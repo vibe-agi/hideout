@@ -37,7 +37,8 @@ HostFS Overlay is not:
 - a replacement for workspace write behavior;
 - a synchronization engine;
 - a conflict-free merge system;
-- a way to bypass HostFS grants or hard-deny roots.
+- a way to bypass HostFS grants, deny rules, or reserved Hideout control-plane
+  invariants.
 
 ## Layer Model
 
@@ -189,7 +190,7 @@ Default apply is conservative:
 
 - fail if base changed;
 - fail if target path is no longer covered by policy;
-- fail if hard-deny now applies;
+- fail if a deny rule or reserved Hideout control-plane invariant now applies;
 - write via temporary file and atomic rename when possible;
 - record apply audit events;
 - keep a backup or rollback record when practical.
@@ -238,7 +239,7 @@ Fail closed when:
 
 - no overlay grant covers the path;
 - a deny rule matches;
-- hard-deny matches;
+- a reserved Hideout control-plane invariant matches;
 - symlink resolution escapes policy;
 - overlay store cannot be created safely;
 - conflict is detected during apply;

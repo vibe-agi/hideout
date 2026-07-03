@@ -10,9 +10,9 @@ If a principle here conflicts with the Phase 1 design, the Phase 1 design wins
 until both documents are intentionally revised.
 
 [threat-model.md](threat-model.md) defines the Phase 1 Lite threat model, TCB,
-claims, non-claims, hard-deny roots, loopback boundary, and PortBridge
-invariants used when applying these principles to new host reach-back
-capabilities.
+claims, non-claims, user-authoritative HostFS grant model, loopback boundary,
+and PortBridge invariants used when applying these principles to new host
+reach-back capabilities.
 
 The purpose of this document is to prevent future features from growing as
 isolated patches. OpenTarget, Network Privacy, Backend support, Manager Control
@@ -128,7 +128,7 @@ Every `hideout run` refreshes these even when it resumes a warm environment.
 ### 6. Policy Is Composed, Deny Wins
 
 Profile, environment, run flags, and scripts may add authority only through the
-same effective policy model. Deny rules and hard-deny roots reduce authority and
+same effective policy model. User-configured deny rules reduce authority and
 win over allow rules.
 
 No layer may implement "last flag wins" for privacy authority.

@@ -126,9 +126,6 @@ func (p EffectivePolicy) Decide(op Op, hostPath string) Decision {
 	if err != nil {
 		return Decision{Reason: err.Error()}
 	}
-	if reason := hardDenyReason(clean); reason != "" {
-		return Decision{Effect: "deny", Reason: reason}
-	}
 	for _, deny := range p.Deny {
 		if ruleMatches(deny.Rule, op, clean, true) {
 			return Decision{
@@ -217,11 +214,6 @@ func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time
 	}
 	if !deny && isBroadHostRoot(rule.HostPath, rule.Scope) {
 		return Grant{}, fmt.Errorf("broad HostFS grant for %s with scope %s is forbidden", rule.HostPath, rule.Scope)
-	}
-	if !deny {
-		if reason := hardDenyReason(rule.HostPath); reason != "" {
-			return Grant{}, errors.New(reason)
-		}
 	}
 	if !deny && strings.TrimSpace(rule.Reason) == "" {
 		return Grant{}, errors.New("reason is required")
@@ -593,37 +585,6 @@ func isBroadHostRoot(path string, scope Scope) bool {
 		return true
 	}
 	return false
-}
-
-func hardDenyReason(path string) string {
-	parts := pathParts(path)
-	for _, part := range parts {
-		switch part {
-		case ".ssh", ".gnupg", ".aws", ".azure", ".docker", ".kube", ".hideout":
-			return "path is under a HostFS hard-deny credential or control-plane root"
-		}
-	}
-	joined := "/" + strings.Join(parts, "/")
-	for _, marker := range []string{
-		"/Library/Keychains",
-		"/Library/Application Support/Google/Chrome",
-		"/Library/Application Support/Firefox",
-		"/Library/Application Support/BraveSoftware",
-		"/Library/Application Support/Microsoft Edge",
-		"/Library/Application Support/Claude",
-		"/Library/Application Support/Cursor",
-		"/.config/gcloud",
-	} {
-		if joined == marker || strings.HasPrefix(joined, marker+"/") {
-			return "path is under a HostFS hard-deny credential or browser profile root"
-		}
-	}
-	base := filepath.Base(path)
-	switch base {
-	case "docker.sock", "ssh-agent.sock", "gpg-agent.sock":
-		return "path is a HostFS hard-deny agent or daemon socket"
-	}
-	return ""
 }
 
 func pathParts(path string) []string {

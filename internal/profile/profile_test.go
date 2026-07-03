@@ -622,19 +622,6 @@ func TestValidateHostFSProfilePolicy(t *testing.T) {
 			want: "absolute",
 		},
 		{
-			name: "hard deny",
-			edit: func(p *Profile) {
-				p.HostFS.Grants = []hostfs.Rule{{
-					ID:       "hfs_ssh",
-					HostPath: "/Users/alice/.ssh/id_ed25519",
-					Ops:      []hostfs.Op{hostfs.OpRead},
-					Scope:    hostfs.ScopeExactFile,
-					Reason:   "ssh",
-				}}
-			},
-			want: "hard-deny",
-		},
-		{
 			name: "write op",
 			edit: func(p *Profile) {
 				p.HostFS.Grants = []hostfs.Rule{{

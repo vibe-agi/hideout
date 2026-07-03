@@ -9,8 +9,9 @@ contract and an engineering contract. If another document conflicts with this
 file, this file wins until the design is intentionally revised.
 
 [threat-model.md](threat-model.md) defines the Phase 1 Lite TCB, claims,
-non-claims, hard-deny roots, loopback boundary, and PortBridge invariants used
-to evaluate new host reach-back capabilities under this contract.
+non-claims, user-authoritative HostFS grant model, loopback boundary, and
+PortBridge invariants used to evaluate new host reach-back capabilities under
+this contract.
 
 Delivery terms:
 
@@ -1557,11 +1558,11 @@ bytes or entries, when returned
 
 `policyReason` is a safe category such as `matched-rule`,
 `matched-deny-rule`, `no-matching-grant`, `symlink-target-not-granted`,
-`hard-deny`, or `unsupported`. It must not contain the user-provided rule
-reason, because the reason can itself contain private information. The audit
-path is the requested path, not an additional resolved symlink target or backend
-mount implementation path. Broker response stderr also uses generic HostFS
-errors such as `hostfs path not found` and does not echo the path back to the
+or `unsupported`. It must not contain the user-provided rule reason, because
+the reason can itself contain private information. The audit path is the
+requested path, not an additional resolved symlink target or backend mount
+implementation path. Broker response stderr also uses generic HostFS errors
+such as `hostfs path not found` and does not echo the path back to the
 target program.
 
 Read-only write attempts are audit events too. HostFS v1 records the requested
@@ -1657,9 +1658,8 @@ run grant
 ```
 
 Effective HostFS visibility is the union of active profile, environment, and run
-grants after revocation, expiry, deny rules, and hard-deny rules are applied.
-Deny rules are evaluated before allow grants. Hard-deny roots are not grantable
-through normal profile policy, environment policy, CLI flags, or scripts.
+grants after revocation, expiry, and deny rules are applied. Deny rules are
+evaluated before allow grants.
 
 Policy-configured visibility is allowed, but it still compiles to explicit
 HostPathGrant records. A directory is not visible because it is under a stable
@@ -1691,10 +1691,12 @@ Example profile shape:
 }
 ```
 
-Hard-deny examples include SSH keys, browser profiles, keychains, cloud
-credential directories, Docker sockets, agent sockets, Hideout control-plane
-state, and profile identity material. A future enterprise policy may add
-organization-specific hard-deny roots, but user scripts must not remove them.
+Sensitive user-owned files such as SSH keys, browser profiles, keychains, cloud
+credential directories, signing keys, package manager tokens, Docker sockets,
+and agent sockets are hidden by default because everything outside the workspace
+is hidden by default. If the user explicitly grants one of those paths, Hideout
+treats it as user intent and records it through the same policy and audit model.
+Users and organizations can express subtractive policy with deny rules.
 
 Visibility semantics:
 
@@ -1830,7 +1832,7 @@ Security rules:
 
 - Host path canonicalization happens on the host side before grant evaluation.
 - Grant checks use the canonical host path, not only the guest path string.
-- HostFS deny and hard-deny rules are evaluated before allow grants.
+- HostFS deny rules are evaluated before allow grants.
 - Host symlinks must not escape an exact-file or non-recursive directory grant.
 - Directory grants are non-recursive by default.
 - Recursive directory grants require explicit user intent.
@@ -2029,7 +2031,6 @@ profile grants
   + environment grants
   + run --fs flags
   - any matching deny rule
-  - hard-deny roots
   = effective HostFS policy for this run
 ```
 
@@ -2048,8 +2049,8 @@ controls instead of treating `--fs` as an override:
   Ignores profile HostFS grants for this run. Profile deny rules still apply.
 ```
 
-These controls reduce authority only. They must not disable hard-deny roots,
-profile deny rules, environment deny rules, or the final capability validator.
+These controls reduce authority only. They must not disable profile deny rules,
+environment deny rules, or the final capability validator.
 
 Lima runtime behavior:
 

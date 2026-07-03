@@ -300,9 +300,6 @@ func safeHostFSPolicyReason(decision hostfs.Decision) string {
 		if decision.Reason == "symlink target is not granted" {
 			return "symlink-target-not-granted"
 		}
-		if strings.Contains(decision.Reason, "hard-deny") {
-			return "hard-deny"
-		}
 		if decision.RuleID != "" {
 			return "matched-deny-rule"
 		}

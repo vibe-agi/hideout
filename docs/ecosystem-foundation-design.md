@@ -370,11 +370,11 @@ Hideout defaults
   + project Hideoutfile requirements
   + profile local overrides
   + run flags
-  - deny and hard-deny
+  - deny rules
   = effective policy
 ```
 
-Deny and hard-deny are subtractive. No bundle can override them.
+Deny rules are subtractive. No bundle can override them.
 
 ### Script Runtime
 

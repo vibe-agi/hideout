@@ -141,8 +141,8 @@ Required evidence:
 - every architecture document that introduces authority has a design status,
   failure behavior, and either a release gate or an explicit Later status.
 - `docs/threat-model.md` defines the Phase 1 Lite TCB, claims, non-claims,
-  hard-deny roots, loopback boundary, and PortBridge invariants before
-  PortBridge or Preview Open can be promoted.
+  user-authoritative HostFS grant model, loopback boundary, and PortBridge
+  invariants before PortBridge or Preview Open can be promoted.
 - RunResult schema includes Boundary Summary as structured data derived from
   audit facts, not as a CLI-only rendering.
 
@@ -652,8 +652,9 @@ Required checks:
   operations by CLI, manager APIs, and future Web UI;
 - deny rules win over allow grants regardless of whether the allow came from
   profile, environment, run, or script output;
-- hard-deny roots fail validation before the target command starts and cannot be
-  enabled through normal profile policy or CLI grant flags;
+- sensitive user-owned paths are hidden by default but become visible when the
+  user explicitly grants them; Hideout must not block user intent with
+  path-name-based credential guesses;
 - exact-file read grant does not reveal sibling filenames through parent
   directory listing;
 - non-recursive directory grant lists only the granted directory entries and
@@ -683,10 +684,10 @@ Required checks:
 Required implementation tests:
 
 - host path resolver tests for canonicalization, symlink escape, case handling
-  where relevant, and forbidden roots;
+  where relevant;
 - grant matcher tests for exact-file, directory, recursive directory, expired
   grant, wrong subject, wrong operation, wrong session, deny precedence, and
-  hard-deny validation;
+  sensitive user-owned path grants;
 - FUSE integration smoke for `ls`, `cat`, Go `os.ReadFile`, Python `open`, and
   Node `fs` when Node is present;
 - broker authorization tests for invalid token, mismatched session, unknown

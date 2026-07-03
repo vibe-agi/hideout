@@ -599,7 +599,7 @@ Hideout defaults
   + project Hideoutfile
   + profile local overrides
   + run flags
-  - deny/hard-deny
+  - deny rules
   = effective policy
 ```
 

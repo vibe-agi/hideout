@@ -93,12 +93,55 @@ func TestRunGrantDoesNotOverrideProfileDeny(t *testing.T) {
 	}
 }
 
-func TestHardDenyGrantFailsValidation(t *testing.T) {
-	_, err := Build(BuildInput{
-		Profile: Config{Grants: []Rule{readGrant("/Users/alice/.ssh/id_ed25519", ScopeExactFile, "ssh key")}},
+func TestSensitiveUserFileGrantsAreUserAuthoritative(t *testing.T) {
+	for _, path := range []string{
+		"/Users/alice/.ssh/id_ed25519",
+		"/Users/alice/.android/debug.keystore",
+		"/Users/alice/Library/Keychains/login.keychain-db",
+		"/Users/alice/Library/Application Support/Google/Chrome/Default/Cookies",
+		"/Users/alice/Library/MobileDevice/Provisioning Profiles/dev.mobileprovision",
+		"/Users/alice/Downloads/AuthKey_ABC123.p8",
+		"/Users/alice/Downloads/release.jks",
+		"/Users/alice/.npmrc",
+		"/home/alice/.pypirc",
+		"/home/alice/.config/google-chrome/Default/Cookies",
+		"/home/alice/.mozilla/firefox/profile/cookies.sqlite",
+		"/home/alice/.m2/settings.xml",
+		"/Users/alice/.gradle/gradle.properties",
+	} {
+		t.Run(path, func(t *testing.T) {
+			policy, err := Build(BuildInput{
+				Profile: Config{Grants: []Rule{readGrant(path, ScopeExactFile, "sensitive credential")}},
+			})
+			if err != nil {
+				t.Fatalf("explicit user grant for %s should be valid: %v", path, err)
+			}
+			decision := policy.Decide(OpRead, path)
+			if !decision.Allowed {
+				t.Fatalf("explicit user grant for %s should allow read: %+v", path, decision)
+			}
+		})
+	}
+}
+
+func TestSensitiveUserFilesInsideGrantedDirectoryFollowUserGrant(t *testing.T) {
+	policy, err := Build(BuildInput{
+		Profile: Config{Grants: []Rule{readGrant("/Users/alice/Downloads", ScopeRecursiveDir, "downloads")}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "hard-deny") {
-		t.Fatalf("expected hard-deny validation failure, got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/Users/alice/Downloads/AuthKey_ABC123.p8",
+		"/Users/alice/Downloads/release.keystore",
+		"/Users/alice/Downloads/app.mobileprovision",
+	} {
+		t.Run(path, func(t *testing.T) {
+			decision := policy.Decide(OpRead, path)
+			if !decision.Allowed {
+				t.Fatalf("sensitive file should follow explicit directory grant: %+v", decision)
+			}
+		})
 	}
 }
 

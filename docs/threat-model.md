@@ -6,8 +6,9 @@
 
 This document is the Phase 1 threat model entrypoint for Hideout. It is a
 Lite threat model, not a formal proof. It defines the security vocabulary,
-trusted computing base, claims, non-claims, and PortBridge invariants required
-before new host reach-back capabilities are promoted.
+trusted computing base, claims, non-claims, user-authoritative HostFS grant
+model, and PortBridge invariants required before new host reach-back
+capabilities are promoted.
 
 [privacy-run-design.md](privacy-run-design.md) remains the Phase 1 product
 contract. If this document conflicts with that design, the design wins until
@@ -67,6 +68,12 @@ Scripts and bundles may classify intent and propose policy decisions. They must
 not execute host authority directly. New authority must be represented as a Core
 primitive, validated by Go code, audited, and then executed by a TCB component.
 
+The per-run broker token is a bearer credential for the guest-side shim and
+HostFS daemon. It is not treated as secret from A3 guest root. The security
+boundary is the host-side broker validator, HostFS policy, explicit user
+grants, and audited TCB execution path, not the assumption that guest root
+cannot read the token.
+
 ## Assets
 
 Hideout protects the following assets by default:
@@ -116,27 +123,31 @@ or created inside that guest boundary.
 Hideout Phase 1 makes these claims when using an isolation-capable backend and
 the default policy profile:
 
-- Target code does not receive the real host home, host identity files, or host
-  proxy credentials through ambient environment variables.
-- Target code cannot read host files outside the workspace unless HostFS grants
-  allow the requested operation.
-- HostFS denies and unsupported operations fail closed and are recorded in
-  audit.
-- `host.open` can open allowed external URLs and workspace files through the
-  Host Broker, but it is not generic host command execution.
-- `host.open` denies localhost, loopback, private network, link-local, multicast,
-  and unspecified URL targets by default.
-- Browser control channels, remote debugging ports, and real browser profiles
-  are not exposed by `host.open`.
-- Hidden proxy setup may affect system networking for the run without placing
-  proxy secrets in the target environment.
-- Per-run authority is session-scoped: broker tokens, shim directories, network
-  bootstrap files, proxy secret files, HostFS materialization, OpenTarget
-  lifetimes, and future PortBridge lifetimes do not belong to reusable
-  environments.
-- Boundary Summary is derived from structured audit facts and must not include
-  HostFS backing secrets, broker tokens, proxy secrets, browser automation
-  secrets, or full sensitive target paths.
+- A1-A3: target code does not receive the real host home, host identity files,
+  or host proxy credentials through ambient environment variables.
+- A1-A3: target code cannot read host files outside the workspace unless an
+  explicit HostFS grant allows the requested operation.
+- A1-A3: HostFS denied, absent, and unsupported operations fail closed and are
+  recorded in audit. The target-visible HostFS response does not reveal whether
+  a denied path exists; audit records the policy reason for the human operator.
+- A1-A3: `host.open` can open allowed external URLs and workspace files through
+  the Host Broker, but it is not generic host command execution.
+- A1-A3: `host.open` denies localhost, loopback, private network, link-local,
+  multicast, unspecified URL targets, and known host gateway aliases by default.
+- A1-A3: browser control channels, remote debugging ports, and real browser
+  profiles are not exposed by `host.open`.
+- A1-A3: hidden proxy setup may affect system networking for the run without
+  placing proxy secrets in the target environment.
+- A1-A3: per-run authority is session-scoped. Broker tokens, shim directories,
+  network bootstrap files, proxy secret files, HostFS materialization,
+  OpenTarget lifetimes, and future PortBridge lifetimes do not belong to
+  reusable environments.
+- A4: policy bundles and scripts may classify intent and propose decisions, but
+  they cannot execute host authority or bypass Go-side validators for Core
+  primitives.
+- A1-A4: Boundary Summary is derived from structured audit facts and must not
+  include HostFS backing secrets, broker tokens, proxy secrets, browser
+  automation secrets, endpoint secrets, or full sensitive target paths.
 
 ## Non-Claims
 
@@ -150,33 +161,45 @@ Hideout Phase 1 does not claim:
 - policy scripts are trusted code;
 - native backend gives OS-level isolation;
 - opening an allowed external URL prevents the remote website from observing the
-  host browser's normal network and browser behavior;
-- a denied request can always tell the target whether a resource exists.
+  host browser's normal network and browser behavior.
 
 When privacy and compatibility conflict, Hideout fails closed and records the
 denied or unsupported attempt.
 
-## Hard-Deny Roots
+## HostFS Grant Authority
 
-HostFS and future host reach-back capabilities must preserve hard-deny roots
-that are not exposed by default and cannot be silently opened by convenience
-features.
+Hideout does not decide which user-owned files are too sensitive for the user to
+share. Host files outside the workspace are hidden by default, but the user is
+the authority that decides which paths become visible through HostFS grants.
 
-The hard-deny class includes:
+The following classes are sensitive, but still user-controlled:
 
 - SSH keys and agent sockets;
 - browser profiles, cookies, login databases, extension state, and browser
-  debugging endpoints;
+  debugging endpoints on macOS and Linux;
 - OS keychains, credential stores, and secret stores;
-- cloud provider credentials and package manager tokens;
+- cloud provider credentials and package manager tokens such as `.npmrc`,
+  `.pypirc`, `.netrc`, Maven settings, Gradle properties, pip config, Cargo
+  credentials, and RubyGems credentials;
 - signing keys, Android debug keys, iOS certificates, provisioning profiles, and
-  app store API keys;
-- Docker, container, VM, and orchestration sockets or admin APIs;
-- Hideout broker tokens, proxy secret files, HostFS backing material, and
-  internal session runtime files.
+  app store API keys such as `.android`, `.keystore`, `.jks`, `.p12`, `.pfx`,
+  `.p8`, `.mobileprovision`, and `.provisionprofile`;
+- Docker, container, VM, and orchestration sockets or admin APIs.
 
-Profile policy may add narrower deny rules. A future capability must not weaken
-hard-deny roots by routing around HostFS, Broker, Policy, or Audit.
+These paths are not exposed by default. If the user explicitly grants one of
+them, Hideout should treat that as an intentional capability decision, record it
+in policy and audit, and preserve the same redaction rules as any other
+sensitive path. This keeps the product user-authoritative instead of
+paternalistic.
+
+Built-in non-overridable denies must be limited to Hideout's own control-plane
+integrity, and they must be store-aware rather than broad path-name guesses.
+Examples include active broker endpoints, proxy secret materialization, and
+session runtime files created by Hideout. Hideout broker tokens, proxy secret
+files, HostFS backing material, and internal session runtime files are
+control-plane assets, not user file categories. A future implementation that
+adds reserved roots must document the exact invariant it protects and add tests
+that prove the reserved root cannot be used to bypass Broker, Policy, or Audit.
 
 ## Loopback Boundary
 
@@ -189,8 +212,9 @@ other privileged services.
 
 Therefore:
 
-- `host.open` must continue to deny localhost, loopback, and private network URL
-  targets by default;
+- `host.open` must continue to deny localhost, loopback, private network URL
+  targets, and known host gateway aliases such as `host.docker.internal`,
+  `host.lima.internal`, and `host.containers.internal` by default;
 - `preview.open` must not be implemented as a localhost/private-network
   exception inside `host.open`;
 - a host browser preview of a guest service must be represented by an
@@ -201,6 +225,12 @@ Therefore:
 
 This distinction prevents product features from eroding the `host.open` browser
 privacy boundary one compatibility exception at a time.
+
+Implementation implication: a `preview.open` mapped endpoint may itself be a
+host loopback URL such as `127.0.0.1:<port>`. If it were passed through the
+`host.open` URL evaluator, it would be denied by design. Therefore preview
+authorization must come from the owning OpenTarget and the PortBridge record,
+not from a localhost exception in `host.open`.
 
 ## PortBridge Invariants
 
@@ -214,8 +244,9 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - structured endpoint model: direction, listen scope, target scope, owner,
   lifetime, and endpoint category are data, not opaque strings;
 - no raw host port exposure without an owning typed capability;
-- no bridge to broker tokens, browser debugging endpoints, keychain services,
-  Docker sockets, VM control sockets, or other hard-deny roots;
+- no bridge to broker tokens, browser debugging endpoints, VM control sockets,
+  or Hideout control-plane endpoints unless an owning typed capability
+  explicitly models that authority;
 - per-run lifetime by default, with cleanup independent of reusable
   environments;
 - audit records for creation, use when observable, denial, error, and cleanup;
