@@ -737,6 +737,64 @@ func TestBoundarySummaryReportsDisabledAuditAsNoEvidence(t *testing.T) {
 	}
 }
 
+func TestBoundarySummaryCountsRealBrokerHostFSDenyAudit(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	aw, err := audit.NewFile(auditPath)
+	if err != nil {
+		t.Fatalf("NewFile: %v", err)
+	}
+	policy, err := hostfs.Build(hostfs.BuildInput{Run: hostfs.Config{}})
+	if err != nil {
+		t.Fatalf("Build HostFS policy: %v", err)
+	}
+	service := hostfs.NewService(policy)
+	server := &broker.Server{
+		SessionID: "ses_test",
+		Token:     "cap_test",
+		Profile:   "default",
+		Backend:   "native",
+		Audit:     aw,
+		HostFS:    &service,
+	}
+	resp := server.Handle(context.Background(), broker.Request{
+		ID:              "req_hostfs_denied",
+		SessionID:       "ses_test",
+		CapabilityToken: "cap_test",
+		Subject:         "hostfs:daemon",
+		Route:           "host-broker",
+		Action:          "host.fs.stat",
+		Args: map[string]any{
+			"path": "/Users/alice/Documents/not-granted.txt",
+		},
+	})
+	if resp.Decision != "deny" || resp.Status != "denied" {
+		t.Fatalf("HostFS broker response mismatch: %+v", resp)
+	}
+	if err := aw.Close(); err != nil {
+		t.Fatalf("close audit: %v", err)
+	}
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	auditText := string(data)
+	for _, want := range []string{
+		`"action":"host.fs.stat"`,
+		`"decision":"deny"`,
+		`"policyEffect":"none"`,
+		`"policyReason":"no-matching-grant"`,
+	} {
+		if !strings.Contains(auditText, want) {
+			t.Fatalf("real broker HostFS audit missing %q:\n%s", want, auditText)
+		}
+	}
+	summary := SummarizeRunBoundary(auditPath)
+	hostFSBoundary := boundarySummaryCapability(t, summary, "hostfs")
+	if hostFSBoundary.Allowed != 0 || hostFSBoundary.Denied != 1 || hostFSBoundary.Unsupported != 0 {
+		t.Fatalf("real broker HostFS deny summary mismatch: %+v audit=%s", hostFSBoundary, auditText)
+	}
+}
+
 func TestCoreApplyRunAppliesPendingSafeInitBeforeBackend(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
