@@ -611,6 +611,16 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 	a.writeRunResultSummary(manager.RunResult{
 		EnvironmentID:    "env_20260703t010203zabcdef1234567890",
 		PreserveInstance: true,
+		AuditPath:        "/tmp/hideout/audit.jsonl",
+		BoundarySummary: &manager.BoundarySummary{
+			Version:   manager.BoundarySummaryVersion,
+			AuditPath: "/tmp/hideout/audit.jsonl",
+			Capabilities: []manager.BoundaryCapabilitySummary{
+				{Capability: "host.open", Allowed: 1, Denied: 2},
+				{Capability: "hostfs", Allowed: 3, Denied: 4, Unsupported: 5},
+				{Capability: "portbridge.host-to-guest", Allowed: 1, Owner: "preview.open", Lifetime: "run", EndpointCategory: "host-loopback"},
+			},
+		},
 	})
 	if out.Len() != 0 {
 		t.Fatalf("run result summary should not write stdout: %s", out.String())
@@ -618,9 +628,19 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 	for _, want := range []string{
 		"Hideout environment: env_20260703t010203zabcdef1234567890",
 		"resume: hideout run --resume env_20260703t010203zabcdef1234567890 -- <command>",
+		"Hideout boundary:",
+		"  audit: /tmp/hideout/audit.jsonl",
+		"  host.open: allowed=1 denied=2",
+		"  hostfs: allowed=3 denied=4 unsupported=5",
+		"  portbridge.host-to-guest: allowed=1 denied=0 owner=preview.open lifetime=run endpoint=host-loopback",
 	} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Fatalf("resume summary missing %q:\n%s", want, errOut.String())
+		}
+	}
+	for _, leaked := range []string{"cap_secret", "127.0.0.1:49152", "/Users/alice/private.txt"} {
+		if strings.Contains(errOut.String(), leaked) {
+			t.Fatalf("run result summary leaked %q:\n%s", leaked, errOut.String())
 		}
 	}
 
@@ -632,6 +652,20 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 	a.writeRunResultSummary(manager.RunResult{})
 	if errOut.Len() != 0 {
 		t.Fatalf("non-preserved or absent environment should not print summary: %s", errOut.String())
+	}
+
+	a.writeRunResultSummary(manager.RunResult{
+		BoundarySummary: &manager.BoundarySummary{
+			Version:   manager.BoundarySummaryVersion,
+			AuditPath: "off",
+			Capabilities: []manager.BoundaryCapabilitySummary{
+				{Capability: "host.open"},
+				{Capability: "hostfs"},
+			},
+		},
+	})
+	if !strings.Contains(errOut.String(), "Hideout boundary:") || !strings.Contains(errOut.String(), "  audit: off") {
+		t.Fatalf("boundary summary without reusable environment missing:\n%s", errOut.String())
 	}
 }
 

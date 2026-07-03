@@ -1,0 +1,264 @@
+# Hideout Threat Model Lite
+
+<!-- markdownlint-disable MD013 -->
+
+## Contract
+
+This document is the Phase 1 threat model entrypoint for Hideout. It is a
+Lite threat model, not a formal proof. It defines the security vocabulary,
+trusted computing base, claims, non-claims, and PortBridge invariants required
+before new host reach-back capabilities are promoted.
+
+[privacy-run-design.md](privacy-run-design.md) remains the Phase 1 product
+contract. If this document conflicts with that design, the design wins until
+both documents are intentionally revised.
+
+## Scope
+
+Hideout confines untrusted developer tools, AI agents first, while allowing
+typed, audited, revocable reach-back to the host. The product replaces ambient
+host authority with brokered capability.
+
+This document covers:
+
+- host identity and credentials;
+- host files outside the workspace;
+- host browser and opener authority;
+- hidden proxy and setup secrets;
+- HostFS, Host Broker, OpenTarget, and future PortBridge authority;
+- audit evidence required to explain what happened.
+
+This document does not cover:
+
+- a complete remote attacker model;
+- kernel or hypervisor compromise;
+- malicious host administrators;
+- formal cryptographic verification of bundles or scripts;
+- Windows backend claims.
+
+## Trusted Computing Base
+
+Hideout's TCB is intentionally small. Components in the TCB may enforce policy,
+hold secrets, or create host-side authority.
+
+TCB:
+
+- `hideout` binary and Manager Core;
+- Profile, Environment, Session, Policy, Audit, HostFS, Network, and Broker
+  packages inside the Hideout binary;
+- host broker process and per-run broker token handling;
+- host-side opener implementations selected by Hideout;
+- HostFS host service and guest FUSE/shim protocol when HostFS is enabled;
+- backend adapter code that prepares the sandbox boundary;
+- the selected backend runtime, such as Lima, for its isolation claims;
+- `tun2socks` and route setup helpers when network privacy is enabled.
+
+Not in TCB:
+
+- target commands and their dependencies;
+- policy bundles, recipes, and scripts;
+- Goja script code;
+- CLI, TUI, or WebUI presentation code;
+- workspace contents;
+- browser pages opened by the target;
+- remote package registries, npm scripts, or project build tools.
+
+Scripts and bundles may classify intent and propose policy decisions. They must
+not execute host authority directly. New authority must be represented as a Core
+primitive, validated by Go code, audited, and then executed by a TCB component.
+
+## Assets
+
+Hideout protects the following assets by default:
+
+- host identity: username, hostname, home path, git global identity, machine
+  identifiers, timezone, locale, and similar fingerprinting surfaces;
+- host credentials: SSH keys, cloud credentials, API tokens, cookies, browser
+  profiles, keychains, proxy credentials, package manager tokens, and signing
+  material;
+- host files outside the workspace;
+- hidden setup secrets used by Hideout but not exposed to the target env;
+- browser automation endpoints and debugging ports;
+- HostFS backing paths and grant implementation details;
+- broker tokens, broker endpoints, proxy bootstrap files, and route secrets;
+- audit integrity and run/session identity.
+
+The workspace is intentionally shared unless a later workspace-filtering
+feature is enabled. Project-local secrets inside the workspace are not protected
+by the Phase 1 default workspace model.
+
+## Adversaries
+
+Phase 1 designs against:
+
+- A1: curious target code that probes environment variables, host paths, git
+  config, network settings, machine identity, or browser state;
+- A2: malicious target code running as the target user inside the guest;
+- A3: malicious target code that gains guest root inside the sandbox;
+- A4: malicious policy bundle or script attempting to request or hide authority;
+- A5: malicious workspace content that influences tools running inside the
+  guest.
+
+Phase 1 does not claim protection against:
+
+- A6: host root or a compromised host OS;
+- A7: backend runtime escape or kernel/hypervisor compromise;
+- A8: a user intentionally granting broad host access;
+- A9: exfiltration through an allowed network route after data is already
+  visible to the target.
+
+Guest root must not be able to read host credentials merely because it is root
+inside the guest. It may, however, control anything intentionally mounted into
+or created inside that guest boundary.
+
+## Claims
+
+Hideout Phase 1 makes these claims when using an isolation-capable backend and
+the default policy profile:
+
+- Target code does not receive the real host home, host identity files, or host
+  proxy credentials through ambient environment variables.
+- Target code cannot read host files outside the workspace unless HostFS grants
+  allow the requested operation.
+- HostFS denies and unsupported operations fail closed and are recorded in
+  audit.
+- `host.open` can open allowed external URLs and workspace files through the
+  Host Broker, but it is not generic host command execution.
+- `host.open` denies localhost, loopback, private network, link-local, multicast,
+  and unspecified URL targets by default.
+- Browser control channels, remote debugging ports, and real browser profiles
+  are not exposed by `host.open`.
+- Hidden proxy setup may affect system networking for the run without placing
+  proxy secrets in the target environment.
+- Per-run authority is session-scoped: broker tokens, shim directories, network
+  bootstrap files, proxy secret files, HostFS materialization, OpenTarget
+  lifetimes, and future PortBridge lifetimes do not belong to reusable
+  environments.
+- Boundary Summary is derived from structured audit facts and must not include
+  HostFS backing secrets, broker tokens, proxy secrets, browser automation
+  secrets, or full sensitive target paths.
+
+## Non-Claims
+
+Hideout Phase 1 does not claim:
+
+- workspace secrets are hidden from the target by default;
+- network exfiltration is impossible in `direct` mode;
+- HostFS write overlay is product-ready;
+- PortBridge, Browser Control, Preview Open, adb, simulator, or IDE integrations
+  are product-ready unless separately promoted;
+- policy scripts are trusted code;
+- native backend gives OS-level isolation;
+- opening an allowed external URL prevents the remote website from observing the
+  host browser's normal network and browser behavior;
+- a denied request can always tell the target whether a resource exists.
+
+When privacy and compatibility conflict, Hideout fails closed and records the
+denied or unsupported attempt.
+
+## Hard-Deny Roots
+
+HostFS and future host reach-back capabilities must preserve hard-deny roots
+that are not exposed by default and cannot be silently opened by convenience
+features.
+
+The hard-deny class includes:
+
+- SSH keys and agent sockets;
+- browser profiles, cookies, login databases, extension state, and browser
+  debugging endpoints;
+- OS keychains, credential stores, and secret stores;
+- cloud provider credentials and package manager tokens;
+- signing keys, Android debug keys, iOS certificates, provisioning profiles, and
+  app store API keys;
+- Docker, container, VM, and orchestration sockets or admin APIs;
+- Hideout broker tokens, proxy secret files, HostFS backing material, and
+  internal session runtime files.
+
+Profile policy may add narrower deny rules. A future capability must not weaken
+hard-deny roots by routing around HostFS, Broker, Policy, or Audit.
+
+## Loopback Boundary
+
+Host loopback and guest loopback are different trust domains.
+
+Guest loopback (`127.0.0.1` inside the guest) belongs to processes inside the
+sandbox. Host loopback (`127.0.0.1` on the host) may expose host developer
+servers, browser debugging ports, databases, admin consoles, mobile tooling, or
+other privileged services.
+
+Therefore:
+
+- `host.open` must continue to deny localhost, loopback, and private network URL
+  targets by default;
+- `preview.open` must not be implemented as a localhost/private-network
+  exception inside `host.open`;
+- a host browser preview of a guest service must be represented by an
+  independent typed OpenTarget, such as `preview.open`, with an owned
+  PortBridge endpoint created by Hideout;
+- the mapped endpoint is trusted only because Hideout created it, owns its
+  lifetime, audits it, and cleans it up, not because loopback is generally safe.
+
+This distinction prevents product features from eroding the `host.open` browser
+privacy boundary one compatibility exception at a time.
+
+## PortBridge Invariants
+
+PortBridge is a generic transport primitive. It is not an adb, browser, preview,
+or IDE feature by itself.
+
+Before a PortBridge direction is promoted to a product path, it must satisfy:
+
+- explicit owning capability, such as `preview.open` or a future adapter-defined
+  OpenTarget;
+- structured endpoint model: direction, listen scope, target scope, owner,
+  lifetime, and endpoint category are data, not opaque strings;
+- no raw host port exposure without an owning typed capability;
+- no bridge to broker tokens, browser debugging endpoints, keychain services,
+  Docker sockets, VM control sockets, or other hard-deny roots;
+- per-run lifetime by default, with cleanup independent of reusable
+  environments;
+- audit records for creation, use when observable, denial, error, and cleanup;
+- Boundary Summary entries that expose counts and endpoint category, not secret
+  endpoint values;
+- fail-closed validation in Go before any script or bundle can depend on the
+  primitive.
+
+`portbridge.host-to-guest` is the likely first product direction because it
+supports host browser preview of a guest dev server. `portbridge.guest-to-host`
+has a larger authority surface and needs separate product design before use by
+browser automation, adb, IDE, or similar adapters.
+
+## Evidence Requirements
+
+New authority must produce evidence at three layers:
+
+- policy evidence: why the request was allowed, denied, unsupported, or
+  audit-only;
+- audit evidence: structured JSONL facts with redaction applied before storage;
+- user evidence: Boundary Summary at run end, derived from the same structured
+  facts rather than recomputing behavior.
+
+Boundary Summary is intentionally lossy. It should answer "what classes of host
+authority were touched?" without disclosing sensitive target paths, broker
+tokens, proxy secrets, backing paths, or endpoint secrets.
+
+## Phase 1 Status
+
+Required:
+
+- HostFS read/list/stat policy and audit;
+- `host.open` external URL and workspace file broker path;
+- hidden env and proxy-secret handling;
+- Boundary Summary for HostFS and `host.open`;
+- this Threat Model Lite.
+
+Design-ready or later:
+
+- HostFS write overlay;
+- interactive approval;
+- `preview.open`;
+- Browser Control;
+- adb, simulator, and IDE adapters;
+- PortBridge product promotion;
+- full bundle signing, revocation, and workspace trust UX.

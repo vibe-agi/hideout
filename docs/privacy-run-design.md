@@ -8,6 +8,10 @@ This is the canonical Phase 1 design document for Hideout. It is a product
 contract and an engineering contract. If another document conflicts with this
 file, this file wins until the design is intentionally revised.
 
+[threat-model.md](threat-model.md) defines the Phase 1 Lite TCB, claims,
+non-claims, hard-deny roots, loopback boundary, and PortBridge invariants used
+to evaluate new host reach-back capabilities under this contract.
+
 Delivery terms:
 
 ```text

@@ -9,6 +9,11 @@ V1 foundation. It does not replace [privacy-run-design.md](privacy-run-design.md
 If a principle here conflicts with the Phase 1 design, the Phase 1 design wins
 until both documents are intentionally revised.
 
+[threat-model.md](threat-model.md) defines the Phase 1 Lite threat model, TCB,
+claims, non-claims, hard-deny roots, loopback boundary, and PortBridge
+invariants used when applying these principles to new host reach-back
+capabilities.
+
 The purpose of this document is to prevent future features from growing as
 isolated patches. OpenTarget, Network Privacy, Backend support, Manager Control
 Plane, Distribution, and HostFS Overlay must all follow the same product and

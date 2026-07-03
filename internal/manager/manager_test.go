@@ -527,6 +527,20 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 	if result.Version != RunResultVersion || result.SessionID == "" || result.Backend != "native" || result.Profile != "default" {
 		t.Fatalf("result mismatch: %+v", result)
 	}
+	if result.BoundarySummary == nil {
+		t.Fatalf("result missing boundary summary: %+v", result)
+	}
+	if result.BoundarySummary.AuditPath != result.AuditPath {
+		t.Fatalf("boundary summary audit path mismatch: %+v result=%s", result.BoundarySummary, result.AuditPath)
+	}
+	hostFSBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "hostfs")
+	if hostFSBoundary.Allowed != 0 || hostFSBoundary.Denied != 0 || hostFSBoundary.Unsupported != 0 {
+		t.Fatalf("unexpected HostFS boundary counts without HostFS requests: %+v", hostFSBoundary)
+	}
+	hostOpenBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "host.open")
+	if hostOpenBoundary.Allowed != 0 || hostOpenBoundary.Denied != 0 {
+		t.Fatalf("unexpected host.open boundary counts without host.open requests: %+v", hostOpenBoundary)
+	}
 	resultData, err := json.Marshal(result)
 	if err != nil {
 		t.Fatalf("marshal result: %v", err)
@@ -583,6 +597,118 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 	}
 	if strings.Contains(auditText, "cap_") || strings.Contains(auditText, spec.IdentityRoot) {
 		t.Fatalf("audit leaked broker token or identity root:\n%s", auditText)
+	}
+}
+
+func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	aw, err := audit.NewFile(auditPath)
+	if err != nil {
+		t.Fatalf("NewFile: %v", err)
+	}
+	events := []audit.Event{
+		{
+			Action:   "host.fs.read",
+			Decision: "allow",
+			Details: map[string]any{
+				"status":       "ok",
+				"policyEffect": "allow",
+				"path":         "/Users/alice/Downloads/allowed.txt",
+				"brokerToken":  "cap_secret_value",
+			},
+		},
+		{
+			Action:   "host.fs.list",
+			Decision: "deny",
+			Details: map[string]any{
+				"status":       "denied",
+				"policyEffect": "deny",
+				"path":         "/Users/alice/Downloads/private",
+			},
+		},
+		{
+			Action:   "host.fs.write",
+			Decision: "deny",
+			Details: map[string]any{
+				"status":       "denied",
+				"policyEffect": "unsupported",
+				"path":         "/Users/alice/Downloads/allowed.txt",
+			},
+		},
+		{
+			Action:   "host.open",
+			Decision: "allow",
+			Details: map[string]any{
+				"status": "ok",
+				"target": "https://example.com/?token=secret",
+			},
+		},
+		{
+			Action:   "host.open",
+			Decision: "deny",
+			Details: map[string]any{
+				"status": "denied",
+				"target": "http://127.0.0.1:3000",
+			},
+		},
+		{
+			Action:   "host.open",
+			Decision: "deny",
+			Details: map[string]any{
+				"status": "error",
+				"target": "https://example.com",
+			},
+		},
+		{
+			Action:   "portbridge.host-to-guest",
+			Decision: "allow",
+			Details: map[string]any{
+				"owner":            "preview.open",
+				"lifetime":         "run",
+				"endpointCategory": "host-loopback",
+				"endpoint":         "127.0.0.1:49152",
+			},
+		},
+	}
+	for _, event := range events {
+		if err := aw.Emit(event); err != nil {
+			t.Fatalf("emit audit: %v", err)
+		}
+	}
+	if err := aw.Close(); err != nil {
+		t.Fatalf("close audit: %v", err)
+	}
+
+	summary := SummarizeRunBoundary(auditPath)
+	if summary.Version != BoundarySummaryVersion || summary.AuditPath != auditPath {
+		t.Fatalf("summary identity mismatch: %+v", summary)
+	}
+	hostFSBoundary := boundarySummaryCapability(t, summary, "hostfs")
+	if hostFSBoundary.Allowed != 1 || hostFSBoundary.Denied != 1 || hostFSBoundary.Unsupported != 1 {
+		t.Fatalf("HostFS boundary counts mismatch: %+v", hostFSBoundary)
+	}
+	hostOpenBoundary := boundarySummaryCapability(t, summary, "host.open")
+	if hostOpenBoundary.Allowed != 1 || hostOpenBoundary.Denied != 1 || hostOpenBoundary.Error != 1 {
+		t.Fatalf("host.open boundary counts mismatch: %+v", hostOpenBoundary)
+	}
+	portBridgeBoundary := boundarySummaryCapability(t, summary, "portbridge.host-to-guest")
+	if portBridgeBoundary.Allowed != 1 || portBridgeBoundary.Owner != "preview.open" ||
+		portBridgeBoundary.Lifetime != "run" || portBridgeBoundary.EndpointCategory != "host-loopback" {
+		t.Fatalf("portbridge boundary shape mismatch: %+v", portBridgeBoundary)
+	}
+	summaryData, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	for _, leaked := range []string{
+		"/Users/alice",
+		"cap_secret_value",
+		"127.0.0.1:49152",
+		"https://example.com",
+	} {
+		if strings.Contains(string(summaryData), leaked) {
+			t.Fatalf("boundary summary leaked %q:\n%s", leaked, summaryData)
+		}
 	}
 }
 
@@ -1118,4 +1244,15 @@ func compileRunResultSchema(t *testing.T) *jsonschema.Schema {
 		t.Fatalf("compile run result schema: %v", err)
 	}
 	return schema
+}
+
+func boundarySummaryCapability(t *testing.T, summary BoundarySummary, capability string) BoundaryCapabilitySummary {
+	t.Helper()
+	for _, item := range summary.Capabilities {
+		if item.Capability == capability {
+			return item
+		}
+	}
+	t.Fatalf("boundary summary missing capability %q: %+v", capability, summary.Capabilities)
+	return BoundaryCapabilitySummary{}
 }

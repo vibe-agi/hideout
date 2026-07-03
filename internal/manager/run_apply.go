@@ -32,17 +32,18 @@ type ApplyRunOptions struct {
 }
 
 type RunResult struct {
-	Version          string   `json:"version"`
-	SessionID        string   `json:"sessionId"`
-	Profile          string   `json:"profile"`
-	Backend          string   `json:"backend"`
-	EnvironmentID    string   `json:"environmentId,omitempty"`
-	InstanceName     string   `json:"instanceName,omitempty"`
-	PreserveInstance bool     `json:"preserveInstance,omitempty"`
-	AuditPath        string   `json:"auditPath,omitempty"`
-	Command          []string `json:"command"`
-	Error            string   `json:"error,omitempty"`
-	CleanupError     string   `json:"cleanupError,omitempty"`
+	Version          string           `json:"version"`
+	SessionID        string           `json:"sessionId"`
+	Profile          string           `json:"profile"`
+	Backend          string           `json:"backend"`
+	EnvironmentID    string           `json:"environmentId,omitempty"`
+	InstanceName     string           `json:"instanceName,omitempty"`
+	PreserveInstance bool             `json:"preserveInstance,omitempty"`
+	AuditPath        string           `json:"auditPath,omitempty"`
+	BoundarySummary  *BoundarySummary `json:"boundarySummary,omitempty"`
+	Command          []string         `json:"command"`
+	Error            string           `json:"error,omitempty"`
+	CleanupError     string           `json:"cleanupError,omitempty"`
 }
 
 func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) (result RunResult, retErr error) {
@@ -83,6 +84,8 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	runEnv = runSession.Environment
 	defer func() {
 		_, closeErr := c.CloseRunSession(runSession)
+		summary := SummarizeRunBoundary(result.AuditPath)
+		result.BoundarySummary = &summary
 		if closeErr != nil && retErr == nil {
 			result.Error = closeErr.Error()
 			retErr = closeErr

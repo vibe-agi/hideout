@@ -40,6 +40,66 @@
       "type": "string",
       "minLength": 1
     },
+    "boundarySummary": {
+      "type": "object",
+      "required": ["version", "capabilities"],
+      "properties": {
+        "version": {
+          "const": "hideout.boundary-summary/v1"
+        },
+        "auditPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["capability", "allowed", "denied"],
+            "properties": {
+              "capability": {
+                "type": "string",
+                "minLength": 1
+              },
+              "owner": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lifetime": {
+                "type": "string",
+                "minLength": 1
+              },
+              "endpointCategory": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "denied": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unsupported": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "error": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "auditOnly": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "command": {
       "type": "array",
       "minItems": 1,

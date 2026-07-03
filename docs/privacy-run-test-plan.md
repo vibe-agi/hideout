@@ -77,7 +77,7 @@ Change-to-gate mapping:
 | Docs, schemas, and generated examples | Gate 0 | none | Gate 0 |
 | Ecosystem foundation, bundle schemas, project manifests, trust, export, or script ABI | Gate 0 and targeted schema tests | Manager plan/apply tests when authority changes | bundle supply-chain gate before public ecosystem release |
 | First-run initialization, InitTask, helper discovery, `doctor --fix`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native first-run smoke; Gate 2 when backend preparation changes | Distribution Bootstrap gate |
-| CLI parsing, profile, identity, env, audit, cleanup, or doctor | Gate 0 and Gate 1 | affected package tests | `--required` if behavior is externally visible |
+| CLI parsing, profile, identity, env, audit, Boundary Summary, cleanup, or doctor | Gate 0 and Gate 1 | affected package tests | `--required` if behavior is externally visible |
 | Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, Gate 1, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
 | HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | HostFS grant gate when promoted |
 | Additional passthrough mounts | Gate 0, Gate 1, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
@@ -140,6 +140,11 @@ Required evidence:
 - no Required Phase 1 behavior depends on lab commands, Web UI, or a daemon.
 - every architecture document that introduces authority has a design status,
   failure behavior, and either a release gate or an explicit Later status.
+- `docs/threat-model.md` defines the Phase 1 Lite TCB, claims, non-claims,
+  hard-deny roots, loopback boundary, and PortBridge invariants before
+  PortBridge or Preview Open can be promoted.
+- RunResult schema includes Boundary Summary as structured data derived from
+  audit facts, not as a CLI-only rendering.
 
 Gate 0 enforces the last item with the phase plan preflight:
 
@@ -213,6 +218,11 @@ Required checks:
   files, and ephemeral identity while preserving audit;
 - cleanup dry-run and `--session` filtering keep non-selected session state
   intact while still reporting secret-bearing cleanup state.
+- run-end Boundary Summary reports the audit path and HostFS / `host.open`
+  allowed, denied, unsupported, or error counts from the structured audit facts;
+- Boundary Summary output does not include broker tokens, proxy secrets, HostFS
+  backing secrets, browser automation secrets, or full sensitive requested
+  paths.
 
 Non-goal:
 

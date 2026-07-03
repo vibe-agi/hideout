@@ -301,11 +301,44 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 }
 
 func (a app) writeRunResultSummary(result manager.RunResult) {
-	if result.EnvironmentID == "" || !result.PreserveInstance {
+	if result.BoundarySummary == nil && !result.PreserveInstance {
 		return
 	}
-	fmt.Fprintf(a.stderr, "Hideout environment: %s\n", result.EnvironmentID)
-	fmt.Fprintf(a.stderr, "resume: hideout run --resume %s -- <command>\n", result.EnvironmentID)
+	if result.EnvironmentID != "" {
+		fmt.Fprintf(a.stderr, "Hideout environment: %s\n", result.EnvironmentID)
+		if result.PreserveInstance {
+			fmt.Fprintf(a.stderr, "resume: hideout run --resume %s -- <command>\n", result.EnvironmentID)
+		}
+	}
+	if result.BoundarySummary == nil {
+		return
+	}
+	fmt.Fprintln(a.stderr, "Hideout boundary:")
+	if result.BoundarySummary.AuditPath != "" {
+		fmt.Fprintf(a.stderr, "  audit: %s\n", result.BoundarySummary.AuditPath)
+	}
+	for _, capability := range result.BoundarySummary.Capabilities {
+		fmt.Fprintf(a.stderr, "  %s: allowed=%d denied=%d", capability.Capability, capability.Allowed, capability.Denied)
+		if capability.Capability == "hostfs" || capability.Unsupported > 0 {
+			fmt.Fprintf(a.stderr, " unsupported=%d", capability.Unsupported)
+		}
+		if capability.Error > 0 {
+			fmt.Fprintf(a.stderr, " error=%d", capability.Error)
+		}
+		if capability.AuditOnly > 0 {
+			fmt.Fprintf(a.stderr, " auditOnly=%d", capability.AuditOnly)
+		}
+		if capability.Owner != "" {
+			fmt.Fprintf(a.stderr, " owner=%s", capability.Owner)
+		}
+		if capability.Lifetime != "" {
+			fmt.Fprintf(a.stderr, " lifetime=%s", capability.Lifetime)
+		}
+		if capability.EndpointCategory != "" {
+			fmt.Fprintf(a.stderr, " endpoint=%s", capability.EndpointCategory)
+		}
+		fmt.Fprintln(a.stderr)
+	}
 }
 
 func cleanupAuditDetails(result session.CleanupResult) map[string]any {
