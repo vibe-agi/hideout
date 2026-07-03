@@ -255,10 +255,15 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - fail-closed validation in Go before any script or bundle can depend on the
   primitive.
 
-`portbridge.host-to-guest` is the likely first product direction because it
-supports host browser preview of a guest dev server. `portbridge.guest-to-host`
-has a larger authority surface and needs separate product design before use by
-browser automation, adb, IDE, or similar adapters.
+`portbridge.host-to-guest` is the first product direction because it supports
+host browser preview of a guest dev server. The product path has a Go-side
+validator, per-run Manager lifecycle, audit, cleanup, and Boundary Summary
+entries. Backends without a host-to-guest provider must fail closed. Today that
+means the native/local provider can prove the primitive, while Lima host-to-guest
+remains blocked until a backend-specific provider is implemented.
+
+`portbridge.guest-to-host` has a larger authority surface and needs separate
+product design before use by browser automation, adb, IDE, or similar adapters.
 
 ## Evidence Requirements
 
@@ -280,8 +285,10 @@ Required:
 
 - HostFS read/list/stat policy and audit;
 - `host.open` external URL and workspace file broker path;
+- `portbridge.host-to-guest` product validation, run-scoped lifecycle, audit,
+  cleanup, and Boundary Summary evidence;
 - hidden env and proxy-secret handling;
-- Boundary Summary for HostFS and `host.open`;
+- Boundary Summary for HostFS, `host.open`, and product PortBridge actions;
 - this Threat Model Lite.
 
 Design-ready or later:

@@ -33,8 +33,16 @@ const (
 	GuestDirect Route = "guest-direct"
 	GuestExec   Route = "guest-exec"
 	HostBroker  Route = "host-broker"
+	PortBridge  Route = "portbridge"
 	Fake        Route = "fake"
 	DenyRoute   Route = "deny"
+)
+
+const (
+	ActionHostOpen              = "host.open"
+	ActionGuestExec             = "guest.exec"
+	ActionNetworkConnect        = "network.connect"
+	ActionPortbridgeHostToGuest = "portbridge.host-to-guest"
 )
 
 const (
@@ -301,7 +309,7 @@ func (e Evaluator) Validate(p Proposal) (Proposal, error) {
 		return p, fmt.Errorf("generic host execution action %q is forbidden", p.Action)
 	}
 	switch p.Action {
-	case "host.open", "guest.exec", "network.connect":
+	case ActionHostOpen, ActionGuestExec, ActionNetworkConnect, ActionPortbridgeHostToGuest:
 	default:
 		return p, fmt.Errorf("unsupported action %q", p.Action)
 	}
@@ -312,18 +320,21 @@ func (e Evaluator) Validate(p Proposal) (Proposal, error) {
 		return p, errors.New("policy proposal route is required")
 	}
 	switch p.Route {
-	case GuestDirect, GuestExec, HostBroker, Fake, DenyRoute:
+	case GuestDirect, GuestExec, HostBroker, PortBridge, Fake, DenyRoute:
 	default:
 		return p, fmt.Errorf("unsupported route %q", p.Route)
 	}
-	if p.Action == "host.open" && p.Decision != Deny && p.Route != HostBroker {
+	if p.Action == ActionHostOpen && p.Decision != Deny && p.Route != HostBroker {
 		return p, errors.New("host.open must use host-broker route unless denied")
 	}
-	if p.Action == "guest.exec" && p.Decision != Deny && p.Route != GuestDirect && p.Route != GuestExec {
+	if p.Action == ActionGuestExec && p.Decision != Deny && p.Route != GuestDirect && p.Route != GuestExec {
 		return p, errors.New("guest.exec must use guest-direct or guest-exec route")
 	}
-	if p.Action == "network.connect" && p.Decision != Deny && p.Route != GuestDirect {
+	if p.Action == ActionNetworkConnect && p.Decision != Deny && p.Route != GuestDirect {
 		return p, errors.New("network.connect must use guest-direct route")
+	}
+	if p.Action == ActionPortbridgeHostToGuest && p.Decision != Deny && p.Route != PortBridge {
+		return p, errors.New("portbridge.host-to-guest must use portbridge route unless denied")
 	}
 	if p.Decision == Deny && p.Route != DenyRoute {
 		return p, errors.New("deny decision must use deny route")

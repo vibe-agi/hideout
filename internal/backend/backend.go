@@ -33,6 +33,7 @@ type RunSpec struct {
 	NetworkCleanupGuestPath   string
 	HostFSEnabled             bool
 	HostFSGrafts              []string
+	PortBridges               []PortBridgeEndpoint
 	InstanceName              string
 	PreserveInstance          bool
 	AuditPath                 string
@@ -60,9 +61,21 @@ type Session struct {
 	NetworkCleanupGuestPath   string
 	HostFSEnabled             bool
 	HostFSGrafts              []string
+	PortBridges               []PortBridgeEndpoint
 	InstanceName              string
 	PreserveInstance          bool
 	Broker                    broker.Endpoint
+}
+
+type PortBridgeEndpoint struct {
+	ID               string `json:"id"`
+	Owner            string `json:"owner"`
+	Lifetime         string `json:"lifetime"`
+	Direction        string `json:"direction"`
+	ListenScope      string `json:"listenScope"`
+	ListenAddress    string `json:"listenAddress"`
+	TargetScope      string `json:"targetScope"`
+	EndpointCategory string `json:"endpointCategory"`
 }
 
 type Backend interface {

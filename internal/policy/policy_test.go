@@ -154,6 +154,13 @@ func TestProposalMatchesJSONSchemaAndValidator(t *testing.T) {
 			Resources: []string{"network:direct"},
 			Reason:    "session network setup",
 		},
+		{
+			Decision:  Allow,
+			Route:     PortBridge,
+			Action:    ActionPortbridgeHostToGuest,
+			Resources: []string{"direction:host-to-guest", "listen:host-loopback", "target:guest", "owner:preview.open", "lifetime:run"},
+			Reason:    "host-to-guest PortBridge requested by preview.open",
+		},
 	}
 	for _, proposal := range proposals {
 		if _, err := e.Validate(proposal); err != nil {
@@ -258,6 +265,17 @@ func TestProposalSchemaAndValidatorRejectInvalidShapes(t *testing.T) {
 				Reason:    "bad route",
 			},
 			want: "guest-direct",
+		},
+		{
+			name: "portbridge through host broker",
+			proposal: Proposal{
+				Decision:  Allow,
+				Route:     HostBroker,
+				Action:    ActionPortbridgeHostToGuest,
+				Resources: []string{"direction:host-to-guest", "listen:host-loopback", "target:guest", "owner:preview.open", "lifetime:run"},
+				Reason:    "bad route",
+			},
+			want: "portbridge route",
 		},
 		{
 			name: "unsupported action",

@@ -344,6 +344,9 @@ Required Phase 1:
 - Command Proxy support for `open` and `xdg-open`, with both enabled in the
   default profile.
 - Host Broker action `host.open` for URLs and mapped workspace files.
+- Run-scoped `portbridge.host-to-guest` as a typed transport primitive for
+  future OpenTarget owners. It is not a browser or adb feature by itself, and
+  it does not weaken `host.open` localhost denial.
 - Isolated browser profile for URL open.
 - Centralized capability evaluator.
 - Constrained `goja` support for command policy and audit redaction hooks.
@@ -359,9 +362,10 @@ Design-ready Phase 1:
 - Minimal Manager API run resources: `run/plan`, `run/apply`, and `run/status`
   over the local token-protected server.
 - Local Web UI page map and data model.
-- OpenTarget and PortBridge domain contracts for future host application
-  automation and preview workflows. The contracts may have internal transport
-  tests, but `hideout run` and `host.open` must not depend on them in Phase 1.
+- OpenTarget domain contracts for future host application automation and
+  preview workflows. `portbridge.host-to-guest` is available as a typed
+  supporting primitive; OpenTarget owners such as `preview.open` remain separate
+  product designs.
 - Profile identity rotate/reset.
 - Audit query API.
 - More complete policy editing surfaces.
@@ -372,7 +376,8 @@ Capability Probe Phase 1:
 - Native loopback/control-plane mechanics for one explicit TCP endpoint.
 - Lima guest-to-host bridge mechanics for one explicit host loopback TCP
   endpoint.
-- Lima host-to-guest bridge mechanics for one explicit guest TCP endpoint.
+- Lima host-to-guest bridge mechanics for one explicit guest TCP endpoint. The
+  product path fails closed until a backend-specific provider exists.
 - Browser-control probe using an isolated browser profile and a loopback-only
   control endpoint, without exposing it through `host.open`.
 - Preview-open probe that maps one guest HTTP service to one host-visible URL,
@@ -619,6 +624,7 @@ Phase 1 capability implementation matrix:
 | `host.open` | `command:open`, `command:xdg-open` | `route=host-broker`; Host Broker opens an isolated browser URL or mapped workspace file. | Generic host command execution. |
 | `guest.exec` | top-level run or registered command proxy shim | `route=guest-direct` for the top-level command; `route=guest-exec` only for an explicitly registered shim that execs the matching real guest binary without host side effects. | Intercepting arbitrary guest commands. |
 | `network.connect` | session setup | `route=guest-direct` for setup and route verification evidence for `direct` or `tun2socks`; `route=deny` on failure. | Per-socket firewalling or request audit. |
+| `portbridge.host-to-guest` | Manager run data plane for an owning typed capability | `route=portbridge`; explicit owner, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup. | Raw host port exposure, `host.open` localhost exceptions, or business-specific adb/browser semantics. |
 
 Any action outside the Phase 1 implementation matrix and Capability Probe matrix
 is unsupported in Phase 1 and fails closed before it reaches an implementation.
@@ -867,8 +873,9 @@ internal/hostopen
   Host browser/file opener used only after Host Broker approval.
 
 internal/portbridge
-  Design-ready TCP bridge primitive for future OpenTarget implementations. It is
-  not wired into Required Phase 1 `host.open`.
+  TCP bridge primitive. `portbridge.host-to-guest` has a product validator and
+  run-scoped Manager lifecycle; `guest-to-host` remains design-ready/lab until a
+  separate product design promotes it. The bridge is not part of `host.open`.
 
 internal/guestaudit
   Future guest-side ordinary process audit. Not Required Phase 1.

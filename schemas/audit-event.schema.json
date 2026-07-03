@@ -38,6 +38,7 @@
         "host.fs.read",
         "host.fs.list",
         "host.fs.write",
+        "portbridge.host-to-guest",
         "portbridge.probe",
         "browser.control.probe",
         "preview.open.probe"

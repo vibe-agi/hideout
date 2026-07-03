@@ -316,7 +316,7 @@
           "type": "array",
           "minItems": 1,
           "items": {
-            "enum": ["host.open", "guest.exec", "network.connect"]
+            "enum": ["host.open", "guest.exec", "network.connect", "portbridge.host-to-guest"]
           },
           "uniqueItems": true
         },

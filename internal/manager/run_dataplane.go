@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
@@ -27,6 +28,7 @@ type RunDataPlaneOptions struct {
 	HostFSRun                  hostfs.Config
 	DisableProfileHostFSGrants bool
 	Opener                     broker.Opener
+	PortBridges                []RunPortBridgeRequest
 }
 
 type RunDataPlane struct {
@@ -34,16 +36,29 @@ type RunDataPlane struct {
 	HostFSPolicy         hostfs.EffectivePolicy
 	HostFSEnabled        bool
 	HostFSGrafts         []string
+	PortBridges          []backend.PortBridgeEndpoint
 	BrokerListenEndpoint broker.Endpoint
 	BrokerGuestEndpoint  broker.Endpoint
 	Env                  []string
 	Broker               *broker.Server `json:"-"`
+	portBridgeLeases     []runPortBridgeLease
+	audit                *audit.Writer
+	auditSession         string
+	auditProfile         string
+	auditBackend         string
 	cancel               context.CancelFunc
 }
 
 func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runNetwork RunNetwork, opts RunDataPlaneOptions) (RunDataPlane, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	aw := runSession.Audit
+	if aw == nil {
+		aw = audit.NewDiscard()
+	}
+	if err := validateRunPortBridgeRequests(runSession, opts.PortBridges, aw); err != nil {
+		return RunDataPlane{}, err
 	}
 	token, err := broker.NewToken()
 	if err != nil {
@@ -112,10 +127,6 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if runSession.Plan.Backend == "lima" {
 		env = lima.GuestEnv(env)
 	}
-	aw := runSession.Audit
-	if aw == nil {
-		aw = audit.NewDiscard()
-	}
 	if err := aw.Emit(audit.Event{
 		Session:  runSession.Layout.ID,
 		Profile:  runSession.Plan.ProfileName,
@@ -137,27 +148,46 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		cancel()
 		return RunDataPlane{}, err
 	}
+	portBridgeLeases, portBridgeEndpoints, err := startRunPortBridges(brokerCtx, runSession, opts.PortBridges, aw)
+	if err != nil {
+		_ = closeRunPortBridgeLeases(portBridgeLeases, aw, runSession.Layout.ID, runSession.Plan.ProfileName, runSession.Plan.Backend)
+		_ = server.Close()
+		cancel()
+		return RunDataPlane{}, err
+	}
 	return RunDataPlane{
 		Registry:             registry,
 		HostFSPolicy:         hostFSPolicy,
 		HostFSEnabled:        hostFSEnabled,
 		HostFSGrafts:         HostFSGrafts(hostFSPolicy),
+		PortBridges:          portBridgeEndpoints,
 		BrokerListenEndpoint: server.Endpoint,
 		BrokerGuestEndpoint:  guestEndpoint,
 		Env:                  env,
 		Broker:               server,
+		portBridgeLeases:     portBridgeLeases,
+		audit:                aw,
+		auditSession:         runSession.Layout.ID,
+		auditProfile:         runSession.Plan.ProfileName,
+		auditBackend:         runSession.Plan.Backend,
 		cancel:               cancel,
 	}, nil
 }
 
 func (c Core) CloseRunDataPlane(dataPlane RunDataPlane) error {
+	var errs []error
+	if err := closeRunPortBridgeLeases(dataPlane.portBridgeLeases, dataPlane.audit, dataPlane.auditSession, dataPlane.auditProfile, dataPlane.auditBackend); err != nil {
+		errs = append(errs, err)
+	}
 	if dataPlane.cancel != nil {
 		dataPlane.cancel()
 	}
 	if dataPlane.Broker != nil {
-		return dataPlane.Broker.Close()
+		if err := dataPlane.Broker.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func BrokerEndpointForBackend(backendName string, layout session.Layout) broker.Endpoint {

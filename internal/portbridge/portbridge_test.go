@@ -88,6 +88,79 @@ func TestValidateRejectsUnsafeOrUnimplementedPortBridgeShapes(t *testing.T) {
 	}
 }
 
+func TestValidateHostToGuestProductRequiresTypedShape(t *testing.T) {
+	valid := Spec{
+		ID:               "pb_preview_1",
+		Owner:            "preview.open",
+		Lifetime:         LifetimeRun,
+		Direction:        DirectionHostToGuest,
+		ListenScope:      ListenScopeLoopback,
+		ListenAddress:    "127.0.0.1:0",
+		TargetScope:      TargetScopeGuest,
+		TargetAddress:    "127.0.0.1:5173",
+		EndpointCategory: EndpointCategoryHostLoopback,
+	}
+	if err := ValidateHostToGuestProduct(valid); err != nil {
+		t.Fatalf("ValidateHostToGuestProduct(valid): %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Spec)
+		want   string
+	}{
+		{
+			name:   "missing owner",
+			mutate: func(spec *Spec) { spec.Owner = "" },
+			want:   "owner",
+		},
+		{
+			name:   "unsafe owner",
+			mutate: func(spec *Spec) { spec.Owner = "preview.open?token=abc" },
+			want:   "unsupported characters",
+		},
+		{
+			name:   "wrong direction",
+			mutate: func(spec *Spec) { spec.Direction = DirectionGuestToHost },
+			want:   "direction",
+		},
+		{
+			name:   "wrong lifetime",
+			mutate: func(spec *Spec) { spec.Lifetime = "" },
+			want:   "lifetime",
+		},
+		{
+			name:   "wrong listen scope",
+			mutate: func(spec *Spec) { spec.ListenScope = "" },
+			want:   "listen scope",
+		},
+		{
+			name:   "wrong target scope",
+			mutate: func(spec *Spec) { spec.TargetScope = "" },
+			want:   "target scope",
+		},
+		{
+			name:   "wrong endpoint category",
+			mutate: func(spec *Spec) { spec.EndpointCategory = "" },
+			want:   "endpoint category",
+		},
+		{
+			name:   "non-loopback target",
+			mutate: func(spec *Spec) { spec.TargetAddress = "192.168.1.10:5173" },
+			want:   "guest loopback",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := valid
+			tt.mutate(&spec)
+			err := ValidateHostToGuestProduct(spec)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func startEchoServer(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

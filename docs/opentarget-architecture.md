@@ -95,9 +95,11 @@ OpenTarget / PortBridge / Command Proxy
 ```
 
 PortBridge remains a generic transport primitive, not an adb, browser, or
-preview-specific target type. Workflows may reference `portbridge.guest-to-host`
-or `portbridge.host-to-guest` as required supporting primitives, but those
-bridges still need an owning OpenTarget or explicit product design.
+preview-specific target type. `portbridge.host-to-guest` is the first product
+primitive and is run-scoped, audited, and owned by a typed capability.
+`portbridge.guest-to-host` remains design-ready/lab until a separate product
+design promotes it. Any bridge still needs an owning OpenTarget or explicit
+product design.
 
 Adapters may understand product protocols and developer workflows. For example:
 
@@ -173,9 +175,9 @@ over PortBridge and audit, not as a generic host port escape. A later
 protocol-aware adapter may classify adb subcommands, but the Core primitive is
 still the typed bridge and lifecycle.
 
-adb adapters require the generic guest-reachable PortBridge primitive to be
-promoted from lab to product path. Until that promotion, adapter proposals for
-bridge capabilities fail closed at the Go validator.
+adb adapters require the generic guest-reachable `portbridge.guest-to-host`
+primitive to be promoted from lab to product path. Until that promotion, adapter
+proposals for guest-to-host bridge capabilities fail closed at the Go validator.
 
 ### iOS
 

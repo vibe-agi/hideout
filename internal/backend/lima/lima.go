@@ -203,6 +203,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		NetworkCleanupGuestPath:   spec.NetworkCleanupGuestPath,
 		HostFSEnabled:             spec.HostFSEnabled,
 		HostFSGrafts:              append([]string(nil), spec.HostFSGrafts...),
+		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
 		InstanceName:              instance,
 		PreserveInstance:          spec.PreserveInstance,
 	}, nil

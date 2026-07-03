@@ -1,15 +1,19 @@
 package manager
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -600,6 +604,138 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 	}
 	if strings.Contains(auditText, "cap_") || strings.Contains(auditText, spec.IdentityRoot) {
 		t.Fatalf("audit leaked broker token or identity root:\n%s", auditText)
+	}
+}
+
+func TestCoreApplyRunStartsHostToGuestPortBridgeAndAudits(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	targetAddr, closeTarget := startManagerEchoServer(t)
+	defer closeTarget()
+	var bridgeAddr string
+	fake := &applyRunFakeBackend{
+		runFunc: func(session *backend.Session) error {
+			if session == nil || len(session.PortBridges) != 1 {
+				return fmt.Errorf("expected one port bridge endpoint, got %+v", session)
+			}
+			endpoint := session.PortBridges[0]
+			bridgeAddr = endpoint.ListenAddress
+			if endpoint.ID != "pb_preview_1" ||
+				endpoint.Owner != "preview.open" ||
+				endpoint.Lifetime != "run" ||
+				endpoint.Direction != "host-to-guest" ||
+				endpoint.ListenScope != "loopback" ||
+				endpoint.TargetScope != "guest" ||
+				endpoint.EndpointCategory != "host-loopback" ||
+				endpoint.ListenAddress == "" {
+				return fmt.Errorf("unexpected port bridge endpoint: %+v", endpoint)
+			}
+			got, err := managerEchoRoundTrip(endpoint.ListenAddress, "hello")
+			if err != nil {
+				return err
+			}
+			if got != "echo:hello\n" {
+				return fmt.Errorf("bridge response=%q", got)
+			}
+			return nil
+		},
+	}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspace,
+		Ephemeral:   true,
+		Command:     []string{"tool"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:            fake,
+		RequestedBackend:   "native",
+		AllowWeakIsolation: true,
+		Environment:        RunEnvironmentOptions{Create: true},
+		PortBridges: []RunPortBridgeRequest{{
+			ID:            "pb_preview_1",
+			Owner:         "preview.open",
+			TargetAddress: targetAddr,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyRun: %v", err)
+	}
+	if len(fake.spec.PortBridges) != 1 || len(fake.runSession.PortBridges) != 1 {
+		t.Fatalf("backend did not receive port bridge lease: spec=%+v session=%+v", fake.spec.PortBridges, fake.runSession.PortBridges)
+	}
+	if result.BoundarySummary == nil {
+		t.Fatalf("result missing boundary summary")
+	}
+	portBridgeBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "portbridge.host-to-guest")
+	if portBridgeBoundary.Allowed != 1 || portBridgeBoundary.AuditOnly != 1 || portBridgeBoundary.Denied != 0 ||
+		portBridgeBoundary.Owner != "preview.open" || portBridgeBoundary.Lifetime != "run" ||
+		portBridgeBoundary.EndpointCategory != "host-loopback" {
+		t.Fatalf("portbridge boundary mismatch: %+v", portBridgeBoundary)
+	}
+	auditData, err := os.ReadFile(result.AuditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	auditText := string(auditData)
+	for _, want := range []string{
+		`"action":"portbridge.host-to-guest"`,
+		`"decision":"allow"`,
+		`"decision":"audit-only"`,
+		`"status":"ready"`,
+		`"status":"cleanup"`,
+		`"endpointCategory":"host-loopback"`,
+	} {
+		if !strings.Contains(auditText, want) {
+			t.Fatalf("portbridge audit missing %q:\n%s", want, auditText)
+		}
+	}
+	for _, leaked := range []string{targetAddr, bridgeAddr} {
+		if leaked != "" && strings.Contains(auditText, leaked) {
+			t.Fatalf("portbridge audit leaked endpoint %q:\n%s", leaked, auditText)
+		}
+	}
+}
+
+func TestCoreApplyRunRejectsHostToGuestPortBridgeWithoutBackendProvider(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	fake := &applyRunFakeBackend{}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "lima",
+		Workspace:   workspace,
+		Command:     []string{"tool"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:          fake,
+		RequestedBackend: "lima",
+		PortBridges: []RunPortBridgeRequest{{
+			ID:            "pb_preview_1",
+			Owner:         "preview.open",
+			TargetAddress: "127.0.0.1:5173",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a backend provider for lima backend") {
+		t.Fatalf("expected lima provider error, got %v", err)
+	}
+	if !reflect.DeepEqual(fake.calls, []string{"available"}) {
+		t.Fatalf("backend should not prepare/run after portbridge rejection: %v", fake.calls)
+	}
+	if result.BoundarySummary == nil {
+		t.Fatalf("result missing boundary summary")
+	}
+	portBridgeBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "portbridge.host-to-guest")
+	if portBridgeBoundary.Denied != 1 || portBridgeBoundary.Allowed != 0 || portBridgeBoundary.Owner != "preview.open" {
+		t.Fatalf("portbridge deny boundary mismatch: %+v", portBridgeBoundary)
 	}
 }
 
@@ -1224,6 +1360,54 @@ func containsEnvPrefixManagerTest(env []string, prefix string) bool {
 	return false
 }
 
+func startManagerEchoServer(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+					return
+				}
+				line, err := bufio.NewReader(conn).ReadString('\n')
+				if err != nil {
+					return
+				}
+				_, _ = fmt.Fprintf(conn, "echo:%s", line)
+			}()
+		}
+	}()
+	return ln.Addr().String(), func() {
+		_ = ln.Close()
+		<-done
+	}
+}
+
+func managerEchoRoundTrip(addr, message string) (string, error) {
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintln(conn, message); err != nil {
+		return "", err
+	}
+	return bufio.NewReader(conn).ReadString('\n')
+}
+
 type applyRunFakeBackend struct {
 	availableErr error
 	prepareErr   error
@@ -1231,6 +1415,8 @@ type applyRunFakeBackend struct {
 	cleanupErr   error
 	calls        []string
 	spec         backend.RunSpec
+	runFunc      func(*backend.Session) error
+	runSession   backend.Session
 	runCommand   []string
 	runEnv       []string
 }
@@ -1270,15 +1456,25 @@ func (b *applyRunFakeBackend) Prepare(_ context.Context, spec backend.RunSpec) (
 		NetworkCleanupGuestPath:   spec.NetworkCleanupGuestPath,
 		HostFSEnabled:             spec.HostFSEnabled,
 		HostFSGrafts:              append([]string(nil), spec.HostFSGrafts...),
+		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
 		InstanceName:              spec.InstanceName,
 		PreserveInstance:          spec.PreserveInstance,
 	}, nil
 }
 
-func (b *applyRunFakeBackend) Run(_ context.Context, _ *backend.Session, command []string, env []string) error {
+func (b *applyRunFakeBackend) Run(_ context.Context, session *backend.Session, command []string, env []string) error {
 	b.calls = append(b.calls, "run")
+	if session != nil {
+		b.runSession = *session
+		b.runSession.Env = append([]string(nil), session.Env...)
+		b.runSession.HostFSGrafts = append([]string(nil), session.HostFSGrafts...)
+		b.runSession.PortBridges = append([]backend.PortBridgeEndpoint(nil), session.PortBridges...)
+	}
 	b.runCommand = append([]string(nil), command...)
 	b.runEnv = append([]string(nil), env...)
+	if b.runFunc != nil {
+		return b.runFunc(session)
+	}
 	return b.runErr
 }
 

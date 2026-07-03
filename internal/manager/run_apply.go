@@ -26,6 +26,7 @@ type ApplyRunOptions struct {
 	AuditPath                  string
 	HostFSRun                  hostfs.Config
 	DisableProfileHostFSGrants bool
+	PortBridges                []RunPortBridgeRequest
 	Network                    RunNetworkOptions
 	Opener                     broker.Opener
 	OpenerForSession           func(RunSession) broker.Opener
@@ -115,6 +116,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	dataPlane, err := c.StartRunDataPlane(ctx, runSession, runNetwork, RunDataPlaneOptions{
 		HostFSRun:                  opts.HostFSRun,
 		DisableProfileHostFSGrants: opts.DisableProfileHostFSGrants,
+		PortBridges:                opts.PortBridges,
 		Opener:                     opener,
 	})
 	if err != nil {
@@ -207,6 +209,7 @@ func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlan
 		NetworkCleanupGuestPath:   runNetwork.Plan.GuestCleanupPath,
 		HostFSEnabled:             dataPlane.HostFSEnabled,
 		HostFSGrafts:              append([]string(nil), dataPlane.HostFSGrafts...),
+		PortBridges:               append([]backend.PortBridgeEndpoint(nil), dataPlane.PortBridges...),
 		InstanceName:              runEnv.InstanceName,
 		PreserveInstance:          runEnv.PreserveInstance,
 		AuditPath:                 runSession.AuditPath,

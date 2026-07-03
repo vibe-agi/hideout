@@ -249,6 +249,7 @@ func Default(name string) Profile {
 				"host.open",
 				"guest.exec",
 				"network.connect",
+				"portbridge.host-to-guest",
 			},
 		},
 		Audit: Audit{Enabled: true},
@@ -614,7 +615,7 @@ func (p Profile) Validate() error {
 	}
 	for _, capability := range p.Policy.MaxCapabilities {
 		switch capability {
-		case "host.open", "guest.exec", "network.connect":
+		case "host.open", "guest.exec", "network.connect", "portbridge.host-to-guest":
 		default:
 			return fmt.Errorf("unsupported policy max capability %q", capability)
 		}

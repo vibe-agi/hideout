@@ -10,10 +10,10 @@
       "enum": ["allow", "deny", "ask", "audit-only"]
     },
     "route": {
-      "enum": ["guest-direct", "guest-exec", "host-broker", "fake", "deny"]
+      "enum": ["guest-direct", "guest-exec", "host-broker", "portbridge", "fake", "deny"]
     },
     "action": {
-      "enum": ["host.open", "guest.exec", "network.connect"]
+      "enum": ["host.open", "guest.exec", "network.connect", "portbridge.host-to-guest"]
     },
     "resources": {
       "type": "array",
@@ -151,6 +151,23 @@
         "properties": {
           "route": {
             "enum": ["guest-direct", "deny"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "portbridge.host-to-guest"
+          }
+        },
+        "required": ["action"]
+      },
+      "then": {
+        "properties": {
+          "route": {
+            "enum": ["portbridge", "deny"]
           }
         }
       }

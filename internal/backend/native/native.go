@@ -45,6 +45,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		NetworkBootstrapGuestPath: spec.NetworkBootstrapGuestPath,
 		NetworkCleanupPath:        spec.NetworkCleanupPath,
 		NetworkCleanupGuestPath:   spec.NetworkCleanupGuestPath,
+		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
 	}, nil
 }
 

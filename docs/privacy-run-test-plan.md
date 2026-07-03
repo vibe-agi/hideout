@@ -85,7 +85,8 @@ Change-to-gate mapping:
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, Gate 1, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and Gate 1 | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
-| PortBridge, Browser Control, Preview Open, or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
+| Product PortBridge primitives | Gate 0 and targeted PortBridge/Manager tests | product action validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` if user-facing |
+| Browser Control, Preview Open, or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
 
 The testing order for new capabilities is:
 
@@ -218,8 +219,9 @@ Required checks:
   files, and ephemeral identity while preserving audit;
 - cleanup dry-run and `--session` filtering keep non-selected session state
   intact while still reporting secret-bearing cleanup state.
-- run-end Boundary Summary reports the audit path and HostFS / `host.open`
-  allowed, denied, unsupported, or error counts from the structured audit facts;
+- run-end Boundary Summary reports the audit path and HostFS / `host.open` /
+  product PortBridge allowed, denied, unsupported, audit-only, or error counts
+  from the structured audit facts;
 - Boundary Summary output does not include broker tokens, proxy secrets, HostFS
   backing secrets, browser automation secrets, or full sensitive requested
   paths.
@@ -475,7 +477,9 @@ Evidence:
   and deny paths;
 - lab command requires explicit `--enable-lab`;
 - probe audit uses lab action names;
-- product paths cannot reference the bridge.
+- product `portbridge.host-to-guest` uses the separate product action, route,
+  validator, run-scoped Manager lifecycle, audit, cleanup, and Boundary Summary;
+- backends without a host-to-guest provider fail closed before backend prepare.
 
 Commands:
 
@@ -484,6 +488,12 @@ hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>
 hideout lab portbridge guest-to-host --enable-lab --target 127.0.0.1:<port>
 hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>
 scripts/test-lab-probes.sh
+```
+
+Product path:
+
+```text
+manager.ApplyRun(... PortBridges: [{owner: "preview.open", target: "127.0.0.1:<guest-service>"}])
 ```
 
 ### Probe B: Browser Control

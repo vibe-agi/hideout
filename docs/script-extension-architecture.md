@@ -17,7 +17,8 @@ Status:
 Script runtime for command policy and audit redaction: Required Phase 1.
 Adapter ABI beyond command.decide and audit.redact: Design-ready.
 Safe context queries: Later.
-PortBridge proposal builders: Later, gated by PortBridge product promotion.
+PortBridge proposal builders: Later. Each builder is gated by the corresponding
+PortBridge direction being promoted to a product primitive.
 ```
 
 ## Product Reasoning

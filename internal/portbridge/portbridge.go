@@ -24,12 +24,34 @@ const (
 	ListenScopeGuestReachable ListenScope = "guest-reachable"
 )
 
+type Lifetime string
+
+const (
+	LifetimeRun Lifetime = "run"
+)
+
+type TargetScope string
+
+const (
+	TargetScopeGuest TargetScope = "guest"
+)
+
+type EndpointCategory string
+
+const (
+	EndpointCategoryHostLoopback EndpointCategory = "host-loopback"
+)
+
 type Spec struct {
-	ID            string
-	Direction     Direction
-	ListenScope   ListenScope
-	ListenAddress string
-	TargetAddress string
+	ID               string
+	Owner            string
+	Lifetime         Lifetime
+	Direction        Direction
+	ListenScope      ListenScope
+	ListenAddress    string
+	TargetScope      TargetScope
+	TargetAddress    string
+	EndpointCategory EndpointCategory
 }
 
 type Bridge struct {
@@ -89,6 +111,47 @@ func Validate(spec Spec) error {
 	}
 	if isUnspecifiedHost(targetHost) {
 		return errors.New("port bridge target must be an explicit host, not a wildcard address")
+	}
+	return nil
+}
+
+func ValidateHostToGuestProduct(spec Spec) error {
+	if strings.TrimSpace(spec.ID) == "" {
+		return errors.New("host-to-guest port bridge ID is required")
+	}
+	if !validProductLabel(spec.ID) {
+		return errors.New("host-to-guest port bridge ID contains unsupported characters")
+	}
+	if strings.TrimSpace(spec.Owner) == "" {
+		return errors.New("host-to-guest port bridge owner is required")
+	}
+	if !validProductLabel(spec.Owner) {
+		return errors.New("host-to-guest port bridge owner contains unsupported characters")
+	}
+	if spec.Direction != DirectionHostToGuest {
+		return fmt.Errorf("host-to-guest product port bridge requires direction %q", DirectionHostToGuest)
+	}
+	if spec.Lifetime != LifetimeRun {
+		return fmt.Errorf("host-to-guest product port bridge requires lifetime %q", LifetimeRun)
+	}
+	if spec.ListenScope != ListenScopeLoopback {
+		return fmt.Errorf("host-to-guest product port bridge requires listen scope %q", ListenScopeLoopback)
+	}
+	if spec.TargetScope != TargetScopeGuest {
+		return fmt.Errorf("host-to-guest product port bridge requires target scope %q", TargetScopeGuest)
+	}
+	if spec.EndpointCategory != EndpointCategoryHostLoopback {
+		return fmt.Errorf("host-to-guest product port bridge requires endpoint category %q", EndpointCategoryHostLoopback)
+	}
+	if err := Validate(spec); err != nil {
+		return err
+	}
+	targetHost, _, err := net.SplitHostPort(spec.TargetAddress)
+	if err != nil {
+		return fmt.Errorf("port bridge target address is invalid: %w", err)
+	}
+	if !isLoopbackHost(targetHost) {
+		return errors.New("host-to-guest product port bridge target must be guest loopback")
 	}
 	return nil
 }
@@ -188,4 +251,21 @@ func isUnspecifiedHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsUnspecified()
+}
+
+func validProductLabel(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
