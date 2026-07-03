@@ -282,28 +282,10 @@ func TestDefaultProfileHostFSIsHiddenByDefault(t *testing.T) {
 	}
 }
 
-func TestDefaultProfileDeniesProxyAndHideoutRuntimeEnvNames(t *testing.T) {
+func TestDefaultProfileLeavesUserEnvDenyEmpty(t *testing.T) {
 	p := Default("test")
-	deny := map[string]bool{}
-	for _, name := range p.Env.Deny {
-		deny[name] = true
-	}
-	for _, name := range []string{
-		"HIDEOUT_*",
-		"HTTP_PROXY",
-		"HTTPS_PROXY",
-		"NO_PROXY",
-		"ALL_PROXY",
-		"FTP_PROXY",
-		"http_proxy",
-		"https_proxy",
-		"no_proxy",
-		"all_proxy",
-		"ftp_proxy",
-	} {
-		if !deny[name] {
-			t.Fatalf("default profile deny list missing proxy env %s: %+v", name, p.Env.Deny)
-		}
+	if len(p.Env.Deny) != 0 {
+		t.Fatalf("default profile should not decide user env deny policy: %+v", p.Env.Deny)
 	}
 }
 
@@ -319,6 +301,82 @@ func TestValidateRejectsEmptyToolPreset(t *testing.T) {
 	p.Tools.Presets = []string{""}
 	if err := p.Validate(); err == nil {
 		t.Fatal("expected empty tool preset to fail")
+	}
+}
+
+func TestValidateAcceptsNodeDevToolPreset(t *testing.T) {
+	p := Default("test")
+	p.Tools.Presets = []string{"base-dev", "node-dev"}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("node-dev preset should be valid: %v", err)
+	}
+}
+
+func TestValidateAcceptsUserDeclaredNPMGlobalTool(t *testing.T) {
+	p := Default("test")
+	p.Tools.Presets = []string{"base-dev", "node-dev"}
+	p.Tools.NPMGlobals = []NPMGlobalPackage{{
+		Package:  "@example/agent-cli@1.2.3",
+		Commands: []string{"agent-cli"},
+	}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("npm global tool should be valid user policy: %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidNPMGlobalTool(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*Profile)
+		want string
+	}{
+		{
+			name: "missing package",
+			edit: func(p *Profile) {
+				p.Tools.NPMGlobals = []NPMGlobalPackage{{Commands: []string{"tool"}}}
+			},
+			want: "package is required",
+		},
+		{
+			name: "package starts with dash",
+			edit: func(p *Profile) {
+				p.Tools.NPMGlobals = []NPMGlobalPackage{{Package: "-bad", Commands: []string{"tool"}}}
+			},
+			want: "package is not a valid npm package spec",
+		},
+		{
+			name: "missing commands",
+			edit: func(p *Profile) {
+				p.Tools.NPMGlobals = []NPMGlobalPackage{{Package: "@example/tool"}}
+			},
+			want: "commands is required",
+		},
+		{
+			name: "bad command",
+			edit: func(p *Profile) {
+				p.Tools.NPMGlobals = []NPMGlobalPackage{{Package: "@example/tool", Commands: []string{"../tool"}}}
+			},
+			want: "is not a command name",
+		},
+		{
+			name: "duplicate command across packages",
+			edit: func(p *Profile) {
+				p.Tools.NPMGlobals = []NPMGlobalPackage{
+					{Package: "@example/one", Commands: []string{"tool"}},
+					{Package: "@example/two", Commands: []string{"tool"}},
+				}
+			},
+			want: "duplicates command",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := Default("test")
+			tt.edit(&p)
+			if err := p.Validate(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q validation failure, got %v", tt.want, err)
+			}
+		})
 	}
 }
 
@@ -452,7 +510,7 @@ func TestValidateRejectsDuplicateProfileArrays(t *testing.T) {
 		{
 			name: "env deny",
 			edit: func(p *Profile) {
-				p.Env.Deny = append(p.Env.Deny, "SSH_*")
+				p.Env.Deny = []string{"SSH_*", "SSH_*"}
 			},
 		},
 		{
@@ -504,7 +562,7 @@ func TestSchemaRejectsDuplicateProfileArrays(t *testing.T) {
 		{
 			name: "env deny",
 			edit: func(p *Profile) {
-				p.Env.Deny = append(p.Env.Deny, "SSH_*")
+				p.Env.Deny = []string{"SSH_*", "SSH_*"}
 			},
 		},
 		{
@@ -603,6 +661,18 @@ func TestValidateHostFSProfilePolicy(t *testing.T) {
 		t.Fatalf("valid HostFS policy should pass: %v", err)
 	}
 
+	broad := Default("test")
+	broad.HostFS.Grants = []hostfs.Rule{{
+		ID:       "hfs_home_tree",
+		HostPath: "/Users/alice",
+		Ops:      []hostfs.Op{hostfs.OpRead, hostfs.OpList},
+		Scope:    hostfs.ScopeRecursiveDir,
+		Reason:   "user explicitly shared this tree",
+	}}
+	if err := broad.Validate(); err != nil {
+		t.Fatalf("explicit broad HostFS policy should be user-authoritative: %v", err)
+	}
+
 	tests := []struct {
 		name string
 		edit func(*Profile)
@@ -633,19 +703,6 @@ func TestValidateHostFSProfilePolicy(t *testing.T) {
 				}}
 			},
 			want: "write-class",
-		},
-		{
-			name: "broad recursive",
-			edit: func(p *Profile) {
-				p.HostFS.Grants = []hostfs.Rule{{
-					ID:       "hfs_broad",
-					HostPath: "/Users/alice",
-					Ops:      []hostfs.Op{hostfs.OpRead},
-					Scope:    hostfs.ScopeRecursiveDir,
-					Reason:   "home",
-				}}
-			},
-			want: "broad HostFS grant",
 		},
 		{
 			name: "missing id",
@@ -1024,6 +1081,10 @@ func TestClonePolicyRegeneratesIdentityAndDoesNotCopyGeneratedState(t *testing.T
 	store := Store{Root: t.TempDir()}
 	source := Default("source")
 	source.Git.UserEmail = "source@example.com"
+	source.Tools.NPMGlobals = []NPMGlobalPackage{{
+		Package:  "@example/agent-cli",
+		Commands: []string{"agent-cli"},
+	}}
 	source.Policy.ScriptRefs = []ScriptRef{{
 		ID:          "command-policy",
 		Path:        "policy/nested/command.js",
@@ -1061,6 +1122,11 @@ func TestClonePolicyRegeneratesIdentityAndDoesNotCopyGeneratedState(t *testing.T
 	}
 	if loadedTarget.Git.UserEmail != "source@example.com" {
 		t.Fatalf("policy field was not copied: %+v", loadedTarget.Git)
+	}
+	if len(loadedTarget.Tools.NPMGlobals) != 1 ||
+		loadedTarget.Tools.NPMGlobals[0].Package != "@example/agent-cli" ||
+		loadedTarget.Tools.NPMGlobals[0].Commands[0] != "agent-cli" {
+		t.Fatalf("npm global tool policy was not copied: %+v", loadedTarget.Tools.NPMGlobals)
 	}
 	if len(loadedTarget.Policy.ScriptRefs) != 1 || loadedTarget.Policy.ScriptRefs[0].Path != "policy/nested/command.js" {
 		t.Fatalf("policy script refs were not copied: %+v", loadedTarget.Policy.ScriptRefs)
@@ -1109,6 +1175,10 @@ func TestEphemeralIdentityProfileRegeneratesIdentityAndKeepsPolicy(t *testing.T)
 	source.Git.UserEmail = "source@example.com"
 	source.Env.Public["NODE_ENV"] = "test"
 	source.Tools.Presets = []string{"base-dev"}
+	source.Tools.NPMGlobals = []NPMGlobalPackage{{
+		Package:  "@example/agent-cli",
+		Commands: []string{"agent-cli"},
+	}}
 	source.Policy.ScriptRefs = []ScriptRef{{
 		ID:          "command-policy",
 		Path:        "policy/command.js",
@@ -1152,6 +1222,11 @@ func TestEphemeralIdentityProfileRegeneratesIdentityAndKeepsPolicy(t *testing.T)
 	if len(ephemeral.Tools.Presets) != len(loaded.Tools.Presets) ||
 		ephemeral.Tools.Presets[0] != "base-dev" {
 		t.Fatalf("ephemeral profile lost tool presets: %+v", ephemeral.Tools.Presets)
+	}
+	if len(ephemeral.Tools.NPMGlobals) != 1 ||
+		ephemeral.Tools.NPMGlobals[0].Package != "@example/agent-cli" ||
+		ephemeral.Tools.NPMGlobals[0].Commands[0] != "agent-cli" {
+		t.Fatalf("ephemeral profile lost npm global tools: %+v", ephemeral.Tools.NPMGlobals)
 	}
 	if len(ephemeral.Policy.ScriptRefs) != 1 || ephemeral.Policy.ScriptRefs[0].Path != "policy/command.js" {
 		t.Fatalf("ephemeral profile lost script refs: %+v", ephemeral.Policy.ScriptRefs)

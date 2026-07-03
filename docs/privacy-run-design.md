@@ -336,7 +336,8 @@ Required Phase 1:
 - Workspace read/write passthrough.
 - Fake `HOME`, `TMPDIR`, XDG config/cache/data, `.gitconfig`, user, hostname,
   machine-id, timezone, and locale.
-- Sensitive env denylist, conservative env allowlist, and synthetic identity env.
+- User-owned env denylist, conservative env allowlist, and synthetic identity
+  env.
 - Secret refs for sensitive host values that must be usable by Hideout without
   becoming readable by the target process.
 - Network modes: `direct` and guest-side `tun2socks`.
@@ -1851,7 +1852,10 @@ Security rules:
 - Audit records first access, deny, directory listing, and read-only
   write-class attempts. Future write support must audit every write-class
   operation and failure.
-- HostFS must never expose the real host home as a broad raw mount.
+- HostFS must never expose the real host home as a broad raw mount. A broad
+  HostFS grant is allowed only as explicit user policy and remains brokered,
+  audited, read-only in Phase 1, and subject to the Hideout control-plane store
+  reservation.
 
 Platform model:
 
@@ -1880,7 +1884,7 @@ HostFS is not:
 - a command proxy for `ls`, `cat`, or `stat`;
 - a JS/runtime hook;
 - a copy cache or symlink tree;
-- permission to mount `/Users/<name>`, `$HOME`, `/Volumes`, or `/` broadly;
+- permission to create implicit broad host mounts;
 - a replacement for workspace passthrough.
 
 Access Sensor relationship:
@@ -1946,6 +1950,11 @@ Hideout's canonical HostFS flags are therefore:
 
 --no-profile-fs
   Disable profile HostFS allow grants for this run.
+
+--env KEY=VALUE
+  Add a run-scoped public environment variable. It is validated through the
+  same env policy as profile env and must not expose Hideout runtime variables,
+  proxy variables, or synthetic identity variables such as HOME and PATH.
 ```
 
 Initial run grant grammar:
@@ -2025,6 +2034,39 @@ hideout profile fs default remove hfs_0123abcd4567
 profile policy. It writes the same `profile.hostfs.grants` and
 `profile.hostfs.deny` objects that `hideout run` consumes. Manager APIs and Web
 UI must use this rule model instead of inventing a second representation.
+
+Persistent profile env management:
+
+```sh
+hideout profile env default list
+hideout profile env default set SERVICE_TOKEN=...
+hideout profile env default unset SERVICE_TOKEN
+hideout profile env default inherit CUSTOM_HOST_ENV
+hideout profile env default uninherit CUSTOM_HOST_ENV
+hideout profile env default deny 'SSH_*'
+hideout profile env default undeny 'SSH_*'
+```
+
+`profile env list` reports env names, not values. Env values may be credentials,
+so ordinary list output must not echo them. Durable env policy writes
+`profile.env.public`, `profile.env.inherit`, and `profile.env.deny`; run-scoped
+`--env` composes on top of `profile.env.public` for one run and does not mutate
+the profile.
+
+Persistent profile tool management:
+
+```sh
+hideout profile tools default list
+hideout profile tools default preset add node-dev
+hideout profile tools default preset remove node-dev
+hideout profile tools default npm add --package @scope/tool --command tool
+hideout profile tools default npm remove @scope/tool
+```
+
+`profile tools` writes the same `profile.tools.presets` and
+`profile.tools.npmGlobals` objects that backend preparation consumes. Core owns
+the runtime supply primitive and command-existence check; it must not encode a
+specific product workflow in the tool declaration.
 
 Persistent profile HostFS rules must have stable unique IDs. CLI-created IDs
 use the opaque `hfs_` prefix. Users and higher layers must treat IDs as opaque
@@ -2119,23 +2161,25 @@ Compatibility grafts are path-entry plumbing only:
 
 Default env behavior:
 
-- deny known sensitive host vars;
+- inherit no business env by default;
 - set synthetic identity vars;
 - keep only a conservative allowlist;
-- do not pass proxy env by default.
+- do not pass proxy or Hideout control-plane env to the target.
 
 Env merge order is fixed:
 
 ```text
 host env
-  -> deny proxy and sensitive patterns
+  -> block Hideout runtime and proxy control-plane env
   -> apply explicit inherit allowlist
   -> add env.public
   -> add synthetic identity env
   -> validate reserved names
 ```
 
-Deny and reserved-name checks win over `env.public` and `env.inherit`.
+Runtime reserved-name checks win over `env.public` and `env.inherit`. User
+configured `env.deny` patterns are subtractive policy only: they reduce what
+`env.public` or `env.inherit` can expose, and the user may keep them empty.
 
 Default synthetic vars:
 
@@ -2166,32 +2210,17 @@ secret ref fields instead. This keeps identity, git global config, command
 resolution, broker authority, and secret plumbing controlled by Hideout instead
 of host or profile env.
 
-Default denied patterns:
+Default user denied patterns:
 
 ```text
-SSH_*
-GITHUB_*
-GITLAB_*
-VSCODE_*
-CURSOR_*
-ANTHROPIC_*
-OPENAI_*
-AWS_*
-GOOGLE_*
-GCLOUD_*
-AZURE_*
-HIDEOUT_*
-HTTP_PROXY
-HTTPS_PROXY
-NO_PROXY
-ALL_PROXY
-FTP_PROXY
-http_proxy
-https_proxy
-no_proxy
-all_proxy
-ftp_proxy
+<empty>
 ```
+
+Hideout runtime env (`HIDEOUT_*`) and proxy env (`HTTP_PROXY`, `HTTPS_PROXY`,
+`NO_PROXY`, `ALL_PROXY`, `FTP_PROXY`, and lowercase equivalents) are blocked by
+the runtime even if a profile attempts to inherit or publish them. They are
+control-plane inputs, not user business env policy. All other env deny choices
+belong to the profile owner.
 
 Fake home materialization:
 
@@ -2704,7 +2733,7 @@ Phase 1 action:
 host.open
 ```
 
-Allowed targets:
+Default allowed targets:
 
 - external `http://` and `https://` URLs that are not host-local, loopback,
   private-network, link-local, multicast, IPv6 ULA, or `.local`/`.localhost`
@@ -2714,10 +2743,14 @@ Allowed targets:
 
 `hostCapabilities.open.allowUrls=false` denies URL open requests even when the
 `open` or `xdg-open` shim is enabled. `allowWorkspaceFiles=false` denies
-workspace file open requests. These flags narrow `host.open`; they do not remove
-the command proxy registration by themselves.
+workspace file open requests. `allowLocalUrls=true` lets the profile owner opt
+into localhost, loopback, `.local`, host-gateway alias, link-local, multicast,
+or unspecified URL opens. `allowPrivateNetworkUrls=true` lets the profile owner
+opt into private, CGNAT, benchmarking, and IPv6 ULA URL opens. These flags are
+profile policy; they do not remove the command proxy registration by
+themselves.
 
-Denied by default:
+Denied by default unless profile policy opts in:
 
 - host paths outside workspace;
 - `file://` URLs outside workspace;
@@ -2734,20 +2767,22 @@ Denied by default:
 - generic host commands.
 
 URL validation must use both lexical and resolved-address checks. The broker
-normalizes the requested URL host, rejects known local names before DNS, resolves
-all A and AAAA records it will rely on for the open decision, follows CNAMEs for
-classification, and denies the URL if any resulting address is loopback,
-host-local, private, CGNAT, benchmarking, link-local, multicast, IPv6 ULA, or a
-known host gateway.
+normalizes the requested URL host, classifies known local names before DNS,
+resolves all A and AAAA records it will rely on for the open decision, follows
+CNAMEs for classification, and denies the URL by default if any resulting
+address is loopback, host-local, private, CGNAT, benchmarking, link-local,
+multicast, IPv6 ULA, or a known host gateway unless the corresponding profile
+policy opt-in is enabled.
 DNS errors fail closed. The broker must not treat a public-looking hostname as
 safe solely because the string is not an IP literal.
 
 Phase 1 `host.open` validates the requested URL before launching the isolated
 browser. It does not claim to police all later browser navigation, page scripts,
 service workers, or redirects after the page loads. Profiles that cannot accept
-that host-browser network exposure must set `allowUrls=false`. A later Browser
-OpenTarget may add browser-level network policy for redirects, DNS rebinding, and
-post-load fetches.
+that host-browser network exposure must set `allowUrls=false`. Profiles that
+choose local or private-network URL access own that risk as explicit policy. A
+later Browser OpenTarget may add browser-level network policy for redirects, DNS
+rebinding, and post-load fetches.
 
 URL open must use an isolated browser profile:
 
@@ -3028,21 +3063,7 @@ Representative profile:
     "public": {
       "NODE_ENV": "development"
     },
-    "deny": [
-      "SSH_*",
-      "GITHUB_*",
-      "HIDEOUT_*",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "NO_PROXY",
-      "ALL_PROXY",
-      "FTP_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "no_proxy",
-      "all_proxy",
-      "ftp_proxy"
-    ],
+    "deny": [],
     "inherit": [
       "TERM",
       "COLORTERM"
@@ -3059,12 +3080,15 @@ Representative profile:
   "tools": {
     "presets": [
       "base-dev"
-    ]
+    ],
+    "npmGlobals": []
   },
   "hostCapabilities": {
     "open": {
       "mode": "brokered",
       "allowUrls": true,
+      "allowLocalUrls": false,
+      "allowPrivateNetworkUrls": false,
       "allowWorkspaceFiles": true,
       "browserProfile": "isolated"
     }
@@ -3113,8 +3137,14 @@ stable subject and audit path. It does not grant URL or workspace-file open by
 itself. `commandProxy.commands.xdg-open` is included in default profiles but may
 be omitted to disable that compatibility shim for a profile.
 
-`tools.presets` prepares tools inside guest base state or the selected identity
-store. It must not create a hidden fallback to host binaries.
+`tools.presets` prepares reusable guest tool families such as base shell tools
+or a Node runtime. `tools.npmGlobals` is a user-owned declaration of npm package
+specs and command names that must exist in the guest. Hideout treats these as
+runtime supply, not product adapters: it may install the package and check the
+commands, but it must not encode third-party workflow semantics in Core.
+
+Tool configuration must not create a hidden fallback to host binaries. Missing
+guest tools fail closed with an explicit guest command error.
 
 ## Session Layout
 

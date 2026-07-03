@@ -152,7 +152,7 @@ deny_url_targets=(
 deny_index=0
 for target in "${deny_url_targets[@]}"; do
   deny_index=$((deny_index + 1))
-  expect_open_denied "local-url-$deny_index" "$target" 'Phase 1 browser boundary'
+  expect_open_denied "local-url-$deny_index" "$target" 'profile policy'
   audit="$(latest_audit)"
   grep -Fq "\"target\":\"$target\"" "$audit"
 done

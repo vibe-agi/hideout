@@ -102,7 +102,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	result.AuditPath = runSession.AuditPath
-	if err := emitRunSetupAudit(runSession.Audit, runSession, opts); err != nil {
+	if err := emitRunSetupAudit(runSession.Audit, runSession, opts, c.Store.Root); err != nil {
 		return result, err
 	}
 	runNetwork, netErr := c.PrepareRunNetwork(runSession, opts.Network)
@@ -233,9 +233,9 @@ func validateRunPolicy(plan RunPlan) error {
 	return nil
 }
 
-func emitRunSetupAudit(aw *audit.Writer, runSession RunSession, opts ApplyRunOptions) error {
+func emitRunSetupAudit(aw *audit.Writer, runSession RunSession, opts ApplyRunOptions, storeRoot string) error {
 	hostFSProfile := HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants)
-	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{Profile: hostFSProfile, Run: opts.HostFSRun})
+	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{Profile: hostFSProfile, Run: opts.HostFSRun, StoreRoot: storeRoot})
 	if err != nil {
 		return err
 	}

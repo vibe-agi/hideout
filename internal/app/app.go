@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -234,6 +235,7 @@ type runOptions struct {
 	hostFSDenyFlags       []string
 	noProfileHostFSGrants bool
 	hostFSRun             hostfs.Config
+	envPublic             map[string]string
 	command               []string
 }
 
@@ -263,6 +265,18 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		return err
 	}
 	runtimeProfile := runPlan.RuntimeProfile
+	if len(opts.envPublic) > 0 {
+		if runtimeProfile.Env.Public == nil {
+			runtimeProfile.Env.Public = map[string]string{}
+		}
+		for name, value := range opts.envPublic {
+			runtimeProfile.Env.Public[name] = value
+		}
+		if err := runtimeProfile.Validate(); err != nil {
+			return err
+		}
+		runPlan.RuntimeProfile = runtimeProfile
+	}
 	opts.workspace = runPlan.Workspace
 	opts.guestWorkspace = runPlan.GuestWorkspace
 	backendName := runPlan.Backend
@@ -500,6 +514,8 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	var noFSFlags stringListFlag
 	fs.Var(&noFSFlags, "no-fs", "run-scoped HostFS deny rule such as read:/absolute/path")
 	fs.BoolVar(&opts.noProfileHostFSGrants, "no-profile-fs", false, "ignore profile HostFS grants for this run")
+	var envFlags stringListFlag
+	fs.Var(&envFlags, "env", "run-scoped public environment variable KEY=VALUE")
 	if err := fs.Parse(flagArgs); err != nil {
 		return opts, err
 	}
@@ -512,6 +528,11 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 		return opts, err
 	}
 	opts.hostFSRun = hostFSRun
+	envPublic, err := parseRunEnvFlags(envFlags)
+	if err != nil {
+		return opts, err
+	}
+	opts.envPublic = envPublic
 	if opts.newEnvironment && strings.TrimSpace(opts.resumeEnvironment) != "" {
 		return opts, errors.New("--new and --resume cannot be used together")
 	}
@@ -522,6 +543,25 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 		opts.command = fs.Args()
 	}
 	return opts, nil
+}
+
+func parseRunEnvFlags(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, raw := range values {
+		name, value, ok := strings.Cut(raw, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			return nil, errors.New("--env must use KEY=VALUE")
+		}
+		name = strings.TrimSpace(name)
+		if _, exists := out[name]; exists {
+			return nil, fmt.Errorf("--env contains duplicate key %q", name)
+		}
+		out[name] = value
+	}
+	return out, nil
 }
 
 type stringListFlag []string
@@ -1851,9 +1891,342 @@ func (a app) profile(args []string) error {
 		return nil
 	case "fs":
 		return a.profileFS(store, args[1:])
+	case "env":
+		return a.profileEnv(store, args[1:])
+	case "tools":
+		return a.profileTools(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
+}
+
+func (a app) profileEnv(store profile.Store, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: hideout profile env <name> <list|set|unset|inherit|uninherit|deny|undeny>")
+	}
+	name := args[0]
+	command := args[1]
+	switch command {
+	case "list":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile env <name> list")
+		}
+		p, err := store.LoadOrInit(name)
+		if err != nil {
+			return err
+		}
+		return writeProfileEnv(a.stdout, p)
+	case "set":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile env <name> set KEY=VALUE")
+		}
+		key, value, ok := strings.Cut(args[2], "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			return errors.New("profile env set requires KEY=VALUE")
+		}
+		return a.profileEnvSet(store, name, strings.TrimSpace(key), value)
+	case "unset":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile env <name> unset KEY")
+		}
+		return a.profileEnvUnset(store, name, args[2])
+	case "inherit":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile env <name> inherit KEY")
+		}
+		return a.profileEnvListAdd(store, name, "inherit", args[2])
+	case "uninherit":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile env <name> uninherit KEY")
+		}
+		return a.profileEnvListRemove(store, name, "inherit", args[2])
+	case "deny":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile env <name> deny PATTERN")
+		}
+		return a.profileEnvListAdd(store, name, "deny", args[2])
+	case "undeny":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile env <name> undeny PATTERN")
+		}
+		return a.profileEnvListRemove(store, name, "deny", args[2])
+	default:
+		return fmt.Errorf("unknown profile env command %q", command)
+	}
+}
+
+type profileEnvListOutput struct {
+	Profile string   `json:"profile"`
+	Public  []string `json:"public"`
+	Inherit []string `json:"inherit"`
+	Deny    []string `json:"deny"`
+}
+
+type profileEnvChangeOutput struct {
+	Profile string `json:"profile"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Removed bool   `json:"removed,omitempty"`
+}
+
+func writeProfileEnv(w io.Writer, p profile.Profile) error {
+	return writeJSONLine(w, profileEnvListOutput{
+		Profile: p.Name,
+		Public:  sortedMapKeys(p.Env.Public),
+		Inherit: sortedStrings(p.Env.Inherit),
+		Deny:    sortedStrings(p.Env.Deny),
+	})
+}
+
+func (a app) profileEnvSet(store profile.Store, name, key, value string) error {
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	if p.Env.Public == nil {
+		p.Env.Public = map[string]string{}
+	}
+	p.Env.Public[key] = value
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env.public", Name: key})
+}
+
+func (a app) profileEnvUnset(store profile.Store, name, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("env key is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	delete(p.Env.Public, key)
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env.public", Name: key, Removed: true})
+}
+
+func (a app) profileEnvListAdd(store profile.Store, name, kind, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("env key or pattern is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case "inherit":
+		p.Env.Inherit = appendIfMissing(p.Env.Inherit, value)
+	case "deny":
+		p.Env.Deny = appendIfMissing(p.Env.Deny, value)
+	default:
+		return fmt.Errorf("unsupported env list kind %q", kind)
+	}
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env." + kind, Name: value})
+}
+
+func (a app) profileEnvListRemove(store profile.Store, name, kind, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("env key or pattern is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case "inherit":
+		p.Env.Inherit = removeString(p.Env.Inherit, value)
+	case "deny":
+		p.Env.Deny = removeString(p.Env.Deny, value)
+	default:
+		return fmt.Errorf("unsupported env list kind %q", kind)
+	}
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env." + kind, Name: value, Removed: true})
+}
+
+func (a app) profileTools(store profile.Store, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: hideout profile tools <name> <list|preset|npm>")
+	}
+	name := args[0]
+	command := args[1]
+	switch command {
+	case "list":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile tools <name> list")
+		}
+		p, err := store.LoadOrInit(name)
+		if err != nil {
+			return err
+		}
+		return writeProfileTools(a.stdout, p)
+	case "preset":
+		return a.profileToolPreset(store, name, args[2:])
+	case "npm":
+		return a.profileToolNPM(store, name, args[2:])
+	default:
+		return fmt.Errorf("unknown profile tools command %q", command)
+	}
+}
+
+type profileToolsOutput struct {
+	Profile    string                     `json:"profile"`
+	Presets    []string                   `json:"presets"`
+	NPMGlobals []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
+}
+
+type profileToolChangeOutput struct {
+	Profile  string   `json:"profile"`
+	Kind     string   `json:"kind"`
+	Package  string   `json:"package,omitempty"`
+	Preset   string   `json:"preset,omitempty"`
+	Commands []string `json:"commands,omitempty"`
+	Removed  bool     `json:"removed,omitempty"`
+}
+
+func writeProfileTools(w io.Writer, p profile.Profile) error {
+	return writeJSONLine(w, profileToolsOutput{
+		Profile:    p.Name,
+		Presets:    sortedStrings(p.Tools.Presets),
+		NPMGlobals: copyNPMGlobalsForOutput(p.Tools.NPMGlobals),
+	})
+}
+
+func (a app) profileToolPreset(store profile.Store, name string, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: hideout profile tools <name> preset <add|remove> <preset>")
+	}
+	action := args[0]
+	preset := strings.TrimSpace(args[1])
+	if preset == "" {
+		return errors.New("tool preset is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "add":
+		p.Tools.Presets = appendIfMissing(p.Tools.Presets, preset)
+	case "remove":
+		p.Tools.Presets = removeString(p.Tools.Presets, preset)
+	default:
+		return fmt.Errorf("unknown profile tools preset command %q", action)
+	}
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileToolChangeOutput{
+		Profile: p.Name,
+		Kind:    "tools.presets",
+		Preset:  preset,
+		Removed: action == "remove",
+	})
+}
+
+func (a app) profileToolNPM(store profile.Store, name string, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout profile tools <name> npm <add|remove>")
+	}
+	switch args[0] {
+	case "add":
+		return a.profileToolNPMAdd(store, name, args[1:])
+	case "remove":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile tools <name> npm remove <package>")
+		}
+		return a.profileToolNPMRemove(store, name, args[1])
+	default:
+		return fmt.Errorf("unknown profile tools npm command %q", args[0])
+	}
+}
+
+func (a app) profileToolNPMAdd(store profile.Store, name string, args []string) error {
+	fs := flag.NewFlagSet("profile tools npm add", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var packageSpec string
+	var commands stringListFlag
+	fs.StringVar(&packageSpec, "package", "", "npm package spec")
+	fs.Var(&commands, "command", "command expected after npm global install")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected profile tools npm argument %q", fs.Arg(0))
+	}
+	packageSpec = strings.TrimSpace(packageSpec)
+	if packageSpec == "" {
+		return errors.New("--package is required")
+	}
+	if len(commands) == 0 {
+		return errors.New("--command is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	next := profile.NPMGlobalPackage{Package: packageSpec, Commands: append([]string(nil), commands...)}
+	replaced := false
+	for i, pkg := range p.Tools.NPMGlobals {
+		if strings.TrimSpace(pkg.Package) == packageSpec {
+			p.Tools.NPMGlobals[i] = next
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		p.Tools.NPMGlobals = append(p.Tools.NPMGlobals, next)
+	}
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileToolChangeOutput{
+		Profile:  p.Name,
+		Kind:     "tools.npmGlobals",
+		Package:  packageSpec,
+		Commands: append([]string(nil), commands...),
+	})
+}
+
+func (a app) profileToolNPMRemove(store profile.Store, name, packageSpec string) error {
+	packageSpec = strings.TrimSpace(packageSpec)
+	if packageSpec == "" {
+		return errors.New("npm package is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	removed := false
+	out := p.Tools.NPMGlobals[:0]
+	for _, pkg := range p.Tools.NPMGlobals {
+		if strings.TrimSpace(pkg.Package) == packageSpec {
+			removed = true
+			continue
+		}
+		out = append(out, pkg)
+	}
+	p.Tools.NPMGlobals = out
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileToolChangeOutput{
+		Profile: p.Name,
+		Kind:    "tools.npmGlobals",
+		Package: packageSpec,
+		Removed: removed,
+	})
 }
 
 func (a app) profileFS(store profile.Store, args []string) error {
@@ -2093,6 +2466,44 @@ func writeJSONLine(w io.Writer, value any) error {
 	data = append(data, '\n')
 	_, err = w.Write(data)
 	return err
+}
+
+func sortedStrings(values []string) []string {
+	out := append([]string(nil), values...)
+	sort.Strings(out)
+	return out
+}
+
+func appendIfMissing(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func removeString(values []string, value string) []string {
+	out := values[:0]
+	for _, existing := range values {
+		if existing == value {
+			continue
+		}
+		out = append(out, existing)
+	}
+	return out
+}
+
+func copyNPMGlobalsForOutput(values []profile.NPMGlobalPackage) []profile.NPMGlobalPackage {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]profile.NPMGlobalPackage, len(values))
+	for i, value := range values {
+		out[i] = value
+		out[i].Commands = append([]string(nil), value.Commands...)
+	}
+	return out
 }
 
 func (a app) cleanup(args []string) error {

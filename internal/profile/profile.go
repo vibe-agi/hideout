@@ -69,7 +69,13 @@ type Network struct {
 }
 
 type Tools struct {
-	Presets []string `json:"presets"`
+	Presets    []string           `json:"presets"`
+	NPMGlobals []NPMGlobalPackage `json:"npmGlobals,omitempty"`
+}
+
+type NPMGlobalPackage struct {
+	Package  string   `json:"package"`
+	Commands []string `json:"commands"`
 }
 
 type HostCapabilities struct {
@@ -77,10 +83,12 @@ type HostCapabilities struct {
 }
 
 type OpenCapability struct {
-	Mode                string `json:"mode"`
-	AllowURLs           bool   `json:"allowUrls"`
-	AllowWorkspaceFiles bool   `json:"allowWorkspaceFiles"`
-	BrowserProfile      string `json:"browserProfile"`
+	Mode                    string `json:"mode"`
+	AllowURLs               bool   `json:"allowUrls"`
+	AllowLocalURLs          bool   `json:"allowLocalUrls"`
+	AllowPrivateNetworkURLs bool   `json:"allowPrivateNetworkUrls"`
+	AllowWorkspaceFiles     bool   `json:"allowWorkspaceFiles"`
+	BrowserProfile          string `json:"browserProfile"`
 }
 
 type CommandProxy struct {
@@ -185,31 +193,8 @@ func Default(name string) Profile {
 			PathMode: "preserve",
 		},
 		Env: Env{
-			Public: map[string]string{},
-			Deny: []string{
-				"SSH_*",
-				"GITHUB_*",
-				"GITLAB_*",
-				"VSCODE_*",
-				"CURSOR_*",
-				"ANTHROPIC_*",
-				"OPENAI_*",
-				"AWS_*",
-				"GOOGLE_*",
-				"GCLOUD_*",
-				"AZURE_*",
-				"HIDEOUT_*",
-				"HTTP_PROXY",
-				"HTTPS_PROXY",
-				"NO_PROXY",
-				"ALL_PROXY",
-				"FTP_PROXY",
-				"http_proxy",
-				"https_proxy",
-				"no_proxy",
-				"all_proxy",
-				"ftp_proxy",
-			},
+			Public:  map[string]string{},
+			Deny:    []string{},
 			Inherit: []string{"TERM", "COLORTERM"},
 		},
 		Git: Git{
@@ -588,9 +573,12 @@ func (p Profile) Validate() error {
 		if strings.TrimSpace(preset) == "" {
 			return errors.New("tool preset cannot be empty")
 		}
-		if preset != "base-dev" {
+		if preset != "base-dev" && preset != "node-dev" {
 			return fmt.Errorf("unsupported tool preset %q", preset)
 		}
+	}
+	if err := validateNPMGlobals(p.Tools.NPMGlobals); err != nil {
+		return err
 	}
 	if err := p.validateHostCapabilities(); err != nil {
 		return err
@@ -816,6 +804,44 @@ func validateHostFSRuleIDs(config hostfs.Config) error {
 			return fmt.Errorf("hostfs.deny[%d].id duplicates %s", i, prev)
 		}
 		seen[rule.ID] = fmt.Sprintf("hostfs.deny[%d].id", i)
+	}
+	return nil
+}
+
+func validateNPMGlobals(packages []NPMGlobalPackage) error {
+	seenPackages := map[string]bool{}
+	seenCommands := map[string]bool{}
+	for i, pkg := range packages {
+		name := strings.TrimSpace(pkg.Package)
+		if name == "" {
+			return fmt.Errorf("tools.npmGlobals[%d].package is required", i)
+		}
+		if strings.HasPrefix(name, "-") || strings.ContainsAny(name, "\x00\r\n\t ") {
+			return fmt.Errorf("tools.npmGlobals[%d].package is not a valid npm package spec", i)
+		}
+		if seenPackages[name] {
+			return fmt.Errorf("tools.npmGlobals[%d].package duplicates %s", i, name)
+		}
+		seenPackages[name] = true
+		if len(pkg.Commands) == 0 {
+			return fmt.Errorf("tools.npmGlobals[%d].commands is required", i)
+		}
+		if err := validateUniqueStrings(fmt.Sprintf("tools.npmGlobals[%d].commands", i), pkg.Commands); err != nil {
+			return err
+		}
+		for j, command := range pkg.Commands {
+			command = strings.TrimSpace(command)
+			if command == "" {
+				return fmt.Errorf("tools.npmGlobals[%d].commands[%d] is required", i, j)
+			}
+			if strings.ContainsAny(command, "\x00\r\n\t /\\") || strings.HasPrefix(command, "-") {
+				return fmt.Errorf("tools.npmGlobals[%d].commands[%d] is not a command name", i, j)
+			}
+			if seenCommands[command] {
+				return fmt.Errorf("tools.npmGlobals[%d].commands[%d] duplicates command %s", i, j, command)
+			}
+			seenCommands[command] = true
+		}
 	}
 	return nil
 }
@@ -1146,10 +1172,11 @@ func writeIdentityMetadata(path string, metadata map[string]string) error {
 
 func cloneProfile(p Profile) Profile {
 	p.Env.Public = copyStringMap(p.Env.Public)
-	p.Env.Deny = append([]string(nil), p.Env.Deny...)
-	p.Env.Inherit = append([]string(nil), p.Env.Inherit...)
-	p.Tools.Presets = append([]string(nil), p.Tools.Presets...)
-	p.Policy.MaxCapabilities = append([]string(nil), p.Policy.MaxCapabilities...)
+	p.Env.Deny = copyStringSlice(p.Env.Deny)
+	p.Env.Inherit = copyStringSlice(p.Env.Inherit)
+	p.Tools.Presets = copyStringSlice(p.Tools.Presets)
+	p.Tools.NPMGlobals = copyNPMGlobals(p.Tools.NPMGlobals)
+	p.Policy.MaxCapabilities = copyStringSlice(p.Policy.MaxCapabilities)
 	p.Policy.ScriptRefs = append([]ScriptRef(nil), p.Policy.ScriptRefs...)
 	p.Metadata = copyStringMap(p.Metadata)
 	return p
@@ -1162,6 +1189,27 @@ func copyStringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+	return out
+}
+
+func copyStringSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+func copyNPMGlobals(in []NPMGlobalPackage) []NPMGlobalPackage {
+	if in == nil {
+		return nil
+	}
+	out := make([]NPMGlobalPackage, len(in))
+	for i, pkg := range in {
+		out[i] = pkg
+		out[i].Commands = copyStringSlice(pkg.Commands)
 	}
 	return out
 }

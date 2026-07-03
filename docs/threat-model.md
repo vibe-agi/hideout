@@ -132,8 +132,10 @@ the default policy profile:
   a denied path exists; audit records the policy reason for the human operator.
 - A1-A3: `host.open` can open allowed external URLs and workspace files through
   the Host Broker, but it is not generic host command execution.
-- A1-A3: `host.open` denies localhost, loopback, private network, link-local,
-  multicast, unspecified URL targets, and known host gateway aliases by default.
+- A1-A3: default profile policy denies `host.open` localhost, loopback, private
+  network, link-local, multicast, unspecified URL targets, and known host
+  gateway aliases. A profile owner may explicitly opt into local or private
+  network URL opens.
 - A1-A3: browser control channels, remote debugging ports, and real browser
   profiles are not exposed by `host.open`.
 - A1-A3: hidden proxy setup may affect system networking for the run without
@@ -212,9 +214,9 @@ other privileged services.
 
 Therefore:
 
-- `host.open` must continue to deny localhost, loopback, private network URL
-  targets, and known host gateway aliases such as `host.docker.internal`,
-  `host.lima.internal`, and `host.containers.internal` by default;
+- default `host.open` profile policy denies localhost, loopback, private network
+  URL targets, and known host gateway aliases such as `host.docker.internal`,
+  `host.lima.internal`, and `host.containers.internal`;
 - `preview.open` must not be implemented as a localhost/private-network
   exception inside `host.open`;
 - a host browser preview of a guest service must be represented by an

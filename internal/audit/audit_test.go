@@ -44,8 +44,8 @@ func TestRedactDetailsRecursiveAndKeyAware(t *testing.T) {
 			},
 		},
 		"env": map[string]string{
-			"GITHUB_TOKEN": "secret",
-			"TERM":         "xterm-256color",
+			"SERVICE_TOKEN": "secret",
+			"TERM":          "xterm-256color",
 		},
 	})
 	if got["capabilityToken"] != "REDACTED" {
@@ -85,7 +85,7 @@ func TestRedactDetailsRecursiveAndKeyAware(t *testing.T) {
 		t.Fatalf("nested api key not redacted: %+v", urls[1])
 	}
 	env := got["env"].(map[string]string)
-	if env["GITHUB_TOKEN"] != "REDACTED" || env["TERM"] != "xterm-256color" {
+	if env["SERVICE_TOKEN"] != "REDACTED" || env["TERM"] != "xterm-256color" {
 		t.Fatalf("env redaction mismatch: %+v", env)
 	}
 }

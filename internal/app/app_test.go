@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -425,6 +426,173 @@ func TestProfileFSAddRequiresReason(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "profile.json")); !os.IsNotExist(err) {
 		t.Fatalf("invalid profile fs add should not create profile state; err=%v", err)
+	}
+}
+
+func TestProfileEnvManagePolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "env", "default", "set", "SERVICE_TOKEN=secret-value"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("env set exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "secret-value") {
+		t.Fatalf("env set output must not echo value: %s", out.String())
+	}
+	loaded, err := store.Load("default")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	if loaded.Env.Public["SERVICE_TOKEN"] != "secret-value" {
+		t.Fatalf("env public was not persisted: %+v", loaded.Env.Public)
+	}
+
+	for _, args := range [][]string{
+		{"profile", "env", "default", "inherit", "USER_OPT_IN_ENV"},
+		{"profile", "env", "default", "deny", "SSH_*"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		code = Main(args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, errOut.String())
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "env", "default", "list"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("env list exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "secret-value") {
+		t.Fatalf("env list output must not echo values: %s", out.String())
+	}
+	var listed struct {
+		Profile string   `json:"profile"`
+		Public  []string `json:"public"`
+		Inherit []string `json:"inherit"`
+		Deny    []string `json:"deny"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &listed); err != nil {
+		t.Fatalf("decode env list: %v\n%s", err, out.String())
+	}
+	if listed.Profile != "default" ||
+		!slices.Contains(listed.Public, "SERVICE_TOKEN") ||
+		!slices.Contains(listed.Inherit, "USER_OPT_IN_ENV") ||
+		!slices.Contains(listed.Deny, "SSH_*") {
+		t.Fatalf("unexpected env list: %+v", listed)
+	}
+
+	for _, args := range [][]string{
+		{"profile", "env", "default", "unset", "SERVICE_TOKEN"},
+		{"profile", "env", "default", "uninherit", "USER_OPT_IN_ENV"},
+		{"profile", "env", "default", "undeny", "SSH_*"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		code = Main(args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, errOut.String())
+		}
+	}
+	loaded, err = store.Load("default")
+	if err != nil {
+		t.Fatalf("reload profile: %v", err)
+	}
+	if _, ok := loaded.Env.Public["SERVICE_TOKEN"]; ok ||
+		slices.Contains(loaded.Env.Inherit, "USER_OPT_IN_ENV") ||
+		slices.Contains(loaded.Env.Deny, "SSH_*") {
+		t.Fatalf("env removals not persisted: %+v", loaded.Env)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "env", "default", "set", "HIDEOUT_STORE_ROOT=/tmp/store"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("reserved env set should fail; stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "env.public must not expose hideout runtime env") {
+		t.Fatalf("reserved env failure should use profile validation, got %s", errOut.String())
+	}
+}
+
+func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "tools", "default", "preset", "add", "node-dev"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("preset add exit=%d stderr=%s", code, errOut.String())
+	}
+	loaded, err := store.Load("default")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	if !slices.Contains(loaded.Tools.Presets, "node-dev") {
+		t.Fatalf("node-dev preset was not persisted: %+v", loaded.Tools.Presets)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "tools", "default", "npm", "add", "--package", "@example/test-cli@1.2.3", "--command", "test-cli", "--command", "test-helper"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("npm add exit=%d stderr=%s", code, errOut.String())
+	}
+	loaded, err = store.Load("default")
+	if err != nil {
+		t.Fatalf("reload profile: %v", err)
+	}
+	if len(loaded.Tools.NPMGlobals) != 1 ||
+		loaded.Tools.NPMGlobals[0].Package != "@example/test-cli@1.2.3" ||
+		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "test-cli") ||
+		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "test-helper") {
+		t.Fatalf("npm global tool was not persisted: %+v", loaded.Tools.NPMGlobals)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "tools", "default", "list"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("tools list exit=%d stderr=%s", code, errOut.String())
+	}
+	var listed struct {
+		Profile    string                     `json:"profile"`
+		Presets    []string                   `json:"presets"`
+		NPMGlobals []profile.NPMGlobalPackage `json:"npmGlobals"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &listed); err != nil {
+		t.Fatalf("decode tools list: %v\n%s", err, out.String())
+	}
+	if listed.Profile != "default" ||
+		!slices.Contains(listed.Presets, "node-dev") ||
+		len(listed.NPMGlobals) != 1 ||
+		listed.NPMGlobals[0].Package != "@example/test-cli@1.2.3" {
+		t.Fatalf("unexpected tools list: %+v", listed)
+	}
+
+	for _, args := range [][]string{
+		{"profile", "tools", "default", "preset", "remove", "node-dev"},
+		{"profile", "tools", "default", "npm", "remove", "@example/test-cli@1.2.3"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		code = Main(args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, errOut.String())
+		}
+	}
+	loaded, err = store.Load("default")
+	if err != nil {
+		t.Fatalf("reload after removals: %v", err)
+	}
+	if slices.Contains(loaded.Tools.Presets, "node-dev") || len(loaded.Tools.NPMGlobals) != 0 {
+		t.Fatalf("tool removals were not persisted: %+v", loaded.Tools)
 	}
 }
 
@@ -2545,7 +2713,7 @@ func TestUIRejectsPublicListenAddress(t *testing.T) {
 func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("GITHUB_TOKEN", "audit-secret")
+	t.Setenv("SERVICE_TOKEN", "audit-secret")
 	t.Setenv("TERM", "xterm-256color")
 	var out, errOut bytes.Buffer
 	code := Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--", "sh", "-c", "printf '%s\n%s' \"$HOME\" \"$HOSTNAME\""}, &out, &errOut)
@@ -2604,7 +2772,6 @@ func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 		`"resolved":"native"`,
 		`"weakIsolation":true`,
 		`"proxyEnv":"absent"`,
-		`"GITHUB_TOKEN"`,
 		`"HOSTNAME"`,
 		`"TERM"`,
 	} {
@@ -2614,6 +2781,9 @@ func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 	}
 	if strings.Contains(string(auditData), "audit-secret") {
 		t.Fatalf("audit leaked denied env value: %s", auditData)
+	}
+	if strings.Contains(string(auditData), "SERVICE_TOKEN") {
+		t.Fatalf("audit should not report non-inherited business env as denied: %s", auditData)
 	}
 	if strings.Contains(string(auditData), "<nil>") {
 		t.Fatalf("session.end audit should not contain nil error string: %s", auditData)
@@ -2629,7 +2799,7 @@ func TestRunNativeAcceptanceWorkspaceGitAndChildEnv(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("HTTP_PROXY", "http://user:pass@proxy.invalid:8080")
 	t.Setenv("HTTPS_PROXY", "http://user:pass@proxy.invalid:8443")
-	t.Setenv("GITHUB_TOKEN", "github-secret")
+	t.Setenv("SERVICE_TOKEN", "service-secret")
 	hostGitConfig := filepath.Join(t.TempDir(), "host.gitconfig")
 	if err := os.WriteFile(hostGitConfig, []byte("[user]\n  email = real@example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -2660,11 +2830,11 @@ test "$home_cache_real" = "$xdg_cache_real"
 home_data_real=$(cd "$HOME/.local/share" && pwd -P)
 xdg_data_real=$(cd "$XDG_DATA_HOME" && pwd -P)
 test "$home_data_real" = "$xdg_data_real"
-if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+if [ -n "${HTTP_PROXY:-}" ] || [ -n "${HTTPS_PROXY:-}" ] || [ -n "${SERVICE_TOKEN:-}" ]; then
   echo "sensitive env leaked to target" >&2
   exit 24
 fi
-child_sensitive_env=$(sh -c 'printf "%s|%s|%s" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${GITHUB_TOKEN:-}"')
+child_sensitive_env=$(sh -c 'printf "%s|%s|%s" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${SERVICE_TOKEN:-}"')
 if [ "$child_sensitive_env" != "||" ]; then
   echo "sensitive env leaked to child: $child_sensitive_env" >&2
   exit 25
@@ -3156,6 +3326,41 @@ func TestRunNativeEphemeralUsesSessionLocalIdentity(t *testing.T) {
 	}
 }
 
+func TestRunScopedEnvIsUserControlledAndValidated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--env", "TEST_CLI_VISIBLE=1", "--", "sh", "-c", "printf '%s' \"$TEST_CLI_VISIBLE\""}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if out.String() != "1" {
+		t.Fatalf("target did not see run-scoped env: %q", out.String())
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("glob audit files: %v", err)
+	}
+	if len(auditFiles) != 1 {
+		t.Fatalf("expected one audit file, got %d: %v", len(auditFiles), auditFiles)
+	}
+	envPolicy := lastAuditEventByActionForAppTest(t, auditFiles[0], "env.policy")
+	public, ok := envPolicy.Details["public"].([]any)
+	if !ok || len(public) != 1 || public[0] != "TEST_CLI_VISIBLE" {
+		t.Fatalf("env.policy audit missing run-scoped public env: %+v", envPolicy.Details)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--env", "HIDEOUT_STORE_ROOT=/tmp/store", "--", "sh", "-c", "true"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("reserved run-scoped env should fail; stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "env.public must not expose hideout runtime env") {
+		t.Fatalf("reserved env failure should come from profile validation, got %s", errOut.String())
+	}
+}
+
 func TestRunRespectsProfileAuditDisabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -3404,8 +3609,8 @@ func TestRunNativeOpenRejectsHostLocalBrowserURL(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("expected host-local URL open to fail; stdout=%s stderr=%s", out.String(), errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "Phase 1 browser boundary") {
-		t.Fatalf("stderr missing browser boundary denial:\n%s", errOut.String())
+	if !strings.Contains(errOut.String(), "profile policy") {
+		t.Fatalf("stderr missing profile policy denial:\n%s", errOut.String())
 	}
 	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
 	if err != nil {
@@ -3424,8 +3629,8 @@ func TestRunNativeOpenRejectsHostLocalBrowserURL(t *testing.T) {
 	if _, ok := hostOpen.Details["browserProfile"]; ok {
 		t.Fatalf("host-local URL should not report browser profile launch: %+v", hostOpen)
 	}
-	if !strings.Contains(fmt.Sprint(hostOpen.Details["error"]), "Phase 1 browser boundary") {
-		t.Fatalf("host.open audit missing browser boundary reason: %+v", hostOpen)
+	if !strings.Contains(fmt.Sprint(hostOpen.Details["error"]), "profile policy") {
+		t.Fatalf("host.open audit missing profile policy reason: %+v", hostOpen)
 	}
 }
 

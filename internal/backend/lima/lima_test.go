@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -214,6 +215,112 @@ func TestPrepareUsesProfileCommandProxyShims(t *testing.T) {
 	}
 }
 
+func TestPrepareAddsNodeDevProvisionWhenPresetEnabled(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Profile.Tools.Presets = []string{"base-dev", "node-dev"}
+	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	data, err := os.ReadFile(session.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg limaConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml decode: %v\n%s", err, data)
+	}
+	if len(cfg.Provision) != 2 {
+		t.Fatalf("expected base and node-dev provision scripts: %+v", cfg.Provision)
+	}
+	nodeProvision := cfg.Provision[1].Script
+	for _, want := range []string{
+		"apt-get install -y ca-certificates curl nodejs npm",
+		"command -v node",
+		"command -v npm",
+	} {
+		if !strings.Contains(nodeProvision, want) {
+			t.Fatalf("node-dev provision missing %q:\n%s", want, nodeProvision)
+		}
+	}
+	bootstrap, err := os.ReadFile(session.BootstrapPath)
+	if err != nil {
+		t.Fatalf("read bootstrap: %v", err)
+	}
+	for _, want := range []string{
+		"required guest command missing: node",
+		"required guest command missing: npm",
+	} {
+		if !strings.Contains(string(bootstrap), want) {
+			t.Fatalf("node-dev bootstrap missing %q:\n%s", want, bootstrap)
+		}
+	}
+	manifest, err := os.ReadFile(session.ToolManifestPath)
+	if err != nil {
+		t.Fatalf("read tool manifest: %v", err)
+	}
+	if !bytes.Contains(manifest, []byte(`"name": "node-dev"`)) {
+		t.Fatalf("manifest missing node-dev: %s", manifest)
+	}
+	if bytes.Contains(manifest, []byte("npm install")) {
+		t.Fatalf("manifest must not embed provision script: %s", manifest)
+	}
+}
+
+func TestPrepareAddsUserNPMGlobalProvision(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Profile.Tools.Presets = []string{"base-dev", "node-dev"}
+	spec.Profile.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
+		Package:  "@example/agent-cli@1.2.3",
+		Commands: []string{"agent-cli"},
+	}}
+	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	data, err := os.ReadFile(session.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg limaConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml decode: %v\n%s", err, data)
+	}
+	if len(cfg.Provision) != 3 {
+		t.Fatalf("expected base, node-dev, and npm global provision scripts: %+v", cfg.Provision)
+	}
+	npmProvision := cfg.Provision[2].Script
+	for _, want := range []string{
+		"npm install -g '@example/agent-cli@1.2.3'",
+		"command -v 'agent-cli'",
+	} {
+		if !strings.Contains(npmProvision, want) {
+			t.Fatalf("npm global provision missing %q:\n%s", want, npmProvision)
+		}
+	}
+	bootstrap, err := os.ReadFile(session.BootstrapPath)
+	if err != nil {
+		t.Fatalf("read bootstrap: %v", err)
+	}
+	if !strings.Contains(string(bootstrap), "required guest command missing: agent-cli") {
+		t.Fatalf("bootstrap missing npm global command check:\n%s", bootstrap)
+	}
+	manifest, err := os.ReadFile(session.ToolManifestPath)
+	if err != nil {
+		t.Fatalf("read tool manifest: %v", err)
+	}
+	for _, want := range []string{`"package": "@example/agent-cli@1.2.3"`, `"agent-cli"`} {
+		if !bytes.Contains(manifest, []byte(want)) {
+			t.Fatalf("manifest missing %s: %s", want, manifest)
+		}
+	}
+	if bytes.Contains(manifest, []byte("npm install")) {
+		t.Fatalf("manifest must not embed provision script: %s", manifest)
+	}
+}
+
 func TestGeneratedYAMLValidatesWithLimactlWhenAvailable(t *testing.T) {
 	limactl, err := exec.LookPath("limactl")
 	if err != nil {
@@ -324,12 +431,30 @@ func TestResolveToolPresetsRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestResolveToolPresetsIncludesNodeDev(t *testing.T) {
+	presets, err := ResolveToolPresets([]string{"base-dev", "node-dev"})
+	if err != nil {
+		t.Fatalf("ResolveToolPresets: %v", err)
+	}
+	if len(presets) != 2 || presets[1].Name != "node-dev" {
+		t.Fatalf("unexpected presets: %+v", presets)
+	}
+	for _, want := range []string{"node", "npm"} {
+		if !slices.Contains(presets[1].RequiredCommands, want) {
+			t.Fatalf("node-dev required commands missing %s: %+v", want, presets[1].RequiredCommands)
+		}
+	}
+	if !strings.Contains(presets[1].ProvisionScript, "apt-get install -y ca-certificates curl nodejs npm") {
+		t.Fatalf("node-dev provision missing package install: %s", presets[1].ProvisionScript)
+	}
+}
+
 func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
 	t.Setenv("HTTP_PROXY", "http://user:pass@proxy.invalid:8080")
 	t.Setenv("HIDEOUT_SECRET_DEFAULT_PROXY", "socks5://user:pass@127.0.0.1:1080")
-	t.Setenv("GITHUB_TOKEN", "secret")
+	t.Setenv("SERVICE_TOKEN", "secret")
 	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
 	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
@@ -375,7 +500,7 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	}
 	for _, call := range runner.calls {
 		hostEnv := strings.Join(call.env, "\n")
-		if strings.Contains(hostEnv, "HTTP_PROXY=") || strings.Contains(hostEnv, "HIDEOUT_SECRET_") || strings.Contains(hostEnv, "GITHUB_TOKEN=") {
+		if strings.Contains(hostEnv, "HTTP_PROXY=") || strings.Contains(hostEnv, "HIDEOUT_SECRET_") || strings.Contains(hostEnv, "SERVICE_TOKEN=") {
 			t.Fatalf("limactl host env leaked sensitive values: %s", hostEnv)
 		}
 	}
@@ -535,7 +660,7 @@ func TestHostCommandEnvUsesSmallAllowlist(t *testing.T) {
 		"USER=alice",
 		"HTTP_PROXY=http://user:pass@proxy.invalid:8080",
 		"HIDEOUT_SECRET_DEFAULT_PROXY=socks5://user:pass@127.0.0.1:1080",
-		"GITHUB_TOKEN=secret",
+		"SERVICE_TOKEN=secret",
 		"LIMA_HOME=/Users/alice/.lima-hideout",
 	})
 	text := strings.Join(got, "\n")
@@ -544,7 +669,7 @@ func TestHostCommandEnvUsesSmallAllowlist(t *testing.T) {
 			t.Fatalf("sanitized host env missing %s: %v", want, got)
 		}
 	}
-	for _, denied := range []string{"HTTP_PROXY=", "HIDEOUT_SECRET_", "GITHUB_TOKEN="} {
+	for _, denied := range []string{"HTTP_PROXY=", "HIDEOUT_SECRET_", "SERVICE_TOKEN="} {
 		if strings.Contains(text, denied) {
 			t.Fatalf("sanitized host env leaked %s: %v", denied, got)
 		}

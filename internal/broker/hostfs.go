@@ -303,6 +303,9 @@ func safeHostFSPolicyReason(decision hostfs.Decision) string {
 		if decision.RuleID != "" {
 			return "matched-deny-rule"
 		}
+		if decision.Reason == hostfs.ReservedRootReason {
+			return "reserved-control-plane"
+		}
 		return "denied"
 	case "unsupported":
 		return "unsupported"

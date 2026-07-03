@@ -72,8 +72,9 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		return RunDataPlane{}, err
 	}
 	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{
-		Profile: HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants),
-		Run:     opts.HostFSRun,
+		Profile:   HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants),
+		Run:       opts.HostFSRun,
+		StoreRoot: c.Store.Root,
 	})
 	if err != nil {
 		return RunDataPlane{}, err

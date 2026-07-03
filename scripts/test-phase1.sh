@@ -7,7 +7,7 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--proxy|--real-browser|--probes]
+  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--proxy|--real-browser|--probes|--dogfood-cli]
 
 Modes:
   --quick         Run fast local gates: Gate 0, Gate 1, Gate 4 dry-run.
@@ -21,6 +21,7 @@ Modes:
   --proxy         Include Gate 3 hidden proxy.
   --real-browser  Run Gate 4 with real external URL browser launch.
   --probes        Run capability probe CLI smoke after product gates.
+  --dogfood-cli  Run generic CLI dogfood smoke on Lima.
   -h, --help      Show this help.
 
 Default:
@@ -57,6 +58,9 @@ print_plan() {
   if [ "$include_probes" -eq 1 ]; then
     echo "phase1-plan: Capability probe CLI smoke"
   fi
+  if [ "$include_dogfood_cli" -eq 1 ]; then
+    echo "phase1-plan: Generic CLI dogfood smoke"
+  fi
 }
 
 mode="quick"
@@ -64,6 +68,7 @@ include_lima=0
 include_proxy=0
 real_browser=0
 include_probes=0
+include_dogfood_cli=0
 require_operator_proxy=0
 
 while [ "$#" -gt 0 ]; do
@@ -98,6 +103,10 @@ while [ "$#" -gt 0 ]; do
     --probes)
       include_probes=1
       ;;
+    --dogfood-cli)
+      include_dogfood_cli=1
+      include_lima=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -111,7 +120,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-echo "phase1: mode=$mode lima=$include_lima proxy=$include_proxy real_browser=$real_browser probes=$include_probes operator_proxy=$require_operator_proxy"
+echo "phase1: mode=$mode lima=$include_lima proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_proxy=$require_operator_proxy"
 
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-}" = "1" ]; then
   print_plan
@@ -154,6 +163,10 @@ fi
 
 if [ "$include_probes" -eq 1 ]; then
   run_gate "Capability probe CLI smoke" scripts/test-lab-probes.sh
+fi
+
+if [ "$include_dogfood_cli" -eq 1 ]; then
+  run_gate "Generic CLI dogfood smoke" scripts/test-dogfood-cli-smoke.sh
 fi
 
 echo "phase1: passed"

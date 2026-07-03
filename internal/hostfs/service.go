@@ -210,9 +210,10 @@ func (s Service) pathVisible(op Op, requested, resolved string) bool {
 
 func canonicalizePolicy(policy EffectivePolicy) EffectivePolicy {
 	out := EffectivePolicy{
-		Grants: make([]Grant, len(policy.Grants)),
-		Deny:   make([]Grant, len(policy.Deny)),
-		Now:    policy.Now,
+		Grants:        make([]Grant, len(policy.Grants)),
+		Deny:          make([]Grant, len(policy.Deny)),
+		Now:           policy.Now,
+		ReservedRoots: append([]string(nil), policy.ReservedRoots...),
 	}
 	copy(out.Grants, policy.Grants)
 	copy(out.Deny, policy.Deny)
@@ -221,6 +222,11 @@ func canonicalizePolicy(policy EffectivePolicy) EffectivePolicy {
 	}
 	for i := range out.Deny {
 		out.Deny[i].Rule = canonicalizeRule(out.Deny[i].Rule)
+	}
+	for i, root := range out.ReservedRoots {
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			out.ReservedRoots[i] = filepath.Clean(resolved)
+		}
 	}
 	return out
 }

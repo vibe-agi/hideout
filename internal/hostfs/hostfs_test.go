@@ -145,6 +145,107 @@ func TestSensitiveUserFilesInsideGrantedDirectoryFollowUserGrant(t *testing.T) {
 	}
 }
 
+func TestStoreReservedRootGrantsAreNotExpressible(t *testing.T) {
+	storeRoot := "/tmp/hideout-dogfood/.hideout"
+	tests := []struct {
+		name string
+		rule Rule
+	}{
+		{
+			name: "exact file inside store",
+			rule: readGrant("/tmp/hideout-dogfood/.hideout/profiles/default/profile.json", ScopeExactFile, "store file"),
+		},
+		{
+			name: "store directory",
+			rule: readGrant("/tmp/hideout-dogfood/.hideout", ScopeDir, "store dir"),
+		},
+		{
+			name: "store tree",
+			rule: readGrant("/tmp/hideout-dogfood/.hideout", ScopeRecursiveDir, "store tree"),
+		},
+		{
+			name: "ancestor tree",
+			rule: readGrant("/tmp/hideout-dogfood", ScopeRecursiveDir, "dogfood root tree"),
+		},
+		{
+			name: "glob inside store",
+			rule: readGrant("/tmp/hideout-dogfood/.hideout/**/*.json", ScopeGlob, "store glob"),
+		},
+		{
+			name: "ancestor glob",
+			rule: readGrant("/tmp/hideout-dogfood/*", ScopeGlob, "dogfood root glob"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Build(BuildInput{
+				Profile:   Config{Grants: []Rule{tt.rule}},
+				StoreRoot: storeRoot,
+			})
+			if err == nil || !strings.Contains(err.Error(), "control-plane store") {
+				t.Fatalf("expected store reserved root rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestStoreReservedRootDoesNotRejectNonCoveringParentGlob(t *testing.T) {
+	_, err := Build(BuildInput{
+		Profile: Config{Grants: []Rule{
+			readGrant("/tmp/hideout-dogfood/*.txt", ScopeGlob, "text files outside store"),
+		}},
+		StoreRoot: "/tmp/hideout-dogfood/.hideout",
+	})
+	if err != nil {
+		t.Fatalf("non-covering parent glob should be allowed: %v", err)
+	}
+}
+
+func TestStoreReservedRootDenyIsRuntimeEnforced(t *testing.T) {
+	storeRoot := "/tmp/hideout-dogfood/.hideout"
+	policy := EffectivePolicy{
+		ReservedRoots: []string{storeRoot},
+		Grants: []Grant{{
+			Rule: readGrant(storeRoot, ScopeRecursiveDir, "legacy broad store grant"),
+		}},
+	}
+	decision := policy.Decide(OpRead, "/tmp/hideout-dogfood/.hideout/sessions/ses_1/audit.jsonl")
+	if decision.Allowed || decision.Effect != "deny" || decision.Reason != ReservedRootReason {
+		t.Fatalf("reserved root should be denied at runtime: %+v", decision)
+	}
+}
+
+func TestStoreReservedRootIsFilteredFromDirectoryList(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, ".hideout")
+	if err := os.MkdirAll(filepath.Join(storeRoot, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	visible := filepath.Join(root, "visible.txt")
+	if err := os.WriteFile(visible, []byte("visible"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := EffectivePolicy{
+		ReservedRoots: []string{storeRoot},
+		Grants: []Grant{{
+			Rule: Rule{
+				HostPath: root,
+				Ops:      []Op{OpRead, OpStat, OpList},
+				Scope:    ScopeDir,
+				Reason:   "legacy parent dir grant",
+			},
+		}},
+	}
+	service := NewService(policy)
+	entries, err := service.List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name != "visible.txt" {
+		t.Fatalf("reserved store root leaked or visible file missing: %+v", entries)
+	}
+}
+
 func TestWriteClassGrantFailsValidation(t *testing.T) {
 	rule := readGrant("/Users/alice/Downloads/file.txt", ScopeExactFile, "write")
 	rule.Ops = []Op{OpWrite}
@@ -259,12 +360,16 @@ func TestRejectsInvalidGlobPattern(t *testing.T) {
 	}
 }
 
-func TestRejectsBroadRecursiveHomeGrant(t *testing.T) {
-	_, err := Build(BuildInput{
+func TestAllowsUserAuthorizedBroadRecursiveGrant(t *testing.T) {
+	policy, err := Build(BuildInput{
 		Profile: Config{Grants: []Rule{readGrant("/Users/alice", ScopeRecursiveDir, "home")}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "broad HostFS grant") {
-		t.Fatalf("expected broad grant validation failure, got %v", err)
+	if err != nil {
+		t.Fatalf("broad grant is an explicit user policy and should build: %v", err)
+	}
+	decision := policy.Decide(OpRead, "/Users/alice/Documents/file.txt")
+	if !decision.Allowed {
+		t.Fatalf("broad grant should allow matching path: %+v", decision)
 	}
 }
 

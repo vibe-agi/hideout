@@ -111,13 +111,14 @@ func NewEvaluator(p profile.Profile) Evaluator {
 func (e Evaluator) EvaluateOpen(target string) (Proposal, error) {
 	u, err := url.Parse(target)
 	if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		if localBrowserTarget(u.Hostname()) {
+		hostBoundary := browserURLBoundary(u.Hostname())
+		if hostBoundary != "" && !e.openAllowsURLBoundary(hostBoundary) {
 			return e.Validate(Proposal{
 				Decision:  Deny,
 				Route:     DenyRoute,
 				Action:    "host.open",
 				Resources: []string{"url-local:" + u.Scheme},
-				Reason:    "URL open to localhost or a private host network address is denied by Phase 1 browser boundary",
+				Reason:    hostOpenBoundaryReason(hostBoundary),
 			})
 		}
 		if !e.Open.AllowURLs {
@@ -129,23 +130,32 @@ func (e Evaluator) EvaluateOpen(target string) (Proposal, error) {
 				Reason:    "URL open is disabled by profile policy",
 			})
 		}
+		if hostBoundary != "" {
+			return e.Validate(Proposal{
+				Decision:  Allow,
+				Route:     HostBroker,
+				Action:    "host.open",
+				Resources: []string{"url:" + u.Scheme},
+				Reason:    "web URL open is allowed through host broker",
+			})
+		}
 		if addrs, err := e.resolveHost(u.Hostname()); err != nil {
 			return e.Validate(Proposal{
 				Decision:  Deny,
 				Route:     DenyRoute,
 				Action:    "host.open",
 				Resources: []string{"url-local:" + u.Scheme},
-				Reason:    "URL host DNS resolution failed by Phase 1 browser boundary",
+				Reason:    "URL host DNS resolution failed by profile policy",
 			})
 		} else {
 			for _, addr := range addrs {
-				if localBrowserAddr(addr) {
+				if category := browserAddrBoundary(addr); category != "" && !e.openAllowsURLBoundary(category) {
 					return e.Validate(Proposal{
 						Decision:  Deny,
 						Route:     DenyRoute,
 						Action:    "host.open",
 						Resources: []string{"url-local:" + u.Scheme},
-						Reason:    "URL host resolves to localhost or a private host network address and is denied by Phase 1 browser boundary",
+						Reason:    resolvedHostOpenBoundaryReason(category),
 					})
 				}
 			}
@@ -192,26 +202,59 @@ func (e Evaluator) resolveHost(host string) ([]netip.Addr, error) {
 	return addrs, nil
 }
 
-func localBrowserTarget(host string) bool {
+func (e Evaluator) openAllowsURLBoundary(category string) bool {
+	switch category {
+	case "local":
+		return e.Open.AllowLocalURLs
+	case "private-network":
+		return e.Open.AllowPrivateNetworkURLs
+	default:
+		return false
+	}
+}
+
+func hostOpenBoundaryReason(category string) string {
+	switch category {
+	case "local":
+		return "URL open to localhost or a host-local address is disabled by profile policy"
+	case "private-network":
+		return "URL open to a private host network address is disabled by profile policy"
+	default:
+		return "URL open is disabled by profile policy"
+	}
+}
+
+func resolvedHostOpenBoundaryReason(category string) string {
+	switch category {
+	case "local":
+		return "URL host resolves to localhost or a host-local address and is disabled by profile policy"
+	case "private-network":
+		return "URL host resolves to a private host network address and is disabled by profile policy"
+	default:
+		return "URL host is disabled by profile policy"
+	}
+}
+
+func browserURLBoundary(host string) string {
 	host = normalizeBrowserHost(host)
 	if host == "" {
-		return true
+		return "local"
 	}
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "local" || strings.HasSuffix(host, ".local") {
-		return true
+		return "local"
 	}
 	switch host {
 	case "host.docker.internal", "gateway.docker.internal", "kubernetes.docker.internal", "host.lima.internal", "host.containers.internal":
-		return true
+		return "local"
 	}
 	if before, _, ok := strings.Cut(host, "%"); ok {
 		host = before
 	}
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
-		return false
+		return ""
 	}
-	return localBrowserAddr(addr)
+	return browserAddrBoundary(addr)
 }
 
 func normalizeBrowserHost(host string) string {
@@ -219,15 +262,19 @@ func normalizeBrowserHost(host string) string {
 	return strings.TrimSuffix(host, ".")
 }
 
-func localBrowserAddr(addr netip.Addr) bool {
+func browserAddrBoundary(addr netip.Addr) string {
 	addr = addr.Unmap()
-	return addr.IsLoopback() ||
-		addr.IsPrivate() ||
-		addrInAnyPrefix(addr, nonPublicBrowserURLPrefixes) ||
+	if addr.IsLoopback() ||
 		addr.IsLinkLocalUnicast() ||
 		addr.IsLinkLocalMulticast() ||
 		addr.IsMulticast() ||
-		addr.IsUnspecified()
+		addr.IsUnspecified() {
+		return "local"
+	}
+	if addr.IsPrivate() || addrInAnyPrefix(addr, nonPublicBrowserURLPrefixes) {
+		return "private-network"
+	}
+	return ""
 }
 
 var nonPublicBrowserURLPrefixes = []netip.Prefix{

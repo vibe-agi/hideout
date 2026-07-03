@@ -679,7 +679,7 @@ func TestHandleRejectsLocalBrowserURLBeforeHostOpen(t *testing.T) {
 		Action:          "host.open",
 		Args:            map[string]any{"target": "http://127.0.0.1:3000"},
 	})
-	if resp.ExitCode == 0 || !strings.Contains(resp.Stderr, "Phase 1 browser boundary") {
+	if resp.ExitCode == 0 || !strings.Contains(resp.Stderr, "profile policy") {
 		t.Fatalf("expected local browser URL denial, got %+v", resp)
 	}
 	if len(opener.urls) != 0 || len(opener.files) != 0 {
@@ -692,7 +692,7 @@ func TestHandleRejectsLocalBrowserURLBeforeHostOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"action":"host.open"`, `"decision":"deny"`, `"target":"http://127.0.0.1:3000"`, "Phase 1 browser boundary"} {
+	for _, want := range []string{`"action":"host.open"`, `"decision":"deny"`, `"target":"http://127.0.0.1:3000"`, "profile policy"} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("audit missing %q: %s", want, data)
 		}

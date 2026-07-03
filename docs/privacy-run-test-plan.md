@@ -25,6 +25,8 @@ Phase 1 testing is intentionally split by cost:
 - local edit loop: run the fast gates after normal code changes;
 - backend proof: run the Lima and hidden proxy gates when touching backend,
   network, broker, or profile isolation behavior;
+- dogfood proof: run the generic agent smoke before relying on an autonomous
+  CLI workflow for daily work;
 - release candidate: run every required gate, the real external URL browser
   launch path for Gate 4, an operator-supplied proxy for Gate 3, and capability
   probe smoke.
@@ -63,6 +65,11 @@ scripts/test-phase1.sh --all --real-browser
 
 # Include command-level capability probe smoke after product gates.
 scripts/test-phase1.sh --quick --probes
+
+# Include the generic CLI dogfood smoke. This uses a fake test CLI and fake API
+# to verify callback login, profile identity persistence, authenticated request
+# flow, and control-plane store denial without binding Hideout to any product.
+scripts/test-phase1.sh --dogfood-cli
 ```
 
 ## Development Test Planning
@@ -81,7 +88,7 @@ Change-to-gate mapping:
 | Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, Gate 1, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
 | HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | HostFS grant gate when promoted |
 | Additional passthrough mounts | Gate 0, Gate 1, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
-| Lima backend, mounts, guest bootstrap, guest command resolution, or instance lifecycle | Gate 0, Gate 1, and Gate 2 | Gate 2 on macOS with Lima | `--release-candidate` |
+| Lima backend, mounts, guest bootstrap, guest command resolution, tool presets, or instance lifecycle | Gate 0, Gate 1, and Gate 2 | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, Gate 1, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and Gate 1 | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
@@ -116,6 +123,8 @@ Definition of done for a Phase 1 change:
   developer;
 - `--required` or the narrower backend gate is run before merging changes that
   affect Lima, network, broker, command proxy, or identity isolation;
+- `scripts/test-phase1.sh --dogfood-cli` passes before claiming a local
+  autonomous CLI workflow is dogfood-ready;
 - release-candidate evidence records the exact command, host prerequisites, and
   whether Gate 3 used an operator-supplied proxy.
 
@@ -309,6 +318,39 @@ Required checks:
   to their documented lifecycle;
 - `doctor` distinguishes missing Lima, invalid YAML, broken mount, invalid
   profile, bad proxy secret, broker failure, and policy script failure.
+
+### Supplemental: Generic Test CLI Dogfood Smoke
+
+Purpose: prove the product mechanics needed by a CLI-style tool
+without putting a specific third-party product into Hideout code or tests.
+
+The smoke uses `hideout-test-cli`, a fake test CLI binary, and
+`hideout-gate-lab-target`, a fake bearer-token API. It verifies:
+
+- a profile can opt into the generic `node-dev` tool preset and receive
+  `node`/`npm` in the Lima guest;
+- a profile can declare a generic npm global package and required command names
+  without Hideout knowing the tool's business semantics;
+- a target can run a local callback listener, complete a callback, and store
+  its own authentication state under the isolated profile identity home;
+- that authentication state persists across reused Lima runs for the same
+  profile and workspace;
+- the target can make an authenticated HTTP request from inside the guest to a
+  host-owned fake API;
+- run-scoped `--env KEY=VALUE` can expose a user-chosen variable while Hideout
+  runtime env remains hidden from the target;
+- HostFS cannot grant the Hideout control-plane store into the guest.
+
+This smoke is not an adapter for any real product. It is a product-mechanism
+proof: runtime supply, user-declared tool installation, callback flow,
+environment policy, profile-state persistence, network request, and
+control-plane store protection.
+
+Command:
+
+```bash
+scripts/test-phase1.sh --dogfood-cli
+```
 
 ### Gate 3: Hidden Proxy
 
@@ -658,6 +700,9 @@ Required checks:
   current run, keeps profile deny rules active, and does not mutate the profile;
 - `hideout profile fs <profile> add|deny|list|remove` manages durable profile
   HostFS rules using the same `--fs` and `--no-fs` grammar as run-scoped rules;
+- `hideout profile env` and `hideout profile tools` manage durable profile
+  policy without introducing a second representation; env list output reports
+  names only and must not echo stored values;
 - profile HostFS rules have stable unique IDs suitable for remove/edit
   operations by CLI, manager APIs, and future Web UI;
 - deny rules win over allow grants regardless of whether the allow came from

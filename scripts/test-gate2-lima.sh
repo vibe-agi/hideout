@@ -195,7 +195,7 @@ if ! with_timeout "$GATE_TIMEOUT" env \
   https_proxy="http://user:pass@proxy.invalid:8443" \
   all_proxy="socks5://user:pass@proxy.invalid:1080" \
   no_proxy="localhost,127.0.0.1" \
-  GITHUB_TOKEN="gate2-secret" \
+  SERVICE_TOKEN="gate2-secret" \
   HIDEOUT_ENABLE_LAB=1 \
   HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@proxy.invalid:1080" \
   "$hideout" run --backend lima --workspace "$workspace" -- sh -eu -c '
@@ -210,14 +210,14 @@ printf "xdg_cache=%s\n" "$XDG_CACHE_HOME"
 printf "xdg_data=%s\n" "$XDG_DATA_HOME"
 printf "git_email=%s\n" "$(git config --global --get user.email)"
 printf "child_home=%s\n" "$(sh -c "printf %s \"\$HOME\"")"
-for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy GITHUB_TOKEN HIDEOUT_ENABLE_LAB HIDEOUT_SECRET_DEFAULT_PROXY; do
+for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy SERVICE_TOKEN HIDEOUT_ENABLE_LAB HIDEOUT_SECRET_DEFAULT_PROXY; do
   eval "value=\${$name:-}"
   if [ -n "$value" ]; then
     echo "sensitive env leaked: $name" >&2
     exit 42
   fi
 done
-child_sensitive_env=$(sh -c '\''printf "%s|%s|%s|%s" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${GITHUB_TOKEN:-}" "${HIDEOUT_ENABLE_LAB:-}"'\'')
+child_sensitive_env=$(sh -c '\''printf "%s|%s|%s|%s" "${HTTP_PROXY:-}" "${HTTPS_PROXY:-}" "${SERVICE_TOKEN:-}" "${HIDEOUT_ENABLE_LAB:-}"'\'')
 if [ "$child_sensitive_env" != "|||" ]; then
   echo "sensitive env leaked to child: $child_sensitive_env" >&2
   exit 43

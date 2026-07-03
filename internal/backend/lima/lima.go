@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/profile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -97,18 +98,30 @@ type ToolPreset struct {
 	Name             string   `json:"name"`
 	RequiredCommands []string `json:"requiredCommands"`
 	RequiredPaths    []string `json:"requiredPaths,omitempty"`
+	ProvisionScript  string   `json:"-"`
+}
+
+type NPMGlobalTool struct {
+	Package  string   `json:"package"`
+	Commands []string `json:"commands"`
+}
+
+type ToolPlan struct {
+	Presets    []ToolPreset    `json:"presets"`
+	NPMGlobals []NPMGlobalTool `json:"npmGlobals,omitempty"`
 }
 
 type ToolManifest struct {
-	Version           string       `json:"version"`
-	Presets           []ToolPreset `json:"presets"`
-	ProfileID         string       `json:"profileId,omitempty"`
-	IdentityID        string       `json:"identityId,omitempty"`
-	IdentityMode      string       `json:"identityMode,omitempty"`
-	IdentityRoot      string       `json:"identityRoot,omitempty"`
-	InstanceName      string       `json:"instanceName"`
-	CommandProxyShims []string     `json:"commandProxyShims"`
-	GuestBootstrap    string       `json:"guestBootstrap"`
+	Version           string          `json:"version"`
+	Presets           []ToolPreset    `json:"presets"`
+	NPMGlobals        []NPMGlobalTool `json:"npmGlobals,omitempty"`
+	ProfileID         string          `json:"profileId,omitempty"`
+	IdentityID        string          `json:"identityId,omitempty"`
+	IdentityMode      string          `json:"identityMode,omitempty"`
+	IdentityRoot      string          `json:"identityRoot,omitempty"`
+	InstanceName      string          `json:"instanceName"`
+	CommandProxyShims []string        `json:"commandProxyShims"`
+	GuestBootstrap    string          `json:"guestBootstrap"`
 }
 
 func (b Backend) Name() string {
@@ -151,7 +164,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	configPath := filepath.Join(spec.SessionDir, "lima.yaml")
 	bootstrapPath := filepath.Join(spec.SessionDir, "bootstrap", "bootstrap.sh")
 	manifestPath := filepath.Join(spec.SessionDir, "tool-preset.json")
-	presets, err := ResolveToolPresets(spec.Profile.Tools.Presets)
+	tools, err := ResolveToolPlan(spec.Profile.Tools)
 	if err != nil {
 		return nil, err
 	}
@@ -160,12 +173,13 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		return nil, err
 	}
 	commandProxyShims := append([]string{"hideout-shim"}, registry.ShimNames()...)
-	if err := WriteBootstrap(bootstrapPath, presets, commandProxyShims); err != nil {
+	if err := WriteBootstrap(bootstrapPath, tools, commandProxyShims); err != nil {
 		return nil, err
 	}
 	if err := WriteToolManifest(manifestPath, ToolManifest{
 		Version:           "hideout.tool-bootstrap/v1",
-		Presets:           presets,
+		Presets:           tools.Presets,
+		NPMGlobals:        tools.NPMGlobals,
 		ProfileID:         spec.Profile.Metadata["profileId"],
 		IdentityID:        spec.Profile.Metadata["identityId"],
 		IdentityMode:      identityMode,
@@ -366,7 +380,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 		Mounts: append([]mount{
 			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
 		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir)...)...),
-		Provision: []provision{
+		Provision: append([]provision{
 			{
 				Mode: "system",
 				Script: strings.TrimSpace(fmt.Sprintf(`#!/bin/sh
@@ -390,7 +404,7 @@ if [ -r /hideout/profile/machine/machine-id ]; then
 fi
 `, shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.Hostname), shellQuote(spec.Profile.Identity.Hostname))) + "\n",
 			},
-		},
+		}, toolProvisionBlocks(spec.Profile.Tools)...),
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
 	}
 }
@@ -439,11 +453,11 @@ func WriteConfig(path string, cfg limaConfig) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func WriteBootstrap(path string, presets []ToolPreset, commandProxyShims []string) error {
+func WriteBootstrap(path string, tools ToolPlan, commandProxyShims []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	script := BootstrapScript(presets, commandProxyShims)
+	script := BootstrapScript(tools, commandProxyShims)
 	return os.WriteFile(path, []byte(script), 0o700)
 }
 
@@ -459,9 +473,12 @@ func WriteToolManifest(path string, manifest ToolManifest) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func BootstrapScript(presets []ToolPreset, commandProxyShims []string) string {
-	commands := uniqueStrings(flatMap(presets, func(p ToolPreset) []string { return p.RequiredCommands }))
-	paths := uniqueStrings(flatMap(presets, func(p ToolPreset) []string { return p.RequiredPaths }))
+func BootstrapScript(tools ToolPlan, commandProxyShims []string) string {
+	commands := uniqueStrings(append(
+		flatMap(tools.Presets, func(p ToolPreset) []string { return p.RequiredCommands }),
+		flatMapNPMGlobals(tools.NPMGlobals, func(p NPMGlobalTool) []string { return p.Commands })...,
+	))
+	paths := uniqueStrings(flatMap(tools.Presets, func(p ToolPreset) []string { return p.RequiredPaths }))
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("set -eu\n")
@@ -587,11 +604,86 @@ func ResolveToolPresets(names []string) ([]ToolPreset, error) {
 				RequiredCommands: []string{"sh", "git", "curl"},
 				RequiredPaths:    []string{"/etc/ssl/certs"},
 			})
+		case "node-dev":
+			out = append(out, ToolPreset{
+				Name:             "node-dev",
+				RequiredCommands: []string{"sh", "git", "curl", "node", "npm"},
+				RequiredPaths:    []string{"/etc/ssl/certs"},
+				ProvisionScript:  NodeDevProvisionScript(),
+			})
 		default:
 			return nil, fmt.Errorf("unsupported tool preset %q", name)
 		}
 	}
 	return out, nil
+}
+
+func ResolveToolPlan(tools profile.Tools) (ToolPlan, error) {
+	presets, err := ResolveToolPresets(tools.Presets)
+	if err != nil {
+		return ToolPlan{}, err
+	}
+	plan := ToolPlan{Presets: presets}
+	for _, pkg := range tools.NPMGlobals {
+		plan.NPMGlobals = append(plan.NPMGlobals, NPMGlobalTool{
+			Package:  strings.TrimSpace(pkg.Package),
+			Commands: append([]string(nil), pkg.Commands...),
+		})
+	}
+	return plan, nil
+}
+
+func toolProvisionBlocks(tools profile.Tools) []provision {
+	plan, err := ResolveToolPlan(tools)
+	if err != nil {
+		return nil
+	}
+	var out []provision
+	for _, preset := range plan.Presets {
+		if strings.TrimSpace(preset.ProvisionScript) == "" {
+			continue
+		}
+		out = append(out, provision{Mode: "system", Script: strings.TrimSpace(preset.ProvisionScript) + "\n"})
+	}
+	for _, pkg := range plan.NPMGlobals {
+		out = append(out, provision{Mode: "system", Script: NPMGlobalProvisionScript(pkg)})
+	}
+	return out
+}
+
+func NodeDevProvisionScript() string {
+	return `#!/bin/sh
+set -eu
+if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+  exit 0
+fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y ca-certificates curl nodejs npm
+command -v node >/dev/null 2>&1
+command -v npm >/dev/null 2>&1
+`
+}
+
+func NPMGlobalProvisionScript(pkg NPMGlobalTool) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("set -eu\n")
+	if len(pkg.Commands) > 0 {
+		b.WriteString("if")
+		for i, command := range pkg.Commands {
+			if i > 0 {
+				b.WriteString(" &&")
+			}
+			fmt.Fprintf(&b, " command -v %s >/dev/null 2>&1", shellQuote(command))
+		}
+		b.WriteString("; then\n  exit 0\nfi\n")
+	}
+	fmt.Fprintf(&b, "npm install -g %s\n", shellQuote(pkg.Package))
+	for _, command := range pkg.Commands {
+		fmt.Fprintf(&b, "command -v %s >/dev/null 2>&1\n", shellQuote(command))
+	}
+	return b.String()
 }
 
 func ShellArgs(instance, workdir string, env []string, command []string) []string {
@@ -606,6 +698,14 @@ func CommandCheck(command string) []string {
 }
 
 func flatMap(values []ToolPreset, fn func(ToolPreset) []string) []string {
+	var out []string
+	for _, value := range values {
+		out = append(out, fn(value)...)
+	}
+	return out
+}
+
+func flatMapNPMGlobals(values []NPMGlobalTool, fn func(NPMGlobalTool) []string) []string {
 	var out []string
 	for _, value := range values {
 		out = append(out, fn(value)...)

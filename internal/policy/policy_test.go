@@ -377,8 +377,51 @@ func TestEvaluateOpenRejectsHostLocalNetworkTargets(t *testing.T) {
 			if proposal.Decision != Deny || proposal.Route != DenyRoute {
 				t.Fatalf("expected local URL denial, got %+v", proposal)
 			}
-			if !strings.Contains(proposal.Reason, "Phase 1 browser boundary") {
-				t.Fatalf("denial should explain browser boundary: %+v", proposal)
+			if !strings.Contains(proposal.Reason, "profile policy") {
+				t.Fatalf("denial should explain profile policy: %+v", proposal)
+			}
+		})
+	}
+}
+
+func TestEvaluateOpenAllowsHostLocalTargetsWhenProfileOptsIn(t *testing.T) {
+	p := profile.Default("test")
+	p.HostCapabilities.Open.AllowLocalURLs = true
+	e := NewEvaluator(p)
+	for _, target := range []string{
+		"http://localhost:3000",
+		"http://127.0.0.1:3000",
+		"http://host.lima.internal:3000",
+	} {
+		t.Run(target, func(t *testing.T) {
+			proposal, err := e.EvaluateOpen(target)
+			if err != nil {
+				t.Fatalf("EvaluateOpen: %v", err)
+			}
+			if proposal.Decision != Allow || proposal.Route != HostBroker {
+				t.Fatalf("expected profile-authorized local URL allow, got %+v", proposal)
+			}
+		})
+	}
+}
+
+func TestEvaluateOpenAllowsPrivateNetworkTargetsWhenProfileOptsIn(t *testing.T) {
+	p := profile.Default("test")
+	p.HostCapabilities.Open.AllowPrivateNetworkURLs = true
+	e := NewEvaluator(p)
+	for _, target := range []string{
+		"http://10.0.0.10",
+		"http://172.16.0.10",
+		"http://192.168.1.10",
+		"http://100.64.0.10",
+	} {
+		t.Run(target, func(t *testing.T) {
+			proposal, err := e.EvaluateOpen(target)
+			if err != nil {
+				t.Fatalf("EvaluateOpen: %v", err)
+			}
+			if proposal.Decision != Allow || proposal.Route != HostBroker {
+				t.Fatalf("expected profile-authorized private URL allow, got %+v", proposal)
 			}
 		})
 	}
@@ -400,7 +443,26 @@ func TestEvaluateOpenRejectsResolvedHostLocalNetworkTargets(t *testing.T) {
 		t.Fatalf("expected resolved local URL denial, got %+v", proposal)
 	}
 	if !strings.Contains(proposal.Reason, "resolves to localhost") {
-		t.Fatalf("denial should explain resolved browser boundary: %+v", proposal)
+		t.Fatalf("denial should explain resolved profile policy boundary: %+v", proposal)
+	}
+}
+
+func TestEvaluateOpenAllowsResolvedHostLocalTargetsWhenProfileOptsIn(t *testing.T) {
+	p := profile.Default("test")
+	p.HostCapabilities.Open.AllowLocalURLs = true
+	e := NewEvaluator(p)
+	e.ResolveHost = func(host string) ([]netip.Addr, error) {
+		if host != "public-looking.example" {
+			t.Fatalf("unexpected resolve host %q", host)
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	proposal, err := e.EvaluateOpen("https://public-looking.example/path")
+	if err != nil {
+		t.Fatalf("EvaluateOpen: %v", err)
+	}
+	if proposal.Decision != Allow || proposal.Route != HostBroker {
+		t.Fatalf("expected resolved local URL allow by profile policy, got %+v", proposal)
 	}
 }
 

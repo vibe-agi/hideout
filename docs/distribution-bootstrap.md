@@ -36,7 +36,7 @@ Users should be able to run:
 scripts/install-local.sh
 hideout init
 hideout doctor --fix
-hideout run -- claude
+hideout run -- example-cli
 ```
 
 and understand:
@@ -336,6 +336,7 @@ Release candidate should verify:
 - release-like tarball package smoke;
 - Gate 0 through Gate 4;
 - Lima Gate2 on macOS;
+- generic CLI dogfood smoke with `scripts/test-phase1.sh --dogfood-cli`;
 - hidden proxy gate;
 - helper binary build for supported architectures;
 - package smoke install;

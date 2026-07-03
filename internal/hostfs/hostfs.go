@@ -42,6 +42,8 @@ const (
 	SourceProfile     Source = "profile"
 	SourceEnvironment Source = "environment"
 	SourceRun         Source = "run"
+
+	ReservedRootReason = "Hideout control-plane path is reserved"
 )
 
 var writeOps = []Op{OpWrite, OpCreate, OpDelete, OpRename}
@@ -69,12 +71,14 @@ type BuildInput struct {
 	Environment Config
 	Run         Config
 	Now         time.Time
+	StoreRoot   string
 }
 
 type EffectivePolicy struct {
-	Grants []Grant
-	Deny   []Grant
-	Now    time.Time
+	Grants        []Grant
+	Deny          []Grant
+	Now           time.Time
+	ReservedRoots []string
 }
 
 type Grant struct {
@@ -93,13 +97,17 @@ type Decision struct {
 }
 
 func ValidateConfig(c Config, source Source) error {
-	_, err := buildSourcePolicy(c, source, nowOrDefault(time.Time{}))
+	_, err := buildSourcePolicy(c, source, nowOrDefault(time.Time{}), nil)
 	return err
 }
 
 func Build(input BuildInput) (EffectivePolicy, error) {
 	now := nowOrDefault(input.Now)
-	out := EffectivePolicy{Now: now}
+	reservedRoots, err := normalizeReservedRoots(input.StoreRoot)
+	if err != nil {
+		return EffectivePolicy{}, err
+	}
+	out := EffectivePolicy{Now: now, ReservedRoots: reservedRoots}
 	for _, sourceInput := range []struct {
 		source Source
 		config Config
@@ -108,7 +116,7 @@ func Build(input BuildInput) (EffectivePolicy, error) {
 		{SourceEnvironment, input.Environment},
 		{SourceRun, input.Run},
 	} {
-		policy, err := buildSourcePolicy(sourceInput.config, sourceInput.source, now)
+		policy, err := buildSourcePolicy(sourceInput.config, sourceInput.source, now, reservedRoots)
 		if err != nil {
 			return EffectivePolicy{}, err
 		}
@@ -125,6 +133,9 @@ func (p EffectivePolicy) Decide(op Op, hostPath string) Decision {
 	clean, err := cleanHostPath(hostPath)
 	if err != nil {
 		return Decision{Reason: err.Error()}
+	}
+	if pathInReservedRoots(clean, p.ReservedRoots) {
+		return Decision{Effect: "deny", Reason: ReservedRootReason}
 	}
 	for _, deny := range p.Deny {
 		if ruleMatches(deny.Rule, op, clean, true) {
@@ -157,21 +168,22 @@ func (p EffectivePolicy) Decide(op Op, hostPath string) Decision {
 
 func (p EffectivePolicy) Summary() map[string]any {
 	return map[string]any{
-		"profileRoots": []string{"/hideout/hostfs", "/Users", "/Volumes", "/private"},
-		"grants":       len(p.Grants),
-		"denyRules":    len(p.Deny),
-		"default":      "hidden",
-		"write":        "unsupported",
+		"profileRoots":  []string{"/hideout/hostfs", "/Users", "/Volumes", "/private"},
+		"grants":        len(p.Grants),
+		"denyRules":     len(p.Deny),
+		"reservedRoots": len(p.ReservedRoots),
+		"default":       "hidden",
+		"write":         "unsupported",
 	}
 }
 
-func buildSourcePolicy(c Config, source Source, now time.Time) (EffectivePolicy, error) {
+func buildSourcePolicy(c Config, source Source, now time.Time, reservedRoots []string) (EffectivePolicy, error) {
 	if err := validateSource(source); err != nil {
 		return EffectivePolicy{}, err
 	}
-	out := EffectivePolicy{Now: now}
+	out := EffectivePolicy{Now: now, ReservedRoots: append([]string(nil), reservedRoots...)}
 	for i, rule := range c.Grants {
-		grant, err := normalizeRule(rule, source, i, false, now)
+		grant, err := normalizeRule(rule, source, i, false, now, reservedRoots)
 		if err != nil {
 			return EffectivePolicy{}, fmt.Errorf("hostfs.%s.grants[%d]: %w", source, i, err)
 		}
@@ -180,7 +192,7 @@ func buildSourcePolicy(c Config, source Source, now time.Time) (EffectivePolicy,
 		}
 	}
 	for i, rule := range c.Deny {
-		deny, err := normalizeRule(rule, source, i, true, now)
+		deny, err := normalizeRule(rule, source, i, true, now, reservedRoots)
 		if err != nil {
 			return EffectivePolicy{}, fmt.Errorf("hostfs.%s.deny[%d]: %w", source, i, err)
 		}
@@ -191,7 +203,7 @@ func buildSourcePolicy(c Config, source Source, now time.Time) (EffectivePolicy,
 	return out, nil
 }
 
-func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time) (Grant, error) {
+func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time, reservedRoots []string) (Grant, error) {
 	hostPath, err := cleanHostPath(rule.HostPath)
 	if err != nil {
 		return Grant{}, err
@@ -212,8 +224,8 @@ func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time
 			return Grant{}, err
 		}
 	}
-	if !deny && isBroadHostRoot(rule.HostPath, rule.Scope) {
-		return Grant{}, fmt.Errorf("broad HostFS grant for %s with scope %s is forbidden", rule.HostPath, rule.Scope)
+	if !deny && ruleCoversReservedRoot(rule, reservedRoots) {
+		return Grant{}, fmt.Errorf("HostFS grant for %s with scope %s covers Hideout control-plane store", rule.HostPath, rule.Scope)
 	}
 	if !deny && strings.TrimSpace(rule.Reason) == "" {
 		return Grant{}, errors.New("reason is required")
@@ -567,24 +579,74 @@ func cleanGuestPath(path string) (string, error) {
 	return clean, nil
 }
 
-func isBroadHostRoot(path string, scope Scope) bool {
-	if scope == ScopeExactFile {
-		return false
+func normalizeReservedRoots(storeRoot string) ([]string, error) {
+	if strings.TrimSpace(storeRoot) == "" {
+		return nil, nil
 	}
-	if path == "/Users" || path == "/Volumes" || path == "/private" {
-		return true
+	root, err := cleanHostPath(storeRoot)
+	if err != nil {
+		return nil, fmt.Errorf("HostFS reserved store root: %w", err)
 	}
-	if scope != ScopeRecursiveDir {
-		return false
-	}
-	parts := pathParts(path)
-	if len(parts) <= 1 {
-		return true
-	}
-	if len(parts) == 2 && parts[0] == "Users" {
-		return true
+	return []string{root}, nil
+}
+
+func ruleCoversReservedRoot(rule Rule, reservedRoots []string) bool {
+	for _, root := range reservedRoots {
+		if ruleCoversPath(rule, root) || pathInRoot(rule.HostPath, root) {
+			return true
+		}
+		if rule.Scope == ScopeGlob {
+			base := globStaticBase(rule.HostPath)
+			if pathInRoot(base, root) || globMatches(rule.HostPath, root) || globCouldMatchChildOf(rule.HostPath, root) {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+func ruleCoversPath(rule Rule, path string) bool {
+	switch rule.Scope {
+	case ScopeExactFile:
+		return rule.HostPath == path
+	case ScopeGlob:
+		return globMatches(rule.HostPath, path)
+	case ScopeDir:
+		return rule.HostPath == path || filepath.Dir(path) == rule.HostPath
+	case ScopeRecursiveDir:
+		return pathInRoot(path, rule.HostPath)
+	default:
+		return false
+	}
+}
+
+func globStaticBase(pattern string) string {
+	index := strings.IndexAny(pattern, "*?[")
+	if index < 0 {
+		return filepath.Dir(pattern)
+	}
+	prefix := pattern[:index]
+	separator := string(filepath.Separator)
+	lastSeparator := strings.LastIndex(prefix, separator)
+	if lastSeparator <= 0 {
+		return separator
+	}
+	return filepath.Clean(prefix[:lastSeparator])
+}
+
+func pathInReservedRoots(path string, reservedRoots []string) bool {
+	for _, root := range reservedRoots {
+		if pathInRoot(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathInRoot(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 func pathParts(path string) []string {

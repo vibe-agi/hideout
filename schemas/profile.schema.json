@@ -227,7 +227,33 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["base-dev"]
+            "enum": ["base-dev", "node-dev"]
+          },
+          "uniqueItems": true
+        },
+        "npmGlobals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["package", "commands"],
+            "properties": {
+              "package": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^[:space:][:cntrl:]]+$"
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9._+][A-Za-z0-9._+-]*$"
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
           },
           "uniqueItems": true
         }
@@ -243,6 +269,8 @@
           "required": [
             "mode",
             "allowUrls",
+            "allowLocalUrls",
+            "allowPrivateNetworkUrls",
             "allowWorkspaceFiles",
             "browserProfile"
           ],
@@ -251,6 +279,12 @@
               "const": "brokered"
             },
             "allowUrls": {
+              "type": "boolean"
+            },
+            "allowLocalUrls": {
+              "type": "boolean"
+            },
+            "allowPrivateNetworkUrls": {
               "type": "boolean"
             },
             "allowWorkspaceFiles": {

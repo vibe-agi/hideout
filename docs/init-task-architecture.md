@@ -195,7 +195,7 @@ profileAuthority.autoGrant
 The primary user path remains:
 
 ```bash
-hideout run -- claude
+hideout run -- example-cli
 ```
 
 If required initialization is missing:

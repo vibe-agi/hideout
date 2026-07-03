@@ -12,12 +12,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
 
 func main() {
-	mode := flag.String("mode", "echo", "target mode: echo, http, devtools")
+	mode := flag.String("mode", "echo", "target mode: echo, http, devtools, auth-api")
 	listen := flag.String("listen", "127.0.0.1:0", "listen address")
 	path := flag.String("path", "/preview", "HTTP path")
 	status := flag.Int("status", http.StatusNoContent, "HTTP status")
@@ -41,6 +42,8 @@ func main() {
 		go func() { errc <- serveHTTP(ctx, ln, httpHandler(*path, *status)) }()
 	case "devtools":
 		go func() { errc <- serveHTTP(ctx, ln, devtoolsHandler(ln.Addr().String(), *browser)) }()
+	case "auth-api":
+		go func() { errc <- serveHTTP(ctx, ln, authAPIHandler(*path)) }()
 	default:
 		log.Fatalf("unsupported mode %q", *mode)
 	}
@@ -122,5 +125,21 @@ func devtoolsHandler(addr, browser string) http.Handler {
 			"webSocketDebuggerUrl": "ws://127.0.0.1:" + port + "/devtools/browser/fake-secret-" + strconv.Itoa(os.Getpid()),
 		}
 		_ = json.NewEncoder(w).Encode(payload)
+	})
+}
+
+func authAPIHandler(path string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != path {
+			http.NotFound(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) == "" {
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("auth-ok\n"))
 	})
 }

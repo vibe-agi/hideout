@@ -135,11 +135,13 @@ func isBlockedProxyEnv(name string) bool {
 
 func matchesAny(name string, patterns []string) bool {
 	for _, p := range patterns {
-		if strings.HasSuffix(p, "*") && strings.HasPrefix(name, strings.TrimSuffix(p, "*")) {
-			return true
-		}
 		if p == name {
 			return true
+		}
+		if strings.ContainsAny(p, "*?[") {
+			if ok, err := filepath.Match(p, name); err == nil && ok {
+				return true
+			}
 		}
 	}
 	return false

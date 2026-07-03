@@ -7,7 +7,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
-func TestBuildDeniesSensitiveEnvAndSetsSyntheticHome(t *testing.T) {
+func TestBuildDoesNotInheritUnlistedEnvAndSetsSyntheticHome(t *testing.T) {
 	p := profile.Default("test")
 	result := Build(Spec{
 		Profile:    p,
@@ -16,12 +16,12 @@ func TestBuildDeniesSensitiveEnvAndSetsSyntheticHome(t *testing.T) {
 		HostEnv: []string{
 			"TERM=xterm-256color",
 			"HTTP_PROXY=http://user:pass@proxy",
-			"GITHUB_TOKEN=secret",
+			"SERVICE_TOKEN=secret",
 			"PATH=/bin",
 		},
 	})
 	env := strings.Join(result.Env, "\n")
-	if strings.Contains(env, "HTTP_PROXY") || strings.Contains(env, "GITHUB_TOKEN") {
+	if strings.Contains(env, "HTTP_PROXY") || strings.Contains(env, "SERVICE_TOKEN") {
 		t.Fatalf("sensitive env leaked: %s", env)
 	}
 	if !strings.Contains(env, "HOME=/tmp/hideout/profile/home") {
@@ -35,6 +35,46 @@ func TestBuildDeniesSensitiveEnvAndSetsSyntheticHome(t *testing.T) {
 	}
 	if !strings.Contains(env, "TERM=xterm-256color") {
 		t.Fatalf("TERM should be inherited: %s", env)
+	}
+}
+
+func TestBuildDenyPatternsSupportGeneralGlobs(t *testing.T) {
+	p := profile.Default("test")
+	p.Env.Deny = []string{"*TOKEN*", "*SECRET*"}
+	p.Env.Inherit = append(p.Env.Inherit, "SERVICE_TOKEN", "MY_SECRET_VALUE", "SAFE_PUBLIC")
+	result := Build(Spec{
+		Profile:    p,
+		ProfileDir: "/tmp/hideout/profile",
+		SessionDir: "/tmp/hideout/session",
+		HostEnv: []string{
+			"SERVICE_TOKEN=secret",
+			"MY_SECRET_VALUE=secret",
+			"SAFE_PUBLIC=ok",
+		},
+	})
+	env := strings.Join(result.Env, "\n")
+	if strings.Contains(env, "SERVICE_TOKEN=") || strings.Contains(env, "MY_SECRET_VALUE=") {
+		t.Fatalf("general deny glob leaked sensitive env: %s", env)
+	}
+	if !strings.Contains(env, "SAFE_PUBLIC=ok") {
+		t.Fatalf("non-sensitive inherited env missing: %s", env)
+	}
+}
+
+func TestBuildAllowsUserInheritedBusinessEnv(t *testing.T) {
+	p := profile.Default("test")
+	p.Env.Inherit = append(p.Env.Inherit, "SERVICE_TOKEN")
+	result := Build(Spec{
+		Profile:    p,
+		ProfileDir: "/tmp/hideout/profile",
+		SessionDir: "/tmp/hideout/session",
+		HostEnv: []string{
+			"SERVICE_TOKEN=user-approved",
+		},
+	})
+	env := strings.Join(result.Env, "\n")
+	if !strings.Contains(env, "SERVICE_TOKEN=user-approved") {
+		t.Fatalf("user-approved business env should be inherited: %s", env)
 	}
 }
 
