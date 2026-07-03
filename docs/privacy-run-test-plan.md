@@ -70,6 +70,15 @@ scripts/test-phase1.sh --quick --probes
 # to verify callback login, profile identity persistence, authenticated request
 # flow, and control-plane store denial without binding Hideout to any product.
 scripts/test-phase1.sh --dogfood-cli
+
+# Optional real CLI operator smoke. The operator supplies the package, command,
+# auth env keys, and request command; Hideout still does not encode product
+# semantics in Core or automated gates.
+HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
+HIDEOUT_OPERATOR_COMMAND=<command> \
+HIDEOUT_OPERATOR_ENV_KEYS=TOKEN_ENV \
+HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
+  scripts/test-phase1.sh --operator-cli
 ```
 
 ## Development Test Planning
@@ -351,6 +360,39 @@ Command:
 ```bash
 scripts/test-phase1.sh --dogfood-cli
 ```
+
+### Supplemental: Operator CLI Smoke
+
+Purpose: let maintainers dogfood a real CLI without committing product-specific
+logic, package names, API keys, or workflow semantics into Hideout.
+
+The operator-supplied smoke is explicitly opt-in:
+
+```bash
+HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
+HIDEOUT_OPERATOR_COMMAND=<command> \
+HIDEOUT_OPERATOR_VERSION_ARGS='--version' \
+HIDEOUT_OPERATOR_ENV_KEYS=TOKEN_ENV \
+HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
+  scripts/test-phase1.sh --operator-cli
+```
+
+Required checks:
+
+- the profile is configured through `hideout profile tools`, not by editing
+  profile JSON directly;
+- `node-dev` and the user-declared npm tool are provisioned into a Lima guest;
+- the first run creates a tool-matched reusable environment and the second run
+  reuses the same environment;
+- operator-selected env keys are passed through `--env` only for the run, while
+  Hideout runtime env remains controlled by the normal env policy;
+- an optional operator-supplied request command succeeds from inside the guest;
+- HostFS grants covering the Hideout store are rejected.
+
+This smoke is not part of the default automated gate because it depends on
+operator-held credentials or accounts. It is the correct place to verify a real
+tool before daily dogfood, while `--dogfood-cli` remains the product-mechanism
+gate that can run in CI.
 
 ### Gate 3: Hidden Proxy
 

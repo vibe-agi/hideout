@@ -1259,14 +1259,18 @@ is not permission to reuse per-run capability material.
 Default environment selection:
 
 ```text
-profile + normalized workspace -> most recently used environment
+profile + normalized workspace + tool plan fingerprint -> most recently used environment
 ```
 
 `hideout run -- <command>` resolves the current workspace, finds the most
-recent resumable environment for the selected profile and workspace, and uses
-it. If none exists, Hideout creates one. Changing directories into a different
-project selects a different environment. Returning to the original project
-selects that project's most recent environment.
+recent resumable environment for the selected profile, workspace, and guest
+tool plan, and uses it. If none exists, Hideout creates one. Changing
+directories into a different project selects a different environment. Returning
+to the original project selects that project's most recent environment.
+Changing `profile.tools.presets` or `profile.tools.npmGlobals` must not silently
+reuse an older guest that was provisioned with a different tool plan. Explicit
+`--resume <id>` against a stale tool plan fails closed with an instruction to
+use `--new`.
 
 `hideout run --new -- <command>` always creates a new environment for the
 current profile and workspace. It does not reset the profile identity. It is for
@@ -2066,7 +2070,10 @@ hideout profile tools default npm remove @scope/tool
 `profile tools` writes the same `profile.tools.presets` and
 `profile.tools.npmGlobals` objects that backend preparation consumes. Core owns
 the runtime supply primitive and command-existence check; it must not encode a
-specific product workflow in the tool declaration.
+specific product workflow in the tool declaration. Tool policy is part of the
+reusable environment identity: changing presets or npm globals creates or
+selects a tool-matched environment instead of reusing an older guest with stale
+commands.
 
 Persistent profile HostFS rules must have stable unique IDs. CLI-created IDs
 use the opaque `hfs_` prefix. Users and higher layers must treat IDs as opaque

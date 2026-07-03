@@ -1,9 +1,13 @@
 package manager
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -95,6 +99,7 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 			IdentityID:     spec.IdentityID,
 			User:           spec.User,
 			Hostname:       spec.Hostname,
+			ToolsHash:      spec.ToolsHash,
 			InstanceName:   lima.InstanceNameForEnvironment(p.Name, "env_new"),
 			Status:         "new",
 		}
@@ -170,6 +175,7 @@ func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspac
 		IdentityID:     p.Metadata["identityId"],
 		User:           p.Identity.User,
 		Hostname:       p.Identity.Hostname,
+		ToolsHash:      profileToolsHash(p.Tools),
 	}
 }
 
@@ -187,7 +193,45 @@ func ValidateEnvironmentRecord(rec environment.Record, spec environment.Spec) er
 	if rec.ProfileID != spec.ProfileID || rec.IdentityID != spec.IdentityID || rec.User != spec.User || rec.Hostname != spec.Hostname {
 		return fmt.Errorf("environment %s identity no longer matches the selected profile; use --new", rec.ID)
 	}
+	if rec.ToolsHash != spec.ToolsHash {
+		return fmt.Errorf("environment %s tools no longer match the selected profile; use --new", rec.ID)
+	}
 	return nil
+}
+
+func profileToolsHash(tools profile.Tools) string {
+	type npmGlobal struct {
+		Package  string   `json:"package"`
+		Commands []string `json:"commands"`
+	}
+	type canonicalTools struct {
+		Presets    []string    `json:"presets"`
+		NPMGlobals []npmGlobal `json:"npmGlobals"`
+	}
+	canonical := canonicalTools{
+		Presets: append([]string(nil), tools.Presets...),
+	}
+	slices.Sort(canonical.Presets)
+	for _, pkg := range tools.NPMGlobals {
+		commands := append([]string(nil), pkg.Commands...)
+		slices.Sort(commands)
+		canonical.NPMGlobals = append(canonical.NPMGlobals, npmGlobal{
+			Package:  strings.TrimSpace(pkg.Package),
+			Commands: commands,
+		})
+	}
+	slices.SortFunc(canonical.NPMGlobals, func(a, b npmGlobal) int {
+		if a.Package != b.Package {
+			return strings.Compare(a.Package, b.Package)
+		}
+		return strings.Compare(strings.Join(a.Commands, "\x00"), strings.Join(b.Commands, "\x00"))
+	})
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func selectedRunEnvironment(store environment.Store, rec environment.Record, preserve, removeAfterRun, created bool) RunEnvironment {

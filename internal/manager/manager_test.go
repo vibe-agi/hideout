@@ -1095,6 +1095,49 @@ func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.
 	}
 }
 
+func TestCoreSelectRunEnvironmentToolChangesCreateNewEnvironment(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	workspace := t.TempDir()
+	p := profile.Default("default")
+	envStore := environment.Store{Root: store.Root}
+	rec, err := envStore.Create(RunEnvironmentSpec(p, "lima", workspace, workspace))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	rec.InstanceName = "hideout-default-env-oldtools"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	withTool := p
+	withTool.Tools.Presets = append(withTool.Tools.Presets, "node-dev")
+	selected, err := New(store).SelectRunEnvironment(RunPlan{
+		Backend:        "lima",
+		Workspace:      workspace,
+		GuestWorkspace: workspace,
+		RuntimeProfile: withTool,
+	}, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatalf("SelectRunEnvironment: %v", err)
+	}
+	if !selected.Created || selected.Record.ID == rec.ID {
+		t.Fatalf("tool change should create a new environment, got %+v old=%s", selected, rec.ID)
+	}
+	if selected.Record.ToolsHash == "" || selected.Record.ToolsHash == rec.ToolsHash {
+		t.Fatalf("environment should persist a distinct tool fingerprint: new=%q old=%q", selected.Record.ToolsHash, rec.ToolsHash)
+	}
+
+	_, err = New(store).SelectRunEnvironment(RunPlan{
+		Backend:        "lima",
+		Workspace:      workspace,
+		GuestWorkspace: workspace,
+		RuntimeProfile: withTool,
+	}, RunEnvironmentOptions{ResumeID: rec.ID, Create: true})
+	if err == nil || !strings.Contains(err.Error(), "tools no longer match") {
+		t.Fatalf("resume of stale tool environment should fail closed, got %v", err)
+	}
+}
+
 func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	p := profile.Default("default")

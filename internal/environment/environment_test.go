@@ -18,6 +18,7 @@ func TestStoreCreateLatestAndResolve(t *testing.T) {
 		IdentityID:     "id_2222",
 		User:           "developer",
 		Hostname:       "devbox",
+		ToolsHash:      "tools_a",
 	}
 	rec, err := store.Create(spec)
 	if err != nil {
@@ -46,6 +47,11 @@ func TestStoreCreateLatestAndResolve(t *testing.T) {
 	spec.IdentityID = "id_changed"
 	if _, ok, err := store.Latest(spec); err != nil || ok {
 		t.Fatalf("Latest should not match changed identity: ok=%t err=%v", ok, err)
+	}
+	spec.IdentityID = "id_2222"
+	spec.ToolsHash = "tools_b"
+	if _, ok, err := store.Latest(spec); err != nil || ok {
+		t.Fatalf("Latest should not match changed tools: ok=%t err=%v", ok, err)
 	}
 }
 

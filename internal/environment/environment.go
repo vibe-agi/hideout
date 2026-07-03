@@ -31,6 +31,7 @@ type Spec struct {
 	IdentityID     string
 	User           string
 	Hostname       string
+	ToolsHash      string
 	InstanceName   string
 }
 
@@ -45,6 +46,7 @@ type Record struct {
 	IdentityID     string    `json:"identityId,omitempty"`
 	User           string    `json:"user,omitempty"`
 	Hostname       string    `json:"hostname,omitempty"`
+	ToolsHash      string    `json:"toolsHash,omitempty"`
 	InstanceName   string    `json:"instanceName,omitempty"`
 	Status         string    `json:"status"`
 	LastSessionID  string    `json:"lastSessionId,omitempty"`
@@ -71,6 +73,7 @@ func (s Store) Create(spec Spec) (Record, error) {
 		IdentityID:     spec.IdentityID,
 		User:           spec.User,
 		Hostname:       spec.Hostname,
+		ToolsHash:      spec.ToolsHash,
 		InstanceName:   spec.InstanceName,
 		Status:         "ready",
 		CreatedAt:      now,
@@ -160,7 +163,8 @@ func (s Store) Latest(spec Spec) (Record, bool, error) {
 			rec.ProfileID == spec.ProfileID &&
 			rec.IdentityID == spec.IdentityID &&
 			rec.User == spec.User &&
-			rec.Hostname == spec.Hostname {
+			rec.Hostname == spec.Hostname &&
+			rec.ToolsHash == spec.ToolsHash {
 			return rec, true, nil
 		}
 	}

@@ -7,7 +7,7 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--proxy|--real-browser|--probes|--dogfood-cli]
+  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--proxy|--real-browser|--probes|--dogfood-cli|--operator-cli]
 
 Modes:
   --quick         Run fast local gates: Gate 0, Gate 1, Gate 4 dry-run.
@@ -22,6 +22,7 @@ Modes:
   --real-browser  Run Gate 4 with real external URL browser launch.
   --probes        Run capability probe CLI smoke after product gates.
   --dogfood-cli  Run generic CLI dogfood smoke on Lima.
+  --operator-cli Run operator-supplied real CLI smoke on Lima.
   -h, --help      Show this help.
 
 Default:
@@ -61,6 +62,9 @@ print_plan() {
   if [ "$include_dogfood_cli" -eq 1 ]; then
     echo "phase1-plan: Generic CLI dogfood smoke"
   fi
+  if [ "$include_operator_cli" -eq 1 ]; then
+    echo "phase1-plan: Operator-supplied real CLI smoke"
+  fi
 }
 
 mode="quick"
@@ -69,6 +73,7 @@ include_proxy=0
 real_browser=0
 include_probes=0
 include_dogfood_cli=0
+include_operator_cli=0
 require_operator_proxy=0
 
 while [ "$#" -gt 0 ]; do
@@ -107,6 +112,10 @@ while [ "$#" -gt 0 ]; do
       include_dogfood_cli=1
       include_lima=1
       ;;
+    --operator-cli)
+      include_operator_cli=1
+      include_lima=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -120,7 +129,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-echo "phase1: mode=$mode lima=$include_lima proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_proxy=$require_operator_proxy"
+echo "phase1: mode=$mode lima=$include_lima proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_cli=$include_operator_cli operator_proxy=$require_operator_proxy"
 
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-}" = "1" ]; then
   print_plan
@@ -167,6 +176,10 @@ fi
 
 if [ "$include_dogfood_cli" -eq 1 ]; then
   run_gate "Generic CLI dogfood smoke" scripts/test-dogfood-cli-smoke.sh
+fi
+
+if [ "$include_operator_cli" -eq 1 ]; then
+  run_gate "Operator-supplied real CLI smoke" scripts/test-operator-cli-smoke.sh
 fi
 
 echo "phase1: passed"
