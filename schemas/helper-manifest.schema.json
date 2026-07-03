@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/helper-manifest.schema.json",
+  "title": "Hideout Helper Manifest",
+  "type": "object",
+  "required": [
+    "version",
+    "command",
+    "targetOS",
+    "targetArch",
+    "artifact",
+    "sha256",
+    "builder",
+    "builtAt"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.helper-manifest/v1"
+    },
+    "command": {
+      "enum": [
+        "hideout-shim",
+        "hideout-hostfsd"
+      ]
+    },
+    "targetOS": {
+      "const": "linux"
+    },
+    "targetArch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "builder": {
+      "type": "string",
+      "minLength": 1
+    },
+    "builtAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

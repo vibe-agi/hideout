@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/audit-event.schema.json",
+  "title": "Hideout Audit Event",
+  "type": "object",
+  "required": ["time", "session", "profile", "backend", "action", "decision"],
+  "properties": {
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "session": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backend": {
+      "enum": ["native", "lima"]
+    },
+    "action": {
+      "enum": [
+        "backend.selected",
+        "backend.cleanup",
+        "workspace.mapping",
+        "env.policy",
+        "hostfs.policy",
+        "command.start",
+        "network.setup",
+        "session.start",
+        "session.end",
+        "session.cleanup",
+        "broker.request",
+        "host.open",
+        "host.fs.stat",
+        "host.fs.read",
+        "host.fs.list",
+        "host.fs.write",
+        "portbridge.probe",
+        "browser.control.probe",
+        "preview.open.probe"
+      ]
+    },
+    "decision": {
+      "enum": ["allow", "deny", "ask", "audit-only", "error"]
+    },
+    "details": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

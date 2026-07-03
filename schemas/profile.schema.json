@@ -1,0 +1,597 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/profile.schema.json",
+  "title": "Hideout Profile",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "name",
+    "identity",
+    "workspace",
+    "env",
+    "git",
+    "network",
+    "tools",
+    "hostCapabilities",
+    "commandProxy",
+    "policy",
+    "audit"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "hideout.profile/v1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "not": {
+        "enum": [".", ".."]
+      }
+    },
+    "identity": {
+      "type": "object",
+      "required": ["user", "hostname", "timezone", "locale"],
+      "properties": {
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z_][a-z0-9_-]*$"
+        },
+        "hostname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["mode", "pathMode"],
+      "properties": {
+        "mode": {
+          "const": "read-write"
+        },
+        "pathMode": {
+          "enum": ["preserve", "alias"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "env": {
+      "type": "object",
+      "required": ["public", "deny", "inherit"],
+      "properties": {
+        "public": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "not": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "HTTP_PROXY",
+                    "HTTPS_PROXY",
+                    "NO_PROXY",
+                    "ALL_PROXY",
+                    "FTP_PROXY",
+                    "http_proxy",
+                    "https_proxy",
+                    "no_proxy",
+                    "all_proxy",
+                    "ftp_proxy",
+                    "HOME",
+                    "USER",
+                    "LOGNAME",
+                    "HOSTNAME",
+                    "TMPDIR",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "XDG_DATA_HOME",
+                    "GIT_CONFIG_GLOBAL",
+                    "TZ",
+                    "LANG",
+                    "LC_ALL",
+                    "PATH"
+                  ]
+                },
+                {
+                  "pattern": "^HIDEOUT_"
+                }
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "inherit": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "not": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "HTTP_PROXY",
+                    "HTTPS_PROXY",
+                    "NO_PROXY",
+                    "ALL_PROXY",
+                    "FTP_PROXY",
+                    "http_proxy",
+                    "https_proxy",
+                    "no_proxy",
+                    "all_proxy",
+                    "ftp_proxy",
+                    "HOME",
+                    "USER",
+                    "LOGNAME",
+                    "HOSTNAME",
+                    "TMPDIR",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "XDG_DATA_HOME",
+                    "GIT_CONFIG_GLOBAL",
+                    "TZ",
+                    "LANG",
+                    "LC_ALL",
+                    "PATH"
+                  ]
+                },
+                {
+                  "pattern": "^HIDEOUT_"
+                }
+              ]
+            }
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "git": {
+      "type": "object",
+      "required": ["userName", "userEmail"],
+      "properties": {
+        "userName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userEmail": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "network": {
+      "type": "object",
+      "required": ["mode", "proxyEnvVisible"],
+      "properties": {
+        "mode": {
+          "enum": ["direct", "tun2socks"]
+        },
+        "proxyEnvVisible": {
+          "const": false
+        },
+        "proxySecretRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "tun2socks"
+              }
+            },
+            "required": ["mode"]
+          },
+          "then": {
+            "required": ["proxySecretRef"]
+          }
+        }
+      ]
+    },
+    "tools": {
+      "type": "object",
+      "required": ["presets"],
+      "properties": {
+        "presets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["base-dev"]
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "hostCapabilities": {
+      "type": "object",
+      "required": ["open"],
+      "properties": {
+        "open": {
+          "type": "object",
+          "required": [
+            "mode",
+            "allowUrls",
+            "allowWorkspaceFiles",
+            "browserProfile"
+          ],
+          "properties": {
+            "mode": {
+              "const": "brokered"
+            },
+            "allowUrls": {
+              "type": "boolean"
+            },
+            "allowWorkspaceFiles": {
+              "type": "boolean"
+            },
+            "browserProfile": {
+              "const": "isolated"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "hostfs": {
+      "type": "object",
+      "properties": {
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hostfsGrant"
+          },
+          "uniqueItems": true
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hostfsDeny"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "commandProxy": {
+      "type": "object",
+      "required": ["commands"],
+      "properties": {
+        "commands": {
+          "type": "object",
+          "required": ["open"],
+          "additionalProperties": false,
+          "properties": {
+            "open": {
+              "$ref": "#/$defs/hostOpenCommandProxy"
+            },
+            "xdg-open": {
+              "$ref": "#/$defs/hostOpenCommandProxy"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "required": ["engine", "maxCapabilities"],
+      "properties": {
+        "engine": {
+          "const": "builtin+goja"
+        },
+        "maxCapabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["host.open", "guest.exec", "network.connect"]
+          },
+          "uniqueItems": true
+        },
+        "scriptRefs": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["id", "path", "entrypoints"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^policy/[^/]",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "(^|/)\\.\\.(/|$)"
+                    },
+                    {
+                      "pattern": "(^|/)\\.(/|$)"
+                    },
+                    {
+                      "pattern": "//"
+                    },
+                    {
+                      "pattern": "\\\\"
+                    }
+                  ]
+                }
+              },
+              "entrypoints": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": ["decideCommand", "redactAudit"]
+                },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "audit": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "profileId": {
+          "type": "string",
+          "pattern": "^prf_[a-f0-9]+$"
+        },
+        "identityId": {
+          "type": "string",
+          "pattern": "^id_[a-f0-9]+$"
+        },
+        "machineId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "lineageMode": {
+          "enum": [
+            "create",
+            "policy-clone",
+            "session-fork",
+            "migration",
+            "exact-copy"
+          ]
+        },
+        "createdFrom": {
+          "type": "string"
+        },
+        "sourceProfileId": {
+          "type": "string",
+          "pattern": "^prf_[a-f0-9]+$"
+        },
+        "sourceIdentityId": {
+          "type": "string",
+          "pattern": "^id_[a-f0-9]+$"
+        },
+        "previousIdentityId": {
+          "type": "string",
+          "pattern": "^id_[a-f0-9]+$"
+        },
+        "identityArchiveId": {
+          "type": "string",
+          "pattern": "^id_[a-f0-9]+$"
+        },
+        "lastIdentityOperation": {
+          "enum": ["rotate", "reset"]
+        },
+        "identityChangedAt": {
+          "type": "string"
+        },
+        "identityRotatedAt": {
+          "type": "string"
+        },
+        "identityResetAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "absoluteHostPath": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^/",
+      "not": {
+        "anyOf": [
+          {
+            "const": "/"
+          },
+          {
+            "pattern": "^//"
+          },
+          {
+            "pattern": "\\\\"
+          },
+          {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          },
+          {
+            "pattern": "(^|/)\\.(/|$)"
+          }
+        ]
+      }
+    },
+    "absoluteGuestPath": {
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^/",
+      "not": {
+        "anyOf": [
+          {
+            "const": "/"
+          },
+          {
+            "pattern": "^//"
+          },
+          {
+            "pattern": "\\\\"
+          }
+        ]
+      }
+    },
+    "hostfsReadOnlyOp": {
+      "enum": ["stat", "read", "list"]
+    },
+    "hostfsGrant": {
+      "type": "object",
+      "required": ["id", "hostPath", "ops", "scope", "reason"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostPath": {
+          "$ref": "#/$defs/absoluteHostPath"
+        },
+        "guestPath": {
+          "$ref": "#/$defs/absoluteGuestPath"
+        },
+        "ops": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/hostfsReadOnlyOp"
+          },
+          "uniqueItems": true
+        },
+        "scope": {
+          "enum": ["exact-file", "glob", "dir", "recursive-dir"]
+        },
+        "subject": {
+          "const": "profile"
+        },
+        "ttl": {
+          "const": "profile"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "hostfsDeny": {
+      "type": "object",
+      "required": ["id", "hostPath", "scope", "reason"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostPath": {
+          "$ref": "#/$defs/absoluteHostPath"
+        },
+        "guestPath": {
+          "$ref": "#/$defs/absoluteGuestPath"
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hostfsReadOnlyOp"
+          },
+          "uniqueItems": true
+        },
+        "scope": {
+          "enum": ["exact-file", "glob", "dir", "recursive-dir"]
+        },
+        "subject": {
+          "const": "profile"
+        },
+        "ttl": {
+          "const": "profile"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "hostOpenCommandProxy": {
+      "type": "object",
+      "required": ["route", "action"],
+      "properties": {
+        "route": {
+          "const": "host-broker"
+        },
+        "action": {
+          "const": "host.open"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

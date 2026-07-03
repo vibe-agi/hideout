@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/manager-api.schema.json",
+  "title": "Hideout Manager API Response",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "const": "hideout.manager-api/v1"
+    },
+    "resource": {
+      "enum": [
+        "overview",
+        "profiles",
+        "sessions",
+        "backends",
+        "capabilities",
+        "broker",
+        "network",
+        "secrets",
+        "audit/events",
+        "audit",
+        "settings",
+        "init",
+        "bundles",
+        "projects",
+        "run/plan",
+        "run/apply",
+        "run/status"
+      ]
+    },
+    "data": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "array"
+        }
+      ]
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["version", "resource", "data"]
+    },
+    {
+      "required": ["version", "errors"],
+      "not": {
+        "required": ["data"]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

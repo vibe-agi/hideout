@@ -1,0 +1,3106 @@
+package app
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/backend/lima"
+	"github.com/vibe-agi/hideout/internal/backend/native"
+	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/envpolicy"
+	"github.com/vibe-agi/hideout/internal/helperbin"
+	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/hostopen"
+	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/manager"
+	netpolicy "github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/policy"
+	"github.com/vibe-agi/hideout/internal/portbridge"
+	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/session"
+)
+
+type app struct {
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func Main(args []string, stdout, stderr io.Writer) int {
+	a := app{stdout: stdout, stderr: stderr}
+	if err := a.run(args); err != nil {
+		fmt.Fprintln(stderr, "hideout:", err)
+		return 1
+	}
+	return 0
+}
+
+func (a app) run(args []string) error {
+	if len(args) == 0 {
+		a.usage()
+		return nil
+	}
+	switch args[0] {
+	case "init":
+		return a.initCommand(args[1:])
+	case "run":
+		return a.runCommand(args[1:], false)
+	case "explain":
+		return a.runCommand(args[1:], true)
+	case "doctor":
+		return a.doctor(args[1:])
+	case "profile":
+		return a.profile(args[1:])
+	case "list":
+		return a.listEnvironments(args[1:])
+	case "clean":
+		return a.cleanEnvironments(args[1:])
+	case "cleanup":
+		return a.cleanup(args[1:])
+	case "ui":
+		return a.ui(args[1:])
+	case "tui":
+		return a.ui(args[1:])
+	case "lab":
+		return a.lab(args[1:])
+	case "shim":
+		return a.shim(args[1:])
+	case "hostfsd":
+		return a.hostfsd(args[1:])
+	case "help", "-h", "--help":
+		a.usage()
+		return nil
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func (a app) usage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
+	fmt.Fprintln(a.stdout, "  hideout run --explain [flags] -- <command> [args...]")
+	fmt.Fprintln(a.stdout, "  hideout explain [flags] -- <command> [args...]")
+	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
+	fmt.Fprintln(a.stdout, "  hideout run --no-fs read:/path --no-profile-fs -- <command>")
+	fmt.Fprintln(a.stdout, "  hideout init [--no-input] [--backend native|lima] [--network direct]")
+	fmt.Fprintln(a.stdout, "  hideout doctor")
+	fmt.Fprintln(a.stdout, "  hideout doctor --fix [--dry-run]")
+	fmt.Fprintln(a.stdout, "  hideout profile init <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile clone <source> <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile rotate-identity <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile reset <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile path <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> add --fs <kind:/path> [--reason <text>]")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> remove <rule-id>")
+	fmt.Fprintln(a.stdout, "  hideout list")
+	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [environment-id...]")
+	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
+	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
+	fmt.Fprintln(a.stdout, "  hideout tui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
+	fmt.Fprintln(a.stdout, "  hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+	fmt.Fprintln(a.stdout, "  hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge guest-to-host --enable-lab --target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab browser-control --enable-lab --profile <name>")
+	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
+}
+
+type initCommandOptions struct {
+	profileName string
+	backendName string
+	networkMode string
+	noInput     bool
+	dryRun      bool
+}
+
+func (a app) initCommand(args []string) error {
+	opts, err := parseInitCommandOptions(args)
+	if err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	plan, err := core.PlanInit(inittask.Options{
+		ProfileName: opts.profileName,
+		Backend:     opts.backendName,
+		Network:     opts.networkMode,
+		NoInput:     opts.noInput,
+	})
+	if err != nil {
+		return err
+	}
+	if opts.dryRun {
+		writeInitPlan(a.stdout, "Hideout init plan", plan)
+		return nil
+	}
+	result, err := core.ApplyInit(plan, inittask.ApplyOptions{
+		NoInput: opts.noInput,
+	})
+	if err != nil {
+		return err
+	}
+	writeInitResult(a.stdout, "Hideout init", result)
+	return nil
+}
+
+func parseInitCommandOptions(args []string) (initCommandOptions, error) {
+	opts := initCommandOptions{profileName: "default", backendName: "auto", networkMode: "direct"}
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
+	fs.StringVar(&opts.backendName, "backend", "auto", "backend")
+	fs.StringVar(&opts.networkMode, "network", "direct", "network mode")
+	fs.BoolVar(&opts.noInput, "no-input", false, "do not ask for confirmation")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "print init plan without applying")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() != 0 {
+		return opts, fmt.Errorf("unexpected init argument %q", fs.Arg(0))
+	}
+	return opts, nil
+}
+
+func writeInitPlan(w io.Writer, title string, plan inittask.Plan) {
+	fmt.Fprintln(w, title)
+	fmt.Fprintf(w, "storage: %s\n", plan.StoreRoot)
+	fmt.Fprintf(w, "profile: %s\n", plan.Profile)
+	fmt.Fprintf(w, "backend: %s\n", plan.Backend)
+	fmt.Fprintf(w, "network: %s\n", plan.Network)
+	for _, task := range plan.Tasks {
+		fmt.Fprintf(w, "task %s: %s risk=%s %s\n", task.Kind, task.Status, task.Risk, task.Message)
+	}
+}
+
+func writeInitResult(w io.Writer, title string, result inittask.Result) {
+	fmt.Fprintln(w, title)
+	fmt.Fprintf(w, "storage: %s\n", result.Plan.StoreRoot)
+	fmt.Fprintf(w, "profile: %s\n", result.Plan.Profile)
+	fmt.Fprintf(w, "backend: %s\n", result.Plan.Backend)
+	fmt.Fprintf(w, "network: %s\n", result.Plan.Network)
+	if result.AuditPath != "" {
+		fmt.Fprintf(w, "audit=%s\n", result.AuditPath)
+	}
+	for _, task := range result.Applied {
+		fmt.Fprintf(w, "task %s: applied risk=%s %s\n", task.Kind, task.Risk, task.Message)
+	}
+	for _, task := range result.Skipped {
+		fmt.Fprintf(w, "task %s: %s risk=%s %s\n", task.Kind, task.Status, task.Risk, task.Message)
+	}
+}
+
+type runOptions struct {
+	profileName           string
+	backendName           string
+	networkMode           string
+	proxySecret           string
+	workspace             string
+	guestWorkspace        string
+	auditPath             string
+	allowWeakIsolation    bool
+	explainOnly           bool
+	ephemeral             bool
+	newEnvironment        bool
+	resumeEnvironment     string
+	removeEnvironment     bool
+	hostFSGrantFlags      []string
+	hostFSDenyFlags       []string
+	noProfileHostFSGrants bool
+	hostFSRun             hostfs.Config
+	command               []string
+}
+
+type runEnvironment = manager.RunEnvironment
+
+func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
+	opts, err := parseRunOptions(args, explainOnly)
+	if err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	runPlan, err := core.PlanRun(manager.RunPlanOptions{
+		ProfileName:    opts.profileName,
+		Backend:        opts.backendName,
+		NetworkMode:    opts.networkMode,
+		ProxySecretRef: opts.proxySecret,
+		Workspace:      opts.workspace,
+		GuestWorkspace: opts.guestWorkspace,
+		Ephemeral:      opts.ephemeral,
+		Command:        opts.command,
+	})
+	if err != nil {
+		return err
+	}
+	runtimeProfile := runPlan.RuntimeProfile
+	opts.workspace = runPlan.Workspace
+	opts.guestWorkspace = runPlan.GuestWorkspace
+	backendName := runPlan.Backend
+	if opts.explainOnly {
+		return core.ExplainRun(runPlan, manager.RunExplainOptions{
+			Environment: manager.RunEnvironmentOptions{
+				New:            opts.newEnvironment,
+				ResumeID:       opts.resumeEnvironment,
+				RemoveAfterRun: opts.removeEnvironment,
+			},
+		}, func(explanation manager.RunExplanation) error {
+			runSession := explanation.Session
+			explain := explainText(runtimeProfile, opts, runSession.Layout, runSession.Environment, runSession.Env, runSession.ProfileDir, runSession.IdentityDir)
+			fmt.Fprint(a.stdout, explain)
+			return nil
+		})
+	}
+	be := a.backend(backendName, opts)
+	result, err := core.ApplyRun(context.Background(), runPlan, manager.ApplyRunOptions{
+		Backend:                    be,
+		RequestedBackend:           opts.backendName,
+		AllowWeakIsolation:         opts.allowWeakIsolation,
+		Environment:                manager.RunEnvironmentOptions{New: opts.newEnvironment, ResumeID: opts.resumeEnvironment, RemoveAfterRun: opts.removeEnvironment, Create: true},
+		AuditPath:                  opts.auditPath,
+		HostFSRun:                  opts.hostFSRun,
+		DisableProfileHostFSGrants: opts.noProfileHostFSGrants,
+		OpenerForSession: func(runSession manager.RunSession) broker.Opener {
+			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	a.writeRunResultSummary(result)
+	return nil
+}
+
+func (a app) writeRunResultSummary(result manager.RunResult) {
+	if result.EnvironmentID == "" || !result.PreserveInstance {
+		return
+	}
+	fmt.Fprintf(a.stderr, "Hideout environment: %s\n", result.EnvironmentID)
+	fmt.Fprintf(a.stderr, "resume: hideout run --resume %s -- <command>\n", result.EnvironmentID)
+}
+
+func cleanupAuditDetails(result session.CleanupResult) map[string]any {
+	return manager.CleanupAuditDetails(result)
+}
+
+func cleanupAuditType(path string) string {
+	return manager.CleanupAuditType(path)
+}
+
+func presence(value string) string {
+	if value == "" {
+		return "absent"
+	}
+	return "present"
+}
+
+func runtimeIdentityDir(layout session.Layout, profileDir string, opts runOptions) string {
+	return manager.RunIdentityDir(layout, profileDir, opts.ephemeral)
+}
+
+func selectRunEnvironment(store environment.Store, p profile.Profile, backendName string, opts runOptions, create bool) (runEnvironment, error) {
+	return manager.SelectRunEnvironment(store, p, backendName, opts.workspace, opts.guestWorkspace, opts.ephemeral, manager.RunEnvironmentOptions{
+		New:            opts.newEnvironment,
+		ResumeID:       opts.resumeEnvironment,
+		RemoveAfterRun: opts.removeEnvironment,
+		Create:         create,
+	})
+}
+
+func runEnvironmentSpec(p profile.Profile, backendName string, opts runOptions) environment.Spec {
+	return manager.RunEnvironmentSpec(p, backendName, opts.workspace, opts.guestWorkspace)
+}
+
+func validateEnvironmentRecord(rec environment.Record, spec environment.Spec) error {
+	return manager.ValidateEnvironmentRecord(rec, spec)
+}
+
+func resolveBackendName(name string) string {
+	return manager.ResolveBackendName(name)
+}
+
+func resolveWorkspaceMapping(hostWorkspace, guestWorkspace string, p profile.Profile) (string, string, error) {
+	return manager.ResolveWorkspaceMapping(hostWorkspace, guestWorkspace, p)
+}
+
+func networkDecision(plan netpolicy.Plan, err error) string {
+	return manager.NetworkDecision(plan, err)
+}
+
+func guestSessionDirForBackend(backendName string) string {
+	return manager.GuestSessionDirForBackend(backendName)
+}
+
+func localBypassHostsForBackend(backendName string) []string {
+	return manager.LocalBypassHostsForBackend(backendName)
+}
+
+func brokerEndpointForBackend(backendName string, layout session.Layout) broker.Endpoint {
+	return manager.BrokerEndpointForBackend(backendName, layout)
+}
+
+func brokerEndpointForGuest(backendName string, listen broker.Endpoint) (broker.Endpoint, error) {
+	return manager.BrokerEndpointForGuest(backendName, listen)
+}
+
+func brokerEndpointForDoctorClient(endpoint broker.Endpoint) broker.Endpoint {
+	if endpoint.Network != broker.EndpointTCP {
+		return endpoint
+	}
+	host, port, err := net.SplitHostPort(endpoint.Address)
+	if err != nil {
+		return endpoint
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		return broker.TCPEndpoint(net.JoinHostPort("127.0.0.1", port))
+	}
+	return endpoint
+}
+
+func appendBrokerEnv(env []string, endpoint broker.Endpoint, sessionID, token, socket string) []string {
+	return manager.AppendBrokerEnv(env, endpoint, sessionID, token, socket)
+}
+
+func (a app) backend(name string, opts runOptions) backend.Backend {
+	switch name {
+	case "lima":
+		return lima.Backend{
+			Stdout: a.stdout,
+			Stderr: a.stderr,
+			Stdin:  os.Stdin,
+		}
+	default:
+		return native.Backend{
+			AllowWeakIsolation: opts.allowWeakIsolation,
+			Stdout:             a.stdout,
+			Stderr:             a.stderr,
+			Stdin:              os.Stdin,
+		}
+	}
+}
+
+func hostFSGrafts(policy hostfs.EffectivePolicy) []string {
+	return manager.HostFSGrafts(policy)
+}
+
+func hostFSProfileForRun(p profile.Profile, opts runOptions) hostfs.Config {
+	return manager.HostFSProfileForRun(p, opts.noProfileHostFSGrants)
+}
+
+func hostOpener(profileDir string, stdout, stderr io.Writer) hostopen.Opener {
+	return hostopen.Opener{
+		BrowserProfileDir: hostopen.BrowserProfileDir(profileDir),
+		BrowserPath:       os.Getenv("HIDEOUT_BROWSER_PATH"),
+		BrowserApp:        os.Getenv("HIDEOUT_BROWSER_APP"),
+		DryRun:            os.Getenv("HIDEOUT_OPEN_DRY_RUN") == "1",
+		Stdout:            stdout,
+		Stderr:            stderr,
+	}
+}
+
+func writeBrokerEndpoint(path string, endpoint broker.Endpoint) error {
+	return manager.WriteBrokerEndpoint(path, endpoint)
+}
+
+func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
+	opts := runOptions{profileName: "default", backendName: "auto", explainOnly: explainOnly}
+	split := slices.Index(args, "--")
+	flagArgs := args
+	if split >= 0 {
+		flagArgs = args[:split]
+		opts.command = args[split+1:]
+	}
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
+	fs.StringVar(&opts.backendName, "backend", "auto", "backend")
+	fs.StringVar(&opts.networkMode, "network", "", "network mode")
+	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
+	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
+	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
+	fs.StringVar(&opts.auditPath, "audit", "", "audit path or off")
+	fs.BoolVar(&opts.allowWeakIsolation, "allow-weak-isolation", false, "allow native weak isolation")
+	fs.BoolVar(&opts.explainOnly, "explain", opts.explainOnly, "print the run boundary without executing the command")
+	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "use session-local identity state for this run")
+	fs.BoolVar(&opts.newEnvironment, "new", false, "create a new reusable environment")
+	fs.StringVar(&opts.resumeEnvironment, "resume", "", "resume an environment id")
+	fs.BoolVar(&opts.removeEnvironment, "rm", false, "remove the runtime environment after the command")
+	var fsFlags stringListFlag
+	fs.Var(&fsFlags, "fs", "run-scoped HostFS allow rule such as read:/absolute/path")
+	var noFSFlags stringListFlag
+	fs.Var(&noFSFlags, "no-fs", "run-scoped HostFS deny rule such as read:/absolute/path")
+	fs.BoolVar(&opts.noProfileHostFSGrants, "no-profile-fs", false, "ignore profile HostFS grants for this run")
+	if err := fs.Parse(flagArgs); err != nil {
+		return opts, err
+	}
+	grantInputs := appendHostFSFlagInputs(nil, "--fs", fsFlags, "run-scoped CLI allow")
+	denyInputs := appendHostFSFlagInputs(nil, "--no-fs", noFSFlags, "run-scoped CLI deny")
+	opts.hostFSGrantFlags = hostFSFlagValues(grantInputs)
+	opts.hostFSDenyFlags = hostFSFlagValues(denyInputs)
+	hostFSRun, err := parseHostFSRunPolicyFlags(grantInputs, denyInputs)
+	if err != nil {
+		return opts, err
+	}
+	opts.hostFSRun = hostFSRun
+	if opts.newEnvironment && strings.TrimSpace(opts.resumeEnvironment) != "" {
+		return opts, errors.New("--new and --resume cannot be used together")
+	}
+	if opts.ephemeral && (opts.newEnvironment || strings.TrimSpace(opts.resumeEnvironment) != "") {
+		return opts, errors.New("--ephemeral cannot be used with --new or --resume")
+	}
+	if split < 0 && fs.NArg() > 0 {
+		opts.command = fs.Args()
+	}
+	return opts, nil
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
+type hostFSFlagInput struct {
+	flagName string
+	value    string
+	reason   string
+}
+
+func appendHostFSFlagInputs(dst []hostFSFlagInput, flagName string, values []string, reason string) []hostFSFlagInput {
+	for _, value := range values {
+		dst = append(dst, hostFSFlagInput{flagName: flagName, value: value, reason: reason})
+	}
+	return dst
+}
+
+func hostFSFlagValues(inputs []hostFSFlagInput) []string {
+	values := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		values = append(values, input.value)
+	}
+	return values
+}
+
+func parseHostFSRunPolicyFlags(grants, deny []hostFSFlagInput) (hostfs.Config, error) {
+	var config hostfs.Config
+	for _, input := range grants {
+		rule, err := parseHostFSRuleFlag(input)
+		if err != nil {
+			return hostfs.Config{}, err
+		}
+		config.Grants = append(config.Grants, rule)
+	}
+	for _, input := range deny {
+		rule, err := parseHostFSRuleFlag(input)
+		if err != nil {
+			return hostfs.Config{}, err
+		}
+		config.Deny = append(config.Deny, rule)
+	}
+	if len(config.Grants) == 0 && len(config.Deny) == 0 {
+		return config, nil
+	}
+	if err := hostfs.ValidateConfig(config, hostfs.SourceRun); err != nil {
+		return hostfs.Config{}, err
+	}
+	return config, nil
+}
+
+func parseHostFSRuleFlag(input hostFSFlagInput) (hostfs.Rule, error) {
+	kind, path, ok := strings.Cut(input.value, ":")
+	if !ok || strings.TrimSpace(kind) == "" || strings.TrimSpace(path) == "" {
+		return hostfs.Rule{}, fmt.Errorf("%s must use kind:/absolute/path", input.flagName)
+	}
+	rule := hostfs.Rule{
+		HostPath: path,
+		Reason:   input.reason,
+	}
+	switch kind {
+	case "stat":
+		rule.Ops = []hostfs.Op{hostfs.OpStat}
+		rule.Scope = hostfs.ScopeExactFile
+		if hostFSPathHasGlobMeta(path) {
+			rule.Scope = hostfs.ScopeGlob
+		}
+	case "read":
+		rule.Ops = []hostfs.Op{hostfs.OpRead}
+		rule.Scope = hostfs.ScopeExactFile
+		if hostFSPathHasGlobMeta(path) {
+			rule.Scope = hostfs.ScopeGlob
+		}
+	case "list":
+		if hostFSPathHasGlobMeta(path) {
+			return hostfs.Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", input.flagName, kind)
+		}
+		rule.Ops = []hostfs.Op{hostfs.OpList}
+		rule.Scope = hostfs.ScopeDir
+	case "dir":
+		if hostFSPathHasGlobMeta(path) {
+			return hostfs.Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", input.flagName, kind)
+		}
+		rule.Ops = []hostfs.Op{hostfs.OpRead, hostfs.OpList}
+		rule.Scope = hostfs.ScopeDir
+	case "tree":
+		if hostFSPathHasGlobMeta(path) {
+			return hostfs.Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", input.flagName, kind)
+		}
+		rule.Ops = []hostfs.Op{hostfs.OpRead, hostfs.OpList}
+		rule.Scope = hostfs.ScopeRecursiveDir
+	default:
+		return hostfs.Rule{}, fmt.Errorf("unsupported %s kind %q", input.flagName, kind)
+	}
+	return rule, nil
+}
+
+func hostFSPathHasGlobMeta(path string) bool {
+	return strings.ContainsAny(path, "*?[")
+}
+
+func explainText(p profile.Profile, opts runOptions, layout session.Layout, runEnv runEnvironment, env envpolicy.Result, profileDir, identityDir string) string {
+	var b strings.Builder
+	backendName := resolveBackendName(opts.backendName)
+	registry, registryErr := commandProxyRegistry(p)
+	displayEnv := env
+	if backendName == "lima" {
+		displayEnv.Env = lima.GuestEnv(env.Env)
+		displayEnv.Synthetic = guestSyntheticEnv(env.Synthetic)
+	}
+	netPlan, netErr := netpolicy.Prepare(netpolicy.Spec{
+		Profile:          p,
+		Backend:          backendName,
+		SessionDir:       layout.Dir,
+		GuestSessionDir:  guestSessionDirForBackend(backendName),
+		TargetEnv:        env.Env,
+		Resolver:         netpolicy.EnvSecretResolver{},
+		LocalBypassHosts: localBypassHostsForBackend(backendName),
+		RuntimeVerify:    backendName == "lima",
+		DryRun:           true,
+	})
+	fmt.Fprintf(&b, "Profile: %s\n", p.Name)
+	if p.Metadata["profileId"] != "" || p.Metadata["identityId"] != "" {
+		fmt.Fprintf(&b, "Identity: profileId=%s identityId=%s lineage=%s", p.Metadata["profileId"], p.Metadata["identityId"], p.Metadata["lineageMode"])
+		if p.Metadata["createdFrom"] != "" {
+			fmt.Fprintf(&b, " createdFrom=%s", p.Metadata["createdFrom"])
+		}
+		if p.Metadata["sourceIdentityId"] != "" {
+			fmt.Fprintf(&b, " sourceIdentityId=%s", p.Metadata["sourceIdentityId"])
+		}
+		fmt.Fprintln(&b)
+	}
+	fmt.Fprintf(&b, "Backend: %s", backendName)
+	if backendName == "native" {
+		fmt.Fprintf(&b, " (Phase 1A native backend is weak isolation unless --allow-weak-isolation is used)")
+	} else if backendName == "lima" {
+		fmt.Fprintf(&b, " (target command resolves inside the Lima guest)")
+	}
+	fmt.Fprintln(&b)
+	if backendName == "lima" {
+		scope := "session scoped"
+		if runEnv.Active {
+			scope = "environment scoped"
+			if runEnv.Created {
+				scope = "environment scoped, new on run"
+			}
+			if runEnv.RemoveAfterRun {
+				scope = "environment scoped, removed after run"
+			}
+		}
+		fmt.Fprintf(&b, "Lima instance: %s (%s)\n", limaInstanceName(p, layout, opts, runEnv), scope)
+		if runEnv.Active {
+			fmt.Fprintf(&b, "Environment: %s status=%s workspace=%s\n", runEnv.Record.ID, explainValue(runEnv.Record.Status, "ready"), runEnv.Record.Workspace)
+		}
+	}
+	if opts.ephemeral {
+		fmt.Fprintf(&b, "Identity storage: ephemeral session-local at %s\n", identityDir)
+	} else {
+		fmt.Fprintf(&b, "Identity storage: persistent profile at %s\n", profileDir)
+	}
+	if len(opts.command) > 0 {
+		fmt.Fprintf(&b, "Target command: %s\n", strings.Join(opts.command, " "))
+		if backendName == "lima" {
+			fmt.Fprintln(&b, "Target resolution: inside Lima guest PATH; no host fallback")
+		} else {
+			fmt.Fprintln(&b, "Target resolution: native host PATH because weak native backend was explicitly selected")
+		}
+	}
+	fmt.Fprintf(&b, "Workspace: host=%s guest=%s mode=%s pathMode=%s\n", opts.workspace, opts.guestWorkspace, p.Workspace.Mode, p.Workspace.PathMode)
+	fmt.Fprintln(&b, "Workspace visibility: guest can read/write mapped workspace contents, including project-local secrets")
+	if p.Workspace.PathMode == "alias" {
+		fmt.Fprintln(&b, "Workspace path privacy: alias mode uses a neutral guest path for the workspace")
+	} else {
+		fmt.Fprintln(&b, "Workspace path privacy: preserve mode may expose host path shape")
+	}
+	hostFSProfile := hostFSProfileForRun(p, opts)
+	hostFSPolicy, hostFSErr := hostfs.Build(hostfs.BuildInput{Profile: hostFSProfile, Run: opts.hostFSRun})
+	if hostFSErr != nil {
+		fmt.Fprintf(&b, "HostFS Portal: invalid policy (%s)\n", hostFSErr)
+	} else {
+		fmt.Fprintf(&b, "HostFS Portal: roots=/hideout/hostfs,/Users,/Volumes,/private default=hidden profileGrants=%d runGrants=%d totalGrants=%d denyRules=%d write=unsupported\n", len(hostFSProfile.Grants), len(opts.hostFSRun.Grants), len(hostFSPolicy.Grants), len(hostFSPolicy.Deny))
+		if opts.noProfileHostFSGrants {
+			fmt.Fprintln(&b, "HostFS profile grants: disabled for this run; profile deny rules still apply")
+		}
+		if len(opts.hostFSRun.Deny) > 0 {
+			fmt.Fprintf(&b, "HostFS run denies: %d temporary deny rule(s) active\n", len(opts.hostFSRun.Deny))
+		}
+		if len(hostFSPolicy.Grants) == 0 {
+			fmt.Fprintln(&b, "HostFS data plane: inactive because no HostFS grants are active")
+		} else if backendName == "lima" {
+			fmt.Fprintln(&b, "HostFS data plane: enabled for Lima through hideout-hostfsd FUSE; grants do not create backend mounts")
+		} else {
+			fmt.Fprintln(&b, "HostFS data plane: not mounted by the native weak backend")
+		}
+	}
+	fmt.Fprintf(&b, "Guest home: %s\n", displayEnv.Synthetic["HOME"])
+	fmt.Fprintf(&b, "Identity env: user=%s hostname=%s timezone=%s locale=%s\n",
+		displayEnv.Synthetic["USER"],
+		displayEnv.Synthetic["HOSTNAME"],
+		displayEnv.Synthetic["TZ"],
+		displayEnv.Synthetic["LANG"],
+	)
+	machineScope := "persistent profile"
+	if opts.ephemeral {
+		machineScope = "ephemeral session"
+	}
+	machineStatus := "missing"
+	if p.Metadata["machineId"] != "" {
+		machineStatus = "present"
+	}
+	fmt.Fprintf(&b, "Machine identity: generated machine-id %s in %s identity root (value hidden)\n", machineStatus, machineScope)
+	fmt.Fprintf(&b, "Config/cache/data: config=%s cache=%s data=%s tmp=%s\n",
+		displayEnv.Synthetic["XDG_CONFIG_HOME"],
+		displayEnv.Synthetic["XDG_CACHE_HOME"],
+		displayEnv.Synthetic["XDG_DATA_HOME"],
+		displayEnv.Synthetic["TMPDIR"],
+	)
+	fmt.Fprintf(&b, "Git identity: name=%s email=%s\n", p.Git.UserName, p.Git.UserEmail)
+	fmt.Fprintf(&b, "Synthetic env: %s\n", explainMapKeys(displayEnv.Synthetic))
+	fmt.Fprintf(&b, "Inherited env: %s\n", explainList(displayEnv.Inherited))
+	fmt.Fprintf(&b, "Denied env observed: %s\n", explainList(displayEnv.Denied))
+	fmt.Fprintf(&b, "Denied env patterns: %s\n", explainList(p.Env.Deny))
+	fmt.Fprintf(&b, "Proxy env in target: absent\n")
+	fmt.Fprintf(&b, "Network: %s", netPlan.Mode)
+	if netPlan.Mode == netpolicy.ModeDirect {
+		fmt.Fprint(&b, " (host network identity may be visible)")
+	} else if netPlan.Mode == netpolicy.ModeTun2Socks {
+		if netPlan.RuntimeVerify {
+			fmt.Fprint(&b, " (hidden proxy via guest-side tun2socks; route verified inside guest before target launch)")
+		} else {
+			fmt.Fprint(&b, " (hidden proxy via guest-side tun2socks; fail closed until routing is verified)")
+		}
+	}
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "Network plan: engine=%s verified=%t runtimeVerify=%t failClosed=%t reason=%s\n", explainValue(netPlan.Engine, "none"), netPlan.Verified, netPlan.RuntimeVerify, netPlan.FailClosed, explainValue(netPlan.Reason, "none"))
+	fmt.Fprintf(&b, "Network DNS policy: %s\n", explainValue(netPlan.DNSPolicy, "none"))
+	if len(netPlan.LocalBypassHosts) > 0 {
+		fmt.Fprintf(&b, "Network local bypass: %s\n", strings.Join(netPlan.LocalBypassHosts, ","))
+	}
+	if netErr != nil {
+		fmt.Fprintf(&b, "Network plan error: %s\n", netErr)
+	}
+	if p.Network.ProxySecretRef != "" {
+		fmt.Fprintf(&b, "Network proxy secret: %s (value hidden)\n", p.Network.ProxySecretRef)
+	}
+	if netPlan.GuestBootstrapPath != "" {
+		fmt.Fprintf(&b, "Network bootstrap: %s\n", netPlan.GuestBootstrapPath)
+	}
+	fmt.Fprintf(&b, "Tool presets: %s\n", strings.Join(lima.EffectiveToolPresetNames(p.Tools.Presets), ","))
+	if registryErr != nil {
+		fmt.Fprintf(&b, "Command proxy: invalid (%s) via %s\n", registryErr, explainBrokerEndpoint(backendName, layout))
+	} else {
+		fmt.Fprintf(&b, "Command proxy: %s via %s\n", explainCommandProxy(registry), explainBrokerEndpoint(backendName, layout))
+	}
+	fmt.Fprintln(&b, "Command proxy scope: registered commands only; ordinary guest processes are not fully audited in Phase 1")
+	fmt.Fprintln(&b, "Host broker capability: host.open allows external http/https URLs and mapped workspace files only")
+	fmt.Fprintf(&b, "Browser profile: isolated at %s\n", hostopen.BrowserProfileDir(identityDir))
+	fmt.Fprintln(&b, "Host browser profile: real default browser profile is not used by default")
+	fmt.Fprintln(&b, "Host browser network: localhost, loopback, private, CGNAT, benchmarking, link-local, multicast, .local, and .localhost URL targets are denied before host open")
+	fmt.Fprintln(&b, "Host browser control: no DevTools or remote-debugging port is exposed to the guest in Phase 1")
+	fmt.Fprintf(&b, "Audit: %s\n", resolveAuditPath(p, opts, layout))
+	fmt.Fprintf(&b, "Session: %s\n", layout.ID)
+	if backendName == "native" {
+		fmt.Fprintln(&b, "Known limitation: native backend does not provide VM/container filesystem isolation.")
+		fmt.Fprintln(&b, "Known limitation: native backend may still expose host OS identity APIs such as kernel hostname, OS user database, and system machine-id.")
+	} else if backendName == "lima" {
+		fmt.Fprintln(&b, "Known limitation: target command must exist inside the Lima guest or be installed by a tool preset.")
+	}
+	fmt.Fprintln(&b, "Known limitation: Phase 1 does not audit every child process inside the guest.")
+	fmt.Fprintln(&b, "Known limitation: workspace secrets remain visible when they are inside the mounted workspace.")
+	return b.String()
+}
+
+func guestSyntheticEnv(synthetic map[string]string) map[string]string {
+	out := make(map[string]string, len(synthetic))
+	for k, v := range synthetic {
+		out[k] = v
+	}
+	out["HOME"] = lima.GuestProfileDir + "/home"
+	out["TMPDIR"] = lima.GuestSessionDir + "/tmp"
+	out["XDG_CONFIG_HOME"] = lima.GuestProfileDir + "/config"
+	out["XDG_CACHE_HOME"] = lima.GuestProfileDir + "/cache"
+	out["XDG_DATA_HOME"] = lima.GuestProfileDir + "/data"
+	out["PATH"] = lima.GuestSessionDir + "/shims:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	return out
+}
+
+func explainList(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ",")
+}
+
+func explainMapKeys(values map[string]string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return strings.Join(keys, ",")
+}
+
+func explainValue(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func resolveAuditPath(p profile.Profile, opts runOptions, layout session.Layout) string {
+	return manager.ResolveRunAuditPath(p, opts.auditPath, layout)
+}
+
+func explainBrokerEndpoint(backendName string, layout session.Layout) string {
+	if backendName == "lima" {
+		return "tcp://host.lima.internal:<allocated-port>"
+	}
+	return broker.UnixEndpoint(layout.BrokerSock).String()
+}
+
+func explainCommandProxy(registry cmdproxy.Registry) string {
+	return strings.Join(registry.ShimNames(), ", ") + " -> " + cmdproxy.ActionHostOpen
+}
+
+func commandProxyRegistry(p profile.Profile) (cmdproxy.Registry, error) {
+	return cmdproxy.RegistryFromProfile(p)
+}
+
+func materializeShims(dir, backendName string, registry cmdproxy.Registry, netPlan netpolicy.Plan) error {
+	return manager.MaterializeCommandProxyShims(dir, backendName, registry, netPlan)
+}
+
+func materializeHostFSD(dir, backendName string, enabled bool) error {
+	return manager.MaterializeHostFSD(dir, backendName, enabled)
+}
+
+func resolveShimPath() string {
+	return manager.ResolveShimPath()
+}
+
+func resolveLinuxShimPath() string {
+	return manager.ResolveLinuxShimPath()
+}
+
+func resolveLinuxTun2SocksPath() string {
+	return manager.ResolveLinuxTun2SocksPath()
+}
+
+func resolveLinuxHostFSDPath() string {
+	return manager.ResolveLinuxHostFSDPath()
+}
+
+type linuxShimBuildOptions struct {
+	out    string
+	goarch string
+	source string
+}
+
+func (a app) shim(args []string) error {
+	if len(args) > 0 && args[0] == "build-linux" {
+		return a.buildLinuxShim(args[1:])
+	}
+	command, commandArgs, err := cmdproxy.DefaultRegistry().ResolveInvocation("hideout-shim", args)
+	if err != nil {
+		return err
+	}
+	normalized, err := cmdproxy.DefaultRegistry().Normalize(command, commandArgs, mustGetwd())
+	if err != nil {
+		return err
+	}
+	endpoint, err := brokerEndpointFromEnv()
+	if err != nil {
+		return err
+	}
+	sessionID := os.Getenv(broker.EnvSession)
+	token := os.Getenv(broker.EnvToken)
+	if sessionID == "" || token == "" {
+		return errors.New("broker environment is missing")
+	}
+	requestID, err := broker.NewRequestID()
+	if err != nil {
+		return err
+	}
+	resp := broker.ClientOpenEndpoint(context.Background(), endpoint, broker.Request{
+		ID:              requestID,
+		SessionID:       sessionID,
+		CapabilityToken: token,
+		Subject:         normalized.Subject,
+		Command:         normalized.Command,
+		Argv:            normalized.Argv,
+		Route:           normalized.Route,
+		Action:          normalized.Action,
+		Args:            normalized.Payload,
+	})
+	if resp.Stdout != "" {
+		fmt.Fprint(a.stdout, resp.Stdout)
+	}
+	if resp.Stderr != "" {
+		fmt.Fprintln(a.stderr, resp.Stderr)
+	}
+	if resp.ExitCode != 0 {
+		return fmt.Errorf("shim %s failed with exit code %d", normalized.Command, resp.ExitCode)
+	}
+	return nil
+}
+
+func (a app) buildLinuxShim(args []string) error {
+	opts := linuxShimBuildOptions{
+		goarch: runtime.GOARCH,
+		source: ".",
+	}
+	fs := flag.NewFlagSet("shim build-linux", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.out, "out", "", "output path for linux hideout-shim")
+	fs.StringVar(&opts.goarch, "goarch", opts.goarch, "linux target GOARCH")
+	fs.StringVar(&opts.source, "source", opts.source, "Hideout source repository")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+	}
+	if strings.TrimSpace(opts.goarch) == "" {
+		return errors.New("linux shim GOARCH is required")
+	}
+	if strings.TrimSpace(opts.out) == "" {
+		var err error
+		opts.out, err = defaultLinuxShimPath(opts.goarch)
+		if err != nil {
+			return err
+		}
+	}
+	if err := buildLinuxShimBinary(opts); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.stdout, opts.out)
+	return nil
+}
+
+func defaultLinuxShimPath(goarch string) (string, error) {
+	return manager.DefaultLinuxShimPath(goarch)
+}
+
+func (a app) hostfsd(args []string) error {
+	if len(args) > 0 && args[0] == "build-linux" {
+		return a.buildLinuxHostFSD(args[1:])
+	}
+	return errors.New("usage: hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+}
+
+func (a app) buildLinuxHostFSD(args []string) error {
+	opts := linuxShimBuildOptions{
+		goarch: runtime.GOARCH,
+		source: ".",
+	}
+	fs := flag.NewFlagSet("hostfsd build-linux", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.out, "out", "", "output path for linux hideout-hostfsd")
+	fs.StringVar(&opts.goarch, "goarch", opts.goarch, "linux target GOARCH")
+	fs.StringVar(&opts.source, "source", opts.source, "Hideout source repository")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+	}
+	if strings.TrimSpace(opts.goarch) == "" {
+		return errors.New("linux hostfsd GOARCH is required")
+	}
+	if strings.TrimSpace(opts.out) == "" {
+		var err error
+		opts.out, err = defaultLinuxHostFSDPath(opts.goarch)
+		if err != nil {
+			return err
+		}
+	}
+	if err := buildLinuxCommandBinary(opts, "hideout-hostfsd"); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.stdout, opts.out)
+	return nil
+}
+
+func defaultLinuxHostFSDPath(goarch string) (string, error) {
+	return manager.DefaultLinuxHostFSDPath(goarch)
+}
+
+func buildLinuxShimBinary(opts linuxShimBuildOptions) error {
+	return buildLinuxCommandBinary(opts, "hideout-shim")
+}
+
+func buildLinuxCommandBinary(opts linuxShimBuildOptions, command string) error {
+	return helperbin.BuildLinuxCommand(helperbin.BuildOptions{
+		Out:     opts.out,
+		GOARCH:  opts.goarch,
+		Source:  opts.source,
+		Command: command,
+	})
+}
+
+func brokerEndpointFromEnv() (broker.Endpoint, error) {
+	if raw := os.Getenv(broker.EnvEndpoint); raw != "" {
+		return broker.ParseEndpoint(raw)
+	}
+	if sock := os.Getenv(broker.EnvSock); sock != "" {
+		return broker.UnixEndpoint(sock), nil
+	}
+	return broker.Endpoint{}, errors.New("broker environment is missing")
+}
+
+func mustGetwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
+func (a app) doctor(args []string) error {
+	opts, err := parseDoctorOptions(args)
+	if err != nil {
+		return err
+	}
+	if opts.fix {
+		return a.doctorFix(opts)
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	failed := false
+	report := func(name, status, message string) {
+		if message == "" {
+			fmt.Fprintf(a.stdout, "%s: %s\n", name, status)
+		} else {
+			fmt.Fprintf(a.stdout, "%s: %s %s\n", name, status, message)
+		}
+		if status == "error" {
+			failed = true
+		}
+	}
+	fmt.Fprintln(a.stdout, "Hideout doctor")
+	fmt.Fprintf(a.stdout, "storage: %s\n", store.Root)
+	if err := os.MkdirAll(store.Root, 0o700); err != nil {
+		report("store", "error", err.Error())
+		return errors.New("doctor found errors")
+	}
+	report("store", "ok", "writable")
+	checkManager(store, report)
+
+	p, profileLoaded := loadDoctorProfile(store, opts.profileName, report)
+	if opts.networkMode != "" {
+		p.Network.Mode = opts.networkMode
+	}
+	if opts.proxySecret != "" {
+		p.Network.ProxySecretRef = opts.proxySecret
+	}
+	if err := p.Validate(); err != nil {
+		report("profile", "error", err.Error())
+	}
+	runtimeProfile := p
+	if opts.ephemeral {
+		runtimeProfile, err = profile.EphemeralIdentityProfile(p)
+		if err != nil {
+			report("identity", "error", err.Error())
+		}
+	}
+	workspace, guestWorkspace, err := resolveWorkspaceMapping(opts.workspace, opts.guestWorkspace, runtimeProfile)
+	if err != nil {
+		report("workspace", "error", err.Error())
+	}
+	checkWorkspace(workspace, guestWorkspace, runtimeProfile, report)
+
+	layout, err := session.New(store.Root)
+	if err != nil {
+		report("session", "error", err.Error())
+		if failed {
+			return errors.New("doctor found errors")
+		}
+		return nil
+	}
+	defer os.RemoveAll(layout.Dir)
+
+	backendName := resolveBackendName(opts.backendName)
+	checkBackend(backendName, report)
+	profileDir := store.ProfileDir(p.Name)
+	identityDir := runtimeIdentityDir(layout, profileDir, runOptions{ephemeral: opts.ephemeral})
+	if opts.ephemeral && runtimeProfile.Metadata["machineId"] != "" {
+		if err := profile.MaterializeIdentityState(identityDir, runtimeProfile); err != nil {
+			report("identity", "error", err.Error())
+		}
+	}
+	checkIdentityState(runtimeProfile, identityDir, opts.ephemeral, profileLoaded, report)
+	checkMountPlan(backendName, runtimeProfile, layout, workspace, guestWorkspace, identityDir, report)
+	checkLimaGeneratedConfig(backendName, runtimeProfile, layout, workspace, guestWorkspace, identityDir, report)
+	env := envpolicy.Build(envpolicy.Spec{
+		Profile:    runtimeProfile,
+		ProfileDir: identityDir,
+		SessionDir: layout.Dir,
+		ShimDir:    layout.ShimDir,
+	})
+	checkEnv(env, report)
+	checkPolicy(runtimeProfile, profileDir, report)
+	checkNetwork(runtimeProfile, backendName, layout, env, report)
+	checkBroker(runtimeProfile, backendName, layout, workspace, guestWorkspace, profileDir, report)
+	checkCommandProxyRuntime(backendName, report)
+	checkHostFSRuntime(backendName, runtimeProfile, report)
+	checkHostOpen(runtimeProfile, identityDir, report)
+	if !profileLoaded {
+		report("profile-init", "warn", "run or profile init will materialize profile state")
+	}
+	if failed {
+		return errors.New("doctor found errors")
+	}
+	return nil
+}
+
+func checkManager(store profile.Store, report func(string, string, string)) {
+	overview, err := manager.New(store).Overview(context.Background())
+	if err != nil {
+		report("manager", "error", err.Error())
+		return
+	}
+	report("manager", "ok", fmt.Sprintf(
+		"profiles=%d sessions=%d backends=%d availableBackends=%d commandProxies=%d secrets=%d",
+		len(overview.Profiles),
+		len(overview.Sessions),
+		len(overview.Backends),
+		availableBackends(overview.Backends),
+		len(overview.Capabilities.CommandProxies),
+		len(overview.Secrets),
+	))
+}
+
+func availableBackends(backends []manager.BackendSummary) int {
+	count := 0
+	for _, backend := range backends {
+		if backend.Available {
+			count++
+		}
+	}
+	return count
+}
+
+func limaInstanceName(p profile.Profile, layout session.Layout, opts runOptions, runEnv runEnvironment) string {
+	if runEnv.Active && runEnv.InstanceName != "" {
+		return runEnv.InstanceName
+	}
+	return lima.InstanceNameForSession(p.Name, layout.ID)
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+type doctorOptions struct {
+	profileName    string
+	backendName    string
+	networkMode    string
+	proxySecret    string
+	workspace      string
+	guestWorkspace string
+	ephemeral      bool
+	fix            bool
+	dryRun         bool
+}
+
+func parseDoctorOptions(args []string) (doctorOptions, error) {
+	opts := doctorOptions{profileName: "default", backendName: "auto"}
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
+	fs.StringVar(&opts.backendName, "backend", "auto", "backend")
+	fs.StringVar(&opts.networkMode, "network", "", "network mode")
+	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
+	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
+	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
+	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "diagnose session-local identity state")
+	fs.BoolVar(&opts.fix, "fix", false, "apply safe initialization repairs")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "print fix plan without applying")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	return opts, nil
+}
+
+func (a app) doctorFix(opts doctorOptions) error {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	networkMode := opts.networkMode
+	if networkMode == "" {
+		networkMode = "direct"
+	}
+	core := manager.New(store)
+	plan, err := core.PlanDoctorFix(inittask.Options{
+		ProfileName: opts.profileName,
+		Backend:     opts.backendName,
+		Network:     networkMode,
+		NoInput:     true,
+	})
+	if err != nil {
+		return err
+	}
+	if opts.dryRun {
+		writeInitPlan(a.stdout, "Hideout doctor fix plan", plan)
+		return nil
+	}
+	result, err := core.ApplyDoctorFix(plan, inittask.ApplyOptions{NoInput: true})
+	if err != nil {
+		return err
+	}
+	writeInitResult(a.stdout, "Hideout doctor fix", result)
+	return nil
+}
+
+func loadDoctorProfile(store profile.Store, name string, report func(string, string, string)) (profile.Profile, bool) {
+	p, err := store.Load(name)
+	if err == nil {
+		report("profile", "ok", name)
+		return p, true
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		report("profile", "warn", fmt.Sprintf("%s missing; using defaults for diagnostics", name))
+		return profile.Default(name), false
+	}
+	report("profile", "error", err.Error())
+	return profile.Default(name), false
+}
+
+func checkWorkspace(host, guest string, p profile.Profile, report func(string, string, string)) {
+	if host == "" {
+		report("workspace", "error", "workspace path is empty")
+		return
+	}
+	st, err := os.Stat(host)
+	if err != nil {
+		report("workspace", "error", err.Error())
+		return
+	}
+	if !st.IsDir() {
+		report("workspace", "error", "workspace is not a directory")
+		return
+	}
+	report("workspace", "ok", fmt.Sprintf("host=%s guest=%s mode=%s pathMode=%s", host, guest, p.Workspace.Mode, p.Workspace.PathMode))
+}
+
+func checkIdentityState(p profile.Profile, identityDir string, ephemeral, profileLoaded bool, report func(string, string, string)) {
+	mode := "persistent"
+	if ephemeral {
+		mode = "ephemeral"
+	}
+	if !profileLoaded && !ephemeral {
+		report("identity", "warn", "profile identity state is not materialized yet")
+		return
+	}
+	if identityDir == "" {
+		report("identity", "error", "identity root is empty")
+		return
+	}
+	machineID := p.Metadata["machineId"]
+	if machineID == "" {
+		report("identity", "error", "metadata.machineId is missing")
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(identityDir, "machine", "machine-id"))
+	if err != nil {
+		report("identity", "error", err.Error())
+		return
+	}
+	if strings.TrimSpace(string(data)) != machineID {
+		report("identity", "error", "machine-id file does not match runtime identity metadata")
+		return
+	}
+	parts := []string{
+		"mode=" + mode,
+		"root=" + identityDir,
+		"identityId=" + p.Metadata["identityId"],
+		"lineage=" + p.Metadata["lineageMode"],
+	}
+	if p.Metadata["sourceIdentityId"] != "" {
+		parts = append(parts, "sourceIdentityId="+p.Metadata["sourceIdentityId"])
+	}
+	report("identity", "ok", strings.Join(parts, " "))
+}
+
+func checkBackend(backendName string, report func(string, string, string)) {
+	switch backendName {
+	case "lima":
+		if err := (lima.Backend{}).Available(context.Background()); err != nil {
+			report("backend", "error", "lima unavailable: "+err.Error())
+			return
+		}
+		report("backend", "ok", "lima available")
+	case "native":
+		report("backend", "warn", "native is weak isolation and requires --backend native --allow-weak-isolation for run")
+	default:
+		report("backend", "error", fmt.Sprintf("%s is not implemented", backendName))
+	}
+}
+
+func checkMountPlan(backendName string, p profile.Profile, layout session.Layout, hostRoot, guestRoot, profileDir string, report func(string, string, string)) {
+	switch backendName {
+	case "native":
+		report("mount", "ok", "native weak backend has no VM mount plan; run still requires explicit weak isolation")
+	case "lima":
+		if hostRoot == "" || guestRoot == "" {
+			report("mount", "error", "workspace mapping is unavailable")
+			return
+		}
+		cfg := lima.ConfigFromRunSpec(backend.RunSpec{
+			Profile:    p,
+			HostWork:   hostRoot,
+			GuestWork:  guestRoot,
+			ProfileDir: profileDir,
+			SessionDir: layout.Dir,
+		})
+		workspaceMounts := 0
+		for _, m := range cfg.Mounts {
+			if m.Location == hostRoot && m.MountPoint == guestRoot && m.Writable {
+				workspaceMounts++
+			}
+			if err := validateRuntimeMount("profile", profileDir, m.Location, []string{"home", "cache", "config", "data", "browser", "machine"}); err != nil {
+				report("mount", "error", err.Error())
+				return
+			}
+			if err := validateRuntimeMount("session", layout.Dir, m.Location, []string{"tmp", "shims", "network", "bootstrap"}); err != nil {
+				report("mount", "error", err.Error())
+				return
+			}
+			if strings.HasPrefix(filepath.Base(m.Location), ".") && m.Location != hostRoot {
+				report("mount", "error", fmt.Sprintf("hidden host path %q must not be mounted by default", m.Location))
+				return
+			}
+		}
+		if workspaceMounts != 1 {
+			report("mount", "error", fmt.Sprintf("expected one writable workspace mount, got %d", workspaceMounts))
+			return
+		}
+		report("mount", "ok", fmt.Sprintf("lima mounts=%d workspace=%s profileRuntimeOnly=true sessionRuntimeOnly=true", len(cfg.Mounts), guestRoot))
+	default:
+		report("mount", "error", fmt.Sprintf("%s is not implemented", backendName))
+	}
+}
+
+func validateRuntimeMount(domain, root, location string, allowedTopLevel []string) error {
+	if root == "" || location == "" {
+		return nil
+	}
+	rel, err := filepath.Rel(root, location)
+	if err != nil || pathEscapesRoot(rel) {
+		return nil
+	}
+	if rel == "." {
+		return fmt.Errorf("%s root %q must not be mounted as a whole", domain, root)
+	}
+	top := rel
+	if before, _, ok := strings.Cut(rel, string(filepath.Separator)); ok {
+		top = before
+	}
+	if !slices.Contains(allowedTopLevel, top) {
+		return fmt.Errorf("%s control-plane path %q must not be mounted", domain, location)
+	}
+	return nil
+}
+
+func pathEscapesRoot(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func checkLimaGeneratedConfig(backendName string, p profile.Profile, layout session.Layout, hostRoot, guestRoot, identityRoot string, report func(string, string, string)) {
+	if backendName != "lima" {
+		return
+	}
+	if hostRoot == "" || guestRoot == "" {
+		return
+	}
+	limactl, err := exec.LookPath("limactl")
+	if err != nil {
+		return
+	}
+	configPath := filepath.Join(layout.Dir, "doctor-lima.yaml")
+	if err := lima.WriteConfig(configPath, lima.ConfigFromRunSpec(backend.RunSpec{
+		Profile:      p,
+		HostWork:     hostRoot,
+		GuestWork:    guestRoot,
+		ProfileDir:   identityRoot,
+		SessionDir:   layout.Dir,
+		IdentityRoot: identityRoot,
+	})); err != nil {
+		report("lima-config", "error", "could not write generated YAML: "+doctorDiagnostic(nil, err))
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, limactl, "validate", configPath)
+	cmd.Env = lima.HostCommandEnv(os.Environ())
+	data, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		report("lima-config", "error", "limactl validate timed out")
+		return
+	}
+	if err != nil {
+		report("lima-config", "error", "generated YAML failed validation: "+doctorDiagnostic(data, err))
+		return
+	}
+	report("lima-config", "ok", "generated YAML validates")
+}
+
+func doctorDiagnostic(output []byte, err error) string {
+	message := strings.TrimSpace(string(output))
+	if message == "" && err != nil {
+		message = err.Error()
+	}
+	message = strings.Join(strings.Fields(message), " ")
+	if message == "" {
+		return "unknown error"
+	}
+	const maxDiagnosticLen = 240
+	if len(message) > maxDiagnosticLen {
+		message = message[:maxDiagnosticLen] + "..."
+	}
+	return message
+}
+
+func checkEnv(env envpolicy.Result, report func(string, string, string)) {
+	if netpolicy.ContainsProxyEnv(env.Env) {
+		report("env", "error", "target env contains proxy variables")
+		return
+	}
+	if containsHideoutSecretEnv(env.Env) {
+		report("env", "error", "target env contains hideout secret variables")
+		return
+	}
+	report("env", "ok", fmt.Sprintf("synthetic=%d inherited=%d denied=%d proxyEnv=absent secretEnv=absent", len(env.Synthetic), len(env.Inherited), len(env.Denied)))
+}
+
+func containsHideoutSecretEnv(env []string) bool {
+	for _, kv := range env {
+		name, _, ok := strings.Cut(kv, "=")
+		if ok && strings.HasPrefix(name, "HIDEOUT_SECRET_") {
+			return true
+		}
+	}
+	return false
+}
+
+func checkPolicy(p profile.Profile, profileDir string, report func(string, string, string)) {
+	evaluator := policy.NewEvaluator(p)
+	if _, err := evaluator.Validate(policy.Proposal{
+		Decision:  policy.AuditOnly,
+		Route:     policy.GuestDirect,
+		Action:    "guest.exec",
+		Resources: []string{"guest-command:doctor"},
+		Reason:    "doctor top-level command policy check",
+	}); err != nil {
+		report("policy", "error", err.Error())
+		return
+	}
+	if _, err := evaluator.Validate(networkConnectProposal(p.Network.Mode, "doctor network policy check")); err != nil {
+		report("policy", "error", err.Error())
+		return
+	}
+	if _, err := evaluator.EvaluateOpen("https://example.com"); err != nil {
+		report("policy", "error", err.Error())
+		return
+	}
+	if err := checkPolicyScripts(p, profileDir, evaluator); err != nil {
+		report("policy", "error", err.Error())
+		return
+	}
+	report("policy", "ok", fmt.Sprintf("engine=%s maxCapabilities=%d scripts=%d", p.Policy.Engine, len(p.Policy.MaxCapabilities), len(p.Policy.ScriptRefs)))
+}
+
+func networkConnectProposal(mode, reason string) policy.Proposal {
+	if mode == "" {
+		mode = "direct"
+	}
+	return policy.Proposal{
+		Decision:  policy.AuditOnly,
+		Route:     policy.GuestDirect,
+		Action:    "network.connect",
+		Resources: []string{"network:" + mode},
+		Reason:    reason,
+	}
+}
+
+func checkPolicyScripts(p profile.Profile, profileDir string, evaluator policy.Evaluator) error {
+	for _, ref := range p.Policy.ScriptRefs {
+		path := ref.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(profileDir, path)
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("script %s: %w", ref.ID, err)
+		}
+		for _, entrypoint := range ref.Entrypoints {
+			switch entrypoint {
+			case "decideCommand":
+				req := doctorCommandScriptRequest()
+				ctx := policy.CommandContext{
+					Version: "policy-script/v1",
+					Profile: map[string]string{
+						"name": p.Name,
+					},
+					Session: map[string]any{
+						"id":          "doctor",
+						"interactive": false,
+					},
+					Subject: "command:open",
+					Command: map[string]any{
+						"name":   "open",
+						"argv":   []string{"open", "https://example.com"},
+						"cwd":    "/workspace",
+						"target": "https://example.com",
+					},
+					Workspace: map[string]any{
+						"guestRoot":       "/workspace",
+						"hostRootVisible": false,
+						"mode":            "read-write",
+					},
+					Env: map[string]any{
+						"safe": map[string]string{"TERM": "xterm-256color"},
+					},
+					Network: map[string]any{
+						"mode": p.Network.Mode,
+					},
+				}
+				proposal, err := evaluator.RunCommandScript(string(source), entrypoint, ctx)
+				if err != nil {
+					return fmt.Errorf("script %s entrypoint %s: %w", ref.ID, entrypoint, err)
+				}
+				if err := broker.ValidateCommandScriptProposal(req, proposal); err != nil {
+					return fmt.Errorf("script %s entrypoint %s: %w", ref.ID, entrypoint, err)
+				}
+			case "redactAudit":
+				ctx := policy.AuditContext{
+					Version:  "policy-audit/v1",
+					Profile:  map[string]string{"name": p.Name},
+					Session:  map[string]any{"id": "doctor"},
+					Subject:  "command:open",
+					Action:   "host.open",
+					Decision: string(policy.Allow),
+					Details: map[string]any{
+						"target": "https://example.com",
+						"argv":   []string{"open", "https://example.com"},
+					},
+					Extra: map[string]interface{}{
+						"status":   "ok",
+						"exitCode": 0,
+					},
+				}
+				if _, err := evaluator.RunAuditRedactScript(string(source), entrypoint, ctx); err != nil {
+					return fmt.Errorf("script %s entrypoint %s: %w", ref.ID, entrypoint, err)
+				}
+			default:
+				continue
+			}
+		}
+	}
+	return nil
+}
+
+func doctorCommandScriptRequest() broker.Request {
+	return broker.Request{
+		ID:              "req_doctor",
+		SessionID:       "doctor",
+		CapabilityToken: "doctor",
+		Subject:         "command:open",
+		Command:         "open",
+		Argv:            []string{"open", "https://example.com"},
+		Route:           "host-broker",
+		Action:          "host.open",
+		Args:            map[string]any{"target": "https://example.com"},
+	}
+}
+
+func checkNetwork(p profile.Profile, backendName string, layout session.Layout, env envpolicy.Result, report func(string, string, string)) {
+	plan, err := netpolicy.Prepare(netpolicy.Spec{
+		Profile:          p,
+		Backend:          backendName,
+		SessionDir:       layout.Dir,
+		GuestSessionDir:  guestSessionDirForBackend(backendName),
+		TargetEnv:        env.Env,
+		Resolver:         netpolicy.EnvSecretResolver{},
+		LocalBypassHosts: localBypassHostsForBackend(backendName),
+		RuntimeVerify:    backendName == "lima",
+		DryRun:           true,
+	})
+	if err != nil {
+		report("network", "error", err.Error())
+		return
+	}
+	status := "ok"
+	if networkDecision(plan, nil) == "audit-only" {
+		status = "warn"
+	}
+	report("network", status, fmt.Sprintf("mode=%s engine=%s runtimeVerify=%t localBypass=%s reason=%s", plan.Mode, plan.Engine, plan.RuntimeVerify, explainList(plan.LocalBypassHosts), plan.Reason))
+}
+
+func checkBroker(p profile.Profile, backendName string, layout session.Layout, hostRoot, guestRoot, profileDir string, report func(string, string, string)) {
+	token, err := broker.NewToken()
+	if err != nil {
+		report("broker", "error", err.Error())
+		return
+	}
+	registry, err := commandProxyRegistry(p)
+	if err != nil {
+		report("broker", "error", err.Error())
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	endpoint := brokerEndpointForBackend(backendName, layout)
+	server := &broker.Server{
+		SessionID:     layout.ID,
+		Token:         token,
+		Socket:        layout.BrokerSock,
+		Endpoint:      endpoint,
+		HostRoot:      hostRoot,
+		GuestRoot:     guestRoot,
+		Profile:       p.Name,
+		ProfileDir:    profileDir,
+		Backend:       backendName,
+		WorkspaceMode: p.Workspace.Mode,
+		NetworkMode:   p.Network.Mode,
+		Commands:      registry.ShimNames(),
+		ScriptRefs:    p.Policy.ScriptRefs,
+		Evaluator:     policy.NewEvaluator(p),
+		Audit:         audit.NewDiscard(),
+		Opener:        broker.NoopOpener{},
+	}
+	if err := server.StartEndpoint(ctx, endpoint); err != nil {
+		report("broker", "error", err.Error())
+		return
+	}
+	defer server.Close()
+	resp := checkBrokerOpen(ctx, brokerEndpointForDoctorClient(server.Endpoint), broker.Request{
+		ID:              "req_doctor",
+		SessionID:       layout.ID,
+		CapabilityToken: token,
+		Subject:         "command:open",
+		Command:         "open",
+		Argv:            []string{"open", "https://example.com"},
+		Route:           "host-broker",
+		Action:          "host.open",
+		Args:            map[string]any{"target": "https://example.com"},
+	})
+	if resp.Status == "broker-unavailable" {
+		report("broker", "error", resp.Stderr)
+		return
+	}
+	if resp.Status != "ok" {
+		report("broker", "warn", fmt.Sprintf("transport=%s endpoint=present host.open decision=%s status=%s", server.Endpoint.Network, resp.Decision, resp.Status))
+	} else {
+		report("broker", "ok", fmt.Sprintf("transport=%s endpoint=present host.open=%s", server.Endpoint.Network, resp.Decision))
+	}
+}
+
+func checkBrokerOpen(ctx context.Context, endpoint broker.Endpoint, req broker.Request) broker.Response {
+	deadline := time.Now().Add(2 * time.Second)
+	var resp broker.Response
+	for {
+		reqCtx, reqCancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		resp = broker.ClientOpenEndpoint(reqCtx, endpoint, req)
+		reqCancel()
+		if resp.Status != "broker-unavailable" || time.Now().After(deadline) {
+			return resp
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func checkCommandProxyRuntime(backendName string, report func(string, string, string)) {
+	switch backendName {
+	case "lima":
+		if resolveLinuxShimPath() == "" {
+			report("command-proxy", "error", "prebuilt linux hideout-shim is required for Lima command proxies")
+			return
+		}
+		report("command-proxy", "ok", "linux shim=present")
+	case "native":
+		if resolveShimPath() == "" {
+			report("command-proxy", "warn", "native hideout-shim not found; registered command proxies will fail")
+			return
+		}
+		report("command-proxy", "ok", "native shim=present")
+	}
+}
+
+func checkHostFSRuntime(backendName string, p profile.Profile, report func(string, string, string)) {
+	hostFSProfile := hostFSProfileForRun(p, runOptions{})
+	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{Profile: hostFSProfile})
+	if err != nil {
+		report("hostfs", "error", err.Error())
+		return
+	}
+	grants := len(hostFSPolicy.Grants)
+	if grants == 0 {
+		report("hostfs", "ok", "inactive grants=0")
+		return
+	}
+	switch backendName {
+	case "lima":
+		if resolveLinuxHostFSDPath() == "" {
+			report("hostfs", "error", fmt.Sprintf("grants=%d prebuilt linux hideout-hostfsd is required for Lima HostFS", grants))
+			return
+		}
+		report("hostfs", "ok", fmt.Sprintf("grants=%d linux hostfsd=present", grants))
+	case "native":
+		report("hostfs", "warn", fmt.Sprintf("grants=%d backend=native dataPlane=not-mounted", grants))
+	default:
+		report("hostfs", "error", fmt.Sprintf("grants=%d backend=%s is not supported for HostFS", grants, backendName))
+	}
+}
+
+func checkHostOpen(p profile.Profile, identityDir string, report func(string, string, string)) {
+	if !p.HostCapabilities.Open.AllowURLs {
+		report("host-open", "ok", "url disabled by profile")
+		return
+	}
+	opener := hostOpener(identityDir, io.Discard, io.Discard)
+	launcher, args, err := opener.URLCommand("https://example.com")
+	if err != nil {
+		status := "error"
+		if strings.Contains(err.Error(), "isolated browser launcher requires") {
+			status = "warn"
+		}
+		report("host-open", status, err.Error())
+		return
+	}
+	if _, err := exec.LookPath(launcher); err != nil {
+		report("host-open", "error", fmt.Sprintf("browser launcher %q is not executable: %v", launcher, err))
+		return
+	}
+	browserProfile := opener.BrowserProfile()
+	if browserProfile == "" {
+		report("host-open", "error", "isolated browser profile path is missing")
+		return
+	}
+	if !slices.Contains(args, "--user-data-dir="+browserProfile) {
+		report("host-open", "error", "URL launcher does not include isolated browser profile")
+		return
+	}
+	report("host-open", "ok", fmt.Sprintf("url=isolated browserProfile=present launcher=%s", filepath.Base(launcher)))
+}
+
+func (a app) profile(args []string) error {
+	if len(args) == 0 {
+		return errors.New("profile command is required")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "init":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile init <name>")
+		}
+		p := profile.Default(args[1])
+		if err := store.Create(p); err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, store.ProfilePath(args[1]))
+		return nil
+	case "clone":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile clone <source> <name>")
+		}
+		p, err := store.ClonePolicy(args[1], args[2])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, store.ProfilePath(p.Name))
+		return nil
+	case "rotate-identity":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile rotate-identity <name>")
+		}
+		p, err := store.RotateIdentity(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "%s identityId=%s previousIdentityId=%s\n", store.ProfilePath(p.Name), p.Metadata["identityId"], p.Metadata["previousIdentityId"])
+		return nil
+	case "reset":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile reset <name>")
+		}
+		p, err := store.ResetIdentity(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "%s identityId=%s previousIdentityId=%s\n", store.ProfilePath(p.Name), p.Metadata["identityId"], p.Metadata["previousIdentityId"])
+		return nil
+	case "path":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile path <name>")
+		}
+		if err := profile.ValidateName(args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, store.ProfilePath(args[1]))
+		return nil
+	case "fs":
+		return a.profileFS(store, args[1:])
+	default:
+		return fmt.Errorf("unknown profile command %q", args[0])
+	}
+}
+
+func (a app) profileFS(store profile.Store, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: hideout profile fs <name> <list|add|deny|remove>")
+	}
+	name := args[0]
+	command := args[1]
+	switch command {
+	case "list":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile fs <name> list")
+		}
+		p, err := store.LoadOrInit(name)
+		if err != nil {
+			return err
+		}
+		return writeProfileFSRules(a.stdout, p)
+	case "add":
+		return a.profileFSAdd(store, name, args[2:], false)
+	case "deny":
+		return a.profileFSAdd(store, name, args[2:], true)
+	case "remove":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile fs <name> remove <rule-id>")
+		}
+		return a.profileFSRemove(store, name, args[2])
+	default:
+		return fmt.Errorf("unknown profile fs command %q", command)
+	}
+}
+
+type profileFSAddOptions struct {
+	ruleValue string
+	reason    string
+}
+
+func parseProfileFSAddOptions(args []string, deny bool) (profileFSAddOptions, error) {
+	var opts profileFSAddOptions
+	fs := flag.NewFlagSet("profile fs", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if deny {
+		fs.StringVar(&opts.ruleValue, "no-fs", "", "profile HostFS deny rule")
+	} else {
+		fs.StringVar(&opts.ruleValue, "fs", "", "profile HostFS allow rule")
+	}
+	fs.StringVar(&opts.reason, "reason", "", "reason for this HostFS rule")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() != 0 {
+		return opts, fmt.Errorf("unexpected profile fs argument %q", fs.Arg(0))
+	}
+	flagName := "--fs"
+	if deny {
+		flagName = "--no-fs"
+	}
+	if strings.TrimSpace(opts.ruleValue) == "" {
+		return opts, fmt.Errorf("%s is required", flagName)
+	}
+	if strings.TrimSpace(opts.reason) == "" {
+		return opts, errors.New("--reason is required")
+	}
+	return opts, nil
+}
+
+func (a app) profileFSAdd(store profile.Store, name string, args []string, deny bool) error {
+	opts, err := parseProfileFSAddOptions(args, deny)
+	if err != nil {
+		return err
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	flagName := "--fs"
+	reasonPrefix := "profile HostFS allow"
+	if deny {
+		flagName = "--no-fs"
+		reasonPrefix = "profile HostFS deny"
+	}
+	rule, err := parseHostFSRuleFlag(hostFSFlagInput{
+		flagName: flagName,
+		value:    opts.ruleValue,
+		reason:   opts.reason,
+	})
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	rule.ID, err = newHostFSRuleID(p.HostFS)
+	if err != nil {
+		return err
+	}
+	rule.CreatedAt = &now
+	rule.Reason = opts.reason
+	if deny {
+		p.HostFS.Deny = append(p.HostFS.Deny, rule)
+	} else {
+		p.HostFS.Grants = append(p.HostFS.Grants, rule)
+	}
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	item := profileFSRuleOutputFromRule(rule, deny)
+	item.Profile = p.Name
+	item.Reason = strings.TrimSpace(item.Reason)
+	item.Kind = reasonPrefix
+	return writeJSONLine(a.stdout, item)
+}
+
+func (a app) profileFSRemove(store profile.Store, name, ruleID string) error {
+	if strings.TrimSpace(ruleID) == "" {
+		return errors.New("rule-id is required")
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	var removed *profileFSRuleOutput
+	p.HostFS.Grants, removed = removeHostFSRule(p.HostFS.Grants, ruleID, false)
+	if removed == nil {
+		p.HostFS.Deny, removed = removeHostFSRule(p.HostFS.Deny, ruleID, true)
+	}
+	if removed == nil {
+		return fmt.Errorf("profile HostFS rule %q not found", ruleID)
+	}
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	removed.Profile = p.Name
+	removed.Removed = true
+	return writeJSONLine(a.stdout, removed)
+}
+
+type profileFSRuleOutput struct {
+	Profile   string       `json:"profile,omitempty"`
+	ID        string       `json:"id"`
+	Kind      string       `json:"kind"`
+	Effect    string       `json:"effect"`
+	HostPath  string       `json:"hostPath"`
+	Ops       []hostfs.Op  `json:"ops,omitempty"`
+	Scope     hostfs.Scope `json:"scope"`
+	Reason    string       `json:"reason"`
+	CreatedAt string       `json:"createdAt,omitempty"`
+	Removed   bool         `json:"removed,omitempty"`
+}
+
+func writeProfileFSRules(w io.Writer, p profile.Profile) error {
+	out := struct {
+		Profile string                `json:"profile"`
+		Grants  []profileFSRuleOutput `json:"grants"`
+		Deny    []profileFSRuleOutput `json:"deny"`
+	}{
+		Profile: p.Name,
+		Grants:  make([]profileFSRuleOutput, 0, len(p.HostFS.Grants)),
+		Deny:    make([]profileFSRuleOutput, 0, len(p.HostFS.Deny)),
+	}
+	for _, rule := range p.HostFS.Grants {
+		out.Grants = append(out.Grants, profileFSRuleOutputFromRule(rule, false))
+	}
+	for _, rule := range p.HostFS.Deny {
+		out.Deny = append(out.Deny, profileFSRuleOutputFromRule(rule, true))
+	}
+	return writeJSONLine(w, out)
+}
+
+func profileFSRuleOutputFromRule(rule hostfs.Rule, deny bool) profileFSRuleOutput {
+	effect := "allow"
+	kind := "profile HostFS allow"
+	if deny {
+		effect = "deny"
+		kind = "profile HostFS deny"
+	}
+	createdAt := ""
+	if rule.CreatedAt != nil {
+		createdAt = rule.CreatedAt.Format(time.RFC3339Nano)
+	}
+	return profileFSRuleOutput{
+		ID:        rule.ID,
+		Kind:      kind,
+		Effect:    effect,
+		HostPath:  rule.HostPath,
+		Ops:       append([]hostfs.Op(nil), rule.Ops...),
+		Scope:     rule.Scope,
+		Reason:    rule.Reason,
+		CreatedAt: createdAt,
+	}
+}
+
+func removeHostFSRule(rules []hostfs.Rule, id string, deny bool) ([]hostfs.Rule, *profileFSRuleOutput) {
+	for i, rule := range rules {
+		if rule.ID != id {
+			continue
+		}
+		removed := profileFSRuleOutputFromRule(rule, deny)
+		out := append([]hostfs.Rule(nil), rules[:i]...)
+		out = append(out, rules[i+1:]...)
+		return out, &removed
+	}
+	return rules, nil
+}
+
+func newHostFSRuleID(config hostfs.Config) (string, error) {
+	for range 16 {
+		var raw [6]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return "", err
+		}
+		id := "hfs_" + hex.EncodeToString(raw[:])
+		if !hostFSRuleIDExists(config, id) {
+			return id, nil
+		}
+	}
+	return "", errors.New("could not allocate unique HostFS rule id")
+}
+
+func hostFSRuleIDExists(config hostfs.Config, id string) bool {
+	for _, rule := range config.Grants {
+		if rule.ID == id {
+			return true
+		}
+	}
+	for _, rule := range config.Deny {
+		if rule.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func writeJSONLine(w io.Writer, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	_, err = w.Write(data)
+	return err
+}
+
+func (a app) cleanup(args []string) error {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	sessionID := fs.String("session", "", "session id")
+	dryRun := fs.Bool("dry-run", false, "show files that would be removed")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	result, err := session.CleanupEphemeral(store.Root, *sessionID, *dryRun)
+	if err != nil {
+		return err
+	}
+	mode := "removed"
+	if *dryRun {
+		mode = "would remove"
+	}
+	secretState := "removed"
+	if *dryRun {
+		secretState = "would-remove"
+	}
+	fmt.Fprintf(a.stdout, "cleanup: sessions=%d %s=%d audit=preserved secretState=%s\n", result.Sessions, mode, len(result.Removed), secretState)
+	for _, path := range result.Removed {
+		fmt.Fprintf(a.stdout, "%s: %s\n", mode, path)
+	}
+	return nil
+}
+
+func (a app) listEnvironments(args []string) error {
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout list")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	records, err := (environment.Store{Root: store.Root}).List()
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		fmt.Fprintln(a.stdout, "environments: none")
+		return nil
+	}
+	fmt.Fprintln(a.stdout, "ID\tPROFILE\tBACKEND\tSTATUS\tCREATED\tLAST_STARTED\tLAST_ENDED\tWORKSPACE\tCOMMAND")
+	for _, rec := range records {
+		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			rec.ID,
+			rec.Profile,
+			rec.Backend,
+			explainValue(rec.Status, "ready"),
+			formatEnvironmentTime(rec.CreatedAt),
+			formatEnvironmentTime(rec.LastStartedAt),
+			formatEnvironmentTime(rec.LastEndedAt),
+			rec.Workspace,
+			rec.LastCommand,
+		)
+	}
+	return nil
+}
+
+func (a app) cleanEnvironments(args []string) error {
+	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dryRun := fs.Bool("dry-run", false, "show environments that would be removed")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	envStore := environment.Store{Root: store.Root}
+	records, err := cleanEnvironmentRecords(envStore, fs.Args())
+	if err != nil {
+		return err
+	}
+	mode := "removed"
+	if *dryRun {
+		mode = "would remove"
+	}
+	removed := 0
+	for _, rec := range records {
+		if *dryRun {
+			fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
+			continue
+		}
+		if rec.Backend == "lima" && rec.InstanceName != "" {
+			if err := (lima.Backend{Stdout: io.Discard, Stderr: a.stderr}).Cleanup(context.Background(), &backend.Session{InstanceName: rec.InstanceName}); err != nil {
+				return err
+			}
+		}
+		if err := envStore.Remove(rec.ID); err != nil {
+			return err
+		}
+		removed++
+		fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
+	}
+	if *dryRun {
+		fmt.Fprintf(a.stdout, "clean: environments=%d would remove=%d\n", len(records), len(records))
+		return nil
+	}
+	fmt.Fprintf(a.stdout, "clean: environments=%d removed=%d\n", len(records), removed)
+	return nil
+}
+
+func cleanEnvironmentRecords(store environment.Store, ids []string) ([]environment.Record, error) {
+	if len(ids) == 0 {
+		return store.List()
+	}
+	records := make([]environment.Record, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		rec, err := store.Load(id)
+		if err != nil {
+			return nil, err
+		}
+		if seen[rec.ID] {
+			continue
+		}
+		seen[rec.ID] = true
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+func formatEnvironmentTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+type uiOptions struct {
+	listen   string
+	ttl      time.Duration
+	noOpen   bool
+	printURL bool
+}
+
+func parseUIOptions(args []string) (uiOptions, error) {
+	opts := uiOptions{
+		listen: manager.DefaultUIListenAddr,
+		ttl:    15 * time.Minute,
+	}
+	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.listen, "listen", opts.listen, "127.0.0.1 listen address")
+	fs.DurationVar(&opts.ttl, "ttl", opts.ttl, "UI token lifetime")
+	fs.BoolVar(&opts.noOpen, "no-open", false, "do not open a browser")
+	fs.BoolVar(&opts.printURL, "print-url", false, "print URL and exit")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() != 0 {
+		return opts, errors.New("usage: hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
+	}
+	return opts, nil
+}
+
+func (a app) ui(args []string) error {
+	opts, err := parseUIOptions(args)
+	if err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(store.Root, 0o700); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, err := manager.StartLocalServer(ctx, manager.LocalServerOptions{
+		Core:       manager.New(store),
+		Addr:       opts.listen,
+		TTL:        opts.ttl,
+		RunBackend: a.runAPIBackend,
+		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
+			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	fmt.Fprintf(a.stdout, "Hideout UI: %s\n", server.UIURL)
+	fmt.Fprintf(a.stdout, "Manager API: %s\n", server.APIURL)
+	fmt.Fprintf(a.stdout, "Token expires: %s\n", server.ExpiresAt.Format(time.RFC3339))
+	if opts.printURL {
+		return nil
+	}
+	if !opts.noOpen {
+		opener := hostopen.Opener{
+			BrowserProfileDir: filepath.Join(store.Root, "ui-browser"),
+			BrowserPath:       os.Getenv("HIDEOUT_BROWSER_PATH"),
+			BrowserApp:        os.Getenv("HIDEOUT_BROWSER_APP"),
+			DryRun:            os.Getenv("HIDEOUT_OPEN_DRY_RUN") == "1",
+			Stdout:            a.stdout,
+			Stderr:            a.stderr,
+		}
+		if err := opener.OpenURL(context.Background(), server.UIURL); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(a.stdout, "Press Ctrl-C to stop.")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+	select {
+	case <-sig:
+		return nil
+	case err := <-serverError(server):
+		return err
+	}
+}
+
+func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (backend.Backend, error) {
+	opts := runOptions{
+		backendName:        plan.Backend,
+		allowWeakIsolation: req.AllowWeakIsolation,
+	}
+	return a.backend(plan.Backend, opts), nil
+}
+
+type labPortbridgeLoopbackOptions struct {
+	enableLab bool
+	listen    string
+	target    string
+	send      string
+	expect    string
+	timeout   time.Duration
+}
+
+type labPortbridgeDirectionOptions struct {
+	enableLab bool
+	listen    string
+	target    string
+	send      string
+	expect    string
+	timeout   time.Duration
+}
+
+type labBrowserControlOptions struct {
+	enableLab   bool
+	profileName string
+	browserPath string
+	timeout     time.Duration
+}
+
+type labPreviewOpenOptions struct {
+	enableLab bool
+	guestURL  string
+	timeout   time.Duration
+}
+
+type labOutputField struct {
+	key   string
+	value string
+}
+
+type labProbeNotImplementedError struct {
+	command  string
+	guidance string
+}
+
+func (e labProbeNotImplementedError) Error() string {
+	if e.guidance != "" {
+		return fmt.Sprintf("hideout lab %s is not implemented; %s", e.command, e.guidance)
+	}
+	return fmt.Sprintf("hideout lab %s is not implemented", e.command)
+}
+
+func isLabProbeNotImplemented(err error) bool {
+	var target labProbeNotImplementedError
+	return errors.As(err, &target)
+}
+
+func (a app) lab(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	}
+	switch args[0] {
+	case "portbridge":
+		return a.labPortbridge(args[1:])
+	case "browser-control":
+		return a.labBrowserControl(args[1:])
+	case "preview-open":
+		return a.labPreviewOpen(args[1:])
+	default:
+		return fmt.Errorf("unknown lab command %q", args[0])
+	}
+}
+
+func (a app) labPortbridge(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	}
+	switch args[0] {
+	case "loopback":
+		return a.labPortbridgeLoopback(args[1:])
+	case "guest-to-host", "host-to-guest":
+		return a.labPortbridgeDirection(args[0], args[1:])
+	default:
+		return fmt.Errorf("unknown lab portbridge command %q", args[0])
+	}
+}
+
+func (a app) labPortbridgeDirection(mode string, args []string) error {
+	opts := labPortbridgeDirectionOptions{
+		listen:  "127.0.0.1:0",
+		timeout: 2 * time.Second,
+	}
+	fs := flag.NewFlagSet("lab portbridge "+mode, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&opts.enableLab, "enable-lab", false, "enable lab command execution")
+	fs.StringVar(&opts.listen, "listen", opts.listen, "loopback listen address")
+	switch mode {
+	case "guest-to-host":
+		fs.StringVar(&opts.target, "target", "", "explicit host target address")
+	case "host-to-guest":
+		fs.StringVar(&opts.target, "guest-target", "", "explicit guest target address")
+	default:
+		return fmt.Errorf("unknown lab portbridge command %q", mode)
+	}
+	fs.StringVar(&opts.send, "send", "", "bytes to send through the bridge")
+	fs.StringVar(&opts.expect, "expect", "", "expected bytes to read through the bridge")
+	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "probe timeout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: hideout lab portbridge %s --enable-lab --%s 127.0.0.1:<port> [--listen 127.0.0.1:0] [--send bytes --expect bytes]", mode, labPortbridgeTargetFlag(mode))
+	}
+	if !opts.enableLab && os.Getenv("HIDEOUT_ENABLE_LAB") != "1" {
+		return errors.New("hideout lab requires --enable-lab or HIDEOUT_ENABLE_LAB=1")
+	}
+	if strings.TrimSpace(opts.target) == "" {
+		return fmt.Errorf("lab portbridge %s requires --%s", mode, labPortbridgeTargetFlag(mode))
+	}
+	if opts.expect != "" && opts.send == "" {
+		return fmt.Errorf("lab portbridge %s requires --send when --expect is set", mode)
+	}
+	proposal := labPortbridgeDirectionProposal(mode, opts)
+	layout, aw, err := newLabAudit()
+	if err != nil {
+		return err
+	}
+	defer aw.Close()
+	defer cleanupLabLayout(layout)
+	if _, err := policy.ValidateLabProposal(proposal); err != nil {
+		return emitLabPortbridgeDirectionProbe(aw, layout, proposal, mode, opts, "", "", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	bridge, err := portbridge.Start(ctx, portbridge.Spec{
+		ID:            "lab_portbridge_" + strings.ReplaceAll(mode, "-", "_"),
+		Direction:     labPortbridgeDirectionValue(mode),
+		ListenScope:   portbridge.ListenScopeLoopback,
+		ListenAddress: opts.listen,
+		TargetAddress: opts.target,
+	})
+	if err != nil {
+		return emitLabPortbridgeDirectionProbe(aw, layout, proposal, mode, opts, "", "", err)
+	}
+	defer bridge.Close()
+	a.printLabProbeEvidence(layout, proposal,
+		labOutputField{"mode", mode},
+		labOutputField{"listen", bridge.ListenAddress()},
+		labOutputField{labPortbridgeTargetFlag(mode), opts.target},
+	)
+	if opts.send == "" {
+		fmt.Fprintln(a.stdout, "probe=tcp-forward skipped")
+		return emitLabPortbridgeDirectionProbe(aw, layout, proposal, mode, opts, bridge.ListenAddress(), "", nil)
+	}
+	got, err := probeTCPBridge(ctx, bridge.ListenAddress(), opts.send, opts.expect, opts.timeout)
+	if err != nil {
+		return emitLabPortbridgeDirectionProbe(aw, layout, proposal, mode, opts, bridge.ListenAddress(), got, err)
+	}
+	if opts.expect != "" && got != opts.expect {
+		return emitLabPortbridgeDirectionProbe(aw, layout, proposal, mode, opts, bridge.ListenAddress(), got, fmt.Errorf("lab portbridge %s expected %q, got %q", mode, opts.expect, got))
+	}
+	fmt.Fprintln(a.stdout, "probe=tcp-forward ok")
+	if opts.expect != "" {
+		fmt.Fprintf(a.stdout, "received=%q\n", got)
+	}
+	return emitLabPortbridgeDirectionProbe(aw, layout, proposal, mode, opts, bridge.ListenAddress(), got, nil)
+}
+
+func labPortbridgeTargetFlag(mode string) string {
+	if mode == "host-to-guest" {
+		return "guest-target"
+	}
+	return "target"
+}
+
+func labPortbridgeDirectionValue(mode string) portbridge.Direction {
+	if mode == "host-to-guest" {
+		return portbridge.DirectionHostToGuest
+	}
+	return portbridge.DirectionGuestToHost
+}
+
+func (a app) labPortbridgeLoopback(args []string) error {
+	opts := labPortbridgeLoopbackOptions{
+		listen:  "127.0.0.1:0",
+		timeout: 2 * time.Second,
+	}
+	fs := flag.NewFlagSet("lab portbridge loopback", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&opts.enableLab, "enable-lab", false, "enable lab command execution")
+	fs.StringVar(&opts.listen, "listen", opts.listen, "loopback listen address")
+	fs.StringVar(&opts.target, "target", "", "explicit target address")
+	fs.StringVar(&opts.send, "send", "", "bytes to send through the bridge")
+	fs.StringVar(&opts.expect, "expect", "", "expected bytes to read through the bridge")
+	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "probe timeout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port> [--listen 127.0.0.1:0] [--send bytes --expect bytes]")
+	}
+	if !opts.enableLab && os.Getenv("HIDEOUT_ENABLE_LAB") != "1" {
+		return errors.New("hideout lab requires --enable-lab or HIDEOUT_ENABLE_LAB=1")
+	}
+	if strings.TrimSpace(opts.target) == "" {
+		return errors.New("lab portbridge loopback requires --target")
+	}
+	if opts.expect != "" && opts.send == "" {
+		return errors.New("lab portbridge loopback requires --send when --expect is set")
+	}
+	proposal := labPortbridgeLoopbackProposal(opts)
+	layout, aw, err := newLabAudit()
+	if err != nil {
+		return err
+	}
+	defer aw.Close()
+	defer func() {
+		_ = os.RemoveAll(layout.TmpDir)
+		_ = os.RemoveAll(layout.ShimDir)
+	}()
+	if _, err := policy.ValidateLabProposal(proposal); err != nil {
+		return emitLabPortbridgeProbe(aw, layout, proposal, opts, "", "", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	bridge, err := portbridge.Start(ctx, portbridge.Spec{
+		ID:            "lab_portbridge_loopback",
+		Direction:     portbridge.DirectionGuestToHost,
+		ListenScope:   portbridge.ListenScopeLoopback,
+		ListenAddress: opts.listen,
+		TargetAddress: opts.target,
+	})
+	if err != nil {
+		return emitLabPortbridgeProbe(aw, layout, proposal, opts, "", "", err)
+	}
+	defer bridge.Close()
+	fmt.Fprintln(a.stdout, "Hideout lab: experimental evidence only")
+	fmt.Fprintf(a.stdout, "capability=%s\n", proposal.Action)
+	fmt.Fprintf(a.stdout, "route=%s\n", proposal.Route)
+	fmt.Fprintln(a.stdout, "mode=loopback")
+	fmt.Fprintf(a.stdout, "session=%s\n", layout.ID)
+	fmt.Fprintf(a.stdout, "audit=%s\n", layout.AuditPath)
+	fmt.Fprintf(a.stdout, "listen=%s\n", bridge.ListenAddress())
+	fmt.Fprintf(a.stdout, "target=%s\n", opts.target)
+	if opts.send == "" {
+		fmt.Fprintln(a.stdout, "probe=tcp-forward skipped")
+		return emitLabPortbridgeProbe(aw, layout, proposal, opts, bridge.ListenAddress(), "", nil)
+	}
+	got, err := probeTCPBridge(ctx, bridge.ListenAddress(), opts.send, opts.expect, opts.timeout)
+	if err != nil {
+		return emitLabPortbridgeProbe(aw, layout, proposal, opts, bridge.ListenAddress(), got, err)
+	}
+	if opts.expect != "" && got != opts.expect {
+		return emitLabPortbridgeProbe(aw, layout, proposal, opts, bridge.ListenAddress(), got, fmt.Errorf("lab portbridge loopback expected %q, got %q", opts.expect, got))
+	}
+	fmt.Fprintln(a.stdout, "probe=tcp-forward ok")
+	if opts.expect != "" {
+		fmt.Fprintf(a.stdout, "received=%q\n", got)
+	}
+	return emitLabPortbridgeProbe(aw, layout, proposal, opts, bridge.ListenAddress(), got, nil)
+}
+
+func labPortbridgeLoopbackProposal(opts labPortbridgeLoopbackOptions) policy.LabProposal {
+	return policy.LabProposal{
+		Subject:  "lab:portbridge",
+		Decision: policy.Allow,
+		Route:    policy.LabProbe,
+		Action:   policy.ActionPortbridgeProbe,
+		Resources: []string{
+			"portbridge:loopback",
+			"listen:" + opts.listen,
+			"target:" + opts.target,
+		},
+		Reason: "loopback port bridge capability probe",
+	}
+}
+
+func labPortbridgeDirectionProposal(mode string, opts labPortbridgeDirectionOptions) policy.LabProposal {
+	return policy.LabProposal{
+		Subject:  "lab:portbridge",
+		Decision: policy.Allow,
+		Route:    policy.LabProbe,
+		Action:   policy.ActionPortbridgeProbe,
+		Resources: []string{
+			"portbridge:" + mode,
+			"listen:" + opts.listen,
+			labPortbridgeTargetFlag(mode) + ":" + opts.target,
+		},
+		Reason: mode + " port bridge capability probe",
+	}
+}
+
+func (a app) labBrowserControl(args []string) error {
+	opts := labBrowserControlOptions{timeout: 2 * time.Second}
+	fs := flag.NewFlagSet("lab browser-control", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&opts.enableLab, "enable-lab", false, "enable lab command execution")
+	fs.StringVar(&opts.profileName, "profile", "", "explicit Hideout profile name")
+	fs.StringVar(&opts.browserPath, "browser-path", os.Getenv("HIDEOUT_BROWSER_PATH"), "direct Chromium-compatible browser binary")
+	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "probe timeout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout lab browser-control --enable-lab --profile <name> [--browser-path <path>]")
+	}
+	if !opts.enableLab && os.Getenv("HIDEOUT_ENABLE_LAB") != "1" {
+		return errors.New("hideout lab requires --enable-lab or HIDEOUT_ENABLE_LAB=1")
+	}
+	if strings.TrimSpace(opts.profileName) == "" {
+		return errors.New("lab browser-control requires --profile")
+	}
+	if err := profile.ValidateName(opts.profileName); err != nil {
+		return err
+	}
+	proposal := labBrowserControlProposal(opts)
+	layout, aw, err := newLabAudit()
+	if err != nil {
+		return err
+	}
+	defer aw.Close()
+	defer cleanupLabLayout(layout)
+	if _, err := policy.ValidateLabProposal(proposal); err != nil {
+		return emitLabBrowserControlProbe(aw, layout, proposal, opts, "", "", false, err)
+	}
+	if strings.TrimSpace(opts.browserPath) == "" {
+		return emitLabBrowserControlProbe(aw, layout, proposal, opts, "", "", false, errors.New("lab browser-control requires --browser-path or HIDEOUT_BROWSER_PATH"))
+	}
+	browserProfileDir := filepath.Join(layout.TmpDir, "browser-control-profile")
+	controlURL, browserName, wsPresent, err := probeLabBrowserControl(context.Background(), opts, browserProfileDir)
+	if err != nil {
+		return emitLabBrowserControlProbe(aw, layout, proposal, opts, controlURL, browserName, wsPresent, err)
+	}
+	a.printLabProbeEvidence(layout, proposal,
+		labOutputField{"mode", "browser-control"},
+		labOutputField{"profile", opts.profileName},
+		labOutputField{"browser-profile", "present"},
+		labOutputField{"control-url", controlURL},
+		labOutputField{"browser", browserName},
+		labOutputField{"probe", "devtools-version ok"},
+	)
+	return emitLabBrowserControlProbe(aw, layout, proposal, opts, controlURL, browserName, wsPresent, nil)
+}
+
+func labBrowserControlProposal(opts labBrowserControlOptions) policy.LabProposal {
+	return policy.LabProposal{
+		Subject:  "lab:browser",
+		Decision: policy.Allow,
+		Route:    policy.LabProbe,
+		Action:   policy.ActionBrowserControlProbe,
+		Resources: []string{
+			"browser-control:loopback",
+			"profile:" + opts.profileName,
+		},
+		Reason: "browser control capability probe",
+	}
+}
+
+func probeLabBrowserControl(ctx context.Context, opts labBrowserControlOptions, browserProfileDir string) (string, string, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, opts.timeout)
+	defer cancel()
+	if err := os.MkdirAll(browserProfileDir, 0o700); err != nil {
+		return "", "", false, err
+	}
+	launcher, args, err := labBrowserControlCommand(opts.browserPath, browserProfileDir)
+	if err != nil {
+		return "", "", false, err
+	}
+	cmd := exec.CommandContext(ctx, launcher, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return "", "", false, err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+		close(done)
+	}()
+	defer func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}()
+	port, err := waitForDevToolsActivePort(ctx, browserProfileDir, done)
+	if err != nil {
+		return "", "", false, err
+	}
+	controlURL := "http://" + net.JoinHostPort("127.0.0.1", port) + "/json/version"
+	browserName, wsPresent, err := probeDevToolsVersion(ctx, controlURL, opts.timeout)
+	return controlURL, browserName, wsPresent, err
+}
+
+func labBrowserControlCommand(browserPath, browserProfileDir string) (string, []string, error) {
+	opener := hostopen.Opener{
+		BrowserPath:       browserPath,
+		BrowserProfileDir: browserProfileDir,
+	}
+	launcher, args, err := opener.URLCommand("about:blank")
+	if err != nil {
+		return "", nil, err
+	}
+	args = append([]string{
+		"--remote-debugging-address=127.0.0.1",
+		"--remote-debugging-port=0",
+	}, args...)
+	return launcher, args, nil
+}
+
+func waitForDevToolsActivePort(ctx context.Context, browserProfileDir string, browserDone <-chan error) (string, error) {
+	path := filepath.Join(browserProfileDir, "DevToolsActivePort")
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if len(lines) > 0 && strings.TrimSpace(lines[0]) != "" {
+				port := strings.TrimSpace(lines[0])
+				value, err := strconv.Atoi(port)
+				if err == nil && value > 0 && value <= 65535 {
+					return port, nil
+				}
+				return "", fmt.Errorf("browser DevToolsActivePort contains invalid port %q", port)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		select {
+		case err, ok := <-browserDone:
+			if ok && err != nil {
+				return "", fmt.Errorf("browser exited before control endpoint became ready: %w", err)
+			}
+			return "", errors.New("browser exited before control endpoint became ready")
+		case <-ctx.Done():
+			return "", fmt.Errorf("browser control endpoint did not become ready: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func probeDevToolsVersion(ctx context.Context, controlURL string, timeout time.Duration) (string, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, controlURL, nil)
+	if err != nil {
+		return "", false, err
+	}
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", false, fmt.Errorf("browser control version endpoint returned HTTP %d", resp.StatusCode)
+	}
+	var payload struct {
+		Browser              string `json:"Browser"`
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 16*1024))
+	if err := dec.Decode(&payload); err != nil {
+		return "", false, err
+	}
+	if strings.TrimSpace(payload.Browser) == "" {
+		return "", false, errors.New("browser control version endpoint did not report browser name")
+	}
+	return payload.Browser, strings.TrimSpace(payload.WebSocketDebuggerURL) != "", nil
+}
+
+func (a app) labPreviewOpen(args []string) error {
+	opts := labPreviewOpenOptions{timeout: 2 * time.Second}
+	fs := flag.NewFlagSet("lab preview-open", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.BoolVar(&opts.enableLab, "enable-lab", false, "enable lab command execution")
+	fs.StringVar(&opts.guestURL, "guest-url", "", "explicit guest HTTP URL")
+	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "probe timeout")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
+	}
+	if !opts.enableLab && os.Getenv("HIDEOUT_ENABLE_LAB") != "1" {
+		return errors.New("hideout lab requires --enable-lab or HIDEOUT_ENABLE_LAB=1")
+	}
+	if strings.TrimSpace(opts.guestURL) == "" {
+		return errors.New("lab preview-open requires --guest-url")
+	}
+	if err := validateLabGuestURL(opts.guestURL); err != nil {
+		return err
+	}
+	proposal := labPreviewOpenProposal(opts)
+	layout, aw, err := newLabAudit()
+	if err != nil {
+		return err
+	}
+	defer aw.Close()
+	defer cleanupLabLayout(layout)
+	if _, err := policy.ValidateLabProposal(proposal); err != nil {
+		return emitLabPreviewOpenProbe(aw, layout, proposal, opts, "", 0, err)
+	}
+	guestURL, err := url.Parse(opts.guestURL)
+	if err != nil {
+		return emitLabPreviewOpenProbe(aw, layout, proposal, opts, "", 0, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	defer cancel()
+	bridge, err := portbridge.Start(ctx, portbridge.Spec{
+		ID:            "lab_preview_open",
+		Direction:     portbridge.DirectionHostToGuest,
+		ListenScope:   portbridge.ListenScopeLoopback,
+		ListenAddress: "127.0.0.1:0",
+		TargetAddress: net.JoinHostPort(guestURL.Hostname(), guestURL.Port()),
+	})
+	if err != nil {
+		return emitLabPreviewOpenProbe(aw, layout, proposal, opts, "", 0, err)
+	}
+	defer bridge.Close()
+	hostURL := labPreviewHostURL(*guestURL, bridge.ListenAddress())
+	statusCode, err := probeLabHTTP(ctx, hostURL, opts.timeout)
+	if err != nil {
+		return emitLabPreviewOpenProbe(aw, layout, proposal, opts, hostURL, statusCode, err)
+	}
+	a.printLabProbeEvidence(layout, proposal,
+		labOutputField{"mode", "preview-open"},
+		labOutputField{"guest-url", opts.guestURL},
+		labOutputField{"host-url", hostURL},
+		labOutputField{"status-code", fmt.Sprint(statusCode)},
+		labOutputField{"probe", "http-get ok"},
+	)
+	return emitLabPreviewOpenProbe(aw, layout, proposal, opts, hostURL, statusCode, nil)
+}
+
+func validateLabGuestURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("lab preview-open guest URL is invalid: %w", err)
+	}
+	if u.Scheme != "http" {
+		return errors.New("lab preview-open guest URL must use http")
+	}
+	if u.User != nil {
+		return errors.New("lab preview-open guest URL must not contain user info")
+	}
+	host := strings.ToLower(u.Hostname())
+	if host != "127.0.0.1" && host != "localhost" {
+		return errors.New("lab preview-open guest URL must target 127.0.0.1 or localhost")
+	}
+	if u.Port() == "" {
+		return errors.New("lab preview-open guest URL must include an explicit port")
+	}
+	return nil
+}
+
+func labPreviewHostURL(guestURL url.URL, listenAddress string) string {
+	guestURL.Scheme = "http"
+	guestURL.Host = listenAddress
+	return guestURL.String()
+}
+
+func probeLabHTTP(ctx context.Context, target string, timeout time.Duration) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return 0, err
+	}
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp.StatusCode, nil
+}
+
+func labPreviewOpenProposal(opts labPreviewOpenOptions) policy.LabProposal {
+	return policy.LabProposal{
+		Subject:  "lab:preview",
+		Decision: policy.Allow,
+		Route:    policy.LabProbe,
+		Action:   policy.ActionPreviewOpenProbe,
+		Resources: []string{
+			"preview-open:guest-http",
+			"guest-url:" + opts.guestURL,
+		},
+		Reason: "preview open capability probe",
+	}
+}
+
+func newLabAudit() (session.Layout, *audit.Writer, error) {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return session.Layout{}, nil, err
+	}
+	if err := os.MkdirAll(store.Root, 0o700); err != nil {
+		return session.Layout{}, nil, err
+	}
+	layout, err := session.New(store.Root)
+	if err != nil {
+		return session.Layout{}, nil, err
+	}
+	aw, err := audit.NewFile(layout.AuditPath)
+	if err != nil {
+		return session.Layout{}, nil, err
+	}
+	return layout, aw, nil
+}
+
+func cleanupLabLayout(layout session.Layout) {
+	_ = os.RemoveAll(layout.TmpDir)
+	_ = os.RemoveAll(layout.ShimDir)
+}
+
+func (a app) printLabProbeEvidence(layout session.Layout, proposal policy.LabProposal, fields ...labOutputField) {
+	fmt.Fprintln(a.stdout, "Hideout lab: experimental evidence only")
+	fmt.Fprintf(a.stdout, "capability=%s\n", proposal.Action)
+	fmt.Fprintf(a.stdout, "route=%s\n", proposal.Route)
+	fmt.Fprintf(a.stdout, "session=%s\n", layout.ID)
+	fmt.Fprintf(a.stdout, "audit=%s\n", layout.AuditPath)
+	for _, field := range fields {
+		fmt.Fprintf(a.stdout, "%s=%s\n", field.key, field.value)
+	}
+}
+
+func emitLabPortbridgeDirectionProbe(aw *audit.Writer, layout session.Layout, proposal policy.LabProposal, mode string, opts labPortbridgeDirectionOptions, listen, received string, probeErr error) error {
+	targetField := labPortbridgeTargetFlag(mode)
+	decision := "allow"
+	status := "error"
+	if opts.send == "" && probeErr == nil {
+		status = "skipped"
+	} else if probeErr == nil {
+		status = "ok"
+	} else {
+		decision = "error"
+	}
+	details := map[string]any{
+		"probe":         "portbridge." + mode,
+		"subject":       proposal.Subject,
+		"route":         string(proposal.Route),
+		"mode":          mode,
+		"listen":        listen,
+		targetField:     audit.RedactString(opts.target),
+		"sendBytes":     len(opts.send),
+		"expectBytes":   len(opts.expect),
+		"receivedBytes": len(received),
+		"status":        status,
+		"timeoutMs":     opts.timeout.Milliseconds(),
+		"targetField":   targetField,
+	}
+	if probeErr != nil {
+		details["error"] = probeErr.Error()
+	}
+	if err := aw.Emit(audit.Event{
+		Session:  layout.ID,
+		Profile:  "lab",
+		Backend:  "native",
+		Action:   proposal.Action,
+		Decision: decision,
+		Details:  details,
+	}); err != nil {
+		return err
+	}
+	return probeErr
+}
+
+func emitLabBrowserControlProbe(aw *audit.Writer, layout session.Layout, proposal policy.LabProposal, opts labBrowserControlOptions, controlURL, browserName string, wsPresent bool, probeErr error) error {
+	decision := "allow"
+	status := "ok"
+	if probeErr != nil {
+		decision = "error"
+		status = "error"
+	}
+	if isLabProbeNotImplemented(probeErr) {
+		status = "not-implemented"
+	}
+	details := map[string]any{
+		"probe":                       "browser-control",
+		"subject":                     proposal.Subject,
+		"route":                       string(proposal.Route),
+		"mode":                        "browser-control",
+		"profile":                     audit.RedactString(opts.profileName),
+		"browserPath":                 filepath.Base(opts.browserPath),
+		"browserProfile":              "present",
+		"controlURL":                  audit.RedactString(controlURL),
+		"browser":                     browserName,
+		"webSocketDebuggerURLPresent": wsPresent,
+		"status":                      status,
+		"timeoutMs":                   opts.timeout.Milliseconds(),
+	}
+	if probeErr != nil {
+		details["error"] = probeErr.Error()
+		if isLabProbeNotImplemented(probeErr) {
+			details["errorType"] = "lab-probe-not-implemented"
+		}
+	}
+	if err := aw.Emit(audit.Event{
+		Session:  layout.ID,
+		Profile:  "lab",
+		Backend:  "native",
+		Action:   proposal.Action,
+		Decision: decision,
+		Details:  details,
+	}); err != nil {
+		return err
+	}
+	return probeErr
+}
+
+func emitLabPreviewOpenProbe(aw *audit.Writer, layout session.Layout, proposal policy.LabProposal, opts labPreviewOpenOptions, hostURL string, statusCode int, probeErr error) error {
+	decision := "allow"
+	status := "ok"
+	if probeErr != nil {
+		decision = "error"
+		status = "error"
+		if isLabProbeNotImplemented(probeErr) {
+			status = "not-implemented"
+		}
+	}
+	details := map[string]any{
+		"probe":          "preview-open",
+		"subject":        proposal.Subject,
+		"route":          string(proposal.Route),
+		"mode":           "preview-open",
+		"guestURL":       audit.RedactString(opts.guestURL),
+		"hostURL":        audit.RedactString(hostURL),
+		"httpStatusCode": statusCode,
+		"status":         status,
+		"timeoutMs":      opts.timeout.Milliseconds(),
+	}
+	if probeErr != nil {
+		details["error"] = probeErr.Error()
+		if isLabProbeNotImplemented(probeErr) {
+			details["errorType"] = "lab-probe-not-implemented"
+		}
+	}
+	if err := aw.Emit(audit.Event{
+		Session:  layout.ID,
+		Profile:  "lab",
+		Backend:  "native",
+		Action:   proposal.Action,
+		Decision: decision,
+		Details:  details,
+	}); err != nil {
+		return err
+	}
+	return probeErr
+}
+
+func emitLabPortbridgeProbe(aw *audit.Writer, layout session.Layout, proposal policy.LabProposal, opts labPortbridgeLoopbackOptions, listen, received string, probeErr error) error {
+	decision := "allow"
+	status := "ok"
+	if opts.send == "" && probeErr == nil {
+		status = "skipped"
+	}
+	if probeErr != nil {
+		decision = "error"
+		status = "error"
+	}
+	details := map[string]any{
+		"probe":         "portbridge.loopback",
+		"subject":       proposal.Subject,
+		"route":         string(proposal.Route),
+		"mode":          "loopback",
+		"listen":        listen,
+		"target":        audit.RedactString(opts.target),
+		"sendBytes":     len(opts.send),
+		"expectBytes":   len(opts.expect),
+		"receivedBytes": len(received),
+		"status":        status,
+	}
+	if probeErr != nil {
+		details["error"] = probeErr.Error()
+	}
+	if err := aw.Emit(audit.Event{
+		Session:  layout.ID,
+		Profile:  "lab",
+		Backend:  "native",
+		Action:   proposal.Action,
+		Decision: decision,
+		Details:  details,
+	}); err != nil {
+		return err
+	}
+	return probeErr
+}
+
+func probeTCPBridge(ctx context.Context, address, send, expect string, timeout time.Duration) (string, error) {
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return "", err
+	}
+	if _, err := io.WriteString(conn, send); err != nil {
+		return "", err
+	}
+	if expect == "" {
+		return "", nil
+	}
+	buf := make([]byte, len(expect))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func serverError(server *manager.LocalServer) <-chan error {
+	ch := make(chan error, 1)
+	go func() {
+		ch <- server.Wait()
+	}()
+	return ch
+}

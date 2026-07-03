@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/init-plan.schema.json",
+  "title": "Hideout Init Plan",
+  "type": "object",
+  "required": ["version", "storeRoot", "profile", "backend", "network", "tasks"],
+  "properties": {
+    "version": {
+      "const": "hideout.init/v1"
+    },
+    "storeRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backend": {
+      "enum": ["native", "lima"]
+    },
+    "network": {
+      "enum": ["direct", "tun2socks"]
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "source",
+        "status",
+        "targetScope",
+        "capabilityBoundary",
+        "risk",
+        "requiresConfirmation",
+        "message"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "store.create",
+            "schema.metadata.write",
+            "profile.create",
+            "identity.materialize",
+            "network.mode.select",
+            "backend.probe",
+            "helper.install.linux-shim",
+            "helper.install.linux-hostfsd",
+            "doctor.check.light"
+          ]
+        },
+        "source": {
+          "enum": ["builtin", "doctor", "backend", "project", "bundle", "local-dev-override"]
+        },
+        "status": {
+          "enum": ["ok", "pending", "applied", "blocked", "error"]
+        },
+        "targetScope": {
+          "enum": ["machine", "profile", "project", "session"]
+        },
+        "capabilityBoundary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "risk": {
+          "enum": ["safe", "requires-confirmation"]
+        },
+        "requiresConfirmation": {
+          "type": "boolean"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

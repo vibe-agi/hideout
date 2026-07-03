@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/run-result.schema.json",
+  "title": "Hideout Run Result",
+  "type": "object",
+  "required": [
+    "version",
+    "sessionId",
+    "profile",
+    "backend",
+    "command"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.run-result/v1"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backend": {
+      "enum": ["native", "lima"]
+    },
+    "environmentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instanceName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "preserveInstance": {
+      "type": "boolean"
+    },
+    "auditPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "error": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cleanupError": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,496 @@
+package manager
+
+import (
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/session"
+)
+
+const APIVersion = "hideout.manager-api/v1"
+
+type API struct {
+	Core           Core
+	Token          string
+	ExpiresAt      time.Time
+	AllowedOrigins []string
+	AllowedHosts   []string
+	Now            func() time.Time
+	RunBackend     RunBackendFactory
+	RunOpener      RunOpenerFactory
+}
+
+type APIResponse struct {
+	Version  string   `json:"version"`
+	Resource string   `json:"resource,omitempty"`
+	Data     any      `json:"data,omitempty"`
+	Errors   []string `json:"errors"`
+}
+
+type RunBackendFactory func(RunAPIRequest, RunPlan) (backend.Backend, error)
+type RunOpenerFactory func(RunAPIRequest, RunPlan, RunSession) broker.Opener
+
+type RunAPIRequest struct {
+	ProfileName        string   `json:"profile,omitempty"`
+	Backend            string   `json:"backend,omitempty"`
+	NetworkMode        string   `json:"networkMode,omitempty"`
+	ProxySecretRef     string   `json:"proxySecretRef,omitempty"`
+	Workspace          string   `json:"workspace,omitempty"`
+	GuestWorkspace     string   `json:"guestWorkspace,omitempty"`
+	Ephemeral          bool     `json:"ephemeral,omitempty"`
+	Command            []string `json:"command"`
+	AllowWeakIsolation bool     `json:"allowWeakIsolation,omitempty"`
+	NewEnvironment     bool     `json:"newEnvironment,omitempty"`
+	ResumeEnvironment  string   `json:"resumeEnvironment,omitempty"`
+	RemoveEnvironment  bool     `json:"removeEnvironment,omitempty"`
+}
+
+type RunStatusResponse struct {
+	Sessions []SessionSummary `json:"sessions"`
+}
+
+func NewAPI(core Core, token string, ttl time.Duration) API {
+	now := time.Now().UTC()
+	return API{
+		Core:      core,
+		Token:     token,
+		ExpiresAt: now.Add(ttl),
+		Now:       func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func (api API) Handler() http.Handler {
+	return http.HandlerFunc(api.ServeHTTP)
+}
+
+func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if err := api.checkHost(r); err != nil {
+		writeAPIError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if err := api.authorize(r); err != nil {
+		writeAPIError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if err := api.checkOrigin(r); err != nil {
+		writeAPIError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	resource, ok := strings.CutPrefix(r.URL.Path, "/api/v1/")
+	if !ok || resource == "" {
+		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+		return
+	}
+	if r.Method == http.MethodPost {
+		api.servePostResource(w, r, resource)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeAPIMethodNotAllowed(w)
+		return
+	}
+	overview, err := api.Core.Overview(r.Context())
+	if err != nil && overview.Version == "" {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if resource == "audit/events" {
+		api.serveAuditEvents(w, r, err)
+		return
+	}
+	if resource == "run/status" {
+		api.serveRunStatus(w, r, overview, err)
+		return
+	}
+	data, ok := overviewResource(overview, resource)
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+		return
+	}
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: resource,
+		Data:     data,
+		Errors:   []string{},
+	}
+	if err != nil {
+		resp.Errors = []string{err.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resource string) {
+	switch resource {
+	case "run/plan":
+		api.serveRunPlan(w, r)
+	case "run/apply":
+		api.serveRunApply(w, r)
+	default:
+		writeAPIMethodNotAllowed(w, http.MethodGet)
+	}
+}
+
+func (api API) serveRunPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeRunAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanRun(runPlanOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "run/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveRunApply(w http.ResponseWriter, r *http.Request) {
+	if api.RunBackend == nil {
+		writeAPIError(w, http.StatusNotImplemented, "run apply backend factory is not configured")
+		return
+	}
+	req, err := decodeRunAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanRun(runPlanOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	be, err := api.RunBackend(req, plan)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, runErr := api.Core.ApplyRun(r.Context(), plan, ApplyRunOptions{
+		Backend:            be,
+		RequestedBackend:   req.Backend,
+		AllowWeakIsolation: req.AllowWeakIsolation,
+		Environment: RunEnvironmentOptions{
+			New:            req.NewEnvironment,
+			ResumeID:       req.ResumeEnvironment,
+			RemoveAfterRun: req.RemoveEnvironment,
+			Create:         true,
+		},
+		OpenerForSession: api.runOpenerForSession(req, plan),
+	})
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "run/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if runErr != nil {
+		resp.Errors = []string{runErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) runOpenerForSession(req RunAPIRequest, plan RunPlan) func(RunSession) broker.Opener {
+	if api.RunOpener == nil {
+		return nil
+	}
+	return func(runSession RunSession) broker.Opener {
+		return api.RunOpener(req, plan, runSession)
+	}
+}
+
+func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
+	sessions := nonNilSlice(overview.Sessions)
+	if rawSession := r.URL.Query().Get("session"); rawSession != "" {
+		if !session.ValidID(rawSession) {
+			writeAPIError(w, http.StatusBadRequest, "invalid session id")
+			return
+		}
+		var filtered []SessionSummary
+		for _, summary := range sessions {
+			if summary.ID == rawSession {
+				filtered = append(filtered, summary)
+				break
+			}
+		}
+		sessions = filtered
+	}
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "run/status",
+		Data:     RunStatusResponse{Sessions: sessions},
+		Errors:   []string{},
+	}
+	if overviewErr != nil {
+		resp.Errors = []string{overviewErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func decodeRunAPIRequest(w http.ResponseWriter, r *http.Request) (RunAPIRequest, error) {
+	var req RunAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid run request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid run request")
+	}
+	if len(req.Command) == 0 {
+		return req, errors.New("command is required")
+	}
+	return req, nil
+}
+
+func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {
+	return RunPlanOptions{
+		ProfileName:    req.ProfileName,
+		Backend:        req.Backend,
+		NetworkMode:    req.NetworkMode,
+		ProxySecretRef: req.ProxySecretRef,
+		Workspace:      req.Workspace,
+		GuestWorkspace: req.GuestWorkspace,
+		Ephemeral:      req.Ephemeral,
+		Command:        append([]string(nil), req.Command...),
+	}
+}
+
+func (api API) serveAuditEvents(w http.ResponseWriter, r *http.Request, overviewErr error) {
+	filter, err := auditEventFilterFromQuery(r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	events, auditErr := api.Core.AuditEvents(filter)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "audit/events",
+		Data:     events,
+		Errors:   []string{},
+	}
+	for _, err := range []error{overviewErr, auditErr} {
+		if err != nil {
+			resp.Errors = append(resp.Errors, err.Error())
+		}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) authorize(r *http.Request) error {
+	if api.Token == "" {
+		return errors.New("manager API token is not configured")
+	}
+	now := time.Now().UTC()
+	if api.Now != nil {
+		now = api.Now().UTC()
+	}
+	if !api.ExpiresAt.IsZero() && !now.Before(api.ExpiresAt) {
+		return errors.New("manager API token expired")
+	}
+	if tokenEqual(bearerToken(r.Header.Get("Authorization")), api.Token) {
+		return nil
+	}
+	if tokenEqual(r.Header.Get("X-Hideout-UI-Token"), api.Token) {
+		return nil
+	}
+	return errors.New("manager API token is required")
+}
+
+func tokenEqual(got, want string) bool {
+	if got == "" || want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func bearerToken(value string) string {
+	prefix := "Bearer "
+	if !strings.HasPrefix(value, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(value, prefix))
+}
+
+func (api API) checkOrigin(r *http.Request) error {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return nil
+	}
+	for _, allowed := range api.AllowedOrigins {
+		if origin == allowed {
+			return nil
+		}
+	}
+	return errors.New("origin is not allowed")
+}
+
+func (api API) checkHost(r *http.Request) error {
+	return checkAllowedHost(r.Host, api.AllowedHosts)
+}
+
+func checkAllowedHost(requestHost string, allowedHosts []string) error {
+	host := strings.TrimSpace(requestHost)
+	if host == "" {
+		return errors.New("host header is required")
+	}
+	if len(allowedHosts) == 0 {
+		name, err := hostName(host)
+		if err != nil {
+			return err
+		}
+		switch name {
+		case "127.0.0.1", "localhost", "::1":
+			return nil
+		default:
+			return errors.New("host is not allowed")
+		}
+	}
+	for _, allowed := range allowedHosts {
+		ok, err := hostMatchesAllowed(host, allowed)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+	}
+	return errors.New("host is not allowed")
+}
+
+func hostMatchesAllowed(host, allowed string) (bool, error) {
+	hostName, hostPort, err := splitHostPortOptional(host)
+	if err != nil {
+		return false, err
+	}
+	allowedName, allowedPort, err := splitHostPortOptional(allowed)
+	if err != nil {
+		return false, err
+	}
+	if hostName != allowedName {
+		return false, nil
+	}
+	return allowedPort == "" || hostPort == allowedPort, nil
+}
+
+func hostName(host string) (string, error) {
+	name, _, err := splitHostPortOptional(host)
+	return name, err
+}
+
+func splitHostPortOptional(value string) (string, string, error) {
+	raw := strings.TrimSpace(strings.ToLower(value))
+	if raw == "" {
+		return "", "", errors.New("host header is required")
+	}
+	if strings.ContainsAny(raw, `/\@`) {
+		return "", "", errors.New("host header is invalid")
+	}
+	if host, port, err := net.SplitHostPort(raw); err == nil {
+		host = strings.TrimSuffix(strings.Trim(host, "[]"), ".")
+		if host == "" || port == "" {
+			return "", "", errors.New("host header is invalid")
+		}
+		return host, port, nil
+	}
+	host := strings.TrimSuffix(strings.Trim(raw, "[]"), ".")
+	if host == "" {
+		return "", "", errors.New("host header is invalid")
+	}
+	return host, "", nil
+}
+
+func overviewResource(overview Overview, resource string) (any, bool) {
+	switch resource {
+	case "overview":
+		return overview, true
+	case "profiles":
+		return nonNilSlice(overview.Profiles), true
+	case "sessions":
+		return nonNilSlice(overview.Sessions), true
+	case "backends":
+		return nonNilSlice(overview.Backends), true
+	case "capabilities":
+		return overview.Capabilities, true
+	case "broker":
+		return overview.Broker, true
+	case "network":
+		return overview.Network, true
+	case "secrets":
+		return nonNilSlice(overview.Secrets), true
+	case "audit":
+		return overview.Audit, true
+	case "settings":
+		return overview.Settings, true
+	case "init":
+		return overview.Init, true
+	case "bundles":
+		return overview.Bundles, true
+	case "projects":
+		return overview.Projects, true
+	default:
+		return nil, false
+	}
+}
+
+func auditEventFilterFromQuery(r *http.Request) (AuditEventFilter, error) {
+	q := r.URL.Query()
+	filter := AuditEventFilter{
+		Session:  q.Get("session"),
+		Profile:  q.Get("profile"),
+		Action:   q.Get("action"),
+		Decision: q.Get("decision"),
+	}
+	if filter.Session != "" && !session.ValidID(filter.Session) {
+		return filter, errors.New("invalid session id")
+	}
+	if raw := q.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 1000 {
+			return filter, errors.New("limit must be between 1 and 1000")
+		}
+		filter.Limit = limit
+	}
+	return filter, nil
+}
+
+func nonNilSlice[S ~[]E, E any](value S) S {
+	if value == nil {
+		return S{}
+	}
+	return value
+}
+
+func writeAPIError(w http.ResponseWriter, status int, message string) {
+	writeAPIJSON(w, status, APIResponse{
+		Version: APIVersion,
+		Errors:  []string{message},
+	})
+}
+
+func writeAPIMethodNotAllowed(w http.ResponseWriter, methods ...string) {
+	if len(methods) == 0 {
+		methods = []string{http.MethodGet}
+	}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
+	writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed")
+}
+
+func writeAPIJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}

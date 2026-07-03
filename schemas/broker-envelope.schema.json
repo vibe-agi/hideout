@@ -1,0 +1,399 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/broker-envelope.schema.json",
+  "title": "Hideout Broker Envelope",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hostOpenRequest"
+        },
+        {
+          "$ref": "#/$defs/hostFSRequest"
+        }
+      ]
+    },
+    "hostOpenRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "sessionId",
+        "capabilityToken",
+        "subject",
+        "command",
+        "argv",
+        "route",
+        "action",
+        "args"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilityToken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "type": "string",
+          "pattern": "^command:(open|xdg-open)$"
+        },
+        "command": {
+          "enum": ["open", "xdg-open"]
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "route": {
+          "const": "host-broker"
+        },
+        "action": {
+          "const": "host.open"
+        },
+        "args": {
+          "type": "object",
+          "required": ["target"],
+          "properties": {
+            "target": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "cwd": {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [
+                {
+                  "pattern": "^/"
+                },
+                {
+                  "not": {
+                    "pattern": "^//"
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "subject": {
+                "const": "command:open"
+              }
+            },
+            "required": ["subject"]
+          },
+          "then": {
+            "properties": {
+              "command": {
+                "const": "open"
+              },
+              "argv": {
+                "prefixItems": [
+                  {
+                    "const": "open"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "subject": {
+                "const": "command:xdg-open"
+              }
+            },
+            "required": ["subject"]
+          },
+          "then": {
+            "properties": {
+              "command": {
+                "const": "xdg-open"
+              },
+              "argv": {
+                "prefixItems": [
+                  {
+                    "const": "xdg-open"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "hostFSRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "sessionId",
+        "capabilityToken",
+        "subject",
+        "route",
+        "action",
+        "args"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilityToken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "const": "hostfs:daemon"
+        },
+        "route": {
+          "const": "host-broker"
+        },
+        "action": {
+          "enum": [
+            "host.fs.stat",
+            "host.fs.read",
+            "host.fs.list",
+            "host.fs.write"
+          ]
+        },
+        "args": {
+          "type": "object",
+          "required": ["path"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/",
+              "not": {
+                "anyOf": [
+                  {
+                    "pattern": "^//"
+                  },
+                  {
+                    "pattern": "\\\\"
+                  }
+                ]
+              }
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "not": {
+                  "const": "host.fs.read"
+                }
+              }
+            },
+            "required": ["action"]
+          },
+          "then": {
+            "properties": {
+              "args": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": ["offset"]
+                    },
+                    {
+                      "required": ["size"]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": ["command"]
+          },
+          {
+            "required": ["argv"]
+          }
+        ]
+      },
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "required": ["id", "decision", "status", "exitCode"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "decision": {
+          "enum": ["allow", "deny"]
+        },
+        "status": {
+          "enum": ["ok", "denied", "error", "broker-unavailable", "bad-request"]
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "decision": {
+                "const": "allow"
+              },
+              "exitCode": {
+                "const": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "denied"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["stderr"],
+            "properties": {
+              "decision": {
+                "const": "deny"
+              },
+              "exitCode": {
+                "const": 126
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "bad-request"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["stderr"],
+            "properties": {
+              "decision": {
+                "const": "deny"
+              },
+              "exitCode": {
+                "const": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "broker-unavailable"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["stderr"],
+            "properties": {
+              "decision": {
+                "const": "deny"
+              },
+              "exitCode": {
+                "const": 69
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "error"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["stderr"],
+            "properties": {
+              "decision": {
+                "const": "deny"
+              },
+              "exitCode": {
+                "const": 1
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}
