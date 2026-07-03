@@ -223,6 +223,8 @@ Required checks:
 - Boundary Summary output does not include broker tokens, proxy secrets, HostFS
   backing secrets, browser automation secrets, or full sensitive requested
   paths.
+- when audit is disabled, Boundary Summary reports that no boundary evidence is
+  available instead of rendering zero-count capability evidence.
 
 Non-goal:
 

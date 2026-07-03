@@ -614,6 +614,7 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 		AuditPath:        "/tmp/hideout/audit.jsonl",
 		BoundarySummary: &manager.BoundarySummary{
 			Version:   manager.BoundarySummaryVersion,
+			Evidence:  "available",
 			AuditPath: "/tmp/hideout/audit.jsonl",
 			Capabilities: []manager.BoundaryCapabilitySummary{
 				{Capability: "host.open", Allowed: 1, Denied: 2},
@@ -657,6 +658,7 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 	a.writeRunResultSummary(manager.RunResult{
 		BoundarySummary: &manager.BoundarySummary{
 			Version:   manager.BoundarySummaryVersion,
+			Evidence:  "disabled",
 			AuditPath: "off",
 			Capabilities: []manager.BoundaryCapabilitySummary{
 				{Capability: "host.open"},
@@ -664,7 +666,9 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 			},
 		},
 	})
-	if !strings.Contains(errOut.String(), "Hideout boundary:") || !strings.Contains(errOut.String(), "  audit: off") {
+	if !strings.Contains(errOut.String(), "Hideout boundary:") ||
+		!strings.Contains(errOut.String(), "  audit: disabled - no boundary evidence") ||
+		strings.Contains(errOut.String(), "hostfs: allowed=0 denied=0") {
 		t.Fatalf("boundary summary without reusable environment missing:\n%s", errOut.String())
 	}
 }

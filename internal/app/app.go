@@ -314,6 +314,14 @@ func (a app) writeRunResultSummary(result manager.RunResult) {
 		return
 	}
 	fmt.Fprintln(a.stderr, "Hideout boundary:")
+	if result.BoundarySummary.Evidence == "disabled" {
+		fmt.Fprintln(a.stderr, "  audit: disabled - no boundary evidence")
+		return
+	}
+	if result.BoundarySummary.Evidence == "unavailable" {
+		fmt.Fprintln(a.stderr, "  audit: unavailable - no boundary evidence")
+		return
+	}
 	if result.BoundarySummary.AuditPath != "" {
 		fmt.Fprintf(a.stderr, "  audit: %s\n", result.BoundarySummary.AuditPath)
 	}

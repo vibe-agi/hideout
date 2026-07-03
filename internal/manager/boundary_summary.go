@@ -14,6 +14,7 @@ const BoundarySummaryVersion = "hideout.boundary-summary/v1"
 
 type BoundarySummary struct {
 	Version      string                      `json:"version"`
+	Evidence     string                      `json:"evidence"`
 	AuditPath    string                      `json:"auditPath,omitempty"`
 	Capabilities []BoundaryCapabilitySummary `json:"capabilities"`
 }
@@ -33,10 +34,12 @@ type BoundaryCapabilitySummary struct {
 func SummarizeRunBoundary(auditPath string) BoundarySummary {
 	summary := newBoundarySummary(auditPath)
 	if auditPath == "" || auditPath == "off" {
+		summary.evidence = "disabled"
 		return summary.snapshot()
 	}
 	file, err := os.Open(auditPath)
 	if err != nil {
+		summary.evidence = "unavailable"
 		return summary.snapshot()
 	}
 	defer file.Close()
@@ -54,12 +57,14 @@ func SummarizeRunBoundary(auditPath string) BoundarySummary {
 
 type boundarySummaryBuilder struct {
 	auditPath    string
+	evidence     string
 	capabilities map[string]*BoundaryCapabilitySummary
 }
 
 func newBoundarySummary(auditPath string) *boundarySummaryBuilder {
 	builder := &boundarySummaryBuilder{
 		auditPath:    auditPath,
+		evidence:     "available",
 		capabilities: map[string]*BoundaryCapabilitySummary{},
 	}
 	builder.capability("hostfs")
@@ -116,6 +121,7 @@ func (b *boundarySummaryBuilder) snapshot() BoundarySummary {
 	})
 	return BoundarySummary{
 		Version:      BoundarySummaryVersion,
+		Evidence:     b.evidence,
 		AuditPath:    b.auditPath,
 		Capabilities: capabilities,
 	}
@@ -137,11 +143,31 @@ func boundaryCapability(action string) string {
 }
 
 func boundaryDecision(event audit.Event) string {
-	if effect := stringDetail(event.Details, "policyEffect"); effect == "unsupported" {
-		return "unsupported"
+	if strings.HasPrefix(event.Action, "host.fs.") {
+		return hostFSBoundaryDecision(event)
 	}
 	if status := stringDetail(event.Details, "status"); status == "error" {
 		return "error"
+	}
+	switch event.Decision {
+	case "allow", "deny", "error", "audit-only":
+		return event.Decision
+	default:
+		return ""
+	}
+}
+
+func hostFSBoundaryDecision(event audit.Event) string {
+	if status := stringDetail(event.Details, "status"); status == "error" {
+		return "error"
+	}
+	switch stringDetail(event.Details, "policyEffect") {
+	case "allow":
+		return "allow"
+	case "deny", "none":
+		return "deny"
+	case "unsupported":
+		return "unsupported"
 	}
 	switch event.Decision {
 	case "allow", "deny", "error", "audit-only":

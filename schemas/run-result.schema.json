@@ -42,10 +42,13 @@
     },
     "boundarySummary": {
       "type": "object",
-      "required": ["version", "capabilities"],
+      "required": ["version", "evidence", "capabilities"],
       "properties": {
         "version": {
           "const": "hideout.boundary-summary/v1"
+        },
+        "evidence": {
+          "enum": ["available", "disabled", "unavailable"]
         },
         "auditPath": {
           "type": "string",

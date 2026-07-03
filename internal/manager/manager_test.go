@@ -533,6 +533,9 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 	if result.BoundarySummary.AuditPath != result.AuditPath {
 		t.Fatalf("boundary summary audit path mismatch: %+v result=%s", result.BoundarySummary, result.AuditPath)
 	}
+	if result.BoundarySummary.Evidence != "available" {
+		t.Fatalf("boundary summary evidence mismatch: %+v", result.BoundarySummary)
+	}
 	hostFSBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "hostfs")
 	if hostFSBoundary.Allowed != 0 || hostFSBoundary.Denied != 0 || hostFSBoundary.Unsupported != 0 {
 		t.Fatalf("unexpected HostFS boundary counts without HostFS requests: %+v", hostFSBoundary)
@@ -618,8 +621,7 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 			},
 		},
 		{
-			Action:   "host.fs.list",
-			Decision: "deny",
+			Action: "host.fs.list",
 			Details: map[string]any{
 				"status":       "denied",
 				"policyEffect": "deny",
@@ -627,8 +629,15 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 			},
 		},
 		{
-			Action:   "host.fs.write",
-			Decision: "deny",
+			Action: "host.fs.stat",
+			Details: map[string]any{
+				"status":       "denied",
+				"policyEffect": "none",
+				"path":         "/Users/alice/.ssh/id_rsa",
+			},
+		},
+		{
+			Action: "host.fs.write",
 			Details: map[string]any{
 				"status":       "denied",
 				"policyEffect": "unsupported",
@@ -683,8 +692,11 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	if summary.Version != BoundarySummaryVersion || summary.AuditPath != auditPath {
 		t.Fatalf("summary identity mismatch: %+v", summary)
 	}
+	if summary.Evidence != "available" {
+		t.Fatalf("summary evidence mismatch: %+v", summary)
+	}
 	hostFSBoundary := boundarySummaryCapability(t, summary, "hostfs")
-	if hostFSBoundary.Allowed != 1 || hostFSBoundary.Denied != 1 || hostFSBoundary.Unsupported != 1 {
+	if hostFSBoundary.Allowed != 1 || hostFSBoundary.Denied != 2 || hostFSBoundary.Unsupported != 1 {
 		t.Fatalf("HostFS boundary counts mismatch: %+v", hostFSBoundary)
 	}
 	hostOpenBoundary := boundarySummaryCapability(t, summary, "host.open")
@@ -709,6 +721,19 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 		if strings.Contains(string(summaryData), leaked) {
 			t.Fatalf("boundary summary leaked %q:\n%s", leaked, summaryData)
 		}
+	}
+}
+
+func TestBoundarySummaryReportsDisabledAuditAsNoEvidence(t *testing.T) {
+	summary := SummarizeRunBoundary("off")
+	if summary.Evidence != "disabled" || summary.AuditPath != "off" {
+		t.Fatalf("disabled summary mismatch: %+v", summary)
+	}
+	hostFSBoundary := boundarySummaryCapability(t, summary, "hostfs")
+	hostOpenBoundary := boundarySummaryCapability(t, summary, "host.open")
+	if hostFSBoundary.Allowed != 0 || hostFSBoundary.Denied != 0 ||
+		hostOpenBoundary.Allowed != 0 || hostOpenBoundary.Denied != 0 {
+		t.Fatalf("disabled audit should not imply observed zero-count evidence: %+v %+v", hostFSBoundary, hostOpenBoundary)
 	}
 }
 
