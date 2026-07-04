@@ -293,6 +293,9 @@ pre-release phase. It builds `hideout`, the host command shim, and Linux guest
 helpers into one prefix, then runs `hideout init --no-input` through the normal
 Manager-owned Init Task Engine unless `--skip-init` is set. This is not a
 separate bootstrap path and must not grow its own initialization semantics.
+The default install backend follows the runtime default, Lima; native remains an
+explicit weak-isolation development option. Source-tree repair may use
+`HIDEOUT_SOURCE_ROOT` when `doctor --fix` is run outside the repository.
 
 Release-like tarball packaging uses `scripts/package-local.sh` during private
 pre-release development. The tarball contains `bin/`, `schemas/`, `docs/`, and

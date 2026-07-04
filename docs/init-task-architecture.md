@@ -224,6 +224,10 @@ hideout init --no-input
 hideout doctor --fix
 ```
 
+`auto` and omitted backends resolve to the same backend as `hideout run`: Lima.
+The weak native backend is available only when the operator explicitly selects
+`--backend native`.
+
 ## Product Command Scope
 
 Keep the command model narrow.
@@ -337,9 +341,11 @@ used for missing privacy contracts.
 
 Minimum acceptance:
 
+- `hideout init --no-input --network direct` plans the default Lima first-run
+  path, including Linux guest helper tasks when official helpers are missing;
 - `hideout init --no-input --backend native --network direct` creates store
   directories, default profile, identity state, schema metadata, and runtime
-  directories under a temporary store;
+  directories under a temporary store for the explicit weak-isolation smoke;
 - repeated init is idempotent and does not rotate identity or grant new
   authority;
 - `doctor --fix --dry-run` shows safe fixes without applying unsafe actions;

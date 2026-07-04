@@ -58,6 +58,50 @@ func TestPlanMachineLimaHelpersRequireStoreManifest(t *testing.T) {
 	}
 }
 
+func TestPlanMachineAutoBackendMatchesRunDefaultLima(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", "")
+	t.Setenv("HIDEOUT_LINUX_HOSTFSD_PATH", "")
+	plan, err := PlanMachine(store, Options{ProfileName: "default", Backend: "auto", Network: "direct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Backend != "lima" {
+		t.Fatalf("auto init backend=%q want lima", plan.Backend)
+	}
+	helperTasks(t, plan)
+}
+
+func TestPlanMachineNativeBackendDoesNotPlanLimaHelpers(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	plan, err := PlanMachine(store, Options{ProfileName: "default", Backend: "native", Network: "direct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Backend != "native" {
+		t.Fatalf("native init backend=%q want native", plan.Backend)
+	}
+	for _, task := range plan.Tasks {
+		switch task.Kind {
+		case "helper.install.linux-shim", "helper.install.linux-hostfsd":
+			t.Fatalf("native init must not plan Lima helper task: %+v", task)
+		}
+	}
+}
+
+func TestFindHelperSourceRootUsesExplicitEnv(t *testing.T) {
+	source := fakeSourceRoot(t)
+	t.Setenv("HIDEOUT_SOURCE_ROOT", filepath.Join(source, "cmd", "hideout-shim"))
+	root, err := findHelperSourceRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != source {
+		t.Fatalf("source root=%q want %q", root, source)
+	}
+}
+
 func TestApplyMachineWritesTaskAudit(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	plan, err := PlanMachine(store, Options{ProfileName: "default", Backend: "native", Network: "direct"})
@@ -201,6 +245,25 @@ func helperTasks(t *testing.T, plan Plan) []Task {
 		t.Fatalf("expected two helper tasks, got %d in %+v", len(tasks), plan.Tasks)
 	}
 	return tasks
+}
+
+func fakeSourceRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, path := range []string{
+		"go.mod",
+		filepath.Join("cmd", "hideout-shim", "main.go"),
+		filepath.Join("cmd", "hideout-hostfsd", "main.go"),
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("package main\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 func schemaMetadataTask(t *testing.T, plan Plan) Task {

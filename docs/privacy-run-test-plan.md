@@ -210,8 +210,8 @@ Scope:
 
 Required checks:
 
-- first-run init creates store directories, default profile, profile identity,
-  schema metadata, and runtime directories under a temporary store;
+- explicit native init creates store directories, default profile, profile
+  identity, schema metadata, and runtime directories under a temporary store;
 - repeated init is idempotent and does not rotate identity, enable bundles,
   add HostFS grants, or create new authority;
 - `doctor --fix --dry-run` reports safe fixes without applying unsafe actions;
@@ -306,9 +306,9 @@ HIDEOUT_GATE2_REQUIRE_NODE=1 HIDEOUT_GATE_TIMEOUT=45m scripts/test-gate2-lima.sh
 
 Required checks:
 
-- `hideout init --backend lima` validates Lima prerequisites, helper discovery,
-  and generated backend metadata without starting the VM unless a deep check is
-  explicitly requested;
+- default `hideout init --no-input` and `hideout init --backend lima` validate
+  Lima prerequisites, helper discovery, and generated backend metadata without
+  starting the VM unless a deep check is explicitly requested;
 - initialized helper discovery is reused by the first Lima run without falling
   back to host binaries;
 - `hideout run --backend lima -- pwd` reports guest workspace or alias;
@@ -892,8 +892,10 @@ Required checks:
   `hideout init --no-input` plus `hideout doctor` from a temporary prefix;
 - Gate 0 statically validates the draft Homebrew formula and its
   `hideout init --no-input` formula smoke contract when Ruby is available;
+- omitted or `auto` backend first-run repair resolves to Lima, matching
+  `hideout run`, and plans Linux helper repair when store helpers are missing;
 - `hideout init --no-input --backend native --network direct` succeeds without
-  using arbitrary shell scripts;
+  using arbitrary shell scripts as an explicit weak-isolation smoke;
 - Manager API run status tests must cover a real `run/apply` session, not only
   an empty store, and must prove status exposes only session summaries and
   presence booleans for broker/proxy artifacts;

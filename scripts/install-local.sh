@@ -18,7 +18,7 @@ USAGE
 prefix="${HIDEOUT_INSTALL_PREFIX:-${HOME:-}/.local}"
 store="${HIDEOUT_STORE_ROOT:-${HOME:-}/.hideout}"
 source="$ROOT"
-backend="native"
+backend="auto"
 network="direct"
 run_init=1
 

@@ -642,6 +642,33 @@ func TestProfileHomeImportCopiesDirectoriesAndRejectsUnsafeSources(t *testing.T)
 	}
 }
 
+func TestProfileHomeImportRejectsSymlinkDestinationParents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	sourceFile := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(sourceFile, []byte(`{"token":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	escapeDir := t.TempDir()
+	profileHome := filepath.Join(store.ProfileDir("default"), "home")
+	if err := os.MkdirAll(profileHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(escapeDir, filepath.Join(profileHome, ".tool")); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "home", "default", "import", "--from", sourceFile, "--to", ".tool/state.json", "--force"}, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "destination must not use a symlink") {
+		t.Fatalf("symlink destination parent should fail, exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(escapeDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatalf("import escaped through destination symlink parent, err=%v", err)
+	}
+}
+
 func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

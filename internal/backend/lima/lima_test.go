@@ -992,6 +992,30 @@ func TestCleanupDeletesInstanceEvenWhenNetworkCleanupFails(t *testing.T) {
 	}
 }
 
+func TestCleanupUsesFreshContextAfterRunCancellation(t *testing.T) {
+	runner := &cleanupContextRunner{lookPath: "/opt/homebrew/bin/limactl"}
+	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session := &backend.Session{
+		InstanceName:            "hideout-canceled-session",
+		GuestWork:               "/workspace",
+		HostFSEnabled:           true,
+		NetworkCleanupGuestPath: GuestSessionDir + "/network/cleanup.sh",
+		Env:                     []string{"PATH=/usr/bin:/bin"},
+		PreserveInstance:        false,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := b.Cleanup(ctx, session); err != nil {
+		t.Fatalf("Cleanup with canceled run context: %v", err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("cleanup should run hostfs cleanup, network cleanup, and delete: %+v", runner.calls)
+	}
+	if !reflect.DeepEqual(runner.calls[2].args, []string{"delete", "-f", session.InstanceName}) {
+		t.Fatalf("cleanup must delete session instance after cancellation: %+v", runner.calls)
+	}
+}
+
 func TestInstanceNameIsStableAndSafe(t *testing.T) {
 	if got := InstanceName("Client A / Prod"); got != "hideout-client-a-prod" {
 		t.Fatalf("InstanceName=%s", got)
@@ -1164,5 +1188,22 @@ func (r *recordingRunner) Run(_ context.Context, name string, args []string, env
 	if len(args) == 2 && args[0] == "list" && args[1] == "--quiet" && r.listOutput != "" {
 		_, _ = io.WriteString(stdout, r.listOutput)
 	}
+	return nil
+}
+
+type cleanupContextRunner struct {
+	lookPath string
+	calls    []recordedCall
+}
+
+func (r *cleanupContextRunner) LookPath(string) (string, error) {
+	return r.lookPath, nil
+}
+
+func (r *cleanupContextRunner) Run(ctx context.Context, name string, args []string, env []string, _ io.Reader, _ io.Writer, _ io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
 	return nil
 }

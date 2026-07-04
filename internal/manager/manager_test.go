@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/network"
@@ -30,10 +32,12 @@ import (
 
 func TestCorePlansAndAppliesInitTasks(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
+	seedStoreHelper(t, store.Root, "hideout-shim")
+	seedStoreHelper(t, store.Root, "hideout-hostfsd")
 	core := New(store)
 	plan, err := core.PlanInit(inittask.Options{
 		ProfileName: "default",
-		Backend:     "native",
+		Backend:     "auto",
 		Network:     "direct",
 		NoInput:     true,
 	})
@@ -73,6 +77,28 @@ func TestCorePlansAndAppliesInitTasks(t *testing.T) {
 	}
 	if overview.Init.AuditPath != result.AuditPath || overview.Init.AuditEvents == 0 {
 		t.Fatalf("init summary audit mismatch: %+v result=%+v", overview.Init, result)
+	}
+}
+
+func seedStoreHelper(t *testing.T, storeRoot, command string) {
+	t.Helper()
+	var path string
+	switch command {
+	case "hideout-shim":
+		path = helperbin.DefaultLinuxShimPath(storeRoot, runtime.GOARCH)
+	case "hideout-hostfsd":
+		path = helperbin.DefaultLinuxHostFSDPath(storeRoot, runtime.GOARCH)
+	default:
+		t.Fatalf("unsupported helper command %q", command)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(command), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := helperbin.WriteStoreHelperManifest(path, command, runtime.GOARCH); err != nil {
+		t.Fatal(err)
 	}
 }
 

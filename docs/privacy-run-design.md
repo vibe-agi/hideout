@@ -3922,6 +3922,13 @@ tasks build the Linux helpers with `go build`; packaged releases should install
 the helpers directly so the tasks are already `ok`. If a default store helper is
 present without a current manifest, the helper task remains pending so
 `doctor --fix` can rebuild or repair it.
+Source-tree repair locates the Hideout source root from `HIDEOUT_SOURCE_ROOT`,
+the current `hideout` executable path, or the working directory, in that order.
+
+The omitted or `auto` backend for `hideout init` and `hideout doctor --fix`
+matches `hideout run`: Lima. `--backend native` remains available as an explicit
+weak-isolation development path, but it must not be the implicit first-run
+repair target.
 
 `hideout init` and non-dry-run `hideout doctor --fix` append typed init audit
 events to `~/.hideout/logs/init-audit.jsonl`. The audit schema is

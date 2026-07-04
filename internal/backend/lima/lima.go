@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
@@ -28,6 +29,7 @@ const (
 	GuestSessionDir       = "/hideout/session"
 	GuestBootstrapPath    = GuestSessionDir + "/bootstrap/bootstrap.sh"
 	GuestNetworkBootstrap = GuestSessionDir + "/network/bootstrap.sh"
+	cleanupTimeout        = 30 * time.Second
 )
 
 type CommandRunner interface {
@@ -309,27 +311,29 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	if session.InstanceName == "" {
 		return errors.New("lima session is missing instance name")
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 	runner := b.runner()
 	hostEnv := HostCommandEnv(os.Environ())
 	var errs []error
 	if session.HostFSEnabled {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
-		} else if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}), hostEnv, nil, b.stdout(), b.stderr()); err != nil {
+		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}), hostEnv, nil, b.stdout(), b.stderr()); err != nil {
 			errs = append(errs, fmt.Errorf("hostfs cleanup: %w", err))
 		}
 	}
 	if session.NetworkCleanupGuestPath != "" {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
-		} else if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}), hostEnv, nil, b.stdout(), b.stderr()); err != nil {
+		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}), hostEnv, nil, b.stdout(), b.stderr()); err != nil {
 			errs = append(errs, fmt.Errorf("network cleanup: %w", err))
 		}
 	}
 	if session.PreserveInstance {
 		return errors.Join(errs...)
 	}
-	if err := runner.Run(ctx, b.limactl(), []string{"delete", "-f", session.InstanceName}, hostEnv, nil, io.Discard, io.Discard); err != nil {
+	if err := runner.Run(cleanupCtx, b.limactl(), []string{"delete", "-f", session.InstanceName}, hostEnv, nil, io.Discard, io.Discard); err != nil {
 		errs = append(errs, fmt.Errorf("delete lima instance %s: %w", session.InstanceName, err))
 	}
 	return errors.Join(errs...)

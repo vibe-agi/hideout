@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -301,7 +302,9 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		})
 	}
 	be := a.backend(backendName, opts)
-	result, err := core.ApplyRun(context.Background(), runPlan, manager.ApplyRunOptions{
+	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	result, err := core.ApplyRun(runCtx, runPlan, manager.ApplyRunOptions{
 		Backend:                    be,
 		RequestedBackend:           opts.backendName,
 		AllowWeakIsolation:         opts.allowWeakIsolation,
@@ -2070,6 +2073,9 @@ func (a app) profileHomeImport(store profile.Store, name string, args []string) 
 	if !pathWithinRoot(homeRoot, dest) {
 		return fmt.Errorf("profile home import destination %q escapes profile home", opts.to)
 	}
+	if err := ensureProfileHomeParent(homeRoot, dest); err != nil {
+		return err
+	}
 	if _, err := os.Lstat(dest); err == nil {
 		if !opts.force {
 			return fmt.Errorf("profile home import destination %q already exists; use --force to replace it", destRel)
@@ -2080,7 +2086,7 @@ func (a app) profileHomeImport(store profile.Store, name string, args []string) 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	stats, err := copyProfileHomePath(src, dest)
+	stats, err := copyProfileHomePath(homeRoot, src, dest)
 	if err != nil {
 		_ = os.RemoveAll(dest)
 		return err
@@ -2123,7 +2129,7 @@ type profileHomeCopyStats struct {
 	bytes int64
 }
 
-func copyProfileHomePath(src, dst string) (profileHomeCopyStats, error) {
+func copyProfileHomePath(homeRoot, src, dst string) (profileHomeCopyStats, error) {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return profileHomeCopyStats{}, errors.New("profile home import source is not accessible")
@@ -2132,28 +2138,28 @@ func copyProfileHomePath(src, dst string) (profileHomeCopyStats, error) {
 		return profileHomeCopyStats{}, fmt.Errorf("profile home import source %q must not be a symlink", filepath.Base(src))
 	}
 	if info.IsDir() {
-		return copyProfileHomeDir(src, dst)
+		return copyProfileHomeDir(homeRoot, src, dst)
 	}
 	if !info.Mode().IsRegular() {
 		return profileHomeCopyStats{}, fmt.Errorf("profile home import source %q must be a regular file or directory", filepath.Base(src))
 	}
-	if err := copyProfileHomeFile(src, dst, info); err != nil {
+	if err := copyProfileHomeFile(homeRoot, src, dst, info); err != nil {
 		return profileHomeCopyStats{}, err
 	}
 	return profileHomeCopyStats{files: 1, bytes: info.Size()}, nil
 }
 
-func copyProfileHomeDir(src, dst string) (profileHomeCopyStats, error) {
+func copyProfileHomeDir(homeRoot, src, dst string) (profileHomeCopyStats, error) {
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return profileHomeCopyStats{}, errors.New("profile home import source directory is not readable")
 	}
-	if err := os.MkdirAll(dst, 0o700); err != nil {
+	if err := ensureProfileHomeDir(homeRoot, dst); err != nil {
 		return profileHomeCopyStats{}, err
 	}
 	var stats profileHomeCopyStats
 	for _, entry := range entries {
-		childStats, err := copyProfileHomePath(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()))
+		childStats, err := copyProfileHomePath(homeRoot, filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()))
 		if err != nil {
 			return profileHomeCopyStats{}, err
 		}
@@ -2163,19 +2169,119 @@ func copyProfileHomeDir(src, dst string) (profileHomeCopyStats, error) {
 	return stats, nil
 }
 
-func copyProfileHomeFile(src, dst string, info os.FileInfo) error {
+func copyProfileHomeFile(homeRoot, src, dst string, info os.FileInfo) error {
+	if err := ensureProfileHomeFile(homeRoot, dst); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return errors.New("profile home import source file is not readable")
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
 	}
 	mode := info.Mode().Perm()
 	if mode == 0 || mode&0o077 != 0 {
 		mode = 0o600
 	}
 	return os.WriteFile(dst, data, mode)
+}
+
+func ensureProfileHomeFile(homeRoot, dst string) error {
+	if err := ensureProfileHomeParent(homeRoot, dst); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dst)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("profile home import destination must not use a symlink")
+	}
+	return nil
+}
+
+func ensureProfileHomeDir(homeRoot, dst string) error {
+	if err := ensureProfileHomeParent(homeRoot, dst); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dst)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Mkdir(dst, 0o700)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("profile home import destination must not use a symlink")
+	}
+	if !info.IsDir() {
+		return errors.New("profile home import destination directory is not a directory")
+	}
+	return nil
+}
+
+func ensureProfileHomeParent(homeRoot, dst string) error {
+	return ensureProfileHomeDirPath(homeRoot, filepath.Dir(dst))
+}
+
+func ensureProfileHomeDirPath(homeRoot, dir string) error {
+	homeRoot = filepath.Clean(homeRoot)
+	dir = filepath.Clean(dir)
+	if !pathWithinRoot(homeRoot, dir) {
+		return errors.New("profile home import destination escapes profile home")
+	}
+	if err := ensureProfileHomeRoot(homeRoot); err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(homeRoot, dir)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	current := homeRoot
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.Mkdir(current, 0o700); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("profile home import destination must not use a symlink")
+		}
+		if !info.IsDir() {
+			return errors.New("profile home import destination parent is not a directory")
+		}
+	}
+	return nil
+}
+
+func ensureProfileHomeRoot(homeRoot string) error {
+	info, err := os.Lstat(homeRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.MkdirAll(homeRoot, 0o700)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("profile home import root must not be a symlink")
+	}
+	if !info.IsDir() {
+		return errors.New("profile home import root is not a directory")
+	}
+	return nil
 }
 
 func (a app) profileEnv(store profile.Store, args []string) error {

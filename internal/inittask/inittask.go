@@ -265,7 +265,7 @@ func normalizeOptions(opts Options) (Options, error) {
 		return opts, err
 	}
 	if opts.Backend == "" || opts.Backend == "auto" {
-		opts.Backend = "native"
+		opts.Backend = "lima"
 	}
 	if opts.Backend != "native" && opts.Backend != "lima" {
 		return opts, fmt.Errorf("backend %q is not implemented yet", opts.Backend)
@@ -419,7 +419,7 @@ func helperTask(storeRoot, id, kind, command, output string) Task {
 	status := "ok"
 	message := command + " linux helper already discoverable"
 	if !linuxHelperDiscoverable(storeRoot, command) {
-		if _, err := helperbin.FindSourceRoot("."); err != nil {
+		if _, err := findHelperSourceRoot(); err != nil {
 			status = "blocked"
 			message = command + " linux helper missing and Hideout source root is unavailable; install packaged helper or run explicit build command"
 		} else {
@@ -538,7 +538,7 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 }
 
 func buildLinuxHelper(storeRoot, command string) error {
-	source, err := helperbin.FindSourceRoot(".")
+	source, err := findHelperSourceRoot()
 	if err != nil {
 		return err
 	}
@@ -552,6 +552,32 @@ func buildLinuxHelper(storeRoot, command string) error {
 		Source:  source,
 		Command: command,
 	})
+}
+
+func findHelperSourceRoot() (string, error) {
+	var errs []error
+	if explicit := strings.TrimSpace(os.Getenv("HIDEOUT_SOURCE_ROOT")); explicit != "" {
+		root, err := helperbin.FindSourceRoot(explicit)
+		if err == nil {
+			return root, nil
+		}
+		errs = append(errs, fmt.Errorf("HIDEOUT_SOURCE_ROOT: %w", err))
+	}
+	if exe, err := os.Executable(); err == nil {
+		root, err := helperbin.FindSourceRoot(exe)
+		if err == nil {
+			return root, nil
+		}
+		errs = append(errs, fmt.Errorf("executable path: %w", err))
+	} else {
+		errs = append(errs, fmt.Errorf("executable path: %w", err))
+	}
+	root, err := helperbin.FindSourceRoot(".")
+	if err == nil {
+		return root, nil
+	}
+	errs = append(errs, fmt.Errorf("working directory: %w", err))
+	return "", errors.Join(errs...)
 }
 
 func storeDirs(root string) []string {
