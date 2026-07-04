@@ -241,6 +241,8 @@ scripts/test-release-dogfood.sh
 
 这会运行 Gate 0、native harness、真实 Lima E2E、严格 hidden proxy、
 真实浏览器 host escape、capability probes 和 generic CLI dogfood smoke。
+默认会在 `.hideout-release-evidence/` 下写入已脱敏的证据包。设置
+`HIDEOUT_RELEASE_EVIDENCE_DIR` 可以指定精确输出目录。
 
 ## 文档地图
 

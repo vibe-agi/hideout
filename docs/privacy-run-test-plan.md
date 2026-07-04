@@ -147,6 +147,9 @@ Definition of done for a Phase 1 change:
   autonomous CLI workflow is dogfood-ready;
 - release-candidate evidence records the exact command, host prerequisites, and
   whether Gate 3 used an operator-supplied proxy.
+- `scripts/test-release-dogfood.sh` writes a named evidence bundle containing a
+  manifest and redacted log; it records proxy presence and scheme, never the
+  full proxy URL.
 
 ## Test Gates
 
@@ -1012,6 +1015,19 @@ enabled:
 - redacted network plan;
 - redacted Lima YAML validation output;
 - lab probe audit when a lab command is used.
+
+`scripts/test-release-dogfood.sh` always writes a release evidence bundle. By
+default it is placed under `.hideout-release-evidence/`; set
+`HIDEOUT_RELEASE_EVIDENCE_DIR` for an exact output path or
+`HIDEOUT_RELEASE_EVIDENCE_ROOT` for a different parent directory. The bundle
+contains:
+
+- `manifest.json` with command, git revision, host prerequisites, tool versions,
+  gate list, exit code, and operator proxy presence;
+- `test-release-dogfood.log` with redacted gate output.
+
+The manifest must record `operatorProxy.url` as `redacted` and the log must not
+contain the raw `HIDEOUT_SECRET_DEFAULT_PROXY` value.
 
 The following must never be copied into normal diagnostic exports:
 

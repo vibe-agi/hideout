@@ -35,3 +35,26 @@ if printf '%s\n' "$phase1_required_plan" | grep -Eiq 'Capability probe|lab|Web U
   printf '%s\n' "$phase1_required_plan" >&2
   exit 1
 fi
+
+release_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-evidence-smoke.XXXXXX")"
+release_secret="socks5://user:pass@127.0.0.1:7890"
+HIDEOUT_PHASE1_PRINT_PLAN=1 \
+  HIDEOUT_SECRET_DEFAULT_PROXY="$release_secret" \
+  HIDEOUT_RELEASE_EVIDENCE_DIR="$release_tmp/evidence" \
+  scripts/test-release-dogfood.sh >"$release_tmp/stdout" 2>"$release_tmp/stderr"
+test -f "$release_tmp/evidence/manifest.json"
+test -f "$release_tmp/evidence/test-release-dogfood.log"
+jq -e '
+  .schema == "hideout.release-dogfood.v1" and
+  .status == "passed" and
+  .command == "scripts/test-phase1.sh --release-candidate" and
+  .operatorProxy.provided == true and
+  .operatorProxy.scheme == "socks5" and
+  .operatorProxy.url == "redacted"
+' "$release_tmp/evidence/manifest.json" >/dev/null
+grep -q 'phase1-plan: Gate 2 Lima E2E' "$release_tmp/evidence/test-release-dogfood.log"
+if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; then
+  echo "gate0: release dogfood evidence leaked operator proxy URL" >&2
+  exit 1
+fi
+rm -rf "$release_tmp"

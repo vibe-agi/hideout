@@ -248,6 +248,8 @@ scripts/test-release-dogfood.sh
 
 This runs Gate 0, the native harness, real Lima E2E, strict hidden proxy,
 real-browser host escape, capability probes, and the generic CLI dogfood smoke.
+It writes a redacted evidence bundle under `.hideout-release-evidence/` by
+default. Set `HIDEOUT_RELEASE_EVIDENCE_DIR` to choose an exact output directory.
 
 ## Documentation Map
 
