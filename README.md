@@ -1,0 +1,241 @@
+# Hideout
+
+Hideout is a local privacy runner for untrusted developer tools and agentic
+CLIs. It runs the target inside a reusable Lima environment, gives it an
+isolated identity, routes host access through typed capabilities, and records
+boundary evidence.
+
+Current status: private alpha / supervised dogfood. The core v1 path is
+working, but this is not a public GA release.
+
+## What Hideout Protects
+
+Hideout replaces ambient host authority with explicit capabilities:
+
+- the target gets an isolated home, XDG paths, machine identity, and git config;
+- the project workspace is mounted read/write for normal development;
+- host files outside the workspace require explicit HostFS grants;
+- host escapes such as `open` and `preview.open` go through typed brokered
+  routes;
+- proxy credentials can be used by Hideout without appearing in target env;
+- every run writes audit and boundary summary evidence.
+
+Important non-claims:
+
+- secrets already inside the mounted workspace are visible to the target;
+- `direct` network mode does not hide network identity;
+- `tun2socks` hides the network origin path, but it is not a data-loss
+  prevention system;
+- `--backend native` is a development harness, not isolation.
+
+## Requirements
+
+On macOS:
+
+- Go;
+- Lima (`limactl`);
+- Google Chrome or another supported Chromium-compatible browser for real
+  browser host-open checks;
+- an optional local proxy for `tun2socks` mode.
+
+For local development, install from the source tree:
+
+```bash
+scripts/install-local.sh --backend lima --network direct
+export PATH="$HOME/.local/bin:$PATH"
+hideout doctor --backend lima
+```
+
+The installer builds:
+
+- `hideout`;
+- the host command shim;
+- the Linux guest shim;
+- the Linux HostFS daemon.
+
+## First Run
+
+Use a dedicated project checkout. Do not run Hideout from `$HOME`, `~/.hideout`,
+or a directory containing host credentials. The workspace is intentionally
+mounted into the guest.
+
+```bash
+cd /path/to/sanitized/project
+hideout run --backend lima -- pwd
+```
+
+Reusable Lima environments are keyed by profile, workspace, backend, and tool
+policy. A successful run prints a resume ID:
+
+```bash
+hideout list
+hideout run --resume <env-id> -- <command>
+hideout stop <env-id>
+hideout clean --stopped <env-id>
+```
+
+Use `--rm` for a disposable environment:
+
+```bash
+hideout run --backend lima --rm -- <command>
+```
+
+## Running A CLI Tool
+
+Hideout does not hardcode product-specific CLIs. Configure generic tool
+provisioning on the profile, then run the command.
+
+For an npm-based CLI:
+
+```bash
+hideout profile tools default preset add node-dev
+hideout profile tools default npm add --package <npm-package> --command <command>
+hideout run --backend lima -- <command> --version
+```
+
+`node-dev` and npm global installs run during managed guest setup after the
+selected network mode has been applied.
+
+If a CLI needs persistent login state, put it in the isolated profile home, not
+the host home:
+
+```bash
+hideout profile home default import \
+  --from /host/path/to/state \
+  --to .config/<tool>/state
+```
+
+## Network Modes
+
+Direct mode is the compatibility default:
+
+```bash
+hideout init --no-input --backend lima --network direct
+hideout run --backend lima --network direct -- <command>
+```
+
+Hidden proxy mode uses `tun2socks` inside the guest. The proxy secret stays in a
+host-only secret ref and is not passed to the target process.
+
+If your host proxy listens on `127.0.0.1:7890`, the Lima guest should reach it
+through `host.lima.internal:7890`:
+
+```bash
+export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
+
+hideout init --no-input \
+  --backend lima \
+  --network tun2socks \
+  --proxy-secret default-proxy
+
+hideout run --backend lima \
+  --network tun2socks \
+  --proxy-secret default-proxy \
+  -- <command>
+```
+
+`doctor` and run bootstrap fail closed if the proxy route cannot be verified.
+
+## Host Files Outside The Workspace
+
+The workspace is mounted directly. Everything else should go through HostFS
+grants.
+
+Run-scoped grants:
+
+```bash
+hideout run --backend lima --fs read:/absolute/file -- <command>
+hideout run --backend lima --fs dir:/absolute/dir -- <command>
+hideout run --backend lima --fs tree:/absolute/dir -- <command>
+hideout run --backend lima --fs read:/absolute/dir/*.txt -- <command>
+```
+
+Persistent profile rules:
+
+```bash
+hideout profile fs default list
+hideout profile fs default add --fs read:/absolute/file --reason "tool input"
+hideout profile fs default deny --no-fs tree:/absolute/dir --reason "too broad"
+hideout profile fs default remove <rule-id>
+```
+
+The Hideout store is reserved control-plane state and cannot be granted through
+HostFS.
+
+## Host Open And Preview
+
+Registered host escapes are typed and audited. `host.open` does not allow raw
+host localhost/private URL access.
+
+To expose a guest dev server to the host browser:
+
+```bash
+hideout run --backend lima \
+  --preview 127.0.0.1:5173 \
+  -- npm run dev
+```
+
+Hideout creates a run-scoped host-to-guest mapping and opens the host browser at
+the mapped endpoint. This is separate from `host.open`; the localhost deny rule
+remains intact.
+
+## Audit And Cleanup
+
+Each run prints a boundary summary and writes an audit log path:
+
+```text
+Hideout boundary:
+  audit: .../audit.jsonl
+  host.open: allowed=1 denied=0
+  hostfs: allowed=0 denied=1 unsupported=0
+```
+
+Useful cleanup commands:
+
+```bash
+hideout list
+hideout stop <env-id>
+hideout stop --idle 2h
+hideout clean --dry-run --stopped
+hideout clean --stopped <env-id>
+hideout cleanup --dry-run
+hideout cleanup
+```
+
+`stop` releases VM memory and keeps the reusable environment. `clean` removes
+stopped or selected environments. `cleanup` removes session-local runtime and
+secret-bearing files while preserving audit by default.
+
+## Verification
+
+Fast local check:
+
+```bash
+scripts/test-phase1.sh --quick
+```
+
+Required automated gates:
+
+```bash
+scripts/test-phase1.sh --required
+```
+
+Release dogfood proof on macOS with Lima, a real browser, and an operator proxy:
+
+```bash
+export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
+scripts/test-release-dogfood.sh
+```
+
+This runs Gate 0, the native harness, real Lima E2E, strict hidden proxy,
+real-browser host escape, capability probes, and the generic CLI dogfood smoke.
+
+## Documentation Map
+
+- [Architecture Principles](docs/architecture-principles.md)
+- [Main Design](docs/privacy-run-design.md)
+- [Threat Model](docs/threat-model.md)
+- [Test Plan](docs/privacy-run-test-plan.md)
+- [Network Privacy](docs/network-privacy-architecture.md)
+- [OpenTarget Architecture](docs/opentarget-architecture.md)
+- [Distribution Bootstrap](docs/distribution-bootstrap.md)
