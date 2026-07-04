@@ -52,13 +52,15 @@ func run(args []string) error {
 func login(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	listen := fs.String("listen", "127.0.0.1:0", "local callback listen address")
 	selfCallback := fs.Bool("self-callback", false, "call the local callback URL from this process")
+	expectTimeout := fs.Bool("expect-timeout", false, "treat a missing callback before --wait as success")
 	wait := fs.Duration("wait", 10*time.Second, "maximum time to wait for callback")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return err
 	}
@@ -120,6 +122,10 @@ func login(args []string) error {
 		fmt.Println("login=ok")
 		return nil
 	case <-timer.C:
+		if *expectTimeout {
+			fmt.Println("login=timeout-ok")
+			return nil
+		}
 		return errors.New("callback timed out")
 	}
 }

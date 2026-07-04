@@ -342,6 +342,9 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
   without Hideout knowing the tool's business semantics;
 - a target can run a local callback listener, complete a callback, and store
   its own authentication state under the isolated profile identity home;
+- a host-owned redirect to `localhost:<guest-listener-port>` does not complete
+  the guest callback, proving host loopback and guest loopback remain separate
+  without a typed PortBridge owner;
 - profile identity home can be seeded through the generic
   `hideout profile home import` primitive without exposing source paths or
   credential contents in smoke output;
@@ -354,17 +357,17 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
 - HostFS cannot grant the Hideout control-plane store into the guest.
 
 This smoke is not an adapter for any real product. It is a product-mechanism
-proof: runtime supply, user-declared tool installation, callback flow,
-environment policy, profile-state persistence, network request, and
-control-plane store protection.
+proof: runtime supply, user-declared tool installation, guest-local callback
+flow, host redirect boundary, environment policy, profile-state persistence,
+network request, and control-plane store protection.
 
-The callback flow intentionally stays inside the guest test process. It does
-not prove that a host browser can redirect into a guest-local listener. A URL
-such as `https://httpbin.org/redirect-to?url=http://localhost:9000` is a useful
-manual thought experiment for the opposite boundary: after `host.open` launches
-the host browser, browser redirects to `localhost` target host loopback, not
-guest loopback. That behavior must not be treated as a supported login callback
-path until a typed owner and PortBridge-backed product path exists.
+The callback success path intentionally stays inside the guest test process. The
+smoke also runs a controlled host redirect that behaves like
+`https://httpbin.org/redirect-to?url=http://localhost:9000`, but without
+depending on the public internet: after a host browser or host HTTP client
+follows the redirect, `localhost` targets host loopback, not guest loopback. That
+negative check must keep failing until a typed owner and PortBridge-backed
+product path exists.
 
 Command:
 
@@ -560,9 +563,9 @@ Required checks:
 - `open http://127.0.0.1:<port>`, private ranges, CGNAT, benchmarking ranges,
   link-local, multicast, `.local`, `.localhost`, and known host gateway aliases
   fail closed before opener execution;
-- the gate does not claim redirect isolation after opener execution. External
-  URLs that later redirect to `localhost` are host browser behavior and must not
-  be used as guest callback proof;
+- redirect isolation after opener execution is covered by the generic dogfood
+  CLI smoke: external URLs that later redirect to `localhost` are host browser
+  behavior and must not be used as guest callback proof;
 - `host.open` does not create a PortBridge, expose DevTools, expose a
   remote-debugging socket, or create a guest-visible browser control channel;
   URL-open audit must record `portBridge=none`, `browserControl=disabled`, and

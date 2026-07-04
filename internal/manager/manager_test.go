@@ -1138,6 +1138,51 @@ func TestCoreSelectRunEnvironmentToolChangesCreateNewEnvironment(t *testing.T) {
 	}
 }
 
+func TestCoreSelectRunEnvironmentBackendConfigChangesCreateNewEnvironment(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	workspace := t.TempDir()
+	p := profile.Default("default")
+	currentSpec := RunEnvironmentSpec(p, "lima", workspace, workspace)
+	oldSpec := currentSpec
+	oldSpec.BackendConfigVersion = "lima-config/old"
+
+	envStore := environment.Store{Root: store.Root}
+	rec, err := envStore.Create(oldSpec)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	rec.InstanceName = "hideout-default-env-oldconfig"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	selected, err := New(store).SelectRunEnvironment(RunPlan{
+		Backend:        "lima",
+		Workspace:      workspace,
+		GuestWorkspace: workspace,
+		RuntimeProfile: p,
+	}, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatalf("SelectRunEnvironment: %v", err)
+	}
+	if !selected.Created || selected.Record.ID == rec.ID {
+		t.Fatalf("backend config change should create a new environment, got %+v old=%s", selected, rec.ID)
+	}
+	if selected.Record.BackendConfigVersion != currentSpec.BackendConfigVersion {
+		t.Fatalf("environment should persist backend config version: new=%q current=%q", selected.Record.BackendConfigVersion, currentSpec.BackendConfigVersion)
+	}
+
+	_, err = New(store).SelectRunEnvironment(RunPlan{
+		Backend:        "lima",
+		Workspace:      workspace,
+		GuestWorkspace: workspace,
+		RuntimeProfile: p,
+	}, RunEnvironmentOptions{ResumeID: rec.ID, Create: true})
+	if err == nil || !strings.Contains(err.Error(), "backend config no longer matches") {
+		t.Fatalf("resume old backend config should fail closed, got %v", err)
+	}
+}
+
 func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	p := profile.Default("default")

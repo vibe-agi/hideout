@@ -224,6 +224,9 @@ Therefore:
   PortBridge endpoint created by Hideout;
 - the mapped endpoint is trusted only because Hideout created it, owns its
   lifetime, audits it, and cleans it up, not because loopback is generally safe.
+- backends must disable or override default automatic guest-to-host port
+  forwarding. A guest-local listener becoming host-visible because of backend
+  defaults is an unowned PortBridge and violates this boundary.
 
 This distinction prevents product features from eroding the `host.open` browser
 privacy boundary one compatibility exception at a time.
@@ -257,6 +260,8 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - structured endpoint model: direction, listen scope, target scope, owner,
   lifetime, and endpoint category are data, not opaque strings;
 - no raw host port exposure without an owning typed capability;
+- backend-default port forwarding must be disabled or explicitly ignored before
+  product code runs;
 - no bridge to broker tokens, browser debugging endpoints, VM control sockets,
   or Hideout control-plane endpoints unless an owning typed capability
   explicitly models that authority;

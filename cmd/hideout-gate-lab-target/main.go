@@ -18,9 +18,10 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "echo", "target mode: echo, http, devtools, auth-api")
+	mode := flag.String("mode", "echo", "target mode: echo, http, redirect, devtools, auth-api")
 	listen := flag.String("listen", "127.0.0.1:0", "listen address")
 	path := flag.String("path", "/preview", "HTTP path")
+	target := flag.String("target", "", "redirect target URL")
 	status := flag.Int("status", http.StatusNoContent, "HTTP status")
 	browser := flag.String("browser", "FakeChrome/1.0", "DevTools browser name")
 	flag.Parse()
@@ -40,6 +41,8 @@ func main() {
 		go func() { errc <- serveEcho(ctx, ln) }()
 	case "http":
 		go func() { errc <- serveHTTP(ctx, ln, httpHandler(*path, *status)) }()
+	case "redirect":
+		go func() { errc <- serveHTTP(ctx, ln, redirectHandler(*path, *target)) }()
 	case "devtools":
 		go func() { errc <- serveHTTP(ctx, ln, devtoolsHandler(ln.Addr().String(), *browser)) }()
 	case "auth-api":
@@ -109,6 +112,20 @@ func httpHandler(path string, status int) http.Handler {
 		}
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte("hideout-lab-target\n"))
+	})
+}
+
+func redirectHandler(path, target string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != path {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.TrimSpace(target) == "" {
+			http.Error(w, "missing redirect target", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, target, http.StatusFound)
 	})
 }
 

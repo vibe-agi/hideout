@@ -65,6 +65,7 @@ type limaConfig struct {
 	User         user              `yaml:"user,omitempty"`
 	Containerd   containerd        `yaml:"containerd"`
 	Mounts       []mount           `yaml:"mounts"`
+	PortForwards []portForward     `yaml:"portForwards"`
 	Provision    []provision       `yaml:"provision,omitempty"`
 	Message      string            `yaml:"message,omitempty"`
 	Env          map[string]string `yaml:"env,omitempty"`
@@ -92,6 +93,14 @@ type mount struct {
 type provision struct {
 	Mode   string `yaml:"mode"`
 	Script string `yaml:"script"`
+}
+
+type portForward struct {
+	GuestIP           string `yaml:"guestIP,omitempty"`
+	GuestIPMustBeZero *bool  `yaml:"guestIPMustBeZero,omitempty"`
+	Proto             string `yaml:"proto,omitempty"`
+	GuestPortRange    [2]int `yaml:"guestPortRange,omitempty"`
+	Ignore            bool   `yaml:"ignore,omitempty"`
 }
 
 type ToolPreset struct {
@@ -380,6 +389,21 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 		Mounts: append([]mount{
 			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
 		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.EnvironmentID != "")...)...),
+		PortForwards: []portForward{
+			{
+				GuestIP:           "0.0.0.0",
+				GuestIPMustBeZero: boolPtr(false),
+				Proto:             "any",
+				GuestPortRange:    [2]int{1, 65535},
+				Ignore:            true,
+			},
+			{
+				GuestIP:        "127.0.0.1",
+				Proto:          "any",
+				GuestPortRange: [2]int{1, 65535},
+				Ignore:         true,
+			},
+		},
 		Provision: append([]provision{
 			{
 				Mode: "system",
@@ -407,6 +431,10 @@ fi
 		}, toolProvisionBlocks(spec.Profile.Tools)...),
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func guestUserHome(user string) string {

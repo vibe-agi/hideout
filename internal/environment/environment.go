@@ -23,37 +23,39 @@ type Store struct {
 }
 
 type Spec struct {
-	Profile        string
-	Backend        string
-	Workspace      string
-	GuestWorkspace string
-	ProfileID      string
-	IdentityID     string
-	User           string
-	Hostname       string
-	ToolsHash      string
-	InstanceName   string
+	Profile              string
+	Backend              string
+	BackendConfigVersion string
+	Workspace            string
+	GuestWorkspace       string
+	ProfileID            string
+	IdentityID           string
+	User                 string
+	Hostname             string
+	ToolsHash            string
+	InstanceName         string
 }
 
 type Record struct {
-	Version        string    `json:"version"`
-	ID             string    `json:"id"`
-	Profile        string    `json:"profile"`
-	Backend        string    `json:"backend"`
-	Workspace      string    `json:"workspace"`
-	GuestWorkspace string    `json:"guestWorkspace"`
-	ProfileID      string    `json:"profileId,omitempty"`
-	IdentityID     string    `json:"identityId,omitempty"`
-	User           string    `json:"user,omitempty"`
-	Hostname       string    `json:"hostname,omitempty"`
-	ToolsHash      string    `json:"toolsHash,omitempty"`
-	InstanceName   string    `json:"instanceName,omitempty"`
-	Status         string    `json:"status"`
-	LastSessionID  string    `json:"lastSessionId,omitempty"`
-	LastCommand    string    `json:"lastCommand,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
-	LastStartedAt  time.Time `json:"lastStartedAt,omitempty"`
-	LastEndedAt    time.Time `json:"lastEndedAt,omitempty"`
+	Version              string    `json:"version"`
+	ID                   string    `json:"id"`
+	Profile              string    `json:"profile"`
+	Backend              string    `json:"backend"`
+	BackendConfigVersion string    `json:"backendConfigVersion,omitempty"`
+	Workspace            string    `json:"workspace"`
+	GuestWorkspace       string    `json:"guestWorkspace"`
+	ProfileID            string    `json:"profileId,omitempty"`
+	IdentityID           string    `json:"identityId,omitempty"`
+	User                 string    `json:"user,omitempty"`
+	Hostname             string    `json:"hostname,omitempty"`
+	ToolsHash            string    `json:"toolsHash,omitempty"`
+	InstanceName         string    `json:"instanceName,omitempty"`
+	Status               string    `json:"status"`
+	LastSessionID        string    `json:"lastSessionId,omitempty"`
+	LastCommand          string    `json:"lastCommand,omitempty"`
+	CreatedAt            time.Time `json:"createdAt"`
+	LastStartedAt        time.Time `json:"lastStartedAt,omitempty"`
+	LastEndedAt          time.Time `json:"lastEndedAt,omitempty"`
 }
 
 func (s Store) Create(spec Spec) (Record, error) {
@@ -63,20 +65,21 @@ func (s Store) Create(spec Spec) (Record, error) {
 	}
 	now := time.Now().UTC()
 	rec := Record{
-		Version:        version,
-		ID:             id,
-		Profile:        spec.Profile,
-		Backend:        spec.Backend,
-		Workspace:      filepath.Clean(spec.Workspace),
-		GuestWorkspace: filepath.Clean(spec.GuestWorkspace),
-		ProfileID:      spec.ProfileID,
-		IdentityID:     spec.IdentityID,
-		User:           spec.User,
-		Hostname:       spec.Hostname,
-		ToolsHash:      spec.ToolsHash,
-		InstanceName:   spec.InstanceName,
-		Status:         "ready",
-		CreatedAt:      now,
+		Version:              version,
+		ID:                   id,
+		Profile:              spec.Profile,
+		Backend:              spec.Backend,
+		BackendConfigVersion: spec.BackendConfigVersion,
+		Workspace:            filepath.Clean(spec.Workspace),
+		GuestWorkspace:       filepath.Clean(spec.GuestWorkspace),
+		ProfileID:            spec.ProfileID,
+		IdentityID:           spec.IdentityID,
+		User:                 spec.User,
+		Hostname:             spec.Hostname,
+		ToolsHash:            spec.ToolsHash,
+		InstanceName:         spec.InstanceName,
+		Status:               "ready",
+		CreatedAt:            now,
 	}
 	if err := s.Save(rec); err != nil {
 		return Record{}, err
@@ -158,6 +161,7 @@ func (s Store) Latest(spec Spec) (Record, bool, error) {
 	for _, rec := range records {
 		if rec.Profile == spec.Profile &&
 			rec.Backend == spec.Backend &&
+			rec.BackendConfigVersion == spec.BackendConfigVersion &&
 			filepath.Clean(rec.Workspace) == filepath.Clean(spec.Workspace) &&
 			filepath.Clean(rec.GuestWorkspace) == filepath.Clean(spec.GuestWorkspace) &&
 			rec.ProfileID == spec.ProfileID &&

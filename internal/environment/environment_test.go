@@ -10,15 +10,16 @@ import (
 func TestStoreCreateLatestAndResolve(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	spec := Spec{
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      filepath.Join(t.TempDir(), "workspace"),
-		GuestWorkspace: "/workspace",
-		ProfileID:      "prf_1111",
-		IdentityID:     "id_2222",
-		User:           "developer",
-		Hostname:       "devbox",
-		ToolsHash:      "tools_a",
+		Profile:              "default",
+		Backend:              "lima",
+		BackendConfigVersion: "lima-config/test-a",
+		Workspace:            filepath.Join(t.TempDir(), "workspace"),
+		GuestWorkspace:       "/workspace",
+		ProfileID:            "prf_1111",
+		IdentityID:           "id_2222",
+		User:                 "developer",
+		Hostname:             "devbox",
+		ToolsHash:            "tools_a",
 	}
 	rec, err := store.Create(spec)
 	if err != nil {
@@ -52,6 +53,11 @@ func TestStoreCreateLatestAndResolve(t *testing.T) {
 	spec.ToolsHash = "tools_b"
 	if _, ok, err := store.Latest(spec); err != nil || ok {
 		t.Fatalf("Latest should not match changed tools: ok=%t err=%v", ok, err)
+	}
+	spec.ToolsHash = "tools_a"
+	spec.BackendConfigVersion = "lima-config/test-b"
+	if _, ok, err := store.Latest(spec); err != nil || ok {
+		t.Fatalf("Latest should not match changed backend config: ok=%t err=%v", ok, err)
 	}
 }
 

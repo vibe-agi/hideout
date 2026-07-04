@@ -1202,7 +1202,11 @@ but every run still gets fresh session-scoped mounts for shims, broker endpoint
 files, network files, and temporary authority. Persistent identity survives
 through profile identity-root mounts, not through hidden access to the real host
 home. Cleanup must delete session authority every run. Environment cleanup must
-delete the reusable Lima instance when the environment is removed.
+delete the reusable Lima instance when the environment is removed. Backend
+configuration and security-boundary changes are part of the reusable environment
+identity; a generated Lima YAML policy change, such as disabling backend-default
+port forwarding, must create or select a new environment instead of reusing an
+older VM with stale backend behavior.
 
 Ephemeral Lima identity must use session-fork metadata. Backend instance names,
 guest hostname material, machine-id material, browser profile paths, and app
@@ -2073,7 +2077,9 @@ the runtime supply primitive and command-existence check; it must not encode a
 specific product workflow in the tool declaration. Tool policy is part of the
 reusable environment identity: changing presets or npm globals creates or
 selects a tool-matched environment instead of reusing an older guest with stale
-commands.
+commands. Backend configuration version is also part of the environment identity
+so backend security-policy changes do not reuse older VMs with stale generated
+YAML.
 
 Persistent profile home seeding:
 
@@ -2903,6 +2909,9 @@ Endpoint semantics:
 - Guest-local services are not reachable from a host browser unless an explicit
   `host-to-guest` bridge or URL rewrite maps that service to a host-visible
   endpoint.
+- Backend-default automatic port forwarding is disabled or ignored. If a backend
+  exposes a guest-local listener to the host without an owning Hideout resource,
+  that exposure is treated as a policy violation, not as a convenience feature.
 - Host-local services are not reachable from the guest unless an explicit
   `guest-to-host` bridge maps a specific host endpoint into the guest boundary.
 
@@ -2926,6 +2935,7 @@ human text or trusting script output.
 PortBridge policy:
 
 - endpoint reachability is not authorization;
+- backend-default port forwarding must not create product reachability;
 - wildcard listen addresses are denied unless a target-specific design
   classifies and audits the exposure;
 - wildcard target addresses are denied;

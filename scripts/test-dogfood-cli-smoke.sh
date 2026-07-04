@@ -158,16 +158,52 @@ start_auth_api() {
   exit 1
 }
 
+free_host_port() {
+  python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind(("127.0.0.1", 0))
+    print(s.getsockname()[1])
+PY
+}
+
+start_redirect_server() {
+  local target="$1"
+  "$lab_target" --mode redirect --path /login --target "$target" --listen 127.0.0.1:0 >"$tmp/redirect.addr" 2>"$tmp/redirect.log" &
+  redirect_pid=$!
+  for _ in $(seq 1 100); do
+    if [ -s "$tmp/redirect.addr" ]; then
+      redirect_addr="$(head -n 1 "$tmp/redirect.addr")"
+      return
+    fi
+    if ! kill -0 "$redirect_pid" 2>/dev/null; then
+      echo "dogfood-cli: redirect server exited early" >&2
+      cat "$tmp/redirect.log" >&2 || true
+      exit 1
+    fi
+    sleep 0.1
+  done
+  echo "dogfood-cli: redirect server did not publish an address" >&2
+  exit 1
+}
+
 require_command go
 require_command limactl
 require_command python3
+require_command curl
 
 tmp="$(mktemp -d "/tmp/ho-dog.XXXXXX")"
 auth_api_pid=""
+redirect_pid=""
 cleanup() {
   if [ -n "${auth_api_pid:-}" ]; then
     kill "$auth_api_pid" 2>/dev/null || true
     wait "$auth_api_pid" 2>/dev/null || true
+  fi
+  if [ -n "${redirect_pid:-}" ]; then
+    kill "$redirect_pid" 2>/dev/null || true
+    wait "$redirect_pid" 2>/dev/null || true
   fi
   if [ -x "${hideout:-}" ]; then
     HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
@@ -287,6 +323,47 @@ if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$li
 fi
 cat "$tmp/login.out"
 grep -q 'login=ok' "$tmp/login.out"
+
+echo "dogfood-cli: verifying host redirect to localhost does not reach guest callback"
+callback_port="$(free_host_port)"
+callback_url="http://127.0.0.1:$callback_port/callback?state=gate-state&code=gate-code"
+start_redirect_server "$callback_url"
+redirect_url="http://$redirect_addr/login"
+with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  "$hideout" run --backend lima --workspace "$workspace" -- ./hideout-test-cli login --listen "127.0.0.1:$callback_port" --wait 5s --expect-timeout >"$tmp/host-redirect-login.out" 2>"$tmp/host-redirect-login.err" &
+host_redirect_login_pid=$!
+for _ in $(seq 1 120); do
+  if grep -Fq "callback=$callback_url" "$tmp/host-redirect-login.out" 2>/dev/null; then
+    break
+  fi
+  if ! kill -0 "$host_redirect_login_pid" 2>/dev/null; then
+    echo "dogfood-cli: host redirect login exited before publishing callback" >&2
+    cat "$tmp/host-redirect-login.out" >&2 || true
+    cat "$tmp/host-redirect-login.err" >&2 || true
+    exit 1
+  fi
+  sleep 0.25
+done
+if ! grep -Fq "callback=$callback_url" "$tmp/host-redirect-login.out"; then
+  echo "dogfood-cli: host redirect login did not publish expected callback" >&2
+  cat "$tmp/host-redirect-login.out" >&2 || true
+  cat "$tmp/host-redirect-login.err" >&2 || true
+  exit 1
+fi
+if curl -sS -L --max-time 3 "$redirect_url" >"$tmp/host-redirect-curl.out" 2>"$tmp/host-redirect-curl.err"; then
+  echo "dogfood-cli: host redirect unexpectedly reached a host localhost listener" >&2
+  cat "$tmp/host-redirect-curl.out" >&2
+  exit 1
+fi
+if ! wait "$host_redirect_login_pid"; then
+  echo "dogfood-cli: host redirect boundary login failed" >&2
+  cat "$tmp/host-redirect-login.out" >&2
+  cat "$tmp/host-redirect-login.err" >&2
+  cat "$tmp/host-redirect-curl.err" >&2 || true
+  exit 1
+fi
+cat "$tmp/host-redirect-login.out"
+grep -q 'login=timeout-ok' "$tmp/host-redirect-login.out"
 
 echo "dogfood-cli: verifying profile identity state persists across runs"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \

@@ -43,6 +43,23 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Base, []string{"template:_images/ubuntu-lts"}) {
 		t.Fatalf("lima config should inherit image metadata without default mounts: %+v", cfg.Base)
 	}
+	if !reflect.DeepEqual(cfg.PortForwards, []portForward{
+		{
+			GuestIP:           "0.0.0.0",
+			GuestIPMustBeZero: boolPtr(false),
+			Proto:             "any",
+			GuestPortRange:    [2]int{1, 65535},
+			Ignore:            true,
+		},
+		{
+			GuestIP:        "127.0.0.1",
+			Proto:          "any",
+			GuestPortRange: [2]int{1, 65535},
+			Ignore:         true,
+		},
+	}) {
+		t.Fatalf("lima config must disable automatic guest loopback forwarding: %+v", cfg.PortForwards)
+	}
 	for _, forbidden := range []string{"template://", "template:ubuntu-lts", "template:_default/mounts"} {
 		if bytes.Contains(data, []byte(forbidden)) {
 			t.Fatalf("lima config should not include %s:\n%s", forbidden, data)

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestTestCLILoginStatusAndRequest(t *testing.T) {
@@ -45,6 +46,18 @@ func TestTestCLIRequestRequiresLogin(t *testing.T) {
 
 	if err := run([]string{"request", "--url", server.URL}); err == nil {
 		t.Fatal("request should fail before login")
+	}
+}
+
+func TestTestCLILoginExpectedTimeout(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	if err := run([]string{"login", "--wait", (10 * time.Millisecond).String(), "--expect-timeout"}); err != nil {
+		t.Fatalf("expected timeout login should succeed: %v", err)
+	}
+	if err := run([]string{"status"}); err == nil {
+		t.Fatal("expected timeout login must not create auth state")
 	}
 }
 

@@ -16,6 +16,8 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
+const limaBackendConfigVersion = "lima-config/v3/no-default-port-forwards"
+
 type RunEnvironmentOptions struct {
 	New            bool
 	ResumeID       string
@@ -90,18 +92,19 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 	}
 	if !opts.Create {
 		rec := environment.Record{
-			ID:             "env_new",
-			Profile:        spec.Profile,
-			Backend:        spec.Backend,
-			Workspace:      spec.Workspace,
-			GuestWorkspace: spec.GuestWorkspace,
-			ProfileID:      spec.ProfileID,
-			IdentityID:     spec.IdentityID,
-			User:           spec.User,
-			Hostname:       spec.Hostname,
-			ToolsHash:      spec.ToolsHash,
-			InstanceName:   lima.InstanceNameForEnvironment(p.Name, "env_new"),
-			Status:         "new",
+			ID:                   "env_new",
+			Profile:              spec.Profile,
+			Backend:              spec.Backend,
+			BackendConfigVersion: spec.BackendConfigVersion,
+			Workspace:            spec.Workspace,
+			GuestWorkspace:       spec.GuestWorkspace,
+			ProfileID:            spec.ProfileID,
+			IdentityID:           spec.IdentityID,
+			User:                 spec.User,
+			Hostname:             spec.Hostname,
+			ToolsHash:            spec.ToolsHash,
+			InstanceName:         lima.InstanceNameForEnvironment(p.Name, "env_new"),
+			Status:               "new",
 		}
 		return selectedRunEnvironment(store, rec, true, false, true), nil
 	}
@@ -167,16 +170,24 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 
 func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {
 	return environment.Spec{
-		Profile:        p.Name,
-		Backend:        backendName,
-		Workspace:      workspace,
-		GuestWorkspace: guestWorkspace,
-		ProfileID:      p.Metadata["profileId"],
-		IdentityID:     p.Metadata["identityId"],
-		User:           p.Identity.User,
-		Hostname:       p.Identity.Hostname,
-		ToolsHash:      profileToolsHash(p.Tools),
+		Profile:              p.Name,
+		Backend:              backendName,
+		BackendConfigVersion: backendConfigVersion(backendName),
+		Workspace:            workspace,
+		GuestWorkspace:       guestWorkspace,
+		ProfileID:            p.Metadata["profileId"],
+		IdentityID:           p.Metadata["identityId"],
+		User:                 p.Identity.User,
+		Hostname:             p.Identity.Hostname,
+		ToolsHash:            profileToolsHash(p.Tools),
 	}
+}
+
+func backendConfigVersion(backendName string) string {
+	if backendName == "lima" {
+		return limaBackendConfigVersion
+	}
+	return ""
 }
 
 func ValidateEnvironmentRecord(rec environment.Record, spec environment.Spec) error {
@@ -185,6 +196,9 @@ func ValidateEnvironmentRecord(rec environment.Record, spec environment.Spec) er
 	}
 	if rec.Backend != spec.Backend {
 		return fmt.Errorf("environment %s uses backend %q, not %q", rec.ID, rec.Backend, spec.Backend)
+	}
+	if rec.BackendConfigVersion != spec.BackendConfigVersion {
+		return fmt.Errorf("environment %s backend config no longer matches; use --new", rec.ID)
 	}
 	if filepath.Clean(rec.Workspace) != filepath.Clean(spec.Workspace) ||
 		filepath.Clean(rec.GuestWorkspace) != filepath.Clean(spec.GuestWorkspace) {
