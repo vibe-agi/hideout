@@ -256,6 +256,17 @@ test -x "$default_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -f "$default_installed_store/install-state.json"
 test -f "$default_installed_store/profiles/default/profile.json"
 grep -q 'backend: lima' "$tmp/package-default-install.out"
+if command -v limactl >/dev/null 2>&1; then
+  HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --workspace "$workspace" >"$tmp/package-default-doctor.out"
+  grep -q 'backend: ok lima available' "$tmp/package-default-doctor.out"
+else
+  if HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --workspace "$workspace" >"$tmp/package-default-doctor.out" 2>"$tmp/package-default-doctor.err"; then
+    echo "package-smoke: default doctor succeeded without limactl" >&2
+    cat "$tmp/package-default-doctor.out" >&2
+    exit 1
+  fi
+  grep -q 'backend: error lima unavailable: limactl is required for lima backend' "$tmp/package-default-doctor.out"
+fi
 HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-shim: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
