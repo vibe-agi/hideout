@@ -8,10 +8,13 @@ Policy and Config Supply Chain defines how Hideout scripts, presets, templates,
 and configuration packages are authored, shared, installed, updated, verified,
 and overridden.
 
-This document follows [architecture-principles.md](architecture-principles.md)
-and [manager-control-plane.md](manager-control-plane.md). The bottom-layer
-runtime contract is defined in
-[ecosystem-foundation-design.md](ecosystem-foundation-design.md).
+This document follows [architecture-principles.md](architecture-principles.md),
+[manager-control-plane.md](manager-control-plane.md), and the bottom-layer
+ecosystem runtime contract in
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md). It defines
+authoring, sharing, installation, update, trust, override, and export behavior.
+It does not redefine the ecosystem resource model, effective policy composition
+order, Hideoutfile schema, or phase status.
 
 The goal is to make Hideout community-extensible without turning local privacy
 policy into unreviewed scattered files.
@@ -298,42 +301,12 @@ Hideoutfile is the project-level shareable manifest.
 It should be safe to commit to Git. It is a project suggestion and constraint
 file, not a profile dump.
 
-Example:
-
-```json
-{
-  "apiVersion": "hideout.project/v1",
-  "kind": "ProjectManifest",
-  "requirements": {
-    "hideout": ">=0.1.0 <0.2.0",
-    "capabilities": [
-      "hostfs.v1",
-      "opentarget.host_open"
-    ]
-  },
-  "bundles": [
-    {
-      "source": "github:vibe-agi/hideout-bundles/web-agent-safe@1.0.0",
-      "name": "web-agent-safe"
-    }
-  ],
-  "projectPolicy": {
-    "network": {
-      "mode": "direct",
-      "warning": "network identity visible"
-    },
-    "hostfsTemplates": [
-      {
-        "bundle": "web-agent-safe",
-        "id": "project-docs",
-        "inputs": {
-          "path": "${workspace}/docs/*.md"
-        }
-      }
-    ]
-  }
-}
-```
+The canonical schema, authority limits, and example manifest are owned by
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#hideoutfile-contract).
+This document only adds supply-chain rules: sources must be pinned, local
+absolute paths must stay in local overrides unless explicitly marked as
+examples, and project discovery must become a reviewable plan before any local
+policy changes.
 
 The canonical machine-readable format should be JSON with schema validation.
 Friendly formats such as TOML or YAML may be added later, but they must compile
@@ -364,27 +337,15 @@ overrides belong in local Hideout install state, not the project lock.
 
 ## Local Layout
 
-Suggested store:
+The authoritative bundle store and local install-state layout are part of the
+ecosystem runtime contract in
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#bundle-store)
+and the distribution contract in
+[distribution-bootstrap.md](distribution-bootstrap.md). Supply-chain logic only
+requires immutable installed bundle versions, local install state outside the
+project, and commit-safe project lock files.
 
-```text
-~/.hideout/
-  bundles/
-    <publisher>/
-      <name>/
-        <version>/
-          bundle.json
-          policy/
-          recipes/
-          schemas/
-          README.md
-  profiles/
-    default/
-      profile.json
-      overrides.json
-  package-lock.json
-```
-
-Project layout:
+Project repositories may contain:
 
 ```text
 project/
@@ -591,17 +552,11 @@ InitTask plan/apply.
 
 Local overrides are first-class.
 
-Composition:
-
-```text
-Hideout defaults
-  + bundle defaults
-  + project Hideoutfile
-  + profile local overrides
-  + run flags
-  - deny rules
-  = effective policy
-```
+The effective policy composition order is owned by the Policy Compiler contract
+in
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#policy-compiler).
+Supply-chain code must present local overrides in that order; it must not
+invent a second composition rule.
 
 Overrides should be visible in `explain`, TUI, WebUI, and `profile diff`.
 
@@ -635,33 +590,21 @@ Community contribution requirements:
 This makes bundles reviewable in pull requests and forkable like dotfiles or
 Brewfile-based setup repos.
 
-## Phase Plan
+## Delivery Notes
 
-### Phase 1 Design
+Current product status is owned by [STATUS.md](STATUS.md). Ecosystem delivery
+sequence is owned by
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#phase-plan).
+This document contributes the supply-chain checklist for that sequence:
 
-- document bundle model;
-- keep scripts constrained;
-- local profile remains canonical runtime state.
-- keep install separate from enable;
-- route bundle and project state through Manager resources.
-
-### Next Product Increment
-
-- `hideout bundle install/list/verify`;
-- local directory and Git source;
-- bundle schema;
-- lock file;
-- Manager resources;
-- TUI bundle list and update warnings.
-
-### Later
-
-- registry;
-- signatures;
-- publisher trust;
-- marketplace;
-- team policy server;
-- automatic compatibility test matrix.
+- bundle schema, script size, entrypoint, permission, compatibility, checksum,
+  forbidden-file, and secret-looking-value validation;
+- local directory and Git source resolution;
+- install/update/remove as Manager plan/apply operations;
+- explicit install-vs-enable separation;
+- export redaction and rejection reports;
+- TUI/WebUI bundle list, update, trust, and diff surfaces;
+- future signatures, publisher trust, registry, and compatibility farm design.
 
 ## Open Questions
 

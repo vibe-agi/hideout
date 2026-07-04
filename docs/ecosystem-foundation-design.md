@@ -8,12 +8,16 @@ This document defines the bottom-layer architecture needed before Hideout grows
 a public ecosystem of bundles, project manifests, presets, scripts, and
 community recipes.
 
-It follows:
+It follows the constitutional and runtime contracts:
 
 - [architecture-principles.md](architecture-principles.md)
 - [init-task-architecture.md](init-task-architecture.md)
 - [manager-control-plane.md](manager-control-plane.md)
-- [policy-config-supply-chain.md](policy-config-supply-chain.md)
+
+[policy-config-supply-chain.md](policy-config-supply-chain.md) builds on this
+document for authoring, sharing, installing, updating, and exporting those
+artifacts. It must not redefine the ecosystem resource model, effective policy
+composition order, or project manifest authority model.
 
 The purpose is to make ecosystem support a stable runtime contract, not a later
 UI or marketplace feature. Bundles, Hideoutfile, TUI, WebUI, and future registry
