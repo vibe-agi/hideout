@@ -741,6 +741,11 @@ Required checks:
   command exits;
 - Gate 2 runs real Lima `--resume`, `--new`, and `--resume <id> --rm` commands
   and verifies `hideout list` reflects the expected environment records;
+- Gate 2 runs real Lima `hideout stop <id>` and verifies the VM is stopped while
+  the environment record remains resumable;
+- Gate 2 covers `hideout stop --idle <duration>` and
+  `hideout clean --stopped`/`hideout clean --idle <duration>` with temporary
+  environments so idle memory release and destructive cleanup are not confused;
 - successful reusable Lima runs print a resume hint on stderr without changing
   target stdout, while `--rm` runs do not print a reusable resume hint;
 - every run, including resumed runs, gets a fresh session ID, broker token,

@@ -669,6 +669,48 @@ func TestProfileHomeImportRejectsSymlinkDestinationParents(t *testing.T) {
 	}
 }
 
+func TestProfileHomeImportForceReplacesSymlinkDestinationWithoutFollowing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	sourceFile := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(sourceFile, []byte(`{"token":"new"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	escapeDir := t.TempDir()
+	escapeFile := filepath.Join(escapeDir, "state.json")
+	if err := os.WriteFile(escapeFile, []byte(`{"token":"old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profileHome := filepath.Join(store.ProfileDir("default"), "home")
+	if err := os.MkdirAll(filepath.Join(profileHome, ".tool"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(escapeFile, filepath.Join(profileHome, ".tool", "state.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "home", "default", "import", "--from", sourceFile, "--to", ".tool/state.json", "--force"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("force import over symlink exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if got, err := os.ReadFile(escapeFile); err != nil || string(got) != `{"token":"old"}` {
+		t.Fatalf("force import followed destination symlink, content=%q err=%v", got, err)
+	}
+	dest := filepath.Join(profileHome, ".tool", "state.json")
+	info, err := os.Lstat(dest)
+	if err != nil {
+		t.Fatalf("destination missing: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("destination should be a regular imported file, got symlink")
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != `{"token":"new"}` {
+		t.Fatalf("destination content mismatch content=%q err=%v", got, err)
+	}
+}
+
 func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -3179,7 +3221,31 @@ exit 0
 
 	out.Reset()
 	errOut.Reset()
-	code = Main([]string{"clean", records[0].ID}, &out, &errOut)
+	code = Main([]string{"stop", records[0].ID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("stop exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "stopped: "+records[0].ID) {
+		t.Fatalf("stop output missing stopped environment:\n%s", out.String())
+	}
+	stopped, err := envStore.Load(records[0].ID)
+	if err != nil {
+		t.Fatalf("load stopped environment: %v", err)
+	}
+	if stopped.Status != "stopped" {
+		t.Fatalf("stop should mark environment stopped, got %+v", stopped)
+	}
+	logData, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake limactl log after stop: %v", err)
+	}
+	if !strings.Contains(string(logData), "stop "+starts[0]) {
+		t.Fatalf("stop should stop reusable lima instance:\n%s", logData)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"clean", "--stopped", records[0].ID}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("clean exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -3199,6 +3265,79 @@ exit 0
 	}
 	if len(records) != 0 {
 		t.Fatalf("clean should remove environment records, got %+v", records)
+	}
+}
+
+func TestStopAndCleanIdleFilters(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := environment.Store{Root: filepath.Join(home, ".hideout")}
+	now := time.Now().UTC()
+	old, err := store.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-old",
+	})
+	if err != nil {
+		t.Fatalf("Create old: %v", err)
+	}
+	old.LastEndedAt = now.Add(-2 * time.Hour)
+	if err := store.Save(old); err != nil {
+		t.Fatalf("Save old: %v", err)
+	}
+	recent, err := store.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-recent",
+	})
+	if err != nil {
+		t.Fatalf("Create recent: %v", err)
+	}
+	recent.LastEndedAt = now.Add(-5 * time.Minute)
+	if err := store.Save(recent); err != nil {
+		t.Fatalf("Save recent: %v", err)
+	}
+	running, err := store.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-running",
+	})
+	if err != nil {
+		t.Fatalf("Create running: %v", err)
+	}
+	running.Status = "running"
+	running.LastEndedAt = now.Add(-3 * time.Hour)
+	if err := store.Save(running); err != nil {
+		t.Fatalf("Save running: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"stop", "--dry-run", "--idle", "1h"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("stop --idle exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "would stop: "+old.ID) ||
+		strings.Contains(out.String(), recent.ID) ||
+		strings.Contains(out.String(), running.ID) {
+		t.Fatalf("stop --idle selected wrong environments:\n%s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"clean", "--dry-run", "--idle", "1h"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("clean --idle exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "would remove: "+old.ID) ||
+		strings.Contains(out.String(), recent.ID) ||
+		strings.Contains(out.String(), running.ID) {
+		t.Fatalf("clean --idle selected wrong environments:\n%s", out.String())
 	}
 }
 

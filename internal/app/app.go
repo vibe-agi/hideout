@@ -76,6 +76,8 @@ func (a app) run(args []string) error {
 		return a.profile(args[1:])
 	case "list":
 		return a.listEnvironments(args[1:])
+	case "stop":
+		return a.stopEnvironments(args[1:])
 	case "clean":
 		return a.cleanEnvironments(args[1:])
 	case "cleanup":
@@ -120,7 +122,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> remove <rule-id>")
 	fmt.Fprintln(a.stdout, "  hideout list")
-	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [environment-id...]")
+	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [environment-id...]")
+	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
@@ -2996,11 +2999,16 @@ func (a app) listEnvironments(args []string) error {
 	return nil
 }
 
-func (a app) cleanEnvironments(args []string) error {
-	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
+func (a app) stopEnvironments(args []string) error {
+	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	dryRun := fs.Bool("dry-run", false, "show environments that would be removed")
+	dryRun := fs.Bool("dry-run", false, "show environments that would be stopped")
+	idleValue := fs.String("idle", "", "stop environments whose last run ended at least this long ago")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	idle, idleSet, err := parseIdleDuration(*idleValue)
+	if err != nil {
 		return err
 	}
 	store, err := profile.DefaultStore()
@@ -3012,6 +3020,89 @@ func (a app) cleanEnvironments(args []string) error {
 	if err != nil {
 		return err
 	}
+	records = filterEnvironmentRecords(records, environmentRecordFilter{
+		Idle:    idle,
+		IdleSet: idleSet,
+		Now:     time.Now().UTC(),
+	})
+	stopped := 0
+	skipped := 0
+	mode := "stopped"
+	if *dryRun {
+		mode = "would stop"
+	}
+	for _, rec := range records {
+		if rec.Status == "stopped" {
+			skipped++
+			fmt.Fprintf(a.stdout, "skipped: %s reason=already-stopped instance=%s workspace=%s\n", rec.ID, rec.InstanceName, rec.Workspace)
+			continue
+		}
+		if rec.Backend != "lima" || rec.InstanceName == "" {
+			skipped++
+			fmt.Fprintf(a.stdout, "skipped: %s reason=no-lima-instance backend=%s workspace=%s\n", rec.ID, rec.Backend, rec.Workspace)
+			continue
+		}
+		if *dryRun {
+			stopped++
+			fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
+			continue
+		}
+		lock, err := envStore.Lock(rec.ID)
+		if err != nil {
+			return err
+		}
+		stopErr := (lima.Backend{Stdout: io.Discard, Stderr: a.stderr}).StopInstance(context.Background(), rec.InstanceName)
+		if stopErr != nil {
+			_ = lock.Unlock()
+			return stopErr
+		}
+		rec.Status = "stopped"
+		if err := envStore.Save(rec); err != nil {
+			_ = lock.Unlock()
+			return err
+		}
+		if err := lock.Unlock(); err != nil {
+			return err
+		}
+		stopped++
+		fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
+	}
+	if *dryRun {
+		fmt.Fprintf(a.stdout, "stop: environments=%d would stop=%d skipped=%d\n", len(records), stopped, skipped)
+		return nil
+	}
+	fmt.Fprintf(a.stdout, "stop: environments=%d stopped=%d skipped=%d\n", len(records), stopped, skipped)
+	return nil
+}
+
+func (a app) cleanEnvironments(args []string) error {
+	fs := flag.NewFlagSet("clean", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dryRun := fs.Bool("dry-run", false, "show environments that would be removed")
+	stoppedOnly := fs.Bool("stopped", false, "remove only stopped environments")
+	idleValue := fs.String("idle", "", "remove environments whose last run ended at least this long ago")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	idle, idleSet, err := parseIdleDuration(*idleValue)
+	if err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	envStore := environment.Store{Root: store.Root}
+	records, err := cleanEnvironmentRecords(envStore, fs.Args())
+	if err != nil {
+		return err
+	}
+	records = filterEnvironmentRecords(records, environmentRecordFilter{
+		StoppedOnly: *stoppedOnly,
+		Idle:        idle,
+		IdleSet:     idleSet,
+		Now:         time.Now().UTC(),
+	})
 	mode := "removed"
 	if *dryRun {
 		mode = "would remove"
@@ -3039,6 +3130,55 @@ func (a app) cleanEnvironments(args []string) error {
 	}
 	fmt.Fprintf(a.stdout, "clean: environments=%d removed=%d\n", len(records), removed)
 	return nil
+}
+
+type environmentRecordFilter struct {
+	StoppedOnly bool
+	Idle        time.Duration
+	IdleSet     bool
+	Now         time.Time
+}
+
+func filterEnvironmentRecords(records []environment.Record, filter environmentRecordFilter) []environment.Record {
+	if !filter.StoppedOnly && !filter.IdleSet {
+		return records
+	}
+	out := records[:0]
+	for _, rec := range records {
+		if filter.StoppedOnly && rec.Status != "stopped" {
+			continue
+		}
+		if filter.IdleSet && !environmentRecordIdle(rec, filter.Idle, filter.Now) {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func environmentRecordIdle(rec environment.Record, idle time.Duration, now time.Time) bool {
+	if rec.Status == "running" || rec.LastEndedAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !rec.LastEndedAt.After(now.Add(-idle))
+}
+
+func parseIdleDuration(value string) (time.Duration, bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid --idle duration %q: %w", value, err)
+	}
+	if duration < 0 {
+		return 0, false, errors.New("--idle duration must be non-negative")
+	}
+	return duration, true, nil
 }
 
 func cleanEnvironmentRecords(store environment.Store, ids []string) ([]environment.Record, error) {

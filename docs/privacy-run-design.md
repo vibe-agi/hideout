@@ -1351,6 +1351,7 @@ User-facing environment commands stay intentionally small:
 
 ```text
 hideout list
+hideout stop
 hideout clean
 ```
 
@@ -1367,10 +1368,19 @@ It must include at least:
 - last ended time when available;
 - last command summary.
 
-`hideout clean` removes stopped/stale environments and runtime cache according
-to a conservative retention policy. It must preserve audit logs unless the user
-uses a future explicit destructive cleanup mode. The default cleanup must not
-delete the real workspace.
+`hideout stop [environment-id...]` stops the backend instance for a reusable
+environment without deleting the environment record, profile identity, caches,
+or guest disk state. It is the user-facing way to release VM memory while keeping
+the environment resumable. `hideout stop --idle <duration>` stops only
+environments whose last run ended at least that long ago. It must not stop an
+environment that is currently locked by a run.
+
+`hideout clean` removes environments and runtime cache according to a
+conservative retention policy. `hideout clean --stopped` removes only stopped
+environments. `hideout clean --idle <duration>` removes environments whose last
+run ended at least that long ago. Cleanup must preserve audit logs unless the
+user uses a future explicit destructive cleanup mode. The default cleanup must
+not delete the real workspace.
 
 Suggested user output after a run:
 
@@ -3858,7 +3868,8 @@ hideout run --new -- <command> [args...]
 hideout run --resume <environment-id> -- <command> [args...]
 hideout run --rm -- <command> [args...]
 hideout list
-hideout clean
+hideout stop [--idle <duration>] [environment-id...]
+hideout clean [--stopped] [--idle <duration>] [environment-id...]
 hideout profile rotate-identity <name>
 hideout profile reset <name>
 hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]
@@ -3887,7 +3898,8 @@ tree.
 behind. Runtime credentials are still regenerated for the run and cleaned up
 afterward.
 
-`hideout list` lists resumable environments. `hideout clean` removes
+`hideout list` lists resumable environments. `hideout stop` releases backend VM
+memory without deleting a resumable environment. `hideout clean` removes
 stopped/stale environments and runtime cache while preserving audit by default.
 
 `hideout ui` starts the local manager HTTP API, generates a short-lived

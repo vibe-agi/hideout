@@ -339,6 +339,19 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	return errors.Join(errs...)
 }
 
+func (b Backend) StopInstance(ctx context.Context, instanceName string) error {
+	instanceName = strings.TrimSpace(instanceName)
+	if instanceName == "" {
+		return errors.New("lima instance name is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	defer cancel()
+	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", instanceName}, HostCommandEnv(os.Environ()), nil, io.Discard, b.stderr())
+}
+
 func cleanupGuestEnv(env []string) []string {
 	out := append([]string(nil), env...)
 	if backend.EnvValue(out, "PATH") == "" {
