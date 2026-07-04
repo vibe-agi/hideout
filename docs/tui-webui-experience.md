@@ -29,7 +29,9 @@ in-process, but must not rebuild state by reading subsystem files directly.
 
 ## TUI Role
 
-The TUI is the low-friction local control surface.
+The TUI is the low-friction local control surface. Phase 1 ships a read-only
+dashboard over Manager overview and redacted audit data. Interactive first-run
+and doctor flows are product increments, not the current default init path.
 
 Recommended implementation stack:
 
@@ -51,8 +53,8 @@ Suggested commands:
 
 ```bash
 hideout tui
-hideout init
-hideout init --no-input
+hideout tui --watch
+hideout doctor
 hideout doctor --fix --dry-run
 ```
 
@@ -215,8 +217,9 @@ Show:
 
 ## Product Decisions
 
-- `hideout init` applies safe InitTasks now and should launch the TUI wizard by
-  default when the terminal is interactive and TUI assets are available.
+- `hideout init` applies safe InitTasks now through the CLI. A future
+  interactive TUI wizard must use the same InitTask plan/apply contract rather
+  than introducing a second initialization path.
 - `hideout init --no-input` is the scripting and CI path.
 - WebUI is not required for first successful run.
 - Phase 1 WebUI remains read-only or plan/apply-only through Manager API.
@@ -229,6 +232,9 @@ Show:
 
 - terminal dashboard over Manager overview;
 - optional local watch refresh;
+
+### TUI Next Increment
+
 - doctor;
 - sessions;
 - HostFS rules;

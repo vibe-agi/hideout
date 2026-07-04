@@ -280,8 +280,10 @@ that CLI, TUI, and WebUI can render.
 
 ## TUI And WebUI
 
-`hideout init` should use the TUI wizard when the terminal is interactive and
-the TUI is available. `hideout init --no-input` is the scripting and CI path.
+Phase 1 uses CLI `hideout init` and `hideout doctor --fix` as the product init
+surface. `hideout init --no-input` is the scripting and CI path. A future TUI
+wizard must still use this same InitTask plan/apply engine; it must not create a
+second initialization model.
 
 The TUI first-run wizard should stay within five steps:
 
@@ -293,9 +295,10 @@ network mode selection
 project Hideoutfile and bundle permission diff
 ```
 
-WebUI should not be required for first successful run. It can later provide
+WebUI should not be required for first successful run. The current WebUI smoke
+surface can render Manager init/tool setup plans and controlled applies. Richer
 audit exploration, session timelines, policy visualization, bundle permission
-review, and network explanations through Manager API.
+review, and network explanations remain future product work through Manager API.
 
 ## Audit
 

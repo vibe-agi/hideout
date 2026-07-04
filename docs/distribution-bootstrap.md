@@ -123,8 +123,8 @@ without printing the full search path list.
 ## First-Run Flow
 
 First-run setup is an `InitPlan`, not a script. `hideout init`,
-`hideout doctor --fix`, TUI first-run, and automatic safe setup triggered by
-`hideout run` must use the same Manager-owned Init Task Engine.
+`hideout doctor --fix`, future TUI first-run, and automatic safe setup triggered
+by `hideout run` must use the same Manager-owned Init Task Engine.
 
 ```text
 hideout init

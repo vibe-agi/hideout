@@ -348,22 +348,25 @@ CLI should remain thin over Manager Core for complex operations.
 
 ### TUI
 
-Best for:
+Current TUI smoke surface is a read-only terminal dashboard over Manager
+overview and redacted audit data. It is best for:
 
-- first-run initialization;
 - local monitoring;
-- interactive doctor;
 - session/environment overview;
-- HostFS grants and recent denied paths;
+- recent denied paths;
 - network status;
-- install tasks.
+- init next steps.
+
+Future TUI increments can add first-run initialization, interactive doctor,
+HostFS rule management, and install-task apply flows. They must still call
+Manager Core operations instead of mutating stores or backends directly.
 
 Suggested command:
 
 ```bash
 hideout tui
-hideout doctor --interactive
-hideout init
+hideout tui --watch
+hideout doctor
 ```
 
 Bubble Tea is a good fit because it keeps the management experience inside the
@@ -371,14 +374,18 @@ terminal, uses Go, and can share process-level code with Hideout.
 
 ### WebUI
 
-Best for:
+Current WebUI smoke surface is a local Manager API client for overview,
+audit/resource summaries, generic tool setup, controlled run plan/apply, and
+reusable environment stop/clean plan/apply. It is best for:
 
 - audit search and filtering;
-- policy editing;
+- basic operations that benefit from visual review;
 - larger visual explanations;
-- OpenTarget and port topology;
 - onboarding;
 - session timeline.
+
+Future WebUI increments can add full policy editing, OpenTarget and port
+topology, HostFS overlay review, and richer session timelines.
 
 WebUI should call Manager API and must not implement separate policy logic.
 
@@ -430,7 +437,9 @@ mutate unrelated stores directly.
 
 - Manager packages exist;
 - CLI remains the primary user surface;
-- UI command exists as an initial surface.
+- `hideout tui` exists as a read-only dashboard over Manager overview.
+- `hideout ui` exists as a local WebUI smoke/operations surface backed by
+  Manager API.
 - Manager overview exposes initial init, bundle, and project status summaries;
 - InitTask has a minimal machine setup engine used by `hideout init` and
   `doctor --fix` through Manager Core.
@@ -448,8 +457,8 @@ mutate unrelated stores directly.
   mutations;
 - plan/apply operations for bundle install, bundle enable, project apply, and
   bundle export;
-- TUI first-run and monitoring surface;
-- WebUI read-only audit/session/profile viewer;
+- TUI first-run wizard and interactive doctor;
+- richer WebUI audit/session/profile views beyond the current smoke surface;
 - ensure CLI paths call Manager Core for shared operations.
 
 ### Later
