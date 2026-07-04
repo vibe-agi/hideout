@@ -353,6 +353,8 @@ Minimum acceptance:
   `doctor --fix --dry-run` compile generic CLI tool supply into explicit
   `tools.preset.add` and `tools.npm-global.add` tasks, not product-specific
   install scripts;
+- init plans include structured `nextSteps` entries for doctor verification,
+  smoke runs, configured generic CLI commands, or blocked-task resolution;
 - `hideout init --network tun2socks --proxy-secret <ref>` compiles proxy
   configuration into `network.mode.select`, persists only `network.proxySecretRef`,
   and fails closed when the ref is missing or invalid;

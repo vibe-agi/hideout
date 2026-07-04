@@ -398,6 +398,12 @@ func TestWriteInitResultDoesNotSuggestRunWhenPlanHasBlockedTasks(t *testing.T) {
 				Status:  "blocked",
 				Message: "linux helper source is unavailable",
 			}},
+			NextSteps: []inittask.NextStep{{
+				ID:      "resolve-blocked",
+				Label:   "Resolve blocked tasks",
+				Command: "hideout doctor --fix --profile blocked --backend lima",
+				Message: "Fix blocked tasks above, then rerun doctor fix.",
+			}},
 		},
 		Skipped: []inittask.Task{{
 			Kind:    "helper.install.linux-shim",
@@ -408,7 +414,7 @@ func TestWriteInitResultDoesNotSuggestRunWhenPlanHasBlockedTasks(t *testing.T) {
 	for _, want := range []string{
 		"task helper.install.linux-shim: blocked",
 		"next:",
-		"resolve: fix blocked tasks above, then rerun hideout doctor --fix --profile blocked --backend lima",
+		"resolve: hideout doctor --fix --profile blocked --backend lima",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("init output missing %q:\n%s", want, out.String())

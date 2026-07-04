@@ -205,6 +205,9 @@ func TestAPIInitPlanAndApplyConfigureGenericToolSupply(t *testing.T) {
 		`"version":"hideout.init/v1"`,
 		`"kind":"tools.preset.add"`,
 		`"kind":"tools.npm-global.add"`,
+		`"nextSteps"`,
+		`"id":"cli-smoke"`,
+		`"command":"hideout run --profile api-tools --backend native --allow-weak-isolation -- agent-cli"`,
 		`"@example/agent-cli@1.2.3"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -228,6 +231,8 @@ func TestAPIInitPlanAndApplyConfigureGenericToolSupply(t *testing.T) {
 		`"resource":"init/apply"`,
 		`"version":"hideout.init/v1"`,
 		`"kind":"tools.npm-global.add"`,
+		`"nextSteps"`,
+		`"id":"cli-smoke"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("init/apply missing %q: %s", want, body)

@@ -602,6 +602,7 @@ function renderSetupResponse(resource, response) {
   const data = response.data || {};
   const plan = data.plan || data;
   const tasks = plan.tasks || [];
+  const nextSteps = plan.nextSteps || [];
   const applied = data.applied || [];
   const skipped = data.skipped || [];
   const header = item(resource, plan.profile || "init", [["backend", plan.backend], ["network", plan.network], ["applied", applied.length], ["skipped", skipped.length], ["tasks", tasks.length]], errors.length ? "error" : "ok");
@@ -610,7 +611,10 @@ function renderSetupResponse(resource, response) {
     const tone = task.status === "pending" ? "warn" : task.status === "blocked" ? "error" : "ok";
     return item(task.kind, task.message || task.id, [["status", task.status], ["targetScope", task.targetScope], ["risk", task.risk], ["inputs", task.inputs || []], ["outputs", task.outputs || []]], tone);
   }).join("") + '</div>' : empty("No init tasks");
-  return header + errorHTML + taskHTML;
+  const nextHTML = nextSteps.length ? '<h3>Next steps</h3><div class="items">' + nextSteps.map(function(step) {
+    return item(step.label || step.id || "next", step.message || "", [["command", step.command]], step.id === "resolve-blocked" ? "warn" : "info");
+  }).join("") + '</div>' : "";
+  return header + errorHTML + taskHTML + nextHTML;
 }
 function setSetupBusy(busy, text) {
   const status = document.getElementById("setupStatus");

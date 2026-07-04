@@ -799,8 +799,8 @@ The minimal Manager API init and run surfaces are design-ready for TUI/WebUI and
 automation integration. Required checks:
 
 - `POST /api/v1/init/plan` returns the same `InitPlan` shape as Manager Core,
-  accepts generic tool presets and user-declared npm global tools, and performs
-  planning only;
+  accepts generic tool presets and user-declared npm global tools, includes
+  structured next steps, and performs planning only;
 - `POST /api/v1/init/apply` reaches `Core.ApplyInit`, uses typed init tasks
   rather than a raw profile writer, persists generic tool supply policy, and
   fails closed for confirmation-required tasks because API v1 has no prompt

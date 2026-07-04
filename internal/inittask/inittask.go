@@ -46,12 +46,20 @@ type ApplyOptions struct {
 }
 
 type Plan struct {
-	Version   string `json:"version"`
-	StoreRoot string `json:"storeRoot"`
-	Profile   string `json:"profile"`
-	Backend   string `json:"backend"`
-	Network   string `json:"network"`
-	Tasks     []Task `json:"tasks"`
+	Version   string     `json:"version"`
+	StoreRoot string     `json:"storeRoot"`
+	Profile   string     `json:"profile"`
+	Backend   string     `json:"backend"`
+	Network   string     `json:"network"`
+	Tasks     []Task     `json:"tasks"`
+	NextSteps []NextStep `json:"nextSteps"`
+}
+
+type NextStep struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Command string `json:"command"`
+	Message string `json:"message"`
 }
 
 type Task struct {
@@ -194,7 +202,78 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		Risk:               "safe",
 		Message:            "doctor can run after initialization",
 	})
+	plan.NextSteps = initNextSteps(plan)
 	return plan, nil
+}
+
+func initNextSteps(plan Plan) []NextStep {
+	if initPlanHasBlockedTasks(plan) {
+		return []NextStep{{
+			ID:      "resolve-blocked",
+			Label:   "Resolve blocked tasks",
+			Command: initDoctorFixCommand(plan),
+			Message: "Fix blocked tasks above, then rerun doctor fix.",
+		}}
+	}
+	steps := []NextStep{
+		{
+			ID:      "doctor-check",
+			Label:   "Check setup",
+			Command: initDoctorCommand(plan),
+			Message: "Verify store, profile, backend, network, and host integration before running a target command.",
+		},
+		{
+			ID:      "smoke-run",
+			Label:   "Smoke run",
+			Command: initRunCommand(plan, "pwd"),
+			Message: "Run a minimal command in the configured backend to verify workspace and identity plumbing.",
+		},
+	}
+	if command := firstNPMGlobalCommand(plan); command != "" {
+		steps = append(steps, NextStep{
+			ID:      "cli-smoke",
+			Label:   "CLI smoke",
+			Command: initRunCommand(plan, command),
+			Message: "Run the first configured generic CLI command inside the sandbox.",
+		})
+	}
+	return steps
+}
+
+func initDoctorCommand(plan Plan) string {
+	return strings.Join([]string{"hideout", "doctor", "--profile", plan.Profile, "--backend", plan.Backend}, " ")
+}
+
+func initDoctorFixCommand(plan Plan) string {
+	return strings.Join([]string{"hideout", "doctor", "--fix", "--profile", plan.Profile, "--backend", plan.Backend}, " ")
+}
+
+func initRunCommand(plan Plan, command string) string {
+	args := []string{"hideout", "run", "--profile", plan.Profile, "--backend", plan.Backend}
+	if plan.Backend == "native" {
+		args = append(args, "--allow-weak-isolation")
+	}
+	args = append(args, "--", command)
+	return strings.Join(args, " ")
+}
+
+func firstNPMGlobalCommand(plan Plan) string {
+	for _, task := range plan.Tasks {
+		if task.Kind != "tools.npm-global.add" || len(task.Inputs) < 2 {
+			continue
+		}
+		return task.Inputs[1]
+	}
+	return ""
+}
+
+func initPlanHasBlockedTasks(plan Plan) bool {
+	for _, task := range plan.Tasks {
+		if task.Status == "blocked" {
+			return true
+		}
+	}
+	return false
 }
 
 func ApplyMachine(store profile.Store, plan Plan, opts ApplyOptions) (Result, error) {

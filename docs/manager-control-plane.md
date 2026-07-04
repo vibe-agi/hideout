@@ -260,13 +260,13 @@ Current API v1 init and run resources:
 POST /api/v1/init/plan
   Input: InitAPIRequest with profile, backend, network, tool presets, and
   user-declared npm global tools.
-  Output: InitPlan.
+  Output: InitPlan with typed InitTasks and structured nextSteps.
   Authority: planning only; no profile mutation, helper build, backend prepare,
   broker, HostFS service, package install, or host command execution.
 
 POST /api/v1/init/apply
   Input: InitAPIRequest.
-  Output: InitResult.
+  Output: InitResult with the same plan/nextSteps shape.
   Authority: applies the same PlanInit -> ApplyInit chain as CLI init and
   doctor fix. It may create store/profile state, write install metadata, and
   update profile tool supply policy. It runs without an interactive prompt

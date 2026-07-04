@@ -3,7 +3,7 @@
   "$id": "https://hideout.local/schemas/init-plan.schema.json",
   "title": "Hideout Init Plan",
   "type": "object",
-  "required": ["version", "storeRoot", "profile", "backend", "network", "tasks"],
+  "required": ["version", "storeRoot", "profile", "backend", "network", "tasks", "nextSteps"],
   "properties": {
     "version": {
       "const": "hideout.init/v1"
@@ -27,10 +27,38 @@
       "items": {
         "$ref": "#/$defs/task"
       }
+    },
+    "nextSteps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/nextStep"
+      }
     }
   },
   "additionalProperties": false,
   "$defs": {
+    "nextStep": {
+      "type": "object",
+      "required": ["id", "label", "command", "message"],
+      "properties": {
+        "id": {
+          "enum": ["doctor-check", "smoke-run", "cli-smoke", "resolve-blocked"]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
     "task": {
       "type": "object",
       "required": [

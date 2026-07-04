@@ -88,6 +88,56 @@ func TestPlanMachineNativeBackendDoesNotPlanLimaHelpers(t *testing.T) {
 			t.Fatalf("native init must not plan Lima helper task: %+v", task)
 		}
 	}
+	assertNextStepCommand(t, plan.NextSteps, "doctor-check", "hideout doctor --profile default --backend native")
+	assertNextStepCommand(t, plan.NextSteps, "smoke-run", "hideout run --profile default --backend native --allow-weak-isolation -- pwd")
+	validateInitPlanWithSchema(t, plan)
+}
+
+func TestPlanMachineNextStepsIncludeGenericCLISmoke(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	plan, err := PlanMachine(store, Options{
+		ProfileName: "agent",
+		Backend:     "native",
+		Network:     "direct",
+		NPMGlobals: []profile.NPMGlobalPackage{{
+			Package:  "@example/agent-cli@1.2.3",
+			Commands: []string{"agent-cli", "agent-helper"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNextStepCommand(t, plan.NextSteps, "cli-smoke", "hideout run --profile agent --backend native --allow-weak-isolation -- agent-cli")
+	validateInitPlanWithSchema(t, plan)
+}
+
+func TestPlanMachineNextStepsBlockRunSuggestionsWhenBlocked(t *testing.T) {
+	plan := Plan{
+		Version:   Version,
+		StoreRoot: t.TempDir(),
+		Profile:   "default",
+		Backend:   "lima",
+		Network:   "direct",
+		Tasks: []Task{{
+			ID:                 "install_lima_linux_shim",
+			Kind:               "helper.install.linux-shim",
+			Source:             "builtin",
+			Status:             "blocked",
+			TargetScope:        "machine",
+			CapabilityBoundary: "backend",
+			Risk:               "safe",
+			RequiresConfirm:    false,
+			Message:            "linux helper source is unavailable",
+		}},
+	}
+	plan.NextSteps = initNextSteps(plan)
+	assertNextStepCommand(t, plan.NextSteps, "resolve-blocked", "hideout doctor --fix --profile default --backend lima")
+	for _, forbidden := range []string{"doctor-check", "smoke-run", "cli-smoke"} {
+		if nextStepByID(plan.NextSteps, forbidden) != nil {
+			t.Fatalf("blocked init plan must not include %s: %+v", forbidden, plan.NextSteps)
+		}
+	}
+	validateInitPlanWithSchema(t, plan)
 }
 
 func TestFindHelperSourceRootUsesExplicitEnv(t *testing.T) {
@@ -247,6 +297,45 @@ func helperTasks(t *testing.T, plan Plan) []Task {
 	return tasks
 }
 
+func assertNextStepCommand(t *testing.T, steps []NextStep, id, command string) {
+	t.Helper()
+	step := nextStepByID(steps, id)
+	if step == nil {
+		t.Fatalf("next step %q missing in %+v", id, steps)
+	}
+	if step.Command != command {
+		t.Fatalf("next step %q command=%q want %q", id, step.Command, command)
+	}
+	if step.Label == "" || step.Message == "" {
+		t.Fatalf("next step %q should include label and message: %+v", id, step)
+	}
+}
+
+func nextStepByID(steps []NextStep, id string) *NextStep {
+	for i := range steps {
+		if steps[i].ID == id {
+			return &steps[i]
+		}
+	}
+	return nil
+}
+
+func validateInitPlanWithSchema(t *testing.T, plan Plan) {
+	t.Helper()
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := compileInitPlanSchema(t)
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode init plan json: %v", err)
+	}
+	if err := schema.Validate(doc); err != nil {
+		t.Fatalf("init plan does not match schema: %v\n%s", err, data)
+	}
+}
+
 func fakeSourceRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -275,6 +364,27 @@ func schemaMetadataTask(t *testing.T, plan Plan) Task {
 	}
 	t.Fatalf("schema metadata task missing in %+v", plan.Tasks)
 	return Task{}
+}
+
+func compileInitPlanSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "init-plan.schema.json"))
+	if err != nil {
+		t.Fatalf("read init plan schema: %v", err)
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode init plan schema: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("init-plan.schema.json", doc); err != nil {
+		t.Fatalf("add init plan schema: %v", err)
+	}
+	schema, err := compiler.Compile("init-plan.schema.json")
+	if err != nil {
+		t.Fatalf("compile init plan schema: %v", err)
+	}
+	return schema
 }
 
 func validateInitAuditJSONLWithSchema(t *testing.T, path string) {
