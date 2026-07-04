@@ -345,6 +345,9 @@ Required Phase 1:
 - Command Proxy support for `open` and `xdg-open`, with both enabled in the
   default profile.
 - Host Broker action `host.open` for URLs and mapped workspace files.
+- HostFS v1 read-only data plane for explicit `stat`, `read`, and `list` grants
+  through the Linux guest FUSE/broker path, with grant filtering, reserved-store
+  rejection, fail-closed startup, audit, and Boundary Summary evidence.
 - Run-scoped `portbridge.host-to-guest` as a thin transport provider with
   validation, audit, cleanup, Boundary Summary evidence, no CLI/API/script
   trigger surface, and no weakening of `host.open` localhost denial.
@@ -379,15 +382,21 @@ Design-ready Phase 1:
 
 Capability Probe Phase 1:
 
-- PortBridge loopback forwarding and cleanup.
+- Diagnostic PortBridge loopback forwarding and cleanup probes. Probe success is
+  evidence for implementation and regression testing; it does not grant raw
+  user-facing bridge authority.
 - Native loopback/control-plane mechanics for one explicit TCP endpoint.
 - Lima guest-to-host bridge mechanics for one explicit host loopback TCP
   endpoint.
-- Lima host-to-guest bridge mechanics for one explicit guest TCP endpoint.
+- Lima host-to-guest bridge mechanics for one explicit guest TCP endpoint. This
+  probe covers the transport mechanics behind the product
+  `endpoint.expose.host-to-guest` path; the product authority remains the typed
+  Endpoint Exposure action.
 - Browser-control probe using an isolated browser profile and a loopback-only
   control endpoint, without exposing it through `host.open`.
-- Preview-open probe that maps one guest HTTP service to one host-visible URL,
-  without granting general host-local or guest-local network access.
+- Preview-open probe that maps one guest HTTP service to one host-visible URL as
+  diagnostic coverage for the product `preview.open` path, without granting
+  general host-local or guest-local network access.
 - Broker token, audit, and policy-deny probes around each bridge direction.
 
 Later:
@@ -434,12 +443,12 @@ Treat these as stable contracts.
 | CapabilityPolicy | Canonical permission model. | Evaluates subject/action/resource/route/decision using JSON rules and optional scripts. |
 | CommandProxy | Guest-visible registered command shim system. | Normalizes explicitly registered commands. Phase 1 ships `open` and `xdg-open` for brokered `host.open`; other routes are protocol vocabulary unless named elsewhere as Required. |
 | HostBroker | Host-side capability authority. | Executes approved host actions such as `host.open` after policy validation. |
-| HostFSPortal | Guest-visible filesystem portal for explicitly granted host paths. | Design-ready long-term host file access model. It owns path grants, filesystem RPC, metadata filtering, and audit for host paths outside the workspace. Initial implementation target is Linux guest; Windows native adapter is Later. |
-| HostPathGrant | Explicit authority record for one host path scope. | Design-ready contract for `stat`, `read`, `list`, and later write operations on workspace-outside host paths. |
+| HostFSPortal | Guest-visible filesystem portal for explicitly granted host paths. | Phase 1 implements the read-only `stat`, `read`, and `list` data plane for Linux guests through FUSE and broker RPC. It owns path grants, filesystem RPC, metadata filtering, reserved-store rejection, and audit for host paths outside the workspace. Write overlay, native host mount adapters, and Windows native adapter are Later. |
+| HostPathGrant | Explicit authority record for one host path scope. | Phase 1 implements read-only grants for `stat`, `read`, and `list`; write-class grants remain Later. |
 | PassthroughMount | Explicit backend mount outside the workspace. | Design-ready opt-in compatibility escape hatch. It owns host path, guest path, read/write mode, lifetime, explanation, and audit. It is broad authority and must not be created implicitly by HostFS. |
 | AccessSensor | Guest-side observation plane for suspicious access attempts. | Later. It may observe and summarize guest filesystem, process, or network probes for audit and user warnings, but it must not be required for HostFS data access or authorization. |
-| OpenTarget | Typed host or guest application target behind an explicit brokered action. | Design-ready contract. Phase 1 implements only `host.open` URL and workspace file targets; browser-control, IDE, Docker, and preview targets are Later implementations. |
-| PortBridge | Auditable TCP bridge between explicit listen and target endpoints. | Design-ready transport primitive. Phase 1 may test loopback forwarding, but `hideout run` and `host.open` do not create port mappings. |
+| OpenTarget | Typed host or guest application target behind an explicit brokered action. | Phase 1 implements `host.open` URL/workspace-file targets and the minimal `preview.open` target over `endpoint.expose.host-to-guest`. Browser-control, IDE, Docker, device/simulator, and guest-to-host targets are Later implementations. |
+| PortBridge | Auditable TCP bridge between explicit listen and target endpoints. | Phase 1 implements run-scoped host-to-guest transport only as the lower-layer provider for typed Endpoint Exposure. It has no raw CLI/API/script trigger surface, and `host.open` must not create port mappings. Guest-to-host remains lab/separate design. |
 | NetworkPolicy | Egress model for a session. | Supports `direct` and guest-side `tun2socks` with hidden proxy env. |
 | SecretRef | Named reference to a sensitive host value. | Resolves availability for setup components without exposing secret values to target env, audit, explain, broker requests, or Web UI. |
 | AuditLog | Evidence trail. | Records setup, policy decisions, broker requests, redactions, and session result. |
@@ -1594,8 +1603,9 @@ Rules:
 ## HostFS Portal
 
 HostFS Portal is the long-term correct architecture for ordinary file access to
-explicitly granted host paths outside the workspace. It is Design-ready in
-Phase 1 and must be implemented as a filesystem capability, not as dynamic broad
+explicitly granted host paths outside the workspace. Phase 1 implements the
+read-only `stat`, `read`, and `list` data plane for Linux guests through FUSE
+and broker RPC. HostFS must remain a filesystem capability, not dynamic broad
 mounts, command proxy wrappers for `ls` or `cat`, or symlink/copy shadow hacks.
 
 Problem statement:
@@ -1822,7 +1832,7 @@ Visibility semantics:
 - read/list grants never become backend passthrough mounts;
 - run grants expire with the session and must not be reused by a later run.
 
-Initial HostFS implementation should support the read-only subset:
+HostFS v1 supports the read-only subset:
 
 ```text
 stat
