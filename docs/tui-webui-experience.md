@@ -105,8 +105,9 @@ Implemented smoke surface shows:
 - capability summary;
 - backend status;
 - network mode and privacy warning;
-- active sessions;
-- reusable environments;
+- recent active sessions;
+- recent reusable environments;
+- reusable environment lifecycle command hints;
 - recent denied audit events;
 - recent audit events.
 
@@ -153,9 +154,9 @@ Shows:
 
 Implemented WebUI smoke surface shows reusable environment records and offers
 controlled stop/clean plan/apply actions through Manager API. TUI currently
-renders the same records in the dashboard; richer terminal lifecycle controls
-should call the same Manager environment endpoints rather than reimplementing
-store or backend cleanup logic.
+renders a capped dashboard summary with copyable resume/stop/clean command
+hints; richer terminal lifecycle controls should call the same Manager
+environment endpoints rather than reimplementing store or backend cleanup logic.
 
 ### Network
 

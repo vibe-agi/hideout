@@ -3476,6 +3476,13 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	if err := (environment.Store{Root: store.Root}).Save(envRec); err != nil {
 		t.Fatalf("save environment: %v", err)
 	}
+	sessionsDir := filepath.Join(store.Root, "sessions")
+	for i := 1; i <= 12; i++ {
+		sessionID := fmt.Sprintf("ses_20260704T0102%02dZ_%02d", i, i)
+		if err := os.MkdirAll(filepath.Join(sessionsDir, sessionID), 0o700); err != nil {
+			t.Fatalf("create session %s: %v", sessionID, err)
+		}
+	}
 	var out, errOut bytes.Buffer
 	code := Main([]string{"tui"}, &out, &errOut)
 	if code != 0 {
@@ -3486,6 +3493,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Store: " + store.Root,
 		"Profiles: 1",
 		"Environments: 1",
+		"Sessions: 12",
 		"Init Next:",
 		"Smoke run: hideout run --profile default --backend lima -- pwd",
 		"Capabilities: host.open",
@@ -3498,13 +3506,19 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Environments",
 		"hideout-default-env-test",
 		"last=agent-cli",
+		"next: resume=hideout run --resume " + envRec.ID + " -- <command>  stop=hideout stop " + envRec.ID + "  clean-after-stop=hideout clean --stopped " + envRec.ID,
 		"Sessions",
+		"showing newest 10 of 12",
+		"ses_20260704T010212Z_12",
 		"Recent Denied Audit",
 		"Recent Audit",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("tui output missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "ses_20260704T010201Z_01") {
+		t.Fatalf("tui output should omit oldest sessions when truncating:\n%s", out.String())
 	}
 	for _, forbidden := range []string{
 		"Hideout UI:",

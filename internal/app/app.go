@@ -3760,6 +3760,8 @@ type tuiOptions struct {
 	interval time.Duration
 }
 
+const tuiDashboardRowLimit = 10
+
 func parseTUIOptions(args []string) (tuiOptions, error) {
 	opts := tuiOptions{interval: 2 * time.Second}
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
@@ -3877,7 +3879,11 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	if len(overview.Environments) == 0 {
 		fmt.Fprintln(w, "  none")
 	}
-	for _, env := range overview.Environments {
+	environments := visibleEnvironmentsForTUI(overview.Environments)
+	if len(environments) < len(overview.Environments) {
+		fmt.Fprintf(w, "  showing newest %d of %d\n", len(environments), len(overview.Environments))
+	}
+	for _, env := range environments {
 		fmt.Fprintf(w, "  - %s  status=%s  backend=%s  profile=%s  instance=%s  workspace=%s  last=%s\n",
 			dash(env.ID),
 			dash(env.Status),
@@ -3887,13 +3893,20 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 			dash(env.Workspace),
 			dash(env.LastCommand),
 		)
+		if env.ID != "" {
+			fmt.Fprintf(w, "    next: resume=hideout run --resume %s -- <command>  stop=hideout stop %s  clean-after-stop=hideout clean --stopped %s\n", env.ID, env.ID, env.ID)
+		}
 	}
 
 	fmt.Fprintln(w, "\nSessions")
 	if len(overview.Sessions) == 0 {
 		fmt.Fprintln(w, "  none")
 	}
-	for _, s := range overview.Sessions {
+	sessions := visibleSessionsForTUI(overview.Sessions)
+	if len(sessions) < len(overview.Sessions) {
+		fmt.Fprintf(w, "  showing newest %d of %d\n", len(sessions), len(overview.Sessions))
+	}
+	for _, s := range sessions {
 		fmt.Fprintf(w, "  - %s  audit=%t  network=%s  runtime=%t\n", dash(s.ID), s.HasAudit, dash(s.NetworkMode), s.HasEphemeralState)
 	}
 
@@ -3912,6 +3925,20 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	for _, event := range events {
 		fmt.Fprintf(w, "  - %s  action=%s  decision=%s  session=%s\n", dash(event.Profile), dash(event.Action), dash(event.Decision), dash(event.Session))
 	}
+}
+
+func visibleEnvironmentsForTUI(environments []manager.EnvironmentSummary) []manager.EnvironmentSummary {
+	if len(environments) <= tuiDashboardRowLimit {
+		return environments
+	}
+	return environments[:tuiDashboardRowLimit]
+}
+
+func visibleSessionsForTUI(sessions []manager.SessionSummary) []manager.SessionSummary {
+	if len(sessions) <= tuiDashboardRowLimit {
+		return sessions
+	}
+	return sessions[len(sessions)-tuiDashboardRowLimit:]
 }
 
 func dash(value string) string {
