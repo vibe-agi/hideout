@@ -3130,10 +3130,14 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Hideout TUI",
 		"Store: " + store.Root,
 		"Profiles: 1",
+		"Capabilities: host.open",
 		"Profiles\n  - default",
 		"tools=base-dev",
 		"Backends",
+		"Network",
+		"warning=direct exposes network identity",
 		"Sessions",
+		"Recent Denied Audit",
 		"Recent Audit",
 	} {
 		if !strings.Contains(out.String(), want) {

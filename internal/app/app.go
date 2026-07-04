@@ -3475,10 +3475,11 @@ func (a app) tui(args []string) error {
 	render := func(clear bool) error {
 		overview, overviewErr := core.Overview(ctx)
 		events, auditErr := core.AuditEvents(manager.AuditEventFilter{Limit: 5})
+		deniedEvents, deniedAuditErr := core.AuditEvents(manager.AuditEventFilter{Decision: "deny", Limit: 5})
 		if clear {
 			fmt.Fprint(a.stdout, "\033[H\033[2J")
 		}
-		writeTUIDashboard(a.stdout, overview, events, errors.Join(overviewErr, auditErr))
+		writeTUIDashboard(a.stdout, overview, events, deniedEvents, errors.Join(overviewErr, auditErr, deniedAuditErr))
 		return nil
 	}
 	if !opts.watch {
@@ -3498,7 +3499,7 @@ func (a app) tui(args []string) error {
 	}
 }
 
-func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Event, err error) {
+func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Event, deniedEvents []audit.Event, err error) {
 	fmt.Fprintln(w, "Hideout TUI")
 	fmt.Fprintf(w, "Store: %s\n", dash(overview.StorageRoot))
 	if err != nil {
@@ -3508,6 +3509,12 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	}
 	fmt.Fprintf(w, "Profiles: %d  Sessions: %d  Audit files: %d\n", len(overview.Profiles), len(overview.Sessions), overview.Audit.SessionAuditFiles)
 	fmt.Fprintf(w, "Init: initialized=%t pending=%d profile=%s\n", overview.Init.Initialized, overview.Init.PendingTasks, dash(overview.Init.Profile))
+	fmt.Fprintf(w, "Capabilities: host.open urls=%t workspaceFiles=%t commandProxies=%s max=%s\n",
+		overview.Capabilities.HostOpen.AllowURLs,
+		overview.Capabilities.HostOpen.AllowWorkspaceFiles,
+		listForTUI(overview.Broker.CommandProxies),
+		listForTUI(overview.Capabilities.MaxCapabilities),
+	)
 
 	fmt.Fprintln(w, "\nProfiles")
 	if len(overview.Profiles) == 0 {
@@ -3533,12 +3540,29 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		fmt.Fprintf(w, "  - %s  isolation=%s  %s\n", dash(b.Name), dash(b.Isolation), status)
 	}
 
+	fmt.Fprintln(w, "\nNetwork")
+	if len(overview.Network.ProfileDefaults) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, n := range overview.Network.ProfileDefaults {
+		mode := networkModeForTUI(n.Mode)
+		fmt.Fprintf(w, "  - %s  mode=%s  proxyEnv=%s%s\n", dash(n.Profile), mode, proxyEnvForTUI(n.ProxyEnvVisible), networkWarningForTUI(mode))
+	}
+
 	fmt.Fprintln(w, "\nSessions")
 	if len(overview.Sessions) == 0 {
 		fmt.Fprintln(w, "  none")
 	}
 	for _, s := range overview.Sessions {
 		fmt.Fprintf(w, "  - %s  audit=%t  network=%s  runtime=%t\n", dash(s.ID), s.HasAudit, dash(s.NetworkMode), s.HasEphemeralState)
+	}
+
+	fmt.Fprintln(w, "\nRecent Denied Audit")
+	if len(deniedEvents) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, event := range deniedEvents {
+		fmt.Fprintf(w, "  - %s  action=%s  session=%s\n", dash(event.Profile), dash(event.Action), dash(event.Session))
 	}
 
 	fmt.Fprintln(w, "\nRecent Audit")
@@ -3555,6 +3579,31 @@ func dash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func proxyEnvForTUI(visible bool) string {
+	if visible {
+		return "visible"
+	}
+	return "hidden"
+}
+
+func networkModeForTUI(mode string) string {
+	if strings.TrimSpace(mode) == "" {
+		return "direct"
+	}
+	return mode
+}
+
+func networkWarningForTUI(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "direct":
+		return "  warning=direct exposes network identity"
+	case "tun2socks":
+		return "  warning=proxy hides origin path, not data egress"
+	default:
+		return ""
+	}
 }
 
 func listForTUI(values []string) string {
