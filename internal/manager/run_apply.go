@@ -121,6 +121,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	dataPlane, err := c.StartRunDataPlane(ctx, runSession, runNetwork, RunDataPlaneOptions{
 		HostFSRun:                  opts.HostFSRun,
 		DisableProfileHostFSGrants: opts.DisableProfileHostFSGrants,
+		Backend:                    opts.Backend,
 		PortBridges:                opts.PortBridges,
 		OpenTargets:                opts.OpenTargets,
 		EndpointCandidates:         opts.EndpointCandidates,

@@ -60,13 +60,21 @@ type Spec struct {
 type Bridge struct {
 	spec     Spec
 	listener net.Listener
+	ctx      context.Context
+	connect  Connector
 	wg       sync.WaitGroup
 	once     sync.Once
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
 }
 
+type Connector func(context.Context, net.Conn) error
+
 func Start(ctx context.Context, spec Spec) (*Bridge, error) {
+	return StartWithConnector(ctx, spec, nil)
+}
+
+func StartWithConnector(ctx context.Context, spec Spec, connector Connector) (*Bridge, error) {
 	if err := Validate(spec); err != nil {
 		return nil, err
 	}
@@ -74,7 +82,10 @@ func Start(ctx context.Context, spec Spec) (*Bridge, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Bridge{spec: spec, listener: ln, conns: map[net.Conn]struct{}{}}
+	if connector == nil {
+		connector = directTCPConnector(spec.TargetAddress)
+	}
+	b := &Bridge{spec: spec, listener: ln, ctx: ctx, connect: connector, conns: map[net.Conn]struct{}{}}
 	go func() {
 		<-ctx.Done()
 		_ = b.Close()
@@ -198,18 +209,7 @@ func (b *Bridge) handle(inbound net.Conn) {
 	b.track(inbound)
 	defer inbound.Close()
 	defer b.untrack(inbound)
-	outbound, err := net.Dial("tcp", b.spec.TargetAddress)
-	if err != nil {
-		return
-	}
-	b.track(outbound)
-	defer outbound.Close()
-	defer b.untrack(outbound)
-	var copies sync.WaitGroup
-	copies.Add(2)
-	go proxyCopy(&copies, outbound, inbound)
-	go proxyCopy(&copies, inbound, outbound)
-	copies.Wait()
+	_ = b.connect(b.ctx, inbound)
 }
 
 func (b *Bridge) track(conn net.Conn) {
@@ -236,6 +236,22 @@ func proxyCopy(wg *sync.WaitGroup, dst, src net.Conn) {
 	defer wg.Done()
 	_, _ = io.Copy(dst, src)
 	_ = dst.Close()
+}
+
+func directTCPConnector(targetAddress string) Connector {
+	return func(_ context.Context, inbound net.Conn) error {
+		outbound, err := net.Dial("tcp", targetAddress)
+		if err != nil {
+			return err
+		}
+		defer outbound.Close()
+		var copies sync.WaitGroup
+		copies.Add(2)
+		go proxyCopy(&copies, outbound, inbound)
+		go proxyCopy(&copies, inbound, outbound)
+		copies.Wait()
+		return nil
+	}
 }
 
 func isLoopbackHost(host string) bool {

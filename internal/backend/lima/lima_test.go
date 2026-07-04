@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"gopkg.in/yaml.v3"
 )
@@ -154,7 +156,7 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	}
 }
 
-func TestPrepareAddsExplicitHostToGuestPortForward(t *testing.T) {
+func TestPrepareDoesNotPersistHostToGuestPortForward(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
 	spec.PortBridges = []backend.PortBridgeEndpoint{{
@@ -183,19 +185,67 @@ func TestPrepareAddsExplicitHostToGuestPortForward(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("yaml decode: %v\n%s", err, data)
 	}
-	if len(cfg.PortForwards) < 3 {
-		t.Fatalf("expected explicit forward plus deny defaults, got %+v", cfg.PortForwards)
+	if !reflect.DeepEqual(cfg.PortForwards, []portForward{
+		{
+			GuestIP:           "0.0.0.0",
+			GuestIPMustBeZero: boolPtr(false),
+			Proto:             "any",
+			GuestPortRange:    [2]int{1, 65535},
+			Ignore:            true,
+		},
+		{
+			GuestIP:        "127.0.0.1",
+			Proto:          "any",
+			GuestPortRange: [2]int{1, 65535},
+			Ignore:         true,
+		},
+	}) {
+		t.Fatalf("lima config must not persist run-scoped host-to-guest forwards: %+v", cfg.PortForwards)
 	}
-	explicit := cfg.PortForwards[0]
-	if explicit.HostIP != "127.0.0.1" || explicit.HostPort != 49152 ||
-		explicit.GuestIP != "127.0.0.1" || explicit.GuestPort != 5173 ||
-		explicit.Proto != "tcp" || explicit.Ignore {
-		t.Fatalf("explicit host-to-guest port forward mismatch: %+v", explicit)
-	}
-	for _, forward := range cfg.PortForwards[1:] {
+	for _, forward := range cfg.PortForwards {
 		if !forward.Ignore {
 			t.Fatalf("default non-owned port forward must remain ignored: %+v", cfg.PortForwards)
 		}
+	}
+}
+
+func TestStartHostToGuestBridgeUsesDynamicLimactlShell(t *testing.T) {
+	runner := &bridgeRunner{lookPath: "/opt/homebrew/bin/limactl", calls: make(chan recordedCall, 1)}
+	bridge, err := (Backend{LimactlPath: "/opt/homebrew/bin/limactl", Runner: runner}).StartHostToGuestBridge(context.Background(), "hideout-test", "/workspace", []string{"PATH=/usr/bin:/bin"}, testPortBridgeSpec("127.0.0.1:0", "127.0.0.1:5173"))
+	if err != nil {
+		t.Fatalf("StartHostToGuestBridge: %v", err)
+	}
+	defer bridge.Close()
+	conn, err := net.Dial("tcp", bridge.ListenAddress())
+	if err != nil {
+		t.Fatalf("dial bridge: %v", err)
+	}
+	tcpConn := conn.(*net.TCPConn)
+	if _, err := tcpConn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write bridge: %v", err)
+	}
+	if err := tcpConn.CloseWrite(); err != nil {
+		t.Fatalf("close write: %v", err)
+	}
+	got, err := io.ReadAll(tcpConn)
+	if err != nil {
+		t.Fatalf("read bridge: %v", err)
+	}
+	if string(got) != "guest:ping" {
+		t.Fatalf("bridge response=%q", got)
+	}
+	call := <-runner.calls
+	if call.name != "/opt/homebrew/bin/limactl" {
+		t.Fatalf("limactl name=%q", call.name)
+	}
+	joined := strings.Join(call.args, "\x00")
+	for _, want := range []string{"shell", "--tty=false", "--workdir", "/workspace", "hideout-test", "bash", "-lc", "/dev/tcp/${host}/${port}", "127.0.0.1", "5173"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("limactl bridge args missing %q: %#v", want, call.args)
+		}
+	}
+	if !slices.Contains(call.args, "PATH=/usr/bin:/bin") {
+		t.Fatalf("guest env missing from bridge args: %+v", call.args)
 	}
 }
 
@@ -939,6 +989,23 @@ func testRunSpec(root string) backend.RunSpec {
 	}
 }
 
+func testPortBridgeSpec(listenAddress, targetAddress string) portbridge.Spec {
+	return portbridge.Spec{
+		ID:               "ep_manual_preview_1",
+		Owner:            "preview.open",
+		Action:           "endpoint.expose.host-to-guest",
+		Source:           "manual",
+		ClosePolicy:      "session-end",
+		Lifetime:         portbridge.LifetimeRun,
+		Direction:        portbridge.DirectionHostToGuest,
+		ListenScope:      portbridge.ListenScopeLoopback,
+		ListenAddress:    listenAddress,
+		TargetScope:      portbridge.TargetScopeGuest,
+		TargetAddress:    targetAddress,
+		EndpointCategory: portbridge.EndpointCategoryHostLoopback,
+	}
+}
+
 type fakeRunner struct {
 	lookPath string
 }
@@ -949,6 +1016,25 @@ func (f fakeRunner) LookPath(string) (string, error) {
 
 func (fakeRunner) Run(context.Context, string, []string, []string, io.Reader, io.Writer, io.Writer) error {
 	return nil
+}
+
+type bridgeRunner struct {
+	lookPath string
+	calls    chan recordedCall
+}
+
+func (r *bridgeRunner) LookPath(string) (string, error) {
+	return r.lookPath, nil
+}
+
+func (r *bridgeRunner) Run(_ context.Context, name string, args []string, env []string, stdin io.Reader, stdout, _ io.Writer) error {
+	r.calls <- recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return err
+	}
+	_, err = stdout.Write(append([]byte("guest:"), data...))
+	return err
 }
 
 type recordingRunner struct {

@@ -859,6 +859,151 @@ func TestCoreApplyRunRejectsEndpointExposureWithoutActiveOwner(t *testing.T) {
 	}
 }
 
+func TestCoreApplyRunRejectsInvalidEndpointExposureRequests(t *testing.T) {
+	tests := []struct {
+		name             string
+		backendName      string
+		requestedBackend string
+		openTargets      []RunOpenTargetOwner
+		candidates       []RunEndpointCandidate
+		exposures        []RunEndpointExposureRequest
+		wantErr          string
+	}{
+		{
+			name:             "unknown candidate",
+			backendName:      "native",
+			requestedBackend: "native",
+			openTargets: []RunOpenTargetOwner{{
+				ID:   OpenTargetPreviewOpen,
+				Kind: OpenTargetPreviewOpen,
+			}},
+			exposures: []RunEndpointExposureRequest{{
+				CandidateID: "missing_preview",
+				Owner:       OpenTargetPreviewOpen,
+				Kind:        OpenTargetPreviewOpen,
+			}},
+			wantErr: `candidate "missing_preview" is unknown`,
+		},
+		{
+			name:             "candidate owner mismatch",
+			backendName:      "native",
+			requestedBackend: "native",
+			openTargets: []RunOpenTargetOwner{{
+				ID:   OpenTargetPreviewOpen,
+				Kind: OpenTargetPreviewOpen,
+			}},
+			candidates: []RunEndpointCandidate{{
+				ID:            "manual_preview_1",
+				Source:        EndpointSourceManual,
+				Owner:         "other.open",
+				Proto:         "tcp",
+				TargetAddress: "127.0.0.1:5173",
+			}},
+			exposures: []RunEndpointExposureRequest{{
+				CandidateID: "manual_preview_1",
+				Owner:       OpenTargetPreviewOpen,
+				Kind:        OpenTargetPreviewOpen,
+			}},
+			wantErr: `belongs to owner "other.open"`,
+		},
+		{
+			name:             "owner kind mismatch",
+			backendName:      "native",
+			requestedBackend: "native",
+			openTargets: []RunOpenTargetOwner{{
+				ID:   OpenTargetPreviewOpen,
+				Kind: "other.open",
+			}},
+			candidates: []RunEndpointCandidate{{
+				ID:            "manual_preview_1",
+				Source:        EndpointSourceManual,
+				Owner:         OpenTargetPreviewOpen,
+				Proto:         "tcp",
+				TargetAddress: "127.0.0.1:5173",
+			}},
+			exposures: []RunEndpointExposureRequest{{
+				CandidateID: "manual_preview_1",
+				Owner:       OpenTargetPreviewOpen,
+				Kind:        OpenTargetPreviewOpen,
+			}},
+			wantErr: `kind "other.open" does not match "preview.open"`,
+		},
+		{
+			name:             "lima backend without provider",
+			backendName:      "lima",
+			requestedBackend: "lima",
+			openTargets: []RunOpenTargetOwner{{
+				ID:   OpenTargetPreviewOpen,
+				Kind: OpenTargetPreviewOpen,
+			}},
+			candidates: []RunEndpointCandidate{{
+				ID:            "manual_preview_1",
+				Source:        EndpointSourceManual,
+				Owner:         OpenTargetPreviewOpen,
+				Proto:         "tcp",
+				TargetAddress: "127.0.0.1:5173",
+			}},
+			exposures: []RunEndpointExposureRequest{{
+				CandidateID: "manual_preview_1",
+				Owner:       OpenTargetPreviewOpen,
+				Kind:        OpenTargetPreviewOpen,
+			}},
+			wantErr: "does not provide run-scoped host-to-guest bridge provider",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := profile.Store{Root: t.TempDir()}
+			core := New(store)
+			fake := &applyRunFakeBackend{}
+			plan, err := core.PlanRun(RunPlanOptions{
+				ProfileName: "default",
+				Backend:     tt.backendName,
+				Workspace:   t.TempDir(),
+				Command:     []string{"tool"},
+			})
+			if err != nil {
+				t.Fatalf("PlanRun: %v", err)
+			}
+			if tt.backendName == "lima" {
+				shimPath := filepath.Join(t.TempDir(), "hideout-shim-linux")
+				if err := os.WriteFile(shimPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+					t.Fatalf("write fake linux shim: %v", err)
+				}
+				t.Setenv("HIDEOUT_LINUX_SHIM_PATH", shimPath)
+			}
+			result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+				Backend:                    fake,
+				RequestedBackend:           tt.requestedBackend,
+				AllowWeakIsolation:         tt.backendName == "native",
+				Environment:                RunEnvironmentOptions{Create: true},
+				OpenTargets:                tt.openTargets,
+				EndpointCandidates:         tt.candidates,
+				EndpointExposures:          tt.exposures,
+				Opener:                     broker.NoopOpener{},
+				OpenerForSession:           nil,
+				PortBridges:                nil,
+				Network:                    RunNetworkOptions{},
+				HostFSRun:                  hostfs.Config{},
+				DisableProfileHostFSGrants: false,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+			}
+			if !reflect.DeepEqual(fake.calls, []string{"available"}) {
+				t.Fatalf("backend should not prepare/run after endpoint exposure rejection: %v", fake.calls)
+			}
+			if result.BoundarySummary == nil {
+				t.Fatalf("result missing boundary summary")
+			}
+			endpointBoundary := boundarySummaryCapability(t, *result.BoundarySummary, policy.ActionEndpointExposeHostToGuest)
+			if endpointBoundary.Denied != 1 || endpointBoundary.Allowed != 0 {
+				t.Fatalf("endpoint exposure rejection summary mismatch: %+v", endpointBoundary)
+			}
+		})
+	}
+}
+
 func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	aw, err := audit.NewFile(auditPath)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -26,6 +25,10 @@ type RunPortBridgeRequest struct {
 type runPortBridgeLease struct {
 	endpoint backend.PortBridgeEndpoint
 	bridge   *portbridge.Bridge
+}
+
+type hostToGuestBridgeProvider interface {
+	StartHostToGuestBridge(ctx context.Context, instanceName, guestWork string, env []string, spec portbridge.Spec) (*portbridge.Bridge, error)
 }
 
 func validateRunPortBridgeRequests(runSession RunSession, requests []RunPortBridgeRequest, aw *audit.Writer) error {
@@ -54,7 +57,7 @@ func validateRunPortBridgeRequests(runSession RunSession, requests []RunPortBrid
 	return nil
 }
 
-func startRunPortBridges(ctx context.Context, runSession RunSession, requests []RunPortBridgeRequest, aw *audit.Writer) ([]runPortBridgeLease, []backend.PortBridgeEndpoint, error) {
+func startRunPortBridges(ctx context.Context, runSession RunSession, requests []RunPortBridgeRequest, env []string, runtimeBackend backend.Backend, aw *audit.Writer) ([]runPortBridgeLease, []backend.PortBridgeEndpoint, error) {
 	if len(requests) == 0 {
 		return nil, nil, nil
 	}
@@ -77,12 +80,19 @@ func startRunPortBridges(ctx context.Context, runSession RunSession, requests []
 			}
 			listenAddress = bridge.ListenAddress()
 		case "lima":
-			address, err := allocateLoopbackListenAddress(spec.ListenAddress)
+			provider, ok := runtimeBackend.(hostToGuestBridgeProvider)
+			if !ok {
+				err := errors.New("lima backend does not provide run-scoped host-to-guest bridge provider")
+				_ = emitPortBridgeAudit(aw, runSession, spec, string(policy.Deny), "denied", err.Error())
+				return leases, endpoints, err
+			}
+			var err error
+			bridge, err = provider.StartHostToGuestBridge(ctx, runSession.Environment.InstanceName, runSession.Plan.GuestWorkspace, env, spec)
 			if err != nil {
 				_ = emitPortBridgeAudit(aw, runSession, spec, "error", "error", err.Error())
 				return leases, endpoints, err
 			}
-			listenAddress = address
+			listenAddress = bridge.ListenAddress()
 		default:
 			err := fmt.Errorf("host-to-guest PortBridge requires a backend provider for %s backend", runSession.Plan.Backend)
 			_ = emitPortBridgeAudit(aw, runSession, spec, string(policy.Deny), "denied", err.Error())
@@ -257,22 +267,6 @@ func emitPortBridgeAudit(aw *audit.Writer, runSession RunSession, spec portbridg
 		Decision: decision,
 		Details:  details,
 	})
-}
-
-func allocateLoopbackListenAddress(preferred string) (string, error) {
-	preferred = strings.TrimSpace(preferred)
-	if preferred == "" {
-		preferred = "127.0.0.1:0"
-	}
-	ln, err := net.Listen("tcp", preferred)
-	if err != nil {
-		return "", err
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		return "", err
-	}
-	return addr, nil
 }
 
 func portBridgeAuditLabel(value string) string {

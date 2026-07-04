@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"gopkg.in/yaml.v3"
 )
@@ -96,12 +97,9 @@ type provision struct {
 }
 
 type portForward struct {
-	HostIP            string `yaml:"hostIP,omitempty"`
-	HostPort          int    `yaml:"hostPort,omitempty"`
 	GuestIP           string `yaml:"guestIP,omitempty"`
 	GuestIPMustBeZero *bool  `yaml:"guestIPMustBeZero,omitempty"`
 	Proto             string `yaml:"proto,omitempty"`
-	GuestPort         int    `yaml:"guestPort,omitempty"`
 	GuestPortRange    [2]int `yaml:"guestPortRange,omitempty"`
 	Ignore            bool   `yaml:"ignore,omitempty"`
 }
@@ -287,6 +285,43 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	return runner.Run(ctx, b.limactl(), args, hostEnv, b.stdin(), b.stdout(), b.stderr())
 }
 
+func (b Backend) StartHostToGuestBridge(ctx context.Context, instanceName, guestWork string, env []string, spec portbridge.Spec) (*portbridge.Bridge, error) {
+	if strings.TrimSpace(instanceName) == "" {
+		return nil, errors.New("lima host-to-guest bridge requires instance name")
+	}
+	if strings.TrimSpace(guestWork) == "" {
+		return nil, errors.New("lima host-to-guest bridge requires guest workdir")
+	}
+	targetHost, targetPort, err := net.SplitHostPort(spec.TargetAddress)
+	if err != nil {
+		return nil, fmt.Errorf("lima host-to-guest bridge target is invalid: %w", err)
+	}
+	targetHost = strings.Trim(targetHost, "[]")
+	if targetHost == "" || targetHost == "localhost" {
+		targetHost = "127.0.0.1"
+	}
+	if parsed := net.ParseIP(targetHost); parsed == nil || !parsed.IsLoopback() {
+		return nil, errors.New("lima host-to-guest bridge target must be guest loopback")
+	}
+	if _, err := net.LookupPort("tcp", targetPort); err != nil {
+		return nil, fmt.Errorf("lima host-to-guest bridge target port is invalid: %w", err)
+	}
+	runner := b.runner()
+	hostEnv := HostCommandEnv(os.Environ())
+	limactl := b.limactl()
+	script := `host=$1
+port=$2
+exec 3<>/dev/tcp/${host}/${port}
+cat <&3 &
+cat >&3
+wait`
+	connector := func(connCtx context.Context, inbound net.Conn) error {
+		args := ShellArgs(instanceName, guestWork, env, []string{"bash", "-lc", script, "hideout-portbridge", targetHost, targetPort})
+		return runner.Run(connCtx, limactl, args, hostEnv, inbound, inbound, io.Discard)
+	}
+	return portbridge.StartWithConnector(ctx, spec, connector)
+}
+
 func (b Backend) instanceExists(ctx context.Context, runner CommandRunner, hostEnv []string, instance string) (bool, error) {
 	var out bytes.Buffer
 	if err := runner.Run(ctx, b.limactl(), []string{"list", "--quiet"}, hostEnv, nil, &out, io.Discard); err != nil {
@@ -392,7 +427,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 		Mounts: append([]mount{
 			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
 		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.EnvironmentID != "")...)...),
-		PortForwards: append(explicitHostToGuestPortForwards(spec.PortBridges), []portForward{
+		PortForwards: []portForward{
 			{
 				GuestIP:           "0.0.0.0",
 				GuestIPMustBeZero: boolPtr(false),
@@ -406,7 +441,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 				GuestPortRange: [2]int{1, 65535},
 				Ignore:         true,
 			},
-		}...),
+		},
 		Provision: append([]provision{
 			{
 				Mode: "system",
@@ -434,49 +469,6 @@ fi
 		}, toolProvisionBlocks(spec.Profile.Tools)...),
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
 	}
-}
-
-func explicitHostToGuestPortForwards(endpoints []backend.PortBridgeEndpoint) []portForward {
-	var out []portForward
-	for _, endpoint := range endpoints {
-		if endpoint.Direction != "host-to-guest" || endpoint.ListenAddress == "" || endpoint.TargetAddress == "" {
-			continue
-		}
-		host, hostPort, err := splitEndpointPort(endpoint.ListenAddress)
-		if err != nil {
-			continue
-		}
-		guestHost, guestPort, err := splitEndpointPort(endpoint.TargetAddress)
-		if err != nil {
-			continue
-		}
-		if host == "" {
-			host = "127.0.0.1"
-		}
-		if guestHost == "localhost" {
-			guestHost = "127.0.0.1"
-		}
-		out = append(out, portForward{
-			HostIP:    host,
-			HostPort:  hostPort,
-			GuestIP:   guestHost,
-			Proto:     "tcp",
-			GuestPort: guestPort,
-		})
-	}
-	return out
-}
-
-func splitEndpointPort(address string) (string, int, error) {
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil {
-		return "", 0, err
-	}
-	port, err := net.LookupPort("tcp", portText)
-	if err != nil {
-		return "", 0, err
-	}
-	return host, port, nil
 }
 
 func boolPtr(value bool) *bool {

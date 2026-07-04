@@ -621,8 +621,9 @@ Evidence:
 
 Current Phase 1 evidence includes the product host-to-guest path for
 profile-declared and manual candidates: candidate validation, active owner
-registry checks, policy validation, native round-trip tests, Lima config
-provider tests, backend fail-closed tests, audit, cleanup, and Boundary Summary.
+registry checks, policy validation, native round-trip tests, Lima dynamic
+provider tests, checks that reusable instance YAML does not persist product
+forwards, backend fail-closed tests, audit, cleanup, and Boundary Summary.
 Endpoint observation, project-declared candidates, direct JavaScript endpoint
 entrypoints, OAuth callback automation, and guest-to-host exposure remain out of
 this gate.

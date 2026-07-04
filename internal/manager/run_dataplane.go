@@ -27,6 +27,7 @@ import (
 type RunDataPlaneOptions struct {
 	HostFSRun                  hostfs.Config
 	DisableProfileHostFSGrants bool
+	Backend                    backend.Backend
 	Opener                     broker.Opener
 	PortBridges                []RunPortBridgeRequest
 	OpenTargets                []RunOpenTargetOwner
@@ -158,7 +159,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		cancel()
 		return RunDataPlane{}, err
 	}
-	portBridgeLeases, portBridgeEndpoints, err := startRunPortBridges(brokerCtx, runSession, portBridges, aw)
+	portBridgeLeases, portBridgeEndpoints, err := startRunPortBridges(brokerCtx, runSession, portBridges, env, opts.Backend, aw)
 	if err != nil {
 		_ = closeRunPortBridgeLeases(portBridgeLeases, aw, runSession.Layout.ID, runSession.Plan.ProfileName, runSession.Plan.Backend)
 		_ = server.Close()
