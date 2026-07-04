@@ -1,5 +1,7 @@
 # Hideout
 
+[简体中文](README.zh-CN.md)
+
 Hideout is a local privacy runner for untrusted developer tools and agentic
 CLIs. It runs the target inside a reusable Lima environment, gives it an
 isolated identity, routes host access through typed capabilities, and records
