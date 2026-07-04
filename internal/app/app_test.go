@@ -131,6 +131,43 @@ func TestInitNoInputCreatesStoreProfileAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"help"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("help exit=%d stderr=%s", code, errOut.String())
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("help should not write stderr: %s", errOut.String())
+	}
+	text := out.String()
+	for _, want := range []string{
+		"Usage:",
+		"  hideout init [--no-input] [--backend lima|auto] [--network direct]",
+		"  hideout doctor",
+		"  hideout run [flags] -- <command> [args...]",
+		"First run and tool setup:",
+		"  hideout init --npm-package <npm-spec> --npm-command <command>",
+		"Run and explain:",
+		"Profile and HostFS:",
+		"Inspect and manage:",
+		"Advanced and developer:",
+		"  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only",
+		"Lab probes:",
+		"  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("help output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "First run and tool setup:") > strings.Index(text, "Advanced and developer:") {
+		t.Fatalf("help should show first-run path before advanced commands:\n%s", text)
+	}
+	if strings.Index(text, "Advanced and developer:") > strings.Index(text, "Lab probes:") {
+		t.Fatalf("help should keep lab probes after advanced commands:\n%s", text)
+	}
+}
+
 func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	root := writeTestPackageRoot(t)
 	var out, errOut bytes.Buffer
