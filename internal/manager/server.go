@@ -355,6 +355,18 @@ function empty(label) {
 function metric(label, value, sub) {
   return '<article class="metric"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div><div class="sub">' + esc(sub || "") + '</div></article>';
 }
+function normalizedNetworkMode(mode) {
+  return mode || "direct";
+}
+function networkRisk(mode) {
+  const normalized = normalizedNetworkMode(mode);
+  if (normalized === "tun2socks") return "proxy hides origin path, not data egress";
+  if (normalized === "direct") return "direct exposes network identity";
+  return "";
+}
+function deniedAuditEvents() {
+  return auditEvents.filter(function(e) { return e.decision === "deny"; });
+}
 function api(path) {
   return fetch("/api/v1/" + path, {headers: {"X-Hideout-UI-Token": token}}).then(async function(response) {
     const text = await response.text();
@@ -378,11 +390,13 @@ function renderSummary() {
   const sessions = overview.sessions || [];
   const backends = overview.backends || [];
   const available = backends.filter(function(b) { return b.available; }).length;
-  const networkModes = (overview.network && overview.network.profileDefaults || []).map(function(n) { return n.mode; });
+  const networkModes = (overview.network && overview.network.profileDefaults || []).map(function(n) { return normalizedNetworkMode(n.mode); });
+  const denied = deniedAuditEvents();
   summaryEl.innerHTML = [
     metric("Profiles", profiles.length, profiles.map(function(p) { return p.name; }).join(", ")),
     metric("Sessions", sessions.length, sessions.filter(function(s) { return s.hasAudit; }).length + " with audit"),
     metric("Backends", available + "/" + backends.length, backends.map(function(b) { return b.name; }).join(", ")),
+    metric("Denied", denied.length, denied.slice(0, 3).map(function(e) { return e.action || "event"; }).join(", ")),
     metric("Network", networkModes.length || "direct", networkModes.join(", ") || "direct")
   ].join("");
 }
@@ -491,7 +505,8 @@ const renderers = {
     const defaults = n.profileDefaults || [];
     if (!defaults.length) return empty("No network profiles");
     return '<div class="items">' + defaults.map(function(row) {
-      return item(row.profile || "profile", row.mode || "direct", [["mode", row.mode], ["proxySecretRef", row.proxySecretRef], ["proxyEnvVisible", row.proxyEnvVisible]], row.mode === "tun2socks" ? "warn" : "ok");
+      const mode = normalizedNetworkMode(row.mode);
+      return item(row.profile || "profile", mode, [["mode", mode], ["risk", networkRisk(mode)], ["proxySecretRef", row.proxySecretRef], ["proxyEnvVisible", row.proxyEnvVisible]], mode === "tun2socks" ? "warn" : "ok");
     }).join("") + "</div>";
   },
   backends: function() {
@@ -666,8 +681,9 @@ function bindRunPanel() {
     });
   });
 }
-function renderAuditEvents(full) {
-  const events = full ? auditEvents : auditEvents.slice(0, 8);
+function renderAuditEvents(full, sourceEvents) {
+  const source = sourceEvents || auditEvents;
+  const events = full ? source : source.slice(0, 8);
   if (!events.length) return empty("No audit events");
   return '<div class="audit-list">' + events.map(function(e) {
     const tone = e.decision === "deny" || e.decision === "error" ? "error" : "";
@@ -676,8 +692,9 @@ function renderAuditEvents(full) {
   }).join("") + "</div>";
 }
 function renderAuditTail() {
-  auditMetaEl.textContent = auditEvents.length + " events";
-  auditBodyEl.innerHTML = renderAuditEvents(false);
+  const denied = deniedAuditEvents();
+  auditMetaEl.textContent = denied.length + " denied / " + auditEvents.length + " events";
+  auditBodyEl.innerHTML = denied.length ? '<h3>Recent denied</h3>' + renderAuditEvents(false, denied) + '<h3>Recent audit</h3>' + renderAuditEvents(false) : renderAuditEvents(false);
 }
 function setStatus(text, tone) {
   statusEl.textContent = text;
