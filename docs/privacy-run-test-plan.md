@@ -373,6 +373,8 @@ HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
 HIDEOUT_OPERATOR_COMMAND=<command> \
 HIDEOUT_OPERATOR_VERSION_ARGS='--version' \
 HIDEOUT_OPERATOR_ENV_KEYS=TOKEN_ENV \
+HIDEOUT_OPERATOR_AUTH_COMMAND='<optional guest login command>' \
+HIDEOUT_OPERATOR_STATUS_COMMAND='<guest command that proves login state>' \
 HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
   scripts/test-phase1.sh --operator-cli
 ```
@@ -392,6 +394,11 @@ Required checks:
   reuses the same environment;
 - operator-selected env keys are passed through `--env` only for the run, while
   Hideout runtime env remains controlled by the normal env policy;
+- an optional operator-supplied auth command can run inside the isolated profile
+  identity home, using the operator's terminal for login flows such as browser
+  plus paste-code;
+- an optional operator-supplied status command proves that auth state persisted
+  in the reusable environment/profile identity, not in the host home;
 - an optional operator-supplied request command succeeds from inside the guest;
 - HostFS grants covering the Hideout store are rejected.
 

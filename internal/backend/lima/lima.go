@@ -379,7 +379,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 		},
 		Mounts: append([]mount{
 			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
-		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir)...)...),
+		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.EnvironmentID != "")...)...),
 		Provision: append([]provision{
 			{
 				Mode: "system",
@@ -429,7 +429,14 @@ func identityStateMounts(identityRoot string) []mount {
 	return mounts
 }
 
-func sessionStateMounts(sessionDir string) []mount {
+func sessionStateMounts(sessionDir string, reusableEnvironment bool) []mount {
+	if reusableEnvironment {
+		return []mount{{
+			Location:   sessionDir,
+			MountPoint: GuestSessionDir,
+			Writable:   true,
+		}}
+	}
 	subdirs := []string{"tmp", "shims", "network", "bootstrap"}
 	mounts := make([]mount, 0, len(subdirs))
 	for _, subdir := range subdirs {

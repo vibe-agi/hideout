@@ -20,12 +20,14 @@ Optional:
   HIDEOUT_OPERATOR_STORE=<path>
   HIDEOUT_OPERATOR_LIMA_HOME=<path>
   HIDEOUT_OPERATOR_VERSION_ARGS='--version'
+  HIDEOUT_OPERATOR_AUTH_COMMAND='<guest shell command>'
+  HIDEOUT_OPERATOR_STATUS_COMMAND='<guest shell command>'
   HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest shell command>'
   HIDEOUT_OPERATOR_ENV_KEYS='KEY1,KEY2'
 
 This is an operator-supplied smoke for any real CLI. Hideout does not encode
 the CLI's product semantics; the operator supplies package, command, env, and
-request behavior.
+auth/request behavior.
 USAGE
 }
 
@@ -178,6 +180,21 @@ run_operator_guest() {
   run_hideout "$label" "$stdout" "$stderr" "${run_args[@]}"
 }
 
+run_operator_guest_interactive() {
+  local label="$1"
+  shift
+  local run_args=(run --backend lima --profile "$profile_name" --workspace "$workspace")
+  if [ "${#OPERATOR_ENV_FLAGS[@]}" -gt 0 ]; then
+    run_args+=("${OPERATOR_ENV_FLAGS[@]}")
+  fi
+  run_args+=(-- "$@")
+  echo "operator-cli: $label"
+  if ! env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" "${run_args[@]}"; then
+    echo "operator-cli: $label failed" >&2
+    exit 1
+  fi
+}
+
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   usage
   exit 0
@@ -252,6 +269,23 @@ env2="$(extract_environment_id "$tmp/version2.err")"
 if [ "$env2" != "$env1" ]; then
   echo "operator-cli: environment was not reused: first=$env1 second=$env2" >&2
   exit 1
+fi
+
+if [ -n "${HIDEOUT_OPERATOR_AUTH_COMMAND:-}" ]; then
+  run_operator_guest_interactive "running operator-supplied auth command" \
+    sh -lc "$HIDEOUT_OPERATOR_AUTH_COMMAND"
+fi
+
+if [ -n "${HIDEOUT_OPERATOR_STATUS_COMMAND:-}" ]; then
+  echo "operator-cli: running operator-supplied status command"
+  run_operator_guest "status run" "$tmp/status.out" "$tmp/status.err" 0 \
+    sh -lc "$HIDEOUT_OPERATOR_STATUS_COMMAND"
+  cat "$tmp/status.out"
+  env_status="$(extract_environment_id "$tmp/status.err")"
+  if [ "$env_status" != "$env1" ]; then
+    echo "operator-cli: status run did not reuse environment: first=$env1 status=$env_status" >&2
+    exit 1
+  fi
 fi
 
 if [ -n "${HIDEOUT_OPERATOR_REQUEST_COMMAND:-}" ]; then

@@ -137,6 +137,39 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	}
 }
 
+func TestPrepareMountsEnvironmentRuntimeRoot(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.SessionDir = filepath.Join(root, "environments", spec.EnvironmentID, "runtime")
+	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	data, err := os.ReadFile(session.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg limaConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml decode: %v\n%s", err, data)
+	}
+	foundRoot := false
+	for _, m := range cfg.Mounts {
+		if m.Location == spec.SessionDir && m.MountPoint == GuestSessionDir && m.Writable {
+			foundRoot = true
+		}
+		for _, subdir := range []string{"tmp", "shims", "network", "bootstrap"} {
+			if m.Location == filepath.Join(spec.SessionDir, subdir) || m.MountPoint == GuestSessionDir+"/"+subdir {
+				t.Fatalf("environment runtime should mount stable root, not child runtime mount: %+v", m)
+			}
+		}
+	}
+	if !foundRoot {
+		t.Fatalf("environment runtime root mount missing in %+v", cfg.Mounts)
+	}
+}
+
 func TestPrepareUsesSessionScopedInstanceForEphemeralIdentity(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
