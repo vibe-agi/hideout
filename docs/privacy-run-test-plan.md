@@ -377,6 +377,12 @@ HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
   scripts/test-phase1.sh --operator-cli
 ```
 
+Real-product values must stay outside the repository. Put them in the invoking
+shell, a local ignored wrapper, or a secrets manager, then call the generic
+operator smoke. Do not add a product-specific smoke script, package name, API
+key, account identifier, or prompt fixture to Hideout Core, docs, or default
+gates.
+
 Required checks:
 
 - the profile is configured through `hideout profile tools`, not by editing
