@@ -449,7 +449,7 @@ Treat these as stable contracts.
 | AccessSensor | Guest-side observation plane for suspicious access attempts. | Later. It may observe and summarize guest filesystem, process, or network probes for audit and user warnings, but it must not be required for HostFS data access or authorization. |
 | OpenTarget | Typed host or guest application target behind an explicit brokered action. | Phase 1 implements `host.open` URL/workspace-file targets and the minimal `preview.open` target over `endpoint.expose.host-to-guest`. Browser-control, IDE, Docker, device/simulator, and guest-to-host targets are Later implementations. |
 | PortBridge | Auditable TCP bridge between explicit listen and target endpoints. | Phase 1 implements run-scoped host-to-guest transport only as the lower-layer provider for typed Endpoint Exposure. It has no raw CLI/API/script trigger surface, and `host.open` must not create port mappings. Guest-to-host remains lab/separate design. |
-| NetworkPolicy | Egress model for a session. | Supports `direct` and guest-side `tun2socks` with hidden proxy env. |
+| NetworkPlan | Egress model for a session. | Supports `direct` and guest-side `tun2socks` with hidden proxy env. |
 | SecretRef | Named reference to a sensitive host value. | Resolves availability for setup components without exposing secret values to target env, audit, explain, broker requests, or Web UI. |
 | AuditLog | Evidence trail. | Records setup, policy decisions, broker requests, redactions, and session result. |
 | ExplainSnapshot | Human-readable privacy summary. | Makes each run understandable without reading raw JSON. |
@@ -647,15 +647,27 @@ Good capability names describe authority:
 
 ```text
 host.open
-host.browser.open
-host.ide.openWorkspaceFile
+host.app.open-resource
+endpoint.expose.host-to-guest
+endpoint.expose.guest-to-host
 host.clipboard.write
-host.docker.runContainer
+host.fs.stat
 host.fs.read
 host.fs.list
 host.fs.write
 guest.exec
 ```
+
+`host.app.open-resource` is a high-authority Design-ready capability. It covers
+opening a validated host-side resource with a declared host application provider;
+it does not mean the resource is safe. A workspace file or directory can itself
+be an execution payload for the host application, for example through editor
+workspace tasks, project settings, extensions, file associations, or other
+application-specific open hooks. Core must not guess this risk for adapters, but
+providers for this capability must open resources through constrained modes or
+provider-specific safeguards that disable automatic execution where the target
+application supports it. Providers that cannot provide such safeguards must be
+treated as higher-risk and gated by explicit policy or a later prompt flow.
 
 `network.connect` in Phase 1 means session network setup and route verification.
 It is not a per-socket firewall, per-request audit system, or packet policy
@@ -786,9 +798,11 @@ Scripts must not:
 - create action names at runtime;
 - depend on mutable global state.
 
-Script inputs contain only sanitized policy context supplied by Hideout. They do
-not expose host env, process env, secret values, real home paths, or arbitrary
-filesystem reads.
+Required Phase 1 script inputs contain only sanitized policy context supplied by
+Hideout. They do not expose host env, process env, secret values, real home
+paths, or arbitrary filesystem reads. Design-ready command adapters may receive
+rich local runtime facts through bounded context queries, but those facts are
+still not authority and must not be exported as public audit evidence.
 
 Domain-specific behavior belongs in adapters and recipes above Core. For
 example, browser preview, browser control, adb access, simulator workflows, MCP
@@ -1193,16 +1207,23 @@ Why Go:
 - keeps the trusted launcher independent from Node, Bun, or Python;
 - supports a clean package layout without a large framework.
 
-Recommended Go dependencies:
+Current Go dependencies:
+
+This table records the packages used by the current implementation. It is not
+a permanent dependency recommendation. In particular, Phase 1 currently uses the
+standard library `flag` package for CLI parsing; a product CLI may later move to
+Cobra, `pflag`, or a similar command framework for help text, completion, and
+nested command ergonomics. Such a framework must only parse user input into
+typed options. It must not own authorization, policy decisions, provider
+execution, or the exact `hideout run -- <target argv>` pass-through contract.
 
 | Area | Package | Use |
 | --- | --- | --- |
-| CLI parsing | `github.com/alecthomas/kong` | Typed subcommands and flags. |
+| CLI parsing | standard library `flag` | Current parser for subcommands and flags; product CLI ergonomics may later move to Cobra/`pflag` while preserving authority separation and exact target argv pass-through. |
 | JSON Schema | `github.com/santhosh-tekuri/jsonschema/v6` | Profile, policy proposal, broker, audit, and manager API validation. |
 | YAML | `gopkg.in/yaml.v3` | Generate Lima YAML. |
-| IDs | `github.com/oklog/ulid/v2` | Sortable profile/session IDs using `crypto/rand`. |
-| File locking | `github.com/gofrs/flock` | Protect profile/session mutation. |
-| Terminal helpers | `golang.org/x/term` | Terminal detection and future prompts. |
+| IDs | standard library `crypto/rand` and `encoding/hex` | Random profile, identity, rule, and environment IDs; environment IDs include a timestamp prefix for listing. |
+| File locking | `golang.org/x/sys/unix` | `flock`-based environment mutation locking on Unix hosts. |
 | Platform syscalls | `golang.org/x/sys` | Unix-specific socket, signal, and file mode details. |
 | Policy scripting | `github.com/dop251/goja` | Constrained JavaScript hooks. |
 | Guest FUSE | `github.com/hanwen/go-fuse/v2` | HostFS Portal mount inside Linux guests. |
@@ -2208,6 +2229,10 @@ use the same run network policy as the target command. The setup phase must:
   present, so user-declared `file:` package specs that point at the workspace
   are explicit supply inputs rather than ambient authority;
 - apply the selected network policy before any package manager network access;
+- require strict operator proxies to allow the package registry egress needed by
+  selected tool supply, such as Debian/Ubuntu apt mirrors for `node-dev` and
+  `registry.npmjs.org` for npm globals; if the proxy denies those destinations,
+  provisioning fails closed before the target command starts;
 - resolve proxy secrets only into Hideout-owned setup material, never into the
   target command environment;
 - fail closed if `tun2socks` route verification or DNS/proxy checks fail;
@@ -2661,6 +2686,173 @@ commands to the broker. Adding proxy behavior for a new command requires an
 explicit command registration, request schema, route implementation, policy
 mapping, and audit shape.
 
+The command name is only a binding key. It must not create product semantics or
+authority by itself. A command named `code`, `open`, `adb`, or any other string
+has no intrinsic meaning to Core. Semantics come from the configured binding and
+the adapter selected for that binding; authority comes only from a Go-owned
+capability validator and provider.
+
+Long-term Command Proxy layering:
+
+```text
+guest command name
+  -> Command Binding
+  -> JavaScript adapter
+  -> intent proposal
+  -> Go capability validator
+  -> Go capability provider
+  -> audit and sanitized guest result
+```
+
+Responsibilities:
+
+```text
+Command Binding
+  User or recipe-owned declaration that maps one guest command symbol to an
+  adapter, allowed outcomes, allowed capabilities, and optional provider names.
+
+JavaScript adapter
+  Interprets argv, cwd, bounded stdin metadata, and explicit context queries. It
+  may deny, ask, simulate, `rewrite-guest`, or propose invoking a declared
+  capability. It does not execute host authority.
+
+Go Core
+  Supplies factual context, enforces the binding limits, validates the proposed
+  capability and resource schema, performs guest-path to host-resource mapping,
+  rebuilds provider arguments from structured resources, executes the provider,
+  and records audit.
+```
+
+Core must provide facts, not risk conclusions. It must not synthesize labels such
+as "IDE risk", "project open", or "safe file" for adapters. If an adapter cares
+about a file, directory, URL, local listener, or tool-specific marker, it must use
+a constrained context query for that fact and make the policy decision itself.
+Those query results are runtime decision context, not public audit fields.
+
+Example Design-ready binding shape:
+
+```json
+{
+  "commandProxy": {
+    "bindings": {
+      "code": {
+        "adapter": "bundle:vscode-cli",
+        "allowedOutcomes": [
+          "invoke-capability",
+          "deny",
+          "ask",
+          "simulate",
+          "rewrite-guest"
+        ],
+        "allowedCapabilities": [
+          "host.app.open-resource"
+        ],
+        "providers": [
+          "vscode"
+        ],
+        "stdin": "deny"
+      }
+    }
+  }
+}
+```
+
+This example does not make `code` an editor in Core. It only declares that this
+binding may use the `vscode-cli` adapter and may propose
+`host.app.open-resource` through the `vscode` provider. The provider is a
+Go-owned executor; bundles and recipes may reference a provider but must not ship
+or replace provider code. The provider must also own application-specific safety
+defaults for opening resources, such as restricted workspace modes, disabled
+auto-run hooks, or equivalent safeguards when the target host application
+supports them. These safeguards are provider obligations, not Core-generated risk
+labels and not adapter-supplied host argv.
+
+Raw command argv is adapter input, not provider output. An adapter may inspect
+`code .`, `code /workspace/file`, or tool-specific flags to understand user
+intent, but it must translate that input into structured resources and options.
+It must not pass target argv through to a host provider.
+
+Host-provider argument construction must be whitelist-based. The provider
+rebuilds host argv from validated structured resources. Guest argv must not be
+filtered and then passed through to host commands. For example, an adapter may
+propose a structured file location, but the provider decides whether and how that
+location becomes an argv element.
+
+Design-ready adapter outcome model:
+
+```text
+deny
+  Return a deterministic failure to the guest.
+
+ask
+  Request interactive approval. Until a prompt channel exists for the current
+  surface, ask fails closed as deny.
+
+simulate
+  Return bounded stdout, stderr, and exit code without executing a command.
+  Simulation has no host authority and no guest process side effect.
+
+rewrite-guest
+  Rewrite to another guest command route. Rewrite may change the guest command
+  name, argv, and a restricted env overlay, but it must never create a host
+  command invocation and must still pass through the validator.
+
+invoke-capability
+  Request a configured Core capability and provider. This is the only outcome
+  that may touch host authority, and only after the Go validator accepts the
+  binding, capability, provider, resource schema, and route.
+```
+
+Outcome authority levels:
+
+| Outcome | Host authority | Guest execution | Required guard |
+| --- | --- | --- | --- |
+| `deny` | none | none | deterministic exit code and audit |
+| `ask` | none until approved | none until approved | prompt exists, otherwise fail closed |
+| `simulate` | none | none | bounded stdout/stderr/exit code, audit |
+| `rewrite-guest` | none | yes, guest only | real guest binary lookup, recursion guard, env denylist |
+| `invoke-capability` | typed provider only | optional | allowed capability/provider, structured resource validation |
+
+`simulate` may model facts that the policy owns, such as a compatibility
+`--version` response or a configured fake command result. It must not read host
+state directly, stream unbounded data, or hide that the response was simulated.
+
+`rewrite-guest` is a guest-side compatibility tool, not an escape hatch. It may
+route `code` to a guest editor binary or add guest-only environment defaults. It
+must resolve the real guest binary from a PATH that excludes the shim directory,
+must set a recursion guard, and must not set `HIDEOUT_*`, broker-token, proxy
+secret, or hidden-env backing variables.
+
+`invoke-capability` consumes structured proposals only. A proposal may include a
+guest path, URL, endpoint candidate ID, option enum, or other schema-defined
+value. Go resolves and validates those values before the provider sees them.
+Raw host commands, raw host argv, provider handles, backend endpoints, and host
+paths supplied by JavaScript fail closed.
+
+Design-ready command context query classes:
+
+```text
+path.resolveGuest(path)
+  Resolve a guest path inside the current decision snapshot.
+
+path.mapToHost(resolvedPath)
+  Map a resolved guest path to a host-backed resource only when it is inside the
+  workspace, an approved mount, or an approved HostFS grant.
+
+fs.stat/readText/exists(path)
+  Bounded, read-only queries over resources already visible to the target or
+  explicitly granted for the decision. These queries are audited or replayable
+  as decision context.
+
+capability.describe(name)
+  Return declared capability/provider metadata. It must not return provider
+  handles, broker tokens, backend endpoints, or host process objects.
+```
+
+Adapters may use these facts to implement their own risk policy. Core must still
+fail closed if a proposal uses a capability, provider, resource kind, route, or
+outcome that the binding did not allow.
+
 Phase 1 delivered command proxies:
 
 ```text
@@ -2706,6 +2898,17 @@ The protocol supports several routes so the model can grow without changing the
 envelope. Required Phase 1 implements only the `open`/`xdg-open` host-open path
 and deny handling. A profile, script, or broker request that selects an
 unimplemented route fails closed.
+
+Adapter outcomes are policy-level results. Routes are the lower-level execution
+paths used after validation:
+
+```text
+simulate          -> route=fake
+rewrite-guest     -> route=guest-exec
+invoke-capability -> route=host-broker, route=portbridge, or another typed
+                     provider route owned by the requested capability
+deny / ask-denied -> route=deny
+```
 
 The session broker endpoint is the per-session transport endpoint owned by Host
 Broker. It is the policy chokepoint for proxied commands. Only
@@ -2783,11 +2986,19 @@ Key rules:
   workspace, or an opaque string passed through to scripts or audit;
 - command proxy policy compiles into canonical capability policy;
 - scripts return proposals only;
+- adapter outcomes are typed and must map to implemented routes;
 - host actions are executed only by Host Broker;
 - paths must be normalized and mapped before policy;
 - host paths outside mapped workspace are denied by default;
 - stdin/stdout content is not logged by default;
 - Phase 1 Command Proxy context must not include stdin/stdout payloads;
+- Core supplies factual context and bounded query APIs to scripts. Risk
+  classification belongs to policy adapters and must not be hard-coded as Core
+  hints;
+- adapter code may be shared, but runtime decision context is local and must not
+  be exported as public audit evidence;
+- capability providers are Go-owned TCB. Bundles may ship adapters and recipes,
+  not provider implementations;
 - high-risk host mutation commands are Later and opt-in.
 
 When `guest-exec` is implemented for a registered shim, it must avoid recursive
@@ -2997,22 +3208,22 @@ local state remain host-side. Profiles that do not want this tradeoff must set
 
 OpenTarget is the domain contract for a typed host or guest application target.
 It is not permission to open any app, execute host commands, or create arbitrary
-network tunnels. Each target implementation owns one specific behavior, such as
-opening a URL, opening a workspace file, controlling an isolated browser, or
-exposing a guest preview to a host browser.
+network tunnels. Each target implementation owns one specific authority shape,
+such as opening an approved URL, opening an approved host-backed resource,
+controlling an isolated browser, or exposing a guest preview to a host browser.
 
 PortBridge is an architecture-level transport primitive owned by an OpenTarget.
 It must not be hidden inside a browser opener, command proxy, or backend adapter.
 The same bridge contract is used whether the later implementation is browser,
 IDE, Docker, preview, or another brokered target.
 
-Core does not need to understand every product protocol. It provides
-capability primitives and validators. Browser control, preview behavior, adb
-access, simulator launch, IDE open, and future MCP integrations should be built
-as adapters and persona recipes over OpenTarget, PortBridge, Command Proxy,
-HostFS, and Network primitives. A JavaScript adapter may propose the typed
-capability; it must not materialize a port, launch a host process, read host
-state, or bypass Manager plan/apply.
+Core does not need to understand every product protocol. It provides capability
+primitives, factual context, validators, and Go-owned providers. Browser
+control, preview behavior, adb access, simulator launch, editor integration, and
+future MCP integrations should be built as adapters and persona recipes over
+OpenTarget, PortBridge, Command Proxy, HostFS, and Network primitives. A
+JavaScript adapter may propose the typed capability; it must not materialize a
+port, launch a host process, read host state, or bypass Manager plan/apply.
 
 Layering:
 
@@ -3112,10 +3323,11 @@ endpoint.expose.host-to-guest
 endpoint.expose.guest-to-host
 ```
 
-Implementation status: Phase 1 implements the minimal
-`endpoint.expose.host-to-guest` product path for profile-declared and run-scoped
-manual candidates. The Manager resolves the candidate, verifies an active
-OpenTarget owner, derives the host-to-guest mapping in Go, validates
+Implementation status, summarized here for the Endpoint Exposure contract. The
+cross-subsystem status source is [STATUS.md](STATUS.md). Phase 1 implements the
+minimal `endpoint.expose.host-to-guest` product path for profile-declared and
+run-scoped manual candidates. The Manager resolves the candidate, verifies an
+active OpenTarget owner, derives the host-to-guest mapping in Go, validates
 `route=portbridge`, materializes the backend provider, audits the decision, and
 cleans up at run end. Lima uses a host-side SSH direct-tcpip dynamic bridge
 rather than static instance port-forward configuration, so cleanup is
@@ -3950,6 +4162,12 @@ environment-scoped lock from runtime preparation through backend cleanup and
 environment finish so concurrent runs cannot clear or rewrite the same runtime
 directories.
 
+CLI interruption is part of the run lifecycle. `SIGINT` and `SIGTERM` must cancel
+the active run context and let Manager perform ordered teardown: command stop,
+PortBridge close, HostFS and network cleanup, audit close, environment finish,
+and session-local secret cleanup. Forced process death such as `SIGKILL` remains
+outside this guarantee and is handled by later cleanup/doctor repair.
+
 `hideout run --new -- <command>` forces a new environment for the current
 profile/workspace pair without resetting profile identity.
 
@@ -4237,7 +4455,7 @@ Phase 2:
 Phase 3:
 
 - Docker broker;
-- IDE broker;
+- host app/resource provider;
 - clipboard broker;
 - guest exec audit research.
 

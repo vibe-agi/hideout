@@ -1,0 +1,45 @@
+# Hideout Implementation Status
+
+<!-- markdownlint-disable MD013 -->
+
+Status source for the current product surface. Detailed contracts remain in the
+design documents; this file prevents implementation status from drifting across
+many subsystem specs.
+
+Current release state: private alpha / supervised dogfood. Public GA requires a
+fresh release-candidate evidence bundle, including Lima Gate 2, strict proxy Gate
+3, host escape Gate 4, generic CLI dogfood smoke, and cleanup lifecycle checks.
+
+## Implemented Product Paths
+
+| Area | Status |
+| --- | --- |
+| Lima backend | Reusable environments, workspace mount, identity mounts, helper discovery, tool provisioning, and command execution are implemented for the primary macOS dogfood path. |
+| Native backend | Implemented as a weak-isolation development harness only. It is not isolation evidence. |
+| Workspace guard | Implemented before backend prepare; rejects host home, Hideout store, credential roots, and browser profile roots unless explicitly overridden. |
+| Environment lifecycle | Reuse, list, stop, clean, environment locking, SIGINT/SIGTERM cancellation, and runtime cleanup are implemented. |
+| Command Proxy | Phase 1 product path implements `open` and `xdg-open` as registered shims for `host.open`. Generic binding/adapter outcomes are design-ready, not implemented as a general user-facing surface. |
+| Host open | `host.open` supports external HTTP(S) URLs and workspace-mapped files through a brokered opener, isolated browser profile, local/private URL deny, DNS rebind checks, audit, and Gate 4 coverage. |
+| HostFS Portal | Read-only `stat`, `read`, and `list` data plane is implemented for Linux guests through FUSE and broker RPC, with grants, reserved-store rejection, filtered list, and audit. |
+| HostFS write overlay | Later. |
+| Network | `direct` and guest-side `tun2socks` modes are implemented. Proxy values are hidden from the target env. DNS/privacy-mode hardening remains governed by the network design and gates. |
+| Tool supply | `base-dev`, `node-dev`, and user-declared npm globals are provisioned after network bootstrap and before target command checks. Strict proxies must allow required registry egress or provisioning fails closed. |
+| Endpoint Exposure | Product `endpoint.expose.host-to-guest` is implemented for declared and run-scoped manual guest-loopback TCP candidates, with active owner validation, backend provider, audit, cleanup, and Boundary Summary. |
+| Preview open | Minimal `preview.open` is implemented as the first consumer of host-to-guest exposure. Callback adapters, endpoint observation, and project-declared auto exposure are later/design-ready. |
+| Boundary Summary | Default `hideout run` is quiet; `--verbose`, `explain`, audit, Manager API, TUI, or Web UI surfaces show control-plane evidence. |
+| Script runtime | Required Phase 1 supports `decideCommand(ctx)` and `redactAudit(ctx)` with constrained goja execution and deterministic time/randomness. Bounded context query APIs are design-ready. |
+
+## Not Yet Productized
+
+| Area | Status |
+| --- | --- |
+| Generic Command Proxy bindings | Design-ready. Command names as binding keys, JS adapters, outcomes, provider descriptors, and bounded context queries are documented but not yet a general product path. |
+| Command outcomes beyond `host.open` deny/allow | Design-ready. `simulate`, `rewrite-guest`, and generic `invoke-capability` must fail closed until implemented and gated. |
+| Provider descriptors | Design-ready. Provider engines must remain Go-owned; ecosystem descriptors require schema, validator, and trust UX before use. |
+| `endpoint.expose.guest-to-host` | Lab/separate design. Required before adb, browser DevTools, host service reachability, or similar workflows. |
+| Endpoint observe / AccessSensor | Later. Observation may produce audit and warnings, but must not authorize exposure by itself. |
+| Browser control | Lab/separate design. |
+| adb / device / simulator workflows | Adapter recipes over future guest-to-host and OpenTarget capabilities; not productized. |
+| Host app/resource provider recipes | Design-ready. Core must supply facts and validators; adapters own product risk logic. |
+| HostFS overlay apply | Later. |
+| Public ecosystem | Later. Bundle composition, revocation, signatures, author tooling, and workspace trust must be promoted before public ecosystem release. |

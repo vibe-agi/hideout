@@ -131,12 +131,12 @@ tbd
 | HostFS overlay | later | later | later/tbd | later/tbd | later/tbd | no |
 | `host.open.url` | required | required | tbd | required | tbd | yes |
 | Isolated browser profile | required | required | local-host only | required | tbd | yes |
-| `endpoint.expose.host-to-guest` | product path | tbd | tbd | tbd | tbd | dev-only / weak |
+| `endpoint.expose.host-to-guest` | required | tbd | tbd | tbd | tbd | weak/dev-only |
 | `endpoint.expose.guest-to-host` | lab / separate design | lab / separate design | tbd | tbd | tbd | lab |
 | `endpoint.observe` | later | later | tbd | tbd | tbd | weak/later |
 | Browser control | lab -> product | product | tbd | tbd | tbd | lab |
 | Direct network | required | required | required | required | required | yes |
-| Tun2socks | product target | product target | tbd | tbd | tbd | no |
+| Tun2socks | required | required | tbd | tbd | tbd | no |
 | DNS verification | required for privacy mode | required for privacy mode | tbd | tbd | tbd | no |
 | Audit | required | required | required | required | required | required |
 | Cleanup | required | required | required | required | required | required |

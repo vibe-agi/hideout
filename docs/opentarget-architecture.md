@@ -22,7 +22,7 @@ Developer tools and agents need controlled host interaction:
 - preview a guest web server in the host browser;
 - attach browser automation to an isolated profile;
 - work with mobile simulators;
-- open an IDE or system app for a project-local file.
+- ask a host application provider to open a project-local resource.
 
 If these are implemented as ad hoc command proxies, Hideout becomes a generic
 host execution system. OpenTarget prevents that by giving every host escape a
@@ -36,7 +36,7 @@ typed model.
 - Browser control is a Browser OpenTarget, not an extension of `open`.
 - OpenTarget Core defines target authority and lifecycle; adapters define
   protocol-specific intent such as browser control, preview, adb, simulator, or
-  IDE behavior.
+  editor behavior.
 - User experience presets may group targets by workflow, but the lower layer is
   target-type based.
 - Real host profiles and private host-local network targets are denied by
@@ -66,9 +66,8 @@ host.open.file
 browser.launch
 browser.control
 preview.open
-app.launch
+host.app.open-resource
 mobile.simulator.open
-ide.open
 ```
 
 OpenTarget lifecycle:
@@ -126,13 +125,13 @@ Targets:
 
 - `host.open.url`
 - `host.open.file`
-- `app.launch` for safe host apps such as Finder or system file reveal
+- `host.app.open-resource` through a declared host app provider
 
 Use cases:
 
 - open documentation;
 - reveal an output file;
-- open a workspace-local file with a host app.
+- open a workspace-local resource with a declared host app provider.
 
 ### Web Development
 
@@ -163,7 +162,7 @@ Implementation shape:
 Targets:
 
 - `mobile.simulator.open`
-- `app.launch` for emulator tooling;
+- `host.app.open-resource` through an emulator-tooling provider;
 - explicit `endpoint.expose.guest-to-host` proposals when an adb adapter is
   enabled.
 
@@ -187,7 +186,7 @@ adapter proposals for host service reachability fail closed at the Go validator.
 Targets:
 
 - `mobile.simulator.open`
-- `app.launch` for simulator tooling;
+- `host.app.open-resource` through a simulator-tooling provider;
 - browser or WebView preview through explicit target rules.
 
 Use cases:
@@ -297,17 +296,23 @@ or arbitrary host command lines.
 - `host.open.file` for workspace-mapped files
 - isolated browser profile for URL open
 - Command Proxy for `open` and `xdg-open`
+- product `endpoint.expose.host-to-guest` over declared or run-scoped manual
+  guest-loopback TCP candidates
+- minimal `preview.open` as the first product consumer of the host-to-guest
+  exposure path
 
-### Capability Probe
+### Diagnostic Coverage For Product Paths
 
-- browser-control probe;
-- preview-open probe;
-- loopback PortBridge probes.
+- `preview-open` lab probe covers product preview mechanics without creating a
+  second authority model;
+- loopback PortBridge probes cover byte copy, cleanup, and cancellation for the
+  transport provider used by product endpoint exposure;
+- browser-control probe remains lab-only and does not promote browser control.
 
 ### Next Product Increment
 
-- harden `preview.open` beyond declared/manual candidates, including callback
-  and readiness behavior;
+- extend endpoint exposure beyond declared/manual candidates, including callback
+  adapters, endpoint observation, and richer readiness behavior;
 - promote `browser.launch`;
 - stabilize the adapter ABI for preview and browser-control recipes;
 - define browser-control policy and endpoint lifecycle;
@@ -316,7 +321,7 @@ or arbitrary host command lines.
 ### Later
 
 - Android and iOS target presets;
-- IDE integration;
+- host app/resource provider recipes;
 - Docker or local service targets;
 - user prompts.
 

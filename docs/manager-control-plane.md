@@ -84,7 +84,7 @@ Session
 HostFSRule
 HostFSOverlay
 NetworkPlan
-NetworkSensor
+AccessSensor
 CommandProxyRule
 OpenTarget
 PortBridge
@@ -122,6 +122,11 @@ bundle/version, declared permissions, required Core primitives, and risk labels
 for a domain workflow. It is not a backend adapter and does not execute
 authority directly. Backend adapters remain Go-owned backend substrate
 integrations.
+
+AccessSensor means the Later observation plane for guest filesystem, process, or
+network probes. It is a reporting and warning resource, not an authorization
+mechanism. Manager should use this term instead of defining separate
+filesystem/network sensors unless a future design intentionally splits them.
 
 Each resource needs:
 
@@ -178,7 +183,8 @@ ApplyBundleExport(planId) -> ExportResult
 
 Plan output should be readable by CLI, TUI, and WebUI.
 
-Current implementation status:
+Current implementation status, summarized for Manager ownership only. The
+cross-subsystem status source is [STATUS.md](STATUS.md).
 
 - `PlanInit` and `ApplyInit` own first-run bootstrap tasks.
 - `PlanDoctorFix` and `ApplyDoctorFix` reuse Init Task plans for repair.

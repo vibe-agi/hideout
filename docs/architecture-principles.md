@@ -204,6 +204,29 @@ intent, construct a proposal, choose among declared recipes, or redact
 presentation fields; it must not execute the capability or become the security
 boundary.
 
+Core supplies facts and authority boundaries, not product risk conclusions. A
+workflow adapter may decide that a command, path, endpoint, or tool marker is
+risky, but that classification belongs to policy. Core should expose bounded
+facts and query APIs, validate proposals, and execute Go-owned providers.
+
+Responsibility rules:
+
+```text
+Names bind; they do not authorize.
+Configuration limits; it does not execute.
+JavaScript interprets; it does not hold authority.
+Core supplies facts; it does not own product risk logic.
+Core validates proposals; scripts do not bypass validators.
+Go providers execute capabilities; bundles do not ship providers.
+Outcomes are typed; guest rewrites are not host invocation.
+Audit records the authority decision; UI only presents it.
+```
+
+These rules apply to Command Proxy, OpenTarget, Endpoint Exposure, Network,
+HostFS, and future host reach-back features. A feature that needs a
+product-specific judgment should put that judgment in an adapter or recipe. A
+feature that touches host authority must end in a typed Go capability provider.
+
 The normative script SDK classes and runtime restrictions are defined in
 [script-extension-architecture.md](script-extension-architecture.md). The SDK
 must not expose raw Go standard library objects, host filesystem handles, HTTP
@@ -332,8 +355,13 @@ boundaries, an end-to-end gate.
 
 ## Architecture Documents
 
-The following documents extend this principle layer:
+Start with [README.md](README.md) for the reading order and
+[STATUS.md](STATUS.md) for current implementation status. The following
+documents extend this principle layer:
 
+- [privacy-run-design.md](privacy-run-design.md)
+- [threat-model.md](threat-model.md)
+- [privacy-run-test-plan.md](privacy-run-test-plan.md)
 - [opentarget-architecture.md](opentarget-architecture.md)
 - [network-privacy-architecture.md](network-privacy-architecture.md)
 - [backend-capability-matrix.md](backend-capability-matrix.md)

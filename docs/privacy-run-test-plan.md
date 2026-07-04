@@ -109,7 +109,8 @@ Change-to-gate mapping:
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
 | Endpoint Exposure product actions | Gate 0 and targeted Manager/PortBridge tests for implemented directions | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` when a new direction or consumer becomes user-facing |
-| Browser Control, Preview Open, or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
+| Browser Control or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
+| `preview.open` product path | Gate 0 and targeted Manager/PortBridge tests | Gate 2 when backend transport changes; dogfood CLI smoke when callback-style reach-back changes | `--release-candidate` |
 
 The testing order for new capabilities is:
 
@@ -742,8 +743,9 @@ scripts/test-lab-probes.sh
 
 ## Environment Resume Acceptance
 
-The Environment resume model is implemented for the Lima backend and covered by
-Gate 2 smoke. The gate proves reuse does not weaken privacy boundaries.
+The Environment resume model is implemented for the Lima backend and is designed
+to be covered by Gate 2 smoke. When Gate 2 is run successfully, it proves reuse
+does not weaken privacy boundaries for the covered backend behaviors.
 
 Required checks:
 
@@ -804,9 +806,10 @@ integration. Required checks:
 
 ## HostFS Portal Acceptance
 
-HostFS Portal has a Lima Gate 2 smoke for the Linux guest FUSE data plane. The
-acceptance target remains proving that ordinary guest filesystem APIs can access
-explicitly granted host paths without exposing ungranted host filesystem state.
+HostFS Portal is covered by the Lima Gate 2 smoke for the Linux guest FUSE data
+plane. When that gate is run successfully, it proves that ordinary guest
+filesystem APIs can access explicitly granted host paths without exposing
+ungranted host filesystem state.
 
 Required checks:
 

@@ -7,8 +7,9 @@ CLIs. It runs the target inside a reusable Lima environment, gives it an
 isolated identity, routes host access through typed capabilities, and records
 boundary evidence.
 
-Current status: private alpha / supervised dogfood. The core v1 path is
-working, but this is not a public GA release.
+Current status: private alpha / supervised dogfood. The native harness and
+unit/Gate 0-1 evidence are green for the core v1 path; release-candidate Lima
+Gate 2-4 evidence must still be produced before public GA.
 
 ## What Hideout Protects
 

@@ -101,6 +101,9 @@ A JavaScript adapter understands domain intent and maps it into proposals.
 Allowed responsibilities:
 
 - classify command arguments or target shape;
+- inspect factual runtime context supplied for the current decision;
+- request bounded factual queries such as guest-path resolution or visible file
+  existence;
 - choose among declared target templates;
 - construct capability proposals;
 - attach reason strings and audit tags;
@@ -116,6 +119,9 @@ Disallowed responsibilities:
 - mutating profile, session, or Environment state;
 - creating undeclared action names;
 - obtaining broker tokens or backend handles;
+- receiving Core-generated risk conclusions as authority;
+- providing raw host commands, raw host argv, host paths, provider handles, or
+  backend endpoints;
 - bypassing Manager plan/apply;
 - changing immutable audit evidence.
 
@@ -129,6 +135,12 @@ redirect URIs, endpoint candidate metadata, ports, process argv, cwd class, and
 declared endpoint metadata when those facts are part of the current decision
 snapshot. This context is local runtime input to a constrained goja VM; sharing
 the adapter code does not share the user's runtime context.
+
+Core supplies facts, not risk hints. It should not label a command as "safe",
+"project open", "IDE risk", or similar policy conclusions. If an adapter cares
+whether a path exists, whether a directory contains a tool-specific file, or how
+an argument resolves, it must use the constrained context/query API and make the
+risk decision itself.
 
 Context richness is not authority. Scripts may see facts, but they cannot use
 those facts to materialize capabilities. For endpoint exposure, a script may
@@ -145,6 +157,60 @@ arbitrary runtime facts cannot be perfectly identified by Core; policy context
 therefore must not be treated as a public record. Audit, Boundary Summary,
 exported fixtures, and UI views must redact or summarize sensitive values even
 when the runtime policy script saw full context.
+
+Command adapters follow the same split:
+
+```text
+Binding
+  Declares the adapter, allowed outcomes, allowed capabilities, and allowed
+  providers for one guest command symbol.
+
+Adapter
+  Reads the decision context, performs bounded factual queries, and proposes an
+  outcome. It may simulate, deny, ask, `rewrite-guest`, or request a declared
+  capability.
+
+Provider
+  Go-owned executor that rebuilds host-side effects from validated structured
+  resources. Bundles and recipes may reference providers but must not ship
+  provider code.
+```
+
+Adapters must not pass through target argv to a host provider. Host argv, file
+locations, endpoint targets, and other authority-bearing parameters are rebuilt
+by Go providers from validated structured resources. For resource-opening
+providers, argument rebuilding is not the whole safety boundary: the opened
+resource can itself be a host-application execution payload. Provider code must
+therefore apply application-specific constrained modes or require explicit
+policy/prompt gating when such safeguards are unavailable.
+
+Command outcomes are typed by authority level:
+
+```text
+deny
+  No execution. Return a deterministic failure.
+
+ask
+  No execution until an approved prompt exists. Without a prompt channel, fail
+  closed as deny.
+
+simulate
+  No execution. Return bounded stdout, stderr, and exit code.
+
+rewrite-guest
+  Guest execution only. Rewrite command name, argv, or restricted guest env for a
+  real guest binary. Never target a host command.
+
+invoke-capability
+  Host or managed capability execution. Request a declared capability and
+  provider using structured resources; Go validates and executes it.
+```
+
+Raw argv is input to the adapter's parser. It is not output authority. If an
+adapter sees `code .`, it may decide that `.` means a guest path resource. It may
+not pass `"."` or the full raw argv directly to a host provider. The proposal
+must carry a structured resource, and the Go validator/provider rebuilds any
+host-side arguments from that resource.
 
 ### Persona Recipe
 
@@ -220,15 +286,20 @@ designed. They are separate from the decision context passed into a policy
 entrypoint. Decision context is a Go-minted immutable snapshot for that one
 evaluation; safe queries are additional APIs scripts may call.
 
-Safe queries must not reveal host file existence, host env, secret values,
-broker tokens, or raw backend state.
+Required Phase 1 safe queries must not reveal host file existence, host env,
+secret values, broker tokens, or raw backend state. Design-ready command context
+queries may inspect bounded facts for resources that are already visible to the
+target or explicitly granted for the current decision, such as workspace paths or
+HostFS-granted paths. Those query inputs and results must be replayable from the
+decision snapshot or protected as local policy evidence, and must not become
+public audit fields by default.
 
 Examples:
 
 ```javascript
 hideout.context.hasCapability("endpoint.expose.guest-to-host")
 hideout.context.backendSupports("host-to-guest-provider")
-hideout.context.policyHas("hostfs.read")
+hideout.context.policyHas("host.fs.read")
 ```
 
 Safe queries are optional and not required for Phase 1 command policy. If a
@@ -352,8 +423,10 @@ Design-ready and Later entrypoints:
 Adapters for adb, browser control, preview, IDE, or simulator workflows must use
 an entrypoint that exists in the current effective policy. Today, that usually
 means classification inside `decideCommand(ctx)` for a registered command shim.
-Future entrypoints must be added to the profile schema, validator, audit shape,
-and Gate 0 contract before bundles can depend on them.
+Richer command binding decisions may extend the `decideCommand`/`command.decide`
+contract with bounded context queries only after the profile schema, validator,
+audit shape, and Gate 0 contract are updated. Bundles must not depend on an
+entrypoint that has not been promoted into the current effective policy.
 
 ## Development Rules
 
