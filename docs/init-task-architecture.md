@@ -378,7 +378,7 @@ Minimum acceptance:
 - make `doctor --fix --dry-run` and safe `doctor --fix` use the same task
   engine;
 - keep bundle/project requirements declarative;
-- add static and native smoke gates.
+- add static gates and native development harness gates.
 
 ### First Product Increment
 

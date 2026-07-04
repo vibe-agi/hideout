@@ -168,7 +168,8 @@ Hideout Phase 1 does not claim:
 - Endpoint Exposure, Browser Control, Preview Open, adb, simulator, or IDE
   integrations are product-ready only when separately promoted;
 - policy scripts are trusted code;
-- native backend gives OS-level isolation;
+- OS-level isolation for the native backend. Native is only a weak development
+  harness and is not dogfood or release evidence for backend isolation;
 - opening an allowed external URL prevents the remote website from observing the
   host browser's normal network and browser behavior.
 

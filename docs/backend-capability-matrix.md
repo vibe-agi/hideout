@@ -86,7 +86,7 @@ Expected role:
 
 ### Native
 
-Weak development backend.
+Weak development harness.
 
 Expected role:
 
@@ -94,7 +94,9 @@ Expected role:
 - debugging;
 - no strong privacy claim.
 
-Native must always declare weak isolation.
+Native is not a product privacy backend and must not be counted as dogfood or
+release evidence for isolation, filesystem, network, mount, HostFS, or guest
+lifecycle behavior. Native must always declare weak isolation.
 
 ## Capability Matrix
 

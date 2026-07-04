@@ -1391,7 +1391,7 @@ Other backends:
 
 | Backend | Phase | Notes |
 | --- | --- | --- |
-| `native` | Required for development only | Must require explicit `--backend native --allow-weak-isolation`. |
+| `native` | Development harness only | Not a product privacy backend and not dogfood evidence. Must require explicit `--backend native --allow-weak-isolation`. |
 | `bubblewrap` | Later | Preferred Linux sandbox path. |
 | Apple Container | Later evaluation | Keep interface compatible; not a Phase 1 dependency. |
 | Node/Bun runtime backend | Later evaluation | Separate backend family, not runtime patching in Phase 1. |

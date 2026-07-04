@@ -11,7 +11,8 @@ design, the design wins and this file must be corrected.
 
 The goal is to prove that `hideout run` is a usable local privacy runner:
 
-- the target command runs in the selected backend boundary;
+- the target command runs in a real backend boundary for product and dogfood
+  claims;
 - generated identity replaces host identity outside the workspace;
 - proxy credentials can be used by Hideout without entering target env;
 - registered host escapes go through Command Proxy and Host Broker;
@@ -37,7 +38,9 @@ The aggregate entrypoint is:
 scripts/test-phase1.sh
 ```
 
-By default it runs the local edit loop: Gate 0, Gate 1, and Gate 4 dry-run.
+By default it runs the local edit loop: Gate 0, the native development harness,
+and Gate 4 dry-run. This default is for engineering speed; it is not enough to
+claim dogfood readiness or product isolation.
 
 Useful modes:
 
@@ -92,14 +95,14 @@ Change-to-gate mapping:
 | --- | --- | --- | --- |
 | Docs, schemas, and generated examples | Gate 0 | none | Gate 0 |
 | Ecosystem foundation, bundle schemas, project manifests, trust, export, or script ABI | Gate 0 and targeted schema tests | Manager plan/apply tests when authority changes | bundle supply-chain gate before public ecosystem release |
-| First-run initialization, InitTask, helper discovery, `doctor --fix`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native first-run smoke; Gate 2 when backend preparation changes | Distribution Bootstrap gate |
-| CLI parsing, profile, identity, env, audit, Boundary Summary, cleanup, or doctor | Gate 0 and Gate 1 | affected package tests | `--required` if behavior is externally visible |
-| Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, Gate 1, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
+| First-run initialization, InitTask, helper discovery, `doctor --fix`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native harness for CLI shape only; Gate 2 when backend preparation changes | Distribution Bootstrap gate |
+| CLI parsing, profile, identity, env, audit, Boundary Summary, cleanup, or doctor | Gate 0 and the native harness | affected package tests | `--required` if behavior is externally visible |
+| Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, native harness, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
 | HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | HostFS grant gate when promoted |
-| Additional passthrough mounts | Gate 0, Gate 1, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
-| Lima backend, mounts, guest bootstrap, guest command resolution, tool presets, or instance lifecycle | Gate 0, Gate 1, and Gate 2 | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
-| Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, Gate 1, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
-| Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and Gate 1 | relevant denied and allowed path tests | `--required` if a required route is affected |
+| Additional passthrough mounts | Gate 0, native harness for CLI shape, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
+| Lima backend, mounts, guest bootstrap, guest command resolution, tool presets, or instance lifecycle | Gate 0 and Gate 2; native harness only for shared CLI wiring | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
+| Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, native harness for shared CLI wiring, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
+| Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
 | Endpoint Exposure product actions | Gate 0 and targeted Manager/PortBridge tests for implemented directions | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` when a new direction or consumer becomes user-facing |
 | Browser Control, Preview Open, or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
@@ -108,8 +111,10 @@ The testing order for new capabilities is:
 
 1. Unit contract: validate policy decisions, schema shape, redaction, path
    normalization, and fail-closed cases without starting a backend.
-2. Native smoke: prove CLI wiring, generated identity, hidden env, audit,
-   `explain`, `doctor`, and cleanup behavior with the weak native backend.
+2. Native harness: prove CLI wiring, generated identity, hidden env, audit,
+   `explain`, `doctor`, and cleanup behavior with the weak native backend. This
+   does not prove isolation, guest filesystem behavior, mount semantics, network
+   privacy, HostFS/FUSE behavior, or real backend lifecycle.
 3. Backend proof: run the Lima or `tun2socks` gate for any behavior that depends
    on guest boundaries, mounts, bootstrap, proxy routing, or command shims.
 4. Capability probe: for experimental host capabilities, add a lab command and
@@ -192,11 +197,12 @@ or remediation designs that rely on arbitrary shell, `host.exec`, raw mounts,
 raw routes, bundle init scripts, project init scripts, or automatic profile
 authority mutation outside Manager plan/apply.
 
-### Gate 1: Native Smoke
+### Gate 1: Native Development Harness
 
 Purpose: fast local smoke for CLI wiring and privacy semantics that do not
-require a VM. This gate uses the explicit weak native backend and must always
-declare weak isolation in output.
+require a VM. This gate is a development harness, not product isolation proof
+and not dogfood evidence. It uses the explicit weak native backend and must
+always declare weak isolation in output.
 
 Scope:
 
@@ -986,7 +992,9 @@ Phase 1 is releasable only when:
   machine with Lima, a real supported browser launcher, and an operator-supplied
   proxy in `HIDEOUT_SECRET_DEFAULT_PROXY`;
 - Gate 0 passes in CI or local release verification;
-- Gate 1 passes on a developer machine;
+- Gate 1 native development harness passes on a developer machine as
+  engineering evidence only; it does not replace Lima or release-candidate
+  gates for product isolation;
 - Gate 2 passes on macOS with Lima;
 - Gate 3 passes with the auto-started test proxy in normal required automation;
 - Gate 3 passes in strict operator proxy mode during
