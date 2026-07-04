@@ -152,10 +152,10 @@ Shows:
 
 ### Environments
 
-Implemented WebUI smoke surface shows reusable environment records and offers
-controlled stop/clean plan/apply actions through Manager API. TUI currently
-renders a capped dashboard summary with copyable resume/stop/clean command
-hints; richer terminal lifecycle controls should call the same Manager
+Implemented WebUI smoke surface shows capped reusable environment panels and
+offers controlled stop/clean plan/apply actions through Manager API. TUI
+currently renders a capped dashboard summary with copyable resume/stop/clean
+command hints; richer terminal lifecycle controls should call the same Manager
 environment endpoints rather than reimplementing store or backend cleanup logic.
 
 ### Network
@@ -177,6 +177,8 @@ Implemented smoke surface:
 - audit tail;
 - denied audit count;
 - recent denied audit list using Manager API `decision=deny` filtering;
+- capped session and reusable environment panels so long dogfood histories do
+  not dominate the page;
 - basic audit explorer filtering by session, profile, action, decision, and
   limit using the same redacted Manager API view as `hideout audit show`.
 

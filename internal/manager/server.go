@@ -331,6 +331,7 @@ let auditExplorerEvents = null;
 let setupResultHTML = "";
 let runResultHTML = "";
 let environmentResultHTML = "";
+const panelRowLimit = 50;
 
 function esc(value) {
   return String(value == null ? "" : value)
@@ -380,6 +381,18 @@ function networkRisk(mode) {
 }
 function deniedAuditEvents() {
   return deniedEvents;
+}
+function panelLimitNotice(label, visible, total) {
+  if (visible >= total) return "";
+  return '<div class="empty">Showing newest ' + esc(visible) + ' of ' + esc(total) + ' ' + esc(label) + '</div>';
+}
+function visibleEnvironmentsForPanel(environments) {
+  if (!Array.isArray(environments) || environments.length <= panelRowLimit) return environments || [];
+  return environments.slice(0, panelRowLimit);
+}
+function visibleSessionsForPanel(sessions) {
+  if (!Array.isArray(sessions) || sessions.length <= panelRowLimit) return sessions || [];
+  return sessions.slice(sessions.length - panelRowLimit);
 }
 function api(path) {
   return fetch("/api/v1/" + path, {headers: {"X-Hideout-UI-Token": token}}).then(async function(response) {
@@ -505,7 +518,8 @@ const renderers = {
   },
   environments: function() {
     const environments = overview.environments || [];
-    const envHTML = environments.length ? '<div class="items">' + environments.map(function(e) {
+    const visibleEnvironments = visibleEnvironmentsForPanel(environments);
+    const envHTML = environments.length ? panelLimitNotice("environments", visibleEnvironments.length, environments.length) + '<div class="items">' + visibleEnvironments.map(function(e) {
       const tone = e.status === "running" ? "warn" : e.status === "stopped" ? "info" : "ok";
       return item(e.id, e.status || "environment", [["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
     }).join("") + "</div>" : empty("No reusable environments");
@@ -522,7 +536,8 @@ const renderers = {
   sessions: function() {
     const sessions = overview.sessions || [];
     if (!sessions.length) return empty("No sessions");
-    return '<div class="items">' + sessions.map(function(s) {
+    const visibleSessions = visibleSessionsForPanel(sessions);
+    return panelLimitNotice("sessions", visibleSessions.length, sessions.length) + '<div class="items">' + visibleSessions.map(function(s) {
       return item(s.id, s.profile || "session", [["backend", s.backend], ["networkMode", s.networkMode], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState]], s.hasProxySecretFile ? "warn" : "ok");
     }).join("") + "</div>";
   },
