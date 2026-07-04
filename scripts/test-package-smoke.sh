@@ -194,6 +194,32 @@ if [ -e "$tmp/lima-store/install-state.json" ]; then
   exit 1
 fi
 
+broken_missing_helper="$tmp/package-missing-helper"
+cp -R "$prefix" "$broken_missing_helper"
+rm -f "$broken_missing_helper/bin/hideout-hostfsd-linux-$arch"
+if "$broken_missing_helper/install.sh" --prefix "$tmp/broken-helper-install" --store "$tmp/broken-helper-store" --skip-init >"$tmp/broken-helper.out" 2>"$tmp/broken-helper.err"; then
+  echo "package-smoke: installer accepted package missing Linux HostFS daemon" >&2
+  exit 1
+fi
+grep -q 'missing Linux HostFS daemon' "$tmp/broken-helper.err"
+if [ -e "$tmp/broken-helper-install/bin/hideout" ]; then
+  echo "package-smoke: broken helper package copied binaries before failing" >&2
+  exit 1
+fi
+
+broken_missing_manifest="$tmp/package-missing-manifest"
+cp -R "$prefix" "$broken_missing_manifest"
+rm -f "$broken_missing_manifest/package-manifest.json"
+if "$broken_missing_manifest/install.sh" --prefix "$tmp/broken-manifest-install" --store "$tmp/broken-manifest-store" --skip-init >"$tmp/broken-manifest.out" 2>"$tmp/broken-manifest.err"; then
+  echo "package-smoke: installer accepted package missing package manifest" >&2
+  exit 1
+fi
+grep -q 'missing package manifest' "$tmp/broken-manifest.err"
+if [ -e "$tmp/broken-manifest-install/bin/hideout" ]; then
+  echo "package-smoke: broken manifest package copied binaries before failing" >&2
+  exit 1
+fi
+
 installed_prefix="$tmp/package-installed"
 installed_store="$tmp/package-store"
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --backend native --network direct >"$tmp/package-install.out"

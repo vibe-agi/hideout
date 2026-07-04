@@ -329,7 +329,9 @@ runs extracted `hideout init --no-input`, `hideout doctor`, `hideout tui`, and
 a separate temporary prefix/store, verifies the installed layout works without
 source-tree state, verifies installed Lima helper discovery from that prefix,
 and checks that `install.sh --skip-init` copies binaries without writing init
-state.
+state. The package-root installer must fail before copying binaries when the
+extracted package is missing `package-manifest.json`, the host shim, Linux guest
+shim, or Linux HostFS daemon.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.

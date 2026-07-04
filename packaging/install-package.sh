@@ -66,10 +66,55 @@ if [ -z "$prefix" ] || [ -z "$store" ]; then
   echo "install-package: --prefix and --store require paths" >&2
   exit 2
 fi
-if [ ! -x "$ROOT/bin/hideout" ] || [ ! -x "$ROOT/bin/hideout-shim" ]; then
-  echo "install-package: package bin/ layout is incomplete" >&2
-  exit 1
-fi
+
+require_package_file() {
+  label="$1"
+  path="$2"
+  if [ ! -f "$path" ]; then
+    echo "install-package: package layout is incomplete: missing $label ($path)" >&2
+    exit 1
+  fi
+}
+
+require_package_executable() {
+  label="$1"
+  path="$2"
+  if [ ! -x "$path" ]; then
+    echo "install-package: package layout is incomplete: missing executable $label ($path)" >&2
+    exit 1
+  fi
+}
+
+require_package_helper_family() {
+  label="$1"
+  pattern="$2"
+  found=0
+  for helper in "$ROOT"/bin/$pattern; do
+    if [ ! -e "$helper" ]; then
+      continue
+    fi
+    case "$helper" in
+      *.manifest.json)
+        continue
+        ;;
+    esac
+    if [ ! -x "$helper" ]; then
+      echo "install-package: package layout is incomplete: $label is not executable ($helper)" >&2
+      exit 1
+    fi
+    found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "install-package: package layout is incomplete: missing $label ($ROOT/bin/$pattern)" >&2
+    exit 1
+  fi
+}
+
+require_package_file "package manifest" "$ROOT/package-manifest.json"
+require_package_executable "hideout" "$ROOT/bin/hideout"
+require_package_executable "host command shim" "$ROOT/bin/hideout-shim"
+require_package_helper_family "Linux guest shim" "hideout-shim-linux*"
+require_package_helper_family "Linux HostFS daemon" "hideout-hostfsd-linux*"
 
 mkdir -p "$prefix/bin" "$store"
 prefix="$(cd "$prefix" && pwd -P)"
