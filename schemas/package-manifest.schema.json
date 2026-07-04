@@ -4,7 +4,7 @@
   "title": "Hideout Package Manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "builtAt", "git", "target", "layout"],
+  "required": ["schema", "builtAt", "git", "target", "layout", "files"],
   "properties": {
     "schema": {
       "const": "hideout.package-manifest.v1"
@@ -88,6 +88,44 @@
           },
           "contains": {
             "const": "schemas"
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind", "sha256"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+          },
+          "kind": {
+            "enum": [
+              "binary",
+              "linux-helper",
+              "helper-manifest",
+              "entrypoint",
+              "schema"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "contains": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "const": "bin/hideout"
           }
         }
       }

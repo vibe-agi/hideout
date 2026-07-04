@@ -938,8 +938,9 @@ Required checks:
   `doctor.fix.apply` audit;
 - package smoke proves a release-like tarball contains binaries, helper
   manifests, a package manifest with schema/build/git/target/layout metadata,
-  package-relative manifest paths that match the extracted layout, English and
-  Chinese README entrypoints, schemas, docs, packaging metadata, can run
+  package-relative manifest paths that match the extracted layout, SHA-256
+  checksums for critical package files that match the extracted files, English
+  and Chinese README entrypoints, schemas, docs, packaging metadata, can run
   installed
   `hideout init --no-input` plus `hideout doctor` from a temporary prefix, and
   can render installed `hideout tui`, start installed `hideout ui --print-url`

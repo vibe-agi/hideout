@@ -62,11 +62,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo "package-local: missing shasum or sha256sum" >&2
+    exit 127
+  fi
+}
+
 stage="$tmp/stage"
 prefix="$stage/hideout"
 mkdir -p "$prefix"
 
 "$source/scripts/install-local.sh" --prefix "$prefix" --store "$tmp/store" --source "$source" --skip-init >/dev/null
+cp "$source/README.md" "$prefix/README.md"
+cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
+cp -R "$source/schemas" "$prefix/schemas"
+cp -R "$source/docs" "$prefix/docs"
+mkdir -p "$prefix/packaging"
+cp -R "$source/packaging/homebrew" "$prefix/packaging/homebrew"
+
 host_os="$(go env GOOS)"
 host_arch="$(go env GOARCH)"
 linux_guest_arch="$host_arch"
@@ -76,6 +94,10 @@ if git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$(g
   git_dirty=true
 fi
 built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+shim_linux="bin/hideout-shim-linux-$linux_guest_arch"
+hostfsd_linux="bin/hideout-hostfsd-linux-$linux_guest_arch"
+shim_linux_manifest="$shim_linux.manifest.json"
+hostfsd_linux_manifest="$hostfsd_linux.manifest.json"
 cat >"$prefix/package-manifest.json" <<EOF
 {
   "schema": "hideout.package-manifest.v1",
@@ -94,8 +116,8 @@ cat >"$prefix/package-manifest.json" <<EOF
     "binaries": [
       "bin/hideout",
       "bin/hideout-shim",
-      "bin/hideout-shim-linux-$linux_guest_arch",
-      "bin/hideout-hostfsd-linux-$linux_guest_arch"
+      "$shim_linux",
+      "$hostfsd_linux"
     ],
     "entrypoints": [
       "README.md",
@@ -106,15 +128,56 @@ cat >"$prefix/package-manifest.json" <<EOF
       "docs",
       "packaging"
     ]
-  }
+  },
+  "files": [
+    {
+      "path": "bin/hideout",
+      "kind": "binary",
+      "sha256": "$(sha256_file "$prefix/bin/hideout")"
+    },
+    {
+      "path": "bin/hideout-shim",
+      "kind": "binary",
+      "sha256": "$(sha256_file "$prefix/bin/hideout-shim")"
+    },
+    {
+      "path": "$shim_linux",
+      "kind": "linux-helper",
+      "sha256": "$(sha256_file "$prefix/$shim_linux")"
+    },
+    {
+      "path": "$shim_linux_manifest",
+      "kind": "helper-manifest",
+      "sha256": "$(sha256_file "$prefix/$shim_linux_manifest")"
+    },
+    {
+      "path": "$hostfsd_linux",
+      "kind": "linux-helper",
+      "sha256": "$(sha256_file "$prefix/$hostfsd_linux")"
+    },
+    {
+      "path": "$hostfsd_linux_manifest",
+      "kind": "helper-manifest",
+      "sha256": "$(sha256_file "$prefix/$hostfsd_linux_manifest")"
+    },
+    {
+      "path": "README.md",
+      "kind": "entrypoint",
+      "sha256": "$(sha256_file "$prefix/README.md")"
+    },
+    {
+      "path": "README.zh-CN.md",
+      "kind": "entrypoint",
+      "sha256": "$(sha256_file "$prefix/README.zh-CN.md")"
+    },
+    {
+      "path": "schemas/package-manifest.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/package-manifest.schema.json")"
+    }
+  ]
 }
 EOF
-cp "$source/README.md" "$prefix/README.md"
-cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
-cp -R "$source/schemas" "$prefix/schemas"
-cp -R "$source/docs" "$prefix/docs"
-mkdir -p "$prefix/packaging"
-cp -R "$source/packaging/homebrew" "$prefix/packaging/homebrew"
 
 mkdir -p "$(dirname "$out")"
 (

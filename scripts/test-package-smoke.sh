@@ -30,6 +30,17 @@ manifest_relative_path() {
   esac
 }
 
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo "package-smoke: missing shasum or sha256sum" >&2
+    exit 127
+  fi
+}
+
 for path in \
   "$prefix/bin/hideout" \
   "$prefix/bin/hideout-shim" \
@@ -70,7 +81,12 @@ jq -e \
     (.layout.entrypoints | index("README.zh-CN.md")) and
     (.layout.directories | index("schemas")) and
     (.layout.directories | index("docs")) and
-    (.layout.directories | index("packaging"))
+    (.layout.directories | index("packaging")) and
+    (.files | type == "array" and length >= 8) and
+    any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$")))
   ' "$prefix/package-manifest.json" >/dev/null
 
 jq -r '.layout.binaries[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do
@@ -102,6 +118,32 @@ jq -r '.layout.directories[]' "$prefix/package-manifest.json" | while IFS= read 
   fi
   if [ ! -d "$prefix/$rel" ]; then
     echo "package-smoke: manifest directory is missing: $rel" >&2
+    exit 1
+  fi
+done
+
+jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$prefix/package-manifest.json" | while IFS=$'\t' read -r rel kind want; do
+  if ! manifest_relative_path "$rel"; then
+    echo "package-smoke: manifest file path is not package-relative: $rel" >&2
+    exit 1
+  fi
+  case "$kind" in
+    binary|linux-helper|helper-manifest|entrypoint|schema)
+      ;;
+    *)
+      echo "package-smoke: manifest file has unknown kind: $rel ($kind)" >&2
+      exit 1
+      ;;
+  esac
+  if [ ! -f "$prefix/$rel" ]; then
+    echo "package-smoke: manifest file is missing or not a file: $rel" >&2
+    exit 1
+  fi
+  got="$(sha256_file "$prefix/$rel")"
+  if [ "$got" != "$want" ]; then
+    echo "package-smoke: manifest checksum mismatch for $rel" >&2
+    echo "package-smoke: want $want" >&2
+    echo "package-smoke: got  $got" >&2
     exit 1
   fi
 done
