@@ -219,6 +219,16 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 .status.error{color:var(--danger);border-color:#774141}
 .refresh{height:32px;border:1px solid var(--line);border-radius:6px;background:#19201e;color:var(--text);padding:0 12px;cursor:pointer}
 .refresh:hover,.tab:hover{border-color:#52645f}
+.action-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.action{height:32px;border:1px solid #3f725d;border-radius:6px;background:#183026;color:var(--text);padding:0 12px;cursor:pointer}
+.action.secondary{border-color:var(--line);background:#19201e;color:var(--muted)}
+.action:disabled{opacity:.55;cursor:not-allowed}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.field{display:grid;gap:5px}
+.field label{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0}
+.field input,.field select{height:34px;border:1px solid var(--line);border-radius:6px;background:#0f1413;color:var(--text);padding:0 10px;font:inherit;font-size:13px;min-width:0}
+.field input:focus,.field select:focus{outline:1px solid #3f725d;border-color:#3f725d}
+.result{margin-top:10px;display:grid;gap:8px}
 .tabs{display:flex;gap:6px;overflow:auto;padding-bottom:12px;margin-bottom:14px}
 .tab{height:34px;border:1px solid var(--line);border-radius:6px;background:#131817;color:var(--muted);padding:0 11px;white-space:nowrap;cursor:pointer}
 .tab.active{background:#1c2723;color:var(--text);border-color:#3f725d}
@@ -252,7 +262,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 .audit-event .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px}
 .audit-event pre{margin:7px 0 0;white-space:pre-wrap;overflow:auto;font-size:11px;line-height:1.4;color:#c8d4ce}
 @media (max-width:900px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.grid{grid-template-columns:1fr}header{align-items:stretch;flex-direction:column}.status-row{justify-content:flex-start}}
-@media (max-width:560px){.shell{padding:14px}.summary{grid-template-columns:1fr}.rows{grid-template-columns:1fr}.tabs{padding-bottom:8px}}
+@media (max-width:560px){.shell{padding:14px}.summary{grid-template-columns:1fr}.rows{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.tabs{padding-bottom:8px}}
 </style>
 </head>
 <body>
@@ -270,6 +280,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 </header>
 <nav class="tabs" id="tabs" aria-label="Hideout domains">
   <button class="tab active" type="button" data-panel="overview">Overview</button>
+  <button class="tab" type="button" data-panel="setup">Setup</button>
   <button class="tab" type="button" data-panel="profiles">Profiles</button>
   <button class="tab" type="button" data-panel="sessions">Sessions</button>
   <button class="tab" type="button" data-panel="capabilities">Capabilities</button>
@@ -309,6 +320,7 @@ const auditMetaEl = document.getElementById("auditMeta");
 let activePanel = "overview";
 let overview = null;
 let auditEvents = [];
+let setupResultHTML = "";
 
 function esc(value) {
   return String(value == null ? "" : value)
@@ -348,6 +360,15 @@ function api(path) {
     return body;
   });
 }
+function apiPost(path, payload) {
+  return fetch("/api/v1/" + path, {method: "POST", headers: {"Content-Type": "application/json", "X-Hideout-UI-Token": token}, body: JSON.stringify(payload)}).then(async function(response) {
+    const text = await response.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch { body = {errors: [text]}; }
+    if (!response.ok) throw new Error((body.errors || [response.statusText]).join("; "));
+    return body;
+  });
+}
 function renderSummary() {
   const profiles = overview.profiles || [];
   const sessions = overview.sessions || [];
@@ -367,10 +388,12 @@ function renderPanel() {
   panelMetaEl.textContent = domainOwner(activePanel);
   const renderer = renderers[activePanel] || renderers.overview;
   panelBodyEl.innerHTML = renderer();
+  if (activePanel === "setup") bindSetupPanel();
 }
 function domainOwner(name) {
   return {
     overview: "manager",
+    setup: "init/tool-supply",
     profiles: "profile",
     sessions: "manager/backend",
     capabilities: "policy/cmdproxy",
@@ -391,6 +414,23 @@ const renderers = {
       item("Broker", "host boundary", [["actions", overview.broker && overview.broker.actions], ["commandProxies", overview.broker && overview.broker.commandProxies]], "info"),
       item("Audit", "redacted JSONL", [["sessionAuditFiles", overview.audit && overview.audit.sessionAuditFiles], ["eventsLoaded", auditEvents.length]], "ok")
     ].join("") + "</div>";
+  },
+  setup: function() {
+    const profiles = overview.profiles || [];
+    const profileOptions = profiles.length ? profiles.map(function(p) {
+      return '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>';
+    }).join("") : '<option value="default">default</option>';
+    return '<form id="setupForm" class="item">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label for="setupProfile">Profile</label><select id="setupProfile">' + profileOptions + '</select></div>' +
+      '<div class="field"><label for="setupBackend">Backend</label><select id="setupBackend"><option value="lima">lima</option><option value="native">native</option></select></div>' +
+      '<div class="field"><label for="setupNetwork">Network</label><select id="setupNetwork"><option value="direct">direct</option><option value="tun2socks">tun2socks</option></select></div>' +
+      '<div class="field"><label for="setupPreset">Tool preset</label><input id="setupPreset" value="node-dev"></div>' +
+      '<div class="field"><label for="setupPackage">NPM package</label><input id="setupPackage" placeholder="@scope/tool@version"></div>' +
+      '<div class="field"><label for="setupCommands">NPM commands</label><input id="setupCommands" placeholder="tool, helper"></div>' +
+      '</div>' +
+      '<div class="action-row"><button class="action secondary" type="button" data-setup-action="plan" data-api="init/plan">Plan</button><button class="action" type="button" data-setup-action="apply" data-api="init/apply">Apply</button><span class="meta" id="setupStatus">ready</span></div>' +
+      '</form><div class="result" id="setupResult">' + setupResultHTML + '</div>';
   },
   profiles: function() {
     const profiles = overview.profiles || [];
@@ -451,6 +491,63 @@ const renderers = {
     return '<div class="items">' + item("Settings", "local manager", [["storeRoot", s.storeRoot], ["apiVersion", "hideout.manager-api/v1"], ["uiToken", "short-lived fragment token"]], "ok") + "</div>";
   }
 };
+function splitCSV(value) {
+  return String(value || "").split(",").map(function(part) { return part.trim(); }).filter(Boolean);
+}
+function setupPayloadFromForm() {
+  const npmPackage = document.getElementById("setupPackage").value.trim();
+  const npmCommands = splitCSV(document.getElementById("setupCommands").value);
+  const npmGlobals = npmPackage ? [{package: npmPackage, commands: npmCommands}] : [];
+  return {
+    profile: document.getElementById("setupProfile").value,
+    backend: document.getElementById("setupBackend").value,
+    network: document.getElementById("setupNetwork").value,
+    toolPresets: splitCSV(document.getElementById("setupPreset").value),
+    npmGlobals: npmGlobals
+  };
+}
+function renderSetupResponse(resource, response) {
+  const errors = response.errors || [];
+  const data = response.data || {};
+  const plan = data.plan || data;
+  const tasks = plan.tasks || [];
+  const applied = data.applied || [];
+  const skipped = data.skipped || [];
+  const header = item(resource, plan.profile || "init", [["backend", plan.backend], ["network", plan.network], ["applied", applied.length], ["skipped", skipped.length], ["tasks", tasks.length]], errors.length ? "error" : "ok");
+  const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
+  const taskHTML = tasks.length ? '<div class="items">' + tasks.map(function(task) {
+    const tone = task.status === "pending" ? "warn" : task.status === "blocked" ? "error" : "ok";
+    return item(task.kind, task.message || task.id, [["status", task.status], ["targetScope", task.targetScope], ["risk", task.risk], ["inputs", task.inputs || []], ["outputs", task.outputs || []]], tone);
+  }).join("") + '</div>' : empty("No init tasks");
+  return header + errorHTML + taskHTML;
+}
+function setSetupBusy(busy, text) {
+  const status = document.getElementById("setupStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-setup-action]").forEach(function(button) { button.disabled = busy; });
+}
+function bindSetupPanel() {
+  const form = document.getElementById("setupForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  document.querySelectorAll("[data-setup-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-setup-action");
+      setSetupBusy(true, action);
+      try {
+        const response = await apiPost("init/" + action, setupPayloadFromForm());
+        setupResultHTML = renderSetupResponse("init/" + action, response);
+        document.getElementById("setupResult").innerHTML = setupResultHTML;
+        setSetupBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+        if (action === "apply" && !(response.errors && response.errors.length)) await load();
+      } catch (error) {
+        setupResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        document.getElementById("setupResult").innerHTML = setupResultHTML;
+        setSetupBusy(false, "error");
+      }
+    });
+  });
+}
 function renderAuditEvents(full) {
   const events = full ? auditEvents : auditEvents.slice(0, 8);
   if (!events.length) return empty("No audit events");

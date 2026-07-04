@@ -25,6 +25,7 @@ fresh release-candidate evidence bundle, including Lima Gate 2, strict proxy Gat
 | Network | `direct` and guest-side `tun2socks` modes are implemented. Proxy values are hidden from the target env. DNS/privacy-mode hardening remains governed by the network design and gates. |
 | Tool supply | `base-dev`, `node-dev`, and user-declared npm globals are provisioned after network bootstrap and before target command checks. Strict proxies must allow required registry egress or provisioning fails closed. |
 | Manager API | Local token-protected API implements read-only overview resources plus typed `init/plan`, `init/apply`, `run/plan`, `run/apply`, and `run/status` surfaces for future TUI/WebUI. It is not a raw profile writer or host execution API. |
+| WebUI smoke surface | Embedded local WebUI shows overview/audit/resource summaries and exposes generic tool setup through `init/plan` and `init/apply`. It remains a lightweight smoke/operations surface, not the final product UI. |
 | Endpoint Exposure | Product `endpoint.expose.host-to-guest` is implemented for declared and run-scoped manual guest-loopback TCP candidates, with active owner validation, backend provider, audit, cleanup, and Boundary Summary. |
 | Preview open | Minimal `preview.open` is implemented as the first consumer of host-to-guest exposure. Callback adapters, endpoint observation, and project-declared auto exposure are later/design-ready. |
 | Boundary Summary | Default `hideout run` is quiet; `--verbose`, `explain`, audit, Manager API, TUI, or Web UI surfaces show control-plane evidence. |

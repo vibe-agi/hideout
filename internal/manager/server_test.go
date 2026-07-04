@@ -53,9 +53,13 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 	}
 	for _, want := range []string{
 		`data-panel="profiles"`,
+		`data-panel="setup"`,
 		`data-panel="capabilities"`,
 		`data-panel="network"`,
 		`data-panel="audit"`,
+		`init/plan`,
+		`init/apply`,
+		`setupPayloadFromForm`,
 		`audit/events?limit=20`,
 		`Private operations console`,
 		`host.open`,

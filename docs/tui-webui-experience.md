@@ -214,6 +214,7 @@ Show:
 ### WebUI First Increment
 
 - read-only dashboard;
+- init/tool setup plan and apply;
 - audit explorer;
 - session detail;
 - profile summary.
