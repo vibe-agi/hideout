@@ -8,6 +8,7 @@ usage() {
 Usage:
   scripts/install-local.sh [--prefix <dir>] [--store <dir>] [--source <dir>]
                            [--backend native|lima|auto] [--network direct|tun2socks]
+                           [--proxy-secret <ref>]
                            [--skip-init]
 
 Build and install Hideout from the current source tree, then run a typed
@@ -20,6 +21,7 @@ store="${HIDEOUT_STORE_ROOT:-${HOME:-}/.hideout}"
 source="$ROOT"
 backend="auto"
 network="direct"
+proxy_secret=""
 run_init=1
 
 while [ "$#" -gt 0 ]; do
@@ -42,6 +44,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --network)
       network="${2:-}"
+      shift 2
+      ;;
+    --proxy-secret)
+      proxy_secret="${2:-}"
       shift 2
       ;;
     --skip-init)
@@ -94,7 +100,11 @@ echo "install-local: building linux hostfsd for $arch"
 
 if [ "$run_init" -eq 1 ]; then
   echo "install-local: running hideout init --no-input"
-  HIDEOUT_STORE_ROOT="$store" "$hideout" init --no-input --backend "$backend" --network "$network"
+  init_args=(init --no-input --backend "$backend" --network "$network")
+  if [ -n "$proxy_secret" ]; then
+    init_args+=(--proxy-secret "$proxy_secret")
+  fi
+  HIDEOUT_STORE_ROOT="$store" "$hideout" "${init_args[@]}"
 else
   echo "install-local: init skipped"
 fi

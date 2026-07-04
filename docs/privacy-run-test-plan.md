@@ -936,6 +936,9 @@ Required checks:
 - source-tree install smoke proves `scripts/install-local.sh` can install
   `hideout`, the host shim, Linux guest helpers, helper manifests, and typed
   init metadata into a temporary prefix/store;
+- source-tree install smoke proves `scripts/install-local.sh --network tun2socks
+  --proxy-secret <ref>` passes only the proxy secret ref into InitTask and does
+  not persist the raw operator proxy URL;
 - install smoke proves installed `doctor --fix --dry-run` does not create state
   and installed safe `doctor --fix` writes current init metadata plus
   `doctor.fix.apply` audit;

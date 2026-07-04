@@ -68,4 +68,14 @@ test -f "$fix_store/logs/init-audit.jsonl"
 test -f "$fix_store/profiles/default/profile.json"
 grep -q '"operation":"doctor.fix.apply"' "$fix_store/logs/init-audit.jsonl"
 
+proxy_store="$tmp/proxy-store"
+proxy_prefix="$tmp/proxy-prefix"
+HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@127.0.0.1:7890" \
+  scripts/install-local.sh --prefix "$proxy_prefix" --store "$proxy_store" --backend native --network tun2socks --proxy-secret default-proxy >"$tmp/install-proxy.out"
+jq -e '.network.mode == "tun2socks" and .network.proxySecretRef == "default-proxy" and (.network.proxyEnvVisible == false)' "$proxy_store/profiles/default/profile.json" >/dev/null
+if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_store" >/dev/null 2>&1; then
+  echo "install-smoke: proxy install persisted raw proxy URL" >&2
+  exit 1
+fi
+
 echo "install-smoke: passed"

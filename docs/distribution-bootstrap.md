@@ -201,6 +201,11 @@ binaries; helper repair stays under explicit `hideout init --backend ...` or
 `hideout doctor --fix`, and runtime still fails closed if a required helper is
 missing.
 
+When `scripts/install-local.sh` is asked to initialize `tun2socks`, it must pass
+only the proxy secret ref to `hideout init`. The raw proxy URL remains in the
+operator environment and must not be written into the store, profile, package
+metadata, or init audit.
+
 The Phase 1 source-tree repair path uses `go build` from a verified Hideout
 source root. Packaged release installers should place the same helpers in the
 official artifact layout or store bin directory, making these tasks `ok` instead
