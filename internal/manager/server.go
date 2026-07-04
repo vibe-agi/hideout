@@ -228,6 +228,8 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 .field label{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0}
 .field input,.field select{height:34px;border:1px solid var(--line);border-radius:6px;background:#0f1413;color:var(--text);padding:0 10px;font:inherit;font-size:13px;min-width:0}
 .field input:focus,.field select:focus{outline:1px solid #3f725d;border-color:#3f725d}
+.check-row{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:12px;padding-top:22px}
+.check-row input{width:16px;height:16px;accent-color:#78dfb2}
 .result{margin-top:10px;display:grid;gap:8px}
 .tabs{display:flex;gap:6px;overflow:auto;padding-bottom:12px;margin-bottom:14px}
 .tab{height:34px;border:1px solid var(--line);border-radius:6px;background:#131817;color:var(--muted);padding:0 11px;white-space:nowrap;cursor:pointer}
@@ -281,6 +283,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 <nav class="tabs" id="tabs" aria-label="Hideout domains">
   <button class="tab active" type="button" data-panel="overview">Overview</button>
   <button class="tab" type="button" data-panel="setup">Setup</button>
+  <button class="tab" type="button" data-panel="run">Run</button>
   <button class="tab" type="button" data-panel="profiles">Profiles</button>
   <button class="tab" type="button" data-panel="sessions">Sessions</button>
   <button class="tab" type="button" data-panel="capabilities">Capabilities</button>
@@ -321,6 +324,7 @@ let activePanel = "overview";
 let overview = null;
 let auditEvents = [];
 let setupResultHTML = "";
+let runResultHTML = "";
 
 function esc(value) {
   return String(value == null ? "" : value)
@@ -389,11 +393,13 @@ function renderPanel() {
   const renderer = renderers[activePanel] || renderers.overview;
   panelBodyEl.innerHTML = renderer();
   if (activePanel === "setup") bindSetupPanel();
+  if (activePanel === "run") bindRunPanel();
 }
 function domainOwner(name) {
   return {
     overview: "manager",
     setup: "init/tool-supply",
+    run: "manager/backend",
     profiles: "profile",
     sessions: "manager/backend",
     capabilities: "policy/cmdproxy",
@@ -431,6 +437,25 @@ const renderers = {
       '</div>' +
       '<div class="action-row"><button class="action secondary" type="button" data-setup-action="plan" data-api="init/plan">Plan</button><button class="action" type="button" data-setup-action="apply" data-api="init/apply">Apply</button><span class="meta" id="setupStatus">ready</span></div>' +
       '</form><div class="result" id="setupResult">' + setupResultHTML + '</div>';
+  },
+  run: function() {
+    const profiles = overview.profiles || [];
+    const profileOptions = profiles.length ? profiles.map(function(p) {
+      return '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>';
+    }).join("") : '<option value="default">default</option>';
+    return '<form id="runForm" class="item">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label for="runProfile">Profile</label><select id="runProfile">' + profileOptions + '</select></div>' +
+      '<div class="field"><label for="runBackend">Backend</label><select id="runBackend"><option value="lima">lima</option><option value="native">native</option></select></div>' +
+      '<div class="field"><label for="runNetwork">Network override</label><select id="runNetwork"><option value="">profile default</option><option value="direct">direct</option><option value="tun2socks">tun2socks</option></select></div>' +
+      '<div class="field"><label for="runWorkspace">Workspace</label><input id="runWorkspace" placeholder="/absolute/project/path"></div>' +
+      '<div class="field"><label for="runCommand">Command argv</label><input id="runCommand" value="pwd" spellcheck="false"></div>' +
+      '<label class="check-row"><input id="runAllowWeak" type="checkbox"> allow native weak isolation</label>' +
+      '<label class="check-row"><input id="runNewEnv" type="checkbox"> new environment</label>' +
+      '<label class="check-row"><input id="runRemoveEnv" type="checkbox"> remove environment after run</label>' +
+      '</div>' +
+      '<div class="action-row"><button class="action secondary" type="button" data-run-action="plan" data-api="run/plan">Plan</button><button class="action" type="button" data-run-action="apply" data-api="run/apply">Apply</button><span class="meta" id="runStatus">ready</span></div>' +
+      '</form><div class="result" id="runResult">' + runResultHTML + '</div>';
   },
   profiles: function() {
     const profiles = overview.profiles || [];
@@ -494,6 +519,46 @@ const renderers = {
 function splitCSV(value) {
   return String(value || "").split(",").map(function(part) { return part.trim(); }).filter(Boolean);
 }
+function splitArgv(value) {
+  const input = String(value || "");
+  const out = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = "";
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        out.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (escaped) current += "\\";
+  if (quote) throw new Error("command has an unterminated quote");
+  if (current) out.push(current);
+  return out;
+}
 function setupPayloadFromForm() {
   const npmPackage = document.getElementById("setupPackage").value.trim();
   const npmCommands = splitCSV(document.getElementById("setupCommands").value);
@@ -544,6 +609,59 @@ function bindSetupPanel() {
         setupResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
         document.getElementById("setupResult").innerHTML = setupResultHTML;
         setSetupBusy(false, "error");
+      }
+    });
+  });
+}
+function runPayloadFromForm() {
+  const command = splitArgv(document.getElementById("runCommand").value);
+  if (!command.length) throw new Error("command is required");
+  const workspace = document.getElementById("runWorkspace").value.trim();
+  const networkMode = document.getElementById("runNetwork").value;
+  const payload = {
+    profile: document.getElementById("runProfile").value,
+    backend: document.getElementById("runBackend").value,
+    command: command,
+    allowWeakIsolation: document.getElementById("runAllowWeak").checked,
+    newEnvironment: document.getElementById("runNewEnv").checked,
+    removeEnvironment: document.getElementById("runRemoveEnv").checked
+  };
+  if (workspace) payload.workspace = workspace;
+  if (networkMode) payload.networkMode = networkMode;
+  return payload;
+}
+function renderRunResponse(resource, response) {
+  const errors = response.errors || [];
+  const data = response.data || {};
+  const summary = data.boundarySummary || {};
+  const header = item(resource, data.profile || "run", [["backend", data.backend], ["workspace", data.workspace], ["guestWorkspace", data.guestWorkspace], ["command", data.command || []], ["sessionId", data.sessionId], ["environmentId", data.environmentId], ["auditPath", data.auditPath], ["error", data.error]], errors.length || data.error ? "error" : "ok");
+  const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
+  const boundary = data.boundarySummary ? item("Boundary Summary", summary.evidence || "audit", [["host.open", summary.hostOpen ? JSON.stringify(summary.hostOpen) : ""], ["hostfs", summary.hostfs ? JSON.stringify(summary.hostfs) : ""], ["portbridge", summary.portbridge ? JSON.stringify(summary.portbridge) : ""]], "info") : "";
+  return header + errorHTML + boundary;
+}
+function setRunBusy(busy, text) {
+  const status = document.getElementById("runStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-run-action]").forEach(function(button) { button.disabled = busy; });
+}
+function bindRunPanel() {
+  const form = document.getElementById("runForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  document.querySelectorAll("[data-run-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-run-action");
+      setRunBusy(true, action);
+      try {
+        const response = await apiPost("run/" + action, runPayloadFromForm());
+        runResultHTML = renderRunResponse("run/" + action, response);
+        document.getElementById("runResult").innerHTML = runResultHTML;
+        setRunBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+        if (action === "apply") await load();
+      } catch (error) {
+        runResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        document.getElementById("runResult").innerHTML = runResultHTML;
+        setRunBusy(false, "error");
       }
     });
   });

@@ -215,6 +215,7 @@ Show:
 
 - read-only dashboard;
 - init/tool setup plan and apply;
+- controlled run plan and apply;
 - audit explorer;
 - session detail;
 - profile summary.
