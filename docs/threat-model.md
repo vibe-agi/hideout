@@ -118,6 +118,13 @@ Guest root must not be able to read host credentials merely because it is root
 inside the guest. It may, however, control anything intentionally mounted into
 or created inside that guest boundary.
 
+Workspace mounts and HostFS grants have different escape models. A workspace
+mount is a user-selected subtree exposed through the guest namespace and mount
+boundary. HostFS is a host-canonical portal: the host broker must resolve host
+symlinks, re-check the resolved path against grants and deny rules, and audit
+the operation. These mechanisms must not be collapsed into a single generic file
+provider unless the implementation preserves both escape models explicitly.
+
 ## Claims
 
 Hideout Phase 1 makes these claims when using an isolation-capable backend and

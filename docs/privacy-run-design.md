@@ -510,6 +510,46 @@ Boundary defaults:
 | Broker -> host Docker | Deny | Later high-risk capability. |
 | Profile clone -> identity material | Deny | Default clone regenerates identity. |
 
+### File Access Surface
+
+Hideout uses one file-access principle with multiple mechanisms:
+
+```text
+One principle: workspace is shared; everything else is granted.
+
+Three mechanisms:
+  workspace mount       primary project tree, direct backend mount
+  HostFS grant          narrow brokered access to workspace-outside host paths
+  passthrough mount     explicit broad compatibility escape hatch
+```
+
+This is a product and explanation model, not a shared Go interface. Workspace
+mounts, HostFS grants, and passthrough mounts deliberately remain separate
+domain objects because their safety models differ:
+
+workspace mount
+  A subtree selected by the user for the run. Symlinks and absolute paths are
+  resolved inside the guest namespace and mount boundary. The workspace can be
+  fast and direct because it is the intentional work surface.
+
+HostFS grant
+  A host-canonical path authority. The host-side broker must resolve symlinks,
+  re-check the resolved path against grants and deny rules, filter directory
+  enumeration, and audit each access. HostFS must not rely on guest namespace
+  containment for correctness.
+
+passthrough mount
+  A backend mount outside the workspace. It gives broad filesystem semantics and
+  weaker per-access evidence, so it is a compatibility escape hatch, not the
+  default way to share workspace-outside files.
+
+Do not introduce a generic `HostFileProvider` abstraction unless a future design
+can preserve these distinct escape models, write semantics, failure modes, and
+audit expectations without reducing them to the weakest common denominator.
+The unified user experience belongs in `explain`, audit summaries, policy
+review, and UI: users should see one coherent file-access surface with clearly
+different authority classes.
+
 ## Capability Policy
 
 All sensitive actions use one canonical shape:
@@ -1485,6 +1525,13 @@ host and guest can both mutate that tree, file watching depends on the backend,
 and conflicts are ordinary shared-filesystem conflicts. Because this is broad
 authority, it must be explicit, audited, and shown in `explain`.
 
+For workspace-outside host paths, the product should prefer HostFS grants by
+default because they are narrow, filterable, and strongly auditable. A
+passthrough mount should be presented as a high-authority compatibility escape
+hatch for cases that truly need broad read/write behavior, filesystem watching,
+or tool compatibility that HostFS cannot provide. It must not be the automatic
+answer to a denied HostFS access.
+
 Suggested future CLI shape:
 
 ```sh
@@ -1504,7 +1551,10 @@ Rules:
   special high-risk policy classification;
 - additional mounts are not HostPathGrants and do not participate in HostFS
   directory filtering;
-- HostFS grants must not silently upgrade to backend mounts.
+- HostFS grants must not silently upgrade to backend mounts;
+- `explain`, audit, and UI must distinguish HostFS grants from passthrough
+  mounts, because a passthrough mount grants broader authority and weaker
+  per-access evidence.
 
 ## HostFS Portal
 
