@@ -355,6 +355,7 @@ Release candidate should verify:
 - schema parse and metadata repair tests;
 - source-tree install smoke;
 - release-like tarball package smoke;
+- release dogfood evidence manifest schema validation;
 - Gate 0 through Gate 4;
 - Lima Gate2 on macOS;
 - generic CLI dogfood smoke through

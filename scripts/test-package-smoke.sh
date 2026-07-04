@@ -50,6 +50,7 @@ for path in \
   "$prefix/README.md" \
   "$prefix/README.zh-CN.md" \
   "$prefix/schemas/package-manifest.schema.json" \
+  "$prefix/schemas/release-dogfood.schema.json" \
   "$prefix/schemas/profile.schema.json" \
   "$prefix/schemas/run-plan.schema.json" \
   "$prefix/docs/privacy-run-design.md" \
@@ -86,7 +87,8 @@ jq -e \
     any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
-    any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$")))
+    any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$")))
   ' "$prefix/package-manifest.json" >/dev/null
 
 jq -r '.layout.binaries[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do

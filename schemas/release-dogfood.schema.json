@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/release-dogfood.schema.json",
+  "title": "Hideout Release Dogfood Evidence Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "exitCode",
+    "startedAt",
+    "endedAt",
+    "command",
+    "evidence",
+    "git",
+    "host",
+    "tools",
+    "operatorProxy",
+    "browser",
+    "gates"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.release-dogfood.v1"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed"
+      ]
+    },
+    "exitCode": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "endedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "command": {
+      "const": "scripts/test-phase1.sh --release-candidate"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "directory",
+        "log"
+      ],
+      "properties": {
+        "directory": {
+          "type": "string",
+          "minLength": 1
+        },
+        "log": {
+          "const": "test-release-dogfood.log"
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "dirty"
+      ],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dirty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uname",
+        "macOSProductVersion"
+      ],
+      "properties": {
+        "uname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "macOSProductVersion": {
+          "type": "string"
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "go",
+        "limactl",
+        "jq"
+      ],
+      "properties": {
+        "go": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limactl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jq": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "operatorProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provided",
+        "scheme",
+        "url"
+      ],
+      "properties": {
+        "provided": {
+          "const": true
+        },
+        "scheme": {
+          "enum": [
+            "http",
+            "https",
+            "socks5",
+            "socks5h",
+            "unknown"
+          ]
+        },
+        "url": {
+          "const": "redacted"
+        }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "realBrowserRequired",
+        "browserPathProvided",
+        "browserApp"
+      ],
+      "properties": {
+        "realBrowserRequired": {
+          "const": true
+        },
+        "browserPathProvided": {
+          "type": "boolean"
+        },
+        "browserApp": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 7,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "allOf": [
+        {
+          "contains": {
+            "const": "gate0-static-contract"
+          }
+        },
+        {
+          "contains": {
+            "const": "gate1-native-smoke"
+          }
+        },
+        {
+          "contains": {
+            "const": "gate2-lima-e2e"
+          }
+        },
+        {
+          "contains": {
+            "const": "gate3-hidden-proxy-operator"
+          }
+        },
+        {
+          "contains": {
+            "const": "gate4-host-escape-real-browser"
+          }
+        },
+        {
+          "contains": {
+            "const": "capability-probe-smoke"
+          }
+        },
+        {
+          "contains": {
+            "const": "generic-cli-dogfood-smoke"
+          }
+        }
+      ]
+    }
+  }
+}

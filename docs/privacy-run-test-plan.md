@@ -1042,7 +1042,8 @@ default it is placed under `.hideout-release-evidence/`; set
 contains:
 
 - `manifest.json` with command, git revision, host prerequisites, tool versions,
-  gate list, exit code, and operator proxy presence;
+  gate list, exit code, and operator proxy presence. It must conform to
+  `schemas/release-dogfood.schema.json`;
 - `test-release-dogfood.log` with redacted gate output.
 
 The manifest must record `operatorProxy.url` as `redacted` and the log must not

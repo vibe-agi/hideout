@@ -88,6 +88,7 @@ redact_stream() {
 
 require_command jq
 require_command perl
+require_command go
 
 started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 stamp="$(date -u +"%Y%m%dT%H%M%SZ")"
@@ -98,6 +99,7 @@ mkdir -p "$evidence_dir"
 
 log_path="$evidence_dir/test-release-dogfood.log"
 manifest_path="$evidence_dir/manifest.json"
+manifest_schema_path="$ROOT/schemas/release-dogfood.schema.json"
 command_text="scripts/test-phase1.sh --release-candidate"
 proxy_scheme_value="$(proxy_scheme)"
 go_version="$(first_line_or_missing go version)"
@@ -179,6 +181,15 @@ write_manifest() {
         "generic-cli-dogfood-smoke"
       ]
     }' >"$manifest_path"
+  validate_manifest
+}
+
+validate_manifest() {
+  go run ./cmd/hideout-schema-validate "$manifest_schema_path" "$manifest_path" >/dev/null
+  jq -e '
+    .operatorProxy.provided == true and
+    .operatorProxy.url == "redacted"
+  ' "$manifest_path" >/dev/null
 }
 
 {

@@ -14,6 +14,7 @@ test -f schemas/init-audit-event.schema.json
 test -f schemas/helper-manifest.schema.json
 test -f schemas/run-plan.schema.json
 test -f schemas/run-result.schema.json
+test -f schemas/release-dogfood.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null

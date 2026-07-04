@@ -174,6 +174,11 @@ cat >"$prefix/package-manifest.json" <<EOF
       "path": "schemas/package-manifest.schema.json",
       "kind": "schema",
       "sha256": "$(sha256_file "$prefix/schemas/package-manifest.schema.json")"
+    },
+    {
+      "path": "schemas/release-dogfood.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/release-dogfood.schema.json")"
     }
   ]
 }
