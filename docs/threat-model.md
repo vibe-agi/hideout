@@ -224,9 +224,9 @@ Therefore:
   PortBridge endpoint created by Hideout;
 - the mapped endpoint is trusted only because Hideout created it, owns its
   lifetime, audits it, and cleans it up, not because loopback is generally safe.
-- backends must disable or override default automatic guest-to-host port
-  forwarding. A guest-local listener becoming host-visible because of backend
-  defaults is an unowned PortBridge and violates this boundary.
+- backends must disable or override default automatic host-to-guest exposure of
+  guest listeners. A guest-local listener becoming host-visible because of
+  backend defaults is an unowned PortBridge and violates this boundary.
 
 This distinction prevents product features from eroding the `host.open` browser
 privacy boundary one compatibility exception at a time.
@@ -314,10 +314,11 @@ Required:
 
 - HostFS read/list/stat policy and audit;
 - `host.open` external URL and workspace file broker path;
-- `portbridge.host-to-guest` product validation, run-scoped lifecycle, audit,
-  cleanup, and Boundary Summary evidence;
+- `endpoint.expose.host-to-guest` product validation backed by run-scoped
+  PortBridge lifecycle, audit, cleanup, and Boundary Summary evidence;
 - hidden env and proxy-secret handling;
-- Boundary Summary for HostFS, `host.open`, and product PortBridge actions;
+- Boundary Summary for HostFS, `host.open`, and product endpoint exposure
+  actions;
 - this Threat Model Lite.
 
 Design-ready or later:
@@ -327,5 +328,5 @@ Design-ready or later:
 - `preview.open`;
 - Browser Control;
 - adb, simulator, and IDE adapters;
-- PortBridge product promotion;
+- additional endpoint exposure directions and PortBridge provider promotion;
 - full bundle signing, revocation, and workspace trust UX.

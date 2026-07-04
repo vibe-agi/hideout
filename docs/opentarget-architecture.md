@@ -95,11 +95,11 @@ OpenTarget / PortBridge / Command Proxy
 ```
 
 PortBridge remains a generic transport primitive, not an adb, browser, or
-preview-specific target type. `portbridge.host-to-guest` is the first product
-primitive and is run-scoped, audited, and owned by a typed capability.
-`portbridge.guest-to-host` remains design-ready/lab until a separate product
-design promotes it. Any bridge still needs an owning OpenTarget or explicit
-product design.
+preview-specific target type. `endpoint.expose.host-to-guest` is the first
+product exposure direction and uses run-scoped, audited PortBridge mappings
+owned by a typed capability. `endpoint.expose.guest-to-host` remains
+design-ready/lab until a separate product design promotes it. Any bridge still
+needs an owning OpenTarget or explicit product design.
 
 Adapters may understand product protocols and developer workflows. For example:
 
@@ -140,7 +140,8 @@ Targets:
 - `preview.open`
 - `browser.launch`
 - `browser.control`
-- `portbridge.guest-to-host`
+- `endpoint.expose.host-to-guest` for preview services
+- `endpoint.expose.guest-to-host` for future browser control
 
 Use cases:
 
@@ -162,7 +163,8 @@ Targets:
 
 - `mobile.simulator.open`
 - `app.launch` for emulator tooling;
-- explicit PortBridge proposals when an adb adapter is enabled.
+- explicit `endpoint.expose.guest-to-host` proposals when an adb adapter is
+  enabled.
 
 Use cases:
 
@@ -175,9 +177,9 @@ over PortBridge and audit, not as a generic host port escape. A later
 protocol-aware adapter may classify adb subcommands, but the Core primitive is
 still the typed bridge and lifecycle.
 
-adb adapters require the generic guest-reachable `portbridge.guest-to-host`
-primitive to be promoted from lab to product path. Until that promotion, adapter
-proposals for guest-to-host bridge capabilities fail closed at the Go validator.
+adb adapters require the higher-risk `endpoint.expose.guest-to-host` primitive
+to be designed and promoted from lab to product path. Until that promotion,
+adapter proposals for host service reachability fail closed at the Go validator.
 
 ### iOS
 
@@ -206,7 +208,8 @@ Targets:
 - `browser.control`
 - `preview.open`
 - `host.open.file`
-- `portbridge.guest-to-host`
+- `endpoint.expose.host-to-guest` for previews and local callbacks
+- `endpoint.expose.guest-to-host` for future browser control
 
 Use cases:
 
@@ -221,7 +224,7 @@ an explicit lab probe.
 
 ```text
 OpenTarget preview.open
-  -> requests portbridge.guest-to-host
+  -> requests endpoint.expose.host-to-guest by candidateId
   -> Manager allocates endpoint
   -> policy validates target and exposure
   -> audit records mapping

@@ -17,8 +17,9 @@ Status:
 Script runtime for command policy and audit redaction: Required Phase 1.
 Adapter ABI beyond command.decide and audit.redact: Design-ready.
 Safe context queries: Later.
-PortBridge proposal builders: Later. Each builder is gated by the corresponding
-PortBridge direction being promoted to a product primitive.
+Endpoint exposure proposal builders: Later. Each builder is gated by the
+corresponding direction-specific exposure primitive being promoted to a product
+path.
 ```
 
 ## Product Reasoning
@@ -119,8 +120,8 @@ Disallowed responsibilities:
 - changing immutable audit evidence.
 
 An adapter may know that `adb` uses a host TCP endpoint or that Chromium DevTools
-uses a loopback port. It may propose a typed PortBridge or OpenTarget. It must
-not open the port itself.
+uses a loopback port. It may propose a typed endpoint exposure or OpenTarget. It
+must not open the port itself.
 
 Runtime decision context is allowed to be rich. Hideout should give adapters the
 structured facts needed for real local policy decisions: full URLs, parsed
@@ -207,8 +208,9 @@ hideout.decision.ask(...)
 hideout.decision.auditOnly(...)
 ```
 
-Future builders may construct structured HostFS, OpenTarget, or PortBridge
-proposals, but they still return data. They do not materialize capabilities.
+Future builders may construct structured HostFS, OpenTarget, or
+`endpoint.expose.*` proposals, but they still return data. They do not
+materialize capabilities or request raw transport mappings.
 
 ### Safe Context Queries
 
@@ -224,15 +226,20 @@ broker tokens, or raw backend state.
 Examples:
 
 ```javascript
-hideout.context.hasCapability("portbridge.guest-to-host")
-hideout.context.backendSupports("loopback-listen")
+hideout.context.hasCapability("endpoint.expose.guest-to-host")
+hideout.context.backendSupports("host-to-guest-provider")
 hideout.context.policyHas("hostfs.read")
 ```
 
 Safe queries are optional and not required for Phase 1 command policy. If a
-query would leak host reality, the runtime must not expose it. When implemented,
-query inputs and results must come from an immutable per-evaluation snapshot and
-be replayable from audit context.
+query would leak host reality, the runtime must not expose it.
+
+Replay has two layers. The local decision snapshot used for policy evaluation
+may contain rich runtime facts and can be retained in a protected local store or
+bound by hash for debugging. Audit, Boundary Summary, exported fixtures, and UI
+views are redacted presentation surfaces and are not required to contain enough
+data to fully replay a decision. A replay tool that needs full fidelity must use
+the protected decision snapshot, not the redacted audit view.
 
 ## Runtime Restrictions
 
@@ -333,7 +340,7 @@ Design-ready and Later entrypoints:
 | --- | --- | --- |
 | `command.normalize(ctx)` | Design-ready | User-scripted normalization for future command families. |
 | `opentarget.decide(ctx)` | Later | Direct OpenTarget proposal hook after OpenTarget product path is promoted. |
-| `portbridge.decide(ctx)` | Later | Direct PortBridge proposal hook after PortBridge product path is promoted. |
+| `endpoint.expose.decide(ctx)` | Later | Direct endpoint exposure proposal hook after a direction-specific exposure product path is promoted. |
 
 Adapters for adb, browser control, preview, IDE, or simulator workflows must use
 an entrypoint that exists in the current effective policy. Today, that usually
@@ -375,8 +382,8 @@ and Gate 0 contract before bundles can depend on them.
 ### Later
 
 - Safe context query SDK backed by immutable per-evaluation snapshots.
-- Structured OpenTarget and PortBridge proposal builders.
-- Direct `opentarget.decide(ctx)` and `portbridge.decide(ctx)` entrypoints.
+- Structured OpenTarget and endpoint exposure proposal builders.
+- Direct `opentarget.decide(ctx)` and `endpoint.expose.decide(ctx)` entrypoints.
 - Author tooling such as script fixture tests and policy evaluation CLI.
 
 ## Failure Behavior
@@ -392,7 +399,7 @@ and Gate 0 contract before bundles can depend on them.
 
 ## Open Questions
 
-- What is the first product-grade structured PortBridge proposal schema?
+- What is the first product-grade structured endpoint exposure proposal schema?
 - Should future OpenTarget adapters share one `opentarget.decide(ctx)`
   entrypoint or use target-specific entrypoints?
 - How should Manager present adapter permission diffs without implying the

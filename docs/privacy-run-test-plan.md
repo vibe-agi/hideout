@@ -101,7 +101,7 @@ Change-to-gate mapping:
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, Gate 1, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and Gate 1 | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
-| Product PortBridge primitives | Gate 0 and targeted PortBridge/Manager tests | product action validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` if user-facing |
+| Endpoint Exposure primitives | Gate 0 and targeted Manager/PortBridge tests | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` if user-facing |
 | Browser Control, Preview Open, or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
 
 The testing order for new capabilities is:
@@ -238,8 +238,8 @@ Required checks:
 - cleanup dry-run and `--session` filtering keep non-selected session state
   intact while still reporting secret-bearing cleanup state.
 - run-end Boundary Summary reports the audit path and HostFS / `host.open` /
-  product PortBridge allowed, denied, unsupported, audit-only, or error counts
-  from the structured audit facts;
+  product endpoint exposure allowed, denied, unsupported, audit-only, or error
+  counts from the structured audit facts;
 - Boundary Summary output does not include broker tokens, proxy secrets, HostFS
   backing secrets, browser automation secrets, or full sensitive requested
   paths.
@@ -344,7 +344,7 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
   its own authentication state under the isolated profile identity home;
 - a host-owned redirect to `localhost:<guest-listener-port>` does not complete
   the guest callback, proving host loopback and guest loopback remain separate
-  without a typed PortBridge owner;
+  without a typed endpoint exposure owner;
 - profile identity home can be seeded through the generic
   `hideout profile home import` primitive without exposing source paths or
   credential contents in smoke output;
@@ -366,8 +366,8 @@ smoke also runs a controlled host redirect that behaves like
 `https://httpbin.org/redirect-to?url=http://localhost:9000`, but without
 depending on the public internet: after a host browser or host HTTP client
 follows the redirect, `localhost` targets host loopback, not guest loopback. That
-negative check must keep failing until a typed owner and PortBridge-backed
-product path exists.
+negative check must keep failing until a typed owner and
+`endpoint.expose.host-to-guest` product path exists.
 
 Command:
 
@@ -595,7 +595,7 @@ control handshake. The fake handshake is automation evidence for CLI, policy,
 audit, and protocol shape; the real browser run is the stronger capability
 evidence before promoting browser-control behavior.
 
-### Probe A: PortBridge
+### Probe A: PortBridge And Endpoint Exposure
 
 Evidence:
 
@@ -603,8 +603,15 @@ Evidence:
   and deny paths;
 - lab command requires explicit `--enable-lab`;
 - probe audit uses lab action names;
-- product `portbridge.host-to-guest` uses the separate product action, route,
-  validator, run-scoped Manager lifecycle, audit, cleanup, and Boundary Summary;
+- product `endpoint.expose.host-to-guest` uses declared or manual endpoint
+  candidates, a direction-specific product action, route, validator, run-scoped
+  Manager lifecycle, audit, cleanup, and Boundary Summary;
+- JavaScript policy may reference `candidateId` and policy fields, but cannot
+  supply raw host addresses, guest addresses, direction, owner IDs, backend
+  endpoints, or provider handles;
+- project-declared candidates from the workspace require review or ask behavior
+  and must not auto-expose without user approval;
+- observed-only candidates are audit-only or ask and must not auto-expose;
 - backends without a host-to-guest provider fail closed before backend prepare.
 
 Commands:
@@ -619,7 +626,10 @@ scripts/test-lab-probes.sh
 Product path:
 
 ```text
-manager.ApplyRun(... PortBridges: [{owner: "preview.open", target: "127.0.0.1:<guest-service>"}])
+endpoint candidate declared by profile or approved project policy
+  -> adapter proposal references candidateId
+  -> manager validates endpoint.expose.host-to-guest
+  -> PortBridge provider materializes the exact mapping
 ```
 
 ### Probe B: Browser Control
@@ -674,7 +684,7 @@ scripts/test-lab-probes.sh
 | Audit redaction | required | required | required | no |
 | Doctor diagnostics | required | required | required | no |
 | Cleanup removes secret-bearing state | required | required | required | no |
-| PortBridge lab isolation | required | optional | optional | no |
+| PortBridge and Endpoint Exposure lab isolation | required | optional | optional | no |
 | Browser-control lab isolation | partial | optional | optional | maybe |
 
 ## Environment Resume Acceptance

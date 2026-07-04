@@ -345,9 +345,9 @@ Required Phase 1:
 - Command Proxy support for `open` and `xdg-open`, with both enabled in the
   default profile.
 - Host Broker action `host.open` for URLs and mapped workspace files.
-- Run-scoped `portbridge.host-to-guest` as a typed transport primitive for
-  future OpenTarget owners. It is not a browser or adb feature by itself, and
-  it does not weaken `host.open` localhost denial.
+- Run-scoped `endpoint.expose.host-to-guest` as the first product exposure
+  direction, backed by the PortBridge transport provider. It is not a browser or
+  adb feature by itself, and it does not weaken `host.open` localhost denial.
 - Isolated browser profile for URL open.
 - Centralized capability evaluator.
 - Constrained `goja` support for command policy and audit redaction hooks.
@@ -364,9 +364,9 @@ Design-ready Phase 1:
   over the local token-protected server.
 - Local Web UI page map and data model.
 - OpenTarget domain contracts for future host application automation and
-  preview workflows. `portbridge.host-to-guest` is available as a typed
-  supporting primitive; OpenTarget owners such as `preview.open` remain separate
-  product designs.
+  preview workflows. `endpoint.expose.host-to-guest` is available as the first
+  product exposure direction; OpenTarget owners such as `preview.open` remain
+  separate product designs.
 - Profile identity rotate/reset.
 - Audit query API.
 - More complete policy editing surfaces.
@@ -625,7 +625,7 @@ Phase 1 capability implementation matrix:
 | `host.open` | `command:open`, `command:xdg-open` | `route=host-broker`; Host Broker opens an isolated browser URL or mapped workspace file. | Generic host command execution. |
 | `guest.exec` | top-level run or registered command proxy shim | `route=guest-direct` for the top-level command; `route=guest-exec` only for an explicitly registered shim that execs the matching real guest binary without host side effects. | Intercepting arbitrary guest commands. |
 | `network.connect` | session setup | `route=guest-direct` for setup and route verification evidence for `direct` or `tun2socks`; `route=deny` on failure. | Per-socket firewalling or request audit. |
-| `portbridge.host-to-guest` | Manager run data plane for an owning typed capability | `route=portbridge`; explicit owner, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup. | Raw host port exposure, `host.open` localhost exceptions, or business-specific adb/browser semantics. |
+| `endpoint.expose.host-to-guest` | Manager run data plane for an owning typed capability | `route=portbridge`; candidate ID resolved by Go, explicit owner, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup. | Raw host port exposure, `host.open` localhost exceptions, script-supplied addresses, or business-specific adb/browser semantics. |
 
 Any action outside the Phase 1 implementation matrix and Capability Probe matrix
 is unsupported in Phase 1 and fails closed before it reaches an implementation.
@@ -874,8 +874,9 @@ internal/hostopen
   Host browser/file opener used only after Host Broker approval.
 
 internal/portbridge
-  TCP bridge primitive. `portbridge.host-to-guest` has a product validator and
-  run-scoped Manager lifecycle; `guest-to-host` remains design-ready/lab until a
+  TCP bridge provider. Product authority is expressed as
+  `endpoint.expose.host-to-guest` and materialized through a run-scoped
+  PortBridge lifecycle; guest-to-host exposure remains design-ready/lab until a
   separate product design promotes it. The bridge is not part of `host.open`.
 
 internal/guestaudit
@@ -2915,7 +2916,8 @@ Endpoint semantics:
 - Host-local services are not reachable from the guest unless an explicit
   `guest-to-host` bridge maps a specific host endpoint into the guest boundary.
 
-Every PortBridge proposal must include:
+Every endpoint exposure proposal and materialized PortBridge record must
+include:
 
 - subject, action, resource, route, and decision;
 - owning OpenTarget and target type;
@@ -2945,9 +2947,9 @@ PortBridge policy:
   guest-to-host reachability, but product paths still fail closed until the
   architecture contract and policy validator are complete;
 - bridges are closed when the owning session or OpenTarget closes;
-- scripts may propose a bridge decision only inside a registered policy hook;
-  the final validator still enforces direction, route, address, scope, and
-  target constraints;
+- scripts may propose endpoint exposure by candidate ID only inside a registered
+  policy hook; the final validator still derives direction and enforces route,
+  address, scope, and target constraints;
 - adapters such as adb, browser control, or preview require their exact
   direction-specific exposure primitive to be promoted from lab to product path
   before their bridge proposals can pass the Go validator;
