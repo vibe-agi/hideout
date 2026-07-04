@@ -1734,6 +1734,10 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	p := profile.Default("default")
 	p.Network.Mode = network.ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
+		Package:  "@example/agent-cli@1.2.3",
+		Commands: []string{"agent-cli", "agent-helper"},
+	}}
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
@@ -1783,6 +1787,12 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 		t.Fatalf("proxy env must not be visible in default profile summary: %+v", prof)
 	}
 	assertContainsManagerTest(t, prof.ToolPresets, "base-dev")
+	if len(prof.NPMGlobals) != 1 ||
+		prof.NPMGlobals[0].Package != "@example/agent-cli@1.2.3" {
+		t.Fatalf("profile npm global summary mismatch: %+v", prof.NPMGlobals)
+	}
+	assertContainsManagerTest(t, prof.NPMGlobals[0].Commands, "agent-cli")
+	assertContainsManagerTest(t, prof.NPMGlobals[0].Commands, "agent-helper")
 	assertContainsManagerTest(t, prof.CommandProxies, "open")
 	assertContainsManagerTest(t, prof.CommandProxies, "xdg-open")
 	assertContainsManagerTest(t, overview.Capabilities.MaxCapabilities, "host.open")

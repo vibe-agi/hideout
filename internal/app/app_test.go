@@ -3327,7 +3327,12 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	store := profile.Store{Root: filepath.Join(home, ".hideout")}
-	if err := store.Save(profile.Default("default")); err != nil {
+	p := profile.Default("default")
+	p.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
+		Package:  "@example/agent-cli@1.2.3",
+		Commands: []string{"agent-cli", "agent-helper"},
+	}}
+	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
@@ -3341,7 +3346,8 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Profiles: 1",
 		"Capabilities: host.open",
 		"Profiles\n  - default",
-		"tools=base-dev",
+		"presets=base-dev",
+		"npm=@example/agent-cli@1.2.3 (agent-cli,agent-helper)",
 		"Backends",
 		"Network",
 		"warning=direct exposes network identity",

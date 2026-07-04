@@ -233,7 +233,7 @@ Show:
 - controlled run plan and apply;
 - audit explorer;
 - session detail;
-- profile summary.
+- profile summary, including tool presets and user-declared npm globals.
 
 ### Later
 

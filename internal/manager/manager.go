@@ -51,19 +51,20 @@ type Overview struct {
 }
 
 type ProfileSummary struct {
-	Name            string   `json:"name"`
-	ProfileID       string   `json:"profileId,omitempty"`
-	IdentityID      string   `json:"identityId,omitempty"`
-	LineageMode     string   `json:"lineageMode,omitempty"`
-	NetworkMode     string   `json:"networkMode"`
-	ProxySecretRef  string   `json:"proxySecretRef,omitempty"`
-	ProxyEnvVisible bool     `json:"proxyEnvVisible"`
-	CommandProxies  []string `json:"commandProxies,omitempty"`
-	PolicyEngine    string   `json:"policyEngine"`
-	ToolPresets     []string `json:"toolPresets"`
-	ProfilePath     string   `json:"profilePath"`
-	IdentityPath    string   `json:"identityPath"`
-	ValidationError string   `json:"validationError,omitempty"`
+	Name            string                     `json:"name"`
+	ProfileID       string                     `json:"profileId,omitempty"`
+	IdentityID      string                     `json:"identityId,omitempty"`
+	LineageMode     string                     `json:"lineageMode,omitempty"`
+	NetworkMode     string                     `json:"networkMode"`
+	ProxySecretRef  string                     `json:"proxySecretRef,omitempty"`
+	ProxyEnvVisible bool                       `json:"proxyEnvVisible"`
+	CommandProxies  []string                   `json:"commandProxies,omitempty"`
+	PolicyEngine    string                     `json:"policyEngine"`
+	ToolPresets     []string                   `json:"toolPresets"`
+	NPMGlobals      []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
+	ProfilePath     string                     `json:"profilePath"`
+	IdentityPath    string                     `json:"identityPath"`
+	ValidationError string                     `json:"validationError,omitempty"`
 }
 
 type SessionSummary struct {
@@ -426,6 +427,7 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			summary.ProxyEnvVisible = p.Network.ProxyEnvVisible
 			summary.PolicyEngine = p.Policy.Engine
 			summary.ToolPresets = append([]string(nil), p.Tools.Presets...)
+			summary.NPMGlobals = copyProfileSummaryNPMGlobals(p.Tools.NPMGlobals)
 			registry, err := cmdproxy.RegistryFromProfile(p)
 			if err == nil {
 				summary.CommandProxies = registry.ShimNames()
@@ -435,6 +437,20 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, errs
+}
+
+func copyProfileSummaryNPMGlobals(values []profile.NPMGlobalPackage) []profile.NPMGlobalPackage {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]profile.NPMGlobalPackage, len(values))
+	for i, pkg := range values {
+		out[i] = profile.NPMGlobalPackage{
+			Package:  pkg.Package,
+			Commands: append([]string(nil), pkg.Commands...),
+		}
+	}
+	return out
 }
 
 func (c Core) sessionSummaries() ([]SessionSummary, int) {

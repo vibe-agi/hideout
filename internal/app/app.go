@@ -3773,7 +3773,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  tools=%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), status)
+		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), status)
 	}
 
 	fmt.Fprintln(w, "\nBackends")
@@ -3859,6 +3859,21 @@ func listForTUI(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ",")
+}
+
+func npmGlobalsForTUI(values []profile.NPMGlobalPackage) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	out := make([]string, 0, len(values))
+	for _, pkg := range values {
+		label := pkg.Package
+		if len(pkg.Commands) > 0 {
+			label += " (" + strings.Join(pkg.Commands, ",") + ")"
+		}
+		out = append(out, label)
+	}
+	return strings.Join(out, ",")
 }
 
 type labPortbridgeLoopbackOptions struct {

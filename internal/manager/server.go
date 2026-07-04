@@ -339,6 +339,14 @@ function list(value) {
   if (value == null || value === "") return "none";
   return String(value);
 }
+function npmGlobalLabels(value) {
+  if (!Array.isArray(value) || !value.length) return [];
+  return value.map(function(pkg) {
+    const name = pkg && pkg.package ? pkg.package : "npm package";
+    const commands = pkg && Array.isArray(pkg.commands) && pkg.commands.length ? " (" + pkg.commands.join(", ") + ")" : "";
+    return name + commands;
+  });
+}
 function pill(label, tone) {
   return '<span class="pill ' + esc(tone || "") + '">' + esc(label) + "</span>";
 }
@@ -478,7 +486,7 @@ const renderers = {
     if (!profiles.length) return empty("No profiles");
     return '<div class="items">' + profiles.map(function(p) {
       const tone = p.validationError ? "error" : "ok";
-      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["toolPresets", p.toolPresets], ["commandProxies", p.commandProxies]], tone);
+      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies]], tone);
     }).join("") + "</div>";
   },
   sessions: function() {
