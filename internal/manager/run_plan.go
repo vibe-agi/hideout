@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -256,16 +257,40 @@ func canonicalPathBestEffort(path string) string {
 }
 
 func pathInRoot(path, root string) bool {
+	return pathInRootWithCaseMode(path, root, caseInsensitivePathComparison())
+}
+
+func pathInRootWithCaseMode(path, root string, caseInsensitive bool) bool {
 	path = filepath.Clean(path)
 	root = filepath.Clean(root)
-	if path == root {
+	if sameFilesystemPath(path, root, caseInsensitive) {
 		return true
+	}
+	if caseInsensitive {
+		path = strings.ToLower(path)
+		root = strings.ToLower(root)
 	}
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func sameFilesystemPath(path, root string, caseInsensitive bool) bool {
+	if path == root {
+		return true
+	}
+	pathInfo, pathErr := os.Stat(path)
+	rootInfo, rootErr := os.Stat(root)
+	if pathErr == nil && rootErr == nil {
+		return os.SameFile(pathInfo, rootInfo)
+	}
+	return caseInsensitive && strings.EqualFold(path, root)
+}
+
+func caseInsensitivePathComparison() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 }
 
 func normalizeGuestWorkspace(guestWorkspace string) (string, error) {

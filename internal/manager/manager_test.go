@@ -229,6 +229,53 @@ func TestCorePlanRunWorkspaceSafetyGuardResolvesSymlinks(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSafetyPathContainmentHandlesCaseInsensitivePlatforms(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "alice")
+	sshUpper := filepath.Join(home, ".SSH")
+	sshLower := filepath.Join(home, ".ssh")
+	if !pathInRootWithCaseMode(sshUpper, sshLower, true) {
+		t.Fatalf("case-insensitive mode should treat %q as inside %q", sshUpper, sshLower)
+	}
+	if pathInRootWithCaseMode(sshUpper, sshLower, false) {
+		t.Fatalf("case-sensitive mode should not treat %q as inside %q", sshUpper, sshLower)
+	}
+
+	gcloudRoot := filepath.Join(home, ".config", "gcloud")
+	configUpper := filepath.Join(home, ".Config")
+	if !pathInRootWithCaseMode(gcloudRoot, configUpper, true) {
+		t.Fatalf("case-insensitive mode should treat %q as inside ancestor %q", gcloudRoot, configUpper)
+	}
+	if pathInRootWithCaseMode(gcloudRoot, configUpper, false) {
+		t.Fatalf("case-sensitive mode should not treat %q as inside ancestor %q", gcloudRoot, configUpper)
+	}
+}
+
+func TestCorePlanRunWorkspaceSafetyGuardRejectsCaseVariantOnCaseInsensitiveFilesystem(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	lowerSSH := filepath.Join(home, ".ssh")
+	upperSSH := filepath.Join(home, ".SSH")
+	if err := os.MkdirAll(lowerSSH, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(upperSSH); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+
+	_, err := New(profile.Store{Root: filepath.Join(home, ".hideout")}).PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   upperSSH,
+		Command:     []string{"echo", "hi"},
+	})
+	if err == nil {
+		t.Fatalf("expected case-variant sensitive workspace %q to fail", upperSSH)
+	}
+	if !strings.Contains(err.Error(), "sensitive host path") {
+		t.Fatalf("unexpected unsafe workspace error: %v", err)
+	}
+}
+
 func TestCorePlanRunRejectsMissingCommandBeforeProfileCreation(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	_, err := New(store).PlanRun(RunPlanOptions{
