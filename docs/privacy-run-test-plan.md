@@ -940,8 +940,9 @@ Required checks:
   manifests, English and Chinese README entrypoints, schemas, docs, packaging
   metadata, can run installed
   `hideout init --no-input` plus `hideout doctor` from a temporary prefix, and
-  can discover packaged Lima Linux helpers without rebuilding from the source
-  tree;
+  can render installed `hideout tui`, start installed `hideout ui --print-url`
+  without opening a browser or blocking, and discover packaged Lima Linux
+  helpers without rebuilding from the source tree;
 - Gate 0 statically validates the draft Homebrew formula and its
   `hideout init --no-input` formula smoke contract when Ruby is available;
 - omitted or `auto` backend first-run repair resolves to Lima, matching

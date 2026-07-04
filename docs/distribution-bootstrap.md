@@ -208,6 +208,10 @@ must also write current helper manifests.
 Release-like tarballs must keep Linux guest helpers next to the installed
 `hideout` binary so the first Lima `doctor --fix --dry-run` can discover them
 without rebuilding from the source tree.
+They must also preserve the embedded terminal TUI and WebUI smoke surfaces:
+`hideout tui` should render once without starting WebUI, and
+`hideout ui --no-open --print-url` should start the local Manager/WebUI server,
+print redacted entrypoint information, and exit without opening a browser.
 
 Unsafe fixes require explicit confirmation:
 

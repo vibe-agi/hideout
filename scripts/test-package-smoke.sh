@@ -54,6 +54,26 @@ grep -q 'store: ok writable' "$tmp/doctor.out"
 grep -q 'profile: ok default' "$tmp/doctor.out"
 grep -q 'manager: ok' "$tmp/doctor.out"
 
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" tui >"$tmp/tui.out"
+grep -q '^Hideout TUI$' "$tmp/tui.out"
+grep -q '^Status: ok$' "$tmp/tui.out"
+grep -q '^Profiles:' "$tmp/tui.out"
+if grep -q 'Hideout UI:' "$tmp/tui.out"; then
+  echo "package-smoke: tui should not start WebUI" >&2
+  cat "$tmp/tui.out" >&2
+  exit 1
+fi
+
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" ui --no-open --print-url --listen 127.0.0.1:0 --ttl 1m >"$tmp/ui.out"
+grep -q '^Hideout UI: http://127\.0\.0\.1:' "$tmp/ui.out"
+grep -q '^Manager API: http://127\.0\.0\.1:' "$tmp/ui.out"
+grep -q '^Token expires:' "$tmp/ui.out"
+if grep -q 'Press Ctrl-C to stop' "$tmp/ui.out"; then
+  echo "package-smoke: ui --print-url should exit without waiting" >&2
+  cat "$tmp/ui.out" >&2
+  exit 1
+fi
+
 HIDEOUT_STORE_ROOT="$tmp/lima-store" "$prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-shim: ok' "$tmp/lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/lima-doctor-fix-dry.out"
