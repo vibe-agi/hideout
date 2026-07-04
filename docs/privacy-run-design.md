@@ -2155,6 +2155,13 @@ commands. Backend configuration version is also part of the environment identity
 so backend security-policy changes do not reuse older VMs with stale generated
 YAML.
 
+Current Lima tool provisioning happens while the environment is created, before
+per-run network bootstrap and guest-side `tun2socks` route replacement. Hideout
+must therefore not claim that first-time package downloads are covered by
+`tun2socks` privacy mode. Privacy-sensitive dogfood should use a prebuilt or
+preprovisioned environment, or explicitly accept `direct` provisioning network
+identity. Proxy-aware provisioning is a separate future capability.
+
 Persistent profile home seeding:
 
 ```sh

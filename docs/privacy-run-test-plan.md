@@ -377,6 +377,11 @@ flow, typed preview callback reach-back, host redirect boundary, environment
 policy, profile-state persistence, network request, and control-plane store
 protection.
 
+The smoke runs with `--network direct`. It proves generic tool supply and CLI
+mechanics, not private first-time provisioning. Until proxy-aware provisioning
+exists, privacy-sensitive runs must use prebuilt or preprovisioned tool
+environments before enabling `tun2socks` for target command traffic.
+
 The automated smoke sets `HIDEOUT_BROWSER_PATH` to a fake browser shim that
 accepts the normal Chromium-style arguments and follows the host-visible URL
 with `curl`. This keeps the gate deterministic and avoids opening the
