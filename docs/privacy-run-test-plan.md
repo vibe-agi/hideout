@@ -956,7 +956,8 @@ Required checks:
   writing init state;
 - package smoke proves package-root `install.sh` fails before copying binaries
   when the extracted package layout is missing `package-manifest.json`, the host
-  shim, Linux guest shim, or Linux HostFS daemon;
+  shim, Linux guest shim, Linux HostFS daemon, or when a manifest-declared
+  checksum does not match the extracted file;
 - Gate 0 statically validates the draft Homebrew formula and its
   `hideout init --no-input` formula smoke contract when Ruby is available;
 - omitted or `auto` backend first-run repair resolves to Lima, matching

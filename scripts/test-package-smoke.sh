@@ -220,6 +220,19 @@ if [ -e "$tmp/broken-manifest-install/bin/hideout" ]; then
   exit 1
 fi
 
+broken_checksum="$tmp/package-bad-checksum"
+cp -R "$prefix" "$broken_checksum"
+printf '\ncorrupt-for-smoke\n' >>"$broken_checksum/README.md"
+if "$broken_checksum/install.sh" --prefix "$tmp/broken-checksum-install" --store "$tmp/broken-checksum-store" --skip-init >"$tmp/broken-checksum.out" 2>"$tmp/broken-checksum.err"; then
+  echo "package-smoke: installer accepted package with checksum mismatch" >&2
+  exit 1
+fi
+grep -q 'package checksum mismatch for README.md' "$tmp/broken-checksum.err"
+if [ -e "$tmp/broken-checksum-install/bin/hideout" ]; then
+  echo "package-smoke: checksum-mismatched package copied binaries before failing" >&2
+  exit 1
+fi
+
 installed_prefix="$tmp/package-installed"
 installed_store="$tmp/package-store"
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --backend native --network direct >"$tmp/package-install.out"

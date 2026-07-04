@@ -321,17 +321,20 @@ schema version, build time, git commit, dirty state, target platform, Linux
 guest helper architecture, and critical package-relative layout paths. It also
 records SHA-256 checksums for critical package files such as binaries, Linux
 guest helpers, helper manifests, the package installer, README entrypoints, and
-manifest schemas. `scripts/test-package-smoke.sh` extracts that tarball into a
-temporary prefix, validates the manifest, proves each manifest-declared path
-exists with the expected file type, recalculates declared file checksums, then
-runs extracted `hideout init --no-input`, `hideout doctor`, `hideout tui`, and
-`hideout ui --no-open --print-url`. It also runs package-root `install.sh` into
-a separate temporary prefix/store, verifies the installed layout works without
-source-tree state, verifies installed Lima helper discovery from that prefix,
-and checks that `install.sh --skip-init` copies binaries without writing init
-state. The package-root installer must fail before copying binaries when the
-extracted package is missing `package-manifest.json`, the host shim, Linux guest
-shim, or Linux HostFS daemon.
+manifest schemas. The package-root installer requires `jq`, validates
+`package-manifest.json`, and recalculates manifest-declared SHA-256 checksums
+before copying binaries. `scripts/test-package-smoke.sh` extracts that tarball
+into a temporary prefix, validates the manifest, proves each manifest-declared
+path exists with the expected file type, recalculates declared file checksums,
+then runs extracted `hideout init --no-input`, `hideout doctor`, `hideout tui`,
+and `hideout ui --no-open --print-url`. It also runs package-root `install.sh`
+into a separate temporary prefix/store, verifies the installed layout works
+without source-tree state, verifies installed Lima helper discovery from that
+prefix, and checks that `install.sh --skip-init` copies binaries without writing
+init state. The package-root installer must fail before copying binaries when
+the extracted package is missing `package-manifest.json`, the host shim, Linux
+guest shim, Linux HostFS daemon, or any manifest-declared checksum does not
+match the extracted file.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.

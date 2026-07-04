@@ -35,6 +35,7 @@ Hideout 用显式能力替代主机上的 ambient authority：
 macOS 上需要：
 
 - Go；
+- `jq`，用于 release-like package 安装和 manifest 校验；
 - Lima（`limactl`）；
 - Google Chrome 或其他支持的 Chromium 兼容浏览器，用于真实浏览器
   host-open 检查；
@@ -65,7 +66,8 @@ hideout doctor --backend lima
 - Linux guest shim；
 - Linux HostFS daemon。
 
-包内 installer 会从解压后的 package 复制同一组预构建产物。
+包内 installer 会先校验 `package-manifest.json` 中的 checksum，再从解压后的
+package 复制同一组预构建产物。
 
 ## 第一次运行
 
