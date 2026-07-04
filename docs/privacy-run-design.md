@@ -2075,6 +2075,22 @@ reusable environment identity: changing presets or npm globals creates or
 selects a tool-matched environment instead of reusing an older guest with stale
 commands.
 
+Persistent profile home seeding:
+
+```sh
+hideout profile home default import --from ~/.tool.json --to .tool.json
+hideout profile home default import --from ~/.tool --to .tool --force
+```
+
+`profile home import` copies a user-selected host file or directory into the
+isolated profile identity home. It is a generic seeding primitive for CLI state
+such as login material, caches, or preferences. It must not understand any
+specific product format, must reject symlink sources, must require an explicit
+destination relative to profile home, and must not print source paths or file
+contents. It is not HostFS authority and does not expose the selected host path
+to the guest; after import, the target only sees the copied profile identity
+state.
+
 Persistent profile HostFS rules must have stable unique IDs. CLI-created IDs
 use the opaque `hfs_` prefix. Users and higher layers must treat IDs as opaque
 handles for remove/edit operations, not as encoded policy meaning. Run-scoped

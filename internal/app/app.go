@@ -1893,11 +1893,193 @@ func (a app) profile(args []string) error {
 		return a.profileFS(store, args[1:])
 	case "env":
 		return a.profileEnv(store, args[1:])
+	case "home":
+		return a.profileHome(store, args[1:])
 	case "tools":
 		return a.profileTools(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
+}
+
+func (a app) profileHome(store profile.Store, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: hideout profile home <name> import --from <path> --to <relative-path> [--force]")
+	}
+	name := args[0]
+	command := args[1]
+	switch command {
+	case "import":
+		return a.profileHomeImport(store, name, args[2:])
+	default:
+		return fmt.Errorf("unknown profile home command %q", command)
+	}
+}
+
+type profileHomeImportOptions struct {
+	from  string
+	to    string
+	force bool
+}
+
+type profileHomeImportOutput struct {
+	Profile string `json:"profile"`
+	Kind    string `json:"kind"`
+	Dest    string `json:"dest"`
+	Files   int    `json:"files"`
+	Bytes   int64  `json:"bytes"`
+}
+
+func parseProfileHomeImportOptions(args []string) (profileHomeImportOptions, error) {
+	var opts profileHomeImportOptions
+	fs := flag.NewFlagSet("profile home import", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.from, "from", "", "host file or directory to import")
+	fs.StringVar(&opts.to, "to", "", "relative path inside profile home")
+	fs.BoolVar(&opts.force, "force", false, "replace an existing profile home path")
+	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() != 0 {
+		return opts, fmt.Errorf("unexpected profile home import argument %q", fs.Arg(0))
+	}
+	if strings.TrimSpace(opts.from) == "" {
+		return opts, errors.New("--from is required")
+	}
+	if strings.TrimSpace(opts.to) == "" {
+		return opts, errors.New("--to is required")
+	}
+	return opts, nil
+}
+
+func (a app) profileHomeImport(store profile.Store, name string, args []string) error {
+	opts, err := parseProfileHomeImportOptions(args)
+	if err != nil {
+		return err
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	src, err := filepath.Abs(opts.from)
+	if err != nil {
+		return err
+	}
+	destRel, err := cleanProfileHomeDest(opts.to)
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(store.ProfileDir(p.Name), "home", destRel)
+	homeRoot := filepath.Join(store.ProfileDir(p.Name), "home")
+	if !pathWithinRoot(homeRoot, dest) {
+		return fmt.Errorf("profile home import destination %q escapes profile home", opts.to)
+	}
+	if _, err := os.Lstat(dest); err == nil {
+		if !opts.force {
+			return fmt.Errorf("profile home import destination %q already exists; use --force to replace it", destRel)
+		}
+		if err := os.RemoveAll(dest); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	stats, err := copyProfileHomePath(src, dest)
+	if err != nil {
+		_ = os.RemoveAll(dest)
+		return err
+	}
+	return writeJSONLine(a.stdout, profileHomeImportOutput{
+		Profile: p.Name,
+		Kind:    "profile.home.import",
+		Dest:    destRel,
+		Files:   stats.files,
+		Bytes:   stats.bytes,
+	})
+}
+
+func cleanProfileHomeDest(value string) (string, error) {
+	value = filepath.Clean(strings.TrimSpace(value))
+	if value == "." || value == string(filepath.Separator) || filepath.IsAbs(value) {
+		return "", fmt.Errorf("profile home destination must be a relative path: %q", value)
+	}
+	if value == ".." || strings.HasPrefix(value, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("profile home destination must stay inside profile home: %q", value)
+	}
+	return value, nil
+}
+
+func pathWithinRoot(root, path string) bool {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+type profileHomeCopyStats struct {
+	files int
+	bytes int64
+}
+
+func copyProfileHomePath(src, dst string) (profileHomeCopyStats, error) {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return profileHomeCopyStats{}, errors.New("profile home import source is not accessible")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return profileHomeCopyStats{}, fmt.Errorf("profile home import source %q must not be a symlink", filepath.Base(src))
+	}
+	if info.IsDir() {
+		return copyProfileHomeDir(src, dst)
+	}
+	if !info.Mode().IsRegular() {
+		return profileHomeCopyStats{}, fmt.Errorf("profile home import source %q must be a regular file or directory", filepath.Base(src))
+	}
+	if err := copyProfileHomeFile(src, dst, info); err != nil {
+		return profileHomeCopyStats{}, err
+	}
+	return profileHomeCopyStats{files: 1, bytes: info.Size()}, nil
+}
+
+func copyProfileHomeDir(src, dst string) (profileHomeCopyStats, error) {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return profileHomeCopyStats{}, errors.New("profile home import source directory is not readable")
+	}
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return profileHomeCopyStats{}, err
+	}
+	var stats profileHomeCopyStats
+	for _, entry := range entries {
+		childStats, err := copyProfileHomePath(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name()))
+		if err != nil {
+			return profileHomeCopyStats{}, err
+		}
+		stats.files += childStats.files
+		stats.bytes += childStats.bytes
+	}
+	return stats, nil
+}
+
+func copyProfileHomeFile(src, dst string, info os.FileInfo) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return errors.New("profile home import source file is not readable")
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	mode := info.Mode().Perm()
+	if mode == 0 || mode&0o077 != 0 {
+		mode = 0o600
+	}
+	return os.WriteFile(dst, data, mode)
 }
 
 func (a app) profileEnv(store profile.Store, args []string) error {

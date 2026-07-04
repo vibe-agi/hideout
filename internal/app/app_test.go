@@ -520,6 +520,128 @@ func TestProfileEnvManagePolicy(t *testing.T) {
 	}
 }
 
+func TestProfileHomeImportCopiesUserSelectedIdentityFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	sourceDir := t.TempDir()
+	sourceFile := filepath.Join(sourceDir, "state.json")
+	if err := os.WriteFile(sourceFile, []byte(`{"token":"secret"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "home", "default", "import", "--from", sourceFile, "--to", ".tool/state.json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("home import exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), sourceFile) || strings.Contains(out.String(), "secret") {
+		t.Fatalf("home import output must not leak source path or content: %s", out.String())
+	}
+	var imported struct {
+		Profile string `json:"profile"`
+		Kind    string `json:"kind"`
+		Dest    string `json:"dest"`
+		Files   int    `json:"files"`
+		Bytes   int64  `json:"bytes"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &imported); err != nil {
+		t.Fatalf("decode home import: %v\n%s", err, out.String())
+	}
+	if imported.Profile != "default" || imported.Kind != "profile.home.import" ||
+		imported.Dest != ".tool/state.json" || imported.Files != 1 || imported.Bytes == 0 {
+		t.Fatalf("unexpected home import output: %+v", imported)
+	}
+	dest := filepath.Join(store.ProfileDir("default"), "home", ".tool", "state.json")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read imported file: %v", err)
+	}
+	if string(data) != `{"token":"secret"}` {
+		t.Fatalf("imported file content mismatch: %s", data)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("imported public credential-like file should be clamped to 0600, got %s", info.Mode().Perm())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "home", "default", "import", "--from", sourceFile, "--to", ".tool/state.json"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("home import without --force should reject existing destination")
+	}
+
+	if err := os.WriteFile(sourceFile, []byte(`{"token":"new"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "home", "default", "import", "--from", sourceFile, "--to", ".tool/state.json", "--force"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("home import --force exit=%d stderr=%s", code, errOut.String())
+	}
+	data, err = os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read forced import: %v", err)
+	}
+	if string(data) != `{"token":"new"}` {
+		t.Fatalf("forced import did not replace file: %s", data)
+	}
+}
+
+func TestProfileHomeImportCopiesDirectoriesAndRejectsUnsafeSources(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	sourceDir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "nested", "token"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "home", "default", "import", "--from", sourceDir, "--to", ".state"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("directory home import exit=%d stderr=%s", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(store.ProfileDir("default"), "home", ".state", "nested", "token")); err != nil {
+		t.Fatalf("imported directory missing nested file: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "home", "default", "import", "--from", sourceDir, "--to", "../outside"}, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "inside profile home") {
+		t.Fatalf("escaping destination should fail, exit=%d stderr=%s", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(store.ProfileDir("default"), "outside")); !os.IsNotExist(err) {
+		t.Fatalf("escaping import should not create outside path, err=%v", err)
+	}
+
+	linkPath := filepath.Join(t.TempDir(), "linked-token")
+	if err := os.Symlink(filepath.Join(sourceDir, "nested", "token"), linkPath); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "home", "default", "import", "--from", linkPath, "--to", ".state/link"}, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "must not be a symlink") {
+		t.Fatalf("symlink source should fail, exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(errOut.String(), linkPath) {
+		t.Fatalf("symlink failure must not leak full source path: %s", errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(store.ProfileDir("default"), "home", ".state", "link")); !os.IsNotExist(err) {
+		t.Fatalf("symlink import should not create destination, err=%v", err)
+	}
+}
+
 func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

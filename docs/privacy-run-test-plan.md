@@ -385,6 +385,13 @@ operator smoke. Do not add a product-specific smoke script, package name, API
 key, account identifier, or prompt fixture to Hideout Core, docs, or default
 gates.
 
+When a real CLI requires pre-existing local auth state, the operator may seed
+that state with `hideout profile home <profile> import --from <host-path> --to
+<relative-profile-home-path>`. This is still operator-controlled test setup, not
+a product-specific Hideout default. The import command must not print source
+paths or credential contents, and the smoke must prove subsequent status/request
+commands read state from the isolated profile identity home.
+
 Required checks:
 
 - the profile is configured through `hideout profile tools`, not by editing
