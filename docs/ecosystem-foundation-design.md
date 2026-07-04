@@ -447,6 +447,49 @@ checksum, when relevant
 capabilityBoundary, when relevant
 ```
 
+## Bundle Manifest Contract
+
+Bundle is the publishable artifact unit. A bundle may contain configuration,
+schemas, goja scripts, JavaScript adapters, persona recipes, docs, examples, and
+test fixtures. It must not contain executable binaries, shell install scripts,
+backend helper binaries, or auto-run hooks outside registered goja entrypoints.
+
+Preferred manifest shape:
+
+```json
+{
+  "apiVersion": "hideout.bundle/v1",
+  "kind": "PolicyBundle",
+  "name": "web-agent-safe",
+  "version": "1.0.0",
+  "publisher": "hideout-community",
+  "description": "Safe defaults for web development agents",
+  "compatibility": {
+    "hideout": ">=0.1.0 <0.2.0",
+    "profileSchema": "hideout.profile/v1"
+  },
+  "entrypoints": {
+    "command.decide": "policy/command_decide.js",
+    "audit.redact": "policy/audit_redact.js"
+  },
+  "permissions": [
+    "command.decide",
+    "audit.redact",
+    "hostfs.template",
+    "opentarget.template"
+  ],
+  "inputs": {},
+  "checksums": {},
+  "signature": null
+}
+```
+
+Recipe is a smaller reusable policy pattern inside a bundle. Persona recipes are
+higher-level recipes for developer workflows, such as H5 development,
+Android-assisted workflows, iOS-assisted workflows, backend agents, or general
+AI-agent workflows. Recipes may compose adapters, policy templates,
+environment hints, doctor checks, and sensitive-path deny templates.
+
 ## Hideoutfile Contract
 
 `Hideoutfile` is the project manifest. It is safe to commit by design.

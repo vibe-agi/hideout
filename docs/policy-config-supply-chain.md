@@ -237,103 +237,32 @@ Never share by default:
 
 `hideout bundle export` must redact or reject these by default.
 
-## Artifact Types
+## Artifact Supply Rules
 
-### Bundle
+The canonical artifact model is owned by
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#domain-resources),
+with bundle and project manifest shapes in
+[Bundle Manifest Contract](ecosystem-foundation-design.md#bundle-manifest-contract)
+and [Hideoutfile Contract](ecosystem-foundation-design.md#hideoutfile-contract).
+That includes Bundle, Recipe, Hideoutfile, ProjectLock, BundleReference,
+entrypoints, permissions, and the Policy Compiler composition order.
 
-Bundle is the publishable unit.
+This document does not redefine those shapes. It adds supply-chain rules:
 
-```json
-{
-  "apiVersion": "hideout.bundle/v1",
-  "kind": "PolicyBundle",
-  "name": "web-agent-safe",
-  "version": "1.0.0",
-  "publisher": "hideout-community",
-  "description": "Safe defaults for web development agents",
-  "compatibility": {
-    "hideout": ">=0.1.0 <0.2.0",
-    "profileSchema": "hideout.profile/v1"
-  },
-  "entrypoints": {
-    "command.decide": "policy/command_decide.js",
-    "audit.redact": "policy/audit_redact.js"
-  },
-  "permissions": [
-    "command.decide",
-    "audit.redact",
-    "hostfs.template",
-    "opentarget.template"
-  ],
-  "inputs": {},
-  "checksums": {},
-  "signature": null
-}
-```
+- sources must be pinned to a ref, digest, or local content checksum before an
+  artifact can be enabled;
+- local absolute paths must stay in local overrides unless explicitly marked as
+  examples;
+- project discovery must become a reviewable plan before any local policy
+  changes;
+- project locks may record resolved refs, artifact digests, checksums,
+  compatibility results, and schema version;
+- install time, local cache paths, user approval history, private trust
+  overrides, local profile IDs, and local absolute paths must stay in local
+  Hideout install state, not in committed project files.
 
-### Recipe
-
-Recipe is a smaller reusable policy pattern inside a bundle.
-
-Examples:
-
-```text
-allow external docs URLs
-deny localhost browser open
-allow read docs/*.md
-tag broad machine identity probes
-```
-
-Persona recipes are higher-level recipes for developer workflows. They may
-compose multiple adapters, templates, and checks:
-
-```text
-h5-dev
-android-dev
-ios-assist
-backend-agent
-```
-
-### Hideoutfile
-
-Hideoutfile is the project-level shareable manifest.
-
-It should be safe to commit to Git. It is a project suggestion and constraint
-file, not a profile dump.
-
-The canonical schema, authority limits, and example manifest are owned by
-[ecosystem-foundation-design.md](ecosystem-foundation-design.md#hideoutfile-contract).
-This document only adds supply-chain rules: sources must be pinned, local
-absolute paths must stay in local overrides unless explicitly marked as
-examples, and project discovery must become a reviewable plan before any local
-policy changes.
-
-The canonical machine-readable format should be JSON with schema validation.
 Friendly formats such as TOML or YAML may be added later, but they must compile
-to the same canonical model.
-
-Avoid a top-level `profile` field. A project can request policy and declare
-requirements, but it does not own the user's local profile, identity, secrets,
-or private overrides.
-
-### Lock File
-
-Installed or project-resolved packages should be pinned.
-
-```text
-hideout.lock.json
-```
-
-Lock file records:
-
-- bundle source;
-- version;
-- resolved commit or artifact digest;
-- checksums;
-- compatibility result.
-
-Install time, local cache paths, user approval history, and private trust
-overrides belong in local Hideout install state, not the project lock.
+to the same canonical model and pass the same schema and permission checks.
 
 ## Local Layout
 
@@ -418,34 +347,15 @@ hideout bundle enable web-agent-safe --profile default
 Profile commands should focus on identity, clone, rotate, path, diff, and
 explain.
 
-## Manager Resources
+## Manager Supply-Chain Behavior
 
-Manager Control Plane should expose:
+The ecosystem resource registry is owned by
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#domain-resources).
+Supply-chain operations must use those Manager resources instead of writing
+profiles, bundle store state, project locks, or trust state directly.
 
-```text
-Bundle
-BundleSource
-BundleVersion
-BundleReference
-BundleEntrypoint
-BundlePermission
-Recipe
-InitRequirement
-InitPlan
-ProjectManifest
-ProjectLock
-ProjectApplyPlan
-ProfileOverride
-InstallTask, as an InitTask subtype for bundle artifact placement
-UpdatePlan
-CompatibilityReport
-VerificationReport
-TrustPolicy
-ExportPlan
-RedactionRule
-```
-
-All install/update/remove operations should be plan/apply:
+All install, update, remove, enable, project apply, rollback, and export
+operations should be plan/apply:
 
 ```text
 PlanBundleInstall(source) -> InstallPlan
@@ -454,6 +364,10 @@ ApplyBundleInstall(planId) -> BundleVersion
 PlanBundleUpdate(bundle) -> UpdatePlan
 ApplyBundleUpdate(planId) -> BundleVersion
 ```
+
+Plans must show permission changes before apply. Apply must audit the artifact
+source, resolved digest or ref, trust result, changed enabled references, and
+the profile or project scope affected.
 
 ## TUI And WebUI Surfaces
 
@@ -590,12 +504,12 @@ Community contribution requirements:
 This makes bundles reviewable in pull requests and forkable like dotfiles or
 Brewfile-based setup repos.
 
-## Delivery Notes
+## Supply-Chain Delivery Checklist
 
 Current product status is owned by [STATUS.md](STATUS.md). Ecosystem delivery
 sequence is owned by
 [ecosystem-foundation-design.md](ecosystem-foundation-design.md#phase-plan).
-This document contributes the supply-chain checklist for that sequence:
+This document contributes only the supply-chain checklist for that sequence:
 
 - bundle schema, script size, entrypoint, permission, compatibility, checksum,
   forbidden-file, and secret-looking-value validation;
@@ -605,6 +519,9 @@ This document contributes the supply-chain checklist for that sequence:
 - export redaction and rejection reports;
 - TUI/WebUI bundle list, update, trust, and diff surfaces;
 - future signatures, publisher trust, registry, and compatibility farm design.
+
+If this checklist conflicts with the ecosystem phase plan, the phase plan wins
+and this section must be updated to point at the new source of truth.
 
 ## Open Questions
 
