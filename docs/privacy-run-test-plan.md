@@ -29,8 +29,8 @@ Phase 1 testing is intentionally split by cost:
 - dogfood proof: run the generic agent smoke before relying on an autonomous
   CLI workflow for daily work;
 - release candidate: run every required gate, the real external URL browser
-  launch path for Gate 4, an operator-supplied proxy for Gate 3, and capability
-  probe smoke.
+  launch path for Gate 4, an operator-supplied proxy for Gate 3, capability
+  probe smoke, and the generic CLI dogfood smoke.
 
 The aggregate entrypoint is:
 
@@ -60,6 +60,10 @@ scripts/test-phase1.sh --proxy
 # Release-candidate gates: real browser, operator proxy, and probes.
 HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
   scripts/test-phase1.sh --release-candidate
+
+# Same release-candidate proof through the dedicated dogfood entrypoint.
+HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
+  scripts/test-release-dogfood.sh
 
 # Compatibility shape: all required gates plus real browser external URL launch.
 # This is not sufficient for a release candidate because it does not require an
@@ -119,9 +123,10 @@ The testing order for new capabilities is:
    on guest boundaries, mounts, bootstrap, proxy routing, or command shims.
 4. Capability probe: for experimental host capabilities, add a lab command and
    probe script before promoting the behavior into `hideout run`.
-5. Release candidate: run `scripts/test-phase1.sh --release-candidate` only
-   after the lower-cost gates pass and the operator proxy and browser launcher
-   prerequisites are available.
+5. Release candidate: run `scripts/test-release-dogfood.sh` or
+   `scripts/test-phase1.sh --release-candidate` only after the lower-cost gates
+   pass and the operator proxy and browser launcher prerequisites are
+   available.
 
 Do not promote a capability from probe to Required Phase 1 because a manual demo
 worked once. Promotion requires an updated design classification, an automated
@@ -464,7 +469,7 @@ Required checks:
 This smoke is not part of the default automated gate because it depends on
 operator-held credentials or accounts. It is the correct place to verify a real
 tool before daily dogfood, while `--dogfood-cli` remains the product-mechanism
-gate that can run in CI.
+gate that can run in CI and release-candidate verification.
 
 ### Gate 3: Hidden Proxy
 
@@ -519,8 +524,9 @@ HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:1080 \
   scripts/test-gate3-hidden-proxy.sh
 ```
 
-The aggregate `scripts/test-phase1.sh --release-candidate` runs the same
-operator proxy preflight before expensive gates.
+The aggregate `scripts/test-phase1.sh --release-candidate` and
+`scripts/test-release-dogfood.sh` run the same operator proxy preflight before
+expensive gates.
 
 Long-running Lima and proxy route checks use `HIDEOUT_GATE_TIMEOUT`, defaulting
 to `15m`.
@@ -584,9 +590,9 @@ launcher preflight. `HIDEOUT_BROWSER_PATH` must point to a direct
 Chromium-compatible browser binary and must not be `open` or `xdg-open`; without
 `HIDEOUT_BROWSER_PATH`, macOS app mode must resolve the configured
 `HIDEOUT_BROWSER_APP` or the default `Google Chrome`.
-The aggregate `scripts/test-phase1.sh --release-candidate` runs this preflight
-before expensive gates so a bad browser launcher fails early without opening a
-browser.
+The aggregate `scripts/test-phase1.sh --release-candidate` and
+`scripts/test-release-dogfood.sh` run this preflight before expensive gates so a
+bad browser launcher fails early without opening a browser.
 
 Required checks:
 
@@ -1017,6 +1023,8 @@ Phase 1 is releasable only when:
 - `scripts/test-phase1.sh --release-candidate` passes on a macOS developer
   machine with Lima, a real supported browser launcher, and an operator-supplied
   proxy in `HIDEOUT_SECRET_DEFAULT_PROXY`;
+- `scripts/test-release-dogfood.sh` passes on the same machine as the named
+  dogfood-ready evidence bundle;
 - Gate 0 passes in CI or local release verification;
 - Gate 1 native development harness passes on a developer machine as
   engineering evidence only; it does not replace Lima or release-candidate

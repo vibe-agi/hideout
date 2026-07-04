@@ -339,7 +339,9 @@ Release candidate should verify:
 - release-like tarball package smoke;
 - Gate 0 through Gate 4;
 - Lima Gate2 on macOS;
-- generic CLI dogfood smoke with `scripts/test-phase1.sh --dogfood-cli`;
+- generic CLI dogfood smoke through
+  `scripts/test-phase1.sh --release-candidate` or
+  `scripts/test-release-dogfood.sh`;
 - hidden proxy gate;
 - helper binary build for supported architectures;
 - package smoke install;

@@ -16,7 +16,8 @@ Modes:
   --all           Same as --required unless --real-browser is also set.
   --release-candidate
                   Run release-candidate gates: Gate 0-4, real browser,
-                  operator-supplied proxy, and capability probe smoke.
+                  operator-supplied proxy, capability probe smoke, and generic
+                  CLI dogfood smoke.
   --lima          Include Gate 2 Lima E2E.
   --proxy         Include Gate 3 hidden proxy.
   --real-browser  Run Gate 4 with real external URL browser launch.
@@ -94,6 +95,7 @@ while [ "$#" -gt 0 ]; do
       include_proxy=1
       real_browser=1
       include_probes=1
+      include_dogfood_cli=1
       require_operator_proxy=1
       ;;
     --lima)
