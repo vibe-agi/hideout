@@ -11,7 +11,7 @@ Current status: private alpha / supervised dogfood. The core v1 path has one
 local release-candidate evidence bundle covering Gate 0, Gate 1, Gate 2 Lima
 E2E, Gate 3 strict proxy, Gate 4 real browser host escape, capability probes,
 and generic CLI dogfood smoke. Public GA still requires repeatable evidence for
-release artifacts, packaging/distribution closure, and release-specific signoff.
+release artifacts and release-specific signoff.
 
 ## What Hideout Protects
 
@@ -49,23 +49,25 @@ copying the prebuilt artifacts from the extracted package.
 
 For local source-tree development, Go is also required.
 
-For local development, install from the source tree:
+For local development, install from the source tree. The default install path
+initializes a Lima-backed profile with direct networking:
 
 ```bash
-scripts/install-local.sh --backend lima --network direct
+scripts/install-local.sh
 export PATH="$HOME/.local/bin:$PATH"
-hideout doctor --backend lima
+hideout doctor
 ```
 
 For a release-like tarball, extract it and run the package installer from the
-package root:
+package root. The package installer follows the same default init path and does
+not require Go:
 
 ```bash
 tar -xzf hideout-<platform>.tar.gz
 cd hideout
-./install.sh --backend lima --network direct
+./install.sh
 export PATH="$HOME/.local/bin:$PATH"
-hideout doctor --backend lima
+hideout doctor
 ```
 
 The source-tree installer builds:
@@ -83,8 +85,7 @@ mounted into the guest.
 
 ```bash
 cd /path/to/sanitized/project
-hideout profile init smoke
-hideout run --profile smoke --backend lima -- pwd
+hideout run -- pwd
 ```
 
 `hideout init` and `hideout doctor --fix` print copyable next-step commands
@@ -106,7 +107,7 @@ hideout clean --stopped <env-id>
 Use `--rm` for a disposable environment:
 
 ```bash
-hideout run --profile smoke --backend lima --rm -- <command>
+hideout run --rm -- <command>
 ```
 
 ## Running A CLI Tool

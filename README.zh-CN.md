@@ -10,7 +10,7 @@ Hideout 是一个面向不可信开发工具和 agent CLI 的本地隐私运行�
 release-candidate 证据，覆盖 Gate 0、Gate 1、Gate 2 Lima E2E、Gate 3
 严格代理、Gate 4 真实浏览器 host escape、capability probes 和通用 CLI
 dogfood smoke。公开 GA 仍需要面向 release artifact 的可重复证据、打包/分发
-闭环以及发布签核。
+证据以及发布签核。
 
 ## Hideout 保护什么
 
@@ -46,22 +46,24 @@ package 复制预构建产物。
 
 如果从源码树做本地开发，还需要 Go。
 
-本地开发时，从源码树安装：
+本地开发时，从源码树安装。默认安装路径会初始化一个 Lima 后端、
+direct 网络的 profile：
 
 ```bash
-scripts/install-local.sh --backend lima --network direct
+scripts/install-local.sh
 export PATH="$HOME/.local/bin:$PATH"
-hideout doctor --backend lima
+hideout doctor
 ```
 
 如果使用 release-like tarball，先解压，然后从包根目录运行包内 installer：
+包内 installer 走同一条默认 init 路径，并且不需要 Go：
 
 ```bash
 tar -xzf hideout-<platform>.tar.gz
 cd hideout
-./install.sh --backend lima --network direct
+./install.sh
 export PATH="$HOME/.local/bin:$PATH"
-hideout doctor --backend lima
+hideout doctor
 ```
 
 源码树安装脚本会构建：
@@ -78,8 +80,7 @@ hideout doctor --backend lima
 
 ```bash
 cd /path/to/sanitized/project
-hideout profile init smoke
-hideout run --profile smoke --backend lima -- pwd
+hideout run -- pwd
 ```
 
 `hideout init` 和 `hideout doctor --fix` 会打印可直接复制的下一步命令，
@@ -101,7 +102,7 @@ hideout clean --stopped <env-id>
 使用 `--rm` 可以创建一次性环境：
 
 ```bash
-hideout run --profile smoke --backend lima --rm -- <command>
+hideout run --rm -- <command>
 ```
 
 ## 运行一个 CLI 工具
