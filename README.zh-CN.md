@@ -6,9 +6,11 @@ Hideout 是一个面向不可信开发工具和 agent CLI 的本地隐私运行�
 它把目标命令运行在可复用的 Lima 环境里，为目标提供隔离身份，
 通过类型化能力路由主机访问，并记录边界证据。
 
-当前状态：private alpha / supervised dogfood。核心 v1 路径已经通过 native
-harness 和 unit/Gate 0-1 证据；公开 GA 之前仍必须产出 release-candidate
-级别的 Lima Gate 2-4 证据。
+当前状态：private alpha / supervised dogfood。核心 v1 路径已经产出一份本机
+release-candidate 证据，覆盖 Gate 0、Gate 1、Gate 2 Lima E2E、Gate 3
+严格代理、Gate 4 真实浏览器 host escape、capability probes 和通用 CLI
+dogfood smoke。公开 GA 仍需要面向 release artifact 的可重复证据、打包/分发
+闭环以及发布签核。
 
 ## Hideout 保护什么
 
