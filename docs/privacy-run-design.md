@@ -2162,6 +2162,20 @@ must therefore not claim that first-time package downloads are covered by
 preprovisioned environment, or explicitly accept `direct` provisioning network
 identity. Proxy-aware provisioning is a separate future capability.
 
+Future proxy-aware provisioning must be a managed setup phase, not an
+uncontrolled shell hook. The setup phase must:
+
+- run without the project workspace, HostFS grants, command proxy authority, or
+  target credentials;
+- apply the selected network policy before any package manager network access;
+- resolve proxy secrets only into Hideout-owned setup material, never into the
+  target command environment;
+- fail closed if `tun2socks` route verification or DNS/proxy checks fail;
+- audit package specs, command checks, route evidence, and setup result without
+  recording proxy values or package-manager credential contents;
+- lock the resulting environment to the tool plan fingerprint so target runs do
+  not silently reuse stale or differently provisioned guests.
+
 Persistent profile home seeding:
 
 ```sh
