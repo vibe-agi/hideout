@@ -22,6 +22,14 @@ tar -xzf "$pkg" -C "$tmp/install"
 prefix="$tmp/install/hideout"
 arch="$(go env GOARCH)"
 
+manifest_relative_path() {
+  case "$1" in
+    ""|/*|../*|*/../*|*/..)
+      return 1
+      ;;
+  esac
+}
+
 for path in \
   "$prefix/bin/hideout" \
   "$prefix/bin/hideout-shim" \
@@ -64,6 +72,39 @@ jq -e \
     (.layout.directories | index("docs")) and
     (.layout.directories | index("packaging"))
   ' "$prefix/package-manifest.json" >/dev/null
+
+jq -r '.layout.binaries[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do
+  if ! manifest_relative_path "$rel"; then
+    echo "package-smoke: manifest binary path is not package-relative: $rel" >&2
+    exit 1
+  fi
+  if [ ! -x "$prefix/$rel" ]; then
+    echo "package-smoke: manifest binary is missing or not executable: $rel" >&2
+    exit 1
+  fi
+done
+
+jq -r '.layout.entrypoints[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do
+  if ! manifest_relative_path "$rel"; then
+    echo "package-smoke: manifest entrypoint path is not package-relative: $rel" >&2
+    exit 1
+  fi
+  if [ ! -f "$prefix/$rel" ]; then
+    echo "package-smoke: manifest entrypoint is missing or not a file: $rel" >&2
+    exit 1
+  fi
+done
+
+jq -r '.layout.directories[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do
+  if ! manifest_relative_path "$rel"; then
+    echo "package-smoke: manifest directory path is not package-relative: $rel" >&2
+    exit 1
+  fi
+  if [ ! -d "$prefix/$rel" ]; then
+    echo "package-smoke: manifest directory is missing: $rel" >&2
+    exit 1
+  fi
+done
 
 HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --backend native --network direct >"$tmp/init.out"
 grep -q 'Hideout init' "$tmp/init.out"

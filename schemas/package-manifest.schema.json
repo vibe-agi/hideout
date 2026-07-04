@@ -59,7 +59,8 @@
           "minItems": 4,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
           },
           "contains": {
             "const": "bin/hideout"
@@ -70,7 +71,8 @@
           "minItems": 2,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
           },
           "contains": {
             "const": "README.md"
@@ -81,7 +83,8 @@
           "minItems": 3,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
           },
           "contains": {
             "const": "schemas"

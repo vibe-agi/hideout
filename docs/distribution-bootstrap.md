@@ -312,8 +312,9 @@ pre-release development. The tarball contains `bin/`, `package-manifest.json`,
 English and Chinese README entrypoints, `schemas/`, `docs/`, and `packaging/`
 under a single `hideout/` root. The manifest records schema version, build time,
 git commit, dirty state, target platform, Linux guest helper architecture, and
-critical layout paths. `scripts/test-package-smoke.sh` extracts that tarball
-into a temporary prefix, validates the manifest, then runs installed
+critical package-relative layout paths. `scripts/test-package-smoke.sh` extracts
+that tarball into a temporary prefix, validates the manifest, proves each
+manifest-declared path exists with the expected file type, then runs installed
 `hideout init --no-input`, `hideout doctor`, `hideout tui`, and
 `hideout ui --no-open --print-url` from the extracted binary.
 
