@@ -20,6 +20,7 @@ Optional:
   HIDEOUT_OPERATOR_STORE=<path>
   HIDEOUT_OPERATOR_LIMA_HOME=<path>
   HIDEOUT_OPERATOR_VERSION_ARGS='--version'
+  HIDEOUT_OPERATOR_HOME_IMPORTS='<host-path>=<profile-home-relative-path>'
   HIDEOUT_OPERATOR_AUTH_COMMAND='<guest shell command>'
   HIDEOUT_OPERATOR_STATUS_COMMAND='<guest shell command>'
   HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest shell command>'
@@ -144,6 +145,39 @@ operator_env_flags() {
   done
 }
 
+operator_home_imports() {
+  local imports="${HIDEOUT_OPERATOR_HOME_IMPORTS:-}"
+  if [ -z "$imports" ]; then
+    return
+  fi
+  local line source_path dest_path
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ -z "$line" ]; then
+      continue
+    fi
+    if [ "$line" = "${line#*=}" ]; then
+      echo "operator-cli: HIDEOUT_OPERATOR_HOME_IMPORTS entries must be <host-path>=<profile-home-relative-path>" >&2
+      exit 2
+    fi
+    source_path="${line%%=*}"
+    dest_path="${line#*=}"
+    if [ -z "$source_path" ] || [ -z "$dest_path" ]; then
+      echo "operator-cli: HIDEOUT_OPERATOR_HOME_IMPORTS entries require non-empty source and destination" >&2
+      exit 2
+    fi
+    echo "operator-cli: importing operator-selected profile home state"
+    if ! env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile home "$profile_name" import --from "$source_path" --to "$dest_path" --force >"$tmp/home-import.out" 2>"$tmp/home-import.err"; then
+      echo "operator-cli: profile home import failed" >&2
+      echo "operator-cli: stdout" >&2
+      cat "$tmp/home-import.out" >&2
+      echo "operator-cli: stderr" >&2
+      cat "$tmp/home-import.err" >&2
+      exit 1
+    fi
+    cat "$tmp/home-import.out"
+  done <<<"$imports"
+}
+
 extract_environment_id() {
   sed -n 's/^Hideout environment: \(env_[A-Za-z0-9_]*\)$/\1/p' "$1" | tail -n 1
 }
@@ -249,6 +283,7 @@ echo "operator-cli: initializing profile"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --backend lima --network direct >/dev/null
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile tools "$profile_name" preset add node-dev >/dev/null
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile tools "$profile_name" npm add --package "$package" --command "$command_name" >/dev/null
+operator_home_imports
 
 echo "operator-cli: first run creates a tool-matched Lima environment"
 run_operator_guest "first version run" "$tmp/version1.out" "$tmp/version1.err" 1 \

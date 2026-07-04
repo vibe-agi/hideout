@@ -251,6 +251,32 @@ grep -q 'HOME=/hideout/profile/home' "$tmp/home.out"
 grep -q 'XDG_CONFIG_HOME=/hideout/profile/config' "$tmp/home.out"
 grep -q 'TOKEN_PATH=/hideout/profile/config/hideout-test-cli/token' "$tmp/home.out"
 
+printf 'hideout-test-cli-token\n' >"$tmp/import-token"
+echo "dogfood-cli: seeding profile identity state through profile home import"
+if ! env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  "$hideout" profile home default import --from "$tmp/import-token" --to .config/hideout-test-cli/token --force >"$tmp/home-import.out" 2>"$tmp/home-import.err"; then
+  echo "dogfood-cli: profile home import failed" >&2
+  cat "$tmp/home-import.out" >&2
+  cat "$tmp/home-import.err" >&2
+  exit 1
+fi
+cat "$tmp/home-import.out"
+if grep -q "$tmp/import-token" "$tmp/home-import.out" || grep -q 'hideout-test-cli-token' "$tmp/home-import.out"; then
+  echo "dogfood-cli: profile home import leaked source path or token" >&2
+  exit 1
+fi
+
+echo "dogfood-cli: verifying imported profile identity state is visible in guest"
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  "$hideout" run --backend lima --workspace "$workspace" -- ./hideout-test-cli status >"$tmp/import-status.out" 2>"$tmp/import-status.err"; then
+  echo "dogfood-cli: imported status smoke failed" >&2
+  cat "$tmp/import-status.out" >&2
+  cat "$tmp/import-status.err" >&2
+  exit 1
+fi
+cat "$tmp/import-status.out"
+grep -q 'status=authenticated' "$tmp/import-status.out"
+
 echo "dogfood-cli: running isolated callback login"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
   "$hideout" run --backend lima --workspace "$workspace" -- ./hideout-test-cli login --self-callback >"$tmp/login.out" 2>"$tmp/login.err"; then

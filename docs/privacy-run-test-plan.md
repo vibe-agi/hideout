@@ -342,6 +342,9 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
   without Hideout knowing the tool's business semantics;
 - a target can run a local callback listener, complete a callback, and store
   its own authentication state under the isolated profile identity home;
+- profile identity home can be seeded through the generic
+  `hideout profile home import` primitive without exposing source paths or
+  credential contents in smoke output;
 - that authentication state persists across reused Lima runs for the same
   profile and workspace;
 - the target can make an authenticated HTTP request from inside the guest to a
@@ -373,6 +376,7 @@ HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
 HIDEOUT_OPERATOR_COMMAND=<command> \
 HIDEOUT_OPERATOR_VERSION_ARGS='--version' \
 HIDEOUT_OPERATOR_ENV_KEYS=TOKEN_ENV \
+HIDEOUT_OPERATOR_HOME_IMPORTS=$'/host/state.json=.tool/state.json\n/host/state=.tool/state' \
 HIDEOUT_OPERATOR_AUTH_COMMAND='<optional guest login command>' \
 HIDEOUT_OPERATOR_STATUS_COMMAND='<guest command that proves login state>' \
 HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
@@ -391,6 +395,10 @@ that state with `hideout profile home <profile> import --from <host-path> --to
 a product-specific Hideout default. The import command must not print source
 paths or credential contents, and the smoke must prove subsequent status/request
 commands read state from the isolated profile identity home.
+`HIDEOUT_OPERATOR_HOME_IMPORTS` is a newline-separated list of
+`<host-path>=<profile-home-relative-path>` entries. The smoke imports these
+entries with `--force` before the first run, so rerunning a local smoke against
+the same temporary or operator-selected store remains deterministic.
 
 Required checks:
 
