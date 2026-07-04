@@ -27,8 +27,10 @@ for path in \
   "$prefix/bin/hideout-shim" \
   "$prefix/bin/hideout-shim-linux-$arch" \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
+  "$prefix/package-manifest.json" \
   "$prefix/README.md" \
   "$prefix/README.zh-CN.md" \
+  "$prefix/schemas/package-manifest.schema.json" \
   "$prefix/schemas/profile.schema.json" \
   "$prefix/schemas/run-plan.schema.json" \
   "$prefix/docs/privacy-run-design.md" \
@@ -42,6 +44,26 @@ done
 
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
+jq -e \
+  --arg host_os "$(go env GOOS)" \
+  --arg host_arch "$arch" \
+  '
+    .schema == "hideout.package-manifest.v1" and
+    (.builtAt | type == "string" and length > 0) and
+    (.git.commit | type == "string" and length > 0) and
+    (.git.dirty | type == "boolean") and
+    .target.hostOS == $host_os and
+    .target.hostArch == $host_arch and
+    .target.linuxGuestArch == $host_arch and
+    .layout.root == "hideout" and
+    (.layout.binaries | index("bin/hideout")) and
+    (.layout.binaries | index("bin/hideout-shim-linux-" + $host_arch)) and
+    (.layout.entrypoints | index("README.md")) and
+    (.layout.entrypoints | index("README.zh-CN.md")) and
+    (.layout.directories | index("schemas")) and
+    (.layout.directories | index("docs")) and
+    (.layout.directories | index("packaging"))
+  ' "$prefix/package-manifest.json" >/dev/null
 
 HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --backend native --network direct >"$tmp/init.out"
 grep -q 'Hideout init' "$tmp/init.out"

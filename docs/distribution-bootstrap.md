@@ -56,6 +56,7 @@ hideout
 hideout-shim-linux-<arch>
 hideout-hostfsd-linux-<arch>
 tun2socks-<platform>-<arch>
+package-manifest.json
 README.md
 README.zh-CN.md
 schemas
@@ -307,10 +308,14 @@ explicit weak-isolation development option. Source-tree repair may use
 `HIDEOUT_SOURCE_ROOT` when `doctor --fix` is run outside the repository.
 
 Release-like tarball packaging uses `scripts/package-local.sh` during private
-pre-release development. The tarball contains `bin/`, `schemas/`, `docs/`, and
-`packaging/` under a single `hideout/` root. `scripts/test-package-smoke.sh`
-extracts that tarball into a temporary prefix, then runs installed
-`hideout init --no-input` and `hideout doctor` from the extracted binary.
+pre-release development. The tarball contains `bin/`, `package-manifest.json`,
+English and Chinese README entrypoints, `schemas/`, `docs/`, and `packaging/`
+under a single `hideout/` root. The manifest records schema version, build time,
+git commit, dirty state, target platform, Linux guest helper architecture, and
+critical layout paths. `scripts/test-package-smoke.sh` extracts that tarball
+into a temporary prefix, validates the manifest, then runs installed
+`hideout init --no-input`, `hideout doctor`, `hideout tui`, and
+`hideout ui --no-open --print-url` from the extracted binary.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.

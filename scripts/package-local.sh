@@ -13,6 +13,7 @@ packaging metadata. The archive layout is:
 
   hideout/
     bin/
+    package-manifest.json
     README.md
     README.zh-CN.md
     schemas/
@@ -66,6 +67,48 @@ prefix="$stage/hideout"
 mkdir -p "$prefix"
 
 "$source/scripts/install-local.sh" --prefix "$prefix" --store "$tmp/store" --source "$source" --skip-init >/dev/null
+host_os="$(go env GOOS)"
+host_arch="$(go env GOARCH)"
+linux_guest_arch="$host_arch"
+git_commit="$(git -C "$source" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+git_dirty=false
+if git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$(git -C "$source" status --porcelain)" ]; then
+  git_dirty=true
+fi
+built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+cat >"$prefix/package-manifest.json" <<EOF
+{
+  "schema": "hideout.package-manifest.v1",
+  "builtAt": "$built_at",
+  "git": {
+    "commit": "$git_commit",
+    "dirty": $git_dirty
+  },
+  "target": {
+    "hostOS": "$host_os",
+    "hostArch": "$host_arch",
+    "linuxGuestArch": "$linux_guest_arch"
+  },
+  "layout": {
+    "root": "hideout",
+    "binaries": [
+      "bin/hideout",
+      "bin/hideout-shim",
+      "bin/hideout-shim-linux-$linux_guest_arch",
+      "bin/hideout-hostfsd-linux-$linux_guest_arch"
+    ],
+    "entrypoints": [
+      "README.md",
+      "README.zh-CN.md"
+    ],
+    "directories": [
+      "schemas",
+      "docs",
+      "packaging"
+    ]
+  }
+}
+EOF
 cp "$source/README.md" "$prefix/README.md"
 cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
 cp -R "$source/schemas" "$prefix/schemas"

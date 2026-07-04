@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/package-manifest.schema.json",
+  "title": "Hideout Package Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "builtAt", "git", "target", "layout"],
+  "properties": {
+    "schema": {
+      "const": "hideout.package-manifest.v1"
+    },
+    "builtAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "dirty"],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostOS", "hostArch", "linuxGuestArch"],
+      "properties": {
+        "hostOS": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostArch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "linuxGuestArch": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "binaries", "entrypoints", "directories"],
+      "properties": {
+        "root": {
+          "const": "hideout"
+        },
+        "binaries": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contains": {
+            "const": "bin/hideout"
+          }
+        },
+        "entrypoints": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contains": {
+            "const": "README.md"
+          }
+        },
+        "directories": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contains": {
+            "const": "schemas"
+          }
+        }
+      }
+    }
+  }
+}

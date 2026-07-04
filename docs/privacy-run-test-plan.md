@@ -937,8 +937,9 @@ Required checks:
   and installed safe `doctor --fix` writes current init metadata plus
   `doctor.fix.apply` audit;
 - package smoke proves a release-like tarball contains binaries, helper
-  manifests, English and Chinese README entrypoints, schemas, docs, packaging
-  metadata, can run installed
+  manifests, a package manifest with schema/build/git/target/layout metadata,
+  English and Chinese README entrypoints, schemas, docs, packaging metadata, can
+  run installed
   `hideout init --no-input` plus `hideout doctor` from a temporary prefix, and
   can render installed `hideout tui`, start installed `hideout ui --print-url`
   without opening a browser or blocking, and discover packaged Lima Linux
