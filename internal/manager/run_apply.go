@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
@@ -84,6 +85,18 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	runEnv, err := c.SelectRunEnvironment(plan, opts.Environment)
 	if err != nil {
 		return result, err
+	}
+	if runEnv.Active {
+		envLock, err := (environment.Store{Root: c.Store.Root}).Lock(runEnv.Record.ID)
+		if err != nil {
+			return result, err
+		}
+		defer func() {
+			if unlockErr := envLock.Unlock(); unlockErr != nil && retErr == nil {
+				result.Error = unlockErr.Error()
+				retErr = unlockErr
+			}
+		}()
 	}
 	runSession, err := c.BeginRunSession(plan, runEnv, RunSessionOptions{})
 	if err != nil {

@@ -1359,6 +1359,45 @@ func TestCoreRunEnvironmentLifecycleUpdatesStatusAndClearsRuntime(t *testing.T) 
 	}
 }
 
+func TestCoreApplyRunRejectsLockedEnvironment(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	workspace := t.TempDir()
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "lima",
+		Workspace:   workspace,
+		Command:     []string{"sh", "-c", "true"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	runEnv, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatalf("SelectRunEnvironment: %v", err)
+	}
+	lock, err := (environment.Store{Root: store.Root}).Lock(runEnv.Record.ID)
+	if err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	defer lock.Unlock()
+
+	fake := &applyRunFakeBackend{}
+	_, err = core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:     fake,
+		Environment: RunEnvironmentOptions{Create: true},
+		Opener:      broker.NoopOpener{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("locked environment should fail closed, got %v", err)
+	}
+	for _, call := range fake.calls {
+		if call == "prepare" || call == "run" || call == "cleanup" {
+			t.Fatalf("locked environment must not reach backend execution, calls=%v", fake.calls)
+		}
+	}
+}
+
 func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	p := profile.Default("default")

@@ -3,6 +3,7 @@ package environment
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,5 +103,35 @@ func TestClearRuntimePreservesMountRootsAndRemovesContents(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(store.RuntimeDir(rec.ID), "lima.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("runtime root files should be removed, err=%v", err)
+	}
+}
+
+func TestStoreLockIsExclusiveAndReleasable(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	rec, err := store.Create(Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	lock, err := store.Lock(rec.ID)
+	if err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	if _, err := store.Lock(rec.ID); err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("second Lock should fail while held, got %v", err)
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	lock, err = store.Lock(rec.ID)
+	if err != nil {
+		t.Fatalf("Lock after unlock: %v", err)
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatalf("second Unlock: %v", err)
 	}
 }

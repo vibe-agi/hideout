@@ -11,15 +11,22 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
 	recordFile = "environment.json"
+	lockFile   = ".lock"
 	version    = "hideout.environment/v1"
 )
 
 type Store struct {
 	Root string
+}
+
+type Lock struct {
+	file *os.File
 }
 
 type Spec struct {
@@ -215,6 +222,37 @@ func (s Store) Remove(id string) error {
 		return err
 	}
 	return os.RemoveAll(s.dir(resolved))
+}
+
+func (s Store) Lock(id string) (*Lock, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("invalid environment id %q", id)
+	}
+	dir := s.dir(id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return nil, fmt.Errorf("environment %s is already in use", id)
+		}
+		return nil, err
+	}
+	return &Lock{file: file}, nil
+}
+
+func (l *Lock) Unlock() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	file := l.file
+	l.file = nil
+	return errors.Join(unix.Flock(int(file.Fd()), unix.LOCK_UN), file.Close())
 }
 
 func (s Store) RuntimeDir(id string) string {

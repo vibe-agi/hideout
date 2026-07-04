@@ -3871,6 +3871,10 @@ runner. Their domain model, API shape, and schema still need to remain stable.
 model ships, it defaults to the most recent environment for the current
 profile/workspace pair. The user should not need to choose a session for normal
 work.
+Reusable environments are single-writer runtime surfaces. Manager must hold an
+environment-scoped lock from runtime preparation through backend cleanup and
+environment finish so concurrent runs cannot clear or rewrite the same runtime
+directories.
 
 `hideout run --new -- <command>` forces a new environment for the current
 profile/workspace pair without resetting profile identity.
