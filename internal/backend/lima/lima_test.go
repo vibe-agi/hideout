@@ -593,6 +593,9 @@ func TestRunFailsClosedWhenHostFSStartFails(t *testing.T) {
 func TestHostFSStartScriptFailsClosedOnMissingPrerequisites(t *testing.T) {
 	script := HostFSStartScript([]string{"/Users/alice/Downloads"})
 	for _, want := range []string{
+		"fusermount3 -u /hideout/hostfs",
+		"sudo -n umount /hideout/hostfs",
+		"existing HostFS mount could not be reset",
 		"[ ! -e /dev/fuse ]",
 		"HostFS requires /dev/fuse",
 		"[ ! -x /hideout/session/shims/hideout-hostfsd ]",

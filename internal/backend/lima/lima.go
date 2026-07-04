@@ -509,6 +509,9 @@ func BootstrapScript(tools ToolPlan, commandProxyShims []string) string {
 func HostFSStartScript(grafts []string) string {
 	var b strings.Builder
 	b.WriteString(`set -eu
+if grep -qs ' /hideout/hostfs ' /proc/mounts; then
+  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || sudo -n umount /hideout/hostfs 2>/dev/null || true
+fi
 mkdir -p /hideout/session/tmp 2>/dev/null || true
 mkdir -p /hideout/hostfs 2>/dev/null || {
   sudo -n mkdir -p /hideout/hostfs
@@ -533,7 +536,8 @@ fi
 	}
 	b.WriteString(`
 if grep -qs ' /hideout/hostfs ' /proc/mounts; then
-  exit 0
+  echo 'hideout: existing HostFS mount could not be reset' >&2
+  exit 70
 fi
 if [ ! -e /dev/fuse ]; then
   echo 'hideout: HostFS requires /dev/fuse in the Lima guest' >&2
@@ -575,7 +579,7 @@ exit 70
 func HostFSCleanupScript() string {
 	return `set +e
 if grep -qs ' /hideout/hostfs ' /proc/mounts; then
-  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || true
+  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || sudo -n umount /hideout/hostfs 2>/dev/null || true
 fi
 if [ -f /hideout/session/tmp/hostfsd.pid ]; then
   kill "$(cat /hideout/session/tmp/hostfsd.pid)" 2>/dev/null || true
