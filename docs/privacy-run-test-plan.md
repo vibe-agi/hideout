@@ -790,11 +790,18 @@ The Environment gate must run at least once with the Lima backend because the
 primary value is preserving guest tool/cache state without preserving previous
 runtime authority.
 
-## Manager API Run Acceptance
+## Manager API Init And Run Acceptance
 
-The minimal Manager API run surface is design-ready for TUI/WebUI and automation
-integration. Required checks:
+The minimal Manager API init and run surfaces are design-ready for TUI/WebUI and
+automation integration. Required checks:
 
+- `POST /api/v1/init/plan` returns the same `InitPlan` shape as Manager Core,
+  accepts generic tool presets and user-declared npm global tools, and performs
+  planning only;
+- `POST /api/v1/init/apply` reaches `Core.ApplyInit`, uses typed init tasks
+  rather than a raw profile writer, persists generic tool supply policy, and
+  fails closed for confirmation-required tasks because API v1 has no prompt
+  channel;
 - `POST /api/v1/run/plan` returns the same `RunPlan` shape as Manager Core and
   performs planning only;
 - `POST /api/v1/run/apply` reaches `Core.ApplyRun` through a configured backend
@@ -804,7 +811,8 @@ integration. Required checks:
 - `GET /api/v1/run/status` returns session summaries and rejects invalid session
   filters;
 - responses do not expose broker tokens, broker socket paths, proxy secret
-  values, or arbitrary host file contents;
+  values, raw helper search paths, package-manager credentials, or arbitrary
+  host file contents;
 - the local server binds only to `127.0.0.1`, enforces token and origin/host
   checks, and does not expose lab or host-control routes as API resources.
 

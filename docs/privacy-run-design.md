@@ -3999,6 +3999,11 @@ GET /api/v1/secrets
 GET /api/v1/audit
 GET /api/v1/audit/events?session=&profile=&action=&decision=&limit=
 GET /api/v1/settings
+POST /api/v1/init/plan
+POST /api/v1/init/apply
+POST /api/v1/run/plan
+POST /api/v1/run/apply
+GET /api/v1/run/status
 ```
 
 Every local HTTP response uses a stable envelope:
@@ -4025,6 +4030,12 @@ Rules:
   read-only snapshot;
 - audit event queries read redacted JSONL events and support session, profile,
   action, decision, and limit filters;
+- init plan/apply requests expose only typed init tasks and generic tool-supply
+  fields; API v1 has no interactive prompt channel, so confirmation-required
+  tasks fail closed;
+- run plan/apply/status requests use Manager Core and configured backend/opener
+  factories; API handlers must not create a second backend, host-open, or
+  profile mutation path;
 - secret values are never returned, only refs and availability;
 - network resources expose mode, proxy secret refs, and proxy-env visibility as
   leak-check state; they must not expose proxy URLs or credentials.
@@ -4199,10 +4210,12 @@ the user stops it. `--print-url` is a nonblocking diagnostic/test mode: it
 allocates the server, prints the URL/API/token metadata, closes the server, and
 does not promise an interactive UI session.
 
-The local manager server exposes minimal run resources for future TUI/WebUI
-control: `POST /api/v1/run/plan`, `POST /api/v1/run/apply`, and
-`GET /api/v1/run/status`. `run/apply` uses the same backend adapters as CLI
-`run` through Manager Core; it is not a generic host execution API.
+The local manager server exposes minimal init and run resources for future
+TUI/WebUI control: `POST /api/v1/init/plan`, `POST /api/v1/init/apply`,
+`POST /api/v1/run/plan`, `POST /api/v1/run/apply`, and
+`GET /api/v1/run/status`. `init/apply` uses typed init tasks rather than a raw
+profile writer. `run/apply` uses the same backend adapters as CLI `run` through
+Manager Core; it is not a generic host execution API.
 
 `hideout shim build-linux` cross-compiles the guest-side `hideout-shim` binary
 for Lima command proxies. By default it writes

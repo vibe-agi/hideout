@@ -215,6 +215,8 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   reassembling the backend/data-plane sequence.
 - Manager API exposes the minimal run surface: `POST /api/v1/run/plan`,
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
+- Manager API exposes the minimal init/tool setup surface:
+  `POST /api/v1/init/plan` and `POST /api/v1/init/apply`.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
   `hideout ui` server wires this factory to the same backend adapters used by
   CLI `run`; tests may install a fake backend. API handlers must not construct
@@ -252,9 +254,24 @@ Manager API may expose:
 - init plans, init task status, and redacted init results;
 - doctor remediation suggestions.
 
-Current API v1 run resources:
+Current API v1 init and run resources:
 
 ```text
+POST /api/v1/init/plan
+  Input: InitAPIRequest with profile, backend, network, tool presets, and
+  user-declared npm global tools.
+  Output: InitPlan.
+  Authority: planning only; no profile mutation, helper build, backend prepare,
+  broker, HostFS service, package install, or host command execution.
+
+POST /api/v1/init/apply
+  Input: InitAPIRequest.
+  Output: InitResult.
+  Authority: applies the same PlanInit -> ApplyInit chain as CLI init and
+  doctor fix. It may create store/profile state, write install metadata, and
+  update profile tool supply policy. It runs without an interactive prompt
+  channel in API v1, so confirmation-required tasks fail closed.
+
 POST /api/v1/run/plan
   Input: RunAPIRequest with profile, backend, workspace, network override,
   environment reuse flags, and command argv.
@@ -279,9 +296,11 @@ GET /api/v1/run/status
   values, or file-read handles.
 ```
 
-The run API is intentionally not a generic `host.exec` endpoint. Native backend
-execution still requires explicit weak-isolation acknowledgement and is audited
-as a backend selection decision.
+The init API is intentionally not a generic profile-write endpoint. It exposes
+only typed init tasks and generic tool-supply fields validated by the profile
+schema. The run API is intentionally not a generic `host.exec` endpoint. Native
+backend execution still requires explicit weak-isolation acknowledgement and is
+audited as a backend selection decision.
 
 ## CLI, TUI, and WebUI Roles
 

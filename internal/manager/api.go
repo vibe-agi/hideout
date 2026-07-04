@@ -12,6 +12,8 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -55,6 +57,15 @@ type RunAPIRequest struct {
 
 type RunStatusResponse struct {
 	Sessions []SessionSummary `json:"sessions"`
+}
+
+type InitAPIRequest struct {
+	ProfileName string                     `json:"profile,omitempty"`
+	Backend     string                     `json:"backend,omitempty"`
+	Network     string                     `json:"network,omitempty"`
+	ToolPresets []string                   `json:"toolPresets,omitempty"`
+	NPMGlobals  []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
+	DryRun      bool                       `json:"dryRun,omitempty"`
 }
 
 func NewAPI(core Core, token string, ttl time.Duration) API {
@@ -131,6 +142,10 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resource string) {
 	switch resource {
+	case "init/plan":
+		api.serveInitPlan(w, r)
+	case "init/apply":
+		api.serveInitApply(w, r)
 	case "run/plan":
 		api.serveRunPlan(w, r)
 	case "run/apply":
@@ -138,6 +153,52 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
+}
+
+func (api API) serveInitPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeInitAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanInit(initOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "init/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveInitApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeInitAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanInit(initOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyInit(plan, inittask.ApplyOptions{
+		NoInput: true,
+		DryRun:  req.DryRun,
+	})
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "init/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
 }
 
 func (api API) serveRunPlan(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +315,30 @@ func decodeRunAPIRequest(w http.ResponseWriter, r *http.Request) (RunAPIRequest,
 		return req, errors.New("command is required")
 	}
 	return req, nil
+}
+
+func decodeInitAPIRequest(w http.ResponseWriter, r *http.Request) (InitAPIRequest, error) {
+	var req InitAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid init request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid init request")
+	}
+	return req, nil
+}
+
+func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
+	return inittask.Options{
+		ProfileName: req.ProfileName,
+		Backend:     req.Backend,
+		Network:     req.Network,
+		NoInput:     true,
+		ToolPresets: append([]string(nil), req.ToolPresets...),
+		NPMGlobals:  append([]profile.NPMGlobalPackage(nil), req.NPMGlobals...),
+	}
 }
 
 func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {

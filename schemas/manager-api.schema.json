@@ -24,6 +24,8 @@
         "init",
         "bundles",
         "projects",
+        "init/plan",
+        "init/apply",
         "run/plan",
         "run/apply",
         "run/status"
