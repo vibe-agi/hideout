@@ -25,6 +25,12 @@ Latest local release-candidate evidence:
 - proxy evidence: operator proxy present; scheme recorded; full proxy URL
   redacted from the manifest and evidence logs
 
+Evidence scope: a release-candidate bundle certifies the exact git commit
+recorded in its manifest. Later documentation-only commits do not extend that
+certification; before cutting a release artifact, rerun
+`scripts/test-release-dogfood.sh` on the release commit and record the new
+manifest.
+
 ## Implemented Product Paths
 
 | Area | Status |
