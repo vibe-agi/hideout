@@ -217,6 +217,9 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   lifecycle plan/apply operations. TUI, WebUI, and automation must use the same
   target/skipped/apply model instead of reimplementing environment store
   selection, backend stop, or cleanup logic.
+- CLI `list` renders reusable environment records from Manager overview, so the
+  terminal, TUI, WebUI, and API share one observation path for environment
+  state.
 - Manager API exposes the minimal run surface: `POST /api/v1/run/plan`,
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
 - Manager API exposes the minimal init/tool setup surface:

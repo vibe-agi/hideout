@@ -3495,26 +3495,27 @@ func (a app) listEnvironments(args []string) error {
 	if err != nil {
 		return err
 	}
-	records, err := (environment.Store{Root: store.Root}).List()
-	if err != nil {
+	overview, err := manager.New(store).Overview(context.Background())
+	if err != nil && overview.Version == "" {
 		return err
 	}
-	if len(records) == 0 {
+	environments := overview.Environments
+	if len(environments) == 0 {
 		fmt.Fprintln(a.stdout, "environments: none")
 		return nil
 	}
 	fmt.Fprintln(a.stdout, "ID\tPROFILE\tBACKEND\tSTATUS\tCREATED\tLAST_STARTED\tLAST_ENDED\tWORKSPACE\tCOMMAND")
-	for _, rec := range records {
+	for _, env := range environments {
 		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			rec.ID,
-			rec.Profile,
-			rec.Backend,
-			explainValue(rec.Status, "ready"),
-			formatEnvironmentTime(rec.CreatedAt),
-			formatEnvironmentTime(rec.LastStartedAt),
-			formatEnvironmentTime(rec.LastEndedAt),
-			rec.Workspace,
-			rec.LastCommand,
+			env.ID,
+			env.Profile,
+			env.Backend,
+			explainValue(env.Status, "ready"),
+			formatEnvironmentTime(env.CreatedAt),
+			formatEnvironmentTime(env.LastStartedAt),
+			formatEnvironmentTime(env.LastEndedAt),
+			env.Workspace,
+			env.LastCommand,
 		)
 	}
 	return nil
