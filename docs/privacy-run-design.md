@@ -3062,8 +3062,10 @@ independent of reusable VM instances. The current user-facing consumer is
 `preview.open`.
 
 `preview.open` opens the host-visible URL as a best-effort UX action after the
-target command has started, because preview servers and callback listeners are
-usually created by the target process itself. Failure to launch the browser is
+target command has started and the mapped HTTP endpoint responds. Preview
+servers and callback listeners are usually created by the target process
+itself, so opening before readiness produces a host browser error page rather
+than a useful preview. Failure to observe readiness or launch the browser is
 audited as `preview.open` error evidence; the endpoint exposure authority and
 bridge cleanup remain owned by the run.
 

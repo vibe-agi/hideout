@@ -93,32 +93,13 @@ prepare_linux_hostfsd() {
   "$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
 }
 
-enable_node_dev_profile() {
-  local profile_json="$store/profiles/default/profile.json"
-  python3 - "$profile_json" "$workspace" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-workspace = sys.argv[2]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-presets = data.setdefault("tools", {}).setdefault("presets", [])
-if "base-dev" not in presets:
-    presets.insert(0, "base-dev")
-if "node-dev" not in presets:
-    presets.append("node-dev")
-npm_globals = data.setdefault("tools", {}).setdefault("npmGlobals", [])
-tool = {
-    "package": f"file:{workspace}/gate-npm-agent",
-    "commands": ["hideout-gate-npm-tool"],
-}
-if tool not in npm_globals:
-    npm_globals.append(tool)
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
+configure_node_dev_profile() {
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" profile tools default preset add node-dev >/dev/null
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" profile tools default npm add \
+      --package "file:$workspace/gate-npm-agent" \
+      --command hideout-gate-npm-tool >/dev/null
 }
 
 prepare_workspace_npm_tool() {
@@ -137,6 +118,29 @@ JSON
 console.log("hideout-gate-npm-tool 1.0");
 JS
   chmod +x "$workspace/gate-npm-agent/bin/hideout-gate-npm-tool.js"
+}
+
+prepare_fake_browser() {
+  local browser="$bin/hideout-gate-browser"
+  cat >"$browser" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+target=""
+for arg in "$@"; do
+  case "$arg" in
+    http://*|https://*) target="$arg" ;;
+  esac
+done
+if [ -z "$target" ]; then
+  echo "hideout-gate-browser: missing URL argument" >&2
+  exit 2
+fi
+curl -fsSL --max-time "${HIDEOUT_GATE_BROWSER_TIMEOUT:-15}" -o /dev/null "$target"
+SH
+  chmod +x "$browser"
+  HIDEOUT_BROWSER_PATH="$browser"
+  export HIDEOUT_BROWSER_PATH
 }
 
 start_auth_api() {
@@ -222,6 +226,7 @@ hideout="$bin/hideout"
 lab_target="$bin/hideout-gate-lab-target"
 go build -o "$hideout" ./cmd/hideout
 go build -o "$lab_target" ./cmd/hideout-gate-lab-target
+prepare_fake_browser
 prepare_linux_shim
 prepare_linux_hostfsd
 
@@ -232,7 +237,7 @@ prepare_workspace_npm_tool
 
 echo "dogfood-cli: initializing profile"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --backend lima --network direct >/dev/null
-enable_node_dev_profile
+configure_node_dev_profile
 
 echo "dogfood-cli: verifying node-dev runtime, user-declared npm tool, and test CLI presence"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
@@ -340,24 +345,26 @@ grep -q 'browser=http://127.0.0.1:' "$tmp/preview-login.out"
 echo "dogfood-cli: verifying host redirect to localhost does not reach guest callback"
 callback_port="$(free_host_port)"
 callback_url="http://127.0.0.1:$callback_port/callback?state=gate-state&code=gate-code"
+callback_prefix="callback=http://127.0.0.1:$callback_port/callback?"
 start_redirect_server "$callback_url"
 redirect_url="http://$redirect_addr/login"
 with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
   "$hideout" run --backend lima --workspace "$workspace" -- ./hideout-test-cli login --listen "127.0.0.1:$callback_port" --wait 5s --expect-timeout >"$tmp/host-redirect-login.out" 2>"$tmp/host-redirect-login.err" &
 host_redirect_login_pid=$!
 for _ in $(seq 1 120); do
-  if grep -Fq "callback=$callback_url" "$tmp/host-redirect-login.out" 2>/dev/null; then
+  if grep -Fq "$callback_prefix" "$tmp/host-redirect-login.out" 2>/dev/null &&
+    grep -Fq "code=gate-code" "$tmp/host-redirect-login.out" 2>/dev/null &&
+    grep -Fq "state=gate-state" "$tmp/host-redirect-login.out" 2>/dev/null; then
     break
   fi
   if ! kill -0 "$host_redirect_login_pid" 2>/dev/null; then
-    echo "dogfood-cli: host redirect login exited before publishing callback" >&2
-    cat "$tmp/host-redirect-login.out" >&2 || true
-    cat "$tmp/host-redirect-login.err" >&2 || true
-    exit 1
+    break
   fi
   sleep 0.25
 done
-if ! grep -Fq "callback=$callback_url" "$tmp/host-redirect-login.out"; then
+if ! grep -Fq "$callback_prefix" "$tmp/host-redirect-login.out" ||
+  ! grep -Fq "code=gate-code" "$tmp/host-redirect-login.out" ||
+  ! grep -Fq "state=gate-state" "$tmp/host-redirect-login.out"; then
   echo "dogfood-cli: host redirect login did not publish expected callback" >&2
   cat "$tmp/host-redirect-login.out" >&2 || true
   cat "$tmp/host-redirect-login.err" >&2 || true

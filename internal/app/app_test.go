@@ -711,6 +711,31 @@ func TestProfileHomeImportForceReplacesSymlinkDestinationWithoutFollowing(t *tes
 	}
 }
 
+func TestProfileHomeImportAllowsManagedXDGSymlinkDestinations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	if err := store.Save(profile.Default("default")); err != nil {
+		t.Fatalf("save default profile: %v", err)
+	}
+	sourceFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(sourceFile, []byte("seeded-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "home", "default", "import", "--from", sourceFile, "--to", ".config/hideout-test-cli/token", "--force"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("managed xdg import exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	if got, err := os.ReadFile(filepath.Join(store.ProfileDir("default"), "config", "hideout-test-cli", "token")); err != nil || string(got) != "seeded-token" {
+		t.Fatalf("managed xdg import wrote wrong target content=%q err=%v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(store.ProfileDir("default"), "home", ".config")); err != nil {
+		t.Fatalf("managed .config symlink missing: %v", err)
+	}
+}
+
 func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

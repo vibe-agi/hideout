@@ -354,9 +354,9 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
 - `preview.open` can expose a declared guest-local callback listener to the
   host browser path, allowing a browser-style callback to complete through a
   typed host-to-guest endpoint exposure;
-- `preview.open` launches after the target command starts, so target-created
-  preview servers and callback listeners can be ready before the host browser
-  reaches the mapped endpoint;
+- `preview.open` waits for the mapped HTTP endpoint to respond before launching
+  the host browser path, so target-created preview servers and callback
+  listeners can be ready before the browser reaches the mapped endpoint;
 - a host-owned redirect to `localhost:<guest-listener-port>` does not complete
   the guest callback, proving host loopback and guest loopback remain separate
   without a typed endpoint exposure owner;
@@ -377,10 +377,19 @@ flow, typed preview callback reach-back, host redirect boundary, environment
 policy, profile-state persistence, network request, and control-plane store
 protection.
 
+The automated smoke sets `HIDEOUT_BROWSER_PATH` to a fake browser shim that
+accepts the normal Chromium-style arguments and follows the host-visible URL
+with `curl`. This keeps the gate deterministic and avoids opening the
+operator's real browser while still exercising the same Hideout opener path.
+
 The smoke has two positive callback paths: a guest-internal self-callback that
 proves profile identity persistence without host reach-back, and a
 `preview.open` browser-style callback that proves typed host-to-guest endpoint
-exposure. It also runs a controlled host redirect that behaves like
+exposure. The positive preview callback uses a same-origin relative redirect so
+it stays inside the Hideout-owned mapped endpoint; OAuth-style absolute
+loopback redirect automation is a separate adapter problem, not a
+`preview.open` responsibility. The smoke also runs a controlled host redirect
+that behaves like
 `https://httpbin.org/redirect-to?url=http://localhost:9000`, but without
 depending on the public internet: after a host browser or host HTTP client
 follows the redirect, `localhost` targets host loopback, not guest loopback. That

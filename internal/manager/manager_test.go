@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -733,8 +736,11 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
 	workspace := t.TempDir()
-	targetAddr, closeTarget := startManagerEchoServer(t)
-	defer closeTarget()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	targetAddr := target.Listener.Addr().String()
 	var bridgeAddr string
 	opener := &managerRecordingOpener{}
 	fake := &applyRunFakeBackend{
@@ -753,12 +759,12 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 				endpoint.EndpointCategory != "host-loopback" {
 				return fmt.Errorf("unexpected endpoint exposure: %+v", endpoint)
 			}
-			got, err := managerEchoRoundTrip(endpoint.ListenAddress, "preview")
+			resp, err := managerPreviewHTTPGet(endpoint.ListenAddress, "/preview")
 			if err != nil {
 				return err
 			}
-			if got != "echo:preview\n" {
-				return fmt.Errorf("bridge response=%q", got)
+			if resp.StatusCode != http.StatusNoContent {
+				return fmt.Errorf("bridge HTTP status=%d", resp.StatusCode)
 			}
 			if !opener.waitForURL(2 * time.Second) {
 				return fmt.Errorf("preview opener was not called while command was running")
@@ -839,6 +845,87 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 		if leaked != "" && strings.Contains(auditText, leaked) {
 			t.Fatalf("endpoint audit leaked %q:\n%s", leaked, auditText)
 		}
+	}
+}
+
+func TestCoreApplyRunPreviewOpenWaitsForHTTPReady(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAddr := ln.Addr().String()
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}
+	var serveOnce sync.Once
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		_ = ln.Close()
+	})
+	opener := &managerRecordingOpener{}
+	fake := &applyRunFakeBackend{
+		runFunc: func(*backend.Session) error {
+			time.Sleep(previewOpenDelay + 100*time.Millisecond)
+			if urls := opener.urlSnapshot(); len(urls) != 0 {
+				return fmt.Errorf("preview opened before endpoint was ready: %+v", urls)
+			}
+			serveOnce.Do(func() {
+				go func() {
+					if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+						t.Errorf("preview test server failed: %v", err)
+					}
+				}()
+			})
+			if !opener.waitForURL(2 * time.Second) {
+				return fmt.Errorf("preview opener was not called after endpoint became ready")
+			}
+			return nil
+		},
+	}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspace,
+		Ephemeral:   true,
+		Command:     []string{"tool"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	if _, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:            fake,
+		RequestedBackend:   "native",
+		AllowWeakIsolation: true,
+		Environment:        RunEnvironmentOptions{Create: true},
+		OpenTargets: []RunOpenTargetOwner{{
+			ID:   OpenTargetPreviewOpen,
+			Kind: OpenTargetPreviewOpen,
+		}},
+		EndpointCandidates: []RunEndpointCandidate{{
+			ID:            "manual_preview_1",
+			Source:        EndpointSourceManual,
+			Owner:         OpenTargetPreviewOpen,
+			Proto:         "tcp",
+			TargetAddress: targetAddr,
+		}},
+		EndpointExposures: []RunEndpointExposureRequest{{
+			CandidateID: "manual_preview_1",
+			Owner:       OpenTargetPreviewOpen,
+			Kind:        OpenTargetPreviewOpen,
+		}},
+		Opener: opener,
+	}); err != nil {
+		t.Fatalf("ApplyRun: %v", err)
+	}
+	if urls := opener.urlSnapshot(); len(urls) != 1 {
+		t.Fatalf("preview opener mismatch: %+v", urls)
 	}
 }
 
@@ -1829,6 +1916,22 @@ func managerEchoRoundTrip(addr, message string) (string, error) {
 		return "", err
 	}
 	return bufio.NewReader(conn).ReadString('\n')
+}
+
+func managerPreviewHTTPGet(addr, path string) (*http.Response, error) {
+	client := http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+	resp, err := client.Get("http://" + addr + path)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp, nil
 }
 
 type applyRunFakeBackend struct {

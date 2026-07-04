@@ -2298,13 +2298,64 @@ func ensureProfileHomeDirPath(homeRoot, dir string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("profile home import destination must not use a symlink")
+			managedTarget, ok, err := managedProfileHomeSymlinkTarget(homeRoot, current)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("profile home import destination must not use a symlink")
+			}
+			current = managedTarget
+			continue
 		}
 		if !info.IsDir() {
 			return errors.New("profile home import destination parent is not a directory")
 		}
 	}
 	return nil
+}
+
+func managedProfileHomeSymlinkTarget(homeRoot, linkPath string) (string, bool, error) {
+	homeRoot = filepath.Clean(homeRoot)
+	linkPath = filepath.Clean(linkPath)
+	profileDir := filepath.Dir(homeRoot)
+	managed := map[string]string{
+		filepath.Join(homeRoot, ".config"):         filepath.Join(profileDir, "config"),
+		filepath.Join(homeRoot, ".cache"):          filepath.Join(profileDir, "cache"),
+		filepath.Join(homeRoot, ".local", "share"): filepath.Join(profileDir, "data"),
+	}
+	want, ok := managed[linkPath]
+	if !ok {
+		return "", false, nil
+	}
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		return "", false, err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(linkPath), target)
+	}
+	target = filepath.Clean(target)
+	if target != want {
+		return "", false, nil
+	}
+	info, err := os.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			return "", false, err
+		}
+		return target, true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", false, errors.New("profile home import managed XDG target must not be a symlink")
+	}
+	if !info.IsDir() {
+		return "", false, errors.New("profile home import managed XDG target is not a directory")
+	}
+	return target, true, nil
 }
 
 func ensureProfileHomeRoot(homeRoot string) error {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,8 +23,11 @@ import (
 )
 
 const (
-	RunResultVersion = "hideout.run-result/v1"
-	previewOpenDelay = 250 * time.Millisecond
+	RunResultVersion          = "hideout.run-result/v1"
+	previewOpenDelay          = 250 * time.Millisecond
+	previewOpenReadyTimeout   = 30 * time.Second
+	previewOpenReadyPoll      = 100 * time.Millisecond
+	previewOpenRequestTimeout = 750 * time.Millisecond
 )
 
 type ApplyRunOptions struct {
@@ -290,6 +295,24 @@ func openRunPreviewEvents(ctx context.Context, runSession RunSession, dataPlane 
 			})
 			continue
 		}
+		if err := waitForPreviewHTTPReady(ctx, target); err != nil {
+			events = append(events, audit.Event{
+				Session:  runSession.Layout.ID,
+				Profile:  runSession.Plan.ProfileName,
+				Backend:  runSession.Plan.Backend,
+				Action:   "preview.open",
+				Decision: "error",
+				Details: map[string]any{
+					"status":           "error",
+					"owner":            endpoint.Owner,
+					"source":           endpoint.Source,
+					"endpointCategory": endpoint.EndpointCategory,
+					"endpoint":         "present",
+					"reason":           err.Error(),
+				},
+			})
+			continue
+		}
 		if err := opener.OpenURL(ctx, target); err != nil {
 			events = append(events, audit.Event{
 				Session:  runSession.Layout.ID,
@@ -335,6 +358,40 @@ func previewURLForEndpoint(listenAddress string) (string, error) {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/", nil
+}
+
+func waitForPreviewHTTPReady(ctx context.Context, target string) error {
+	readyCtx, cancel := context.WithTimeout(ctx, previewOpenReadyTimeout)
+	defer cancel()
+	client := &http.Client{
+		Timeout: previewOpenRequestTimeout,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	for {
+		req, err := http.NewRequestWithContext(readyCtx, http.MethodGet, target, nil)
+		if err != nil {
+			return errors.New("preview endpoint URL is invalid")
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			return nil
+		}
+		select {
+		case <-readyCtx.Done():
+			if ctx.Err() != nil {
+				return errors.New("preview endpoint wait canceled")
+			}
+			return errors.New("preview endpoint did not become ready before timeout")
+		case <-time.After(previewOpenReadyPoll):
+		}
+	}
 }
 
 func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlane, runNetwork RunNetwork) backend.RunSpec {

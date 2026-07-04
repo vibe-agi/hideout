@@ -78,9 +78,8 @@ func login(args []string) error {
 	done := make(chan error, 1)
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			callbackURL := localCallbackURL(ln.Addr().String(), normalizedCallbackPath, *state, *code)
 			if *browserRedirect && r.URL.Path == "/" {
-				http.Redirect(w, r, callbackURL, http.StatusFound)
+				http.Redirect(w, r, relativeCallbackURL(normalizedCallbackPath, *state, *code), http.StatusFound)
 				return
 			}
 			if r.URL.Path != normalizedCallbackPath {
@@ -171,6 +170,15 @@ func localCallbackURL(address, callbackPath, state, code string) string {
 		Host:   address,
 		Path:   callbackPath,
 	}
+	query := u.Query()
+	query.Set("state", state)
+	query.Set("code", code)
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func relativeCallbackURL(callbackPath, state, code string) string {
+	u := url.URL{Path: callbackPath}
 	query := u.Query()
 	query.Set("state", state)
 	query.Set("code", code)
