@@ -251,8 +251,8 @@ Hideout boundary:
   hostfs: allowed=0 denied=1 unsupported=0
 ```
 
-Inspect redacted audit events through the Manager-backed CLI instead of reading
-raw JSONL by hand:
+Inspect the latest matching redacted audit events through the Manager-backed CLI
+instead of reading raw JSONL by hand:
 
 ```bash
 hideout audit show --limit 20

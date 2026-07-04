@@ -242,8 +242,8 @@ Hideout boundary:
   hostfs: allowed=0 denied=1 unsupported=0
 ```
 
-查看审计时优先使用 Manager 支持的 redacted CLI 视图，不需要手动读取
-raw JSONL：
+查看审计时优先使用 Manager 支持的 redacted CLI 视图，它会返回最新匹配的
+事件，不需要手动读取 raw JSONL：
 
 ```bash
 hideout audit show --limit 20

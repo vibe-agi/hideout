@@ -304,7 +304,6 @@ func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {
 		}
 		return nil, err
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	out := make([]audit.Event, 0)
 	var errs []error
 	for _, entry := range entries {
@@ -318,25 +317,38 @@ func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {
 		if filter.Session != "" && sessionID != filter.Session {
 			continue
 		}
-		events, err := readAuditEvents(filepath.Join(sessionsDir, sessionID, "audit.jsonl"), filter, limit-len(out))
+		events, err := readAuditEvents(filepath.Join(sessionsDir, sessionID, "audit.jsonl"), filter)
 		if err != nil {
 			errs = append(errs, err)
 		}
 		out = append(out, events...)
-		if len(out) >= limit {
-			break
-		}
 	}
 	if out == nil {
 		out = []audit.Event{}
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, right := out[i], out[j]
+		if !left.Time.Equal(right.Time) {
+			if left.Time.IsZero() {
+				return false
+			}
+			if right.Time.IsZero() {
+				return true
+			}
+			return left.Time.After(right.Time)
+		}
+		if left.Session != right.Session {
+			return left.Session > right.Session
+		}
+		return left.Action > right.Action
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
 	return out, errors.Join(errs...)
 }
 
-func readAuditEvents(path string, filter AuditEventFilter, remaining int) ([]audit.Event, error) {
-	if remaining <= 0 {
-		return nil, nil
-	}
+func readAuditEvents(path string, filter AuditEventFilter) ([]audit.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -361,9 +373,6 @@ func readAuditEvents(path string, filter AuditEventFilter, remaining int) ([]aud
 			continue
 		}
 		out = append(out, event)
-		if len(out) >= remaining {
-			break
-		}
 	}
 	if err := scanner.Err(); err != nil {
 		errs = append(errs, err)

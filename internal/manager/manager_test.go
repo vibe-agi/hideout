@@ -1954,6 +1954,43 @@ func TestAuditEventsFiltersAndRedactsJSONL(t *testing.T) {
 	}
 }
 
+func TestAuditEventsReturnsNewestMatchesFirst(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_older", "audit.jsonl"), strings.Join([]string{
+		`{"time":"2026-07-01T00:00:00Z","session":"ses_older","profile":"default","backend":"native","action":"host.open","decision":"allow"}`,
+		`{"time":"2026-07-01T00:00:03Z","session":"ses_older","profile":"default","backend":"native","action":"host.fs.read","decision":"deny"}`,
+	}, "\n")+"\n", 0o600)
+	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_newer", "audit.jsonl"), strings.Join([]string{
+		`{"time":"2026-07-01T00:00:02Z","session":"ses_newer","profile":"default","backend":"native","action":"host.open","decision":"deny"}`,
+		`{"time":"2026-07-01T00:00:04Z","session":"ses_newer","profile":"default","backend":"native","action":"network.setup","decision":"allow"}`,
+	}, "\n")+"\n", 0o600)
+
+	events, err := Core{Store: store}.AuditEvents(AuditEventFilter{Limit: 3})
+	if err != nil {
+		t.Fatalf("AuditEvents: %v", err)
+	}
+	got := make([]string, 0, len(events))
+	for _, event := range events {
+		got = append(got, event.Session+"/"+event.Action)
+	}
+	want := []string{
+		"ses_newer/network.setup",
+		"ses_older/host.fs.read",
+		"ses_newer/host.open",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("events should be newest first, got %v want %v", got, want)
+	}
+
+	denied, err := Core{Store: store}.AuditEvents(AuditEventFilter{Decision: "deny", Limit: 1})
+	if err != nil {
+		t.Fatalf("AuditEvents denied: %v", err)
+	}
+	if len(denied) != 1 || denied[0].Session != "ses_older" || denied[0].Action != "host.fs.read" {
+		t.Fatalf("deny limit should return newest denied event: %+v", denied)
+	}
+}
+
 func TestAuditEventsSkipsNonSessionDirectoriesAndRejectsInvalidFilter(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_valid", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_valid","profile":"default","backend":"native","action":"session.start","decision":"allow"}`+"\n", 0o600)
