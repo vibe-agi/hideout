@@ -164,16 +164,14 @@ Implemented smoke surface:
 
 - audit tail;
 - denied audit count;
-- recent denied audit list using Manager API `decision=deny` filtering.
+- recent denied audit list using Manager API `decision=deny` filtering;
+- basic audit explorer filtering by session, profile, action, decision, and
+  limit using the same redacted Manager API view as `hideout audit show`.
 
 Design-ready search by:
 
 - path;
-- action;
-- decision;
 - rule ID;
-- session;
-- profile;
 - time range.
 
 ### Policy Editor

@@ -324,6 +324,7 @@ let activePanel = "overview";
 let overview = null;
 let auditEvents = [];
 let deniedEvents = [];
+let auditExplorerEvents = null;
 let setupResultHTML = "";
 let runResultHTML = "";
 
@@ -417,6 +418,7 @@ function renderPanel() {
   panelBodyEl.innerHTML = renderer();
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
+  if (activePanel === "audit") bindAuditPanel();
 }
 function domainOwner(name) {
   return {
@@ -537,7 +539,7 @@ const renderers = {
     }).join("") + "</div>";
   },
   audit: function() {
-    return renderAuditEvents(true);
+    return renderAuditExplorer();
   },
   settings: function() {
     const s = overview.settings || {};
@@ -708,6 +710,65 @@ function renderAuditEvents(full, sourceEvents) {
     const details = JSON.stringify(e.details || {}, null, 2);
     return '<article class="audit-event ' + esc(tone) + '"><div class="line">' + pill(e.decision || "event", tone || "ok") + '<strong>' + esc(e.action || "event") + '</strong><span class="meta">' + esc(e.session || "") + '</span><span class="meta">' + esc(e.profile || "") + '</span></div><pre>' + esc(details) + '</pre></article>';
   }).join("") + "</div>";
+}
+function renderAuditExplorer() {
+  const source = auditExplorerEvents || auditEvents;
+  return '<form id="auditFilterForm" class="item">' +
+    '<div class="form-grid">' +
+    '<div class="field"><label for="auditSession">Session</label><input id="auditSession" placeholder="ses_..."></div>' +
+    '<div class="field"><label for="auditProfile">Profile</label><input id="auditProfile" placeholder="default"></div>' +
+    '<div class="field"><label for="auditAction">Action</label><input id="auditAction" placeholder="host.open"></div>' +
+    '<div class="field"><label for="auditDecision">Decision</label><select id="auditDecision"><option value="">any</option><option value="allow">allow</option><option value="deny">deny</option><option value="audit-only">audit-only</option><option value="unsupported">unsupported</option><option value="error">error</option></select></div>' +
+    '<div class="field"><label for="auditLimit">Limit</label><input id="auditLimit" type="number" min="1" max="1000" value="50"></div>' +
+    '</div>' +
+    '<div class="action-row"><button class="action secondary" type="button" data-audit-action="filter">Filter</button><button class="action secondary" type="button" data-audit-action="reset">Reset</button><span class="meta" id="auditExplorerStatus">ready</span></div>' +
+    '</form><div class="result" id="auditExplorerResult">' + renderAuditEvents(true, source) + '</div>';
+}
+function auditFilterFromForm() {
+  const params = new URLSearchParams();
+  const fields = [
+    ["session", document.getElementById("auditSession").value.trim()],
+    ["profile", document.getElementById("auditProfile").value.trim()],
+    ["action", document.getElementById("auditAction").value.trim()],
+    ["decision", document.getElementById("auditDecision").value]
+  ];
+  fields.forEach(function(field) {
+    if (field[1]) params.set(field[0], field[1]);
+  });
+  const limit = document.getElementById("auditLimit").value.trim() || "50";
+  params.set("limit", limit);
+  return params.toString();
+}
+function setAuditBusy(busy, text) {
+  const status = document.getElementById("auditExplorerStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-audit-action]").forEach(function(button) { button.disabled = busy; });
+}
+function bindAuditPanel() {
+  const form = document.getElementById("auditFilterForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  document.querySelectorAll("[data-audit-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-audit-action");
+      if (action === "reset") {
+        auditExplorerEvents = null;
+        document.getElementById("auditExplorerResult").innerHTML = renderAuditEvents(true);
+        setAuditBusy(false, "ready");
+        return;
+      }
+      setAuditBusy(true, "filtering");
+      try {
+        const response = await api("audit/events?" + auditFilterFromForm());
+        auditExplorerEvents = Array.isArray(response.data) ? response.data : [];
+        document.getElementById("auditExplorerResult").innerHTML = renderAuditEvents(true, auditExplorerEvents);
+        setAuditBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+      } catch (error) {
+        document.getElementById("auditExplorerResult").innerHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        setAuditBusy(false, "error");
+      }
+    });
+  });
 }
 function renderAuditTail() {
   const denied = deniedAuditEvents();
