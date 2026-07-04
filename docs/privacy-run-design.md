@@ -345,9 +345,9 @@ Required Phase 1:
 - Command Proxy support for `open` and `xdg-open`, with both enabled in the
   default profile.
 - Host Broker action `host.open` for URLs and mapped workspace files.
-- Run-scoped `endpoint.expose.host-to-guest` as the first product exposure
-  direction, backed by the PortBridge transport provider. It is not a browser or
-  adb feature by itself, and it does not weaken `host.open` localhost denial.
+- Run-scoped `portbridge.host-to-guest` as a thin transport provider with
+  validation, audit, cleanup, Boundary Summary evidence, no CLI/API/script
+  trigger surface, and no weakening of `host.open` localhost denial.
 - Isolated browser profile for URL open.
 - Centralized capability evaluator.
 - Constrained `goja` support for command policy and audit redaction hooks.
@@ -363,10 +363,10 @@ Design-ready Phase 1:
 - Minimal Manager API run resources: `run/plan`, `run/apply`, and `run/status`
   over the local token-protected server.
 - Local Web UI page map and data model.
-- OpenTarget domain contracts for future host application automation and
-  preview workflows. `endpoint.expose.host-to-guest` is available as the first
-  product exposure direction; OpenTarget owners such as `preview.open` remain
-  separate product designs.
+- OpenTarget and Endpoint Exposure contracts for future host application
+  automation and preview workflows. Candidate creation, immutable candidate
+  snapshots, active OpenTarget owner registry, and `endpoint.expose.*` product
+  actions are Design-ready until implemented end to end.
 - Profile identity rotate/reset.
 - Audit query API.
 - More complete policy editing surfaces.
@@ -625,10 +625,13 @@ Phase 1 capability implementation matrix:
 | `host.open` | `command:open`, `command:xdg-open` | `route=host-broker`; Host Broker opens an isolated browser URL or mapped workspace file. | Generic host command execution. |
 | `guest.exec` | top-level run or registered command proxy shim | `route=guest-direct` for the top-level command; `route=guest-exec` only for an explicitly registered shim that execs the matching real guest binary without host side effects. | Intercepting arbitrary guest commands. |
 | `network.connect` | session setup | `route=guest-direct` for setup and route verification evidence for `direct` or `tun2socks`; `route=deny` on failure. | Per-socket firewalling or request audit. |
-| `endpoint.expose.host-to-guest` | Manager run data plane for an owning typed capability | `route=portbridge`; candidate ID resolved by Go, explicit owner, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup. | Raw host port exposure, `host.open` localhost exceptions, script-supplied addresses, or business-specific adb/browser semantics. |
+| `portbridge.host-to-guest` | Manager run data plane only | `route=portbridge`; explicit owner label, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup, and no untrusted request surface. | Product authorization, raw host port exposure, `host.open` localhost exceptions, script-supplied addresses, or business-specific adb/browser semantics. |
 
 Any action outside the Phase 1 implementation matrix and Capability Probe matrix
 is unsupported in Phase 1 and fails closed before it reaches an implementation.
+`route=portbridge` names the internal transport provider. Product authority is
+expressed by a higher-level action such as `endpoint.expose.host-to-guest` only
+after the candidate model and owner registry are implemented.
 
 HostFS actions:
 
@@ -1922,7 +1925,9 @@ heuristic command parsing. If Access Sensor ships later, it may help answer:
 Access Sensor output is advisory unless a separate enforcement policy explicitly
 promotes it. It must not grant host filesystem access, create HostPathGrants,
 mount new directories, or reveal hidden host path existence to the target
-process.
+process. Endpoint observation follows the same rule: `endpoint.observe` may
+produce candidate evidence and warnings, but it must not authorize
+`endpoint.expose.*` by itself.
 
 Product CLI shape:
 
@@ -2968,6 +2973,13 @@ endpoint.expose.host-to-guest
 endpoint.expose.guest-to-host
 ```
 
+Implementation status: the Phase 1 code has the underlying run-scoped
+PortBridge transport path and fail-closed backend behavior. The candidate model,
+immutable candidate snapshots, active OpenTarget owner registry, and
+`endpoint.expose.*` product actions are Design-ready. They must not be described
+as available to scripts, bundles, CLI users, or HTTP API clients until those
+pieces exist and are covered by the Endpoint Exposure gates.
+
 `endpoint.observe` and `endpoint.expose.*` are different trust levels.
 Observation may produce an endpoint candidate and audit evidence. It must not
 create reachability. Exposure is a separate authorization transaction that
@@ -2990,10 +3002,27 @@ target agent can modify workspace files. Observed candidates are facts about
 guest behavior; they are not evidence that exposure is safe. They default to
 audit-only and must never auto-expose by themselves.
 
+Candidate access surfaces:
+
+- profile-declared candidates are written in the user-owned profile or
+  Environment policy and may be auto-exposed only when the same policy grants the
+  matching OpenTarget owner and exposure action;
+- project-declared candidates are discovered from project configuration such as
+  a future Hideoutfile. Discovery is not consent. They require review or
+  interactive ask before exposure because the workspace is writable by the
+  target;
+- manual candidates are created by an explicit run or session request, such as a
+  future `hideout run --expose host-to-guest:<guest-loopback-port> -- ...`.
+  They are run-scoped by default unless the user persists them into profile
+  policy;
+- observed candidates come from `endpoint.observe` or Access Sensor style
+  evidence. They may help explain behavior or support an ask prompt, but they do
+  not authorize exposure by themselves.
+
 Candidate shape:
 
 ```text
-candidateId       opaque, one transaction or snapshot scope
+candidateId       opaque, unguessable, session-bound, one transaction or snapshot scope
 side              guest, host, or device
 proto             tcp initially
 source            declared, manual, observed, or device

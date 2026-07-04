@@ -241,6 +241,13 @@ views are redacted presentation surfaces and are not required to contain enough
 data to fully replay a decision. A replay tool that needs full fidelity must use
 the protected decision snapshot, not the redacted audit view.
 
+The default for rich snapshots should be hash-bound, not retained. If a full
+snapshot is retained for debugging, it becomes a secret-bearing session artifact:
+store it under the Hideout control-plane store with owner-only permissions,
+include it in store-reserved-root protection, expire it with the session unless
+the user explicitly preserves it, and never export it through audit, fixtures, or
+UI views by accident.
+
 ## Runtime Restrictions
 
 The runtime must not expose raw Go standard library packages or host objects.

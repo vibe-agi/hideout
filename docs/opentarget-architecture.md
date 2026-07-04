@@ -96,7 +96,7 @@ OpenTarget / PortBridge / Command Proxy
 
 PortBridge remains a generic transport primitive, not an adb, browser, or
 preview-specific target type. `endpoint.expose.host-to-guest` is the first
-product exposure direction and uses run-scoped, audited PortBridge mappings
+direction to productize and will use run-scoped, audited PortBridge mappings
 owned by a typed capability. `endpoint.expose.guest-to-host` remains
 design-ready/lab until a separate product design promotes it. Any bridge still
 needs an owning OpenTarget or explicit product design.

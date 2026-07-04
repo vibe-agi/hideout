@@ -26,7 +26,7 @@ This document covers:
 - host files outside the workspace;
 - host browser and opener authority;
 - hidden proxy and setup secrets;
-- HostFS, Host Broker, OpenTarget, and future PortBridge authority;
+- HostFS, Host Broker, OpenTarget, and future Endpoint Exposure authority;
 - audit evidence required to explain what happened.
 
 This document does not cover:
@@ -142,8 +142,8 @@ the default policy profile:
   placing proxy secrets in the target environment.
 - A1-A3: per-run authority is session-scoped. Broker tokens, shim directories,
   network bootstrap files, proxy secret files, HostFS materialization,
-  OpenTarget lifetimes, and future PortBridge lifetimes do not belong to
-  reusable environments.
+  OpenTarget lifetimes, and PortBridge-backed endpoint transport lifetimes do
+  not belong to reusable environments.
 - A4: policy bundles and scripts may classify intent and propose decisions, but
   they cannot execute host authority or bypass Go-side validators for Core
   primitives.
@@ -158,8 +158,8 @@ Hideout Phase 1 does not claim:
 - workspace secrets are hidden from the target by default;
 - network exfiltration is impossible in `direct` mode;
 - HostFS write overlay is product-ready;
-- PortBridge, Browser Control, Preview Open, adb, simulator, or IDE integrations
-  are product-ready unless separately promoted;
+- Endpoint Exposure, Browser Control, Preview Open, adb, simulator, or IDE
+  integrations are product-ready only when separately promoted;
 - policy scripts are trusted code;
 - native backend gives OS-level isolation;
 - opening an allowed external URL prevents the remote website from observing the
@@ -276,7 +276,7 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - fail-closed validation in Go before any script or bundle can depend on the
   primitive.
 
-`endpoint.expose.host-to-guest` is the first product direction because it
+`endpoint.expose.host-to-guest` is the first direction to productize because it
 supports host browser preview of a guest dev server and local callback flows.
 This direction exposes a guest-side service to host loopback. It must still have
 an owner, lifetime, audit, cleanup, and backend-specific provider, but it does
@@ -293,6 +293,13 @@ freshness and process ownership. Those properties may support denial or user
 explanation, but they are not sufficient evidence for automatic exposure.
 Observed-only candidates default to audit-only or ask, and must fail closed when
 no prompt channel exists.
+
+Endpoint observation is Later work and expands the trusted observation surface.
+The observer, guest socket enumeration mechanism, and any Access Sensor
+integration become part of the evidence path. Observation should record only
+candidate metadata needed for policy or explanation, such as endpoint class,
+source, process class, and timing. It must not record forwarded bytes, callback
+query strings, broker tokens, proxy secrets, or raw backend handles.
 
 ## Evidence Requirements
 
@@ -314,17 +321,20 @@ Required:
 
 - HostFS read/list/stat policy and audit;
 - `host.open` external URL and workspace file broker path;
-- `endpoint.expose.host-to-guest` product validation backed by run-scoped
-  PortBridge lifecycle, audit, cleanup, and Boundary Summary evidence;
+- run-scoped `portbridge.host-to-guest` transport validation, audit, cleanup,
+  Boundary Summary evidence, and fail-closed behavior when a backend provider is
+  missing;
 - hidden env and proxy-secret handling;
-- Boundary Summary for HostFS, `host.open`, and product endpoint exposure
-  actions;
+- Boundary Summary for HostFS, `host.open`, and implemented PortBridge transport
+  events;
 - this Threat Model Lite.
 
 Design-ready or later:
 
 - HostFS write overlay;
 - interactive approval;
+- Endpoint Exposure candidate model, immutable candidate snapshots, active
+  OpenTarget owner registry, and `endpoint.expose.*` product actions;
 - `preview.open`;
 - Browser Control;
 - adb, simulator, and IDE adapters;
