@@ -66,6 +66,16 @@ cd /path/to/sanitized/project
 hideout run --backend lima -- pwd
 ```
 
+If your `default` profile already has tool presets or npm globals, Hideout will
+provision those tools before running even a simple command such as `pwd`. That
+can trigger a first-time `apt-get` and `npm install -g`. For a minimal smoke
+run, use a fresh profile with no extra tool policy:
+
+```bash
+hideout profile init smoke
+hideout run --profile smoke --backend lima -- pwd
+```
+
 Reusable Lima environments are keyed by profile, workspace, backend, and tool
 policy. A successful run prints a resume ID:
 
@@ -96,7 +106,9 @@ hideout run --backend lima -- <command> --version
 ```
 
 `node-dev` and npm global installs run during managed guest setup after the
-selected network mode has been applied.
+selected network mode has been applied. They are provisioned for the reusable
+environment before the target command starts, so the first run after changing
+tool policy may download packages even when the target command itself is small.
 
 If a CLI needs persistent login state, put it in the isolated profile home, not
 the host home:

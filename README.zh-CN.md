@@ -62,6 +62,16 @@ cd /path/to/sanitized/project
 hideout run --backend lima -- pwd
 ```
 
+如果你的 `default` profile 已经配置了 tool preset 或 npm global，Hideout
+即使在运行 `pwd` 这种简单命令前，也会先 provision 这些工具。这可能触发
+首次 `apt-get` 和 `npm install -g`。如果只是做最小 smoke，请使用一个
+没有额外工具策略的新 profile：
+
+```bash
+hideout profile init smoke
+hideout run --profile smoke --backend lima -- pwd
+```
+
 可复用 Lima 环境按 profile、workspace、backend 和工具策略建立索引。
 成功运行后会打印一个 resume ID：
 
@@ -92,7 +102,9 @@ hideout run --backend lima -- <command> --version
 ```
 
 `node-dev` 和 npm global 安装会在受管理的 guest setup 阶段运行，并且
-会在所选网络模式已经生效之后执行。
+会在所选网络模式已经生效之后执行。它们会在目标命令启动前为可复用环境
+完成 provision，所以改变工具策略后的第一次运行，即使目标命令本身很小，
+也可能下载软件包。
 
 如果某个 CLI 需要持久化登录状态，把它放到隔离的 profile home，而不是
 主机 home：
