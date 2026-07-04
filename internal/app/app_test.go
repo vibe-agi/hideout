@@ -3,6 +3,8 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -121,6 +123,161 @@ func TestInitNoInputCreatesStoreProfileAndIsIdempotent(t *testing.T) {
 	if reloaded.Metadata["identityId"] != initialIdentityID {
 		t.Fatalf("idempotent init rotated identity: before=%s after=%s", initialIdentityID, reloaded.Metadata["identityId"])
 	}
+}
+
+func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
+	root := writeTestPackageRoot(t)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "verify", root}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "package: ok root=") {
+		t.Fatalf("unexpected output: %s", out.String())
+	}
+}
+
+func TestPackageVerifyRejectsChecksumMismatch(t *testing.T) {
+	root := writeTestPackageRoot(t)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "verify", root}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expected failure stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "package checksum mismatch for README.md") {
+		t.Fatalf("missing checksum error: %s", errOut.String())
+	}
+}
+
+func TestPackageVerifyRejectsLayoutFileWithoutChecksum(t *testing.T) {
+	root := writeTestPackageRoot(t)
+	manifestPath := filepath.Join(root, "package-manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packageManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	var files []packageManifestFile
+	for _, file := range manifest.Files {
+		if file.Path != "bin/hideout-shim" {
+			files = append(files, file)
+		}
+	}
+	manifest.Files = files
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "verify", root}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expected failure stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), `layout path "bin/hideout-shim" is not covered`) {
+		t.Fatalf("missing checksum coverage error: %s", errOut.String())
+	}
+}
+
+func TestPackageVerifyRejectsSymlinkManifestFile(t *testing.T) {
+	root := writeTestPackageRoot(t)
+	readme := filepath.Join(root, "README.md")
+	target := filepath.Join(root, "README.target")
+	data, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(readme); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("README.target", readme); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "verify", root}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expected failure stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), `README.md": must not be a symlink`) {
+		t.Fatalf("missing symlink error: %s", errOut.String())
+	}
+}
+
+func writeTestPackageRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{"bin", "schemas", "docs", "packaging"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{
+		"bin/hideout":                          {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout-shim":                     {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout-shim-linux-arm64":         {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout-hostfsd-linux-arm64":      {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"install.sh":                           {kind: "installer", mode: 0o755, data: "#!/bin/sh\n"},
+		"README.md":                            {kind: "entrypoint", mode: 0o644, data: "readme\n"},
+		"README.zh-CN.md":                      {kind: "entrypoint", mode: 0o644, data: "readme zh\n"},
+		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
+		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
+	}
+	manifest := packageManifest{Schema: "hideout.package-manifest.v1"}
+	manifest.BuiltAt = "2026-01-01T00:00:00Z"
+	manifest.Git.Commit = "test"
+	manifest.Target.HostOS = runtime.GOOS
+	manifest.Target.HostArch = runtime.GOARCH
+	manifest.Target.LinuxGuestArch = runtime.GOARCH
+	manifest.Layout.Root = "hideout"
+	manifest.Layout.Binaries = []string{
+		"bin/hideout",
+		"bin/hideout-shim",
+		"bin/hideout-shim-linux-arm64",
+		"bin/hideout-hostfsd-linux-arm64",
+	}
+	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
+	manifest.Layout.Directories = []string{"schemas", "docs", "packaging"}
+	for rel, spec := range files {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(spec.data), spec.mode); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256([]byte(spec.data))
+		manifest.Files = append(manifest.Files, packageManifestFile{
+			Path:   rel,
+			Kind:   spec.kind,
+			SHA256: hex.EncodeToString(sum[:]),
+		})
+	}
+	slices.SortFunc(manifest.Files, func(a, b packageManifestFile) int {
+		return strings.Compare(a.Path, b.Path)
+	})
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package-manifest.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func TestDoctorFixDryRunDoesNotCreateProfile(t *testing.T) {

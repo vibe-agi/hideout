@@ -110,67 +110,12 @@ require_package_helper_family() {
   fi
 }
 
-manifest_relative_path() {
-  case "$1" in
-    ""|/*|../*|*/../*|*/..)
-      return 1
-      ;;
-  esac
-}
-
-sha256_file() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    echo "install-package: missing shasum or sha256sum for package verification" >&2
-    exit 127
-  fi
-}
-
-verify_package_manifest() {
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "install-package: jq is required to verify package-manifest.json before install" >&2
-    exit 127
-  fi
-  if ! jq -e '.schema == "hideout.package-manifest.v1" and (.files | type == "array")' "$ROOT/package-manifest.json" >/dev/null; then
-    echo "install-package: invalid package-manifest.json" >&2
-    exit 1
-  fi
-  jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$ROOT/package-manifest.json" | while IFS='	' read -r rel kind want; do
-    if ! manifest_relative_path "$rel"; then
-      echo "install-package: package manifest contains non-package-relative path: $rel" >&2
-      exit 1
-    fi
-    case "$kind" in
-      binary|linux-helper|helper-manifest|installer|entrypoint|schema)
-        ;;
-      *)
-        echo "install-package: package manifest contains unsupported file kind: $rel ($kind)" >&2
-        exit 1
-        ;;
-    esac
-    if [ ! -f "$ROOT/$rel" ]; then
-      echo "install-package: package manifest references a missing file: $rel" >&2
-      exit 1
-    fi
-    got="$(sha256_file "$ROOT/$rel")"
-    if [ "$got" != "$want" ]; then
-      echo "install-package: package checksum mismatch for $rel" >&2
-      echo "install-package: want $want" >&2
-      echo "install-package: got  $got" >&2
-      exit 1
-    fi
-  done
-}
-
 require_package_file "package manifest" "$ROOT/package-manifest.json"
 require_package_executable "hideout" "$ROOT/bin/hideout"
 require_package_executable "host command shim" "$ROOT/bin/hideout-shim"
 require_package_helper_family "Linux guest shim" "hideout-shim-linux*"
 require_package_helper_family "Linux HostFS daemon" "hideout-hostfsd-linux*"
-verify_package_manifest
+"$ROOT/bin/hideout" package verify "$ROOT" >/dev/null
 
 mkdir -p "$prefix/bin" "$store"
 prefix="$(cd "$prefix" && pwd -P)"

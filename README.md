@@ -38,7 +38,6 @@ Important non-claims:
 On macOS:
 
 - Go;
-- `jq` for release-like package install and manifest verification;
 - Lima (`limactl`);
 - Google Chrome or another supported Chromium-compatible browser for real
   browser host-open checks;
@@ -70,8 +69,9 @@ The source-tree installer builds:
 - the Linux guest shim;
 - the Linux HostFS daemon.
 
-The package installer verifies `package-manifest.json` checksums before copying
-the same prebuilt artifacts from the extracted package.
+The package installer uses the packaged `hideout` binary to verify
+`package-manifest.json` checksums before copying the same prebuilt artifacts
+from the extracted package.
 
 ## First Run
 
