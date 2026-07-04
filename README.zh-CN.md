@@ -30,15 +30,21 @@ Hideout 用显式能力替代主机上的 ambient authority：
 - `tun2socks` 隐藏的是网络出口路径，但它不是数据防泄漏系统；
 - `--backend native` 只是开发 harness，不是隔离后端。
 
-## 使用要求
+## 安装要求
 
-macOS 上需要：
+如果使用 release-like tarball，macOS 上需要：
 
-- Go；
 - Lima（`limactl`）；
 - Google Chrome 或其他支持的 Chromium 兼容浏览器，用于真实浏览器
   host-open 检查；
 - 可选的本地代理，用于 `tun2socks` 模式。
+
+tarball 路径不需要 Go。它已经包含主机二进制、Linux guest helpers、
+manifest schemas 和包内 installer。包内 installer 会使用 package 内的
+`hideout` 二进制先校验 `package-manifest.json` 中的 checksum，再从解压后的
+package 复制预构建产物。
+
+如果从源码树做本地开发，还需要 Go。
 
 本地开发时，从源码树安装：
 
@@ -64,9 +70,6 @@ hideout doctor --backend lima
 - 主机 command shim；
 - Linux guest shim；
 - Linux HostFS daemon。
-
-包内 installer 会使用 package 内的 `hideout` 二进制先校验
-`package-manifest.json` 中的 checksum，再从解压后的 package 复制同一组预构建产物。
 
 ## 第一次运行
 

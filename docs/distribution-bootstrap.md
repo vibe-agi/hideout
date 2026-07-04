@@ -312,6 +312,7 @@ separate bootstrap path and must not grow its own initialization semantics.
 The default install backend follows the runtime default, Lima; native remains an
 explicit weak-isolation development option. Source-tree repair may use
 `HIDEOUT_SOURCE_ROOT` when `doctor --fix` is run outside the repository.
+Source-tree installs require Go.
 
 Release-like tarball packaging uses `scripts/package-local.sh` during private
 pre-release development. The tarball contains `bin/`, package-root `install.sh`,
@@ -335,6 +336,8 @@ copies binaries without writing init state. The package-root installer must fail
 before copying binaries when the extracted package is missing
 `package-manifest.json`, the host shim, Linux guest shim, Linux HostFS daemon,
 or any manifest-declared checksum does not match the extracted file.
+Release-like tarball installs must not require Go; they use the packaged
+`hideout` binary for package verification and packaged Linux helpers for Lima.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.

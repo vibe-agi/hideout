@@ -33,15 +33,21 @@ Important non-claims:
   prevention system;
 - `--backend native` is a development harness, not isolation.
 
-## Requirements
+## Install Requirements
 
-On macOS:
+For a release-like tarball on macOS:
 
-- Go;
 - Lima (`limactl`);
 - Google Chrome or another supported Chromium-compatible browser for real
   browser host-open checks;
 - an optional local proxy for `tun2socks` mode.
+
+The tarball path does not require Go. It contains the host binaries, Linux guest
+helpers, manifest schemas, and the package installer. The package installer uses
+the packaged `hideout` binary to verify `package-manifest.json` checksums before
+copying the prebuilt artifacts from the extracted package.
+
+For local source-tree development, Go is also required.
 
 For local development, install from the source tree:
 
@@ -68,10 +74,6 @@ The source-tree installer builds:
 - the host command shim;
 - the Linux guest shim;
 - the Linux HostFS daemon.
-
-The package installer uses the packaged `hideout` binary to verify
-`package-manifest.json` checksums before copying the same prebuilt artifacts
-from the extracted package.
 
 ## First Run
 
