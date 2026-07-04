@@ -261,13 +261,15 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.stdout(), b.stderr()); err != nil {
 		return err
 	}
-	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{GuestBootstrapPath}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
-		return err
-	}
+	setupEnv := SetupEnv(env)
+	setupWorkdir := GuestSessionDir + "/tmp"
 	if session.NetworkBootstrapGuestPath != "" {
-		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{session.NetworkBootstrapGuestPath}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
+		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{session.NetworkBootstrapGuestPath}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
 			return err
 		}
+	}
+	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{GuestBootstrapPath}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
+		return err
 	}
 	if session.HostFSEnabled {
 		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{"sh", "-c", HostFSStartScript(session.HostFSGrafts)}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
@@ -387,6 +389,28 @@ func HostCommandEnv(base []string) []string {
 	return out
 }
 
+func SetupEnv(base []string) []string {
+	allowed := map[string]bool{
+		"PATH":    true,
+		"HOME":    true,
+		"USER":    true,
+		"LOGNAME": true,
+		"SHELL":   true,
+	}
+	out := make([]string, 0, len(allowed))
+	seen := map[string]bool{}
+	for _, kv := range base {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok || !allowed[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, kv)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 	identityRoot := spec.IdentityRoot
 	if identityRoot == "" {
@@ -426,7 +450,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 				Ignore:         true,
 			},
 		},
-		Provision: append([]provision{
+		Provision: []provision{
 			{
 				Mode: "system",
 				Script: strings.TrimSpace(fmt.Sprintf(`#!/bin/sh
@@ -450,7 +474,7 @@ if [ -r /hideout/profile/machine/machine-id ]; then
 fi
 `, shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.Hostname), shellQuote(spec.Profile.Identity.Hostname))) + "\n",
 			},
-		}, toolProvisionBlocks(spec.Profile.Tools)...),
+		},
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
 	}
 }
@@ -540,6 +564,9 @@ func BootstrapScript(tools ToolPlan, commandProxyShims []string) string {
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("set -eu\n")
 	b.WriteString("mkdir -p /hideout/profile/home /hideout/profile/config /hideout/profile/cache /hideout/profile/data /hideout/profile/browser /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap\n")
+	for _, script := range toolProvisionScripts(tools) {
+		writeRootProvisionScript(&b, script)
+	}
 	for _, command := range commands {
 		fmt.Fprintf(&b, "command -v %s >/dev/null 2>&1 || { echo 'hideout: required guest command missing: %s' >&2; exit 127; }\n", shellQuote(command), command)
 	}
@@ -554,6 +581,36 @@ func BootstrapScript(tools ToolPlan, commandProxyShims []string) string {
 		fmt.Fprintf(&b, "[ -x %s ] || { echo 'hideout: required command proxy shim missing: %s' >&2; exit 127; }\n", shellQuote(path), path)
 	}
 	return b.String()
+}
+
+func toolProvisionScripts(tools ToolPlan) []string {
+	var out []string
+	for _, preset := range tools.Presets {
+		if strings.TrimSpace(preset.ProvisionScript) == "" {
+			continue
+		}
+		out = append(out, strings.TrimSpace(preset.ProvisionScript)+"\n")
+	}
+	for _, pkg := range tools.NPMGlobals {
+		out = append(out, NPMGlobalProvisionScript(pkg))
+	}
+	return out
+}
+
+func writeRootProvisionScript(b *strings.Builder, script string) {
+	if strings.TrimSpace(script) == "" {
+		return
+	}
+	b.WriteString("if [ \"$(id -u)\" -eq 0 ]; then\n")
+	b.WriteString("  /bin/sh <<'HIDEOUT_TOOL_PROVISION'\n")
+	b.WriteString(strings.TrimSpace(script))
+	b.WriteString("\nHIDEOUT_TOOL_PROVISION\n")
+	b.WriteString("else\n")
+	b.WriteString("  command -v sudo >/dev/null 2>&1 || { echo 'hideout: sudo is required for tool provisioning' >&2; exit 127; }\n")
+	b.WriteString("  sudo -n /bin/sh <<'HIDEOUT_TOOL_PROVISION'\n")
+	b.WriteString(strings.TrimSpace(script))
+	b.WriteString("\nHIDEOUT_TOOL_PROVISION\n")
+	b.WriteString("fi\n")
 }
 
 func HostFSStartScript(grafts []string) string {
@@ -692,24 +749,6 @@ func ResolveToolPlan(tools profile.Tools) (ToolPlan, error) {
 		})
 	}
 	return plan, nil
-}
-
-func toolProvisionBlocks(tools profile.Tools) []provision {
-	plan, err := ResolveToolPlan(tools)
-	if err != nil {
-		return nil
-	}
-	var out []provision
-	for _, preset := range plan.Presets {
-		if strings.TrimSpace(preset.ProvisionScript) == "" {
-			continue
-		}
-		out = append(out, provision{Mode: "system", Script: strings.TrimSpace(preset.ProvisionScript) + "\n"})
-	}
-	for _, pkg := range plan.NPMGlobals {
-		out = append(out, provision{Mode: "system", Script: NPMGlobalProvisionScript(pkg)})
-	}
-	return out
 }
 
 func NodeDevProvisionScript() string {

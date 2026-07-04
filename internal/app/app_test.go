@@ -3524,10 +3524,12 @@ func TestRunLimaTun2SocksRunsNetworkBootstrapBeforeTargetWithoutProxyEnv(t *test
 		}
 	}
 	networkBootstrap := strings.Index(log, "/hideout/session/network/bootstrap.sh")
+	toolBootstrap := strings.Index(log, "/hideout/session/bootstrap/bootstrap.sh")
 	commandCheck := strings.Index(log, "hideout-command-check sh")
 	target := strings.Index(log, "sh -c true")
-	if networkBootstrap < 0 || commandCheck < 0 || target < 0 || !(networkBootstrap < commandCheck && commandCheck < target) {
-		t.Fatalf("network bootstrap should run before command check and target:\n%s", log)
+	if networkBootstrap < 0 || toolBootstrap < 0 || commandCheck < 0 || target < 0 ||
+		!(networkBootstrap < toolBootstrap && toolBootstrap < commandCheck && commandCheck < target) {
+		t.Fatalf("network bootstrap should run before tool bootstrap, command check, and target:\n%s", log)
 	}
 	if strings.Contains(log, "HTTP_PROXY=") || strings.Contains(log, "HTTPS_PROXY=") || strings.Contains(log, "socks5://127.0.0.1:1080") {
 		t.Fatalf("lima shell args leaked proxy env or proxy secret:\n%s", log)

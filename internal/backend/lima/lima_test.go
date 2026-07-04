@@ -425,29 +425,32 @@ func TestPrepareAddsNodeDevProvisionWhenPresetEnabled(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("yaml decode: %v\n%s", err, data)
 	}
-	if len(cfg.Provision) != 2 {
-		t.Fatalf("expected base and node-dev provision scripts: %+v", cfg.Provision)
+	if len(cfg.Provision) != 1 {
+		t.Fatalf("tool provisioning must not be embedded in lima.yaml: %+v", cfg.Provision)
 	}
-	nodeProvision := cfg.Provision[1].Script
-	for _, want := range []string{
-		"apt-get install -y ca-certificates curl nodejs npm",
-		"command -v node",
-		"command -v npm",
-	} {
-		if !strings.Contains(nodeProvision, want) {
-			t.Fatalf("node-dev provision missing %q:\n%s", want, nodeProvision)
-		}
+	if strings.Contains(cfg.Provision[0].Script, "apt-get") || strings.Contains(cfg.Provision[0].Script, "npm install") {
+		t.Fatalf("lima yaml provision must not perform network tool setup: %+v", cfg.Provision)
 	}
 	bootstrap, err := os.ReadFile(session.BootstrapPath)
 	if err != nil {
 		t.Fatalf("read bootstrap: %v", err)
 	}
+	bootstrapText := string(bootstrap)
+	for _, want := range []string{
+		"apt-get install -y ca-certificates curl nodejs npm",
+		"command -v node",
+		"command -v npm",
+	} {
+		if !strings.Contains(bootstrapText, want) {
+			t.Fatalf("node-dev bootstrap missing provision %q:\n%s", want, bootstrapText)
+		}
+	}
 	for _, want := range []string{
 		"required guest command missing: node",
 		"required guest command missing: npm",
 	} {
-		if !strings.Contains(string(bootstrap), want) {
-			t.Fatalf("node-dev bootstrap missing %q:\n%s", want, bootstrap)
+		if !strings.Contains(bootstrapText, want) {
+			t.Fatalf("node-dev bootstrap missing command check %q:\n%s", want, bootstrapText)
 		}
 	}
 	manifest, err := os.ReadFile(session.ToolManifestPath)
@@ -482,23 +485,26 @@ func TestPrepareAddsUserNPMGlobalProvision(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("yaml decode: %v\n%s", err, data)
 	}
-	if len(cfg.Provision) != 3 {
-		t.Fatalf("expected base, node-dev, and npm global provision scripts: %+v", cfg.Provision)
+	if len(cfg.Provision) != 1 {
+		t.Fatalf("tool provisioning must not be embedded in lima.yaml: %+v", cfg.Provision)
 	}
-	npmProvision := cfg.Provision[2].Script
-	for _, want := range []string{
-		"npm install -g '@example/agent-cli@1.2.3'",
-		"command -v 'agent-cli'",
-	} {
-		if !strings.Contains(npmProvision, want) {
-			t.Fatalf("npm global provision missing %q:\n%s", want, npmProvision)
-		}
+	if strings.Contains(cfg.Provision[0].Script, "apt-get") || strings.Contains(cfg.Provision[0].Script, "npm install") {
+		t.Fatalf("lima yaml provision must not perform network tool setup: %+v", cfg.Provision)
 	}
 	bootstrap, err := os.ReadFile(session.BootstrapPath)
 	if err != nil {
 		t.Fatalf("read bootstrap: %v", err)
 	}
-	if !strings.Contains(string(bootstrap), "required guest command missing: agent-cli") {
+	bootstrapText := string(bootstrap)
+	for _, want := range []string{
+		"npm install -g '@example/agent-cli@1.2.3'",
+		"command -v 'agent-cli'",
+	} {
+		if !strings.Contains(bootstrapText, want) {
+			t.Fatalf("npm global bootstrap missing provision %q:\n%s", want, bootstrapText)
+		}
+	}
+	if !strings.Contains(bootstrapText, "required guest command missing: agent-cli") {
 		t.Fatalf("bootstrap missing npm global command check:\n%s", bootstrap)
 	}
 	manifest, err := os.ReadFile(session.ToolManifestPath)
@@ -655,7 +661,13 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if err := b.Run(context.Background(), session, []string{"sh", "-c", "pwd"}, []string{"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin"}); err != nil {
+	runEnv := []string{
+		"HOME=/hideout/profile/home",
+		"PATH=/hideout/session/shims:/usr/bin",
+		"SERVICE_TOKEN=secret",
+		"HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1",
+	}
+	if err := b.Run(context.Background(), session, []string{"sh", "-c", "pwd"}, runEnv); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(runner.calls) != 5 {
@@ -664,33 +676,39 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	if !reflect.DeepEqual(runner.calls[0].args, []string{"start", "--tty=false", "--name", session.InstanceName, session.ConfigPath}) {
 		t.Fatalf("start args=%v", runner.calls[0].args)
 	}
-	wantBootstrap := []string{
-		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
-		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", GuestBootstrapPath,
-	}
-	if !reflect.DeepEqual(runner.calls[1].args, wantBootstrap) {
-		t.Fatalf("bootstrap args=%v want %v", runner.calls[1].args, wantBootstrap)
-	}
 	wantNetwork := []string{
-		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
+		"shell", "--tty=false", "--workdir", GuestSessionDir + "/tmp", session.InstanceName, "--", "env", "-i",
 		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", GuestSessionDir + "/network/bootstrap.sh",
 	}
-	if !reflect.DeepEqual(runner.calls[2].args, wantNetwork) {
-		t.Fatalf("network bootstrap args=%v want %v", runner.calls[2].args, wantNetwork)
+	if !reflect.DeepEqual(runner.calls[1].args, wantNetwork) {
+		t.Fatalf("network bootstrap args=%v want %v", runner.calls[1].args, wantNetwork)
+	}
+	wantBootstrap := []string{
+		"shell", "--tty=false", "--workdir", GuestSessionDir + "/tmp", session.InstanceName, "--", "env", "-i",
+		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", GuestBootstrapPath,
+	}
+	if !reflect.DeepEqual(runner.calls[2].args, wantBootstrap) {
+		t.Fatalf("bootstrap args=%v want %v", runner.calls[2].args, wantBootstrap)
 	}
 	wantCheck := []string{
 		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
-		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "sh", "-c", "command -v \"$1\" >/dev/null 2>&1", "hideout-command-check", "sh",
+		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "SERVICE_TOKEN=secret", "HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1", "sh", "-c", "command -v \"$1\" >/dev/null 2>&1", "hideout-command-check", "sh",
 	}
 	if !reflect.DeepEqual(runner.calls[3].args, wantCheck) {
 		t.Fatalf("command check args=%v want %v", runner.calls[3].args, wantCheck)
 	}
 	wantShell := []string{
 		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
-		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "sh", "-c", "pwd",
+		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "SERVICE_TOKEN=secret", "HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1", "sh", "-c", "pwd",
 	}
 	if !reflect.DeepEqual(runner.calls[4].args, wantShell) {
 		t.Fatalf("shell args=%v want %v", runner.calls[4].args, wantShell)
+	}
+	for _, index := range []int{1, 2} {
+		setupArgs := strings.Join(runner.calls[index].args, "\n")
+		if strings.Contains(setupArgs, "SERVICE_TOKEN=") || strings.Contains(setupArgs, "HIDEOUT_BROKER_ENDPOINT=") {
+			t.Fatalf("setup call %d leaked target env:\n%s", index, setupArgs)
+		}
 	}
 	for _, call := range runner.calls {
 		hostEnv := strings.Join(call.env, "\n")

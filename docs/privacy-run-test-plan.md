@@ -378,9 +378,9 @@ policy, profile-state persistence, network request, and control-plane store
 protection.
 
 The smoke runs with `--network direct`. It proves generic tool supply and CLI
-mechanics, not private first-time provisioning. Until proxy-aware provisioning
-exists, privacy-sensitive runs must use prebuilt or preprovisioned tool
-environments before enabling `tun2socks` for target command traffic.
+mechanics, not proxy-routed first-time provisioning. Changes to tool
+provisioning order, setup env filtering, `tun2socks` bootstrap, or proxy secret
+handling must also run Gate 3 or an equivalent `tun2socks` provisioning smoke.
 
 The automated smoke sets `HIDEOUT_BROWSER_PATH` to a fake browser shim that
 accepts the normal Chromium-style arguments and follows the host-visible URL

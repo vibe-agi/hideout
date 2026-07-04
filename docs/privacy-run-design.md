@@ -2155,18 +2155,18 @@ commands. Backend configuration version is also part of the environment identity
 so backend security-policy changes do not reuse older VMs with stale generated
 YAML.
 
-Current Lima tool provisioning happens while the environment is created, before
-per-run network bootstrap and guest-side `tun2socks` route replacement. Hideout
-must therefore not claim that first-time package downloads are covered by
-`tun2socks` privacy mode. Privacy-sensitive dogfood should use a prebuilt or
-preprovisioned environment, or explicitly accept `direct` provisioning network
-identity. Proxy-aware provisioning is a separate future capability.
-
-Future proxy-aware provisioning must be a managed setup phase, not an
-uncontrolled shell hook. The setup phase must:
+Lima tool provisioning is a managed setup phase, not an uncontrolled guest image
+hook. Hideout starts the VM, runs the selected network bootstrap first, verifies
+guest-side `tun2socks` when configured, and only then runs tool provisioning and
+tool command checks. First-time `node-dev` and npm global downloads therefore
+use the same run network policy as the target command. The setup phase must:
 
 - run without the project workspace, HostFS grants, command proxy authority, or
-  target credentials;
+  target credentials as ambient authority: the setup cwd is not the workspace,
+  HostFS and command proxy are not started, and target-only env is filtered
+  before setup; current Lima instances may still have the workspace mount
+  present, so user-declared `file:` package specs that point at the workspace
+  are explicit supply inputs rather than ambient authority;
 - apply the selected network policy before any package manager network access;
 - resolve proxy secrets only into Hideout-owned setup material, never into the
   target command environment;
