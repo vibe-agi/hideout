@@ -62,6 +62,7 @@ type Bridge struct {
 	listener net.Listener
 	ctx      context.Context
 	connect  Connector
+	closers  []io.Closer
 	wg       sync.WaitGroup
 	once     sync.Once
 	mu       sync.Mutex
@@ -74,7 +75,7 @@ func Start(ctx context.Context, spec Spec) (*Bridge, error) {
 	return StartWithConnector(ctx, spec, nil)
 }
 
-func StartWithConnector(ctx context.Context, spec Spec, connector Connector) (*Bridge, error) {
+func StartWithConnector(ctx context.Context, spec Spec, connector Connector, closers ...io.Closer) (*Bridge, error) {
 	if err := Validate(spec); err != nil {
 		return nil, err
 	}
@@ -85,7 +86,7 @@ func StartWithConnector(ctx context.Context, spec Spec, connector Connector) (*B
 	if connector == nil {
 		connector = directTCPConnector(spec.TargetAddress)
 	}
-	b := &Bridge{spec: spec, listener: ln, ctx: ctx, connect: connector, conns: map[net.Conn]struct{}{}}
+	b := &Bridge{spec: spec, listener: ln, ctx: ctx, connect: connector, closers: append([]io.Closer(nil), closers...), conns: map[net.Conn]struct{}{}}
 	go func() {
 		<-ctx.Done()
 		_ = b.Close()
@@ -187,6 +188,11 @@ func (b *Bridge) Close() error {
 			err = b.listener.Close()
 		}
 		b.closeTracked()
+		for _, closer := range b.closers {
+			if closeErr := closer.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}
 		b.wg.Wait()
 	})
 	return err

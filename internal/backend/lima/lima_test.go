@@ -3,6 +3,10 @@ package lima
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
@@ -11,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -18,6 +23,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -209,9 +215,43 @@ func TestPrepareDoesNotPersistHostToGuestPortForward(t *testing.T) {
 	}
 }
 
-func TestStartHostToGuestBridgeUsesDynamicLimactlShell(t *testing.T) {
-	runner := &bridgeRunner{lookPath: "/opt/homebrew/bin/limactl", calls: make(chan recordedCall, 1)}
-	bridge, err := (Backend{LimactlPath: "/opt/homebrew/bin/limactl", Runner: runner}).StartHostToGuestBridge(context.Background(), "hideout-test", "/workspace", []string{"PATH=/usr/bin:/bin"}, testPortBridgeSpec("127.0.0.1:0", "127.0.0.1:5173"))
+func TestStartHostToGuestBridgeUsesSSHDirectTCPIP(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("LIMA_HOME", "")
+	clientSigner, clientKey := testSSHSigner(t)
+	hostSigner, _ := testSSHSigner(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen ssh: %v", err)
+	}
+	defer listener.Close()
+	targets := make(chan directTCPIPTarget, 1)
+	startDirectTCPIPSSHServer(t, listener, hostSigner, clientSigner.PublicKey(), targets)
+	identityPath := filepath.Join(home, "id_lima")
+	if err := os.WriteFile(identityPath, clientKey, 0o600); err != nil {
+		t.Fatalf("write identity: %v", err)
+	}
+	_, sshPort, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split ssh addr: %v", err)
+	}
+	configDir := filepath.Join(home, ".lima", "hideout-test")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir ssh config dir: %v", err)
+	}
+	sshConfig := strings.Join([]string{
+		"Host hideout-test",
+		"  HostName 127.0.0.1",
+		"  Port " + sshPort,
+		"  User lima",
+		"  IdentityFile " + strconv.Quote(identityPath),
+		"  StrictHostKeyChecking no",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(configDir, "ssh.config"), []byte(sshConfig), 0o600); err != nil {
+		t.Fatalf("write ssh config: %v", err)
+	}
+	bridge, err := (Backend{}).StartHostToGuestBridge(context.Background(), "hideout-test", "/workspace", []string{"PATH=/usr/bin:/bin"}, testPortBridgeSpec("127.0.0.1:0", "127.0.0.1:5173"))
 	if err != nil {
 		t.Fatalf("StartHostToGuestBridge: %v", err)
 	}
@@ -234,21 +274,9 @@ func TestStartHostToGuestBridgeUsesDynamicLimactlShell(t *testing.T) {
 	if string(got) != "guest:ping" {
 		t.Fatalf("bridge response=%q", got)
 	}
-	call := <-runner.calls
-	if call.name != "/opt/homebrew/bin/limactl" {
-		t.Fatalf("limactl name=%q", call.name)
-	}
-	joined := strings.Join(call.args, "\x00")
-	for _, want := range []string{"shell", "--tty=false", "--workdir", "/workspace", "hideout-test", "bash", "-c", "/dev/tcp/${host}/${port}", "127.0.0.1", "5173"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("limactl bridge args missing %q: %#v", want, call.args)
-		}
-	}
-	if strings.Contains(joined, "-lc") {
-		t.Fatalf("limactl bridge must not use login shell: %#v", call.args)
-	}
-	if !slices.Contains(call.args, "PATH=/usr/bin:/bin") {
-		t.Fatalf("guest env missing from bridge args: %+v", call.args)
+	target := <-targets
+	if target.Host != "127.0.0.1" || target.Port != 5173 {
+		t.Fatalf("direct-tcpip target mismatch: %+v", target)
 	}
 }
 
@@ -1009,6 +1037,78 @@ func testPortBridgeSpec(listenAddress, targetAddress string) portbridge.Spec {
 	}
 }
 
+type directTCPIPTarget struct {
+	Host string
+	Port uint32
+}
+
+func testSSHSigner(t *testing.T) (ssh.Signer, []byte) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate ssh key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		t.Fatalf("new ssh signer: %v", err)
+	}
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return signer, pemKey
+}
+
+func startDirectTCPIPSSHServer(t *testing.T, listener net.Listener, hostSigner ssh.Signer, allowedClientKey ssh.PublicKey, targets chan<- directTCPIPTarget) {
+	t.Helper()
+	serverConfig := &ssh.ServerConfig{
+		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if bytes.Equal(key.Marshal(), allowedClientKey.Marshal()) {
+				return nil, nil
+			}
+			return nil, errors.New("unexpected client key")
+		},
+	}
+	serverConfig.AddHostKey(hostSigner)
+	go func() {
+		raw, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		conn, chans, reqs, err := ssh.NewServerConn(raw, serverConfig)
+		if err != nil {
+			_ = raw.Close()
+			return
+		}
+		defer conn.Close()
+		go ssh.DiscardRequests(reqs)
+		for next := range chans {
+			if next.ChannelType() != "direct-tcpip" {
+				_ = next.Reject(ssh.UnknownChannelType, "unsupported channel")
+				continue
+			}
+			var payload struct {
+				Host           string
+				Port           uint32
+				OriginatorHost string
+				OriginatorPort uint32
+			}
+			if err := ssh.Unmarshal(next.ExtraData(), &payload); err != nil {
+				_ = next.Reject(ssh.ConnectionFailed, err.Error())
+				continue
+			}
+			ch, requests, err := next.Accept()
+			if err != nil {
+				continue
+			}
+			go ssh.DiscardRequests(requests)
+			targets <- directTCPIPTarget{Host: payload.Host, Port: payload.Port}
+			go func() {
+				defer ch.Close()
+				data, _ := io.ReadAll(ch)
+				_, _ = ch.Write(append([]byte("guest:"), data...))
+			}()
+		}
+	}()
+}
+
 type fakeRunner struct {
 	lookPath string
 }
@@ -1019,25 +1119,6 @@ func (f fakeRunner) LookPath(string) (string, error) {
 
 func (fakeRunner) Run(context.Context, string, []string, []string, io.Reader, io.Writer, io.Writer) error {
 	return nil
-}
-
-type bridgeRunner struct {
-	lookPath string
-	calls    chan recordedCall
-}
-
-func (r *bridgeRunner) LookPath(string) (string, error) {
-	return r.lookPath, nil
-}
-
-func (r *bridgeRunner) Run(_ context.Context, name string, args []string, env []string, stdin io.Reader, stdout, _ io.Writer) error {
-	r.calls <- recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)}
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return err
-	}
-	_, err = stdout.Write(append([]byte("guest:"), data...))
-	return err
 }
 
 type recordingRunner struct {

@@ -271,8 +271,8 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - per-run lifetime by default, with cleanup independent of reusable
   environments;
 - reusable backend instance configuration must not persist product
-  host-to-guest forwards. A provider such as Lima must use a run-owned dynamic
-  bridge or an equivalent closeable mechanism;
+  host-to-guest forwards. A provider such as Lima must use run-owned SSH
+  direct-tcpip channels or an equivalent closeable mechanism;
 - audit records for creation, use when observable, denial, error, and cleanup;
 - Boundary Summary entries that expose counts and endpoint category, not secret
   endpoint values;

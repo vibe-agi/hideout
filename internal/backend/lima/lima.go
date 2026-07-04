@@ -286,40 +286,7 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 }
 
 func (b Backend) StartHostToGuestBridge(ctx context.Context, instanceName, guestWork string, env []string, spec portbridge.Spec) (*portbridge.Bridge, error) {
-	if strings.TrimSpace(instanceName) == "" {
-		return nil, errors.New("lima host-to-guest bridge requires instance name")
-	}
-	if strings.TrimSpace(guestWork) == "" {
-		return nil, errors.New("lima host-to-guest bridge requires guest workdir")
-	}
-	targetHost, targetPort, err := net.SplitHostPort(spec.TargetAddress)
-	if err != nil {
-		return nil, fmt.Errorf("lima host-to-guest bridge target is invalid: %w", err)
-	}
-	targetHost = strings.Trim(targetHost, "[]")
-	if targetHost == "" || targetHost == "localhost" {
-		targetHost = "127.0.0.1"
-	}
-	if parsed := net.ParseIP(targetHost); parsed == nil || !parsed.IsLoopback() {
-		return nil, errors.New("lima host-to-guest bridge target must be guest loopback")
-	}
-	if _, err := net.LookupPort("tcp", targetPort); err != nil {
-		return nil, fmt.Errorf("lima host-to-guest bridge target port is invalid: %w", err)
-	}
-	runner := b.runner()
-	hostEnv := HostCommandEnv(os.Environ())
-	limactl := b.limactl()
-	script := "host=$1\n" +
-		"port=$2\n" +
-		"exec 3<>/dev/tcp/${host}/${port}\n" +
-		"cat <&3 &\n" +
-		"cat >&3\n" +
-		"wait"
-	connector := func(connCtx context.Context, inbound net.Conn) error {
-		args := ShellArgs(instanceName, guestWork, env, []string{"bash", "-c", script, "hideout-portbridge", targetHost, targetPort})
-		return runner.Run(connCtx, limactl, args, hostEnv, inbound, inbound, io.Discard)
-	}
-	return portbridge.StartWithConnector(ctx, spec, connector)
+	return b.startSSHHostToGuestBridge(ctx, instanceName, guestWork, env, spec)
 }
 
 func (b Backend) instanceExists(ctx context.Context, runner CommandRunner, hostEnv []string, instance string) (bool, error) {

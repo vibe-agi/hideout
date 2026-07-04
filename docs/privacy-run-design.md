@@ -2958,7 +2958,8 @@ PortBridge policy:
   implemented provider fails closed before backend prepare; a backend with a
   provider still requires an owning Endpoint Exposure transaction;
 - Lima host-to-guest exposure is a host-side dynamic bridge owned by the current
-  run. It must not be persisted into reusable instance YAML port-forward
+  run. It uses SSH direct-tcpip channels to the guest loopback endpoint, not a
+  guest shell, HTTP reverse proxy, or reusable instance YAML port-forward
   configuration;
 - Capability Probe code may validate backend-specific host-to-guest or
   guest-to-host reachability, but probe success does not promote a product
@@ -2991,9 +2992,10 @@ Implementation status: Phase 1 implements the minimal
 manual candidates. The Manager resolves the candidate, verifies an active
 OpenTarget owner, derives the host-to-guest mapping in Go, validates
 `route=portbridge`, materializes the backend provider, audits the decision, and
-cleans up at run end. Lima uses a host-side dynamic bridge rather than static
-instance port-forward configuration, so cleanup is independent of reusable VM
-instances. The current user-facing consumer is `preview.open`.
+cleans up at run end. Lima uses a host-side SSH direct-tcpip dynamic bridge
+rather than static instance port-forward configuration, so cleanup is
+independent of reusable VM instances. The current user-facing consumer is
+`preview.open`.
 
 Not implemented in this path: endpoint observation, project-declared automatic
 exposure, direct JS endpoint proposal entrypoints, OAuth callback automation,
