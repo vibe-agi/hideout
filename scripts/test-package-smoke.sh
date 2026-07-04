@@ -207,6 +207,28 @@ HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --b
 grep -q 'store: ok writable' "$tmp/package-installed-doctor.out"
 grep -q 'profile: ok default' "$tmp/package-installed-doctor.out"
 
+HIDEOUT_STORE_ROOT="$tmp/package-installed-lima-store" "$installed_prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/package-installed-lima-doctor-fix-dry.out"
+grep -q 'task helper.install.linux-shim: ok' "$tmp/package-installed-lima-doctor-fix-dry.out"
+grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/package-installed-lima-doctor-fix-dry.out"
+if [ -e "$tmp/package-installed-lima-store/install-state.json" ]; then
+  echo "package-smoke: installed package lima dry-run repair created install state" >&2
+  cat "$tmp/package-installed-lima-doctor-fix-dry.out" >&2
+  exit 1
+fi
+
+skip_installed_prefix="$tmp/package-skip-installed"
+skip_installed_store="$tmp/package-skip-store"
+"$prefix/install.sh" --prefix "$skip_installed_prefix" --store "$skip_installed_store" --skip-init >"$tmp/package-skip-install.out"
+test -x "$skip_installed_prefix/bin/hideout"
+test -x "$skip_installed_prefix/bin/hideout-shim"
+test -x "$skip_installed_prefix/bin/hideout-shim-linux-$arch"
+test -x "$skip_installed_prefix/bin/hideout-hostfsd-linux-$arch"
+if [ -e "$skip_installed_store/install-state.json" ] || [ -e "$skip_installed_store/profiles/default/profile.json" ]; then
+  echo "package-smoke: package installer --skip-init wrote init state" >&2
+  cat "$tmp/package-skip-install.out" >&2
+  exit 1
+fi
+
 proxy_installed_prefix="$tmp/package-proxy-installed"
 proxy_installed_store="$tmp/package-proxy-store"
 HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@127.0.0.1:7890" \

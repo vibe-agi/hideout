@@ -326,8 +326,10 @@ temporary prefix, validates the manifest, proves each manifest-declared path
 exists with the expected file type, recalculates declared file checksums, then
 runs extracted `hideout init --no-input`, `hideout doctor`, `hideout tui`, and
 `hideout ui --no-open --print-url`. It also runs package-root `install.sh` into
-a separate temporary prefix/store and verifies the installed layout works
-without source-tree state.
+a separate temporary prefix/store, verifies the installed layout works without
+source-tree state, verifies installed Lima helper discovery from that prefix,
+and checks that `install.sh --skip-init` copies binaries without writing init
+state.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.

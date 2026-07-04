@@ -950,8 +950,10 @@ Required checks:
   packaging metadata, can run extracted `hideout init --no-input` plus
   `hideout doctor`, can render extracted `hideout tui`, start extracted
   `hideout ui --print-url` without opening a browser or blocking, can run
-  package-root `install.sh` into a separate temporary prefix/store, and can
-  discover packaged Lima Linux helpers without rebuilding from the source tree;
+  package-root `install.sh` into a separate temporary prefix/store, can discover
+  packaged Lima Linux helpers from the installed prefix without rebuilding from
+  the source tree, and verifies `install.sh --skip-init` copies binaries without
+  writing init state;
 - Gate 0 statically validates the draft Homebrew formula and its
   `hideout init --no-input` formula smoke contract when Ruby is available;
 - omitted or `auto` backend first-run repair resolves to Lima, matching
