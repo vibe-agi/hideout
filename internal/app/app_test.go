@@ -3431,6 +3431,8 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Hideout TUI",
 		"Store: " + store.Root,
 		"Profiles: 1",
+		"Init Next:",
+		"Smoke run: hideout run --profile default --backend lima -- pwd",
 		"Capabilities: host.open",
 		"Profiles\n  - default",
 		"presets=base-dev",

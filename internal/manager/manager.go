@@ -134,13 +134,14 @@ type SettingsSummary struct {
 }
 
 type InitSummary struct {
-	Version      string `json:"version"`
-	Initialized  bool   `json:"initialized"`
-	PendingTasks int    `json:"pendingTasks"`
-	Profile      string `json:"profile"`
-	StatePath    string `json:"statePath"`
-	AuditPath    string `json:"auditPath"`
-	AuditEvents  int    `json:"auditEvents"`
+	Version      string              `json:"version"`
+	Initialized  bool                `json:"initialized"`
+	PendingTasks int                 `json:"pendingTasks"`
+	Profile      string              `json:"profile"`
+	StatePath    string              `json:"statePath"`
+	AuditPath    string              `json:"auditPath"`
+	AuditEvents  int                 `json:"auditEvents"`
+	NextSteps    []inittask.NextStep `json:"nextSteps,omitempty"`
 }
 
 type BundleSummary struct {
@@ -638,7 +639,7 @@ func secretSummaries(profiles []ProfileSummary, env []string) []SecretSummary {
 
 func initSummary(store profile.Store) InitSummary {
 	summary := inittask.Summary(store, "default")
-	return InitSummary{
+	out := InitSummary{
 		Version:      summary.Version,
 		Initialized:  summary.Initialized,
 		PendingTasks: summary.PendingTasks,
@@ -647,6 +648,11 @@ func initSummary(store profile.Store) InitSummary {
 		AuditPath:    summary.AuditPath,
 		AuditEvents:  summary.AuditEvents,
 	}
+	plan, err := inittask.PlanMachine(store, inittask.Options{ProfileName: "default", Backend: "auto", Network: "direct", NoInput: true})
+	if err == nil {
+		out.NextSteps = append([]inittask.NextStep(nil), plan.NextSteps...)
+	}
+	return out
 }
 
 func bundleSummary(root string) BundleSummary {

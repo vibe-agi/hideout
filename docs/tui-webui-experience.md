@@ -99,6 +99,7 @@ Surface differences are layout differences, not data model differences.
 Implemented smoke surface shows:
 
 - selected profile;
+- init next steps;
 - capability summary;
 - backend status;
 - network mode and privacy warning;
@@ -230,6 +231,7 @@ Show:
 
 - read-only dashboard;
 - init/tool setup plan and apply;
+- init next-step rendering;
 - controlled run plan and apply;
 - audit explorer;
 - session detail;

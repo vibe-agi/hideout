@@ -3791,6 +3791,12 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	}
 	fmt.Fprintf(w, "Profiles: %d  Sessions: %d  Audit files: %d\n", len(overview.Profiles), len(overview.Sessions), overview.Audit.SessionAuditFiles)
 	fmt.Fprintf(w, "Init: initialized=%t pending=%d profile=%s\n", overview.Init.Initialized, overview.Init.PendingTasks, dash(overview.Init.Profile))
+	if len(overview.Init.NextSteps) > 0 {
+		fmt.Fprintln(w, "Init Next:")
+		for _, step := range overview.Init.NextSteps {
+			fmt.Fprintf(w, "  - %s: %s\n", dash(step.Label), dash(step.Command))
+		}
+	}
 	fmt.Fprintf(w, "Capabilities: host.open urls=%t workspaceFiles=%t commandProxies=%s max=%s\n",
 		overview.Capabilities.HostOpen.AllowURLs,
 		overview.Capabilities.HostOpen.AllowWorkspaceFiles,

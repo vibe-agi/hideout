@@ -81,6 +81,9 @@ func TestCorePlansAndAppliesInitTasks(t *testing.T) {
 	if overview.Init.AuditPath != result.AuditPath || overview.Init.AuditEvents == 0 {
 		t.Fatalf("init summary audit mismatch: %+v result=%+v", overview.Init, result)
 	}
+	if len(overview.Init.NextSteps) == 0 {
+		t.Fatalf("init summary should include next steps: %+v", overview.Init)
+	}
 }
 
 func seedStoreHelper(t *testing.T, storeRoot, command string) {
@@ -1819,6 +1822,8 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	if overview.Audit.SessionAuditFiles != 1 {
 		t.Fatalf("audit summary mismatch: %+v", overview.Audit)
 	}
+	assertNextStepManagerTest(t, overview.Init.NextSteps, "doctor-check")
+	assertNextStepManagerTest(t, overview.Init.NextSteps, "smoke-run")
 	if len(overview.Network.ProfileDefaults) != 1 || overview.Network.ProfileDefaults[0].ProxySecretRef != "default-proxy" || overview.Network.ProfileDefaults[0].ProxyEnvVisible {
 		t.Fatalf("network summary mismatch: %+v", overview.Network)
 	}
@@ -1993,6 +1998,19 @@ func assertContainsManagerTest(t *testing.T, values []string, want string) {
 		}
 	}
 	t.Fatalf("%q not found in %+v", want, values)
+}
+
+func assertNextStepManagerTest(t *testing.T, steps []inittask.NextStep, id string) {
+	t.Helper()
+	for _, step := range steps {
+		if step.ID == id {
+			if step.Command == "" || step.Label == "" {
+				t.Fatalf("next step %q missing label/command: %+v", id, step)
+			}
+			return
+		}
+	}
+	t.Fatalf("next step %q missing in %+v", id, steps)
 }
 
 func containsEnvPrefixManagerTest(env []string, prefix string) bool {
