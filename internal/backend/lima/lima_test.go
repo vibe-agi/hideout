@@ -239,10 +239,13 @@ func TestStartHostToGuestBridgeUsesDynamicLimactlShell(t *testing.T) {
 		t.Fatalf("limactl name=%q", call.name)
 	}
 	joined := strings.Join(call.args, "\x00")
-	for _, want := range []string{"shell", "--tty=false", "--workdir", "/workspace", "hideout-test", "bash", "-lc", "/dev/tcp/${host}/${port}", "127.0.0.1", "5173"} {
+	for _, want := range []string{"shell", "--tty=false", "--workdir", "/workspace", "hideout-test", "bash", "-c", "/dev/tcp/${host}/${port}", "127.0.0.1", "5173"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("limactl bridge args missing %q: %#v", want, call.args)
 		}
+	}
+	if strings.Contains(joined, "-lc") {
+		t.Fatalf("limactl bridge must not use login shell: %#v", call.args)
 	}
 	if !slices.Contains(call.args, "PATH=/usr/bin:/bin") {
 		t.Fatalf("guest env missing from bridge args: %+v", call.args)

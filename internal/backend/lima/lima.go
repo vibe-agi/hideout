@@ -309,14 +309,14 @@ func (b Backend) StartHostToGuestBridge(ctx context.Context, instanceName, guest
 	runner := b.runner()
 	hostEnv := HostCommandEnv(os.Environ())
 	limactl := b.limactl()
-	script := `host=$1
-port=$2
-exec 3<>/dev/tcp/${host}/${port}
-cat <&3 &
-cat >&3
-wait`
+	script := "host=$1\n" +
+		"port=$2\n" +
+		"exec 3<>/dev/tcp/${host}/${port}\n" +
+		"cat <&3 &\n" +
+		"cat >&3\n" +
+		"wait"
 	connector := func(connCtx context.Context, inbound net.Conn) error {
-		args := ShellArgs(instanceName, guestWork, env, []string{"bash", "-lc", script, "hideout-portbridge", targetHost, targetPort})
+		args := ShellArgs(instanceName, guestWork, env, []string{"bash", "-c", script, "hideout-portbridge", targetHost, targetPort})
 		return runner.Run(connCtx, limactl, args, hostEnv, inbound, inbound, io.Discard)
 	}
 	return portbridge.StartWithConnector(ctx, spec, connector)
