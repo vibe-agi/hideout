@@ -111,6 +111,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout run --verbose -- <command>  # print Hideout control-plane progress and summary")
 	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
 	fmt.Fprintln(a.stdout, "  hideout init [--no-input] [--backend lima|auto] [--network direct]")
+	fmt.Fprintln(a.stdout, "  hideout init --npm-package <npm-spec> --npm-command <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only")
 	fmt.Fprintln(a.stdout, "  hideout doctor")
 	fmt.Fprintln(a.stdout, "  hideout doctor --fix [--dry-run]")
@@ -144,6 +145,13 @@ type initCommandOptions struct {
 	networkMode string
 	noInput     bool
 	dryRun      bool
+	tools       toolSupplyOptions
+}
+
+type toolSupplyOptions struct {
+	presets     stringListFlag
+	npmPackage  string
+	npmCommands stringListFlag
 }
 
 func (a app) initCommand(args []string) error {
@@ -161,6 +169,8 @@ func (a app) initCommand(args []string) error {
 		Backend:     opts.backendName,
 		Network:     opts.networkMode,
 		NoInput:     opts.noInput,
+		ToolPresets: []string(opts.tools.presets),
+		NPMGlobals:  opts.tools.npmGlobals(),
 	})
 	if err != nil {
 		return err
@@ -186,6 +196,7 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
 	fs.StringVar(&opts.backendName, "backend", "auto", "backend: auto/lima for isolation; native is a dev-only weak harness")
 	fs.StringVar(&opts.networkMode, "network", "direct", "network mode")
+	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.noInput, "no-input", false, "do not ask for confirmation")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print init plan without applying")
 	if err := fs.Parse(args); err != nil {
@@ -193,6 +204,9 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	}
 	if fs.NArg() != 0 {
 		return opts, fmt.Errorf("unexpected init argument %q", fs.Arg(0))
+	}
+	if err := opts.tools.validate(); err != nil {
+		return opts, err
 	}
 	return opts, nil
 }
@@ -1217,6 +1231,9 @@ func (a app) doctor(args []string) error {
 	if err != nil {
 		return err
 	}
+	if !opts.fix && opts.tools.hasChanges() {
+		return errors.New("--tool-preset, --npm-package, and --npm-command require doctor --fix")
+	}
 	if opts.fix {
 		return a.doctorFix(opts)
 	}
@@ -1372,6 +1389,7 @@ type doctorOptions struct {
 	ephemeral      bool
 	fix            bool
 	dryRun         bool
+	tools          toolSupplyOptions
 }
 
 func parseDoctorOptions(args []string) (doctorOptions, error) {
@@ -1384,10 +1402,17 @@ func parseDoctorOptions(args []string) (doctorOptions, error) {
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
 	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
+	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "diagnose session-local identity state")
 	fs.BoolVar(&opts.fix, "fix", false, "apply safe initialization repairs")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print fix plan without applying")
 	if err := fs.Parse(args); err != nil {
+		return opts, err
+	}
+	if fs.NArg() != 0 {
+		return opts, fmt.Errorf("unexpected doctor argument %q", fs.Arg(0))
+	}
+	if err := opts.tools.validate(); err != nil {
 		return opts, err
 	}
 	return opts, nil
@@ -1408,6 +1433,8 @@ func (a app) doctorFix(opts doctorOptions) error {
 		Backend:     opts.backendName,
 		Network:     networkMode,
 		NoInput:     true,
+		ToolPresets: []string(opts.tools.presets),
+		NPMGlobals:  opts.tools.npmGlobals(),
 	})
 	if err != nil {
 		return err
@@ -1422,6 +1449,42 @@ func (a app) doctorFix(opts doctorOptions) error {
 	}
 	writeInitResult(a.stdout, "Hideout doctor fix", result)
 	return nil
+}
+
+func registerToolSupplyFlags(fs *flag.FlagSet, opts *toolSupplyOptions) {
+	fs.Var(&opts.presets, "tool-preset", "tool preset to add to the profile; may be repeated")
+	fs.StringVar(&opts.npmPackage, "npm-package", "", "npm package spec for one global CLI tool")
+	fs.Var(&opts.npmCommands, "npm-command", "command expected after npm global install; may be repeated")
+}
+
+func (opts toolSupplyOptions) validate() error {
+	if strings.TrimSpace(opts.npmPackage) == "" && len(opts.npmCommands) > 0 {
+		return errors.New("--npm-command requires --npm-package")
+	}
+	if strings.TrimSpace(opts.npmPackage) != "" && len(opts.npmCommands) == 0 {
+		return errors.New("--npm-package requires at least one --npm-command")
+	}
+	p := profile.Default("tool-check")
+	if len(opts.presets) > 0 {
+		p.Tools.Presets = []string(opts.presets)
+	}
+	p.Tools.NPMGlobals = opts.npmGlobals()
+	return p.Validate()
+}
+
+func (opts toolSupplyOptions) hasChanges() bool {
+	return len(opts.presets) > 0 || strings.TrimSpace(opts.npmPackage) != "" || len(opts.npmCommands) > 0
+}
+
+func (opts toolSupplyOptions) npmGlobals() []profile.NPMGlobalPackage {
+	packageSpec := strings.TrimSpace(opts.npmPackage)
+	if packageSpec == "" {
+		return nil
+	}
+	return []profile.NPMGlobalPackage{{
+		Package:  packageSpec,
+		Commands: append([]string(nil), opts.npmCommands...),
+	}}
 }
 
 func loadDoctorProfile(store profile.Store, name string, report func(string, string, string)) (profile.Profile, bool) {

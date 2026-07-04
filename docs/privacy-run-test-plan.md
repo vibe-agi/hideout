@@ -456,8 +456,9 @@ the same temporary or operator-selected store remains deterministic.
 
 Required checks:
 
-- the profile is configured through `hideout profile tools`, not by editing
-  profile JSON directly;
+- the profile is configured through Hideout-managed tool setup (`hideout init`
+  or `doctor --fix` tool flags, or lower-level `hideout profile tools`), not by
+  editing profile JSON directly;
 - `node-dev` and the user-declared npm tool are provisioned into a Lima guest;
 - the first run creates a tool-matched reusable environment and the second run
   reuses the same environment;
@@ -945,6 +946,9 @@ Required checks:
 - `hideout doctor` reports core checks after init;
 - `hideout doctor --fix --dry-run` shows safe fixes without executing unsafe
   tasks;
+- `hideout init --npm-package <spec> --npm-command <name>` and
+  `hideout doctor --fix --dry-run --npm-package <spec> --npm-command <name>`
+  plan generic CLI tool supply without product-specific logic;
 - `hideout doctor --fix --dry-run --backend lima` includes
   `helper.install.linux-shim` and `helper.install.linux-hostfsd` when the
   official store helpers are missing and a source-tree repair is available;

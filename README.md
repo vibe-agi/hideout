@@ -95,9 +95,13 @@ provisioning on the profile, then run the command.
 For an npm-based CLI:
 
 ```bash
-hideout profile init agent
-hideout profile tools agent preset add node-dev
-hideout profile tools agent npm add --package <npm-package> --command <command>
+hideout init \
+  --profile agent \
+  --backend lima \
+  --network direct \
+  --npm-package <npm-package> \
+  --npm-command <command>
+
 hideout run --profile agent --backend lima -- <command> --version
 ```
 
@@ -105,6 +109,22 @@ hideout run --profile agent --backend lima -- <command> --version
 selected network mode has been applied. They are provisioned for the reusable
 environment before the target command starts, so the first run after changing
 tool policy may download packages even when the target command itself is small.
+
+The same setup can be planned or repaired later:
+
+```bash
+hideout doctor --fix --dry-run \
+  --profile agent \
+  --npm-package <npm-package> \
+  --npm-command <command>
+```
+
+For lower-level profile edits:
+
+```bash
+hideout profile tools agent preset add node-dev
+hideout profile tools agent npm add --package <npm-package> --command <command>
+```
 
 If a CLI needs persistent login state, put it in the isolated profile home, not
 the host home:

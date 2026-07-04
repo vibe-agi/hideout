@@ -168,6 +168,99 @@ func TestDoctorFixAppliesAndWritesInitAudit(t *testing.T) {
 	}
 }
 
+func TestInitConfiguresGenericNPMCLITool(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"init",
+		"--no-input",
+		"--backend", "native",
+		"--network", "direct",
+		"--npm-package", "@example/agent-cli@1.2.3",
+		"--npm-command", "agent-cli",
+		"--npm-command", "agent-helper",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("init with npm tool exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	for _, want := range []string{
+		"task tools.preset.add: applied",
+		"task tools.npm-global.add: applied",
+		"add tool preset node-dev to profile",
+		"add npm global tool @example/agent-cli@1.2.3 to profile",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("init output missing %q:\n%s", want, out.String())
+		}
+	}
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	loaded, err := store.Load("default")
+	if err != nil {
+		t.Fatalf("load default profile: %v", err)
+	}
+	if !slices.Contains(loaded.Tools.Presets, "node-dev") {
+		t.Fatalf("node-dev preset was not persisted: %+v", loaded.Tools.Presets)
+	}
+	if len(loaded.Tools.NPMGlobals) != 1 ||
+		loaded.Tools.NPMGlobals[0].Package != "@example/agent-cli@1.2.3" ||
+		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "agent-cli") ||
+		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "agent-helper") {
+		t.Fatalf("npm global tool was not persisted: %+v", loaded.Tools.NPMGlobals)
+	}
+	auditPath := filepath.Join(home, ".hideout", "logs", "init-audit.jsonl")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read init audit: %v", err)
+	}
+	if !strings.Contains(string(data), `"taskKind":"tools.preset.add"`) ||
+		!strings.Contains(string(data), `"taskKind":"tools.npm-global.add"`) {
+		t.Fatalf("init audit missing tool tasks: %s", data)
+	}
+}
+
+func TestDoctorFixDryRunPlansGenericNPMCLIToolWithoutState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"doctor",
+		"--fix",
+		"--dry-run",
+		"--backend", "native",
+		"--npm-package", "@example/agent-cli@1.2.3",
+		"--npm-command", "agent-cli",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor --fix --dry-run with npm tool exit=%d stderr=%s", code, errOut.String())
+	}
+	for _, want := range []string{
+		"Hideout doctor fix plan",
+		"task tools.preset.add: pending",
+		"task tools.npm-global.add: pending",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor fix dry-run output missing %q:\n%s", want, out.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("doctor --fix --dry-run should not create profile, stat err=%v", err)
+	}
+}
+
+func TestDoctorRejectsToolSupplyFlagsWithoutFix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--npm-package", "@example/agent-cli@1.2.3", "--npm-command", "agent-cli"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("doctor without --fix unexpectedly succeeded stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "require doctor --fix") {
+		t.Fatalf("doctor error should explain --fix requirement, got %s", errOut.String())
+	}
+}
+
 func TestDoctorFixDryRunPlansLimaHelperRepairs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

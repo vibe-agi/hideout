@@ -349,6 +349,10 @@ Minimum acceptance:
 - repeated init is idempotent and does not rotate identity or grant new
   authority;
 - `doctor --fix --dry-run` shows safe fixes without applying unsafe actions;
+- `hideout init --npm-package <spec> --npm-command <name>` and matching
+  `doctor --fix --dry-run` compile generic CLI tool supply into explicit
+  `tools.preset.add` and `tools.npm-global.add` tasks, not product-specific
+  install scripts;
 - helper discovery succeeds from official store path or explicit development
   override and fails closed when the binary is missing or mismatched;
 - store-built helpers have sibling `hideout.helper-manifest/v1` manifests, and

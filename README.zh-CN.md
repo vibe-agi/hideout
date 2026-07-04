@@ -91,9 +91,13 @@ Hideout 不会 hardcode 某个具体产品的 CLI。你需要在 profile 上配�
 对于 npm CLI：
 
 ```bash
-hideout profile init agent
-hideout profile tools agent preset add node-dev
-hideout profile tools agent npm add --package <npm-package> --command <command>
+hideout init \
+  --profile agent \
+  --backend lima \
+  --network direct \
+  --npm-package <npm-package> \
+  --npm-command <command>
+
 hideout run --profile agent --backend lima -- <command> --version
 ```
 
@@ -101,6 +105,22 @@ hideout run --profile agent --backend lima -- <command> --version
 会在所选网络模式已经生效之后执行。它们会在目标命令启动前为可复用环境
 完成 provision，所以改变工具策略后的第一次运行，即使目标命令本身很小，
 也可能下载软件包。
+
+同一套 setup 可以先规划或后续修复：
+
+```bash
+hideout doctor --fix --dry-run \
+  --profile agent \
+  --npm-package <npm-package> \
+  --npm-command <command>
+```
+
+如果需要更底层地编辑 profile：
+
+```bash
+hideout profile tools agent preset add node-dev
+hideout profile tools agent npm add --package <npm-package> --command <command>
+```
 
 如果某个 CLI 需要持久化登录状态，把它放到隔离的 profile home，而不是
 主机 home：

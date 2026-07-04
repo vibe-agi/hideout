@@ -32,6 +32,8 @@ type Options struct {
 	Backend     string
 	Network     string
 	NoInput     bool
+	ToolPresets []string
+	NPMGlobals  []profile.NPMGlobalPackage
 }
 
 type ApplyOptions struct {
@@ -145,6 +147,24 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		return Plan{}, err
 	}
 	plan.Tasks = append(plan.Tasks, networkTask)
+	toolPresets := append([]string(nil), normalized.ToolPresets...)
+	if len(normalized.NPMGlobals) > 0 {
+		toolPresets = appendUniqueString(toolPresets, "node-dev")
+	}
+	for _, preset := range toolPresets {
+		task, err := toolPresetTask(store, normalized.ProfileName, preset, profileExists)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.Tasks = append(plan.Tasks, task)
+	}
+	for _, pkg := range normalized.NPMGlobals {
+		task, err := npmGlobalTask(store, normalized.ProfileName, pkg, profileExists)
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.Tasks = append(plan.Tasks, task)
+	}
 	plan.Tasks = append(plan.Tasks, Task{
 		ID:                 "init_backend_probe",
 		Kind:               "backend.probe",
@@ -275,6 +295,11 @@ func normalizeOptions(opts Options) (Options, error) {
 	}
 	if opts.Network != "direct" && opts.Network != "tun2socks" {
 		return opts, fmt.Errorf("unsupported network mode %q", opts.Network)
+	}
+	opts.ToolPresets = normalizeStringList(opts.ToolPresets)
+	opts.NPMGlobals = normalizeNPMGlobals(opts.NPMGlobals)
+	if err := validateToolOptions(opts.ToolPresets, opts.NPMGlobals); err != nil {
+		return opts, err
 	}
 	return opts, nil
 }
@@ -415,6 +440,63 @@ func networkTask(store profile.Store, name, mode string, profileExists bool) (Ta
 	return task, nil
 }
 
+func toolPresetTask(store profile.Store, name, preset string, profileExists bool) (Task, error) {
+	task := Task{
+		ID:                 "init_tool_preset_" + safeTaskID(preset),
+		Kind:               "tools.preset.add",
+		Source:             "builtin",
+		Status:             "pending",
+		TargetScope:        "profile",
+		CapabilityBoundary: "tool-supply",
+		Risk:               "safe",
+		Inputs:             []string{preset},
+		Outputs:            []string{store.ProfilePath(name)},
+		Message:            "add tool preset " + preset + " to profile",
+	}
+	if !profileExists {
+		return task, nil
+	}
+	p, err := store.Load(name)
+	if err != nil {
+		return Task{}, err
+	}
+	if containsString(p.Tools.Presets, preset) {
+		task.Status = "ok"
+		task.Message = "tool preset " + preset + " is already configured"
+	}
+	return task, nil
+}
+
+func npmGlobalTask(store profile.Store, name string, pkg profile.NPMGlobalPackage, profileExists bool) (Task, error) {
+	task := Task{
+		ID:                 "init_tool_npm_" + safeTaskID(pkg.Package),
+		Kind:               "tools.npm-global.add",
+		Source:             "builtin",
+		Status:             "pending",
+		TargetScope:        "profile",
+		CapabilityBoundary: "tool-supply",
+		Risk:               "safe",
+		Inputs:             append([]string{pkg.Package}, pkg.Commands...),
+		Outputs:            []string{store.ProfilePath(name)},
+		Message:            "add npm global tool " + pkg.Package + " to profile",
+	}
+	if !profileExists {
+		return task, nil
+	}
+	p, err := store.Load(name)
+	if err != nil {
+		return Task{}, err
+	}
+	for _, existing := range p.Tools.NPMGlobals {
+		if strings.TrimSpace(existing.Package) == pkg.Package && equalStringSlices(existing.Commands, pkg.Commands) {
+			task.Status = "ok"
+			task.Message = "npm global tool " + pkg.Package + " is already configured"
+			break
+		}
+	}
+	return task, nil
+}
+
 func helperTask(storeRoot, id, kind, command, output string) Task {
 	status := "ok"
 	message := command + " linux helper already discoverable"
@@ -528,6 +610,30 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 			return err
 		}
 		return profile.MaterializeIdentityState(store.ProfileDir(plan.Profile), p)
+	case "tools.preset.add":
+		if len(task.Inputs) != 1 {
+			return fmt.Errorf("tools.preset.add task requires one preset input")
+		}
+		p, err := store.LoadOrInit(plan.Profile)
+		if err != nil {
+			return err
+		}
+		p.Tools.Presets = appendUniqueString(p.Tools.Presets, task.Inputs[0])
+		return store.Save(p)
+	case "tools.npm-global.add":
+		if len(task.Inputs) < 2 {
+			return fmt.Errorf("tools.npm-global.add task requires package and command inputs")
+		}
+		p, err := store.LoadOrInit(plan.Profile)
+		if err != nil {
+			return err
+		}
+		pkg := profile.NPMGlobalPackage{
+			Package:  task.Inputs[0],
+			Commands: append([]string(nil), task.Inputs[1:]...),
+		}
+		p.Tools.NPMGlobals = upsertNPMGlobal(p.Tools.NPMGlobals, pkg)
+		return store.Save(p)
 	case "helper.install.linux-shim":
 		return buildLinuxHelper(store.Root, "hideout-shim")
 	case "helper.install.linux-hostfsd":
@@ -535,6 +641,112 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 	default:
 		return fmt.Errorf("unsupported init task %q", task.Kind)
 	}
+}
+
+func normalizeStringList(values []string) []string {
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		out = appendUniqueString(out, value)
+	}
+	return out
+}
+
+func normalizeNPMGlobals(values []profile.NPMGlobalPackage) []profile.NPMGlobalPackage {
+	out := make([]profile.NPMGlobalPackage, 0, len(values))
+	for _, value := range values {
+		pkg := profile.NPMGlobalPackage{
+			Package:  strings.TrimSpace(value.Package),
+			Commands: normalizeStringList(value.Commands),
+		}
+		if pkg.Package == "" && len(pkg.Commands) == 0 {
+			continue
+		}
+		out = append(out, pkg)
+	}
+	return out
+}
+
+func validateToolOptions(presets []string, npmGlobals []profile.NPMGlobalPackage) error {
+	if len(presets) == 0 && len(npmGlobals) == 0 {
+		return nil
+	}
+	p := profile.Default("tool-check")
+	if len(presets) > 0 {
+		p.Tools.Presets = presets
+	}
+	p.Tools.NPMGlobals = npmGlobals
+	return p.Validate()
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func containsString(values []string, value string) bool {
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func upsertNPMGlobal(values []profile.NPMGlobalPackage, pkg profile.NPMGlobalPackage) []profile.NPMGlobalPackage {
+	out := make([]profile.NPMGlobalPackage, 0, len(values)+1)
+	replaced := false
+	for _, existing := range values {
+		if strings.TrimSpace(existing.Package) == pkg.Package {
+			out = append(out, pkg)
+			replaced = true
+			continue
+		}
+		out = append(out, existing)
+	}
+	if !replaced {
+		out = append(out, pkg)
+	}
+	return out
+}
+
+func safeTaskID(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "value"
+	}
+	return out
 }
 
 func buildLinuxHelper(storeRoot, command string) error {

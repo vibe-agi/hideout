@@ -2199,12 +2199,20 @@ the profile.
 Persistent profile tool management:
 
 ```sh
+hideout init --profile agent --npm-package @scope/tool --npm-command tool
+hideout doctor --fix --dry-run --profile agent --npm-package @scope/tool --npm-command tool
 hideout profile tools default list
 hideout profile tools default preset add node-dev
 hideout profile tools default preset remove node-dev
 hideout profile tools default npm add --package @scope/tool --command tool
 hideout profile tools default npm remove @scope/tool
 ```
+
+`init --npm-package` and `doctor --fix --npm-package` are user-facing setup
+shortcuts for the same profile state managed by `profile tools`: they add
+`node-dev` and a user-declared `tools.npmGlobals` entry through InitTask
+plan/apply. They do not encode any product-specific CLI. `profile tools` remains
+the lower-level editor for durable tool policy.
 
 `profile tools` writes the same `profile.tools.presets` and
 `profile.tools.npmGlobals` objects that backend preparation consumes. Core owns
