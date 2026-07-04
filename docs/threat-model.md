@@ -125,6 +125,14 @@ symlinks, re-check the resolved path against grants and deny rules, and audit
 the operation. These mechanisms must not be collapsed into a single generic file
 provider unless the implementation preserves both escape models explicitly.
 
+The HostFS reserved-store guard does not protect paths that enter through the
+workspace mount. Phase 1 therefore treats workspace safety as a separate mount
+invariant: before backend prepare, Hideout canonicalizes the workspace and
+rejects host home, the effective Hideout store root, credential roots, browser
+profile roots, and parent directories that would mount those roots into the
+guest. A normal project directory under the home directory remains allowed when
+it does not contain those protected roots.
+
 ## Claims
 
 Hideout Phase 1 makes these claims when using an isolation-capable backend and

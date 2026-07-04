@@ -17,14 +17,15 @@ const (
 )
 
 type RunPlanOptions struct {
-	ProfileName    string
-	Backend        string
-	NetworkMode    string
-	ProxySecretRef string
-	Workspace      string
-	GuestWorkspace string
-	Ephemeral      bool
-	Command        []string
+	ProfileName          string
+	Backend              string
+	NetworkMode          string
+	ProxySecretRef       string
+	Workspace            string
+	GuestWorkspace       string
+	AllowUnsafeWorkspace bool
+	Ephemeral            bool
+	Command              []string
 }
 
 type RunPlan struct {
@@ -77,6 +78,11 @@ func (c Core) PlanRun(opts RunPlanOptions) (RunPlan, error) {
 	hostWorkspace, guestWorkspace, err := ResolveWorkspaceMapping(opts.Workspace, opts.GuestWorkspace, runtimeProfile)
 	if err != nil {
 		return RunPlan{}, err
+	}
+	if !opts.AllowUnsafeWorkspace {
+		if err := ValidateWorkspaceMountSafety(hostWorkspace, c.Store.Root); err != nil {
+			return RunPlan{}, err
+		}
 	}
 	backendName := ResolveBackendName(opts.Backend)
 	if backendName != "native" && backendName != "lima" {
@@ -139,6 +145,127 @@ func ResolveWorkspaceMapping(hostWorkspace, guestWorkspace string, p profile.Pro
 		return hostWorkspace, AliasGuestWorkspace, nil
 	}
 	return hostWorkspace, hostWorkspace, nil
+}
+
+type workspaceRiskRoot struct {
+	path     string
+	reason   string
+	homeRoot bool
+}
+
+func ValidateWorkspaceMountSafety(workspace, storeRoot string) error {
+	workspacePath, err := canonicalExistingWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	for _, root := range workspaceSensitiveRoots(storeRoot) {
+		rootPath := canonicalPathBestEffort(root.path)
+		if rootPath == "" {
+			continue
+		}
+		workspaceInsideRoot := pathInRoot(workspacePath, rootPath)
+		workspaceContainsRoot := pathInRoot(rootPath, workspacePath)
+		blocked := workspaceContainsRoot
+		if !root.homeRoot && workspaceInsideRoot {
+			blocked = true
+		}
+		if !blocked {
+			continue
+		}
+		return fmt.Errorf("workspace %q would mount sensitive host path %q (%s); use a dedicated project directory or rerun with --allow-unsafe-workspace", workspace, root.path, root.reason)
+	}
+	return nil
+}
+
+func workspaceSensitiveRoots(storeRoot string) []workspaceRiskRoot {
+	var roots []workspaceRiskRoot
+	if strings.TrimSpace(storeRoot) != "" {
+		roots = append(roots, workspaceRiskRoot{
+			path:   storeRoot,
+			reason: "Hideout control-plane store",
+		})
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		roots = append(roots, workspaceRiskRoot{
+			path:     home,
+			reason:   "host home contains credentials and Hideout control-plane state",
+			homeRoot: true,
+		})
+		for _, rel := range []string{
+			".ssh",
+			".gnupg",
+			".aws",
+			".azure",
+			".kube",
+			".docker",
+			".android",
+			".config/gcloud",
+			".config/gh",
+			".config/google-chrome",
+			".config/BraveSoftware",
+			".config/microsoft-edge",
+			".mozilla",
+			"Library/Keychains",
+			"Library/Application Support/Google/Chrome",
+			"Library/Application Support/BraveSoftware",
+			"Library/Application Support/Firefox",
+			"Library/Application Support/Microsoft Edge",
+		} {
+			roots = append(roots, workspaceRiskRoot{
+				path:   filepath.Join(home, filepath.FromSlash(rel)),
+				reason: "credential or browser profile root",
+			})
+		}
+	}
+	roots = append(roots, workspaceRiskRoot{
+		path:   "/Library/Keychains",
+		reason: "system credential root",
+	})
+	return roots
+}
+
+func canonicalExistingWorkspace(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("workspace path is empty")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(abs))
+	if err != nil {
+		return "", fmt.Errorf("workspace %q cannot resolve symlinks: %w", path, err)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func canonicalPathBestEffort(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	clean := filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return clean
+}
+
+func pathInRoot(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func normalizeGuestWorkspace(guestWorkspace string) (string, error) {

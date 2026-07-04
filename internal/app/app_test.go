@@ -3056,6 +3056,30 @@ func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnsafeWorkspaceUnlessExplicitlyAllowed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--workspace", home, "--", "echo", "hi"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expected unsafe workspace to fail; stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "--allow-unsafe-workspace") {
+		t.Fatalf("unsafe workspace error missing override hint: %s", errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--allow-unsafe-workspace", "--workspace", home, "--", "echo", "hi"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("override run exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "hi") {
+		t.Fatalf("override run output mismatch: %q", out.String())
+	}
+}
+
 func TestRunNativeAcceptanceWorkspaceGitAndChildEnv(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not available: %v", err)

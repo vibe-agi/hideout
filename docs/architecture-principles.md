@@ -55,6 +55,11 @@ Examples:
 The workspace is the intentional collaboration surface. It remains read/write
 and may expose project-local secrets.
 
+The workspace must still be a project boundary, not a disguised host home,
+credential root, browser profile, or Hideout control-plane store mount. Run
+planning must reject those dangerous workspace roots before backend prepare,
+with an explicit high-risk override for intentional use.
+
 Everything outside the workspace is hidden by default and must enter through a
 typed authority:
 

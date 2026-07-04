@@ -968,6 +968,13 @@ Required checks:
 
 - no path outside the workspace is mounted unless the user explicitly declares a
   mount;
+- workspace safety guard rejects the host home, the effective Hideout store
+  root, credential roots, browser profile roots, symlinks to those roots, and
+  parent directories that would mount them into the guest;
+- workspace safety guard allows ordinary project directories under the host home
+  when they do not contain the protected roots;
+- the explicit unsafe-workspace override is required before such a high-risk
+  workspace can be mounted;
 - `rw` mounts permit read/write from the guest and changes are visible on the
   host;
 - `ro` mounts permit reads and reject guest writes;

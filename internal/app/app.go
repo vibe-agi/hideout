@@ -108,6 +108,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --no-fs read:/path --no-profile-fs -- <command>")
+	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
 	fmt.Fprintln(a.stdout, "  hideout init [--no-input] [--backend lima|auto] [--network direct]")
 	fmt.Fprintln(a.stdout, "  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only")
 	fmt.Fprintln(a.stdout, "  hideout doctor")
@@ -232,6 +233,7 @@ type runOptions struct {
 	guestWorkspace        string
 	auditPath             string
 	allowWeakIsolation    bool
+	allowUnsafeWorkspace  bool
 	explainOnly           bool
 	ephemeral             bool
 	newEnvironment        bool
@@ -259,14 +261,15 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 	}
 	core := manager.New(store)
 	runPlan, err := core.PlanRun(manager.RunPlanOptions{
-		ProfileName:    opts.profileName,
-		Backend:        opts.backendName,
-		NetworkMode:    opts.networkMode,
-		ProxySecretRef: opts.proxySecret,
-		Workspace:      opts.workspace,
-		GuestWorkspace: opts.guestWorkspace,
-		Ephemeral:      opts.ephemeral,
-		Command:        opts.command,
+		ProfileName:          opts.profileName,
+		Backend:              opts.backendName,
+		NetworkMode:          opts.networkMode,
+		ProxySecretRef:       opts.proxySecret,
+		Workspace:            opts.workspace,
+		GuestWorkspace:       opts.guestWorkspace,
+		AllowUnsafeWorkspace: opts.allowUnsafeWorkspace,
+		Ephemeral:            opts.ephemeral,
+		Command:              opts.command,
 	})
 	if err != nil {
 		return err
@@ -526,6 +529,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
 	fs.StringVar(&opts.auditPath, "audit", "", "audit path or off")
 	fs.BoolVar(&opts.allowWeakIsolation, "allow-weak-isolation", false, "allow native weak isolation")
+	fs.BoolVar(&opts.allowUnsafeWorkspace, "allow-unsafe-workspace", false, "explicitly allow mounting a sensitive workspace root")
 	fs.BoolVar(&opts.explainOnly, "explain", opts.explainOnly, "print the run boundary without executing the command")
 	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "use session-local identity state for this run")
 	fs.BoolVar(&opts.newEnvironment, "new", false, "create a new reusable environment")
@@ -1247,6 +1251,11 @@ func (a app) doctor(args []string) error {
 	workspace, guestWorkspace, err := resolveWorkspaceMapping(opts.workspace, opts.guestWorkspace, runtimeProfile)
 	if err != nil {
 		report("workspace", "error", err.Error())
+	}
+	if err == nil {
+		if safetyErr := manager.ValidateWorkspaceMountSafety(workspace, store.Root); safetyErr != nil {
+			report("workspace", "error", safetyErr.Error())
+		}
 	}
 	checkWorkspace(workspace, guestWorkspace, runtimeProfile, report)
 

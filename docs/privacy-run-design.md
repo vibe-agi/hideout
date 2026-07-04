@@ -1467,6 +1467,31 @@ host cwd
 Workspace is mounted read/write because preserving local development workflow is
 a core product goal.
 
+Workspace safety guard:
+
+The workspace mount is broad authority. It bypasses HostFS grant filtering by
+design, so Hideout must reject dangerous workspace roots before any backend is
+prepared. This guard is the mount-side complement to the HostFS reserved-store
+guard.
+
+Rules:
+
+- resolve the workspace with symlink canonicalization before classification;
+- use the effective Hideout store root, including `HIDEOUT_STORE_ROOT`, not a
+  hard-coded default path;
+- reject a workspace that is the host home, the Hideout store, a credential
+  root, a browser profile root, or a parent directory that would mount those
+  roots into the guest;
+- allow ordinary project directories under the host home, such as
+  `$HOME/code/project`, when they do not contain the protected roots;
+- provide an explicit high-risk override for rare intentional cases;
+- apply the same guard to future explicit passthrough mounts before backend
+  prepare.
+
+This guard does not hide secrets already inside an allowed project workspace.
+It only prevents accidentally mounting broad host identity, credential, browser,
+or Hideout control-plane state as the workspace itself.
+
 Preferred path mapping:
 
 ```text

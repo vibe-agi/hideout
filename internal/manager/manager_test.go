@@ -152,6 +152,83 @@ func TestCorePlanRunOwnsProfileBackendAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestCorePlanRunWorkspaceSafetyGuard(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	project := filepath.Join(home, "Code", "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	core := New(store)
+	if _, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   project,
+		Command:     []string{"echo", "hi"},
+	}); err != nil {
+		t.Fatalf("project under home should be allowed: %v", err)
+	}
+
+	for name, workspace := range map[string]string{
+		"home":  home,
+		"store": store.Root,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := core.PlanRun(RunPlanOptions{
+				ProfileName: "default",
+				Backend:     "native",
+				Workspace:   workspace,
+				Command:     []string{"echo", "hi"},
+			})
+			if err == nil {
+				t.Fatalf("expected unsafe workspace %q to fail", workspace)
+			}
+			if !strings.Contains(err.Error(), "--allow-unsafe-workspace") {
+				t.Fatalf("unsafe workspace error missing override hint: %v", err)
+			}
+		})
+	}
+
+	if _, err := core.PlanRun(RunPlanOptions{
+		ProfileName:          "default",
+		Backend:              "native",
+		Workspace:            store.Root,
+		AllowUnsafeWorkspace: true,
+		Command:              []string{"echo", "hi"},
+	}); err != nil {
+		t.Fatalf("explicit unsafe workspace override should be allowed: %v", err)
+	}
+}
+
+func TestCorePlanRunWorkspaceSafetyGuardResolvesSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on Windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	linkParent := t.TempDir()
+	workspaceLink := filepath.Join(linkParent, "home-link")
+	if err := os.Symlink(home, workspaceLink); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+
+	_, err := New(store).PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspaceLink,
+		Command:     []string{"echo", "hi"},
+	})
+	if err == nil {
+		t.Fatalf("expected symlink to home to fail")
+	}
+	if !strings.Contains(err.Error(), "sensitive host path") {
+		t.Fatalf("unexpected unsafe workspace error: %v", err)
+	}
+}
+
 func TestCorePlanRunRejectsMissingCommandBeforeProfileCreation(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	_, err := New(store).PlanRun(RunPlanOptions{
