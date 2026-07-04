@@ -6,9 +6,24 @@ Status source for the current product surface. Detailed contracts remain in the
 design documents; this file prevents implementation status from drifting across
 many subsystem specs.
 
-Current release state: private alpha / supervised dogfood. Public GA requires a
-fresh release-candidate evidence bundle, including Lima Gate 2, strict proxy Gate
-3, host escape Gate 4, generic CLI dogfood smoke, and cleanup lifecycle checks.
+Current release state: private alpha / supervised dogfood with one local
+release-candidate evidence bundle produced on macOS at commit
+`1dea7af8162a`. Public GA still requires repeatable evidence for release
+artifacts, packaging/distribution closure, and release-specific signoff.
+
+Latest local release-candidate evidence:
+
+- manifest:
+  `.hideout-release-evidence/release-dogfood-20260704T182751Z-1dea7af8162a/manifest.json`
+- status: passed
+- command: `scripts/test-phase1.sh --release-candidate`
+- commit: `1dea7af8162a`, dirty: false
+- host: Darwin arm64, macOS 26.4.1
+- gates: Gate 0 static contract, Gate 1 native smoke, Gate 2 Lima E2E, Gate 3
+  hidden proxy with operator-supplied proxy, Gate 4 host escape with a real
+  browser, capability probe smoke, and generic CLI dogfood smoke
+- proxy evidence: operator proxy present; scheme recorded; full proxy URL
+  redacted from the manifest and evidence logs
 
 ## Implemented Product Paths
 
