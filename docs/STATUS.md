@@ -44,7 +44,7 @@ Latest local release-candidate evidence:
 | WebUI smoke surface | Embedded local WebUI shows overview/audit/resource summaries, init next steps, network risk, denied-audit counts through Manager API filtering, generic tool setup with next-step rendering, and controlled run plan/apply through Manager API. It remains a lightweight smoke/operations surface, not the final product UI. |
 | Endpoint Exposure | Product `endpoint.expose.host-to-guest` is implemented for declared and run-scoped manual guest-loopback TCP candidates, with active owner validation, backend provider, audit, cleanup, and Boundary Summary. |
 | Preview open | Minimal `preview.open` is implemented as the first consumer of host-to-guest exposure. Callback adapters, endpoint observation, and project-declared auto exposure are later/design-ready. |
-| Boundary Summary | Default `hideout run` is quiet; `--verbose`, `explain`, audit, Manager API, TUI, or Web UI surfaces show control-plane evidence. |
+| Boundary Summary | Default `hideout run` is quiet; `--verbose`, `explain`, `hideout audit show`, Manager API, TUI, or Web UI surfaces show redacted control-plane evidence. |
 | Script runtime | Required Phase 1 supports `decideCommand(ctx)` and `redactAudit(ctx)` with constrained goja execution and deterministic time/randomness. Bounded context query APIs are design-ready. |
 
 ## Not Yet Productized

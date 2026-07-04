@@ -3460,6 +3460,57 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	}
 }
 
+func TestAuditShowFiltersAndRedactsEvents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	auditPath := filepath.Join(home, ".hideout", "sessions", "ses_audit", "audit.jsonl")
+	mustWriteAppTest(t, auditPath, strings.Join([]string{
+		`{"time":"2026-07-01T00:00:00Z","session":"ses_audit","profile":"default","backend":"lima","action":"host.open","decision":"allow","details":{"target":"https://user:pass@example.com/path?token=abc","capabilityToken":"cap_secret"}}`,
+		`{"time":"2026-07-01T00:00:01Z","session":"ses_audit","profile":"default","backend":"lima","action":"host.fs.read","decision":"deny","details":{"path":"/Users/alice/.ssh/id_rsa","policyEffect":"none"}}`,
+		`{"time":"2026-07-01T00:00:02Z","session":"ses_other","profile":"default","backend":"lima","action":"host.open","decision":"deny","details":{"target":"https://example.invalid"}}`,
+	}, "\n")+"\n")
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"audit", "show", "--session", "ses_audit", "--action", "host.open"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	for _, want := range []string{
+		"TIME\tSESSION\tPROFILE\tBACKEND\tACTION\tDECISION\tDETAILS",
+		"ses_audit",
+		"host.open",
+		"allow",
+		`https://example.com/path?token=REDACTED`,
+		`"capabilityToken":"REDACTED"`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("audit output missing %q:\n%s", want, out.String())
+		}
+	}
+	for _, forbidden := range []string{"user:pass", "cap_secret", "host.fs.read", "ses_other"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Fatalf("audit output leaked or failed to filter %q:\n%s", forbidden, out.String())
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"audit", "show", "--session", "ses_audit", "--decision", "deny", "--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	var events []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &events); err != nil {
+		t.Fatalf("audit json should decode: %v\n%s", err, out.String())
+	}
+	if len(events) != 1 || events[0]["action"] != "host.fs.read" || events[0]["decision"] != "deny" {
+		t.Fatalf("unexpected json events: %#v", events)
+	}
+	if strings.Contains(out.String(), "user:pass") || strings.Contains(out.String(), "cap_secret") {
+		t.Fatalf("audit json leaked sensitive fields:\n%s", out.String())
+	}
+}
+
 func TestTUIRejectsInvalidInterval(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

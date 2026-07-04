@@ -251,6 +251,15 @@ Hideout boundary:
   hostfs: allowed=0 denied=1 unsupported=0
 ```
 
+Inspect redacted audit events through the Manager-backed CLI instead of reading
+raw JSONL by hand:
+
+```bash
+hideout audit show --limit 20
+hideout audit show --decision deny
+hideout audit show --session <session-id> --json
+```
+
 Useful cleanup commands:
 
 ```bash

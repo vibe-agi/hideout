@@ -84,6 +84,8 @@ func (a app) run(args []string) error {
 		return a.cleanEnvironments(args[1:])
 	case "cleanup":
 		return a.cleanup(args[1:])
+	case "audit":
+		return a.auditCommand(args[1:])
 	case "ui":
 		return a.ui(args[1:])
 	case "tui":
@@ -132,6 +134,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
+	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--watch] [--interval 2s]")
 	fmt.Fprintln(a.stdout, "  hideout package verify <package-root>")
@@ -3377,6 +3380,106 @@ func (a app) cleanup(args []string) error {
 		fmt.Fprintf(a.stdout, "%s: %s\n", mode, path)
 	}
 	return nil
+}
+
+type auditShowOptions struct {
+	session  string
+	profile  string
+	action   string
+	decision string
+	limit    int
+	json     bool
+}
+
+func parseAuditShowOptions(args []string) (auditShowOptions, error) {
+	fs := flag.NewFlagSet("audit show", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	opts := auditShowOptions{limit: 50}
+	fs.StringVar(&opts.session, "session", "", "session id")
+	fs.StringVar(&opts.profile, "profile", "", "profile name")
+	fs.StringVar(&opts.action, "action", "", "audit action")
+	fs.StringVar(&opts.decision, "decision", "", "audit decision")
+	fs.IntVar(&opts.limit, "limit", opts.limit, "maximum events")
+	fs.BoolVar(&opts.json, "json", false, "print redacted JSON events")
+	if err := fs.Parse(args); err != nil {
+		return auditShowOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return auditShowOptions{}, errors.New("usage: hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
+	}
+	if opts.limit <= 0 {
+		return auditShowOptions{}, errors.New("--limit must be greater than zero")
+	}
+	return opts, nil
+}
+
+func (a app) auditCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
+	}
+	switch args[0] {
+	case "show":
+		return a.auditShow(args[1:])
+	default:
+		return fmt.Errorf("unknown audit command %q", args[0])
+	}
+}
+
+func (a app) auditShow(args []string) error {
+	opts, err := parseAuditShowOptions(args)
+	if err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	events, err := manager.New(store).AuditEvents(manager.AuditEventFilter{
+		Session:  opts.session,
+		Profile:  opts.profile,
+		Action:   opts.action,
+		Decision: opts.decision,
+		Limit:    opts.limit,
+	})
+	if err != nil {
+		return err
+	}
+	if opts.json {
+		enc := json.NewEncoder(a.stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(events)
+	}
+	writeAuditShowEvents(a.stdout, events)
+	return nil
+}
+
+func writeAuditShowEvents(w io.Writer, events []audit.Event) {
+	if len(events) == 0 {
+		fmt.Fprintln(w, "audit: none")
+		return
+	}
+	fmt.Fprintln(w, "TIME\tSESSION\tPROFILE\tBACKEND\tACTION\tDECISION\tDETAILS")
+	for _, event := range events {
+		ts := "-"
+		if !event.Time.IsZero() {
+			ts = event.Time.UTC().Format(time.RFC3339Nano)
+		}
+		details := "{}"
+		if len(event.Details) > 0 {
+			if data, err := json.Marshal(event.Details); err == nil {
+				details = string(data)
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			ts,
+			event.Session,
+			event.Profile,
+			event.Backend,
+			event.Action,
+			event.Decision,
+			details,
+		)
+	}
 }
 
 func (a app) listEnvironments(args []string) error {

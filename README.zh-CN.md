@@ -242,6 +242,15 @@ Hideout boundary:
   hostfs: allowed=0 denied=1 unsupported=0
 ```
 
+查看审计时优先使用 Manager 支持的 redacted CLI 视图，不需要手动读取
+raw JSONL：
+
+```bash
+hideout audit show --limit 20
+hideout audit show --decision deny
+hideout audit show --session <session-id> --json
+```
+
 常用清理命令：
 
 ```bash
