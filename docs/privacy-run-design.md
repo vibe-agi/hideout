@@ -2961,6 +2961,10 @@ PortBridge policy:
   run. It uses SSH direct-tcpip channels to the guest loopback endpoint, not a
   guest shell, HTTP reverse proxy, or reusable instance YAML port-forward
   configuration;
+- Lima SSH host-key handling follows the Threat Model: Phase 1 preview may use
+  Lima's loopback-local unpinned SSH posture, but credential-bearing callback
+  automation requires guest host-key pinning or an equivalent authenticated
+  channel before promotion;
 - Capability Probe code may validate backend-specific host-to-guest or
   guest-to-host reachability, but probe success does not promote a product
   action by itself;

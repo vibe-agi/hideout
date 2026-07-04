@@ -11,11 +11,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/portbridge"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+const limaSSHConnectTimeout = 15 * time.Second
 
 type limaSSHConfig struct {
 	HostName                         string
@@ -88,16 +91,26 @@ func (b Backend) newSSHClient(ctx context.Context, instanceName string) (*ssh.Cl
 		return nil, err
 	}
 	address := net.JoinHostPort(cfg.HostName, cfg.Port)
-	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	raw, err := (&net.Dialer{Timeout: limaSSHConnectTimeout}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("dial lima ssh: %w", err)
 	}
+	_ = raw.SetDeadline(sshConnectDeadline(ctx))
 	conn, chans, reqs, err := ssh.NewClientConn(raw, address, clientConfig)
 	if err != nil {
 		_ = raw.Close()
 		return nil, fmt.Errorf("start lima ssh client: %w", err)
 	}
+	_ = raw.SetDeadline(time.Time{})
 	return ssh.NewClient(conn, chans, reqs), nil
+}
+
+func sshConnectDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(limaSSHConnectTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		return ctxDeadline
+	}
+	return deadline
 }
 
 func readLimaSSHConfig(instanceName string) (limaSSHConfig, error) {
@@ -242,21 +255,50 @@ func (cfg limaSSHConfig) clientConfig() (*ssh.ClientConfig, error) {
 		User:            cfg.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: hostKeyCallback,
+		Timeout:         limaSSHConnectTimeout,
 	}, nil
 }
 
 func (cfg limaSSHConfig) hostKeyCallback() (ssh.HostKeyCallback, error) {
-	if cfg.UserKnownHostsFile != "" && cfg.StrictHostKeyChecking != "no" {
-		callback, err := knownhosts.New(cfg.UserKnownHostsFile)
+	knownHostsFile := strings.TrimSpace(cfg.UserKnownHostsFile)
+	if knownHostsFile != "" && !isDevNullPath(knownHostsFile) && cfg.StrictHostKeyChecking != "no" {
+		callback, err := knownhosts.New(knownHostsFile)
 		if err != nil {
 			return nil, fmt.Errorf("load lima ssh known hosts: %w", err)
 		}
 		return callback, nil
 	}
-	if cfg.NoHostAuthenticationForLocalhost == "yes" || cfg.StrictHostKeyChecking == "no" {
-		return ssh.InsecureIgnoreHostKey(), nil
+	if isDevNullPath(knownHostsFile) || cfg.NoHostAuthenticationForLocalhost == "yes" || cfg.StrictHostKeyChecking == "no" {
+		return loopbackUnpinnedHostKeyCallback(), nil
 	}
 	return nil, errors.New("lima ssh config does not define a usable host key policy")
+}
+
+func isDevNullPath(path string) bool {
+	return filepath.Clean(strings.TrimSpace(path)) == filepath.Clean(os.DevNull)
+}
+
+func loopbackUnpinnedHostKeyCallback() ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, _ ssh.PublicKey) error {
+		host := hostname
+		if splitHost, _, err := net.SplitHostPort(hostname); err == nil {
+			host = splitHost
+		}
+		host = strings.Trim(host, "[]")
+		hostLoopback := false
+		if host == "" || host == "localhost" {
+			hostLoopback = true
+		} else if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			hostLoopback = true
+		}
+		if !hostLoopback {
+			return fmt.Errorf("lima unpinned ssh host key policy only permits loopback endpoints: %s", hostname)
+		}
+		if tcp, ok := remote.(*net.TCPAddr); ok && tcp.IP != nil && !tcp.IP.IsLoopback() {
+			return fmt.Errorf("lima unpinned ssh host key policy only permits loopback remotes: %s", remote.String())
+		}
+		return nil
+	}
 }
 
 type closeWriter interface {

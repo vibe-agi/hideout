@@ -273,6 +273,14 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - reusable backend instance configuration must not persist product
   host-to-guest forwards. A provider such as Lima must use run-owned SSH
   direct-tcpip channels or an equivalent closeable mechanism;
+- Lima's generated SSH configuration commonly disables guest sshd host-key
+  checking for the host-loopback SSH port. Phase 1 preview accepts this only as
+  an explicit loopback-local transport posture equivalent to Lima's own local
+  trust boundary. It does not claim protection from a hostile host-side process
+  that can hijack the loopback SSH port. Before this bridge carries OAuth
+  callback codes, tokens, or other credential-bearing callback traffic, the
+  provider must add guest host-key pinning or an equivalent authenticated
+  channel;
 - audit records for creation, use when observable, denial, error, and cleanup;
 - Boundary Summary entries that expose counts and endpoint category, not secret
   endpoint values;
@@ -347,7 +355,9 @@ Design-ready or later:
 - project-declared endpoint candidates and workspace trust review;
 - direct JS endpoint exposure proposal entrypoints and richer candidate
   snapshots for adapter scripts;
-- OAuth/local callback automation;
+- OAuth/local callback automation, gated on authenticated Lima SSH channel
+  pinning or equivalent protection before callback credentials traverse the
+  bridge;
 - Browser Control;
 - adb, simulator, and IDE adapters;
 - additional endpoint exposure directions and provider promotion beyond

@@ -280,6 +280,24 @@ func TestStartHostToGuestBridgeUsesSSHDirectTCPIP(t *testing.T) {
 	}
 }
 
+func TestLimaHostKeyCallbackDefaultConfigIsLoopbackOnly(t *testing.T) {
+	hostSigner, _ := testSSHSigner(t)
+	callback, err := (limaSSHConfig{
+		UserKnownHostsFile:               os.DevNull,
+		StrictHostKeyChecking:            "no",
+		NoHostAuthenticationForLocalhost: "yes",
+	}).hostKeyCallback()
+	if err != nil {
+		t.Fatalf("hostKeyCallback: %v", err)
+	}
+	if err := callback("127.0.0.1:60022", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 60022}, hostSigner.PublicKey()); err != nil {
+		t.Fatalf("loopback host key callback rejected default Lima endpoint: %v", err)
+	}
+	if err := callback("192.0.2.10:22", &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 22}, hostSigner.PublicKey()); err == nil {
+		t.Fatalf("loopback host key callback accepted non-loopback endpoint")
+	}
+}
+
 func TestPrepareMountsEnvironmentRuntimeRoot(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
