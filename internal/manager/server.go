@@ -16,13 +16,14 @@ import (
 const DefaultUIListenAddr = "127.0.0.1:0"
 
 type LocalServerOptions struct {
-	Core       Core
-	Addr       string
-	Token      string
-	TTL        time.Duration
-	Now        func() time.Time
-	RunBackend RunBackendFactory
-	RunOpener  RunOpenerFactory
+	Core        Core
+	Addr        string
+	Token       string
+	TTL         time.Duration
+	Now         func() time.Time
+	RunBackend  RunBackendFactory
+	RunOpener   RunOpenerFactory
+	EnvOperator EnvironmentOperator
 }
 
 type LocalServer struct {
@@ -76,6 +77,7 @@ func StartLocalServer(ctx context.Context, opts LocalServerOptions) (*LocalServe
 		Now:            opts.Now,
 		RunBackend:     opts.RunBackend,
 		RunOpener:      opts.RunOpener,
+		EnvOperator:    opts.EnvOperator,
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", api.Handler())
@@ -328,6 +330,7 @@ let deniedEvents = [];
 let auditExplorerEvents = null;
 let setupResultHTML = "";
 let runResultHTML = "";
+let environmentResultHTML = "";
 
 function esc(value) {
   return String(value == null ? "" : value)
@@ -421,6 +424,7 @@ function renderPanel() {
   panelBodyEl.innerHTML = renderer();
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
+  if (activePanel === "environments") bindEnvironmentPanel();
   if (activePanel === "audit") bindAuditPanel();
 }
 function domainOwner(name) {
@@ -501,11 +505,19 @@ const renderers = {
   },
   environments: function() {
     const environments = overview.environments || [];
-    if (!environments.length) return empty("No reusable environments");
-    return '<div class="items">' + environments.map(function(e) {
+    const envHTML = environments.length ? '<div class="items">' + environments.map(function(e) {
       const tone = e.status === "running" ? "warn" : e.status === "stopped" ? "info" : "ok";
       return item(e.id, e.status || "environment", [["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
-    }).join("") + "</div>";
+    }).join("") + "</div>" : empty("No reusable environments");
+    return '<form id="environmentForm" class="item">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label for="envAction">Action</label><select id="envAction"><option value="stop">stop</option><option value="clean">clean</option></select></div>' +
+      '<div class="field"><label for="envIds">Environment IDs</label><input id="envIds" placeholder="empty = all, or env_..., abc123"></div>' +
+      '<div class="field"><label for="envIdle">Idle filter</label><input id="envIdle" placeholder="24h, 30m"></div>' +
+      '<label class="check-row"><input id="envStoppedOnly" type="checkbox"> stopped only</label>' +
+      '</div>' +
+      '<div class="action-row"><button class="action secondary" type="button" data-environment-mode="plan">Plan</button><button class="action" type="button" data-environment-mode="apply">Apply</button><span class="meta" id="environmentStatus">ready</span></div>' +
+      '</form><div class="result" id="environmentResult">' + environmentResultHTML + '</div>' + envHTML;
   },
   sessions: function() {
     const sessions = overview.sessions || [];
@@ -710,6 +722,62 @@ function bindRunPanel() {
         runResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
         document.getElementById("runResult").innerHTML = runResultHTML;
         setRunBusy(false, "error");
+      }
+    });
+  });
+}
+function environmentPayloadFromForm() {
+  const action = document.getElementById("envAction").value;
+  const payload = {
+    ids: splitCSV(document.getElementById("envIds").value),
+    stoppedOnly: action === "clean" && document.getElementById("envStoppedOnly").checked
+  };
+  const idle = document.getElementById("envIdle").value.trim();
+  if (idle) payload.idle = idle;
+  return payload;
+}
+function renderEnvironmentTargets(title, targets, tone) {
+  if (!Array.isArray(targets) || !targets.length) return empty(title + ": none");
+  return '<h3>' + esc(title) + '</h3><div class="items">' + targets.map(function(target) {
+    return item(target.id || "environment", target.reason || target.status || "", [["profile", target.profile], ["backend", target.backend], ["instance", target.instanceName], ["workspace", target.workspace], ["reason", target.reason], ["lastEndedAt", target.lastEndedAt]], target.reason ? "warn" : tone);
+  }).join("") + '</div>';
+}
+function renderEnvironmentResponse(resource, response) {
+  const errors = response.errors || [];
+  const data = response.data || {};
+  const plan = data.plan || data;
+  const applied = data.applied || [];
+  const targets = plan.targets || [];
+  const skipped = plan.skipped || data.skipped || [];
+  const header = item(resource, plan.action || "environment", [["requestedIds", plan.requestedIds || []], ["total", plan.total], ["targets", targets.length], ["applied", applied.length], ["skipped", skipped.length]], errors.length ? "error" : "ok");
+  const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
+  return header + errorHTML + renderEnvironmentTargets("Applied", applied, "ok") + renderEnvironmentTargets("Targets", targets, "info") + renderEnvironmentTargets("Skipped", skipped, "warn");
+}
+function setEnvironmentBusy(busy, text) {
+  const status = document.getElementById("environmentStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-environment-mode]").forEach(function(button) { button.disabled = busy; });
+}
+function bindEnvironmentPanel() {
+  const form = document.getElementById("environmentForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  document.querySelectorAll("[data-environment-mode]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const mode = button.getAttribute("data-environment-mode");
+      const action = document.getElementById("envAction").value;
+      const resource = "environment/" + action + "/" + mode;
+      setEnvironmentBusy(true, mode);
+      try {
+        const response = await apiPost(resource, environmentPayloadFromForm());
+        environmentResultHTML = renderEnvironmentResponse(resource, response);
+        document.getElementById("environmentResult").innerHTML = environmentResultHTML;
+        setEnvironmentBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+        if (mode === "apply") await load();
+      } catch (error) {
+        environmentResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        document.getElementById("environmentResult").innerHTML = environmentResultHTML;
+        setEnvironmentBusy(false, "error");
       }
     });
   });

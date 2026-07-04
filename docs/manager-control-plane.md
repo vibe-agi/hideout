@@ -217,6 +217,11 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
 - Manager API exposes the minimal init/tool setup surface:
   `POST /api/v1/init/plan` and `POST /api/v1/init/apply`.
+- Manager API exposes controlled reusable environment lifecycle actions:
+  `POST /api/v1/environment/stop/plan`,
+  `POST /api/v1/environment/stop/apply`,
+  `POST /api/v1/environment/clean/plan`, and
+  `POST /api/v1/environment/clean/apply`.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
   `hideout ui` server wires this factory to the same backend adapters used by
   CLI `run`; tests may install a fake backend. API handlers must not construct
@@ -294,6 +299,24 @@ GET /api/v1/run/status
   booleans such as `hasBrokerEndpoint` and `hasProxySecretFile`, but it must
   not return broker tokens, broker socket contents, proxy URLs, proxy secret
   values, or file-read handles.
+
+POST /api/v1/environment/stop/plan
+POST /api/v1/environment/clean/plan
+  Input: optional environment IDs, idle filter, and stopped-only filter.
+  Output: EnvironmentActionPlan with explicit targets and skipped entries.
+  Authority: planning only; no backend stop, no instance deletion, no store
+  mutation.
+
+POST /api/v1/environment/stop/apply
+POST /api/v1/environment/clean/apply
+  Input: same as the matching plan endpoint.
+  Output: EnvironmentActionResult with the applied plan, applied targets, and
+  skipped entries.
+  Authority: applies the same reusable environment store and Lima lifecycle
+  operations as CLI stop/clean. Apply revalidates each target under the
+  environment lock. It may stop a Lima instance, delete a Lima instance for
+  clean, and update or remove environment records. It must not expose arbitrary
+  VM commands, broker tokens, proxy secret values, or host file handles.
 ```
 
 The init API is intentionally not a generic profile-write endpoint. It exposes

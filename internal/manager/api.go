@@ -28,6 +28,7 @@ type API struct {
 	Now            func() time.Time
 	RunBackend     RunBackendFactory
 	RunOpener      RunOpenerFactory
+	EnvOperator    EnvironmentOperator
 }
 
 type APIResponse struct {
@@ -67,6 +68,12 @@ type InitAPIRequest struct {
 	ToolPresets    []string                   `json:"toolPresets,omitempty"`
 	NPMGlobals     []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
 	DryRun         bool                       `json:"dryRun,omitempty"`
+}
+
+type EnvironmentActionAPIRequest struct {
+	IDs         []string `json:"ids,omitempty"`
+	Idle        string   `json:"idle,omitempty"`
+	StoppedOnly bool     `json:"stoppedOnly,omitempty"`
 }
 
 func NewAPI(core Core, token string, ttl time.Duration) API {
@@ -151,6 +158,14 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveRunPlan(w, r)
 	case "run/apply":
 		api.serveRunApply(w, r)
+	case "environment/stop/plan":
+		api.serveEnvironmentStopPlan(w, r)
+	case "environment/stop/apply":
+		api.serveEnvironmentStopApply(w, r)
+	case "environment/clean/plan":
+		api.serveEnvironmentCleanPlan(w, r)
+	case "environment/clean/apply":
+		api.serveEnvironmentCleanApply(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -274,6 +289,112 @@ func (api API) runOpenerForSession(req RunAPIRequest, plan RunPlan) func(RunSess
 	}
 }
 
+func (api API) serveEnvironmentStopPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeEnvironmentActionAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts, err := environmentActionOptionsFromAPIRequest(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanEnvironmentStop(opts)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "environment/stop/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveEnvironmentStopApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeEnvironmentActionAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts, err := environmentActionOptionsFromAPIRequest(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanEnvironmentStop(opts)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyEnvironmentStop(r.Context(), plan, EnvironmentApplyOptions{Operator: api.EnvOperator})
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "environment/stop/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveEnvironmentCleanPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeEnvironmentActionAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts, err := environmentActionOptionsFromAPIRequest(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanEnvironmentClean(opts)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "environment/clean/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveEnvironmentCleanApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeEnvironmentActionAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts, err := environmentActionOptionsFromAPIRequest(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanEnvironmentClean(opts)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyEnvironmentClean(r.Context(), plan, EnvironmentApplyOptions{Operator: api.EnvOperator})
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "environment/clean/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
 func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
 	sessions := nonNilSlice(overview.Sessions)
 	if rawSession := r.URL.Query().Get("session"); rawSession != "" {
@@ -331,6 +452,19 @@ func decodeInitAPIRequest(w http.ResponseWriter, r *http.Request) (InitAPIReques
 	return req, nil
 }
 
+func decodeEnvironmentActionAPIRequest(w http.ResponseWriter, r *http.Request) (EnvironmentActionAPIRequest, error) {
+	var req EnvironmentActionAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid environment action request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid environment action request")
+	}
+	return req, nil
+}
+
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
 		ProfileName:    req.ProfileName,
@@ -354,6 +488,22 @@ func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {
 		Ephemeral:      req.Ephemeral,
 		Command:        append([]string(nil), req.Command...),
 	}
+}
+
+func environmentActionOptionsFromAPIRequest(req EnvironmentActionAPIRequest) (EnvironmentActionOptions, error) {
+	opts := EnvironmentActionOptions{
+		IDs:         append([]string(nil), req.IDs...),
+		StoppedOnly: req.StoppedOnly,
+	}
+	if req.Idle != "" {
+		idle, err := time.ParseDuration(req.Idle)
+		if err != nil || idle < 0 {
+			return opts, errors.New("idle must be a non-negative duration")
+		}
+		opts.Idle = idle
+		opts.IdleSet = true
+	}
+	return opts, nil
 }
 
 func (api API) serveAuditEvents(w http.ResponseWriter, r *http.Request, overviewErr error) {

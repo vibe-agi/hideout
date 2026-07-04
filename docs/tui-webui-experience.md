@@ -147,6 +147,14 @@ Shows:
 - audit path;
 - environment reuse.
 
+### Environments
+
+Implemented WebUI smoke surface shows reusable environment records and offers
+controlled stop/clean plan/apply actions through Manager API. TUI currently
+renders the same records in the dashboard; richer terminal lifecycle controls
+should call the same Manager environment endpoints rather than reimplementing
+store or backend cleanup logic.
+
 ### Network
 
 Shows:

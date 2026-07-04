@@ -33,6 +33,23 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
+type fakeEnvironmentOperator struct {
+	stopped []string
+	cleaned []string
+}
+
+func (f *fakeEnvironmentOperator) StopInstance(_ context.Context, instance string) error {
+	f.stopped = append(f.stopped, instance)
+	return nil
+}
+
+func (f *fakeEnvironmentOperator) Cleanup(_ context.Context, session *backend.Session) error {
+	if session != nil {
+		f.cleaned = append(f.cleaned, session.InstanceName)
+	}
+	return nil
+}
+
 func TestCorePlansAndAppliesInitTasks(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	seedStoreHelper(t, store.Root, "hideout-shim")
@@ -1884,6 +1901,129 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	}
 	if !strings.Contains(text, `"proxyEnvVisible":false`) {
 		t.Fatalf("overview should expose proxy env visibility as an explicit leak check: %s", text)
+	}
+}
+
+func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	envStore := environment.Store{Root: store.Root}
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	running, err := envStore.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/work/running",
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-running",
+	})
+	if err != nil {
+		t.Fatalf("create running environment: %v", err)
+	}
+	running.Status = "running"
+	running.LastEndedAt = now.Add(-2 * time.Hour)
+	if err := envStore.Save(running); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := envStore.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/work/stopped",
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-stopped",
+	})
+	if err != nil {
+		t.Fatalf("create stopped environment: %v", err)
+	}
+	stopped.Status = "stopped"
+	stopped.LastEndedAt = now.Add(-3 * time.Hour)
+	if err := envStore.Save(stopped); err != nil {
+		t.Fatal(err)
+	}
+	nativeRec, err := envStore.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "native",
+		Workspace:      "/work/native",
+		GuestWorkspace: "/work/native",
+	})
+	if err != nil {
+		t.Fatalf("create native environment: %v", err)
+	}
+	nativeRec.Status = "running"
+	nativeRec.LastEndedAt = now.Add(-4 * time.Hour)
+	if err := envStore.Save(nativeRec); err != nil {
+		t.Fatal(err)
+	}
+
+	core := Core{Store: store}
+	stopPlan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{
+		IDs:     []string{running.ID, stopped.ID, nativeRec.ID},
+		Idle:    time.Hour,
+		IdleSet: true,
+		Now:     now,
+	})
+	if err != nil {
+		t.Fatalf("PlanEnvironmentStop: %v", err)
+	}
+	if stopPlan.Action != EnvironmentActionStop || stopPlan.Total != 3 || len(stopPlan.Targets) != 1 || len(stopPlan.Skipped) != 2 {
+		t.Fatalf("unexpected stop plan: %+v", stopPlan)
+	}
+	if stopPlan.Targets[0].ID != running.ID {
+		t.Fatalf("stop target mismatch: %+v", stopPlan.Targets)
+	}
+	reasons := map[string]bool{}
+	for _, skipped := range stopPlan.Skipped {
+		reasons[skipped.Reason] = true
+	}
+	if !reasons["already-stopped"] || !reasons["no-lima-instance"] {
+		t.Fatalf("stop skip reasons mismatch: %+v", stopPlan.Skipped)
+	}
+	operator := &fakeEnvironmentOperator{}
+	stopResult, err := core.ApplyEnvironmentStop(context.Background(), stopPlan, EnvironmentApplyOptions{Operator: operator})
+	if err != nil {
+		t.Fatalf("ApplyEnvironmentStop: %v", err)
+	}
+	if len(stopResult.Applied) != 1 || stopResult.Applied[0].Status != "stopped" {
+		t.Fatalf("unexpected stop result: %+v", stopResult)
+	}
+	if !reflect.DeepEqual(operator.stopped, []string{"hideout-running"}) {
+		t.Fatalf("stop operator calls mismatch: %+v", operator.stopped)
+	}
+	loadedRunning, err := envStore.Load(running.ID)
+	if err != nil {
+		t.Fatalf("load stopped environment: %v", err)
+	}
+	if loadedRunning.Status != "stopped" {
+		t.Fatalf("environment status not persisted: %+v", loadedRunning)
+	}
+
+	cleanPlan, err := core.PlanEnvironmentClean(EnvironmentActionOptions{
+		IDs:         []string{running.ID, stopped.ID, nativeRec.ID},
+		StoppedOnly: true,
+		Now:         now,
+	})
+	if err != nil {
+		t.Fatalf("PlanEnvironmentClean: %v", err)
+	}
+	if cleanPlan.Action != EnvironmentActionClean || cleanPlan.Total != 2 || len(cleanPlan.Targets) != 2 || len(cleanPlan.Skipped) != 0 {
+		t.Fatalf("unexpected clean plan: %+v", cleanPlan)
+	}
+	operator = &fakeEnvironmentOperator{}
+	cleanResult, err := core.ApplyEnvironmentClean(context.Background(), cleanPlan, EnvironmentApplyOptions{Operator: operator})
+	if err != nil {
+		t.Fatalf("ApplyEnvironmentClean: %v", err)
+	}
+	if len(cleanResult.Applied) != 2 {
+		t.Fatalf("unexpected clean result: %+v", cleanResult)
+	}
+	if !reflect.DeepEqual(operator.cleaned, []string{"hideout-running", "hideout-stopped"}) {
+		t.Fatalf("clean operator calls mismatch: %+v", operator.cleaned)
+	}
+	for _, id := range []string{running.ID, stopped.ID} {
+		if _, err := envStore.Load(id); err == nil {
+			t.Fatalf("environment %s should have been removed", id)
+		}
+	}
+	if _, err := envStore.Load(nativeRec.ID); err != nil {
+		t.Fatalf("native environment should remain: %v", err)
 	}
 }
 

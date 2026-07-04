@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -455,6 +456,98 @@ func TestAPIRunApplyRequiresConfiguredBackendFactory(t *testing.T) {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
+}
+
+func TestAPIEnvironmentLifecyclePlanAndApply(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	envStore := environment.Store{Root: store.Root}
+	rec, err := envStore.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/work/project",
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-env-test",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	rec.Status = "running"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	operator := &fakeEnvironmentOperator{}
+	api := API{
+		Core: Core{
+			Store: store,
+			Backends: []BackendCheck{
+				{Name: "native", Isolation: "weak"},
+			},
+		},
+		Token:       "ui_token",
+		ExpiresAt:   time.Now().Add(time.Minute),
+		EnvOperator: operator,
+	}
+	schema := compileManagerAPISchema(t)
+	planReq := newAPIJSONRequest(http.MethodPost, "/api/v1/environment/stop/plan", EnvironmentActionAPIRequest{
+		IDs: []string{rec.ID},
+	})
+	planReq.Header.Set("X-Hideout-UI-Token", "ui_token")
+	planResp := httptest.NewRecorder()
+	api.ServeHTTP(planResp, planReq)
+	if planResp.Code != http.StatusOK {
+		t.Fatalf("stop plan status=%d body=%s", planResp.Code, planResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, planResp.Body.Bytes())
+	if !strings.Contains(planResp.Body.String(), `"resource":"environment/stop/plan"`) ||
+		!strings.Contains(planResp.Body.String(), `"targets"`) {
+		t.Fatalf("stop plan response missing expected fields: %s", planResp.Body.String())
+	}
+
+	applyReq := newAPIJSONRequest(http.MethodPost, "/api/v1/environment/stop/apply", EnvironmentActionAPIRequest{
+		IDs: []string{rec.ID},
+	})
+	applyReq.Header.Set("X-Hideout-UI-Token", "ui_token")
+	applyResp := httptest.NewRecorder()
+	api.ServeHTTP(applyResp, applyReq)
+	if applyResp.Code != http.StatusOK {
+		t.Fatalf("stop apply status=%d body=%s", applyResp.Code, applyResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, applyResp.Body.Bytes())
+	if !strings.Contains(applyResp.Body.String(), `"resource":"environment/stop/apply"`) ||
+		!strings.Contains(applyResp.Body.String(), `"applied"`) {
+		t.Fatalf("stop apply response missing expected fields: %s", applyResp.Body.String())
+	}
+	if !reflect.DeepEqual(operator.stopped, []string{"hideout-env-test"}) {
+		t.Fatalf("operator stop calls mismatch: %+v", operator.stopped)
+	}
+	loaded, err := envStore.Load(rec.ID)
+	if err != nil {
+		t.Fatalf("load environment: %v", err)
+	}
+	if loaded.Status != "stopped" {
+		t.Fatalf("environment was not stopped: %+v", loaded)
+	}
+
+	cleanReq := newAPIJSONRequest(http.MethodPost, "/api/v1/environment/clean/apply", EnvironmentActionAPIRequest{
+		IDs:         []string{rec.ID},
+		StoppedOnly: true,
+	})
+	cleanReq.Header.Set("X-Hideout-UI-Token", "ui_token")
+	cleanResp := httptest.NewRecorder()
+	api.ServeHTTP(cleanResp, cleanReq)
+	if cleanResp.Code != http.StatusOK {
+		t.Fatalf("clean apply status=%d body=%s", cleanResp.Code, cleanResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, cleanResp.Body.Bytes())
+	if !strings.Contains(cleanResp.Body.String(), `"resource":"environment/clean/apply"`) {
+		t.Fatalf("clean apply response missing resource: %s", cleanResp.Body.String())
+	}
+	if !reflect.DeepEqual(operator.cleaned, []string{"hideout-env-test"}) {
+		t.Fatalf("operator clean calls mismatch: %+v", operator.cleaned)
+	}
+	if _, err := envStore.Load(rec.ID); err == nil {
+		t.Fatalf("environment should have been removed")
+	}
 }
 
 func TestAPIOverviewReturnsEmptyCollectionsAsArrays(t *testing.T) {

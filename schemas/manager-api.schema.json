@@ -29,7 +29,11 @@
         "init/apply",
         "run/plan",
         "run/apply",
-        "run/status"
+        "run/status",
+        "environment/stop/plan",
+        "environment/stop/apply",
+        "environment/clean/plan",
+        "environment/clean/apply"
       ]
     },
     "data": {
