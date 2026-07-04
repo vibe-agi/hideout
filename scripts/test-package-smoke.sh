@@ -27,6 +27,8 @@ for path in \
   "$prefix/bin/hideout-shim" \
   "$prefix/bin/hideout-shim-linux-$arch" \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
+  "$prefix/README.md" \
+  "$prefix/README.zh-CN.md" \
   "$prefix/schemas/profile.schema.json" \
   "$prefix/schemas/run-plan.schema.json" \
   "$prefix/docs/privacy-run-design.md" \

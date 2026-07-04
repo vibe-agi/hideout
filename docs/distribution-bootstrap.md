@@ -56,6 +56,8 @@ hideout
 hideout-shim-linux-<arch>
 hideout-hostfsd-linux-<arch>
 tun2socks-<platform>-<arch>
+README.md
+README.zh-CN.md
 schemas
 default profile templates
 ```

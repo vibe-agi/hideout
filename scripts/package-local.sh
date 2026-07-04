@@ -13,6 +13,8 @@ packaging metadata. The archive layout is:
 
   hideout/
     bin/
+    README.md
+    README.zh-CN.md
     schemas/
     docs/
     packaging/
@@ -64,6 +66,8 @@ prefix="$stage/hideout"
 mkdir -p "$prefix"
 
 "$source/scripts/install-local.sh" --prefix "$prefix" --store "$tmp/store" --source "$source" --skip-init >/dev/null
+cp "$source/README.md" "$prefix/README.md"
+cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
 cp -R "$source/schemas" "$prefix/schemas"
 cp -R "$source/docs" "$prefix/docs"
 mkdir -p "$prefix/packaging"
