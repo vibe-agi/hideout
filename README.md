@@ -87,6 +87,9 @@ hideout profile init smoke
 hideout run --profile smoke --backend lima -- pwd
 ```
 
+`hideout init` and `hideout doctor --fix` print copyable next-step commands
+for `doctor`, a smoke run, and any configured generic CLI tool.
+
 This first run should only verify the backend, workspace mount, and isolated
 identity. Do not configure CLI tool provisioning until the next section.
 

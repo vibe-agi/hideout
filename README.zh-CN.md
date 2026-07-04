@@ -82,6 +82,9 @@ hideout profile init smoke
 hideout run --profile smoke --backend lima -- pwd
 ```
 
+`hideout init` 和 `hideout doctor --fix` 会打印可直接复制的下一步命令，
+包括 `doctor` 检查、smoke run，以及已配置的通用 CLI 工具。
+
 第一次运行只应该验证 backend、workspace mount 和隔离身份。不要在这一步
 配置 CLI 工具供给；工具供给从下一节开始。
 

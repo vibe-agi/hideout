@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -86,6 +87,9 @@ func TestInitNoInputCreatesStoreProfileAndIsIdempotent(t *testing.T) {
 		"task schema.metadata.write: applied",
 		"task profile.create: applied",
 		"audit=",
+		"next:",
+		"check: hideout doctor --profile default --backend native",
+		"smoke: hideout run --profile default --backend native --allow-weak-isolation -- pwd",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("init output missing %q:\n%s", want, out.String())
@@ -311,6 +315,9 @@ func TestDoctorFixAppliesAndWritesInitAudit(t *testing.T) {
 		"Hideout doctor fix",
 		"audit=",
 		"task profile.create: applied",
+		"next:",
+		"check: hideout doctor --profile default --backend native",
+		"smoke: hideout run --profile default --backend native --allow-weak-isolation -- pwd",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("doctor fix output missing %q:\n%s", want, out.String())
@@ -348,6 +355,7 @@ func TestInitConfiguresGenericNPMCLITool(t *testing.T) {
 		"task tools.npm-global.add: applied",
 		"add tool preset node-dev to profile",
 		"add npm global tool @example/agent-cli@1.2.3 to profile",
+		"cli: hideout run --profile default --backend native --allow-weak-isolation -- agent-cli",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("init output missing %q:\n%s", want, out.String())
@@ -375,6 +383,44 @@ func TestInitConfiguresGenericNPMCLITool(t *testing.T) {
 	if !strings.Contains(string(data), `"taskKind":"tools.preset.add"`) ||
 		!strings.Contains(string(data), `"taskKind":"tools.npm-global.add"`) {
 		t.Fatalf("init audit missing tool tasks: %s", data)
+	}
+}
+
+func TestWriteInitResultDoesNotSuggestRunWhenPlanHasBlockedTasks(t *testing.T) {
+	var out bytes.Buffer
+	writeInitResult(&out, "Hideout init", inittask.Result{
+		Plan: inittask.Plan{
+			Version: "hideout.init/v1",
+			Profile: "blocked",
+			Backend: "lima",
+			Tasks: []inittask.Task{{
+				Kind:    "helper.install.linux-shim",
+				Status:  "blocked",
+				Message: "linux helper source is unavailable",
+			}},
+		},
+		Skipped: []inittask.Task{{
+			Kind:    "helper.install.linux-shim",
+			Status:  "blocked",
+			Message: "linux helper source is unavailable",
+		}},
+	})
+	for _, want := range []string{
+		"task helper.install.linux-shim: blocked",
+		"next:",
+		"resolve: fix blocked tasks above, then rerun hideout doctor --fix --profile blocked --backend lima",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("init output missing %q:\n%s", want, out.String())
+		}
+	}
+	for _, forbidden := range []string{
+		"smoke:",
+		"cli:",
+	} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Fatalf("blocked init output should not suggest %q:\n%s", forbidden, out.String())
+		}
 	}
 }
 

@@ -484,6 +484,58 @@ func writeInitResult(w io.Writer, title string, result inittask.Result) {
 	for _, task := range result.Skipped {
 		fmt.Fprintf(w, "task %s: %s risk=%s %s\n", task.Kind, task.Status, task.Risk, task.Message)
 	}
+	writeInitNextSteps(w, result.Plan)
+}
+
+func writeInitNextSteps(w io.Writer, plan inittask.Plan) {
+	fmt.Fprintln(w, "next:")
+	if initPlanHasBlockedTasks(plan) {
+		fmt.Fprintf(w, "  resolve: fix blocked tasks above, then rerun %s\n", initDoctorFixCommand(plan))
+		return
+	}
+	fmt.Fprintf(w, "  check: %s\n", initDoctorCommand(plan))
+	fmt.Fprintf(w, "  smoke: %s\n", initRunCommand(plan, "pwd"))
+	if command := firstNPMGlobalCommand(plan); command != "" {
+		fmt.Fprintf(w, "  cli: %s\n", initRunCommand(plan, command))
+	}
+}
+
+func initDoctorCommand(plan inittask.Plan) string {
+	args := []string{"hideout", "doctor", "--profile", plan.Profile, "--backend", plan.Backend}
+	return strings.Join(args, " ")
+}
+
+func initDoctorFixCommand(plan inittask.Plan) string {
+	args := []string{"hideout", "doctor", "--fix", "--profile", plan.Profile, "--backend", plan.Backend}
+	return strings.Join(args, " ")
+}
+
+func initRunCommand(plan inittask.Plan, command string) string {
+	args := []string{"hideout", "run", "--profile", plan.Profile, "--backend", plan.Backend}
+	if plan.Backend == "native" {
+		args = append(args, "--allow-weak-isolation")
+	}
+	args = append(args, "--", command)
+	return strings.Join(args, " ")
+}
+
+func firstNPMGlobalCommand(plan inittask.Plan) string {
+	for _, task := range plan.Tasks {
+		if task.Kind != "tools.npm-global.add" || len(task.Inputs) < 2 {
+			continue
+		}
+		return task.Inputs[1]
+	}
+	return ""
+}
+
+func initPlanHasBlockedTasks(plan inittask.Plan) bool {
+	for _, task := range plan.Tasks {
+		if task.Status == "blocked" {
+			return true
+		}
+	}
+	return false
 }
 
 type runOptions struct {
