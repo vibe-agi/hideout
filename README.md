@@ -51,12 +51,26 @@ export PATH="$HOME/.local/bin:$PATH"
 hideout doctor --backend lima
 ```
 
-The installer builds:
+For a release-like tarball, extract it and run the package installer from the
+package root:
+
+```bash
+tar -xzf hideout-<platform>.tar.gz
+cd hideout
+./install.sh --backend lima --network direct
+export PATH="$HOME/.local/bin:$PATH"
+hideout doctor --backend lima
+```
+
+The source-tree installer builds:
 
 - `hideout`;
 - the host command shim;
 - the Linux guest shim;
 - the Linux HostFS daemon.
+
+The package installer copies the same prebuilt artifacts from the extracted
+package.
 
 ## First Run
 

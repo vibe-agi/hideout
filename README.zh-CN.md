@@ -48,12 +48,24 @@ export PATH="$HOME/.local/bin:$PATH"
 hideout doctor --backend lima
 ```
 
-安装脚本会构建：
+如果使用 release-like tarball，先解压，然后从包根目录运行包内 installer：
+
+```bash
+tar -xzf hideout-<platform>.tar.gz
+cd hideout
+./install.sh --backend lima --network direct
+export PATH="$HOME/.local/bin:$PATH"
+hideout doctor --backend lima
+```
+
+源码树安装脚本会构建：
 
 - `hideout`；
 - 主机 command shim；
 - Linux guest shim；
 - Linux HostFS daemon。
+
+包内 installer 会从解压后的 package 复制同一组预构建产物。
 
 ## 第一次运行
 

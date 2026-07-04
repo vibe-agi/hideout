@@ -46,6 +46,7 @@ for path in \
   "$prefix/bin/hideout-shim" \
   "$prefix/bin/hideout-shim-linux-$arch" \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
+  "$prefix/install.sh" \
   "$prefix/package-manifest.json" \
   "$prefix/README.md" \
   "$prefix/README.zh-CN.md" \
@@ -64,6 +65,7 @@ done
 
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
+go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$prefix/package-manifest.json"
 jq -e \
   --arg host_os "$(go env GOOS)" \
   --arg host_arch "$arch" \
@@ -78,6 +80,7 @@ jq -e \
     .layout.root == "hideout" and
     (.layout.binaries | index("bin/hideout")) and
     (.layout.binaries | index("bin/hideout-shim-linux-" + $host_arch)) and
+    (.layout.entrypoints | index("install.sh")) and
     (.layout.entrypoints | index("README.md")) and
     (.layout.entrypoints | index("README.zh-CN.md")) and
     (.layout.directories | index("schemas")) and
@@ -86,6 +89,7 @@ jq -e \
     (.files | type == "array" and length >= 8) and
     any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "install.sh" and .kind == "installer" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$")))
@@ -130,7 +134,7 @@ jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$prefix/package-manifest.json
     exit 1
   fi
   case "$kind" in
-    binary|linux-helper|helper-manifest|entrypoint|schema)
+    binary|linux-helper|helper-manifest|installer|entrypoint|schema)
       ;;
     *)
       echo "package-smoke: manifest file has unknown kind: $rel ($kind)" >&2
@@ -187,6 +191,29 @@ grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/lima-doctor-fix-dry.out"
 if [ -e "$tmp/lima-store/install-state.json" ]; then
   echo "package-smoke: lima dry-run repair created install state" >&2
   cat "$tmp/lima-doctor-fix-dry.out" >&2
+  exit 1
+fi
+
+installed_prefix="$tmp/package-installed"
+installed_store="$tmp/package-store"
+"$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --backend native --network direct >"$tmp/package-install.out"
+test -x "$installed_prefix/bin/hideout"
+test -x "$installed_prefix/bin/hideout-shim"
+test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
+test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
+test -f "$installed_store/install-state.json"
+test -f "$installed_store/profiles/default/profile.json"
+HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/package-installed-doctor.out"
+grep -q 'store: ok writable' "$tmp/package-installed-doctor.out"
+grep -q 'profile: ok default' "$tmp/package-installed-doctor.out"
+
+proxy_installed_prefix="$tmp/package-proxy-installed"
+proxy_installed_store="$tmp/package-proxy-store"
+HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@127.0.0.1:7890" \
+  "$prefix/install.sh" --prefix "$proxy_installed_prefix" --store "$proxy_installed_store" --backend native --network tun2socks --proxy-secret default-proxy >"$tmp/package-proxy-install.out"
+jq -e '.network.mode == "tun2socks" and .network.proxySecretRef == "default-proxy" and (.network.proxyEnvVisible == false)' "$proxy_installed_store/profiles/default/profile.json" >/dev/null
+if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_installed_store" >/dev/null 2>&1; then
+  echo "package-smoke: package installer persisted raw proxy URL" >&2
   exit 1
 fi
 

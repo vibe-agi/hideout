@@ -946,12 +946,12 @@ Required checks:
   manifests, a package manifest with schema/build/git/target/layout metadata,
   package-relative manifest paths that match the extracted layout, SHA-256
   checksums for critical package files that match the extracted files, English
-  and Chinese README entrypoints, schemas, docs, packaging metadata, can run
-  installed
-  `hideout init --no-input` plus `hideout doctor` from a temporary prefix, and
-  can render installed `hideout tui`, start installed `hideout ui --print-url`
-  without opening a browser or blocking, and discover packaged Lima Linux
-  helpers without rebuilding from the source tree;
+  and Chinese README entrypoints, a package-root installer, schemas, docs,
+  packaging metadata, can run extracted `hideout init --no-input` plus
+  `hideout doctor`, can render extracted `hideout tui`, start extracted
+  `hideout ui --print-url` without opening a browser or blocking, can run
+  package-root `install.sh` into a separate temporary prefix/store, and can
+  discover packaged Lima Linux helpers without rebuilding from the source tree;
 - Gate 0 statically validates the draft Homebrew formula and its
   `hideout init --no-input` formula smoke contract when Ruby is available;
 - omitted or `auto` backend first-run repair resolves to Lima, matching

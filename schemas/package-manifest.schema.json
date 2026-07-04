@@ -60,7 +60,10 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+            "pattern": "^[^/].*",
+            "not": {
+              "pattern": "(^|/)\\.\\.(/|$)"
+            }
           },
           "contains": {
             "const": "bin/hideout"
@@ -72,11 +75,23 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+            "pattern": "^[^/].*",
+            "not": {
+              "pattern": "(^|/)\\.\\.(/|$)"
+            }
           },
-          "contains": {
-            "const": "README.md"
-          }
+          "allOf": [
+            {
+              "contains": {
+                "const": "install.sh"
+              }
+            },
+            {
+              "contains": {
+                "const": "README.md"
+              }
+            }
+          ]
         },
         "directories": {
           "type": "array",
@@ -84,7 +99,10 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+            "pattern": "^[^/].*",
+            "not": {
+              "pattern": "(^|/)\\.\\.(/|$)"
+            }
           },
           "contains": {
             "const": "schemas"
@@ -103,13 +121,17 @@
           "path": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+            "pattern": "^[^/].*",
+            "not": {
+              "pattern": "(^|/)\\.\\.(/|$)"
+            }
           },
           "kind": {
             "enum": [
               "binary",
               "linux-helper",
               "helper-manifest",
+              "installer",
               "entrypoint",
               "schema"
             ]
@@ -120,15 +142,33 @@
           }
         }
       },
-      "contains": {
-        "type": "object",
-        "required": ["path"],
-        "properties": {
-          "path": {
-            "const": "bin/hideout"
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": {
+                "const": "bin/hideout"
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["path", "kind"],
+            "properties": {
+              "path": {
+                "const": "install.sh"
+              },
+              "kind": {
+                "const": "installer"
+              }
+            }
           }
         }
-      }
+      ]
     }
   }
 }

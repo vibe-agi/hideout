@@ -13,6 +13,7 @@ packaging metadata. The archive layout is:
 
   hideout/
     bin/
+    install.sh
     package-manifest.json
     README.md
     README.zh-CN.md
@@ -78,6 +79,8 @@ prefix="$stage/hideout"
 mkdir -p "$prefix"
 
 "$source/scripts/install-local.sh" --prefix "$prefix" --store "$tmp/store" --source "$source" --skip-init >/dev/null
+cp "$source/packaging/install-package.sh" "$prefix/install.sh"
+chmod 0755 "$prefix/install.sh"
 cp "$source/README.md" "$prefix/README.md"
 cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
 cp -R "$source/schemas" "$prefix/schemas"
@@ -120,6 +123,7 @@ cat >"$prefix/package-manifest.json" <<EOF
       "$hostfsd_linux"
     ],
     "entrypoints": [
+      "install.sh",
       "README.md",
       "README.zh-CN.md"
     ],
@@ -159,6 +163,11 @@ cat >"$prefix/package-manifest.json" <<EOF
       "path": "$hostfsd_linux_manifest",
       "kind": "helper-manifest",
       "sha256": "$(sha256_file "$prefix/$hostfsd_linux_manifest")"
+    },
+    {
+      "path": "install.sh",
+      "kind": "installer",
+      "sha256": "$(sha256_file "$prefix/install.sh")"
     },
     {
       "path": "README.md",

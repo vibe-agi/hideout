@@ -56,6 +56,7 @@ hideout
 hideout-shim-linux-<arch>
 hideout-hostfsd-linux-<arch>
 tun2socks-<platform>-<arch>
+install.sh
 package-manifest.json
 README.md
 README.zh-CN.md
@@ -313,18 +314,20 @@ explicit weak-isolation development option. Source-tree repair may use
 `HIDEOUT_SOURCE_ROOT` when `doctor --fix` is run outside the repository.
 
 Release-like tarball packaging uses `scripts/package-local.sh` during private
-pre-release development. The tarball contains `bin/`, `package-manifest.json`,
-English and Chinese README entrypoints, `schemas/`, `docs/`, and `packaging/`
-under a single `hideout/` root. The manifest records schema version, build time,
-git commit, dirty state, target platform, Linux guest helper architecture, and
-critical package-relative layout paths. It also records SHA-256 checksums for
-critical package files such as binaries, Linux guest helpers, helper manifests,
-README entrypoints, and manifest schemas. `scripts/test-package-smoke.sh`
-extracts that tarball into a temporary prefix, validates the manifest, proves
-each manifest-declared path exists with the expected file type, recalculates
-declared file checksums, then runs installed `hideout init --no-input`,
-`hideout doctor`, `hideout tui`, and `hideout ui --no-open --print-url` from
-the extracted binary.
+pre-release development. The tarball contains `bin/`, package-root `install.sh`,
+`package-manifest.json`, English and Chinese README entrypoints, `schemas/`,
+`docs/`, and `packaging/` under a single `hideout/` root. The manifest records
+schema version, build time, git commit, dirty state, target platform, Linux
+guest helper architecture, and critical package-relative layout paths. It also
+records SHA-256 checksums for critical package files such as binaries, Linux
+guest helpers, helper manifests, the package installer, README entrypoints, and
+manifest schemas. `scripts/test-package-smoke.sh` extracts that tarball into a
+temporary prefix, validates the manifest, proves each manifest-declared path
+exists with the expected file type, recalculates declared file checksums, then
+runs extracted `hideout init --no-input`, `hideout doctor`, `hideout tui`, and
+`hideout ui --no-open --print-url`. It also runs package-root `install.sh` into
+a separate temporary prefix/store and verifies the installed layout works
+without source-tree state.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.
@@ -384,8 +387,8 @@ Release candidate should verify:
   manifests, init metadata, idempotent init, doctor, `doctor --fix --dry-run`,
   and safe `doctor --fix` from temporary prefix/store roots;
 - `scripts/package-local.sh` and `scripts/test-package-smoke.sh` verify a
-  release-like tarball layout can be extracted and initialized without hidden
-  repository state;
+  release-like tarball layout can be extracted, installed through package-root
+  `install.sh`, and initialized without hidden repository state;
 - `packaging/homebrew/hideout.rb` defines the draft Homebrew `--HEAD` formula
   and its formula-level `init`/`doctor` smoke;
 - `hideout init --no-input` applies safe machine initialization tasks;
