@@ -358,6 +358,14 @@ proof: runtime supply, user-declared tool installation, callback flow,
 environment policy, profile-state persistence, network request, and
 control-plane store protection.
 
+The callback flow intentionally stays inside the guest test process. It does
+not prove that a host browser can redirect into a guest-local listener. A URL
+such as `https://httpbin.org/redirect-to?url=http://localhost:9000` is a useful
+manual thought experiment for the opposite boundary: after `host.open` launches
+the host browser, browser redirects to `localhost` target host loopback, not
+guest loopback. That behavior must not be treated as a supported login callback
+path until a typed owner and PortBridge-backed product path exists.
+
 Command:
 
 ```bash
@@ -552,6 +560,9 @@ Required checks:
 - `open http://127.0.0.1:<port>`, private ranges, CGNAT, benchmarking ranges,
   link-local, multicast, `.local`, `.localhost`, and known host gateway aliases
   fail closed before opener execution;
+- the gate does not claim redirect isolation after opener execution. External
+  URLs that later redirect to `localhost` are host browser behavior and must not
+  be used as guest callback proof;
 - `host.open` does not create a PortBridge, expose DevTools, expose a
   remote-debugging socket, or create a guest-visible browser control channel;
   URL-open audit must record `portBridge=none`, `browserControl=disabled`, and

@@ -234,6 +234,17 @@ host loopback URL such as `127.0.0.1:<port>`. If it were passed through the
 authorization must come from the owning OpenTarget and the PortBridge record,
 not from a localhost exception in `host.open`.
 
+Redirect implication: `host.open` evaluates the URL requested by the target
+before launching the host browser. It does not claim to sandbox every subsequent
+browser navigation. An allowed external URL can redirect the host browser to a
+host-local URL such as `http://localhost:<port>`, and that request belongs to
+the host browser and host loopback, not to guest loopback. This behavior must
+not be used as a guest callback mechanism. CLI login flows that need no
+PortBridge must use browser plus paste-code, profile-home seeding, or another
+explicit user-controlled mechanism. A browser callback into a guest-local
+listener requires a typed owner and PortBridge-backed product path such as a
+future `preview.open`.
+
 ## PortBridge Invariants
 
 PortBridge is a generic transport primitive. It is not an adb, browser, preview,
