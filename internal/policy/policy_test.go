@@ -29,6 +29,17 @@ func TestValidateRejectsGenericHostExec(t *testing.T) {
 	}
 }
 
+func TestEvaluateOpenKeepsLocalhostDeniedForPreviewBoundary(t *testing.T) {
+	e := NewEvaluator(profile.Default("test"))
+	proposal, err := e.EvaluateOpen("http://127.0.0.1:5173")
+	if err != nil {
+		t.Fatalf("EvaluateOpen: %v", err)
+	}
+	if proposal.Decision != Deny || proposal.Route != DenyRoute || proposal.Action != ActionHostOpen {
+		t.Fatalf("localhost host.open should stay denied, got %+v", proposal)
+	}
+}
+
 func TestValidateRejectsProbeActionsOnProductPath(t *testing.T) {
 	e := NewEvaluator(profile.Default("test"))
 	_, err := e.Validate(Proposal{

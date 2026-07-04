@@ -29,6 +29,9 @@ type RunDataPlaneOptions struct {
 	DisableProfileHostFSGrants bool
 	Opener                     broker.Opener
 	PortBridges                []RunPortBridgeRequest
+	OpenTargets                []RunOpenTargetOwner
+	EndpointCandidates         []RunEndpointCandidate
+	EndpointExposures          []RunEndpointExposureRequest
 }
 
 type RunDataPlane struct {
@@ -57,7 +60,13 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if aw == nil {
 		aw = audit.NewDiscard()
 	}
-	if err := validateRunPortBridgeRequests(runSession, opts.PortBridges, aw); err != nil {
+	portBridges, err := resolveRunEndpointExposures(runSession, opts.OpenTargets, opts.EndpointCandidates, opts.EndpointExposures)
+	if err != nil {
+		_ = emitEndpointExposureDeny(aw, runSession, opts.EndpointExposures, err)
+		return RunDataPlane{}, err
+	}
+	portBridges = append(portBridges, opts.PortBridges...)
+	if err := validateRunPortBridgeRequests(runSession, portBridges, aw); err != nil {
 		return RunDataPlane{}, err
 	}
 	token, err := broker.NewToken()
@@ -149,7 +158,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		cancel()
 		return RunDataPlane{}, err
 	}
-	portBridgeLeases, portBridgeEndpoints, err := startRunPortBridges(brokerCtx, runSession, opts.PortBridges, aw)
+	portBridgeLeases, portBridgeEndpoints, err := startRunPortBridges(brokerCtx, runSession, portBridges, aw)
 	if err != nil {
 		_ = closeRunPortBridgeLeases(portBridgeLeases, aw, runSession.Layout.ID, runSession.Plan.ProfileName, runSession.Plan.Backend)
 		_ = server.Close()

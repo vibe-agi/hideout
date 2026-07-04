@@ -101,7 +101,7 @@ Change-to-gate mapping:
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, Gate 1, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and Gate 1 | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
-| Endpoint Exposure product actions | Gate 0 and targeted Manager/PortBridge tests after promotion | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` when user-facing |
+| Endpoint Exposure product actions | Gate 0 and targeted Manager/PortBridge tests for implemented directions | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` when a new direction or consumer becomes user-facing |
 | Browser Control, Preview Open, or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
 
 The testing order for new capabilities is:
@@ -161,7 +161,7 @@ Required evidence:
   failure behavior, and either a release gate or an explicit Later status.
 - `docs/threat-model.md` defines the Phase 1 Lite TCB, claims, non-claims,
   user-authoritative HostFS grant model, loopback boundary, and PortBridge
-  invariants before PortBridge or Preview Open can be promoted.
+  invariants before new PortBridge-backed capabilities are promoted.
 - RunResult schema includes Boundary Summary as structured data derived from
   audit facts, not as a CLI-only rendering.
 
@@ -369,8 +369,9 @@ smoke also runs a controlled host redirect that behaves like
 `https://httpbin.org/redirect-to?url=http://localhost:9000`, but without
 depending on the public internet: after a host browser or host HTTP client
 follows the redirect, `localhost` targets host loopback, not guest loopback. That
-negative check must keep failing until a typed owner and
-`endpoint.expose.host-to-guest` product path exists.
+negative check must keep failing unless a typed owner, endpoint candidate, and
+`endpoint.expose.host-to-guest` request explicitly create a Hideout-owned
+mapping.
 
 Command:
 
@@ -598,7 +599,7 @@ control handshake. The fake handshake is automation evidence for CLI, policy,
 audit, and protocol shape; the real browser run is the stronger capability
 evidence before promoting browser-control behavior.
 
-### Probe A: PortBridge And Endpoint Exposure
+### PortBridge And Endpoint Exposure Checks
 
 Evidence:
 
@@ -606,9 +607,10 @@ Evidence:
   and deny paths;
 - lab command requires explicit `--enable-lab`;
 - probe audit uses lab action names;
-- when product `endpoint.expose.host-to-guest` is promoted, it uses declared or
+- product `endpoint.expose.host-to-guest` uses profile-declared or run-scoped
   manual endpoint candidates, a direction-specific product action, route,
-  validator, run-scoped Manager lifecycle, audit, cleanup, and Boundary Summary;
+  active owner validation, run-scoped Manager lifecycle, backend provider,
+  audit, cleanup, and Boundary Summary;
 - JavaScript policy may reference `candidateId` and policy fields, but cannot
   supply raw host addresses, guest addresses, direction, owner IDs, backend
   endpoints, or provider handles;
@@ -617,12 +619,13 @@ Evidence:
 - observed-only candidates are audit-only or ask and must not auto-expose;
 - backends without a host-to-guest provider fail closed before backend prepare.
 
-Current Phase 1 evidence is transport and boundary evidence: PortBridge
-forwarding tests, lab-only probes, and negative smoke proving host loopback and
-guest loopback remain separate without a typed Endpoint Exposure owner. A
-product `endpoint.expose.host-to-guest` gate becomes required only after the
-candidate access surfaces, active owner registry, and backend provider are
-implemented.
+Current Phase 1 evidence includes the product host-to-guest path for
+profile-declared and manual candidates: candidate validation, active owner
+registry checks, policy validation, native round-trip tests, Lima config
+provider tests, backend fail-closed tests, audit, cleanup, and Boundary Summary.
+Endpoint observation, project-declared candidates, direct JavaScript endpoint
+entrypoints, OAuth callback automation, and guest-to-host exposure remain out of
+this gate.
 
 Commands:
 
@@ -694,7 +697,7 @@ scripts/test-lab-probes.sh
 | Audit redaction | required | required | required | no |
 | Doctor diagnostics | required | required | required | no |
 | Cleanup removes secret-bearing state | required | required | required | no |
-| PortBridge and Endpoint Exposure lab isolation | required | optional | optional | no |
+| PortBridge and Endpoint Exposure product path | required | optional | optional | no |
 | Browser-control lab isolation | partial | optional | optional | maybe |
 
 ## Environment Resume Acceptance

@@ -283,7 +283,7 @@ H5 tool asks to open http://localhost:5173
   -> adapter proposes endpoint.expose.host-to-guest by candidateId
   -> Go validator checks owner, source, backend, address, lifetime, and audit
   -> PortBridge provider materializes one endpoint
-  -> optional host.open opens isolated browser URL pointing at the mapped endpoint
+  -> preview.open opens the Hideout-owned host-loopback URL
 ```
 
 Core does not understand Vite, Next.js, or the browser's DevTools protocol. It

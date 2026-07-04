@@ -102,6 +102,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout run --explain [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout explain [flags] -- <command> [args...]")
+	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --no-fs read:/path --no-profile-fs -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout init [--no-input] [--backend native|lima] [--network direct]")
@@ -236,6 +237,7 @@ type runOptions struct {
 	noProfileHostFSGrants bool
 	hostFSRun             hostfs.Config
 	envPublic             map[string]string
+	previewTargets        []string
 	command               []string
 }
 
@@ -277,6 +279,10 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		}
 		runPlan.RuntimeProfile = runtimeProfile
 	}
+	openTargets, endpointCandidates, endpointExposures, err := buildPreviewOpenOptions(runtimeProfile, opts.previewTargets)
+	if err != nil {
+		return err
+	}
 	opts.workspace = runPlan.Workspace
 	opts.guestWorkspace = runPlan.GuestWorkspace
 	backendName := runPlan.Backend
@@ -303,6 +309,9 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		AuditPath:                  opts.auditPath,
 		HostFSRun:                  opts.hostFSRun,
 		DisableProfileHostFSGrants: opts.noProfileHostFSGrants,
+		OpenTargets:                openTargets,
+		EndpointCandidates:         endpointCandidates,
+		EndpointExposures:          endpointExposures,
 		OpenerForSession: func(runSession manager.RunSession) broker.Opener {
 			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
 		},
@@ -353,8 +362,14 @@ func (a app) writeRunResultSummary(result manager.RunResult) {
 		if capability.Owner != "" {
 			fmt.Fprintf(a.stderr, " owner=%s", capability.Owner)
 		}
+		if capability.Source != "" {
+			fmt.Fprintf(a.stderr, " source=%s", capability.Source)
+		}
 		if capability.Lifetime != "" {
 			fmt.Fprintf(a.stderr, " lifetime=%s", capability.Lifetime)
+		}
+		if capability.CloseReason != "" {
+			fmt.Fprintf(a.stderr, " close=%s", capability.CloseReason)
 		}
 		if capability.EndpointCategory != "" {
 			fmt.Fprintf(a.stderr, " endpoint=%s", capability.EndpointCategory)
@@ -516,6 +531,8 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	fs.BoolVar(&opts.noProfileHostFSGrants, "no-profile-fs", false, "ignore profile HostFS grants for this run")
 	var envFlags stringListFlag
 	fs.Var(&envFlags, "env", "run-scoped public environment variable KEY=VALUE")
+	var previewFlags stringListFlag
+	fs.Var(&previewFlags, "preview", "open a preview for a profile endpoint candidate id or guest loopback endpoint")
 	if err := fs.Parse(flagArgs); err != nil {
 		return opts, err
 	}
@@ -533,6 +550,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 		return opts, err
 	}
 	opts.envPublic = envPublic
+	opts.previewTargets = append([]string(nil), previewFlags...)
 	if opts.newEnvironment && strings.TrimSpace(opts.resumeEnvironment) != "" {
 		return opts, errors.New("--new and --resume cannot be used together")
 	}
@@ -562,6 +580,84 @@ func parseRunEnvFlags(values []string) (map[string]string, error) {
 		out[name] = value
 	}
 	return out, nil
+}
+
+func buildPreviewOpenOptions(p profile.Profile, targets []string) ([]manager.RunOpenTargetOwner, []manager.RunEndpointCandidate, []manager.RunEndpointExposureRequest, error) {
+	if len(targets) == 0 {
+		return nil, nil, nil, nil
+	}
+	owners := []manager.RunOpenTargetOwner{{
+		ID:   manager.OpenTargetPreviewOpen,
+		Kind: manager.OpenTargetPreviewOpen,
+	}}
+	profileCandidates := map[string]profile.EndpointCandidate{}
+	for _, candidate := range p.EndpointExposure.HostToGuest {
+		profileCandidates[strings.TrimSpace(candidate.ID)] = candidate
+	}
+	var runCandidates []manager.RunEndpointCandidate
+	var exposures []manager.RunEndpointExposureRequest
+	for i, raw := range targets {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return nil, nil, nil, errors.New("--preview cannot be empty")
+		}
+		candidateID := value
+		if candidate, ok := profileCandidates[value]; ok {
+			owner := strings.TrimSpace(candidate.Owner)
+			if owner != manager.OpenTargetPreviewOpen {
+				return nil, nil, nil, fmt.Errorf("--preview candidate %q belongs to owner %q, not preview.open", value, owner)
+			}
+		} else {
+			targetAddress, err := normalizePreviewEndpoint(value)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("--preview %q: %w", value, err)
+			}
+			candidateID = fmt.Sprintf("manual_preview_%d", i+1)
+			runCandidates = append(runCandidates, manager.RunEndpointCandidate{
+				ID:            candidateID,
+				Source:        manager.EndpointSourceManual,
+				Owner:         manager.OpenTargetPreviewOpen,
+				Proto:         "tcp",
+				TargetAddress: targetAddress,
+			})
+		}
+		exposures = append(exposures, manager.RunEndpointExposureRequest{
+			CandidateID: candidateID,
+			Owner:       manager.OpenTargetPreviewOpen,
+			Kind:        manager.OpenTargetPreviewOpen,
+			ClosePolicy: "session-end",
+		})
+	}
+	return owners, runCandidates, exposures, nil
+}
+
+func normalizePreviewEndpoint(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("endpoint is required")
+	}
+	if strings.Contains(value, "://") {
+		u, err := url.Parse(value)
+		if err != nil {
+			return "", err
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return "", fmt.Errorf("preview URL scheme %q is unsupported", u.Scheme)
+		}
+		value = u.Host
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return "", fmt.Errorf("must be host:port or http(s) loopback URL: %w", err)
+	}
+	if host == "localhost" {
+		return net.JoinHostPort("127.0.0.1", port), nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return "", errors.New("preview endpoint must use localhost or a loopback IP")
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 type stringListFlag []string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -15,6 +16,9 @@ import (
 type RunPortBridgeRequest struct {
 	ID            string
 	Owner         string
+	Action        string
+	Source        string
+	ClosePolicy   string
 	ListenAddress string
 	TargetAddress string
 }
@@ -37,7 +41,7 @@ func validateRunPortBridgeRequests(runSession RunSession, requests []RunPortBrid
 			_ = emitPortBridgeAudit(aw, runSession, spec, string(policy.Deny), "denied", err.Error())
 			return err
 		}
-		if runSession.Plan.Backend != "native" {
+		if runSession.Plan.Backend != "native" && runSession.Plan.Backend != "lima" {
 			err := fmt.Errorf("host-to-guest PortBridge requires a backend provider for %s backend", runSession.Plan.Backend)
 			_ = emitPortBridgeAudit(aw, runSession, spec, string(policy.Deny), "denied", err.Error())
 			return err
@@ -61,12 +65,30 @@ func startRunPortBridges(ctx context.Context, runSession RunSession, requests []
 	var endpoints []backend.PortBridgeEndpoint
 	for _, request := range requests {
 		spec := runPortBridgeSpec(request)
-		bridge, err := portbridge.Start(ctx, spec)
-		if err != nil {
-			_ = emitPortBridgeAudit(aw, runSession, spec, "error", "error", err.Error())
+		var bridge *portbridge.Bridge
+		var listenAddress string
+		switch runSession.Plan.Backend {
+		case "native":
+			var err error
+			bridge, err = portbridge.Start(ctx, spec)
+			if err != nil {
+				_ = emitPortBridgeAudit(aw, runSession, spec, "error", "error", err.Error())
+				return leases, endpoints, err
+			}
+			listenAddress = bridge.ListenAddress()
+		case "lima":
+			address, err := allocateLoopbackListenAddress(spec.ListenAddress)
+			if err != nil {
+				_ = emitPortBridgeAudit(aw, runSession, spec, "error", "error", err.Error())
+				return leases, endpoints, err
+			}
+			listenAddress = address
+		default:
+			err := fmt.Errorf("host-to-guest PortBridge requires a backend provider for %s backend", runSession.Plan.Backend)
+			_ = emitPortBridgeAudit(aw, runSession, spec, string(policy.Deny), "denied", err.Error())
 			return leases, endpoints, err
 		}
-		endpoint := portBridgeEndpoint(spec, bridge.ListenAddress())
+		endpoint := portBridgeEndpoint(spec, listenAddress)
 		lease := runPortBridgeLease{endpoint: endpoint, bridge: bridge}
 		leases = append(leases, lease)
 		endpoints = append(endpoints, endpoint)
@@ -86,8 +108,18 @@ func closeRunPortBridgeLeases(leases []runPortBridgeLease, aw *audit.Writer, ses
 	}
 	var errs []error
 	for _, lease := range leases {
-		if err := lease.bridge.Close(); err != nil {
-			errs = append(errs, err)
+		if lease.bridge != nil {
+			if err := lease.bridge.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		action := lease.endpoint.Action
+		if action == "" {
+			action = policy.ActionPortbridgeHostToGuest
+		}
+		closePolicy := lease.endpoint.ClosePolicy
+		if closePolicy == "" {
+			closePolicy = "session-end"
 		}
 		details := map[string]any{
 			"status":           "cleanup",
@@ -98,13 +130,16 @@ func closeRunPortBridgeLeases(leases []runPortBridgeLease, aw *audit.Writer, ses
 			"listenScope":      lease.endpoint.ListenScope,
 			"targetScope":      lease.endpoint.TargetScope,
 			"endpointCategory": lease.endpoint.EndpointCategory,
+			"source":           portBridgeAuditLabel(lease.endpoint.Source),
+			"closePolicy":      closePolicy,
+			"closeReason":      "session-end",
 			"endpoint":         "present",
 		}
 		if err := aw.Emit(audit.Event{
 			Session:  sessionID,
 			Profile:  profileName,
 			Backend:  backendName,
-			Action:   policy.ActionPortbridgeHostToGuest,
+			Action:   action,
 			Decision: string(policy.AuditOnly),
 			Details:  details,
 		}); err != nil {
@@ -115,10 +150,14 @@ func closeRunPortBridgeLeases(leases []runPortBridgeLease, aw *audit.Writer, ses
 }
 
 func validateRunPortBridgePolicy(runSession RunSession, spec portbridge.Spec) error {
+	action := spec.Action
+	if action == "" {
+		action = policy.ActionPortbridgeHostToGuest
+	}
 	proposal := policy.Proposal{
 		Decision:  policy.Allow,
 		Route:     policy.PortBridge,
-		Action:    policy.ActionPortbridgeHostToGuest,
+		Action:    action,
 		Resources: portBridgePolicyResources(spec),
 		Reason:    "host-to-guest PortBridge requested by " + spec.Owner,
 	}
@@ -134,6 +173,9 @@ func runPortBridgeSpec(request RunPortBridgeRequest) portbridge.Spec {
 	return portbridge.Spec{
 		ID:               strings.TrimSpace(request.ID),
 		Owner:            strings.TrimSpace(request.Owner),
+		Action:           strings.TrimSpace(request.Action),
+		Source:           strings.TrimSpace(request.Source),
+		ClosePolicy:      strings.TrimSpace(request.ClosePolicy),
 		Lifetime:         portbridge.LifetimeRun,
 		Direction:        portbridge.DirectionHostToGuest,
 		ListenScope:      portbridge.ListenScopeLoopback,
@@ -148,11 +190,15 @@ func portBridgeEndpoint(spec portbridge.Spec, listenAddress string) backend.Port
 	return backend.PortBridgeEndpoint{
 		ID:               spec.ID,
 		Owner:            spec.Owner,
+		Action:           spec.Action,
+		Source:           spec.Source,
+		ClosePolicy:      spec.ClosePolicy,
 		Lifetime:         string(spec.Lifetime),
 		Direction:        string(spec.Direction),
 		ListenScope:      string(spec.ListenScope),
 		ListenAddress:    listenAddress,
 		TargetScope:      string(spec.TargetScope),
+		TargetAddress:    spec.TargetAddress,
 		EndpointCategory: string(spec.EndpointCategory),
 	}
 }
@@ -168,6 +214,18 @@ func portBridgePolicyResources(spec portbridge.Spec) []string {
 }
 
 func emitPortBridgeAudit(aw *audit.Writer, runSession RunSession, spec portbridge.Spec, decision, status, reason string) error {
+	action := spec.Action
+	if action == "" {
+		action = policy.ActionPortbridgeHostToGuest
+	}
+	source := spec.Source
+	if source == "" {
+		source = "internal"
+	}
+	closePolicy := spec.ClosePolicy
+	if closePolicy == "" {
+		closePolicy = "session-end"
+	}
 	endpointState := "present"
 	if status == "denied" || status == "error" {
 		endpointState = "not-created"
@@ -181,7 +239,12 @@ func emitPortBridgeAudit(aw *audit.Writer, runSession RunSession, spec portbridg
 		"listenScope":      string(spec.ListenScope),
 		"targetScope":      string(spec.TargetScope),
 		"endpointCategory": string(spec.EndpointCategory),
+		"source":           portBridgeAuditLabel(source),
+		"closePolicy":      closePolicy,
 		"endpoint":         endpointState,
+	}
+	if status == "cleanup" {
+		details["closeReason"] = "session-end"
 	}
 	if reason != "" {
 		details["reason"] = reason
@@ -190,10 +253,26 @@ func emitPortBridgeAudit(aw *audit.Writer, runSession RunSession, spec portbridg
 		Session:  runSession.Layout.ID,
 		Profile:  runSession.Plan.ProfileName,
 		Backend:  runSession.Plan.Backend,
-		Action:   policy.ActionPortbridgeHostToGuest,
+		Action:   action,
 		Decision: decision,
 		Details:  details,
 	})
+}
+
+func allocateLoopbackListenAddress(preferred string) (string, error) {
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		preferred = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", preferred)
+	if err != nil {
+		return "", err
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		return "", err
+	}
+	return addr, nil
 }
 
 func portBridgeAuditLabel(value string) string {

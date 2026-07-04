@@ -70,11 +70,15 @@ type Session struct {
 type PortBridgeEndpoint struct {
 	ID               string `json:"id"`
 	Owner            string `json:"owner"`
+	Action           string `json:"action,omitempty"`
+	Source           string `json:"source,omitempty"`
+	ClosePolicy      string `json:"closePolicy,omitempty"`
 	Lifetime         string `json:"lifetime"`
 	Direction        string `json:"direction"`
 	ListenScope      string `json:"listenScope"`
 	ListenAddress    string `json:"listenAddress"`
 	TargetScope      string `json:"targetScope"`
+	TargetAddress    string `json:"targetAddress,omitempty"`
 	EndpointCategory string `json:"endpointCategory"`
 }
 

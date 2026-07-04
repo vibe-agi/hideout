@@ -13,7 +13,7 @@
       "enum": ["guest-direct", "guest-exec", "host-broker", "portbridge", "fake", "deny"]
     },
     "action": {
-      "enum": ["host.open", "guest.exec", "network.connect", "portbridge.host-to-guest"]
+      "enum": ["host.open", "guest.exec", "network.connect", "portbridge.host-to-guest", "endpoint.expose.host-to-guest"]
     },
     "resources": {
       "type": "array",
@@ -95,6 +95,23 @@
         "properties": {
           "route": {
             "const": "host-broker"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "endpoint.expose.host-to-guest"
+          }
+        },
+        "required": ["action"]
+      },
+      "then": {
+        "properties": {
+          "route": {
+            "enum": ["portbridge", "deny"]
           }
         }
       }

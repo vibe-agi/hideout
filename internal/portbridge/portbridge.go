@@ -45,6 +45,9 @@ const (
 type Spec struct {
 	ID               string
 	Owner            string
+	Action           string
+	Source           string
+	ClosePolicy      string
 	Lifetime         Lifetime
 	Direction        Direction
 	ListenScope      ListenScope

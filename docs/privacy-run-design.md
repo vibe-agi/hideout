@@ -348,6 +348,12 @@ Required Phase 1:
 - Run-scoped `portbridge.host-to-guest` as a thin transport provider with
   validation, audit, cleanup, Boundary Summary evidence, no CLI/API/script
   trigger surface, and no weakening of `host.open` localhost denial.
+- Product `endpoint.expose.host-to-guest` over profile-declared and run-scoped
+  manual candidates, with active OpenTarget owner validation, backend provider
+  fail-closed behavior, audit, cleanup, and Boundary Summary evidence.
+- Minimal `preview.open` consumer for declared or manual guest-loopback TCP
+  endpoints. It opens the Hideout-owned host-loopback endpoint and does not add
+  a localhost exception to `host.open`.
 - Isolated browser profile for URL open.
 - Centralized capability evaluator.
 - Constrained `goja` support for command policy and audit redaction hooks.
@@ -363,10 +369,10 @@ Design-ready Phase 1:
 - Minimal Manager API run resources: `run/plan`, `run/apply`, and `run/status`
   over the local token-protected server.
 - Local Web UI page map and data model.
-- OpenTarget and Endpoint Exposure contracts for future host application
-  automation and preview workflows. Candidate creation, immutable candidate
-  snapshots, active OpenTarget owner registry, and `endpoint.expose.*` product
-  actions are Design-ready until implemented end to end.
+- OpenTarget and Endpoint Exposure contracts beyond the first
+  `endpoint.expose.host-to-guest` path: endpoint observation, project-declared
+  candidates, JS adapter entrypoints, callback flows, browser control,
+  guest-to-host exposure, and device/simulator targets.
 - Profile identity rotate/reset.
 - Audit query API.
 - More complete policy editing surfaces.
@@ -377,8 +383,7 @@ Capability Probe Phase 1:
 - Native loopback/control-plane mechanics for one explicit TCP endpoint.
 - Lima guest-to-host bridge mechanics for one explicit host loopback TCP
   endpoint.
-- Lima host-to-guest bridge mechanics for one explicit guest TCP endpoint. The
-  product path fails closed until a backend-specific provider exists.
+- Lima host-to-guest bridge mechanics for one explicit guest TCP endpoint.
 - Browser-control probe using an isolated browser profile and a loopback-only
   control endpoint, without exposing it through `host.open`.
 - Preview-open probe that maps one guest HTTP service to one host-visible URL,
@@ -626,12 +631,15 @@ Phase 1 capability implementation matrix:
 | `guest.exec` | top-level run or registered command proxy shim | `route=guest-direct` for the top-level command; `route=guest-exec` only for an explicitly registered shim that execs the matching real guest binary without host side effects. | Intercepting arbitrary guest commands. |
 | `network.connect` | session setup | `route=guest-direct` for setup and route verification evidence for `direct` or `tun2socks`; `route=deny` on failure. | Per-socket firewalling or request audit. |
 | `portbridge.host-to-guest` | Manager run data plane only | `route=portbridge`; explicit owner label, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup, and no untrusted request surface. | Product authorization, raw host port exposure, `host.open` localhost exceptions, script-supplied addresses, or business-specific adb/browser semantics. |
+| `endpoint.expose.host-to-guest` | Manager run data plane for active OpenTarget owners | `route=portbridge`; profile-declared or run-scoped manual candidate, active owner, guest-loopback TCP target, host-loopback endpoint, run lifetime, audit, cleanup, and backend provider fail-closed. | Endpoint observation, project-declared auto exposure, guest-to-host reachability, script-supplied addresses, or `host.open` localhost exceptions. |
 
 Any action outside the Phase 1 implementation matrix and Capability Probe matrix
 is unsupported in Phase 1 and fails closed before it reaches an implementation.
 `route=portbridge` names the internal transport provider. Product authority is
-expressed by a higher-level action such as `endpoint.expose.host-to-guest` only
-after the candidate model and owner registry are implemented.
+expressed by a higher-level action such as `endpoint.expose.host-to-guest`.
+The transport route and the product action are intentionally separate: the
+route materializes a mapping, while the product action proves ownership,
+candidate source, lifetime, and policy.
 
 HostFS actions:
 
@@ -2946,18 +2954,20 @@ PortBridge policy:
 - wildcard listen addresses are denied unless a target-specific design
   classifies and audits the exposure;
 - wildcard target addresses are denied;
-- host-to-guest providers are backend-specific and fail closed until the backend
-  implements a reviewed exposure model;
+- host-to-guest providers are backend-specific. A backend without an
+  implemented provider fails closed before backend prepare; a backend with a
+  provider still requires an owning Endpoint Exposure transaction;
 - Capability Probe code may validate backend-specific host-to-guest or
-  guest-to-host reachability, but product paths still fail closed until the
-  architecture contract and policy validator are complete;
+  guest-to-host reachability, but probe success does not promote a product
+  action by itself;
 - bridges are closed when the owning session or OpenTarget closes;
 - scripts may propose endpoint exposure by candidate ID only inside a registered
   policy hook; the final validator still derives direction and enforces route,
   address, scope, and target constraints;
 - adapters such as adb, browser control, or preview require their exact
-  direction-specific exposure primitive to be promoted from lab to product path
-  before their bridge proposals can pass the Go validator;
+  direction-specific exposure primitive before their bridge proposals can pass
+  the Go validator. Phase 1 promotes only the minimal preview-oriented
+  host-to-guest path;
 - `host.open` in Required Phase 1 must not create a PortBridge.
 
 ### Endpoint Exposure
@@ -2973,12 +2983,17 @@ endpoint.expose.host-to-guest
 endpoint.expose.guest-to-host
 ```
 
-Implementation status: the Phase 1 code has the underlying run-scoped
-PortBridge transport path and fail-closed backend behavior. The candidate model,
-immutable candidate snapshots, active OpenTarget owner registry, and
-`endpoint.expose.*` product actions are Design-ready. They must not be described
-as available to scripts, bundles, CLI users, or HTTP API clients until those
-pieces exist and are covered by the Endpoint Exposure gates.
+Implementation status: Phase 1 implements the minimal
+`endpoint.expose.host-to-guest` product path for profile-declared and run-scoped
+manual candidates. The Manager resolves the candidate, verifies an active
+OpenTarget owner, derives the host-to-guest mapping in Go, validates
+`route=portbridge`, materializes the backend provider, audits the decision, and
+cleans up at run end. The current user-facing consumer is `preview.open`.
+
+Not implemented in this path: endpoint observation, project-declared automatic
+exposure, direct JS endpoint proposal entrypoints, OAuth callback automation,
+`endpoint.expose.guest-to-host`, adb, browser DevTools, and device/simulator
+targets. Those must still fail closed or stay absent.
 
 `endpoint.observe` and `endpoint.expose.*` are different trust levels.
 Observation may produce an endpoint candidate and audit evidence. It must not
@@ -3011,15 +3026,15 @@ Candidate access surfaces:
   a future Hideoutfile. Discovery is not consent. They require review or
   interactive ask before exposure because the workspace is writable by the
   target;
-- manual candidates are created by an explicit run or session request, such as a
-  future `hideout run --expose host-to-guest:<guest-loopback-port> -- ...`.
-  They are run-scoped by default unless the user persists them into profile
-  policy;
+- manual candidates are created by an explicit run or session request. Phase 1
+  exposes this through `hideout run --preview <guest-loopback-host:port> -- ...`
+  for the `preview.open` owner. They are run-scoped by default unless the user
+  persists them into profile policy;
 - observed candidates come from `endpoint.observe` or Access Sensor style
   evidence. They may help explain behavior or support an ask prompt, but they do
   not authorize exposure by themselves.
 
-Candidate shape:
+Canonical candidate shape:
 
 ```text
 candidateId       opaque, unguessable, session-bound, one transaction or snapshot scope
@@ -3061,6 +3076,12 @@ direction from candidate side and requested action. It revalidates source,
 address class, port category, owner, policy, backend support, lifetime, and
 atomic host bind before creating a bridge.
 
+The current Phase 1 `preview.open` path does not expose a direct JavaScript
+endpoint decision entrypoint. It is still governed by the same rule: adapter or
+CLI input selects a candidate by ID or by a run-scoped preview target, while Go
+derives the actual mapping and rejects script-supplied addresses, direction,
+owner, final host port, and provider handles.
+
 Direction matters:
 
 - `endpoint.expose.host-to-guest` lets host-side software connect to a guest
@@ -3090,16 +3111,18 @@ exists and fail closed or audit-only when it does not.
 
 MVP sequencing:
 
-1. Implement `endpoint.expose.host-to-guest` over declared and manual candidates.
-2. Use a web-preview adapter as the first consumer because it is declared,
-   long-lived, and does not require `open.intent` or endpoint observation.
-3. Add an OAuth/local-callback adapter later using `open.intent`, Go-parsed
+1. Implemented: `endpoint.expose.host-to-guest` over profile-declared and
+   run-scoped manual candidates.
+2. Implemented: `preview.open` as the first consumer because it is declared or
+   manual, long-lived, and does not require `open.intent` or endpoint
+   observation.
+3. Next: add an OAuth/local-callback adapter later using `open.intent`, Go-parsed
    loopback `redirect_uri`, short TTL, and first-request cleanup.
-4. Add `endpoint.observe` later as audit-only evidence and as optional
+4. Later: add `endpoint.observe` as audit-only evidence and as optional
    confidence input for adapters. It must not be required for the first product
    exposure path.
-5. Design `endpoint.expose.guest-to-host` separately for adb, browser DevTools,
-   simulator, and other host-control targets.
+5. Later: design `endpoint.expose.guest-to-host` separately for adb, browser
+   DevTools, simulator, and other host-control targets.
 
 PortBridge tests are transport tests. A test that starts a listener, forwards
 bytes, and verifies access proves only that the selected listen/target path can
@@ -3987,8 +4010,9 @@ Phase P: capability probes
   loopback target;
 - prove backend guest-to-host TCP mechanics with Lima when the guest network can
   reach a brokered endpoint;
-- prove host-to-guest TCP mechanics with one explicit guest HTTP service and one
-  host-visible URL;
+- prove and guard the product host-to-guest Endpoint Exposure path with one
+  explicit guest HTTP service, one Hideout-owned host-visible URL, and no
+  `host.open` localhost exception;
 - prove isolated browser launch with a loopback-only control endpoint;
 - prove a minimal browser-control handshake without using `host.open`;
 - prove policy-deny, token-deny, audit, and cleanup behavior for each bridge

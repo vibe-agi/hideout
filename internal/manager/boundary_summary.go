@@ -22,7 +22,9 @@ type BoundarySummary struct {
 type BoundaryCapabilitySummary struct {
 	Capability       string `json:"capability"`
 	Owner            string `json:"owner,omitempty"`
+	Source           string `json:"source,omitempty"`
 	Lifetime         string `json:"lifetime,omitempty"`
+	CloseReason      string `json:"closeReason,omitempty"`
 	EndpointCategory string `json:"endpointCategory,omitempty"`
 	Allowed          int    `json:"allowed"`
 	Denied           int    `json:"denied"`
@@ -93,8 +95,14 @@ func (b *boundarySummaryBuilder) observe(event audit.Event) {
 	if item.Owner == "" {
 		item.Owner = stringDetail(event.Details, "owner")
 	}
+	if item.Source == "" {
+		item.Source = stringDetail(event.Details, "source")
+	}
 	if item.Lifetime == "" {
 		item.Lifetime = stringDetail(event.Details, "lifetime")
+	}
+	if item.CloseReason == "" {
+		item.CloseReason = stringDetail(event.Details, "closeReason")
 	}
 	if item.EndpointCategory == "" {
 		item.EndpointCategory = stringDetail(event.Details, "endpointCategory")
@@ -135,6 +143,8 @@ func boundaryCapability(action string) string {
 		return "host.open"
 	case action == "preview.open":
 		return "preview.open"
+	case strings.HasPrefix(action, "endpoint.expose."):
+		return action
 	case strings.HasPrefix(action, "portbridge."):
 		return action
 	default:

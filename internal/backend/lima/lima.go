@@ -96,9 +96,12 @@ type provision struct {
 }
 
 type portForward struct {
+	HostIP            string `yaml:"hostIP,omitempty"`
+	HostPort          int    `yaml:"hostPort,omitempty"`
 	GuestIP           string `yaml:"guestIP,omitempty"`
 	GuestIPMustBeZero *bool  `yaml:"guestIPMustBeZero,omitempty"`
 	Proto             string `yaml:"proto,omitempty"`
+	GuestPort         int    `yaml:"guestPort,omitempty"`
 	GuestPortRange    [2]int `yaml:"guestPortRange,omitempty"`
 	Ignore            bool   `yaml:"ignore,omitempty"`
 }
@@ -389,7 +392,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 		Mounts: append([]mount{
 			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
 		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.EnvironmentID != "")...)...),
-		PortForwards: []portForward{
+		PortForwards: append(explicitHostToGuestPortForwards(spec.PortBridges), []portForward{
 			{
 				GuestIP:           "0.0.0.0",
 				GuestIPMustBeZero: boolPtr(false),
@@ -403,7 +406,7 @@ func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
 				GuestPortRange: [2]int{1, 65535},
 				Ignore:         true,
 			},
-		},
+		}...),
 		Provision: append([]provision{
 			{
 				Mode: "system",
@@ -431,6 +434,49 @@ fi
 		}, toolProvisionBlocks(spec.Profile.Tools)...),
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
 	}
+}
+
+func explicitHostToGuestPortForwards(endpoints []backend.PortBridgeEndpoint) []portForward {
+	var out []portForward
+	for _, endpoint := range endpoints {
+		if endpoint.Direction != "host-to-guest" || endpoint.ListenAddress == "" || endpoint.TargetAddress == "" {
+			continue
+		}
+		host, hostPort, err := splitEndpointPort(endpoint.ListenAddress)
+		if err != nil {
+			continue
+		}
+		guestHost, guestPort, err := splitEndpointPort(endpoint.TargetAddress)
+		if err != nil {
+			continue
+		}
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		if guestHost == "localhost" {
+			guestHost = "127.0.0.1"
+		}
+		out = append(out, portForward{
+			HostIP:    host,
+			HostPort:  hostPort,
+			GuestIP:   guestHost,
+			Proto:     "tcp",
+			GuestPort: guestPort,
+		})
+	}
+	return out
+}
+
+func splitEndpointPort(address string) (string, int, error) {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := net.LookupPort("tcp", portText)
+	if err != nil {
+		return "", 0, err
+	}
+	return host, port, nil
 }
 
 func boolPtr(value bool) *bool {

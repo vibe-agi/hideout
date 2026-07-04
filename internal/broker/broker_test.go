@@ -2439,7 +2439,7 @@ func TestHandleRejectsCommandPolicyScriptActionMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := `function decideCommand(ctx) {
-  return hideout.decision.allow({ route: 'guest-exec', action: 'guest.exec', resources: ['guest-command:open'], reason: 'wrong action' });
+  return hideout.decision.allow({ route: 'portbridge', action: 'endpoint.expose.host-to-guest', resources: ['candidate:manual_preview_1'], reason: 'try to mint endpoint exposure' });
 }`
 	if err := os.WriteFile(scriptPath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
@@ -2481,7 +2481,7 @@ func TestHandleRejectsCommandPolicyScriptActionMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"error":"script proposal action \"guest.exec\" does not match request action \"host.open\""`) {
+	if !strings.Contains(string(data), `"error":"script proposal action \"endpoint.expose.host-to-guest\" does not match request action \"host.open\""`) {
 		t.Fatalf("audit missing script mismatch error: %s", data)
 	}
 }

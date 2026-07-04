@@ -39,6 +39,8 @@
         "host.fs.list",
         "host.fs.write",
         "portbridge.host-to-guest",
+        "endpoint.expose.host-to-guest",
+        "preview.open",
         "portbridge.probe",
         "browser.control.probe",
         "preview.open.probe"

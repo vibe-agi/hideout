@@ -324,6 +324,59 @@ func TestValidateAcceptsUserDeclaredNPMGlobalTool(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsProfileDeclaredEndpointCandidate(t *testing.T) {
+	p := Default("test")
+	p.EndpointExposure.HostToGuest = []EndpointCandidate{{
+		ID:            "preview.dev",
+		Owner:         "preview.open",
+		Proto:         "tcp",
+		TargetAddress: "127.0.0.1:5173",
+	}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("profile-declared endpoint candidate should be valid: %v", err)
+	}
+	schema := compileProfileSchema(t)
+	if err := validateProfileWithSchema(schema, p); err != nil {
+		t.Fatalf("profile-declared endpoint candidate should validate against schema: %v", err)
+	}
+}
+
+func TestValidateRejectsUnsafeEndpointCandidate(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*Profile)
+	}{
+		{
+			name: "non loopback target",
+			edit: func(p *Profile) {
+				p.EndpointExposure.HostToGuest = []EndpointCandidate{{
+					ID:            "preview.dev",
+					Owner:         "preview.open",
+					TargetAddress: "192.168.1.10:5173",
+				}}
+			},
+		},
+		{
+			name: "duplicate id",
+			edit: func(p *Profile) {
+				p.EndpointExposure.HostToGuest = []EndpointCandidate{
+					{ID: "preview.dev", Owner: "preview.open", TargetAddress: "127.0.0.1:5173"},
+					{ID: "preview.dev", Owner: "preview.open", TargetAddress: "127.0.0.1:5174"},
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Default("test")
+			tc.edit(&p)
+			if err := p.Validate(); err == nil {
+				t.Fatal("expected invalid endpoint candidate to fail")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidNPMGlobalTool(t *testing.T) {
 	tests := []struct {
 		name string

@@ -39,10 +39,11 @@ const (
 )
 
 const (
-	ActionHostOpen              = "host.open"
-	ActionGuestExec             = "guest.exec"
-	ActionNetworkConnect        = "network.connect"
-	ActionPortbridgeHostToGuest = "portbridge.host-to-guest"
+	ActionHostOpen                  = "host.open"
+	ActionGuestExec                 = "guest.exec"
+	ActionNetworkConnect            = "network.connect"
+	ActionPortbridgeHostToGuest     = "portbridge.host-to-guest"
+	ActionEndpointExposeHostToGuest = "endpoint.expose.host-to-guest"
 )
 
 const (
@@ -356,7 +357,7 @@ func (e Evaluator) Validate(p Proposal) (Proposal, error) {
 		return p, fmt.Errorf("generic host execution action %q is forbidden", p.Action)
 	}
 	switch p.Action {
-	case ActionHostOpen, ActionGuestExec, ActionNetworkConnect, ActionPortbridgeHostToGuest:
+	case ActionHostOpen, ActionGuestExec, ActionNetworkConnect, ActionPortbridgeHostToGuest, ActionEndpointExposeHostToGuest:
 	default:
 		return p, fmt.Errorf("unsupported action %q", p.Action)
 	}
@@ -382,6 +383,9 @@ func (e Evaluator) Validate(p Proposal) (Proposal, error) {
 	}
 	if p.Action == ActionPortbridgeHostToGuest && p.Decision != Deny && p.Route != PortBridge {
 		return p, errors.New("portbridge.host-to-guest must use portbridge route unless denied")
+	}
+	if p.Action == ActionEndpointExposeHostToGuest && p.Decision != Deny && p.Route != PortBridge {
+		return p, errors.New("endpoint.expose.host-to-guest must use portbridge route unless denied")
 	}
 	if p.Decision == Deny && p.Route != DenyRoute {
 		return p, errors.New("deny decision must use deny route")

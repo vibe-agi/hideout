@@ -909,7 +909,7 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 			Capabilities: []manager.BoundaryCapabilitySummary{
 				{Capability: "host.open", Allowed: 1, Denied: 2},
 				{Capability: "hostfs", Allowed: 3, Denied: 4, Unsupported: 5},
-				{Capability: "portbridge.host-to-guest", Allowed: 1, Owner: "preview.open", Lifetime: "run", EndpointCategory: "host-loopback"},
+				{Capability: "portbridge.host-to-guest", Allowed: 1, Owner: "preview.open", Source: "manual", Lifetime: "run", CloseReason: "session-end", EndpointCategory: "host-loopback"},
 			},
 		},
 	})
@@ -923,7 +923,7 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 		"  audit: /tmp/hideout/audit.jsonl",
 		"  host.open: allowed=1 denied=2",
 		"  hostfs: allowed=3 denied=4 unsupported=5",
-		"  portbridge.host-to-guest: allowed=1 denied=0 owner=preview.open lifetime=run endpoint=host-loopback",
+		"  portbridge.host-to-guest: allowed=1 denied=0 owner=preview.open source=manual lifetime=run close=session-end endpoint=host-loopback",
 	} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Fatalf("resume summary missing %q:\n%s", want, errOut.String())
@@ -960,6 +960,36 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 		!strings.Contains(errOut.String(), "  audit: disabled - no boundary evidence") ||
 		strings.Contains(errOut.String(), "hostfs: allowed=0 denied=0") {
 		t.Fatalf("boundary summary without reusable environment missing:\n%s", errOut.String())
+	}
+}
+
+func TestBuildPreviewOpenOptionsSupportsManualAndProfileCandidates(t *testing.T) {
+	p := profile.Default("preview-test")
+	p.EndpointExposure.HostToGuest = []profile.EndpointCandidate{{
+		ID:            "dev",
+		Owner:         manager.OpenTargetPreviewOpen,
+		Proto:         "tcp",
+		TargetAddress: "127.0.0.1:5173",
+	}}
+	owners, candidates, exposures, err := buildPreviewOpenOptions(p, []string{"dev", "http://localhost:3000/app"})
+	if err != nil {
+		t.Fatalf("buildPreviewOpenOptions: %v", err)
+	}
+	if len(owners) != 1 || owners[0].ID != manager.OpenTargetPreviewOpen {
+		t.Fatalf("owners mismatch: %+v", owners)
+	}
+	if len(candidates) != 1 ||
+		candidates[0].Source != manager.EndpointSourceManual ||
+		candidates[0].Owner != manager.OpenTargetPreviewOpen ||
+		candidates[0].TargetAddress != "127.0.0.1:3000" {
+		t.Fatalf("manual candidate mismatch: %+v", candidates)
+	}
+	if len(exposures) != 2 ||
+		exposures[0].CandidateID != "dev" ||
+		exposures[1].CandidateID != "manual_preview_2" ||
+		exposures[0].Owner != manager.OpenTargetPreviewOpen ||
+		exposures[1].Owner != manager.OpenTargetPreviewOpen {
+		t.Fatalf("exposures mismatch: %+v", exposures)
 	}
 }
 

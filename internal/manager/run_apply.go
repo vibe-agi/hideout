@@ -3,6 +3,8 @@ package manager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,6 +29,9 @@ type ApplyRunOptions struct {
 	HostFSRun                  hostfs.Config
 	DisableProfileHostFSGrants bool
 	PortBridges                []RunPortBridgeRequest
+	OpenTargets                []RunOpenTargetOwner
+	EndpointCandidates         []RunEndpointCandidate
+	EndpointExposures          []RunEndpointExposureRequest
 	Network                    RunNetworkOptions
 	Opener                     broker.Opener
 	OpenerForSession           func(RunSession) broker.Opener
@@ -117,6 +122,9 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		HostFSRun:                  opts.HostFSRun,
 		DisableProfileHostFSGrants: opts.DisableProfileHostFSGrants,
 		PortBridges:                opts.PortBridges,
+		OpenTargets:                opts.OpenTargets,
+		EndpointCandidates:         opts.EndpointCandidates,
+		EndpointExposures:          opts.EndpointExposures,
 		Opener:                     opener,
 	})
 	if err != nil {
@@ -130,6 +138,9 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	}()
 	session, err := opts.Backend.Prepare(ctx, runSpec(runSession, runEnv, dataPlane, runNetwork))
 	if err != nil {
+		return result, err
+	}
+	if err := openRunPreviews(ctx, runSession, dataPlane, opener); err != nil {
 		return result, err
 	}
 	result.EnvironmentID = session.EnvironmentID
@@ -185,6 +196,82 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		Details:  sessionEndDetails(plan.Command, runErr),
 	})
 	return result, runErr
+}
+
+func openRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDataPlane, opener broker.Opener) error {
+	if opener == nil {
+		opener = broker.NoopOpener{}
+	}
+	for _, endpoint := range dataPlane.PortBridges {
+		if endpoint.Action != policy.ActionEndpointExposeHostToGuest || endpoint.Owner != OpenTargetPreviewOpen {
+			continue
+		}
+		target, err := previewURLForEndpoint(endpoint.ListenAddress)
+		if err != nil {
+			_ = runSession.Audit.Emit(audit.Event{
+				Session:  runSession.Layout.ID,
+				Profile:  runSession.Plan.ProfileName,
+				Backend:  runSession.Plan.Backend,
+				Action:   "preview.open",
+				Decision: "error",
+				Details: map[string]any{
+					"status":           "error",
+					"owner":            endpoint.Owner,
+					"source":           endpoint.Source,
+					"endpointCategory": endpoint.EndpointCategory,
+					"endpoint":         "present",
+					"reason":           err.Error(),
+				},
+			})
+			return err
+		}
+		if err := opener.OpenURL(ctx, target); err != nil {
+			_ = runSession.Audit.Emit(audit.Event{
+				Session:  runSession.Layout.ID,
+				Profile:  runSession.Plan.ProfileName,
+				Backend:  runSession.Plan.Backend,
+				Action:   "preview.open",
+				Decision: "error",
+				Details: map[string]any{
+					"status":           "error",
+					"owner":            endpoint.Owner,
+					"source":           endpoint.Source,
+					"endpointCategory": endpoint.EndpointCategory,
+					"endpoint":         "present",
+					"reason":           err.Error(),
+				},
+			})
+			return err
+		}
+		if err := runSession.Audit.Emit(audit.Event{
+			Session:  runSession.Layout.ID,
+			Profile:  runSession.Plan.ProfileName,
+			Backend:  runSession.Plan.Backend,
+			Action:   "preview.open",
+			Decision: string(policy.Allow),
+			Details: map[string]any{
+				"status":           "ok",
+				"owner":            endpoint.Owner,
+				"source":           endpoint.Source,
+				"endpointCategory": endpoint.EndpointCategory,
+				"endpoint":         "present",
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func previewURLForEndpoint(listenAddress string) (string, error) {
+	host, port, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return "", fmt.Errorf("preview endpoint listen address is invalid: %w", err)
+	}
+	if host == "" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/", nil
 }
 
 func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlane, runNetwork RunNetwork) backend.RunSpec {

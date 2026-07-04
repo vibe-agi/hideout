@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	slashpath "path"
 	"path/filepath"
@@ -32,6 +33,7 @@ type Profile struct {
 	Network          Network           `json:"network"`
 	Tools            Tools             `json:"tools"`
 	HostCapabilities HostCapabilities  `json:"hostCapabilities"`
+	EndpointExposure EndpointExposure  `json:"endpointExposure,omitempty"`
 	HostFS           hostfs.Config     `json:"hostfs,omitempty"`
 	CommandProxy     CommandProxy      `json:"commandProxy"`
 	Policy           Policy            `json:"policy"`
@@ -80,6 +82,17 @@ type NPMGlobalPackage struct {
 
 type HostCapabilities struct {
 	Open OpenCapability `json:"open"`
+}
+
+type EndpointExposure struct {
+	HostToGuest []EndpointCandidate `json:"hostToGuest,omitempty"`
+}
+
+type EndpointCandidate struct {
+	ID            string `json:"id"`
+	Owner         string `json:"owner"`
+	Proto         string `json:"proto,omitempty"`
+	TargetAddress string `json:"targetAddress"`
 }
 
 type OpenCapability struct {
@@ -235,6 +248,7 @@ func Default(name string) Profile {
 				"guest.exec",
 				"network.connect",
 				"portbridge.host-to-guest",
+				"endpoint.expose.host-to-guest",
 			},
 		},
 		Audit: Audit{Enabled: true},
@@ -583,6 +597,9 @@ func (p Profile) Validate() error {
 	if err := p.validateHostCapabilities(); err != nil {
 		return err
 	}
+	if err := validateEndpointExposure(p.EndpointExposure); err != nil {
+		return err
+	}
 	if err := hostfs.ValidateConfig(p.HostFS, hostfs.SourceProfile); err != nil {
 		return err
 	}
@@ -603,7 +620,7 @@ func (p Profile) Validate() error {
 	}
 	for _, capability := range p.Policy.MaxCapabilities {
 		switch capability {
-		case "host.open", "guest.exec", "network.connect", "portbridge.host-to-guest":
+		case "host.open", "guest.exec", "network.connect", "portbridge.host-to-guest", "endpoint.expose.host-to-guest":
 		default:
 			return fmt.Errorf("unsupported policy max capability %q", capability)
 		}
@@ -842,6 +859,78 @@ func validateNPMGlobals(packages []NPMGlobalPackage) error {
 			}
 			seenCommands[command] = true
 		}
+	}
+	return nil
+}
+
+func validateEndpointExposure(config EndpointExposure) error {
+	seen := map[string]bool{}
+	for i, candidate := range config.HostToGuest {
+		label := fmt.Sprintf("endpointExposure.hostToGuest[%d]", i)
+		id := strings.TrimSpace(candidate.ID)
+		if id == "" {
+			return fmt.Errorf("%s.id is required", label)
+		}
+		if !validEndpointLabel(id) {
+			return fmt.Errorf("%s.id contains unsupported characters", label)
+		}
+		if seen[id] {
+			return fmt.Errorf("%s.id duplicates %q", label, id)
+		}
+		seen[id] = true
+		owner := strings.TrimSpace(candidate.Owner)
+		if owner == "" {
+			return fmt.Errorf("%s.owner is required", label)
+		}
+		if !validEndpointLabel(owner) {
+			return fmt.Errorf("%s.owner contains unsupported characters", label)
+		}
+		proto := strings.TrimSpace(candidate.Proto)
+		if proto == "" {
+			proto = "tcp"
+		}
+		if proto != "tcp" {
+			return fmt.Errorf("%s.proto %q is unsupported", label, proto)
+		}
+		if err := validateLoopbackEndpoint(candidate.TargetAddress); err != nil {
+			return fmt.Errorf("%s.targetAddress: %w", label, err)
+		}
+	}
+	return nil
+}
+
+func validEndpointLabel(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateLoopbackEndpoint(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("target address is required")
+	}
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return fmt.Errorf("must be host:port: %w", err)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	parsed := net.ParseIP(host)
+	if parsed == nil || !parsed.IsLoopback() {
+		return errors.New("target host must be localhost or a loopback IP")
 	}
 	return nil
 }

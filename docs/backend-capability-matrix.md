@@ -129,7 +129,7 @@ tbd
 | HostFS overlay | later | later | later/tbd | later/tbd | later/tbd | no |
 | `host.open.url` | required | required | tbd | required | tbd | yes |
 | Isolated browser profile | required | required | local-host only | required | tbd | yes |
-| `endpoint.expose.host-to-guest` | design-ready / provider tbd | design-ready / provider tbd | tbd | tbd | tbd | lab |
+| `endpoint.expose.host-to-guest` | product path | tbd | tbd | tbd | tbd | dev-only / weak |
 | `endpoint.expose.guest-to-host` | lab / separate design | lab / separate design | tbd | tbd | tbd | lab |
 | `endpoint.observe` | later | later | tbd | tbd | tbd | weak/later |
 | Browser control | lab -> product | product | tbd | tbd | tbd | lab |

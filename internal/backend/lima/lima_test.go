@@ -154,6 +154,51 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	}
 }
 
+func TestPrepareAddsExplicitHostToGuestPortForward(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.PortBridges = []backend.PortBridgeEndpoint{{
+		ID:               "ep_manual_preview_1",
+		Owner:            "preview.open",
+		Action:           "endpoint.expose.host-to-guest",
+		Source:           "manual",
+		ClosePolicy:      "session-end",
+		Lifetime:         "run",
+		Direction:        "host-to-guest",
+		ListenScope:      "loopback",
+		ListenAddress:    "127.0.0.1:49152",
+		TargetScope:      "guest",
+		TargetAddress:    "127.0.0.1:5173",
+		EndpointCategory: "host-loopback",
+	}}
+	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	data, err := os.ReadFile(session.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg limaConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("yaml decode: %v\n%s", err, data)
+	}
+	if len(cfg.PortForwards) < 3 {
+		t.Fatalf("expected explicit forward plus deny defaults, got %+v", cfg.PortForwards)
+	}
+	explicit := cfg.PortForwards[0]
+	if explicit.HostIP != "127.0.0.1" || explicit.HostPort != 49152 ||
+		explicit.GuestIP != "127.0.0.1" || explicit.GuestPort != 5173 ||
+		explicit.Proto != "tcp" || explicit.Ignore {
+		t.Fatalf("explicit host-to-guest port forward mismatch: %+v", explicit)
+	}
+	for _, forward := range cfg.PortForwards[1:] {
+		if !forward.Ignore {
+			t.Fatalf("default non-owned port forward must remain ignored: %+v", cfg.PortForwards)
+		}
+	}
+}
+
 func TestPrepareMountsEnvironmentRuntimeRoot(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)

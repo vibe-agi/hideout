@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -701,14 +702,123 @@ func TestCoreApplyRunStartsHostToGuestPortBridgeAndAudits(t *testing.T) {
 	}
 }
 
-func TestCoreApplyRunRejectsHostToGuestPortBridgeWithoutBackendProvider(t *testing.T) {
+func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	targetAddr, closeTarget := startManagerEchoServer(t)
+	defer closeTarget()
+	var bridgeAddr string
+	opener := &managerRecordingOpener{}
+	fake := &applyRunFakeBackend{
+		runFunc: func(session *backend.Session) error {
+			if session == nil || len(session.PortBridges) != 1 {
+				return fmt.Errorf("expected one endpoint exposure, got %+v", session)
+			}
+			endpoint := session.PortBridges[0]
+			bridgeAddr = endpoint.ListenAddress
+			if endpoint.Action != policy.ActionEndpointExposeHostToGuest ||
+				endpoint.Owner != OpenTargetPreviewOpen ||
+				endpoint.Source != EndpointSourceManual ||
+				endpoint.ClosePolicy != "session-end" ||
+				endpoint.TargetAddress != targetAddr ||
+				endpoint.Direction != "host-to-guest" ||
+				endpoint.EndpointCategory != "host-loopback" {
+				return fmt.Errorf("unexpected endpoint exposure: %+v", endpoint)
+			}
+			got, err := managerEchoRoundTrip(endpoint.ListenAddress, "preview")
+			if err != nil {
+				return err
+			}
+			if got != "echo:preview\n" {
+				return fmt.Errorf("bridge response=%q", got)
+			}
+			return nil
+		},
+	}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspace,
+		Ephemeral:   true,
+		Command:     []string{"tool"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:            fake,
+		RequestedBackend:   "native",
+		AllowWeakIsolation: true,
+		Environment:        RunEnvironmentOptions{Create: true},
+		OpenTargets: []RunOpenTargetOwner{{
+			ID:   OpenTargetPreviewOpen,
+			Kind: OpenTargetPreviewOpen,
+		}},
+		EndpointCandidates: []RunEndpointCandidate{{
+			ID:            "manual_preview_1",
+			Source:        EndpointSourceManual,
+			Owner:         OpenTargetPreviewOpen,
+			Proto:         "tcp",
+			TargetAddress: targetAddr,
+		}},
+		EndpointExposures: []RunEndpointExposureRequest{{
+			CandidateID: "manual_preview_1",
+			Owner:       OpenTargetPreviewOpen,
+			Kind:        OpenTargetPreviewOpen,
+		}},
+		Opener: opener,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRun: %v", err)
+	}
+	if len(opener.urls) != 1 || !strings.HasPrefix(opener.urls[0], "http://127.0.0.1:") {
+		t.Fatalf("preview opener mismatch: %+v", opener.urls)
+	}
+	if result.BoundarySummary == nil {
+		t.Fatalf("result missing boundary summary")
+	}
+	endpointBoundary := boundarySummaryCapability(t, *result.BoundarySummary, policy.ActionEndpointExposeHostToGuest)
+	if endpointBoundary.Allowed != 1 || endpointBoundary.AuditOnly != 1 || endpointBoundary.Denied != 0 ||
+		endpointBoundary.Owner != OpenTargetPreviewOpen || endpointBoundary.Source != EndpointSourceManual ||
+		endpointBoundary.Lifetime != "run" || endpointBoundary.EndpointCategory != "host-loopback" ||
+		endpointBoundary.CloseReason != "session-end" {
+		t.Fatalf("endpoint exposure boundary mismatch: %+v", endpointBoundary)
+	}
+	previewBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "preview.open")
+	if previewBoundary.Allowed != 1 || previewBoundary.Owner != OpenTargetPreviewOpen || previewBoundary.Source != EndpointSourceManual {
+		t.Fatalf("preview.open boundary mismatch: %+v", previewBoundary)
+	}
+	auditData, err := os.ReadFile(result.AuditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	auditText := string(auditData)
+	for _, want := range []string{
+		`"action":"endpoint.expose.host-to-guest"`,
+		`"action":"preview.open"`,
+		`"source":"manual"`,
+		`"closeReason":"session-end"`,
+	} {
+		if !strings.Contains(auditText, want) {
+			t.Fatalf("endpoint audit missing %q:\n%s", want, auditText)
+		}
+	}
+	for _, leaked := range []string{targetAddr, bridgeAddr, opener.urls[0]} {
+		if leaked != "" && strings.Contains(auditText, leaked) {
+			t.Fatalf("endpoint audit leaked %q:\n%s", leaked, auditText)
+		}
+	}
+}
+
+func TestCoreApplyRunRejectsEndpointExposureWithoutActiveOwner(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
 	workspace := t.TempDir()
 	fake := &applyRunFakeBackend{}
 	plan, err := core.PlanRun(RunPlanOptions{
 		ProfileName: "default",
-		Backend:     "lima",
+		Backend:     "native",
 		Workspace:   workspace,
 		Command:     []string{"tool"},
 	})
@@ -716,26 +826,36 @@ func TestCoreApplyRunRejectsHostToGuestPortBridgeWithoutBackendProvider(t *testi
 		t.Fatalf("PlanRun: %v", err)
 	}
 	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
-		Backend:          fake,
-		RequestedBackend: "lima",
-		PortBridges: []RunPortBridgeRequest{{
-			ID:            "pb_preview_1",
-			Owner:         "preview.open",
+		Backend:            fake,
+		RequestedBackend:   "native",
+		AllowWeakIsolation: true,
+		Environment:        RunEnvironmentOptions{Create: true},
+		EndpointCandidates: []RunEndpointCandidate{{
+			ID:            "manual_preview_1",
+			Source:        EndpointSourceManual,
+			Owner:         OpenTargetPreviewOpen,
+			Proto:         "tcp",
 			TargetAddress: "127.0.0.1:5173",
 		}},
+		EndpointExposures: []RunEndpointExposureRequest{{
+			CandidateID: "manual_preview_1",
+			Owner:       OpenTargetPreviewOpen,
+			Kind:        OpenTargetPreviewOpen,
+		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "requires a backend provider for lima backend") {
-		t.Fatalf("expected lima provider error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `owner "preview.open" is not active`) {
+		t.Fatalf("expected inactive owner error, got %v", err)
 	}
 	if !reflect.DeepEqual(fake.calls, []string{"available"}) {
-		t.Fatalf("backend should not prepare/run after portbridge rejection: %v", fake.calls)
+		t.Fatalf("backend should not prepare/run after endpoint exposure rejection: %v", fake.calls)
 	}
 	if result.BoundarySummary == nil {
 		t.Fatalf("result missing boundary summary")
 	}
-	portBridgeBoundary := boundarySummaryCapability(t, *result.BoundarySummary, "portbridge.host-to-guest")
-	if portBridgeBoundary.Denied != 1 || portBridgeBoundary.Allowed != 0 || portBridgeBoundary.Owner != "preview.open" {
-		t.Fatalf("portbridge deny boundary mismatch: %+v", portBridgeBoundary)
+	endpointBoundary := boundarySummaryCapability(t, *result.BoundarySummary, policy.ActionEndpointExposeHostToGuest)
+	if endpointBoundary.Denied != 1 || endpointBoundary.Allowed != 0 || endpointBoundary.Owner != OpenTargetPreviewOpen ||
+		endpointBoundary.EndpointCategory != "host-loopback" {
+		t.Fatalf("endpoint exposure rejection summary mismatch: %+v", endpointBoundary)
 	}
 }
 
@@ -1507,6 +1627,21 @@ type applyRunFakeBackend struct {
 	runSession   backend.Session
 	runCommand   []string
 	runEnv       []string
+}
+
+type managerRecordingOpener struct {
+	urls  []string
+	files []string
+}
+
+func (o *managerRecordingOpener) OpenURL(_ context.Context, target string) error {
+	o.urls = append(o.urls, target)
+	return nil
+}
+
+func (o *managerRecordingOpener) OpenFile(_ context.Context, target string) error {
+	o.files = append(o.files, target)
+	return nil
 }
 
 func (b *applyRunFakeBackend) Name() string {

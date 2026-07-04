@@ -68,7 +68,15 @@
                 "type": "string",
                 "minLength": 1
               },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
               "lifetime": {
+                "type": "string",
+                "minLength": 1
+              },
+              "closeReason": {
                 "type": "string",
                 "minLength": 1
               },

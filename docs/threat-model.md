@@ -281,6 +281,8 @@ supports host browser preview of a guest dev server and local callback flows.
 This direction exposes a guest-side service to host loopback. It must still have
 an owner, lifetime, audit, cleanup, and backend-specific provider, but it does
 not grant the guest reachability to host services.
+The Phase 1 product scope is narrower than the full direction: profile-declared
+or run-scoped manual candidates owned by `preview.open`.
 
 `endpoint.expose.guest-to-host` has a larger authority surface because it gives
 guest code reachability to a host-side service. It needs separate product design
@@ -324,19 +326,27 @@ Required:
 - run-scoped `portbridge.host-to-guest` transport validation, audit, cleanup,
   Boundary Summary evidence, and fail-closed behavior when a backend provider is
   missing;
+- product `endpoint.expose.host-to-guest` over profile-declared and run-scoped
+  manual candidates, with active OpenTarget owner validation, backend provider
+  fail-closed behavior, audit, cleanup, and Boundary Summary evidence;
+- minimal `preview.open` over the product host-to-guest exposure path, without
+  changing `host.open` localhost/private-network denial;
 - hidden env and proxy-secret handling;
-- Boundary Summary for HostFS, `host.open`, and implemented PortBridge transport
-  events;
+- Boundary Summary for HostFS, `host.open`, implemented PortBridge transport
+  events, product Endpoint Exposure events, and `preview.open`;
 - this Threat Model Lite.
 
 Design-ready or later:
 
 - HostFS write overlay;
 - interactive approval;
-- Endpoint Exposure candidate model, immutable candidate snapshots, active
-  OpenTarget owner registry, and `endpoint.expose.*` product actions;
-- `preview.open`;
+- endpoint observation;
+- project-declared endpoint candidates and workspace trust review;
+- direct JS endpoint exposure proposal entrypoints and richer candidate
+  snapshots for adapter scripts;
+- OAuth/local callback automation;
 - Browser Control;
 - adb, simulator, and IDE adapters;
-- additional endpoint exposure directions and PortBridge provider promotion;
+- additional endpoint exposure directions and provider promotion beyond
+  host-to-guest;
 - full bundle signing, revocation, and workspace trust UX.
