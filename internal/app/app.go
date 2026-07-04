@@ -1914,6 +1914,16 @@ func checkHostOpen(p profile.Profile, identityDir string, report func(string, st
 		report("host-open", status, err.Error())
 		return
 	}
+	if runtime.GOOS == "darwin" && os.Getenv("HIDEOUT_BROWSER_PATH") == "" {
+		appName := os.Getenv("HIDEOUT_BROWSER_APP")
+		if appName == "" {
+			appName = "Google Chrome"
+		}
+		if !darwinBrowserAppInstalled(appName) {
+			report("host-open", "error", fmt.Sprintf("browser app %q is not installed in a standard Applications directory; install it or set HIDEOUT_BROWSER_PATH to a direct Chromium-compatible browser binary", appName))
+			return
+		}
+	}
 	if _, err := exec.LookPath(launcher); err != nil {
 		report("host-open", "error", fmt.Sprintf("browser launcher %q is not executable: %v", launcher, err))
 		return
@@ -1928,6 +1938,32 @@ func checkHostOpen(p profile.Profile, identityDir string, report func(string, st
 		return
 	}
 	report("host-open", "ok", fmt.Sprintf("url=isolated browserProfile=present launcher=%s", filepath.Base(launcher)))
+}
+
+func darwinBrowserAppInstalled(appName string) bool {
+	home, _ := os.UserHomeDir()
+	return darwinBrowserAppInstalledInRoots(appName, home, []string{"/Applications", "/System/Applications"})
+}
+
+func darwinBrowserAppInstalledInRoots(appName, home string, roots []string) bool {
+	appName = strings.TrimSpace(appName)
+	if appName == "" {
+		return false
+	}
+	appName = strings.TrimSuffix(appName, ".app") + ".app"
+	candidates := make([]string, 0, len(roots)+1)
+	if strings.TrimSpace(home) != "" {
+		candidates = append(candidates, filepath.Join(home, "Applications", appName))
+	}
+	for _, root := range roots {
+		candidates = append(candidates, filepath.Join(root, appName))
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func (a app) profile(args []string) error {

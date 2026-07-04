@@ -2282,6 +2282,26 @@ func TestDoctorRejectsUnsupportedBrowserApp(t *testing.T) {
 	}
 }
 
+func TestDarwinBrowserAppInstalledInStandardRoots(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Chromium.app"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "Applications", "Google Chrome.app"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !darwinBrowserAppInstalledInRoots("Chromium", "", []string{root}) {
+		t.Fatal("expected Chromium app in system root to be detected")
+	}
+	if !darwinBrowserAppInstalledInRoots("Google Chrome.app", home, nil) {
+		t.Fatal("expected user Applications app to be detected")
+	}
+	if darwinBrowserAppInstalledInRoots("Vivaldi", "", []string{root}) {
+		t.Fatal("unexpected missing app detection")
+	}
+}
+
 func TestCheckEnvRejectsHideoutSecretEnvLeak(t *testing.T) {
 	var reports []string
 	checkEnv(envpolicy.Result{
