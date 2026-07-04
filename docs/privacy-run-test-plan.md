@@ -248,9 +248,10 @@ Required checks:
   files, and ephemeral identity while preserving audit;
 - cleanup dry-run and `--session` filtering keep non-selected session state
   intact while still reporting secret-bearing cleanup state.
-- run-end Boundary Summary reports the audit path and HostFS / `host.open` /
-  implemented PortBridge or product endpoint exposure allowed, denied,
-  unsupported, audit-only, or error counts from the structured audit facts;
+- verbose run-end Boundary Summary reports the audit path and HostFS /
+  `host.open` / implemented PortBridge or product endpoint exposure allowed,
+  denied, unsupported, audit-only, or error counts from the structured audit
+  facts;
 - product endpoint exposure summary entries include non-secret source class and
   close reason, such as `declared`, `manual`, `observed`, `first-request`,
   `ttl`, `process-exit`, or `session-end`;
@@ -747,7 +748,8 @@ Gate 2 smoke. The gate proves reuse does not weaken privacy boundaries.
 Required checks:
 
 - `hideout run -- <command>` creates an environment for the current
-  profile/workspace when none exists and prints a resume ID;
+  profile/workspace when none exists, while `hideout list` exposes the resume
+  ID;
 - a second `hideout run -- <command>` from the same workspace reuses that
   environment;
 - running from a different workspace creates or selects a different environment;
@@ -766,8 +768,9 @@ Required checks:
 - Gate 2 covers `hideout stop --idle <duration>` and
   `hideout clean --stopped`/`hideout clean --idle <duration>` with temporary
   environments so idle memory release and destructive cleanup are not confused;
-- successful reusable Lima runs print a resume hint on stderr without changing
-  target stdout, while `--rm` runs do not print a reusable resume hint;
+- successful reusable Lima runs keep target stdout/stderr clean by default;
+  `--verbose` prints a resume hint on stderr without changing target stdout,
+  while `--rm` runs do not print a reusable resume hint;
 - every run, including resumed runs, gets a fresh session ID, broker token,
   command proxy shim directory, network plan, proxy secret runtime file, and
   audit context;

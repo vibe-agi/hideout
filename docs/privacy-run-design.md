@@ -1391,13 +1391,18 @@ run ended at least that long ago. Cleanup must preserve audit logs unless the
 user uses a future explicit destructive cleanup mode. The default cleanup must
 not delete the real workspace.
 
-Suggested user output after a run:
+Suggested verbose user output after a run:
 
 ```text
 Hideout environment: 16f8850e
 workspace: /path/project
 resume: hideout run --resume 16f8850e -- <command>
 ```
+
+Default `hideout run` output should stay close to native command execution:
+target stdout/stderr pass through, while Hideout control-plane progress,
+environment hints, and Boundary Summary are shown through `--verbose`,
+`explain`, `hideout list`, TUI, Web UI, audit files, or Manager API.
 
 The product rule is:
 

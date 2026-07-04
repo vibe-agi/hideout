@@ -989,6 +989,51 @@ func TestRunExplainFlagPrintsBoundaryWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestRunSuppressesControlSummaryUnlessVerbose(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--backend", "native",
+		"--allow-weak-isolation",
+		"--",
+		"sh", "-c", "printf target-output",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("default run exit=%d stderr=%s", code, errOut.String())
+	}
+	if got := out.String(); got != "target-output" {
+		t.Fatalf("default run stdout=%q", got)
+	}
+	if strings.Contains(errOut.String(), "Hideout boundary:") ||
+		strings.Contains(errOut.String(), "Hideout environment:") ||
+		strings.Contains(errOut.String(), "resume: hideout run --resume") {
+		t.Fatalf("default run should not print control summary:\n%s", errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{
+		"run",
+		"--backend", "native",
+		"--allow-weak-isolation",
+		"--verbose",
+		"--",
+		"sh", "-c", "printf target-output",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("verbose run exit=%d stderr=%s", code, errOut.String())
+	}
+	if got := out.String(); got != "target-output" {
+		t.Fatalf("verbose run stdout=%q", got)
+	}
+	if !strings.Contains(errOut.String(), "Hideout boundary:") {
+		t.Fatalf("verbose run should print boundary summary:\n%s", errOut.String())
+	}
+}
+
 func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) {
 	var out, errOut bytes.Buffer
 	a := app{stdout: &out, stderr: &errOut}

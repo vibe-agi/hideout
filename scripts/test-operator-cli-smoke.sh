@@ -203,7 +203,7 @@ run_operator_guest() {
   local stderr="$3"
   local new_env="$4"
   shift 4
-  local run_args=(run --backend lima --profile "$profile_name" --workspace "$workspace")
+  local run_args=(run --verbose --backend lima --profile "$profile_name" --workspace "$workspace")
   if [ "$new_env" = "1" ]; then
     run_args+=(--new)
   fi

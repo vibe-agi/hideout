@@ -67,7 +67,7 @@ hideout run --profile smoke --backend lima -- pwd
 配置 CLI 工具供给；工具供给从下一节开始。
 
 可复用 Lima 环境按 profile、workspace、backend 和工具策略建立索引。
-成功运行后会打印一个 resume ID：
+使用 `hideout list` 查看可 resume 的环境：
 
 ```bash
 hideout list
@@ -184,7 +184,15 @@ Hideout 会创建一个 run-scoped host-to-guest 映射，并在主机浏览器�
 
 ## 审计与清理
 
-每次运行都会打印边界摘要，并写入 audit log 路径：
+默认情况下，`hideout run` 会尽量接近本地命令执行体验：目标命令的 stdout
+和 stderr 原样透出，Hideout 控制面进度默认保持安静。如果你需要环境提示、
+resume 命令和边界摘要，使用 `--verbose`：
+
+```bash
+hideout run --verbose --profile smoke --backend lima -- pwd
+```
+
+verbose 运行会打印边界摘要和 audit log 路径：
 
 ```text
 Hideout boundary:

@@ -718,6 +718,41 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	}
 }
 
+func TestRunSeparatesControlOutputFromTargetOutput(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", emitOutput: true}
+	var targetOut, targetErr, controlOut, controlErr bytes.Buffer
+	b := Backend{
+		Runner:        runner,
+		Stdin:         bytes.NewBufferString(""),
+		Stdout:        &targetOut,
+		Stderr:        &targetErr,
+		ControlStdout: &controlOut,
+		ControlStderr: &controlErr,
+	}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	runEnv := []string{
+		"HOME=/hideout/profile/home",
+		"PATH=/hideout/session/shims:/usr/bin",
+	}
+	if err := b.Run(context.Background(), session, []string{"sh", "-c", "pwd"}, runEnv); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := controlOut.String(), "call1\ncall2\ncall3\ncall4\n"; got != want {
+		t.Fatalf("control stdout=%q want %q", got, want)
+	}
+	if got, want := targetOut.String(), "call5\n"; got != want {
+		t.Fatalf("target stdout=%q want %q", got, want)
+	}
+	if targetErr.Len() != 0 || controlErr.Len() != 0 {
+		t.Fatalf("unexpected stderr target=%q control=%q", targetErr.String(), controlErr.String())
+	}
+}
+
 func TestRunStartsHostFSBeforeCommandCheckWhenEnabled(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
@@ -1186,6 +1221,7 @@ type recordingRunner struct {
 	calls      []recordedCall
 	failCall   int
 	listOutput string
+	emitOutput bool
 }
 
 type recordedCall struct {
@@ -1202,6 +1238,9 @@ func (r *recordingRunner) Run(_ context.Context, name string, args []string, env
 	r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
 	if r.failCall > 0 && len(r.calls) == r.failCall {
 		return errors.New("guest command not found")
+	}
+	if r.emitOutput {
+		_, _ = io.WriteString(stdout, "call"+strconv.Itoa(len(r.calls))+"\n")
 	}
 	if len(args) == 2 && args[0] == "list" && args[1] == "--quiet" && r.listOutput != "" {
 		_, _ = io.WriteString(stdout, r.listOutput)

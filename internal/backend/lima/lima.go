@@ -53,11 +53,13 @@ func (ExecRunner) Run(ctx context.Context, name string, args []string, env []str
 }
 
 type Backend struct {
-	LimactlPath string
-	Runner      CommandRunner
-	Stdout      io.Writer
-	Stderr      io.Writer
-	Stdin       io.Reader
+	LimactlPath   string
+	Runner        CommandRunner
+	Stdout        io.Writer
+	Stderr        io.Writer
+	ControlStdout io.Writer
+	ControlStderr io.Writer
+	Stdin         io.Reader
 }
 
 type limaConfig struct {
@@ -258,25 +260,25 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 			startArgs = []string{"start", "--tty=false", session.InstanceName}
 		}
 	}
-	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.stdout(), b.stderr()); err != nil {
+	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 		return err
 	}
 	setupEnv := SetupEnv(env)
 	setupWorkdir := GuestSessionDir + "/tmp"
 	if session.NetworkBootstrapGuestPath != "" {
-		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{session.NetworkBootstrapGuestPath}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
+		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{session.NetworkBootstrapGuestPath}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
 			return err
 		}
 	}
-	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{GuestBootstrapPath}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
+	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{GuestBootstrapPath}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
 		return err
 	}
 	if session.HostFSEnabled {
-		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{"sh", "-c", HostFSStartScript(session.HostFSGrafts)}), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
+		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{"sh", "-c", HostFSStartScript(session.HostFSGrafts)}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
 			return fmt.Errorf("hostfs start: %w", err)
 		}
 	}
-	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, CommandCheck(command[0])), hostEnv, b.stdin(), b.stdout(), b.stderr()); err != nil {
+	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, CommandCheck(command[0])), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
 		return backend.CommandNotFoundError{
 			Backend:   b.Name(),
 			Command:   command[0],
@@ -974,4 +976,18 @@ func (b Backend) stderr() io.Writer {
 		return b.Stderr
 	}
 	return os.Stderr
+}
+
+func (b Backend) controlStdout() io.Writer {
+	if b.ControlStdout != nil {
+		return b.ControlStdout
+	}
+	return b.stdout()
+}
+
+func (b Backend) controlStderr() io.Writer {
+	if b.ControlStderr != nil {
+		return b.ControlStderr
+	}
+	return b.stderr()
 }

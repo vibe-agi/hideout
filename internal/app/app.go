@@ -108,6 +108,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --no-fs read:/path --no-profile-fs -- <command>")
+	fmt.Fprintln(a.stdout, "  hideout run --verbose -- <command>  # print Hideout control-plane progress and summary")
 	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
 	fmt.Fprintln(a.stdout, "  hideout init [--no-input] [--backend lima|auto] [--network direct]")
 	fmt.Fprintln(a.stdout, "  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only")
@@ -235,6 +236,7 @@ type runOptions struct {
 	allowWeakIsolation    bool
 	allowUnsafeWorkspace  bool
 	explainOnly           bool
+	verbose               bool
 	ephemeral             bool
 	newEnvironment        bool
 	resumeEnvironment     string
@@ -329,7 +331,9 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 	if err != nil {
 		return err
 	}
-	a.writeRunResultSummary(result)
+	if opts.verbose {
+		a.writeRunResultSummary(result)
+	}
 	return nil
 }
 
@@ -473,10 +477,18 @@ func appendBrokerEnv(env []string, endpoint broker.Endpoint, sessionID, token, s
 func (a app) backend(name string, opts runOptions) backend.Backend {
 	switch name {
 	case "lima":
+		controlOut := io.Discard
+		controlErr := io.Discard
+		if opts.verbose {
+			controlOut = a.stdout
+			controlErr = a.stderr
+		}
 		return lima.Backend{
-			Stdout: a.stdout,
-			Stderr: a.stderr,
-			Stdin:  os.Stdin,
+			Stdout:        a.stdout,
+			Stderr:        a.stderr,
+			ControlStdout: controlOut,
+			ControlStderr: controlErr,
+			Stdin:         os.Stdin,
 		}
 	default:
 		return native.Backend{
@@ -531,6 +543,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	fs.BoolVar(&opts.allowWeakIsolation, "allow-weak-isolation", false, "allow native weak isolation")
 	fs.BoolVar(&opts.allowUnsafeWorkspace, "allow-unsafe-workspace", false, "explicitly allow mounting a sensitive workspace root")
 	fs.BoolVar(&opts.explainOnly, "explain", opts.explainOnly, "print the run boundary without executing the command")
+	fs.BoolVar(&opts.verbose, "verbose", false, "print Hideout control-plane progress and run summary")
 	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "use session-local identity state for this run")
 	fs.BoolVar(&opts.newEnvironment, "new", false, "create a new reusable environment")
 	fs.StringVar(&opts.resumeEnvironment, "resume", "", "resume an environment id")

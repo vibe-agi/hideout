@@ -71,7 +71,7 @@ This first run should only verify the backend, workspace mount, and isolated
 identity. Do not configure CLI tool provisioning until the next section.
 
 Reusable Lima environments are keyed by profile, workspace, backend, and tool
-policy. A successful run prints a resume ID:
+policy. Use `hideout list` to see resumable environments:
 
 ```bash
 hideout list
@@ -190,7 +190,16 @@ remains intact.
 
 ## Audit And Cleanup
 
-Each run prints a boundary summary and writes an audit log path:
+By default, `hideout run` keeps the terminal close to local command execution:
+target stdout and stderr are passed through, while Hideout control-plane
+progress is kept quiet. Use `--verbose` when you want the environment hint,
+resume command, and boundary summary:
+
+```bash
+hideout run --verbose --profile smoke --backend lima -- pwd
+```
+
+Verbose runs print a boundary summary and the audit log path:
 
 ```text
 Hideout boundary:

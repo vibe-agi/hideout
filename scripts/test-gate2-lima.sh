@@ -198,7 +198,7 @@ if ! with_timeout "$GATE_TIMEOUT" env \
   SERVICE_TOKEN="gate2-secret" \
   HIDEOUT_ENABLE_LAB=1 \
   HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@proxy.invalid:1080" \
-  "$hideout" run --backend lima --workspace "$workspace" -- sh -eu -c '
+  "$hideout" run --verbose --backend lima --workspace "$workspace" -- sh -eu -c '
 actual_pwd=$(pwd)
 printf "pwd=%s\n" "$actual_pwd"
 printf "read=%s\n" "$(cat input.txt)"
