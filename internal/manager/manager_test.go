@@ -1908,19 +1908,19 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	envStore := environment.Store{Root: store.Root}
 	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
-	running, err := envStore.Create(environment.Spec{
+	ready, err := envStore.Create(environment.Spec{
 		Profile:        "default",
 		Backend:        "lima",
-		Workspace:      "/work/running",
+		Workspace:      "/work/ready",
 		GuestWorkspace: "/workspace",
-		InstanceName:   "hideout-running",
+		InstanceName:   "hideout-ready",
 	})
 	if err != nil {
-		t.Fatalf("create running environment: %v", err)
+		t.Fatalf("create ready environment: %v", err)
 	}
-	running.Status = "running"
-	running.LastEndedAt = now.Add(-2 * time.Hour)
-	if err := envStore.Save(running); err != nil {
+	ready.Status = "ready"
+	ready.LastEndedAt = now.Add(-2 * time.Hour)
+	if err := envStore.Save(ready); err != nil {
 		t.Fatal(err)
 	}
 	stopped, err := envStore.Create(environment.Spec{
@@ -1947,7 +1947,7 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create native environment: %v", err)
 	}
-	nativeRec.Status = "running"
+	nativeRec.Status = "ready"
 	nativeRec.LastEndedAt = now.Add(-4 * time.Hour)
 	if err := envStore.Save(nativeRec); err != nil {
 		t.Fatal(err)
@@ -1955,7 +1955,7 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 
 	core := Core{Store: store}
 	stopPlan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{
-		IDs:     []string{running.ID, stopped.ID, nativeRec.ID},
+		IDs:     []string{ready.ID, stopped.ID, nativeRec.ID},
 		Idle:    time.Hour,
 		IdleSet: true,
 		Now:     now,
@@ -1966,7 +1966,7 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	if stopPlan.Action != EnvironmentActionStop || stopPlan.Total != 3 || len(stopPlan.Targets) != 1 || len(stopPlan.Skipped) != 2 {
 		t.Fatalf("unexpected stop plan: %+v", stopPlan)
 	}
-	if stopPlan.Targets[0].ID != running.ID {
+	if stopPlan.Targets[0].ID != ready.ID {
 		t.Fatalf("stop target mismatch: %+v", stopPlan.Targets)
 	}
 	reasons := map[string]bool{}
@@ -1984,19 +1984,19 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	if len(stopResult.Applied) != 1 || stopResult.Applied[0].Status != "stopped" {
 		t.Fatalf("unexpected stop result: %+v", stopResult)
 	}
-	if !reflect.DeepEqual(operator.stopped, []string{"hideout-running"}) {
+	if !reflect.DeepEqual(operator.stopped, []string{"hideout-ready"}) {
 		t.Fatalf("stop operator calls mismatch: %+v", operator.stopped)
 	}
-	loadedRunning, err := envStore.Load(running.ID)
+	loadedReady, err := envStore.Load(ready.ID)
 	if err != nil {
 		t.Fatalf("load stopped environment: %v", err)
 	}
-	if loadedRunning.Status != "stopped" {
-		t.Fatalf("environment status not persisted: %+v", loadedRunning)
+	if loadedReady.Status != "stopped" {
+		t.Fatalf("environment status not persisted: %+v", loadedReady)
 	}
 
 	cleanPlan, err := core.PlanEnvironmentClean(EnvironmentActionOptions{
-		IDs:         []string{running.ID, stopped.ID, nativeRec.ID},
+		IDs:         []string{ready.ID, stopped.ID, nativeRec.ID},
 		StoppedOnly: true,
 		Now:         now,
 	})
@@ -2014,10 +2014,10 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	if len(cleanResult.Applied) != 2 {
 		t.Fatalf("unexpected clean result: %+v", cleanResult)
 	}
-	if !reflect.DeepEqual(operator.cleaned, []string{"hideout-running", "hideout-stopped"}) {
+	if !reflect.DeepEqual(operator.cleaned, []string{"hideout-ready", "hideout-stopped"}) {
 		t.Fatalf("clean operator calls mismatch: %+v", operator.cleaned)
 	}
-	for _, id := range []string{running.ID, stopped.ID} {
+	for _, id := range []string{ready.ID, stopped.ID} {
 		if _, err := envStore.Load(id); err == nil {
 			t.Fatalf("environment %s should have been removed", id)
 		}

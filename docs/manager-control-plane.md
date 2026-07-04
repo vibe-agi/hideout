@@ -213,6 +213,10 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
 - CLI `run` is now a thin caller over `PlanRun`, `ExplainRun`, and `ApplyRun`.
   TUI, WebUI, and automation must use the same Manager operation instead of
   reassembling the backend/data-plane sequence.
+- CLI `stop` and `clean` are thin callers over Manager reusable environment
+  lifecycle plan/apply operations. TUI, WebUI, and automation must use the same
+  target/skipped/apply model instead of reimplementing environment store
+  selection, backend stop, or cleanup logic.
 - Manager API exposes the minimal run surface: `POST /api/v1/run/plan`,
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
 - Manager API exposes the minimal init/tool setup surface:

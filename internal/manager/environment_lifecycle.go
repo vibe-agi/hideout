@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"time"
 
@@ -215,7 +214,7 @@ func filterEnvironmentActionRecords(records []environment.Record, opts Environme
 			continue
 		}
 		if opts.IdleSet {
-			if rec.LastEndedAt.IsZero() || now.Sub(rec.LastEndedAt) < opts.Idle {
+			if rec.Status == "running" || rec.LastEndedAt.IsZero() || now.Sub(rec.LastEndedAt) < opts.Idle {
 				continue
 			}
 		}
@@ -303,10 +302,4 @@ func environmentOperatorOrDefault(operator EnvironmentOperator) EnvironmentOpera
 		return operator
 	}
 	return lima.Backend{Stdout: io.Discard, Stderr: io.Discard}
-}
-
-func sortEnvironmentTargetsByID(targets []EnvironmentActionTarget) {
-	slices.SortFunc(targets, func(a, b EnvironmentActionTarget) int {
-		return strings.Compare(a.ID, b.ID)
-	})
 }

@@ -3536,63 +3536,31 @@ func (a app) stopEnvironments(args []string) error {
 	if err != nil {
 		return err
 	}
-	envStore := environment.Store{Root: store.Root}
-	records, err := cleanEnvironmentRecords(envStore, fs.Args())
-	if err != nil {
-		return err
-	}
-	records = filterEnvironmentRecords(records, environmentRecordFilter{
+	core := manager.New(store)
+	plan, err := core.PlanEnvironmentStop(manager.EnvironmentActionOptions{
+		IDs:     fs.Args(),
 		Idle:    idle,
 		IdleSet: idleSet,
 		Now:     time.Now().UTC(),
 	})
-	stopped := 0
-	skipped := 0
-	mode := "stopped"
-	if *dryRun {
-		mode = "would stop"
-	}
-	for _, rec := range records {
-		if rec.Status == "stopped" {
-			skipped++
-			fmt.Fprintf(a.stdout, "skipped: %s reason=already-stopped instance=%s workspace=%s\n", rec.ID, rec.InstanceName, rec.Workspace)
-			continue
-		}
-		if rec.Backend != "lima" || rec.InstanceName == "" {
-			skipped++
-			fmt.Fprintf(a.stdout, "skipped: %s reason=no-lima-instance backend=%s workspace=%s\n", rec.ID, rec.Backend, rec.Workspace)
-			continue
-		}
-		if *dryRun {
-			stopped++
-			fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
-			continue
-		}
-		lock, err := envStore.Lock(rec.ID)
-		if err != nil {
-			return err
-		}
-		stopErr := (lima.Backend{Stdout: io.Discard, Stderr: a.stderr}).StopInstance(context.Background(), rec.InstanceName)
-		if stopErr != nil {
-			_ = lock.Unlock()
-			return stopErr
-		}
-		rec.Status = "stopped"
-		if err := envStore.Save(rec); err != nil {
-			_ = lock.Unlock()
-			return err
-		}
-		if err := lock.Unlock(); err != nil {
-			return err
-		}
-		stopped++
-		fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
+	if err != nil {
+		return err
 	}
 	if *dryRun {
-		fmt.Fprintf(a.stdout, "stop: environments=%d would stop=%d skipped=%d\n", len(records), stopped, skipped)
+		a.writeEnvironmentTargets("would stop", plan.Targets)
+		a.writeEnvironmentSkipped(plan.Skipped)
+		fmt.Fprintf(a.stdout, "stop: environments=%d would stop=%d skipped=%d\n", plan.Total, len(plan.Targets), len(plan.Skipped))
 		return nil
 	}
-	fmt.Fprintf(a.stdout, "stop: environments=%d stopped=%d skipped=%d\n", len(records), stopped, skipped)
+	result, err := core.ApplyEnvironmentStop(context.Background(), plan, manager.EnvironmentApplyOptions{
+		Operator: lima.Backend{Stdout: io.Discard, Stderr: a.stderr},
+	})
+	if err != nil {
+		return err
+	}
+	a.writeEnvironmentTargets("stopped", result.Applied)
+	a.writeEnvironmentSkipped(result.Skipped)
+	fmt.Fprintf(a.stdout, "stop: environments=%d stopped=%d skipped=%d\n", plan.Total, len(result.Applied), len(result.Skipped))
 	return nil
 }
 
@@ -3613,78 +3581,33 @@ func (a app) cleanEnvironments(args []string) error {
 	if err != nil {
 		return err
 	}
-	envStore := environment.Store{Root: store.Root}
-	records, err := cleanEnvironmentRecords(envStore, fs.Args())
-	if err != nil {
-		return err
-	}
-	records = filterEnvironmentRecords(records, environmentRecordFilter{
+	core := manager.New(store)
+	plan, err := core.PlanEnvironmentClean(manager.EnvironmentActionOptions{
+		IDs:         fs.Args(),
 		StoppedOnly: *stoppedOnly,
 		Idle:        idle,
 		IdleSet:     idleSet,
 		Now:         time.Now().UTC(),
 	})
-	mode := "removed"
-	if *dryRun {
-		mode = "would remove"
-	}
-	removed := 0
-	for _, rec := range records {
-		if *dryRun {
-			fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
-			continue
-		}
-		if rec.Backend == "lima" && rec.InstanceName != "" {
-			if err := (lima.Backend{Stdout: io.Discard, Stderr: a.stderr}).Cleanup(context.Background(), &backend.Session{InstanceName: rec.InstanceName}); err != nil {
-				return err
-			}
-		}
-		if err := envStore.Remove(rec.ID); err != nil {
-			return err
-		}
-		removed++
-		fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, rec.ID, rec.InstanceName, rec.Workspace)
+	if err != nil {
+		return err
 	}
 	if *dryRun {
-		fmt.Fprintf(a.stdout, "clean: environments=%d would remove=%d\n", len(records), len(records))
+		a.writeEnvironmentTargets("would remove", plan.Targets)
+		a.writeEnvironmentSkipped(plan.Skipped)
+		fmt.Fprintf(a.stdout, "clean: environments=%d would remove=%d\n", plan.Total, len(plan.Targets))
 		return nil
 	}
-	fmt.Fprintf(a.stdout, "clean: environments=%d removed=%d\n", len(records), removed)
+	result, err := core.ApplyEnvironmentClean(context.Background(), plan, manager.EnvironmentApplyOptions{
+		Operator: lima.Backend{Stdout: io.Discard, Stderr: a.stderr},
+	})
+	if err != nil {
+		return err
+	}
+	a.writeEnvironmentTargets("removed", result.Applied)
+	a.writeEnvironmentSkipped(result.Skipped)
+	fmt.Fprintf(a.stdout, "clean: environments=%d removed=%d\n", plan.Total, len(result.Applied))
 	return nil
-}
-
-type environmentRecordFilter struct {
-	StoppedOnly bool
-	Idle        time.Duration
-	IdleSet     bool
-	Now         time.Time
-}
-
-func filterEnvironmentRecords(records []environment.Record, filter environmentRecordFilter) []environment.Record {
-	if !filter.StoppedOnly && !filter.IdleSet {
-		return records
-	}
-	out := records[:0]
-	for _, rec := range records {
-		if filter.StoppedOnly && rec.Status != "stopped" {
-			continue
-		}
-		if filter.IdleSet && !environmentRecordIdle(rec, filter.Idle, filter.Now) {
-			continue
-		}
-		out = append(out, rec)
-	}
-	return out
-}
-
-func environmentRecordIdle(rec environment.Record, idle time.Duration, now time.Time) bool {
-	if rec.Status == "running" || rec.LastEndedAt.IsZero() {
-		return false
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	return !rec.LastEndedAt.After(now.Add(-idle))
 }
 
 func parseIdleDuration(value string) (time.Duration, bool, error) {
@@ -3702,24 +3625,20 @@ func parseIdleDuration(value string) (time.Duration, bool, error) {
 	return duration, true, nil
 }
 
-func cleanEnvironmentRecords(store environment.Store, ids []string) ([]environment.Record, error) {
-	if len(ids) == 0 {
-		return store.List()
+func (a app) writeEnvironmentTargets(mode string, targets []manager.EnvironmentActionTarget) {
+	for _, target := range targets {
+		fmt.Fprintf(a.stdout, "%s: %s instance=%s workspace=%s\n", mode, target.ID, target.InstanceName, target.Workspace)
 	}
-	records := make([]environment.Record, 0, len(ids))
-	seen := map[string]bool{}
-	for _, id := range ids {
-		rec, err := store.Load(id)
-		if err != nil {
-			return nil, err
-		}
-		if seen[rec.ID] {
+}
+
+func (a app) writeEnvironmentSkipped(targets []manager.EnvironmentActionTarget) {
+	for _, target := range targets {
+		if target.Reason == "no-lima-instance" {
+			fmt.Fprintf(a.stdout, "skipped: %s reason=%s backend=%s workspace=%s\n", target.ID, target.Reason, target.Backend, target.Workspace)
 			continue
 		}
-		seen[rec.ID] = true
-		records = append(records, rec)
+		fmt.Fprintf(a.stdout, "skipped: %s reason=%s instance=%s workspace=%s\n", target.ID, target.Reason, target.InstanceName, target.Workspace)
 	}
-	return records, nil
 }
 
 func formatEnvironmentTime(value time.Time) string {
