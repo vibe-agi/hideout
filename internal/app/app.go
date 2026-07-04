@@ -3892,7 +3892,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	} else {
 		fmt.Fprintln(w, "Status: ok")
 	}
-	fmt.Fprintf(w, "Profiles: %d  Sessions: %d  Audit files: %d\n", len(overview.Profiles), len(overview.Sessions), overview.Audit.SessionAuditFiles)
+	fmt.Fprintf(w, "Profiles: %d  Environments: %d  Sessions: %d  Audit files: %d\n", len(overview.Profiles), len(overview.Environments), len(overview.Sessions), overview.Audit.SessionAuditFiles)
 	fmt.Fprintf(w, "Init: initialized=%t pending=%d profile=%s\n", overview.Init.Initialized, overview.Init.PendingTasks, dash(overview.Init.Profile))
 	if len(overview.Init.NextSteps) > 0 {
 		fmt.Fprintln(w, "Init Next:")
@@ -3938,6 +3938,22 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	for _, n := range overview.Network.ProfileDefaults {
 		mode := networkModeForTUI(n.Mode)
 		fmt.Fprintf(w, "  - %s  mode=%s  proxyEnv=%s%s\n", dash(n.Profile), mode, proxyEnvForTUI(n.ProxyEnvVisible), networkWarningForTUI(mode))
+	}
+
+	fmt.Fprintln(w, "\nEnvironments")
+	if len(overview.Environments) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, env := range overview.Environments {
+		fmt.Fprintf(w, "  - %s  status=%s  backend=%s  profile=%s  instance=%s  workspace=%s  last=%s\n",
+			dash(env.ID),
+			dash(env.Status),
+			dash(env.Backend),
+			dash(env.Profile),
+			dash(env.InstanceName),
+			dash(env.Workspace),
+			dash(env.LastCommand),
+		)
 	}
 
 	fmt.Fprintln(w, "\nSessions")

@@ -508,6 +508,8 @@ func overviewResource(overview Overview, resource string) (any, bool) {
 		return nonNilSlice(overview.Profiles), true
 	case "sessions":
 		return nonNilSlice(overview.Sessions), true
+	case "environments":
+		return nonNilSlice(overview.Environments), true
 	case "backends":
 		return nonNilSlice(overview.Backends), true
 	case "capabilities":

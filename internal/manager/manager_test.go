@@ -1758,6 +1758,26 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(sessionDir, "tmp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	envStore := environment.Store{Root: store.Root}
+	envRec, err := envStore.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/work/project",
+		GuestWorkspace: "/work/project",
+		ProfileID:      p.Metadata["profileId"],
+		IdentityID:     p.Metadata["identityId"],
+		InstanceName:   "hideout-default-env-test",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	envRec.Status = "running"
+	envRec.LastSessionID = "ses_test"
+	envRec.LastCommand = "pwd"
+	envRec.LastStartedAt = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if err := envStore.Save(envRec); err != nil {
+		t.Fatalf("save environment: %v", err)
+	}
 
 	core := Core{
 		Store: store,
@@ -1839,6 +1859,16 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	}
 	if ses.NetworkMode != network.ModeTun2Socks {
 		t.Fatalf("session details mismatch: %+v", ses)
+	}
+	if len(overview.Environments) != 1 {
+		t.Fatalf("environments=%+v", overview.Environments)
+	}
+	env := overview.Environments[0]
+	if env.ID != envRec.ID || env.Profile != "default" || env.Backend != "lima" ||
+		env.Status != "running" || env.InstanceName != "hideout-default-env-test" ||
+		env.LastSessionID != "ses_test" || env.LastCommand != "pwd" ||
+		env.Workspace != "/work/project" || env.GuestWorkspace != "/work/project" {
+		t.Fatalf("environment summary mismatch: %+v", env)
 	}
 
 	data, err := json.Marshal(overview)

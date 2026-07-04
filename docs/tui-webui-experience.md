@@ -104,12 +104,12 @@ Implemented smoke surface shows:
 - backend status;
 - network mode and privacy warning;
 - active sessions;
+- reusable environments;
 - recent denied audit events;
 - recent audit events.
 
 Design-ready additions:
 
-- active environment;
 - install/doctor warnings.
 
 ### Doctor
@@ -139,6 +139,7 @@ Shows:
 Shows:
 
 - running sessions;
+- reusable environment records;
 - resume IDs;
 - command;
 - profile;

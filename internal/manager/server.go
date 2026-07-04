@@ -285,6 +285,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
   <button class="tab" type="button" data-panel="setup">Setup</button>
   <button class="tab" type="button" data-panel="run">Run</button>
   <button class="tab" type="button" data-panel="profiles">Profiles</button>
+  <button class="tab" type="button" data-panel="environments">Environments</button>
   <button class="tab" type="button" data-panel="sessions">Sessions</button>
   <button class="tab" type="button" data-panel="capabilities">Capabilities</button>
   <button class="tab" type="button" data-panel="broker">Broker</button>
@@ -397,6 +398,7 @@ function apiPost(path, payload) {
 }
 function renderSummary() {
   const profiles = overview.profiles || [];
+  const environments = overview.environments || [];
   const sessions = overview.sessions || [];
   const backends = overview.backends || [];
   const available = backends.filter(function(b) { return b.available; }).length;
@@ -404,6 +406,7 @@ function renderSummary() {
   const denied = deniedAuditEvents();
   summaryEl.innerHTML = [
     metric("Profiles", profiles.length, profiles.map(function(p) { return p.name; }).join(", ")),
+    metric("Environments", environments.length, environments.slice(0, 3).map(function(e) { return (e.status || "unknown") + ":" + (e.profile || "-"); }).join(", ")),
     metric("Sessions", sessions.length, sessions.filter(function(s) { return s.hasAudit; }).length + " with audit"),
     metric("Backends", available + "/" + backends.length, backends.map(function(b) { return b.name; }).join(", ")),
     metric("Denied", denied.length, denied.slice(0, 3).map(function(e) { return e.action || "event"; }).join(", ")),
@@ -426,6 +429,7 @@ function domainOwner(name) {
     setup: "init/tool-supply",
     run: "manager/backend",
     profiles: "profile",
+    environments: "manager/environment",
     sessions: "manager/backend",
     capabilities: "policy/cmdproxy",
     broker: "broker",
@@ -446,6 +450,7 @@ const renderers = {
       item("Manager", overview.version || "hideout.manager/v1", [["storageRoot", overview.storageRoot], ["storeRoot", s.storeRoot], ["maxCapabilities", c.maxCapabilities || []]], "ok"),
       item("Init", init.initialized ? "initialized" : "needs setup", [["profile", init.profile], ["pendingTasks", init.pendingTasks], ["nextSteps", initSteps.map(function(step) { return (step.label || step.id) + ": " + step.command; })]], init.pendingTasks ? "warn" : "ok"),
       item("Broker", "host boundary", [["actions", overview.broker && overview.broker.actions], ["commandProxies", overview.broker && overview.broker.commandProxies]], "info"),
+      item("Environments", "reusable guest state", [["count", (overview.environments || []).length], ["running", (overview.environments || []).filter(function(e) { return e.status === "running"; }).length]], "info"),
       item("Audit", "redacted JSONL", [["sessionAuditFiles", overview.audit && overview.audit.sessionAuditFiles], ["eventsLoaded", auditEvents.length]], "ok")
     ].join("") + "</div>";
   },
@@ -492,6 +497,14 @@ const renderers = {
     return '<div class="items">' + profiles.map(function(p) {
       const tone = p.validationError ? "error" : "ok";
       return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies]], tone);
+    }).join("") + "</div>";
+  },
+  environments: function() {
+    const environments = overview.environments || [];
+    if (!environments.length) return empty("No reusable environments");
+    return '<div class="items">' + environments.map(function(e) {
+      const tone = e.status === "running" ? "warn" : e.status === "stopped" ? "info" : "ok";
+      return item(e.id, e.status || "environment", [["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
     }).join("") + "</div>";
   },
   sessions: function() {
@@ -798,7 +811,7 @@ async function load() {
     renderAuditTail();
     setStatus("connected", "ok");
   } catch (error) {
-    overview = {profiles: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
+    overview = {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
     auditEvents = [];
     deniedEvents = [];
     summaryEl.innerHTML = "";

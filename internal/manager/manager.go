@@ -10,10 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -34,20 +36,21 @@ type BackendCheck struct {
 }
 
 type Overview struct {
-	Version      string            `json:"version"`
-	StorageRoot  string            `json:"storageRoot"`
-	Profiles     []ProfileSummary  `json:"profiles"`
-	Sessions     []SessionSummary  `json:"sessions"`
-	Backends     []BackendSummary  `json:"backends"`
-	Capabilities CapabilitySummary `json:"capabilities"`
-	Network      NetworkSummary    `json:"network"`
-	Broker       BrokerSummary     `json:"broker"`
-	Secrets      []SecretSummary   `json:"secrets"`
-	Audit        AuditSummary      `json:"audit"`
-	Settings     SettingsSummary   `json:"settings"`
-	Init         InitSummary       `json:"init"`
-	Bundles      BundleSummary     `json:"bundles"`
-	Projects     ProjectSummary    `json:"projects"`
+	Version      string               `json:"version"`
+	StorageRoot  string               `json:"storageRoot"`
+	Profiles     []ProfileSummary     `json:"profiles"`
+	Sessions     []SessionSummary     `json:"sessions"`
+	Environments []EnvironmentSummary `json:"environments"`
+	Backends     []BackendSummary     `json:"backends"`
+	Capabilities CapabilitySummary    `json:"capabilities"`
+	Network      NetworkSummary       `json:"network"`
+	Broker       BrokerSummary        `json:"broker"`
+	Secrets      []SecretSummary      `json:"secrets"`
+	Audit        AuditSummary         `json:"audit"`
+	Settings     SettingsSummary      `json:"settings"`
+	Init         InitSummary          `json:"init"`
+	Bundles      BundleSummary        `json:"bundles"`
+	Projects     ProjectSummary       `json:"projects"`
 }
 
 type ProfileSummary struct {
@@ -77,6 +80,21 @@ type SessionSummary struct {
 	HasProxySecretFile bool   `json:"hasProxySecretFile"`
 	HasEphemeralState  bool   `json:"hasEphemeralState"`
 	NetworkMode        string `json:"networkMode,omitempty"`
+}
+
+type EnvironmentSummary struct {
+	ID             string    `json:"id"`
+	Profile        string    `json:"profile"`
+	Backend        string    `json:"backend"`
+	Status         string    `json:"status"`
+	Workspace      string    `json:"workspace"`
+	GuestWorkspace string    `json:"guestWorkspace"`
+	InstanceName   string    `json:"instanceName,omitempty"`
+	LastSessionID  string    `json:"lastSessionId,omitempty"`
+	LastCommand    string    `json:"lastCommand,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	LastStartedAt  time.Time `json:"lastStartedAt,omitempty"`
+	LastEndedAt    time.Time `json:"lastEndedAt,omitempty"`
 }
 
 type BackendSummary struct {
@@ -267,6 +285,7 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 		StorageRoot:  c.Store.Root,
 		Profiles:     profiles,
 		Sessions:     sessions,
+		Environments: environmentSummaries(c.Store.Root),
 		Backends:     c.backendSummaries(ctx),
 		Capabilities: capabilities,
 		Network:      networkSummary(profiles),
@@ -346,6 +365,31 @@ func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {
 		out = out[:limit]
 	}
 	return out, errors.Join(errs...)
+}
+
+func environmentSummaries(storeRoot string) []EnvironmentSummary {
+	records, err := (environment.Store{Root: storeRoot}).List()
+	if err != nil {
+		return nil
+	}
+	out := make([]EnvironmentSummary, 0, len(records))
+	for _, rec := range records {
+		out = append(out, EnvironmentSummary{
+			ID:             rec.ID,
+			Profile:        rec.Profile,
+			Backend:        rec.Backend,
+			Status:         rec.Status,
+			Workspace:      rec.Workspace,
+			GuestWorkspace: rec.GuestWorkspace,
+			InstanceName:   rec.InstanceName,
+			LastSessionID:  rec.LastSessionID,
+			LastCommand:    rec.LastCommand,
+			CreatedAt:      rec.CreatedAt,
+			LastStartedAt:  rec.LastStartedAt,
+			LastEndedAt:    rec.LastEndedAt,
+		})
+	}
+	return out
 }
 
 func readAuditEvents(path string, filter AuditEventFilter) ([]audit.Event, error) {

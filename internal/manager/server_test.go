@@ -53,6 +53,7 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 	}
 	for _, want := range []string{
 		`data-panel="profiles"`,
+		`data-panel="environments"`,
 		`data-panel="setup"`,
 		`data-panel="run"`,
 		`data-panel="capabilities"`,
@@ -75,6 +76,8 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`auditFilterFromForm`,
 		`data-audit-action="filter"`,
 		`auditExplorerResult`,
+		`overview.environments`,
+		`No reusable environments`,
 		`Private operations console`,
 		`host.open`,
 		`allowUrls`,

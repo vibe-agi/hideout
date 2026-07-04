@@ -3422,6 +3422,23 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
+	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/tmp/hideout-project",
+		GuestWorkspace: "/tmp/hideout-project",
+		ProfileID:      p.Metadata["profileId"],
+		IdentityID:     p.Metadata["identityId"],
+		InstanceName:   "hideout-default-env-test",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	envRec.Status = "running"
+	envRec.LastCommand = "agent-cli"
+	if err := (environment.Store{Root: store.Root}).Save(envRec); err != nil {
+		t.Fatalf("save environment: %v", err)
+	}
 	var out, errOut bytes.Buffer
 	code := Main([]string{"tui"}, &out, &errOut)
 	if code != 0 {
@@ -3431,6 +3448,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Hideout TUI",
 		"Store: " + store.Root,
 		"Profiles: 1",
+		"Environments: 1",
 		"Init Next:",
 		"Smoke run: hideout run --profile default --backend lima -- pwd",
 		"Capabilities: host.open",
@@ -3440,6 +3458,9 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Backends",
 		"Network",
 		"warning=direct exposes network identity",
+		"Environments",
+		"hideout-default-env-test",
+		"last=agent-cli",
 		"Sessions",
 		"Recent Denied Audit",
 		"Recent Audit",

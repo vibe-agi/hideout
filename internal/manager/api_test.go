@@ -14,6 +14,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
@@ -483,7 +484,7 @@ func TestAPIOverviewReturnsEmptyCollectionsAsArrays(t *testing.T) {
 	if !ok {
 		t.Fatalf("overview data has wrong shape: %+v", decoded.Data)
 	}
-	for _, field := range []string{"profiles", "sessions", "secrets"} {
+	for _, field := range []string{"profiles", "sessions", "environments", "secrets"} {
 		values, ok := overview[field].([]any)
 		if !ok || len(values) != 0 {
 			t.Fatalf("overview.%s should be an empty array, got %#v", field, overview[field])
@@ -597,6 +598,18 @@ func TestAPIExposesDomainResourcesWithoutSecretValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_1", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_1","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://user:pass@example.com/path?token=abc"}}`+"\n", 0o600)
+	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/work/project",
+		GuestWorkspace: "/work/project",
+		ProfileID:      p.Metadata["profileId"],
+		IdentityID:     p.Metadata["identityId"],
+		InstanceName:   "hideout-default-env-test",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
 	api := API{
 		Core: Core{
 			Store: store,
@@ -615,6 +628,7 @@ func TestAPIExposesDomainResourcesWithoutSecretValues(t *testing.T) {
 		"overview",
 		"profiles",
 		"sessions",
+		"environments",
 		"backends",
 		"capabilities",
 		"broker",
@@ -666,6 +680,16 @@ func TestAPIExposesDomainResourcesWithoutSecretValues(t *testing.T) {
 				hostOpen["browserProfile"] != "isolated" ||
 				hostOpen["browserControl"] != "none" {
 				t.Fatalf("capabilities hostOpen mismatch: %+v", hostOpen)
+			}
+		}
+		if resource == "environments" {
+			values, ok := decoded.Data.([]any)
+			if !ok || len(values) != 1 {
+				t.Fatalf("environments data has unexpected shape: %+v", decoded.Data)
+			}
+			env, ok := values[0].(map[string]any)
+			if !ok || env["id"] != envRec.ID || env["instanceName"] != "hideout-default-env-test" {
+				t.Fatalf("environment resource mismatch: %+v", values[0])
 			}
 		}
 	}
