@@ -59,18 +59,12 @@ hideout doctor --backend lima
 
 ```bash
 cd /path/to/sanitized/project
-hideout run --backend lima -- pwd
-```
-
-如果你的 `default` profile 已经配置了 tool preset 或 npm global，Hideout
-即使在运行 `pwd` 这种简单命令前，也会先 provision 这些工具。这可能触发
-首次 `apt-get` 和 `npm install -g`。如果只是做最小 smoke，请使用一个
-没有额外工具策略的新 profile：
-
-```bash
 hideout profile init smoke
 hideout run --profile smoke --backend lima -- pwd
 ```
+
+第一次运行只应该验证 backend、workspace mount 和隔离身份。不要在这一步
+配置 CLI 工具供给；工具供给从下一节开始。
 
 可复用 Lima 环境按 profile、workspace、backend 和工具策略建立索引。
 成功运行后会打印一个 resume ID：
@@ -85,7 +79,7 @@ hideout clean --stopped <env-id>
 使用 `--rm` 可以创建一次性环境：
 
 ```bash
-hideout run --backend lima --rm -- <command>
+hideout run --profile smoke --backend lima --rm -- <command>
 ```
 
 ## 运行一个 CLI 工具
@@ -96,9 +90,10 @@ Hideout 不会 hardcode 某个具体产品的 CLI。你需要在 profile 上配�
 对于 npm CLI：
 
 ```bash
-hideout profile tools default preset add node-dev
-hideout profile tools default npm add --package <npm-package> --command <command>
-hideout run --backend lima -- <command> --version
+hideout profile init agent
+hideout profile tools agent preset add node-dev
+hideout profile tools agent npm add --package <npm-package> --command <command>
+hideout run --profile agent --backend lima -- <command> --version
 ```
 
 `node-dev` 和 npm global 安装会在受管理的 guest setup 阶段运行，并且
@@ -110,7 +105,7 @@ hideout run --backend lima -- <command> --version
 主机 home：
 
 ```bash
-hideout profile home default import \
+hideout profile home agent import \
   --from /host/path/to/state \
   --to .config/<tool>/state
 ```

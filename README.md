@@ -63,18 +63,12 @@ mounted into the guest.
 
 ```bash
 cd /path/to/sanitized/project
-hideout run --backend lima -- pwd
-```
-
-If your `default` profile already has tool presets or npm globals, Hideout will
-provision those tools before running even a simple command such as `pwd`. That
-can trigger a first-time `apt-get` and `npm install -g`. For a minimal smoke
-run, use a fresh profile with no extra tool policy:
-
-```bash
 hideout profile init smoke
 hideout run --profile smoke --backend lima -- pwd
 ```
+
+This first run should only verify the backend, workspace mount, and isolated
+identity. Do not configure CLI tool provisioning until the next section.
 
 Reusable Lima environments are keyed by profile, workspace, backend, and tool
 policy. A successful run prints a resume ID:
@@ -89,7 +83,7 @@ hideout clean --stopped <env-id>
 Use `--rm` for a disposable environment:
 
 ```bash
-hideout run --backend lima --rm -- <command>
+hideout run --profile smoke --backend lima --rm -- <command>
 ```
 
 ## Running A CLI Tool
@@ -100,9 +94,10 @@ provisioning on the profile, then run the command.
 For an npm-based CLI:
 
 ```bash
-hideout profile tools default preset add node-dev
-hideout profile tools default npm add --package <npm-package> --command <command>
-hideout run --backend lima -- <command> --version
+hideout profile init agent
+hideout profile tools agent preset add node-dev
+hideout profile tools agent npm add --package <npm-package> --command <command>
+hideout run --profile agent --backend lima -- <command> --version
 ```
 
 `node-dev` and npm global installs run during managed guest setup after the
@@ -114,7 +109,7 @@ If a CLI needs persistent login state, put it in the isolated profile home, not
 the host home:
 
 ```bash
-hideout profile home default import \
+hideout profile home agent import \
   --from /host/path/to/state \
   --to .config/<tool>/state
 ```
