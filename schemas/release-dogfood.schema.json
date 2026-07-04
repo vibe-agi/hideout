@@ -168,6 +168,29 @@
         }
       }
     },
+    "releaseArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "^hideout-[A-Za-z0-9_.-]+\\.tar\\.gz$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "gates": {
       "type": "array",
       "minItems": 7,

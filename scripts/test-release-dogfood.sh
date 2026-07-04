@@ -14,8 +14,8 @@ Environment:
   HIDEOUT_RELEASE_EVIDENCE_DIR   Optional exact evidence output directory.
   HIDEOUT_RELEASE_EVIDENCE_ROOT  Optional parent directory for generated evidence.
 
-The evidence bundle stores command, host prerequisite, tool version, and result
-metadata. It never records the full proxy URL.
+The evidence bundle stores command, host prerequisite, tool version, release
+artifact, and result metadata. It never records the full proxy URL.
 USAGE
 }
 
@@ -57,6 +57,21 @@ proxy_scheme() {
     socks5h://*) printf 'socks5h' ;;
     *) printf 'unknown' ;;
   esac
+}
+
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo "release-dogfood: missing shasum or sha256sum" >&2
+    exit 127
+  fi
+}
+
+file_size_bytes() {
+  wc -c <"$1" | tr -d '[:space:]'
 }
 
 first_line_or_missing() {
@@ -101,6 +116,10 @@ log_path="$evidence_dir/test-release-dogfood.log"
 manifest_path="$evidence_dir/manifest.json"
 manifest_schema_path="$ROOT/schemas/release-dogfood.schema.json"
 command_text="scripts/test-phase1.sh --release-candidate"
+artifact_file="hideout-$(go env GOOS)-$(go env GOARCH)-$commit.tar.gz"
+artifact_path="$evidence_dir/$artifact_file"
+artifact_sha256=""
+artifact_bytes=0
 proxy_scheme_value="$(proxy_scheme)"
 go_version="$(first_line_or_missing go version)"
 limactl_version="$(first_line_or_missing limactl --version)"
@@ -113,6 +132,13 @@ if [ -n "${HIDEOUT_BROWSER_PATH:-}" ]; then
 fi
 browser_app="${HIDEOUT_BROWSER_APP:-Google Chrome}"
 git_dirty="$(git_dirty_json)"
+
+build_release_artifact() {
+  echo "release-dogfood: building release-like artifact $artifact_file" | tee -a "$log_path"
+  scripts/package-local.sh --out "$artifact_path" >/dev/null
+  artifact_sha256="$(sha256_file "$artifact_path")"
+  artifact_bytes="$(file_size_bytes "$artifact_path")"
+}
 
 write_manifest() {
   local status="$1"
@@ -134,9 +160,12 @@ write_manifest() {
     --arg jqVersion "$jq_version" \
     --arg proxyScheme "$proxy_scheme_value" \
     --arg browserApp "$browser_app" \
+    --arg artifactFile "$artifact_file" \
+    --arg artifactSha256 "$artifact_sha256" \
     --argjson exitCode "$exit_code" \
     --argjson gitDirty "$git_dirty" \
     --argjson browserPathProvided "$browser_path_provided" \
+    --argjson artifactBytes "$artifact_bytes" \
     '{
       schema: $schema,
       status: $status,
@@ -171,6 +200,11 @@ write_manifest() {
         browserPathProvided: $browserPathProvided,
         browserApp: $browserApp
       },
+      releaseArtifact: {
+        file: $artifactFile,
+        sha256: $artifactSha256,
+        bytes: $artifactBytes
+      },
       gates: [
         "gate0-static-contract",
         "gate1-native-smoke",
@@ -198,6 +232,8 @@ validate_manifest() {
   echo "release-dogfood: command $command_text"
   echo "release-dogfood: operator proxy provided (url redacted, scheme=$proxy_scheme_value)"
 } >"$log_path"
+
+build_release_artifact
 
 echo "release-dogfood: running Phase 1 release-candidate gates"
 echo "release-dogfood: includes Gate 2 Lima lifecycle, Gate 3 strict proxy, Gate 4 real browser, probes, and generic CLI dogfood"

@@ -51,8 +51,22 @@ jq -e '
   .command == "scripts/test-phase1.sh --release-candidate" and
   .operatorProxy.provided == true and
   .operatorProxy.scheme == "socks5" and
-  .operatorProxy.url == "redacted"
+  .operatorProxy.url == "redacted" and
+  (.releaseArtifact.file | test("^hideout-[A-Za-z0-9_.-]+\\.tar\\.gz$")) and
+  (.releaseArtifact.sha256 | test("^[a-f0-9]{64}$")) and
+  (.releaseArtifact.bytes > 0)
 ' "$release_tmp/evidence/manifest.json" >/dev/null
+release_artifact_file="$(jq -r '.releaseArtifact.file' "$release_tmp/evidence/manifest.json")"
+test -f "$release_tmp/evidence/$release_artifact_file"
+if command -v shasum >/dev/null 2>&1; then
+  release_artifact_sha="$(shasum -a 256 "$release_tmp/evidence/$release_artifact_file" | awk '{print $1}')"
+elif command -v sha256sum >/dev/null 2>&1; then
+  release_artifact_sha="$(sha256sum "$release_tmp/evidence/$release_artifact_file" | awk '{print $1}')"
+else
+  echo "gate0: missing shasum or sha256sum" >&2
+  exit 127
+fi
+test "$release_artifact_sha" = "$(jq -r '.releaseArtifact.sha256' "$release_tmp/evidence/manifest.json")"
 grep -q 'phase1-plan: Gate 2 Lima E2E' "$release_tmp/evidence/test-release-dogfood.log"
 if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; then
   echo "gate0: release dogfood evidence leaked operator proxy URL" >&2
