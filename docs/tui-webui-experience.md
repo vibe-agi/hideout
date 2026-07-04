@@ -96,14 +96,19 @@ Surface differences are layout differences, not data model differences.
 
 ### Dashboard
 
-Shows:
+Implemented smoke surface shows:
 
 - selected profile;
-- active environment;
+- capability summary;
 - backend status;
 - network mode and privacy warning;
 - active sessions;
 - recent denied audit events;
+- recent audit events.
+
+Design-ready additions:
+
+- active environment;
 - install/doctor warnings.
 
 ### Doctor
@@ -154,7 +159,13 @@ Shows:
 
 ### Audit Explorer
 
-Search by:
+Implemented smoke surface:
+
+- audit tail;
+- denied audit count;
+- recent denied audit list using Manager API `decision=deny` filtering.
+
+Design-ready search by:
 
 - path;
 - action;
