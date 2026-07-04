@@ -365,6 +365,35 @@ printf "resume_ok=yes\n"
   exit 1
 fi
 grep -q 'resume_ok=yes' "$tmp/env-resume.out"
+env_instance="$(awk -F'"' '/"instanceName"/ { print $4; exit }' "$store/environments/$env_id/environment.json")"
+if [ -z "$env_instance" ]; then
+  echo "gate2: environment record is missing instanceName" >&2
+  cat "$store/environments/$env_id/environment.json" >&2
+  exit 1
+fi
+
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop "$env_id" >"$tmp/env-stop.out"
+grep -q "stopped: $env_id" "$tmp/env-stop.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-stop.out"
+awk -v id="$env_id" 'NR > 1 && $1 == id && $4 == "stopped" { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-stop.out"
+lima_status="$(LIMA_HOME="$lima_home" limactl list | awk -v name="$env_instance" 'NR > 1 && $1 == name { print $2; exit }')"
+if [ "$lima_status" != "Stopped" ]; then
+  echo "gate2: lima instance was not stopped by hideout stop; status=$lima_status instance=$env_instance" >&2
+  LIMA_HOME="$lima_home" limactl list >&2 || true
+  exit 1
+fi
+
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --resume "$env_id" -- sh -eu -c '
+printf "resume_after_stop=yes\n"
+' >"$tmp/env-resume-after-stop.out" 2>"$tmp/env-resume-after-stop.err"; then
+  echo "gate2: environment resume after stop failed" >&2
+  echo "gate2: stdout" >&2
+  cat "$tmp/env-resume-after-stop.out" >&2
+  echo "gate2: stderr" >&2
+  cat "$tmp/env-resume-after-stop.err" >&2
+  exit 1
+fi
+grep -q 'resume_after_stop=yes' "$tmp/env-resume-after-stop.out"
 
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --new -- sh -eu -c '
 printf "new_ok=yes\n"
@@ -408,5 +437,20 @@ if awk -v id="$new_env_id" 'NR > 1 && $1 == id { found = 1 } END { exit found ? 
   exit 1
 fi
 grep -q "$env_id" "$tmp/env-list-after-rm.out"
+
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop --idle 0s >"$tmp/env-stop-idle.out"
+grep -q "stopped: $env_id" "$tmp/env-stop-idle.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-idle-stop.out"
+awk -v id="$env_id" 'NR > 1 && $1 == id && $4 == "stopped" { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-idle-stop.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean --dry-run --stopped "$env_id" >"$tmp/env-clean-stopped-dry.out"
+grep -q "would remove: $env_id" "$tmp/env-clean-stopped-dry.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean --idle 0s "$env_id" >"$tmp/env-clean-idle.out"
+grep -q "removed: $env_id" "$tmp/env-clean-idle.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-idle-clean.out"
+if awk -v id="$env_id" 'NR > 1 && $1 == id { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-idle-clean.out"; then
+  echo "gate2: idle-cleaned environment is still listed" >&2
+  cat "$tmp/env-list-after-idle-clean.out" >&2
+  exit 1
+fi
 
 echo "gate2: passed"
