@@ -122,6 +122,29 @@ An adapter may know that `adb` uses a host TCP endpoint or that Chromium DevTool
 uses a loopback port. It may propose a typed PortBridge or OpenTarget. It must
 not open the port itself.
 
+Runtime decision context is allowed to be rich. Hideout should give adapters the
+structured facts needed for real local policy decisions: full URLs, parsed
+redirect URIs, endpoint candidate metadata, ports, process argv, cwd class, and
+declared endpoint metadata when those facts are part of the current decision
+snapshot. This context is local runtime input to a constrained goja VM; sharing
+the adapter code does not share the user's runtime context.
+
+Context richness is not authority. Scripts may see facts, but they cannot use
+those facts to materialize capabilities. For endpoint exposure, a script may
+reference a Go-minted `candidateId` and request a category, TTL, close policy,
+reason, or audit tag. It must not provide raw host addresses, guest addresses,
+bridge direction, owner IDs, backend endpoints, provider handles, or a PID as
+authority. Go resolves the candidate from the immutable snapshot and performs
+the final validation.
+
+Hideout control-plane secrets are never policy context. Broker tokens, proxy
+secrets, hidden-env backing values, manager tokens, and PortBridge provider
+handles must not be exposed to scripts. User/application secrets embedded in
+arbitrary runtime facts cannot be perfectly identified by Core; policy context
+therefore must not be treated as a public record. Audit, Boundary Summary,
+exported fixtures, and UI views must redact or summarize sensitive values even
+when the runtime policy script saw full context.
+
 ### Persona Recipe
 
 A persona recipe is a product composition for a workflow. It combines adapters,
@@ -191,7 +214,11 @@ proposals, but they still return data. They do not materialize capabilities.
 
 Safe queries are a future SDK class. They may inspect sanitized effective policy
 or backend capability facts after their ABI, replay model, and audit fields are
-designed. They must not reveal host file existence, host env, secret values,
+designed. They are separate from the decision context passed into a policy
+entrypoint. Decision context is a Go-minted immutable snapshot for that one
+evaluation; safe queries are additional APIs scripts may call.
+
+Safe queries must not reveal host file existence, host env, secret values,
 broker tokens, or raw backend state.
 
 Examples:
@@ -237,12 +264,12 @@ that introduce nondeterminism.
 
 ```text
 H5 tool asks to open http://localhost:5173
-  -> command adapter classifies it as preview intent
-  -> adapter proposes OpenTarget preview.open
-  -> preview target proposes host-to-guest PortBridge
-  -> Go validator checks policy, backend, address, lifetime, and audit shape
+  -> declared endpoint candidate exists in profile or approved project policy
+  -> preview adapter classifies candidate as a web preview
+  -> adapter proposes endpoint.expose.host-to-guest by candidateId
+  -> Go validator checks owner, source, backend, address, lifetime, and audit
   -> PortBridge provider materializes one endpoint
-  -> Host Broker opens isolated browser URL pointing at the mapped endpoint
+  -> optional host.open opens isolated browser URL pointing at the mapped endpoint
 ```
 
 Core does not understand Vite, Next.js, or the browser's DevTools protocol. It
@@ -265,8 +292,9 @@ secret handling, exposure scope, and cleanup.
 
 ```text
 Recipe enables adb adapter
-  -> adapter proposes access to a specific host adb server endpoint
-  -> Go validator checks profile policy, endpoint scope, and audit requirements
+  -> adapter references a declared or device-discovered host adb endpoint
+  -> adapter proposes endpoint.expose.guest-to-host by candidateId
+  -> Go validator checks higher-risk guest-to-host policy and audit requirements
   -> PortBridge provider exposes only the approved mapping
 ```
 
@@ -274,9 +302,9 @@ Phase 1 should treat adb as high-authority and coarse-grained unless a later
 protocol-aware adapter design introduces per-command policy. It must not be
 implemented as a generic host port escape.
 
-adb adapters require the generic guest-reachable PortBridge primitive to be
-promoted from lab to product path. Until that promotion, adapter proposals for
-bridge capabilities fail closed at the Go validator.
+adb adapters require the higher-risk `endpoint.expose.guest-to-host` primitive
+to be designed and promoted from lab to product path. Until that promotion,
+adapter proposals for host service reachability fail closed at the Go validator.
 
 ### iOS-assisted Workflow
 

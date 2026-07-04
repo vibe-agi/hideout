@@ -262,6 +262,9 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - no raw host port exposure without an owning typed capability;
 - backend-default port forwarding must be disabled or explicitly ignored before
   product code runs;
+- endpoint observation must not itself create reachability. Observed endpoints
+  are evidence and candidates only; exposure is a separate transaction with an
+  active owner, policy decision, validator, audit, and cleanup;
 - no bridge to broker tokens, browser debugging endpoints, VM control sockets,
   or Hideout control-plane endpoints unless an owning typed capability
   explicitly models that authority;
@@ -273,15 +276,23 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - fail-closed validation in Go before any script or bundle can depend on the
   primitive.
 
-`portbridge.host-to-guest` is the first product direction because it supports
-host browser preview of a guest dev server. The product path has a Go-side
-validator, per-run Manager lifecycle, audit, cleanup, and Boundary Summary
-entries. Backends without a host-to-guest provider must fail closed. Today that
-means the native/local provider can prove the primitive, while Lima host-to-guest
-remains blocked until a backend-specific provider is implemented.
+`endpoint.expose.host-to-guest` is the first product direction because it
+supports host browser preview of a guest dev server and local callback flows.
+This direction exposes a guest-side service to host loopback. It must still have
+an owner, lifetime, audit, cleanup, and backend-specific provider, but it does
+not grant the guest reachability to host services.
 
-`portbridge.guest-to-host` has a larger authority surface and needs separate
-product design before use by browser automation, adb, IDE, or similar adapters.
+`endpoint.expose.guest-to-host` has a larger authority surface because it gives
+guest code reachability to a host-side service. It needs separate product design
+before use by browser automation, adb, IDE, database, simulator, or similar
+adapters. It must not inherit the host-to-guest validator or risk posture.
+
+Endpoint observation and endpoint exposure have separate trust models. An
+observed guest listener can be created by malicious guest code with perfect
+freshness and process ownership. Those properties may support denial or user
+explanation, but they are not sufficient evidence for automatic exposure.
+Observed-only candidates default to audit-only or ask, and must fail closed when
+no prompt channel exists.
 
 ## Evidence Requirements
 

@@ -1118,7 +1118,7 @@ Policy scripts:  goja
 Broker IPC:      Unix socket or backend-scoped TCP endpoint with token
 HostFS Portal:   Linux guest FUSE daemon over broker RPC
 Manager API:     JSON over Unix socket or 127.0.0.1 loopback with token
-Port bridge:     Go TCP bridge; guest-reachable listeners are backend-specific
+Port bridge:     Go TCP bridge; host-to-guest providers are backend-specific
 Audit:           JSONL
 Web UI:          React + TypeScript + Vite, embedded static assets later
 Packaging:       Internal builds first; Homebrew/GitHub releases later
@@ -2939,19 +2939,136 @@ PortBridge policy:
 - wildcard listen addresses are denied unless a target-specific design
   classifies and audits the exposure;
 - wildcard target addresses are denied;
-- guest-reachable listeners are backend-specific and fail closed until the
-  backend implements a reviewed exposure model;
-- Capability Probe code may validate backend-specific guest reachability or
-  host reachability, but product paths still fail closed until the architecture
-  contract and policy validator are complete;
+- host-to-guest providers are backend-specific and fail closed until the backend
+  implements a reviewed exposure model;
+- Capability Probe code may validate backend-specific host-to-guest or
+  guest-to-host reachability, but product paths still fail closed until the
+  architecture contract and policy validator are complete;
 - bridges are closed when the owning session or OpenTarget closes;
 - scripts may propose a bridge decision only inside a registered policy hook;
   the final validator still enforces direction, route, address, scope, and
   target constraints;
-- adapters such as adb, browser control, or preview require the generic
-  guest-reachable or host-reachable PortBridge primitive to be promoted from lab
-  to product path before their bridge proposals can pass the Go validator;
+- adapters such as adb, browser control, or preview require their exact
+  direction-specific exposure primitive to be promoted from lab to product path
+  before their bridge proposals can pass the Go validator;
 - `host.open` in Required Phase 1 must not create a PortBridge.
+
+### Endpoint Exposure
+
+Endpoint Exposure is the subsystem that turns declared, manually granted, or
+observed endpoints into auditable PortBridge transactions. It is a documentation
+level umbrella, not a single symmetric Core action. The authority-bearing actions
+must keep direction visible:
+
+```text
+endpoint.observe
+endpoint.expose.host-to-guest
+endpoint.expose.guest-to-host
+```
+
+`endpoint.observe` and `endpoint.expose.*` are different trust levels.
+Observation may produce an endpoint candidate and audit evidence. It must not
+create reachability. Exposure is a separate authorization transaction that
+references a candidate, has an active owner, passes Go validation, starts a
+PortBridge, and records cleanup.
+
+Endpoint candidates may come from several sources:
+
+```text
+declared  profile, Environment, or approved project policy declares an endpoint
+manual    user grants an endpoint for a run or session
+observed  backend or guest-side sensor observes a listener
+device    future adapter discovers a device, simulator, adb, or browser endpoint
+```
+
+Source is part of the trust model. Profile declarations are user-authored and
+may be eligible for automatic exposure under profile policy. Project declarations
+come from the workspace and must be reviewed or treated as ask-only because the
+target agent can modify workspace files. Observed candidates are facts about
+guest behavior; they are not evidence that exposure is safe. They default to
+audit-only and must never auto-expose by themselves.
+
+Candidate shape:
+
+```text
+candidateId       opaque, one transaction or snapshot scope
+side              guest, host, or device
+proto             tcp initially
+source            declared, manual, observed, or device
+addressClass      loopback, private, external, device, or unsupported
+portCategory      ephemeral, declared, well-known, debug, adb, devtools, unknown
+ownerScope        profile, environment, project, run, or session when declared
+observedAt        timestamp for observed sources
+processHints      optional process class, cwd class, argv, or argv hash
+metadata          adapter-specific structured facts
+```
+
+JavaScript adapters may receive rich runtime candidate context so they can make
+real policy decisions. Runtime context is local decision input, not a public log.
+Adapters may see full URLs, redirect URIs, ports, process argv, cwd classes, or
+declared metadata when the effective policy grants that adapter entrypoint.
+However, scripts still do not receive Hideout control-plane secrets such as
+broker tokens, proxy secrets, manager tokens, hidden-env backing values, or
+PortBridge provider handles. Audit, Boundary Summary, exported fixtures, and UI
+views must redact or summarize sensitive runtime facts even when the policy
+script saw the full context.
+
+JavaScript may classify the scenario and request exposure by candidate ID. It
+must not provide raw authority fields:
+
+```text
+allowed from JS:
+  decision, category, candidateId, ttlRequest, closePolicy, reason, auditTags
+
+not accepted from JS:
+  raw host address, raw guest address, direction, owner ID, backend endpoint,
+  PID as authority, final host port, or provider handle
+```
+
+Go Core resolves `candidateId` back to its immutable snapshot and derives the
+direction from candidate side and requested action. It revalidates source,
+address class, port category, owner, policy, backend support, lifetime, and
+atomic host bind before creating a bridge.
+
+Direction matters:
+
+- `endpoint.expose.host-to-guest` lets host-side software connect to a guest
+  endpoint. It supports preview servers, local callback listeners, and similar
+  guest services. This is the first direction to productize.
+- `endpoint.expose.guest-to-host` lets guest code connect to a host endpoint.
+  This is higher authority because it gives an untrusted guest reachability to
+  host services such as adb servers, DevTools, databases, or control sockets. It
+  requires a separate threat model, validator, and product promotion.
+
+Long-lived and short-lived exposures share close-policy vocabulary:
+
+```text
+ttl              close after fixed duration
+process-exit     close when owning target process exits
+first-request    close after the first HTTP request is forwarded
+first-connection close after the first TCP connection closes
+session-end      close when the Hideout session ends
+manual           close only through explicit manager operation
+```
+
+Preview-like adapters should start from declared or manual candidates and may
+use `process-exit` or `session-end` lifetimes. Callback-like adapters should use
+short TTL plus `first-request` or `first-connection`. Observed-only candidates
+without a declaration or an explicit user grant must ask when a prompt channel
+exists and fail closed or audit-only when it does not.
+
+MVP sequencing:
+
+1. Implement `endpoint.expose.host-to-guest` over declared and manual candidates.
+2. Use a web-preview adapter as the first consumer because it is declared,
+   long-lived, and does not require `open.intent` or endpoint observation.
+3. Add an OAuth/local-callback adapter later using `open.intent`, Go-parsed
+   loopback `redirect_uri`, short TTL, and first-request cleanup.
+4. Add `endpoint.observe` later as audit-only evidence and as optional
+   confidence input for adapters. It must not be required for the first product
+   exposure path.
+5. Design `endpoint.expose.guest-to-host` separately for adb, browser DevTools,
+   simulator, and other host-control targets.
 
 PortBridge tests are transport tests. A test that starts a listener, forwards
 bytes, and verifies access proves only that the selected listen/target path can
