@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -1333,6 +1335,39 @@ func TestRunSuppressesControlSummaryUnlessVerbose(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "Hideout boundary:") {
 		t.Fatalf("verbose run should print boundary summary:\n%s", errOut.String())
+	}
+}
+
+func TestAppLimaBackendSuppressesControlOutputUnlessVerbose(t *testing.T) {
+	var out, errOut bytes.Buffer
+	a := app{stdout: &out, stderr: &errOut}
+
+	be := a.backend("lima", runOptions{})
+	limaBackend, ok := be.(lima.Backend)
+	if !ok {
+		t.Fatalf("backend type=%T want lima.Backend", be)
+	}
+	if limaBackend.ControlStdout == nil || limaBackend.ControlStderr == nil {
+		t.Fatalf("lima control writers must be explicit")
+	}
+	_, _ = fmt.Fprint(limaBackend.ControlStdout, "control stdout")
+	_, _ = fmt.Fprint(limaBackend.ControlStderr, "control stderr")
+	if out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("default lima control output should be discarded stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+	if limaBackend.ControlStdout != io.Discard || limaBackend.ControlStderr != io.Discard {
+		t.Fatalf("default lima control writers should be io.Discard")
+	}
+
+	verbose := a.backend("lima", runOptions{verbose: true})
+	verboseLima, ok := verbose.(lima.Backend)
+	if !ok {
+		t.Fatalf("verbose backend type=%T want lima.Backend", verbose)
+	}
+	_, _ = fmt.Fprint(verboseLima.ControlStdout, "control stdout")
+	_, _ = fmt.Fprint(verboseLima.ControlStderr, "control stderr")
+	if out.String() != "control stdout" || errOut.String() != "control stderr" {
+		t.Fatalf("verbose lima control output should reach CLI writers stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }
 
