@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hideout-test-cli <version|login|status|request|env|home>")
+		return errors.New("usage: hideout-test-cli <version|login|status|request|env|home>; login supports --browser-redirect for preview/open smoke")
 	}
 	switch args[0] {
 	case "version":
@@ -53,10 +54,18 @@ func login(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	listen := fs.String("listen", "127.0.0.1:0", "local callback listen address")
+	callbackPath := fs.String("callback-path", "/callback", "local callback path")
+	state := fs.String("state", "gate-state", "expected callback state")
+	code := fs.String("code", "gate-code", "expected callback code")
+	browserRedirect := fs.Bool("browser-redirect", false, "redirect browser root requests to the local callback")
 	selfCallback := fs.Bool("self-callback", false, "call the local callback URL from this process")
 	expectTimeout := fs.Bool("expect-timeout", false, "treat a missing callback before --wait as success")
 	wait := fs.Duration("wait", 10*time.Second, "maximum time to wait for callback")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	normalizedCallbackPath, err := normalizeCallbackPath(*callbackPath)
+	if err != nil {
 		return err
 	}
 
@@ -69,11 +78,16 @@ func login(args []string) error {
 	done := make(chan error, 1)
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/callback" {
+			callbackURL := localCallbackURL(ln.Addr().String(), normalizedCallbackPath, *state, *code)
+			if *browserRedirect && r.URL.Path == "/" {
+				http.Redirect(w, r, callbackURL, http.StatusFound)
+				return
+			}
+			if r.URL.Path != normalizedCallbackPath {
 				http.NotFound(w, r)
 				return
 			}
-			if r.URL.Query().Get("state") != "gate-state" || r.URL.Query().Get("code") != "gate-code" {
+			if r.URL.Query().Get("state") != *state || r.URL.Query().Get("code") != *code {
 				http.Error(w, "bad callback", http.StatusBadRequest)
 				done <- errors.New("callback query did not match")
 				return
@@ -98,8 +112,11 @@ func login(args []string) error {
 		_ = server.Shutdown(ctx)
 	}()
 
-	callbackURL := fmt.Sprintf("http://%s/callback?state=gate-state&code=gate-code", ln.Addr().String())
+	callbackURL := localCallbackURL(ln.Addr().String(), normalizedCallbackPath, *state, *code)
 	fmt.Printf("callback=%s\n", callbackURL)
+	if *browserRedirect {
+		fmt.Printf("browser=%s\n", localBrowserURL(ln.Addr().String()))
+	}
 	if *selfCallback {
 		client := http.Client{Transport: &http.Transport{Proxy: nil}}
 		resp, err := client.Get(callbackURL)
@@ -128,6 +145,37 @@ func login(args []string) error {
 		}
 		return errors.New("callback timed out")
 	}
+}
+
+func normalizeCallbackPath(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("callback path is required")
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	if strings.Contains(value, "?") || strings.Contains(value, "#") {
+		return "", errors.New("callback path must not include query or fragment")
+	}
+	return value, nil
+}
+
+func localBrowserURL(address string) string {
+	return "http://" + address + "/"
+}
+
+func localCallbackURL(address, callbackPath, state, code string) string {
+	u := url.URL{
+		Scheme: "http",
+		Host:   address,
+		Path:   callbackPath,
+	}
+	query := u.Query()
+	query.Set("state", state)
+	query.Set("code", code)
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 func status() error {

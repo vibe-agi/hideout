@@ -324,6 +324,19 @@ fi
 cat "$tmp/login.out"
 grep -q 'login=ok' "$tmp/login.out"
 
+echo "dogfood-cli: verifying preview.open can drive a browser-style callback"
+preview_port="$(free_host_port)"
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  "$hideout" run --backend lima --workspace "$workspace" --preview "127.0.0.1:$preview_port" -- ./hideout-test-cli login --listen "127.0.0.1:$preview_port" --browser-redirect --wait 30s >"$tmp/preview-login.out" 2>"$tmp/preview-login.err"; then
+  echo "dogfood-cli: preview callback smoke failed" >&2
+  cat "$tmp/preview-login.out" >&2
+  cat "$tmp/preview-login.err" >&2
+  exit 1
+fi
+cat "$tmp/preview-login.out"
+grep -q 'login=ok' "$tmp/preview-login.out"
+grep -q 'browser=http://127.0.0.1:' "$tmp/preview-login.out"
+
 echo "dogfood-cli: verifying host redirect to localhost does not reach guest callback"
 callback_port="$(free_host_port)"
 callback_url="http://127.0.0.1:$callback_port/callback?state=gate-state&code=gate-code"

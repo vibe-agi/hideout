@@ -3051,6 +3051,12 @@ rather than static instance port-forward configuration, so cleanup is
 independent of reusable VM instances. The current user-facing consumer is
 `preview.open`.
 
+`preview.open` opens the host-visible URL as a best-effort UX action after the
+target command has started, because preview servers and callback listeners are
+usually created by the target process itself. Failure to launch the browser is
+audited as `preview.open` error evidence; the endpoint exposure authority and
+bridge cleanup remain owned by the run.
+
 Not implemented in this path: endpoint observation, project-declared automatic
 exposure, direct JS endpoint proposal entrypoints, OAuth callback automation,
 `endpoint.expose.guest-to-host`, adb, browser DevTools, and device/simulator

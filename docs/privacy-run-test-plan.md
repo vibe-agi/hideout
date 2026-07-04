@@ -345,6 +345,12 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
   without Hideout knowing the tool's business semantics;
 - a target can run a local callback listener, complete a callback, and store
   its own authentication state under the isolated profile identity home;
+- `preview.open` can expose a declared guest-local callback listener to the
+  host browser path, allowing a browser-style callback to complete through a
+  typed host-to-guest endpoint exposure;
+- `preview.open` launches after the target command starts, so target-created
+  preview servers and callback listeners can be ready before the host browser
+  reaches the mapped endpoint;
 - a host-owned redirect to `localhost:<guest-listener-port>` does not complete
   the guest callback, proving host loopback and guest loopback remain separate
   without a typed endpoint exposure owner;
@@ -361,11 +367,14 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
 
 This smoke is not an adapter for any real product. It is a product-mechanism
 proof: runtime supply, user-declared tool installation, guest-local callback
-flow, host redirect boundary, environment policy, profile-state persistence,
-network request, and control-plane store protection.
+flow, typed preview callback reach-back, host redirect boundary, environment
+policy, profile-state persistence, network request, and control-plane store
+protection.
 
-The callback success path intentionally stays inside the guest test process. The
-smoke also runs a controlled host redirect that behaves like
+The smoke has two positive callback paths: a guest-internal self-callback that
+proves profile identity persistence without host reach-back, and a
+`preview.open` browser-style callback that proves typed host-to-guest endpoint
+exposure. It also runs a controlled host redirect that behaves like
 `https://httpbin.org/redirect-to?url=http://localhost:9000`, but without
 depending on the public internet: after a host browser or host HTTP client
 follows the redirect, `localhost` targets host loopback, not guest loopback. That

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
@@ -18,7 +19,10 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
-const RunResultVersion = "hideout.run-result/v1"
+const (
+	RunResultVersion = "hideout.run-result/v1"
+	previewOpenDelay = 250 * time.Millisecond
+)
 
 type ApplyRunOptions struct {
 	Backend                    backend.Backend
@@ -141,9 +145,6 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	if err != nil {
 		return result, err
 	}
-	if err := openRunPreviews(ctx, runSession, dataPlane, opener); err != nil {
-		return result, err
-	}
 	result.EnvironmentID = session.EnvironmentID
 	result.InstanceName = session.InstanceName
 	result.PreserveInstance = session.PreserveInstance
@@ -182,11 +183,23 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			return result, startErr
 		}
 	}
+	previewCtx, cancelPreview := context.WithCancel(ctx)
+	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
 	runErr := opts.Backend.Run(ctx, session, plan.Command, dataPlane.Env)
+	cancelPreview()
+	var previewAuditErr error
+	for _, event := range <-previewEvents {
+		if err := runSession.Audit.Emit(event); err != nil && previewAuditErr == nil {
+			previewAuditErr = err
+		}
+	}
 	decision := "allow"
 	if runErr != nil {
 		decision = "error"
 		result.Error = runErr.Error()
+	} else if previewAuditErr != nil {
+		decision = "error"
+		result.Error = previewAuditErr.Error()
 	}
 	_ = runSession.Audit.Emit(audit.Event{
 		Session:  runSession.Layout.ID,
@@ -196,20 +209,58 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		Decision: decision,
 		Details:  sessionEndDetails(plan.Command, runErr),
 	})
-	return result, runErr
+	if runErr != nil {
+		return result, runErr
+	}
+	if previewAuditErr != nil {
+		return result, previewAuditErr
+	}
+	return result, nil
 }
 
-func openRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDataPlane, opener broker.Opener) error {
+func startRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDataPlane, opener broker.Opener) <-chan []audit.Event {
+	out := make(chan []audit.Event, 1)
+	if !hasRunPreviews(dataPlane) {
+		out <- nil
+		close(out)
+		return out
+	}
+	go func() {
+		defer close(out)
+		timer := time.NewTimer(previewOpenDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			out <- nil
+			return
+		case <-timer.C:
+		}
+		out <- openRunPreviewEvents(ctx, runSession, dataPlane, opener)
+	}()
+	return out
+}
+
+func hasRunPreviews(dataPlane RunDataPlane) bool {
+	for _, endpoint := range dataPlane.PortBridges {
+		if endpoint.Action == policy.ActionEndpointExposeHostToGuest && endpoint.Owner == OpenTargetPreviewOpen {
+			return true
+		}
+	}
+	return false
+}
+
+func openRunPreviewEvents(ctx context.Context, runSession RunSession, dataPlane RunDataPlane, opener broker.Opener) []audit.Event {
 	if opener == nil {
 		opener = broker.NoopOpener{}
 	}
+	var events []audit.Event
 	for _, endpoint := range dataPlane.PortBridges {
 		if endpoint.Action != policy.ActionEndpointExposeHostToGuest || endpoint.Owner != OpenTargetPreviewOpen {
 			continue
 		}
 		target, err := previewURLForEndpoint(endpoint.ListenAddress)
 		if err != nil {
-			_ = runSession.Audit.Emit(audit.Event{
+			events = append(events, audit.Event{
 				Session:  runSession.Layout.ID,
 				Profile:  runSession.Plan.ProfileName,
 				Backend:  runSession.Plan.Backend,
@@ -224,10 +275,10 @@ func openRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDa
 					"reason":           err.Error(),
 				},
 			})
-			return err
+			continue
 		}
 		if err := opener.OpenURL(ctx, target); err != nil {
-			_ = runSession.Audit.Emit(audit.Event{
+			events = append(events, audit.Event{
 				Session:  runSession.Layout.ID,
 				Profile:  runSession.Plan.ProfileName,
 				Backend:  runSession.Plan.Backend,
@@ -242,9 +293,9 @@ func openRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDa
 					"reason":           err.Error(),
 				},
 			})
-			return err
+			continue
 		}
-		if err := runSession.Audit.Emit(audit.Event{
+		events = append(events, audit.Event{
 			Session:  runSession.Layout.ID,
 			Profile:  runSession.Plan.ProfileName,
 			Backend:  runSession.Plan.Backend,
@@ -257,11 +308,9 @@ func openRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDa
 				"endpointCategory": endpoint.EndpointCategory,
 				"endpoint":         "present",
 			},
-		}); err != nil {
-			return err
-		}
+		})
 	}
-	return nil
+	return events
 }
 
 func previewURLForEndpoint(listenAddress string) (string, error) {

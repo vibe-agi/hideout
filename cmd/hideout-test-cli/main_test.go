@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,6 +59,51 @@ func TestTestCLILoginExpectedTimeout(t *testing.T) {
 	}
 	if err := run([]string{"status"}); err == nil {
 		t.Fatal("expected timeout login must not create auth state")
+	}
+}
+
+func TestTestCLILoginBrowserRedirect(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	address := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close probe listener: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- run([]string{"login", "--listen", address, "--browser-redirect", "--wait", (2 * time.Second).String()})
+	}()
+
+	client := http.Client{Timeout: 100 * time.Millisecond}
+	deadline := time.After(2 * time.Second)
+	for {
+		resp, err := client.Get("http://" + address + "/")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("browser redirect final status=%d", resp.StatusCode)
+			}
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("login exited before browser callback: %v", err)
+		case <-deadline:
+			t.Fatalf("browser redirect never became reachable: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if err := run([]string{"status"}); err != nil {
+		t.Fatalf("status: %v", err)
 	}
 }
 

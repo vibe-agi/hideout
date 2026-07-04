@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -733,6 +734,9 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 			if got != "echo:preview\n" {
 				return fmt.Errorf("bridge response=%q", got)
 			}
+			if !opener.waitForURL(2 * time.Second) {
+				return fmt.Errorf("preview opener was not called while command was running")
+			}
 			return nil
 		},
 	}
@@ -772,8 +776,9 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyRun: %v", err)
 	}
-	if len(opener.urls) != 1 || !strings.HasPrefix(opener.urls[0], "http://127.0.0.1:") {
-		t.Fatalf("preview opener mismatch: %+v", opener.urls)
+	openerURLs := opener.urlSnapshot()
+	if len(openerURLs) != 1 || !strings.HasPrefix(openerURLs[0], "http://127.0.0.1:") {
+		t.Fatalf("preview opener mismatch: %+v", openerURLs)
 	}
 	if result.BoundarySummary == nil {
 		t.Fatalf("result missing boundary summary")
@@ -804,7 +809,7 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 			t.Fatalf("endpoint audit missing %q:\n%s", want, auditText)
 		}
 	}
-	for _, leaked := range []string{targetAddr, bridgeAddr, opener.urls[0]} {
+	for _, leaked := range []string{targetAddr, bridgeAddr, openerURLs[0]} {
 		if leaked != "" && strings.Contains(auditText, leaked) {
 			t.Fatalf("endpoint audit leaked %q:\n%s", leaked, auditText)
 		}
@@ -1775,18 +1780,40 @@ type applyRunFakeBackend struct {
 }
 
 type managerRecordingOpener struct {
+	mu    sync.Mutex
 	urls  []string
 	files []string
 }
 
 func (o *managerRecordingOpener) OpenURL(_ context.Context, target string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.urls = append(o.urls, target)
 	return nil
 }
 
 func (o *managerRecordingOpener) OpenFile(_ context.Context, target string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.files = append(o.files, target)
 	return nil
+}
+
+func (o *managerRecordingOpener) urlSnapshot() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.urls...)
+}
+
+func (o *managerRecordingOpener) waitForURL(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if len(o.urlSnapshot()) > 0 {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return len(o.urlSnapshot()) > 0
 }
 
 func (b *applyRunFakeBackend) Name() string {
