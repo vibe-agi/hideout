@@ -627,6 +627,7 @@ func TestAPIAuditEventsSupportsFilters(t *testing.T) {
 	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_1", "audit.jsonl"), strings.Join([]string{
 		`{"time":"2026-07-01T00:00:00Z","session":"ses_1","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://user:pass@example.com/path?token=abc","identityId":"id_traceable","sourceIdentityId":"id_source","machineId":"0123456789abcdef0123456789abcdef","message":"guest machine-id 0123456789abcdef0123456789abcdef is ready","headerDump":"Authorization: Bearer tok_123\nCookie: sid=abc"}}`,
 		`{"time":"2026-07-01T00:00:01Z","session":"ses_1","profile":"default","backend":"native","action":"network.setup","decision":"allow","details":{}}`,
+		`{"time":"2026-07-01T00:00:02Z","session":"ses_1","profile":"default","backend":"native","action":"host.fs.read","decision":"deny","details":{"status":"denied","policyEffect":"none"}}`,
 	}, "\n")+"\n", 0o600)
 	api := API{
 		Core: Core{
@@ -676,6 +677,26 @@ func TestAPIAuditEventsSupportsFilters(t *testing.T) {
 	}
 	if details["message"] != "guest machine-id REDACTED is ready" {
 		t.Fatalf("string machine-id should be redacted: %+v", details)
+	}
+
+	denyReq := newAPIRequest(http.MethodGet, "/api/v1/audit/events?decision=deny&limit=20")
+	denyReq.Header.Set("Authorization", "Bearer ui_token")
+	denyResp := httptest.NewRecorder()
+	api.ServeHTTP(denyResp, denyReq)
+	if denyResp.Code != http.StatusOK {
+		t.Fatalf("deny filter status=%d body=%s", denyResp.Code, denyResp.Body.String())
+	}
+	var denyDecoded APIResponse
+	if err := json.Unmarshal(denyResp.Body.Bytes(), &denyDecoded); err != nil {
+		t.Fatal(err)
+	}
+	denyEvents, ok := denyDecoded.Data.([]any)
+	if !ok || len(denyEvents) != 1 {
+		t.Fatalf("expected one denied event, got %+v", denyDecoded.Data)
+	}
+	denyEvent, ok := denyEvents[0].(map[string]any)
+	if !ok || denyEvent["decision"] != "deny" || denyEvent["action"] != "host.fs.read" {
+		t.Fatalf("unexpected denied event data: %+v", denyEvents[0])
 	}
 }
 

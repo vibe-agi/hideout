@@ -70,6 +70,7 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`runPayloadFromForm`,
 		`splitArgv`,
 		`audit/events?limit=20`,
+		`audit/events?decision=deny&limit=20`,
 		`Private operations console`,
 		`host.open`,
 		`allowUrls`,

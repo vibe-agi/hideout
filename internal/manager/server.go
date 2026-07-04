@@ -323,6 +323,7 @@ const auditMetaEl = document.getElementById("auditMeta");
 let activePanel = "overview";
 let overview = null;
 let auditEvents = [];
+let deniedEvents = [];
 let setupResultHTML = "";
 let runResultHTML = "";
 
@@ -365,7 +366,7 @@ function networkRisk(mode) {
   return "";
 }
 function deniedAuditEvents() {
-  return auditEvents.filter(function(e) { return e.decision === "deny"; });
+  return deniedEvents;
 }
 function api(path) {
   return fetch("/api/v1/" + path, {headers: {"X-Hideout-UI-Token": token}}).then(async function(response) {
@@ -707,9 +708,12 @@ async function load() {
     overview = overviewResp.data || {};
     try {
       const auditResp = await api("audit/events?limit=20");
+      const deniedResp = await api("audit/events?decision=deny&limit=20");
       auditEvents = Array.isArray(auditResp.data) ? auditResp.data : [];
+      deniedEvents = Array.isArray(deniedResp.data) ? deniedResp.data : [];
     } catch {
       auditEvents = [];
+      deniedEvents = [];
     }
     renderSummary();
     renderPanel();
@@ -718,6 +722,7 @@ async function load() {
   } catch (error) {
     overview = {profiles: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
     auditEvents = [];
+    deniedEvents = [];
     summaryEl.innerHTML = "";
     panelBodyEl.innerHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
     auditBodyEl.innerHTML = empty("No audit events");
