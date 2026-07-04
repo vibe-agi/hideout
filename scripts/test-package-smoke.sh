@@ -52,4 +52,13 @@ grep -q 'store: ok writable' "$tmp/doctor.out"
 grep -q 'profile: ok default' "$tmp/doctor.out"
 grep -q 'manager: ok' "$tmp/doctor.out"
 
+HIDEOUT_STORE_ROOT="$tmp/lima-store" "$prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/lima-doctor-fix-dry.out"
+grep -q 'task helper.install.linux-shim: ok' "$tmp/lima-doctor-fix-dry.out"
+grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/lima-doctor-fix-dry.out"
+if [ -e "$tmp/lima-store/install-state.json" ]; then
+  echo "package-smoke: lima dry-run repair created install state" >&2
+  cat "$tmp/lima-doctor-fix-dry.out" >&2
+  exit 1
+fi
+
 echo "package-smoke: passed"

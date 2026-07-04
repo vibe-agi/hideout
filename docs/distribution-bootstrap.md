@@ -203,6 +203,9 @@ source root. Packaged release installers should place the same helpers in the
 official artifact layout or store bin directory, making these tasks `ok` instead
 of `pending`. When installers place helpers in the store bin directory, they
 must also write current helper manifests.
+Release-like tarballs must keep Linux guest helpers next to the installed
+`hideout` binary so the first Lima `doctor --fix --dry-run` can discover them
+without rebuilding from the source tree.
 
 Unsafe fixes require explicit confirmation:
 

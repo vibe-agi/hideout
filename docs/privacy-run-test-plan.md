@@ -937,8 +937,10 @@ Required checks:
   and installed safe `doctor --fix` writes current init metadata plus
   `doctor.fix.apply` audit;
 - package smoke proves a release-like tarball contains binaries, helper
-  manifests, schemas, docs, packaging metadata, and can run installed
-  `hideout init --no-input` plus `hideout doctor` from a temporary prefix;
+  manifests, schemas, docs, packaging metadata, can run installed
+  `hideout init --no-input` plus `hideout doctor` from a temporary prefix, and
+  can discover packaged Lima Linux helpers without rebuilding from the source
+  tree;
 - Gate 0 statically validates the draft Homebrew formula and its
   `hideout init --no-input` formula smoke contract when Ruby is available;
 - omitted or `auto` backend first-run repair resolves to Lima, matching
