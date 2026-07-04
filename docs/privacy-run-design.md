@@ -4167,6 +4167,7 @@ hideout clean [--stopped] [--idle <duration>] [environment-id...]
 hideout profile rotate-identity <name>
 hideout profile reset <name>
 hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]
+hideout tui [--watch] [--interval 2s]
 ```
 
 These commands may ship in Phase 1 only if they do not delay the required local
@@ -4209,6 +4210,10 @@ fragment is for the browser page only; API requests still send the token through
 the user stops it. `--print-url` is a nonblocking diagnostic/test mode: it
 allocates the server, prints the URL/API/token metadata, closes the server, and
 does not promise an interactive UI session.
+
+`hideout tui` renders a terminal dashboard from Manager overview and redacted
+audit data. It does not start a local HTTP server, mint a UI token, or open a
+browser. `--watch` refreshes the same domain view locally until interrupted.
 
 The local manager server exposes minimal init and run resources for future
 TUI/WebUI control: `POST /api/v1/init/plan`, `POST /api/v1/init/apply`,

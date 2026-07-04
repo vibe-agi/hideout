@@ -23,7 +23,9 @@ WebUI
   visual, searchable, better for audit and policy editing
 ```
 
-Both surfaces must use the same Manager API and domain resources.
+Both surfaces must use the same Manager Core/API domain resources. WebUI uses
+the local Manager API transport; terminal surfaces may call Manager Core
+in-process, but must not rebuild state by reading subsystem files directly.
 
 ## TUI Role
 
@@ -189,7 +191,8 @@ Show:
 - No sensitive secret values are rendered.
 - Authority-changing UI actions call Manager plan/apply.
 - Every apply operation emits audit.
-- TUI and WebUI must not read arbitrary host paths except through Manager APIs.
+- TUI and WebUI must not read arbitrary host paths except through Manager Core
+  or Manager API operations.
 
 ## Product Decisions
 
@@ -205,7 +208,8 @@ Show:
 
 ### TUI First Increment
 
-- dashboard;
+- terminal dashboard over Manager overview;
+- optional local watch refresh;
 - doctor;
 - sessions;
 - HostFS rules;

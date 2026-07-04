@@ -3114,6 +3114,57 @@ func TestUIRejectsPublicListenAddress(t *testing.T) {
 	}
 }
 
+func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	if err := store.Save(profile.Default("default")); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"tui"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	for _, want := range []string{
+		"Hideout TUI",
+		"Store: " + store.Root,
+		"Profiles: 1",
+		"Profiles\n  - default",
+		"tools=base-dev",
+		"Backends",
+		"Sessions",
+		"Recent Audit",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("tui output missing %q:\n%s", want, out.String())
+		}
+	}
+	for _, forbidden := range []string{
+		"Hideout UI:",
+		"Manager API:",
+		"ui_",
+		"#token=",
+	} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Fatalf("tui output should not start or expose WebUI details %q:\n%s", forbidden, out.String())
+		}
+	}
+}
+
+func TestTUIRejectsInvalidInterval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"tui", "--interval", "0s"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expected invalid interval to fail; stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "--interval must be positive") {
+		t.Fatalf("unexpected stderr: %s", errOut.String())
+	}
+}
+
 func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
