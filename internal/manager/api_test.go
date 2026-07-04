@@ -251,6 +251,50 @@ func TestAPIInitPlanAndApplyConfigureGenericToolSupply(t *testing.T) {
 	}
 }
 
+func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	api := API{
+		Core:      Core{Store: store},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	reqBody := InitAPIRequest{
+		ProfileName:    "api-privacy",
+		Backend:        "native",
+		Network:        "tun2socks",
+		ProxySecretRef: "default-proxy",
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
+	body := resp.Body.String()
+	for _, want := range []string{
+		`"resource":"init/apply"`,
+		`"kind":"network.mode.select"`,
+		`"tun2socks"`,
+		`"default-proxy"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("init/apply missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "socks5://") || strings.Contains(body, "HIDEOUT_SECRET_DEFAULT_PROXY") {
+		t.Fatalf("init/apply leaked proxy secret value: %s", body)
+	}
+	loaded, err := store.Load("api-privacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Network.Mode != network.ModeTun2Socks || loaded.Network.ProxySecretRef != "default-proxy" {
+		t.Fatalf("network settings were not persisted: %+v", loaded.Network)
+	}
+}
+
 func TestAPIInitRequestRejectsUnknownFields(t *testing.T) {
 	api := API{
 		Core:      Core{Store: profile.Store{Root: t.TempDir()}},

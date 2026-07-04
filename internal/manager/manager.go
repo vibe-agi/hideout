@@ -195,11 +195,16 @@ func (c Core) EnsureRunInitialized(plan RunPlan) (inittask.Result, error) {
 	if err != nil {
 		return inittask.Result{}, err
 	}
+	proxySecretRef := ""
+	if networkMode == "tun2socks" {
+		proxySecretRef = plan.RuntimeProfile.Network.ProxySecretRef
+	}
 	initPlan, err := c.PlanInit(inittask.Options{
-		ProfileName: plan.ProfileName,
-		Backend:     plan.Backend,
-		Network:     networkMode,
-		NoInput:     true,
+		ProfileName:    plan.ProfileName,
+		Backend:        plan.Backend,
+		Network:        networkMode,
+		ProxySecretRef: proxySecretRef,
+		NoInput:        true,
 	})
 	if err != nil {
 		return inittask.Result{}, err

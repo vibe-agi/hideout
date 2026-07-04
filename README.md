@@ -150,19 +150,19 @@ Hidden proxy mode uses `tun2socks` inside the guest. The proxy secret stays in a
 host-only secret ref and is not passed to the target process.
 
 If your host proxy listens on `127.0.0.1:7890`, the Lima guest should reach it
-through `host.lima.internal:7890`:
+through `host.lima.internal:7890`. Configure this on a dedicated profile so the
+network default is explicit and repeatable:
 
 ```bash
 export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
 
 hideout init --no-input \
+  --profile privacy \
   --backend lima \
   --network tun2socks \
   --proxy-secret default-proxy
 
-hideout run --backend lima \
-  --network tun2socks \
-  --proxy-secret default-proxy \
+hideout run --profile privacy --backend lima \
   -- <command>
 ```
 

@@ -146,19 +146,18 @@ Hidden proxy mode 会在 guest 内使用 `tun2socks`。代理 secret 保存在
 host-only secret ref 中，不会传给目标进程。
 
 如果你的主机代理监听在 `127.0.0.1:7890`，Lima guest 应该通过
-`host.lima.internal:7890` 访问它：
+`host.lima.internal:7890` 访问它。建议配置到一个专用 profile，让网络默认值明确且可复用：
 
 ```bash
 export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
 
 hideout init --no-input \
+  --profile privacy \
   --backend lima \
   --network tun2socks \
   --proxy-secret default-proxy
 
-hideout run --backend lima \
-  --network tun2socks \
-  --proxy-secret default-proxy \
+hideout run --profile privacy --backend lima \
   -- <command>
 ```
 

@@ -353,6 +353,9 @@ Minimum acceptance:
   `doctor --fix --dry-run` compile generic CLI tool supply into explicit
   `tools.preset.add` and `tools.npm-global.add` tasks, not product-specific
   install scripts;
+- `hideout init --network tun2socks --proxy-secret <ref>` compiles proxy
+  configuration into `network.mode.select`, persists only `network.proxySecretRef`,
+  and fails closed when the ref is missing or invalid;
 - helper discovery succeeds from official store path or explicit development
   override and fails closed when the binary is missing or mismatched;
 - store-built helpers have sibling `hideout.helper-manifest/v1` manifests, and

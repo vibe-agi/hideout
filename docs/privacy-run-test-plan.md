@@ -543,6 +543,9 @@ Required checks:
   SecretRef references;
 - direct mode init makes `explain` and `doctor` report that network identity is
   visible;
+- `hideout init --network tun2socks --proxy-secret <ref>` persists only
+  `network.proxySecretRef`, and `tun2socks` init without a proxy secret ref
+  fails closed before profile mutation;
 - `tun2socks` mode init never writes proxy values into profile, audit, or
   target env;
 - init does not change system routes; route setup belongs to per-session
@@ -964,6 +967,9 @@ Required checks:
 - `hideout init --npm-package <spec> --npm-command <name>` and
   `hideout doctor --fix --dry-run --npm-package <spec> --npm-command <name>`
   plan generic CLI tool supply without product-specific logic;
+- `hideout init --network tun2socks --proxy-secret <ref>` and Manager
+  `init/apply` persist only the proxy secret ref, not a proxy URL or backing env
+  var name;
 - `hideout doctor --fix --dry-run --backend lima` includes
   `helper.install.linux-shim` and `helper.install.linux-hostfsd` when the
   official store helpers are missing and a source-tree repair is available;

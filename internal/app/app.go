@@ -143,6 +143,7 @@ type initCommandOptions struct {
 	profileName string
 	backendName string
 	networkMode string
+	proxySecret string
 	noInput     bool
 	dryRun      bool
 	tools       toolSupplyOptions
@@ -165,12 +166,13 @@ func (a app) initCommand(args []string) error {
 	}
 	core := manager.New(store)
 	plan, err := core.PlanInit(inittask.Options{
-		ProfileName: opts.profileName,
-		Backend:     opts.backendName,
-		Network:     opts.networkMode,
-		NoInput:     opts.noInput,
-		ToolPresets: []string(opts.tools.presets),
-		NPMGlobals:  opts.tools.npmGlobals(),
+		ProfileName:    opts.profileName,
+		Backend:        opts.backendName,
+		Network:        opts.networkMode,
+		ProxySecretRef: opts.proxySecret,
+		NoInput:        opts.noInput,
+		ToolPresets:    []string(opts.tools.presets),
+		NPMGlobals:     opts.tools.npmGlobals(),
 	})
 	if err != nil {
 		return err
@@ -196,6 +198,7 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
 	fs.StringVar(&opts.backendName, "backend", "auto", "backend: auto/lima for isolation; native is a dev-only weak harness")
 	fs.StringVar(&opts.networkMode, "network", "direct", "network mode")
+	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref for tun2socks network mode")
 	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.noInput, "no-input", false, "do not ask for confirmation")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print init plan without applying")
@@ -1429,12 +1432,13 @@ func (a app) doctorFix(opts doctorOptions) error {
 	}
 	core := manager.New(store)
 	plan, err := core.PlanDoctorFix(inittask.Options{
-		ProfileName: opts.profileName,
-		Backend:     opts.backendName,
-		Network:     networkMode,
-		NoInput:     true,
-		ToolPresets: []string(opts.tools.presets),
-		NPMGlobals:  opts.tools.npmGlobals(),
+		ProfileName:    opts.profileName,
+		Backend:        opts.backendName,
+		Network:        networkMode,
+		ProxySecretRef: opts.proxySecret,
+		NoInput:        true,
+		ToolPresets:    []string(opts.tools.presets),
+		NPMGlobals:     opts.tools.npmGlobals(),
 	})
 	if err != nil {
 		return err

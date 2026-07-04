@@ -219,6 +219,58 @@ func TestInitConfiguresGenericNPMCLITool(t *testing.T) {
 	}
 }
 
+func TestInitConfiguresTun2SocksProxySecretRef(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"init",
+		"--no-input",
+		"--profile", "privacy",
+		"--backend", "native",
+		"--network", "tun2socks",
+		"--proxy-secret", "default-proxy",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("init tun2socks exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	for _, want := range []string{
+		"network: tun2socks",
+		"task network.mode.select: applied",
+		"set profile network mode to tun2socks",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("init output missing %q:\n%s", want, out.String())
+		}
+	}
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	loaded, err := store.Load("privacy")
+	if err != nil {
+		t.Fatalf("load privacy profile: %v", err)
+	}
+	if loaded.Network.Mode != "tun2socks" || loaded.Network.ProxySecretRef != "default-proxy" {
+		t.Fatalf("network settings were not persisted: %+v", loaded.Network)
+	}
+}
+
+func TestInitTun2SocksRequiresProxySecretRef(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"init",
+		"--no-input",
+		"--backend", "native",
+		"--network", "tun2socks",
+	}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("init tun2socks without proxy secret unexpectedly succeeded stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "tun2socks network mode requires a proxy secret ref") {
+		t.Fatalf("init error should explain missing proxy secret, got %s", errOut.String())
+	}
+}
+
 func TestDoctorFixDryRunPlansGenericNPMCLIToolWithoutState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
 const (
@@ -28,12 +29,13 @@ const (
 )
 
 type Options struct {
-	ProfileName string
-	Backend     string
-	Network     string
-	NoInput     bool
-	ToolPresets []string
-	NPMGlobals  []profile.NPMGlobalPackage
+	ProfileName    string
+	Backend        string
+	Network        string
+	ProxySecretRef string
+	NoInput        bool
+	ToolPresets    []string
+	NPMGlobals     []profile.NPMGlobalPackage
 }
 
 type ApplyOptions struct {
@@ -142,7 +144,7 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		}
 		plan.Tasks = append(plan.Tasks, identityTask)
 	}
-	networkTask, err := networkTask(store, normalized.ProfileName, normalized.Network, profileExists)
+	networkTask, err := networkTask(store, normalized.ProfileName, normalized.Network, normalized.ProxySecretRef, profileExists)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -296,6 +298,20 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.Network != "direct" && opts.Network != "tun2socks" {
 		return opts, fmt.Errorf("unsupported network mode %q", opts.Network)
 	}
+	opts.ProxySecretRef = strings.TrimSpace(opts.ProxySecretRef)
+	switch opts.Network {
+	case "direct":
+		if opts.ProxySecretRef != "" {
+			return opts, errors.New("direct network mode does not use a proxy secret ref")
+		}
+	case "tun2socks":
+		if opts.ProxySecretRef == "" {
+			return opts, errors.New("tun2socks network mode requires a proxy secret ref")
+		}
+		if err := secrets.ValidateRef(opts.ProxySecretRef); err != nil {
+			return opts, fmt.Errorf("proxy secret ref: %w", err)
+		}
+	}
 	opts.ToolPresets = normalizeStringList(opts.ToolPresets)
 	opts.NPMGlobals = normalizeNPMGlobals(opts.NPMGlobals)
 	if err := validateToolOptions(opts.ToolPresets, opts.NPMGlobals); err != nil {
@@ -411,7 +427,11 @@ func identityTask(store profile.Store, name string) (Task, error) {
 	}, nil
 }
 
-func networkTask(store profile.Store, name, mode string, profileExists bool) (Task, error) {
+func networkTask(store profile.Store, name, mode, proxySecretRef string, profileExists bool) (Task, error) {
+	inputs := []string{mode}
+	if proxySecretRef != "" {
+		inputs = append(inputs, proxySecretRef)
+	}
 	task := Task{
 		ID:                 "init_network_select",
 		Kind:               "network.mode.select",
@@ -420,23 +440,28 @@ func networkTask(store profile.Store, name, mode string, profileExists bool) (Ta
 		TargetScope:        "profile",
 		CapabilityBoundary: "network",
 		Risk:               "safe",
-		Inputs:             []string{mode},
+		Inputs:             inputs,
+		Outputs:            []string{store.ProfilePath(name)},
 		Message:            "network mode is selected",
 	}
 	if !profileExists {
+		if mode != "direct" || proxySecretRef != "" {
+			task.Status = "pending"
+			task.Message = "set profile network mode to " + mode
+		}
 		return task, nil
 	}
 	p, err := store.Load(name)
 	if err != nil {
 		return Task{}, err
 	}
-	if p.Network.Mode == mode {
+	if p.Network.Mode == mode && strings.TrimSpace(p.Network.ProxySecretRef) == proxySecretRef {
 		return task, nil
 	}
 	task.Status = "pending"
 	task.Risk = "requires-confirmation"
 	task.RequiresConfirm = true
-	task.Message = "changing existing profile network mode requires confirmation"
+	task.Message = "changing existing profile network settings requires confirmation"
 	return task, nil
 }
 
@@ -610,6 +635,21 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 			return err
 		}
 		return profile.MaterializeIdentityState(store.ProfileDir(plan.Profile), p)
+	case "network.mode.select":
+		if len(task.Inputs) < 1 || len(task.Inputs) > 2 {
+			return fmt.Errorf("network.mode.select task requires mode and optional proxy secret ref inputs")
+		}
+		p, err := store.LoadOrInit(plan.Profile)
+		if err != nil {
+			return err
+		}
+		p.Network.Mode = task.Inputs[0]
+		if len(task.Inputs) == 2 {
+			p.Network.ProxySecretRef = task.Inputs[1]
+		} else {
+			p.Network.ProxySecretRef = ""
+		}
+		return store.Save(p)
 	case "tools.preset.add":
 		if len(task.Inputs) != 1 {
 			return fmt.Errorf("tools.preset.add task requires one preset input")

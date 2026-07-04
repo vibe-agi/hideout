@@ -60,12 +60,13 @@ type RunStatusResponse struct {
 }
 
 type InitAPIRequest struct {
-	ProfileName string                     `json:"profile,omitempty"`
-	Backend     string                     `json:"backend,omitempty"`
-	Network     string                     `json:"network,omitempty"`
-	ToolPresets []string                   `json:"toolPresets,omitempty"`
-	NPMGlobals  []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
-	DryRun      bool                       `json:"dryRun,omitempty"`
+	ProfileName    string                     `json:"profile,omitempty"`
+	Backend        string                     `json:"backend,omitempty"`
+	Network        string                     `json:"network,omitempty"`
+	ProxySecretRef string                     `json:"proxySecretRef,omitempty"`
+	ToolPresets    []string                   `json:"toolPresets,omitempty"`
+	NPMGlobals     []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
+	DryRun         bool                       `json:"dryRun,omitempty"`
 }
 
 func NewAPI(core Core, token string, ttl time.Duration) API {
@@ -332,12 +333,13 @@ func decodeInitAPIRequest(w http.ResponseWriter, r *http.Request) (InitAPIReques
 
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
-		ProfileName: req.ProfileName,
-		Backend:     req.Backend,
-		Network:     req.Network,
-		NoInput:     true,
-		ToolPresets: append([]string(nil), req.ToolPresets...),
-		NPMGlobals:  append([]profile.NPMGlobalPackage(nil), req.NPMGlobals...),
+		ProfileName:    req.ProfileName,
+		Backend:        req.Backend,
+		Network:        req.Network,
+		ProxySecretRef: req.ProxySecretRef,
+		NoInput:        true,
+		ToolPresets:    append([]string(nil), req.ToolPresets...),
+		NPMGlobals:     append([]profile.NPMGlobalPackage(nil), req.NPMGlobals...),
 	}
 }
 

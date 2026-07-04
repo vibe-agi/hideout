@@ -446,6 +446,7 @@ const renderers = {
       '<div class="field"><label for="setupProfile">Profile</label><select id="setupProfile">' + profileOptions + '</select></div>' +
       '<div class="field"><label for="setupBackend">Backend</label><select id="setupBackend"><option value="lima">lima</option><option value="native">native</option></select></div>' +
       '<div class="field"><label for="setupNetwork">Network</label><select id="setupNetwork"><option value="direct">direct</option><option value="tun2socks">tun2socks</option></select></div>' +
+      '<div class="field"><label for="setupProxySecret">Proxy secret ref</label><input id="setupProxySecret" placeholder="default-proxy"></div>' +
       '<div class="field"><label for="setupPreset">Tool preset</label><input id="setupPreset" value="node-dev"></div>' +
       '<div class="field"><label for="setupPackage">NPM package</label><input id="setupPackage" placeholder="@scope/tool@version"></div>' +
       '<div class="field"><label for="setupCommands">NPM commands</label><input id="setupCommands" placeholder="tool, helper"></div>' +
@@ -583,6 +584,7 @@ function setupPayloadFromForm() {
     profile: document.getElementById("setupProfile").value,
     backend: document.getElementById("setupBackend").value,
     network: document.getElementById("setupNetwork").value,
+    proxySecretRef: document.getElementById("setupProxySecret").value.trim(),
     toolPresets: splitCSV(document.getElementById("setupPreset").value),
     npmGlobals: npmGlobals
   };
