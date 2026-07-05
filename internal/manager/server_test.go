@@ -47,6 +47,16 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 	if rootResp.StatusCode != http.StatusOK || rootResp.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("unexpected root response: status=%d headers=%v", rootResp.StatusCode, rootResp.Header)
 	}
+	for key, want := range map[string]string{
+		"Content-Security-Policy": "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+		"Referrer-Policy":         "no-referrer",
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+	} {
+		if got := rootResp.Header.Get(key); got != want {
+			t.Fatalf("unexpected root %s header: got %q want %q", key, got, want)
+		}
+	}
 	rootHTML, err := io.ReadAll(rootResp.Body)
 	if err != nil {
 		t.Fatal(err)

@@ -218,6 +218,9 @@ Show:
 
 - UI tokens are short-lived.
 - Browser UI binds to localhost by default.
+- Browser UI responses use `Cache-Control: no-store`, `Referrer-Policy:
+  no-referrer`, frame denial, and a restrictive CSP that permits the embedded
+  inline bundle and same-origin Manager API calls only.
 - No sensitive secret values are rendered.
 - Authority-changing UI actions call Manager plan/apply.
 - Every apply operation emits audit.

@@ -169,8 +169,7 @@ func validateLocalListenAddr(addr string) error {
 }
 
 func serveUIRoot(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	setUIRootSecurityHeaders(w.Header())
 	if r.Method != http.MethodGet {
 		writeAPIMethodNotAllowed(w)
 		return
@@ -181,6 +180,14 @@ func serveUIRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(uiHTML))
+}
+
+func setUIRootSecurityHeaders(header http.Header) {
+	header.Set("Cache-Control", "no-store")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("X-Frame-Options", "DENY")
+	header.Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 }
 
 func (s *LocalServer) Close() error {
