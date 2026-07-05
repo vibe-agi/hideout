@@ -169,6 +169,31 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	}
 }
 
+func TestSubcommandHelpIsSuccessfulAndQuiet(t *testing.T) {
+	for _, args := range [][]string{
+		{"init", "--help"},
+		{"run", "--help"},
+		{"doctor", "--help"},
+		{"cleanup", "--help"},
+		{"audit", "show", "--help"},
+	} {
+		var out, errOut bytes.Buffer
+		code := Main(args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, errOut.String())
+		}
+		if errOut.Len() != 0 {
+			t.Fatalf("%v should not write stderr: %s", args, errOut.String())
+		}
+		if !strings.Contains(out.String(), "Usage:") {
+			t.Fatalf("%v help missing usage output:\n%s", args, out.String())
+		}
+		if strings.Contains(out.String(), "flag: help requested") {
+			t.Fatalf("%v help leaked flag.ErrHelp:\n%s", args, out.String())
+		}
+	}
+}
+
 func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	root := writeTestPackageRoot(t)
 	var out, errOut bytes.Buffer

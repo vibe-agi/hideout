@@ -53,6 +53,10 @@ type app struct {
 func Main(args []string, stdout, stderr io.Writer) int {
 	a := app{stdout: stdout, stderr: stderr}
 	if err := a.run(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			a.usage()
+			return 0
+		}
 		fmt.Fprintln(stderr, "hideout:", err)
 		return 1
 	}
