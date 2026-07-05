@@ -8,23 +8,25 @@ many subsystem specs.
 
 Current release state: private alpha / supervised dogfood with a latest local
 release-candidate evidence bundle produced on macOS at commit
-`da75f3ded7a0`. Public GA still requires this evidence to be produced for the
+`3654e62e34e5`. Public GA still requires this evidence to be produced for the
 final release artifact and explicit release-specific signoff.
 
 Latest local release-candidate evidence:
 
 - manifest:
-  `.hideout-release-evidence/release-dogfood-20260705T043851Z-da75f3ded7a0/manifest.json`
+  `.hideout-release-evidence/release-dogfood-20260705T051238Z-3654e62e34e5/manifest.json`
 - status: passed
 - command: `scripts/test-phase1.sh --release-candidate`
-- commit: `da75f3ded7a0`, dirty: false
+- commit: `3654e62e34e5`, dirty: false
 - host: Darwin 25.4.0 arm64, macOS 26.4.1
-- release artifact: `hideout-darwin-arm64-da75f3ded7a0.tar.gz`; SHA-256
-  `d5ec08cf94a2087e72fff065e147ebecad26fe208e6e1d79e5370979c1875aa5`;
+- release artifact: `hideout-darwin-arm64-3654e62e34e5.tar.gz`; SHA-256
+  `6bc7ae01d5bd0c9069e4da2a6745d0bf857dd420af7b41131d3a17da457febf1`;
   byte size recorded in the manifest
 - gates: Gate 0 static contract, Gate 1 native smoke, Gate 2 Lima E2E, Gate 3
   hidden proxy with operator-supplied proxy, Gate 4 host escape with a real
   browser, capability probe smoke, and generic CLI dogfood smoke
+- cleanup evidence: Gate 4 browser processes, Gate 4 temporary directories, and
+  Hideout Lima instances all recorded as zero in the manifest
 - proxy evidence: operator proxy present; scheme recorded; full proxy URL
   redacted from the manifest and evidence logs
 
