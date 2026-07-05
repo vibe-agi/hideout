@@ -175,7 +175,8 @@
       "required": [
         "file",
         "sha256",
-        "bytes"
+        "bytes",
+        "hideoutVersion"
       ],
       "properties": {
         "file": {
@@ -189,6 +190,39 @@
         "bytes": {
           "type": "integer",
           "minimum": 1
+        },
+        "hideoutVersion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version",
+            "commit",
+            "builtAt",
+            "go",
+            "platform"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "builtAt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "go": {
+              "type": "string",
+              "minLength": 1
+            },
+            "platform": {
+              "type": "string",
+              "pattern": "^[^/]+/[^/]+$"
+            }
+          }
         }
       }
     },

@@ -55,6 +55,11 @@ jq -e '
   (.releaseArtifact.file | test("^hideout-[A-Za-z0-9_.-]+\\.tar\\.gz$")) and
   (.releaseArtifact.sha256 | test("^[a-f0-9]{64}$")) and
   (.releaseArtifact.bytes > 0) and
+  (.releaseArtifact.hideoutVersion.version | length > 0) and
+  (.releaseArtifact.hideoutVersion.commit == .git.commit) and
+  (.releaseArtifact.hideoutVersion.builtAt | length > 0) and
+  (.releaseArtifact.hideoutVersion.go | length > 0) and
+  (.releaseArtifact.hideoutVersion.platform | test("^[^/]+/[^/]+$")) and
   .cleanup.gate4BrowserProcesses == 0 and
   .cleanup.gate4TempDirs == 0 and
   .cleanup.hideoutLimaInstances == 0
@@ -70,6 +75,15 @@ else
   exit 127
 fi
 test "$release_artifact_sha" = "$(jq -r '.releaseArtifact.sha256' "$release_tmp/evidence/manifest.json")"
+release_artifact_extract="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-artifact-extract.XXXXXX")"
+tar -xzf "$release_tmp/evidence/$release_artifact_file" -C "$release_artifact_extract"
+"$release_artifact_extract/hideout/bin/hideout" version >"$release_tmp/artifact-version.out"
+grep -qx "hideout $(jq -r '.releaseArtifact.hideoutVersion.version' "$release_tmp/evidence/manifest.json")" "$release_tmp/artifact-version.out"
+grep -qx "commit: $(jq -r '.releaseArtifact.hideoutVersion.commit' "$release_tmp/evidence/manifest.json")" "$release_tmp/artifact-version.out"
+grep -qx "builtAt: $(jq -r '.releaseArtifact.hideoutVersion.builtAt' "$release_tmp/evidence/manifest.json")" "$release_tmp/artifact-version.out"
+grep -qx "go: $(jq -r '.releaseArtifact.hideoutVersion.go' "$release_tmp/evidence/manifest.json")" "$release_tmp/artifact-version.out"
+grep -qx "platform: $(jq -r '.releaseArtifact.hideoutVersion.platform' "$release_tmp/evidence/manifest.json")" "$release_tmp/artifact-version.out"
+rm -rf "$release_artifact_extract"
 grep -q 'phase1-plan: Gate 2 Lima E2E' "$release_tmp/evidence/test-release-dogfood.log"
 if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; then
   echo "gate0: release dogfood evidence leaked operator proxy URL" >&2

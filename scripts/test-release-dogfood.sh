@@ -120,6 +120,11 @@ artifact_file="hideout-$(go env GOOS)-$(go env GOARCH)-$commit.tar.gz"
 artifact_path="$evidence_dir/$artifact_file"
 artifact_sha256=""
 artifact_bytes=0
+artifact_hideout_version=""
+artifact_hideout_commit=""
+artifact_hideout_built_at=""
+artifact_hideout_go=""
+artifact_hideout_platform=""
 proxy_scheme_value="$(proxy_scheme)"
 go_version="$(first_line_or_missing go version)"
 limactl_version="$(first_line_or_missing limactl --version)"
@@ -235,6 +240,28 @@ build_release_artifact() {
   scripts/package-local.sh --out "$artifact_path" >/dev/null
   artifact_sha256="$(sha256_file "$artifact_path")"
   artifact_bytes="$(file_size_bytes "$artifact_path")"
+  collect_artifact_hideout_version
+}
+
+collect_artifact_hideout_version() {
+  local tmp
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-artifact-version.XXXXXX")"
+  tar -xzf "$artifact_path" -C "$tmp"
+  "$tmp/hideout/bin/hideout" version >"$tmp/version.out"
+  artifact_hideout_version="$(sed -n '1s/^hideout //p' "$tmp/version.out")"
+  artifact_hideout_commit="$(sed -n 's/^commit: //p' "$tmp/version.out")"
+  artifact_hideout_built_at="$(sed -n 's/^builtAt: //p' "$tmp/version.out")"
+  artifact_hideout_go="$(sed -n 's/^go: //p' "$tmp/version.out")"
+  artifact_hideout_platform="$(sed -n 's/^platform: //p' "$tmp/version.out")"
+  rm -rf "$tmp"
+  if [ -z "$artifact_hideout_version" ] ||
+    [ -z "$artifact_hideout_commit" ] ||
+    [ -z "$artifact_hideout_built_at" ] ||
+    [ -z "$artifact_hideout_go" ] ||
+    [ -z "$artifact_hideout_platform" ]; then
+    echo "release-dogfood: artifact hideout version output is incomplete" >&2
+    exit 1
+  fi
 }
 
 write_manifest() {
@@ -259,6 +286,11 @@ write_manifest() {
     --arg browserApp "$browser_app" \
     --arg artifactFile "$artifact_file" \
     --arg artifactSha256 "$artifact_sha256" \
+    --arg artifactHideoutVersion "$artifact_hideout_version" \
+    --arg artifactHideoutCommit "$artifact_hideout_commit" \
+    --arg artifactHideoutBuiltAt "$artifact_hideout_built_at" \
+    --arg artifactHideoutGo "$artifact_hideout_go" \
+    --arg artifactHideoutPlatform "$artifact_hideout_platform" \
     --argjson exitCode "$exit_code" \
     --argjson gitDirty "$git_dirty" \
     --argjson browserPathProvided "$browser_path_provided" \
@@ -303,7 +335,14 @@ write_manifest() {
       releaseArtifact: {
         file: $artifactFile,
         sha256: $artifactSha256,
-        bytes: $artifactBytes
+        bytes: $artifactBytes,
+        hideoutVersion: {
+          version: $artifactHideoutVersion,
+          commit: $artifactHideoutCommit,
+          builtAt: $artifactHideoutBuiltAt,
+          go: $artifactHideoutGo,
+          platform: $artifactHideoutPlatform
+        }
       },
       gates: [
         "gate0-static-contract",
@@ -327,7 +366,8 @@ validate_manifest() {
   go run ./cmd/hideout-schema-validate "$manifest_schema_path" "$manifest_path" >/dev/null
   jq -e '
     .operatorProxy.provided == true and
-    .operatorProxy.url == "redacted"
+    .operatorProxy.url == "redacted" and
+    .releaseArtifact.hideoutVersion.commit == .git.commit
   ' "$manifest_path" >/dev/null
 }
 
