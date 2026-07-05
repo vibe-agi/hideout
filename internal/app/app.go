@@ -50,6 +50,12 @@ type app struct {
 	stderr io.Writer
 }
 
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
+)
+
 func Main(args []string, stdout, stderr io.Writer) int {
 	a := app{stdout: stdout, stderr: stderr}
 	if err := a.run(args); err != nil {
@@ -93,6 +99,9 @@ func (a app) run(args []string) error {
 		return a.ui(args[1:])
 	case "tui":
 		return a.tui(args[1:])
+	case "version", "--version", "-v":
+		a.version()
+		return nil
 	case "lab":
 		return a.lab(args[1:])
 	case "shim":
@@ -148,6 +157,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
+	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--watch] [--interval 2s]")
 	fmt.Fprintln(a.stdout)
@@ -164,6 +174,14 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>")
 	fmt.Fprintln(a.stdout, "  hideout lab browser-control --enable-lab --profile <name>")
 	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
+}
+
+func (a app) version() {
+	fmt.Fprintf(a.stdout, "hideout %s\n", Version)
+	fmt.Fprintf(a.stdout, "commit: %s\n", Commit)
+	fmt.Fprintf(a.stdout, "builtAt: %s\n", BuildTime)
+	fmt.Fprintf(a.stdout, "go: %s\n", runtime.Version())
+	fmt.Fprintf(a.stdout, "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 }
 
 func (a app) initUsage() {

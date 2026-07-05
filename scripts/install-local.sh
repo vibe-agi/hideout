@@ -79,9 +79,17 @@ source="$(cd "$source" && pwd -P)"
 hideout="$prefix/bin/hideout"
 shim="$prefix/bin/hideout-shim"
 arch="$(go env GOARCH)"
+build_version="${HIDEOUT_VERSION:-dev}"
+git_commit="$(git -C "$source" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+ldflags=(
+  "-X" "github.com/vibe-agi/hideout/internal/app.Version=$build_version"
+  "-X" "github.com/vibe-agi/hideout/internal/app.Commit=$git_commit"
+  "-X" "github.com/vibe-agi/hideout/internal/app.BuildTime=$built_at"
+)
 
 echo "install-local: building hideout into $hideout"
-go build -trimpath -o "$hideout" ./cmd/hideout
+go build -trimpath -ldflags "${ldflags[*]}" -o "$hideout" ./cmd/hideout
 
 echo "install-local: building host command shim into $shim"
 go build -trimpath -o "$shim" ./cmd/hideout-shim

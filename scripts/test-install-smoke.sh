@@ -37,6 +37,13 @@ test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
 test -f "$store/profiles/default/profile.json"
 
+commit="$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+"$prefix/bin/hideout" version >"$tmp/version.out"
+grep -q '^hideout dev$' "$tmp/version.out"
+grep -q "^commit: $commit$" "$tmp/version.out"
+grep -Eq '^builtAt: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$tmp/version.out"
+grep -q "^platform: $(go env GOOS)/$(go env GOARCH)$" "$tmp/version.out"
+
 HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/doctor.out"
 grep -q 'store: ok writable' "$tmp/doctor.out"
 grep -q 'profile: ok default' "$tmp/doctor.out"

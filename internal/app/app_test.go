@@ -154,6 +154,7 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 		"Inspect and manage:",
 		"Advanced and developer:",
 		"  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only",
+		"  hideout version",
 		"Lab probes:",
 		"  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>",
 	} {
@@ -166,6 +167,38 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	}
 	if strings.Index(text, "Advanced and developer:") > strings.Index(text, "Lab probes:") {
 		t.Fatalf("help should keep lab probes after advanced commands:\n%s", text)
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	oldVersion, oldCommit, oldBuildTime := Version, Commit, BuildTime
+	Version = "test-version"
+	Commit = "abc123def456"
+	BuildTime = "2026-07-05T00:00:00Z"
+	t.Cleanup(func() {
+		Version, Commit, BuildTime = oldVersion, oldCommit, oldBuildTime
+	})
+
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+		var out, errOut bytes.Buffer
+		code := Main(args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, errOut.String())
+		}
+		if errOut.Len() != 0 {
+			t.Fatalf("%v should not write stderr: %s", args, errOut.String())
+		}
+		for _, want := range []string{
+			"hideout test-version",
+			"commit: abc123def456",
+			"builtAt: 2026-07-05T00:00:00Z",
+			"go: ",
+			"platform: " + runtime.GOOS + "/" + runtime.GOARCH,
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("%v version output missing %q:\n%s", args, want, out.String())
+			}
+		}
 	}
 }
 

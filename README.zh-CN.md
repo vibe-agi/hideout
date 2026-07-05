@@ -52,6 +52,7 @@ direct 网络的 profile：
 ```bash
 scripts/install-local.sh
 export PATH="$HOME/.local/bin:$PATH"
+hideout version
 hideout doctor
 ```
 
@@ -63,6 +64,7 @@ tar -xzf hideout-<platform>.tar.gz
 cd hideout
 ./install.sh
 export PATH="$HOME/.local/bin:$PATH"
+hideout version
 hideout doctor
 ```
 
