@@ -8,13 +8,14 @@ Policy and Config Supply Chain defines how Hideout scripts, presets, templates,
 and configuration packages are authored, shared, installed, updated, verified,
 and overridden.
 
-This document follows [architecture-principles.md](architecture-principles.md),
+This document is subordinate to
+[architecture-principles.md](architecture-principles.md),
 [manager-control-plane.md](manager-control-plane.md), and the bottom-layer
 ecosystem runtime contract in
 [ecosystem-foundation-design.md](ecosystem-foundation-design.md). It defines
 authoring, sharing, installation, update, trust, override, and export behavior.
 It does not redefine the ecosystem resource model, effective policy composition
-order, Hideoutfile schema, or phase status.
+order, Hideoutfile schema, or ecosystem phase plan.
 
 The goal is to make Hideout community-extensible without turning local privacy
 policy into unreviewed scattered files.
@@ -509,7 +510,8 @@ Brewfile-based setup repos.
 Current product status is owned by [STATUS.md](STATUS.md). Ecosystem delivery
 sequence is owned by
 [ecosystem-foundation-design.md](ecosystem-foundation-design.md#phase-plan).
-This document contributes only the supply-chain checklist for that sequence:
+This document contributes only the supply-chain checklist for that sequence. It
+must not be read as a second roadmap:
 
 - bundle schema, script size, entrypoint, permission, compatibility, checksum,
   forbidden-file, and secret-looking-value validation;

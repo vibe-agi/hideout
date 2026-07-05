@@ -14,10 +14,11 @@ It follows the constitutional and runtime contracts:
 - [init-task-architecture.md](init-task-architecture.md)
 - [manager-control-plane.md](manager-control-plane.md)
 
-[policy-config-supply-chain.md](policy-config-supply-chain.md) builds on this
-document for authoring, sharing, installing, updating, and exporting those
-artifacts. It must not redefine the ecosystem resource model, effective policy
-composition order, or project manifest authority model.
+[policy-config-supply-chain.md](policy-config-supply-chain.md) is subordinate
+to this document for authoring, sharing, installing, updating, and exporting
+those artifacts. It must not redefine the ecosystem resource model, effective
+policy composition order, project manifest authority model, or ecosystem phase
+plan.
 
 The purpose is to make ecosystem support a stable runtime contract, not a later
 UI or marketplace feature. Bundles, Hideoutfile, TUI, WebUI, and future registry
