@@ -811,6 +811,21 @@ func (a app) backend(name string, opts runOptions) backend.Backend {
 	}
 }
 
+func (a app) environmentOperator(verbose bool) manager.EnvironmentOperator {
+	controlOut := io.Discard
+	controlErr := io.Discard
+	if verbose {
+		controlOut = a.stdout
+		controlErr = a.stderr
+	}
+	return lima.Backend{
+		Stdout:        io.Discard,
+		Stderr:        io.Discard,
+		ControlStdout: controlOut,
+		ControlStderr: controlErr,
+	}
+}
+
 func hostFSGrafts(policy hostfs.EffectivePolicy) []string {
 	return manager.HostFSGrafts(policy)
 }
@@ -3539,6 +3554,7 @@ func (a app) stopEnvironments(args []string) error {
 	fs.SetOutput(io.Discard)
 	dryRun := fs.Bool("dry-run", false, "show environments that would be stopped")
 	idleValue := fs.String("idle", "", "stop environments whose last run ended at least this long ago")
+	verbose := fs.Bool("verbose", false, "show backend control output while stopping environments")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -3567,7 +3583,7 @@ func (a app) stopEnvironments(args []string) error {
 		return nil
 	}
 	result, err := core.ApplyEnvironmentStop(context.Background(), plan, manager.EnvironmentApplyOptions{
-		Operator: lima.Backend{Stdout: io.Discard, Stderr: a.stderr},
+		Operator: a.environmentOperator(*verbose),
 	})
 	if err != nil {
 		return err
@@ -3584,6 +3600,7 @@ func (a app) cleanEnvironments(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "show environments that would be removed")
 	stoppedOnly := fs.Bool("stopped", false, "remove only stopped environments")
 	idleValue := fs.String("idle", "", "remove environments whose last run ended at least this long ago")
+	verbose := fs.Bool("verbose", false, "show backend control output while cleaning environments")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -3613,7 +3630,7 @@ func (a app) cleanEnvironments(args []string) error {
 		return nil
 	}
 	result, err := core.ApplyEnvironmentClean(context.Background(), plan, manager.EnvironmentApplyOptions{
-		Operator: lima.Backend{Stdout: io.Discard, Stderr: a.stderr},
+		Operator: a.environmentOperator(*verbose),
 	})
 	if err != nil {
 		return err

@@ -277,6 +277,9 @@ hideout cleanup
 stopped or selected environments. `cleanup` removes session-local runtime and
 secret-bearing files while preserving audit by default.
 
+`stop` and `clean` keep backend control output quiet by default. Add `--verbose`
+to those lifecycle commands when debugging `limactl` behavior.
+
 ## Verification
 
 Fast local check:

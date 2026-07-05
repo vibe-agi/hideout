@@ -1460,6 +1460,98 @@ func TestAppLimaBackendSuppressesControlOutputUnlessVerbose(t *testing.T) {
 	}
 }
 
+func TestAppEnvironmentOperatorSuppressesControlOutputUnlessVerbose(t *testing.T) {
+	var out, errOut bytes.Buffer
+	a := app{stdout: &out, stderr: &errOut}
+
+	operator := a.environmentOperator(false)
+	limaOperator, ok := operator.(lima.Backend)
+	if !ok {
+		t.Fatalf("operator type=%T want lima.Backend", operator)
+	}
+	if limaOperator.ControlStdout == nil || limaOperator.ControlStderr == nil {
+		t.Fatalf("lima environment control writers must be explicit")
+	}
+	_, _ = fmt.Fprint(limaOperator.ControlStdout, "control stdout")
+	_, _ = fmt.Fprint(limaOperator.ControlStderr, "control stderr")
+	if out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("default lifecycle control output should be discarded stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+	if limaOperator.ControlStdout != io.Discard || limaOperator.ControlStderr != io.Discard {
+		t.Fatalf("default lifecycle control writers should be io.Discard")
+	}
+
+	verbose := a.environmentOperator(true)
+	verboseLima, ok := verbose.(lima.Backend)
+	if !ok {
+		t.Fatalf("verbose operator type=%T want lima.Backend", verbose)
+	}
+	_, _ = fmt.Fprint(verboseLima.ControlStdout, "control stdout")
+	_, _ = fmt.Fprint(verboseLima.ControlStderr, "control stderr")
+	if out.String() != "control stdout" || errOut.String() != "control stderr" {
+		t.Fatalf("verbose lifecycle control output should reach CLI writers stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+}
+
+func TestEnvironmentLifecycleCommandsSuppressBackendControlOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fakeBin := t.TempDir()
+	fakeLimactl := filepath.Join(fakeBin, "limactl")
+	if err := os.WriteFile(fakeLimactl, []byte("#!/bin/sh\necho raw-control-stdout\necho raw-control-stderr >&2\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake limactl: %v", err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatalf("default store: %v", err)
+	}
+	envStore := environment.Store{Root: store.Root}
+	rec, err := envStore.Create(environment.Spec{
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      "/work",
+		GuestWorkspace: "/workspace",
+		InstanceName:   "hideout-fake",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	rec.Status = "ready"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatalf("save environment: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"stop", rec.ID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("stop exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	for _, forbidden := range []string{"raw-control-stdout", "raw-control-stderr"} {
+		if strings.Contains(out.String(), forbidden) || strings.Contains(errOut.String(), forbidden) {
+			t.Fatalf("stop leaked backend control output %q stdout=%q stderr=%q", forbidden, out.String(), errOut.String())
+		}
+	}
+	if !strings.Contains(out.String(), "stopped: "+rec.ID) {
+		t.Fatalf("stop output missing Hideout result:\n%s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"clean", "--stopped", rec.ID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("clean exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	for _, forbidden := range []string{"raw-control-stdout", "raw-control-stderr"} {
+		if strings.Contains(out.String(), forbidden) || strings.Contains(errOut.String(), forbidden) {
+			t.Fatalf("clean leaked backend control output %q stdout=%q stderr=%q", forbidden, out.String(), errOut.String())
+		}
+	}
+	if !strings.Contains(out.String(), "removed: "+rec.ID) {
+		t.Fatalf("clean output missing Hideout result:\n%s", out.String())
+	}
+}
+
 func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) {
 	var out, errOut bytes.Buffer
 	a := app{stdout: &out, stderr: &errOut}

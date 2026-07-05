@@ -268,6 +268,9 @@ hideout cleanup
 环境。`cleanup` 会移除 session-local runtime 和 secret-bearing 文件，
 默认保留 audit。
 
+`stop` 和 `clean` 默认也会保持 backend 控制输出安静。排查 `limactl`
+行为时，可以给这些生命周期命令加 `--verbose`。
+
 ## 验证
 
 快速本地检查：
