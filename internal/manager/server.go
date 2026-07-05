@@ -391,6 +391,26 @@ function rows(items) {
 function item(title, meta, rowItems, tone) {
   return '<article class="item"><div class="item-top"><div><div class="title">' + esc(title) + '</div><div class="meta">' + esc(meta || "") + '</div></div>' + pill(tone || "ok", tone || "ok") + '</div>' + rows(rowItems) + "</article>";
 }
+function boundaryRowsFromSummary(summary) {
+  const capabilities = Array.isArray(summary && summary.capabilities) ? summary.capabilities : [];
+  if (!capabilities.length) return [["capabilities", "none"]];
+  return capabilities.map(function(capability) {
+    const counts = [
+      "allowed=" + (capability.allowed || 0),
+      "denied=" + (capability.denied || 0)
+    ];
+    if (capability.unsupported) counts.push("unsupported=" + capability.unsupported);
+    if (capability.error) counts.push("error=" + capability.error);
+    if (capability.auditOnly) counts.push("auditOnly=" + capability.auditOnly);
+    const context = [];
+    if (capability.owner) context.push("owner=" + capability.owner);
+    if (capability.source) context.push("source=" + capability.source);
+    if (capability.lifetime) context.push("lifetime=" + capability.lifetime);
+    if (capability.closeReason) context.push("closed=" + capability.closeReason);
+    if (capability.endpointCategory) context.push("category=" + capability.endpointCategory);
+    return [capability.capability || "capability", counts.concat(context).join(" · ")];
+  });
+}
 function empty(label) {
   return '<div class="empty">' + esc(label) + '</div>';
 }
@@ -837,7 +857,7 @@ function renderRunResponse(resource, response) {
   const summary = data.boundarySummary || {};
   const header = item(resource, data.profile || "run", [["backend", data.backend], ["workspace", data.workspace], ["guestWorkspace", data.guestWorkspace], ["command", data.command || []], ["sessionId", data.sessionId], ["environmentId", data.environmentId], ["auditPath", data.auditPath], ["error", data.error]], errors.length || data.error ? "error" : "ok");
   const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
-  const boundary = data.boundarySummary ? item("Boundary Summary", summary.evidence || "audit", [["host.open", summary.hostOpen ? JSON.stringify(summary.hostOpen) : ""], ["hostfs", summary.hostfs ? JSON.stringify(summary.hostfs) : ""], ["portbridge", summary.portbridge ? JSON.stringify(summary.portbridge) : ""]], "info") : "";
+  const boundary = data.boundarySummary ? item("Boundary Summary", summary.evidence || "audit", boundaryRowsFromSummary(summary), "info") : "";
   return header + errorHTML + boundary;
 }
 function setRunBusy(busy, text) {

@@ -79,6 +79,10 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`init/apply`,
 		`run/plan`,
 		`run/apply`,
+		`boundaryRowsFromSummary`,
+		`summary.capabilities`,
+		`auditOnly`,
+		`endpointCategory`,
 		`environment/`,
 		`setupPayloadFromForm`,
 		`runPayloadFromForm`,
@@ -155,6 +159,15 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 	} {
 		if strings.Contains(string(rootHTML), forbidden) {
 			t.Fatalf("UI HTML should not contain %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		"summary.hostOpen",
+		"summary.hostfs",
+		"summary.portbridge",
+	} {
+		if strings.Contains(string(rootHTML), forbidden) {
+			t.Fatalf("UI HTML still reads legacy boundary summary field %q", forbidden)
 		}
 	}
 
