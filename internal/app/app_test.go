@@ -182,6 +182,17 @@ func TestSubcommandHelpIsSuccessfulAndQuiet(t *testing.T) {
 		{"profile", "env", "--help"},
 		{"profile", "home", "--help"},
 		{"profile", "command-proxy", "--help"},
+		{"package", "--help"},
+		{"package", "verify", "--help"},
+		{"shim", "--help"},
+		{"shim", "build-linux", "--help"},
+		{"hostfsd", "--help"},
+		{"hostfsd", "build-linux", "--help"},
+		{"lab", "--help"},
+		{"lab", "portbridge", "--help"},
+		{"lab", "portbridge", "loopback", "--help"},
+		{"lab", "browser-control", "--help"},
+		{"lab", "preview-open", "--help"},
 	} {
 		var out, errOut bytes.Buffer
 		code := Main(args, &out, &errOut)

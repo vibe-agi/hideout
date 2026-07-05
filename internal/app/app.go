@@ -224,6 +224,38 @@ func (a app) profileHomeUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile home <name> import --from <path> --to <relative-path> [--force]")
 }
 
+func (a app) packageUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout package verify <package-root>")
+}
+
+func (a app) shimUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+	fmt.Fprintln(a.stdout, "  hideout shim <open-like-command> [args...]")
+}
+
+func (a app) hostfsdUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
+}
+
+func (a app) labUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge guest-to-host --enable-lab --target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab browser-control --enable-lab --profile <name>")
+	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
+}
+
+func (a app) labPortbridgeUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge guest-to-host --enable-lab --target 127.0.0.1:<port>")
+	fmt.Fprintln(a.stdout, "  hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>")
+}
+
 type packageManifest struct {
 	Schema  string `json:"schema"`
 	BuiltAt string `json:"builtAt"`
@@ -252,11 +284,16 @@ type packageManifestFile struct {
 }
 
 func (a app) packageCommand(args []string) error {
-	if len(args) == 0 {
-		return errors.New("package command is required")
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.packageUsage()
+		return nil
 	}
 	switch args[0] {
 	case "verify":
+		if len(args) == 2 && isHelpToken(args[1]) {
+			a.packageUsage()
+			return nil
+		}
 		if len(args) != 2 {
 			return errors.New("usage: hideout package verify <package-root>")
 		}
@@ -1397,7 +1434,15 @@ type linuxShimBuildOptions struct {
 }
 
 func (a app) shim(args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.shimUsage()
+		return nil
+	}
 	if len(args) > 0 && args[0] == "build-linux" {
+		if len(args) == 2 && isHelpToken(args[1]) {
+			a.shimUsage()
+			return nil
+		}
 		return a.buildLinuxShim(args[1:])
 	}
 	command, commandArgs, err := cmdproxy.ResolveHostOpenInvocation("hideout-shim", args)
@@ -1482,7 +1527,15 @@ func defaultLinuxShimPath(goarch string) (string, error) {
 }
 
 func (a app) hostfsd(args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.hostfsdUsage()
+		return nil
+	}
 	if len(args) > 0 && args[0] == "build-linux" {
+		if len(args) == 2 && isHelpToken(args[1]) {
+			a.hostfsdUsage()
+			return nil
+		}
 		return a.buildLinuxHostFSD(args[1:])
 	}
 	return errors.New("usage: hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
@@ -4331,8 +4384,9 @@ func isLabProbeNotImplemented(err error) bool {
 }
 
 func (a app) lab(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.labUsage()
+		return nil
 	}
 	switch args[0] {
 	case "portbridge":
@@ -4347,8 +4401,9 @@ func (a app) lab(args []string) error {
 }
 
 func (a app) labPortbridge(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.labPortbridgeUsage()
+		return nil
 	}
 	switch args[0] {
 	case "loopback":
