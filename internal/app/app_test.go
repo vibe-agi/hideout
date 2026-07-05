@@ -3500,6 +3500,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	for _, want := range []string{
 		"Hideout TUI",
 		"Store: " + store.Root,
+		"Updated:",
 		"Profiles: 1",
 		"Environments: 1",
 		"Sessions: 12",

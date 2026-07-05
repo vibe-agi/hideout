@@ -3827,6 +3827,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	} else {
 		fmt.Fprintln(w, "Status: ok")
 	}
+	fmt.Fprintf(w, "Updated: %s\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(w, "Profiles: %d  Environments: %d  Sessions: %d  Audit files: %d\n", len(overview.Profiles), len(overview.Environments), len(overview.Sessions), overview.Audit.SessionAuditFiles)
 	fmt.Fprintf(w, "Init: initialized=%t pending=%d profile=%s\n", overview.Init.Initialized, overview.Init.PendingTasks, dash(overview.Init.Profile))
 	if len(overview.Init.NextSteps) > 0 {

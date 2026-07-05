@@ -74,6 +74,8 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`data-environment-mode="plan"`,
 		`environmentResult`,
 		`splitArgv`,
+		`freshnessLabel`,
+		`connected ·`,
 		`panelRowLimit`,
 		`visibleEnvironmentsForPanel`,
 		`visibleSessionsForPanel`,

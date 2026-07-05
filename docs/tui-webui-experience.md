@@ -100,6 +100,7 @@ Surface differences are layout differences, not data model differences.
 
 Implemented smoke surface shows:
 
+- local refresh time;
 - selected profile;
 - init next steps;
 - capability summary;
@@ -176,6 +177,7 @@ Shows:
 
 Implemented smoke surface:
 
+- local refresh time;
 - audit tail;
 - denied audit count;
 - recent denied audit list using Manager API `decision=deny` filtering;

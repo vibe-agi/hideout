@@ -382,6 +382,9 @@ function networkRisk(mode) {
 function deniedAuditEvents() {
   return deniedEvents;
 }
+function freshnessLabel() {
+  return "updated " + new Date().toLocaleTimeString();
+}
 function panelLimitNotice(label, visible, total) {
   if (visible >= total) return "";
   return '<div class="empty">Showing newest ' + esc(visible) + ' of ' + esc(total) + ' ' + esc(label) + '</div>';
@@ -899,7 +902,7 @@ async function load() {
     renderSummary();
     renderPanel();
     renderAuditTail();
-    setStatus("connected", "ok");
+    setStatus("connected · " + freshnessLabel(), "ok");
   } catch (error) {
     overview = {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
     auditEvents = [];
