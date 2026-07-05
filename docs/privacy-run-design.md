@@ -4018,15 +4018,19 @@ Daemon invariants:
 
 - `hideoutd` must not be a generic host execution API or raw VM control API.
 - Daemon authority transport must be structurally unreachable from backend
-  guests. Preferred transport is a Unix socket under a Hideout-owned runtime
-  directory with `0700` ancestors, never under workspace, HostFS, passthrough
-  mount, or guest-visible state.
+  guests. Preferred transport is a Unix socket under a runtime subdirectory of
+  the effective Hideout store root, with `0700` ancestors, never under
+  workspace, HostFS, passthrough mount, or guest-visible state. This anchors
+  daemon reachability to the existing store-reserved HostFS guard and workspace
+  mount safety guard.
 - Host loopback is not sufficient daemon authentication. Any loopback HTTP
   transport is command-scoped UI transport with short-lived tokens and roles,
   not the default long-lived daemon authority channel.
 - Every daemon client must be authenticated and authorized per operation.
   Read-only observation, plan, apply, cleanup, and approval are different
-  permissions.
+  permissions. OS peer credentials are useful for Unix-socket clients but are
+  not enough by themselves for weak native-backend targets that share the host
+  UID.
 - Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
   exposure leases, and audit handles remain session-scoped even when the daemon
   is long-lived.
@@ -4034,7 +4038,8 @@ Daemon invariants:
   actions still go through Manager plan/apply and emit audit.
 - Prompt approvals must be bound to the exact request fingerprint, session ID,
   requester, approving client role, expiry, and a single-use nonce. Replayed or
-  mismatched approvals fail closed.
+  mismatched approvals fail closed. The request fingerprint must be computed by
+  Manager from the validated canonical request, not supplied by the client.
 - Event streams are redacted per subscriber. Aggregated audit indexes must not
   let a lower-trust subscriber receive fields or sessions outside its role and
   scope.

@@ -378,18 +378,22 @@ running.
 
 Daemon transport is security-sensitive:
 
-- Preferred transport is a Unix domain socket under a Hideout-owned runtime
-  directory with `0700` ancestors. The socket path must never live under the
-  workspace, HostFS grants, passthrough mounts, or any path visible to the
-  guest.
+- Preferred transport is a Unix domain socket under a runtime subdirectory of
+  the effective Hideout store root, with `0700` ancestors. Anchoring the socket
+  under the store lets the existing store-reserved HostFS guard and workspace
+  mount safety guard enforce guest unreachability. The socket path must never
+  live under the workspace, HostFS grants, passthrough mounts, or any path
+  visible to the guest.
 - Host loopback is not a sufficient trust boundary for the daemon API. A
   loopback HTTP listener may be used for a command-scoped browser UI only when
   protected by a short-lived token and role; it must not be the default
   long-lived daemon authority transport.
 - Every client must authenticate. Unix-socket clients should use OS peer
-  credentials when available; browser clients use short-lived tokens. Each
-  authenticated client gets a role such as read-only observer, operator, or
-  prompt approver.
+  credentials when available; browser clients use short-lived tokens. Peer
+  credentials are not sufficient by themselves for weak native-backend
+  scenarios where the target and operator share the host UID; path
+  unreachability, tokens, and per-client roles still apply. Each authenticated
+  client gets a role such as read-only observer, operator, or prompt approver.
 - Authorization is per client and per operation. Read-only event subscription,
   plan creation, apply, cleanup, and approval are separate permissions.
 - The guest must not learn daemon socket paths, daemon tokens, UI tokens, or
@@ -398,9 +402,11 @@ Daemon transport is security-sensitive:
 
 Approval channels are also authority-bearing. A prompt approval must be bound
 to the exact request fingerprint, session ID, requester, client role, expiry,
-and single-use nonce. Daemon-mediated approval must emit audit and must fail
-closed if the approving client is unauthenticated, lacks the approval role, or
-submits a replayed or mismatched approval.
+and single-use nonce. The fingerprint is computed by Manager from the validated
+and canonicalized request; clients must not provide their own fingerprint
+string. Daemon-mediated approval must emit audit and must fail closed if the
+approving client is unauthenticated, lacks the approval role, or submits a
+replayed or mismatched approval.
 
 Event streams must be redacted per subscriber. A daemon may aggregate sessions
 for indexing, but each subscriber receives only the fields and scope allowed by

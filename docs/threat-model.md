@@ -76,19 +76,25 @@ cannot read the token.
 
 Future `hideoutd` daemon mode is part of the local management TCB when enabled.
 Its transport must be unreachable from backend guests by construction. A Unix
-socket must live under Hideout-owned runtime state with private ancestors, not
-under workspace, HostFS grants, passthrough mounts, or any guest-visible path.
+socket must live under a runtime subdirectory of the effective Hideout store
+root with private ancestors, not under workspace, HostFS grants, passthrough
+mounts, or any guest-visible path. This reuses the existing store-reserved
+HostFS guard and workspace mount safety guard rather than creating a separate
+guest-unreachability mechanism.
 Host loopback is not a trust boundary for daemon authority: loopback HTTP is
 acceptable only as short-lived browser UI transport with explicit client tokens
 and roles, not as an unauthenticated daemon API.
 
 Daemon clients must be authenticated and authorized per operation. Read-only
 event subscription, plan creation, apply, cleanup, and prompt approval are
-separate permissions. Approval records must bind to the exact request
-fingerprint, session ID, requester, approving client role, expiry, and a
-single-use nonce. Event streams must be redacted per subscriber. After restart,
-the daemon must fail closed for live resources it cannot prove still belong to
-an active session.
+separate permissions. OS peer credentials are not sufficient by themselves for
+weak native-backend targets that share the host UID with operator clients.
+Approval records must bind to the exact request fingerprint, session ID,
+requester, approving client role, expiry, and a single-use nonce. The
+fingerprint must be computed by Manager from the validated canonical request,
+not supplied by the client. Event streams must be redacted per subscriber.
+After restart, the daemon must fail closed for live resources it cannot prove
+still belong to an active session.
 
 ## Assets
 
