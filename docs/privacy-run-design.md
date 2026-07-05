@@ -4028,6 +4028,8 @@ POST /api/v1/init/apply
 POST /api/v1/run/plan
 POST /api/v1/run/apply
 GET /api/v1/run/status
+POST /api/v1/profile/command-proxy/plan
+POST /api/v1/profile/command-proxy/apply
 ```
 
 Every local HTTP response uses a stable envelope:
@@ -4060,6 +4062,9 @@ Rules:
 - run plan/apply/status requests use Manager Core and configured backend/opener
   factories; API handlers must not create a second backend, host-open, or
   profile mutation path;
+- command-proxy plan/apply requests expose only typed registration of
+  `host.open` command symbols with the `open-target-v1` schema. They are not a
+  raw profile writer, provider descriptor writer, or host command execution API;
 - secret values are never returned, only refs and availability;
 - network resources expose mode, proxy secret refs, and proxy-env visibility as
   leak-check state; they must not expose proxy URLs or credentials.

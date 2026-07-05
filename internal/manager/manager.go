@@ -600,30 +600,31 @@ func (c Core) backendSummaries(ctx context.Context) []BackendSummary {
 }
 
 func profileCommandProxyRegistry(profiles []ProfileSummary) cmdproxy.Registry {
-	aliases := map[string]bool{}
-	foundOpen := false
+	names := map[string]bool{}
 	for _, p := range profiles {
 		if p.ValidationError != "" {
 			continue
 		}
 		for _, name := range p.CommandProxies {
-			switch name {
-			case "open":
-				foundOpen = true
-			case "xdg-open":
-				aliases[name] = true
-			}
+			names[name] = true
 		}
 	}
-	if !foundOpen {
+	if !names["open"] {
 		return cmdproxy.DefaultRegistry()
 	}
-	out := make([]string, 0, len(aliases))
-	for alias := range aliases {
-		out = append(out, alias)
+	registrations := make([]cmdproxy.Registration, 0, len(names))
+	for name := range names {
+		registrations = append(registrations, cmdproxy.Registration{
+			Name:           name,
+			Action:         cmdproxy.ActionHostOpen,
+			ArgvSchema:     cmdproxy.ArgvSchemaOpenV1,
+			StreamPolicy:   cmdproxy.StreamMetadataOnly,
+			DefaultMode:    cmdproxy.DefaultModeAllow,
+			AllowedTargets: []string{"url:http", "url:https", "workspace-file"},
+		})
 	}
-	sort.Strings(out)
-	registry, err := cmdproxy.HostOpenRegistry(out)
+	sort.Slice(registrations, func(i, j int) bool { return registrations[i].Name < registrations[j].Name })
+	registry, err := cmdproxy.NewRegistry(registrations)
 	if err != nil {
 		return cmdproxy.DefaultRegistry()
 	}

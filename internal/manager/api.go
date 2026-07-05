@@ -76,6 +76,12 @@ type EnvironmentActionAPIRequest struct {
 	StoppedOnly bool     `json:"stoppedOnly,omitempty"`
 }
 
+type CommandProxyAPIRequest struct {
+	ProfileName string `json:"profile,omitempty"`
+	Operation   string `json:"operation"`
+	Command     string `json:"command"`
+}
+
 func NewAPI(core Core, token string, ttl time.Duration) API {
 	now := time.Now().UTC()
 	return API{
@@ -166,6 +172,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveEnvironmentCleanPlan(w, r)
 	case "environment/clean/apply":
 		api.serveEnvironmentCleanApply(w, r)
+	case "profile/command-proxy/plan":
+		api.serveCommandProxyPlan(w, r)
+	case "profile/command-proxy/apply":
+		api.serveCommandProxyApply(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -395,6 +405,49 @@ func (api API) serveEnvironmentCleanApply(w http.ResponseWriter, r *http.Request
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (api API) serveCommandProxyPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeCommandProxyAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanCommandProxy(commandProxyOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/command-proxy/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveCommandProxyApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeCommandProxyAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanCommandProxy(commandProxyOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyCommandProxy(plan)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/command-proxy/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
 func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
 	sessions := nonNilSlice(overview.Sessions)
 	if rawSession := r.URL.Query().Get("session"); rawSession != "" {
@@ -465,6 +518,19 @@ func decodeEnvironmentActionAPIRequest(w http.ResponseWriter, r *http.Request) (
 	return req, nil
 }
 
+func decodeCommandProxyAPIRequest(w http.ResponseWriter, r *http.Request) (CommandProxyAPIRequest, error) {
+	var req CommandProxyAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid command-proxy request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid command-proxy request")
+	}
+	return req, nil
+}
+
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
 		ProfileName:    req.ProfileName,
@@ -487,6 +553,14 @@ func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {
 		GuestWorkspace: req.GuestWorkspace,
 		Ephemeral:      req.Ephemeral,
 		Command:        append([]string(nil), req.Command...),
+	}
+}
+
+func commandProxyOptionsFromAPIRequest(req CommandProxyAPIRequest) CommandProxyOptions {
+	return CommandProxyOptions{
+		ProfileName: req.ProfileName,
+		Operation:   req.Operation,
+		Command:     req.Command,
 	}
 }
 

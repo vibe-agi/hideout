@@ -354,6 +354,7 @@ let auditExplorerEvents = null;
 let setupResultHTML = "";
 let runResultHTML = "";
 let environmentResultHTML = "";
+let commandProxyResultHTML = "";
 let selectedProfile = "";
 const panelRowLimit = 50;
 
@@ -521,6 +522,7 @@ function renderPanel() {
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
   if (activePanel === "environments") bindEnvironmentPanel();
+  if (activePanel === "capabilities") bindCommandProxyPanel();
   if (activePanel === "audit") bindAuditPanel();
   });
 }
@@ -629,7 +631,19 @@ const renderers = {
     const c = overview.capabilities || {};
     const h = c.hostOpen || {};
     const proxies = c.commandProxies || [];
-    return '<div class="items">' + item("Capability ceiling", "final validator", [["maxCapabilities", c.maxCapabilities || []]], "ok") + item("host.open", "host broker", [["mode", h.mode], ["allowUrls", h.allowUrls], ["urlScope", h.urlScope], ["localNetworkPolicy", h.localNetworkPolicy], ["allowWorkspaceFiles", h.allowWorkspaceFiles], ["browserProfile", h.browserProfile], ["browserControl", h.browserControl], ["profiles", h.profiles]], h.allowUrls || h.allowWorkspaceFiles ? "info" : "warn") + (proxies.length ? proxies.map(function(p) {
+    const profiles = overview.profiles || [];
+    const profileOptions = profiles.length ? profiles.map(function(p) {
+      return '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>';
+    }).join("") : '<option value="default">default</option>';
+    const commandForm = '<form id="commandProxyForm" class="item">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label for="commandProxyProfile">Profile</label><select id="commandProxyProfile">' + profileOptions + '</select></div>' +
+      '<div class="field"><label for="commandProxyOperation">Operation</label><select id="commandProxyOperation"><option value="add-open">add host.open symbol</option><option value="remove">remove symbol</option></select></div>' +
+      '<div class="field"><label for="commandProxyCommand">Command symbol</label><input id="commandProxyCommand" placeholder="browser-open"></div>' +
+      '</div>' +
+      '<div class="action-row"><button class="action secondary" type="button" data-command-proxy-action="plan">Plan</button><button class="action" type="button" data-command-proxy-action="apply">Apply</button><span class="meta" id="commandProxyStatus">ready</span></div>' +
+      '</form><div class="result" id="commandProxyResult">' + commandProxyResultHTML + '</div>';
+    return commandForm + '<div class="items">' + item("Capability ceiling", "final validator", [["maxCapabilities", c.maxCapabilities || []]], "ok") + item("host.open", "host broker", [["mode", h.mode], ["allowUrls", h.allowUrls], ["urlScope", h.urlScope], ["localNetworkPolicy", h.localNetworkPolicy], ["allowWorkspaceFiles", h.allowWorkspaceFiles], ["browserProfile", h.browserProfile], ["browserControl", h.browserControl], ["profiles", h.profiles]], h.allowUrls || h.allowWorkspaceFiles ? "info" : "warn") + (proxies.length ? proxies.map(function(p) {
       return item(p.name, p.action || "command proxy", [["route", p.route], ["action", p.action], ["subject", "command:" + p.name]], p.route === "host-broker" ? "info" : "warn");
     }).join("") : empty("No command proxies")) + "</div>";
   },
@@ -877,6 +891,52 @@ function bindEnvironmentPanel() {
         environmentResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
         document.getElementById("environmentResult").innerHTML = environmentResultHTML;
         setEnvironmentBusy(false, "error");
+      }
+    });
+  });
+}
+function commandProxyPayloadFromForm() {
+  return {
+    profile: document.getElementById("commandProxyProfile").value,
+    operation: document.getElementById("commandProxyOperation").value,
+    command: document.getElementById("commandProxyCommand").value.trim()
+  };
+}
+function renderCommandProxyResponse(resource, response) {
+  const errors = response.errors || [];
+  const data = response.data || {};
+  const plan = data.plan || data;
+  const header = item(resource, plan.profile || "profile", [["operation", plan.operation], ["command", plan.command], ["route", plan.route], ["action", plan.action], ["argvSchema", plan.argvSchema], ["status", plan.status], ["changed", plan.changed], ["applied", data.applied], ["before", plan.commandsBefore || []], ["after", plan.commandsAfter || data.commands || []]], errors.length ? "error" : plan.changed || data.applied ? "ok" : "info");
+  const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
+  return header + errorHTML;
+}
+function setCommandProxyBusy(busy, text) {
+  const status = document.getElementById("commandProxyStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-command-proxy-action]").forEach(function(button) { button.disabled = busy; });
+}
+function bindCommandProxyPanel() {
+  const form = document.getElementById("commandProxyForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  if (selectedProfile && document.getElementById("commandProxyProfile")) {
+    document.getElementById("commandProxyProfile").value = selectedProfile;
+  }
+  document.querySelectorAll("[data-command-proxy-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-command-proxy-action");
+      const resource = "profile/command-proxy/" + action;
+      setCommandProxyBusy(true, action);
+      try {
+        const response = await apiPost(resource, commandProxyPayloadFromForm());
+        commandProxyResultHTML = renderCommandProxyResponse(resource, response);
+        document.getElementById("commandProxyResult").innerHTML = commandProxyResultHTML;
+        setCommandProxyBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+        if (action === "apply" && !(response.errors && response.errors.length)) await load();
+      } catch (error) {
+        commandProxyResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        document.getElementById("commandProxyResult").innerHTML = commandProxyResultHTML;
+        setCommandProxyBusy(false, "error");
       }
     });
   });

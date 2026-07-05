@@ -121,6 +121,13 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`localNetworkPolicy`,
 		`allowWorkspaceFiles`,
 		`browserControl`,
+		`commandProxyForm`,
+		`commandProxyPayloadFromForm`,
+		`profile/command-proxy/`,
+		`data-command-proxy-action="plan"`,
+		`data-command-proxy-action="apply"`,
+		`add host.open symbol`,
+		`Command symbol`,
 		`history.replaceState`,
 	} {
 		if !strings.Contains(string(rootHTML), want) {

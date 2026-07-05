@@ -33,7 +33,9 @@
         "environment/stop/plan",
         "environment/stop/apply",
         "environment/clean/plan",
-        "environment/clean/apply"
+        "environment/clean/apply",
+        "profile/command-proxy/plan",
+        "profile/command-proxy/apply"
       ]
     },
     "data": {

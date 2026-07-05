@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/hostfs"
@@ -311,6 +312,104 @@ func TestCorePlanRunRejectsMissingCommandBeforeProfileCreation(t *testing.T) {
 	}
 	if _, statErr := os.Stat(store.ProfilePath("no-command")); !os.IsNotExist(statErr) {
 		t.Fatalf("missing command should not create profile state, stat err=%v", statErr)
+	}
+}
+
+func TestCorePlanAndApplyCommandProxyHostOpenSymbol(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	plan, err := core.PlanCommandProxy(CommandProxyOptions{
+		ProfileName: "cmdproxy",
+		Operation:   "add-open",
+		Command:     "browser-open",
+	})
+	if err != nil {
+		t.Fatalf("PlanCommandProxy: %v", err)
+	}
+	if plan.Version != CommandProxyPlanVersion ||
+		plan.Profile != "cmdproxy" ||
+		plan.Operation != "add-open" ||
+		plan.Command != "browser-open" ||
+		plan.Route != "host-broker" ||
+		plan.Action != "host.open" ||
+		plan.ArgvSchema != "open-target-v1" ||
+		!plan.Changed ||
+		!containsStringForManagerTest(plan.CommandsAfter, "browser-open") {
+		t.Fatalf("unexpected command proxy plan: %+v", plan)
+	}
+	if _, err := store.Load("cmdproxy"); err == nil {
+		t.Fatal("PlanCommandProxy should not create profile state")
+	}
+	result, err := core.ApplyCommandProxy(plan)
+	if err != nil {
+		t.Fatalf("ApplyCommandProxy: %v", err)
+	}
+	if !result.Applied || !containsStringForManagerTest(result.Commands, "browser-open") {
+		t.Fatalf("unexpected command proxy result: %+v", result)
+	}
+	loaded, err := store.Load("cmdproxy")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	if loaded.CommandProxy.Commands["browser-open"].Action != "host.open" {
+		t.Fatalf("command proxy was not persisted: %+v", loaded.CommandProxy.Commands)
+	}
+
+	removePlan, err := core.PlanCommandProxy(CommandProxyOptions{
+		ProfileName: "cmdproxy",
+		Operation:   "remove",
+		Command:     "browser-open",
+	})
+	if err != nil {
+		t.Fatalf("PlanCommandProxy remove: %v", err)
+	}
+	if !removePlan.Changed || containsStringForManagerTest(removePlan.CommandsAfter, "browser-open") {
+		t.Fatalf("unexpected remove plan: %+v", removePlan)
+	}
+	removeResult, err := core.ApplyCommandProxy(removePlan)
+	if err != nil {
+		t.Fatalf("ApplyCommandProxy remove: %v", err)
+	}
+	if !removeResult.Applied || containsStringForManagerTest(removeResult.Commands, "browser-open") {
+		t.Fatalf("unexpected remove result: %+v", removeResult)
+	}
+	loaded, err = store.Load("cmdproxy")
+	if err != nil {
+		t.Fatalf("reload profile: %v", err)
+	}
+	if _, ok := loaded.CommandProxy.Commands["browser-open"]; ok {
+		t.Fatalf("command proxy was not removed: %+v", loaded.CommandProxy.Commands)
+	}
+}
+
+func TestCoreCommandProxyRejectsUnsafeOperations(t *testing.T) {
+	core := New(profile.Store{Root: t.TempDir()})
+	for _, tc := range []struct {
+		name string
+		opts CommandProxyOptions
+		want string
+	}{
+		{
+			name: "remove required open",
+			opts: CommandProxyOptions{ProfileName: "default", Operation: "remove", Command: "open"},
+			want: "open is required",
+		},
+		{
+			name: "invalid command name",
+			opts: CommandProxyOptions{ProfileName: "default", Operation: "add-open", Command: "bad/name"},
+			want: "simple command name",
+		},
+		{
+			name: "unknown operation",
+			opts: CommandProxyOptions{ProfileName: "default", Operation: "host-exec", Command: "shell"},
+			want: "unsupported command-proxy operation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := core.PlanCommandProxy(tc.opts); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
 	}
 }
 
@@ -1850,7 +1949,8 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	assertContainsManagerTest(t, overview.Broker.Actions, "host.open")
 	assertContainsManagerTest(t, overview.Broker.CommandProxies, "open")
 	assertContainsManagerTest(t, overview.Broker.CommandProxies, "xdg-open")
-	if len(overview.Capabilities.CommandProxies) != 1 || overview.Capabilities.CommandProxies[0].Name != "open" {
+	if !commandProxyRegistrationExistsForManagerTest(overview.Capabilities.CommandProxies, "open") ||
+		!commandProxyRegistrationExistsForManagerTest(overview.Capabilities.CommandProxies, "xdg-open") {
 		t.Fatalf("command proxy registrations mismatch: %+v", overview.Capabilities.CommandProxies)
 	}
 	if len(overview.Backends) != 1 || !overview.Backends[0].Available || overview.Backends[0].Name != "native" {
@@ -2456,4 +2556,22 @@ func boundarySummaryCapability(t *testing.T, summary BoundarySummary, capability
 	}
 	t.Fatalf("boundary summary missing capability %q: %+v", capability, summary.Capabilities)
 	return BoundaryCapabilitySummary{}
+}
+
+func containsStringForManagerTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func commandProxyRegistrationExistsForManagerTest(values []cmdproxy.Registration, name string) bool {
+	for _, value := range values {
+		if value.Name == name {
+			return true
+		}
+	}
+	return false
 }

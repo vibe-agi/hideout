@@ -229,6 +229,11 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   `POST /api/v1/environment/stop/apply`,
   `POST /api/v1/environment/clean/plan`, and
   `POST /api/v1/environment/clean/apply`.
+- Manager API exposes controlled command-proxy registration actions:
+  `POST /api/v1/profile/command-proxy/plan` and
+  `POST /api/v1/profile/command-proxy/apply`. These mutate only durable
+  `profile.commandProxy.commands` entries for `host.open` symbols and must use
+  the same profile validator as CLI `profile command-proxy`.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
   `hideout ui` server wires this factory to the same backend adapters used by
   CLI `run`; tests may install a fake backend. API handlers must not construct
@@ -406,6 +411,9 @@ Rules:
 - audit all authority-changing operations;
 - sensitive values are redacted before API response;
 - manager socket path lives under Hideout runtime state.
+- typed command-proxy mutation endpoints are limited to `host.open` command
+  symbol registration and must not accept host command paths, provider code, or
+  raw profile JSON.
 
 ## State Ownership
 
@@ -448,14 +456,16 @@ mutate unrelated stores directly.
   typed `hideout.init-audit/v1` JSONL file under the store logs directory.
 - Manager API exposes minimal run plan/apply/status resources over the local
   token-protected server.
+- Manager API and WebUI expose typed command-proxy plan/apply for `host.open`
+  command symbols.
 
 ### Next Product Increment
 
 - formal Manager resource schema;
 - expand InitTask resource schema and plan/apply operations beyond machine
   setup;
-- plan/apply operations for HostFS, network, OpenTarget, and profile/config
-  mutations;
+- plan/apply operations for HostFS, network, OpenTarget, and broader
+  profile/config mutations beyond typed command-proxy registration;
 - plan/apply operations for bundle install, bundle enable, project apply, and
   bundle export;
 - TUI first-run wizard and interactive doctor;
