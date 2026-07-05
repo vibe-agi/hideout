@@ -323,21 +323,21 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	if session.HostFSEnabled {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
-		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}), hostEnv, nil, b.stdout(), b.stderr()); err != nil {
+		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}), hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 			errs = append(errs, fmt.Errorf("hostfs cleanup: %w", err))
 		}
 	}
 	if session.NetworkCleanupGuestPath != "" {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
-		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}), hostEnv, nil, b.stdout(), b.stderr()); err != nil {
+		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}), hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 			errs = append(errs, fmt.Errorf("network cleanup: %w", err))
 		}
 	}
 	if session.PreserveInstance {
 		return errors.Join(errs...)
 	}
-	if err := runner.Run(cleanupCtx, b.limactl(), []string{"delete", "-f", session.InstanceName}, hostEnv, nil, io.Discard, io.Discard); err != nil {
+	if err := runner.Run(cleanupCtx, b.limactl(), []string{"delete", "-f", session.InstanceName}, hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 		errs = append(errs, fmt.Errorf("delete lima instance %s: %w", session.InstanceName, err))
 	}
 	return errors.Join(errs...)
@@ -353,7 +353,7 @@ func (b Backend) StopInstance(ctx context.Context, instanceName string) error {
 	}
 	stopCtx, cancel := context.WithTimeout(ctx, cleanupTimeout)
 	defer cancel()
-	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", instanceName}, HostCommandEnv(os.Environ()), nil, io.Discard, b.stderr())
+	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", instanceName}, HostCommandEnv(os.Environ()), nil, b.controlStdout(), b.controlStderr())
 }
 
 func cleanupGuestEnv(env []string) []string {

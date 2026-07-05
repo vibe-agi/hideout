@@ -713,6 +713,17 @@ func TestCoreProfileEnvNoopApplyDoesNotCreateProfileState(t *testing.T) {
 	}
 }
 
+func TestRemoveStringForManagerDoesNotMutateInput(t *testing.T) {
+	values := []string{"FIRST", "SECOND", "THIRD"}
+	out := removeStringForManager(values, "SECOND")
+	if !reflect.DeepEqual(out, []string{"FIRST", "THIRD"}) {
+		t.Fatalf("remove output=%v", out)
+	}
+	if !reflect.DeepEqual(values, []string{"FIRST", "SECOND", "THIRD"}) {
+		t.Fatalf("remove mutated input slice: %v", values)
+	}
+}
+
 func TestRunPlanJSONMatchesSchemaAndHidesProfiles(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	plan, err := New(store).PlanRun(RunPlanOptions{

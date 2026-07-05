@@ -264,7 +264,7 @@ func appendStringIfMissing(values []string, value string) []string {
 }
 
 func removeStringForManager(values []string, value string) []string {
-	out := values[:0]
+	out := make([]string, 0, len(values))
 	for _, item := range values {
 		if item == value {
 			continue

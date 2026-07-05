@@ -753,6 +753,37 @@ func TestRunSeparatesControlOutputFromTargetOutput(t *testing.T) {
 	}
 }
 
+func TestCleanupAndStopUseControlOutput(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", emitOutput: true}
+	var targetOut, targetErr, controlOut, controlErr bytes.Buffer
+	b := Backend{
+		Runner:        runner,
+		Stdin:         bytes.NewBufferString(""),
+		Stdout:        &targetOut,
+		Stderr:        &targetErr,
+		ControlStdout: &controlOut,
+		ControlStderr: &controlErr,
+	}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := b.Cleanup(context.Background(), session); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if err := b.StopInstance(context.Background(), session.InstanceName); err != nil {
+		t.Fatalf("StopInstance: %v", err)
+	}
+	if got, want := controlOut.String(), "call1\ncall2\ncall3\n"; got != want {
+		t.Fatalf("control stdout=%q want %q", got, want)
+	}
+	if targetOut.Len() != 0 || targetErr.Len() != 0 || controlErr.Len() != 0 {
+		t.Fatalf("unexpected output targetOut=%q targetErr=%q controlErr=%q", targetOut.String(), targetErr.String(), controlErr.String())
+	}
+}
+
 func TestRunStartsHostFSBeforeCommandCheckWhenEnabled(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)

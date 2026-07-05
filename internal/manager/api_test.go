@@ -173,6 +173,17 @@ func TestAPIRunPlanAndStatus(t *testing.T) {
 		!strings.Contains(resp.Body.String(), `"sessions":[]`) {
 		t.Fatalf("run status response mismatch: %s", resp.Body.String())
 	}
+	req = newAPIRequest(http.MethodGet, "/api/v1/run/status?session=ses_20260705T000000Z_0000000000000000")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("filtered status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"sessions":[]`) {
+		t.Fatalf("filtered run status should return empty array, got %s", resp.Body.String())
+	}
 }
 
 func TestAPIInitPlanAndApplyConfigureGenericToolSupply(t *testing.T) {

@@ -571,7 +571,7 @@ func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview O
 				break
 			}
 		}
-		sessions = filtered
+		sessions = nonNilSlice(filtered)
 	}
 	resp := APIResponse{
 		Version:  APIVersion,
