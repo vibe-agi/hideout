@@ -4032,7 +4032,11 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), status)
+		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  commandProxies=%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), status)
+		next := profileNextCommandsForTUI(p)
+		if len(next) > 0 {
+			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))
+		}
 	}
 
 	fmt.Fprintln(w, "\nBackends")
@@ -4189,6 +4193,16 @@ func sessionNextCommandsForTUI(s manager.SessionSummary) []string {
 		out = append(out, "cleanup-check=hideout cleanup --session "+s.ID+" --dry-run")
 	}
 	return out
+}
+
+func profileNextCommandsForTUI(p manager.ProfileSummary) []string {
+	if p.Name == "" {
+		return nil
+	}
+	return []string{
+		"command-proxy-add=hideout profile command-proxy " + p.Name + " add-open <command>",
+		"command-proxy-remove=hideout profile command-proxy " + p.Name + " remove <command>",
+	}
 }
 
 func dash(value string) string {
