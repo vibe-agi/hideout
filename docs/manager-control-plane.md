@@ -361,7 +361,7 @@ overview and redacted audit data. It is best for:
 - recent denied paths;
 - network status;
 - init next steps.
-- per-profile command-proxy symbols and CLI command hints.
+- per-profile tool and command-proxy state with CLI setup hints.
 
 Future TUI increments can add first-run initialization, interactive doctor,
 HostFS rule management, and install-task apply flows. They must still call
@@ -448,7 +448,7 @@ mutate unrelated stores directly.
 - Manager packages exist;
 - CLI remains the primary user surface;
 - `hideout tui` exists as a read-only dashboard over Manager overview, including
-  per-profile command-proxy visibility and CLI command hints.
+  per-profile tool and command-proxy visibility with CLI setup hints.
 - `hideout ui` exists as a local WebUI smoke/operations surface backed by
   Manager API.
 - Manager overview exposes initial init, bundle, and project status summaries;

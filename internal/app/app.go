@@ -1957,6 +1957,8 @@ func pathEscapesRoot(rel string) bool {
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+const limaConfigValidateTimeout = 15 * time.Second
+
 func checkLimaGeneratedConfig(backendName string, p profile.Profile, layout session.Layout, hostRoot, guestRoot, identityRoot string, report func(string, string, string)) {
 	if backendName != "lima" {
 		return
@@ -1980,7 +1982,7 @@ func checkLimaGeneratedConfig(backendName string, p profile.Profile, layout sess
 		report("lima-config", "error", "could not write generated YAML: "+doctorDiagnostic(nil, err))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), limaConfigValidateTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, limactl, "validate", configPath)
 	cmd.Env = lima.HostCommandEnv(os.Environ())
@@ -4035,7 +4037,9 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  commandProxies=%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), status)
 		next := profileNextCommandsForTUI(p)
 		if len(next) > 0 {
-			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))
+			for _, command := range next {
+				fmt.Fprintf(w, "    next: %s\n", command)
+			}
 		}
 	}
 
@@ -4200,8 +4204,10 @@ func profileNextCommandsForTUI(p manager.ProfileSummary) []string {
 		return nil
 	}
 	return []string{
-		"command-proxy-add=hideout profile command-proxy " + p.Name + " add-open <command>",
-		"command-proxy-remove=hideout profile command-proxy " + p.Name + " remove <command>",
+		"tools=hideout profile tools " + p.Name + " list",
+		"add-tool=hideout profile tools " + p.Name + " npm add --package <npm-package> --command <command>",
+		"command-proxy=hideout profile command-proxy " + p.Name + " list",
+		"add-open=hideout profile command-proxy " + p.Name + " add-open <command>",
 	}
 }
 
