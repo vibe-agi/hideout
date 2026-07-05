@@ -8,19 +8,19 @@ many subsystem specs.
 
 Current release state: private alpha / supervised dogfood with a latest local
 release-candidate evidence bundle produced on macOS at commit
-`594518de69a0`. Public GA still requires this evidence to be produced for the
+`7df9b88e3a4e`. Public GA still requires this evidence to be produced for the
 final release artifact and explicit release-specific signoff.
 
 Latest local release-candidate evidence:
 
 - manifest:
-  `.hideout-release-evidence/release-dogfood-20260705T061015Z-594518de69a0/manifest.json`
+  `.hideout-release-evidence/release-dogfood-20260705T062339Z-7df9b88e3a4e/manifest.json`
 - status: passed
 - command: `scripts/test-phase1.sh --release-candidate`
-- commit: `594518de69a0`, dirty: false
+- commit: `7df9b88e3a4e`, dirty: false
 - host: Darwin 25.4.0 arm64, macOS 26.4.1
-- release artifact: `hideout-darwin-arm64-594518de69a0.tar.gz`; SHA-256
-  `f82ab6d725a4f9f6f64a56b6f597088dc80d354cce5f90365ac030cd00222a5a`;
+- release artifact: `hideout-darwin-arm64-7df9b88e3a4e.tar.gz`; SHA-256
+  `ee78443d627d1c90a6a6f7e6aa40a9fdddb2b0e751269f3cec66bfef8bb59edb`;
   byte size recorded in the manifest
 - gates: Gate 0 static contract, Gate 1 native smoke, Gate 2 Lima E2E, Gate 3
   hidden proxy with operator-supplied proxy, Gate 4 host escape with a real
