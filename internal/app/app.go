@@ -166,6 +166,105 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
 }
 
+func (a app) initUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout init [flags]")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Initialize or repair Hideout machine/profile state through typed init tasks.")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Common:")
+	fmt.Fprintln(a.stdout, "  hideout init --no-input --backend lima --network direct")
+	fmt.Fprintln(a.stdout, "  hideout init --profile agent --backend lima --network direct --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout, "  hideout init --dry-run --profile agent --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Flags:")
+	fmt.Fprintln(a.stdout, "  --profile <name>          profile to initialize (default: default)")
+	fmt.Fprintln(a.stdout, "  --backend <name>          auto or lima for product isolation; native is a weak dev harness")
+	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
+	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      host-only proxy secret ref for tun2socks")
+	fmt.Fprintln(a.stdout, "  --tool-preset <name>      tool preset to add; may be repeated")
+	fmt.Fprintln(a.stdout, "  --npm-package <spec>      npm package for a global CLI tool")
+	fmt.Fprintln(a.stdout, "  --npm-command <command>   command expected from the npm package; may be repeated")
+	fmt.Fprintln(a.stdout, "  --no-input                do not ask for confirmation")
+	fmt.Fprintln(a.stdout, "  --dry-run                 print the init plan without applying it")
+}
+
+func (a app) runUsage(commandName string) {
+	if strings.TrimSpace(commandName) == "" {
+		commandName = "run"
+	}
+	explain := commandName == "explain"
+	fmt.Fprintln(a.stdout, "Usage:")
+	if explain {
+		fmt.Fprintln(a.stdout, "  hideout explain [flags] -- <command> [args...]")
+	} else {
+		fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
+		fmt.Fprintln(a.stdout, "  hideout run --explain [flags] -- <command> [args...]")
+	}
+	fmt.Fprintln(a.stdout)
+	if explain {
+		fmt.Fprintln(a.stdout, "Print the run boundary without executing the command.")
+	} else {
+		fmt.Fprintln(a.stdout, "Run a command in the selected Hideout boundary.")
+	}
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Common:")
+	fmt.Fprintln(a.stdout, "  hideout run --profile smoke --backend lima --network direct -- pwd")
+	fmt.Fprintln(a.stdout, "  hideout run --profile agent --backend lima -- <command>")
+	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- npm run dev")
+	fmt.Fprintln(a.stdout, "  hideout run --fs read:/absolute/file -- <command>")
+	fmt.Fprintln(a.stdout, "  hideout explain --profile agent --backend lima -- <command>")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Flags:")
+	fmt.Fprintln(a.stdout, "  --profile <name>              profile name (default: default)")
+	fmt.Fprintln(a.stdout, "  --backend <name>              auto/lima for isolation; native requires --allow-weak-isolation")
+	fmt.Fprintln(a.stdout, "  --network <mode>              direct or tun2socks")
+	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>          proxy secret ref for tun2socks")
+	fmt.Fprintln(a.stdout, "  --workspace <path>            host workspace (default: current directory)")
+	fmt.Fprintln(a.stdout, "  --guest-workspace <path>      guest workspace path")
+	fmt.Fprintln(a.stdout, "  --audit <path|off>            audit path or off")
+	fmt.Fprintln(a.stdout, "  --fs <kind:/path>             run-scoped HostFS allow rule; may be repeated")
+	fmt.Fprintln(a.stdout, "  --no-fs <kind:/path>          run-scoped HostFS deny rule; may be repeated")
+	fmt.Fprintln(a.stdout, "  --no-profile-fs               ignore profile HostFS grants for this run")
+	fmt.Fprintln(a.stdout, "  --env KEY=VALUE               run-scoped public environment variable")
+	fmt.Fprintln(a.stdout, "  --preview <endpoint|id>       expose a guest-loopback endpoint to the host browser")
+	fmt.Fprintln(a.stdout, "  --verbose                     print Hideout control-plane progress and boundary summary")
+	fmt.Fprintln(a.stdout, "  --explain                     print the run boundary without executing")
+	fmt.Fprintln(a.stdout, "  --new                         create a new reusable environment")
+	fmt.Fprintln(a.stdout, "  --resume <env-id>             resume an existing environment")
+	fmt.Fprintln(a.stdout, "  --rm                          remove the runtime environment after command exit")
+	fmt.Fprintln(a.stdout, "  --ephemeral                   use session-local identity state")
+	fmt.Fprintln(a.stdout, "  --allow-unsafe-workspace      explicitly allow a high-risk workspace mount")
+	fmt.Fprintln(a.stdout, "  --allow-weak-isolation        allow the native development harness")
+}
+
+func (a app) doctorUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout doctor [flags]")
+	fmt.Fprintln(a.stdout, "  hideout doctor --fix [--dry-run] [flags]")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Check Hideout setup, or apply safe initialization repairs through InitTask.")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Common:")
+	fmt.Fprintln(a.stdout, "  hideout doctor --profile default --backend lima --network direct")
+	fmt.Fprintln(a.stdout, "  hideout doctor --fix --dry-run --profile agent --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout, "  hideout doctor --fix --profile agent --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Flags:")
+	fmt.Fprintln(a.stdout, "  --profile <name>          profile name (default: default)")
+	fmt.Fprintln(a.stdout, "  --backend <name>          backend to diagnose (default: auto)")
+	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
+	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      proxy secret ref for tun2socks")
+	fmt.Fprintln(a.stdout, "  --workspace <path>        host workspace (default: current directory)")
+	fmt.Fprintln(a.stdout, "  --guest-workspace <path>  guest workspace path")
+	fmt.Fprintln(a.stdout, "  --ephemeral               diagnose session-local identity state")
+	fmt.Fprintln(a.stdout, "  --fix                     apply safe initialization repairs")
+	fmt.Fprintln(a.stdout, "  --dry-run                 print the fix plan without applying it")
+	fmt.Fprintln(a.stdout, "  --tool-preset <name>      tool preset to add during --fix; may be repeated")
+	fmt.Fprintln(a.stdout, "  --npm-package <spec>      npm package for one global CLI tool during --fix")
+	fmt.Fprintln(a.stdout, "  --npm-command <command>   command expected from the npm package; may be repeated")
+}
+
 func isHelpToken(value string) bool {
 	return value == "help" || value == "-h" || value == "--help"
 }
@@ -521,6 +620,10 @@ type toolSupplyOptions struct {
 }
 
 func (a app) initCommand(args []string) error {
+	if containsHelpToken(args) {
+		a.initUsage()
+		return nil
+	}
 	opts, err := parseInitCommandOptions(args)
 	if err != nil {
 		return err
@@ -669,6 +772,14 @@ type runOptions struct {
 type runEnvironment = manager.RunEnvironment
 
 func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
+	if runHelpRequested(args) {
+		if explainOnly {
+			a.runUsage("explain")
+		} else {
+			a.runUsage("run")
+		}
+		return nil
+	}
 	opts, err := parseRunOptions(args, explainOnly)
 	if err != nil {
 		return err
@@ -1016,6 +1127,14 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 		opts.command = fs.Args()
 	}
 	return opts, nil
+}
+
+func runHelpRequested(args []string) bool {
+	split := slices.Index(args, "--")
+	if split >= 0 {
+		args = args[:split]
+	}
+	return containsHelpToken(args)
 }
 
 func parseRunEnvFlags(values []string) (map[string]string, error) {
@@ -1614,6 +1733,10 @@ func mustGetwd() string {
 }
 
 func (a app) doctor(args []string) error {
+	if containsHelpToken(args) {
+		a.doctorUsage()
+		return nil
+	}
 	opts, err := parseDoctorOptions(args)
 	if err != nil {
 		return err

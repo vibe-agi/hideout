@@ -244,6 +244,47 @@ func TestProfileLeafHelpIsSpecific(t *testing.T) {
 	}
 }
 
+func TestPrimaryCommandHelpIsSpecific(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"init", "--help"}, "hideout init [flags]"},
+		{[]string{"doctor", "--help"}, "hideout doctor --fix [--dry-run] [flags]"},
+		{[]string{"run", "--help"}, "hideout run [flags] -- <command> [args...]"},
+		{[]string{"explain", "--help"}, "hideout explain [flags] -- <command> [args...]"},
+	}
+	for _, tt := range tests {
+		var out, errOut bytes.Buffer
+		code := Main(tt.args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", tt.args, code, errOut.String())
+		}
+		if !strings.Contains(out.String(), tt.want) {
+			t.Fatalf("%v help missing %q:\n%s", tt.args, tt.want, out.String())
+		}
+		if strings.Contains(out.String(), "Profile and HostFS:") {
+			t.Fatalf("%v should not fall back to top-level usage:\n%s", tt.args, out.String())
+		}
+	}
+}
+
+func TestRunTargetHelpIsNotConsumedByHideout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"run", "--explain", "--", "echo", "--help"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Target command: echo --help") {
+		t.Fatalf("run explain should preserve target --help:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "hideout run [flags] -- <command>") {
+		t.Fatalf("target --help should not trigger Hideout usage:\n%s", out.String())
+	}
+}
+
 func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	root := writeTestPackageRoot(t)
 	var out, errOut bytes.Buffer
