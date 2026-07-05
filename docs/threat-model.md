@@ -74,6 +74,22 @@ boundary is the host-side broker validator, HostFS policy, explicit user
 grants, and audited TCB execution path, not the assumption that guest root
 cannot read the token.
 
+Future `hideoutd` daemon mode is part of the local management TCB when enabled.
+Its transport must be unreachable from backend guests by construction. A Unix
+socket must live under Hideout-owned runtime state with private ancestors, not
+under workspace, HostFS grants, passthrough mounts, or any guest-visible path.
+Host loopback is not a trust boundary for daemon authority: loopback HTTP is
+acceptable only as short-lived browser UI transport with explicit client tokens
+and roles, not as an unauthenticated daemon API.
+
+Daemon clients must be authenticated and authorized per operation. Read-only
+event subscription, plan creation, apply, cleanup, and prompt approval are
+separate permissions. Approval records must bind to the exact request
+fingerprint, session ID, requester, approving client role, expiry, and a
+single-use nonce. Event streams must be redacted per subscriber. After restart,
+the daemon must fail closed for live resources it cannot prove still belong to
+an active session.
+
 ## Assets
 
 Hideout protects the following assets by default:

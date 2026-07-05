@@ -356,7 +356,7 @@ hideoutd
   local Manager runtime and event hub
 
 hideout CLI / TUI / WebUI
-  clients over Unix socket or local loopback transport
+  authenticated clients over protected local transport
 ```
 
 The daemon exists to make observation and control continuous across CLI
@@ -375,6 +375,41 @@ execution, raw VM commands, broker tokens, proxy secret values, host file
 handles, or a raw profile writer. Per-run authority remains session-scoped and
 must be regenerated for each `hideout run` even when `hideoutd` is already
 running.
+
+Daemon transport is security-sensitive:
+
+- Preferred transport is a Unix domain socket under a Hideout-owned runtime
+  directory with `0700` ancestors. The socket path must never live under the
+  workspace, HostFS grants, passthrough mounts, or any path visible to the
+  guest.
+- Host loopback is not a sufficient trust boundary for the daemon API. A
+  loopback HTTP listener may be used for a command-scoped browser UI only when
+  protected by a short-lived token and role; it must not be the default
+  long-lived daemon authority transport.
+- Every client must authenticate. Unix-socket clients should use OS peer
+  credentials when available; browser clients use short-lived tokens. Each
+  authenticated client gets a role such as read-only observer, operator, or
+  prompt approver.
+- Authorization is per client and per operation. Read-only event subscription,
+  plan creation, apply, cleanup, and approval are separate permissions.
+- The guest must not learn daemon socket paths, daemon tokens, UI tokens, or
+  approval tokens. Endpoint exposure and PortBridge providers must not expose
+  the daemon API back into the guest.
+
+Approval channels are also authority-bearing. A prompt approval must be bound
+to the exact request fingerprint, session ID, requester, client role, expiry,
+and single-use nonce. Daemon-mediated approval must emit audit and must fail
+closed if the approving client is unauthenticated, lacks the approval role, or
+submits a replayed or mismatched approval.
+
+Event streams must be redacted per subscriber. A daemon may aggregate sessions
+for indexing, but each subscriber receives only the fields and scope allowed by
+its role, profile/session filter, and local authentication state.
+
+After daemon restart, live resources are valid only when the daemon can prove
+they still belong to an active session using session-scoped state such as an
+epoch, nonce, pid/lock, or backend lease recorded by Manager. Resources that
+cannot be proven active must be cleaned up or treated as unavailable.
 
 Phase 1 uses embedded Manager Core in each command so `hideout run` remains
 available without starting a resident process. Promoting `hideoutd` is a

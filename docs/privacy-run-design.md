@@ -369,7 +369,8 @@ Required Phase 1:
 Design-ready Phase 1:
 
 - `hideoutd` daemon mode.
-- Broader Manager API resource model over Unix socket or localhost loopback.
+- Broader Manager API resource model over protected Unix socket transport, with
+  command-scoped localhost loopback transport only for token-protected Web UI.
 - Minimal Manager API run resources: `run/plan`, `run/apply`, and `run/status`
   over the local token-protected server.
 - Local Web UI page map and data model.
@@ -4016,14 +4017,31 @@ in-process overview is not allowed to expose.
 Daemon invariants:
 
 - `hideoutd` must not be a generic host execution API or raw VM control API.
+- Daemon authority transport must be structurally unreachable from backend
+  guests. Preferred transport is a Unix socket under a Hideout-owned runtime
+  directory with `0700` ancestors, never under workspace, HostFS, passthrough
+  mount, or guest-visible state.
+- Host loopback is not sufficient daemon authentication. Any loopback HTTP
+  transport is command-scoped UI transport with short-lived tokens and roles,
+  not the default long-lived daemon authority channel.
+- Every daemon client must be authenticated and authorized per operation.
+  Read-only observation, plan, apply, cleanup, and approval are different
+  permissions.
 - Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
   exposure leases, and audit handles remain session-scoped even when the daemon
   is long-lived.
 - TUI and WebUI may subscribe to daemon event streams, but authority-changing
   actions still go through Manager plan/apply and emit audit.
+- Prompt approvals must be bound to the exact request fingerprint, session ID,
+  requester, approving client role, expiry, and a single-use nonce. Replayed or
+  mismatched approvals fail closed.
+- Event streams are redacted per subscriber. Aggregated audit indexes must not
+  let a lower-trust subscriber receive fields or sessions outside its role and
+  scope.
 - A daemon restart must not grant new authority. It may reconstruct observable
   state from stores and audit, then fail closed for any live resource it cannot
-  prove still belongs to an active session.
+  prove still belongs to an active session using session-scoped state such as a
+  nonce, epoch, pid/lock, or backend lease.
 
 Design-ready local HTTP resources:
 
