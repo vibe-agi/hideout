@@ -80,21 +80,23 @@ hideout doctor
 
 ```bash
 cd /path/to/sanitized/project
-hideout run -- pwd
+hideout run --profile smoke --backend lima --network direct -- pwd
 ```
 
 `hideout init` 和 `hideout doctor --fix` 会打印可直接复制的下一步命令，
 包括 `doctor` 检查、smoke run，以及已配置的通用 CLI 工具。
 
-第一次运行只应该验证 backend、workspace mount 和隔离身份。不要在这一步
-配置 CLI 工具供给；工具供给从下一节开始。
+第一次运行只应该验证 backend、workspace mount 和隔离身份。这里使用
+独立的 `smoke` profile，这样已有 `default` profile 上的工具策略不会在
+第一次检查时触发软件包供给。不要在这一步配置 CLI 工具供给；工具供给从
+下一节开始。
 
 可复用 Lima 环境按 profile、workspace、backend 和工具策略建立索引。
 使用 `hideout list` 查看可 resume 的环境：
 
 ```bash
 hideout list
-hideout run --resume <env-id> -- <command>
+hideout run --profile smoke --resume <env-id> -- <command>
 hideout stop <env-id>
 hideout clean --stopped <env-id>
 ```
@@ -102,7 +104,7 @@ hideout clean --stopped <env-id>
 使用 `--rm` 可以创建一次性环境：
 
 ```bash
-hideout run --rm -- <command>
+hideout run --profile smoke --rm -- <command>
 ```
 
 ## 运行一个 CLI 工具

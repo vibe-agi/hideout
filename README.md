@@ -85,21 +85,23 @@ mounted into the guest.
 
 ```bash
 cd /path/to/sanitized/project
-hideout run -- pwd
+hideout run --profile smoke --backend lima --network direct -- pwd
 ```
 
 `hideout init` and `hideout doctor --fix` print copyable next-step commands
 for `doctor`, a smoke run, and any configured generic CLI tool.
 
 This first run should only verify the backend, workspace mount, and isolated
-identity. Do not configure CLI tool provisioning until the next section.
+identity. Use a dedicated `smoke` profile so existing `default` profile tool
+policy cannot trigger package provisioning during the first check. Do not
+configure CLI tool provisioning until the next section.
 
 Reusable Lima environments are keyed by profile, workspace, backend, and tool
 policy. Use `hideout list` to see resumable environments:
 
 ```bash
 hideout list
-hideout run --resume <env-id> -- <command>
+hideout run --profile smoke --resume <env-id> -- <command>
 hideout stop <env-id>
 hideout clean --stopped <env-id>
 ```
@@ -107,7 +109,7 @@ hideout clean --stopped <env-id>
 Use `--rm` for a disposable environment:
 
 ```bash
-hideout run --rm -- <command>
+hideout run --profile smoke --rm -- <command>
 ```
 
 ## Running A CLI Tool
