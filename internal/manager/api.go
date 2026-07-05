@@ -90,6 +90,13 @@ type ProfileHostFSAPIRequest struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
+type ProfileEnvAPIRequest struct {
+	ProfileName string `json:"profile,omitempty"`
+	Operation   string `json:"operation"`
+	Name        string `json:"name,omitempty"`
+	Value       string `json:"value,omitempty"`
+}
+
 func NewAPI(core Core, token string, ttl time.Duration) API {
 	now := time.Now().UTC()
 	return API{
@@ -188,6 +195,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveProfileHostFSPlan(w, r)
 	case "profile/hostfs/apply":
 		api.serveProfileHostFSApply(w, r)
+	case "profile/env/plan":
+		api.serveProfileEnvPlan(w, r)
+	case "profile/env/apply":
+		api.serveProfileEnvApply(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -503,6 +514,49 @@ func (api API) serveProfileHostFSApply(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (api API) serveProfileEnvPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeProfileEnvAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanProfileEnv(profileEnvOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/env/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveProfileEnvApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeProfileEnvAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanProfileEnv(profileEnvOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyProfileEnv(plan)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/env/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
 func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
 	sessions := nonNilSlice(overview.Sessions)
 	if rawSession := r.URL.Query().Get("session"); rawSession != "" {
@@ -599,6 +653,19 @@ func decodeProfileHostFSAPIRequest(w http.ResponseWriter, r *http.Request) (Prof
 	return req, nil
 }
 
+func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileEnvAPIRequest, error) {
+	var req ProfileEnvAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid profile-env request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid profile-env request")
+	}
+	return req, nil
+}
+
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
 		ProfileName:    req.ProfileName,
@@ -639,6 +706,15 @@ func profileHostFSOptionsFromAPIRequest(req ProfileHostFSAPIRequest) ProfileHost
 		Rule:        req.Rule,
 		RuleID:      req.RuleID,
 		Reason:      req.Reason,
+	}
+}
+
+func profileEnvOptionsFromAPIRequest(req ProfileEnvAPIRequest) ProfileEnvOptions {
+	return ProfileEnvOptions{
+		ProfileName: req.ProfileName,
+		Operation:   req.Operation,
+		Name:        req.Name,
+		Value:       req.Value,
 	}
 }
 

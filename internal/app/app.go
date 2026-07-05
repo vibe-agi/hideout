@@ -3959,7 +3959,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  commandProxies=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), p.HostFSGrants, p.HostFSDeny, status)
+		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  presets=%s  npm=%s  commandProxies=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), p.HostFSGrants, p.HostFSDeny, status)
 		next := profileNextCommandsForTUI(p)
 		if len(next) > 0 {
 			for _, command := range next {
@@ -4131,6 +4131,8 @@ func profileNextCommandsForTUI(p manager.ProfileSummary) []string {
 	return []string{
 		"tools=hideout profile tools " + p.Name + " list",
 		"add-tool=hideout profile tools " + p.Name + " npm add --package <npm-package> --command <command>",
+		"env=hideout profile env " + p.Name + " list",
+		"set-env=hideout profile env " + p.Name + " set NAME=value",
 		"command-proxy=hideout profile command-proxy " + p.Name + " list",
 		"add-open=hideout profile command-proxy " + p.Name + " add-open <command>",
 		"hostfs=hideout profile fs " + p.Name + " list",

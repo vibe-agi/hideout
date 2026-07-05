@@ -2196,7 +2196,8 @@ hideout profile env default undeny 'SSH_*'
 so ordinary list output must not echo them. Durable env policy writes
 `profile.env.public`, `profile.env.inherit`, and `profile.env.deny`; run-scoped
 `--env` composes on top of `profile.env.public` for one run and does not mutate
-the profile.
+the profile. Manager API and WebUI profile env plan/apply surfaces use the same
+durable env policy model and must not return public env values in responses.
 
 Persistent profile tool management:
 
@@ -4033,6 +4034,8 @@ POST /api/v1/profile/command-proxy/plan
 POST /api/v1/profile/command-proxy/apply
 POST /api/v1/profile/hostfs/plan
 POST /api/v1/profile/hostfs/apply
+POST /api/v1/profile/env/plan
+POST /api/v1/profile/env/apply
 ```
 
 Every local HTTP response uses a stable envelope:

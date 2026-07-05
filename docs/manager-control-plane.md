@@ -239,6 +239,11 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   `POST /api/v1/profile/hostfs/apply`. These mutate only durable
   `profile.hostfs.grants` and `profile.hostfs.deny` rules and must use the same
   HostFS rule grammar and profile validator as CLI `profile fs`.
+- Manager API exposes controlled profile env policy actions:
+  `POST /api/v1/profile/env/plan` and `POST /api/v1/profile/env/apply`. These
+  mutate only durable `profile.env.public`, `profile.env.inherit`, and
+  `profile.env.deny` policy, use the same profile validator as CLI
+  `profile env`, and must not return public env values in plan/apply responses.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
   `hideout ui` server wires this factory to the same backend adapters used by
   CLI `run`; tests may install a fake backend. API handlers must not construct
@@ -467,6 +472,8 @@ mutate unrelated stores directly.
   command symbols.
 - Manager API and WebUI expose typed profile HostFS rule plan/apply for durable
   HostFS allow/deny rules.
+- Manager API and WebUI expose typed profile env policy plan/apply for durable
+  public/inherit/deny env policy without echoing env values.
 
 ### Next Product Increment
 

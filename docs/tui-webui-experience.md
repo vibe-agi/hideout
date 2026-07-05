@@ -106,6 +106,7 @@ Implemented smoke surface shows:
 - selected profile;
 - init next steps;
 - capability summary;
+- per-profile env policy counts without env values;
 - backend status;
 - network mode and privacy warning;
 - recent active sessions;
@@ -196,6 +197,7 @@ Implemented smoke surface:
   not dominate the page;
 - session audit and runtime cleanup command hints for entries that have audit or
   ephemeral runtime state;
+- profile env policy plan/apply without echoing public env values;
 - basic audit explorer filtering by session, profile, action, decision, and
   limit using the same redacted Manager API view as `hideout audit show`.
 
@@ -209,6 +211,7 @@ Design-ready search by:
 
 Edit:
 
+- profile env policy through Manager plan/apply;
 - HostFS rules through Manager plan/apply;
 - command proxy rules;
 - network mode;
@@ -257,6 +260,7 @@ Show:
 
 - terminal dashboard over Manager overview;
 - optional local watch refresh;
+- per-profile env policy counts and CLI hints;
 
 ### TUI Next Increment
 

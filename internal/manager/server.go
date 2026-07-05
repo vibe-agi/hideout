@@ -356,6 +356,7 @@ let runResultHTML = "";
 let environmentResultHTML = "";
 let commandProxyResultHTML = "";
 let hostFSResultHTML = "";
+let profileEnvResultHTML = "";
 let selectedProfile = "";
 const panelRowLimit = 50;
 
@@ -522,6 +523,7 @@ function renderPanel() {
   panelBodyEl.innerHTML = renderer();
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
+  if (activePanel === "profiles") bindProfileEnvPanel();
   if (activePanel === "environments") bindEnvironmentPanel();
   if (activePanel === "capabilities") {
     bindCommandProxyPanel();
@@ -600,10 +602,22 @@ const renderers = {
   },
   profiles: function() {
     const profiles = overview.profiles || [];
-    if (!profiles.length) return empty("No profiles");
-    return '<div class="items">' + profiles.map(function(p) {
+    const profileOptions = profiles.length ? profiles.map(function(p) {
+      return '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>';
+    }).join("") : '<option value="default">default</option>';
+    const envForm = '<form id="profileEnvForm" class="item">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label for="profileEnvProfile">Profile</label><select id="profileEnvProfile">' + profileOptions + '</select></div>' +
+      '<div class="field"><label for="profileEnvOperation">Operation</label><select id="profileEnvOperation"><option value="set">set public</option><option value="unset">unset public</option><option value="inherit">inherit host env</option><option value="uninherit">remove inherited env</option><option value="deny">deny env</option><option value="undeny">remove deny</option></select></div>' +
+      '<div class="field"><label for="profileEnvName">Name or pattern</label><input id="profileEnvName" placeholder="SERVICE_TOKEN or SSH_*"></div>' +
+      '<div class="field"><label for="profileEnvValue">Value</label><input id="profileEnvValue" placeholder="only used by set public"></div>' +
+      '</div>' +
+      '<div class="action-row"><button class="action secondary" type="button" data-profile-env-action="plan">Plan</button><button class="action" type="button" data-profile-env-action="apply">Apply</button><span class="meta" id="profileEnvStatus">ready</span></div>' +
+      '</form><div class="result" id="profileEnvResult">' + profileEnvResultHTML + '</div>';
+    if (!profiles.length) return envForm + empty("No profiles");
+    return envForm + '<div class="items">' + profiles.map(function(p) {
       const tone = p.validationError ? "error" : "ok";
-      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
+      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["envPublic", p.envPublic], ["envInherit", p.envInherit], ["envDeny", p.envDeny], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
     }).join("") + "</div>";
   },
   environments: function() {
@@ -1006,6 +1020,53 @@ function bindHostFSPanel() {
         hostFSResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
         document.getElementById("hostFSResult").innerHTML = hostFSResultHTML;
         setHostFSBusy(false, "error");
+      }
+    });
+  });
+}
+function profileEnvPayloadFromForm() {
+  return {
+    profile: document.getElementById("profileEnvProfile").value,
+    operation: document.getElementById("profileEnvOperation").value,
+    name: document.getElementById("profileEnvName").value.trim(),
+    value: document.getElementById("profileEnvValue").value
+  };
+}
+function renderProfileEnvResponse(resource, response) {
+  const errors = response.errors || [];
+  const data = response.data || {};
+  const plan = data.plan || data;
+  const header = item(resource, plan.profile || "profile", [["operation", plan.operation], ["kind", plan.kind], ["name", plan.name], ["valueProvided", plan.valueProvided], ["status", plan.status], ["changed", plan.changed], ["applied", data.applied], ["public", plan.publicAfter || data.public || []], ["inherit", plan.inheritAfter || data.inherit || []], ["deny", plan.denyAfter || data.deny || []]], errors.length ? "error" : plan.changed || data.applied ? "ok" : "info");
+  const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
+  return header + errorHTML;
+}
+function setProfileEnvBusy(busy, text) {
+  const status = document.getElementById("profileEnvStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-profile-env-action]").forEach(function(button) { button.disabled = busy; });
+}
+function bindProfileEnvPanel() {
+  const form = document.getElementById("profileEnvForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  if (selectedProfile && document.getElementById("profileEnvProfile")) {
+    document.getElementById("profileEnvProfile").value = selectedProfile;
+  }
+  document.querySelectorAll("[data-profile-env-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-profile-env-action");
+      const resource = "profile/env/" + action;
+      setProfileEnvBusy(true, action);
+      try {
+        const response = await apiPost(resource, profileEnvPayloadFromForm());
+        profileEnvResultHTML = renderProfileEnvResponse(resource, response);
+        document.getElementById("profileEnvResult").innerHTML = profileEnvResultHTML;
+        setProfileEnvBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+        if (action === "apply" && !(response.errors && response.errors.length)) await load();
+      } catch (error) {
+        profileEnvResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        document.getElementById("profileEnvResult").innerHTML = profileEnvResultHTML;
+        setProfileEnvBusy(false, "error");
       }
     });
   });

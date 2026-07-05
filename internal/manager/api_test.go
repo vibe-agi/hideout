@@ -518,6 +518,124 @@ func TestAPIProfileHostFSRejectsUnknownFieldsAndHostExecShape(t *testing.T) {
 	}
 }
 
+func TestAPIProfileEnvPlanAndApplyDoesNotEchoValues(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	api := API{
+		Core:      Core{Store: store},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+	reqBody := ProfileEnvAPIRequest{
+		ProfileName: "api-env",
+		Operation:   "set",
+		Name:        "SERVICE_TOKEN",
+		Value:       "secret-value",
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/profile/env/plan", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	planBody := resp.Body.String()
+	for _, want := range []string{
+		`"resource":"profile/env/plan"`,
+		`"version":"hideout.profile-env-plan/v1"`,
+		`"operation":"set"`,
+		`"kind":"env.public"`,
+		`"name":"SERVICE_TOKEN"`,
+		`"valueProvided":true`,
+		`"changed":true`,
+	} {
+		if !strings.Contains(planBody, want) {
+			t.Fatalf("profile-env plan missing %q: %s", want, planBody)
+		}
+	}
+	if strings.Contains(planBody, "secret-value") {
+		t.Fatalf("profile-env plan must not echo env values: %s", planBody)
+	}
+	if _, err := store.Load("api-env"); err == nil {
+		t.Fatal("profile-env plan should not create profile state")
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/profile/env/apply", reqBody)
+	req.Header.Set("X-Hideout-UI-Token", "ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	applyBody := resp.Body.String()
+	for _, want := range []string{
+		`"resource":"profile/env/apply"`,
+		`"applied":true`,
+		`"public":["SERVICE_TOKEN"]`,
+	} {
+		if !strings.Contains(applyBody, want) {
+			t.Fatalf("profile-env apply missing %q: %s", want, applyBody)
+		}
+	}
+	if strings.Contains(applyBody, "secret-value") {
+		t.Fatalf("profile-env apply must not echo env values: %s", applyBody)
+	}
+	loaded, err := store.Load("api-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Env.Public["SERVICE_TOKEN"] != "secret-value" {
+		t.Fatalf("env value was not persisted: %+v", loaded.Env.Public)
+	}
+}
+
+func TestAPIProfileEnvRejectsUnknownFieldsAndHostExecShape(t *testing.T) {
+	api := API{
+		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "unknown raw host command field",
+			body: `{"profile":"default","operation":"set","name":"SERVICE_TOKEN","value":"secret","hostCommand":"/usr/bin/open"}`,
+			want: "invalid profile-env request",
+		},
+		{
+			name: "unsupported operation",
+			body: `{"profile":"default","operation":"host-exec","name":"SERVICE_TOKEN","value":"secret"}`,
+			want: "unsupported profile-env operation",
+		},
+		{
+			name: "reserved env",
+			body: `{"profile":"default","operation":"set","name":"HIDEOUT_STORE_ROOT","value":"/tmp/store"}`,
+			want: "env.public must not expose hideout runtime env",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/env/plan", strings.NewReader(tc.body))
+			req.Host = "127.0.0.1"
+			req.Header.Set("Authorization", "Bearer ui_token")
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			api.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
+			if !strings.Contains(resp.Body.String(), tc.want) {
+				t.Fatalf("expected %q rejection, got %s", tc.want, resp.Body.String())
+			}
+		})
+	}
+}
+
 func TestAPIInitRequestRejectsUnknownFields(t *testing.T) {
 	api := API{
 		Core:      Core{Store: profile.Store{Root: t.TempDir()}},

@@ -61,6 +61,9 @@ type ProfileSummary struct {
 	NetworkMode     string                     `json:"networkMode"`
 	ProxySecretRef  string                     `json:"proxySecretRef,omitempty"`
 	ProxyEnvVisible bool                       `json:"proxyEnvVisible"`
+	EnvPublic       []string                   `json:"envPublic,omitempty"`
+	EnvInherit      []string                   `json:"envInherit,omitempty"`
+	EnvDeny         []string                   `json:"envDeny,omitempty"`
 	CommandProxies  []string                   `json:"commandProxies,omitempty"`
 	HostFSGrants    int                        `json:"hostfsGrants"`
 	HostFSDeny      int                        `json:"hostfsDeny"`
@@ -482,6 +485,9 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			summary.NetworkMode = p.Network.Mode
 			summary.ProxySecretRef = p.Network.ProxySecretRef
 			summary.ProxyEnvVisible = p.Network.ProxyEnvVisible
+			summary.EnvPublic = sortedProfileEnvPublicKeys(p.Env.Public)
+			summary.EnvInherit = sortedStringsForManager(p.Env.Inherit)
+			summary.EnvDeny = sortedStringsForManager(p.Env.Deny)
 			summary.PolicyEngine = p.Policy.Engine
 			summary.ToolPresets = append([]string(nil), p.Tools.Presets...)
 			summary.NPMGlobals = copyProfileSummaryNPMGlobals(p.Tools.NPMGlobals)

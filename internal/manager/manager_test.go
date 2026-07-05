@@ -529,6 +529,146 @@ func TestCoreProfileHostFSRejectsUnsafeOperations(t *testing.T) {
 	}
 }
 
+func TestCorePlanAndApplyProfileEnvPolicy(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	plan, err := core.PlanProfileEnv(ProfileEnvOptions{
+		ProfileName: "env-profile",
+		Operation:   "set",
+		Name:        "SERVICE_TOKEN",
+		Value:       "secret-value",
+	})
+	if err != nil {
+		t.Fatalf("PlanProfileEnv set: %v", err)
+	}
+	if plan.Version != ProfileEnvPlanVersion ||
+		plan.Profile != "env-profile" ||
+		plan.Operation != "set" ||
+		plan.Kind != "env.public" ||
+		plan.Name != "SERVICE_TOKEN" ||
+		!plan.ValueProvided ||
+		!plan.Changed ||
+		!containsStringForManagerTest(plan.PublicAfter, "SERVICE_TOKEN") {
+		t.Fatalf("unexpected env set plan: %+v", plan)
+	}
+	if _, err := store.Load("env-profile"); err == nil {
+		t.Fatal("PlanProfileEnv should not create profile state")
+	}
+	result, err := core.ApplyProfileEnv(plan)
+	if err != nil {
+		t.Fatalf("ApplyProfileEnv set: %v", err)
+	}
+	if !result.Applied || !containsStringForManagerTest(result.Public, "SERVICE_TOKEN") {
+		t.Fatalf("unexpected env set result: %+v", result)
+	}
+	loaded, err := store.Load("env-profile")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	if loaded.Env.Public["SERVICE_TOKEN"] != "secret-value" {
+		t.Fatalf("env value was not persisted: %+v", loaded.Env.Public)
+	}
+
+	for _, opts := range []ProfileEnvOptions{
+		{ProfileName: "env-profile", Operation: "inherit", Name: "USER_OPT_IN_ENV"},
+		{ProfileName: "env-profile", Operation: "deny", Name: "SSH_*"},
+	} {
+		next, err := core.PlanProfileEnv(opts)
+		if err != nil {
+			t.Fatalf("PlanProfileEnv %+v: %v", opts, err)
+		}
+		if _, err := core.ApplyProfileEnv(next); err != nil {
+			t.Fatalf("ApplyProfileEnv %+v: %v", opts, err)
+		}
+	}
+	loaded, err = store.Load("env-profile")
+	if err != nil {
+		t.Fatalf("reload profile: %v", err)
+	}
+	if !containsStringForManagerTest(loaded.Env.Inherit, "USER_OPT_IN_ENV") ||
+		!containsStringForManagerTest(loaded.Env.Deny, "SSH_*") {
+		t.Fatalf("env list policy not persisted: %+v", loaded.Env)
+	}
+
+	unsetPlan, err := core.PlanProfileEnv(ProfileEnvOptions{
+		ProfileName: "env-profile",
+		Operation:   "unset",
+		Name:        "SERVICE_TOKEN",
+	})
+	if err != nil {
+		t.Fatalf("PlanProfileEnv unset: %v", err)
+	}
+	unsetResult, err := core.ApplyProfileEnv(unsetPlan)
+	if err != nil {
+		t.Fatalf("ApplyProfileEnv unset: %v", err)
+	}
+	if !unsetResult.Applied || containsStringForManagerTest(unsetResult.Public, "SERVICE_TOKEN") {
+		t.Fatalf("unexpected env unset result: %+v", unsetResult)
+	}
+}
+
+func TestCoreProfileEnvRejectsUnsafeOperations(t *testing.T) {
+	core := New(profile.Store{Root: t.TempDir()})
+	for _, tc := range []struct {
+		name string
+		opts ProfileEnvOptions
+		want string
+	}{
+		{
+			name: "reserved public env",
+			opts: ProfileEnvOptions{ProfileName: "default", Operation: "set", Name: "HIDEOUT_STORE_ROOT", Value: "/tmp/store"},
+			want: "env.public must not expose hideout runtime env",
+		},
+		{
+			name: "proxy inherit",
+			opts: ProfileEnvOptions{ProfileName: "default", Operation: "inherit", Name: "HTTPS_PROXY"},
+			want: "env.inherit must not expose proxy env",
+		},
+		{
+			name: "missing name",
+			opts: ProfileEnvOptions{ProfileName: "default", Operation: "deny"},
+			want: "env name or pattern is required",
+		},
+		{
+			name: "unknown operation",
+			opts: ProfileEnvOptions{ProfileName: "default", Operation: "host-exec", Name: "SHELL"},
+			want: "unsupported profile-env operation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := core.PlanProfileEnv(tc.opts); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestCoreProfileEnvNoopApplyDoesNotCreateProfileState(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	plan, err := core.PlanProfileEnv(ProfileEnvOptions{
+		ProfileName: "noop-env-profile",
+		Operation:   "unset",
+		Name:        "MISSING_ENV",
+	})
+	if err != nil {
+		t.Fatalf("PlanProfileEnv noop: %v", err)
+	}
+	if plan.Changed {
+		t.Fatalf("expected no-op plan: %+v", plan)
+	}
+	result, err := core.ApplyProfileEnv(plan)
+	if err != nil {
+		t.Fatalf("ApplyProfileEnv noop: %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("expected no-op apply: %+v", result)
+	}
+	if _, err := store.Load("noop-env-profile"); err == nil {
+		t.Fatal("no-op profile env apply should not create profile state")
+	}
+}
+
 func TestRunPlanJSONMatchesSchemaAndHidesProfiles(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	plan, err := New(store).PlanRun(RunPlanOptions{

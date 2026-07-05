@@ -37,7 +37,9 @@
         "profile/command-proxy/plan",
         "profile/command-proxy/apply",
         "profile/hostfs/plan",
-        "profile/hostfs/apply"
+        "profile/hostfs/apply",
+        "profile/env/plan",
+        "profile/env/apply"
       ]
     },
     "data": {

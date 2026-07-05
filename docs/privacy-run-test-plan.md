@@ -879,6 +879,10 @@ Required checks:
 - `hideout profile env` and `hideout profile tools` manage durable profile
   policy without introducing a second representation; env list output reports
   names only and must not echo stored values;
+- Manager API `profile/env/plan|apply` manages durable profile env policy
+  using the same profile validator as CLI `profile env`, performs planning
+  without creating profile state, rejects raw host command or raw profile-writer
+  request shapes, and must not echo public env values in responses;
 - profile HostFS rules have stable unique IDs suitable for remove/edit
   operations by CLI, manager APIs, and future Web UI;
 - deny rules win over allow grants regardless of whether the allow came from
