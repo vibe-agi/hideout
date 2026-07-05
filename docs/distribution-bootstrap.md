@@ -216,7 +216,7 @@ Release-like tarballs must keep Linux guest helpers next to the installed
 `hideout` binary so the first Lima `doctor --fix --dry-run` can discover them
 without rebuilding from the source tree.
 They must also preserve the embedded terminal TUI and WebUI smoke surfaces:
-`hideout tui` should render once without starting WebUI, and
+`hideout tui --once` should render once without starting WebUI, and
 `hideout ui --no-open --print-url` should start the local Manager/WebUI server,
 print redacted entrypoint information, and exit without opening a browser.
 
@@ -328,7 +328,7 @@ SHA-256 checksums before copying binaries. `scripts/test-package-smoke.sh`
 extracts that tarball into a temporary prefix, validates the manifest, proves
 each manifest-declared path exists with the expected file type, recalculates
 declared file checksums, then runs extracted `hideout init --no-input`,
-`hideout doctor`, `hideout tui`, and `hideout ui --no-open --print-url`. It also
+`hideout doctor`, `hideout tui --once`, and `hideout ui --no-open --print-url`. It also
 runs package-root `install.sh` into a separate temporary prefix/store, verifies
 the installed layout works without source-tree state, verifies installed Lima
 helper discovery from that prefix, and checks that `install.sh --skip-init`

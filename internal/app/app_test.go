@@ -3871,7 +3871,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		}
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"tui"}, &out, &errOut)
+	code := Main([]string{"tui", "--once"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
@@ -3964,7 +3964,7 @@ func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := Main([]string{"tui", "--profile", "agent"}, &out, &errOut)
+	code := Main([]string{"tui", "--once", "--profile", "agent"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
@@ -4058,6 +4058,27 @@ func TestTUIRejectsInvalidInterval(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "--interval must be positive") {
 		t.Fatalf("unexpected stderr: %s", errOut.String())
+	}
+}
+
+func TestTUIOptionsDefaultToPersistentObserver(t *testing.T) {
+	opts, err := parseTUIOptions(nil)
+	if err != nil {
+		t.Fatalf("parse default tui options: %v", err)
+	}
+	if !opts.watch || opts.once {
+		t.Fatalf("default tui should watch until interrupted: %+v", opts)
+	}
+	if opts.interval != 2*time.Second {
+		t.Fatalf("default interval=%s want 2s", opts.interval)
+	}
+
+	opts, err = parseTUIOptions([]string{"--once", "--profile", "agent"})
+	if err != nil {
+		t.Fatalf("parse once tui options: %v", err)
+	}
+	if opts.watch || !opts.once || opts.profileName != "agent" {
+		t.Fatalf("--once should render one snapshot for the selected profile: %+v", opts)
 	}
 }
 

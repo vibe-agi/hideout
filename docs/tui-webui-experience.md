@@ -29,9 +29,17 @@ in-process, but must not rebuild state by reading subsystem files directly.
 
 ## TUI Role
 
-The TUI is the low-friction local control surface. Phase 1 ships a read-only
-dashboard over Manager overview and redacted audit data. Interactive first-run
-and doctor flows are product increments, not the current default init path.
+The TUI is the always-on local operator surface. It is meant to run in a
+separate terminal while another terminal runs `hideout run -- <agent-or-tool>`.
+It must behave like a persistent session observer and control plane, not like a
+post-run log printout.
+
+Phase 1 ships a read-only smoke dashboard over Manager overview and redacted
+audit data. It can refresh in place and can render a single snapshot for tests,
+but it is not the final interactive TUI. The product target is a full-screen,
+keyboard-first interface with selectable rows, drill-down panes, and controlled
+Manager plan/apply actions. Interactive first-run and doctor flows are product
+increments, not the current default init path.
 
 Recommended implementation stack:
 
@@ -54,7 +62,7 @@ Suggested commands:
 ```bash
 hideout tui
 hideout tui --profile <name>
-hideout tui --watch
+hideout tui --once
 hideout doctor
 hideout doctor --fix --dry-run
 ```
@@ -99,7 +107,9 @@ Surface differences are layout differences, not data model differences.
 
 ### Dashboard
 
-Implemented smoke surface shows:
+Implemented smoke surface shows a persistent local dashboard by default.
+`--once` is reserved for scripts, package smoke, and documentation snapshots.
+The dashboard shows:
 
 - local refresh time;
 - optional profile filter;
@@ -118,6 +128,12 @@ Implemented smoke surface shows:
 
 Design-ready additions:
 
+- full-screen Bubble Tea layout;
+- keyboard navigation across profiles, environments, sessions, audit rows, and
+  denied events;
+- drill-down panes for selected sessions, HostFS requests, OpenTarget events,
+  network setup, and cleanup state;
+- non-authoritative follow mode for active runs;
 - install/doctor warnings.
 
 ### Doctor
@@ -159,6 +175,17 @@ Shows:
 - audit path;
 - environment reuse.
 - audit and runtime cleanup command hints.
+
+Design-ready interactive session observer:
+
+- active run list with start time, command, profile, backend, workspace, and
+  current environment;
+- live event tail grouped by HostFS, host.open, endpoint exposure, network, and
+  cleanup;
+- keyboard selection of a session and event row;
+- detail view for the selected event using the same redacted Manager/audit view
+  as `hideout audit show`;
+- explicit commands or plan/apply actions for cleanup, stop, and doctor repair.
 
 ### Environments
 
@@ -245,6 +272,13 @@ Show:
 
 ## Product Decisions
 
+- `hideout run` must remain close to local command execution. It may print
+  target stdout/stderr and, when requested, a concise verbose summary. It must
+  not become the monitoring UI.
+- `hideout tui` is the terminal monitoring UI. It should be useful as a
+  long-lived observer window while a separate terminal runs the target command.
+- `hideout tui --once` is the script and smoke-test mode. It is not the product
+  interaction model.
 - `hideout init` applies safe InitTasks now through the CLI. A future
   interactive TUI wizard must use the same InitTask plan/apply contract rather
   than introducing a second initialization path.
@@ -259,15 +293,19 @@ Show:
 ### TUI First Increment
 
 - terminal dashboard over Manager overview;
-- optional local watch refresh;
+- persistent local refresh by default;
+- explicit `--once` snapshot mode for tests and scripts;
 - per-profile env policy counts and CLI hints;
 
 ### TUI Next Increment
 
+- full-screen Bubble Tea shell;
+- keyboard navigation and row selection;
+- active session observer and event detail panes;
 - doctor;
-- sessions;
 - HostFS rules;
-- recent audit events.
+- recent audit events;
+- controlled Manager plan/apply actions.
 
 ### WebUI First Increment
 

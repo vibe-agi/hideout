@@ -159,7 +159,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
 	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
-	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--watch] [--interval 2s]")
+	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]")
+	fmt.Fprintln(a.stdout, "  hideout tui --once [--profile <name>]  # script/smoke mode")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Advanced and developer:")
 	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
@@ -4149,6 +4150,7 @@ func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (bac
 
 type tuiOptions struct {
 	watch       bool
+	once        bool
 	interval    time.Duration
 	profileName string
 }
@@ -4156,20 +4158,23 @@ type tuiOptions struct {
 const tuiDashboardRowLimit = 10
 
 func parseTUIOptions(args []string) (tuiOptions, error) {
-	opts := tuiOptions{interval: 2 * time.Second}
+	opts := tuiOptions{watch: true, interval: 2 * time.Second}
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.BoolVar(&opts.watch, "watch", false, "refresh the terminal dashboard until interrupted")
+	fs.BoolVar(&opts.once, "once", false, "render the terminal dashboard once and exit")
 	fs.DurationVar(&opts.interval, "interval", opts.interval, "watch refresh interval")
 	fs.StringVar(&opts.profileName, "profile", "", "filter dashboard and audit rows to one profile")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
 	if fs.NArg() != 0 {
-		return opts, errors.New("usage: hideout tui [--profile <name>] [--watch] [--interval 2s]")
+		return opts, errors.New("usage: hideout tui [--profile <name>] [--interval 2s] | hideout tui --once [--profile <name>]")
 	}
 	if opts.interval <= 0 {
 		return opts, errors.New("--interval must be positive")
+	}
+	if opts.once {
+		opts.watch = false
 	}
 	opts.profileName = strings.TrimSpace(opts.profileName)
 	if opts.profileName != "" {

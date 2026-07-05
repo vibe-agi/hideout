@@ -274,7 +274,12 @@ hideout audit show --limit 20
 hideout audit show --decision deny
 hideout audit show --session <session-id> --json
 hideout tui --profile agent
+hideout tui --once --profile agent
 ```
+
+`hideout tui` is the terminal observer surface. Keep it open in a second
+terminal while another terminal runs an agent or CLI. `--once` is for scripts
+and snapshots.
 
 Useful cleanup commands:
 

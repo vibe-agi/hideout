@@ -967,7 +967,7 @@ Required checks:
   checksums for critical package files that match the extracted files, English
   and Chinese README entrypoints, a package-root installer, schemas, docs,
   packaging metadata, can run extracted `hideout init --no-input` plus
-  `hideout doctor`, can render extracted `hideout tui`, start extracted
+  `hideout doctor`, can render extracted `hideout tui --once`, start extracted
   `hideout ui --print-url` without opening a browser or blocking, can run
   package-root `install.sh` into a separate temporary prefix/store, can discover
   packaged Lima Linux helpers from the installed prefix without rebuilding from

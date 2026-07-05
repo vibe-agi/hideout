@@ -264,7 +264,11 @@ hideout audit show --limit 20
 hideout audit show --decision deny
 hideout audit show --session <session-id> --json
 hideout tui --profile agent
+hideout tui --once --profile agent
 ```
+
+`hideout tui` 是终端观察台，适合在第二个终端里常驻运行，用来观察另一个
+终端里的 agent 或 CLI 行为。`--once` 只用于脚本和快照。
 
 常用清理命令：
 

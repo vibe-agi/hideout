@@ -364,7 +364,9 @@ CLI should remain thin over Manager Core for complex operations.
 ### TUI
 
 Current TUI smoke surface is a read-only terminal dashboard over Manager
-overview and redacted audit data. It is best for:
+overview and redacted audit data. The product role is a persistent operator
+window that can stay open while another terminal runs an agent or CLI. It is
+best for:
 
 - local monitoring;
 - session/environment overview;
@@ -373,16 +375,17 @@ overview and redacted audit data. It is best for:
 - init next steps.
 - per-profile tool and command-proxy state with CLI setup hints.
 
-Future TUI increments can add first-run initialization, interactive doctor,
-HostFS rule management, and install-task apply flows. They must still call
-Manager Core operations instead of mutating stores or backends directly.
+Future TUI increments can add full-screen keyboard navigation, selectable
+sessions and audit rows, first-run initialization, interactive doctor, HostFS
+rule management, and install-task apply flows. They must still call Manager
+Core operations instead of mutating stores or backends directly.
 
 Suggested command:
 
 ```bash
 hideout tui
 hideout tui --profile <name>
-hideout tui --watch
+hideout tui --once
 hideout doctor
 ```
 
@@ -457,8 +460,9 @@ mutate unrelated stores directly.
 
 - Manager packages exist;
 - CLI remains the primary user surface;
-- `hideout tui` exists as a read-only dashboard over Manager overview, including
-  per-profile tool and command-proxy visibility with CLI setup hints.
+- `hideout tui` exists as a read-only persistent smoke dashboard over Manager
+  overview, including per-profile tool and command-proxy visibility with CLI
+  setup hints. `--once` is the script/package-smoke snapshot mode.
 - `hideout ui` exists as a local WebUI smoke/operations surface backed by
   Manager API.
 - Manager overview exposes initial init, bundle, and project status summaries;

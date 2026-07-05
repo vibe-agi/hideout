@@ -165,7 +165,7 @@ grep -q 'store: ok writable' "$tmp/doctor.out"
 grep -q 'profile: ok default' "$tmp/doctor.out"
 grep -q 'manager: ok' "$tmp/doctor.out"
 
-HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" tui >"$tmp/tui.out"
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" tui --once >"$tmp/tui.out"
 grep -q '^Hideout TUI$' "$tmp/tui.out"
 grep -q '^Status: ok$' "$tmp/tui.out"
 grep -q '^Profiles:' "$tmp/tui.out"
