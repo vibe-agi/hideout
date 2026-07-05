@@ -347,6 +347,40 @@ schema. The run API is intentionally not a generic `host.exec` endpoint. Native
 backend execution still requires explicit weak-isolation acknowledgement and is
 audited as a backend selection decision.
 
+## Daemon Role
+
+Long term, Hideout should have a per-user local daemon:
+
+```text
+hideoutd
+  local Manager runtime and event hub
+
+hideout CLI / TUI / WebUI
+  clients over Unix socket or local loopback transport
+```
+
+The daemon exists to make observation and control continuous across CLI
+invocations. It is appropriate for:
+
+- live session and environment state;
+- redacted event streams for TUI/WebUI;
+- audit indexing and filtering;
+- prompt and approval channels;
+- background cleanup, idle stop, and orphan repair;
+- local Manager API serving.
+
+The daemon is not a new authority layer. It must call the same Manager Core
+plan/apply operations as CLI, TUI, and WebUI. It must not expose arbitrary host
+execution, raw VM commands, broker tokens, proxy secret values, host file
+handles, or a raw profile writer. Per-run authority remains session-scoped and
+must be regenerated for each `hideout run` even when `hideoutd` is already
+running.
+
+Phase 1 uses embedded Manager Core in each command so `hideout run` remains
+available without starting a resident process. Promoting `hideoutd` is a
+product increment for persistent TUI/WebUI observation, prompts, and background
+maintenance.
+
 ## CLI, TUI, and WebUI Roles
 
 ### CLI
@@ -478,10 +512,14 @@ mutate unrelated stores directly.
   HostFS allow/deny rules.
 - Manager API and WebUI expose typed profile env policy plan/apply for durable
   public/inherit/deny env policy without echoing env values.
+- A resident `hideoutd` is not implemented; CLI, TUI, and WebUI use embedded
+  Manager Core or the local WebUI server process.
 
 ### Next Product Increment
 
 - formal Manager resource schema;
+- per-user `hideoutd` design and implementation for persistent event streams,
+  prompt channels, background cleanup, and local API serving;
 - expand InitTask resource schema and plan/apply operations beyond machine
   setup;
 - plan/apply operations for HostFS, network, OpenTarget, and broader
@@ -501,7 +539,8 @@ mutate unrelated stores directly.
 
 ## Open Questions
 
-- Should Manager run as an explicit daemon or in-process per command first?
+- Which `hideoutd` responsibilities must ship before interactive prompt flows:
+  event stream, background cleanup, approval channel, or all three?
 - Which operations require plan/apply before product release?
 - Should TUI be the default first-run experience?
 - What is the smallest read-only WebUI worth shipping?

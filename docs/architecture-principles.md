@@ -94,15 +94,16 @@ host.shell arbitrary script
 host.fs passthrough mount without policy
 ```
 
-### 4. UI Is Not Authority
+### 4. UI And Daemon Are Not Authority
 
-CLI, TUI, and WebUI are interaction shells. They must not own policy semantics,
-backend authority, or filesystem mutation rules.
+CLI, TUI, WebUI, and any future `hideoutd` daemon are interaction or transport
+surfaces over the same Manager Control Plane. They must not own policy
+semantics, backend authority, or filesystem mutation rules.
 
 All user-facing surfaces must call the same Manager Control Plane:
 
 ```text
-CLI / TUI / WebUI
+CLI / TUI / WebUI / hideoutd clients
         |
 Manager API
         |
@@ -112,6 +113,12 @@ Profile / Session / Environment / Backend / Broker / HostFS / Network / Policy /
 ```
 
 If the WebUI and TUI disagree, the domain model is wrong.
+
+`hideoutd` may keep live state, event streams, API sockets, prompt channels,
+and cleanup workers alive across CLI invocations. It must not become a generic
+host execution service, a long-lived bearer of per-run capability tokens, or a
+path around Manager plan/apply validation. Per-run authority still belongs to
+the session, broker, and typed capability records described below.
 
 ### 5. Session Authority Is Ephemeral
 

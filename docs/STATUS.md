@@ -64,6 +64,7 @@ manifest.
 | Area | Status |
 | --- | --- |
 | Generic Command Proxy bindings | Partially implemented for configured `host.open` command symbols only. JS adapters, non-open outcomes, provider descriptors, and bounded context queries are documented but not yet a general product path. |
+| `hideoutd` daemon | Design-ready. Current CLI, TUI, and WebUI use embedded Manager Core or a command-scoped local WebUI server. A per-user daemon for persistent event streams, prompt channels, background cleanup, and local API serving is not implemented. |
 | Command outcomes beyond `host.open` deny/allow | Design-ready. `simulate`, `rewrite-guest`, and generic `invoke-capability` must fail closed until implemented and gated. |
 | Provider descriptors | Design-ready. Provider engines must remain Go-owned; ecosystem descriptors require schema, validator, and trust UX before use. |
 | `endpoint.expose.guest-to-host` | Lab/separate design. Required before adb, browser DevTools, host service reachability, or similar workflows. |

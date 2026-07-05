@@ -3989,8 +3989,10 @@ Design-ready Phase 1:
 
 ```text
 hideoutd
-  Local daemon/manager. Owns profiles, sessions, backend lifecycle, broker
-  lifecycle, secrets, audit, prompts, and Web UI API.
+  Per-user local Manager runtime. Serves profiles, sessions, backend lifecycle,
+  broker lifecycle, secrets, audit, prompt channels, event streams, background
+  cleanup, and Web UI API through the same Manager Core plan/apply contracts
+  used by CLI.
 ```
 
 Later:
@@ -4010,6 +4012,18 @@ Never: unauthenticated network listener
 Socket or HTTP APIs are only transports over the embedded manager domains. They
 must not add new authority, bypass policy validation, or expose fields that the
 in-process overview is not allowed to expose.
+
+Daemon invariants:
+
+- `hideoutd` must not be a generic host execution API or raw VM control API.
+- Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
+  exposure leases, and audit handles remain session-scoped even when the daemon
+  is long-lived.
+- TUI and WebUI may subscribe to daemon event streams, but authority-changing
+  actions still go through Manager plan/apply and emit audit.
+- A daemon restart must not grant new authority. It may reconstruct observable
+  state from stores and audit, then fail closed for any live resource it cannot
+  prove still belongs to an active session.
 
 Design-ready local HTTP resources:
 

@@ -26,6 +26,8 @@ WebUI
 Both surfaces must use the same Manager Core/API domain resources. WebUI uses
 the local Manager API transport; terminal surfaces may call Manager Core
 in-process, but must not rebuild state by reading subsystem files directly.
+When `hideoutd` is promoted, both surfaces should become daemon clients for
+live state and event streams instead of inventing their own file watchers.
 
 ## TUI Role
 
@@ -187,6 +189,10 @@ Design-ready interactive session observer:
   as `hideout audit show`;
 - explicit commands or plan/apply actions for cleanup, stop, and doctor repair.
 
+The live tail should come from Manager/daemon event streams. Until daemon mode
+ships, polling Manager overview and redacted audit is acceptable for the smoke
+surface.
+
 ### Environments
 
 Implemented WebUI smoke surface shows capped reusable environment panels and
@@ -279,6 +285,8 @@ Show:
   long-lived observer window while a separate terminal runs the target command.
 - `hideout tui --once` is the script and smoke-test mode. It is not the product
   interaction model.
+- A future daemon should improve freshness and interaction; it must not change
+  TUI authority. The TUI remains a Manager client.
 - `hideout init` applies safe InitTasks now through the CLI. A future
   interactive TUI wizard must use the same InitTask plan/apply contract rather
   than introducing a second initialization path.
