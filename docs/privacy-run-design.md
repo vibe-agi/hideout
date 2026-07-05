@@ -866,7 +866,8 @@ host paths, proxy URLs, capability tokens, raw endpoint addresses, or unbounded
 user-supplied envelope fields.
 
 Command policy script proposals must match the current request context. A
-`decideCommand` result for a brokered `host.open` request must use
+`command.decide` result, implemented in Phase 1 by `decideCommand(ctx)`, for a
+brokered `host.open` request must use
 `action=host.open`; `allow`, `audit-only`, and `ask` must also use the current
 request route. Mismatched script proposals fail closed and are audited as script
 errors. This keeps scripts from smuggling unrelated capability proposals into a
@@ -875,7 +876,18 @@ host boundary decision.
 For `host.open`, only `decision=allow` with `route=host-broker` may call the host
 opener. `audit-only` records evidence and returns without a host side effect.
 
-Phase 1 script ABI:
+Phase 1 script ABI for the required domain entrypoints:
+
+```text
+command.decide -> decideCommand(ctx) -> capability proposal
+audit.redact   -> redactAudit(ctx)   -> { details, reason?, audit? }
+```
+
+Profile `scriptRefs.entrypoints` name the goja ABI functions (`decideCommand`
+and `redactAudit`). Bundle and ecosystem permission contracts name the domain
+entrypoints (`command.decide` and `audit.redact`).
+
+Executable JavaScript shape:
 
 ```text
 decideCommand(ctx) -> capability proposal
@@ -2124,9 +2136,9 @@ Initial run deny grammar uses the same `kind:/absolute/path` shape:
 ```
 
 HostFS treats the path part of `read:` and `stat:` as a selector. If the path
-contains Go glob metacharacters (`*`, `?`, or `[`), the rule is a glob selector;
-otherwise it is an exact-file selector. This keeps the CLI close to normal shell
-usage:
+contains unescaped glob metacharacters (`*`, `?`, or `[`), the rule is a glob
+selector; otherwise it is an exact-file selector. A backslash can escape a
+literal `*`, `?`, `[`, `]`, or backslash in CLI selectors.
 
 ```sh
 hideout run --fs 'read:/Users/alice/Downloads/*.txt' -- tool
@@ -2136,14 +2148,29 @@ hideout run --no-fs 'read:/Users/alice/Downloads/private-*.txt' -- tool
 Users must quote glob selectors in the host shell. Otherwise the host shell may
 expand the pattern before Hideout receives it.
 
-Glob selectors use Go `filepath.Match` semantics:
+Glob selectors use Go `filepath.Match` semantics with Hideout-specific safety
+constraints:
 
 - `*` and `?` do not match the path separator;
 - character classes such as `[abc]` use Go filepath pattern syntax;
+- `*` does not implicitly match path components whose name starts with `.`;
+  dotfiles such as `.env`, `.netrc`, and `.git` must be explicitly named with a
+  selector component that starts with `.`;
+- on case-insensitive host filesystems such as default macOS APFS and Windows,
+  glob matching is case-insensitive so deny rules cannot be bypassed with path
+  case variants;
 - recursive `**` is not a special form in V1;
 - patterns must be absolute local paths;
 - glob selectors match files for `stat` and `read`; they do not create
   writable or recursive directory authority.
+
+Examples:
+
+```sh
+hideout run --fs 'read:/Users/alice/Downloads/*.txt' -- tool
+hideout run --fs 'read:/Users/alice/Downloads/.*' -- tool       # explicit dotfiles
+hideout run --fs 'read:/Users/alice/Downloads/\[2026\].txt' -- tool
+```
 
 `list:`, `dir:`, and `tree:` do not accept glob selectors in V1. Users should
 use `read:` or `stat:` glob selectors for filtered file visibility, and keep
@@ -4224,7 +4251,9 @@ hideout cleanup
 hideout profile init <name>
 hideout profile clone <source> <name>
 hideout profile path <name>
+hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]
 hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]
+hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]
 ```
 
 Design-ready commands:
@@ -4275,6 +4304,10 @@ afterward.
 `hideout list` lists resumable environments. `hideout stop` releases backend VM
 memory without deleting a resumable environment. `hideout clean` removes
 stopped/stale environments and runtime cache while preserving audit by default.
+
+`hideout audit show` renders the same redacted audit view used by Manager API,
+TUI, and WebUI. It must not expose raw proxy secrets, broker tokens, endpoint
+addresses, or unredacted callback/open URL query values.
 
 `hideout ui` starts the local manager HTTP API, generates a short-lived
 `ui_...` token, and opens the local URL with the token in the URL fragment. The

@@ -204,8 +204,13 @@ Run-scoped grants:
 hideout run --backend lima --fs read:/absolute/file -- <command>
 hideout run --backend lima --fs dir:/absolute/dir -- <command>
 hideout run --backend lima --fs tree:/absolute/dir -- <command>
-hideout run --backend lima --fs read:/absolute/dir/*.txt -- <command>
+hideout run --backend lima --fs 'read:/absolute/dir/*.txt' -- <command>
 ```
+
+Quote HostFS glob selectors so your shell does not expand them. `*` does not
+implicitly include dotfiles such as `.env`; grant those with an explicit dotfile
+selector. Use backslash escaping for literal glob characters or a literal
+backslash, for example `read:/absolute/dir/\[2026\].txt`.
 
 Persistent profile rules:
 

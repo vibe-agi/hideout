@@ -116,8 +116,9 @@ blocked-until-defined
   Fail closed when Hideout cannot verify DNS behavior for the selected backend.
 ```
 
-Phase 1 may keep direct mode as `backend-default`. Tun2socks product promotion
-requires a clear DNS policy per backend.
+Phase 1 may keep direct mode as `backend-default` and supports tun2socks privacy
+mode with route verification. DNS verification remains backend-specific
+hardening governed by this policy and the release gates.
 
 ## Route Verification
 
@@ -178,13 +179,11 @@ For each backend, the capability matrix must state:
 
 - direct mode;
 - proxy env hidden from target;
-- tun2socks route bootstrap behind explicit config or lab gate;
+- tun2socks route bootstrap for privacy mode;
 - audit and doctor explain direct risk.
 
 ### Next Product Increment
 
-- package tun2socks;
-- make tun2socks an easy profile setting;
 - add DNS verification per supported backend;
 - add `doctor --fix` for missing tun2socks;
 - expose network state in Manager/TUI/WebUI.

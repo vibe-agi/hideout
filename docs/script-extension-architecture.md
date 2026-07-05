@@ -407,10 +407,17 @@ dedicated adapter contract.
 
 Current entrypoints:
 
-| Entrypoint | Phase | Owner | Adapter use |
-| --- | --- | --- | --- |
-| `decideCommand(ctx)` | Required Phase 1 | Policy Engine | Command Proxy decisions for registered `host.open` command symbols such as the default `open` and `xdg-open`. |
-| `redactAudit(ctx)` | Required Phase 1 | Policy Engine | Presentation redaction for exported or viewed audit details. |
+| Domain entrypoint | Phase 1 profile ABI | Phase | Owner | Adapter use |
+| --- | --- | --- | --- | --- |
+| `command.decide` | `decideCommand(ctx)` | Required Phase 1 | Policy Engine | Command Proxy decisions for registered `host.open` command symbols such as the default `open` and `xdg-open`. |
+| `audit.redact` | `redactAudit(ctx)` | Required Phase 1 | Policy Engine | Presentation redaction for exported or viewed audit details. |
+
+`command.decide` and `audit.redact` are the domain entrypoint names used by
+bundle and ecosystem contracts. The Phase 1 profile schema and goja evaluator
+still bind concrete script files by the ABI function names `decideCommand` and
+`redactAudit`. Documentation that describes bundle permissions should use the
+domain names. Documentation that describes profile `scriptRefs` or executable
+JavaScript should use the ABI names.
 
 Design-ready and Later entrypoints:
 
@@ -422,11 +429,12 @@ Design-ready and Later entrypoints:
 
 Adapters for adb, browser control, preview, IDE, or simulator workflows must use
 an entrypoint that exists in the current effective policy. Today, that usually
-means classification inside `decideCommand(ctx)` for a registered command shim.
-Richer command binding decisions may extend the `decideCommand`/`command.decide`
-contract with bounded context queries only after the profile schema, validator,
-audit shape, and Gate 0 contract are updated. Bundles must not depend on an
-entrypoint that has not been promoted into the current effective policy.
+means the `command.decide` domain entrypoint, implemented by the Phase 1
+`decideCommand(ctx)` ABI, for a registered command shim. Richer command binding
+decisions may extend the `command.decide` contract with bounded context queries
+only after the profile schema, validator, audit shape, and Gate 0 contract are
+updated. Bundles must not depend on an entrypoint that has not been promoted into
+the current effective policy.
 
 ## Development Rules
 
@@ -445,7 +453,8 @@ entrypoint that has not been promoted into the current effective policy.
 
 ### Phase 1 Product Path
 
-- `decideCommand(ctx)` and `redactAudit(ctx)` goja ABI.
+- `command.decide` and `audit.redact` domain entrypoints, implemented in Phase 1
+  by the `decideCommand(ctx)` and `redactAudit(ctx)` goja ABI.
 - Deterministic time and random sources for policy evaluation.
 - Pure helper SDK and decision proposal builders needed by required command
   policy.

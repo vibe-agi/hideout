@@ -53,6 +53,7 @@ Core artifacts:
 
 ```text
 hideout
+hideout-shim
 hideout-shim-linux-<arch>
 hideout-hostfsd-linux-<arch>
 tun2socks-<platform>-<arch>
@@ -112,7 +113,7 @@ Explicit env overrides remain useful for development:
 ```text
 HIDEOUT_LINUX_SHIM_PATH
 HIDEOUT_LINUX_HOSTFSD_PATH
-HIDEOUT_TUN2SOCKS_PATH
+HIDEOUT_LINUX_TUN2SOCKS_PATH
 ```
 
 An explicit helper override is considered discovered only when the path exists
@@ -146,7 +147,7 @@ hideout init
   -> schema.metadata.write
   -> select recommended backend
   -> backend.probe
-  -> helper.locate or helper.install.official
+  -> helper.locate or helper.install.linux-shim/helper.install.linux-hostfsd
   -> network.mode.select
   -> doctor.check.light
   -> print next command
@@ -252,7 +253,8 @@ profile.create
 identity.materialize
 schema.metadata.write
 helper.locate
-helper.install.official
+helper.install.linux-shim
+helper.install.linux-hostfsd
 backend.probe
 network.mode.select
 doctor.check.light

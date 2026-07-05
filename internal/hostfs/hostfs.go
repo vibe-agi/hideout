@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -108,6 +109,10 @@ func ParseRuleSpec(flagName, value, reason string) (Rule, error) {
 	if !ok || strings.TrimSpace(kind) == "" || strings.TrimSpace(path) == "" {
 		return Rule{}, fmt.Errorf("%s must use kind:/absolute/path", flagName)
 	}
+	path, hasGlob, err := normalizeHostPathSelector(path)
+	if err != nil {
+		return Rule{}, fmt.Errorf("%s host path selector: %w", flagName, err)
+	}
 	rule := Rule{
 		HostPath: path,
 		Reason:   reason,
@@ -116,29 +121,29 @@ func ParseRuleSpec(flagName, value, reason string) (Rule, error) {
 	case "stat":
 		rule.Ops = []Op{OpStat}
 		rule.Scope = ScopeExactFile
-		if hasGlobMeta(path) {
+		if hasGlob {
 			rule.Scope = ScopeGlob
 		}
 	case "read":
 		rule.Ops = []Op{OpRead}
 		rule.Scope = ScopeExactFile
-		if hasGlobMeta(path) {
+		if hasGlob {
 			rule.Scope = ScopeGlob
 		}
 	case "list":
-		if hasGlobMeta(path) {
+		if hasGlob {
 			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
 		}
 		rule.Ops = []Op{OpList}
 		rule.Scope = ScopeDir
 	case "dir":
-		if hasGlobMeta(path) {
+		if hasGlob {
 			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
 		}
 		rule.Ops = []Op{OpRead, OpList}
 		rule.Scope = ScopeDir
 	case "tree":
-		if hasGlobMeta(path) {
+		if hasGlob {
 			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
 		}
 		rule.Ops = []Op{OpRead, OpList}
@@ -489,7 +494,15 @@ func globAllowsParentList(rule Rule, hostPath string) bool {
 }
 
 func globMatches(pattern, hostPath string) bool {
-	ok, err := filepath.Match(pattern, hostPath)
+	return globMatchesWithCaseMode(pattern, hostPath, caseInsensitiveHostFSGlobMatch())
+}
+
+func globMatchesWithCaseMode(pattern, hostPath string, caseInsensitive bool) bool {
+	matchPattern, matchPath := normalizeGlobMatchInputs(pattern, hostPath, caseInsensitive)
+	if globDotfileImplicitlyMatches(matchPattern, matchPath) {
+		return false
+	}
+	ok, err := filepath.Match(matchPattern, matchPath)
 	return err == nil && ok
 }
 
@@ -500,7 +513,11 @@ func globCouldMatchChildOf(pattern, dir string) bool {
 		return false
 	}
 	for i, part := range dirParts {
-		ok, err := filepath.Match(patternParts[i], part)
+		patternPart, dirPart := normalizeGlobMatchInputs(patternParts[i], part, caseInsensitiveHostFSGlobMatch())
+		if globDotfileImplicitlyMatches(patternPart, dirPart) {
+			return false
+		}
+		ok, err := filepath.Match(patternPart, dirPart)
 		if err != nil || !ok {
 			return false
 		}
@@ -599,7 +616,114 @@ func validateGlobPattern(pattern string) error {
 }
 
 func hasGlobMeta(path string) bool {
-	return strings.ContainsAny(path, "*?[")
+	return firstUnescapedGlobMeta(path) >= 0
+}
+
+func normalizeHostPathSelector(path string) (string, bool, error) {
+	hasGlob, err := hasUnescapedGlobMeta(path)
+	if err != nil {
+		return "", false, err
+	}
+	var out strings.Builder
+	escaped := false
+	for _, r := range path {
+		if escaped {
+			if !strings.ContainsRune(`*?[]\`, r) {
+				return "", false, fmt.Errorf(`backslash may only escape *, ?, [, ], or \`)
+			}
+			if hasGlob {
+				switch r {
+				case '*':
+					out.WriteString("[*]")
+				case '?':
+					out.WriteString("[?]")
+				case '[':
+					out.WriteString("[[]")
+				case ']':
+					out.WriteRune(']')
+				case '\\':
+					out.WriteString(`\\`)
+				}
+			} else {
+				out.WriteRune(r)
+			}
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String(), hasGlob, nil
+}
+
+func hasUnescapedGlobMeta(path string) (bool, error) {
+	escaped := false
+	for _, r := range path {
+		if escaped {
+			if !strings.ContainsRune(`*?[]\`, r) {
+				return false, fmt.Errorf(`backslash may only escape *, ?, [, ], or \`)
+			}
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if strings.ContainsRune("*?[", r) {
+			return true, nil
+		}
+	}
+	if escaped {
+		return false, errors.New("trailing backslash escape")
+	}
+	return false, nil
+}
+
+func firstUnescapedGlobMeta(path string) int {
+	escaped := false
+	for i, r := range path {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if strings.ContainsRune("*?[", r) {
+			return i
+		}
+	}
+	return -1
+}
+
+func normalizeGlobMatchInputs(pattern, hostPath string, caseInsensitive bool) (string, string) {
+	if caseInsensitive {
+		return strings.ToLower(pattern), strings.ToLower(hostPath)
+	}
+	return pattern, hostPath
+}
+
+func caseInsensitiveHostFSGlobMatch() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+}
+
+func globDotfileImplicitlyMatches(pattern, hostPath string) bool {
+	patternParts := pathParts(pattern)
+	hostParts := pathParts(hostPath)
+	if len(patternParts) != len(hostParts) {
+		return false
+	}
+	for i, hostPart := range hostParts {
+		if strings.HasPrefix(hostPart, ".") && !strings.HasPrefix(patternParts[i], ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateExpiry(rule Rule) error {
@@ -673,12 +797,18 @@ func ruleCoversReservedRoot(rule Rule, reservedRoots []string) bool {
 		}
 		if rule.Scope == ScopeGlob {
 			base := globStaticBase(rule.HostPath)
-			if pathInRoot(base, root) || globMatches(rule.HostPath, root) || globCouldMatchChildOf(rule.HostPath, root) {
+			if pathInRoot(base, root) || globMatchesIncludingDotfile(rule.HostPath, root) || globCouldMatchChildOf(rule.HostPath, root) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func globMatchesIncludingDotfile(pattern, hostPath string) bool {
+	matchPattern, matchPath := normalizeGlobMatchInputs(pattern, hostPath, caseInsensitiveHostFSGlobMatch())
+	ok, err := filepath.Match(matchPattern, matchPath)
+	return err == nil && ok
 }
 
 func ruleCoversPath(rule Rule, path string) bool {
@@ -697,7 +827,7 @@ func ruleCoversPath(rule Rule, path string) bool {
 }
 
 func globStaticBase(pattern string) string {
-	index := strings.IndexAny(pattern, "*?[")
+	index := firstUnescapedGlobMeta(pattern)
 	if index < 0 {
 		return filepath.Dir(pattern)
 	}

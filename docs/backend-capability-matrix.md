@@ -112,6 +112,14 @@ optional
 lab
   Probe or experimental path only.
 
+later
+  Product direction is understood, but not implemented in the current product
+  path.
+
+weak
+  Development harness behavior only. It must not be counted as isolation
+  evidence.
+
 no
   Not supported or not safe for this backend.
 
@@ -121,32 +129,34 @@ tbd
 
 | Capability | Lima | Linux Container | SSH | Apple Container | Docker/Devcontainer | Native |
 | --- | --- | --- | --- | --- | --- | --- |
-| Workspace read/write | required | required | required | required | required | yes |
+| Workspace read/write | required | required | required | required | required | weak |
 | Fake home/config/cache/data | required | required | required | required | required | weak |
 | Env hiding | required | required | required | required | required | weak |
 | Command Proxy shims | required | required | tbd | required | tbd | weak |
-| Host Broker | required | required | tbd | required | tbd | yes |
-| HostFS read-only | required | required | tbd | tbd | tbd | weak/no |
-| HostFS glob/filter list | required | required | tbd | tbd | tbd | weak/no |
-| HostFS overlay | later | later | later/tbd | later/tbd | later/tbd | no |
-| `host.open.url` | required | required | tbd | required | tbd | yes |
-| Isolated browser profile | required | required | local-host only | required | tbd | yes |
-| `endpoint.expose.host-to-guest` | required | tbd | tbd | tbd | tbd | weak/dev-only |
-| `endpoint.expose.guest-to-host` | lab / separate design | lab / separate design | tbd | tbd | tbd | lab |
-| `endpoint.observe` | later | later | tbd | tbd | tbd | weak/later |
-| Browser control | lab -> product | product | tbd | tbd | tbd | lab |
-| Direct network | required | required | required | required | required | yes |
+| Host Broker | required | required | tbd | required | tbd | weak |
+| HostFS read-only | required | required | tbd | tbd | tbd | weak |
+| HostFS glob/filter list | required | required | tbd | tbd | tbd | weak |
+| HostFS overlay | later | later | tbd | tbd | tbd | no |
+| `host.open` | required | required | tbd | required | tbd | weak |
+| Isolated browser profile | required | required | tbd | required | tbd | weak |
+| `endpoint.expose.host-to-guest` | required | tbd | tbd | tbd | tbd | weak |
+| `endpoint.expose.guest-to-host` | lab | lab | tbd | tbd | tbd | lab |
+| `endpoint.observe` | later | later | tbd | tbd | tbd | weak |
+| Browser control | lab | tbd | tbd | tbd | tbd | lab |
+| Direct network | required | required | required | required | required | weak |
 | Tun2socks | required | required | tbd | tbd | tbd | no |
-| DNS verification | required for privacy mode | required for privacy mode | tbd | tbd | tbd | no |
+| DNS verification | required | required | tbd | tbd | tbd | no |
 | Audit | required | required | required | required | required | required |
 | Cleanup | required | required | required | required | required | required |
-| Warm environment reuse | required | required | tbd | tbd | maybe | n/a |
-| Guest helper distribution | required | required | required | required | required | n/a |
+| Warm environment reuse | required | required | tbd | tbd | tbd | no |
+| Guest helper distribution | required | required | required | required | required | no |
 
 ## Backend Selection Rules
 
-`--backend auto` should choose the strongest available product backend for the
-platform.
+Current Phase 1 `--backend auto` resolves the same way as `hideout run`: Lima on
+supported macOS hosts. Future backend selection may choose the strongest
+available product backend for each platform only after that backend has matching
+isolation evidence and gate coverage.
 
 Initial recommendation:
 
@@ -183,7 +193,7 @@ Open questions for SSH:
 
 - Does HostFS expose local product-host files, remote execution-host files, or
   both?
-- Does `host.open.url` open local browser or remote browser?
+- Does `host.open` open a local browser or remote browser?
 - How are local workspace changes synchronized?
 - How are broker tokens transported?
 - How are audit logs collected?

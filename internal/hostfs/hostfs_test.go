@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -348,6 +349,98 @@ func TestGlobScopeMatching(t *testing.T) {
 				t.Fatalf("ruleID=%q want %q decision=%+v", decision.RuleID, tt.wantID, decision)
 			}
 		})
+	}
+}
+
+func TestGlobDenyMatchesCaseInsensitiveFilesystems(t *testing.T) {
+	if !globMatchesWithCaseMode("/Users/alice/Downloads/private-*.txt", "/Users/alice/Downloads/Private-report.txt", true) {
+		t.Fatal("case-insensitive glob should match path case variants")
+	}
+	policy, err := Build(BuildInput{Profile: Config{
+		Grants: []Rule{withRuleID(readGrant("/Users/alice/Downloads/*.txt", ScopeGlob, "text files"), "hfs_txt")},
+		Deny: []Rule{{
+			ID:       "hfs_private",
+			HostPath: "/Users/alice/Downloads/private-*.txt",
+			Ops:      []Op{OpRead},
+			Scope:    ScopeGlob,
+			Reason:   "private text files",
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := policy.Decide(OpRead, "/Users/alice/Downloads/Private-report.txt")
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		if decision.Allowed || decision.Effect != "deny" || decision.RuleID != "hfs_private" {
+			t.Fatalf("case-insensitive platform should deny path case variants: %+v", decision)
+		}
+	} else if !decision.Allowed {
+		t.Fatalf("case-sensitive platform should keep case-sensitive glob semantics: %+v", decision)
+	}
+}
+
+func TestGlobDoesNotImplicitlyMatchDotfiles(t *testing.T) {
+	policy, err := Build(BuildInput{Profile: Config{Grants: []Rule{
+		withRuleID(readGrant("/Users/alice/project/*", ScopeGlob, "project files"), "hfs_project"),
+		withRuleID(readGrant("/Users/alice/project/.*", ScopeGlob, "project dotfiles"), "hfs_dotfiles"),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision := policy.Decide(OpRead, "/Users/alice/project/app.js"); !decision.Allowed || decision.RuleID != "hfs_project" {
+		t.Fatalf("non-dotfile should match wildcard grant: %+v", decision)
+	}
+	if decision := policy.Decide(OpRead, "/Users/alice/project/.env"); !decision.Allowed || decision.RuleID != "hfs_dotfiles" {
+		t.Fatalf("dotfile should require explicit dotfile grant: %+v", decision)
+	}
+	policy, err = Build(BuildInput{Profile: Config{Grants: []Rule{withRuleID(readGrant("/Users/alice/project/*", ScopeGlob, "project files"), "hfs_project")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision := policy.Decide(OpRead, "/Users/alice/project/.env"); decision.Allowed {
+		t.Fatalf("implicit wildcard must not grant dotfiles: %+v", decision)
+	}
+}
+
+func TestParseRuleSpecEscapesLiteralGlobMeta(t *testing.T) {
+	rule, err := ParseRuleSpec("--fs", `read:/Users/alice/Downloads/\[2026\]-draft\?.txt`, "literal meta")
+	if err != nil {
+		t.Fatalf("ParseRuleSpec exact literal: %v", err)
+	}
+	if rule.Scope != ScopeExactFile || rule.HostPath != "/Users/alice/Downloads/[2026]-draft?.txt" {
+		t.Fatalf("escaped literal selector should become exact file, got %+v", rule)
+	}
+	policy, err := Build(BuildInput{Profile: Config{Grants: []Rule{withRuleID(rule, "hfs_literal")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision := policy.Decide(OpRead, "/Users/alice/Downloads/[2026]-draft?.txt"); !decision.Allowed || decision.RuleID != "hfs_literal" {
+		t.Fatalf("literal meta filename should be allowed: %+v", decision)
+	}
+	if decision := policy.Decide(OpRead, "/Users/alice/Downloads/2-draftX.txt"); decision.Allowed {
+		t.Fatalf("escaped literal selector must not become a glob: %+v", decision)
+	}
+
+	backslashRule, err := ParseRuleSpec("--fs", `read:/Users/alice/Downloads/name\\with-backslash.txt`, "literal backslash")
+	if err != nil {
+		t.Fatalf("ParseRuleSpec literal backslash: %v", err)
+	}
+	if backslashRule.Scope != ScopeExactFile || backslashRule.HostPath != `/Users/alice/Downloads/name\with-backslash.txt` {
+		t.Fatalf("escaped backslash selector should become exact file, got %+v", backslashRule)
+	}
+
+	globRule, err := ParseRuleSpec("--fs", `read:/Users/alice/Downloads/\[2026\]-*.txt`, "literal prefix glob")
+	if err != nil {
+		t.Fatalf("ParseRuleSpec mixed literal/glob: %v", err)
+	}
+	if globRule.Scope != ScopeGlob || globRule.HostPath != "/Users/alice/Downloads/[[]2026]-*.txt" {
+		t.Fatalf("escaped literal prefix should be preserved for glob matcher, got %+v", globRule)
+	}
+	if !globMatches(globRule.HostPath, "/Users/alice/Downloads/[2026]-report.txt") {
+		t.Fatalf("mixed literal/glob selector should match literal bracket prefix")
+	}
+	if globMatches(globRule.HostPath, "/Users/alice/Downloads/2-report.txt") {
+		t.Fatalf("mixed literal/glob selector must not treat escaped bracket as character class")
 	}
 }
 

@@ -243,7 +243,7 @@ func canonicalizeRule(rule Rule) Rule {
 }
 
 func canonicalizeGlobPattern(pattern string) string {
-	index := strings.IndexAny(pattern, "*?[")
+	index := firstUnescapedGlobMeta(pattern)
 	if index < 0 {
 		return pattern
 	}

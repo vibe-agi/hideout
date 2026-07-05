@@ -78,8 +78,8 @@ must be modeled as typed domain actions with their own policy and audit shape.
 Allowed direction:
 
 ```text
-open URL -> host.open.url
-open file -> host.open.file
+open URL -> host.open (resource type: url)
+open file -> host.open (resource type: workspace-file)
 launch browser -> browser.launch
 control browser -> browser.control
 preview service -> preview.open + portbridge

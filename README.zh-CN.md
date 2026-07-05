@@ -197,8 +197,12 @@ Run-scoped grant：
 hideout run --backend lima --fs read:/absolute/file -- <command>
 hideout run --backend lima --fs dir:/absolute/dir -- <command>
 hideout run --backend lima --fs tree:/absolute/dir -- <command>
-hideout run --backend lima --fs read:/absolute/dir/*.txt -- <command>
+hideout run --backend lima --fs 'read:/absolute/dir/*.txt' -- <command>
 ```
+
+HostFS glob selector 要加引号，避免先被宿主 shell 展开。`*` 不会隐式包含
+`.env` 这类 dotfile；需要显式使用 dotfile selector 授权。字面量 glob 字符
+或字面量反斜杠用反斜杠转义，例如 `read:/absolute/dir/\[2026\].txt`。
 
 持久 profile 规则：
 

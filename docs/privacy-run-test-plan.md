@@ -858,9 +858,13 @@ Required checks:
 - `hideout hostfsd build-linux` produces the Linux guest daemon in the default
   store location and that location is discoverable by `hideout run`;
 - exact-file read grant allows `stat`, `open`, and read for that file;
-- `read:` and `stat:` paths containing Go glob metacharacters (`*`, `?`, `[`)
-  are treated as glob selectors using Go `filepath.Match` semantics, while
-  paths without metacharacters remain exact-file selectors;
+- `read:` and `stat:` paths containing unescaped glob metacharacters (`*`, `?`,
+  `[`) are treated as glob selectors using Go `filepath.Match` semantics, while
+  paths without unescaped metacharacters remain exact-file selectors;
+- glob matching denies case-variant bypasses on case-insensitive host
+  filesystems, does not let `*` implicitly expose dotfiles, and supports
+  backslash escaping for literal `*`, `?`, `[`, `]`, and backslash in CLI
+  selectors;
 - `list:`, `dir:`, and `tree:` reject glob selectors instead of silently
   treating them as broader directory grants;
 - glob read/stat grants allow matching files and filtered parent-directory

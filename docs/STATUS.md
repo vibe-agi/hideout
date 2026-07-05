@@ -31,10 +31,10 @@ Latest local release-candidate evidence:
   redacted from the manifest and evidence logs
 
 Evidence scope: a release-candidate bundle certifies the exact git commit
-recorded in its manifest. Later documentation-only commits do not extend that
-certification; before cutting a release artifact, rerun
+recorded in its manifest. Later code or documentation commits do not extend that
+certification. Before cutting a release artifact, rerun
 `scripts/test-release-dogfood.sh` on the release commit and record the new
-manifest.
+manifest for that exact commit.
 
 ## Implemented Product Paths
 
@@ -57,7 +57,7 @@ manifest.
 | Endpoint Exposure | Product `endpoint.expose.host-to-guest` is implemented for declared and run-scoped manual guest-loopback TCP candidates, with active owner validation, backend provider, audit, cleanup, and Boundary Summary. |
 | Preview open | Minimal `preview.open` is implemented as the first consumer of host-to-guest exposure. Callback adapters, endpoint observation, and project-declared auto exposure are later/design-ready. |
 | Boundary Summary | Default `hideout run` is quiet; `--verbose`, `explain`, `hideout audit show`, Manager API, TUI, or Web UI surfaces show redacted control-plane evidence. |
-| Script runtime | Required Phase 1 supports `decideCommand(ctx)` and `redactAudit(ctx)` with constrained goja execution and deterministic time/randomness. Bounded context query APIs are design-ready. |
+| Script runtime | Required Phase 1 supports `command.decide` and `audit.redact` domain entrypoints through the `decideCommand(ctx)` and `redactAudit(ctx)` goja ABI, with constrained execution and deterministic time/randomness. Bounded context query APIs are design-ready. |
 
 ## Not Yet Productized
 

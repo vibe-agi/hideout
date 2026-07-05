@@ -61,8 +61,8 @@ OpenTarget
 Target types:
 
 ```text
-host.open.url
-host.open.file
+host.open (resource type: url)
+host.open (resource type: workspace-file)
 browser.launch
 browser.control
 preview.open
@@ -123,8 +123,8 @@ Presets are product composition, not low-level authority.
 
 Targets:
 
-- `host.open.url`
-- `host.open.file`
+- `host.open` for external URLs
+- `host.open` for workspace-mapped files
 - `host.app.open-resource` through a declared host app provider
 
 Use cases:
@@ -207,7 +207,7 @@ Targets:
 - `browser.launch`
 - `browser.control`
 - `preview.open`
-- `host.open.file`
+- `host.open` for workspace-mapped files
 - `endpoint.expose.host-to-guest` for previews and local callbacks
 - `endpoint.expose.guest-to-host` for future browser control
 
@@ -292,8 +292,8 @@ or arbitrary host command lines.
 
 ### Phase 1 Product Path
 
-- `host.open.url`
-- `host.open.file` for workspace-mapped files
+- `host.open` for external URLs
+- `host.open` for workspace-mapped files
 - isolated browser profile for URL open
 - Command Proxy for `open` and `xdg-open`
 - product `endpoint.expose.host-to-guest` over declared or run-scoped manual
