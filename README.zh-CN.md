@@ -250,6 +250,7 @@ Hideout boundary:
 hideout audit show --limit 20
 hideout audit show --decision deny
 hideout audit show --session <session-id> --json
+hideout tui --profile agent
 ```
 
 常用清理命令：

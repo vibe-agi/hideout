@@ -4162,12 +4162,12 @@ hideout run --new -- <command> [args...]
 hideout run --resume <environment-id> -- <command> [args...]
 hideout run --rm -- <command> [args...]
 hideout list
-hideout stop [--idle <duration>] [environment-id...]
-hideout clean [--stopped] [--idle <duration>] [environment-id...]
+hideout stop [--idle <duration>] [--verbose] [environment-id...]
+hideout clean [--stopped] [--idle <duration>] [--verbose] [environment-id...]
 hideout profile rotate-identity <name>
 hideout profile reset <name>
 hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]
-hideout tui [--watch] [--interval 2s]
+hideout tui [--profile <name>] [--watch] [--interval 2s]
 ```
 
 These commands may ship in Phase 1 only if they do not delay the required local

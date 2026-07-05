@@ -138,12 +138,12 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Inspect and manage:")
 	fmt.Fprintln(a.stdout, "  hideout list")
-	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [environment-id...]")
-	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [environment-id...]")
+	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [--verbose] [environment-id...]")
+	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
-	fmt.Fprintln(a.stdout, "  hideout tui [--watch] [--interval 2s]")
+	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--watch] [--interval 2s]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Advanced and developer:")
 	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
@@ -3773,8 +3773,9 @@ func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (bac
 }
 
 type tuiOptions struct {
-	watch    bool
-	interval time.Duration
+	watch       bool
+	interval    time.Duration
+	profileName string
 }
 
 const tuiDashboardRowLimit = 10
@@ -3785,14 +3786,21 @@ func parseTUIOptions(args []string) (tuiOptions, error) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&opts.watch, "watch", false, "refresh the terminal dashboard until interrupted")
 	fs.DurationVar(&opts.interval, "interval", opts.interval, "watch refresh interval")
+	fs.StringVar(&opts.profileName, "profile", "", "filter dashboard and audit rows to one profile")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
 	if fs.NArg() != 0 {
-		return opts, errors.New("usage: hideout tui [--watch] [--interval 2s]")
+		return opts, errors.New("usage: hideout tui [--profile <name>] [--watch] [--interval 2s]")
 	}
 	if opts.interval <= 0 {
 		return opts, errors.New("--interval must be positive")
+	}
+	opts.profileName = strings.TrimSpace(opts.profileName)
+	if opts.profileName != "" {
+		if err := profile.ValidateName(opts.profileName); err != nil {
+			return opts, err
+		}
 	}
 	return opts, nil
 }
@@ -3811,12 +3819,13 @@ func (a app) tui(args []string) error {
 	defer cancel()
 	render := func(clear bool) error {
 		overview, overviewErr := core.Overview(ctx)
-		events, auditErr := core.AuditEvents(manager.AuditEventFilter{Limit: 5})
-		deniedEvents, deniedAuditErr := core.AuditEvents(manager.AuditEventFilter{Decision: "deny", Limit: 5})
+		overview = filterOverviewForTUI(overview, opts.profileName)
+		events, auditErr := core.AuditEvents(manager.AuditEventFilter{Profile: opts.profileName, Limit: 5})
+		deniedEvents, deniedAuditErr := core.AuditEvents(manager.AuditEventFilter{Profile: opts.profileName, Decision: "deny", Limit: 5})
 		if clear {
 			fmt.Fprint(a.stdout, "\033[H\033[2J")
 		}
-		writeTUIDashboard(a.stdout, overview, events, deniedEvents, errors.Join(overviewErr, auditErr, deniedAuditErr))
+		writeTUIDashboard(a.stdout, overview, events, deniedEvents, errors.Join(overviewErr, auditErr, deniedAuditErr), opts.profileName)
 		return nil
 	}
 	if !opts.watch {
@@ -3836,9 +3845,12 @@ func (a app) tui(args []string) error {
 	}
 }
 
-func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Event, deniedEvents []audit.Event, err error) {
+func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Event, deniedEvents []audit.Event, err error, profileFilter string) {
 	fmt.Fprintln(w, "Hideout TUI")
 	fmt.Fprintf(w, "Store: %s\n", dash(overview.StorageRoot))
+	if profileFilter != "" {
+		fmt.Fprintf(w, "Profile filter: %s\n", profileFilter)
+	}
 	if err != nil {
 		fmt.Fprintf(w, "Status: degraded (%s)\n", err)
 	} else {
@@ -3925,7 +3937,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		fmt.Fprintf(w, "  showing newest %d of %d\n", len(sessions), len(overview.Sessions))
 	}
 	for _, s := range sessions {
-		fmt.Fprintf(w, "  - %s  audit=%t  network=%s  runtime=%t\n", dash(s.ID), s.HasAudit, dash(s.NetworkMode), s.HasEphemeralState)
+		fmt.Fprintf(w, "  - %s  profile=%s  audit=%t  network=%s  runtime=%t\n", dash(s.ID), dash(s.Profile), s.HasAudit, dash(s.NetworkMode), s.HasEphemeralState)
 		next := sessionNextCommandsForTUI(s)
 		if len(next) > 0 {
 			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))
@@ -3947,6 +3959,57 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	for _, event := range events {
 		fmt.Fprintf(w, "  - %s  action=%s  decision=%s  session=%s\n", dash(event.Profile), dash(event.Action), dash(event.Decision), dash(event.Session))
 	}
+}
+
+func filterOverviewForTUI(overview manager.Overview, profileName string) manager.Overview {
+	if profileName == "" {
+		return overview
+	}
+	overview.Profiles = filterProfilesForTUI(overview.Profiles, profileName)
+	overview.Environments = filterEnvironmentsForTUI(overview.Environments, profileName)
+	overview.Sessions = filterSessionsForTUI(overview.Sessions, profileName)
+	overview.Network.ProfileDefaults = filterNetworkProfilesForTUI(overview.Network.ProfileDefaults, profileName)
+	return overview
+}
+
+func filterProfilesForTUI(values []manager.ProfileSummary, profileName string) []manager.ProfileSummary {
+	out := values[:0]
+	for _, value := range values {
+		if value.Name == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func filterEnvironmentsForTUI(values []manager.EnvironmentSummary, profileName string) []manager.EnvironmentSummary {
+	out := values[:0]
+	for _, value := range values {
+		if value.Profile == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func filterSessionsForTUI(values []manager.SessionSummary, profileName string) []manager.SessionSummary {
+	out := values[:0]
+	for _, value := range values {
+		if value.Profile == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func filterNetworkProfilesForTUI(values []manager.ProfileNetworkSummary, profileName string) []manager.ProfileNetworkSummary {
+	out := values[:0]
+	for _, value := range values {
+		if value.Profile == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func visibleEnvironmentsForTUI(environments []manager.EnvironmentSummary) []manager.EnvironmentSummary {

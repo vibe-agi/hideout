@@ -53,6 +53,7 @@ Suggested commands:
 
 ```bash
 hideout tui
+hideout tui --profile <name>
 hideout tui --watch
 hideout doctor
 hideout doctor --fix --dry-run
@@ -101,6 +102,7 @@ Surface differences are layout differences, not data model differences.
 Implemented smoke surface shows:
 
 - local refresh time;
+- optional profile filter;
 - selected profile;
 - init next steps;
 - capability summary;

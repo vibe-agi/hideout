@@ -72,6 +72,7 @@ type ProfileSummary struct {
 
 type SessionSummary struct {
 	ID                 string `json:"id"`
+	Profile            string `json:"profile,omitempty"`
 	Path               string `json:"path"`
 	AuditPath          string `json:"auditPath,omitempty"`
 	HasAudit           bool   `json:"hasAudit"`
@@ -536,6 +537,7 @@ func (c Core) sessionSummaries() ([]SessionSummary, int) {
 		}
 		if summary.HasAudit {
 			auditCount++
+			summary.Profile = readSessionAuditProfile(summary.AuditPath)
 		}
 		if mode := readNetworkMode(filepath.Join(dir, "network-plan.json")); mode != "" {
 			summary.NetworkMode = mode
@@ -544,6 +546,26 @@ func (c Core) sessionSummaries() ([]SessionSummary, int) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, auditCount
+}
+
+func readSessionAuditProfile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 16*1024), 256*1024)
+	for scanner.Scan() {
+		var event audit.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		if event.Profile != "" {
+			return event.Profile
+		}
+	}
+	return ""
 }
 
 func (c Core) backendSummaries(ctx context.Context) []BackendSummary {

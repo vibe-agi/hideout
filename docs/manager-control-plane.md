@@ -365,6 +365,7 @@ Suggested command:
 
 ```bash
 hideout tui
+hideout tui --profile <name>
 hideout tui --watch
 hideout doctor
 ```

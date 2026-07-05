@@ -3635,6 +3635,74 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	}
 }
 
+func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	for _, name := range []string{"agent", "smoke"} {
+		if err := store.Save(profile.Default(name)); err != nil {
+			t.Fatalf("save profile %s: %v", name, err)
+		}
+	}
+	envStore := environment.Store{Root: store.Root}
+	for _, spec := range []environment.Spec{
+		{Profile: "agent", Backend: "lima", Workspace: "/work/agent", GuestWorkspace: "/workspace", InstanceName: "hideout-agent-env"},
+		{Profile: "smoke", Backend: "lima", Workspace: "/work/smoke", GuestWorkspace: "/workspace", InstanceName: "hideout-smoke-env"},
+	} {
+		rec, err := envStore.Create(spec)
+		if err != nil {
+			t.Fatalf("create environment for %s: %v", spec.Profile, err)
+		}
+		rec.Status = "ready"
+		if err := envStore.Save(rec); err != nil {
+			t.Fatalf("save environment for %s: %v", spec.Profile, err)
+		}
+	}
+	sessionsDir := filepath.Join(store.Root, "sessions")
+	sessionAudits := map[string]string{
+		"ses_20260704T020101Z_agent": `{"time":"2026-07-04T02:01:01Z","session":"ses_20260704T020101Z_agent","profile":"agent","backend":"lima","action":"network.setup","decision":"allow"}`,
+		"ses_20260704T020102Z_smoke": `{"time":"2026-07-04T02:01:02Z","session":"ses_20260704T020102Z_smoke","profile":"smoke","backend":"lima","action":"network.setup","decision":"allow"}`,
+	}
+	for id, line := range sessionAudits {
+		if err := os.MkdirAll(filepath.Join(sessionsDir, id), 0o700); err != nil {
+			t.Fatalf("create session %s: %v", id, err)
+		}
+		if err := os.WriteFile(filepath.Join(sessionsDir, id, "audit.jsonl"), []byte(line+"\n"), 0o600); err != nil {
+			t.Fatalf("write audit for %s: %v", id, err)
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"tui", "--profile", "agent"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	for _, want := range []string{
+		"Profile filter: agent",
+		"Profiles: 1",
+		"Environments: 1",
+		"Sessions: 1",
+		"Profiles\n  - agent",
+		"hideout-agent-env",
+		"ses_20260704T020101Z_agent  profile=agent",
+		"Recent Audit\n  - agent  action=network.setup",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("filtered tui output missing %q:\n%s", want, out.String())
+		}
+	}
+	for _, forbidden := range []string{
+		"hideout-smoke-env",
+		"ses_20260704T020102Z_smoke",
+		"  - smoke  network=",
+		"  - smoke  action=network.setup",
+	} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Fatalf("filtered tui output should omit %q:\n%s", forbidden, out.String())
+		}
+	}
+}
+
 func TestAuditShowFiltersAndRedactsEvents(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

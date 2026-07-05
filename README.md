@@ -259,6 +259,7 @@ instead of reading raw JSONL by hand:
 hideout audit show --limit 20
 hideout audit show --decision deny
 hideout audit show --session <session-id> --json
+hideout tui --profile agent
 ```
 
 Useful cleanup commands:
