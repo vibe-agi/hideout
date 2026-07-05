@@ -1338,11 +1338,11 @@ func (a app) shim(args []string) error {
 	if len(args) > 0 && args[0] == "build-linux" {
 		return a.buildLinuxShim(args[1:])
 	}
-	command, commandArgs, err := cmdproxy.DefaultRegistry().ResolveInvocation("hideout-shim", args)
+	command, commandArgs, err := cmdproxy.ResolveHostOpenInvocation("hideout-shim", args)
 	if err != nil {
 		return err
 	}
-	normalized, err := cmdproxy.DefaultRegistry().Normalize(command, commandArgs, mustGetwd())
+	normalized, err := cmdproxy.NormalizeHostOpenCommand(command, commandArgs, mustGetwd())
 	if err != nil {
 		return err
 	}

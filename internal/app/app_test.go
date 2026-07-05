@@ -1035,6 +1035,20 @@ func TestProfileCommandProxyCannotRemoveRequiredOpen(t *testing.T) {
 	}
 }
 
+func TestBuiltInShimAcceptsConfiguredHostOpenSymbols(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"shim", "browser-open"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("shim without target unexpectedly succeeded stdout=%s", out.String())
+	}
+	if strings.Contains(errOut.String(), "unsupported command proxy") {
+		t.Fatalf("built-in shim should not reject configured symbols through default registry: %s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "open target is required") {
+		t.Fatalf("built-in shim should normalize configured symbol as open-target-v1, got %s", errOut.String())
+	}
+}
+
 func TestProfileHomeImportCopiesUserSelectedIdentityFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

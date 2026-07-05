@@ -607,6 +607,10 @@ Required checks:
 
 - `open https://example.com` routes through Command Proxy to Host Broker with
   `route=host-broker`;
+- the installed `hideout-shim` binary and the built-in `hideout shim` command
+  normalize configured `open-target-v1` command symbols the same way; neither
+  entrypoint may hard-code only the default `open`/`xdg-open` symbols before the
+  broker's session command registry validates the request;
 - URL open uses an isolated browser profile and never the real browser profile;
 - `open http://127.0.0.1:<port>`, private ranges, CGNAT, benchmarking ranges,
   link-local, multicast, `.local`, `.localhost`, and known host gateway aliases
