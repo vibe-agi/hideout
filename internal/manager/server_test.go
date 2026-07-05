@@ -20,6 +20,7 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 	if err := store.Save(profile.Default("default")); err != nil {
 		t.Fatal(err)
 	}
+	now := time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	server, err := StartLocalServer(ctx, LocalServerOptions{
@@ -31,6 +32,7 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		},
 		Token: "ui_token",
 		TTL:   time.Minute,
+		Now:   func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("StartLocalServer: %v", err)
@@ -85,7 +87,11 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`environmentResult`,
 		`splitArgv`,
 		`freshnessLabel`,
+		`tokenExpiryLabel`,
+		`const uiTokenExpiresAt = "2026-07-05T00:01:00Z";`,
+		`tokenExpiresAt`,
 		`connected ·`,
+		`token expires`,
 		`panelRowLimit`,
 		`visibleEnvironmentsForPanel`,
 		`visibleSessionsForPanel`,

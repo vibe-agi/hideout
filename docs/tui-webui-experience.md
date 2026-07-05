@@ -178,6 +178,7 @@ Shows:
 Implemented smoke surface:
 
 - local refresh time;
+- UI token expiry time;
 - audit tail;
 - denied audit count;
 - recent denied audit list using Manager API `decision=deny` filtering;
@@ -217,6 +218,8 @@ Show:
 ## Security Rules
 
 - UI tokens are short-lived.
+- Browser UI renders the token expiry time as metadata so operators can
+  distinguish stale UI sessions from runtime failures.
 - Browser UI binds to localhost by default.
 - Browser UI responses use `Cache-Control: no-store`, `Referrer-Policy:
   no-referrer`, frame denial, and a restrictive CSP that permits the embedded

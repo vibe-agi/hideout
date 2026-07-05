@@ -83,7 +83,9 @@ func StartLocalServer(ctx context.Context, opts LocalServerOptions) (*LocalServe
 	mux.Handle("/api/v1/", api.Handler())
 	mux.Handle("/", originGuard{
 		AllowedOrigins: []string{baseURL},
-		Next:           http.HandlerFunc(serveUIRoot),
+		Next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serveUIRoot(w, r, expiresAt)
+		}),
 	})
 	server := &http.Server{Handler: hostGuard{
 		AllowedHosts: []string{ln.Addr().String()},
@@ -168,7 +170,7 @@ func validateLocalListenAddr(addr string) error {
 	return nil
 }
 
-func serveUIRoot(w http.ResponseWriter, r *http.Request) {
+func serveUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
 	setUIRootSecurityHeaders(w.Header())
 	if r.Method != http.MethodGet {
 		writeAPIMethodNotAllowed(w)
@@ -179,7 +181,7 @@ func serveUIRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(uiHTML))
+	_, _ = w.Write([]byte(renderUIHTML(expiresAt)))
 }
 
 func setUIRootSecurityHeaders(header http.Header) {
@@ -188,6 +190,10 @@ func setUIRootSecurityHeaders(header http.Header) {
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Frame-Options", "DENY")
 	header.Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+}
+
+func renderUIHTML(expiresAt time.Time) string {
+	return strings.ReplaceAll(uiHTML, uiExpiresAtPlaceholder, expiresAt.UTC().Format(time.RFC3339))
 }
 
 func (s *LocalServer) Close() error {
@@ -203,6 +209,8 @@ func (s *LocalServer) Wait() error {
 	}
 	return <-s.errc
 }
+
+const uiExpiresAtPlaceholder = "__HIDEOUT_UI_EXPIRES_AT__"
 
 const uiHTML = `<!doctype html>
 <html lang="en">
@@ -320,6 +328,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 <script>
 const params = new URLSearchParams(location.hash.slice(1));
 const token = params.get("token") || "";
+const uiTokenExpiresAt = "__HIDEOUT_UI_EXPIRES_AT__";
 if (token && window.history && history.replaceState) {
   history.replaceState(null, document.title, location.pathname + location.search);
 }
@@ -391,6 +400,12 @@ function deniedAuditEvents() {
 }
 function freshnessLabel() {
   return "updated " + new Date().toLocaleTimeString();
+}
+function tokenExpiryLabel() {
+  if (!uiTokenExpiresAt) return "";
+  const expires = new Date(uiTokenExpiresAt);
+  if (Number.isNaN(expires.getTime())) return "";
+  return "token expires " + expires.toLocaleTimeString();
 }
 function panelLimitNotice(label, visible, total) {
   if (visible >= total) return "";
@@ -600,7 +615,7 @@ const renderers = {
   },
   settings: function() {
     const s = overview.settings || {};
-    return '<div class="items">' + item("Settings", "local manager", [["storeRoot", s.storeRoot], ["apiVersion", "hideout.manager-api/v1"], ["uiToken", "short-lived fragment token"]], "ok") + "</div>";
+    return '<div class="items">' + item("Settings", "local manager", [["storeRoot", s.storeRoot], ["apiVersion", "hideout.manager-api/v1"], ["uiToken", "short-lived fragment token"], ["tokenExpiresAt", uiTokenExpiresAt]], "ok") + "</div>";
   }
 };
 function splitCSV(value) {
@@ -909,7 +924,8 @@ async function load() {
     renderSummary();
     renderPanel();
     renderAuditTail();
-    setStatus("connected · " + freshnessLabel(), "ok");
+    const expiry = tokenExpiryLabel();
+    setStatus("connected · " + freshnessLabel() + (expiry ? " · " + expiry : ""), "ok");
   } catch (error) {
     overview = {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
     auditEvents = [];
