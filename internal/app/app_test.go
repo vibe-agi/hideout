@@ -3479,8 +3479,17 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	sessionsDir := filepath.Join(store.Root, "sessions")
 	for i := 1; i <= 12; i++ {
 		sessionID := fmt.Sprintf("ses_20260704T0102%02dZ_%02d", i, i)
-		if err := os.MkdirAll(filepath.Join(sessionsDir, sessionID), 0o700); err != nil {
+		sessionDir := filepath.Join(sessionsDir, sessionID)
+		if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 			t.Fatalf("create session %s: %v", sessionID, err)
+		}
+		if i == 12 {
+			if err := os.WriteFile(filepath.Join(sessionDir, "audit.jsonl"), []byte("{}\n"), 0o600); err != nil {
+				t.Fatalf("write session audit: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(sessionDir, "tmp"), 0o700); err != nil {
+				t.Fatalf("create session runtime: %v", err)
+			}
 		}
 	}
 	var out, errOut bytes.Buffer
@@ -3510,6 +3519,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Sessions",
 		"showing newest 10 of 12",
 		"ses_20260704T010212Z_12",
+		"next: audit=hideout audit show --session ses_20260704T010212Z_12  cleanup-check=hideout cleanup --session ses_20260704T010212Z_12 --dry-run",
 		"Recent Denied Audit",
 		"Recent Audit",
 	} {

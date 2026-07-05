@@ -394,6 +394,13 @@ function visibleSessionsForPanel(sessions) {
   if (!Array.isArray(sessions) || sessions.length <= panelRowLimit) return sessions || [];
   return sessions.slice(sessions.length - panelRowLimit);
 }
+function sessionNextCommands(session) {
+  if (!session || !session.id) return [];
+  const commands = [];
+  if (session.hasAudit) commands.push("audit=hideout audit show --session " + session.id);
+  if (session.hasEphemeralState) commands.push("cleanup-check=hideout cleanup --session " + session.id + " --dry-run");
+  return commands;
+}
 function api(path) {
   return fetch("/api/v1/" + path, {headers: {"X-Hideout-UI-Token": token}}).then(async function(response) {
     const text = await response.text();
@@ -538,7 +545,7 @@ const renderers = {
     if (!sessions.length) return empty("No sessions");
     const visibleSessions = visibleSessionsForPanel(sessions);
     return panelLimitNotice("sessions", visibleSessions.length, sessions.length) + '<div class="items">' + visibleSessions.map(function(s) {
-      return item(s.id, s.profile || "session", [["backend", s.backend], ["networkMode", s.networkMode], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState]], s.hasProxySecretFile ? "warn" : "ok");
+      return item(s.id, s.profile || "session", [["backend", s.backend], ["networkMode", s.networkMode], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.hasProxySecretFile ? "warn" : "ok");
     }).join("") + "</div>";
   },
   capabilities: function() {

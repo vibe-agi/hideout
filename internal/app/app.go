@@ -3908,6 +3908,10 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	}
 	for _, s := range sessions {
 		fmt.Fprintf(w, "  - %s  audit=%t  network=%s  runtime=%t\n", dash(s.ID), s.HasAudit, dash(s.NetworkMode), s.HasEphemeralState)
+		next := sessionNextCommandsForTUI(s)
+		if len(next) > 0 {
+			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))
+		}
 	}
 
 	fmt.Fprintln(w, "\nRecent Denied Audit")
@@ -3939,6 +3943,20 @@ func visibleSessionsForTUI(sessions []manager.SessionSummary) []manager.SessionS
 		return sessions
 	}
 	return sessions[len(sessions)-tuiDashboardRowLimit:]
+}
+
+func sessionNextCommandsForTUI(s manager.SessionSummary) []string {
+	if s.ID == "" {
+		return nil
+	}
+	var out []string
+	if s.HasAudit {
+		out = append(out, "audit=hideout audit show --session "+s.ID)
+	}
+	if s.HasEphemeralState {
+		out = append(out, "cleanup-check=hideout cleanup --session "+s.ID+" --dry-run")
+	}
+	return out
 }
 
 func dash(value string) string {

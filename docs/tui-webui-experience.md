@@ -108,6 +108,7 @@ Implemented smoke surface shows:
 - recent active sessions;
 - recent reusable environments;
 - reusable environment lifecycle command hints;
+- session audit and runtime cleanup command hints;
 - recent denied audit events;
 - recent audit events.
 
@@ -149,6 +150,7 @@ Shows:
 - workspace;
 - audit path;
 - environment reuse.
+- audit and runtime cleanup command hints.
 
 ### Environments
 
@@ -179,6 +181,8 @@ Implemented smoke surface:
 - recent denied audit list using Manager API `decision=deny` filtering;
 - capped session and reusable environment panels so long dogfood histories do
   not dominate the page;
+- session audit and runtime cleanup command hints for entries that have audit or
+  ephemeral runtime state;
 - basic audit explorer filtering by session, profile, action, decision, and
   limit using the same redacted Manager API view as `hideout audit show`.
 
