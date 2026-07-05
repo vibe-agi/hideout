@@ -266,11 +266,11 @@ func TestDefaultProfileIncludesToolPreset(t *testing.T) {
 func TestDefaultProfileIncludesCommandProxyPolicy(t *testing.T) {
 	p := Default("test")
 	open := p.CommandProxy.Commands["open"]
-	if open.Route != "host-broker" || open.Action != "host.open" {
+	if open.Route != "host-broker" || open.Action != "host.open" || open.ArgvSchema != "open-target-v1" {
 		t.Fatalf("unexpected open command proxy: %+v", open)
 	}
 	xdgOpen := p.CommandProxy.Commands["xdg-open"]
-	if xdgOpen.Route != "host-broker" || xdgOpen.Action != "host.open" {
+	if xdgOpen.Route != "host-broker" || xdgOpen.Action != "host.open" || xdgOpen.ArgvSchema != "open-target-v1" {
 		t.Fatalf("unexpected xdg-open command proxy: %+v", xdgOpen)
 	}
 }
@@ -874,9 +874,14 @@ func TestValidateRejectsPolicyScriptPathsOutsidePolicyDir(t *testing.T) {
 func TestSchemaRejectsUnsupportedProfileShape(t *testing.T) {
 	schema := compileProfileSchema(t)
 	p := Default("test")
-	p.CommandProxy.Commands["shell"] = CommandProxyCommand{Route: "host-broker", Action: "host.open"}
+	p.CommandProxy.Commands["bad command"] = CommandProxyCommand{Route: "host-broker", Action: "host.open"}
 	if err := validateProfileWithSchema(schema, p); err == nil {
-		t.Fatal("expected schema to reject unsupported command proxy")
+		t.Fatal("expected schema to reject invalid command proxy name")
+	}
+	p = Default("test")
+	p.CommandProxy.Commands["browser-open"] = CommandProxyCommand{Route: "host-broker", Action: "host.open", ArgvSchema: "open-target-v1"}
+	if err := validateProfileWithSchema(schema, p); err != nil {
+		t.Fatalf("expected schema to accept configured host.open command proxy: %v", err)
 	}
 	p = Default("test")
 	p.Network.Mode = "tun2socks"
@@ -1108,14 +1113,41 @@ func TestValidateRejectsInvalidHostname(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsUnsupportedCommandProxy(t *testing.T) {
+func TestValidateAcceptsConfiguredHostOpenCommandProxyName(t *testing.T) {
+	p := Default("test")
+	p.CommandProxy.Commands["browser-open"] = CommandProxyCommand{
+		Route:      "host-broker",
+		Action:     "host.open",
+		ArgvSchema: "open-target-v1",
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("expected custom host.open command proxy to validate: %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidCommandProxyName(t *testing.T) {
+	for _, name := range []string{"bad name", "../open", `bad\open`, ".", "hideout-shim"} {
+		t.Run(name, func(t *testing.T) {
+			p := Default("test")
+			p.CommandProxy.Commands[name] = CommandProxyCommand{
+				Route:  "host-broker",
+				Action: "host.open",
+			}
+			if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "simple command name") {
+				t.Fatalf("expected invalid command proxy name failure, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnsupportedCommandProxyAction(t *testing.T) {
 	p := Default("test")
 	p.CommandProxy.Commands["shell"] = CommandProxyCommand{
 		Route:  "host-broker",
 		Action: "host.exec",
 	}
-	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported command proxy") {
-		t.Fatalf("expected unsupported command proxy failure, got %v", err)
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "action must be host.open") {
+		t.Fatalf("expected unsupported command proxy action failure, got %v", err)
 	}
 }
 
@@ -1127,6 +1159,18 @@ func TestValidateRejectsCommandProxyHostExec(t *testing.T) {
 	}
 	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "action must be host.open") {
 		t.Fatalf("expected host.open clamp failure, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedCommandProxyArgvSchema(t *testing.T) {
+	p := Default("test")
+	p.CommandProxy.Commands["open"] = CommandProxyCommand{
+		Route:      "host-broker",
+		Action:     "host.open",
+		ArgvSchema: "raw-argv",
+	}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "argvSchema must be open-target-v1") {
+		t.Fatalf("expected argv schema clamp failure, got %v", err)
 	}
 }
 

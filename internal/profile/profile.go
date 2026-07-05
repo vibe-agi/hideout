@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/secrets"
@@ -109,8 +110,9 @@ type CommandProxy struct {
 }
 
 type CommandProxyCommand struct {
-	Route  string `json:"route"`
-	Action string `json:"action"`
+	Route      string `json:"route"`
+	Action     string `json:"action"`
+	ArgvSchema string `json:"argvSchema,omitempty"`
 }
 
 type Policy struct {
@@ -232,12 +234,14 @@ func Default(name string) Profile {
 		CommandProxy: CommandProxy{
 			Commands: map[string]CommandProxyCommand{
 				"open": {
-					Route:  "host-broker",
-					Action: "host.open",
+					Route:      "host-broker",
+					Action:     "host.open",
+					ArgvSchema: "open-target-v1",
 				},
 				"xdg-open": {
-					Route:  "host-broker",
-					Action: "host.open",
+					Route:      "host-broker",
+					Action:     "host.open",
+					ArgvSchema: "open-target-v1",
 				},
 			},
 		},
@@ -954,10 +958,8 @@ func (p Profile) validateCommandProxy() error {
 		return errors.New("commandProxy.commands.open is required")
 	}
 	for name, command := range p.CommandProxy.Commands {
-		switch name {
-		case "open", "xdg-open":
-		default:
-			return fmt.Errorf("unsupported command proxy %q", name)
+		if err := validateCommandProxyName(name); err != nil {
+			return err
 		}
 		if command.Route != "host-broker" {
 			return fmt.Errorf("commandProxy.commands.%s.route must be host-broker", name)
@@ -965,6 +967,24 @@ func (p Profile) validateCommandProxy() error {
 		if command.Action != "host.open" {
 			return fmt.Errorf("commandProxy.commands.%s.action must be host.open", name)
 		}
+		switch command.ArgvSchema {
+		case "", "open-target-v1":
+		default:
+			return fmt.Errorf("commandProxy.commands.%s.argvSchema must be open-target-v1", name)
+		}
+	}
+	return nil
+}
+
+func validateCommandProxyName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("command proxy name is required")
+	}
+	if strings.TrimSpace(name) != name {
+		return fmt.Errorf("command proxy %q must not contain surrounding whitespace", name)
+	}
+	if name == "." || name == ".." || name == "hideout-shim" || strings.ContainsAny(name, `/\`) || strings.ContainsFunc(name, unicode.IsSpace) {
+		return fmt.Errorf("command proxy %q must be a simple command name", name)
 	}
 	return nil
 }

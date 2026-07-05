@@ -358,12 +358,18 @@
         "commands": {
           "type": "object",
           "required": ["open"],
-          "additionalProperties": false,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[^\\\\/\\s]+$",
+            "not": {
+              "enum": [".", "..", "hideout-shim"]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/hostOpenCommandProxy"
+          },
           "properties": {
             "open": {
-              "$ref": "#/$defs/hostOpenCommandProxy"
-            },
-            "xdg-open": {
               "$ref": "#/$defs/hostOpenCommandProxy"
             }
           }
@@ -655,6 +661,9 @@
         },
         "action": {
           "const": "host.open"
+        },
+        "argvSchema": {
+          "const": "open-target-v1"
         }
       },
       "additionalProperties": false

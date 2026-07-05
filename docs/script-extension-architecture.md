@@ -409,7 +409,7 @@ Current entrypoints:
 
 | Entrypoint | Phase | Owner | Adapter use |
 | --- | --- | --- | --- |
-| `decideCommand(ctx)` | Required Phase 1 | Policy Engine | Command Proxy decisions for registered commands such as `open` and `xdg-open`. |
+| `decideCommand(ctx)` | Required Phase 1 | Policy Engine | Command Proxy decisions for registered `host.open` command symbols such as the default `open` and `xdg-open`. |
 | `redactAudit(ctx)` | Required Phase 1 | Policy Engine | Presentation redaction for exported or viewed audit details. |
 
 Design-ready and Later entrypoints:

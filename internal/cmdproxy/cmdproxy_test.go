@@ -64,6 +64,12 @@ func TestNewRegistryRejectsAmbiguousRegistrations(t *testing.T) {
 		"dot alias": {
 			func() Registration { r := base; r.Aliases = []string{"."}; return r }(),
 		},
+		"reserved command": {
+			func() Registration { r := base; r.Name = "hideout-shim"; return r }(),
+		},
+		"reserved alias": {
+			func() Registration { r := base; r.Aliases = []string{"hideout-shim"}; return r }(),
+		},
 		"spaced command": {
 			func() Registration { r := base; r.Name = " open"; return r }(),
 		},
@@ -155,6 +161,33 @@ func TestNormalizeRejectsExtraOpenArgs(t *testing.T) {
 	}
 }
 
+func TestResolveHostOpenInvocationAcceptsConfiguredCommandSymbols(t *testing.T) {
+	command, args, err := ResolveHostOpenInvocation("/hideout/session/shims/browser-open", []string{"https://example.com"})
+	if err != nil {
+		t.Fatalf("ResolveHostOpenInvocation shim: %v", err)
+	}
+	if command != "browser-open" || !reflect.DeepEqual(args, []string{"https://example.com"}) {
+		t.Fatalf("shim command=%s args=%v", command, args)
+	}
+	command, args, err = ResolveHostOpenInvocation("hideout-shim", []string{"/hideout/session/shims/browser-open", "https://example.com"})
+	if err != nil {
+		t.Fatalf("ResolveHostOpenInvocation wrapper: %v", err)
+	}
+	if command != "browser-open" || !reflect.DeepEqual(args, []string{"https://example.com"}) {
+		t.Fatalf("wrapper command=%s args=%v", command, args)
+	}
+}
+
+func TestNormalizeHostOpenCommandKeepsCustomSubject(t *testing.T) {
+	req, err := NormalizeHostOpenCommand("browser-open", []string{"https://example.com"}, "/workspace")
+	if err != nil {
+		t.Fatalf("NormalizeHostOpenCommand: %v", err)
+	}
+	if req.Subject != "command:browser-open" || req.Command != "browser-open" || req.Action != ActionHostOpen {
+		t.Fatalf("unexpected custom host-open request: %+v", req)
+	}
+}
+
 func TestRegistryFromProfileUsesCommandProxyConfig(t *testing.T) {
 	p := profile.Default("test")
 	delete(p.CommandProxy.Commands, "xdg-open")
@@ -167,6 +200,29 @@ func TestRegistryFromProfileUsesCommandProxyConfig(t *testing.T) {
 	}
 	if _, ok := registry.Lookup("xdg-open"); ok {
 		t.Fatal("xdg-open should not be registered when profile omits it")
+	}
+}
+
+func TestRegistryFromProfileSupportsConfiguredHostOpenCommandName(t *testing.T) {
+	p := profile.Default("test")
+	p.CommandProxy.Commands["browser-open"] = profile.CommandProxyCommand{
+		Route:      RouteHostBroker,
+		Action:     ActionHostOpen,
+		ArgvSchema: ArgvSchemaOpenV1,
+	}
+	registry, err := RegistryFromProfile(p)
+	if err != nil {
+		t.Fatalf("RegistryFromProfile: %v", err)
+	}
+	if got := registry.ShimNames(); !reflect.DeepEqual(got, []string{"browser-open", "open", "xdg-open"}) {
+		t.Fatalf("ShimNames=%v", got)
+	}
+	req, err := registry.Normalize("browser-open", []string{"https://example.com"}, "/workspace")
+	if err != nil {
+		t.Fatalf("Normalize custom command: %v", err)
+	}
+	if req.Subject != "command:browser-open" || req.Action != ActionHostOpen || req.Payload["target"] != "https://example.com" {
+		t.Fatalf("unexpected normalized request: %+v", req)
 	}
 }
 

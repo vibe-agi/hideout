@@ -77,23 +77,31 @@ func RegistryFromProfile(p profile.Profile) (Registry, error) {
 	if _, ok := p.CommandProxy.Commands["open"]; !ok {
 		return Registry{}, errors.New("commandProxy.commands.open is required")
 	}
-	aliases := []string{}
+	registrations := make([]Registration, 0, len(p.CommandProxy.Commands))
 	for name, command := range p.CommandProxy.Commands {
-		switch name {
-		case "open":
-		case "xdg-open":
-			aliases = append(aliases, name)
-		default:
-			return Registry{}, fmt.Errorf("unsupported command proxy %q", name)
-		}
 		if command.Route != RouteHostBroker {
 			return Registry{}, fmt.Errorf("commandProxy.commands.%s.route must be %s", name, RouteHostBroker)
 		}
 		if command.Action != ActionHostOpen {
 			return Registry{}, fmt.Errorf("commandProxy.commands.%s.action must be %s", name, ActionHostOpen)
 		}
+		argvSchema := command.ArgvSchema
+		if argvSchema == "" {
+			argvSchema = ArgvSchemaOpenV1
+		}
+		if argvSchema != ArgvSchemaOpenV1 {
+			return Registry{}, fmt.Errorf("commandProxy.commands.%s.argvSchema must be %s", name, ArgvSchemaOpenV1)
+		}
+		registrations = append(registrations, Registration{
+			Name:           name,
+			Action:         ActionHostOpen,
+			ArgvSchema:     ArgvSchemaOpenV1,
+			StreamPolicy:   StreamMetadataOnly,
+			DefaultMode:    DefaultModeAllow,
+			AllowedTargets: []string{"url:http", "url:https", "workspace-file"},
+		})
 	}
-	return HostOpenRegistry(aliases)
+	return NewRegistry(registrations)
 }
 
 func NewRegistry(registrations []Registration) (Registry, error) {
@@ -145,6 +153,9 @@ func normalizeRegistryName(kind, name string) (string, error) {
 	clean := filepath.Base(name)
 	if clean != name || clean == "." || clean == ".." || clean == string(filepath.Separator) {
 		return "", fmt.Errorf("%s %q must be a simple command name", kind, name)
+	}
+	if clean == "hideout-shim" {
+		return "", fmt.Errorf("%s %q is reserved", kind, name)
 	}
 	return clean, nil
 }
@@ -215,35 +226,62 @@ func (r Registry) Normalize(command string, args []string, cwd string) (Request,
 	}
 	switch reg.ArgvSchema {
 	case ArgvSchemaOpenV1:
-		cwd, err := normalizeCWD(cwd)
-		if err != nil {
-			return Request{}, err
-		}
-		if len(args) < 1 {
-			return Request{}, errors.New("open target is required")
-		}
-		if len(args) != 1 {
-			return Request{}, errors.New("open expects exactly one target")
-		}
-		if strings.TrimSpace(args[0]) == "" {
-			return Request{}, errors.New("open target is required")
-		}
-		argv := append([]string{command}, args...)
-		return Request{
-			Subject: "command:" + command,
-			Command: command,
-			Argv:    argv,
-			CWD:     cwd,
-			Action:  reg.Action,
-			Route:   RouteHostBroker,
-			Payload: map[string]any{
-				"target": args[0],
-				"cwd":    cwd,
-			},
-		}, nil
+		return NormalizeHostOpenCommand(command, args, cwd)
 	default:
 		return Request{}, fmt.Errorf("unsupported argv schema %q for command proxy %q", reg.ArgvSchema, command)
 	}
+}
+
+func ResolveHostOpenInvocation(program string, args []string) (string, []string, error) {
+	command := filepath.Base(program)
+	if command == "hideout-shim" {
+		if len(args) == 0 {
+			return "", nil, errors.New("command proxy name is required")
+		}
+		commandName, err := normalizeRegistryName("command proxy", filepath.Base(args[0]))
+		if err != nil {
+			return "", nil, err
+		}
+		return commandName, args[1:], nil
+	}
+	commandName, err := normalizeRegistryName("command proxy", command)
+	if err != nil {
+		return "", nil, err
+	}
+	return commandName, args, nil
+}
+
+func NormalizeHostOpenCommand(command string, args []string, cwd string) (Request, error) {
+	command, err := normalizeRegistryName("command proxy", filepath.Base(command))
+	if err != nil {
+		return Request{}, err
+	}
+	cwd, err = normalizeCWD(cwd)
+	if err != nil {
+		return Request{}, err
+	}
+	if len(args) < 1 {
+		return Request{}, errors.New("open target is required")
+	}
+	if len(args) != 1 {
+		return Request{}, errors.New("open expects exactly one target")
+	}
+	if strings.TrimSpace(args[0]) == "" {
+		return Request{}, errors.New("open target is required")
+	}
+	argv := append([]string{command}, args...)
+	return Request{
+		Subject: "command:" + command,
+		Command: command,
+		Argv:    argv,
+		CWD:     cwd,
+		Action:  ActionHostOpen,
+		Route:   RouteHostBroker,
+		Payload: map[string]any{
+			"target": args[0],
+			"cwd":    cwd,
+		},
+	}, nil
 }
 
 func normalizeCWD(cwd string) (string, error) {

@@ -16,13 +16,12 @@ func main() {
 }
 
 func run() int {
-	registry := cmdproxy.DefaultRegistry()
-	command, args, err := registry.ResolveInvocation(filepath.Base(os.Args[0]), os.Args[1:])
+	command, args, err := cmdproxy.ResolveHostOpenInvocation(filepath.Base(os.Args[0]), os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
 		return 2
 	}
-	normalized, err := registry.Normalize(command, args, mustGetwd())
+	normalized, err := cmdproxy.NormalizeHostOpenCommand(command, args, mustGetwd())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
 		return 2

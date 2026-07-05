@@ -41,7 +41,7 @@ manifest.
 | Native backend | Implemented as a weak-isolation development harness only. It is not isolation evidence. |
 | Workspace guard | Implemented before backend prepare; rejects host home, Hideout store, credential roots, and browser profile roots unless explicitly overridden. |
 | Environment lifecycle | Reuse, list, stop, clean, environment locking, SIGINT/SIGTERM cancellation, and runtime cleanup are implemented. |
-| Command Proxy | Phase 1 product path implements `open` and `xdg-open` as registered shims for `host.open`. Generic binding/adapter outcomes are design-ready, not implemented as a general user-facing surface. |
+| Command Proxy | Phase 1 product path implements registered `host.open` command shims using the `open-target-v1` argv schema. Default profiles register `open` and `xdg-open`; profiles may add more host-open command symbols without adding new authority. Generic JS adapter outcomes are design-ready, not implemented as a general user-facing surface. |
 | Host open | `host.open` supports external HTTP(S) URLs and workspace-mapped files through a brokered opener, isolated browser profile, local/private URL deny, DNS rebind checks, audit, and Gate 4 coverage. |
 | HostFS Portal | Read-only `stat`, `read`, and `list` data plane is implemented for Linux guests through FUSE and broker RPC, with grants, reserved-store rejection, filtered list, and audit. |
 | HostFS write overlay | Later. |
@@ -59,7 +59,7 @@ manifest.
 
 | Area | Status |
 | --- | --- |
-| Generic Command Proxy bindings | Design-ready. Command names as binding keys, JS adapters, outcomes, provider descriptors, and bounded context queries are documented but not yet a general product path. |
+| Generic Command Proxy bindings | Partially implemented for configured `host.open` command symbols only. JS adapters, non-open outcomes, provider descriptors, and bounded context queries are documented but not yet a general product path. |
 | Command outcomes beyond `host.open` deny/allow | Design-ready. `simulate`, `rewrite-guest`, and generic `invoke-capability` must fail closed until implemented and gated. |
 | Provider descriptors | Design-ready. Provider engines must remain Go-owned; ecosystem descriptors require schema, validator, and trust UX before use. |
 | `endpoint.expose.guest-to-host` | Lab/separate design. Required before adb, browser DevTools, host service reachability, or similar workflows. |

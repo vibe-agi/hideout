@@ -342,7 +342,8 @@ Required Phase 1:
   becoming readable by the target process.
 - Network modes: `direct` and guest-side `tun2socks`.
 - Proxy credentials absent from target env and audit.
-- Command Proxy support for `open` and `xdg-open`, with both enabled in the
+- Command Proxy support for registered `host.open` command symbols using the
+  `open-target-v1` argv schema, with `open` and `xdg-open` enabled in the
   default profile.
 - Host Broker action `host.open` for URLs and mapped workspace files.
 - HostFS v1 read-only data plane for explicit `stat`, `read`, and `list` grants
@@ -441,7 +442,7 @@ Treat these as stable contracts.
 | Session | One command execution under one profile. | Owns session ID, workspace mapping, backend run, broker endpoint, shims, audit file, and explain snapshot. |
 | Backend | Execution substrate. | Starts Lima guest, mounts workspace and current identity runtime state, prepares tools, launches command, streams stdio. |
 | CapabilityPolicy | Canonical permission model. | Evaluates subject/action/resource/route/decision using JSON rules and optional scripts. |
-| CommandProxy | Guest-visible registered command shim system. | Normalizes explicitly registered commands. Phase 1 ships `open` and `xdg-open` for brokered `host.open`; other routes are protocol vocabulary unless named elsewhere as Required. |
+| CommandProxy | Guest-visible registered command shim system. | Normalizes explicitly registered commands. Phase 1 supports configured command symbols for brokered `host.open` using the `open-target-v1` argv schema; other routes are protocol vocabulary unless named elsewhere as Required. |
 | HostBroker | Host-side capability authority. | Executes approved host actions such as `host.open` after policy validation. |
 | HostFSPortal | Guest-visible filesystem portal for explicitly granted host paths. | Phase 1 implements the read-only `stat`, `read`, and `list` data plane for Linux guests through FUSE and broker RPC. It owns path grants, filesystem RPC, metadata filtering, reserved-store rejection, and audit for host paths outside the workspace. Write overlay, native host mount adapters, and Windows native adapter are Later. |
 | HostPathGrant | Explicit authority record for one host path scope. | Phase 1 implements read-only grants for `stat`, `read`, and `list`; write-class grants remain Later. |
@@ -2861,22 +2862,25 @@ Adapters may use these facts to implement their own risk policy. Core must still
 fail closed if a proposal uses a capability, provider, resource kind, route, or
 outcome that the binding did not allow.
 
-Phase 1 delivered command proxies:
+Phase 1 delivered command proxy route:
 
 ```text
-open      -> host.open
-xdg-open  -> host.open
+<configured command symbol> -> host-broker -> host.open
 ```
 
-The default profile enables both names. `open` is the canonical Phase 1 command
-proxy entry and must exist in a valid profile with `route=host-broker` and
-`action=host.open`. This is a registration and attribution requirement, not an
-authority grant. The host-open grant is controlled by
+The command name is a profile-owned binding key, not Core product semantics.
+Phase 1 accepts simple command names whose binding has `route=host-broker`,
+`action=host.open`, and `argvSchema=open-target-v1`. `open` is the canonical
+Phase 1 command proxy entry and must exist in a valid profile. This is a
+registration and attribution requirement, not an authority grant. The host-open
+grant is controlled by
 `hostCapabilities.open.allowUrls` and
 `hostCapabilities.open.allowWorkspaceFiles`. To disable all host open behavior,
 keep `commandProxy.commands.open` registered and set both allow flags to
-`false`. `xdg-open` is a supported alias that default profiles enable for Linux
-CLI compatibility; a profile may omit it to disable that shim. If a disabled
+`false`. `xdg-open` is a default registered command for Linux CLI compatibility;
+a profile may omit it to disable that shim. A profile may add other command
+symbols for open-like tools, but those symbols still normalize through the same
+`open-target-v1` schema and cannot select a new host authority. If a disabled
 shim binary is invoked directly, the broker must reject the request before any
 host opener runs.
 
@@ -2903,8 +2907,8 @@ guest shim command
 ```
 
 The protocol supports several routes so the model can grow without changing the
-envelope. Required Phase 1 implements only the `open`/`xdg-open` host-open path
-and deny handling. A profile, script, or broker request that selects an
+envelope. Required Phase 1 implements only the registered `host.open` command
+path and deny handling. A profile, script, or broker request that selects an
 unimplemented route fails closed.
 
 Adapter outcomes are policy-level results. Routes are the lower-level execution
@@ -2951,7 +2955,7 @@ deny
 Phase 1 requires only this registered host action route:
 
 ```text
-open, xdg-open -> host-broker -> host.open
+<configured command symbol> -> host-broker -> host.open
 ```
 
 `guest-direct`, `guest-exec`, `fake`, and `deny` are part of the canonical route
@@ -2961,7 +2965,7 @@ guest commands.
 Required Phase 1 route behavior:
 
 - `guest-direct` describes the top-level command and unproxied guest commands;
-- `host-broker` is implemented for `open` and `xdg-open`;
+- `host-broker` is implemented for configured `host.open` command symbols;
 - `deny` is implemented for invalid, disabled, unsupported, or policy-denied
   command proxy requests.
 
@@ -2987,8 +2991,8 @@ Key rules:
 - broker envelopes from Command Proxy include subject, command, argv, route,
   action, cwd, and normalized payload so audit can explain the host boundary
   crossing;
-- Phase 1 Command Proxy payload for `open` and `xdg-open` is limited to
-  `target` and optional `cwd`. Unknown payload fields fail closed;
+- Phase 1 Command Proxy payload for registered `host.open` command symbols is
+  limited to `target` and optional `cwd`. Unknown payload fields fail closed;
 - `cwd`, when present, must be an absolute guest path under the mapped
   workspace after cleaning. It must not be a URL, a host path outside the
   workspace, or an opaque string passed through to scripts or audit;
@@ -3661,11 +3665,13 @@ Representative profile:
     "commands": {
       "open": {
         "route": "host-broker",
-        "action": "host.open"
+        "action": "host.open",
+        "argvSchema": "open-target-v1"
       },
       "xdg-open": {
         "route": "host-broker",
-        "action": "host.open"
+        "action": "host.open",
+        "argvSchema": "open-target-v1"
       }
     }
   },
@@ -3699,7 +3705,9 @@ into canonical capability policy before any decision is made.
 `commandProxy.commands.open` is required so host-bound open attempts have a
 stable subject and audit path. It does not grant URL or workspace-file open by
 itself. `commandProxy.commands.xdg-open` is included in default profiles but may
-be omitted to disable that compatibility shim for a profile.
+be omitted to disable that compatibility shim for a profile. Additional
+Phase 1 command symbols may be declared only for the same
+`host-broker -> host.open` route with `argvSchema=open-target-v1`.
 
 `tools.presets` prepares reusable guest tool families such as base shell tools
 or a Node runtime. `tools.npmGlobals` is a user-owned declaration of npm package
