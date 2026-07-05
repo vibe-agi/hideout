@@ -607,6 +607,50 @@ func TestCorePlanAndApplyProfileEnvPolicy(t *testing.T) {
 	}
 }
 
+func TestCoreApplyProfileEnvSerializesConcurrentMutations(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	const workers = 16
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			name := fmt.Sprintf("SERVICE_TOKEN_%02d", i)
+			plan, err := core.PlanProfileEnv(ProfileEnvOptions{
+				ProfileName: "concurrent-env-profile",
+				Operation:   "set",
+				Name:        name,
+				Value:       fmt.Sprintf("secret-%02d", i),
+			})
+			if err == nil {
+				_, err = core.ApplyProfileEnv(plan)
+			}
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent ApplyProfileEnv: %v", err)
+	}
+	loaded, err := store.Load("concurrent-env-profile")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	for i := 0; i < workers; i++ {
+		name := fmt.Sprintf("SERVICE_TOKEN_%02d", i)
+		want := fmt.Sprintf("secret-%02d", i)
+		if got := loaded.Env.Public[name]; got != want {
+			t.Fatalf("env value %s=%q want %q; all values=%+v", name, got, want, loaded.Env.Public)
+		}
+	}
+}
+
 func TestCoreProfileEnvRejectsUnsafeOperations(t *testing.T) {
 	core := New(profile.Store{Root: t.TempDir()})
 	for _, tc := range []struct {

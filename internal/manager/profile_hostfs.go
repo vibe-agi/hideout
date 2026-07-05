@@ -131,48 +131,56 @@ func (c Core) ApplyProfileHostFS(plan ProfileHostFSPlan) (ProfileHostFSResult, e
 	if plan.Version != ProfileHostFSPlanVersion {
 		return ProfileHostFSResult{}, errors.New("invalid profile-hostfs plan version")
 	}
-	p, err := c.Store.LoadOrInit(plan.Profile)
+	var result ProfileHostFSResult
+	err := c.withProfileMutationLock(plan.Profile, func() error {
+		p, err := c.Store.LoadOrInit(plan.Profile)
+		if err != nil {
+			return err
+		}
+		switch plan.Operation {
+		case "add":
+			rule, err := ruleFromProfileHostFSPlan(plan, p.HostFS, false)
+			if err != nil {
+				return err
+			}
+			p.HostFS.Grants = append(p.HostFS.Grants, rule)
+		case "deny":
+			rule, err := ruleFromProfileHostFSPlan(plan, p.HostFS, true)
+			if err != nil {
+				return err
+			}
+			p.HostFS.Deny = append(p.HostFS.Deny, rule)
+		case "remove":
+			var removed *ProfileHostFSRuleSummary
+			p.HostFS.Grants, removed = removeProfileHostFSRule(p.HostFS.Grants, plan.RuleID, false)
+			if removed == nil {
+				p.HostFS.Deny, removed = removeProfileHostFSRule(p.HostFS.Deny, plan.RuleID, true)
+			}
+			if removed == nil {
+				return fmt.Errorf("profile HostFS rule %q not found", plan.RuleID)
+			}
+		default:
+			return fmt.Errorf("unsupported profile-hostfs operation %q", plan.Operation)
+		}
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if err := c.Store.Save(p); err != nil {
+			return err
+		}
+		result = ProfileHostFSResult{
+			Version: ProfileHostFSPlanVersion,
+			Plan:    plan,
+			Applied: plan.Changed,
+			Grants:  profileHostFSRuleSummaries(p.HostFS.Grants, false),
+			Deny:    profileHostFSRuleSummaries(p.HostFS.Deny, true),
+		}
+		return nil
+	})
 	if err != nil {
 		return ProfileHostFSResult{}, err
 	}
-	switch plan.Operation {
-	case "add":
-		rule, err := ruleFromProfileHostFSPlan(plan, p.HostFS, false)
-		if err != nil {
-			return ProfileHostFSResult{}, err
-		}
-		p.HostFS.Grants = append(p.HostFS.Grants, rule)
-	case "deny":
-		rule, err := ruleFromProfileHostFSPlan(plan, p.HostFS, true)
-		if err != nil {
-			return ProfileHostFSResult{}, err
-		}
-		p.HostFS.Deny = append(p.HostFS.Deny, rule)
-	case "remove":
-		var removed *ProfileHostFSRuleSummary
-		p.HostFS.Grants, removed = removeProfileHostFSRule(p.HostFS.Grants, plan.RuleID, false)
-		if removed == nil {
-			p.HostFS.Deny, removed = removeProfileHostFSRule(p.HostFS.Deny, plan.RuleID, true)
-		}
-		if removed == nil {
-			return ProfileHostFSResult{}, fmt.Errorf("profile HostFS rule %q not found", plan.RuleID)
-		}
-	default:
-		return ProfileHostFSResult{}, fmt.Errorf("unsupported profile-hostfs operation %q", plan.Operation)
-	}
-	if err := p.Validate(); err != nil {
-		return ProfileHostFSResult{}, err
-	}
-	if err := c.Store.Save(p); err != nil {
-		return ProfileHostFSResult{}, err
-	}
-	return ProfileHostFSResult{
-		Version: ProfileHostFSPlanVersion,
-		Plan:    plan,
-		Applied: plan.Changed,
-		Grants:  profileHostFSRuleSummaries(p.HostFS.Grants, false),
-		Deny:    profileHostFSRuleSummaries(p.HostFS.Deny, true),
-	}, nil
+	return result, nil
 }
 
 func planProfileHostFSRule(opts ProfileHostFSOptions, config hostfs.Config, deny bool) (hostfs.Rule, ProfileHostFSRuleSummary, error) {

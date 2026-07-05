@@ -89,6 +89,46 @@ func TestStoreSaveMaterializesProfile(t *testing.T) {
 	}
 }
 
+func TestStoreSaveAtomicallyReplacesProfileJSON(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	p := Default("atomic")
+	p.Env.Public = map[string]string{"FIRST": "one"}
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	p.Env.Public["SECOND"] = "two"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(store.ProfilePath("atomic"))
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	var decoded Profile
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("profile JSON is not valid after save: %v\n%s", err, data)
+	}
+	if decoded.Env.Public["FIRST"] != "one" || decoded.Env.Public["SECOND"] != "two" {
+		t.Fatalf("profile env not fully replaced: %+v", decoded.Env.Public)
+	}
+	info, err := os.Stat(store.ProfilePath("atomic"))
+	if err != nil {
+		t.Fatalf("stat profile: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("profile mode=%#o want 0600", got)
+	}
+	entries, err := os.ReadDir(store.ProfileDir("atomic"))
+	if err != nil {
+		t.Fatalf("read profile dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".profile.json.tmp-") {
+			t.Fatalf("atomic profile temp file was not cleaned up: %s", entry.Name())
+		}
+	}
+}
+
 func TestMaterializeIdentityStateRejectsInvalidHomeXDGMappings(t *testing.T) {
 	for _, tt := range []struct {
 		name      string

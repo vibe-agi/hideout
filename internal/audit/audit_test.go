@@ -1,12 +1,87 @@
 package audit
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+)
 
 func TestRedactStringURLSecrets(t *testing.T) {
 	got := RedactString("https://user:pass@example.com/path?token=abc&ok=1")
 	if got != "https://example.com/path?ok=1&token=REDACTED" {
 		t.Fatalf("unexpected redaction: %s", got)
 	}
+}
+
+func TestWriterSerializesConcurrentEmits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	w, err := NewFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const events = 64
+	var wg sync.WaitGroup
+	for i := 0; i < events; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := w.Emit(Event{
+				Session:  "ses_concurrent",
+				Profile:  "default",
+				Backend:  "native",
+				Action:   "host.open",
+				Decision: "allow",
+				Details:  map[string]any{"target": "https://example.com/?token=secret"},
+			}); err != nil {
+				t.Errorf("Emit: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := 0
+	for _, line := range splitNonEmptyLines(string(data)) {
+		lines++
+		var event Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("invalid JSONL line %d: %v\n%s", lines, err, line)
+		}
+		if event.Details["target"] != "https://example.com/?token=REDACTED" {
+			t.Fatalf("event was not redacted: %+v", event.Details)
+		}
+	}
+	if lines != events {
+		t.Fatalf("lines=%d want %d\n%s", lines, events, data)
+	}
+	if err := w.Emit(Event{Action: "after.close"}); err == nil {
+		t.Fatalf("Emit after Close should fail")
+	}
+}
+
+func splitNonEmptyLines(s string) []string {
+	var out []string
+	start := 0
+	for i, ch := range s {
+		if ch != '\n' {
+			continue
+		}
+		if start < i {
+			out = append(out, s[start:i])
+		}
+		start = i + 1
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
 }
 
 func TestRedactStringURLSubstringAndAssignments(t *testing.T) {

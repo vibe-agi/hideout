@@ -68,6 +68,11 @@ func TestValidateRejectsUnsafeOrUnimplementedPortBridgeShapes(t *testing.T) {
 			want: "loopback",
 		},
 		{
+			name: "empty host listen",
+			spec: Spec{Direction: DirectionGuestToHost, ListenAddress: ":0", TargetAddress: "127.0.0.1:1"},
+			want: "explicit localhost",
+		},
+		{
 			name: "wildcard target",
 			spec: Spec{Direction: DirectionHostToGuest, ListenAddress: "127.0.0.1:0", TargetAddress: "0.0.0.0:1"},
 			want: "explicit host",

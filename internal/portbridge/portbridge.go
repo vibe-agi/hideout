@@ -117,6 +117,9 @@ func Validate(spec Spec) error {
 	if err != nil {
 		return fmt.Errorf("port bridge listen address is invalid: %w", err)
 	}
+	if isUnspecifiedHost(listenHost) {
+		return errors.New("loopback port bridge must listen on an explicit localhost or loopback IP")
+	}
 	if !isLoopbackHost(listenHost) {
 		return errors.New("loopback port bridge must listen on localhost or a loopback IP")
 	}
@@ -262,7 +265,7 @@ func directTCPConnector(targetAddress string) Connector {
 
 func isLoopbackHost(host string) bool {
 	host = strings.Trim(strings.ToLower(host), "[]")
-	if host == "" || host == "localhost" {
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)

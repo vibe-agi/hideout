@@ -36,6 +36,24 @@ func (r *recordingOpener) OpenFile(_ context.Context, target string) error {
 	return nil
 }
 
+type blockingOpener struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b blockingOpener) OpenURL(context.Context, string) error {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-b.release
+	return nil
+}
+
+func (b blockingOpener) OpenFile(context.Context, string) error {
+	return errors.New("unexpected file open")
+}
+
 type failingOpener struct {
 	urlErr  error
 	fileErr error
@@ -3366,6 +3384,71 @@ func TestTCPClientOpenEndpoint(t *testing.T) {
 	}
 	if len(opener.urls) != 1 || opener.urls[0] != "https://example.com" {
 		t.Fatalf("opener did not see URL: %+v", opener.urls)
+	}
+}
+
+func TestServerCloseWaitsForInFlightHandlers(t *testing.T) {
+	opener := blockingOpener{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	server := &Server{
+		SessionID: "ses_tcp",
+		Token:     "cap_good",
+		Profile:   "test",
+		Backend:   "native",
+		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Opener:    opener,
+		Audit:     audit.NewDiscard(),
+	}
+	if err := server.StartEndpoint(ctx, TCPEndpoint("127.0.0.1:0")); err != nil {
+		t.Fatalf("start tcp broker: %v", err)
+	}
+	responseDone := make(chan Response, 1)
+	go func() {
+		reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer reqCancel()
+		responseDone <- ClientOpenEndpoint(reqCtx, server.Endpoint, Request{
+			ID:              "req_close_wait",
+			SessionID:       "ses_tcp",
+			CapabilityToken: "cap_good",
+			Route:           "host-broker",
+			Action:          "host.open",
+			Args:            map[string]any{"target": "https://example.com"},
+		})
+	}()
+	select {
+	case <-opener.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not enter opener")
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- server.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before in-flight handler completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(opener.release)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after handler completed")
+	}
+	select {
+	case resp := <-responseDone:
+		if resp.ExitCode != 0 {
+			t.Fatalf("expected in-flight request to finish before close, got %+v", resp)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not receive response")
 	}
 }
 

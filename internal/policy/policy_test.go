@@ -551,6 +551,40 @@ func TestEvaluateOpenAllowsResolvedPublicHost(t *testing.T) {
 	}
 }
 
+func TestEvaluateOpenReResolvesHostEachEvaluation(t *testing.T) {
+	e := NewEvaluator(profile.Default("test"))
+	var calls int
+	e.ResolveHost = func(host string) ([]netip.Addr, error) {
+		if host != "app.attacker.example" {
+			t.Fatalf("unexpected resolve host %q", host)
+		}
+		calls++
+		if calls == 1 {
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+
+	first, err := e.EvaluateOpen("https://app.attacker.example/path")
+	if err != nil {
+		t.Fatalf("first EvaluateOpen: %v", err)
+	}
+	if first.Decision != Allow || first.Route != HostBroker {
+		t.Fatalf("expected first public resolution to allow, got %+v", first)
+	}
+
+	second, err := e.EvaluateOpen("https://app.attacker.example/path")
+	if err != nil {
+		t.Fatalf("second EvaluateOpen: %v", err)
+	}
+	if second.Decision != Deny || second.Route != DenyRoute {
+		t.Fatalf("expected second loopback resolution to deny, got %+v", second)
+	}
+	if calls != 2 {
+		t.Fatalf("host should be resolved for every evaluation, calls=%d", calls)
+	}
+}
+
 func TestEvaluateOpenDoesNotResolvePublicIPLiteral(t *testing.T) {
 	e := NewEvaluator(profile.Default("test"))
 	e.ResolveHost = func(host string) ([]netip.Addr, error) {

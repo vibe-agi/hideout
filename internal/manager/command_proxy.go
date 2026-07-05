@@ -115,46 +115,55 @@ func (c Core) ApplyCommandProxy(plan CommandProxyPlan) (CommandProxyResult, erro
 	if plan.Version != CommandProxyPlanVersion {
 		return CommandProxyResult{}, errors.New("invalid command-proxy plan version")
 	}
-	checked, err := c.PlanCommandProxy(CommandProxyOptions{
-		ProfileName: plan.Profile,
-		Operation:   plan.Operation,
-		Command:     plan.Command,
+	var result CommandProxyResult
+	err := c.withProfileMutationLock(plan.Profile, func() error {
+		checked, err := c.PlanCommandProxy(CommandProxyOptions{
+			ProfileName: plan.Profile,
+			Operation:   plan.Operation,
+			Command:     plan.Command,
+		})
+		if err != nil {
+			return err
+		}
+		if !checked.Changed {
+			result = CommandProxyResult{
+				Version:  CommandProxyPlanVersion,
+				Plan:     checked,
+				Applied:  false,
+				Commands: checked.CommandsAfter,
+			}
+			return nil
+		}
+		p, err := c.Store.LoadOrInit(checked.Profile)
+		if err != nil {
+			return err
+		}
+		if p.CommandProxy.Commands == nil {
+			p.CommandProxy.Commands = map[string]profile.CommandProxyCommand{}
+		}
+		switch checked.Operation {
+		case "add-open":
+			p.CommandProxy.Commands[checked.Command] = hostOpenCommandProxyCommand()
+		case "remove":
+			delete(p.CommandProxy.Commands, checked.Command)
+		default:
+			return fmt.Errorf("unsupported command-proxy operation %q", checked.Operation)
+		}
+		if err := c.Store.Save(p); err != nil {
+			return err
+		}
+		result = CommandProxyResult{
+			Version:  CommandProxyPlanVersion,
+			Plan:     checked,
+			Applied:  checked.Changed,
+			Commands: checked.CommandsAfter,
+		}
+		return nil
 	})
 	if err != nil {
 		return CommandProxyResult{}, err
 	}
-	if !checked.Changed {
-		return CommandProxyResult{
-			Version:  CommandProxyPlanVersion,
-			Plan:     checked,
-			Applied:  false,
-			Commands: checked.CommandsAfter,
-		}, nil
-	}
-	p, err := c.Store.LoadOrInit(checked.Profile)
-	if err != nil {
-		return CommandProxyResult{}, err
-	}
-	if p.CommandProxy.Commands == nil {
-		p.CommandProxy.Commands = map[string]profile.CommandProxyCommand{}
-	}
-	switch checked.Operation {
-	case "add-open":
-		p.CommandProxy.Commands[checked.Command] = hostOpenCommandProxyCommand()
-	case "remove":
-		delete(p.CommandProxy.Commands, checked.Command)
-	default:
-		return CommandProxyResult{}, fmt.Errorf("unsupported command-proxy operation %q", checked.Operation)
-	}
-	if err := c.Store.Save(p); err != nil {
-		return CommandProxyResult{}, err
-	}
-	return CommandProxyResult{
-		Version:  CommandProxyPlanVersion,
-		Plan:     checked,
-		Applied:  checked.Changed,
-		Commands: checked.CommandsAfter,
-	}, nil
+	return result, nil
 }
 
 func hostOpenCommandProxyCommand() profile.CommandProxyCommand {

@@ -2,11 +2,13 @@ package audit
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,8 +35,10 @@ type Event struct {
 }
 
 type Writer struct {
+	mu     sync.Mutex
 	enc    *json.Encoder
 	closer io.Closer
+	closed bool
 }
 
 func NewFile(path string) (*Writer, error) {
@@ -54,10 +58,21 @@ func (w *Writer) Emit(e Event) error {
 		e.Time = time.Now().UTC()
 	}
 	e.Details = RedactDetails(e.Details)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return errors.New("audit writer is closed")
+	}
 	return w.enc.Encode(e)
 }
 
 func (w *Writer) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closed = true
 	if w.closer == nil {
 		return nil
 	}

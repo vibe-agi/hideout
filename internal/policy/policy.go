@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -292,27 +291,15 @@ func addrInAnyPrefix(addr netip.Addr, prefixes []netip.Prefix) bool {
 	return false
 }
 
-type resolveCacheEntry struct {
-	addrs []netip.Addr
-}
-
-var resolveHostCache sync.Map
-
 func defaultResolveHost(host string) ([]netip.Addr, error) {
 	normalized := normalizeBrowserHost(host)
-	if cached, ok := resolveHostCache.Load(normalized); ok {
-		entry := cached.(resolveCacheEntry)
-		return cloneResolvedAddrs(entry.addrs), nil
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", normalized)
 	if err != nil {
 		return nil, err
 	}
-	entry := resolveCacheEntry{addrs: cloneResolvedAddrs(addrs)}
-	resolveHostCache.Store(normalized, entry)
-	return cloneResolvedAddrs(entry.addrs), nil
+	return cloneResolvedAddrs(addrs), nil
 }
 
 func cloneResolvedAddrs(addrs []netip.Addr) []netip.Addr {

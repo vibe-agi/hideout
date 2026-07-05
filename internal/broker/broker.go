@@ -137,6 +137,9 @@ type Server struct {
 
 	listener net.Listener
 	once     sync.Once
+	mu       sync.Mutex
+	closed   bool
+	handlers sync.WaitGroup
 }
 
 func NewToken() (string, error) {
@@ -198,15 +201,19 @@ func (s *Server) StartEndpoint(ctx context.Context, endpoint Endpoint) error {
 func (s *Server) Close() error {
 	var err error
 	s.once.Do(func() {
+		s.mu.Lock()
+		s.closed = true
 		if s.listener != nil {
 			err = s.listener.Close()
 		}
+		s.mu.Unlock()
 		if s.Endpoint.Network == EndpointUnix && s.Endpoint.Address != "" {
 			_ = os.Remove(s.Endpoint.Address)
 		} else if s.Socket != "" {
 			_ = os.Remove(s.Socket)
 		}
 	})
+	s.handlers.Wait()
 	return err
 }
 
@@ -216,7 +223,18 @@ func (s *Server) serve() {
 		if err != nil {
 			return
 		}
-		go s.handle(conn)
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		s.handlers.Add(1)
+		s.mu.Unlock()
+		go func() {
+			defer s.handlers.Done()
+			s.handle(conn)
+		}()
 	}
 }
 

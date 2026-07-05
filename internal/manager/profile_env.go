@@ -188,49 +188,57 @@ func (c Core) ApplyProfileEnv(plan ProfileEnvPlan) (ProfileEnvResult, error) {
 			Deny:    append([]string(nil), plan.DenyAfter...),
 		}, nil
 	}
-	p, err := c.Store.LoadOrInit(plan.Profile)
+	var result ProfileEnvResult
+	err := c.withProfileMutationLock(plan.Profile, func() error {
+		p, err := c.Store.LoadOrInit(plan.Profile)
+		if err != nil {
+			return err
+		}
+		switch plan.Operation {
+		case "set":
+			if plan.Name == "" {
+				return errors.New("env name is required")
+			}
+			if !plan.ValueProvided {
+				return errors.New("env value is required")
+			}
+			if p.Env.Public == nil {
+				p.Env.Public = map[string]string{}
+			}
+			p.Env.Public[plan.Name] = plan.value
+		case "unset":
+			delete(p.Env.Public, plan.Name)
+		case "inherit":
+			p.Env.Inherit = appendStringIfMissing(p.Env.Inherit, plan.Name)
+		case "uninherit":
+			p.Env.Inherit = removeStringForManager(p.Env.Inherit, plan.Name)
+		case "deny":
+			p.Env.Deny = appendStringIfMissing(p.Env.Deny, plan.Name)
+		case "undeny":
+			p.Env.Deny = removeStringForManager(p.Env.Deny, plan.Name)
+		default:
+			return fmt.Errorf("unsupported profile-env operation %q", plan.Operation)
+		}
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if err := c.Store.Save(p); err != nil {
+			return err
+		}
+		result = ProfileEnvResult{
+			Version: ProfileEnvPlanVersion,
+			Plan:    plan,
+			Applied: plan.Changed,
+			Public:  sortedProfileEnvPublicKeys(p.Env.Public),
+			Inherit: sortedStringsForManager(p.Env.Inherit),
+			Deny:    sortedStringsForManager(p.Env.Deny),
+		}
+		return nil
+	})
 	if err != nil {
 		return ProfileEnvResult{}, err
 	}
-	switch plan.Operation {
-	case "set":
-		if plan.Name == "" {
-			return ProfileEnvResult{}, errors.New("env name is required")
-		}
-		if !plan.ValueProvided {
-			return ProfileEnvResult{}, errors.New("env value is required")
-		}
-		if p.Env.Public == nil {
-			p.Env.Public = map[string]string{}
-		}
-		p.Env.Public[plan.Name] = plan.value
-	case "unset":
-		delete(p.Env.Public, plan.Name)
-	case "inherit":
-		p.Env.Inherit = appendStringIfMissing(p.Env.Inherit, plan.Name)
-	case "uninherit":
-		p.Env.Inherit = removeStringForManager(p.Env.Inherit, plan.Name)
-	case "deny":
-		p.Env.Deny = appendStringIfMissing(p.Env.Deny, plan.Name)
-	case "undeny":
-		p.Env.Deny = removeStringForManager(p.Env.Deny, plan.Name)
-	default:
-		return ProfileEnvResult{}, fmt.Errorf("unsupported profile-env operation %q", plan.Operation)
-	}
-	if err := p.Validate(); err != nil {
-		return ProfileEnvResult{}, err
-	}
-	if err := c.Store.Save(p); err != nil {
-		return ProfileEnvResult{}, err
-	}
-	return ProfileEnvResult{
-		Version: ProfileEnvPlanVersion,
-		Plan:    plan,
-		Applied: plan.Changed,
-		Public:  sortedProfileEnvPublicKeys(p.Env.Public),
-		Inherit: sortedStringsForManager(p.Env.Inherit),
-		Deny:    sortedStringsForManager(p.Env.Deny),
-	}, nil
+	return result, nil
 }
 
 func sortedProfileEnvPublicKeys(values map[string]string) []string {
