@@ -448,12 +448,6 @@ func (s *Server) validateBrokerRequestEnvelope(req Request) (string, error) {
 	if strings.TrimSpace(req.ID) == "" {
 		return "", errors.New("broker request id is required")
 	}
-	if req.Subject != "" && req.Subject != "command:open" && req.Subject != "command:xdg-open" {
-		return "", fmt.Errorf("broker request subject %q is not registered", req.Subject)
-	}
-	if req.Command != "" && req.Command != "open" && req.Command != "xdg-open" {
-		return "", fmt.Errorf("broker request command %q is not registered", req.Command)
-	}
 	if err := s.validateRegisteredCommand(req); err != nil {
 		return "", err
 	}
@@ -565,7 +559,7 @@ func (s *Server) validateRegisteredCommand(req Request) error {
 }
 
 func validateOpenCommandArgv(req Request, target string) error {
-	if req.Command != "open" && req.Command != "xdg-open" {
+	if req.Command == "" {
 		return nil
 	}
 	if len(req.Argv) != 2 {

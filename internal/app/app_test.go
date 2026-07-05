@@ -913,6 +913,128 @@ func TestProfileEnvManagePolicy(t *testing.T) {
 	}
 }
 
+func TestProfileCommandProxyManageHostOpenSymbols(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "command-proxy", "default", "add-open", "browser-open"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-proxy add-open exit=%d stderr=%s", code, errOut.String())
+	}
+	var added struct {
+		Profile    string `json:"profile"`
+		Command    string `json:"command"`
+		Route      string `json:"route"`
+		Action     string `json:"action"`
+		ArgvSchema string `json:"argvSchema"`
+		Added      bool   `json:"added"`
+		Updated    bool   `json:"updated"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &added); err != nil {
+		t.Fatalf("decode command-proxy add output: %v\n%s", err, out.String())
+	}
+	if added.Profile != "default" || added.Command != "browser-open" || added.Route != "host-broker" ||
+		added.Action != "host.open" || added.ArgvSchema != "open-target-v1" || !added.Added || added.Updated {
+		t.Fatalf("unexpected command-proxy add output: %+v", added)
+	}
+	loaded, err := store.Load("default")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	if loaded.CommandProxy.Commands["browser-open"].Action != "host.open" {
+		t.Fatalf("configured command proxy was not persisted: %+v", loaded.CommandProxy.Commands)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-proxy", "default", "list"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-proxy list exit=%d stderr=%s", code, errOut.String())
+	}
+	var listed struct {
+		Profile  string `json:"profile"`
+		Commands []struct {
+			Name       string `json:"name"`
+			Route      string `json:"route"`
+			Action     string `json:"action"`
+			ArgvSchema string `json:"argvSchema"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &listed); err != nil {
+		t.Fatalf("decode command-proxy list output: %v\n%s", err, out.String())
+	}
+	var names []string
+	for _, command := range listed.Commands {
+		names = append(names, command.Name)
+		if command.Name == "browser-open" &&
+			(command.Route != "host-broker" || command.Action != "host.open" || command.ArgvSchema != "open-target-v1") {
+			t.Fatalf("custom command proxy has wrong details: %+v", command)
+		}
+	}
+	if listed.Profile != "default" || !slices.Contains(names, "open") || !slices.Contains(names, "xdg-open") || !slices.Contains(names, "browser-open") {
+		t.Fatalf("unexpected command-proxy list: %+v", listed)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-proxy", "default", "remove", "browser-open"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-proxy remove exit=%d stderr=%s", code, errOut.String())
+	}
+	var removed struct {
+		Profile string `json:"profile"`
+		Command string `json:"command"`
+		Removed bool   `json:"removed"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &removed); err != nil {
+		t.Fatalf("decode command-proxy remove output: %v\n%s", err, out.String())
+	}
+	if removed.Profile != "default" || removed.Command != "browser-open" || !removed.Removed {
+		t.Fatalf("unexpected command-proxy remove output: %+v", removed)
+	}
+	loaded, err = store.Load("default")
+	if err != nil {
+		t.Fatalf("reload profile: %v", err)
+	}
+	if _, ok := loaded.CommandProxy.Commands["browser-open"]; ok {
+		t.Fatalf("command proxy was not removed: %+v", loaded.CommandProxy.Commands)
+	}
+	if _, ok := loaded.CommandProxy.Commands["open"]; !ok {
+		t.Fatalf("required open command proxy was removed: %+v", loaded.CommandProxy.Commands)
+	}
+}
+
+func TestProfileCommandProxyRejectsInvalidCommandWithoutCreatingProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "command-proxy", "default", "add-open", "bad/name"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("invalid command proxy unexpectedly succeeded stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "must be a simple command name") {
+		t.Fatalf("invalid command proxy error should come from profile validation, got %s", errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("invalid command-proxy add should not create profile state; err=%v", err)
+	}
+}
+
+func TestProfileCommandProxyCannotRemoveRequiredOpen(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "command-proxy", "default", "remove", "open"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("removing required open unexpectedly succeeded stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "open is required") {
+		t.Fatalf("remove open error should explain required command, got %s", errOut.String())
+	}
+}
+
 func TestProfileHomeImportCopiesUserSelectedIdentityFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -4982,6 +5104,55 @@ func TestRunNativeRejectsDisabledCommandProxyShim(t *testing.T) {
 	} {
 		if !strings.Contains(string(auditData), want) {
 			t.Fatalf("audit missing %q: %s", want, auditData)
+		}
+	}
+}
+
+func TestRunNativeUsesProfileCommandProxyManagedSymbol(t *testing.T) {
+	shimPath := buildShim(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HIDEOUT_SHIM_PATH", shimPath)
+	t.Setenv("HIDEOUT_OPEN_DRY_RUN", "1")
+
+	var profileOut, profileErr bytes.Buffer
+	if code := Main([]string{"profile", "command-proxy", "custom-open", "add-open", "browser-open"}, &profileOut, &profileErr); code != 0 {
+		t.Fatalf("command-proxy add-open exit=%d stderr=%s", code, profileErr.String())
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"run",
+		"--profile", "custom-open",
+		"--backend", "native",
+		"--allow-weak-isolation",
+		"--",
+		"sh", "-c", `"$1" browser-open https://example.com/configured`, "hideout-shim-test", shimPath,
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("glob audit files: %v", err)
+	}
+	if len(auditFiles) != 1 {
+		t.Fatalf("expected one audit file, got %d: %v", len(auditFiles), auditFiles)
+	}
+	validateAuditJSONLWithSchema(t, auditFiles[0])
+	auditData, err := os.ReadFile(auditFiles[0])
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	for _, want := range []string{
+		`"action":"host.open"`,
+		`"decision":"allow"`,
+		`"subject":"command:browser-open"`,
+		`"command":"browser-open"`,
+		`"argv":["browser-open","https://example.com/configured"]`,
+	} {
+		if !strings.Contains(string(auditData), want) {
+			t.Fatalf("audit missing configured command proxy metadata %q: %s", want, auditData)
 		}
 	}
 }

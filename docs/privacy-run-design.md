@@ -2884,6 +2884,22 @@ symbols for open-like tools, but those symbols still normalize through the same
 shim binary is invoked directly, the broker must reject the request before any
 host opener runs.
 
+Durable Phase 1 command-proxy profile management:
+
+```sh
+hideout profile command-proxy default list
+hideout profile command-proxy default add-open browser-open
+hideout profile command-proxy default remove browser-open
+```
+
+`profile command-proxy add-open` is a thin editor for
+`profile.commandProxy.commands.<name>`. It always writes
+`route=host-broker`, `action=host.open`, and `argvSchema=open-target-v1`.
+The profile schema, shim materialization, broker registered-command list, and
+runtime validator all consume the same profile state. This command does not
+create host app providers, raw host command execution, or product-specific
+semantics for the command name.
+
 Normal commands run inside the guest boundary by default:
 
 ```text

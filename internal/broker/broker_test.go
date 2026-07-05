@@ -1474,6 +1474,34 @@ func TestHandleRejectsCommandProxyWithoutRegisteredCommands(t *testing.T) {
 	}
 }
 
+func TestHandleAcceptsRegisteredCustomCommandProxy(t *testing.T) {
+	opener := &recordingOpener{}
+	server := Server{
+		SessionID: "ses_1",
+		Token:     "cap_good",
+		Commands:  []string{"open", "browser-open"},
+		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Opener:    opener,
+	}
+	resp := server.Handle(context.Background(), Request{
+		ID:              "req_1",
+		SessionID:       "ses_1",
+		CapabilityToken: "cap_good",
+		Subject:         "command:browser-open",
+		Command:         "browser-open",
+		Argv:            []string{"browser-open", "https://example.com"},
+		Route:           "host-broker",
+		Action:          "host.open",
+		Args:            map[string]any{"target": "https://example.com"},
+	})
+	if resp.ExitCode != 0 || resp.Decision != "allow" {
+		t.Fatalf("expected registered custom command to be allowed, got %+v", resp)
+	}
+	if len(opener.urls) != 1 || opener.urls[0] != "https://example.com" {
+		t.Fatalf("registered custom command did not reach opener: urls=%v files=%v", opener.urls, opener.files)
+	}
+}
+
 func TestHandleRejectsMissingCommandMetadataWhenRegistryConfigured(t *testing.T) {
 	for name, tc := range map[string]struct {
 		req     Request

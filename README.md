@@ -220,6 +220,16 @@ HostFS.
 Registered host escapes are typed and audited. `host.open` does not allow raw
 host localhost/private URL access.
 
+Profiles can register additional open-like command symbols without adding new
+host authority. They still use the same `host.open` policy and `open-target-v1`
+argv schema:
+
+```bash
+hideout profile command-proxy default add-open browser-open
+hideout profile command-proxy default list
+hideout profile command-proxy default remove browser-open
+```
+
 To expose a guest dev server to the host browser:
 
 ```bash

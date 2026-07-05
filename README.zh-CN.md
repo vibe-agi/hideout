@@ -212,6 +212,15 @@ Hideout store 是保留的 control-plane 状态，不能通过 HostFS grant 暴�
 注册过的主机逃逸是类型化且可审计的。`host.open` 不允许原始的 host
 localhost/private URL 访问。
 
+profile 可以注册额外的 open-like 命令符号，但不会增加新的主机权威。
+这些符号仍然走同一套 `host.open` 策略和 `open-target-v1` argv schema：
+
+```bash
+hideout profile command-proxy default add-open browser-open
+hideout profile command-proxy default list
+hideout profile command-proxy default remove browser-open
+```
+
 把 guest dev server 暴露给主机浏览器：
 
 ```bash

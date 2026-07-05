@@ -41,7 +41,7 @@ manifest.
 | Native backend | Implemented as a weak-isolation development harness only. It is not isolation evidence. |
 | Workspace guard | Implemented before backend prepare; rejects host home, Hideout store, credential roots, and browser profile roots unless explicitly overridden. |
 | Environment lifecycle | Reuse, list, stop, clean, environment locking, SIGINT/SIGTERM cancellation, and runtime cleanup are implemented. |
-| Command Proxy | Phase 1 product path implements registered `host.open` command shims using the `open-target-v1` argv schema. Default profiles register `open` and `xdg-open`; profiles may add more host-open command symbols without adding new authority. Generic JS adapter outcomes are design-ready, not implemented as a general user-facing surface. |
+| Command Proxy | Phase 1 product path implements registered `host.open` command shims using the `open-target-v1` argv schema. Default profiles register `open` and `xdg-open`; profiles may add more host-open command symbols through `profile command-proxy add-open` without adding new authority. Generic JS adapter outcomes are design-ready, not implemented as a general user-facing surface. |
 | Host open | `host.open` supports external HTTP(S) URLs and workspace-mapped files through a brokered opener, isolated browser profile, local/private URL deny, DNS rebind checks, audit, and Gate 4 coverage. |
 | HostFS Portal | Read-only `stat`, `read`, and `list` data plane is implemented for Linux guests through FUSE and broker RPC, with grants, reserved-store rejection, filtered list, and audit. |
 | HostFS write overlay | Later. |

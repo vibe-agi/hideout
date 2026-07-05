@@ -135,6 +135,9 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> add --fs <kind:/path> [--reason <text>]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> remove <rule-id>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> add-open <command>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> remove <command>")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Inspect and manage:")
 	fmt.Fprintln(a.stdout, "  hideout list")
@@ -2434,6 +2437,8 @@ func (a app) profile(args []string) error {
 		return a.profileHome(store, args[1:])
 	case "tools":
 		return a.profileTools(store, args[1:])
+	case "command-proxy":
+		return a.profileCommandProxy(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
@@ -3100,6 +3105,152 @@ func (a app) profileToolNPMRemove(store profile.Store, name, packageSpec string)
 		Package: packageSpec,
 		Removed: removed,
 	})
+}
+
+func (a app) profileCommandProxy(store profile.Store, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: hideout profile command-proxy <name> <list|add-open|remove>")
+	}
+	name := args[0]
+	command := args[1]
+	switch command {
+	case "list":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile command-proxy <name> list")
+		}
+		p, err := store.LoadOrInit(name)
+		if err != nil {
+			return err
+		}
+		return writeProfileCommandProxy(a.stdout, p)
+	case "add-open":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile command-proxy <name> add-open <command>")
+		}
+		return a.profileCommandProxyAddOpen(store, name, args[2])
+	case "remove":
+		if len(args) != 3 {
+			return errors.New("usage: hideout profile command-proxy <name> remove <command>")
+		}
+		return a.profileCommandProxyRemove(store, name, args[2])
+	default:
+		return fmt.Errorf("unknown profile command-proxy command %q", command)
+	}
+}
+
+type profileCommandProxyCommandOutput struct {
+	Name       string `json:"name"`
+	Route      string `json:"route"`
+	Action     string `json:"action"`
+	ArgvSchema string `json:"argvSchema,omitempty"`
+}
+
+type profileCommandProxyOutput struct {
+	Profile  string                             `json:"profile"`
+	Commands []profileCommandProxyCommandOutput `json:"commands"`
+}
+
+type profileCommandProxyChangeOutput struct {
+	Profile    string `json:"profile"`
+	Command    string `json:"command"`
+	Route      string `json:"route,omitempty"`
+	Action     string `json:"action,omitempty"`
+	ArgvSchema string `json:"argvSchema,omitempty"`
+	Added      bool   `json:"added,omitempty"`
+	Updated    bool   `json:"updated,omitempty"`
+	Removed    bool   `json:"removed,omitempty"`
+}
+
+func writeProfileCommandProxy(w io.Writer, p profile.Profile) error {
+	names := make([]string, 0, len(p.CommandProxy.Commands))
+	for name := range p.CommandProxy.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]profileCommandProxyCommandOutput, 0, len(names))
+	for _, name := range names {
+		command := p.CommandProxy.Commands[name]
+		out = append(out, profileCommandProxyCommandOutput{
+			Name:       name,
+			Route:      command.Route,
+			Action:     command.Action,
+			ArgvSchema: command.ArgvSchema,
+		})
+	}
+	return writeJSONLine(w, profileCommandProxyOutput{Profile: p.Name, Commands: out})
+}
+
+func (a app) profileCommandProxyAddOpen(store profile.Store, name, commandName string) error {
+	commandName = strings.TrimSpace(commandName)
+	if commandName == "" {
+		return errors.New("command is required")
+	}
+	next := profile.CommandProxyCommand{
+		Route:      cmdproxy.RouteHostBroker,
+		Action:     cmdproxy.ActionHostOpen,
+		ArgvSchema: cmdproxy.ArgvSchemaOpenV1,
+	}
+	if err := validateProfileCommandProxyCommandName(commandName, next); err != nil {
+		return err
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	if p.CommandProxy.Commands == nil {
+		p.CommandProxy.Commands = map[string]profile.CommandProxyCommand{}
+	}
+	previous, exists := p.CommandProxy.Commands[commandName]
+	p.CommandProxy.Commands[commandName] = next
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileCommandProxyChangeOutput{
+		Profile:    p.Name,
+		Command:    commandName,
+		Route:      next.Route,
+		Action:     next.Action,
+		ArgvSchema: next.ArgvSchema,
+		Added:      !exists,
+		Updated:    exists && previous != next,
+	})
+}
+
+func (a app) profileCommandProxyRemove(store profile.Store, name, commandName string) error {
+	commandName = strings.TrimSpace(commandName)
+	if commandName == "" {
+		return errors.New("command is required")
+	}
+	if commandName == "open" {
+		return errors.New("command-proxy open is required and cannot be removed")
+	}
+	if err := validateProfileCommandProxyCommandName(commandName, profile.CommandProxyCommand{
+		Route:      cmdproxy.RouteHostBroker,
+		Action:     cmdproxy.ActionHostOpen,
+		ArgvSchema: cmdproxy.ArgvSchemaOpenV1,
+	}); err != nil {
+		return err
+	}
+	p, err := store.LoadOrInit(name)
+	if err != nil {
+		return err
+	}
+	_, exists := p.CommandProxy.Commands[commandName]
+	delete(p.CommandProxy.Commands, commandName)
+	if err := store.Save(p); err != nil {
+		return err
+	}
+	return writeJSONLine(a.stdout, profileCommandProxyChangeOutput{
+		Profile: p.Name,
+		Command: commandName,
+		Removed: exists,
+	})
+}
+
+func validateProfileCommandProxyCommandName(commandName string, command profile.CommandProxyCommand) error {
+	probe := profile.Default("__command_proxy_validation__")
+	probe.CommandProxy.Commands[commandName] = command
+	return probe.Validate()
 }
 
 func (a app) profileFS(store profile.Store, args []string) error {
