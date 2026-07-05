@@ -1,6 +1,8 @@
 package hostfs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -99,6 +101,80 @@ type Decision struct {
 func ValidateConfig(c Config, source Source) error {
 	_, err := buildSourcePolicy(c, source, nowOrDefault(time.Time{}), nil)
 	return err
+}
+
+func ParseRuleSpec(flagName, value, reason string) (Rule, error) {
+	kind, path, ok := strings.Cut(value, ":")
+	if !ok || strings.TrimSpace(kind) == "" || strings.TrimSpace(path) == "" {
+		return Rule{}, fmt.Errorf("%s must use kind:/absolute/path", flagName)
+	}
+	rule := Rule{
+		HostPath: path,
+		Reason:   reason,
+	}
+	switch kind {
+	case "stat":
+		rule.Ops = []Op{OpStat}
+		rule.Scope = ScopeExactFile
+		if hasGlobMeta(path) {
+			rule.Scope = ScopeGlob
+		}
+	case "read":
+		rule.Ops = []Op{OpRead}
+		rule.Scope = ScopeExactFile
+		if hasGlobMeta(path) {
+			rule.Scope = ScopeGlob
+		}
+	case "list":
+		if hasGlobMeta(path) {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
+		}
+		rule.Ops = []Op{OpList}
+		rule.Scope = ScopeDir
+	case "dir":
+		if hasGlobMeta(path) {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
+		}
+		rule.Ops = []Op{OpRead, OpList}
+		rule.Scope = ScopeDir
+	case "tree":
+		if hasGlobMeta(path) {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
+		}
+		rule.Ops = []Op{OpRead, OpList}
+		rule.Scope = ScopeRecursiveDir
+	default:
+		return Rule{}, fmt.Errorf("unsupported %s kind %q", flagName, kind)
+	}
+	return rule, nil
+}
+
+func NewRuleID(config Config) (string, error) {
+	for range 16 {
+		var raw [6]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return "", err
+		}
+		id := "hfs_" + hex.EncodeToString(raw[:])
+		if !RuleIDExists(config, id) {
+			return id, nil
+		}
+	}
+	return "", errors.New("could not allocate unique HostFS rule id")
+}
+
+func RuleIDExists(config Config, id string) bool {
+	for _, rule := range config.Grants {
+		if rule.ID == id {
+			return true
+		}
+	}
+	for _, rule := range config.Deny {
+		if rule.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func Build(input BuildInput) (EffectivePolicy, error) {

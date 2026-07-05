@@ -132,14 +132,18 @@ Shows checks and repair actions:
 
 ### HostFS
 
-Shows:
+Current smoke surface shows:
 
-- profile grants;
-- profile deny rules;
+- profile grant and deny counts in TUI and WebUI overview;
+- profile HostFS allow/deny plan/apply in WebUI through Manager API;
+- CLI hints for listing and adding durable profile HostFS rules.
+
+Later product views should add:
+
 - run-scoped grants for active sessions;
 - recent requested paths;
 - deny hits;
-- add/remove rule actions.
+- richer add/remove/edit rule actions.
 
 ### Sessions
 
@@ -205,7 +209,7 @@ Design-ready search by:
 
 Edit:
 
-- HostFS rules;
+- HostFS rules through Manager plan/apply;
 - command proxy rules;
 - network mode;
 - policy script refs.

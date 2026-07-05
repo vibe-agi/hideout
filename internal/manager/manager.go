@@ -62,6 +62,8 @@ type ProfileSummary struct {
 	ProxySecretRef  string                     `json:"proxySecretRef,omitempty"`
 	ProxyEnvVisible bool                       `json:"proxyEnvVisible"`
 	CommandProxies  []string                   `json:"commandProxies,omitempty"`
+	HostFSGrants    int                        `json:"hostfsGrants"`
+	HostFSDeny      int                        `json:"hostfsDeny"`
 	PolicyEngine    string                     `json:"policyEngine"`
 	ToolPresets     []string                   `json:"toolPresets"`
 	NPMGlobals      []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
@@ -483,6 +485,8 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			summary.PolicyEngine = p.Policy.Engine
 			summary.ToolPresets = append([]string(nil), p.Tools.Presets...)
 			summary.NPMGlobals = copyProfileSummaryNPMGlobals(p.Tools.NPMGlobals)
+			summary.HostFSGrants = len(p.HostFS.Grants)
+			summary.HostFSDeny = len(p.HostFS.Deny)
 			registry, err := cmdproxy.RegistryFromProfile(p)
 			if err == nil {
 				summary.CommandProxies = registry.ShimNames()

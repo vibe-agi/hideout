@@ -128,6 +128,13 @@ func TestStartLocalServerServesUIAndAPI(t *testing.T) {
 		`data-command-proxy-action="apply"`,
 		`add host.open symbol`,
 		`Command symbol`,
+		`hostFSForm`,
+		`hostFSPayloadFromForm`,
+		`profile/hostfs/`,
+		`data-hostfs-action="plan"`,
+		`data-hostfs-action="apply"`,
+		`HostFS profile rules`,
+		`read:/absolute/file`,
 		`history.replaceState`,
 	} {
 		if !strings.Contains(string(rootHTML), want) {

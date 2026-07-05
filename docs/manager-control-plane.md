@@ -234,6 +234,11 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   `POST /api/v1/profile/command-proxy/apply`. These mutate only durable
   `profile.commandProxy.commands` entries for `host.open` symbols and must use
   the same profile validator as CLI `profile command-proxy`.
+- Manager API exposes controlled profile HostFS rule actions:
+  `POST /api/v1/profile/hostfs/plan` and
+  `POST /api/v1/profile/hostfs/apply`. These mutate only durable
+  `profile.hostfs.grants` and `profile.hostfs.deny` rules and must use the same
+  HostFS rule grammar and profile validator as CLI `profile fs`.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
   `hideout ui` server wires this factory to the same backend adapters used by
   CLI `run`; tests may install a fake backend. API handlers must not construct
@@ -460,6 +465,8 @@ mutate unrelated stores directly.
   token-protected server.
 - Manager API and WebUI expose typed command-proxy plan/apply for `host.open`
   command symbols.
+- Manager API and WebUI expose typed profile HostFS rule plan/apply for durable
+  HostFS allow/deny rules.
 
 ### Next Product Increment
 

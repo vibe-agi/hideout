@@ -355,6 +355,7 @@ let setupResultHTML = "";
 let runResultHTML = "";
 let environmentResultHTML = "";
 let commandProxyResultHTML = "";
+let hostFSResultHTML = "";
 let selectedProfile = "";
 const panelRowLimit = 50;
 
@@ -522,7 +523,10 @@ function renderPanel() {
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
   if (activePanel === "environments") bindEnvironmentPanel();
-  if (activePanel === "capabilities") bindCommandProxyPanel();
+  if (activePanel === "capabilities") {
+    bindCommandProxyPanel();
+    bindHostFSPanel();
+  }
   if (activePanel === "audit") bindAuditPanel();
   });
 }
@@ -599,7 +603,7 @@ const renderers = {
     if (!profiles.length) return empty("No profiles");
     return '<div class="items">' + profiles.map(function(p) {
       const tone = p.validationError ? "error" : "ok";
-      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies]], tone);
+      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
     }).join("") + "</div>";
   },
   environments: function() {
@@ -643,7 +647,17 @@ const renderers = {
       '</div>' +
       '<div class="action-row"><button class="action secondary" type="button" data-command-proxy-action="plan">Plan</button><button class="action" type="button" data-command-proxy-action="apply">Apply</button><span class="meta" id="commandProxyStatus">ready</span></div>' +
       '</form><div class="result" id="commandProxyResult">' + commandProxyResultHTML + '</div>';
-    return commandForm + '<div class="items">' + item("Capability ceiling", "final validator", [["maxCapabilities", c.maxCapabilities || []]], "ok") + item("host.open", "host broker", [["mode", h.mode], ["allowUrls", h.allowUrls], ["urlScope", h.urlScope], ["localNetworkPolicy", h.localNetworkPolicy], ["allowWorkspaceFiles", h.allowWorkspaceFiles], ["browserProfile", h.browserProfile], ["browserControl", h.browserControl], ["profiles", h.profiles]], h.allowUrls || h.allowWorkspaceFiles ? "info" : "warn") + (proxies.length ? proxies.map(function(p) {
+    const hostFSForm = '<form id="hostFSForm" class="item">' +
+      '<div class="form-grid">' +
+      '<div class="field"><label for="hostFSProfile">Profile</label><select id="hostFSProfile">' + profileOptions + '</select></div>' +
+      '<div class="field"><label for="hostFSOperation">Operation</label><select id="hostFSOperation"><option value="add">allow rule</option><option value="deny">deny rule</option><option value="remove">remove rule</option></select></div>' +
+      '<div class="field"><label for="hostFSRule">Rule</label><input id="hostFSRule" placeholder="read:/absolute/file or tree:/absolute/dir"></div>' +
+      '<div class="field"><label for="hostFSRuleID">Rule ID</label><input id="hostFSRuleID" placeholder="hfs_... for remove"></div>' +
+      '<div class="field"><label for="hostFSReason">Reason</label><input id="hostFSReason" placeholder="why this host path is needed"></div>' +
+      '</div>' +
+      '<div class="action-row"><button class="action secondary" type="button" data-hostfs-action="plan">Plan</button><button class="action" type="button" data-hostfs-action="apply">Apply</button><span class="meta" id="hostFSStatus">ready</span></div>' +
+      '</form><div class="result" id="hostFSResult">' + hostFSResultHTML + '</div>';
+    return commandForm + hostFSForm + '<div class="items">' + item("Capability ceiling", "final validator", [["maxCapabilities", c.maxCapabilities || []]], "ok") + item("host.open", "host broker", [["mode", h.mode], ["allowUrls", h.allowUrls], ["urlScope", h.urlScope], ["localNetworkPolicy", h.localNetworkPolicy], ["allowWorkspaceFiles", h.allowWorkspaceFiles], ["browserProfile", h.browserProfile], ["browserControl", h.browserControl], ["profiles", h.profiles]], h.allowUrls || h.allowWorkspaceFiles ? "info" : "warn") + (profiles.length ? item("HostFS profile rules", "read-only portal", [["profiles", profiles.map(function(p) { return (p.name || "-") + ": allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0); })]], "info") : "") + (proxies.length ? proxies.map(function(p) {
       return item(p.name, p.action || "command proxy", [["route", p.route], ["action", p.action], ["subject", "command:" + p.name]], p.route === "host-broker" ? "info" : "warn");
     }).join("") : empty("No command proxies")) + "</div>";
   },
@@ -937,6 +951,61 @@ function bindCommandProxyPanel() {
         commandProxyResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
         document.getElementById("commandProxyResult").innerHTML = commandProxyResultHTML;
         setCommandProxyBusy(false, "error");
+      }
+    });
+  });
+}
+function hostFSPayloadFromForm() {
+  return {
+    profile: document.getElementById("hostFSProfile").value,
+    operation: document.getElementById("hostFSOperation").value,
+    rule: document.getElementById("hostFSRule").value.trim(),
+    ruleId: document.getElementById("hostFSRuleID").value.trim(),
+    reason: document.getElementById("hostFSReason").value.trim()
+  };
+}
+function hostFSRuleLabel(rule) {
+  if (!rule) return "";
+  return (rule.effect || "") + ":" + (rule.hostPath || "") + " " + (rule.id || "");
+}
+function renderHostFSResponse(resource, response) {
+  const errors = response.errors || [];
+  const data = response.data || {};
+  const plan = data.plan || data;
+  const planned = plan.plannedRule || plan.removedRule || {};
+  const grants = (plan.grantsAfter || data.grants || []).map(hostFSRuleLabel);
+  const deny = (plan.denyAfter || data.deny || []).map(hostFSRuleLabel);
+  const header = item(resource, plan.profile || "profile", [["operation", plan.operation], ["rule", plan.rule], ["ruleId", plan.ruleId || planned.id], ["planned", hostFSRuleLabel(planned)], ["status", plan.status], ["changed", plan.changed], ["applied", data.applied], ["grants", grants], ["deny", deny]], errors.length ? "error" : plan.changed || data.applied ? "ok" : "info");
+  const errorHTML = errors.map(function(err) { return '<div class="error-box">' + esc(err) + '</div>'; }).join("");
+  return header + errorHTML;
+}
+function setHostFSBusy(busy, text) {
+  const status = document.getElementById("hostFSStatus");
+  if (status) status.textContent = text || (busy ? "working" : "ready");
+  document.querySelectorAll("[data-hostfs-action]").forEach(function(button) { button.disabled = busy; });
+}
+function bindHostFSPanel() {
+  const form = document.getElementById("hostFSForm");
+  if (!form) return;
+  form.addEventListener("submit", function(event) { event.preventDefault(); });
+  if (selectedProfile && document.getElementById("hostFSProfile")) {
+    document.getElementById("hostFSProfile").value = selectedProfile;
+  }
+  document.querySelectorAll("[data-hostfs-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-hostfs-action");
+      const resource = "profile/hostfs/" + action;
+      setHostFSBusy(true, action);
+      try {
+        const response = await apiPost(resource, hostFSPayloadFromForm());
+        hostFSResultHTML = renderHostFSResponse(resource, response);
+        document.getElementById("hostFSResult").innerHTML = hostFSResultHTML;
+        setHostFSBusy(false, response.errors && response.errors.length ? "needs attention" : "ready");
+        if (action === "apply" && !(response.errors && response.errors.length)) await load();
+      } catch (error) {
+        hostFSResultHTML = '<div class="error-box">' + esc(error.message || error) + '</div>';
+        document.getElementById("hostFSResult").innerHTML = hostFSResultHTML;
+        setHostFSBusy(false, "error");
       }
     });
   });

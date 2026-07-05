@@ -2176,8 +2176,9 @@ hideout profile fs default remove hfs_0123abcd4567
 
 `profile fs` is the stable lower-layer management contract for durable HostFS
 profile policy. It writes the same `profile.hostfs.grants` and
-`profile.hostfs.deny` objects that `hideout run` consumes. Manager APIs and Web
-UI must use this rule model instead of inventing a second representation.
+`profile.hostfs.deny` objects that `hideout run` consumes. Manager API and WebUI
+profile HostFS plan/apply surfaces use this rule model instead of inventing a
+second representation.
 
 Persistent profile env management:
 
@@ -4030,6 +4031,8 @@ POST /api/v1/run/apply
 GET /api/v1/run/status
 POST /api/v1/profile/command-proxy/plan
 POST /api/v1/profile/command-proxy/apply
+POST /api/v1/profile/hostfs/plan
+POST /api/v1/profile/hostfs/apply
 ```
 
 Every local HTTP response uses a stable envelope:

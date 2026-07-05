@@ -82,6 +82,14 @@ type CommandProxyAPIRequest struct {
 	Command     string `json:"command"`
 }
 
+type ProfileHostFSAPIRequest struct {
+	ProfileName string `json:"profile,omitempty"`
+	Operation   string `json:"operation"`
+	Rule        string `json:"rule,omitempty"`
+	RuleID      string `json:"ruleId,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+}
+
 func NewAPI(core Core, token string, ttl time.Duration) API {
 	now := time.Now().UTC()
 	return API{
@@ -176,6 +184,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveCommandProxyPlan(w, r)
 	case "profile/command-proxy/apply":
 		api.serveCommandProxyApply(w, r)
+	case "profile/hostfs/plan":
+		api.serveProfileHostFSPlan(w, r)
+	case "profile/hostfs/apply":
+		api.serveProfileHostFSApply(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -448,6 +460,49 @@ func (api API) serveCommandProxyApply(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (api API) serveProfileHostFSPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeProfileHostFSAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanProfileHostFS(profileHostFSOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/hostfs/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveProfileHostFSApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeProfileHostFSAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanProfileHostFS(profileHostFSOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyProfileHostFS(plan)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/hostfs/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
 func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
 	sessions := nonNilSlice(overview.Sessions)
 	if rawSession := r.URL.Query().Get("session"); rawSession != "" {
@@ -531,6 +586,19 @@ func decodeCommandProxyAPIRequest(w http.ResponseWriter, r *http.Request) (Comma
 	return req, nil
 }
 
+func decodeProfileHostFSAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileHostFSAPIRequest, error) {
+	var req ProfileHostFSAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid profile-hostfs request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid profile-hostfs request")
+	}
+	return req, nil
+}
+
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
 		ProfileName:    req.ProfileName,
@@ -561,6 +629,16 @@ func commandProxyOptionsFromAPIRequest(req CommandProxyAPIRequest) CommandProxyO
 		ProfileName: req.ProfileName,
 		Operation:   req.Operation,
 		Command:     req.Command,
+	}
+}
+
+func profileHostFSOptionsFromAPIRequest(req ProfileHostFSAPIRequest) ProfileHostFSOptions {
+	return ProfileHostFSOptions{
+		ProfileName: req.ProfileName,
+		Operation:   req.Operation,
+		Rule:        req.Rule,
+		RuleID:      req.RuleID,
+		Reason:      req.Reason,
 	}
 }
 

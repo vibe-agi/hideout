@@ -410,6 +410,114 @@ func TestAPICommandProxyRejectsUnknownFieldsAndHostExecShape(t *testing.T) {
 	}
 }
 
+func TestAPIProfileHostFSPlanAndApply(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	api := API{
+		Core:      Core{Store: store},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+	reqBody := ProfileHostFSAPIRequest{
+		ProfileName: "api-hostfs",
+		Operation:   "add",
+		Rule:        "read:/tmp/api.txt",
+		Reason:      "read one api-selected file",
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/profile/hostfs/plan", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	planBody := resp.Body.String()
+	for _, want := range []string{
+		`"resource":"profile/hostfs/plan"`,
+		`"version":"hideout.profile-hostfs-plan/v1"`,
+		`"operation":"add"`,
+		`"rule":"read:/tmp/api.txt"`,
+		`"effect":"allow"`,
+		`"hostPath":"/tmp/api.txt"`,
+		`"changed":true`,
+	} {
+		if !strings.Contains(planBody, want) {
+			t.Fatalf("profile-hostfs plan missing %q: %s", want, planBody)
+		}
+	}
+	if _, err := store.Load("api-hostfs"); err == nil {
+		t.Fatal("profile-hostfs plan should not create profile state")
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/profile/hostfs/apply", reqBody)
+	req.Header.Set("X-Hideout-UI-Token", "ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	applyBody := resp.Body.String()
+	for _, want := range []string{
+		`"resource":"profile/hostfs/apply"`,
+		`"applied":true`,
+		`"hostPath":"/tmp/api.txt"`,
+		`"grants":[`,
+	} {
+		if !strings.Contains(applyBody, want) {
+			t.Fatalf("profile-hostfs apply missing %q: %s", want, applyBody)
+		}
+	}
+	loaded, err := store.Load("api-hostfs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.HostFS.Grants) != 1 || loaded.HostFS.Grants[0].HostPath != "/tmp/api.txt" {
+		t.Fatalf("HostFS rule was not persisted: %+v", loaded.HostFS)
+	}
+}
+
+func TestAPIProfileHostFSRejectsUnknownFieldsAndHostExecShape(t *testing.T) {
+	api := API{
+		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "unknown raw host command field",
+			body: `{"profile":"default","operation":"add","rule":"read:/tmp/file.txt","reason":"test","hostCommand":"/usr/bin/open"}`,
+			want: "invalid profile-hostfs request",
+		},
+		{
+			name: "unsupported operation",
+			body: `{"profile":"default","operation":"host-exec","rule":"read:/tmp/file.txt","reason":"test"}`,
+			want: "unsupported profile-hostfs operation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/hostfs/plan", strings.NewReader(tc.body))
+			req.Host = "127.0.0.1"
+			req.Header.Set("Authorization", "Bearer ui_token")
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			api.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+			validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
+			if !strings.Contains(resp.Body.String(), tc.want) {
+				t.Fatalf("expected %q rejection, got %s", tc.want, resp.Body.String())
+			}
+		})
+	}
+}
+
 func TestAPIInitRequestRejectsUnknownFields(t *testing.T) {
 	api := API{
 		Core:      Core{Store: profile.Store{Root: t.TempDir()}},

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1071,53 +1070,7 @@ func parseHostFSRunPolicyFlags(grants, deny []hostFSFlagInput) (hostfs.Config, e
 }
 
 func parseHostFSRuleFlag(input hostFSFlagInput) (hostfs.Rule, error) {
-	kind, path, ok := strings.Cut(input.value, ":")
-	if !ok || strings.TrimSpace(kind) == "" || strings.TrimSpace(path) == "" {
-		return hostfs.Rule{}, fmt.Errorf("%s must use kind:/absolute/path", input.flagName)
-	}
-	rule := hostfs.Rule{
-		HostPath: path,
-		Reason:   input.reason,
-	}
-	switch kind {
-	case "stat":
-		rule.Ops = []hostfs.Op{hostfs.OpStat}
-		rule.Scope = hostfs.ScopeExactFile
-		if hostFSPathHasGlobMeta(path) {
-			rule.Scope = hostfs.ScopeGlob
-		}
-	case "read":
-		rule.Ops = []hostfs.Op{hostfs.OpRead}
-		rule.Scope = hostfs.ScopeExactFile
-		if hostFSPathHasGlobMeta(path) {
-			rule.Scope = hostfs.ScopeGlob
-		}
-	case "list":
-		if hostFSPathHasGlobMeta(path) {
-			return hostfs.Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", input.flagName, kind)
-		}
-		rule.Ops = []hostfs.Op{hostfs.OpList}
-		rule.Scope = hostfs.ScopeDir
-	case "dir":
-		if hostFSPathHasGlobMeta(path) {
-			return hostfs.Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", input.flagName, kind)
-		}
-		rule.Ops = []hostfs.Op{hostfs.OpRead, hostfs.OpList}
-		rule.Scope = hostfs.ScopeDir
-	case "tree":
-		if hostFSPathHasGlobMeta(path) {
-			return hostfs.Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", input.flagName, kind)
-		}
-		rule.Ops = []hostfs.Op{hostfs.OpRead, hostfs.OpList}
-		rule.Scope = hostfs.ScopeRecursiveDir
-	default:
-		return hostfs.Rule{}, fmt.Errorf("unsupported %s kind %q", input.flagName, kind)
-	}
-	return rule, nil
-}
-
-func hostFSPathHasGlobMeta(path string) bool {
-	return strings.ContainsAny(path, "*?[")
+	return hostfs.ParseRuleSpec(input.flagName, input.value, input.reason)
 }
 
 func explainText(p profile.Profile, opts runOptions, layout session.Layout, runEnv runEnvironment, env envpolicy.Result, profileDir, identityDir string) string {
@@ -3343,7 +3296,7 @@ func (a app) profileFSAdd(store profile.Store, name string, args []string, deny 
 		return err
 	}
 	now := time.Now().UTC()
-	rule.ID, err = newHostFSRuleID(p.HostFS)
+	rule.ID, err = hostfs.NewRuleID(p.HostFS)
 	if err != nil {
 		return err
 	}
@@ -3454,34 +3407,6 @@ func removeHostFSRule(rules []hostfs.Rule, id string, deny bool) ([]hostfs.Rule,
 		return out, &removed
 	}
 	return rules, nil
-}
-
-func newHostFSRuleID(config hostfs.Config) (string, error) {
-	for range 16 {
-		var raw [6]byte
-		if _, err := rand.Read(raw[:]); err != nil {
-			return "", err
-		}
-		id := "hfs_" + hex.EncodeToString(raw[:])
-		if !hostFSRuleIDExists(config, id) {
-			return id, nil
-		}
-	}
-	return "", errors.New("could not allocate unique HostFS rule id")
-}
-
-func hostFSRuleIDExists(config hostfs.Config, id string) bool {
-	for _, rule := range config.Grants {
-		if rule.ID == id {
-			return true
-		}
-	}
-	for _, rule := range config.Deny {
-		if rule.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func writeJSONLine(w io.Writer, value any) error {
@@ -4034,7 +3959,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  commandProxies=%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), status)
+		fmt.Fprintf(w, "  - %s  network=%s  presets=%s  npm=%s  commandProxies=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), p.HostFSGrants, p.HostFSDeny, status)
 		next := profileNextCommandsForTUI(p)
 		if len(next) > 0 {
 			for _, command := range next {
@@ -4208,6 +4133,8 @@ func profileNextCommandsForTUI(p manager.ProfileSummary) []string {
 		"add-tool=hideout profile tools " + p.Name + " npm add --package <npm-package> --command <command>",
 		"command-proxy=hideout profile command-proxy " + p.Name + " list",
 		"add-open=hideout profile command-proxy " + p.Name + " add-open <command>",
+		"hostfs=hideout profile fs " + p.Name + " list",
+		"add-hostfs=hideout profile fs " + p.Name + " add --fs read:/absolute/file --reason <why>",
 	}
 }
 

@@ -413,6 +413,122 @@ func TestCoreCommandProxyRejectsUnsafeOperations(t *testing.T) {
 	}
 }
 
+func TestCorePlanAndApplyProfileHostFSRules(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	plan, err := core.PlanProfileHostFS(ProfileHostFSOptions{
+		ProfileName: "hostfs-profile",
+		Operation:   "add",
+		Rule:        "read:/tmp/input.txt",
+		Reason:      "read one user-selected file",
+	})
+	if err != nil {
+		t.Fatalf("PlanProfileHostFS add: %v", err)
+	}
+	if plan.Version != ProfileHostFSPlanVersion ||
+		plan.Profile != "hostfs-profile" ||
+		plan.Operation != "add" ||
+		plan.Rule != "read:/tmp/input.txt" ||
+		plan.RuleID == "" ||
+		plan.PlannedRule == nil ||
+		plan.PlannedRule.Effect != "allow" ||
+		plan.PlannedRule.HostPath != "/tmp/input.txt" ||
+		plan.PlannedRule.Scope != hostfs.ScopeExactFile ||
+		!plan.Changed ||
+		len(plan.GrantsAfter) != 1 {
+		t.Fatalf("unexpected HostFS add plan: %+v", plan)
+	}
+	if _, err := store.Load("hostfs-profile"); err == nil {
+		t.Fatal("PlanProfileHostFS should not create profile state")
+	}
+	result, err := core.ApplyProfileHostFS(plan)
+	if err != nil {
+		t.Fatalf("ApplyProfileHostFS add: %v", err)
+	}
+	if !result.Applied || len(result.Grants) != 1 || result.Grants[0].ID != plan.RuleID {
+		t.Fatalf("unexpected HostFS add result: %+v", result)
+	}
+	loaded, err := store.Load("hostfs-profile")
+	if err != nil {
+		t.Fatalf("load profile: %v", err)
+	}
+	if len(loaded.HostFS.Grants) != 1 || loaded.HostFS.Grants[0].HostPath != "/tmp/input.txt" {
+		t.Fatalf("HostFS grant was not persisted: %+v", loaded.HostFS)
+	}
+
+	denyPlan, err := core.PlanProfileHostFS(ProfileHostFSOptions{
+		ProfileName: "hostfs-profile",
+		Operation:   "deny",
+		Rule:        "tree:/tmp/private",
+		Reason:      "keep private temp tree hidden",
+	})
+	if err != nil {
+		t.Fatalf("PlanProfileHostFS deny: %v", err)
+	}
+	denyResult, err := core.ApplyProfileHostFS(denyPlan)
+	if err != nil {
+		t.Fatalf("ApplyProfileHostFS deny: %v", err)
+	}
+	if !denyResult.Applied || len(denyResult.Deny) != 1 || denyResult.Deny[0].Effect != "deny" {
+		t.Fatalf("unexpected HostFS deny result: %+v", denyResult)
+	}
+
+	removePlan, err := core.PlanProfileHostFS(ProfileHostFSOptions{
+		ProfileName: "hostfs-profile",
+		Operation:   "remove",
+		RuleID:      plan.RuleID,
+	})
+	if err != nil {
+		t.Fatalf("PlanProfileHostFS remove: %v", err)
+	}
+	if !removePlan.Changed || removePlan.RemovedRule == nil || len(removePlan.GrantsAfter) != 0 {
+		t.Fatalf("unexpected HostFS remove plan: %+v", removePlan)
+	}
+	removeResult, err := core.ApplyProfileHostFS(removePlan)
+	if err != nil {
+		t.Fatalf("ApplyProfileHostFS remove: %v", err)
+	}
+	if !removeResult.Applied || len(removeResult.Grants) != 0 || len(removeResult.Deny) != 1 {
+		t.Fatalf("unexpected HostFS remove result: %+v", removeResult)
+	}
+}
+
+func TestCoreProfileHostFSRejectsUnsafeOperations(t *testing.T) {
+	core := New(profile.Store{Root: t.TempDir()})
+	for _, tc := range []struct {
+		name string
+		opts ProfileHostFSOptions
+		want string
+	}{
+		{
+			name: "missing reason",
+			opts: ProfileHostFSOptions{ProfileName: "default", Operation: "add", Rule: "read:/tmp/file.txt"},
+			want: "reason is required",
+		},
+		{
+			name: "glob tree",
+			opts: ProfileHostFSOptions{ProfileName: "default", Operation: "add", Rule: "tree:/tmp/*.txt", Reason: "bad glob"},
+			want: "does not support glob",
+		},
+		{
+			name: "missing rule id",
+			opts: ProfileHostFSOptions{ProfileName: "default", Operation: "remove"},
+			want: "ruleId is required",
+		},
+		{
+			name: "unknown operation",
+			opts: ProfileHostFSOptions{ProfileName: "default", Operation: "host-exec", Rule: "read:/tmp/file.txt", Reason: "bad"},
+			want: "unsupported profile-hostfs operation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := core.PlanProfileHostFS(tc.opts); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestRunPlanJSONMatchesSchemaAndHidesProfiles(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	plan, err := New(store).PlanRun(RunPlanOptions{

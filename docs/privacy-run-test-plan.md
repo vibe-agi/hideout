@@ -872,6 +872,10 @@ Required checks:
   current run, keeps profile deny rules active, and does not mutate the profile;
 - `hideout profile fs <profile> add|deny|list|remove` manages durable profile
   HostFS rules using the same `--fs` and `--no-fs` grammar as run-scoped rules;
+- Manager API `profile/hostfs/plan|apply` manages durable profile HostFS rules
+  using the same HostFS rule grammar and profile validator as CLI
+  `profile fs`, performs planning without creating profile state, and rejects
+  raw host command or raw profile-writer request shapes;
 - `hideout profile env` and `hideout profile tools` manage durable profile
   policy without introducing a second representation; env list output reports
   names only and must not echo stored values;
