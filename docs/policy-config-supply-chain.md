@@ -15,10 +15,17 @@ ecosystem runtime contract in
 [ecosystem-foundation-design.md](ecosystem-foundation-design.md). It defines
 authoring, sharing, installation, update, trust, override, and export behavior.
 It does not redefine the ecosystem resource model, effective policy composition
-order, Hideoutfile schema, or ecosystem phase plan.
+order, Hideoutfile schema, or ecosystem delivery sequence.
 
 The goal is to make Hideout community-extensible without turning local privacy
 policy into unreviewed scattered files.
+
+Document boundary: this file describes supply-chain operations for the
+ecosystem model. It does not own ecosystem resource names, policy composition,
+Hideoutfile authority, or the ecosystem delivery sequence. Those are owned by
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md). If a
+supply-chain rule needs a new ecosystem resource or changes policy composition,
+the foundation contract must change first.
 
 ## Product Goal
 
@@ -475,7 +482,7 @@ invent a second composition rule.
 
 Overrides should be visible in `explain`, TUI, WebUI, and `profile diff`.
 
-## Community Model
+## Example Community Repository Layout
 
 Recommended ecosystem structure:
 
@@ -505,13 +512,13 @@ Community contribution requirements:
 This makes bundles reviewable in pull requests and forkable like dotfiles or
 Brewfile-based setup repos.
 
-## Supply-Chain Delivery Checklist
+## Supply-Chain Checklist For The Ecosystem Sequence
 
 Current product status is owned by [STATUS.md](STATUS.md). Ecosystem delivery
 sequence is owned by
-[ecosystem-foundation-design.md](ecosystem-foundation-design.md#phase-plan).
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md#ecosystem-delivery-sequence).
 This document contributes only the supply-chain checklist for that sequence. It
-must not be read as a second roadmap:
+must not be read as a second roadmap or a second phase plan:
 
 - bundle schema, script size, entrypoint, permission, compatibility, checksum,
   forbidden-file, and secret-looking-value validation;
@@ -522,8 +529,8 @@ must not be read as a second roadmap:
 - TUI/WebUI bundle list, update, trust, and diff surfaces;
 - future signatures, publisher trust, registry, and compatibility farm design.
 
-If this checklist conflicts with the ecosystem phase plan, the phase plan wins
-and this section must be updated to point at the new source of truth.
+If this checklist conflicts with the ecosystem delivery sequence, the sequence
+wins and this section must be updated to point at the new source of truth.
 
 ## Open Questions
 

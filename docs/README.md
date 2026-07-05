@@ -24,13 +24,13 @@ Subsystem documents:
 | --- | --- |
 | Backend capability | [backend-capability-matrix.md](backend-capability-matrix.md) |
 | Distribution and first run | [distribution-bootstrap.md](distribution-bootstrap.md) |
-| Ecosystem foundation | [ecosystem-foundation-design.md](ecosystem-foundation-design.md) |
+| Ecosystem foundation | [ecosystem-foundation-design.md](ecosystem-foundation-design.md): canonical resource model, policy composition, Hideoutfile contract, and ecosystem delivery sequence. |
 | HostFS overlay | [hostfs-overlay-design.md](hostfs-overlay-design.md) |
 | Init tasks | [init-task-architecture.md](init-task-architecture.md) |
 | Manager control plane | [manager-control-plane.md](manager-control-plane.md) |
 | Network privacy | [network-privacy-architecture.md](network-privacy-architecture.md) |
 | OpenTarget and host reach-back | [opentarget-architecture.md](opentarget-architecture.md) |
-| Policy/config supply chain | [policy-config-supply-chain.md](policy-config-supply-chain.md) |
+| Policy/config supply chain | [policy-config-supply-chain.md](policy-config-supply-chain.md): authoring, source resolution, install, update, trust, override, and export behavior for the ecosystem model. |
 | Script adapters | [script-extension-architecture.md](script-extension-architecture.md) |
 | TUI/Web UI | [tui-webui-experience.md](tui-webui-experience.md) |
 
@@ -40,6 +40,10 @@ Subsystem documents:
 - `privacy-run-design.md` owns the Phase 1 product contract.
 - `threat-model.md` owns security claims and non-claims.
 - `STATUS.md` owns current implementation status.
+- `ecosystem-foundation-design.md` owns the ecosystem resource model,
+  effective policy composition order, project manifest authority model, and
+  ecosystem delivery sequence.
+- `policy-config-supply-chain.md` owns supply-chain operations for that model.
 - Subsystem documents must not create authority that conflicts with those files.
 
 When a status sentence in a subsystem document becomes stale, update

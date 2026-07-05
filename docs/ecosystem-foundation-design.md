@@ -25,6 +25,13 @@ UI or marketplace feature. Bundles, Hideoutfile, TUI, WebUI, and future registry
 features must compile into the same Manager resources and effective policy
 model.
 
+This document is the canonical source for ecosystem resource names, policy
+composition, project manifest authority, and ecosystem delivery sequence. It
+does not own supply-chain UX details such as source syntax, update commands,
+trust labels, export CLI shape, or registry operations; those belong to
+[policy-config-supply-chain.md](policy-config-supply-chain.md) and must compile
+back into the model defined here.
+
 ## Design Goal
 
 Hideout should support a community ecosystem without allowing community
@@ -715,7 +722,12 @@ Ecosystem foundation needs tests before public bundle usage:
   scripts;
 - effective policy records bundle source in audit decisions.
 
-## Phase Plan
+## Ecosystem Delivery Sequence
+
+This is the authoritative sequence for ecosystem delivery. It is not a current
+implementation status table; [STATUS.md](STATUS.md) owns current product
+status. Supply-chain documents may add operational checklists, but they must
+not introduce a second ecosystem roadmap.
 
 ### Phase 1 Foundation
 
