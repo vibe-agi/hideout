@@ -176,6 +176,12 @@ func TestSubcommandHelpIsSuccessfulAndQuiet(t *testing.T) {
 		{"doctor", "--help"},
 		{"cleanup", "--help"},
 		{"audit", "show", "--help"},
+		{"profile", "--help"},
+		{"profile", "fs", "--help"},
+		{"profile", "tools", "--help"},
+		{"profile", "env", "--help"},
+		{"profile", "home", "--help"},
+		{"profile", "command-proxy", "--help"},
 	} {
 		var out, errOut bytes.Buffer
 		code := Main(args, &out, &errOut)

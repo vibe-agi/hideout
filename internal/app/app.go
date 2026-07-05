@@ -166,6 +166,64 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
 }
 
+func isHelpToken(value string) bool {
+	return value == "help" || value == "-h" || value == "--help"
+}
+
+func (a app) profileUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile init <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile clone <source> <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile rotate-identity <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile reset <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile path <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> <list|add|deny|remove>")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> <list|set|unset|inherit|uninherit|deny|undeny>")
+	fmt.Fprintln(a.stdout, "  hideout profile home <name> import --from <path> --to <relative-path> [--force]")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> <list|preset|npm>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> <list|add-open|remove>")
+}
+
+func (a app) profileFSUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> add --fs <kind:/path> [--reason <text>]")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> remove <rule-id>")
+}
+
+func (a app) profileToolsUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> preset add <preset>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> preset remove <preset>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> npm add --package <npm-spec> --command <command>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> npm remove <package>")
+}
+
+func (a app) profileCommandProxyUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> add-open <command>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> remove <command>")
+}
+
+func (a app) profileEnvUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> set KEY=VALUE")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> unset KEY")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> inherit KEY")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> uninherit KEY")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> deny PATTERN")
+	fmt.Fprintln(a.stdout, "  hideout profile env <name> undeny PATTERN")
+}
+
+func (a app) profileHomeUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile home <name> import --from <path> --to <relative-path> [--force]")
+}
+
 type packageManifest struct {
 	Schema  string `json:"schema"`
 	BuiltAt string `json:"builtAt"`
@@ -2331,8 +2389,9 @@ func darwinBrowserAppInstalledInRoots(appName, home string, roots []string) bool
 }
 
 func (a app) profile(args []string) error {
-	if len(args) == 0 {
-		return errors.New("profile command is required")
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.profileUsage()
+		return nil
 	}
 	store, err := profile.DefaultStore()
 	if err != nil {
@@ -2404,6 +2463,10 @@ func (a app) profile(args []string) error {
 }
 
 func (a app) profileHome(store profile.Store, args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+		a.profileHomeUsage()
+		return nil
+	}
 	if len(args) < 2 {
 		return errors.New("usage: hideout profile home <name> import --from <path> --to <relative-path> [--force]")
 	}
@@ -2738,6 +2801,10 @@ func ensureProfileHomeRoot(homeRoot string) error {
 }
 
 func (a app) profileEnv(store profile.Store, args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+		a.profileEnvUsage()
+		return nil
+	}
 	if len(args) < 2 {
 		return errors.New("usage: hideout profile env <name> <list|set|unset|inherit|uninherit|deny|undeny>")
 	}
@@ -2893,6 +2960,10 @@ func (a app) profileEnvListRemove(store profile.Store, name, kind, value string)
 }
 
 func (a app) profileTools(store profile.Store, args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+		a.profileToolsUsage()
+		return nil
+	}
 	if len(args) < 2 {
 		return errors.New("usage: hideout profile tools <name> <list|preset|npm>")
 	}
@@ -3067,6 +3138,10 @@ func (a app) profileToolNPMRemove(store profile.Store, name, packageSpec string)
 }
 
 func (a app) profileCommandProxy(store profile.Store, args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+		a.profileCommandProxyUsage()
+		return nil
+	}
 	if len(args) < 2 {
 		return errors.New("usage: hideout profile command-proxy <name> <list|add-open|remove>")
 	}
@@ -3213,6 +3288,10 @@ func validateProfileCommandProxyCommandName(commandName string, command profile.
 }
 
 func (a app) profileFS(store profile.Store, args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+		a.profileFSUsage()
+		return nil
+	}
 	if len(args) < 2 {
 		return errors.New("usage: hideout profile fs <name> <list|add|deny|remove>")
 	}
