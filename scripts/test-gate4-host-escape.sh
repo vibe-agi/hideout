@@ -101,6 +101,21 @@ preflight_real_browser_launcher
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate4.XXXXXX")"
 cleanup() {
+  if command -v pgrep >/dev/null 2>&1; then
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      kill "$pid" >/dev/null 2>&1 || true
+    done < <(pgrep -f "$tmp" || true)
+    sleep 1
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      kill -9 "$pid" >/dev/null 2>&1 || true
+    done < <(pgrep -f "$tmp" || true)
+  fi
+  for _ in 1 2 3 4 5; do
+    rm -rf "$tmp" >/dev/null 2>&1 && return
+    sleep 1
+  done
   rm -rf "$tmp"
 }
 trap cleanup EXIT
