@@ -170,6 +170,10 @@ func isHelpToken(value string) bool {
 	return value == "help" || value == "-h" || value == "--help"
 }
 
+func containsHelpToken(values []string) bool {
+	return slices.ContainsFunc(values, isHelpToken)
+}
+
 func (a app) profileUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout profile init <name>")
@@ -2516,7 +2520,7 @@ func (a app) profile(args []string) error {
 }
 
 func (a app) profileHome(store profile.Store, args []string) error {
-	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+	if len(args) == 0 || containsHelpToken(args) {
 		a.profileHomeUsage()
 		return nil
 	}
@@ -2570,6 +2574,10 @@ func parseProfileHomeImportOptions(args []string) (profileHomeImportOptions, err
 }
 
 func (a app) profileHomeImport(store profile.Store, name string, args []string) error {
+	if containsHelpToken(args) {
+		a.profileHomeUsage()
+		return nil
+	}
 	opts, err := parseProfileHomeImportOptions(args)
 	if err != nil {
 		return err
@@ -2854,7 +2862,7 @@ func ensureProfileHomeRoot(homeRoot string) error {
 }
 
 func (a app) profileEnv(store profile.Store, args []string) error {
-	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+	if len(args) == 0 || containsHelpToken(args) {
 		a.profileEnvUsage()
 		return nil
 	}
@@ -3013,7 +3021,7 @@ func (a app) profileEnvListRemove(store profile.Store, name, kind, value string)
 }
 
 func (a app) profileTools(store profile.Store, args []string) error {
-	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+	if len(args) == 0 || containsHelpToken(args) {
 		a.profileToolsUsage()
 		return nil
 	}
@@ -3065,6 +3073,10 @@ func writeProfileTools(w io.Writer, p profile.Profile) error {
 }
 
 func (a app) profileToolPreset(store profile.Store, name string, args []string) error {
+	if containsHelpToken(args) {
+		a.profileToolsUsage()
+		return nil
+	}
 	if len(args) != 2 {
 		return errors.New("usage: hideout profile tools <name> preset <add|remove> <preset>")
 	}
@@ -3114,6 +3126,10 @@ func (a app) profileToolNPM(store profile.Store, name string, args []string) err
 }
 
 func (a app) profileToolNPMAdd(store profile.Store, name string, args []string) error {
+	if containsHelpToken(args) {
+		a.profileToolsUsage()
+		return nil
+	}
 	fs := flag.NewFlagSet("profile tools npm add", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var packageSpec string
@@ -3191,7 +3207,7 @@ func (a app) profileToolNPMRemove(store profile.Store, name, packageSpec string)
 }
 
 func (a app) profileCommandProxy(store profile.Store, args []string) error {
-	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+	if len(args) == 0 || containsHelpToken(args) {
 		a.profileCommandProxyUsage()
 		return nil
 	}
@@ -3341,7 +3357,7 @@ func validateProfileCommandProxyCommandName(commandName string, command profile.
 }
 
 func (a app) profileFS(store profile.Store, args []string) error {
-	if len(args) == 0 || isHelpToken(args[0]) || (len(args) >= 2 && isHelpToken(args[1])) {
+	if len(args) == 0 || containsHelpToken(args) {
 		a.profileFSUsage()
 		return nil
 	}
@@ -3409,6 +3425,10 @@ func parseProfileFSAddOptions(args []string, deny bool) (profileFSAddOptions, er
 }
 
 func (a app) profileFSAdd(store profile.Store, name string, args []string, deny bool) error {
+	if containsHelpToken(args) {
+		a.profileFSUsage()
+		return nil
+	}
 	opts, err := parseProfileFSAddOptions(args, deny)
 	if err != nil {
 		return err

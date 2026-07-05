@@ -178,10 +178,18 @@ func TestSubcommandHelpIsSuccessfulAndQuiet(t *testing.T) {
 		{"audit", "show", "--help"},
 		{"profile", "--help"},
 		{"profile", "fs", "--help"},
+		{"profile", "fs", "default", "add", "--help"},
+		{"profile", "fs", "default", "remove", "--help"},
 		{"profile", "tools", "--help"},
+		{"profile", "tools", "default", "preset", "--help"},
+		{"profile", "tools", "default", "npm", "--help"},
+		{"profile", "tools", "default", "npm", "add", "--help"},
 		{"profile", "env", "--help"},
+		{"profile", "env", "default", "set", "--help"},
 		{"profile", "home", "--help"},
+		{"profile", "home", "default", "import", "--help"},
 		{"profile", "command-proxy", "--help"},
+		{"profile", "command-proxy", "default", "add-open", "--help"},
 		{"package", "--help"},
 		{"package", "verify", "--help"},
 		{"shim", "--help"},
@@ -207,6 +215,31 @@ func TestSubcommandHelpIsSuccessfulAndQuiet(t *testing.T) {
 		}
 		if strings.Contains(out.String(), "flag: help requested") {
 			t.Fatalf("%v help leaked flag.ErrHelp:\n%s", args, out.String())
+		}
+	}
+}
+
+func TestProfileLeafHelpIsSpecific(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"profile", "fs", "default", "add", "--help"}, "hideout profile fs <name> add --fs <kind:/path>"},
+		{[]string{"profile", "tools", "default", "npm", "add", "--help"}, "hideout profile tools <name> npm add --package <npm-spec> --command <command>"},
+		{[]string{"profile", "home", "default", "import", "--help"}, "hideout profile home <name> import --from <path>"},
+		{[]string{"profile", "command-proxy", "default", "add-open", "--help"}, "hideout profile command-proxy <name> add-open <command>"},
+	}
+	for _, tt := range tests {
+		var out, errOut bytes.Buffer
+		code := Main(tt.args, &out, &errOut)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", tt.args, code, errOut.String())
+		}
+		if !strings.Contains(out.String(), tt.want) {
+			t.Fatalf("%v help missing %q:\n%s", tt.args, tt.want, out.String())
+		}
+		if strings.Contains(out.String(), "hideout init [--no-input]") {
+			t.Fatalf("%v should not fall back to top-level usage:\n%s", tt.args, out.String())
 		}
 	}
 }
