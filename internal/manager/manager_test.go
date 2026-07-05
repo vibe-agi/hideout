@@ -1797,6 +1797,39 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	}
 }
 
+func TestAuditEventGroupsPreservesIndependentFilterLimits(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	sessionID := "ses_batch"
+	lines := []string{
+		`{"time":"2026-07-01T00:00:00Z","session":"` + sessionID + `","profile":"default","backend":"native","action":"host.fs.read","decision":"deny","details":{"path":"/Users/alice/.ssh/id_rsa"}}`,
+	}
+	for i := 1; i <= 10; i++ {
+		lines = append(lines, fmt.Sprintf(`{"time":"2026-07-01T00:00:%02dZ","session":"%s","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://example.com/%02d"}}`, i, sessionID, i))
+	}
+	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", sessionID, "audit.jsonl"), strings.Join(lines, "\n")+"\n", 0o600)
+	groups, err := New(store).AuditEventGroups(
+		AuditEventFilter{Profile: "default", Limit: 5},
+		AuditEventFilter{Profile: "default", Decision: "deny", Limit: 5},
+	)
+	if err != nil {
+		t.Fatalf("AuditEventGroups: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("groups=%d want 2", len(groups))
+	}
+	if len(groups[0]) != 5 {
+		t.Fatalf("recent events=%d want 5", len(groups[0]))
+	}
+	for _, event := range groups[0] {
+		if event.Decision == "deny" {
+			t.Fatalf("old denied event should not be in recent limit group: %+v", groups[0])
+		}
+	}
+	if len(groups[1]) != 1 || groups[1][0].Decision != "deny" || groups[1][0].Action != "host.fs.read" {
+		t.Fatalf("denied group mismatch: %+v", groups[1])
+	}
+}
+
 func TestBoundarySummaryReportsDisabledAuditAsNoEvidence(t *testing.T) {
 	summary := SummarizeRunBoundary("off")
 	if summary.Evidence != "disabled" || summary.AuditPath != "off" {

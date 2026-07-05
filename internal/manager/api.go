@@ -139,13 +139,13 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeAPIMethodNotAllowed(w)
 		return
 	}
+	if resource == "audit/events" {
+		api.serveAuditEvents(w, r)
+		return
+	}
 	overview, err := api.Core.Overview(r.Context())
 	if err != nil && overview.Version == "" {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if resource == "audit/events" {
-		api.serveAuditEvents(w, r, err)
 		return
 	}
 	if resource == "run/status" {
@@ -734,7 +734,7 @@ func environmentActionOptionsFromAPIRequest(req EnvironmentActionAPIRequest) (En
 	return opts, nil
 }
 
-func (api API) serveAuditEvents(w http.ResponseWriter, r *http.Request, overviewErr error) {
+func (api API) serveAuditEvents(w http.ResponseWriter, r *http.Request) {
 	filter, err := auditEventFilterFromQuery(r)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
@@ -747,10 +747,8 @@ func (api API) serveAuditEvents(w http.ResponseWriter, r *http.Request, overview
 		Data:     events,
 		Errors:   []string{},
 	}
-	for _, err := range []error{overviewErr, auditErr} {
-		if err != nil {
-			resp.Errors = append(resp.Errors, err.Error())
-		}
+	if auditErr != nil {
+		resp.Errors = append(resp.Errors, auditErr.Error())
 	}
 	writeAPIJSON(w, http.StatusOK, resp)
 }

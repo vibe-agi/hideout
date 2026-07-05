@@ -4200,12 +4200,21 @@ func (a app) tui(args []string) error {
 	render := func(clear bool) error {
 		overview, overviewErr := core.Overview(ctx)
 		overview = filterOverviewForTUI(overview, opts.profileName)
-		events, auditErr := core.AuditEvents(manager.AuditEventFilter{Profile: opts.profileName, Limit: 5})
-		deniedEvents, deniedAuditErr := core.AuditEvents(manager.AuditEventFilter{Profile: opts.profileName, Decision: "deny", Limit: 5})
+		eventGroups, auditErr := core.AuditEventGroups(
+			manager.AuditEventFilter{Profile: opts.profileName, Limit: 5},
+			manager.AuditEventFilter{Profile: opts.profileName, Decision: "deny", Limit: 5},
+		)
+		events, deniedEvents := []audit.Event{}, []audit.Event{}
+		if len(eventGroups) > 0 {
+			events = eventGroups[0]
+		}
+		if len(eventGroups) > 1 {
+			deniedEvents = eventGroups[1]
+		}
 		if clear {
 			fmt.Fprint(a.stdout, "\033[H\033[2J")
 		}
-		writeTUIDashboard(a.stdout, overview, events, deniedEvents, errors.Join(overviewErr, auditErr, deniedAuditErr), opts.profileName)
+		writeTUIDashboard(a.stdout, overview, events, deniedEvents, errors.Join(overviewErr, auditErr), opts.profileName)
 		return nil
 	}
 	if !opts.watch {

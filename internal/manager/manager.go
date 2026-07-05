@@ -73,6 +73,7 @@ type ProfileSummary struct {
 	ProfilePath     string                     `json:"profilePath"`
 	IdentityPath    string                     `json:"identityPath"`
 	ValidationError string                     `json:"validationError,omitempty"`
+	profile         profile.Profile
 }
 
 type SessionSummary struct {
@@ -311,25 +312,39 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 }
 
 func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {
+	groups, err := c.AuditEventGroups(filter)
+	if len(groups) == 0 {
+		return []audit.Event{}, err
+	}
+	return groups[0], err
+}
+
+func (c Core) AuditEventGroups(filters ...AuditEventFilter) ([][]audit.Event, error) {
 	if c.Store.Root == "" {
 		return nil, errors.New("manager store root is required")
 	}
-	if filter.Session != "" && !session.ValidID(filter.Session) {
-		return nil, errors.New("invalid session id")
+	if len(filters) == 0 {
+		return [][]audit.Event{}, nil
 	}
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 200
+	limits := make([]int, len(filters))
+	for i, filter := range filters {
+		if filter.Session != "" && !session.ValidID(filter.Session) {
+			return nil, errors.New("invalid session id")
+		}
+		limits[i] = filter.Limit
+		if limits[i] <= 0 {
+			limits[i] = 200
+		}
 	}
 	sessionsDir := filepath.Join(c.Store.Root, "sessions")
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return []audit.Event{}, nil
+			return emptyAuditEventGroups(len(filters)), nil
 		}
 		return nil, err
 	}
-	out := make([]audit.Event, 0)
+	groups := emptyAuditEventGroups(len(filters))
 	var errs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -339,20 +354,46 @@ func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {
 		if !session.ValidID(sessionID) {
 			continue
 		}
-		if filter.Session != "" && sessionID != filter.Session {
+		if !sessionMatchesAnyFilter(sessionID, filters) {
 			continue
 		}
-		events, err := readAuditEvents(filepath.Join(sessionsDir, sessionID, "audit.jsonl"), filter)
+		events, err := readAuditEventGroups(filepath.Join(sessionsDir, sessionID, "audit.jsonl"), filters)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		out = append(out, events...)
+		for i := range groups {
+			groups[i] = append(groups[i], events[i]...)
+		}
 	}
-	if out == nil {
-		out = []audit.Event{}
+	for i := range groups {
+		sortAuditEvents(groups[i])
+		if len(groups[i]) > limits[i] {
+			groups[i] = groups[i][:limits[i]]
+		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		left, right := out[i], out[j]
+	return groups, errors.Join(errs...)
+}
+
+func emptyAuditEventGroups(count int) [][]audit.Event {
+	groups := make([][]audit.Event, count)
+	for i := range groups {
+		groups[i] = []audit.Event{}
+	}
+	return groups
+}
+
+func sessionMatchesAnyFilter(sessionID string, filters []AuditEventFilter) bool {
+	for _, filter := range filters {
+		if filter.Session == "" || filter.Session == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+func sortAuditEvents(events []audit.Event) {
+	sort.SliceStable(events, func(i, j int) bool {
+		left, right := events[i], events[j]
 		if !left.Time.Equal(right.Time) {
 			if left.Time.IsZero() {
 				return false
@@ -367,10 +408,6 @@ func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {
 		}
 		return left.Action > right.Action
 	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, errors.Join(errs...)
 }
 
 func environmentSummaries(storeRoot string) []EnvironmentSummary {
@@ -399,15 +436,23 @@ func environmentSummaries(storeRoot string) []EnvironmentSummary {
 }
 
 func readAuditEvents(path string, filter AuditEventFilter) ([]audit.Event, error) {
+	groups, err := readAuditEventGroups(path, []AuditEventFilter{filter})
+	if len(groups) == 0 {
+		return nil, err
+	}
+	return groups[0], err
+}
+
+func readAuditEventGroups(path string, filters []AuditEventFilter) ([][]audit.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return emptyAuditEventGroups(len(filters)), nil
 		}
 		return nil, err
 	}
 	defer f.Close()
-	var out []audit.Event
+	out := emptyAuditEventGroups(len(filters))
 	var errs []error
 	scanner := bufio.NewScanner(f)
 	line := 0
@@ -419,10 +464,12 @@ func readAuditEvents(path string, filter AuditEventFilter) ([]audit.Event, error
 			continue
 		}
 		event.Details = audit.RedactDetails(event.Details)
-		if !matchesAuditFilter(event, filter) {
-			continue
+		for i, filter := range filters {
+			if !matchesAuditFilter(event, filter) {
+				continue
+			}
+			out[i] = append(out[i], event)
 		}
-		out = append(out, event)
 	}
 	if err := scanner.Err(); err != nil {
 		errs = append(errs, err)
@@ -479,6 +526,7 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			summary.ValidationError = err.Error()
 			errs = append(errs, err)
 		} else {
+			summary.profile = p
 			summary.ProfileID = p.Metadata["profileId"]
 			summary.IdentityID = p.Metadata["identityId"]
 			summary.LineageMode = p.Metadata["lineageMode"]
@@ -656,12 +704,8 @@ func capabilitySummary(profiles []ProfileSummary, registry cmdproxy.Registry) Ca
 		if p.ValidationError != "" {
 			continue
 		}
-		data, err := os.ReadFile(p.ProfilePath)
-		if err != nil {
-			continue
-		}
-		var doc profile.Profile
-		if err := json.Unmarshal(data, &doc); err != nil {
+		doc := p.profile
+		if doc.Name == "" {
 			continue
 		}
 		for _, cap := range doc.Policy.MaxCapabilities {

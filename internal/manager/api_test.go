@@ -1211,6 +1211,32 @@ func TestAPIAuditEventsSupportsFilters(t *testing.T) {
 	}
 }
 
+func TestAPIAuditEventsDoesNotBuildOverview(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	mustWriteManagerTest(t, filepath.Join(store.Root, "profiles", "broken", "profile.json"), `{`, 0o600)
+	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_audit_only", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_audit_only","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://example.com"}}`+"\n", 0o600)
+	api := API{Core: New(store), Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute)}
+	req := newAPIRequest(http.MethodGet, "/api/v1/audit/events?limit=5")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
+	var decoded APIResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Errors) != 0 {
+		t.Fatalf("audit/events should not include overview errors: %+v body=%s", decoded.Errors, resp.Body.String())
+	}
+	events, ok := decoded.Data.([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("audit/events data mismatch: %+v", decoded.Data)
+	}
+}
+
 func TestAPIAuditEventsRejectsInvalidSessionFilter(t *testing.T) {
 	api := API{
 		Core: Core{
