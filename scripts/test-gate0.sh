@@ -54,7 +54,10 @@ jq -e '
   .operatorProxy.url == "redacted" and
   (.releaseArtifact.file | test("^hideout-[A-Za-z0-9_.-]+\\.tar\\.gz$")) and
   (.releaseArtifact.sha256 | test("^[a-f0-9]{64}$")) and
-  (.releaseArtifact.bytes > 0)
+  (.releaseArtifact.bytes > 0) and
+  .cleanup.gate4BrowserProcesses == 0 and
+  .cleanup.gate4TempDirs == 0 and
+  .cleanup.hideoutLimaInstances == 0
 ' "$release_tmp/evidence/manifest.json" >/dev/null
 release_artifact_file="$(jq -r '.releaseArtifact.file' "$release_tmp/evidence/manifest.json")"
 test -f "$release_tmp/evidence/$release_artifact_file"

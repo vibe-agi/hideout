@@ -1077,16 +1077,18 @@ contains:
 
 - `manifest.json` with command, git revision, host prerequisites, tool versions,
   gate list, exit code, operator proxy presence, and the generated release-like
-  tarball file name, SHA-256, and byte size. It must conform to
-  `schemas/release-dogfood.schema.json`;
+  tarball file name, SHA-256, byte size, and post-run cleanup counts for Gate 4
+  browser processes, Gate 4 temporary directories, and Hideout Lima instances.
+  It must conform to `schemas/release-dogfood.schema.json`;
 - `hideout-<os>-<arch>-<commit>.tar.gz`, the release-like artifact built from
   the same worktree before gates run;
 - `test-release-dogfood.log` with redacted gate output.
 
 The manifest must record `operatorProxy.url` as `redacted` and the log must not
 contain the raw `HIDEOUT_SECRET_DEFAULT_PROXY` value. Gate 0 verifies that the
-recorded release artifact exists in the evidence directory and that its SHA-256
-matches the manifest.
+recorded release artifact exists in the evidence directory, that its SHA-256
+matches the manifest, and that cleanup counts are zero for a passed release
+candidate.
 
 The following must never be copied into normal diagnostic exports:
 

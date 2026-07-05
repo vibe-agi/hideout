@@ -2203,10 +2203,10 @@ func checkBroker(p profile.Profile, backendName string, layout session.Layout, h
 }
 
 func checkBrokerOpen(ctx context.Context, endpoint broker.Endpoint, req broker.Request) broker.Response {
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	var resp broker.Response
 	for {
-		reqCtx, reqCancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		reqCtx, reqCancel := context.WithTimeout(ctx, time.Second)
 		resp = broker.ClientOpenEndpoint(reqCtx, endpoint, req)
 		reqCancel()
 		if resp.Status != "broker-unavailable" || time.Now().After(deadline) {

@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -5632,6 +5633,48 @@ func TestCheckBrokerUsesTCPForLima(t *testing.T) {
 	if strings.Contains(got, "tcp://") || strings.Contains(got, "unix://") {
 		t.Fatalf("broker check leaked raw endpoint address:\n%s", got)
 	}
+}
+
+func TestCheckBrokerOpenToleratesSlowLocalBrokerResponse(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req broker.Request
+		if err := json.NewDecoder(conn).Decode(&req); err != nil {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		_ = json.NewEncoder(conn).Encode(broker.Response{
+			ID:       req.ID,
+			Decision: "allow",
+			Status:   "ok",
+			ExitCode: 0,
+		})
+	}()
+
+	resp := checkBrokerOpen(context.Background(), broker.TCPEndpoint(ln.Addr().String()), broker.Request{
+		ID:              "req_slow_doctor",
+		SessionID:       "ses_test",
+		CapabilityToken: "cap_test",
+		Action:          "host.open",
+		Route:           "host-broker",
+		Args:            map[string]any{"target": "https://example.com"},
+	})
+	if resp.Status != "ok" || resp.Decision != "allow" {
+		t.Fatalf("slow broker response was not accepted: %+v", resp)
+	}
+	<-done
 }
 
 func TestCheckBrokerReportsStartFailure(t *testing.T) {

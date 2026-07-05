@@ -132,6 +132,103 @@ if [ -n "${HIDEOUT_BROWSER_PATH:-}" ]; then
 fi
 browser_app="${HIDEOUT_BROWSER_APP:-Google Chrome}"
 git_dirty="$(git_dirty_json)"
+cleanup_gate4_browser_processes=0
+cleanup_gate4_temp_dirs=0
+cleanup_hideout_lima_instances=0
+
+count_gate4_browser_processes() {
+  ps -axo pid=,command= |
+    awk '
+      BEGIN {
+        marker = "--user" "-data-dir="
+        needle = "/hideout-gate4."
+      }
+      $1 ~ /^[0-9]+$/ &&
+      index($0, marker) > 0 &&
+      index($0, needle) > 0 {
+        count++
+      }
+      END { print count+0 }
+    '
+}
+
+count_gate4_temp_dirs() {
+  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'hideout-gate4.*' -print 2>/dev/null |
+    awk 'NF {count++} END {print count+0}'
+}
+
+count_hideout_lima_instances() {
+  if ! command -v limactl >/dev/null 2>&1; then
+    printf '0\n'
+    return
+  fi
+  limactl list --format '{{.Name}}' 2>/dev/null |
+    awk '$1 ~ /^hideout-/ {count++} END {print count+0}'
+}
+
+gate4_browser_pids() {
+  ps -axo pid=,command= |
+    awk '
+      BEGIN {
+        marker = "--user" "-data-dir="
+        needle = "/hideout-gate4."
+      }
+      $1 ~ /^[0-9]+$/ &&
+      index($0, marker) > 0 &&
+      index($0, needle) > 0 {
+        print $1
+      }
+    '
+}
+
+signal_gate4_browsers() {
+  local signal="$1"
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    /bin/kill "-$signal" "$pid" >/dev/null 2>&1 || true
+  done < <(gate4_browser_pids)
+}
+
+post_run_cleanup() {
+  local quiet=0
+  local browser_count
+  local temp_count
+
+  signal_gate4_browsers TERM
+  for _ in 1 2 3; do
+    sleep 1
+    [ "$(count_gate4_browser_processes)" = "0" ] && break
+  done
+  if [ "$(count_gate4_browser_processes)" != "0" ]; then
+    signal_gate4_browsers KILL
+  fi
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'hideout-gate4.*' -exec rm -rf {} + >/dev/null 2>&1 || true
+    browser_count="$(count_gate4_browser_processes)"
+    temp_count="$(count_gate4_temp_dirs)"
+    if [ "$browser_count" = "0" ] && [ "$temp_count" = "0" ]; then
+      quiet=$((quiet + 1))
+      [ "$quiet" -ge 3 ] && return 0
+    else
+      quiet=0
+    fi
+    sleep 1
+  done
+}
+
+collect_cleanup_evidence() {
+  cleanup_gate4_browser_processes="$(count_gate4_browser_processes)"
+  cleanup_gate4_temp_dirs="$(count_gate4_temp_dirs)"
+  cleanup_hideout_lima_instances="$(count_hideout_lima_instances)"
+}
+
+cleanup_evidence_passed() {
+  [ "$cleanup_gate4_browser_processes" = "0" ] &&
+    [ "$cleanup_gate4_temp_dirs" = "0" ] &&
+    [ "$cleanup_hideout_lima_instances" = "0" ]
+}
 
 build_release_artifact() {
   echo "release-dogfood: building release-like artifact $artifact_file" | tee -a "$log_path"
@@ -166,6 +263,9 @@ write_manifest() {
     --argjson gitDirty "$git_dirty" \
     --argjson browserPathProvided "$browser_path_provided" \
     --argjson artifactBytes "$artifact_bytes" \
+    --argjson cleanupGate4BrowserProcesses "$cleanup_gate4_browser_processes" \
+    --argjson cleanupGate4TempDirs "$cleanup_gate4_temp_dirs" \
+    --argjson cleanupHideoutLimaInstances "$cleanup_hideout_lima_instances" \
     '{
       schema: $schema,
       status: $status,
@@ -213,7 +313,12 @@ write_manifest() {
         "gate4-host-escape-real-browser",
         "capability-probe-smoke",
         "generic-cli-dogfood-smoke"
-      ]
+      ],
+      cleanup: {
+        gate4BrowserProcesses: $cleanupGate4BrowserProcesses,
+        gate4TempDirs: $cleanupGate4TempDirs,
+        hideoutLimaInstances: $cleanupHideoutLimaInstances
+      }
     }' >"$manifest_path"
   validate_manifest
 }
@@ -248,6 +353,18 @@ status=${PIPESTATUS[0]}
 set -e
 
 ended_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+post_run_cleanup
+collect_cleanup_evidence
+if [ "$status" -eq 0 ] && ! cleanup_evidence_passed; then
+  {
+    echo "release-dogfood: cleanup evidence failed"
+    echo "release-dogfood: gate4BrowserProcesses=$cleanup_gate4_browser_processes"
+    echo "release-dogfood: gate4TempDirs=$cleanup_gate4_temp_dirs"
+    echo "release-dogfood: hideoutLimaInstances=$cleanup_hideout_lima_instances"
+  } | tee -a "$log_path" >&2
+  status=1
+fi
+
 if [ "$status" -eq 0 ]; then
   write_manifest "passed" "$status" "$ended_at"
   echo "release-dogfood: passed"

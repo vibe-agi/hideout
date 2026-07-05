@@ -17,7 +17,8 @@
     "tools",
     "operatorProxy",
     "browser",
-    "gates"
+    "gates",
+    "cleanup"
   ],
   "properties": {
     "schema": {
@@ -235,6 +236,29 @@
           }
         }
       ]
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate4BrowserProcesses",
+        "gate4TempDirs",
+        "hideoutLimaInstances"
+      ],
+      "properties": {
+        "gate4BrowserProcesses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gate4TempDirs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hideoutLimaInstances": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
   }
 }
