@@ -158,10 +158,13 @@ Shows:
 ### Environments
 
 Implemented WebUI smoke surface shows capped reusable environment panels and
-offers controlled stop/clean plan/apply actions through Manager API. TUI
-currently renders a capped dashboard summary with copyable resume/stop/clean
-command hints; richer terminal lifecycle controls should call the same Manager
-environment endpoints rather than reimplementing store or backend cleanup logic.
+offers controlled stop/clean plan/apply actions through Manager API. It also
+supports a local profile scope so overview cards, environment/session panels,
+and recent audit tails can be narrowed to one profile without changing Manager
+state. TUI currently renders a capped dashboard summary with copyable
+resume/stop/clean command hints; richer terminal lifecycle controls should call
+the same Manager environment endpoints rather than reimplementing store or
+backend cleanup logic.
 
 ### Network
 
@@ -181,6 +184,7 @@ Implemented smoke surface:
 
 - local refresh time;
 - UI token expiry time;
+- optional profile scope filter;
 - audit tail;
 - denied audit count;
 - recent denied audit list using Manager API `decision=deny` filtering;

@@ -280,8 +280,10 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 .audit-event.deny,.audit-event.error{border-left-color:#774141}
 .audit-event .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px}
 .audit-event pre{margin:7px 0 0;white-space:pre-wrap;overflow:auto;font-size:11px;line-height:1.4;color:#c8d4ce}
+.scope-bar{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin:12px 0 0;color:var(--muted);font-size:12px}
+.scope-bar select{width:auto;min-width:170px}
 @media (max-width:900px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.grid{grid-template-columns:1fr}header{align-items:stretch;flex-direction:column}.status-row{justify-content:flex-start}}
-@media (max-width:560px){.shell{padding:14px}.summary{grid-template-columns:1fr}.rows{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.tabs{padding-bottom:8px}}
+@media (max-width:560px){.shell{padding:14px}.summary{grid-template-columns:1fr}.rows{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.tabs{padding-bottom:8px}.scope-bar{align-items:stretch;flex-direction:column}.scope-bar select{width:100%}}
 </style>
 </head>
 <body>
@@ -312,6 +314,10 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
   <button class="tab" type="button" data-panel="audit">Audit</button>
   <button class="tab" type="button" data-panel="settings">Settings</button>
 </nav>
+<section class="scope-bar" aria-label="Profile scope">
+  <label for="profileScope">Profile scope</label>
+  <select id="profileScope"><option value="">All profiles</option></select>
+</section>
 <section class="summary" id="summary"></section>
 <section class="grid">
   <section class="panel">
@@ -339,6 +345,7 @@ const panelMetaEl = document.getElementById("panelMeta");
 const panelBodyEl = document.getElementById("panelBody");
 const auditBodyEl = document.getElementById("auditBody");
 const auditMetaEl = document.getElementById("auditMeta");
+const profileScopeEl = document.getElementById("profileScope");
 let activePanel = "overview";
 let overview = null;
 let auditEvents = [];
@@ -347,6 +354,7 @@ let auditExplorerEvents = null;
 let setupResultHTML = "";
 let runResultHTML = "";
 let environmentResultHTML = "";
+let selectedProfile = "";
 const panelRowLimit = 50;
 
 function esc(value) {
@@ -419,6 +427,46 @@ function visibleSessionsForPanel(sessions) {
   if (!Array.isArray(sessions) || sessions.length <= panelRowLimit) return sessions || [];
   return sessions.slice(sessions.length - panelRowLimit);
 }
+function filterByProfile(values, key) {
+  if (!selectedProfile || !Array.isArray(values)) return values || [];
+  return values.filter(function(value) { return value && value[key] === selectedProfile; });
+}
+function scopedOverview() {
+  const source = overview || {};
+  if (!selectedProfile) return source;
+  const network = Object.assign({}, source.network || {});
+  network.profileDefaults = filterByProfile(network.profileDefaults, "profile");
+  return Object.assign({}, source, {
+    profiles: filterByProfile(source.profiles, "name"),
+    environments: filterByProfile(source.environments, "profile"),
+    sessions: filterByProfile(source.sessions, "profile"),
+    network: network
+  });
+}
+function withScopedOverview(fn) {
+  const source = overview;
+  overview = scopedOverview();
+  try { return fn(); } finally { overview = source; }
+}
+function scopedAuditEvents(source) {
+  if (!selectedProfile || !Array.isArray(source)) return source || [];
+  return source.filter(function(event) { return event && event.profile === selectedProfile; });
+}
+function syncProfileScopeOptions() {
+  const profiles = (overview && overview.profiles) || [];
+  const seen = {};
+  const options = ['<option value="">All profiles</option>'];
+  profiles.forEach(function(profile) {
+    if (!profile || !profile.name || seen[profile.name]) return;
+    seen[profile.name] = true;
+    options.push('<option value="' + esc(profile.name) + '">' + esc(profile.name) + '</option>');
+  });
+  if (selectedProfile && !seen[selectedProfile]) {
+    options.push('<option value="' + esc(selectedProfile) + '">' + esc(selectedProfile) + ' (missing)</option>');
+  }
+  profileScopeEl.innerHTML = options.join("");
+  profileScopeEl.value = selectedProfile;
+}
 function sessionNextCommands(session) {
   if (!session || !session.id) return [];
   const commands = [];
@@ -445,6 +493,7 @@ function apiPost(path, payload) {
   });
 }
 function renderSummary() {
+  return withScopedOverview(function() {
   const profiles = overview.profiles || [];
   const environments = overview.environments || [];
   const sessions = overview.sessions || [];
@@ -460,17 +509,20 @@ function renderSummary() {
     metric("Denied", denied.length, denied.slice(0, 3).map(function(e) { return e.action || "event"; }).join(", ")),
     metric("Network", networkModes.length || "direct", networkModes.join(", ") || "direct")
   ].join("");
+  });
 }
 function renderPanel() {
+  return withScopedOverview(function() {
   const title = activePanel.charAt(0).toUpperCase() + activePanel.slice(1);
   panelTitleEl.textContent = title;
-  panelMetaEl.textContent = domainOwner(activePanel);
+  panelMetaEl.textContent = domainOwner(activePanel) + (selectedProfile ? " · " + selectedProfile : "");
   const renderer = renderers[activePanel] || renderers.overview;
   panelBodyEl.innerHTML = renderer();
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
   if (activePanel === "environments") bindEnvironmentPanel();
   if (activePanel === "audit") bindAuditPanel();
+  });
 }
 function domainOwner(name) {
   return {
@@ -840,11 +892,11 @@ function renderAuditEvents(full, sourceEvents) {
   }).join("") + "</div>";
 }
 function renderAuditExplorer() {
-  const source = auditExplorerEvents || auditEvents;
+  const source = auditExplorerEvents || scopedAuditEvents(auditEvents);
   return '<form id="auditFilterForm" class="item">' +
     '<div class="form-grid">' +
     '<div class="field"><label for="auditSession">Session</label><input id="auditSession" placeholder="ses_..."></div>' +
-    '<div class="field"><label for="auditProfile">Profile</label><input id="auditProfile" placeholder="default"></div>' +
+    '<div class="field"><label for="auditProfile">Profile</label><input id="auditProfile" placeholder="default" value="' + esc(selectedProfile) + '"></div>' +
     '<div class="field"><label for="auditAction">Action</label><input id="auditAction" placeholder="host.open"></div>' +
     '<div class="field"><label for="auditDecision">Decision</label><select id="auditDecision"><option value="">any</option><option value="allow">allow</option><option value="deny">deny</option><option value="audit-only">audit-only</option><option value="unsupported">unsupported</option><option value="error">error</option></select></div>' +
     '<div class="field"><label for="auditLimit">Limit</label><input id="auditLimit" type="number" min="1" max="1000" value="50"></div>' +
@@ -856,7 +908,7 @@ function auditFilterFromForm() {
   const params = new URLSearchParams();
   const fields = [
     ["session", document.getElementById("auditSession").value.trim()],
-    ["profile", document.getElementById("auditProfile").value.trim()],
+    ["profile", document.getElementById("auditProfile").value.trim() || selectedProfile],
     ["action", document.getElementById("auditAction").value.trim()],
     ["decision", document.getElementById("auditDecision").value]
   ];
@@ -899,9 +951,10 @@ function bindAuditPanel() {
   });
 }
 function renderAuditTail() {
-  const denied = deniedAuditEvents();
-  auditMetaEl.textContent = denied.length + " denied / " + auditEvents.length + " events";
-  auditBodyEl.innerHTML = denied.length ? '<h3>Recent denied</h3>' + renderAuditEvents(false, denied) + '<h3>Recent audit</h3>' + renderAuditEvents(false) : renderAuditEvents(false);
+  const scopedAudit = scopedAuditEvents(auditEvents);
+  const denied = scopedAuditEvents(deniedAuditEvents());
+  auditMetaEl.textContent = denied.length + " denied / " + scopedAudit.length + " events" + (selectedProfile ? " · " + selectedProfile : "");
+  auditBodyEl.innerHTML = denied.length ? '<h3>Recent denied</h3>' + renderAuditEvents(false, denied) + '<h3>Recent audit</h3>' + renderAuditEvents(false, scopedAudit) : renderAuditEvents(false, scopedAudit);
 }
 function setStatus(text, tone) {
   statusEl.textContent = text;
@@ -912,9 +965,11 @@ async function load() {
   try {
     const overviewResp = await api("overview");
     overview = overviewResp.data || {};
+    syncProfileScopeOptions();
     try {
-      const auditResp = await api("audit/events?limit=20");
-      const deniedResp = await api("audit/events?decision=deny&limit=20");
+      const profileQuery = selectedProfile ? "&profile=" + encodeURIComponent(selectedProfile) : "";
+      const auditResp = await api("audit/events?limit=20" + profileQuery);
+      const deniedResp = await api("audit/events?decision=deny&limit=20" + profileQuery);
       auditEvents = Array.isArray(auditResp.data) ? auditResp.data : [];
       deniedEvents = Array.isArray(deniedResp.data) ? deniedResp.data : [];
     } catch {
@@ -928,6 +983,7 @@ async function load() {
     setStatus("connected · " + freshnessLabel() + (expiry ? " · " + expiry : ""), "ok");
   } catch (error) {
     overview = {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
+    syncProfileScopeOptions();
     auditEvents = [];
     deniedEvents = [];
     summaryEl.innerHTML = "";
@@ -936,6 +992,11 @@ async function load() {
     setStatus("error", "error");
   }
 }
+profileScopeEl.addEventListener("change", function() {
+  selectedProfile = profileScopeEl.value;
+  auditExplorerEvents = null;
+  load();
+});
 document.getElementById("tabs").addEventListener("click", function(event) {
   const button = event.target.closest("button[data-panel]");
   if (!button) return;
