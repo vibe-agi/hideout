@@ -11,46 +11,91 @@ require_command() {
   fi
 }
 
-preflight_real_browser_launcher() {
-  if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" != "1" ]; then
-    return
-  fi
+gate4_real_browser_path=""
+gate4_browser_wrapper=""
 
-  if [ -n "${HIDEOUT_BROWSER_PATH:-}" ]; then
-    local launcher="$HIDEOUT_BROWSER_PATH"
-    if [[ "$launcher" == */* ]]; then
-      if [ ! -x "$launcher" ]; then
-        echo "gate4: HIDEOUT_BROWSER_PATH is not executable: $launcher" >&2
-        exit 2
-      fi
-    elif ! command -v "$launcher" >/dev/null 2>&1; then
-      echo "gate4: HIDEOUT_BROWSER_PATH is not on PATH: $launcher" >&2
+validate_browser_path() {
+  local launcher="$1"
+  if [[ "$launcher" == */* ]]; then
+    if [ ! -x "$launcher" ]; then
+      echo "gate4: HIDEOUT_BROWSER_PATH is not executable: $launcher" >&2
       exit 2
     fi
-    case "$(basename "$launcher")" in
-      open|xdg-open)
-        echo "gate4: HIDEOUT_BROWSER_PATH must be a direct Chromium-compatible browser binary, not $launcher" >&2
-        exit 2
-        ;;
-    esac
+  elif ! command -v "$launcher" >/dev/null 2>&1; then
+    echo "gate4: HIDEOUT_BROWSER_PATH is not on PATH: $launcher" >&2
+    exit 2
+  fi
+  case "$(basename "$launcher")" in
+    open|xdg-open)
+      echo "gate4: HIDEOUT_BROWSER_PATH must be a direct Chromium-compatible browser binary, not $launcher" >&2
+      exit 2
+      ;;
+  esac
+}
+
+set_darwin_browser_path_for_app() {
+  local app="$1"
+  local root
+  local path
+  for root in /Applications "$HOME/Applications"; do
+    path="$root/$app.app/Contents/MacOS/$app"
+    if [ -x "$path" ]; then
+      gate4_real_browser_path="$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+select_real_browser_path() {
+  if [ -n "${HIDEOUT_BROWSER_PATH:-}" ]; then
+    validate_browser_path "$HIDEOUT_BROWSER_PATH"
+    gate4_real_browser_path="$HIDEOUT_BROWSER_PATH"
     return
   fi
 
   case "$(uname -s)" in
     Darwin)
-      local app="${HIDEOUT_BROWSER_APP:-Google Chrome}"
-      if ! /usr/bin/open -Ra "$app" >/dev/null 2>&1; then
-        echo "gate4: browser app is not registered or launchable: $app; set HIDEOUT_BROWSER_PATH to a direct Chromium-compatible browser binary" >&2
-        exit 2
+      if [ -n "${HIDEOUT_BROWSER_APP:-}" ]; then
+        if ! set_darwin_browser_path_for_app "$HIDEOUT_BROWSER_APP"; then
+          echo "gate4: browser app binary is not executable: $HIDEOUT_BROWSER_APP; set HIDEOUT_BROWSER_PATH to a direct Chromium-compatible browser binary" >&2
+          exit 2
+        fi
+        return
       fi
+      for app in "Google Chrome" Chromium "Microsoft Edge" "Brave Browser" Vivaldi; do
+        if set_darwin_browser_path_for_app "$app"; then
+          return
+        fi
+      done
+      echo "gate4: no direct Chromium-compatible browser binary found; set HIDEOUT_BROWSER_PATH" >&2
+      exit 2
       ;;
     Linux)
-      if ! command -v chromium >/dev/null 2>&1 && ! command -v google-chrome >/dev/null 2>&1; then
-        echo "gate4: real browser mode requires HIDEOUT_BROWSER_PATH or chromium/google-chrome on PATH" >&2
-        exit 2
+      if command -v chromium >/dev/null 2>&1; then
+        gate4_real_browser_path="$(command -v chromium)"
+        return
       fi
+      if command -v google-chrome >/dev/null 2>&1; then
+        gate4_real_browser_path="$(command -v google-chrome)"
+        return
+      fi
+      echo "gate4: real browser mode requires HIDEOUT_BROWSER_PATH or chromium/google-chrome on PATH" >&2
+      exit 2
+      ;;
+    *)
+      echo "gate4: real browser mode requires HIDEOUT_BROWSER_PATH on $(uname -s)" >&2
+      exit 2
       ;;
   esac
+}
+
+preflight_real_browser_launcher() {
+  if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" != "1" ]; then
+    return
+  fi
+
+  select_real_browser_path
 }
 
 if [ "${1:-}" = "--preflight-only" ]; then
@@ -66,13 +111,186 @@ latest_audit() {
     sed -n '1p'
 }
 
+gate4_browser_pids() {
+  local needle="$1"
+  ps -axo pid=,command= |
+    awk -v needle="$needle" '
+      BEGIN {
+        marker = "--user" "-data-dir="
+      }
+      $1 ~ /^[0-9]+$/ &&
+      index($0, marker) > 0 &&
+      index($0, needle) > 0 {
+        print $1
+      }
+    '
+}
+
+gate4_browser_count() {
+  gate4_browser_pids "$1" | awk 'NF {count++} END {print count+0}'
+}
+
+gate4_path_pids() {
+  local needle="$1"
+  ps -axo pid=,command= |
+    awk -v needle="$needle" '
+      $1 ~ /^[0-9]+$/ &&
+      index($0, needle) > 0 &&
+      index($0, "awk -v needle=") == 0 &&
+      index($0, "ps -axo") == 0 {
+        print $1
+      }
+    '
+}
+
+gate4_path_count() {
+  gate4_path_pids "$1" | awk 'NF {count++} END {print count+0}'
+}
+
+signal_gate4_browsers() {
+  local needle="$1"
+  local signal="$2"
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    /bin/kill "-$signal" "$pid" >/dev/null 2>&1 || true
+  done < <(gate4_browser_pids "$needle")
+}
+
+signal_gate4_path_processes() {
+  local needle="$1"
+  local signal="$2"
+  local pid
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    /bin/kill "-$signal" "$pid" >/dev/null 2>&1 || true
+  done < <(gate4_path_pids "$needle")
+}
+
+wait_for_gate4_browsers() {
+  local needle="$1"
+  local count
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    count="$(gate4_browser_count "$needle")"
+    [ "$count" != "0" ] && return 0
+    sleep 1
+  done
+  return 0
+}
+
+wait_for_gate4_browsers_gone() {
+  local needle="$1"
+  local count
+  local quiet=0
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    count="$(gate4_browser_count "$needle")"
+    if [ "$count" = "0" ]; then
+      quiet=$((quiet + 1))
+      [ "$quiet" -ge 3 ] && return 0
+    else
+      quiet=0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+wait_for_gate4_path_processes_gone() {
+  local needle="$1"
+  local count
+  local quiet=0
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    count="$(gate4_path_count "$needle")"
+    if [ "$count" = "0" ]; then
+      quiet=$((quiet + 1))
+      [ "$quiet" -ge 3 ] && return 0
+    else
+      quiet=0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+kill_gate4_browsers() {
+  local needle="$1"
+
+  signal_gate4_browsers "$needle" TERM
+  if wait_for_gate4_browsers_gone "$needle"; then
+    return 0
+  fi
+
+  for _ in 1 2 3; do
+    signal_gate4_browsers "$needle" KILL
+    if wait_for_gate4_browsers_gone "$needle"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+cleanup_real_gate4_browser() {
+  local needle="$1"
+  if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" = "1" ]; then
+    wait_for_gate4_browsers "$needle"
+  fi
+  kill_gate4_browsers "$needle"
+  signal_gate4_path_processes "$needle" TERM
+  if ! wait_for_gate4_path_processes_gone "$needle"; then
+    signal_gate4_path_processes "$needle" KILL
+    wait_for_gate4_path_processes_gone "$needle" || true
+  fi
+  return 0
+}
+
+remove_gate4_tmp() {
+  local dir="$1"
+  local quiet=0
+
+  [ -n "$dir" ] || return 0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    rm -rf "$dir" >/dev/null 2>&1 || true
+    if [ ! -d "$dir" ]; then
+      quiet=$((quiet + 1))
+      [ "$quiet" -ge 3 ] && return 0
+    else
+      quiet=0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+write_gate4_browser_wrapper() {
+  local quoted_browser
+  gate4_browser_wrapper="$bin/gate4-browser"
+  printf -v quoted_browser "%q" "$gate4_real_browser_path"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'exec </dev/null\n'
+    printf '%s "$@" >/dev/null 2>&1 &\n' "$quoted_browser"
+    printf 'exit 0\n'
+  } > "$gate4_browser_wrapper"
+  chmod +x "$gate4_browser_wrapper"
+}
+
+cleanup_stale_gate4_state() {
+  kill_gate4_browsers "/hideout-gate4."
+  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'hideout-gate4.*' -exec rm -rf {} + >/dev/null 2>&1 || true
+}
+
 run_hideout_dry() {
   HOME="$home" HIDEOUT_SHIM_PATH="$shim" HIDEOUT_OPEN_DRY_RUN=1 "$hideout" "$@"
 }
 
 run_hideout_browser() {
   if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" = "1" ]; then
-    HOME="$home" HIDEOUT_SHIM_PATH="$shim" "$hideout" "$@"
+    HOME="$home" HIDEOUT_SHIM_PATH="$shim" HIDEOUT_BROWSER_PATH="$gate4_browser_wrapper" "$hideout" "$@"
   else
     run_hideout_dry "$@"
   fi
@@ -98,25 +316,12 @@ expect_open_denied() {
 require_command go
 require_command jq
 preflight_real_browser_launcher
+cleanup_stale_gate4_state
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate4.XXXXXX")"
 cleanup() {
-  if command -v pgrep >/dev/null 2>&1; then
-    while IFS= read -r pid; do
-      [ -n "$pid" ] || continue
-      kill "$pid" >/dev/null 2>&1 || true
-    done < <(pgrep -f "$tmp" || true)
-    sleep 1
-    while IFS= read -r pid; do
-      [ -n "$pid" ] || continue
-      kill -9 "$pid" >/dev/null 2>&1 || true
-    done < <(pgrep -f "$tmp" || true)
-  fi
-  for _ in 1 2 3 4 5; do
-    rm -rf "$tmp" >/dev/null 2>&1 && return
-    sleep 1
-  done
-  rm -rf "$tmp"
+  cleanup_real_gate4_browser "$tmp" || true
+  remove_gate4_tmp "$tmp" || true
 }
 trap cleanup EXIT
 
@@ -124,6 +329,9 @@ bin="$tmp/bin"
 home="$tmp/home"
 workspace="$tmp/workspace"
 mkdir -p "$bin" "$home" "$workspace"
+if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" = "1" ]; then
+  write_gate4_browser_wrapper
+fi
 
 hideout="$bin/hideout"
 shim="$bin/hideout-shim"
@@ -210,4 +418,7 @@ grep -q '"action":"host.open"' "$audit"
 grep -q '"decision":"deny"' "$audit"
 grep -q '"command":"xdg-open"' "$audit"
 
+cleanup_real_gate4_browser "$tmp"
+remove_gate4_tmp "$tmp"
+trap - EXIT
 echo "gate4: passed"

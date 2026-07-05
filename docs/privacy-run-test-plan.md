@@ -596,9 +596,12 @@ The real-browser mode must still dry-run file opens and denial checks so the gat
 does not open arbitrary local files while proving the URL launcher path.
 Before the external URL launch, the gate performs a no-side-effect browser
 launcher preflight. `HIDEOUT_BROWSER_PATH` must point to a direct
-Chromium-compatible browser binary and must not be `open` or `xdg-open`; without
-`HIDEOUT_BROWSER_PATH`, macOS app mode must resolve the configured
-`HIDEOUT_BROWSER_APP` or the default `Google Chrome`.
+Chromium-compatible browser binary and must not be `open` or `xdg-open`. If
+`HIDEOUT_BROWSER_PATH` is not set, the script must resolve a direct
+Chromium-compatible browser binary itself and invoke it through a gate-owned
+temporary launcher. Real-browser Gate 4 must not use generic URL openers such
+as `/usr/bin/open` or `xdg-open`; the test must own the browser process
+lifetime so cleanup evidence is meaningful.
 The aggregate `scripts/test-phase1.sh --release-candidate` and
 `scripts/test-release-dogfood.sh` run this preflight before expensive gates so a
 bad browser launcher fails early without opening a browser.
@@ -622,6 +625,10 @@ Required checks:
   remote-debugging socket, or create a guest-visible browser control channel;
   URL-open audit must record `portBridge=none`, `browserControl=disabled`, and
   `remoteDebugging=not-exposed`;
+- real-browser Gate 4 must terminate temporary browser processes that use a
+  `hideout-gate4.*` isolated profile and remove the matching temporary
+  directories. Cleanup must match the test profile path, not the operator's
+  normal browser profile;
 - workspace file open maps guest paths to host workspace files only;
 - file open rejects host paths outside workspace, special files, symlink escapes,
   remote `file://` hosts, query/fragment file URLs, and encoded path separators;
