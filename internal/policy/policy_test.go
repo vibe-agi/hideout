@@ -106,16 +106,16 @@ func TestValidateLabProposalRejectsUnsafeShapes(t *testing.T) {
 			want: "lab-probe",
 		},
 		{
-			name: "secret resource",
+			name: "control-plane token in resource",
 			proposal: LabProposal{
 				Subject:   "lab:portbridge",
 				Decision:  Allow,
 				Route:     LabProbe,
 				Action:    ActionPortbridgeProbe,
-				Resources: []string{"target:token=abc"},
+				Resources: []string{"target:cap_0123456789abcdef0123456789abcdef"},
 				Reason:    "bad resource",
 			},
-			want: "secret",
+			want: "control-plane",
 		},
 		{
 			name: "unsupported action",
@@ -300,37 +300,40 @@ func TestProposalSchemaAndValidatorRejectInvalidShapes(t *testing.T) {
 			want: "unsupported action",
 		},
 		{
-			name: "secret value in resource",
+			name: "control-plane token in resource",
 			proposal: Proposal{
 				Decision:  Allow,
 				Route:     HostBroker,
 				Action:    "host.open",
-				Resources: []string{"secret=value"},
+				Resources: []string{"url:https://example.com/callback?ref=cap_0123456789abcdef0123456789abcdef"},
 				Reason:    "bad resource",
 			},
-			want: "secret",
+			want: "control-plane",
 		},
 		{
-			name: "token value in resource",
+			name: "hideout secret backing name in resource",
 			proposal: Proposal{
 				Decision:  Allow,
 				Route:     HostBroker,
 				Action:    "host.open",
-				Resources: []string{"url:https://example.com/callback?token=abc"},
+				Resources: []string{"env:HIDEOUT_SECRET_DEFAULT_PROXY"},
 				Reason:    "bad resource",
 			},
-			want: "secret",
+			want: "control-plane",
 		},
 		{
-			name: "URL credential in resource",
+			// The Go guard is case-insensitive; the schema precheck must
+			// mirror it so a proposal never passes precheck and then
+			// fail-closes at runtime.
+			name: "lowercase hideout secret backing name in resource",
 			proposal: Proposal{
 				Decision:  Allow,
 				Route:     HostBroker,
 				Action:    "host.open",
-				Resources: []string{"url:https://user:pass@example.com"},
+				Resources: []string{"env:hideout_secret_default_proxy"},
 				Reason:    "bad resource",
 			},
-			want: "secret",
+			want: "control-plane",
 		},
 	}
 	for _, tt := range tests {
@@ -342,6 +345,36 @@ func TestProposalSchemaAndValidatorRejectInvalidShapes(t *testing.T) {
 				t.Fatal("expected schema validation to fail")
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsRawUserURLInResources(t *testing.T) {
+	// The migration's core win: a command.decide script receives the target
+	// verbatim and may echo raw user URLs (with credentials or query params
+	// that heuristics used to flag) into proposal resources. These are
+	// host-local evidence and must be accepted; only Hideout control-plane
+	// credentials are rejected.
+	e := NewEvaluator(profile.Default("test"))
+	schema := compilePolicySchema(t)
+	for _, resource := range []string{
+		"url:https://app.example.com/callback?code=authcode123&state=xyz",
+		"url:https://api.example.com/v1?token=user-supplied-value",
+		"url:https://user:pass@example.com/path",
+		"url:https://shipping.example.com/rate?postal_code=94107&area_code=415",
+	} {
+		p := Proposal{
+			Decision:  Allow,
+			Route:     HostBroker,
+			Action:    "host.open",
+			Resources: []string{resource},
+			Reason:    "raw user URL from verbatim command context",
+		}
+		if _, err := e.Validate(p); err != nil {
+			t.Fatalf("validator should accept raw user URL resource %q: %v", resource, err)
+		}
+		if err := validatePolicyProposal(schema, p); err != nil {
+			t.Fatalf("schema should accept raw user URL resource %q: %v", resource, err)
+		}
 	}
 }
 

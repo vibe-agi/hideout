@@ -4,14 +4,71 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
 
-func TestRedactStringURLSecrets(t *testing.T) {
-	got := RedactString("https://user:pass@example.com/path?token=abc&ok=1")
-	if got != "https://example.com/path?ok=1&token=REDACTED" {
-		t.Fatalf("unexpected redaction: %s", got)
+func TestRedactDetailsStripsAllControlPlaneFieldNames(t *testing.T) {
+	// Every Core control-plane field name in controlPlaneKeys must be stripped,
+	// so none can be silently dropped from the set without a test failing.
+	for _, key := range []string{"capabilityToken", "brokerToken", "uiToken", "managerToken"} {
+		got := RedactDetails(map[string]any{key: "sensitive-control-plane-value"})
+		if got[key] != "REDACTED" {
+			t.Fatalf("control-plane field %q should be redacted, got %+v", key, got)
+		}
+	}
+}
+
+func TestWriterEmitStripsControlPlaneToDisk(t *testing.T) {
+	// The storage-time redaction wiring in Writer.Emit must strip control-plane
+	// material into the on-disk JSONL, not only when RedactDetails is called
+	// directly.
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	w, err := NewFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Emit(Event{
+		Action:   "host.open",
+		Decision: "allow",
+		Details: map[string]any{
+			"capabilityToken": "cap_0123456789abcdef0123456789abcdef",
+			"machineId":       "0123456789abcdef0123456789abcdef",
+			"target":          "https://example.com/?token=user-value",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "cap_0123456789abcdef0123456789abcdef") || strings.Contains(text, "0123456789abcdef0123456789abcdef") {
+		t.Fatalf("on-disk audit leaked control-plane material: %s", text)
+	}
+	if !strings.Contains(text, "token=user-value") {
+		t.Fatalf("on-disk audit should preserve user data verbatim: %s", text)
+	}
+}
+
+func TestRedactStringPreservesUserURLData(t *testing.T) {
+	// User/application data in a URL is host-local evidence and is preserved
+	// verbatim; Core does not guess which values are secrets.
+	cases := []string{
+		"https://user:pass@example.com/path?token=abc&ok=1",
+		"https://example.com/callback?code=authcode&state=xyz",
+		"https://example.com/ship?postal_code=90210&area_code=415",
+		"https://example.com/i18n?language_code=en-US",
+	}
+	for _, in := range cases {
+		if got := RedactString(in); got != in {
+			t.Fatalf("user URL data should be preserved verbatim: in=%q got=%q", in, got)
+		}
 	}
 }
 
@@ -54,8 +111,8 @@ func TestWriterSerializesConcurrentEmits(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("invalid JSONL line %d: %v\n%s", lines, err, line)
 		}
-		if event.Details["target"] != "https://example.com/?token=REDACTED" {
-			t.Fatalf("event was not redacted: %+v", event.Details)
+		if event.Details["target"] != "https://example.com/?token=secret" {
+			t.Fatalf("user URL data should be preserved verbatim: %+v", event.Details)
 		}
 	}
 	if lines != events {
@@ -84,25 +141,100 @@ func splitNonEmptyLines(s string) []string {
 	return out
 }
 
-func TestRedactStringURLSubstringAndAssignments(t *testing.T) {
-	got := RedactString("curl --token abc --api-key=sk-123 https://user:pass@example.com/path?token=abc&ok=1 password=hunter2")
-	if got != "curl --token REDACTED --api-key=REDACTED https://example.com/path?ok=1&token=REDACTED password=REDACTED" {
-		t.Fatalf("unexpected redaction: %s", got)
+func TestRedactStringPreservesUserCommandData(t *testing.T) {
+	// Command flags and assignments are user data; Core does not guess.
+	in := "curl --token abc --api-key=sk-123 https://user:pass@example.com/path?token=abc&ok=1 password=hunter2"
+	if got := RedactString(in); got != in {
+		t.Fatalf("user command data should be preserved verbatim:\n in=%q\ngot=%q", in, got)
 	}
 }
 
-func TestRedactStringHeaderSecrets(t *testing.T) {
+func TestRedactStringPreservesUserHeadersButStripsMachineID(t *testing.T) {
+	// User-supplied headers are preserved verbatim. Generated machine-id is
+	// Core identity material of known shape and is stripped deterministically.
 	in := "Authorization: Bearer tok_123\nX-API-Key: sk-123\nCookie: sid=abc; theme=dark\nmachine-id=0123456789abcdef0123456789abcdef\nguestMachineID: fedcba9876543210fedcba9876543210\nok=value"
 	got := RedactString(in)
-	want := "Authorization: Bearer REDACTED\nX-API-Key: REDACTED\nCookie: REDACTED\nmachine-id=REDACTED\nguestMachineID: REDACTED\nok=value"
+	want := "Authorization: Bearer tok_123\nX-API-Key: sk-123\nCookie: sid=abc; theme=dark\nmachine-id=REDACTED\nguestMachineID: REDACTED\nok=value"
 	if got != want {
 		t.Fatalf("unexpected redaction:\n%s", got)
 	}
 }
 
-func TestRedactDetailsRecursiveAndKeyAware(t *testing.T) {
+func TestRedactValuePreservesUserFieldsContainingMachineIDSubstring(t *testing.T) {
+	// Only Core's own machine-id field names (machineId, guestMachineId and
+	// separator variants) are control-plane. User business fields that merely
+	// contain the substring are user data and stay verbatim.
 	got := RedactDetails(map[string]any{
-		"capabilityToken":  "cap_secret",
+		"customerMachineId":         "customer-asset-42",
+		"externalMachineIdentifier": "rack-7-slot-3",
+	})
+	if got["customerMachineId"] != "customer-asset-42" {
+		t.Fatalf("user field customerMachineId should be preserved verbatim: %+v", got)
+	}
+	if got["externalMachineIdentifier"] != "rack-7-slot-3" {
+		t.Fatalf("user field externalMachineIdentifier should be preserved verbatim: %+v", got)
+	}
+}
+
+func TestRedactStringStripsHideoutSecretColonAndJSONForms(t *testing.T) {
+	// The HIDEOUT_SECRET_* namespace is self-known, so backing values adjacent
+	// to the name are stripped in every formatting Core or tooling can emit:
+	// KEY=value, KEY: value, and JSON "KEY":"value".
+	cases := []struct{ in, want string }{
+		{
+			in:   "HIDEOUT_SECRET_DEFAULT_PROXY: socks5://user:pass@127.0.0.1:1080",
+			want: "HIDEOUT_*=REDACTED",
+		},
+		{
+			in:   `{"HIDEOUT_SECRET_DEFAULT_PROXY":"socks5://user:pass@127.0.0.1:1080"}`,
+			want: `{"HIDEOUT_*":"REDACTED"}`,
+		},
+		{
+			in:   `env dump: HIDEOUT_SECRET_OTHER:socks5://127.0.0.1:1080 done`,
+			want: "env dump: HIDEOUT_*=REDACTED done",
+		},
+		{
+			// Deliberate over-eat: in prose, the single token following
+			// "HIDEOUT_SECRET_FOO:" is consumed. Core cannot tell prose from a
+			// value dump, and eating one adjacent token is the conservative
+			// side for a self-known secret namespace.
+			in:   "unknown variable HIDEOUT_SECRET_FOO: not found",
+			want: "unknown variable HIDEOUT_*=REDACTED found",
+		},
+		{
+			// A bare name followed by prose without a separator is still just
+			// a name collapse; no value is eaten.
+			in:   "missing HIDEOUT_SECRET_DEFAULT_PROXY and exiting",
+			want: "missing HIDEOUT_* and exiting",
+		},
+	}
+	for _, tt := range cases {
+		if got := RedactString(tt.in); got != tt.want {
+			t.Fatalf("hideout secret form not stripped:\n in=%q\ngot=%q\nwant=%q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestRedactStringStripsControlPlaneTokens(t *testing.T) {
+	// Core-minted token values (cap_/ui_ + hex) are self-known and stripped.
+	in := "broker cap_0123456789abcdef0123456789abcdef ui token ui_fedcba9876543210fedcba9876543210 done"
+	want := "broker REDACTED ui token REDACTED done"
+	if got := RedactString(in); got != want {
+		t.Fatalf("control-plane token not stripped:\n%s", got)
+	}
+	// A user string that merely starts with cap_ but is not a minted token
+	// (non-hex) is preserved.
+	if got := RedactString("cap_manual_preview_1"); got != "cap_manual_preview_1" {
+		t.Fatalf("non-token cap_ value should be preserved: %s", got)
+	}
+}
+
+func TestRedactDetailsDeterministic(t *testing.T) {
+	// Deterministic redaction: Core strips only its own control-plane field
+	// names, minted token values, generated machine-id, and the
+	// HIDEOUT_SECRET_* namespace. All user/application data is preserved.
+	got := RedactDetails(map[string]any{
+		"capabilityToken":  "cap_0123456789abcdef0123456789abcdef",
 		"proxySecretRef":   "default-proxy",
 		"identityId":       "id_traceable",
 		"sourceIdentityId": "id_source",
@@ -123,49 +255,57 @@ func TestRedactDetailsRecursiveAndKeyAware(t *testing.T) {
 			"TERM":          "xterm-256color",
 		},
 	})
+	// Control-plane and identity material: stripped.
 	if got["capabilityToken"] != "REDACTED" {
-		t.Fatalf("capability token not redacted: %+v", got)
-	}
-	if got["proxySecretRef"] != "default-proxy" {
-		t.Fatalf("secret ref should be preserved: %+v", got)
-	}
-	if got["identityId"] != "id_traceable" || got["sourceIdentityId"] != "id_source" {
-		t.Fatalf("identity lineage IDs should be preserved: %+v", got)
+		t.Fatalf("control-plane capability token field not redacted: %+v", got)
 	}
 	if got["machineId"] != "REDACTED" {
-		t.Fatalf("machineId should be redacted: %+v", got)
+		t.Fatalf("machineId field should be redacted: %+v", got)
 	}
 	if got["message"] != "guest machine-id REDACTED is ready" {
 		t.Fatalf("message machine-id should be redacted: %+v", got)
 	}
-	if got["target"] != "https://example.com/path?auth=REDACTED&ok=1" {
-		t.Fatalf("target not redacted: %+v", got["target"])
+	nested := got["nested"].(map[string]any)
+	if nested["guestMachineID"] != "REDACTED" {
+		t.Fatalf("nested machine ID field should be redacted: %+v", nested)
+	}
+	// Identifiers and user data: preserved verbatim.
+	if got["proxySecretRef"] != "default-proxy" {
+		t.Fatalf("secret ref identifier should be preserved: %+v", got)
+	}
+	if got["identityId"] != "id_traceable" || got["sourceIdentityId"] != "id_source" {
+		t.Fatalf("identity lineage IDs should be preserved: %+v", got)
+	}
+	if got["target"] != "https://user:pass@example.com/path?auth=abc&ok=1" {
+		t.Fatalf("user target should be preserved verbatim: %+v", got["target"])
 	}
 	argv := got["argv"].([]string)
-	if argv[2] != "REDACTED" || argv[3] != "--api-key=REDACTED" || argv[4] != "https://example.com/?code=REDACTED" {
-		t.Fatalf("argv not redacted: %+v", argv)
+	if argv[2] != "abc123" || argv[3] != "--api-key=sk-123" || argv[4] != "https://example.com/?code=abc" {
+		t.Fatalf("user argv should be preserved verbatim: %+v", argv)
 	}
-	nested := got["nested"].(map[string]any)
-	if nested["password"] != "REDACTED" {
-		t.Fatalf("nested password not redacted: %+v", nested)
-	}
-	if nested["guestMachineID"] != "REDACTED" {
-		t.Fatalf("nested machine ID not redacted: %+v", nested)
+	if nested["password"] != "hunter2" {
+		t.Fatalf("user password field should be preserved verbatim: %+v", nested)
 	}
 	urls := nested["urls"].([]any)
-	if urls[0] != "https://example.com/callback?code=REDACTED" {
-		t.Fatalf("nested URL not redacted: %+v", urls)
+	if urls[0] != "https://example.com/callback?code=abc" {
+		t.Fatalf("user URL should be preserved verbatim: %+v", urls)
 	}
-	if urls[1].(map[string]any)["apiKey"] != "REDACTED" {
-		t.Fatalf("nested api key not redacted: %+v", urls[1])
+	if urls[1].(map[string]any)["apiKey"] != "abc123" {
+		t.Fatalf("user apiKey field should be preserved verbatim: %+v", urls[1])
 	}
 	env := got["env"].(map[string]string)
-	if env["SERVICE_TOKEN"] != "REDACTED" || env["TERM"] != "xterm-256color" {
-		t.Fatalf("env redaction mismatch: %+v", env)
+	if env["SERVICE_TOKEN"] != "secret" || env["TERM"] != "xterm-256color" {
+		t.Fatalf("user env should be preserved verbatim: %+v", env)
 	}
 }
 
 func TestRedactHideoutSecretBackingNames(t *testing.T) {
+	// The HIDEOUT_SECRET_* backing namespace is self-known: names collapse to
+	// HIDEOUT_*, assignments and env-map values under such keys are REDACTED.
+	// A bare resolved value carried as an unlabeled argv token (arg[3]) is
+	// preserved because Core cannot distinguish it from a user URL; real proxy
+	// secrets reach audit only under the HIDEOUT_SECRET_* form above, never as
+	// a bare argv element.
 	got := RedactDetails(map[string]any{
 		"message": "missing HIDEOUT_SECRET_DEFAULT_PROXY and HIDEOUT_SECRET_OTHER=socks5://user:pass@127.0.0.1:1080",
 		"argv": []string{
@@ -183,8 +323,8 @@ func TestRedactHideoutSecretBackingNames(t *testing.T) {
 		t.Fatalf("message leaked hideout secret backing name: %s", text)
 	}
 	argv := got["argv"].([]string)
-	if argv[1] != "HIDEOUT_*=REDACTED" || argv[2] != "HIDEOUT_*" || argv[3] != "REDACTED" {
-		t.Fatalf("argv leaked hideout secret backing name: %+v", argv)
+	if argv[1] != "HIDEOUT_*=REDACTED" || argv[2] != "HIDEOUT_*" || argv[3] != "socks5://user:pass@127.0.0.1:1080" {
+		t.Fatalf("argv redaction mismatch: %+v", argv)
 	}
 	env := got["env"].(map[string]string)
 	if _, ok := env["HIDEOUT_SECRET_DEFAULT_PROXY"]; ok {

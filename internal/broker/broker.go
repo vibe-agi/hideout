@@ -689,10 +689,15 @@ func (s *Server) commandContext(req Request, target string) policy.CommandContex
 		},
 		Subject: req.Subject,
 		Command: map[string]any{
-			"name":         req.Command,
-			"argv":         audit.RedactArgv(req.Argv),
+			"name": req.Command,
+			// target and argv are canonicalized guest-authored values, provided
+			// raw: the requesting process already possesses them, so redacting
+			// them from the decision hook protects nothing and breaks real
+			// policy such as redirect-URI parsing or query-parameter rules.
+			// Control-plane credentials never enter this request shape.
+			"argv":         append([]string(nil), req.Argv...),
 			"cwd":          req.Args["cwd"],
-			"target":       audit.RedactString(target),
+			"target":       target,
 			"action":       req.Action,
 			"route":        req.Route,
 			"resourceType": resourceType,

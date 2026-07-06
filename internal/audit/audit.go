@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -12,17 +11,36 @@ import (
 	"time"
 )
 
+// Redaction is deterministic, not heuristic. Core strips only what it minted
+// and can name exactly: the HIDEOUT_SECRET_* backing namespace, Core-minted
+// control-plane token values (cap_/ui_ + hex), Core's own control-plane detail
+// field names, and generated machine-id identity material. User/application
+// request data (URLs, argv, query values, headers, paths) is host-local
+// evidence and is recorded verbatim; Core does not guess which user values are
+// secrets. Redacting user data belongs to user-owned audit.redact policy and
+// to the export/share boundary. See docs/privacy-run-design.md (Audit and
+// Explain) and docs/threat-model.md (Evidence Requirements).
 var (
-	urlSubstringRE            = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+`)
-	hideoutSecretNameRE       = regexp.MustCompile(`(?i)\bHIDEOUT_SECRET_[A-Z0-9_]*\b`)
-	hideoutSecretAssignmentRE = regexp.MustCompile(`(?i)\bHIDEOUT_SECRET_[A-Z0-9_]*=([^\s&;]+)`)
-	secretAssignmentRE        = regexp.MustCompile(`(?i)\b(token|password|passwd|secret|api[_-]?key|access[_-]?key|authorization|cookie)=([^\s&;]+)`)
-	secretFlagRE              = regexp.MustCompile(`(?i)(-{1,2}(?:token|password|passwd|secret|api[-_]?key|access[-_]?key|authorization|cookie)(?:=|\s+))([^\s]+)`)
-	authHeaderRE              = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*(?:bearer|basic|digest|token)?\s*)[^\s,;]+`)
-	cookieHeaderRE            = regexp.MustCompile(`(?i)\b((?:cookie|set-cookie)\s*[:=]\s*)[^\r\n]+`)
-	apiKeyHeaderRE            = regexp.MustCompile(`(?i)\b((?:x[-_]?api[-_]?key|api[-_]?key|access[-_]?key|private[-_]?token|auth[-_]?token|x[-_]?auth[-_]?token)\s*[:=]\s*)[^\s,;]+`)
+	hideoutSecretNameRE = regexp.MustCompile(`(?i)\bHIDEOUT_SECRET_[A-Z0-9_]*\b`)
+	// Backing values adjacent to a self-known HIDEOUT_SECRET_* name are
+	// stripped in KEY=value, KEY: value, and JSON "KEY":"value" forms. In
+	// prose this can eat the single token following "KEY:"; that over-eat is
+	// deliberate — conservative for a self-known secret namespace.
+	hideoutSecretAssignmentRE = regexp.MustCompile(`(?i)\bHIDEOUT_SECRET_[A-Z0-9_]*\s*[:=]\s*[^\s&;]+`)
+	hideoutSecretJSONRE       = regexp.MustCompile(`(?i)"HIDEOUT_SECRET_[A-Z0-9_]*"\s*:\s*"[^"]*"`)
+	controlPlaneTokenRE       = regexp.MustCompile(`\b(?:cap|ui)_[0-9a-f]{16,}\b`)
 	machineIDValueRE          = regexp.MustCompile(`(?i)\b((?:guest[-_ ]?)?machine[-_ ]?id\s*(?:[:=]|\s+)\s*)[0-9a-f]{32}\b`)
 )
+
+// controlPlaneKeys are Core's own control-plane detail field names. Matching
+// these exactly is self-knowledge, not heuristic guessing: they are field
+// names Hideout itself emits, never user business fields.
+var controlPlaneKeys = map[string]bool{
+	"capabilitytoken": true,
+	"brokertoken":     true,
+	"uitoken":         true,
+	"managertoken":    true,
+}
 
 type Event struct {
 	Time     time.Time      `json:"time"`
@@ -95,7 +113,7 @@ func RedactKey(key string) string {
 }
 
 func RedactValue(key string, value any) any {
-	if IsSecretValueKey(key) {
+	if isControlPlaneKey(key) {
 		return "REDACTED"
 	}
 	switch v := value.(type) {
@@ -132,7 +150,7 @@ func RedactValue(key string, value any) any {
 	case map[string]string:
 		out := make(map[string]string, len(v))
 		for k, item := range v {
-			if IsSecretValueKey(k) {
+			if isControlPlaneKey(k) {
 				out[RedactKey(k)] = "REDACTED"
 			} else {
 				out[RedactKey(k)] = RedactString(item)
@@ -146,100 +164,43 @@ func RedactValue(key string, value any) any {
 
 func RedactArgv(argv []string) []string {
 	out := make([]string, len(argv))
-	for i := 0; i < len(argv); i++ {
+	for i := range argv {
 		out[i] = RedactString(argv[i])
-		if (isSecretFlag(argv[i]) || containsHideoutSecretName(argv[i])) && !strings.Contains(argv[i], "=") && i+1 < len(argv) {
-			i++
-			out[i] = "REDACTED"
-		}
 	}
 	return out
 }
 
+// RedactString strips only Hideout-minted control-plane material: the
+// HIDEOUT_SECRET_* backing namespace, Core-minted token values, and generated
+// machine-id identity material. All other text is user/application data and is
+// returned verbatim.
 func RedactString(s string) string {
+	s = hideoutSecretJSONRE.ReplaceAllString(s, `"HIDEOUT_*":"REDACTED"`)
 	s = hideoutSecretAssignmentRE.ReplaceAllString(s, "HIDEOUT_*=REDACTED")
 	s = hideoutSecretNameRE.ReplaceAllString(s, "HIDEOUT_*")
-	s = authHeaderRE.ReplaceAllString(s, "${1}REDACTED")
-	s = cookieHeaderRE.ReplaceAllString(s, "${1}REDACTED")
-	s = apiKeyHeaderRE.ReplaceAllString(s, "${1}REDACTED")
+	s = controlPlaneTokenRE.ReplaceAllString(s, "REDACTED")
 	s = machineIDValueRE.ReplaceAllString(s, "${1}REDACTED")
-	s = secretFlagRE.ReplaceAllString(s, "${1}REDACTED")
-	s = secretAssignmentRE.ReplaceAllString(s, "$1=REDACTED")
-	if !strings.Contains(s, "://") {
-		return s
-	}
-	return urlSubstringRE.ReplaceAllStringFunc(s, redactURLString)
+	return s
 }
 
-func redactURLString(s string) string {
-	u, err := url.Parse(s)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return s
-	}
-	u.User = nil
-	q := u.Query()
-	for key := range q {
-		if IsSecretValueKey(key) || isSensitiveQueryKey(key) {
-			q.Set(key, "REDACTED")
-		}
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
-}
-
-func isSecretFlag(value string) bool {
-	if !strings.HasPrefix(value, "-") {
-		return false
-	}
-	name := strings.TrimLeft(value, "-")
-	if before, _, ok := strings.Cut(name, "="); ok {
-		name = before
-	}
-	return IsSecretValueKey(name)
-}
-
-func containsHideoutSecretName(value string) bool {
-	return hideoutSecretNameRE.MatchString(value)
-}
-
-func IsSecretValueKey(key string) bool {
+// isControlPlaneKey reports whether key is one of Core's own control-plane
+// detail field names or one of Core's own machine-id field names (machineId /
+// guestMachineId and separator variants, which normalizeKey collapses). All
+// are self-known: Core emits these field names itself, so an exact match is
+// not a heuristic guess about user data. Fields that merely contain a
+// machine-id-like substring (e.g. customerMachineId) are user data.
+func isControlPlaneKey(key string) bool {
 	normalized := normalizeKey(key)
 	if normalized == "" {
 		return false
 	}
-	if strings.Contains(normalized, "machineid") {
+	if normalized == "machineid" || normalized == "guestmachineid" {
 		return true
 	}
-	if strings.Contains(normalized, "secretref") || strings.HasSuffix(normalized, "ref") {
-		return false
+	if strings.HasPrefix(normalized, "hideoutsecret") {
+		return true
 	}
-	for _, marker := range []string{
-		"token",
-		"password",
-		"passwd",
-		"credential",
-		"authorization",
-		"cookie",
-		"privatekey",
-		"apikey",
-		"accesskey",
-		"secret",
-	} {
-		if strings.Contains(normalized, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func isSensitiveQueryKey(key string) bool {
-	normalized := normalizeKey(key)
-	for _, marker := range []string{"auth", "code", "key"} {
-		if normalized == marker || strings.Contains(normalized, marker) {
-			return true
-		}
-	}
-	return false
+	return controlPlaneKeys[normalized]
 }
 
 func normalizeKey(key string) string {

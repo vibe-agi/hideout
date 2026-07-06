@@ -2548,23 +2548,25 @@ func TestAuditEventsFiltersAndRedactsJSONL(t *testing.T) {
 	if event.Session != "ses_1" || event.Action != "host.open" || event.Decision != "allow" {
 		t.Fatalf("unexpected event: %+v", event)
 	}
-	if event.Details["target"] != "https://example.com/path?token=REDACTED" {
-		t.Fatalf("target should be redacted: %+v", event.Details)
+	// User/application data is preserved verbatim in host-local evidence.
+	if event.Details["target"] != "https://user:pass@example.com/path?token=abc" {
+		t.Fatalf("user target should be preserved verbatim: %+v", event.Details)
 	}
-	if event.Details["capabilityToken"] != "REDACTED" {
-		t.Fatalf("capability token should be redacted: %+v", event.Details)
+	if event.Details["headerDump"] != "Authorization: Bearer tok_123\nX-API-Key: sk-123\nCookie: sid=abc" {
+		t.Fatalf("user header dump should be preserved verbatim: %+v", event.Details)
 	}
 	if event.Details["identityId"] != "id_traceable" || event.Details["sourceIdentityId"] != "id_source" {
 		t.Fatalf("identity lineage IDs should be preserved: %+v", event.Details)
+	}
+	// Hideout-minted control-plane field and generated identity material: stripped.
+	if event.Details["capabilityToken"] != "REDACTED" {
+		t.Fatalf("control-plane capability token field should be redacted: %+v", event.Details)
 	}
 	if event.Details["machineId"] != "REDACTED" {
 		t.Fatalf("raw machine-id should be redacted: %+v", event.Details)
 	}
 	if event.Details["message"] != "guest machine-id REDACTED is ready" {
 		t.Fatalf("string machine-id should be redacted: %+v", event.Details)
-	}
-	if event.Details["headerDump"] != "Authorization: Bearer REDACTED\nX-API-Key: REDACTED\nCookie: REDACTED" {
-		t.Fatalf("header dump should be redacted: %+v", event.Details)
 	}
 }
 

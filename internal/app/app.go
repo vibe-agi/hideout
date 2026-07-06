@@ -5188,7 +5188,7 @@ func emitLabBrowserControlProbe(aw *audit.Writer, layout session.Layout, proposa
 		"route":                       string(proposal.Route),
 		"mode":                        "browser-control",
 		"profile":                     audit.RedactString(opts.profileName),
-		"browserPath":                 filepath.Base(opts.browserPath),
+		"browserPath":                 opts.browserPath,
 		"browserProfile":              "present",
 		"controlURL":                  audit.RedactString(controlURL),
 		"browser":                     browserName,

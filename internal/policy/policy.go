@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -384,8 +385,8 @@ func (e Evaluator) Validate(p Proposal) (Proposal, error) {
 		if strings.TrimSpace(r) == "" {
 			return p, errors.New("policy resources must not be empty")
 		}
-		if resourceContainsSecretValue(r) {
-			return p, errors.New("policy resources must not contain secret values")
+		if resourceContainsControlPlaneSecret(r) {
+			return p, errors.New("policy resources must not reference Hideout control-plane credentials")
 		}
 	}
 	if strings.TrimSpace(p.Reason) == "" {
@@ -394,50 +395,22 @@ func (e Evaluator) Validate(p Proposal) (Proposal, error) {
 	return p, nil
 }
 
-func resourceContainsSecretValue(resource string) bool {
-	if containsURLUserInfo(resource) {
-		return true
-	}
-	normalized := strings.ToLower(resource)
-	for _, marker := range []string{
-		"token=",
-		"password=",
-		"passwd=",
-		"credential=",
-		"authorization=",
-		"cookie=",
-		"privatekey=",
-		"private-key=",
-		"private_key=",
-		"apikey=",
-		"api-key=",
-		"api_key=",
-		"accesskey=",
-		"access-key=",
-		"access_key=",
-		"secret=",
-		"auth=",
-		"code=",
-		"key=",
-	} {
-		if strings.Contains(normalized, marker) {
-			return true
-		}
-	}
-	return false
+// resourceContainsControlPlaneSecret reports whether a proposal resource
+// embeds Hideout-minted control-plane material. This is a deterministic guard,
+// not a heuristic user-data check: a resource may legitimately carry a raw user
+// URL with query parameters (the script received the target verbatim and may
+// echo it), which is host-local evidence and is preserved. Only Core's own
+// credentials — the HIDEOUT_SECRET_* backing namespace and minted cap_/ui_
+// token values — must never be referenced from a script proposal. This mirrors
+// the deterministic redaction contract in internal/audit.
+func resourceContainsControlPlaneSecret(resource string) bool {
+	return hideoutSecretNameRE.MatchString(resource) || controlPlaneTokenRE.MatchString(resource)
 }
 
-func containsURLUserInfo(value string) bool {
-	start := strings.Index(value, "://")
-	if start < 0 {
-		return false
-	}
-	authority := value[start+3:]
-	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
-		authority = authority[:end]
-	}
-	return strings.Contains(authority, "@")
-}
+var (
+	hideoutSecretNameRE = regexp.MustCompile(`(?i)\bHIDEOUT_SECRET_[A-Z0-9_]*\b`)
+	controlPlaneTokenRE = regexp.MustCompile(`\b(?:cap|ui)_[0-9a-f]{16,}\b`)
+)
 
 func (e Evaluator) RunCommandScript(source, entrypoint string, ctx CommandContext) (Proposal, error) {
 	out, err := runPolicyScript(source, entrypoint, ctx)

@@ -2058,7 +2058,11 @@ func TestLabPortbridgeLoopbackProbe(t *testing.T) {
 	}
 }
 
-func TestLabPortbridgeValidatorDenialWritesRedactedAudit(t *testing.T) {
+func TestLabPortbridgeDeniesControlPlaneTargetAndStripsAudit(t *testing.T) {
+	// Deterministic contract: a lab target that embeds Hideout-minted
+	// control-plane material (a cap_ token here) is denied by the lab validator,
+	// and the denial audit strips the token. A user-data query value would be
+	// accepted and recorded verbatim (see TestLabPortbridgeAllowsUserDataTarget).
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
@@ -2068,12 +2072,12 @@ func TestLabPortbridgeValidatorDenialWritesRedactedAudit(t *testing.T) {
 		"loopback",
 		"--enable-lab",
 		"--target",
-		"127.0.0.1:1?token=abc123",
+		"127.0.0.1:1?ref=cap_0123456789abcdef0123456789abcdef",
 	}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected lab validator denial; stdout=%s stderr=%s", out.String(), errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "lab proposal resources must not contain secret values") {
+	if !strings.Contains(errOut.String(), "must not reference Hideout control-plane credentials") {
 		t.Fatalf("stderr should explain lab validator denial:\n%s", errOut.String())
 	}
 	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
@@ -2088,13 +2092,47 @@ func TestLabPortbridgeValidatorDenialWritesRedactedAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "abc123") {
-		t.Fatalf("lab audit leaked secret target: %s", data)
+	if strings.Contains(string(data), "cap_0123456789abcdef0123456789abcdef") {
+		t.Fatalf("lab audit leaked control-plane token: %s", data)
 	}
-	for _, want := range []string{`"action":"portbridge.probe"`, `"decision":"error"`, `"target":"127.0.0.1:1?token=REDACTED"`} {
+	for _, want := range []string{`"action":"portbridge.probe"`, `"decision":"error"`, `"target":"127.0.0.1:1?ref=REDACTED"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("lab audit missing %q: %s", want, data)
 		}
+	}
+}
+
+func TestLabPortbridgeAllowsUserDataTarget(t *testing.T) {
+	// A user-data query value that heuristics used to flag (token=) is not
+	// control-plane material; the lab validator accepts it and the audit records
+	// it verbatim as host-local evidence.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	Main([]string{
+		"lab",
+		"portbridge",
+		"loopback",
+		"--enable-lab",
+		"--target",
+		"127.0.0.1:1?token=abc123",
+	}, &out, &errOut)
+	if strings.Contains(errOut.String(), "control-plane") {
+		t.Fatalf("user-data target must not be denied as control-plane:\n%s", errOut.String())
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("glob audit files: %v", err)
+	}
+	if len(auditFiles) != 1 {
+		t.Fatalf("expected one lab audit file, got %d: %v", len(auditFiles), auditFiles)
+	}
+	data, err := os.ReadFile(auditFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"target":"127.0.0.1:1?token=abc123"`) {
+		t.Fatalf("lab audit should record user-data target verbatim: %s", data)
 	}
 }
 
@@ -2276,8 +2314,8 @@ done
 	if event.Details["controlURL"] != "http://127.0.0.1:"+devtoolsPort+"/json/version" {
 		t.Fatalf("browser control audit should record loopback control URL: %+v", event)
 	}
-	if event.Details["browserPath"] != filepath.Base(fakeBrowser) {
-		t.Fatalf("browser control audit should record browser path basename only: %+v", event)
+	if event.Details["browserPath"] != fakeBrowser {
+		t.Fatalf("browser control audit should record the operator-supplied browser path verbatim (host-local evidence): %+v", event)
 	}
 	data, err := os.ReadFile(auditFiles[0])
 	if err != nil {
@@ -4017,14 +4055,16 @@ func TestAuditShowFiltersAndRedactsEvents(t *testing.T) {
 		"ses_audit",
 		"host.open",
 		"allow",
-		`https://example.com/path?token=REDACTED`,
+		// User URL data is host-local evidence, shown verbatim.
+		`https://user:pass@example.com/path?token=abc`,
+		// Control-plane field stripped by its self-known name.
 		`"capabilityToken":"REDACTED"`,
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("audit output missing %q:\n%s", want, out.String())
 		}
 	}
-	for _, forbidden := range []string{"user:pass", "cap_secret", "host.fs.read", "ses_other"} {
+	for _, forbidden := range []string{"cap_secret", "host.fs.read", "ses_other"} {
 		if strings.Contains(out.String(), forbidden) {
 			t.Fatalf("audit output leaked or failed to filter %q:\n%s", forbidden, out.String())
 		}
@@ -4958,7 +4998,11 @@ func TestRunAuditOffOverridesProfileAuditEnabled(t *testing.T) {
 	}
 }
 
-func TestRunNativeAuditRedactsCommandSecrets(t *testing.T) {
+func TestRunNativeAuditRecordsCommandVerbatim(t *testing.T) {
+	// The target command and its arguments are user data recorded verbatim in
+	// the host-local audit file. Core does not guess which flag values are
+	// secrets; redacting them is the operator's audit.redact policy or the
+	// export boundary, not storage-time heuristics.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
@@ -4977,22 +5021,19 @@ func TestRunNativeAuditRedactsCommandSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read audit: %v", err)
 	}
-	if strings.Contains(string(auditData), "abc123") {
-		t.Fatalf("audit leaked command secret: %s", auditData)
-	}
-	if !strings.Contains(string(auditData), "--token REDACTED") {
-		t.Fatalf("audit missing redacted command secret: %s", auditData)
+	if !strings.Contains(string(auditData), "abc123") {
+		t.Fatalf("local audit should preserve command argument verbatim: %s", auditData)
 	}
 	events := auditEventsByActionForAppTest(t, auditFiles[0])
 	commandStart := events["command.start"]
 	argv, ok := commandStart.Details["argv"].([]any)
-	if !ok || len(argv) < 5 || argv[4] != "REDACTED" {
-		t.Fatalf("command.start argv did not redact secret flag argument: %+v", commandStart.Details)
+	if !ok || len(argv) < 5 || argv[4] != "abc123" {
+		t.Fatalf("command.start argv should be recorded verbatim: %+v", commandStart.Details)
 	}
 	sessionEnd := events["session.end"]
 	command, _ := sessionEnd.Details["command"].(string)
-	if !strings.Contains(command, "--token REDACTED") || strings.Contains(command, "abc123") {
-		t.Fatalf("session.end command was not redacted: %+v", sessionEnd.Details)
+	if !strings.Contains(command, "--token abc123") {
+		t.Fatalf("session.end command should be recorded verbatim: %+v", sessionEnd.Details)
 	}
 }
 

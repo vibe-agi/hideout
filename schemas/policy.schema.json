@@ -24,49 +24,14 @@
         "not": {
           "anyOf": [
             {
-              "pattern": "[tT][oO][kK][eE][nN]="
+              "pattern": "[Hh][Ii][Dd][Ee][Oo][Uu][Tt]_[Ss][Ee][Cc][Rr][Ee][Tt]_"
             },
             {
-              "pattern": "[pP][aA][sS][sS][wW][oO][rR][dD]="
-            },
-            {
-              "pattern": "[pP][aA][sS][sS][wW][dD]="
-            },
-            {
-              "pattern": "[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]="
-            },
-            {
-              "pattern": "[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]="
-            },
-            {
-              "pattern": "[cC][oO][oO][kK][iI][eE]="
-            },
-            {
-              "pattern": "[pP][rR][iI][vV][aA][tT][eE][_-]?[kK][eE][yY]="
-            },
-            {
-              "pattern": "[aA][pP][iI][_-]?[kK][eE][yY]="
-            },
-            {
-              "pattern": "[aA][cC][cC][eE][sS][sS][_-]?[kK][eE][yY]="
-            },
-            {
-              "pattern": "[sS][eE][cC][rR][eE][tT]="
-            },
-            {
-              "pattern": "[aA][uU][tT][hH]="
-            },
-            {
-              "pattern": "[cC][oO][dD][eE]="
-            },
-            {
-              "pattern": "[kK][eE][yY]="
-            },
-            {
-              "pattern": "://[^/?#\\s]*@"
+              "pattern": "\\b(cap|ui)_[0-9a-f]{16,}\\b"
             }
           ]
-        }
+        },
+        "$comment": "Deterministic guard: resources may carry raw user URLs and query values (host-local evidence, preserved verbatim); only Hideout-minted control-plane credentials (HIDEOUT_SECRET_* backing names, matched case-insensitively via character classes because ECMA-262 schema patterns have no inline flags, and cap_/ui_ token values) are rejected. Mirrors internal/audit and internal/policy resourceContainsControlPlaneSecret, including their (?i) case-insensitivity."
       }
     },
     "reason": {

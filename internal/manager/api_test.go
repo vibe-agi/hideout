@@ -1035,7 +1035,11 @@ func TestAPIExposesDomainResourcesWithoutSecretValues(t *testing.T) {
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
-	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_1", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_1","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://user:pass@example.com/path?token=abc"}}`+"\n", 0o600)
+	// The proxy secret canary below is HIDEOUT_SECRET_DEFAULT_PROXY, which
+	// contains user:pass@127.0.0.1:1080. Keep this host.open target free of
+	// that substring so the leak check guards only the control-plane secret,
+	// not verbatim user URL data.
+	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_1", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_1","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://example.com/path?token=abc"}}`+"\n", 0o600)
 	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
 		Profile:        "default",
 		Backend:        "lima",
@@ -1159,10 +1163,15 @@ func TestAPIAuditEventsSupportsFilters(t *testing.T) {
 	}
 	validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
 	body := resp.Body.String()
-	if strings.Contains(body, "user:pass") || strings.Contains(body, "token=abc") ||
-		strings.Contains(body, "0123456789abcdef0123456789abcdef") ||
-		strings.Contains(body, "tok_123") || strings.Contains(body, "sid=abc") {
-		t.Fatalf("audit events leaked secret or raw machine-id: %s", body)
+	// The local authenticated WebUI view is host-local: user/application data
+	// is shown verbatim, only Hideout-minted control-plane credentials and
+	// generated machine-id are stripped (deterministic redaction).
+	if !strings.Contains(body, "user:pass") || !strings.Contains(body, "token=abc") ||
+		!strings.Contains(body, "tok_123") || !strings.Contains(body, "sid=abc") {
+		t.Fatalf("local authenticated view should preserve user data verbatim: %s", body)
+	}
+	if strings.Contains(body, "0123456789abcdef0123456789abcdef") {
+		t.Fatalf("audit events leaked raw machine-id: %s", body)
 	}
 	var decoded APIResponse
 	if err := json.Unmarshal([]byte(body), &decoded); err != nil {

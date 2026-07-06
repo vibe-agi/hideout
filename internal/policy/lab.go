@@ -56,8 +56,8 @@ func ValidateLabProposal(p LabProposal) (LabProposal, error) {
 		if strings.TrimSpace(resource) == "" {
 			return p, errors.New("lab proposal resources must not be empty")
 		}
-		if resourceContainsSecretValue(resource) {
-			return p, errors.New("lab proposal resources must not contain secret values")
+		if resourceContainsControlPlaneSecret(resource) {
+			return p, errors.New("lab proposal resources must not reference Hideout control-plane credentials")
 		}
 	}
 	return p, nil

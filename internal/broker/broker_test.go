@@ -1914,13 +1914,12 @@ func TestHandleRejectsOpenArgvThatDoesNotMatchPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"status":"bad-request"`, `"decision":"deny"`, `"--token"`, `"REDACTED"`} {
+	// Rejected argv is recorded verbatim: it is user data in host-local
+	// evidence, and Core does not guess which flag values are secrets.
+	for _, want := range []string{`"status":"bad-request"`, `"decision":"deny"`, `"--token"`, `"abc123"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("audit missing %q: %s", want, data)
 		}
-	}
-	if strings.Contains(string(data), "abc123") {
-		t.Fatalf("audit leaked argv secret: %s", data)
 	}
 }
 
@@ -2401,7 +2400,82 @@ func TestHandleRunsCommandPolicyScriptAndAuditsHash(t *testing.T) {
 	}
 }
 
-func TestHandleRedactsSensitiveURLBeforeCommandPolicyScript(t *testing.T) {
+func TestNewTokenFormatIsStrippedByAuditRedactor(t *testing.T) {
+	// Couple the minted broker token format to the audit redactor so that a
+	// change to NewToken() that no longer matches controlPlaneTokenRE fails
+	// here instead of silently defeating redaction.
+	token, err := NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := audit.RedactString("broker endpoint token " + token + " end")
+	if strings.Contains(got, token) {
+		t.Fatalf("minted broker token was not stripped by audit redactor: %q -> %q", token, got)
+	}
+	if got != "broker endpoint token REDACTED end" {
+		t.Fatalf("unexpected redaction of minted token: %q", got)
+	}
+}
+
+func TestCommandScriptContextArgvIsRaw(t *testing.T) {
+	// The command.decide script context must expose argv verbatim, so a
+	// regression that reinstates argv redaction fails here.
+	profileDir := t.TempDir()
+	scriptPath := filepath.Join(profileDir, "policy", "argv.js")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The script denies unless argv[1] carries the raw query value from the
+	// target. Legacy heuristic argv redaction would have rewritten token=abc123.
+	source := `function decideCommand(ctx) {
+  var arg = ctx.command.argv[1] || "";
+  if (arg.indexOf("token=abc123") < 0) {
+    return hideout.decision.deny({ route: "deny", action: "host.open", resources: ["url:https"], reason: "argv was not raw: " + arg });
+  }
+  return hideout.decision.allow({ route: "host-broker", action: "host.open", resources: ["url:https"], reason: "raw argv available" });
+}`
+	if err := os.WriteFile(scriptPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opener := &recordingOpener{}
+	server := Server{
+		SessionID:  "ses_1",
+		Token:      "cap_good",
+		Profile:    "test",
+		ProfileDir: profileDir,
+		Commands:   []string{"open"},
+		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Opener:     opener,
+		Audit:      audit.NewDiscard(),
+		ScriptRefs: []profile.ScriptRef{{
+			ID:          "argv",
+			Path:        "policy/argv.js",
+			Entrypoints: []string{"decideCommand"},
+		}},
+	}
+	target := "https://example.com/?token=abc123"
+	resp := server.Handle(context.Background(), Request{
+		ID:              "req_1",
+		SessionID:       "ses_1",
+		CapabilityToken: "cap_good",
+		Subject:         "command:open",
+		Command:         "open",
+		Argv:            []string{"open", target},
+		Route:           "host-broker",
+		Action:          "host.open",
+		Args:            map[string]any{"target": target},
+	})
+	if resp.ExitCode != 0 {
+		t.Fatalf("script should have seen raw argv and allowed, got %+v", resp)
+	}
+}
+
+func TestHandleGivesCommandPolicyScriptRawTargetAndAuditsVerbatim(t *testing.T) {
+	// The command policy script receives the canonicalized target verbatim so
+	// it can make real security decisions on it (here: deny URLs that carry
+	// embedded credentials). User data is host-local evidence and is written
+	// to the local audit file verbatim; only Hideout-minted control-plane
+	// credentials are stripped.
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	writer, err := audit.NewFile(auditPath)
 	if err != nil {
@@ -2409,19 +2483,19 @@ func TestHandleRedactsSensitiveURLBeforeCommandPolicyScript(t *testing.T) {
 	}
 	defer writer.Close()
 	profileDir := t.TempDir()
-	scriptPath := filepath.Join(profileDir, "policy", "allow-redacted.js")
+	scriptPath := filepath.Join(profileDir, "policy", "raw-target.js")
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	source := `function decideCommand(ctx) {
-  var command = JSON.stringify(ctx.command);
-  if (command.indexOf("user:pass") >= 0 || command.indexOf("token=abc") >= 0) {
-    return hideout.decision.deny({ route: "deny", action: "host.open", resources: ["url:https"], reason: "raw URL secret reached script" });
+  var u = hideout.url.parse(ctx.command.target);
+  if (u.host.indexOf("@") >= 0) {
+    return hideout.decision.deny({ route: "deny", action: "host.open", resources: ["url:https"], reason: "URL carries embedded credentials" });
   }
-  if (ctx.command.target !== "https://example.com/path?ok=1&token=REDACTED") {
-    return hideout.decision.deny({ route: "deny", action: "host.open", resources: ["url:https"], reason: "target was not redacted: " + ctx.command.target });
+  if (ctx.command.target.indexOf("token=abc") < 0) {
+    return hideout.decision.deny({ route: "deny", action: "host.open", resources: ["url:https"], reason: "script did not receive raw target: " + ctx.command.target });
   }
-  return hideout.decision.allow({ route: "host-broker", action: "host.open", resources: ["url:https"], reason: "redacted URL context" });
+  return hideout.decision.allow({ route: "host-broker", action: "host.open", resources: ["url:https"], reason: "raw URL context available" });
 }`
 	if err := os.WriteFile(scriptPath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
@@ -2437,12 +2511,12 @@ func TestHandleRedactsSensitiveURLBeforeCommandPolicyScript(t *testing.T) {
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
-			ID:          "allow-redacted",
-			Path:        "policy/allow-redacted.js",
+			ID:          "raw-target",
+			Path:        "policy/raw-target.js",
 			Entrypoints: []string{"decideCommand"},
 		}},
 	}
-	target := "https://user:pass@example.com/path?token=abc&ok=1"
+	target := "https://example.com/path?token=abc&ok=1"
 	resp := server.Handle(context.Background(), Request{
 		ID:              "req_1",
 		SessionID:       "ses_1",
@@ -2455,7 +2529,7 @@ func TestHandleRedactsSensitiveURLBeforeCommandPolicyScript(t *testing.T) {
 		Args:            map[string]any{"target": target},
 	})
 	if resp.ExitCode != 0 {
-		t.Fatalf("expected allow with redacted script context, got %+v", resp)
+		t.Fatalf("expected allow with raw script context, got %+v", resp)
 	}
 	if len(opener.urls) != 1 || opener.urls[0] != target {
 		t.Fatalf("opener should receive original URL target: %+v", opener.urls)
@@ -2464,11 +2538,66 @@ func TestHandleRedactsSensitiveURLBeforeCommandPolicyScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "user:pass") || strings.Contains(string(data), "token=abc") {
-		t.Fatalf("audit leaked URL secret: %s", data)
+	// User query data is host-local evidence, recorded verbatim.
+	if !strings.Contains(string(data), "token=abc") {
+		t.Fatalf("local audit should preserve user URL data verbatim: %s", data)
 	}
 	if !strings.Contains(string(data), `"decision":"allow"`) {
 		t.Fatalf("audit missing script allow metadata: %s", data)
+	}
+}
+
+func TestHandleDeniesCommandPolicyScriptOnRawCredentialURL(t *testing.T) {
+	// Companion to the test above: a URL that embeds credentials is now
+	// visible to the script (raw), which can deny it. This is a policy win
+	// that heuristic input redaction previously made impossible.
+	profileDir := t.TempDir()
+	scriptPath := filepath.Join(profileDir, "policy", "raw-target.js")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := `function decideCommand(ctx) {
+  if (ctx.command.target.indexOf("@") >= 0 && ctx.command.target.indexOf("://") >= 0 && ctx.command.target.indexOf("@", ctx.command.target.indexOf("://")) >= 0) {
+    return hideout.decision.deny({ route: "deny", action: "host.open", resources: ["url:https"], reason: "URL carries embedded credentials" });
+  }
+  return hideout.decision.allow({ route: "host-broker", action: "host.open", resources: ["url:https"], reason: "ok" });
+}`
+	if err := os.WriteFile(scriptPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opener := &recordingOpener{}
+	server := Server{
+		SessionID:  "ses_1",
+		Token:      "cap_good",
+		Profile:    "test",
+		ProfileDir: profileDir,
+		Commands:   []string{"open"},
+		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Opener:     opener,
+		Audit:      audit.NewDiscard(),
+		ScriptRefs: []profile.ScriptRef{{
+			ID:          "raw-target",
+			Path:        "policy/raw-target.js",
+			Entrypoints: []string{"decideCommand"},
+		}},
+	}
+	target := "https://user:pass@example.com/path?ok=1"
+	resp := server.Handle(context.Background(), Request{
+		ID:              "req_1",
+		SessionID:       "ses_1",
+		CapabilityToken: "cap_good",
+		Subject:         "command:open",
+		Command:         "open",
+		Argv:            []string{"open", target},
+		Route:           "host-broker",
+		Action:          "host.open",
+		Args:            map[string]any{"target": target},
+	})
+	if resp.Decision != string(policy.Deny) {
+		t.Fatalf("script should deny credential-bearing URL using raw target, got %+v", resp)
+	}
+	if len(opener.urls) != 0 {
+		t.Fatalf("denied URL must not reach opener: %+v", opener.urls)
 	}
 }
 
@@ -3236,7 +3365,10 @@ func TestHandleAuditRedactionScriptFailureFailsClosed(t *testing.T) {
 	}
 }
 
-func TestHandleRedactsSensitiveURLInAudit(t *testing.T) {
+func TestHandleRecordsUserURLVerbatimInLocalAudit(t *testing.T) {
+	// User/application URL data is host-local evidence and is written to the
+	// local audit file verbatim. Only Hideout-minted control-plane credentials
+	// are stripped; Core does not guess at user secrets.
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	writer, err := audit.NewFile(auditPath)
 	if err != nil {
@@ -3265,15 +3397,15 @@ func TestHandleRedactsSensitiveURLInAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "user:pass") || strings.Contains(string(data), "token=abc") {
-		t.Fatalf("audit leaked URL secret: %s", data)
-	}
-	if !strings.Contains(string(data), "https://example.com/path?ok=1\\u0026token=REDACTED") {
-		t.Fatalf("audit missing redacted URL: %s", data)
+	if !strings.Contains(string(data), "user:pass") || !strings.Contains(string(data), "token=abc") {
+		t.Fatalf("local audit should preserve user URL data verbatim: %s", data)
 	}
 }
 
-func TestHandleRedactsSensitiveURLBeforeAuditRedactionScript(t *testing.T) {
+func TestHandleGivesAuditRedactionScriptRawDetails(t *testing.T) {
+	// The audit.redact script receives user data verbatim and may choose to
+	// redact presentation fields itself. This is user-owned redaction, not
+	// Core heuristic guessing.
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	writer, err := audit.NewFile(auditPath)
 	if err != nil {
@@ -3286,13 +3418,10 @@ func TestHandleRedactsSensitiveURLBeforeAuditRedactionScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := `function redactAudit(ctx) {
-  var details = JSON.stringify(ctx.details);
-  if (details.indexOf("user:pass") >= 0 || details.indexOf("token=abc") >= 0) {
-    return { details: { leak: "raw URL secret reached redactAudit" } };
-  }
   var out = ctx.details;
-  out.sawRedactedTarget = String(ctx.details.target).indexOf("token=REDACTED") >= 0;
-  return { details: out, reason: "checked redacted input" };
+  out.sawRawTarget = String(ctx.details.target).indexOf("token=abc") >= 0;
+  out.target = "REDACTED_BY_USER_POLICY";
+  return { details: out, reason: "user policy redacted its own field" };
 }`
 	if err := os.WriteFile(scriptPath, []byte(source), 0o600); err != nil {
 		t.Fatal(err)
@@ -3326,11 +3455,16 @@ func TestHandleRedactsSensitiveURLBeforeAuditRedactionScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "user:pass") || strings.Contains(string(data), "token=abc") || strings.Contains(string(data), "raw URL secret reached") {
-		t.Fatalf("audit/redaction script leaked URL secret: %s", data)
+	// Script saw the raw target (proving no input redaction).
+	if !strings.Contains(string(data), `"sawRawTarget":true`) {
+		t.Fatalf("redaction script did not receive raw target: %s", data)
 	}
-	if !strings.Contains(string(data), `"sawRedactedTarget":true`) {
-		t.Fatalf("redaction script did not see redacted target: %s", data)
+	// The user policy's own redaction is applied to the stored field.
+	if !strings.Contains(string(data), "REDACTED_BY_USER_POLICY") {
+		t.Fatalf("user-owned redaction was not applied: %s", data)
+	}
+	if strings.Contains(string(data), "token=abc") {
+		t.Fatalf("user policy chose to redact target but raw value persisted: %s", data)
 	}
 }
 
