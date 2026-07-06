@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "hideout.profile/v1",
+  "name": "mixed-tools",
+  "identity": {
+    "user": "developer",
+    "hostname": "devbox",
+    "timezone": "UTC",
+    "locale": "en_US.UTF-8"
+  },
+  "workspace": {
+    "mode": "read-write",
+    "pathMode": "preserve"
+  },
+  "env": {
+    "public": {},
+    "deny": [],
+    "inherit": []
+  },
+  "git": {
+    "userName": "Developer",
+    "userEmail": "developer@example.com"
+  },
+  "network": {
+    "mode": "direct",
+    "proxyEnvVisible": false
+  },
+  "tools": {
+    "expectedCommands": [
+      "agent-cli"
+    ],
+    "npmGlobals": [
+      {
+        "package": "@example/agent-cli@1.2.3",
+        "commands": [
+          "agent-cli"
+        ]
+      }
+    ]
+  },
+  "hostCapabilities": {
+    "open": {
+      "mode": "brokered",
+      "allowUrls": true,
+      "allowLocalUrls": false,
+      "allowPrivateNetworkUrls": false,
+      "allowWorkspaceFiles": true,
+      "browserProfile": "isolated"
+    }
+  },
+  "hostfs": {},
+  "commandProxy": {},
+  "policy": {
+    "engine": "builtin+goja",
+    "maxCapabilities": [
+      "host.open",
+      "guest.exec",
+      "network.connect"
+    ]
+  },
+  "audit": {
+    "enabled": true
+  }
+}

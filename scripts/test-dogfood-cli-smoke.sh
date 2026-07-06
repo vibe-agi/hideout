@@ -93,31 +93,9 @@ prepare_linux_hostfsd() {
   "$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
 }
 
-configure_node_dev_profile() {
+configure_expected_commands() {
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
-    "$hideout" profile tools default preset add node-dev >/dev/null
-  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
-    "$hideout" profile tools default npm add \
-      --package "file:$workspace/gate-npm-agent" \
-      --command hideout-gate-npm-tool >/dev/null
-}
-
-prepare_workspace_npm_tool() {
-  mkdir -p "$workspace/gate-npm-agent/bin"
-  cat >"$workspace/gate-npm-agent/package.json" <<'JSON'
-{
-  "name": "hideout-gate-npm-tool",
-  "version": "1.0.0",
-  "bin": {
-    "hideout-gate-npm-tool": "bin/hideout-gate-npm-tool.js"
-  }
-}
-JSON
-  cat >"$workspace/gate-npm-agent/bin/hideout-gate-npm-tool.js" <<'JS'
-#!/usr/bin/env node
-console.log("hideout-gate-npm-tool 1.0");
-JS
-  chmod +x "$workspace/gate-npm-agent/bin/hideout-gate-npm-tool.js"
+    "$hideout" profile tools default expected add hideout-test-cli >/dev/null
 }
 
 prepare_fake_browser() {
@@ -233,21 +211,14 @@ prepare_linux_hostfsd
 arch="$(go env GOARCH)"
 GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
   go build -trimpath -o "$workspace/hideout-test-cli" ./cmd/hideout-test-cli
-prepare_workspace_npm_tool
 
 echo "dogfood-cli: initializing profile"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --backend lima --network direct >/dev/null
-configure_node_dev_profile
+configure_expected_commands
 
-echo "dogfood-cli: verifying node-dev runtime, user-declared npm tool, and test CLI presence"
+echo "dogfood-cli: verifying user-declared expected command and test CLI presence"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
   "$hideout" run --backend lima --workspace "$workspace" -- sh -eu -c '
-command -v node >/dev/null
-command -v npm >/dev/null
-command -v hideout-gate-npm-tool >/dev/null
-node -v
-npm -v
-hideout-gate-npm-tool
 ./hideout-test-cli version
 ' >"$tmp/runtime.out" 2>"$tmp/runtime.err"; then
   echo "dogfood-cli: runtime smoke failed" >&2
@@ -256,7 +227,6 @@ hideout-gate-npm-tool
   exit 1
 fi
 cat "$tmp/runtime.out"
-grep -q 'hideout-gate-npm-tool 1.0' "$tmp/runtime.out"
 grep -q 'hideout-test-cli 1.0' "$tmp/runtime.out"
 
 echo "dogfood-cli: verifying env visibility is user policy controlled"
@@ -270,7 +240,7 @@ fi
 cat "$tmp/env-hidden.out"
 grep -q 'env=HIDEOUT_STORE_ROOT absent' "$tmp/env-hidden.out"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
-  "$hideout" run --backend lima --workspace "$workspace" --env TEST_CLI_VISIBLE=1 -- ./hideout-test-cli env --key TEST_CLI_VISIBLE >"$tmp/env-visible.out" 2>"$tmp/env-visible.err"; then
+  "$hideout" run --backend lima --workspace "$workspace" --env-var TEST_CLI_VISIBLE=1 -- ./hideout-test-cli env --key TEST_CLI_VISIBLE >"$tmp/env-visible.out" 2>"$tmp/env-visible.err"; then
   echo "dogfood-cli: visible env probe failed" >&2
   cat "$tmp/env-visible.out" >&2
   cat "$tmp/env-visible.err" >&2

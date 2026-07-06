@@ -29,7 +29,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hideout-test-cli <version|login|status|request|env|home>; login supports --browser-redirect for preview/open smoke")
+		return errors.New("usage: hideout-test-cli <version|login|status|request|env|home|workload>; login supports --browser-redirect for preview/open smoke")
 	}
 	switch args[0] {
 	case "version":
@@ -45,6 +45,8 @@ func run(args []string) error {
 		return envProbe(args[1:])
 	case "home":
 		return homeProbe()
+	case "workload":
+		return workload(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -278,6 +280,179 @@ func homeProbe() error {
 	}
 	fmt.Printf("TOKEN_PATH=%s\n", path)
 	return nil
+}
+
+func workload(args []string) error {
+	fs := flag.NewFlagSet("workload", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	taskPath := fs.String("task", "", "workspace task file to read")
+	outputPath := fs.String("output", "", "workspace output file to create or update")
+	expected := fs.String("expected", "", "expected output content")
+	endpoint := fs.String("url", "", "HTTP endpoint URL to request")
+	expectStatus := fs.Int("expect-status", http.StatusOK, "expected endpoint HTTP status")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*taskPath) == "" {
+		return errors.New("workload requires --task")
+	}
+	if strings.TrimSpace(*outputPath) == "" {
+		return errors.New("workload requires --output")
+	}
+	if *expected == "" {
+		return errors.New("workload requires --expected")
+	}
+	if strings.TrimSpace(*endpoint) == "" {
+		return errors.New("workload requires --url")
+	}
+	if *expectStatus < 100 || *expectStatus > 999 {
+		return errors.New("workload --expect-status must be an HTTP status code")
+	}
+
+	task, err := resolveExistingWorkspacePath(*taskPath)
+	if err != nil {
+		return err
+	}
+	output, err := resolveOutputWorkspacePath(*outputPath)
+	if err != nil {
+		return err
+	}
+	taskData, err := os.ReadFile(task)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(taskData)) == "" {
+		return errors.New("workload task file is empty")
+	}
+
+	if err := os.WriteFile(output, []byte(*expected), 0o644); err != nil {
+		return err
+	}
+	outputData, err := os.ReadFile(output)
+	if err != nil {
+		return err
+	}
+	if string(outputData) != *expected {
+		return errors.New("workload success check failed")
+	}
+	fmt.Println("workspace-updated=yes")
+	fmt.Println("success-check=passed")
+
+	status, err := requestEndpoint(*endpoint)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("http_status=%d\n", status)
+	if status != *expectStatus {
+		return fmt.Errorf("endpoint returned HTTP %d, want %d", status, *expectStatus)
+	}
+	fmt.Println("endpoint=reachable")
+	return nil
+}
+
+func requestEndpoint(rawURL string) (int, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return 0, err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return 0, fmt.Errorf("endpoint URL scheme %q is unsupported", parsed.Scheme)
+	}
+	client := http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp.StatusCode, nil
+}
+
+func resolveExistingWorkspacePath(path string) (string, error) {
+	resolved, err := resolveWorkspacePath(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("workspace path %q is a directory", path)
+	}
+	return resolved, nil
+}
+
+func resolveOutputWorkspacePath(path string) (string, error) {
+	resolved, err := resolveWorkspacePath(path)
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Dir(resolved)
+	if info, err := os.Stat(parent); err != nil {
+		return "", err
+	} else if !info.IsDir() {
+		return "", fmt.Errorf("workspace output parent is not a directory")
+	}
+	if info, err := os.Lstat(resolved); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("workspace output must not be a symlink")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return resolved, nil
+}
+
+func resolveWorkspacePath(path string) (string, error) {
+	value := strings.TrimSpace(path)
+	if value == "" {
+		return "", errors.New("workspace path is required")
+	}
+	workspace, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
+		workspace = resolved
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(workspace, value)
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	if !pathWithin(abs, workspace) {
+		return "", fmt.Errorf("workspace path %q escapes current workspace", path)
+	}
+	return abs, nil
+}
+
+func pathWithin(path, root string) bool {
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return rel != ""
 }
 
 func writeToken(token string) error {

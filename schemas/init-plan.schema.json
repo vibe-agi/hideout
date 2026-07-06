@@ -84,8 +84,6 @@
             "profile.create",
             "identity.materialize",
             "network.mode.select",
-            "tools.preset.add",
-            "tools.npm-global.add",
             "backend.probe",
             "helper.install.linux-shim",
             "helper.install.linux-hostfsd",

@@ -93,9 +93,9 @@ func TestPlanMachineNativeBackendDoesNotPlanLimaHelpers(t *testing.T) {
 	validateInitPlanWithSchema(t, plan)
 }
 
-func TestPlanMachineNextStepsIncludeGenericCLISmoke(t *testing.T) {
+func TestPlanMachineRejectsLegacyToolSupply(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
-	plan, err := PlanMachine(store, Options{
+	_, err := PlanMachine(store, Options{
 		ProfileName: "agent",
 		Backend:     "native",
 		Network:     "direct",
@@ -104,11 +104,9 @@ func TestPlanMachineNextStepsIncludeGenericCLISmoke(t *testing.T) {
 			Commands: []string{"agent-cli", "agent-helper"},
 		}},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "legacy tool-supply") {
+		t.Fatalf("expected legacy tool-supply failure, got %v", err)
 	}
-	assertNextStepCommand(t, plan.NextSteps, "cli-smoke", "hideout run --profile agent --backend native --allow-weak-isolation -- agent-cli")
-	validateInitPlanWithSchema(t, plan)
 }
 
 func TestPlanMachineNextStepsBlockRunSuggestionsWhenBlocked(t *testing.T) {
