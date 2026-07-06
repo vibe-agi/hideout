@@ -107,14 +107,21 @@ This first run should only verify the backend, workspace mount, and isolated
 identity. Use a dedicated `smoke` profile so existing `default` profile policy
 cannot trigger extra guest setup during the first check.
 
-Reusable Lima environments are keyed by profile, workspace, backend, and tool
-policy. Use `hideout list` to see resumable environments:
+Every reusable environment is named: runs without `--env` use a deterministic
+auto-named environment per profile and workspace, and `hideout env create`
+makes one explicitly with a pinned base image declaration. Changing an
+environment's identity inputs fails closed with a recreate hint instead of
+silently switching guests.
 
 ```bash
-hideout list
-hideout run --profile smoke --resume <env-id> -- <command>
-hideout stop <env-id>
-hideout clean --stopped <env-id>
+hideout env create work --image 'template:_images/ubuntu-lts'
+hideout run --env work -- <command>
+hideout env list
+hideout env inspect work
+hideout env recreate work
+hideout stop work
+hideout clean --stopped work
+hideout env remove work
 ```
 
 Use `--rm` for a disposable environment:
@@ -133,7 +140,7 @@ installation providers. Guest tools arrive on two paths:
   inside the boundary, under the same network policy and audit as any other
   run.
 
-The npm-based provisioning path is being removed.
+The old npm-based provisioning path has been removed.
 
 Use `init` and `doctor` to create the profile, then run the CLI you want:
 
@@ -295,7 +302,7 @@ and is not required for any first-run flow.
 Useful cleanup commands:
 
 ```bash
-hideout list
+hideout env list
 hideout stop <env-id>
 hideout stop --idle 2h
 hideout clean --dry-run --stopped

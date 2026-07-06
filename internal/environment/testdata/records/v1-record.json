@@ -1,0 +1,13 @@
+{
+  "version": "hideout.environment/v1",
+  "id": "env_20260701t000000zaabbccddee00000000ff",
+  "profile": "default",
+  "backend": "lima",
+  "backendConfigVersion": "lima-config/v3",
+  "workspace": "/tmp/old-workspace",
+  "guestWorkspace": "/workspace",
+  "toolsHash": "sha256:deadbeef",
+  "instanceName": "hideout-default-aabbcc",
+  "status": "ready",
+  "createdAt": "2026-07-01T00:00:00Z"
+}

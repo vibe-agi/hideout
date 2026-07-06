@@ -53,6 +53,7 @@ type RunResult struct {
 	Profile          string           `json:"profile"`
 	Backend          string           `json:"backend"`
 	EnvironmentID    string           `json:"environmentId,omitempty"`
+	EnvironmentName  string           `json:"environmentName,omitempty"`
 	InstanceName     string           `json:"instanceName,omitempty"`
 	PreserveInstance bool             `json:"preserveInstance,omitempty"`
 	AuditPath        string           `json:"auditPath,omitempty"`
@@ -164,6 +165,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	result.EnvironmentID = session.EnvironmentID
+	result.EnvironmentName = runEnv.Record.Name
 	result.InstanceName = session.InstanceName
 	result.PreserveInstance = session.PreserveInstance
 	defer func() {
@@ -398,6 +400,7 @@ func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlan
 	return backend.RunSpec{
 		SessionID:                 runSession.Layout.ID,
 		EnvironmentID:             runEnv.Record.ID,
+		ImageRef:                  runImageRef(runEnv, runSession.Plan.RuntimeProfile),
 		Profile:                   runSession.Plan.RuntimeProfile,
 		Command:                   append([]string(nil), runSession.Plan.Command...),
 		Env:                       append([]string(nil), dataPlane.Env...),
@@ -438,6 +441,16 @@ func validateRunPolicy(plan RunPlan) error {
 		return err
 	}
 	return nil
+}
+
+// runImageRef resolves the base image declaration for backend preparation:
+// the environment's pinned declaration, or the profile default for
+// record-less disposable and ephemeral runs.
+func runImageRef(runEnv RunEnvironment, p profile.Profile) string {
+	if strings.TrimSpace(runEnv.Record.ImageRef) != "" {
+		return runEnv.Record.ImageRef
+	}
+	return p.BaseImageOrBuiltin()
 }
 
 func emitRunSetupAudit(aw *audit.Writer, runSession RunSession, opts ApplyRunOptions, storeRoot string) error {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 )
 
@@ -296,10 +297,10 @@ func TestValidateRequiresSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestDefaultProfileIncludesToolPreset(t *testing.T) {
+func TestDefaultProfileDoesNotDeclareToolInstallation(t *testing.T) {
 	p := Default("test")
-	if len(p.Tools.Presets) != 1 || p.Tools.Presets[0] != "base-dev" {
-		t.Fatalf("unexpected tool presets: %+v", p.Tools.Presets)
+	if len(p.Tools.ExpectedCommands) != 0 || len(p.Tools.Presets) != 0 || len(p.Tools.NPMGlobals) != 0 {
+		t.Fatalf("default tools should be diagnostic-only and empty: %+v", p.Tools)
 	}
 }
 
@@ -336,31 +337,30 @@ func TestDefaultProfileMatchesJSONSchema(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsEmptyToolPreset(t *testing.T) {
+func TestValidateRejectsRemovedToolPreset(t *testing.T) {
 	p := Default("test")
 	p.Tools.Presets = []string{""}
-	if err := p.Validate(); err == nil {
-		t.Fatal("expected empty tool preset to fail")
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "tools.presets has been removed") {
+		t.Fatalf("expected removed preset failure, got %v", err)
 	}
 }
 
-func TestValidateAcceptsNodeDevToolPreset(t *testing.T) {
+func TestValidateAcceptsExpectedCommands(t *testing.T) {
 	p := Default("test")
-	p.Tools.Presets = []string{"base-dev", "node-dev"}
+	p.Tools.ExpectedCommands = []string{"git", "python3", "c++"}
 	if err := p.Validate(); err != nil {
-		t.Fatalf("node-dev preset should be valid: %v", err)
+		t.Fatalf("expected commands should be valid: %v", err)
 	}
 }
 
-func TestValidateAcceptsUserDeclaredNPMGlobalTool(t *testing.T) {
+func TestValidateRejectsRemovedNPMGlobalTool(t *testing.T) {
 	p := Default("test")
-	p.Tools.Presets = []string{"base-dev", "node-dev"}
 	p.Tools.NPMGlobals = []NPMGlobalPackage{{
 		Package:  "@example/agent-cli@1.2.3",
 		Commands: []string{"agent-cli"},
 	}}
-	if err := p.Validate(); err != nil {
-		t.Fatalf("npm global tool should be valid user policy: %v", err)
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "tools.npmGlobals has been removed") {
+		t.Fatalf("expected removed npm global failure, got %v", err)
 	}
 }
 
@@ -417,49 +417,46 @@ func TestValidateRejectsUnsafeEndpointCandidate(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInvalidNPMGlobalTool(t *testing.T) {
+func TestValidateRejectsInvalidExpectedCommands(t *testing.T) {
 	tests := []struct {
 		name string
 		edit func(*Profile)
 		want string
 	}{
 		{
-			name: "missing package",
+			name: "empty command",
 			edit: func(p *Profile) {
-				p.Tools.NPMGlobals = []NPMGlobalPackage{{Commands: []string{"tool"}}}
+				p.Tools.ExpectedCommands = []string{""}
 			},
-			want: "package is required",
+			want: "non-empty command name",
 		},
 		{
-			name: "package starts with dash",
+			name: "path-like command",
 			edit: func(p *Profile) {
-				p.Tools.NPMGlobals = []NPMGlobalPackage{{Package: "-bad", Commands: []string{"tool"}}}
+				p.Tools.ExpectedCommands = []string{"../tool"}
 			},
-			want: "package is not a valid npm package spec",
+			want: "unsupported command-name characters",
 		},
 		{
-			name: "missing commands",
+			name: "argument-bearing command",
 			edit: func(p *Profile) {
-				p.Tools.NPMGlobals = []NPMGlobalPackage{{Package: "@example/tool"}}
+				p.Tools.ExpectedCommands = []string{"tool --flag"}
 			},
-			want: "commands is required",
+			want: "unsupported command-name characters",
 		},
 		{
-			name: "bad command",
+			name: "url-like command",
 			edit: func(p *Profile) {
-				p.Tools.NPMGlobals = []NPMGlobalPackage{{Package: "@example/tool", Commands: []string{"../tool"}}}
+				p.Tools.ExpectedCommands = []string{"https://example.invalid/tool"}
 			},
-			want: "is not a command name",
+			want: "not a command name",
 		},
 		{
-			name: "duplicate command across packages",
+			name: "duplicate command",
 			edit: func(p *Profile) {
-				p.Tools.NPMGlobals = []NPMGlobalPackage{
-					{Package: "@example/one", Commands: []string{"tool"}},
-					{Package: "@example/two", Commands: []string{"tool"}},
-				}
+				p.Tools.ExpectedCommands = []string{"tool", "tool"}
 			},
-			want: "duplicates command",
+			want: "duplicate",
 		},
 	}
 	for _, tt := range tests {
@@ -613,9 +610,9 @@ func TestValidateRejectsDuplicateProfileArrays(t *testing.T) {
 			},
 		},
 		{
-			name: "tool presets",
+			name: "expected commands",
 			edit: func(p *Profile) {
-				p.Tools.Presets = []string{"base-dev", "base-dev"}
+				p.Tools.ExpectedCommands = []string{"git", "git"}
 			},
 		},
 		{
@@ -665,9 +662,9 @@ func TestSchemaRejectsDuplicateProfileArrays(t *testing.T) {
 			},
 		},
 		{
-			name: "tool presets",
+			name: "expected commands",
 			edit: func(p *Profile) {
-				p.Tools.Presets = []string{"base-dev", "base-dev"}
+				p.Tools.ExpectedCommands = []string{"git", "git"}
 			},
 		},
 		{
@@ -1218,10 +1215,7 @@ func TestClonePolicyRegeneratesIdentityAndDoesNotCopyGeneratedState(t *testing.T
 	store := Store{Root: t.TempDir()}
 	source := Default("source")
 	source.Git.UserEmail = "source@example.com"
-	source.Tools.NPMGlobals = []NPMGlobalPackage{{
-		Package:  "@example/agent-cli",
-		Commands: []string{"agent-cli"},
-	}}
+	source.Tools.ExpectedCommands = []string{"agent-cli"}
 	source.Policy.ScriptRefs = []ScriptRef{{
 		ID:          "command-policy",
 		Path:        "policy/nested/command.js",
@@ -1260,10 +1254,9 @@ func TestClonePolicyRegeneratesIdentityAndDoesNotCopyGeneratedState(t *testing.T
 	if loadedTarget.Git.UserEmail != "source@example.com" {
 		t.Fatalf("policy field was not copied: %+v", loadedTarget.Git)
 	}
-	if len(loadedTarget.Tools.NPMGlobals) != 1 ||
-		loadedTarget.Tools.NPMGlobals[0].Package != "@example/agent-cli" ||
-		loadedTarget.Tools.NPMGlobals[0].Commands[0] != "agent-cli" {
-		t.Fatalf("npm global tool policy was not copied: %+v", loadedTarget.Tools.NPMGlobals)
+	if len(loadedTarget.Tools.ExpectedCommands) != 1 ||
+		loadedTarget.Tools.ExpectedCommands[0] != "agent-cli" {
+		t.Fatalf("expected commands were not copied: %+v", loadedTarget.Tools.ExpectedCommands)
 	}
 	if len(loadedTarget.Policy.ScriptRefs) != 1 || loadedTarget.Policy.ScriptRefs[0].Path != "policy/nested/command.js" {
 		t.Fatalf("policy script refs were not copied: %+v", loadedTarget.Policy.ScriptRefs)
@@ -1311,11 +1304,7 @@ func TestEphemeralIdentityProfileRegeneratesIdentityAndKeepsPolicy(t *testing.T)
 	source.Git.UserName = "Source Dev"
 	source.Git.UserEmail = "source@example.com"
 	source.Env.Public["NODE_ENV"] = "test"
-	source.Tools.Presets = []string{"base-dev"}
-	source.Tools.NPMGlobals = []NPMGlobalPackage{{
-		Package:  "@example/agent-cli",
-		Commands: []string{"agent-cli"},
-	}}
+	source.Tools.ExpectedCommands = []string{"agent-cli"}
 	source.Policy.ScriptRefs = []ScriptRef{{
 		ID:          "command-policy",
 		Path:        "policy/command.js",
@@ -1356,14 +1345,9 @@ func TestEphemeralIdentityProfileRegeneratesIdentityAndKeepsPolicy(t *testing.T)
 		ephemeral.Network != loaded.Network {
 		t.Fatalf("ephemeral profile should keep policy fields: source=%+v ephemeral=%+v", loaded, ephemeral)
 	}
-	if len(ephemeral.Tools.Presets) != len(loaded.Tools.Presets) ||
-		ephemeral.Tools.Presets[0] != "base-dev" {
-		t.Fatalf("ephemeral profile lost tool presets: %+v", ephemeral.Tools.Presets)
-	}
-	if len(ephemeral.Tools.NPMGlobals) != 1 ||
-		ephemeral.Tools.NPMGlobals[0].Package != "@example/agent-cli" ||
-		ephemeral.Tools.NPMGlobals[0].Commands[0] != "agent-cli" {
-		t.Fatalf("ephemeral profile lost npm global tools: %+v", ephemeral.Tools.NPMGlobals)
+	if len(ephemeral.Tools.ExpectedCommands) != 1 ||
+		ephemeral.Tools.ExpectedCommands[0] != "agent-cli" {
+		t.Fatalf("ephemeral profile lost expected commands: %+v", ephemeral.Tools.ExpectedCommands)
 	}
 	if len(ephemeral.Policy.ScriptRefs) != 1 || ephemeral.Policy.ScriptRefs[0].Path != "policy/command.js" {
 		t.Fatalf("ephemeral profile lost script refs: %+v", ephemeral.Policy.ScriptRefs)
@@ -1615,4 +1599,51 @@ func validateProfileWithSchema(schema *jsonschema.Schema, value any) error {
 		return err
 	}
 	return schema.Validate(doc)
+}
+
+func TestEnvironmentBaseImageValidationAndDefault(t *testing.T) {
+	p := Default("test")
+	if p.Environment.BaseImage != environment.BuiltinBaseImage {
+		t.Fatalf("default profile must carry the explicit built-in base image, got %q", p.Environment.BaseImage)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	p.Environment.BaseImage = "https://example.com/images/dev.qcow2#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := p.Validate(); err != nil {
+		t.Fatalf("URL form with digest should validate: %v", err)
+	}
+	for _, bad := range []string{
+		"https://example.com/images/dev.qcow2",
+		"https://user:pass@example.com/images/dev.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"ubuntu:24.04",
+		"/var/images/dev.img",
+	} {
+		p.Environment.BaseImage = bad
+		if err := p.Validate(); err == nil {
+			t.Fatalf("baseImage %q should be rejected", bad)
+		}
+	}
+	p.Environment.BaseImage = ""
+	if err := p.Validate(); err != nil {
+		t.Fatalf("absent baseImage is allowed (resolves to built-in default): %v", err)
+	}
+	if got := p.BaseImageOrBuiltin(); got != environment.BuiltinBaseImage {
+		t.Fatalf("absent baseImage must resolve to built-in default, got %q", got)
+	}
+
+	schema := compileProfileSchema(t)
+	good := Default("schema-good")
+	if err := validateProfileWithSchema(schema, good); err != nil {
+		t.Fatalf("default profile with baseImage should pass schema: %v", err)
+	}
+	good.Environment.BaseImage = "https://example.com/images/dev.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := validateProfileWithSchema(schema, good); err != nil {
+		t.Fatalf("URL baseImage should pass schema: %v", err)
+	}
+	bad := Default("schema-bad")
+	bad.Environment.BaseImage = "https://example.com/images/dev.img"
+	if err := validateProfileWithSchema(schema, bad); err == nil {
+		t.Fatal("schema should reject digest-less URL baseImage")
+	}
 }

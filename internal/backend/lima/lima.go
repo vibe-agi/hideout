@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -19,8 +20,8 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/portbridge"
-	"github.com/vibe-agi/hideout/internal/profile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -64,6 +65,7 @@ type Backend struct {
 
 type limaConfig struct {
 	Base         []string          `yaml:"base,omitempty"`
+	Images       []limaImage       `yaml:"images,omitempty"`
 	VMType       string            `yaml:"vmType,omitempty"`
 	MountType    string            `yaml:"mountType,omitempty"`
 	MountInotify bool              `yaml:"mountInotify"`
@@ -108,34 +110,16 @@ type portForward struct {
 	Ignore            bool   `yaml:"ignore,omitempty"`
 }
 
-type ToolPreset struct {
-	Name             string   `json:"name"`
-	RequiredCommands []string `json:"requiredCommands"`
-	RequiredPaths    []string `json:"requiredPaths,omitempty"`
-	ProvisionScript  string   `json:"-"`
-}
-
-type NPMGlobalTool struct {
-	Package  string   `json:"package"`
-	Commands []string `json:"commands"`
-}
-
-type ToolPlan struct {
-	Presets    []ToolPreset    `json:"presets"`
-	NPMGlobals []NPMGlobalTool `json:"npmGlobals,omitempty"`
-}
-
 type ToolManifest struct {
-	Version           string          `json:"version"`
-	Presets           []ToolPreset    `json:"presets"`
-	NPMGlobals        []NPMGlobalTool `json:"npmGlobals,omitempty"`
-	ProfileID         string          `json:"profileId,omitempty"`
-	IdentityID        string          `json:"identityId,omitempty"`
-	IdentityMode      string          `json:"identityMode,omitempty"`
-	IdentityRoot      string          `json:"identityRoot,omitempty"`
-	InstanceName      string          `json:"instanceName"`
-	CommandProxyShims []string        `json:"commandProxyShims"`
-	GuestBootstrap    string          `json:"guestBootstrap"`
+	Version           string   `json:"version"`
+	ExpectedCommands  []string `json:"expectedCommands,omitempty"`
+	ProfileID         string   `json:"profileId,omitempty"`
+	IdentityID        string   `json:"identityId,omitempty"`
+	IdentityMode      string   `json:"identityMode,omitempty"`
+	IdentityRoot      string   `json:"identityRoot,omitempty"`
+	InstanceName      string   `json:"instanceName"`
+	CommandProxyShims []string `json:"commandProxyShims"`
+	GuestBootstrap    string   `json:"guestBootstrap"`
 }
 
 func (b Backend) Name() string {
@@ -177,23 +161,18 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	}
 	configPath := filepath.Join(spec.SessionDir, "lima.yaml")
 	bootstrapPath := filepath.Join(spec.SessionDir, "bootstrap", "bootstrap.sh")
-	manifestPath := filepath.Join(spec.SessionDir, "tool-preset.json")
-	tools, err := ResolveToolPlan(spec.Profile.Tools)
-	if err != nil {
-		return nil, err
-	}
+	manifestPath := filepath.Join(spec.SessionDir, "guest-bootstrap.json")
 	registry, err := cmdproxy.RegistryFromProfile(spec.Profile)
 	if err != nil {
 		return nil, err
 	}
 	commandProxyShims := append([]string{"hideout-shim"}, registry.ShimNames()...)
-	if err := WriteBootstrap(bootstrapPath, tools, commandProxyShims); err != nil {
+	if err := WriteBootstrap(bootstrapPath, commandProxyShims); err != nil {
 		return nil, err
 	}
 	if err := WriteToolManifest(manifestPath, ToolManifest{
 		Version:           "hideout.tool-bootstrap/v1",
-		Presets:           tools.Presets,
-		NPMGlobals:        tools.NPMGlobals,
+		ExpectedCommands:  append([]string(nil), spec.Profile.Tools.ExpectedCommands...),
 		ProfileID:         spec.Profile.Metadata["profileId"],
 		IdentityID:        spec.Profile.Metadata["identityId"],
 		IdentityMode:      identityMode,
@@ -204,7 +183,10 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	}); err != nil {
 		return nil, err
 	}
-	cfg := ConfigFromRunSpec(spec)
+	cfg, err := ConfigForRunSpec(spec)
+	if err != nil {
+		return nil, err
+	}
 	if err := WriteConfig(configPath, cfg); err != nil {
 		return nil, err
 	}
@@ -284,7 +266,7 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 			Command:   command[0],
 			Path:      backend.EnvValue(env, "PATH"),
 			Workspace: session.GuestWork,
-			Hint:      "install the command in the Lima guest or add a Hideout tool preset; no host fallback was attempted",
+			Hint:      "install the command in the guest base environment or run in-boundary setup before retrying; no host fallback was attempted",
 		}
 	}
 	args := ShellArgs(session.InstanceName, session.GuestWork, env, command)
@@ -413,13 +395,59 @@ func SetupEnv(base []string) []string {
 	return out
 }
 
-func ConfigFromRunSpec(spec backend.RunSpec) limaConfig {
+type limaImage struct {
+	Location string `yaml:"location"`
+	Arch     string `yaml:"arch,omitempty"`
+	Digest   string `yaml:"digest,omitempty"`
+}
+
+func hostLimaArch() string {
+	switch runtime.GOARCH {
+	case "arm64":
+		return "aarch64"
+	case "amd64":
+		return "x86_64"
+	default:
+		return ""
+	}
+}
+
+// compileImageDeclaration turns the environment's pinned base image
+// declaration into lima configuration: a template reference for the template
+// form, or a digest-verified images entry for the URL form. Invalid or empty
+// declarations fail closed — the backend never substitutes a different image
+// for the pinned one.
+func compileImageDeclaration(ref string) ([]string, []limaImage, error) {
+	decl, err := environment.ParseImageDeclaration(ref)
+	if err != nil {
+		return nil, nil, fmt.Errorf("base image declaration is not usable: %w", err)
+	}
+	if decl.Form == environment.ImageFormURL {
+		return nil, []limaImage{{
+			Location: decl.Location,
+			Arch:     hostLimaArch(),
+			Digest:   "sha256:" + decl.Digest,
+		}}, nil
+	}
+	return []string{decl.Ref}, nil, nil
+}
+
+// ConfigForRunSpec validates the pinned image declaration and builds the lima
+// configuration, failing closed on an unusable declaration. It is the only
+// config builder: there is no panic-on-invalid variant, so every caller
+// (Prepare, doctor, tests) goes through the same fail-closed error path.
+func ConfigForRunSpec(spec backend.RunSpec) (limaConfig, error) {
 	identityRoot := spec.IdentityRoot
 	if identityRoot == "" {
 		identityRoot = spec.ProfileDir
 	}
+	base, images, err := compileImageDeclaration(spec.ImageRef)
+	if err != nil {
+		return limaConfig{}, err
+	}
 	return limaConfig{
-		Base:         []string{"template:_images/ubuntu-lts"},
+		Base:         base,
+		Images:       images,
 		VMType:       "vz",
 		MountType:    "virtiofs",
 		MountInotify: true,
@@ -478,7 +506,7 @@ fi
 			},
 		},
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
-	}
+	}, nil
 }
 
 func boolPtr(value bool) *bool {
@@ -536,11 +564,11 @@ func WriteConfig(path string, cfg limaConfig) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func WriteBootstrap(path string, tools ToolPlan, commandProxyShims []string) error {
+func WriteBootstrap(path string, commandProxyShims []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	script := BootstrapScript(tools, commandProxyShims)
+	script := BootstrapScript(commandProxyShims)
 	return os.WriteFile(path, []byte(script), 0o700)
 }
 
@@ -556,25 +584,11 @@ func WriteToolManifest(path string, manifest ToolManifest) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func BootstrapScript(tools ToolPlan, commandProxyShims []string) string {
-	commands := uniqueStrings(append(
-		flatMap(tools.Presets, func(p ToolPreset) []string { return p.RequiredCommands }),
-		flatMapNPMGlobals(tools.NPMGlobals, func(p NPMGlobalTool) []string { return p.Commands })...,
-	))
-	paths := uniqueStrings(flatMap(tools.Presets, func(p ToolPreset) []string { return p.RequiredPaths }))
+func BootstrapScript(commandProxyShims []string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("set -eu\n")
 	b.WriteString("mkdir -p /hideout/profile/home /hideout/profile/config /hideout/profile/cache /hideout/profile/data /hideout/profile/browser /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap\n")
-	for _, script := range toolProvisionScripts(tools) {
-		writeRootProvisionScript(&b, script)
-	}
-	for _, command := range commands {
-		fmt.Fprintf(&b, "command -v %s >/dev/null 2>&1 || { echo 'hideout: required guest command missing: %s' >&2; exit 127; }\n", shellQuote(command), command)
-	}
-	for _, path := range paths {
-		fmt.Fprintf(&b, "[ -e %s ] || { echo 'hideout: required guest path missing: %s' >&2; exit 127; }\n", shellQuote(path), path)
-	}
 	if len(commandProxyShims) == 0 {
 		commandProxyShims = append([]string{"hideout-shim"}, cmdproxy.DefaultRegistry().ShimNames()...)
 	}
@@ -583,36 +597,6 @@ func BootstrapScript(tools ToolPlan, commandProxyShims []string) string {
 		fmt.Fprintf(&b, "[ -x %s ] || { echo 'hideout: required command proxy shim missing: %s' >&2; exit 127; }\n", shellQuote(path), path)
 	}
 	return b.String()
-}
-
-func toolProvisionScripts(tools ToolPlan) []string {
-	var out []string
-	for _, preset := range tools.Presets {
-		if strings.TrimSpace(preset.ProvisionScript) == "" {
-			continue
-		}
-		out = append(out, strings.TrimSpace(preset.ProvisionScript)+"\n")
-	}
-	for _, pkg := range tools.NPMGlobals {
-		out = append(out, NPMGlobalProvisionScript(pkg))
-	}
-	return out
-}
-
-func writeRootProvisionScript(b *strings.Builder, script string) {
-	if strings.TrimSpace(script) == "" {
-		return
-	}
-	b.WriteString("if [ \"$(id -u)\" -eq 0 ]; then\n")
-	b.WriteString("  /bin/sh <<'HIDEOUT_TOOL_PROVISION'\n")
-	b.WriteString(strings.TrimSpace(script))
-	b.WriteString("\nHIDEOUT_TOOL_PROVISION\n")
-	b.WriteString("else\n")
-	b.WriteString("  command -v sudo >/dev/null 2>&1 || { echo 'hideout: sudo is required for tool provisioning' >&2; exit 127; }\n")
-	b.WriteString("  sudo -n /bin/sh <<'HIDEOUT_TOOL_PROVISION'\n")
-	b.WriteString(strings.TrimSpace(script))
-	b.WriteString("\nHIDEOUT_TOOL_PROVISION\n")
-	b.WriteString("fi\n")
 }
 
 func HostFSStartScript(grafts []string) string {
@@ -697,97 +681,6 @@ rm -f /hideout/session/tmp/hostfsd.pid
 `
 }
 
-func EffectiveToolPresetNames(names []string) []string {
-	if len(names) == 0 {
-		return []string{"base-dev"}
-	}
-	return names
-}
-
-func ResolveToolPresets(names []string) ([]ToolPreset, error) {
-	names = EffectiveToolPresetNames(names)
-	out := make([]ToolPreset, 0, len(names))
-	seen := map[string]bool{}
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, errors.New("tool preset cannot be empty")
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		switch name {
-		case "base-dev":
-			out = append(out, ToolPreset{
-				Name:             "base-dev",
-				RequiredCommands: []string{"sh", "git", "curl"},
-				RequiredPaths:    []string{"/etc/ssl/certs"},
-			})
-		case "node-dev":
-			out = append(out, ToolPreset{
-				Name:             "node-dev",
-				RequiredCommands: []string{"sh", "git", "curl", "node", "npm"},
-				RequiredPaths:    []string{"/etc/ssl/certs"},
-				ProvisionScript:  NodeDevProvisionScript(),
-			})
-		default:
-			return nil, fmt.Errorf("unsupported tool preset %q", name)
-		}
-	}
-	return out, nil
-}
-
-func ResolveToolPlan(tools profile.Tools) (ToolPlan, error) {
-	presets, err := ResolveToolPresets(tools.Presets)
-	if err != nil {
-		return ToolPlan{}, err
-	}
-	plan := ToolPlan{Presets: presets}
-	for _, pkg := range tools.NPMGlobals {
-		plan.NPMGlobals = append(plan.NPMGlobals, NPMGlobalTool{
-			Package:  strings.TrimSpace(pkg.Package),
-			Commands: append([]string(nil), pkg.Commands...),
-		})
-	}
-	return plan, nil
-}
-
-func NodeDevProvisionScript() string {
-	return `#!/bin/sh
-set -eu
-if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-  exit 0
-fi
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y ca-certificates curl nodejs npm
-command -v node >/dev/null 2>&1
-command -v npm >/dev/null 2>&1
-`
-}
-
-func NPMGlobalProvisionScript(pkg NPMGlobalTool) string {
-	var b strings.Builder
-	b.WriteString("#!/bin/sh\n")
-	b.WriteString("set -eu\n")
-	if len(pkg.Commands) > 0 {
-		b.WriteString("if")
-		for i, command := range pkg.Commands {
-			if i > 0 {
-				b.WriteString(" &&")
-			}
-			fmt.Fprintf(&b, " command -v %s >/dev/null 2>&1", shellQuote(command))
-		}
-		b.WriteString("; then\n  exit 0\nfi\n")
-	}
-	fmt.Fprintf(&b, "npm install -g %s\n", shellQuote(pkg.Package))
-	for _, command := range pkg.Commands {
-		fmt.Fprintf(&b, "command -v %s >/dev/null 2>&1\n", shellQuote(command))
-	}
-	return b.String()
-}
-
 func ShellArgs(instance, workdir string, env []string, command []string) []string {
 	args := []string{"shell", "--tty=false", "--workdir", workdir, instance, "--", "env", "-i"}
 	args = append(args, env...)
@@ -797,22 +690,6 @@ func ShellArgs(instance, workdir string, env []string, command []string) []strin
 
 func CommandCheck(command string) []string {
 	return []string{"sh", "-c", "command -v \"$1\" >/dev/null 2>&1", "hideout-command-check", command}
-}
-
-func flatMap(values []ToolPreset, fn func(ToolPreset) []string) []string {
-	var out []string
-	for _, value := range values {
-		out = append(out, fn(value)...)
-	}
-	return out
-}
-
-func flatMapNPMGlobals(values []NPMGlobalTool, fn func(NPMGlobalTool) []string) []string {
-	var out []string
-	for _, value := range values {
-		out = append(out, fn(value)...)
-	}
-	return out
 }
 
 func uniqueStrings(values []string) []string {

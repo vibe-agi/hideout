@@ -1,0 +1,23 @@
+{
+  "valid": [
+    {"ref": "template:_images/ubuntu-lts", "form": "template"},
+    {"ref": "template:_images/debian-13", "form": "template"},
+    {"ref": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "form": "url"},
+    {"ref": "https://example.com/images/dev.qcow2#sha256:FEDCBA9876543210fedcba9876543210fedcba9876543210fedcba9876543210", "form": "url"}
+  ],
+  "invalid": [
+    {"ref": "", "reason": "empty"},
+    {"ref": "https://example.com/images/dev.img", "reason": "missing digest fragment"},
+    {"ref": "https://example.com/images/dev.qcow2#sha256:abc123", "reason": "malformed digest"},
+    {"ref": "https://example.com/images/dev.img#md5:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "reason": "wrong digest algorithm"},
+    {"ref": "https://user:pass@example.com/images/dev.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "reason": "embedded credentials"},
+    {"ref": "http://example.com/images/dev.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "reason": "non-https scheme"},
+    {"ref": "ubuntu:24.04@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "reason": "oci reference"},
+    {"ref": "docker.io/library/ubuntu:24.04", "reason": "oci reference"},
+    {"ref": "/var/images/dev.img", "reason": "local path"},
+    {"ref": "file:///var/images/dev.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "reason": "file scheme"},
+    {"ref": "https://example.com/images/dev.tar.gz#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "reason": "unsupported image extension"},
+    {"ref": "template:", "reason": "empty template name"},
+    {"ref": "template:bad name", "reason": "template name whitespace"}
+  ]
+}

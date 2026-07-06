@@ -2,3 +2,23 @@
 .hideout-bin/
 .hideout-release-evidence/
 .hideout-operator*
+
+# Go build/test artifacts
+*.exe
+*.test
+*.out
+vendor/
+
+# Local editor/OS scratch
+.DS_Store
+*.log
+*.tmp
+*.swp
+.env*
+.vscode/
+.idea/
+
+# Local agent / spec-kit tooling (not part of product history)
+.agents/
+.claude/
+.specify/

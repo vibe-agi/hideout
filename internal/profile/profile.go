@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
@@ -33,6 +34,7 @@ type Profile struct {
 	Git              Git               `json:"git"`
 	Network          Network           `json:"network"`
 	Tools            Tools             `json:"tools"`
+	Environment      EnvironmentConfig `json:"environment"`
 	HostCapabilities HostCapabilities  `json:"hostCapabilities"`
 	EndpointExposure EndpointExposure  `json:"endpointExposure,omitempty"`
 	HostFS           hostfs.Config     `json:"hostfs,omitempty"`
@@ -71,9 +73,19 @@ type Network struct {
 	ProxySecretRef  string `json:"proxySecretRef,omitempty"`
 }
 
+// EnvironmentConfig carries profile-level environment defaults. BaseImage is
+// a base image declaration string (template:<name> or a https disk-image URL
+// with a #sha256 fragment); when absent it resolves to the built-in default.
+type EnvironmentConfig struct {
+	BaseImage string `json:"baseImage,omitempty"`
+}
+
 type Tools struct {
-	Presets    []string           `json:"presets"`
-	NPMGlobals []NPMGlobalPackage `json:"npmGlobals,omitempty"`
+	ExpectedCommands []string           `json:"expectedCommands,omitempty"`
+	Presets          []string           `json:"-"`
+	NPMGlobals       []NPMGlobalPackage `json:"-"`
+	LegacyPresets    []string           `json:"presets,omitempty"`
+	LegacyNPMGlobals []NPMGlobalPackage `json:"npmGlobals,omitempty"`
 }
 
 type NPMGlobalPackage struct {
@@ -220,8 +232,9 @@ func Default(name string) Profile {
 			Mode:            "direct",
 			ProxyEnvVisible: false,
 		},
-		Tools: Tools{
-			Presets: []string{"base-dev"},
+		Tools: Tools{},
+		Environment: EnvironmentConfig{
+			BaseImage: environment.BuiltinBaseImage,
 		},
 		HostCapabilities: HostCapabilities{
 			Open: OpenCapability{
@@ -560,6 +573,16 @@ func copyPolicyDir(src, dst string) error {
 	return nil
 }
 
+// BaseImageOrBuiltin resolves the profile's base image declaration, falling
+// back to the built-in default when the field is absent. The field is a
+// default, not identity: filling it is not record migration.
+func (p Profile) BaseImageOrBuiltin() string {
+	if strings.TrimSpace(p.Environment.BaseImage) != "" {
+		return p.Environment.BaseImage
+	}
+	return environment.BuiltinBaseImage
+}
+
 func (p Profile) Validate() error {
 	if p.SchemaVersion == "" {
 		return errors.New("profile schemaVersion is required")
@@ -620,21 +643,18 @@ func (p Profile) Validate() error {
 			return fmt.Errorf("network.proxySecretRef: %w", err)
 		}
 	}
-	if p.Tools.Presets == nil {
-		return errors.New("tools.presets is required")
+	if len(p.Tools.Presets) > 0 || len(p.Tools.LegacyPresets) > 0 {
+		return errors.New("tools.presets has been removed; use tools.expectedCommands for diagnostics only")
 	}
-	if err := validateUniqueStrings("tools.presets", p.Tools.Presets); err != nil {
-		return err
+	if len(p.Tools.NPMGlobals) > 0 || len(p.Tools.LegacyNPMGlobals) > 0 {
+		return errors.New("tools.npmGlobals has been removed; install tools in the guest environment and declare tools.expectedCommands for diagnostics")
 	}
-	for _, preset := range p.Tools.Presets {
-		if strings.TrimSpace(preset) == "" {
-			return errors.New("tool preset cannot be empty")
-		}
-		if preset != "base-dev" && preset != "node-dev" {
-			return fmt.Errorf("unsupported tool preset %q", preset)
+	if p.Environment.BaseImage != "" {
+		if _, err := environment.ParseImageDeclaration(p.Environment.BaseImage); err != nil {
+			return fmt.Errorf("environment.baseImage: %w", err)
 		}
 	}
-	if err := validateNPMGlobals(p.Tools.NPMGlobals); err != nil {
+	if err := validateExpectedCommands(p.Tools.ExpectedCommands); err != nil {
 		return err
 	}
 	if err := p.validateHostCapabilities(); err != nil {
@@ -868,39 +888,36 @@ func validateHostFSRuleIDs(config hostfs.Config) error {
 	return nil
 }
 
-func validateNPMGlobals(packages []NPMGlobalPackage) error {
-	seenPackages := map[string]bool{}
-	seenCommands := map[string]bool{}
-	for i, pkg := range packages {
-		name := strings.TrimSpace(pkg.Package)
-		if name == "" {
-			return fmt.Errorf("tools.npmGlobals[%d].package is required", i)
+func validateExpectedCommands(commands []string) error {
+	if err := validateUniqueStrings("tools.expectedCommands", commands); err != nil {
+		return err
+	}
+	for i, command := range commands {
+		if err := ValidateExpectedCommandName(command); err != nil {
+			return fmt.Errorf("tools.expectedCommands[%d]: %w", i, err)
 		}
-		if strings.HasPrefix(name, "-") || strings.ContainsAny(name, "\x00\r\n\t ") {
-			return fmt.Errorf("tools.npmGlobals[%d].package is not a valid npm package spec", i)
-		}
-		if seenPackages[name] {
-			return fmt.Errorf("tools.npmGlobals[%d].package duplicates %s", i, name)
-		}
-		seenPackages[name] = true
-		if len(pkg.Commands) == 0 {
-			return fmt.Errorf("tools.npmGlobals[%d].commands is required", i)
-		}
-		if err := validateUniqueStrings(fmt.Sprintf("tools.npmGlobals[%d].commands", i), pkg.Commands); err != nil {
-			return err
-		}
-		for j, command := range pkg.Commands {
-			command = strings.TrimSpace(command)
-			if command == "" {
-				return fmt.Errorf("tools.npmGlobals[%d].commands[%d] is required", i, j)
-			}
-			if strings.ContainsAny(command, "\x00\r\n\t /\\") || strings.HasPrefix(command, "-") {
-				return fmt.Errorf("tools.npmGlobals[%d].commands[%d] is not a command name", i, j)
-			}
-			if seenCommands[command] {
-				return fmt.Errorf("tools.npmGlobals[%d].commands[%d] duplicates command %s", i, j, command)
-			}
-			seenCommands[command] = true
+	}
+	return nil
+}
+
+func ValidateExpectedCommandName(command string) error {
+	if strings.TrimSpace(command) != command || command == "" {
+		return errors.New("expected command must be a non-empty command name")
+	}
+	if command == "." || command == ".." || strings.Contains(command, "://") {
+		return fmt.Errorf("%q is not a command name", command)
+	}
+	if command[0] == '-' {
+		return fmt.Errorf("%q must not start with '-'", command)
+	}
+	for _, r := range command {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '+', r == '-':
+		default:
+			return fmt.Errorf("%q contains unsupported command-name characters", command)
 		}
 	}
 	return nil
@@ -1322,8 +1339,11 @@ func cloneProfile(p Profile) Profile {
 	p.Env.Public = copyStringMap(p.Env.Public)
 	p.Env.Deny = copyStringSlice(p.Env.Deny)
 	p.Env.Inherit = copyStringSlice(p.Env.Inherit)
+	p.Tools.ExpectedCommands = copyStringSlice(p.Tools.ExpectedCommands)
 	p.Tools.Presets = copyStringSlice(p.Tools.Presets)
 	p.Tools.NPMGlobals = copyNPMGlobals(p.Tools.NPMGlobals)
+	p.Tools.LegacyPresets = copyStringSlice(p.Tools.LegacyPresets)
+	p.Tools.LegacyNPMGlobals = copyLegacyNPMGlobals(p.Tools.LegacyNPMGlobals)
 	p.Policy.MaxCapabilities = copyStringSlice(p.Policy.MaxCapabilities)
 	p.Policy.ScriptRefs = append([]ScriptRef(nil), p.Policy.ScriptRefs...)
 	p.Metadata = copyStringMap(p.Metadata)
@@ -1351,6 +1371,18 @@ func copyStringSlice(in []string) []string {
 }
 
 func copyNPMGlobals(in []NPMGlobalPackage) []NPMGlobalPackage {
+	if in == nil {
+		return nil
+	}
+	out := make([]NPMGlobalPackage, len(in))
+	for i, pkg := range in {
+		out[i] = pkg
+		out[i].Commands = copyStringSlice(pkg.Commands)
+	}
+	return out
+}
+
+func copyLegacyNPMGlobals(in []NPMGlobalPackage) []NPMGlobalPackage {
 	if in == nil {
 		return nil
 	}

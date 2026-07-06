@@ -75,8 +75,13 @@ scripts/test-phase1.sh --quick --probes
 # flow, and control-plane store denial without binding Hideout to any product.
 scripts/test-phase1.sh --dogfood-cli
 
-# Run the operator-supplied real CLI smoke on Lima. Currently npm-based; it is
-# being reworked by the npm-provisioning removal (002).
+# Run the declared-image boot gate variant: create a named environment from a
+# digest-carrying image URL, boot it, and prove a wrong digest fails closed.
+HIDEOUT_ENV_IMAGE_URL='https://<distributor>/<image>.img#sha256:<digest>' \
+  scripts/test-phase1.sh --env-image
+
+# Run the operator-supplied real CLI smoke on Lima. The operator provides a
+# guest environment where the command is already runnable.
 scripts/test-phase1.sh --operator-cli
 ```
 
@@ -97,6 +102,7 @@ Change-to-gate mapping:
 | HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | Gate 2 HostFS coverage (read/list grants) |
 | Additional passthrough mounts | Gate 0, native harness for CLI shape, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
 | Lima backend, mounts, guest bootstrap, guest command resolution, base image declarations, or instance lifecycle | Gate 0 and Gate 2; native harness only for shared CLI wiring | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
+| Environment model: naming, auto-name resolution, drift semantics, record versioning, or image declaration plumbing | Gate 0 and targeted environment/manager/app tests | `scripts/test-env-image.sh` (via `--env-image`) proves declared-image boot, digest-drift fail-closed, and recreate recovery on macOS with Lima | `--release-candidate` remains separate |
 | Supervised Lima real-run dogfood slice | Gate 0 and targeted test CLI tests | `scripts/test-lima-real-run.sh` as the optional Gate 2 step on macOS with Lima | `--release-candidate` remains separate |
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, native harness for shared CLI wiring, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests | `--required` if a required route is affected |
@@ -429,7 +435,7 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
   profile and workspace;
 - the target can make an authenticated HTTP request from inside the guest to a
   host-owned fake API;
-- run-scoped `--env KEY=VALUE` can expose a user-chosen variable while Hideout
+- run-scoped `--env-var KEY=VALUE` can expose a user-chosen variable while Hideout
   runtime env remains hidden from the target;
 - HostFS cannot grant the Hideout control-plane store into the guest.
 
@@ -762,36 +768,39 @@ does not weaken privacy boundaries for the covered backend behaviors.
 
 Required checks:
 
-- `hideout run -- <command>` creates an environment for the current
-  profile/workspace when none exists, while `hideout list` exposes the resume
-  ID;
+- `hideout run -- <command>` creates the deterministic auto-named environment
+  for the current profile and workspace when none exists, while
+  `hideout env list` shows it marked as auto-named;
 - a second `hideout run -- <command>` from the same workspace reuses that
   environment;
-- running from a different workspace creates or selects a different environment;
-- `hideout run --new -- <command>` creates a new environment for the same
-  profile/workspace without changing profile identity;
-- `hideout run --resume <id> -- <command>` resumes the exact environment only
-  from the original workspace or a child directory;
-- `--resume <id>` from an unrelated workspace fails closed before command
-  execution;
-- `hideout run --rm -- <command>` removes the reusable environment after the
-  command exits;
-- Gate 2 runs real Lima `--resume`, `--new`, and `--resume <id> --rm` commands
-  and verifies `hideout list` reflects the expected environment records;
-- Gate 2 runs real Lima `hideout stop <id>` and verifies the VM is stopped while
-  the environment record remains resumable;
+- running from a different workspace resolves a different auto-named
+  environment;
+- `hideout env create <name> --workspace <ws>` creates an explicit named
+  environment with a pinned base image declaration, and `hideout run --env
+  <name> -- <command>` runs inside it;
+- `hideout run --env <name>` from a conflicting workspace fails closed with a
+  workspace drift report before command execution;
+- `hideout env recreate <name>` refuses a running guest without `--force` and
+  rebuilds under the same name with `--force`;
+- `hideout run --rm -- <command>` leaves no reusable environment record;
+- Gate 2 runs the real Lima named-environment lifecycle (`env list`, `run
+  --env`, `env create`, `env recreate --force`, `--rm`) and verifies
+  `hideout env list` reflects the expected records; `--new`, `--resume`, and
+  the top-level `hideout list` are removed and are not exercised;
+- Gate 2 runs real Lima `hideout stop <name>` and verifies the VM is stopped
+  while the environment record remains resumable;
 - Gate 2 covers `hideout stop --idle <duration>` and
   `hideout clean --stopped`/`hideout clean --idle <duration>` with temporary
   environments so idle memory release and destructive cleanup are not confused;
 - successful reusable Lima runs keep target stdout/stderr clean by default;
-  `--verbose` prints a resume hint on stderr without changing target stdout,
-  while `--rm` runs do not print a reusable resume hint;
+  `--verbose` prints a name-based run-again hint on stderr without changing
+  target stdout, while `--rm` runs do not print a reusable environment hint;
 - every run, including resumed runs, gets a fresh session ID, broker token,
   command proxy shim directory, network plan, proxy secret runtime file, and
   audit context;
 - stopped/stale environment cleanup preserves audit by default and never deletes
   the real workspace;
-- `hideout list` shows ID, profile, backend, workspace, status, start/end
+- `hideout env list` shows name, kind, image, backend, workspace, status, start/end
   times, and last command without leaking command secrets, broker tokens, proxy
   URLs, or raw machine IDs.
 
@@ -888,9 +897,8 @@ Required checks:
 - `hideout profile env` and `hideout profile tools` manage durable profile
   policy without introducing a second representation; `profile tools`
   converges on recording declared expected guest commands as diagnostics
-  data, not installation actions — its npm-backed subcommands still exist
-  today and are being removed (002); env list output reports names only and
-  must not echo stored values;
+  data, not installation actions; env list output reports names only and must
+  not echo stored values;
 - Manager API `profile/env/plan|apply` manages durable profile env policy
   using the same profile validator as CLI `profile env`, performs planning
   without creating profile state, rejects raw host command or raw profile-writer

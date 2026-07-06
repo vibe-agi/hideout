@@ -372,12 +372,13 @@ function list(value) {
   if (value == null || value === "") return "none";
   return String(value);
 }
-function npmGlobalLabels(value) {
+function expectedCommandDiagnosticLabels(value) {
   if (!Array.isArray(value) || !value.length) return [];
-  return value.map(function(pkg) {
-    const name = pkg && pkg.package ? pkg.package : "npm package";
-    const commands = pkg && Array.isArray(pkg.commands) && pkg.commands.length ? " (" + pkg.commands.join(", ") + ")" : "";
-    return name + commands;
+  return value.map(function(diag) {
+    if (!diag || !diag.command) return "unknown:not-checkable";
+    const status = diag.status || "not-checkable";
+    const blocks = diag.blocksRequestedRun ? " blocks-run" : "";
+    return diag.command + ":" + status + blocks;
   });
 }
 function pill(label, tone) {
@@ -594,9 +595,6 @@ const renderers = {
       '<div class="field"><label for="setupBackend">Backend</label><select id="setupBackend"><option value="lima">lima</option><option value="native">native</option></select></div>' +
       '<div class="field"><label for="setupNetwork">Network</label><select id="setupNetwork"><option value="direct">direct</option><option value="tun2socks">tun2socks</option></select></div>' +
       '<div class="field"><label for="setupProxySecret">Proxy secret ref</label><input id="setupProxySecret" placeholder="default-proxy"></div>' +
-      '<div class="field"><label for="setupPreset">Tool preset</label><input id="setupPreset" value="node-dev"></div>' +
-      '<div class="field"><label for="setupPackage">NPM package</label><input id="setupPackage" placeholder="@scope/tool@version"></div>' +
-      '<div class="field"><label for="setupCommands">NPM commands</label><input id="setupCommands" placeholder="tool, helper"></div>' +
       '</div>' +
       '<div class="action-row"><button class="action secondary" type="button" data-setup-action="plan" data-api="init/plan">Plan</button><button class="action" type="button" data-setup-action="apply" data-api="init/apply">Apply</button><span class="meta" id="setupStatus">ready</span></div>' +
       '</form><div class="result" id="setupResult">' + setupResultHTML + '</div>';
@@ -637,7 +635,7 @@ const renderers = {
     if (!profiles.length) return envForm + empty("No profiles");
     return envForm + '<div class="items">' + profiles.map(function(p) {
       const tone = p.validationError ? "error" : "ok";
-      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["envPublic", p.envPublic], ["envInherit", p.envInherit], ["envDeny", p.envDeny], ["toolPresets", p.toolPresets], ["npmGlobals", npmGlobalLabels(p.npmGlobals)], ["commandProxies", p.commandProxies], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
+      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["envPublic", p.envPublic], ["envInherit", p.envInherit], ["envDeny", p.envDeny], ["expectedCommands", p.expectedCommands], ["expectedDiagnostics", expectedCommandDiagnosticLabels(p.expectedCommandDiagnostics)], ["commandProxies", p.commandProxies], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
     }).join("") + "</div>";
   },
   environments: function() {
@@ -645,12 +643,13 @@ const renderers = {
     const visibleEnvironments = visibleEnvironmentsForPanel(environments);
     const envHTML = environments.length ? panelLimitNotice("environments", visibleEnvironments.length, environments.length) + '<div class="items">' + visibleEnvironments.map(function(e) {
       const tone = e.status === "running" ? "warn" : e.status === "stopped" ? "info" : "ok";
-      return item(e.id, e.status || "environment", [["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
+      const title = e.name ? (e.name + (e.autoNamed ? " (auto)" : "")) : e.id;
+      return item(title, e.status || "environment", [["image", e.imageRef], ["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["id", e.id], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
     }).join("") + "</div>" : empty("No reusable environments");
     return '<form id="environmentForm" class="item">' +
       '<div class="form-grid">' +
       '<div class="field"><label for="envAction">Action</label><select id="envAction"><option value="stop">stop</option><option value="clean">clean</option></select></div>' +
-      '<div class="field"><label for="envIds">Environment IDs</label><input id="envIds" placeholder="empty = all, or env_..., abc123"></div>' +
+      '<div class="field"><label for="envIds">Environment names or IDs</label><input id="envIds" placeholder="empty = all, or work, env_..."></div>' +
       '<div class="field"><label for="envIdle">Idle filter</label><input id="envIdle" placeholder="24h, 30m"></div>' +
       '<label class="check-row"><input id="envStoppedOnly" type="checkbox"> stopped only</label>' +
       '</div>' +
@@ -776,16 +775,11 @@ function splitArgv(value) {
   return out;
 }
 function setupPayloadFromForm() {
-  const npmPackage = document.getElementById("setupPackage").value.trim();
-  const npmCommands = splitCSV(document.getElementById("setupCommands").value);
-  const npmGlobals = npmPackage ? [{package: npmPackage, commands: npmCommands}] : [];
   return {
     profile: document.getElementById("setupProfile").value,
     backend: document.getElementById("setupBackend").value,
     network: document.getElementById("setupNetwork").value,
-    proxySecretRef: document.getElementById("setupProxySecret").value.trim(),
-    toolPresets: splitCSV(document.getElementById("setupPreset").value),
-    npmGlobals: npmGlobals
+    proxySecretRef: document.getElementById("setupProxySecret").value.trim()
   };
 }
 function renderSetupResponse(resource, response) {

@@ -10,9 +10,7 @@ OPERATOR_ENV_FLAGS=()
 usage() {
   cat <<'USAGE'
 Usage:
-  HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
-  HIDEOUT_OPERATOR_COMMAND=<command> \
-    scripts/test-operator-cli-smoke.sh
+  HIDEOUT_OPERATOR_COMMAND=<command> scripts/test-operator-cli-smoke.sh
 
 Optional:
   HIDEOUT_OPERATOR_PROFILE=default
@@ -27,8 +25,9 @@ Optional:
   HIDEOUT_OPERATOR_ENV_KEYS='KEY1,KEY2'
 
 This is an operator-supplied smoke for any real CLI. Hideout does not encode
-the CLI's product semantics; the operator supplies package, command, env, and
-auth/request behavior.
+the CLI's product semantics or install the tool; the operator supplies a guest
+environment where the command is already runnable, plus env and auth/request
+behavior.
 USAGE
 }
 
@@ -141,7 +140,7 @@ operator_env_flags() {
       echo "operator-cli: requested env key $key is not set in host env" >&2
       exit 2
     fi
-    OPERATOR_ENV_FLAGS+=(--env "$key=$value")
+    OPERATOR_ENV_FLAGS+=(--env-var "$key=$value")
   done
 }
 
@@ -203,10 +202,11 @@ run_operator_guest() {
   local stderr="$3"
   local new_env="$4"
   shift 4
+  # The first run auto-creates the environment for this profile+workspace and
+  # later runs reuse it; there is no --new flag under the named-environment
+  # model. new_env is kept as a call-site marker only.
+  local _ignored_new_env="$new_env"
   local run_args=(run --verbose --backend lima --profile "$profile_name" --workspace "$workspace")
-  if [ "$new_env" = "1" ]; then
-    run_args+=(--new)
-  fi
   if [ "${#OPERATOR_ENV_FLAGS[@]}" -gt 0 ]; then
     run_args+=("${OPERATOR_ENV_FLAGS[@]}")
   fi
@@ -234,9 +234,8 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   exit 0
 fi
 
-package="${HIDEOUT_OPERATOR_NPM_PACKAGE:-}"
 command_name="${HIDEOUT_OPERATOR_COMMAND:-}"
-if [ -z "$package" ] || [ -z "$command_name" ]; then
+if [ -z "$command_name" ]; then
   usage >&2
   exit 2
 fi
@@ -281,11 +280,10 @@ operator_env_flags
 
 echo "operator-cli: initializing profile"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --backend lima --network direct >/dev/null
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile tools "$profile_name" preset add node-dev >/dev/null
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile tools "$profile_name" npm add --package "$package" --command "$command_name" >/dev/null
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile tools "$profile_name" expected add "$command_name" >/dev/null
 operator_home_imports
 
-echo "operator-cli: first run creates a tool-matched Lima environment"
+echo "operator-cli: first run creates a Lima environment with operator-declared expected command"
 run_operator_guest "first version run" "$tmp/version1.out" "$tmp/version1.err" 1 \
   sh -lc "$command_name $version_args"
 cat "$tmp/version1.out"

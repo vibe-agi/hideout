@@ -1392,34 +1392,27 @@ is not permission to reuse per-run capability material.
 Default environment selection:
 
 ```text
-profile + normalized workspace + environment fingerprint (base image digest + expected-command declarations + backend config version) -> most recently used environment
+profile + workspace -> deterministic auto-name -> the one named environment
 ```
 
-`hideout run -- <command>` resolves the current workspace, finds the most
-recent resumable environment for the selected profile, workspace, and
-environment fingerprint, and uses it. If none exists, Hideout creates one.
-Changing
-directories into a different project selects a different environment. Returning
-to the original project selects that project's most recent environment.
-Changing the declared base image digest or expected-command declarations must
-not silently reuse an older guest that was provisioned from a different
-image. Explicit
-`--resume <id>` against a stale environment fingerprint fails closed with an
-instruction to use `--new`.
+`hideout run -- <command>` resolves the current workspace to its
+deterministic auto-named environment for the selected profile, creating it on
+first use and reusing it afterward. `hideout run --env <name> -- <command>`
+selects a named environment explicitly; it accepts names only, and the record
+supplies the profile, backend, pinned image declaration, and pinned workspace
+binding — conflicting inputs fail closed. There is no most-recently-used
+fingerprint selection and no silent derivation of replacement environments.
 
-`hideout run --new -- <command>` always creates a new environment for the
-current profile and workspace. It does not reset the profile identity. It is for
-starting from a clean runtime environment while keeping the same configured fake
-device/persona. Resetting identity is a stronger profile operation and must not
-be hidden behind `--new`.
-
-`hideout run --resume <id> -- <command>` resumes a specific environment. The
-resume ID is an environment handle, not a session token. A resume command must
-only run from the environment's original workspace or a child directory of that
-workspace. If the current directory is outside the environment workspace, the
-command fails closed with a message showing both paths. A future explicit
-override may exist, but the default must prevent accidentally using one
-project's environment to operate on another project.
+Environment identity is fixed at creation: the pinned image declaration, the
+backend configuration version, and the pinned workspace. Use-time drift on
+the backend-configuration or workspace axes fails closed with a drift report
+naming each axis (pinned and current values) plus a copyable
+`hideout env recreate <name>` command. Workspace identity is compared by real
+file identity, not string paths. Expected-command declarations are live
+diagnostics, not identity: changing them never drifts an environment and
+never forces a rebuild. The previous `--new` and `--resume` flags are
+removed; `hideout env create` is the explicit way to make an environment, and
+`hideout env recreate` is the explicit answer to drift.
 
 `hideout run --rm -- <command>` creates a disposable run. It may still use
 profile identity defaults, but it removes the runtime environment after the
@@ -1429,23 +1422,31 @@ higher-risk command.
 User-facing environment commands stay intentionally small:
 
 ```text
-hideout list
-hideout stop
-hideout clean
+hideout env create <name> [--image <declaration>] [--workspace <path>]
+hideout env list
+hideout env inspect <name>
+hideout env recreate <name> [--force]
+hideout env remove <name> [--force]
+hideout stop <name|id>
+hideout clean --stopped <name|id>
 ```
 
-`hideout list` shows resumable environments, not low-level session internals.
-It must include at least:
+`hideout env list` is the only environment listing command and shows every
+environment — explicit and auto-named — plus prior-model records as
+`unsupported-version` rows keyed by record id and version only. It must
+include at least:
 
-- short and full environment ID;
-- profile;
+- name and whether it was auto-named;
+- pinned image declaration (abbreviated digest);
 - backend;
-- normalized workspace;
-- status;
-- created time;
+- status and disk usage;
 - last started time;
-- last ended time when available;
-- last command summary.
+- normalized workspace;
+- record ID.
+
+`hideout env recreate` and `hideout env remove` fail closed on a running
+guest with a copyable stop command; the explicit `--force` flag stops the
+guest first and then proceeds.
 
 `hideout stop [environment-id...]` stops the backend instance for a reusable
 environment without deleting the environment record, profile identity, caches,
@@ -1464,15 +1465,16 @@ not delete the real workspace.
 Suggested verbose user output after a run:
 
 ```text
-Hideout environment: 16f8850e
+Hideout environment: env_16f8850e...
+Hideout environment name: work
 workspace: /path/project
-resume: hideout run --resume 16f8850e -- <command>
+run again: hideout run --env work -- <command>
 ```
 
 Default `hideout run` output should stay close to native command execution:
 target stdout/stderr pass through, while Hideout control-plane progress,
 environment hints, and Boundary Summary are shown through `--verbose`,
-`explain`, `hideout list`, TUI, Web UI, audit files, or Manager API.
+`explain`, `hideout env list`, TUI, Web UI, audit files, or Manager API.
 
 The product rule is:
 
@@ -1828,7 +1830,7 @@ User experience:
 
 - `hideout explain` must show HostFS roots, active grant count, and whether
   workspace-outside host paths are hidden.
-- `hideout list` should show whether an environment has persistent HostFS
+- `hideout env list` should show whether an environment has persistent HostFS
   grants without printing sensitive path details by default.
 - denied HostFS attempts may appear in audit and UI warnings, but the target
   process still receives `ENOENT`.
@@ -2154,7 +2156,7 @@ Hideout's canonical HostFS flags are therefore:
 --no-profile-fs
   Disable profile HostFS allow grants for this run.
 
---env KEY=VALUE
+--env-var KEY=VALUE
   Add a run-scoped public environment variable. It is validated through the
   same env policy as profile env and must not expose Hideout runtime variables,
   proxy variables, or synthetic identity variables such as HOME and PATH.
@@ -2276,17 +2278,18 @@ durable env policy model and must not return public env values in responses.
 Persistent profile tool management:
 
 ```sh
-hideout profile tools default list
+hideout profile tools default expected add git
+hideout profile tools default expected remove git
+hideout profile tools default expected list
 ```
 
 An expected-command declaration names a command the operator expects to be
 available in the guest (for example `git` or `node`). It is diagnostics and
 environment-fingerprint input only: doctor checks whether the command is
 runnable, `hideout run` reports it with guest context when it is missing, and
-nothing installs it. The npm-provisioning removal (002) reduces
-`profile tools` to this declaration surface. Editing surfaces compile into
-the same profile state through Manager plan/apply, not raw profile writes or
-product-specific install scripts.
+nothing installs it. `profile tools` is reduced to this declaration surface.
+Editing surfaces compile into the same profile state through Manager
+plan/apply, not raw profile writes or product-specific install scripts.
 
 Tool supply separates naming from authority:
 
@@ -2308,11 +2311,10 @@ operator-authored setup executed as an ordinary in-boundary `hideout run`.
 Hideout ships no package-installation providers, and tool supply is not a
 Core security capability or a future provider platform: Hideout does not own
 tool installation as a product domain; it owns the boundary once a tool runs.
-The previous `npm-global` provider and its `profile.tools.npmGlobals` storage
-are being removed (002). Recipes, bundles, JavaScript, and user configuration
-may declare which guest commands they expect, but they must not ship
-installer implementations, pass arbitrary setup shell, or execute host
-authority.
+The previous package-installation provider path and guest-tool package storage
+have been removed. Recipes, bundles, JavaScript, and user configuration may
+declare which guest commands they expect, but they must not ship installer
+implementations, pass arbitrary setup shell, or execute host authority.
 
 Environment preparation is an operator concern: an operator-authored setup
 script runs as an ordinary `hideout run` target inside the same boundary,
@@ -4066,12 +4068,15 @@ part of the operator-facing Required CLI.
 Design-ready commands:
 
 ```text
-hideout run --new -- <command> [args...]
-hideout run --resume <environment-id> -- <command> [args...]
+hideout run --env <name> -- <command> [args...]
 hideout run --rm -- <command> [args...]
-hideout list
-hideout stop [--idle <duration>] [--verbose] [environment-id...]
-hideout clean [--stopped] [--idle <duration>] [--verbose] [environment-id...]
+hideout env create <name> [--image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]
+hideout env list
+hideout env inspect <name>
+hideout env recreate <name> [--force]
+hideout env remove <name> [--force]
+hideout stop [--idle <duration>] [--verbose] [name-or-id...]
+hideout clean [--stopped] [--idle <duration>] [--verbose] [name-or-id...]
 hideout profile rotate-identity <name>
 hideout profile reset <name>
 hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]
@@ -4097,20 +4102,18 @@ PortBridge close, HostFS and network cleanup, audit close, environment finish,
 and session-local secret cleanup. Forced process death such as `SIGKILL` remains
 outside this guarantee and is handled by later cleanup/doctor repair.
 
-`hideout run --new -- <command>` forces a new environment for the current
-profile/workspace pair without resetting profile identity.
-
-`hideout run --resume <environment-id> -- <command>` resumes an exact
-environment and fails closed when invoked outside that environment's workspace
-tree.
+`hideout run --env <name> -- <command>` runs inside a named environment; the
+record supplies profile, backend, image, and workspace binding, and
+conflicting inputs or identity drift fail closed with a recreate hint.
 
 `hideout run --rm -- <command>` runs without leaving a reusable environment
 behind. Runtime credentials are still regenerated for the run and cleaned up
 afterward.
 
-`hideout list` lists resumable environments. `hideout stop` releases backend VM
-memory without deleting a resumable environment. `hideout clean` removes
-stopped/stale environments and runtime cache while preserving audit by default.
+`hideout env list` lists every environment — auto-named and explicit — by
+name. `hideout stop <name>` releases backend VM memory without deleting a
+resumable environment. `hideout clean` removes stopped/stale environments and
+runtime cache while preserving audit by default.
 
 `hideout audit show` renders the same audit view used by Manager API, TUI, and
 WebUI. It must not expose Hideout-minted control-plane credentials: proxy

@@ -186,86 +186,28 @@ func TestAPIRunPlanAndStatus(t *testing.T) {
 	}
 }
 
-func TestAPIInitPlanAndApplyConfigureGenericToolSupply(t *testing.T) {
+func TestAPIInitRejectsLegacyToolSupplyPayload(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	api := API{
 		Core:      Core{Store: store},
 		Token:     "ui_token",
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
-	schema := compileManagerAPISchema(t)
-	reqBody := InitAPIRequest{
-		ProfileName: "api-tools",
-		Backend:     "native",
-		Network:     "direct",
-		ToolPresets: []string{"base-dev"},
-		NPMGlobals: []profile.NPMGlobalPackage{{
-			Package:  "@example/agent-cli@1.2.3",
-			Commands: []string{"agent-cli", "agent-helper"},
-		}},
+	reqBody := map[string]any{
+		"profile":     "api-tools",
+		"backend":     "native",
+		"network":     "direct",
+		"toolPresets": []string{"base-dev"},
 	}
 	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/plan", reqBody)
 	req.Header.Set("Authorization", "Bearer ui_token")
 	resp := httptest.NewRecorder()
 	api.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK {
+	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
-	}
-	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
-	body := resp.Body.String()
-	for _, want := range []string{
-		`"resource":"init/plan"`,
-		`"version":"hideout.init/v1"`,
-		`"kind":"tools.preset.add"`,
-		`"kind":"tools.npm-global.add"`,
-		`"nextSteps"`,
-		`"id":"cli-smoke"`,
-		`"command":"hideout run --profile api-tools --backend native --allow-weak-isolation -- agent-cli"`,
-		`"@example/agent-cli@1.2.3"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("init/plan missing %q: %s", want, body)
-		}
 	}
 	if _, err := store.Load("api-tools"); err == nil {
 		t.Fatal("init/plan mutated profile state")
-	}
-
-	req = newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", reqBody)
-	req.Header.Set("X-Hideout-UI-Token", "ui_token")
-	resp = httptest.NewRecorder()
-	api.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
-	}
-	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
-	body = resp.Body.String()
-	for _, want := range []string{
-		`"resource":"init/apply"`,
-		`"version":"hideout.init/v1"`,
-		`"kind":"tools.npm-global.add"`,
-		`"nextSteps"`,
-		`"id":"cli-smoke"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("init/apply missing %q: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "HIDEOUT_SECRET") || strings.Contains(body, "proxy.url") {
-		t.Fatalf("init/apply leaked secret-bearing data: %s", body)
-	}
-	loaded, err := store.Load("api-tools")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !containsStringForAPITest(loaded.Tools.Presets, "node-dev") {
-		t.Fatalf("node-dev preset was not persisted: %+v", loaded.Tools.Presets)
-	}
-	if len(loaded.Tools.NPMGlobals) != 1 ||
-		loaded.Tools.NPMGlobals[0].Package != "@example/agent-cli@1.2.3" ||
-		!containsStringForAPITest(loaded.Tools.NPMGlobals[0].Commands, "agent-cli") ||
-		!containsStringForAPITest(loaded.Tools.NPMGlobals[0].Commands, "agent-helper") {
-		t.Fatalf("npm global tool was not persisted: %+v", loaded.Tools.NPMGlobals)
 	}
 }
 
@@ -807,6 +749,8 @@ func TestAPIEnvironmentLifecyclePlanAndApply(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	envStore := environment.Store{Root: store.Root}
 	rec, err := envStore.Create(environment.Spec{
+		Name:           "fixture-env-106",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/work/project",
@@ -1041,6 +985,8 @@ func TestAPIExposesDomainResourcesWithoutSecretValues(t *testing.T) {
 	// not verbatim user URL data.
 	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_1", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_1","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://example.com/path?token=abc"}}`+"\n", 0o600)
 	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
+		Name:           "fixture-env-107",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/work/project",

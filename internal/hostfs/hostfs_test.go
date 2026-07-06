@@ -671,3 +671,30 @@ func withRuleID(rule Rule, id string) Rule {
 	rule.ID = id
 	return rule
 }
+
+func TestWorkspaceShadowedRules(t *testing.T) {
+	workspace := t.TempDir()
+	inside := filepath.Join(workspace, "secrets")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	cfg := Config{
+		Grants: []Rule{{ID: "g1", HostPath: filepath.Join(inside, "*.txt"), Scope: ScopeGlob}},
+		Deny:   []Rule{{ID: "d1", HostPath: inside, Scope: ScopeDir}, {ID: "d2", HostPath: outside, Scope: ScopeDir}},
+	}
+	shadowed := WorkspaceShadowedRules(cfg, workspace)
+	ids := map[string]bool{}
+	for _, rule := range shadowed {
+		ids[rule.ID] = true
+	}
+	if !ids["g1"] || !ids["d1"] {
+		t.Fatalf("in-workspace rules should be shadowed: %+v", shadowed)
+	}
+	if ids["d2"] {
+		t.Fatalf("outside rule must not be shadowed: %+v", shadowed)
+	}
+	if len(WorkspaceShadowedRules(cfg, outside)) != 1 {
+		t.Fatalf("only the outside rule shadows the other workspace")
+	}
+}

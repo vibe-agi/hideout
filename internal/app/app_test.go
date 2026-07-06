@@ -147,8 +147,7 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 		"  hideout init [--no-input] [--backend lima|auto] [--network direct]",
 		"  hideout doctor",
 		"  hideout run [flags] -- <command> [args...]",
-		"First run and tool setup:",
-		"  hideout init --npm-package <npm-spec> --npm-command <command>",
+		"First run:",
 		"Run and explain:",
 		"Profile and HostFS:",
 		"Inspect and manage:",
@@ -162,7 +161,7 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 			t.Fatalf("help output missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Index(text, "First run and tool setup:") > strings.Index(text, "Advanced and developer:") {
+	if strings.Index(text, "First run:") > strings.Index(text, "Advanced and developer:") {
 		t.Fatalf("help should show first-run path before advanced commands:\n%s", text)
 	}
 	if strings.Index(text, "Advanced and developer:") > strings.Index(text, "Lab probes:") {
@@ -214,9 +213,8 @@ func TestSubcommandHelpIsSuccessfulAndQuiet(t *testing.T) {
 		{"profile", "fs", "default", "add", "--help"},
 		{"profile", "fs", "default", "remove", "--help"},
 		{"profile", "tools", "--help"},
-		{"profile", "tools", "default", "preset", "--help"},
-		{"profile", "tools", "default", "npm", "--help"},
-		{"profile", "tools", "default", "npm", "add", "--help"},
+		{"profile", "tools", "default", "expected", "--help"},
+		{"profile", "tools", "default", "expected", "add", "--help"},
 		{"profile", "env", "--help"},
 		{"profile", "env", "default", "set", "--help"},
 		{"profile", "home", "--help"},
@@ -258,7 +256,7 @@ func TestProfileLeafHelpIsSpecific(t *testing.T) {
 		want string
 	}{
 		{[]string{"profile", "fs", "default", "add", "--help"}, "hideout profile fs <name> add --fs <kind:/path>"},
-		{[]string{"profile", "tools", "default", "npm", "add", "--help"}, "hideout profile tools <name> npm add --package <npm-spec> --command <command>"},
+		{[]string{"profile", "tools", "default", "expected", "add", "--help"}, "hideout profile tools <name> expected add <command>"},
 		{[]string{"profile", "home", "default", "import", "--help"}, "hideout profile home <name> import --from <path>"},
 		{[]string{"profile", "command-proxy", "default", "add-open", "--help"}, "hideout profile command-proxy <name> add-open <command>"},
 	}
@@ -521,7 +519,7 @@ func TestDoctorFixAppliesAndWritesInitAudit(t *testing.T) {
 	}
 }
 
-func TestInitConfiguresGenericNPMCLITool(t *testing.T) {
+func TestInitRejectsLegacyNPMCLIToolFlags(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
@@ -534,42 +532,11 @@ func TestInitConfiguresGenericNPMCLITool(t *testing.T) {
 		"--npm-command", "agent-cli",
 		"--npm-command", "agent-helper",
 	}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("init with npm tool exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	if code == 0 {
+		t.Fatalf("init with legacy npm flags unexpectedly succeeded stdout=%s", out.String())
 	}
-	for _, want := range []string{
-		"task tools.preset.add: applied",
-		"task tools.npm-global.add: applied",
-		"add tool preset node-dev to profile",
-		"add npm global tool @example/agent-cli@1.2.3 to profile",
-		"cli: hideout run --profile default --backend native --allow-weak-isolation -- agent-cli",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("init output missing %q:\n%s", want, out.String())
-		}
-	}
-	store := profile.Store{Root: filepath.Join(home, ".hideout")}
-	loaded, err := store.Load("default")
-	if err != nil {
-		t.Fatalf("load default profile: %v", err)
-	}
-	if !slices.Contains(loaded.Tools.Presets, "node-dev") {
-		t.Fatalf("node-dev preset was not persisted: %+v", loaded.Tools.Presets)
-	}
-	if len(loaded.Tools.NPMGlobals) != 1 ||
-		loaded.Tools.NPMGlobals[0].Package != "@example/agent-cli@1.2.3" ||
-		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "agent-cli") ||
-		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "agent-helper") {
-		t.Fatalf("npm global tool was not persisted: %+v", loaded.Tools.NPMGlobals)
-	}
-	auditPath := filepath.Join(home, ".hideout", "logs", "init-audit.jsonl")
-	data, err := os.ReadFile(auditPath)
-	if err != nil {
-		t.Fatalf("read init audit: %v", err)
-	}
-	if !strings.Contains(string(data), `"taskKind":"tools.preset.add"`) ||
-		!strings.Contains(string(data), `"taskKind":"tools.npm-global.add"`) {
-		t.Fatalf("init audit missing tool tasks: %s", data)
+	if !strings.Contains(errOut.String(), "legacy tool-supply flags are no longer supported") {
+		t.Fatalf("init error should explain legacy removal, got %s", errOut.String())
 	}
 }
 
@@ -669,7 +636,7 @@ func TestInitTun2SocksRequiresProxySecretRef(t *testing.T) {
 	}
 }
 
-func TestDoctorFixDryRunPlansGenericNPMCLIToolWithoutState(t *testing.T) {
+func TestDoctorFixRejectsLegacyNPMCLIToolFlagsWithoutState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
@@ -681,17 +648,11 @@ func TestDoctorFixDryRunPlansGenericNPMCLIToolWithoutState(t *testing.T) {
 		"--npm-package", "@example/agent-cli@1.2.3",
 		"--npm-command", "agent-cli",
 	}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("doctor --fix --dry-run with npm tool exit=%d stderr=%s", code, errOut.String())
+	if code == 0 {
+		t.Fatalf("doctor --fix --dry-run with legacy npm flags unexpectedly succeeded stdout=%s", out.String())
 	}
-	for _, want := range []string{
-		"Hideout doctor fix plan",
-		"task tools.preset.add: pending",
-		"task tools.npm-global.add: pending",
-	} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("doctor fix dry-run output missing %q:\n%s", want, out.String())
-		}
+	if !strings.Contains(errOut.String(), "legacy tool-supply flags are no longer supported") {
+		t.Fatalf("doctor fix error should explain legacy removal, got %s", errOut.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "profile.json")); !os.IsNotExist(err) {
 		t.Fatalf("doctor --fix --dry-run should not create profile, stat err=%v", err)
@@ -706,8 +667,8 @@ func TestDoctorRejectsToolSupplyFlagsWithoutFix(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("doctor without --fix unexpectedly succeeded stdout=%s", out.String())
 	}
-	if !strings.Contains(errOut.String(), "require doctor --fix") {
-		t.Fatalf("doctor error should explain --fix requirement, got %s", errOut.String())
+	if !strings.Contains(errOut.String(), "legacy tool-supply flags are no longer supported") {
+		t.Fatalf("doctor error should explain legacy removal, got %s", errOut.String())
 	}
 }
 
@@ -1415,39 +1376,22 @@ func TestProfileHomeImportAllowsManagedXDGSymlinkDestinations(t *testing.T) {
 	}
 }
 
-func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
+func TestProfileToolsManageExpectedCommandsAndRejectLegacy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	store := profile.Store{Root: filepath.Join(home, ".hideout")}
 
 	var out, errOut bytes.Buffer
-	code := Main([]string{"profile", "tools", "default", "preset", "add", "node-dev"}, &out, &errOut)
+	code := Main([]string{"profile", "tools", "default", "expected", "add", "agent-cli"}, &out, &errOut)
 	if code != 0 {
-		t.Fatalf("preset add exit=%d stderr=%s", code, errOut.String())
+		t.Fatalf("expected add exit=%d stderr=%s", code, errOut.String())
 	}
 	loaded, err := store.Load("default")
 	if err != nil {
 		t.Fatalf("load profile: %v", err)
 	}
-	if !slices.Contains(loaded.Tools.Presets, "node-dev") {
-		t.Fatalf("node-dev preset was not persisted: %+v", loaded.Tools.Presets)
-	}
-
-	out.Reset()
-	errOut.Reset()
-	code = Main([]string{"profile", "tools", "default", "npm", "add", "--package", "@example/test-cli@1.2.3", "--command", "test-cli", "--command", "test-helper"}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("npm add exit=%d stderr=%s", code, errOut.String())
-	}
-	loaded, err = store.Load("default")
-	if err != nil {
-		t.Fatalf("reload profile: %v", err)
-	}
-	if len(loaded.Tools.NPMGlobals) != 1 ||
-		loaded.Tools.NPMGlobals[0].Package != "@example/test-cli@1.2.3" ||
-		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "test-cli") ||
-		!slices.Contains(loaded.Tools.NPMGlobals[0].Commands, "test-helper") {
-		t.Fatalf("npm global tool was not persisted: %+v", loaded.Tools.NPMGlobals)
+	if !slices.Contains(loaded.Tools.ExpectedCommands, "agent-cli") {
+		t.Fatalf("expected command was not persisted: %+v", loaded.Tools.ExpectedCommands)
 	}
 
 	out.Reset()
@@ -1457,23 +1401,19 @@ func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
 		t.Fatalf("tools list exit=%d stderr=%s", code, errOut.String())
 	}
 	var listed struct {
-		Profile    string                     `json:"profile"`
-		Presets    []string                   `json:"presets"`
-		NPMGlobals []profile.NPMGlobalPackage `json:"npmGlobals"`
+		Profile          string   `json:"profile"`
+		ExpectedCommands []string `json:"expectedCommands"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &listed); err != nil {
 		t.Fatalf("decode tools list: %v\n%s", err, out.String())
 	}
 	if listed.Profile != "default" ||
-		!slices.Contains(listed.Presets, "node-dev") ||
-		len(listed.NPMGlobals) != 1 ||
-		listed.NPMGlobals[0].Package != "@example/test-cli@1.2.3" {
+		!slices.Contains(listed.ExpectedCommands, "agent-cli") {
 		t.Fatalf("unexpected tools list: %+v", listed)
 	}
 
 	for _, args := range [][]string{
-		{"profile", "tools", "default", "preset", "remove", "node-dev"},
-		{"profile", "tools", "default", "npm", "remove", "@example/test-cli@1.2.3"},
+		{"profile", "tools", "default", "expected", "remove", "agent-cli"},
 	} {
 		out.Reset()
 		errOut.Reset()
@@ -1486,8 +1426,20 @@ func TestProfileToolsManagePresetsAndNPMGlobals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload after removals: %v", err)
 	}
-	if slices.Contains(loaded.Tools.Presets, "node-dev") || len(loaded.Tools.NPMGlobals) != 0 {
+	if slices.Contains(loaded.Tools.ExpectedCommands, "agent-cli") {
 		t.Fatalf("tool removals were not persisted: %+v", loaded.Tools)
+	}
+
+	for _, args := range [][]string{
+		{"profile", "tools", "default", "preset", "add", "node-dev"},
+		{"profile", "tools", "default", "npm", "add", "--package", "@example/test-cli@1.2.3", "--command", "test-cli"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		code = Main(args, &out, &errOut)
+		if code == 0 || !strings.Contains(errOut.String(), "legacy tool-supply") {
+			t.Fatalf("%v should fail with legacy diagnostic, exit=%d stderr=%s", args, code, errOut.String())
+		}
 	}
 }
 
@@ -1794,6 +1746,8 @@ func TestEnvironmentLifecycleCommandsSuppressBackendControlOutput(t *testing.T) 
 	}
 	envStore := environment.Store{Root: store.Root}
 	rec, err := envStore.Create(environment.Spec{
+		Name:           "fixture-env-101",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/work",
@@ -1843,6 +1797,7 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 	a := app{stdout: &out, stderr: &errOut}
 	a.writeRunResultSummary(manager.RunResult{
 		EnvironmentID:    "env_20260703t010203zabcdef1234567890",
+		EnvironmentName:  "work",
 		PreserveInstance: true,
 		AuditPath:        "/tmp/hideout/audit.jsonl",
 		BoundarySummary: &manager.BoundarySummary{
@@ -1861,7 +1816,9 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 	}
 	for _, want := range []string{
 		"Hideout environment: env_20260703t010203zabcdef1234567890",
-		"resume: hideout run --resume env_20260703t010203zabcdef1234567890 -- <command>",
+		"run again: hideout run --env work -- <command>",
+		"stop: hideout stop work",
+		"clean-after-stop: hideout clean --stopped work",
 		"Hideout boundary:",
 		"  audit: /tmp/hideout/audit.jsonl",
 		"  host.open: allowed=1 denied=2",
@@ -2600,8 +2557,8 @@ func TestExplainLimaShowsGuestResolution(t *testing.T) {
 	if !strings.Contains(out.String(), "Guest home: /hideout/profile/home") {
 		t.Fatalf("lima explain should show guest home: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "Tool presets: base-dev") {
-		t.Fatalf("lima explain should show tool presets: %s", out.String())
+	if !strings.Contains(out.String(), "Expected commands: none") {
+		t.Fatalf("lima explain should show expected commands: %s", out.String())
 	}
 	if !strings.Contains(out.String(), "Lima instance: hideout-test-env-new") || !strings.Contains(out.String(), "environment scoped") {
 		t.Fatalf("lima explain should show environment-scoped instance: %s", out.String())
@@ -3868,14 +3825,13 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	t.Setenv("HOME", home)
 	store := profile.Store{Root: filepath.Join(home, ".hideout")}
 	p := profile.Default("default")
-	p.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
-		Package:  "@example/agent-cli@1.2.3",
-		Commands: []string{"agent-cli", "agent-helper"},
-	}}
+	p.Tools.ExpectedCommands = []string{"agent-cli", "agent-helper"}
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
 	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
+		Name:           "fixture-env-102",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/tmp/hideout-project",
@@ -3924,20 +3880,19 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Smoke run: hideout run --profile default --backend lima -- pwd",
 		"Capabilities: host.open",
 		"Profiles\n  - default",
-		"presets=base-dev",
-		"npm=@example/agent-cli@1.2.3 (agent-cli,agent-helper)",
+		"expected=agent-cli,agent-helper",
 		"commandProxies=open,xdg-open",
 		"next: tools=hideout profile tools default list",
-		"next: add-tool=hideout profile tools default npm add --package <npm-package> --command <command>",
+		"next: expect-command=hideout profile tools default expected add <command>",
 		"next: command-proxy=hideout profile command-proxy default list",
 		"next: add-open=hideout profile command-proxy default add-open <command>",
 		"Backends",
 		"Network",
 		"warning=direct exposes network identity",
 		"Environments",
-		"hideout-default-env-test",
-		"last=agent-cli",
-		"next: resume=hideout run --resume " + envRec.ID + " -- <command>  stop=hideout stop " + envRec.ID + "  clean-after-stop=hideout clean --stopped " + envRec.ID,
+		"fixture-env-102",
+		"image=template:_images/ubuntu-lts",
+		"next: run=hideout run --env fixture-env-102 -- <command>  stop=hideout stop fixture-env-102  clean-after-stop=hideout clean --stopped fixture-env-102",
 		"Sessions",
 		"showing newest 10 of 12",
 		"ses_20260704T010212Z_12",
@@ -3975,8 +3930,8 @@ func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 	}
 	envStore := environment.Store{Root: store.Root}
 	for _, spec := range []environment.Spec{
-		{Profile: "agent", Backend: "lima", Workspace: "/work/agent", GuestWorkspace: "/workspace", InstanceName: "hideout-agent-env"},
-		{Profile: "smoke", Backend: "lima", Workspace: "/work/smoke", GuestWorkspace: "/workspace", InstanceName: "hideout-smoke-env"},
+		{Name: "agent-env", ImageRef: environment.BuiltinBaseImage, Profile: "agent", Backend: "lima", Workspace: "/work/agent", GuestWorkspace: "/workspace", InstanceName: "hideout-agent-env"},
+		{Name: "smoke-env", ImageRef: environment.BuiltinBaseImage, Profile: "smoke", Backend: "lima", Workspace: "/work/smoke", GuestWorkspace: "/workspace", InstanceName: "hideout-smoke-env"},
 	} {
 		rec, err := envStore.Create(spec)
 		if err != nil {
@@ -4015,7 +3970,7 @@ func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 		"commandProxies=open,xdg-open",
 		"tools=hideout profile tools agent list",
 		"add-open=hideout profile command-proxy agent add-open <command>",
-		"hideout-agent-env",
+		"agent-env",
 		"ses_20260704T020101Z_agent  profile=agent",
 		"Recent Audit\n  - agent  action=network.setup",
 	} {
@@ -4024,7 +3979,7 @@ func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"hideout-smoke-env",
+		"smoke-env",
 		"ses_20260704T020102Z_smoke",
 		"  - smoke  network=",
 		"  - smoke  action=network.setup",
@@ -4164,8 +4119,8 @@ func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 		t.Fatalf("read audit: %v", err)
 	}
 	validateAuditJSONLWithSchema(t, auditFiles[0])
-	if !strings.Contains(string(auditData), `"toolPresets":["base-dev"]`) {
-		t.Fatalf("session.start audit missing tool presets: %s", auditData)
+	if strings.Contains(string(auditData), `"toolPresets"`) {
+		t.Fatalf("session.start audit must not include tool presets: %s", auditData)
 	}
 	for _, want := range []string{
 		`"action":"backend.selected"`,
@@ -4406,12 +4361,12 @@ exit 0
 	}
 
 	var out, errOut bytes.Buffer
-	code := Main([]string{"list"}, &out, &errOut)
+	code := Main([]string{"env", "list"}, &out, &errOut)
 	if code != 0 {
-		t.Fatalf("list exit=%d stderr=%s", code, errOut.String())
+		t.Fatalf("env list exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), records[0].ID) || !strings.Contains(out.String(), "sh -c true") {
-		t.Fatalf("list output missing environment metadata:\n%s", out.String())
+	if !strings.Contains(out.String(), records[0].ID) || !strings.Contains(out.String(), records[0].Name) {
+		t.Fatalf("env list output missing environment metadata:\n%s", out.String())
 	}
 
 	out.Reset()
@@ -4469,6 +4424,8 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 	store := environment.Store{Root: filepath.Join(home, ".hideout")}
 	now := time.Now().UTC()
 	old, err := store.Create(environment.Spec{
+		Name:           "fixture-env-103",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      t.TempDir(),
@@ -4478,11 +4435,14 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create old: %v", err)
 	}
+	old.Status = "ready"
 	old.LastEndedAt = now.Add(-2 * time.Hour)
 	if err := store.Save(old); err != nil {
 		t.Fatalf("Save old: %v", err)
 	}
 	recent, err := store.Create(environment.Spec{
+		Name:           "fixture-env-104",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      t.TempDir(),
@@ -4492,11 +4452,14 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create recent: %v", err)
 	}
+	recent.Status = "ready"
 	recent.LastEndedAt = now.Add(-5 * time.Minute)
 	if err := store.Save(recent); err != nil {
 		t.Fatalf("Save recent: %v", err)
 	}
 	running, err := store.Create(environment.Spec{
+		Name:           "fixture-env-105",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      t.TempDir(),
@@ -4536,32 +4499,20 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 	}
 }
 
-func TestSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.T) {
+func TestSelectRunEnvironmentRemoveStaysRecordless(t *testing.T) {
 	store := environment.Store{Root: t.TempDir()}
 	p := profile.Default("default")
 	opts := runOptions{
-		workspace:         t.TempDir(),
-		guestWorkspace:    "/workspace",
-		resumeEnvironment: "",
+		workspace:      t.TempDir(),
+		guestWorkspace: "/workspace",
 	}
-	spec := runEnvironmentSpec(p, "lima", opts)
-	rec, err := store.Create(spec)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	rec.InstanceName = "hideout-default-env-test"
-	if err := store.Save(rec); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	opts.resumeEnvironment = rec.ID
 	opts.removeEnvironment = true
 	selected, err := selectRunEnvironment(store, p, "lima", opts, true)
 	if err != nil {
 		t.Fatalf("selectRunEnvironment: %v", err)
 	}
-	if !selected.Active || !selected.RemoveAfterRun || selected.PreserveInstance {
-		t.Fatalf("resume --rm should delete environment after run: %+v", selected)
+	if selected.Active {
+		t.Fatalf("--rm runs stay record-less/disposable: %+v", selected)
 	}
 }
 
@@ -4865,7 +4816,7 @@ func TestRunScopedEnvIsUserControlledAndValidated(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
-	code := Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--env", "TEST_CLI_VISIBLE=1", "--", "sh", "-c", "printf '%s' \"$TEST_CLI_VISIBLE\""}, &out, &errOut)
+	code := Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--env-var", "TEST_CLI_VISIBLE=1", "--", "sh", "-c", "printf '%s' \"$TEST_CLI_VISIBLE\""}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
@@ -4887,7 +4838,7 @@ func TestRunScopedEnvIsUserControlledAndValidated(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	code = Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--env", "HIDEOUT_STORE_ROOT=/tmp/store", "--", "sh", "-c", "true"}, &out, &errOut)
+	code = Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--env-var", "HIDEOUT_STORE_ROOT=/tmp/store", "--", "sh", "-c", "true"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("reserved run-scoped env should fail; stdout=%s", out.String())
 	}
@@ -6158,4 +6109,237 @@ func compileAuditSchemaForAppTest(t *testing.T) *jsonschema.Schema {
 		t.Fatalf("compile audit schema: %v", err)
 	}
 	return schema
+}
+
+func TestEnvCreateAndInspect(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir()) // no limactl reachable: create must not need it
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"env", "create", "work", "--image", "template:_images/ubuntu-lts"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("env create exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "work") || !strings.Contains(out.String(), "template:_images/ubuntu-lts") {
+		t.Fatalf("create output should name environment and image: %s", out.String())
+	}
+
+	store := environment.Store{Root: filepath.Join(home, ".hideout")}
+	rec, err := store.LoadByName("work")
+	if err != nil {
+		t.Fatalf("record not written: %v", err)
+	}
+	if rec.ImageRef != "template:_images/ubuntu-lts" || rec.AutoNamed {
+		t.Fatalf("unexpected record: %+v", rec)
+	}
+	if filepath.Clean(rec.Workspace) != filepath.Clean(mustEvalSymlinks(t, workspace)) && filepath.Clean(rec.Workspace) != filepath.Clean(workspace) {
+		t.Fatalf("workspace should pin the invoking directory: %+v", rec)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"env", "inspect", "work"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("env inspect exit=%d stderr=%s", code, errOut.String())
+	}
+	for _, want := range []string{"work", "template:_images/ubuntu-lts", rec.ID, "lima"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("inspect output missing %q: %s", want, out.String())
+		}
+	}
+
+	// reserved name
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"env", "create", "Default"}, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "reserved") {
+		t.Fatalf("reserved name must be rejected: exit=%d stderr=%s", code, errOut.String())
+	}
+	// collision
+	if code := Main([]string{"env", "create", "WORK"}, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "exists") {
+		t.Fatalf("name collision must be rejected: stderr=%s", errOut.String())
+	}
+	// digest-less URL guidance
+	errOut.Reset()
+	if code := Main([]string{"env", "create", "img1", "--image", "https://example.com/dev.img"}, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "sha256") {
+		t.Fatalf("digest-less URL must fail with sha256 guidance: stderr=%s", errOut.String())
+	}
+	// credentialed URL rejection
+	errOut.Reset()
+	if code := Main([]string{"env", "create", "img2", "--image", "https://user:pass@example.com/dev.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "credentials") {
+		t.Fatalf("credentialed URL must be rejected: stderr=%s", errOut.String())
+	}
+}
+
+func mustEvalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func TestRunSummaryNamesSelectedEnvironment(t *testing.T) {
+	var out, errOut bytes.Buffer
+	a := app{stdout: &out, stderr: &errOut}
+	a.writeRunResultSummary(manager.RunResult{
+		EnvironmentID:    "env_20260703t010203zabcdef1234567890",
+		EnvironmentName:  "work",
+		PreserveInstance: true,
+	})
+	if !strings.Contains(errOut.String(), "Hideout environment name: work") {
+		t.Fatalf("run summary should name the environment: %s", errOut.String())
+	}
+}
+
+func TestEnvListShowsAllAndTopLevelListIsGone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"env", "create", "work", "--image", "template:_images/ubuntu-lts"}, &out, &errOut); code != 0 {
+		t.Fatalf("env create: %s", errOut.String())
+	}
+	// plant an auto-named environment via manager selection
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.LoadOrInit("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	autoWS := t.TempDir()
+	if _, err := manager.New(store).SelectRunEnvironment(manager.RunPlan{Backend: "lima", Workspace: autoWS, GuestWorkspace: autoWS, RuntimeProfile: p}, manager.RunEnvironmentOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	// plant a foreign-version record
+	oldID := "env_20260701t000000zaabbccddee0000000002"
+	oldDir := filepath.Join(store.Root, "environments", oldID)
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "environment.json"), []byte(`{"version":"hideout.environment/v1","id":"`+oldID+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"env", "list"}, &out, &errOut); code != 0 {
+		t.Fatalf("env list exit != 0: %s", errOut.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "work") {
+		t.Fatalf("env list missing explicit environment: %s", text)
+	}
+	auto := environment.AutoName("default", autoWS)
+	if !strings.Contains(text, auto) || !strings.Contains(text, "auto") {
+		t.Fatalf("env list missing auto-named marker for %s: %s", auto, text)
+	}
+	if !strings.Contains(text, "unsupported-version") || !strings.Contains(text, oldID) {
+		t.Fatalf("env list missing unsupported-version row: %s", text)
+	}
+	if !strings.Contains(text, "template:_images/ubuntu-lts") && !strings.Contains(text, "ubuntu-lts") {
+		t.Fatalf("env list missing image column: %s", text)
+	}
+
+	// top-level list is gone
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"list"}, &out, &errOut); code == 0 {
+		t.Fatalf("top-level list must be removed: %s", out.String())
+	}
+	// removed run flags are rejected
+	errOut.Reset()
+	if code := Main([]string{"run", "--resume", "env_x", "--", "true"}, &out, &errOut); code == 0 {
+		t.Fatal("--resume must be removed")
+	}
+	errOut.Reset()
+	if code := Main([]string{"run", "--new", "--", "true"}, &out, &errOut); code == 0 {
+		t.Fatal("--new must be removed")
+	}
+}
+
+func TestEnvDestructiveCommandsAndWorkspaceGuard(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"env", "create", "boxed"}, &out, &errOut); code != 0 {
+		t.Fatalf("env create: %s", errOut.String())
+	}
+
+	// dangerous workspace root rejected at create
+	errOut.Reset()
+	if code := Main([]string{"env", "create", "danger", "--workspace", home}, &out, &errOut); code == 0 {
+		t.Fatal("dangerous workspace root must be rejected at env create")
+	}
+
+	// mark running: recreate/remove refuse without --force
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envStore := environment.Store{Root: store.Root}
+	rec, err := envStore.LoadByName("boxed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Status = "running"
+	rec.InstanceName = "" // no real instance: force path must not call limactl
+	if err := envStore.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	errOut.Reset()
+	if code := Main([]string{"env", "recreate", "boxed"}, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "hideout stop boxed") {
+		t.Fatalf("recreate must refuse running guest with stop hint: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"env", "recreate", "boxed", "--force"}, &out, &errOut); code != 0 {
+		t.Fatalf("forced recreate: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), "recreated environment boxed") {
+		t.Fatalf("recreate output: %s", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"env", "remove", "boxed"}, &out, &errOut); code != 0 {
+		t.Fatalf("remove stopped env: %s", errOut.String())
+	}
+	if _, err := envStore.LoadByName("boxed"); err == nil {
+		t.Fatal("record should be gone")
+	}
+}
+
+func TestRunWarnsShadowedHostFSRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	var out, errOut bytes.Buffer
+	inside := filepath.Join(workspace, "secrets")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"profile", "fs", "default", "add", "--fs", "dir:" + inside, "--reason", "test"}, &out, &errOut); code != 0 {
+		t.Fatalf("profile fs add: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code := Main([]string{"run", "--backend", "native", "--allow-weak-isolation", "--", "true"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("run: %s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "shadowed by the workspace") {
+		t.Fatalf("run should warn about shadowed hostfs rule: %s", errOut.String())
+	}
 }

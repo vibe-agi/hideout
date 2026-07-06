@@ -103,14 +103,20 @@ hideout run --profile smoke --backend lima --network direct -- pwd
 独立的 `smoke` profile，这样已有 `default` profile 上的策略不会在
 第一次检查时触发额外的 guest setup。
 
-可复用 Lima 环境按 profile、workspace、backend 和工具策略建立索引。
-使用 `hideout list` 查看可 resume 的环境：
+每个可复用环境都有名字：不带 `--env` 的 run 使用按 profile+workspace
+确定性派生的自动命名环境；`hideout env create` 显式创建并固化 base
+image 声明。环境身份输入变化时 fail closed 并给出 recreate 提示，
+不会静默切换 guest。
 
 ```bash
-hideout list
-hideout run --profile smoke --resume <env-id> -- <command>
-hideout stop <env-id>
-hideout clean --stopped <env-id>
+hideout env create work --image 'template:_images/ubuntu-lts'
+hideout run --env work -- <command>
+hideout env list
+hideout env inspect work
+hideout env recreate work
+hideout stop work
+hideout clean --stopped work
+hideout env remove work
 ```
 
 使用 `--rm` 可以创建一次性环境：
@@ -128,7 +134,7 @@ provider。guest 工具来自两条路径：
 - 其余工具由 operator 在边界内用普通 setup 命令自行安装，和任何其他
   run 一样受同样的网络策略与审计约束。
 
-基于 npm 的供给路径正在被移除。
+旧的 npm 供给路径已经移除。
 
 先用 `init` 和 `doctor` 创建 profile，然后运行你想要的 CLI：
 
@@ -283,8 +289,8 @@ hideout tui --once --profile agent
 常用清理命令：
 
 ```bash
-hideout list
-hideout stop <env-id>
+hideout env list
+hideout stop <name|env-id>
 hideout stop --idle 2h
 hideout clean --dry-run --stopped
 hideout clean --stopped <env-id>

@@ -241,7 +241,8 @@ grep -q 'home=/hideout/profile/home' "$stdout"
 grep -q 'child_home=/hideout/profile/home' "$stdout"
 grep -q 'sensitive_env_absent=yes' "$stdout"
 grep -q 'Hideout environment: env_' "$stderr"
-grep -q 'resume: hideout run --resume env_' "$stderr"
+grep -q 'Hideout environment name: ' "$stderr"
+grep -q 'run again: hideout run --env ' "$stderr"
 test "$(cat "$workspace/output.txt")" = "workspace-write"
 
 prepare_guest_node
@@ -346,25 +347,25 @@ fi
 cat "$tmp/ephemeral.out"
 grep -q 'ephemeral_home=/hideout/profile/home' "$tmp/ephemeral.out"
 
-echo "gate2: running environment resume/new/rm smoke"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-before.out"
-env_id="$(awk -v ws="$workspace" 'NR > 1 && $2 == "default" && $3 == "lima" && $8 == ws { print $1; exit }' "$tmp/env-list-before.out")"
-if [ -z "$env_id" ]; then
-  echo "gate2: no reusable lima environment found for workspace" >&2
+echo "gate2: running named-environment lifecycle smoke"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-before.out"
+env_name="$(awk -F'\t' 'NR > 1 && $2 != "unsupported-version" { print $1; exit }' "$tmp/env-list-before.out")"
+if [ -z "$env_name" ]; then
+  echo "gate2: no reusable lima environment found" >&2
   cat "$tmp/env-list-before.out" >&2
   exit 1
 fi
-if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --resume "$env_id" -- sh -eu -c '
-printf "resume_ok=yes\n"
-' >"$tmp/env-resume.out" 2>"$tmp/env-resume.err"; then
-  echo "gate2: environment resume failed" >&2
-  echo "gate2: stdout" >&2
-  cat "$tmp/env-resume.out" >&2
-  echo "gate2: stderr" >&2
-  cat "$tmp/env-resume.err" >&2
+
+# Re-selecting the same workspace resolves the same named environment.
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --env "$env_name" -- sh -eu -c '
+printf "reselect_ok=yes\n"
+' >"$tmp/env-reselect.out" 2>"$tmp/env-reselect.err"; then
+  echo "gate2: run --env reselect failed" >&2
+  cat "$tmp/env-reselect.out" "$tmp/env-reselect.err" >&2
   exit 1
 fi
-grep -q 'resume_ok=yes' "$tmp/env-resume.out"
+grep -q 'reselect_ok=yes' "$tmp/env-reselect.out"
+env_id="$(awk -F'\t' -v name="$env_name" 'NR > 1 && $1 == name { print $9; exit }' "$tmp/env-list-before.out")"
 env_instance="$(awk -F'"' '/"instanceName"/ { print $4; exit }' "$store/environments/$env_id/environment.json")"
 if [ -z "$env_instance" ]; then
   echo "gate2: environment record is missing instanceName" >&2
@@ -372,10 +373,9 @@ if [ -z "$env_instance" ]; then
   exit 1
 fi
 
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop "$env_id" >"$tmp/env-stop.out"
+# stop by name releases the VM but keeps the record resumable.
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop "$env_name" >"$tmp/env-stop.out"
 grep -q "stopped: $env_id" "$tmp/env-stop.out"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-stop.out"
-awk -v id="$env_id" 'NR > 1 && $1 == id && $4 == "stopped" { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-stop.out"
 lima_status="$(LIMA_HOME="$lima_home" limactl list | awk -v name="$env_instance" 'NR > 1 && $1 == name { print $2; exit }')"
 if [ "$lima_status" != "Stopped" ]; then
   echo "gate2: lima instance was not stopped by hideout stop; status=$lima_status instance=$env_instance" >&2
@@ -383,73 +383,63 @@ if [ "$lima_status" != "Stopped" ]; then
   exit 1
 fi
 
-if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --resume "$env_id" -- sh -eu -c '
+# Re-running by name after stop boots the same environment again.
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --env "$env_name" -- sh -eu -c '
 printf "resume_after_stop=yes\n"
 ' >"$tmp/env-resume-after-stop.out" 2>"$tmp/env-resume-after-stop.err"; then
-  echo "gate2: environment resume after stop failed" >&2
-  echo "gate2: stdout" >&2
-  cat "$tmp/env-resume-after-stop.out" >&2
-  echo "gate2: stderr" >&2
-  cat "$tmp/env-resume-after-stop.err" >&2
+  echo "gate2: run --env after stop failed" >&2
+  cat "$tmp/env-resume-after-stop.out" "$tmp/env-resume-after-stop.err" >&2
   exit 1
 fi
 grep -q 'resume_after_stop=yes' "$tmp/env-resume-after-stop.out"
 
-if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --new -- sh -eu -c '
-printf "new_ok=yes\n"
-' >"$tmp/env-new.out" 2>"$tmp/env-new.err"; then
-  echo "gate2: environment --new failed" >&2
-  echo "gate2: stdout" >&2
-  cat "$tmp/env-new.out" >&2
-  echo "gate2: stderr" >&2
-  cat "$tmp/env-new.err" >&2
+# Explicit named environment in a fresh workspace is a distinct environment.
+named_ws="$workspace-named"
+mkdir -p "$named_ws"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env create gate2-named --backend lima --workspace "$named_ws" >"$tmp/env-create.out"
+grep -q 'created environment gate2-named' "$tmp/env-create.out"
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$named_ws" --env gate2-named -- sh -eu -c '
+printf "named_ok=yes\n"
+' >"$tmp/env-named.out" 2>"$tmp/env-named.err"; then
+  echo "gate2: run --env gate2-named failed" >&2
+  cat "$tmp/env-named.out" "$tmp/env-named.err" >&2
   exit 1
 fi
-grep -q 'new_ok=yes' "$tmp/env-new.out"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-new.out"
-new_env_id="$(awk -v ws="$workspace" -v old="$env_id" 'NR > 1 && $2 == "default" && $3 == "lima" && $8 == ws && $1 != old { print $1; exit }' "$tmp/env-list-after-new.out")"
-if [ -z "$new_env_id" ]; then
-  echo "gate2: --new did not create a second environment" >&2
-  cat "$tmp/env-list-after-new.out" >&2
-  exit 1
-fi
+grep -q 'named_ok=yes' "$tmp/env-named.out"
 
-if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --resume "$new_env_id" --rm -- sh -eu -c '
+# recreate refuses a running guest without --force, then rebuilds under the
+# same name with --force.
+if HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env recreate gate2-named >"$tmp/env-recreate-refuse.out" 2>"$tmp/env-recreate-refuse.err"; then
+  echo "gate2: recreate of a running guest should refuse without --force" >&2
+  exit 1
+fi
+grep -q 'hideout stop gate2-named' "$tmp/env-recreate-refuse.err"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env recreate gate2-named --force >"$tmp/env-recreate.out"
+grep -q 'recreated environment gate2-named' "$tmp/env-recreate.out"
+
+# --rm stays record-less: no new reusable environment, no resume hint.
+before_count="$(awk -F'\t' 'NR > 1' "$tmp/env-list-before.out" | wc -l | tr -d ' ')"
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --rm -- sh -eu -c '
 printf "rm_ok=yes\n"
 ' >"$tmp/env-rm.out" 2>"$tmp/env-rm.err"; then
-  echo "gate2: environment --resume --rm failed" >&2
-  echo "gate2: stdout" >&2
-  cat "$tmp/env-rm.out" >&2
-  echo "gate2: stderr" >&2
-  cat "$tmp/env-rm.err" >&2
+  echo "gate2: --rm run failed" >&2
+  cat "$tmp/env-rm.out" "$tmp/env-rm.err" >&2
   exit 1
 fi
 grep -q 'rm_ok=yes' "$tmp/env-rm.out"
-if grep -q 'resume: hideout run --resume' "$tmp/env-rm.err"; then
-  echo "gate2: --rm should not print a reusable environment resume hint" >&2
+if grep -q 'run again: hideout run --env' "$tmp/env-rm.err"; then
+  echo "gate2: --rm should not print a reusable environment hint" >&2
   cat "$tmp/env-rm.err" >&2
   exit 1
 fi
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-rm.out"
-if awk -v id="$new_env_id" 'NR > 1 && $1 == id { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-rm.out"; then
-  echo "gate2: --rm environment is still listed" >&2
-  cat "$tmp/env-list-after-rm.out" >&2
-  exit 1
-fi
-grep -q "$env_id" "$tmp/env-list-after-rm.out"
 
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop --idle 0s >"$tmp/env-stop-idle.out"
-grep -q "stopped: $env_id" "$tmp/env-stop-idle.out"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-idle-stop.out"
-awk -v id="$env_id" 'NR > 1 && $1 == id && $4 == "stopped" { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-idle-stop.out"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean --dry-run --stopped "$env_id" >"$tmp/env-clean-stopped-dry.out"
-grep -q "would remove: $env_id" "$tmp/env-clean-stopped-dry.out"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean --idle 0s "$env_id" >"$tmp/env-clean-idle.out"
-grep -q "removed: $env_id" "$tmp/env-clean-idle.out"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" list >"$tmp/env-list-after-idle-clean.out"
-if awk -v id="$env_id" 'NR > 1 && $1 == id { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-idle-clean.out"; then
-  echo "gate2: idle-cleaned environment is still listed" >&2
-  cat "$tmp/env-list-after-idle-clean.out" >&2
+# clean by name removes the named environment (stop first, it is running).
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop gate2-named >"$tmp/env-stop-named.out" || true
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean --stopped gate2-named >"$tmp/env-clean-named.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-after.out"
+if awk -F'\t' 'NR > 1 && $1 == "gate2-named" { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after.out"; then
+  echo "gate2: cleaned named environment is still listed" >&2
+  cat "$tmp/env-list-after.out" >&2
   exit 1
 fi
 

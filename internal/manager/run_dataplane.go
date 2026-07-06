@@ -152,7 +152,6 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 			"command":         strings.Join(runSession.Plan.Command, " "),
 			"brokerEndpoint":  "present",
 			"brokerTransport": guestEndpoint.Network,
-			"toolPresets":     lima.EffectiveToolPresetNames(runSession.Plan.RuntimeProfile.Tools.Presets),
 		},
 	}); err != nil {
 		_ = server.Close()

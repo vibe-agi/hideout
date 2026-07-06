@@ -7,7 +7,7 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--proxy|--real-browser|--probes|--dogfood-cli|--operator-cli]
+  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--lima-real-run|--env-image|--proxy|--real-browser|--probes|--dogfood-cli|--operator-cli]
 
 Modes:
   --quick         Run fast local gates: Gate 0, Gate 1, Gate 4 dry-run.
@@ -19,6 +19,10 @@ Modes:
                   operator-supplied proxy, capability probe smoke, and generic
                   CLI dogfood smoke.
   --lima          Include Gate 2 Lima E2E.
+  --env-image     Run the declared-image boot gate variant (needs
+                  HIDEOUT_ENV_IMAGE_URL and Lima).
+  --lima-real-run
+                  Include the supervised Lima real-run reference smoke after Gate 2.
   --proxy         Include Gate 3 hidden proxy.
   --real-browser  Run Gate 4 with real external URL browser launch.
   --probes        Run capability probe CLI smoke after product gates.
@@ -43,6 +47,14 @@ print_plan() {
   echo "phase1-plan: Gate 1 native smoke"
   if [ "$include_lima" -eq 1 ]; then
     echo "phase1-plan: Gate 2 Lima E2E"
+  fi
+  if [ "$include_env_image" -eq 1 ]; then
+  echo "phase1: env-image declared-image gate"
+  scripts/test-env-image.sh
+fi
+
+if [ "$include_lima_real_run" -eq 1 ]; then
+    echo "phase1-plan: Lima real-run reference smoke"
   fi
   if [ "$include_proxy" -eq 1 ]; then
     if [ "$require_operator_proxy" -eq 1 ]; then
@@ -70,6 +82,8 @@ print_plan() {
 
 mode="quick"
 include_lima=0
+include_lima_real_run=0
+include_env_image=0
 include_proxy=0
 real_browser=0
 include_probes=0
@@ -101,6 +115,15 @@ while [ "$#" -gt 0 ]; do
     --lima)
       include_lima=1
       ;;
+    --env-image)
+      include_lima=1
+      include_env_image=1
+      shift
+      ;;
+    --lima-real-run)
+      include_lima=1
+      include_lima_real_run=1
+      ;;
     --proxy)
       include_proxy=1
       ;;
@@ -131,7 +154,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-echo "phase1: mode=$mode lima=$include_lima proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_cli=$include_operator_cli operator_proxy=$require_operator_proxy"
+echo "phase1: mode=$mode lima=$include_lima lima_real_run=$include_lima_real_run proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_cli=$include_operator_cli operator_proxy=$require_operator_proxy"
 
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-}" = "1" ]; then
   print_plan
@@ -156,6 +179,10 @@ run_gate "Gate 1 native smoke" scripts/test-gate1-native.sh
 
 if [ "$include_lima" -eq 1 ]; then
   run_gate "Gate 2 Lima E2E" scripts/test-gate2-lima.sh
+fi
+
+if [ "$include_lima_real_run" -eq 1 ]; then
+  run_gate "Lima real-run reference smoke" scripts/test-lima-real-run.sh
 fi
 
 if [ "$include_proxy" -eq 1 ]; then

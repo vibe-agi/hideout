@@ -15,6 +15,7 @@ import (
 type RunSpec struct {
 	SessionID                 string
 	EnvironmentID             string
+	ImageRef                  string
 	Profile                   profile.Profile
 	Command                   []string
 	Env                       []string

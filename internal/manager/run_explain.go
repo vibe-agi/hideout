@@ -11,8 +11,7 @@ type RunExplanation struct {
 
 func (c Core) ExplainRun(plan RunPlan, opts RunExplainOptions, render func(RunExplanation) error) (retErr error) {
 	runEnv, err := c.SelectRunEnvironment(plan, RunEnvironmentOptions{
-		New:            opts.Environment.New,
-		ResumeID:       opts.Environment.ResumeID,
+		EnvName:        opts.Environment.EnvName,
 		RemoveAfterRun: opts.Environment.RemoveAfterRun,
 		Create:         false,
 	})

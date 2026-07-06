@@ -1,13 +1,10 @@
 package manager
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -19,8 +16,7 @@ import (
 const limaBackendConfigVersion = "lima-config/v3/no-default-port-forwards"
 
 type RunEnvironmentOptions struct {
-	New            bool
-	ResumeID       string
+	EnvName        string
 	RemoveAfterRun bool
 	Create         bool
 }
@@ -40,59 +36,67 @@ func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (Ru
 	if c.Store.Root == "" {
 		return RunEnvironment{}, errors.New("manager store root is required")
 	}
-	return SelectRunEnvironment(environment.Store{Root: c.Store.Root}, plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace, plan.Ephemeral, opts)
+	runEnv, err := SelectRunEnvironment(environment.Store{Root: c.Store.Root}, plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace, plan.Ephemeral, opts)
+	if err == nil && runEnv.Created && runEnv.Record.ID != "env_new" {
+		c.emitEnvironmentAudit("env.create", "allow", map[string]any{
+			"environmentName": runEnv.Record.Name,
+			"environmentId":   runEnv.Record.ID,
+			"autoNamed":       runEnv.Record.AutoNamed,
+			"imageRef":        runEnv.Record.ImageRef,
+			"workspace":       runEnv.Record.Workspace,
+			"backend":         runEnv.Record.Backend,
+			"profile":         runEnv.Record.Profile,
+		})
+	}
+	var drift *DriftError
+	if errors.As(err, &drift) {
+		c.emitEnvironmentAudit("env.drift.denied", "deny", map[string]any{
+			"environmentName": drift.Environment,
+			"axes":            drift.Axes,
+		})
+	}
+	return runEnv, err
 }
 
 func SelectRunEnvironment(store environment.Store, p profile.Profile, backendName, workspace, guestWorkspace string, ephemeral bool, opts RunEnvironmentOptions) (RunEnvironment, error) {
-	if backendName != "lima" {
-		if opts.New || strings.TrimSpace(opts.ResumeID) != "" {
-			return RunEnvironment{}, fmt.Errorf("environment reuse is only supported by the lima backend; got %s", backendName)
+	if name := strings.TrimSpace(opts.EnvName); name != "" {
+		if ephemeral {
+			return RunEnvironment{}, errors.New("--ephemeral cannot be combined with --env; ephemeral runs are record-less")
 		}
-		return RunEnvironment{}, nil
-	}
-	if ephemeral {
-		return RunEnvironment{}, nil
-	}
-	spec := RunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
-	if opts.RemoveAfterRun && strings.TrimSpace(opts.ResumeID) == "" {
-		return RunEnvironment{}, nil
-	}
-	if opts.ResumeID != "" {
-		rec, err := store.Load(opts.ResumeID)
+		if opts.RemoveAfterRun {
+			return RunEnvironment{}, errors.New("--rm cannot be combined with --env; disposable runs are record-less")
+		}
+		rec, err := store.LoadByName(name)
 		if err != nil {
 			return RunEnvironment{}, err
 		}
+		spec := RunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
 		if err := ValidateEnvironmentRecord(rec, spec); err != nil {
 			return RunEnvironment{}, err
 		}
-		if rec.InstanceName == "" {
-			rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, rec.ID)
-			if opts.Create {
-				if err := store.Save(rec); err != nil {
-					return RunEnvironment{}, err
-				}
-			}
-		}
-		return selectedRunEnvironment(store, rec, !opts.RemoveAfterRun, opts.RemoveAfterRun, false), nil
+		return selectedEnvironmentWithInstance(store, rec, p, opts.Create)
 	}
-	if !opts.New {
-		if rec, ok, err := store.Latest(spec); err != nil {
+	if ephemeral || opts.RemoveAfterRun {
+		// Disposable sessions stay record-less by contract.
+		return RunEnvironment{}, nil
+	}
+	spec := RunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
+	rec, err := store.LoadByName(spec.Name)
+	switch {
+	case err == nil:
+		if err := ValidateEnvironmentRecord(rec, spec); err != nil {
 			return RunEnvironment{}, err
-		} else if ok {
-			if rec.InstanceName == "" {
-				rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, rec.ID)
-				if opts.Create {
-					if err := store.Save(rec); err != nil {
-						return RunEnvironment{}, err
-					}
-				}
-			}
-			return selectedRunEnvironment(store, rec, true, false, false), nil
 		}
+		return selectedEnvironmentWithInstance(store, rec, p, opts.Create)
+	case !errors.Is(err, environment.ErrNameNotFound):
+		return RunEnvironment{}, err
 	}
 	if !opts.Create {
 		rec := environment.Record{
 			ID:                   "env_new",
+			Name:                 spec.Name,
+			AutoNamed:            spec.AutoNamed,
+			ImageRef:             spec.ImageRef,
 			Profile:              spec.Profile,
 			Backend:              spec.Backend,
 			BackendConfigVersion: spec.BackendConfigVersion,
@@ -102,21 +106,36 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 			IdentityID:           spec.IdentityID,
 			User:                 spec.User,
 			Hostname:             spec.Hostname,
-			ToolsHash:            spec.ToolsHash,
-			InstanceName:         lima.InstanceNameForEnvironment(p.Name, "env_new"),
 			Status:               "new",
+		}
+		if spec.Backend == "lima" {
+			rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, "env_new")
 		}
 		return selectedRunEnvironment(store, rec, true, false, true), nil
 	}
-	rec, err := store.Create(spec)
+	created, err := store.Create(spec)
 	if err != nil {
 		return RunEnvironment{}, err
 	}
-	rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, rec.ID)
-	if err := store.Save(rec); err != nil {
-		return RunEnvironment{}, err
+	if created.Backend == "lima" {
+		created.InstanceName = lima.InstanceNameForEnvironment(p.Name, created.ID)
+		if err := store.Save(created); err != nil {
+			return RunEnvironment{}, err
+		}
 	}
-	return selectedRunEnvironment(store, rec, true, false, true), nil
+	return selectedRunEnvironment(store, created, true, false, true), nil
+}
+
+func selectedEnvironmentWithInstance(store environment.Store, rec environment.Record, p profile.Profile, persist bool) (RunEnvironment, error) {
+	if rec.Backend == "lima" && rec.InstanceName == "" {
+		rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, rec.ID)
+		if persist {
+			if err := store.Save(rec); err != nil {
+				return RunEnvironment{}, err
+			}
+		}
+	}
+	return selectedRunEnvironment(store, rec, true, false, false), nil
 }
 
 func (c Core) PrepareRunEnvironment(runEnv RunEnvironment) error {
@@ -170,6 +189,9 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 
 func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {
 	return environment.Spec{
+		Name:                 environment.AutoName(p.Name, workspace),
+		AutoNamed:            true,
+		ImageRef:             p.BaseImageOrBuiltin(),
 		Profile:              p.Name,
 		Backend:              backendName,
 		BackendConfigVersion: backendConfigVersion(backendName),
@@ -179,7 +201,6 @@ func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspac
 		IdentityID:           p.Metadata["identityId"],
 		User:                 p.Identity.User,
 		Hostname:             p.Identity.Hostname,
-		ToolsHash:            profileToolsHash(p.Tools),
 	}
 }
 
@@ -190,62 +211,72 @@ func backendConfigVersion(backendName string) string {
 	return ""
 }
 
+// DriftAxis names one drifted identity input with its pinned and current
+// values (verbatim operator data).
+type DriftAxis struct {
+	Axis    string `json:"axis"`
+	Pinned  string `json:"pinned"`
+	Current string `json:"current"`
+}
+
+// DriftError is the fail-closed use-time drift report: backend configuration
+// and pinned workspace are the two drift axes. It never triggers a rebuild.
+type DriftError struct {
+	Environment string
+	Axes        []DriftAxis
+}
+
+func (e *DriftError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "environment %q drifted from its pinned identity:", e.Environment)
+	for _, axis := range e.Axes {
+		fmt.Fprintf(&b, "\n  %s: pinned=%q current=%q", axis.Axis, axis.Pinned, axis.Current)
+	}
+	fmt.Fprintf(&b, "\nrecreate it: hideout env recreate %s", e.Environment)
+	return b.String()
+}
+
 func ValidateEnvironmentRecord(rec environment.Record, spec environment.Spec) error {
+	if _, err := environment.ParseImageDeclaration(rec.ImageRef); err != nil {
+		return fmt.Errorf("environment %q has an unusable pinned image declaration (%v); clean and recreate it: hideout env remove %s", rec.Name, err, rec.Name)
+	}
 	if rec.Profile != spec.Profile {
 		return fmt.Errorf("environment %s belongs to profile %q, not %q", rec.ID, rec.Profile, spec.Profile)
 	}
 	if rec.Backend != spec.Backend {
 		return fmt.Errorf("environment %s uses backend %q, not %q", rec.ID, rec.Backend, spec.Backend)
 	}
-	if rec.BackendConfigVersion != spec.BackendConfigVersion {
-		return fmt.Errorf("environment %s backend config no longer matches; use --new", rec.ID)
-	}
-	if filepath.Clean(rec.Workspace) != filepath.Clean(spec.Workspace) ||
-		filepath.Clean(rec.GuestWorkspace) != filepath.Clean(spec.GuestWorkspace) {
-		return fmt.Errorf("environment %s belongs to workspace %s -> %s", rec.ID, rec.Workspace, rec.GuestWorkspace)
-	}
 	if rec.ProfileID != spec.ProfileID || rec.IdentityID != spec.IdentityID || rec.User != spec.User || rec.Hostname != spec.Hostname {
-		return fmt.Errorf("environment %s identity no longer matches the selected profile; use --new", rec.ID)
+		return fmt.Errorf("environment %q identity no longer matches the selected profile; recreate it: hideout env recreate %s", rec.Name, rec.Name)
 	}
-	if rec.ToolsHash != spec.ToolsHash {
-		return fmt.Errorf("environment %s tools no longer match the selected profile; use --new", rec.ID)
+	var axes []DriftAxis
+	if rec.BackendConfigVersion != spec.BackendConfigVersion {
+		axes = append(axes, DriftAxis{Axis: "backendConfig", Pinned: rec.BackendConfigVersion, Current: spec.BackendConfigVersion})
+	}
+	if !sameWorkspaceIdentity(rec.Workspace, spec.Workspace) ||
+		filepath.Clean(rec.GuestWorkspace) != filepath.Clean(spec.GuestWorkspace) {
+		axes = append(axes, DriftAxis{
+			Axis:    "workspace",
+			Pinned:  rec.Workspace + " -> " + rec.GuestWorkspace,
+			Current: spec.Workspace + " -> " + spec.GuestWorkspace,
+		})
+	}
+	if len(axes) > 0 {
+		return &DriftError{Environment: rec.Name, Axes: axes}
 	}
 	return nil
 }
 
-func profileToolsHash(tools profile.Tools) string {
-	type npmGlobal struct {
-		Package  string   `json:"package"`
-		Commands []string `json:"commands"`
+// sameWorkspaceIdentity compares workspaces by real file identity, not string
+// paths: a symlink or case variant of the pinned workspace is the same
+// workspace.
+func sameWorkspaceIdentity(pinned, current string) bool {
+	if filepath.Clean(pinned) == filepath.Clean(current) {
+		return true
 	}
-	type canonicalTools struct {
-		Presets    []string    `json:"presets"`
-		NPMGlobals []npmGlobal `json:"npmGlobals"`
-	}
-	canonical := canonicalTools{
-		Presets: append([]string(nil), tools.Presets...),
-	}
-	slices.Sort(canonical.Presets)
-	for _, pkg := range tools.NPMGlobals {
-		commands := append([]string(nil), pkg.Commands...)
-		slices.Sort(commands)
-		canonical.NPMGlobals = append(canonical.NPMGlobals, npmGlobal{
-			Package:  strings.TrimSpace(pkg.Package),
-			Commands: commands,
-		})
-	}
-	slices.SortFunc(canonical.NPMGlobals, func(a, b npmGlobal) int {
-		if a.Package != b.Package {
-			return strings.Compare(a.Package, b.Package)
-		}
-		return strings.Compare(strings.Join(a.Commands, "\x00"), strings.Join(b.Commands, "\x00"))
-	})
-	data, err := json.Marshal(canonical)
-	if err != nil {
-		panic(err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	pi, err1 := os.Stat(pinned)
+	ci, err2 := os.Stat(current)
+	return err1 == nil && err2 == nil && os.SameFile(pi, ci)
 }
 
 func selectedRunEnvironment(store environment.Store, rec environment.Record, preserve, removeAfterRun, created bool) RunEnvironment {

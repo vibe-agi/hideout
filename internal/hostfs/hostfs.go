@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -868,4 +869,61 @@ func nowOrDefault(now time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return now
+}
+
+// WorkspaceShadowedRules reports profile HostFS rules whose host path lies
+// inside the workspace. The workspace is a uniform read/write zone that does
+// not consult HostFS policy, so such rules are shadowed: they create the
+// illusion of protection or grant without any effect. Containment is decided
+// by real file identity where the paths exist, falling back to cleaned-path
+// prefix comparison for not-yet-existing rule targets.
+func WorkspaceShadowedRules(cfg Config, workspace string) []Rule {
+	workspace = filepath.Clean(workspace)
+	wsInfo, wsErr := os.Stat(workspace)
+	shadowed := make([]Rule, 0)
+	rules := make([]Rule, 0, len(cfg.Grants)+len(cfg.Deny))
+	rules = append(rules, cfg.Grants...)
+	rules = append(rules, cfg.Deny...)
+	for _, rule := range rules {
+		base := globFreeBase(rule.HostPath)
+		if base == "" {
+			continue
+		}
+		if pathWithinWorkspace(base, workspace, wsInfo, wsErr == nil) {
+			shadowed = append(shadowed, rule)
+		}
+	}
+	return shadowed
+}
+
+// globFreeBase strips trailing glob-bearing path segments so containment is
+// decided on the literal directory prefix.
+func globFreeBase(hostPath string) string {
+	cleaned := filepath.Clean(hostPath)
+	for cleaned != "/" && cleaned != "." {
+		if !strings.ContainsAny(filepath.Base(cleaned), "*?[") {
+			return cleaned
+		}
+		cleaned = filepath.Dir(cleaned)
+	}
+	return ""
+}
+
+func pathWithinWorkspace(path, workspace string, wsInfo os.FileInfo, wsExists bool) bool {
+	current := filepath.Clean(path)
+	for {
+		if current == workspace {
+			return true
+		}
+		if wsExists {
+			if info, err := os.Stat(current); err == nil && os.SameFile(info, wsInfo) {
+				return true
+			}
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }

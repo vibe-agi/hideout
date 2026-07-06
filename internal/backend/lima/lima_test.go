@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -128,7 +127,7 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 			t.Fatalf("lima config must not expose profile control-plane path as a guest mount: %+v", m)
 		}
 		switch m.Location {
-		case spec.SessionDir, filepath.Join(spec.SessionDir, "audit.jsonl"), filepath.Join(spec.SessionDir, "lima.yaml"), filepath.Join(spec.SessionDir, "tool-preset.json"), filepath.Join(spec.SessionDir, "broker-endpoint.json"), filepath.Join(spec.SessionDir, "network-plan.json"):
+		case spec.SessionDir, filepath.Join(spec.SessionDir, "audit.jsonl"), filepath.Join(spec.SessionDir, "lima.yaml"), filepath.Join(spec.SessionDir, "guest-bootstrap.json"), filepath.Join(spec.SessionDir, "broker-endpoint.json"), filepath.Join(spec.SessionDir, "network-plan.json"):
 			t.Fatalf("lima config must not expose session control-plane path as a guest mount: %+v", m)
 		}
 	}
@@ -136,18 +135,12 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read bootstrap: %v", err)
 	}
-	if !bytes.Contains(bootstrap, []byte("required guest command missing")) {
-		t.Fatalf("bootstrap missing command checks:\n%s", bootstrap)
-	}
 	if !bytes.Contains(bootstrap, []byte("/hideout/session/shims/hideout-shim")) {
 		t.Fatalf("bootstrap missing shim check:\n%s", bootstrap)
 	}
 	manifest, err := os.ReadFile(session.ToolManifestPath)
 	if err != nil {
 		t.Fatalf("read tool manifest: %v", err)
-	}
-	if !bytes.Contains(manifest, []byte(`"name": "base-dev"`)) {
-		t.Fatalf("manifest missing base-dev: %s", manifest)
 	}
 	if !bytes.Contains(manifest, []byte(`"commandProxyShims"`)) {
 		t.Fatalf("manifest missing command proxy shims: %s", manifest)
@@ -409,63 +402,7 @@ func TestPrepareUsesProfileCommandProxyShims(t *testing.T) {
 	}
 }
 
-func TestPrepareAddsNodeDevProvisionWhenPresetEnabled(t *testing.T) {
-	root := t.TempDir()
-	spec := testRunSpec(root)
-	spec.Profile.Tools.Presets = []string{"base-dev", "node-dev"}
-	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	data, err := os.ReadFile(session.ConfigPath)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	var cfg limaConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("yaml decode: %v\n%s", err, data)
-	}
-	if len(cfg.Provision) != 1 {
-		t.Fatalf("tool provisioning must not be embedded in lima.yaml: %+v", cfg.Provision)
-	}
-	if strings.Contains(cfg.Provision[0].Script, "apt-get") || strings.Contains(cfg.Provision[0].Script, "npm install") {
-		t.Fatalf("lima yaml provision must not perform network tool setup: %+v", cfg.Provision)
-	}
-	bootstrap, err := os.ReadFile(session.BootstrapPath)
-	if err != nil {
-		t.Fatalf("read bootstrap: %v", err)
-	}
-	bootstrapText := string(bootstrap)
-	for _, want := range []string{
-		"apt-get install -y ca-certificates curl nodejs npm",
-		"command -v node",
-		"command -v npm",
-	} {
-		if !strings.Contains(bootstrapText, want) {
-			t.Fatalf("node-dev bootstrap missing provision %q:\n%s", want, bootstrapText)
-		}
-	}
-	for _, want := range []string{
-		"required guest command missing: node",
-		"required guest command missing: npm",
-	} {
-		if !strings.Contains(bootstrapText, want) {
-			t.Fatalf("node-dev bootstrap missing command check %q:\n%s", want, bootstrapText)
-		}
-	}
-	manifest, err := os.ReadFile(session.ToolManifestPath)
-	if err != nil {
-		t.Fatalf("read tool manifest: %v", err)
-	}
-	if !bytes.Contains(manifest, []byte(`"name": "node-dev"`)) {
-		t.Fatalf("manifest missing node-dev: %s", manifest)
-	}
-	if bytes.Contains(manifest, []byte("npm install")) {
-		t.Fatalf("manifest must not embed provision script: %s", manifest)
-	}
-}
-
-func TestPrepareAddsUserNPMGlobalProvision(t *testing.T) {
+func TestPrepareDoesNotProvisionToolsFromLegacyFields(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
 	spec.Profile.Tools.Presets = []string{"base-dev", "node-dev"}
@@ -496,24 +433,23 @@ func TestPrepareAddsUserNPMGlobalProvision(t *testing.T) {
 		t.Fatalf("read bootstrap: %v", err)
 	}
 	bootstrapText := string(bootstrap)
-	for _, want := range []string{
-		"npm install -g '@example/agent-cli@1.2.3'",
-		"command -v 'agent-cli'",
+	for _, forbidden := range []string{
+		"apt-get install",
+		"npm install",
+		"required guest command missing: node",
+		"required guest command missing: agent-cli",
 	} {
-		if !strings.Contains(bootstrapText, want) {
-			t.Fatalf("npm global bootstrap missing provision %q:\n%s", want, bootstrapText)
+		if strings.Contains(bootstrapText, forbidden) {
+			t.Fatalf("bootstrap must not include tool provisioning/check %q:\n%s", forbidden, bootstrapText)
 		}
-	}
-	if !strings.Contains(bootstrapText, "required guest command missing: agent-cli") {
-		t.Fatalf("bootstrap missing npm global command check:\n%s", bootstrap)
 	}
 	manifest, err := os.ReadFile(session.ToolManifestPath)
 	if err != nil {
 		t.Fatalf("read tool manifest: %v", err)
 	}
-	for _, want := range []string{`"package": "@example/agent-cli@1.2.3"`, `"agent-cli"`} {
-		if !bytes.Contains(manifest, []byte(want)) {
-			t.Fatalf("manifest missing %s: %s", want, manifest)
+	for _, forbidden := range []string{`"presets"`, `"npmGlobals"`, `"node-dev"`, `"@example/agent-cli@1.2.3"`} {
+		if bytes.Contains(manifest, []byte(forbidden)) {
+			t.Fatalf("manifest must not include legacy tool data %s: %s", forbidden, manifest)
 		}
 	}
 	if bytes.Contains(manifest, []byte("npm install")) {
@@ -622,30 +558,6 @@ func TestGuestBrokerEndpointUsesLimaHostAlias(t *testing.T) {
 	}
 	if got.String() != "tcp://host.lima.internal:4321" {
 		t.Fatalf("endpoint=%s", got.String())
-	}
-}
-
-func TestResolveToolPresetsRejectsUnknown(t *testing.T) {
-	if _, err := ResolveToolPresets([]string{"unknown"}); err == nil {
-		t.Fatal("expected unknown preset to fail")
-	}
-}
-
-func TestResolveToolPresetsIncludesNodeDev(t *testing.T) {
-	presets, err := ResolveToolPresets([]string{"base-dev", "node-dev"})
-	if err != nil {
-		t.Fatalf("ResolveToolPresets: %v", err)
-	}
-	if len(presets) != 2 || presets[1].Name != "node-dev" {
-		t.Fatalf("unexpected presets: %+v", presets)
-	}
-	for _, want := range []string{"node", "npm"} {
-		if !slices.Contains(presets[1].RequiredCommands, want) {
-			t.Fatalf("node-dev required commands missing %s: %+v", want, presets[1].RequiredCommands)
-		}
-	}
-	if !strings.Contains(presets[1].ProvisionScript, "apt-get install -y ca-certificates curl nodejs npm") {
-		t.Fatalf("node-dev provision missing package install: %s", presets[1].ProvisionScript)
 	}
 }
 
@@ -1126,6 +1038,7 @@ func testRunSpec(root string) backend.RunSpec {
 	}
 	return backend.RunSpec{
 		SessionID:                 "ses_1",
+		ImageRef:                  "template:_images/ubuntu-lts",
 		Profile:                   p,
 		Command:                   []string{"sh"},
 		Env:                       []string{"HOME=/hideout/profile/home"},
@@ -1294,4 +1207,48 @@ func (r *cleanupContextRunner) Run(ctx context.Context, name string, args []stri
 	}
 	r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
 	return nil
+}
+
+func TestConfigForRunSpecCompilesImageDeclaration(t *testing.T) {
+	base := backend.RunSpec{Profile: profile.Default("img-test")}
+
+	spec := base
+	spec.ImageRef = "template:_images/debian-13"
+	cfg, err := ConfigForRunSpec(spec)
+	if err != nil {
+		t.Fatalf("template declaration should build: %v", err)
+	}
+	if len(cfg.Base) != 1 || cfg.Base[0] != "template:_images/debian-13" {
+		t.Fatalf("template declaration should map to base template: %+v", cfg.Base)
+	}
+	if len(cfg.Images) != 0 {
+		t.Fatalf("template form should not emit images entries: %+v", cfg.Images)
+	}
+
+	spec = base
+	spec.ImageRef = "https://example.com/images/dev.qcow2#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cfg, err = ConfigForRunSpec(spec)
+	if err != nil {
+		t.Fatalf("url declaration should build: %v", err)
+	}
+	if len(cfg.Base) != 0 {
+		t.Fatalf("url form should not use a base template: %+v", cfg.Base)
+	}
+	if len(cfg.Images) != 1 ||
+		cfg.Images[0].Location != "https://example.com/images/dev.qcow2" ||
+		cfg.Images[0].Digest != "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("url form should emit a digest-verified images entry: %+v", cfg.Images)
+	}
+
+	// The declaration is the single source and the backend never substitutes
+	// a different image: an empty or unusable ref fails closed.
+	spec = base
+	spec.ImageRef = ""
+	if _, err := ConfigForRunSpec(spec); err == nil {
+		t.Fatal("empty image declaration must fail closed, not fall back")
+	}
+	spec.ImageRef = "ubuntu:24.04"
+	if _, err := ConfigForRunSpec(spec); err == nil {
+		t.Fatal("unusable image declaration must fail closed, not fall back")
+	}
 }

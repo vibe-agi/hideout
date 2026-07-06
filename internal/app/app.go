@@ -85,8 +85,8 @@ func (a app) run(args []string) error {
 		return a.doctor(args[1:])
 	case "profile":
 		return a.profile(args[1:])
-	case "list":
-		return a.listEnvironments(args[1:])
+	case "env":
+		return a.envCommand(args[1:])
 	case "stop":
 		return a.stopEnvironments(args[1:])
 	case "clean":
@@ -124,8 +124,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout doctor")
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "First run and tool setup:")
-	fmt.Fprintln(a.stdout, "  hideout init --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout, "First run:")
 	fmt.Fprintln(a.stdout, "  hideout doctor --fix [--dry-run]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Run and explain:")
@@ -152,7 +151,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> remove <command>")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Inspect and manage:")
-	fmt.Fprintln(a.stdout, "  hideout list")
+	fmt.Fprintln(a.stdout, "  hideout env create|inspect|list|recreate|remove")
 	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
@@ -193,17 +192,13 @@ func (a app) initUsage() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Common:")
 	fmt.Fprintln(a.stdout, "  hideout init --no-input --backend lima --network direct")
-	fmt.Fprintln(a.stdout, "  hideout init --profile agent --backend lima --network direct --npm-package <npm-spec> --npm-command <command>")
-	fmt.Fprintln(a.stdout, "  hideout init --dry-run --profile agent --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout, "  hideout init --dry-run --profile agent --backend lima")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Flags:")
 	fmt.Fprintln(a.stdout, "  --profile <name>          profile to initialize (default: default)")
 	fmt.Fprintln(a.stdout, "  --backend <name>          auto or lima for product isolation; native is a weak dev harness")
 	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
 	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      host-only proxy secret ref for tun2socks")
-	fmt.Fprintln(a.stdout, "  --tool-preset <name>      tool preset to add; may be repeated")
-	fmt.Fprintln(a.stdout, "  --npm-package <spec>      npm package for a global CLI tool")
-	fmt.Fprintln(a.stdout, "  --npm-command <command>   command expected from the npm package; may be repeated")
 	fmt.Fprintln(a.stdout, "  --no-input                do not ask for confirmation")
 	fmt.Fprintln(a.stdout, "  --dry-run                 print the init plan without applying it")
 }
@@ -245,12 +240,11 @@ func (a app) runUsage(commandName string) {
 	fmt.Fprintln(a.stdout, "  --fs <kind:/path>             run-scoped HostFS allow rule; may be repeated")
 	fmt.Fprintln(a.stdout, "  --no-fs <kind:/path>          run-scoped HostFS deny rule; may be repeated")
 	fmt.Fprintln(a.stdout, "  --no-profile-fs               ignore profile HostFS grants for this run")
-	fmt.Fprintln(a.stdout, "  --env KEY=VALUE               run-scoped public environment variable")
+	fmt.Fprintln(a.stdout, "  --env <name>                  run inside the named environment")
+	fmt.Fprintln(a.stdout, "  --env-var KEY=VALUE           run-scoped public environment variable")
 	fmt.Fprintln(a.stdout, "  --preview <endpoint|id>       expose a guest-loopback endpoint to the host browser")
 	fmt.Fprintln(a.stdout, "  --verbose                     print Hideout control-plane progress and boundary summary")
 	fmt.Fprintln(a.stdout, "  --explain                     print the run boundary without executing")
-	fmt.Fprintln(a.stdout, "  --new                         create a new reusable environment")
-	fmt.Fprintln(a.stdout, "  --resume <env-id>             resume an existing environment")
 	fmt.Fprintln(a.stdout, "  --rm                          remove the runtime environment after command exit")
 	fmt.Fprintln(a.stdout, "  --ephemeral                   use session-local identity state")
 	fmt.Fprintln(a.stdout, "  --allow-unsafe-workspace      explicitly allow a high-risk workspace mount")
@@ -266,8 +260,7 @@ func (a app) doctorUsage() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Common:")
 	fmt.Fprintln(a.stdout, "  hideout doctor --profile default --backend lima --network direct")
-	fmt.Fprintln(a.stdout, "  hideout doctor --fix --dry-run --profile agent --npm-package <npm-spec> --npm-command <command>")
-	fmt.Fprintln(a.stdout, "  hideout doctor --fix --profile agent --npm-package <npm-spec> --npm-command <command>")
+	fmt.Fprintln(a.stdout, "  hideout doctor --fix --dry-run --profile agent --backend lima")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Flags:")
 	fmt.Fprintln(a.stdout, "  --profile <name>          profile name (default: default)")
@@ -279,9 +272,6 @@ func (a app) doctorUsage() {
 	fmt.Fprintln(a.stdout, "  --ephemeral               diagnose session-local identity state")
 	fmt.Fprintln(a.stdout, "  --fix                     apply safe initialization repairs")
 	fmt.Fprintln(a.stdout, "  --dry-run                 print the fix plan without applying it")
-	fmt.Fprintln(a.stdout, "  --tool-preset <name>      tool preset to add during --fix; may be repeated")
-	fmt.Fprintln(a.stdout, "  --npm-package <spec>      npm package for one global CLI tool during --fix")
-	fmt.Fprintln(a.stdout, "  --npm-command <command>   command expected from the npm package; may be repeated")
 }
 
 func isHelpToken(value string) bool {
@@ -302,7 +292,7 @@ func (a app) profileUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> <list|add|deny|remove>")
 	fmt.Fprintln(a.stdout, "  hideout profile env <name> <list|set|unset|inherit|uninherit|deny|undeny>")
 	fmt.Fprintln(a.stdout, "  hideout profile home <name> import --from <path> --to <relative-path> [--force]")
-	fmt.Fprintln(a.stdout, "  hideout profile tools <name> <list|preset|npm>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> <list|expected>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> <list|add-open|remove>")
 }
 
@@ -317,10 +307,9 @@ func (a app) profileFSUsage() {
 func (a app) profileToolsUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout profile tools <name> list")
-	fmt.Fprintln(a.stdout, "  hideout profile tools <name> preset add <preset>")
-	fmt.Fprintln(a.stdout, "  hideout profile tools <name> preset remove <preset>")
-	fmt.Fprintln(a.stdout, "  hideout profile tools <name> npm add --package <npm-spec> --command <command>")
-	fmt.Fprintln(a.stdout, "  hideout profile tools <name> npm remove <package>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> expected add <command>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> expected remove <command>")
+	fmt.Fprintln(a.stdout, "  hideout profile tools <name> expected list")
 }
 
 func (a app) profileCommandProxyUsage() {
@@ -658,8 +647,6 @@ func (a app) initCommand(args []string) error {
 		Network:        opts.networkMode,
 		ProxySecretRef: opts.proxySecret,
 		NoInput:        opts.noInput,
-		ToolPresets:    []string(opts.tools.presets),
-		NPMGlobals:     opts.tools.npmGlobals(),
 	})
 	if err != nil {
 		return err
@@ -776,8 +763,7 @@ type runOptions struct {
 	explainOnly           bool
 	verbose               bool
 	ephemeral             bool
-	newEnvironment        bool
-	resumeEnvironment     string
+	envName               string
 	removeEnvironment     bool
 	hostFSGrantFlags      []string
 	hostFSDenyFlags       []string
@@ -841,12 +827,12 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 	}
 	opts.workspace = runPlan.Workspace
 	opts.guestWorkspace = runPlan.GuestWorkspace
+	a.warnShadowedHostFSRules(runtimeProfile.HostFS, runPlan.Workspace)
 	backendName := runPlan.Backend
 	if opts.explainOnly {
 		return core.ExplainRun(runPlan, manager.RunExplainOptions{
 			Environment: manager.RunEnvironmentOptions{
-				New:            opts.newEnvironment,
-				ResumeID:       opts.resumeEnvironment,
+				EnvName:        opts.envName,
 				RemoveAfterRun: opts.removeEnvironment,
 			},
 		}, func(explanation manager.RunExplanation) error {
@@ -863,7 +849,7 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		Backend:                    be,
 		RequestedBackend:           opts.backendName,
 		AllowWeakIsolation:         opts.allowWeakIsolation,
-		Environment:                manager.RunEnvironmentOptions{New: opts.newEnvironment, ResumeID: opts.resumeEnvironment, RemoveAfterRun: opts.removeEnvironment, Create: true},
+		Environment:                manager.RunEnvironmentOptions{EnvName: opts.envName, RemoveAfterRun: opts.removeEnvironment, Create: true},
 		AuditPath:                  opts.auditPath,
 		HostFSRun:                  opts.hostFSRun,
 		DisableProfileHostFSGrants: opts.noProfileHostFSGrants,
@@ -889,8 +875,19 @@ func (a app) writeRunResultSummary(result manager.RunResult) {
 	}
 	if result.EnvironmentID != "" {
 		fmt.Fprintf(a.stderr, "Hideout environment: %s\n", result.EnvironmentID)
+		if result.EnvironmentName != "" {
+			fmt.Fprintf(a.stderr, "Hideout environment name: %s\n", result.EnvironmentName)
+		}
 		if result.PreserveInstance {
-			fmt.Fprintf(a.stderr, "resume: hideout run --resume %s -- <command>\n", result.EnvironmentID)
+			handle := result.EnvironmentName
+			if handle == "" {
+				handle = result.EnvironmentID
+			}
+			if result.EnvironmentName != "" {
+				fmt.Fprintf(a.stderr, "run again: hideout run --env %s -- <command>\n", result.EnvironmentName)
+			}
+			fmt.Fprintf(a.stderr, "stop: hideout stop %s\n", handle)
+			fmt.Fprintf(a.stderr, "clean-after-stop: hideout clean --stopped %s\n", handle)
 		}
 	}
 	if result.BoundarySummary == nil {
@@ -959,8 +956,7 @@ func runtimeIdentityDir(layout session.Layout, profileDir string, opts runOption
 
 func selectRunEnvironment(store environment.Store, p profile.Profile, backendName string, opts runOptions, create bool) (runEnvironment, error) {
 	return manager.SelectRunEnvironment(store, p, backendName, opts.workspace, opts.guestWorkspace, opts.ephemeral, manager.RunEnvironmentOptions{
-		New:            opts.newEnvironment,
-		ResumeID:       opts.resumeEnvironment,
+		EnvName:        opts.envName,
 		RemoveAfterRun: opts.removeEnvironment,
 		Create:         create,
 	})
@@ -1106,8 +1102,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	fs.BoolVar(&opts.explainOnly, "explain", opts.explainOnly, "print the run boundary without executing the command")
 	fs.BoolVar(&opts.verbose, "verbose", false, "print Hideout control-plane progress and run summary")
 	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "use session-local identity state for this run")
-	fs.BoolVar(&opts.newEnvironment, "new", false, "create a new reusable environment")
-	fs.StringVar(&opts.resumeEnvironment, "resume", "", "resume an environment id")
+	fs.StringVar(&opts.envName, "env", "", "run inside the named environment")
 	fs.BoolVar(&opts.removeEnvironment, "rm", false, "remove the runtime environment after the command")
 	var fsFlags stringListFlag
 	fs.Var(&fsFlags, "fs", "run-scoped HostFS allow rule such as read:/absolute/path")
@@ -1115,7 +1110,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	fs.Var(&noFSFlags, "no-fs", "run-scoped HostFS deny rule such as read:/absolute/path")
 	fs.BoolVar(&opts.noProfileHostFSGrants, "no-profile-fs", false, "ignore profile HostFS grants for this run")
 	var envFlags stringListFlag
-	fs.Var(&envFlags, "env", "run-scoped public environment variable KEY=VALUE")
+	fs.Var(&envFlags, "env-var", "run-scoped public environment variable KEY=VALUE")
 	var previewFlags stringListFlag
 	fs.Var(&previewFlags, "preview", "open a preview for a profile endpoint candidate id or guest loopback endpoint")
 	if err := fs.Parse(flagArgs); err != nil {
@@ -1136,11 +1131,8 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	}
 	opts.envPublic = envPublic
 	opts.previewTargets = append([]string(nil), previewFlags...)
-	if opts.newEnvironment && strings.TrimSpace(opts.resumeEnvironment) != "" {
-		return opts, errors.New("--new and --resume cannot be used together")
-	}
-	if opts.ephemeral && (opts.newEnvironment || strings.TrimSpace(opts.resumeEnvironment) != "") {
-		return opts, errors.New("--ephemeral cannot be used with --new or --resume")
+	if opts.ephemeral && strings.TrimSpace(opts.envName) != "" {
+		return opts, errors.New("--ephemeral cannot be used with --env")
 	}
 	if split < 0 && fs.NArg() > 0 {
 		opts.command = fs.Args()
@@ -1461,7 +1453,7 @@ func explainText(p profile.Profile, opts runOptions, layout session.Layout, runE
 	if netPlan.GuestBootstrapPath != "" {
 		fmt.Fprintf(&b, "Network bootstrap: %s\n", netPlan.GuestBootstrapPath)
 	}
-	fmt.Fprintf(&b, "Tool presets: %s\n", strings.Join(lima.EffectiveToolPresetNames(p.Tools.Presets), ","))
+	fmt.Fprintf(&b, "Expected commands: %s\n", listForTUI(sortedStrings(p.Tools.ExpectedCommands)))
 	if registryErr != nil {
 		fmt.Fprintf(&b, "Command proxy: invalid (%s) via %s\n", registryErr, explainBrokerEndpoint(backendName, layout))
 	} else {
@@ -1479,7 +1471,7 @@ func explainText(p profile.Profile, opts runOptions, layout session.Layout, runE
 		fmt.Fprintln(&b, "Known limitation: native backend does not provide VM/container filesystem isolation.")
 		fmt.Fprintln(&b, "Known limitation: native backend may still expose host OS identity APIs such as kernel hostname, OS user database, and system machine-id.")
 	} else if backendName == "lima" {
-		fmt.Fprintln(&b, "Known limitation: target command must exist inside the Lima guest or be installed by a tool preset.")
+		fmt.Fprintln(&b, "Known limitation: target command must already exist inside the Lima guest; Hideout does not install guest tools.")
 	}
 	fmt.Fprintln(&b, "Known limitation: Phase 1 does not audit every child process inside the guest.")
 	fmt.Fprintln(&b, "Known limitation: workspace secrets remain visible when they are inside the mounted workspace.")
@@ -1760,8 +1752,8 @@ func (a app) doctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !opts.fix && opts.tools.hasChanges() {
-		return errors.New("--tool-preset, --npm-package, and --npm-command require doctor --fix")
+	if opts.tools.hasChanges() {
+		return unsupportedLegacyToolSupplyError()
 	}
 	if opts.fix {
 		return a.doctorFix(opts)
@@ -1817,6 +1809,7 @@ func (a app) doctor(args []string) error {
 		}
 	}
 	checkWorkspace(workspace, guestWorkspace, runtimeProfile, report)
+	a.warnShadowedHostFSRules(runtimeProfile.HostFS, workspace)
 
 	layout, err := session.New(store.Root)
 	if err != nil {
@@ -1963,8 +1956,6 @@ func (a app) doctorFix(opts doctorOptions) error {
 		Network:        networkMode,
 		ProxySecretRef: opts.proxySecret,
 		NoInput:        true,
-		ToolPresets:    []string(opts.tools.presets),
-		NPMGlobals:     opts.tools.npmGlobals(),
 	})
 	if err != nil {
 		return err
@@ -1988,33 +1979,18 @@ func registerToolSupplyFlags(fs *flag.FlagSet, opts *toolSupplyOptions) {
 }
 
 func (opts toolSupplyOptions) validate() error {
-	if strings.TrimSpace(opts.npmPackage) == "" && len(opts.npmCommands) > 0 {
-		return errors.New("--npm-command requires --npm-package")
+	if opts.hasChanges() {
+		return unsupportedLegacyToolSupplyError()
 	}
-	if strings.TrimSpace(opts.npmPackage) != "" && len(opts.npmCommands) == 0 {
-		return errors.New("--npm-package requires at least one --npm-command")
-	}
-	p := profile.Default("tool-check")
-	if len(opts.presets) > 0 {
-		p.Tools.Presets = []string(opts.presets)
-	}
-	p.Tools.NPMGlobals = opts.npmGlobals()
-	return p.Validate()
+	return nil
 }
 
 func (opts toolSupplyOptions) hasChanges() bool {
 	return len(opts.presets) > 0 || strings.TrimSpace(opts.npmPackage) != "" || len(opts.npmCommands) > 0
 }
 
-func (opts toolSupplyOptions) npmGlobals() []profile.NPMGlobalPackage {
-	packageSpec := strings.TrimSpace(opts.npmPackage)
-	if packageSpec == "" {
-		return nil
-	}
-	return []profile.NPMGlobalPackage{{
-		Package:  packageSpec,
-		Commands: append([]string(nil), opts.npmCommands...),
-	}}
+func unsupportedLegacyToolSupplyError() error {
+	return errors.New("legacy tool-supply flags are no longer supported; install tools in the guest environment and declare expected commands with hideout profile tools <name> expected add <command>")
 }
 
 func loadDoctorProfile(store profile.Store, name string, report func(string, string, string)) (profile.Profile, bool) {
@@ -2111,13 +2087,18 @@ func checkMountPlan(backendName string, p profile.Profile, layout session.Layout
 			report("mount", "error", "workspace mapping is unavailable")
 			return
 		}
-		cfg := lima.ConfigFromRunSpec(backend.RunSpec{
+		cfg, err := lima.ConfigForRunSpec(backend.RunSpec{
 			Profile:    p,
+			ImageRef:   p.BaseImageOrBuiltin(),
 			HostWork:   hostRoot,
 			GuestWork:  guestRoot,
 			ProfileDir: profileDir,
 			SessionDir: layout.Dir,
 		})
+		if err != nil {
+			report("mount", "error", err.Error())
+			return
+		}
 		workspaceMounts := 0
 		for _, m := range cfg.Mounts {
 			if m.Location == hostRoot && m.MountPoint == guestRoot && m.Writable {
@@ -2185,14 +2166,20 @@ func checkLimaGeneratedConfig(backendName string, p profile.Profile, layout sess
 		return
 	}
 	configPath := filepath.Join(layout.Dir, "doctor-lima.yaml")
-	if err := lima.WriteConfig(configPath, lima.ConfigFromRunSpec(backend.RunSpec{
+	limaCfg, err := lima.ConfigForRunSpec(backend.RunSpec{
 		Profile:      p,
+		ImageRef:     p.BaseImageOrBuiltin(),
 		HostWork:     hostRoot,
 		GuestWork:    guestRoot,
 		ProfileDir:   identityRoot,
 		SessionDir:   layout.Dir,
 		IdentityRoot: identityRoot,
-	})); err != nil {
+	})
+	if err != nil {
+		report("lima-config", "error", "invalid base image declaration: "+err.Error())
+		return
+	}
+	if err := lima.WriteConfig(configPath, limaCfg); err != nil {
 		report("lima-config", "error", "could not write generated YAML: "+doctorDiagnostic(nil, err))
 		return
 	}
@@ -3168,7 +3155,7 @@ func (a app) profileTools(store profile.Store, args []string) error {
 		return nil
 	}
 	if len(args) < 2 {
-		return errors.New("usage: hideout profile tools <name> <list|preset|npm>")
+		return errors.New("usage: hideout profile tools <name> <list|expected>")
 	}
 	name := args[0]
 	command := args[1]
@@ -3182,169 +3169,93 @@ func (a app) profileTools(store profile.Store, args []string) error {
 			return err
 		}
 		return writeProfileTools(a.stdout, p)
-	case "preset":
-		return a.profileToolPreset(store, name, args[2:])
-	case "npm":
-		return a.profileToolNPM(store, name, args[2:])
+	case "expected":
+		return a.profileToolExpected(store, name, args[2:])
+	case "preset", "npm":
+		return unsupportedLegacyToolSupplyError()
 	default:
 		return fmt.Errorf("unknown profile tools command %q", command)
 	}
 }
 
 type profileToolsOutput struct {
-	Profile    string                     `json:"profile"`
-	Presets    []string                   `json:"presets"`
-	NPMGlobals []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
+	Profile          string   `json:"profile"`
+	ExpectedCommands []string `json:"expectedCommands,omitempty"`
 }
 
 type profileToolChangeOutput struct {
-	Profile  string   `json:"profile"`
-	Kind     string   `json:"kind"`
-	Package  string   `json:"package,omitempty"`
-	Preset   string   `json:"preset,omitempty"`
-	Commands []string `json:"commands,omitempty"`
-	Removed  bool     `json:"removed,omitempty"`
+	Profile string `json:"profile"`
+	Kind    string `json:"kind"`
+	Command string `json:"command,omitempty"`
+	Removed bool   `json:"removed,omitempty"`
 }
 
 func writeProfileTools(w io.Writer, p profile.Profile) error {
 	return writeJSONLine(w, profileToolsOutput{
-		Profile:    p.Name,
-		Presets:    sortedStrings(p.Tools.Presets),
-		NPMGlobals: copyNPMGlobalsForOutput(p.Tools.NPMGlobals),
+		Profile:          p.Name,
+		ExpectedCommands: sortedStrings(p.Tools.ExpectedCommands),
 	})
 }
 
-func (a app) profileToolPreset(store profile.Store, name string, args []string) error {
+func (a app) profileToolExpected(store profile.Store, name string, args []string) error {
 	if containsHelpToken(args) {
 		a.profileToolsUsage()
 		return nil
 	}
-	if len(args) != 2 {
-		return errors.New("usage: hideout profile tools <name> preset <add|remove> <preset>")
+	if len(args) == 0 {
+		return errors.New("usage: hideout profile tools <name> expected <add|remove|list>")
 	}
 	action := args[0]
-	preset := strings.TrimSpace(args[1])
-	if preset == "" {
-		return errors.New("tool preset is required")
-	}
-	p, err := store.LoadOrInit(name)
-	if err != nil {
-		return err
-	}
 	switch action {
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: hideout profile tools <name> expected list")
+		}
+		p, err := store.LoadOrInit(name)
+		if err != nil {
+			return err
+		}
+		return writeProfileTools(a.stdout, p)
 	case "add":
-		p.Tools.Presets = appendIfMissing(p.Tools.Presets, preset)
-	case "remove":
-		p.Tools.Presets = removeString(p.Tools.Presets, preset)
-	default:
-		return fmt.Errorf("unknown profile tools preset command %q", action)
-	}
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	return writeJSONLine(a.stdout, profileToolChangeOutput{
-		Profile: p.Name,
-		Kind:    "tools.presets",
-		Preset:  preset,
-		Removed: action == "remove",
-	})
-}
-
-func (a app) profileToolNPM(store profile.Store, name string, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: hideout profile tools <name> npm <add|remove>")
-	}
-	switch args[0] {
-	case "add":
-		return a.profileToolNPMAdd(store, name, args[1:])
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile tools <name> expected add <command>")
+		}
+		return a.profileToolExpectedChange(store, name, args[1], false)
 	case "remove":
 		if len(args) != 2 {
-			return errors.New("usage: hideout profile tools <name> npm remove <package>")
+			return errors.New("usage: hideout profile tools <name> expected remove <command>")
 		}
-		return a.profileToolNPMRemove(store, name, args[1])
+		return a.profileToolExpectedChange(store, name, args[1], true)
 	default:
-		return fmt.Errorf("unknown profile tools npm command %q", args[0])
+		return fmt.Errorf("unknown profile tools expected command %q", action)
 	}
 }
 
-func (a app) profileToolNPMAdd(store profile.Store, name string, args []string) error {
-	if containsHelpToken(args) {
-		a.profileToolsUsage()
-		return nil
-	}
-	fs := flag.NewFlagSet("profile tools npm add", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	var packageSpec string
-	var commands stringListFlag
-	fs.StringVar(&packageSpec, "package", "", "npm package spec")
-	fs.Var(&commands, "command", "command expected after npm global install")
-	if err := fs.Parse(args); err != nil {
+func (a app) profileToolExpectedChange(store profile.Store, name, command string, remove bool) error {
+	command = strings.TrimSpace(command)
+	if err := profile.ValidateExpectedCommandName(command); err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected profile tools npm argument %q", fs.Arg(0))
-	}
-	packageSpec = strings.TrimSpace(packageSpec)
-	if packageSpec == "" {
-		return errors.New("--package is required")
-	}
-	if len(commands) == 0 {
-		return errors.New("--command is required")
-	}
-	p, err := store.LoadOrInit(name)
-	if err != nil {
-		return err
-	}
-	next := profile.NPMGlobalPackage{Package: packageSpec, Commands: append([]string(nil), commands...)}
-	replaced := false
-	for i, pkg := range p.Tools.NPMGlobals {
-		if strings.TrimSpace(pkg.Package) == packageSpec {
-			p.Tools.NPMGlobals[i] = next
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		p.Tools.NPMGlobals = append(p.Tools.NPMGlobals, next)
-	}
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	return writeJSONLine(a.stdout, profileToolChangeOutput{
-		Profile:  p.Name,
-		Kind:     "tools.npmGlobals",
-		Package:  packageSpec,
-		Commands: append([]string(nil), commands...),
-	})
-}
-
-func (a app) profileToolNPMRemove(store profile.Store, name, packageSpec string) error {
-	packageSpec = strings.TrimSpace(packageSpec)
-	if packageSpec == "" {
-		return errors.New("npm package is required")
 	}
 	p, err := store.LoadOrInit(name)
 	if err != nil {
 		return err
 	}
 	removed := false
-	out := p.Tools.NPMGlobals[:0]
-	for _, pkg := range p.Tools.NPMGlobals {
-		if strings.TrimSpace(pkg.Package) == packageSpec {
-			removed = true
-			continue
-		}
-		out = append(out, pkg)
+	if remove {
+		before := len(p.Tools.ExpectedCommands)
+		p.Tools.ExpectedCommands = removeString(p.Tools.ExpectedCommands, command)
+		removed = len(p.Tools.ExpectedCommands) != before
+	} else {
+		p.Tools.ExpectedCommands = appendIfMissing(p.Tools.ExpectedCommands, command)
 	}
-	p.Tools.NPMGlobals = out
 	if err := store.Save(p); err != nil {
 		return err
 	}
 	return writeJSONLine(a.stdout, profileToolChangeOutput{
 		Profile: p.Name,
-		Kind:    "tools.npmGlobals",
-		Package: packageSpec,
-		Removed: removed,
+		Kind:    "tools.expectedCommands",
+		Command: command,
+		Removed: remove && removed,
 	})
 }
 
@@ -3743,18 +3654,6 @@ func removeString(values []string, value string) []string {
 	return out
 }
 
-func copyNPMGlobalsForOutput(values []profile.NPMGlobalPackage) []profile.NPMGlobalPackage {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]profile.NPMGlobalPackage, len(values))
-	for i, value := range values {
-		out[i] = value
-		out[i].Commands = append([]string(nil), value.Commands...)
-	}
-	return out
-}
-
 func (a app) cleanup(args []string) error {
 	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -3886,14 +3785,14 @@ func writeAuditShowEvents(w io.Writer, events []audit.Event) {
 	}
 }
 
-func (a app) listEnvironments(args []string) error {
-	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+func (a app) envList(args []string) error {
+	fs := flag.NewFlagSet("env list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: hideout list")
+		return errors.New("usage: hideout env list")
 	}
 	store, err := profile.DefaultStore()
 	if err != nil {
@@ -3908,19 +3807,214 @@ func (a app) listEnvironments(args []string) error {
 		fmt.Fprintln(a.stdout, "environments: none")
 		return nil
 	}
-	fmt.Fprintln(a.stdout, "ID\tPROFILE\tBACKEND\tSTATUS\tCREATED\tLAST_STARTED\tLAST_ENDED\tWORKSPACE\tCOMMAND")
+	fmt.Fprintln(a.stdout, "NAME\tKIND\tIMAGE\tBACKEND\tSTATUS\tDISK\tLAST_STARTED\tWORKSPACE\tID")
 	for _, env := range environments {
+		if env.Status == "unsupported-version" {
+			fmt.Fprintf(a.stdout, "-\tunsupported-version\t-\t-\t%s\t%s\t-\t-\t%s\n",
+				env.Status, environmentDiskUsage(store.Root, env.ID), env.ID)
+			continue
+		}
+		kind := "named"
+		if env.AutoNamed {
+			kind = "auto"
+		}
 		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			env.ID,
-			env.Profile,
+			env.Name,
+			kind,
+			abbreviateImageRef(env.ImageRef),
 			env.Backend,
 			explainValue(env.Status, "ready"),
-			formatEnvironmentTime(env.CreatedAt),
+			environmentDiskUsage(store.Root, env.ID),
 			formatEnvironmentTime(env.LastStartedAt),
-			formatEnvironmentTime(env.LastEndedAt),
 			env.Workspace,
-			env.LastCommand,
-		)
+			env.ID)
+	}
+	return nil
+}
+
+// abbreviateImageRef keeps listing columns readable: URL digests collapse to
+// their first 12 hex characters.
+func abbreviateImageRef(ref string) string {
+	if ref == "" {
+		return "-"
+	}
+	if i := strings.Index(ref, "#sha256:"); i >= 0 && len(ref) > i+len("#sha256:")+12 {
+		return ref[:i+len("#sha256:")+12] + "…"
+	}
+	return ref
+}
+
+// environmentDiskUsage computes the environment directory size at list time;
+// disk usage is derived evidence, never stored on the record.
+func environmentDiskUsage(storeRoot, id string) string {
+	var total int64
+	root := filepath.Join(storeRoot, "environments", id)
+	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	switch {
+	case total >= 1<<30:
+		return fmt.Sprintf("%.1fGiB", float64(total)/(1<<30))
+	case total >= 1<<20:
+		return fmt.Sprintf("%.1fMiB", float64(total)/(1<<20))
+	case total >= 1<<10:
+		return fmt.Sprintf("%.1fKiB", float64(total)/(1<<10))
+	default:
+		return fmt.Sprintf("%dB", total)
+	}
+}
+
+// warnShadowedHostFSRules keeps HostFS honest inside the workspace: the
+// workspace is a uniform read/write zone that never consults HostFS policy,
+// so rules covering in-workspace paths are warned about (once per rule) and
+// never enforced or blocking.
+func (a app) warnShadowedHostFSRules(cfg hostfs.Config, workspace string) {
+	for _, rule := range hostfs.WorkspaceShadowedRules(cfg, workspace) {
+		fmt.Fprintf(a.stderr, "warning: hostfs rule %s (%s) is shadowed by the workspace %s and has no effect inside it\n", rule.ID, rule.HostPath, workspace)
+	}
+}
+
+func (a app) envCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout env <create|inspect|list|recreate|remove> ...")
+	}
+	switch args[0] {
+	case "create":
+		return a.envCreate(args[1:])
+	case "inspect":
+		return a.envInspect(args[1:])
+	case "list":
+		return a.envList(args[1:])
+	case "recreate":
+		return a.envDestructive(args[1:], "recreate")
+	case "remove":
+		return a.envDestructive(args[1:], "remove")
+	default:
+		return fmt.Errorf("unknown env subcommand %q (expected create, inspect, list, recreate, or remove)", args[0])
+	}
+}
+
+func (a app) envDestructive(args []string, verb string) error {
+	fs := flag.NewFlagSet("env "+verb, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	force := fs.Bool("force", false, "stop a running guest first, then "+verb)
+	verbose := fs.Bool("verbose", false, "show backend control output")
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("usage: hideout env %s <name> [--force]", verb)
+	}
+	name := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: hideout env %s <name> [--force]", verb)
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	applyOpts := manager.EnvironmentApplyOptions{Operator: a.environmentOperator(*verbose)}
+	switch verb {
+	case "recreate":
+		rec, err := core.RecreateEnvironment(context.Background(), name, *force, applyOpts)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "recreated environment %s (%s)\n", rec.Name, rec.ID)
+		fmt.Fprintf(a.stdout, "  image: %s\n", rec.ImageRef)
+		fmt.Fprintf(a.stdout, "run: hideout run --env %s -- <command>\n", rec.Name)
+	case "remove":
+		rec, err := core.RemoveEnvironment(context.Background(), name, *force, applyOpts)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "removed environment %s (%s)\n", rec.Name, rec.ID)
+	}
+	return nil
+}
+
+func (a app) envCreate(args []string) error {
+	fs := flag.NewFlagSet("env create", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	image := fs.String("image", "", "base image declaration (template:<name> or https URL with #sha256:<digest>)")
+	workspace := fs.String("workspace", "", "workspace to pin (defaults to the current directory)")
+	profileName := fs.String("profile", "default", "profile the environment belongs to")
+	backendName := fs.String("backend", "lima", "backend for the environment")
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return errors.New("usage: hideout env create <name> [--image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]")
+	}
+	name := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout env create <name> [--image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]")
+	}
+	ws := strings.TrimSpace(*workspace)
+	if ws == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		ws = cwd
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	rec, err := manager.New(store).CreateEnvironment(manager.EnvironmentCreateOptions{
+		Name:      name,
+		ImageRef:  *image,
+		Profile:   *profileName,
+		Backend:   *backendName,
+		Workspace: ws,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "created environment %s (%s)\n", rec.Name, rec.ID)
+	fmt.Fprintf(a.stdout, "  image: %s\n", rec.ImageRef)
+	fmt.Fprintf(a.stdout, "  workspace: %s\n", rec.Workspace)
+	fmt.Fprintf(a.stdout, "  backend: %s profile: %s\n", rec.Backend, rec.Profile)
+	fmt.Fprintf(a.stdout, "run: hideout run --env %s -- <command>\n", rec.Name)
+	return nil
+}
+
+func (a app) envInspect(args []string) error {
+	fs := flag.NewFlagSet("env inspect", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout env inspect <name>")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	rec, err := manager.New(store).EnvironmentByName(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "environment: %s\n", rec.Name)
+	fmt.Fprintf(a.stdout, "  id: %s\n", rec.ID)
+	fmt.Fprintf(a.stdout, "  auto-named: %t\n", rec.AutoNamed)
+	fmt.Fprintf(a.stdout, "  status: %s\n", rec.Status)
+	fmt.Fprintln(a.stdout, "  identity:")
+	fmt.Fprintf(a.stdout, "    image: %s\n", rec.ImageRef)
+	fmt.Fprintf(a.stdout, "    backend-config: %s\n", rec.BackendConfigVersion)
+	fmt.Fprintf(a.stdout, "    workspace: %s -> %s\n", rec.Workspace, rec.GuestWorkspace)
+	fmt.Fprintf(a.stdout, "  backend: %s profile: %s\n", rec.Backend, rec.Profile)
+	if rec.InstanceName != "" {
+		fmt.Fprintf(a.stdout, "  instance: %s\n", rec.InstanceName)
 	}
 	return nil
 }
@@ -4270,7 +4364,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  presets=%s  npm=%s  commandProxies=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ToolPresets), npmGlobalsForTUI(p.NPMGlobals), listForTUI(p.CommandProxies), p.HostFSGrants, p.HostFSDeny, status)
+		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  expected=%s  commandProxies=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ExpectedCommands), listForTUI(p.CommandProxies), p.HostFSGrants, p.HostFSDeny, status)
 		next := profileNextCommandsForTUI(p)
 		if len(next) > 0 {
 			for _, command := range next {
@@ -4309,17 +4403,26 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		fmt.Fprintf(w, "  showing newest %d of %d\n", len(environments), len(overview.Environments))
 	}
 	for _, env := range environments {
-		fmt.Fprintf(w, "  - %s  status=%s  backend=%s  profile=%s  instance=%s  workspace=%s  last=%s\n",
-			dash(env.ID),
+		kind := "named"
+		if env.AutoNamed {
+			kind = "auto"
+		}
+		if env.Status == "unsupported-version" {
+			fmt.Fprintf(w, "  - %s  status=%s (clean and recreate)\n", dash(env.ID), env.Status)
+			continue
+		}
+		fmt.Fprintf(w, "  - %s (%s)  status=%s  image=%s  backend=%s  profile=%s  workspace=%s  last=%s\n",
+			dash(env.Name),
+			kind,
 			dash(env.Status),
+			dash(abbreviateImageRef(env.ImageRef)),
 			dash(env.Backend),
 			dash(env.Profile),
-			dash(env.InstanceName),
 			dash(env.Workspace),
 			dash(env.LastCommand),
 		)
-		if env.ID != "" {
-			fmt.Fprintf(w, "    next: resume=hideout run --resume %s -- <command>  stop=hideout stop %s  clean-after-stop=hideout clean --stopped %s\n", env.ID, env.ID, env.ID)
+		if env.Name != "" {
+			fmt.Fprintf(w, "    next: run=hideout run --env %s -- <command>  stop=hideout stop %s  clean-after-stop=hideout clean --stopped %s\n", env.Name, env.Name, env.Name)
 		}
 	}
 
@@ -4441,7 +4544,7 @@ func profileNextCommandsForTUI(p manager.ProfileSummary) []string {
 	}
 	return []string{
 		"tools=hideout profile tools " + p.Name + " list",
-		"add-tool=hideout profile tools " + p.Name + " npm add --package <npm-package> --command <command>",
+		"expect-command=hideout profile tools " + p.Name + " expected add <command>",
 		"env=hideout profile env " + p.Name + " list",
 		"set-env=hideout profile env " + p.Name + " set NAME=value",
 		"command-proxy=hideout profile command-proxy " + p.Name + " list",
@@ -4488,21 +4591,6 @@ func listForTUI(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ",")
-}
-
-func npmGlobalsForTUI(values []profile.NPMGlobalPackage) string {
-	if len(values) == 0 {
-		return "none"
-	}
-	out := make([]string, 0, len(values))
-	for _, pkg := range values {
-		label := pkg.Package
-		if len(pkg.Commands) > 0 {
-			label += " (" + strings.Join(pkg.Commands, ",") + ")"
-		}
-		out = append(out, label)
-	}
-	return strings.Join(out, ",")
 }
 
 type labPortbridgeLoopbackOptions struct {

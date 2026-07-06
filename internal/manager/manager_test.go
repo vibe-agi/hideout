@@ -2092,19 +2092,35 @@ func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.
 		GuestWorkspace: spec.GuestWorkspace,
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{
-		ResumeID:       rec.ID,
+		EnvName:        rec.Name,
+		RemoveAfterRun: true,
+		Create:         true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "--rm cannot be combined") {
+		t.Fatalf("--rm with --env must fail closed, got %v", err)
+	}
+	_ = selected
+	selected, err = New(store).SelectRunEnvironment(RunPlan{
+		Backend:        "lima",
+		Workspace:      spec.Workspace,
+		GuestWorkspace: spec.GuestWorkspace,
+		RuntimeProfile: p,
+	}, RunEnvironmentOptions{
 		RemoveAfterRun: true,
 		Create:         true,
 	})
 	if err != nil {
 		t.Fatalf("SelectRunEnvironment: %v", err)
 	}
-	if !selected.Active || !selected.RemoveAfterRun || selected.PreserveInstance {
-		t.Fatalf("resume --rm should delete environment after run: %+v", selected)
+	if selected.Active {
+		t.Fatalf("--rm runs stay record-less/disposable: %+v", selected)
 	}
 }
 
-func TestCoreSelectRunEnvironmentToolChangesCreateNewEnvironment(t *testing.T) {
+func TestCoreSelectRunEnvironmentExpectedCommandChangesReuseEnvironment(t *testing.T) {
+	// Expected-command declarations are live diagnostics, not environment
+	// identity: changing them must reuse the same environment, never derive
+	// or demand a new one.
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
 	p := profile.Default("default")
@@ -2119,7 +2135,7 @@ func TestCoreSelectRunEnvironmentToolChangesCreateNewEnvironment(t *testing.T) {
 	}
 
 	withTool := p
-	withTool.Tools.Presets = append(withTool.Tools.Presets, "node-dev")
+	withTool.Tools.ExpectedCommands = append(withTool.Tools.ExpectedCommands, "agent-cli")
 	selected, err := New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
@@ -2129,25 +2145,25 @@ func TestCoreSelectRunEnvironmentToolChangesCreateNewEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectRunEnvironment: %v", err)
 	}
-	if !selected.Created || selected.Record.ID == rec.ID {
-		t.Fatalf("tool change should create a new environment, got %+v old=%s", selected, rec.ID)
-	}
-	if selected.Record.ToolsHash == "" || selected.Record.ToolsHash == rec.ToolsHash {
-		t.Fatalf("environment should persist a distinct tool fingerprint: new=%q old=%q", selected.Record.ToolsHash, rec.ToolsHash)
+	if selected.Created || selected.Record.ID != rec.ID {
+		t.Fatalf("expected-command change must reuse the environment, got %+v old=%s", selected, rec.ID)
 	}
 
-	_, err = New(store).SelectRunEnvironment(RunPlan{
+	resumed, err := New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
 		GuestWorkspace: workspace,
 		RuntimeProfile: withTool,
-	}, RunEnvironmentOptions{ResumeID: rec.ID, Create: true})
-	if err == nil || !strings.Contains(err.Error(), "tools no longer match") {
-		t.Fatalf("resume of stale tool environment should fail closed, got %v", err)
+	}, RunEnvironmentOptions{EnvName: rec.Name, Create: true})
+	if err != nil {
+		t.Fatalf("selecting by name after expected-command change must succeed: %v", err)
+	}
+	if resumed.Record.ID != rec.ID {
+		t.Fatalf("resume selected wrong environment: %+v", resumed)
 	}
 }
 
-func TestCoreSelectRunEnvironmentBackendConfigChangesCreateNewEnvironment(t *testing.T) {
+func TestCoreSelectRunEnvironmentBackendConfigChangeFailsClosed(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
 	p := profile.Default("default")
@@ -2165,30 +2181,68 @@ func TestCoreSelectRunEnvironmentBackendConfigChangesCreateNewEnvironment(t *tes
 		t.Fatalf("Save: %v", err)
 	}
 
-	selected, err := New(store).SelectRunEnvironment(RunPlan{
+	// Interim contract until the drift report lands: a backend-config change
+	// on the auto-named environment fails closed instead of silently deriving
+	// a replacement. The US3 drift matrix supersedes this assertion.
+	_, err = New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
 		GuestWorkspace: workspace,
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{Create: true})
-	if err != nil {
-		t.Fatalf("SelectRunEnvironment: %v", err)
+	if err == nil {
+		t.Fatal("backend config change must fail closed, not silently derive a new environment")
 	}
-	if !selected.Created || selected.Record.ID == rec.ID {
-		t.Fatalf("backend config change should create a new environment, got %+v old=%s", selected, rec.ID)
-	}
-	if selected.Record.BackendConfigVersion != currentSpec.BackendConfigVersion {
-		t.Fatalf("environment should persist backend config version: new=%q current=%q", selected.Record.BackendConfigVersion, currentSpec.BackendConfigVersion)
-	}
+	_ = currentSpec
 
 	_, err = New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
 		GuestWorkspace: workspace,
 		RuntimeProfile: p,
-	}, RunEnvironmentOptions{ResumeID: rec.ID, Create: true})
-	if err == nil || !strings.Contains(err.Error(), "backend config no longer matches") {
-		t.Fatalf("resume old backend config should fail closed, got %v", err)
+	}, RunEnvironmentOptions{EnvName: rec.Name, Create: true})
+	if err == nil || !strings.Contains(err.Error(), "backendConfig") {
+		t.Fatalf("selecting stale backend config by name should drift-fail closed, got %v", err)
+	}
+}
+
+func TestBuildExpectedCommandDiagnosticsFromControlledContext(t *testing.T) {
+	diagnostics := BuildExpectedCommandDiagnostics([]string{"missing-cli", "present-cli"}, ExpectedCommandCheckContext{
+		Backend:          "lima",
+		Checkable:        true,
+		PresentCommands:  map[string]bool{"present-cli": true},
+		RequestedCommand: "missing-cli",
+	})
+	if len(diagnostics) != 2 {
+		t.Fatalf("diagnostics=%+v", diagnostics)
+	}
+	byCommand := map[string]ExpectedCommandDiagnostic{}
+	for _, diagnostic := range diagnostics {
+		byCommand[diagnostic.Command] = diagnostic
+	}
+	if got := byCommand["present-cli"]; got.Status != ExpectedCommandPresent || got.BlocksRequestedRun {
+		t.Fatalf("present diagnostic mismatch: %+v", got)
+	}
+	if got := byCommand["missing-cli"]; got.Status != ExpectedCommandMissing || !got.BlocksRequestedRun {
+		t.Fatalf("missing requested diagnostic mismatch: %+v", got)
+	}
+
+	notCheckable := BuildExpectedCommandDiagnostics([]string{"agent-cli"}, ExpectedCommandCheckContext{
+		Backend:          "lima",
+		Checkable:        false,
+		RequestedCommand: "agent-cli",
+	})
+	if len(notCheckable) != 1 || notCheckable[0].Status != ExpectedCommandNotCheckable || !notCheckable[0].BlocksRequestedRun {
+		t.Fatalf("not-checkable diagnostic mismatch: %+v", notCheckable)
+	}
+
+	blocked := BuildExpectedCommandDiagnostics([]string{"agent-cli"}, ExpectedCommandCheckContext{
+		Backend:          "lima",
+		BlockedReason:    "legacy tool-supply state is unsupported",
+		RequestedCommand: "agent-cli",
+	})
+	if len(blocked) != 1 || blocked[0].Status != ExpectedCommandBlocked || !blocked[0].BlocksRequestedRun {
+		t.Fatalf("blocked diagnostic mismatch: %+v", blocked)
 	}
 }
 
@@ -2197,10 +2251,7 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	p := profile.Default("default")
 	p.Network.Mode = network.ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
-	p.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
-		Package:  "@example/agent-cli@1.2.3",
-		Commands: []string{"agent-cli", "agent-helper"},
-	}}
+	p.Tools.ExpectedCommands = []string{"agent-cli", "agent-helper"}
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
@@ -2220,6 +2271,8 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	}
 	envStore := environment.Store{Root: store.Root}
 	envRec, err := envStore.Create(environment.Spec{
+		Name:           "fixture-env-108",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/work/project",
@@ -2269,13 +2322,16 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	if prof.ProxyEnvVisible {
 		t.Fatalf("proxy env must not be visible in default profile summary: %+v", prof)
 	}
-	assertContainsManagerTest(t, prof.ToolPresets, "base-dev")
-	if len(prof.NPMGlobals) != 1 ||
-		prof.NPMGlobals[0].Package != "@example/agent-cli@1.2.3" {
-		t.Fatalf("profile npm global summary mismatch: %+v", prof.NPMGlobals)
+	assertContainsManagerTest(t, prof.ExpectedCommands, "agent-cli")
+	assertContainsManagerTest(t, prof.ExpectedCommands, "agent-helper")
+	if len(prof.ExpectedCommandDiagnostics) != 2 {
+		t.Fatalf("expected diagnostics for declared commands: %+v", prof.ExpectedCommandDiagnostics)
 	}
-	assertContainsManagerTest(t, prof.NPMGlobals[0].Commands, "agent-cli")
-	assertContainsManagerTest(t, prof.NPMGlobals[0].Commands, "agent-helper")
+	for _, diagnostic := range prof.ExpectedCommandDiagnostics {
+		if diagnostic.Status != ExpectedCommandNotCheckable {
+			t.Fatalf("overview should not inspect guest commands without a check context: %+v", prof.ExpectedCommandDiagnostics)
+		}
+	}
 	assertContainsManagerTest(t, prof.CommandProxies, "open")
 	assertContainsManagerTest(t, prof.CommandProxies, "xdg-open")
 	assertContainsManagerTest(t, overview.Capabilities.MaxCapabilities, "host.open")
@@ -2353,6 +2409,8 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	envStore := environment.Store{Root: store.Root}
 	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
 	ready, err := envStore.Create(environment.Spec{
+		Name:           "fixture-env-109",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/work/ready",
@@ -2368,6 +2426,8 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped, err := envStore.Create(environment.Spec{
+		Name:           "fixture-env-110",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "lima",
 		Workspace:      "/work/stopped",
@@ -2383,6 +2443,8 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeRec, err := envStore.Create(environment.Spec{
+		Name:           "fixture-env-1",
+		ImageRef:       environment.BuiltinBaseImage,
 		Profile:        "default",
 		Backend:        "native",
 		Workspace:      "/work/native",
@@ -2920,4 +2982,190 @@ func commandProxyRegistrationExistsForManagerTest(values []cmdproxy.Registration
 		}
 	}
 	return false
+}
+
+func TestCreateEnvironmentPrecedenceAndAudit(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	noImage := profile.Default("noimage")
+	noImage.Environment.BaseImage = ""
+	if err := store.Save(noImage); err != nil {
+		t.Fatal(err)
+	}
+	withImage := profile.Default("withimage")
+	withImage.Environment.BaseImage = "https://example.com/profile.img#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := store.Save(withImage); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	workspace := t.TempDir()
+
+	// flag wins over profile default
+	rec, err := core.CreateEnvironment(EnvironmentCreateOptions{
+		Name: "flagwins", Profile: "withimage", Backend: "lima", Workspace: workspace,
+		ImageRef: "template:_images/ubuntu-lts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ImageRef != "template:_images/ubuntu-lts" {
+		t.Fatalf("flag should win: %+v", rec)
+	}
+	// profile default wins over builtin
+	rec, err = core.CreateEnvironment(EnvironmentCreateOptions{Name: "profwins", Profile: "withimage", Backend: "lima", Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ImageRef != withImage.Environment.BaseImage {
+		t.Fatalf("profile default should win: %+v", rec)
+	}
+	// absent profile field resolves to builtin
+	rec, err = core.CreateEnvironment(EnvironmentCreateOptions{Name: "builtin", Profile: "noimage", Backend: "lima", Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ImageRef != environment.BuiltinBaseImage {
+		t.Fatalf("absent profile field should resolve to builtin: %+v", rec)
+	}
+
+	// audit trail
+	data, err := os.ReadFile(filepath.Join(store.Root, "logs", "environment-audit.jsonl"))
+	if err != nil {
+		t.Fatalf("environment audit missing: %v", err)
+	}
+	text := string(data)
+	if strings.Count(text, `"env.create"`) != 3 || !strings.Contains(text, "flagwins") || !strings.Contains(text, "template:_images/ubuntu-lts") {
+		t.Fatalf("env.create audit incomplete: %s", text)
+	}
+}
+
+func TestRemoveEnvironmentRefusesRunningGuest(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	rec, err := core.CreateEnvironment(EnvironmentCreateOptions{Name: "busy", Profile: "default", Backend: "lima", Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envStore := environment.Store{Root: store.Root}
+	rec.Status = "running"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	_, err = core.RemoveEnvironment(context.Background(), "busy", false, EnvironmentApplyOptions{Operator: fakeEnvOperator{}})
+	if err == nil || !strings.Contains(err.Error(), "hideout stop busy") {
+		t.Fatalf("running guest must refuse with stop hint, got %v", err)
+	}
+	rec.Status = "stopped"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := core.RemoveEnvironment(context.Background(), "busy", false, EnvironmentApplyOptions{Operator: fakeEnvOperator{}})
+	if err != nil {
+		t.Fatalf("remove stopped environment: %v", err)
+	}
+	if removed.Name != "busy" {
+		t.Fatalf("unexpected removed record: %+v", removed)
+	}
+	if _, err := envStore.LoadByName("busy"); err == nil {
+		t.Fatal("record should be gone after remove")
+	}
+	data, err := os.ReadFile(filepath.Join(store.Root, "logs", "environment-audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"env.remove"`) {
+		t.Fatalf("env.remove audit missing: %s", data)
+	}
+}
+
+type fakeEnvOperator struct{}
+
+func (fakeEnvOperator) StopInstance(context.Context, string) error      { return nil }
+func (fakeEnvOperator) Cleanup(context.Context, *backend.Session) error { return nil }
+
+func TestOverviewEnvironmentSummariesExposeNameAndImage(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	rec, err := core.CreateEnvironment(EnvironmentCreateOptions{Name: "sumtest", Profile: "default", Backend: "lima", Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// foreign-version record shows as unsupported keyed by id/version only
+	oldID := "env_20260701t000000zaabbccddee0000000003"
+	oldDir := filepath.Join(store.Root, "environments", oldID)
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "environment.json"), []byte(`{"version":"hideout.environment/v1","id":"`+oldID+`","name":"stale-name","imageRef":"https://x/y.img#sha256:1111111111111111111111111111111111111111111111111111111111111111"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	overview, err := core.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found, foundOld bool
+	for _, env := range overview.Environments {
+		if env.ID == rec.ID {
+			found = true
+			if env.Name != "sumtest" || env.ImageRef != rec.ImageRef || env.Workspace == "" {
+				t.Fatalf("summary missing name/image/workspace: %+v", env)
+			}
+		}
+		if env.ID == oldID {
+			foundOld = true
+			if env.Status != environment.StatusUnsupportedVersion {
+				t.Fatalf("old record should be unsupported-version: %+v", env)
+			}
+			if env.Name != "" || env.ImageRef != "" {
+				t.Fatalf("old record fields must not be trusted: %+v", env)
+			}
+		}
+	}
+	if !found || !foundOld {
+		t.Fatalf("overview missing environments: found=%t foundOld=%t %+v", found, foundOld, overview.Environments)
+	}
+}
+
+func TestStopAndCleanAcceptEnvironmentNames(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	rec, err := core.CreateEnvironment(EnvironmentCreateOptions{Name: "byname", Profile: "default", Backend: "lima", Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envStore := environment.Store{Root: store.Root}
+	rec.Status = "running"
+	if err := envStore.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{IDs: []string{"byname"}})
+	if err != nil {
+		t.Fatalf("stop plan by name: %v", err)
+	}
+	if len(plan.Targets) != 1 || plan.Targets[0].ID != rec.ID {
+		t.Fatalf("stop plan should target the named environment: %+v", plan)
+	}
+	cleanPlan, err := core.PlanEnvironmentClean(EnvironmentActionOptions{IDs: []string{"byname"}})
+	if err != nil || len(cleanPlan.Targets) != 1 {
+		t.Fatalf("clean plan by name: %+v err=%v", cleanPlan, err)
+	}
+}
+
+func TestStopSkipsNeverBootedEnvironments(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	if _, err := core.CreateEnvironment(EnvironmentCreateOptions{Name: "fresh", Profile: "default", Backend: "lima", Workspace: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{IDs: []string{"fresh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Targets) != 0 {
+		t.Fatalf("never-booted environment must not be a stop target: %+v", plan.Targets)
+	}
+	if len(plan.Skipped) != 1 || plan.Skipped[0].Reason != "never-booted" {
+		t.Fatalf("expected never-booted skip reason: %+v", plan.Skipped)
+	}
 }

@@ -54,27 +54,50 @@ type Overview struct {
 }
 
 type ProfileSummary struct {
-	Name            string                     `json:"name"`
-	ProfileID       string                     `json:"profileId,omitempty"`
-	IdentityID      string                     `json:"identityId,omitempty"`
-	LineageMode     string                     `json:"lineageMode,omitempty"`
-	NetworkMode     string                     `json:"networkMode"`
-	ProxySecretRef  string                     `json:"proxySecretRef,omitempty"`
-	ProxyEnvVisible bool                       `json:"proxyEnvVisible"`
-	EnvPublic       []string                   `json:"envPublic,omitempty"`
-	EnvInherit      []string                   `json:"envInherit,omitempty"`
-	EnvDeny         []string                   `json:"envDeny,omitempty"`
-	CommandProxies  []string                   `json:"commandProxies,omitempty"`
-	HostFSGrants    int                        `json:"hostfsGrants"`
-	HostFSDeny      int                        `json:"hostfsDeny"`
-	PolicyEngine    string                     `json:"policyEngine"`
-	ToolPresets     []string                   `json:"toolPresets"`
-	NPMGlobals      []profile.NPMGlobalPackage `json:"npmGlobals,omitempty"`
-	ProfilePath     string                     `json:"profilePath"`
-	IdentityPath    string                     `json:"identityPath"`
-	ValidationError string                     `json:"validationError,omitempty"`
-	profile         profile.Profile
+	Name                       string                      `json:"name"`
+	ProfileID                  string                      `json:"profileId,omitempty"`
+	IdentityID                 string                      `json:"identityId,omitempty"`
+	LineageMode                string                      `json:"lineageMode,omitempty"`
+	NetworkMode                string                      `json:"networkMode"`
+	ProxySecretRef             string                      `json:"proxySecretRef,omitempty"`
+	ProxyEnvVisible            bool                        `json:"proxyEnvVisible"`
+	EnvPublic                  []string                    `json:"envPublic,omitempty"`
+	EnvInherit                 []string                    `json:"envInherit,omitempty"`
+	EnvDeny                    []string                    `json:"envDeny,omitempty"`
+	CommandProxies             []string                    `json:"commandProxies,omitempty"`
+	HostFSGrants               int                         `json:"hostfsGrants"`
+	HostFSDeny                 int                         `json:"hostfsDeny"`
+	PolicyEngine               string                      `json:"policyEngine"`
+	ExpectedCommands           []string                    `json:"expectedCommands,omitempty"`
+	ExpectedCommandDiagnostics []ExpectedCommandDiagnostic `json:"expectedCommandDiagnostics,omitempty"`
+	ProfilePath                string                      `json:"profilePath"`
+	IdentityPath               string                      `json:"identityPath"`
+	ValidationError            string                      `json:"validationError,omitempty"`
+	profile                    profile.Profile
 }
+
+type ExpectedCommandDiagnostic struct {
+	Command            string `json:"command"`
+	Status             string `json:"status"`
+	Backend            string `json:"backend,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+	BlocksRequestedRun bool   `json:"blocksRequestedRun,omitempty"`
+}
+
+type ExpectedCommandCheckContext struct {
+	Backend          string
+	Checkable        bool
+	PresentCommands  map[string]bool
+	BlockedReason    string
+	RequestedCommand string
+}
+
+const (
+	ExpectedCommandPresent      = "present"
+	ExpectedCommandMissing      = "missing"
+	ExpectedCommandNotCheckable = "not-checkable"
+	ExpectedCommandBlocked      = "blocked"
+)
 
 type SessionSummary struct {
 	ID                 string `json:"id"`
@@ -91,6 +114,10 @@ type SessionSummary struct {
 
 type EnvironmentSummary struct {
 	ID             string    `json:"id"`
+	Name           string    `json:"name,omitempty"`
+	AutoNamed      bool      `json:"autoNamed,omitempty"`
+	ImageRef       string    `json:"imageRef,omitempty"`
+	Version        string    `json:"version,omitempty"`
 	Profile        string    `json:"profile"`
 	Backend        string    `json:"backend"`
 	Status         string    `json:"status"`
@@ -419,6 +446,10 @@ func environmentSummaries(storeRoot string) []EnvironmentSummary {
 	for _, rec := range records {
 		out = append(out, EnvironmentSummary{
 			ID:             rec.ID,
+			Name:           rec.Name,
+			AutoNamed:      rec.AutoNamed,
+			ImageRef:       rec.ImageRef,
+			Version:        rec.Version,
 			Profile:        rec.Profile,
 			Backend:        rec.Backend,
 			Status:         rec.Status,
@@ -537,8 +568,11 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			summary.EnvInherit = sortedStringsForManager(p.Env.Inherit)
 			summary.EnvDeny = sortedStringsForManager(p.Env.Deny)
 			summary.PolicyEngine = p.Policy.Engine
-			summary.ToolPresets = append([]string(nil), p.Tools.Presets...)
-			summary.NPMGlobals = copyProfileSummaryNPMGlobals(p.Tools.NPMGlobals)
+			summary.ExpectedCommands = sortedStringsForManager(p.Tools.ExpectedCommands)
+			summary.ExpectedCommandDiagnostics = BuildExpectedCommandDiagnostics(summary.ExpectedCommands, ExpectedCommandCheckContext{
+				Backend:   "profile",
+				Checkable: false,
+			})
 			summary.HostFSGrants = len(p.HostFS.Grants)
 			summary.HostFSDeny = len(p.HostFS.Deny)
 			registry, err := cmdproxy.RegistryFromProfile(p)
@@ -552,16 +586,32 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 	return out, errs
 }
 
-func copyProfileSummaryNPMGlobals(values []profile.NPMGlobalPackage) []profile.NPMGlobalPackage {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]profile.NPMGlobalPackage, len(values))
-	for i, pkg := range values {
-		out[i] = profile.NPMGlobalPackage{
-			Package:  pkg.Package,
-			Commands: append([]string(nil), pkg.Commands...),
+func BuildExpectedCommandDiagnostics(expected []string, check ExpectedCommandCheckContext) []ExpectedCommandDiagnostic {
+	commands := sortedStringsForManager(expected)
+	out := make([]ExpectedCommandDiagnostic, 0, len(commands))
+	for _, command := range commands {
+		diagnostic := ExpectedCommandDiagnostic{
+			Command: command,
+			Backend: check.Backend,
 		}
+		switch {
+		case strings.TrimSpace(check.BlockedReason) != "":
+			diagnostic.Status = ExpectedCommandBlocked
+			diagnostic.Reason = check.BlockedReason
+			diagnostic.BlocksRequestedRun = command == check.RequestedCommand
+		case !check.Checkable:
+			diagnostic.Status = ExpectedCommandNotCheckable
+			diagnostic.Reason = "selected environment is not inspectable in this context"
+			diagnostic.BlocksRequestedRun = command == check.RequestedCommand
+		case check.PresentCommands[command]:
+			diagnostic.Status = ExpectedCommandPresent
+			diagnostic.Reason = "command observed in selected environment"
+		default:
+			diagnostic.Status = ExpectedCommandMissing
+			diagnostic.Reason = "command not observed in selected environment"
+			diagnostic.BlocksRequestedRun = command == check.RequestedCommand
+		}
+		out = append(out, diagnostic)
 	}
 	return out
 }
