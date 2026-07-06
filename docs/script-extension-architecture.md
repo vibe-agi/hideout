@@ -8,6 +8,10 @@ Hideout supports JavaScript extension points through constrained `goja`
 entrypoints. Scripts are policy and composition tools. They are not plugins with
 ambient authority, not backend drivers, and not isolation boundaries.
 
+Script capability grows along the expressiveness axis, never the authority
+axis: strengthen what scripts can see, decide, and propose; never what they can
+execute. Scripts carry zero authority precisely so they can be shared.
+
 This document follows [architecture-principles.md](architecture-principles.md)
 and is subordinate to [privacy-run-design.md](privacy-run-design.md).
 
@@ -16,7 +20,8 @@ Status:
 ```text
 Script runtime for command policy and audit redaction: Required Phase 1.
 Adapter ABI beyond command.decide and audit.redact: Design-ready.
-Safe context queries: Later.
+Safe context queries: Design-ready. First expressiveness increment together
+with raw decision context and the `simulate` and `rewrite-guest` outcomes.
 Endpoint exposure proposal builders: Later. Each builder is gated by the
 corresponding direction-specific exposure primitive being promoted to a product
 path.
@@ -123,7 +128,10 @@ Disallowed responsibilities:
 - providing raw host commands, raw host argv, host paths, provider handles, or
   backend endpoints;
 - bypassing Manager plan/apply;
-- changing immutable audit evidence.
+- changing immutable audit evidence;
+- selecting or overriding the guest base image; image declarations come only
+  from the bundle, recipe, or Hideoutfile declaration layer defined in
+  [ecosystem-foundation-design.md](ecosystem-foundation-design.md).
 
 An adapter may know that `adb` uses a host TCP endpoint or that Chromium DevTools
 uses a loopback port. It may propose a typed endpoint exposure or OpenTarget. It
@@ -134,7 +142,10 @@ structured facts needed for real local policy decisions: full URLs, parsed
 redirect URIs, endpoint candidate metadata, ports, process argv, cwd class, and
 declared endpoint metadata when those facts are part of the current decision
 snapshot. This context is local runtime input to a constrained goja VM; sharing
-the adapter code does not share the user's runtime context.
+the adapter code does not share the user's runtime context. For
+`command.decide`, the canonicalized `target` and `argv` are contract-level raw
+values: the requesting guest process authored them, so redacting them from the
+decision hook protects nothing and breaks real policy.
 
 Core supplies facts, not risk hints. It should not label a command as "safe",
 "project open", "IDE risk", or similar policy conclusions. If an adapter cares
@@ -153,10 +164,12 @@ the final validation.
 Hideout control-plane secrets are never policy context. Broker tokens, proxy
 secrets, hidden-env backing values, manager tokens, and PortBridge provider
 handles must not be exposed to scripts. User/application secrets embedded in
-arbitrary runtime facts cannot be perfectly identified by Core; policy context
-therefore must not be treated as a public record. Audit, Boundary Summary,
-exported fixtures, and UI views must redact or summarize sensitive values even
-when the runtime policy script saw full context.
+arbitrary runtime facts cannot be perfectly identified by Core; redaction is
+therefore deterministic, not heuristic. Local audit records user data verbatim
+as host-local evidence, control-plane credentials are stripped exactly, and
+export/share surfaces apply user-owned redaction plus the deterministic strip
+before anything leaves the machine. Boundary Summary stays a lossy count/class
+summary by construction.
 
 Command adapters follow the same split:
 
@@ -214,9 +227,13 @@ host-side arguments from that resource.
 
 ### Persona Recipe
 
+The recipe artifact model is owned by
+[ecosystem-foundation-design.md](ecosystem-foundation-design.md); this section
+describes only how recipes reference script adapters.
+
 A persona recipe is a product composition for a workflow. It combines adapters,
-policy templates, environment requirements, doctor checks, and user-facing
-defaults.
+policy templates, environment hints, doctor checks, and sensitive-path deny
+templates.
 
 Examples:
 
@@ -312,12 +329,8 @@ views are redacted presentation surfaces and are not required to contain enough
 data to fully replay a decision. A replay tool that needs full fidelity must use
 the protected decision snapshot, not the redacted audit view.
 
-The default for rich snapshots should be hash-bound, not retained. If a full
-snapshot is retained for debugging, it becomes a secret-bearing session artifact:
-store it under the Hideout control-plane store with owner-only permissions,
-include it in store-reserved-root protection, expire it with the session unless
-the user explicitly preserves it, and never export it through audit, fixtures, or
-UI views by accident.
+Snapshot retention is a later concern; until then decision snapshots are
+hash-bound only.
 
 ## Runtime Restrictions
 
@@ -423,7 +436,6 @@ Design-ready and Later entrypoints:
 
 | Entrypoint | Phase | Purpose |
 | --- | --- | --- |
-| `command.normalize(ctx)` | Design-ready | User-scripted normalization for future command families. |
 | `opentarget.decide(ctx)` | Later | Direct OpenTarget proposal hook after OpenTarget product path is promoted. |
 | `endpoint.expose.decide(ctx)` | Later | Direct endpoint exposure proposal hook after a direction-specific exposure product path is promoted. |
 
@@ -432,8 +444,10 @@ an entrypoint that exists in the current effective policy. Today, that usually
 means the `command.decide` domain entrypoint, implemented by the Phase 1
 `decideCommand(ctx)` ABI, for a registered command shim. Richer command binding
 decisions may extend the `command.decide` contract with bounded context queries
-only after the profile schema, validator, audit shape, and Gate 0 contract are
-updated. Bundles must not depend on an entrypoint that has not been promoted into
+or additional normalization fields only after the profile schema, validator,
+audit shape, and Gate 0 contract are updated; command normalization is an
+extensible part of the `command.decide` contract, not a separate entrypoint.
+Bundles must not depend on an entrypoint that has not been promoted into
 the current effective policy.
 
 ## Development Rules
@@ -464,13 +478,12 @@ the current effective policy.
 ### Design-Ready
 
 - Script adapter packaging as bundle entries.
-- `command.normalize(ctx)` contract for future command families.
+- Safe context query SDK backed by immutable per-evaluation snapshots.
 - Persona recipe references to adapters without granting authority directly.
 - Adapter permission diff in Manager and UI surfaces.
 
 ### Later
 
-- Safe context query SDK backed by immutable per-evaluation snapshots.
 - Structured OpenTarget and endpoint exposure proposal builders.
 - Direct `opentarget.decide(ctx)` and `endpoint.expose.decide(ctx)` entrypoints.
 - Author tooling such as script fixture tests and policy evaluation CLI.

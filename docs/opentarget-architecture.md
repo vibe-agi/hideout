@@ -93,6 +93,10 @@ OpenTarget / PortBridge / Command Proxy
       -> persona recipe
 ```
 
+A persona recipe in this layering is declarative configuration and decision
+data consumed by a JavaScript adapter; it carries no installation or
+environment-construction semantics.
+
 PortBridge remains a generic transport primitive, not an adb, browser, or
 preview-specific target type. `endpoint.expose.host-to-guest` is the first
 direction productized and uses run-scoped, audited PortBridge mappings owned by
@@ -152,6 +156,8 @@ Use cases:
 Implementation shape:
 
 - preview and browser-control behavior should live in adapters and recipes;
+  recipes remain declarative adapter configuration and decision data, never
+  installation or environment-build steps;
 - Core owns OpenTarget, PortBridge, browser profile isolation, and audit;
 - framework-specific knowledge such as Vite, Next.js, Playwright, or DevTools
   compatibility must not become broker policy unless needed for a security
@@ -159,63 +165,27 @@ Implementation shape:
 
 ### Android
 
-Targets:
-
-- `mobile.simulator.open`
-- `host.app.open-resource` through an emulator-tooling provider;
-- explicit `endpoint.expose.guest-to-host` proposals when an adb adapter is
-  enabled.
-
-Use cases:
-
-- launch emulator;
-- open app or deep link;
-- forward or reverse a specific debug port.
-
-adb is high-authority. The first product design should treat it as an adapter
-over PortBridge and audit, not as a generic host port escape. A later
-protocol-aware adapter may classify adb subcommands, but the Core primitive is
-still the typed bridge and lifecycle.
-
-adb adapters require the higher-risk `endpoint.expose.guest-to-host` primitive
-to be designed and promoted from lab to product path. Until that promotion,
-adapter proposals for host service reachability fail closed at the Go validator.
+Direction only: Android support is a later preset built on
+`mobile.simulator.open`, `host.app.open-resource` through an emulator-tooling
+provider, and explicit adb adapter proposals over PortBridge policy and audit.
+adb is high-authority and requires the `endpoint.expose.guest-to-host`
+primitive to be promoted from lab; until then adapter proposals for host
+service reachability fail closed at the Go validator.
 
 ### iOS
 
-Targets:
-
-- `mobile.simulator.open`
-- `host.app.open-resource` through a simulator-tooling provider;
-- browser or WebView preview through explicit target rules.
-
-Use cases:
-
-- launch iOS simulator;
-- open a URL in simulator Safari;
-- preview local development pages through controlled mapping.
-
-Linux guest backends cannot run the full Xcode toolchain. iOS support should be
-documented as assisted workflow unless a macOS-native backend provides a
-reviewed confinement model. Host-side `xcodebuild` must not be represented as a
+Direction only: iOS support is an assisted workflow built on
+`mobile.simulator.open`, `host.app.open-resource` through a simulator-tooling
+provider, and controlled preview mappings. Linux guest backends cannot run the
+Xcode toolchain, and host-side `xcodebuild` must not be represented as a
 generic host execution target.
 
 ### AI Agent
 
-Targets:
-
-- `browser.launch`
-- `browser.control`
-- `preview.open`
-- `host.open` for workspace-mapped files
-- `endpoint.expose.host-to-guest` for previews and local callbacks
-- `endpoint.expose.guest-to-host` for future browser control
-
-Use cases:
-
-- agent previews app;
-- agent controls isolated browser profile;
-- host file open remains audited and scoped.
+Direction only: agent workflows compose existing targets — `browser.launch`,
+`browser.control`, `preview.open`, workspace-file `host.open`, and
+`endpoint.expose.host-to-guest` for previews and local callbacks — without any
+agent-specific authority; host file open remains audited and scoped.
 
 ## PortBridge Relationship
 

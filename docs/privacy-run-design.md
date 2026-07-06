@@ -69,10 +69,6 @@ Interpretation rules:
   `hideout run` must not depend on the full user-facing feature. If a
   Design-ready feature ships early, it must remain additive, tested, explicitly
   documented, and unable to weaken any Required boundary.
-- Capability Probe means "prove the capability with the smallest useful
-  experiment." Probe code must stay off the default `hideout run` path, must not
-  create hidden authority, and must fail closed if accidentally reached from a
-  product path.
 - Later terms may appear as protocol vocabulary or interface placeholders. They
   are not permission to ship broad hooks, generic host execution, or implicit
   fallbacks in Phase 1. If a Later route, action, or feature is reached at
@@ -171,9 +167,7 @@ The successful first release lets a developer:
 Primary users:
 
 - developers running AI agents or third-party CLIs against local projects;
-- security-conscious engineers who want evidence about what a tool could see;
-- platform/security engineers evaluating whether Hideout can become a team
-  policy product later.
+- security-conscious engineers who want evidence about what a tool could see.
 
 Do not optimize Phase 1 for:
 
@@ -324,7 +318,7 @@ Release discipline:
 
 Required Phase 1:
 
-- CLI: `init --no-input`, `run`, `explain`, `doctor`, `doctor --fix --dry-run`, `cleanup`, `profile init`, `profile clone`, `profile path`.
+- CLI: `init --no-input`, `run`, `explain`, `doctor`, `doctor --fix --dry-run`, `cleanup`, `audit show`, `profile init`, `profile clone`, `profile path`, and the persistent profile policy editors (`profile fs`, `profile env`, `profile command-proxy`, `profile home import`).
 - Embedded manager core with stable domain APIs. A daemon or web server is not
   required for the first CLI release.
 - Profile schema, defaults, validation, and generated identity store.
@@ -409,7 +403,6 @@ Later:
 - Runtime patching of Node, Bun, or other runtimes.
 - Package attribution inside bundled binaries.
 - Remote execution.
-- Cloud service, login, team policy sync, or fleet management.
 - Full visual Web UI. A read-only smoke surface may ship only when it stays
   additive and does not delay or redefine the required CLI runner.
 
@@ -428,7 +421,6 @@ Phase 1 fixed decisions:
 | Host files outside workspace | HostFS Portal with explicit grants. | Dynamic broad home mounts, `ls/cat` command proxy, or symlink/copy shadow hacks. |
 | Command visibility | Registered Command Proxy shims only. | Auditing every guest child process. |
 | Environment reuse | Reuse by profile plus workspace. | Reusing runtime secrets or capability tokens. |
-| Capability probes | Minimal experiments may exist off the default run path. | Treating probes as shipped authority or product promises. |
 | Web UI | Domain/API model and optional read-only smoke surface. | Required visual console for first usable CLI. |
 
 ## Domain Model
@@ -437,18 +429,17 @@ Treat these as stable contracts.
 
 | Object | Meaning | Phase 1 responsibility |
 | --- | --- | --- |
-| Profile | User-editable privacy policy and defaults. | Owns env, identity defaults, workspace defaults, network mode, command proxy policy, tool presets, and script refs. |
+| Profile | User-editable privacy policy and defaults. | Owns env, identity defaults, workspace defaults, network mode, command proxy policy, expected-command declarations, and script refs. |
 | IdentityStore | Generated identity material for persistent profiles and ephemeral sessions. | Owns fake home/config/cache/data/browser state and guest machine identity for the current identity root. |
 | Environment | Resumable isolated environment for one profile and one normalized workspace. | Design-ready default runtime model. It owns reusable guest tool/cache/home state but must not own broker tokens, proxy secret files, network routes, active shims, or other per-run authority. |
 | Session | One command execution under one profile. | Owns session ID, workspace mapping, backend run, broker endpoint, shims, audit file, and explain snapshot. |
-| Backend | Execution substrate. | Starts Lima guest, mounts workspace and current identity runtime state, prepares tools, launches command, streams stdio. |
+| Backend | Execution substrate. | Starts the Lima guest from the declared base image, mounts workspace and current identity runtime state, launches command, streams stdio. |
 | CapabilityPolicy | Canonical permission model. | Evaluates subject/action/resource/route/decision using JSON rules and optional scripts. |
 | CommandProxy | Guest-visible registered command shim system. | Normalizes explicitly registered commands. Phase 1 supports configured command symbols for brokered `host.open` using the `open-target-v1` argv schema; other routes are protocol vocabulary unless named elsewhere as Required. |
 | HostBroker | Host-side capability authority. | Executes approved host actions such as `host.open` after policy validation. |
 | HostFSPortal | Guest-visible filesystem portal for explicitly granted host paths. | Phase 1 implements the read-only `stat`, `read`, and `list` data plane for Linux guests through FUSE and broker RPC. It owns path grants, filesystem RPC, metadata filtering, reserved-store rejection, and audit for host paths outside the workspace. Write overlay, native host mount adapters, and Windows native adapter are Later. |
 | HostPathGrant | Explicit authority record for one host path scope. | Phase 1 implements read-only grants for `stat`, `read`, and `list`; write-class grants remain Later. |
 | PassthroughMount | Explicit backend mount outside the workspace. | Design-ready opt-in compatibility escape hatch. It owns host path, guest path, read/write mode, lifetime, explanation, and audit. It is broad authority and must not be created implicitly by HostFS. |
-| AccessSensor | Guest-side observation plane for suspicious access attempts. | Later. It may observe and summarize guest filesystem, process, or network probes for audit and user warnings, but it must not be required for HostFS data access or authorization. |
 | OpenTarget | Typed host or guest application target behind an explicit brokered action. | Phase 1 implements `host.open` URL/workspace-file targets and the minimal `preview.open` target over `endpoint.expose.host-to-guest`. Browser-control, IDE, Docker, device/simulator, and guest-to-host targets are Later implementations. |
 | PortBridge | Auditable TCP bridge between explicit listen and target endpoints. | Phase 1 implements run-scoped host-to-guest transport only as the lower-layer provider for typed Endpoint Exposure. It has no raw CLI/API/script trigger surface, and `host.open` must not create port mappings. Guest-to-host remains lab/separate design. |
 | NetworkPlan | Egress model for a session. | Supports `direct` and guest-side `tun2socks` with hidden proxy env. |
@@ -504,8 +495,8 @@ Session mounts follow the same rule. The guest may see session runtime
 directories such as `tmp/`, `shims/`, `network/`, `bootstrap/`, and
 `identity/` when `--ephemeral` is used, but not the session root as a whole.
 Session control-plane files such as `audit.jsonl`, `lima.yaml`,
-`tool-preset.json`, `broker-endpoint.json`, and `network-plan.json` stay
-host-side unless explicitly needed by a guest runtime component.
+`broker-endpoint.json`, and `network-plan.json` stay host-side unless
+explicitly needed by a guest runtime component.
 
 Boundary defaults:
 
@@ -573,7 +564,8 @@ Definitions:
 
 ```text
 subject
-  Who is asking. Phase 1 subjects are command proxies and session/network setup.
+  Who is asking. Phase 1 subjects include command proxies, session/network
+  setup, the HostFS data plane, Manager run planning, and lab probes.
 
 action
   What is requested, such as host.open, guest.exec, or network.connect.
@@ -629,9 +621,17 @@ Rules:
 - Command Proxy and Host Broker call the same evaluator.
 - Deny wins over allow.
 - More specific rules win over broad wildcard rules.
-- `ask` fails closed when no interactive prompt channel exists.
+- Policy is live: grant and deny changes, script updates, and env policy edits
+  take effect on the next evaluated request without restarting the
+  environment; only physical mounts follow the environment lifecycle.
 - Decisions produce audit metadata even when denied.
-- Secrets are referenced by name, never embedded in policy output or audit.
+- Hideout control-plane credentials are referenced by name, never embedded in
+  policy output or audit. Proposal resources are validated deterministically:
+  a resource may carry a raw user URL or query value (the script received the
+  target verbatim), but it must not embed Hideout-minted control-plane material
+  (`HIDEOUT_SECRET_*` names or `cap_`/`ui_` token values). The policy validator
+  and `schemas/policy.schema.json` apply the same deterministic rule; neither
+  guesses at user secrets.
 - Scripted policy may propose a decision; the final validator enforces hard
   guards, registered actions, resource bounds, and route constraints.
 
@@ -785,8 +785,8 @@ route. `guest-exec` and `fake` are stable protocol vocabulary, but they do not
 become executable routes until a registered implementation exists.
 
 Command argument normalization is required in Phase 1, but it is builtin and
-registry-owned. User-scripted `command.normalize` is Design-ready only; it must
-not delay or weaken the first local runner.
+registry-owned. User-influenced normalization, if ever needed, is an
+extensible part of the `command.decide` contract, not a separate entrypoint.
 
 Scripts must not:
 
@@ -800,11 +800,16 @@ Scripts must not:
 - create action names at runtime;
 - depend on mutable global state.
 
-Required Phase 1 script inputs contain only sanitized policy context supplied by
-Hideout. They do not expose host env, process env, secret values, real home
-paths, or arbitrary filesystem reads. Design-ready command adapters may receive
-rich local runtime facts through bounded context queries, but those facts are
-still not authority and must not be exported as public audit evidence.
+Required Phase 1 script inputs are the canonical policy context supplied by
+Hideout. Guest-authored request fields (target, argv, cwd) are canonicalized
+and then provided verbatim: the requesting process already possesses them, so
+redacting them from the decision hook has no confidentiality value and breaks
+legitimate policy such as redirect-URI parsing or query-parameter rules.
+Script context still never exposes host env, process env, Hideout-minted
+control-plane credentials (broker tokens, secret backing values, proxy URLs,
+UI tokens), real home paths, or arbitrary filesystem reads. Design-ready
+command adapters may receive richer local runtime facts through bounded context
+queries, but those facts are still not authority.
 
 Domain-specific behavior belongs in adapters and recipes above Core. For
 example, browser preview, browser control, adb access, simulator workflows, MCP
@@ -842,7 +847,6 @@ still use only builtin policy with no user script.
 | Extension point | Phase | Purpose |
 | --- | --- | --- |
 | builtin command normalization | Required | Parse registered argv/cwd metadata into a canonical request. |
-| `command.normalize` | Design-ready | User-scripted normalization for future command families. |
 | `command.decide` | Required | Propose valid route, action, resources, decision, and reason for the current request. |
 | `audit.redact` | Required | Redact command-specific fields before writing audit. |
 
@@ -862,8 +866,9 @@ Script context is the canonical policy context, not the raw broker envelope.
 Hideout must validate and canonicalize command name, subject, route, action,
 target, cwd, resource type, and workspace mapping before a command decision or
 audit redaction script can inspect them. Scripts must not receive arbitrary
-host paths, proxy URLs, capability tokens, raw endpoint addresses, or unbounded
-user-supplied envelope fields.
+host paths, Hideout proxy secret URLs, capability tokens, raw backend endpoint
+addresses, or envelope fields outside the validated schema. The validated
+target and argv themselves are provided raw.
 
 Command policy script proposals must match the current request context. A
 `command.decide` result, implemented in Phase 1 by `decideCommand(ctx)`, for a
@@ -953,7 +958,9 @@ internal/envpolicy
   Env scrub, allow, deny, fake, and inherited vars.
 
 internal/pathmap
-  Host/guest path mapping.
+  Host/guest path mapping. Currently implemented inside the broker and manager
+  run planning code rather than as a dedicated package; extract only when a
+  second consumer needs it.
 
 internal/audit
   JSONL audit writer and redaction helpers.
@@ -1241,6 +1248,7 @@ execution, or the exact `hideout run -- <target argv>` pass-through contract.
 | Platform syscalls | `golang.org/x/sys` | Unix-specific socket, signal, and file mode details. |
 | Policy scripting | `github.com/dop251/goja` | Constrained JavaScript hooks. |
 | Guest FUSE | `github.com/hanwen/go-fuse/v2` | HostFS Portal mount inside Linux guests. |
+| Backend SSH bridge | `golang.org/x/crypto` | Lima host-to-guest SSH direct-tcpip channel for product endpoint exposure. |
 
 Avoid in Phase 1:
 
@@ -1281,6 +1289,13 @@ Hideout owns generated Lima instances and generated Lima YAML.
 The default is one reusable generated Lima instance per environment.
 Backend auto-selection resolves to Lima in Phase 1.
 ```
+
+One declarative input is carved out: a guest base image reference — a name
+plus digest, nothing more — may be supplied by the user or an ecosystem
+artifact as guest-domain data. YAML generation authority still belongs to
+Hideout: mounts, port forwards, network configuration, and provisioning
+fragments are always generated by Hideout, never injected by ecosystem
+artifacts.
 
 `hideout doctor --backend lima` validates the generated Lima YAML with
 `limactl validate` before any VM start. This is a host control-plane check: it
@@ -1328,8 +1343,26 @@ This model is the Design-ready runtime model for reducing startup cost while
 keeping user mental load low. The user-facing concept is one thing:
 
 ```text
-Environment = the isolated machine Hideout uses for this project.
+Environment = the reusable guest machine Hideout uses for a run or a named
+project boundary.
 ```
+
+The design-ready direction gives this concept two user-facing forms. A shared
+`default` environment gives zero-configuration runs from any directory; a
+named environment created explicitly gives isolation and a statically mounted
+workspace. Inside a shared environment each session sees only its own
+workspace plus HostFS grants: the session mount namespace scopes that view
+for ordinary target processes, but it is not a wall against guest root — a
+guest-root target in a shared environment may reach other attached
+workspaces (see threat-model.md). Operators who need the VM-level wall
+between projects create a dedicated environment. Changing an environment's pinned
+configuration (base image digest, backend, profile binding) is drift: the
+product fails closed and offers recreation, never a silent switch. The
+detailed design for named and shared environments is a separate spec; this
+section defines the resume and per-run authority model those environments
+share. Until that spec lands, the implemented behavior is the per-workspace
+most-recently-used selection below; the shared `default` environment refines
+selection, not the authority model.
 
 The implementation still separates reusable environment state from per-run
 authority. A reusable environment may keep:
@@ -1359,18 +1392,20 @@ is not permission to reuse per-run capability material.
 Default environment selection:
 
 ```text
-profile + normalized workspace + tool plan fingerprint -> most recently used environment
+profile + normalized workspace + environment fingerprint (base image digest + expected-command declarations + backend config version) -> most recently used environment
 ```
 
 `hideout run -- <command>` resolves the current workspace, finds the most
-recent resumable environment for the selected profile, workspace, and guest
-tool plan, and uses it. If none exists, Hideout creates one. Changing
+recent resumable environment for the selected profile, workspace, and
+environment fingerprint, and uses it. If none exists, Hideout creates one.
+Changing
 directories into a different project selects a different environment. Returning
 to the original project selects that project's most recent environment.
-Changing `profile.tools.presets` or `profile.tools.npmGlobals` must not silently
-reuse an older guest that was provisioned with a different tool plan. Explicit
-`--resume <id>` against a stale tool plan fails closed with an instruction to
-use `--new`.
+Changing the declared base image digest or expected-command declarations must
+not silently reuse an older guest that was provisioned from a different
+image. Explicit
+`--resume <id>` against a stale environment fingerprint fails closed with an
+instruction to use `--new`.
 
 `hideout run --new -- <command>` always creates a new environment for the
 current profile and workspace. It does not reset the profile identity. It is for
@@ -1489,21 +1524,33 @@ missing. Missing commands should report:
 - selected backend;
 - profile;
 - guest PATH context;
-- suggested tool preset or guest install path.
+- suggested base image or operator setup path.
 
 Compatibility paths:
 
 ```text
 base image
-  shell, git, curl, certificates, and common utilities are available.
+  the declared base image provides the shell, git, curl, certificates, and
+  the rest of the guest toolchain.
 
-tool preset
-  profile/backend preset installs a known CLI into guest base state or the
-  declared identity root.
-
-guest install command
-  user installs tools into persistent profile identity state.
+in-boundary setup
+  the operator installs tools by running setup commands as an ordinary
+  `hideout run` target; the results persist in the reusable environment.
 ```
+
+The base image is declarative guest-domain data, not host authority. A
+profile or ecosystem artifact may declare a base image reference — a name
+plus digest, nothing more — and backends consume that reference to start the
+guest. The dividing line is data consumed versus steps executed: referencing
+an existing image is data; ecosystem-shared preparation steps that Hideout
+would execute remain prohibited until a dedicated trust design promotes them.
+A bad image degrades the guest, not the host: it is contained by the backend
+boundary, so image references do not pass the host trust gate that guards
+non-operator-authored host authority proposals. Backend configuration —
+mounts, port forwards, network, provisioning fragments — is host domain and
+is always generated by Hideout, never injected by ecosystem artifacts. The
+image digest participates in the environment fingerprint, and changing it
+means a new environment.
 
 ## Workspace Model
 
@@ -1859,7 +1906,7 @@ credential directories, signing keys, package manager tokens, Docker sockets,
 and agent sockets are hidden by default because everything outside the workspace
 is hidden by default. If the user explicitly grants one of those paths, Hideout
 treats it as user intent and records it through the same policy and audit model.
-Users and organizations can express subtractive policy with deny rules.
+Users can express subtractive policy with deny rules.
 
 Visibility semantics:
 
@@ -1932,7 +1979,6 @@ HostFS v2
 HostFS v3
   write-class operations
   interactive grant prompts
-  Access Sensor correlation
 ```
 
 This is a staged implementation plan for one architecture, not a set of
@@ -2230,55 +2276,72 @@ durable env policy model and must not return public env values in responses.
 Persistent profile tool management:
 
 ```sh
-hideout init --profile agent --npm-package @scope/tool --npm-command tool
-hideout doctor --fix --dry-run --profile agent --npm-package @scope/tool --npm-command tool
 hideout profile tools default list
-hideout profile tools default preset add node-dev
-hideout profile tools default preset remove node-dev
-hideout profile tools default npm add --package @scope/tool --command tool
-hideout profile tools default npm remove @scope/tool
 ```
 
-`init --npm-package` and `doctor --fix --npm-package` are user-facing setup
-shortcuts for the same profile state managed by `profile tools`: they add
-`node-dev` and a user-declared `tools.npmGlobals` entry through InitTask
-plan/apply. They do not encode any product-specific CLI. `profile tools` remains
-the lower-level editor for durable tool policy.
+An expected-command declaration names a command the operator expects to be
+available in the guest (for example `git` or `node`). It is diagnostics and
+environment-fingerprint input only: doctor checks whether the command is
+runnable, `hideout run` reports it with guest context when it is missing, and
+nothing installs it. The npm-provisioning removal (002) reduces
+`profile tools` to this declaration surface. Editing surfaces compile into
+the same profile state through Manager plan/apply, not raw profile writes or
+product-specific install scripts.
 
-`profile tools` writes the same `profile.tools.presets` and
-`profile.tools.npmGlobals` objects that backend preparation consumes. Core owns
-the runtime supply primitive and command-existence check; it must not encode a
-specific product workflow in the tool declaration. Tool policy is part of the
-reusable environment identity: changing presets or npm globals creates or
-selects a tool-matched environment instead of reusing an older guest with stale
-commands. Backend configuration version is also part of the environment identity
-so backend security-policy changes do not reuse older VMs with stale generated
-YAML.
+Tool supply separates naming from authority:
 
-Lima tool provisioning is a managed setup phase, not an uncontrolled guest image
-hook. Hideout starts the VM, runs the selected network bootstrap first, verifies
-guest-side `tun2socks` when configured, and only then runs tool provisioning and
-tool command checks. First-time `node-dev` and npm global downloads therefore
-use the same run network policy as the target command. The setup phase must:
+```text
+target command
+  ordinary guest process; no host authority by name
 
-- run without the project workspace, HostFS grants, command proxy authority, or
-  target credentials as ambient authority: the setup cwd is not the workspace,
-  HostFS and command proxy are not started, and target-only env is filtered
-  before setup; current Lima instances may still have the workspace mount
-  present, so user-declared `file:` package specs that point at the workspace
-  are explicit supply inputs rather than ambient authority;
-- apply the selected network policy before any package manager network access;
-- require strict operator proxies to allow the package registry egress needed by
-  selected tool supply, such as Debian/Ubuntu apt mirrors for `node-dev` and
-  `registry.npmjs.org` for npm globals; if the proxy denies those destinations,
-  provisioning fails closed before the target command starts;
-- resolve proxy secrets only into Hideout-owned setup material, never into the
-  target command environment;
-- fail closed if `tun2socks` route verification or DNS/proxy checks fail;
-- audit package specs, command checks, route evidence, and setup result without
-  recording proxy values or package-manager credential contents;
-- lock the resulting environment to the tool plan fingerprint so target runs do
-  not silently reuse stale or differently provisioned guests.
+tool declaration
+  profile policy saying which guest commands must exist
+```
+
+A tool's presence in the guest does not register a Command Proxy binding and
+does not grant
+host capabilities. If a guest command needs host authority, it must separately
+use an explicit Command Proxy binding or another typed capability.
+
+Guest tools come from two paths: the declared base image, and
+operator-authored setup executed as an ordinary in-boundary `hideout run`.
+Hideout ships no package-installation providers, and tool supply is not a
+Core security capability or a future provider platform: Hideout does not own
+tool installation as a product domain; it owns the boundary once a tool runs.
+The previous `npm-global` provider and its `profile.tools.npmGlobals` storage
+are being removed (002). Recipes, bundles, JavaScript, and user configuration
+may declare which guest commands they expect, but they must not ship
+installer implementations, pass arbitrary setup shell, or execute host
+authority.
+
+Environment preparation is an operator concern: an operator-authored setup
+script runs as an ordinary `hideout run` target inside the same boundary,
+with the selected network policy, no ambient host authority, and full audit.
+Ecosystem-shared imperative environment recipes are out of scope until a
+dedicated trust design promotes them as an ecosystem artifact class. A
+declarative guest base image reference is not such a recipe: referencing an
+existing image is data the backend consumes to start the guest, not steps
+Hideout executes.
+
+Tool policy and the declared base image are part of the reusable environment
+identity: changing expected-command declarations or the base image digest
+creates or selects a matching environment instead of reusing an older guest
+with stale commands or a stale image. Backend configuration version is
+also part of the environment identity so backend security-policy changes do not
+reuse older VMs with stale generated YAML.
+
+Lima environment preparation is a managed phase, not an uncontrolled guest
+image hook. Hideout starts the VM from the declared base image, runs the
+selected network bootstrap first, and verifies guest-side `tun2socks` when
+configured before any setup work runs in the guest. Operator-authored setup
+commands then run under the same run network policy as any other target
+command: a strict operator proxy must allow the egress those setup commands
+need, and a denied destination fails inside the boundary instead of falling
+back to an unpoliced route. Proxy secrets resolve only into Hideout-owned
+setup material, never into the target command environment; `tun2socks` route
+verification or DNS/proxy check failures fail closed; and the resulting
+environment is locked to its environment fingerprint so target runs do not
+silently reuse stale or differently provisioned guests.
 
 Persistent profile home seeding:
 
@@ -2310,6 +2373,10 @@ profile grants
   - any matching deny rule
   = effective HostFS policy for this run
 ```
+
+Effective HostFS policy is live: profile and environment grant or deny
+changes apply to the next evaluated request without restarting the
+environment; only physical mounts follow the environment lifecycle.
 
 `--fs` is an additive, temporary authority source. It does not replace
 profile grants, environment grants, or deny rules. A run-scoped grant cannot
@@ -2433,7 +2500,7 @@ Synthetic identity env names are reserved. A profile must not set or inherit
 or `PATH` through `env.public` or `env.inherit`. The `HIDEOUT_*` namespace is
 also reserved for Hideout runtime and control-plane env such as broker endpoint,
 session ID, capability token, shim state, and host-only secret backing values.
-Use the profile `identity`, `git`, workspace, tool preset, backend, network, and
+Use the profile `identity`, `git`, workspace, backend, network, and
 secret ref fields instead. This keeps identity, git global config, command
 resolution, broker authority, and secret plumbing controlled by Hideout instead
 of host or profile env.
@@ -2685,15 +2752,8 @@ Route verification must prove:
 - active PortBridge endpoints declare whether they are control-plane exceptions
   or data-plane targets.
 
-Alternative Later engine:
-
-```text
-sing-box
-```
-
-`sing-box` becomes attractive when Hideout needs split routing, DNS hijacking,
-multiple outbound policies, WireGuard, or more complex proxy rules. Phase 1 is
-`direct` plus `tun2socks`.
+`sing-box` is a possible Later engine if Hideout ever needs split routing or
+more complex proxy rules; Phase 1 is `direct` plus `tun2socks`.
 
 ## Command Proxy
 
@@ -2743,106 +2803,8 @@ guest command name
   -> audit and sanitized guest result
 ```
 
-Responsibilities:
-
-```text
-Command Binding
-  User or recipe-owned declaration that maps one guest command symbol to an
-  adapter, allowed outcomes, allowed capabilities, and optional provider names.
-
-JavaScript adapter
-  Interprets argv, cwd, bounded stdin metadata, and explicit context queries. It
-  may deny, ask, simulate, `rewrite-guest`, or propose invoking a declared
-  capability. It does not execute host authority.
-
-Go Core
-  Supplies factual context, enforces the binding limits, validates the proposed
-  capability and resource schema, performs guest-path to host-resource mapping,
-  rebuilds provider arguments from structured resources, executes the provider,
-  and records audit.
-```
-
-Core must provide facts, not risk conclusions. It must not synthesize labels such
-as "IDE risk", "project open", or "safe file" for adapters. If an adapter cares
-about a file, directory, URL, local listener, or tool-specific marker, it must use
-a constrained context query for that fact and make the policy decision itself.
-Those query results are runtime decision context, not public audit fields.
-
-Example Design-ready binding shape:
-
-```json
-{
-  "commandProxy": {
-    "bindings": {
-      "code": {
-        "adapter": "bundle:vscode-cli",
-        "allowedOutcomes": [
-          "invoke-capability",
-          "deny",
-          "ask",
-          "simulate",
-          "rewrite-guest"
-        ],
-        "allowedCapabilities": [
-          "host.app.open-resource"
-        ],
-        "providers": [
-          "vscode"
-        ],
-        "stdin": "deny"
-      }
-    }
-  }
-}
-```
-
-This example does not make `code` an editor in Core. It only declares that this
-binding may use the `vscode-cli` adapter and may propose
-`host.app.open-resource` through the `vscode` provider. The provider is a
-Go-owned executor; bundles and recipes may reference a provider but must not ship
-or replace provider code. The provider must also own application-specific safety
-defaults for opening resources, such as restricted workspace modes, disabled
-auto-run hooks, or equivalent safeguards when the target host application
-supports them. These safeguards are provider obligations, not Core-generated risk
-labels and not adapter-supplied host argv.
-
-Raw command argv is adapter input, not provider output. An adapter may inspect
-`code .`, `code /workspace/file`, or tool-specific flags to understand user
-intent, but it must translate that input into structured resources and options.
-It must not pass target argv through to a host provider.
-
-Host-provider argument construction must be whitelist-based. The provider
-rebuilds host argv from validated structured resources. Guest argv must not be
-filtered and then passed through to host commands. For example, an adapter may
-propose a structured file location, but the provider decides whether and how that
-location becomes an argv element.
-
-Design-ready adapter outcome model:
-
-```text
-deny
-  Return a deterministic failure to the guest.
-
-ask
-  Request interactive approval. Until a prompt channel exists for the current
-  surface, ask fails closed as deny.
-
-simulate
-  Return bounded stdout, stderr, and exit code without executing a command.
-  Simulation has no host authority and no guest process side effect.
-
-rewrite-guest
-  Rewrite to another guest command route. Rewrite may change the guest command
-  name, argv, and a restricted env overlay, but it must never create a host
-  command invocation and must still pass through the validator.
-
-invoke-capability
-  Request a configured Core capability and provider. This is the only outcome
-  that may touch host authority, and only after the Go validator accepts the
-  binding, capability, provider, resource schema, and route.
-```
-
-Outcome authority levels:
+Adapter outcomes are typed, and their authority levels are the binding
+contract:
 
 | Outcome | Host authority | Guest execution | Required guard |
 | --- | --- | --- | --- |
@@ -2852,45 +2814,13 @@ Outcome authority levels:
 | `rewrite-guest` | none | yes, guest only | real guest binary lookup, recursion guard, env denylist |
 | `invoke-capability` | typed provider only | optional | allowed capability/provider, structured resource validation |
 
-`simulate` may model facts that the policy owns, such as a compatibility
-`--version` response or a configured fake command result. It must not read host
-state directly, stream unbounded data, or hide that the response was simulated.
-
-`rewrite-guest` is a guest-side compatibility tool, not an escape hatch. It may
-route `code` to a guest editor binary or add guest-only environment defaults. It
-must resolve the real guest binary from a PATH that excludes the shim directory,
-must set a recursion guard, and must not set `HIDEOUT_*`, broker-token, proxy
-secret, or hidden-env backing variables.
-
-`invoke-capability` consumes structured proposals only. A proposal may include a
-guest path, URL, endpoint candidate ID, option enum, or other schema-defined
-value. Go resolves and validates those values before the provider sees them.
-Raw host commands, raw host argv, provider handles, backend endpoints, and host
-paths supplied by JavaScript fail closed.
-
-Design-ready command context query classes:
-
-```text
-path.resolveGuest(path)
-  Resolve a guest path inside the current decision snapshot.
-
-path.mapToHost(resolvedPath)
-  Map a resolved guest path to a host-backed resource only when it is inside the
-  workspace, an approved mount, or an approved HostFS grant.
-
-fs.stat/readText/exists(path)
-  Bounded, read-only queries over resources already visible to the target or
-  explicitly granted for the decision. These queries are audited or replayable
-  as decision context.
-
-capability.describe(name)
-  Return declared capability/provider metadata. It must not return provider
-  handles, broker tokens, backend endpoints, or host process objects.
-```
-
-Adapters may use these facts to implement their own risk policy. Core must still
-fail closed if a proposal uses a capability, provider, resource kind, route, or
-outcome that the binding did not allow.
+The detailed binding declaration shape, adapter obligations, outcome
+semantics, whitelist-based provider argv construction, and bounded context
+query classes are specified in
+[script-extension-architecture.md](script-extension-architecture.md). Core
+supplies facts, not risk conclusions, and it fails closed when a proposal
+uses a capability, provider, resource kind, route, or outcome that the
+binding did not allow.
 
 Phase 1 delivered command proxy route:
 
@@ -3355,9 +3285,6 @@ PortBridge policy:
   Lima's loopback-local unpinned SSH posture, but credential-bearing callback
   automation requires guest host-key pinning or an equivalent authenticated
   channel before promotion;
-- Capability Probe code may validate backend-specific host-to-guest or
-  guest-to-host reachability, but probe success does not promote a product
-  action by itself;
 - bridges are closed when the owning session or OpenTarget closes;
 - scripts may propose endpoint exposure by candidate ID only inside a registered
   policy hook; the final validator still derives direction and enforces route,
@@ -3370,10 +3297,8 @@ PortBridge policy:
 
 ### Endpoint Exposure
 
-Endpoint Exposure is the subsystem that turns declared, manually granted, or
-observed endpoints into auditable PortBridge transactions. It is a documentation
-level umbrella, not a single symmetric Core action. The authority-bearing actions
-must keep direction visible:
+Endpoint Exposure turns declared or manually granted endpoints into auditable
+PortBridge transactions. The authority-bearing actions keep direction visible:
 
 ```text
 endpoint.observe
@@ -3381,10 +3306,10 @@ endpoint.expose.host-to-guest
 endpoint.expose.guest-to-host
 ```
 
-Implementation status, summarized here for the Endpoint Exposure contract. The
-cross-subsystem status source is [STATUS.md](STATUS.md). Phase 1 implements the
-minimal `endpoint.expose.host-to-guest` product path for profile-declared and
-run-scoped manual candidates. The Manager resolves the candidate, verifies an
+Implemented path. Phase 1 implements the minimal
+`endpoint.expose.host-to-guest` product path for profile-declared and
+run-scoped manual candidates; the cross-subsystem status source is
+[STATUS.md](STATUS.md). The Manager resolves the candidate, verifies an
 active OpenTarget owner, derives the host-to-guest mapping in Go, validates
 `route=portbridge`, materializes the backend provider, audits the decision, and
 cleans up at run end. Lima uses a host-side SSH direct-tcpip dynamic bridge
@@ -3400,139 +3325,34 @@ than a useful preview. Failure to observe readiness or launch the browser is
 audited as `preview.open` error evidence; the endpoint exposure authority and
 bridge cleanup remain owned by the run.
 
-Not implemented in this path: endpoint observation, project-declared automatic
+Candidate trust in the implemented path stays simple. Profile-declared
+candidates are user-authored policy; manual candidates come from an explicit
+run request, `hideout run --preview <guest-loopback-host:port> -- ...`, and
+are run-scoped unless the user persists them into profile policy.
+`endpoint.observe` is a lower trust level than exposure: observation may
+produce candidate evidence and warnings, but it must not create reachability
+or authorize `endpoint.expose.*` by itself. Project-declared candidates
+discovered from the workspace require review or interactive ask before
+exposure because the workspace is writable by the target.
+
+Candidate resolution keeps authority in Go. A candidate ID is opaque,
+unguessable, and session-bound; adapter or CLI input selects a candidate by ID
+or by a run-scoped preview target, while Go resolves the immutable candidate
+snapshot, derives the direction and mapping, and rejects script-supplied
+addresses, direction, owner, final host port, and provider handles. Scripts
+never receive Hideout control-plane secrets such as broker tokens, proxy
+secrets, manager tokens, or PortBridge provider handles.
+
+Guest-to-host exposure is a separate design.
+`endpoint.expose.guest-to-host` gives an untrusted guest reachability to host
+services such as adb servers, DevTools, databases, or control sockets. It is
+higher authority than host-to-guest exposure and requires its own threat
+model, validator, and product promotion before implementation; today it fails
+closed, together with endpoint observation, project-declared automatic
 exposure, direct JS endpoint proposal entrypoints, OAuth callback automation,
-`endpoint.expose.guest-to-host`, adb, browser DevTools, and device/simulator
-targets. Those must still fail closed or stay absent.
-
-`endpoint.observe` and `endpoint.expose.*` are different trust levels.
-Observation may produce an endpoint candidate and audit evidence. It must not
-create reachability. Exposure is a separate authorization transaction that
-references a candidate, has an active owner, passes Go validation, starts a
-PortBridge, and records cleanup.
-
-Endpoint candidates may come from several sources:
-
-```text
-declared  profile, Environment, or approved project policy declares an endpoint
-manual    user grants an endpoint for a run or session
-observed  backend or guest-side sensor observes a listener
-device    future adapter discovers a device, simulator, adb, or browser endpoint
-```
-
-Source is part of the trust model. Profile declarations are user-authored and
-may be eligible for automatic exposure under profile policy. Project declarations
-come from the workspace and must be reviewed or treated as ask-only because the
-target agent can modify workspace files. Observed candidates are facts about
-guest behavior; they are not evidence that exposure is safe. They default to
-audit-only and must never auto-expose by themselves.
-
-Candidate access surfaces:
-
-- profile-declared candidates are written in the user-owned profile or
-  Environment policy and may be auto-exposed only when the same policy grants the
-  matching OpenTarget owner and exposure action;
-- project-declared candidates are discovered from project configuration such as
-  a future Hideoutfile. Discovery is not consent. They require review or
-  interactive ask before exposure because the workspace is writable by the
-  target;
-- manual candidates are created by an explicit run or session request. Phase 1
-  exposes this through `hideout run --preview <guest-loopback-host:port> -- ...`
-  for the `preview.open` owner. They are run-scoped by default unless the user
-  persists them into profile policy;
-- observed candidates come from `endpoint.observe` or Access Sensor style
-  evidence. They may help explain behavior or support an ask prompt, but they do
-  not authorize exposure by themselves.
-
-Canonical candidate shape:
-
-```text
-candidateId       opaque, unguessable, session-bound, one transaction or snapshot scope
-side              guest, host, or device
-proto             tcp initially
-source            declared, manual, observed, or device
-addressClass      loopback, private, external, device, or unsupported
-portCategory      ephemeral, declared, well-known, debug, adb, devtools, unknown
-ownerScope        profile, environment, project, run, or session when declared
-observedAt        timestamp for observed sources
-processHints      optional process class, cwd class, argv, or argv hash
-metadata          adapter-specific structured facts
-```
-
-JavaScript adapters may receive rich runtime candidate context so they can make
-real policy decisions. Runtime context is local decision input, not a public log.
-Adapters may see full URLs, redirect URIs, ports, process argv, cwd classes, or
-declared metadata when the effective policy grants that adapter entrypoint.
-However, scripts still do not receive Hideout control-plane secrets such as
-broker tokens, proxy secrets, manager tokens, hidden-env backing values, or
-PortBridge provider handles. Audit, Boundary Summary, exported fixtures, and UI
-views must redact or summarize sensitive runtime facts even when the policy
-script saw the full context.
-
-JavaScript may classify the scenario and request exposure by candidate ID. It
-must not provide raw authority fields:
-
-```text
-allowed from JS:
-  decision, category, candidateId, ttlRequest, closePolicy, reason, auditTags
-
-not accepted from JS:
-  raw host address, raw guest address, direction, owner ID, backend endpoint,
-  PID as authority, final host port, or provider handle
-```
-
-Go Core resolves `candidateId` back to its immutable snapshot and derives the
-direction from candidate side and requested action. It revalidates source,
-address class, port category, owner, policy, backend support, lifetime, and
-atomic host bind before creating a bridge.
-
-The current Phase 1 `preview.open` path does not expose a direct JavaScript
-endpoint decision entrypoint. It is still governed by the same rule: adapter or
-CLI input selects a candidate by ID or by a run-scoped preview target, while Go
-derives the actual mapping and rejects script-supplied addresses, direction,
-owner, final host port, and provider handles.
-
-Direction matters:
-
-- `endpoint.expose.host-to-guest` lets host-side software connect to a guest
-  endpoint. It supports preview servers, local callback listeners, and similar
-  guest services. This is the first direction to productize.
-- `endpoint.expose.guest-to-host` lets guest code connect to a host endpoint.
-  This is higher authority because it gives an untrusted guest reachability to
-  host services such as adb servers, DevTools, databases, or control sockets. It
-  requires a separate threat model, validator, and product promotion.
-
-Long-lived and short-lived exposures share close-policy vocabulary:
-
-```text
-ttl              close after fixed duration
-process-exit     close when owning target process exits
-first-request    close after the first HTTP request is forwarded
-first-connection close after the first TCP connection closes
-session-end      close when the Hideout session ends
-manual           close only through explicit manager operation
-```
-
-Preview-like adapters should start from declared or manual candidates and may
-use `process-exit` or `session-end` lifetimes. Callback-like adapters should use
-short TTL plus `first-request` or `first-connection`. Observed-only candidates
-without a declaration or an explicit user grant must ask when a prompt channel
-exists and fail closed or audit-only when it does not.
-
-MVP sequencing:
-
-1. Implemented: `endpoint.expose.host-to-guest` over profile-declared and
-   run-scoped manual candidates.
-2. Implemented: `preview.open` as the first consumer because it is declared or
-   manual, long-lived, and does not require `open.intent` or endpoint
-   observation.
-3. Next: add an OAuth/local-callback adapter later using `open.intent`, Go-parsed
-   loopback `redirect_uri`, short TTL, and first-request cleanup.
-4. Later: add `endpoint.observe` as audit-only evidence and as optional
-   confidence input for adapters. It must not be required for the first product
-   exposure path.
-5. Later: design `endpoint.expose.guest-to-host` separately for adb, browser
-   DevTools, simulator, and other host-control targets.
+and device/simulator targets. Future browser automation follows the same
+rule: it is a Browser OpenTarget over a brokered `guest-to-host` bridge, not
+an extension of `host.open`.
 
 PortBridge tests are transport tests. A test that starts a listener, forwards
 bytes, and verifies access proves only that the selected listen/target path can
@@ -3540,14 +3360,6 @@ carry TCP traffic. It does not prove browser automation correctness, DevTools
 protocol safety, target authorization, target classification, token handling, or
 whether a guest should receive the endpoint. Those require OpenTarget-specific
 tests and policy tests.
-
-Future browser automation is a Browser OpenTarget, not an extension of
-`host.open`. A later browser target would launch an isolated browser profile,
-bind DevTools to host loopback, allocate a brokered `guest-to-host` bridge,
-expose only an authorized endpoint to the guest, and audit the endpoint. A later
-preview target would allocate a `host-to-guest` bridge or URL rewrite so the
-host browser can reach one guest service without granting general host-local or
-guest-local network access.
 
 ## Profile Identity and Cloning
 
@@ -3598,15 +3410,6 @@ reset
   Delete generated identity material and recreate it. Policy files and
   `profile.json` are preserved; generated home/config/cache/data/browser/machine
   state is not archived.
-
-migrate
-  Move identity material intentionally to another host.
-
-export-policy
-  Export policy only.
-
-export-identity
-  Export identity material intentionally with a warning.
 ```
 
 Default clone:
@@ -3641,13 +3444,9 @@ modify the source profile's `identity.json`, persistent home/config/cache/data,
 browser profile, or machine identity. It may copy policy templates before
 rendering them with the session identity.
 
-Exact identity copy is migration, not clone. Later explicit migration commands
-may look like:
-
-```text
-hideout profile migrate old-machine new-machine
-hideout profile export --include-identity default
-```
+Exact identity copy is migration, not clone. If identity migration or
+identity export ever ships, it is an explicit command with a warning, never a
+side effect of clone or copy.
 
 Design rule:
 
@@ -3692,10 +3491,9 @@ Representative profile:
     "proxyEnvVisible": false
   },
   "tools": {
-    "presets": [
-      "base-dev"
-    ],
-    "npmGlobals": []
+    "expectedCommands": [
+      "git"
+    ]
   },
   "hostCapabilities": {
     "open": {
@@ -3755,11 +3553,15 @@ be omitted to disable that compatibility shim for a profile. Additional
 Phase 1 command symbols may be declared only for the same
 `host-broker -> host.open` route with `argvSchema=open-target-v1`.
 
-`tools.presets` prepares reusable guest tool families such as base shell tools
-or a Node runtime. `tools.npmGlobals` is a user-owned declaration of npm package
-specs and command names that must exist in the guest. Hideout treats these as
-runtime supply, not product adapters: it may install the package and check the
-commands, but it must not encode third-party workflow semantics in Core.
+Guest tools come from the declared base image and from operator-authored
+setup run inside the boundary; profile tool configuration is limited to
+expected-command declarations used for diagnostics and the environment
+fingerprint, carried as `tools.expectedCommands`. The base image reference is
+declared as `environment.baseImage` (name plus digest); its Manager resource
+shape is `GuestImageRef` in
+[manager-control-plane.md](manager-control-plane.md). Hideout ships no
+package-installation providers and must not encode third-party workflow
+semantics in Core.
 
 Tool configuration must not create a hidden fallback to host binaries. Missing
 guest tools fail closed with an explicit guest command error.
@@ -3912,18 +3714,35 @@ recorded as `action=broker.request` with the original name in
 audit JSONL schema-stable without treating generic host actions as supported
 capabilities.
 
-Do not log secrets. Audit redaction is recursive and key-aware:
+Audit redaction is deterministic, not heuristic:
 
-- URL credentials are removed;
-- sensitive URL query parameters such as `token`, `secret`, `password`, `auth`,
-  `key`, and `code` are replaced with `REDACTED`;
-- fields that look like secret values, such as tokens, passwords, credentials,
-  cookies, authorization headers, private keys, API keys, and access keys, are
-  replaced with `REDACTED`;
-- command strings redact common secret assignment and flag forms such as
-  `token=value`, `password=value`, `--token value`, and `--api-key=value`;
-- secret references such as `proxySecretRef` are preserved because they are
+- Hideout-minted control-plane credentials never enter audit: broker `cap_` and
+  UI `ui_` token values, `HIDEOUT_SECRET_*` backing names and values adjacent
+  to those names (in `KEY=value`, `KEY: value`, and JSON `"KEY":"value"`
+  forms), generated machine-id material, and Core's own control-plane detail
+  field names (`capabilityToken`, `brokerToken`, `uiToken`, `managerToken`).
+  These are self-known namespaces, values, and field names, so stripping them
+  is exact.
+- Raw proxy URLs and proxy secret file contents stay out of audit as a flow
+  obligation: the Hideout-managed proxy secret flow must not emit them, and
+  the redactor strips their `HIDEOUT_SECRET_*`-labeled forms. The redactor
+  does not scan for arbitrary proxy-shaped strings — a bare `socks5://...`
+  value is indistinguishable from a user URL and is preserved as user data.
+- User/application request data (URLs, argv, query values, paths) is recorded
+  verbatim in the local audit file. Core cannot reliably identify which user
+  values are secrets; guessing produces both misses and false redactions that
+  break policy and evidence fidelity. The local audit file is `0600`
+  host-local evidence in the same trust domain as any other local log.
+- Redacting user data is user-owned: `audit.redact` policy scripts rewrite
+  presentation fields, and the export/share boundary must strip control-plane
+  credentials and apply user-selected redaction before audit leaves the
+  machine.
+- Secret references such as `proxySecretRef` are preserved because they are
   identifiers, not secret values.
+
+This deterministic model is implemented for local audit, local authenticated
+Manager/WebUI views, and script context. The dedicated export/share redaction
+surface is design-ready; see [STATUS.md](STATUS.md).
 
 `explain` must show:
 
@@ -3958,9 +3777,11 @@ purpose is evidence generation.
 Audit redaction scripts may rewrite command-specific fields such as target or
 argv, but they must not be able to remove broker boundary metadata needed to
 explain a host capability decision. `requestId`, `subject`, `command`, and
-`route` are restored from the broker envelope after scripted redaction. `action`,
+`route` are restored from the broker envelope after scripted redaction, and
 `requestedAction`, `status`, and `error` are also restored when present because
-they define what was requested and how the boundary responded.
+they define what was requested and how the boundary responded. The audit
+event `action` is the authoritative top-level event field set by the broker
+after redaction, not a script-writable detail, so it needs no restoration.
 
 ## Management Plane
 
@@ -3974,8 +3795,11 @@ CLI uses embedded manager core for each run.
 ```
 
 No Required Phase 1 command may require a resident daemon, HTTP server, browser,
-or Web UI. The embedded manager is the authority; daemon and Web UI transports
-are additional surfaces over the same domains.
+or Web UI. The embedded manager core is the Phase 1 authority. The
+steady-state architecture direction is daemon-first, in the Docker model:
+`hideoutd` hosts the Manager API and owns cross-invocation state, and CLI,
+TUI, and WebUI are its clients over the same domains. Daemon and Web UI
+transports add no new authority beyond those domains.
 
 The embedded manager core must expose stable in-process domain APIs for:
 
@@ -4017,10 +3841,11 @@ Design-ready Phase 1:
 
 ```text
 hideoutd
-  Per-user local Manager runtime. Serves profiles, sessions, backend lifecycle,
-  broker lifecycle, secrets, audit, prompt channels, event streams, background
-  cleanup, and Web UI API through the same Manager Core plan/apply contracts
-  used by CLI.
+  Per-user local Manager runtime and the steady-state architecture direction.
+  It owns cross-invocation state — the environment registry, session state,
+  event streams, prompt channels, and background cleanup workers — and serves
+  profiles, sessions, backend lifecycle, broker lifecycle, secrets, audit, and
+  Web UI API through the same Manager Core plan/apply contracts used by CLI.
 ```
 
 Later:
@@ -4044,6 +3869,10 @@ in-process overview is not allowed to expose.
 Daemon invariants:
 
 - `hideoutd` must not be a generic host execution API or raw VM control API.
+- `hideoutd` must not expose a daemon-specific tool installation API, raw setup
+  shell, or raw profile writer. Guest tools come from the declared base image
+  or from operator-authored setup run inside the boundary, and profile changes
+  still enter through Manager plan/apply as typed profile policy.
 - Daemon authority transport must be structurally unreachable from backend
   guests. Preferred transport is a Unix socket under a runtime subdirectory of
   the effective Hideout store root, with `0700` ancestors, never under
@@ -4051,29 +3880,25 @@ Daemon invariants:
   daemon reachability to the existing store-reserved HostFS guard and workspace
   mount safety guard.
 - Host loopback is not sufficient daemon authentication. Any loopback HTTP
-  transport is command-scoped UI transport with short-lived tokens and roles,
-  not the default long-lived daemon authority channel.
-- Every daemon client must be authenticated and authorized per operation.
-  Read-only observation, plan, apply, cleanup, and approval are different
-  permissions. OS peer credentials are useful for Unix-socket clients but are
-  not enough by themselves for weak native-backend targets that share the host
-  UID.
+  transport is command-scoped UI transport with short-lived tokens, not the
+  default long-lived daemon authority channel.
+- The daemon stays in single-operator form: an operator token with full
+  access plus an optional read-only token. Client role matrices, delegated
+  approval channels, per-subscriber redaction tiers, and replay-protection
+  protocols are enterprise shapes and are not built. Approval is the operator
+  confirming interactively on their own machine, recorded in audit. OS peer
+  credentials are useful for Unix-socket clients but are not enough by
+  themselves for weak native-backend targets that share the host UID.
 - Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
   exposure leases, and audit handles remain session-scoped even when the daemon
   is long-lived.
 - TUI and WebUI may subscribe to daemon event streams, but authority-changing
-  actions still go through Manager plan/apply and emit audit.
-- Prompt approvals must be bound to the exact request fingerprint, session ID,
-  requester, approving client role, expiry, and a single-use nonce. Replayed or
-  mismatched approvals fail closed. The request fingerprint must be computed by
-  Manager from the validated canonical request, not supplied by the client.
-- Event streams are redacted per subscriber. Aggregated audit indexes must not
-  let a lower-trust subscriber receive fields or sessions outside its role and
-  scope.
+  actions still go through Manager plan/apply and emit audit. Event streams
+  carry the same deterministic redaction as local audit views.
 - A daemon restart must not grant new authority. It may reconstruct observable
   state from stores and audit, then fail closed for any live resource it cannot
-  prove still belongs to an active session using session-scoped state such as a
-  nonce, epoch, pid/lock, or backend lease.
+  prove still belongs to an active session using session-scoped state such as
+  an epoch, pid/lock, or backend lease.
 
 Design-ready local HTTP resources:
 
@@ -4170,32 +3995,8 @@ Security requirements:
 - auto-expire UI tokens;
 - avoid persistent admin login state by default.
 
-Recommended Web UI stack:
-
-```text
-Framework:       React + TypeScript + Vite
-Styling:         Tailwind CSS
-Components:      Radix UI primitives where useful
-Icons:           lucide-react
-Data fetching:   TanStack Query
-Tables:          TanStack Table
-Transport:       Manager local HTTP API over 127.0.0.1 with token
-Packaging:       Embedded static assets served by hideoutd later
-```
-
-Design direction:
-
-```text
-Private operations console.
-Dark developer workspace.
-Terminal-native surfaces.
-Dense, precise, auditable controls.
-```
-
-Reference mood, not brand copying:
-
-- [VoltAgent DESIGN.md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/voltagent/DESIGN.md)
-- [Warp DESIGN.md](https://github.com/VoltAgent/awesome-design-md/blob/main/design-md/warp/DESIGN.md)
+The Web UI technology stack, design direction, and experience model are
+specified in [tui-webui-experience.md](tui-webui-experience.md).
 
 Primary pages:
 
@@ -4252,9 +4053,15 @@ hideout profile init <name>
 hideout profile clone <source> <name>
 hideout profile path <name>
 hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]
-hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]
-hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]
+hideout profile fs <name> <subcommand>
+hideout profile env <name> <subcommand>
+hideout profile command-proxy <name> add-open <symbol>
+hideout profile home <name> import --from <path> --to <relative> [--force]
 ```
+
+`hideout shim build-linux` and `hideout hostfsd build-linux` are build helpers
+for development and packaging. They support the release process but are not
+part of the operator-facing Required CLI.
 
 Design-ready commands:
 
@@ -4305,9 +4112,11 @@ afterward.
 memory without deleting a resumable environment. `hideout clean` removes
 stopped/stale environments and runtime cache while preserving audit by default.
 
-`hideout audit show` renders the same redacted audit view used by Manager API,
-TUI, and WebUI. It must not expose raw proxy secrets, broker tokens, endpoint
-addresses, or unredacted callback/open URL query values.
+`hideout audit show` renders the same audit view used by Manager API, TUI, and
+WebUI. It must not expose Hideout-minted control-plane credentials: proxy
+secrets, broker tokens, or raw backend endpoint addresses. User/application
+request data, including callback/open URL query values, is host-local evidence
+and follows the deterministic redaction contract in Audit and Explain.
 
 `hideout ui` starts the local manager HTTP API, generates a short-lived
 `ui_...` token, and opens the local URL with the token in the URL fragment. The
@@ -4423,6 +4232,7 @@ Important flags:
 --proxy-secret <name>
 --workspace <path>
 --guest-workspace <path>
+--preview <guest-loopback-host:port>
 --ephemeral
 --audit <path|off>
 --explain
@@ -4596,9 +4406,7 @@ Phase 3:
 
 Phase 4:
 
-- controlled Node/Bun runtime backends;
-- remote execution backend if business demand is proven;
-- team policy distribution and managed profiles.
+- controlled Node/Bun runtime backends.
 
 ## Acceptance Criteria
 
@@ -4633,6 +4441,11 @@ For Phase 1, a command run under `hideout run` must satisfy:
 - proxy env vars are absent from target env in `tun2socks` mode;
 - HTTP(S) requests route through `tun2socks` when configured without exposing
   proxy credentials in target env;
+- a granted host path outside the workspace is readable through the HostFS
+  portal and the access is audited;
+- `hideout run --preview <host:port>` exposes the declared guest endpoint to
+  the host through the typed preview path;
+- the run summary reports the Boundary Summary;
 - network startup fails closed when `tun2socks` cannot verify routing;
 - `open https://example.com` routes through Command Proxy to Host Broker with
   `route=host-broker`;

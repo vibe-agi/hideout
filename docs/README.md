@@ -7,8 +7,8 @@ when reviewing architecture changes.
 
 ## Reading Order
 
-1. [architecture-principles.md](architecture-principles.md) defines the product
-   and engineering principles. It is the constitution for new design work.
+1. [architecture-principles.md](architecture-principles.md) defines the detailed
+   product and engineering principles for architecture work.
 2. [privacy-run-design.md](privacy-run-design.md) defines the Phase 1 product
    contract and detailed subsystem contracts.
 3. [threat-model.md](threat-model.md) defines claims, non-claims, TCB, and host
@@ -24,7 +24,7 @@ Subsystem documents:
 | --- | --- |
 | Backend capability | [backend-capability-matrix.md](backend-capability-matrix.md) |
 | Distribution and first run | [distribution-bootstrap.md](distribution-bootstrap.md) |
-| Ecosystem foundation | [ecosystem-foundation-design.md](ecosystem-foundation-design.md): canonical resource model, policy composition, Hideoutfile contract, and ecosystem delivery sequence. |
+| Ecosystem foundation | [ecosystem-foundation-design.md](ecosystem-foundation-design.md): canonical resource model, policy composition, Hideoutfile contract, guest base-environment artifact class (declarative base image references; distinct from imperative environment recipes, which remain prohibited), and ecosystem delivery sequence. |
 | HostFS overlay | [hostfs-overlay-design.md](hostfs-overlay-design.md) |
 | Init tasks | [init-task-architecture.md](init-task-architecture.md) |
 | Manager control plane | [manager-control-plane.md](manager-control-plane.md) |
@@ -36,13 +36,16 @@ Subsystem documents:
 
 ## Authority
 
+- `.specify/memory/constitution.md` owns Spec Kit planning gates and summarizes
+  the non-negotiable rules for generated specs, plans, and task lists.
 - `architecture-principles.md` owns principles.
 - `privacy-run-design.md` owns the Phase 1 product contract.
 - `threat-model.md` owns security claims and non-claims.
 - `STATUS.md` owns current implementation status.
 - `ecosystem-foundation-design.md` owns the ecosystem resource model,
-  effective policy composition order, project manifest authority model, and
-  ecosystem delivery sequence.
+  effective policy composition order, project manifest authority model, the
+  guest base-environment artifact class (declarative base image references,
+  not imperative recipes), and ecosystem delivery sequence.
 - `policy-config-supply-chain.md` owns supply-chain operations for that model.
 - Subsystem documents must not create authority that conflicts with those files.
 
@@ -76,7 +79,13 @@ Hideout uses separate registries for different layers:
 - policy and broker action names use forms such as `host.open`,
   `host.fs.read`, and `endpoint.expose.host-to-guest`;
 - backend capability flags use forms such as `filesystem.hostfs.read`,
-  `network.tun2socks`, and `portBridge`.
+  `network.tun2socks`, and `portBridge`;
+- capability decision, command outcome, and route vocabularies are owned by
+  [privacy-run-design.md](privacy-run-design.md): decisions
+  `allow/deny/ask/audit-only`; outcomes
+  `deny/ask/simulate/rewrite-guest/invoke-capability`; routes
+  `guest-direct/guest-exec/host-broker/fake/deny/portbridge/lab-probe`. Other
+  documents must reuse these words instead of coining synonyms.
 
 Do not treat similar suffixes as interchangeable. Action names describe
 authority requested by a policy decision. Backend capability flags describe what

@@ -51,7 +51,9 @@ scripts/test-phase1.sh --quick
 # Required automated gates, excluding real browser launch.
 scripts/test-phase1.sh --required
 
-# Include only the real Lima backend gate in addition to fast gates.
+# Include only the real Lima backend gate in addition to fast gates. The
+# supervised Lima real-run reference smoke is an optional Gate 2 step; see
+# Gate 2 below.
 scripts/test-phase1.sh --lima
 
 # Include only hidden proxy/tun2socks in addition to fast gates.
@@ -65,11 +67,6 @@ HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
 HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
   scripts/test-release-dogfood.sh
 
-# Compatibility shape: all required gates plus real browser external URL launch.
-# This is not sufficient for a release candidate because it does not require an
-# operator-supplied proxy or capability probe smoke.
-scripts/test-phase1.sh --all --real-browser
-
 # Include command-level capability probe smoke after product gates.
 scripts/test-phase1.sh --quick --probes
 
@@ -78,14 +75,9 @@ scripts/test-phase1.sh --quick --probes
 # flow, and control-plane store denial without binding Hideout to any product.
 scripts/test-phase1.sh --dogfood-cli
 
-# Optional real CLI operator smoke. The operator supplies the package, command,
-# auth env keys, and request command; Hideout still does not encode product
-# semantics in Core or automated gates.
-HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
-HIDEOUT_OPERATOR_COMMAND=<command> \
-HIDEOUT_OPERATOR_ENV_KEYS=TOKEN_ENV \
-HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
-  scripts/test-phase1.sh --operator-cli
+# Run the operator-supplied real CLI smoke on Lima. Currently npm-based; it is
+# being reworked by the npm-provisioning removal (002).
+scripts/test-phase1.sh --operator-cli
 ```
 
 ## Development Test Planning
@@ -98,13 +90,14 @@ Change-to-gate mapping:
 | Change area | Minimum local check | Boundary proof | Release-candidate check |
 | --- | --- | --- | --- |
 | Docs, schemas, and generated examples | Gate 0 | none | Gate 0 |
-| Ecosystem foundation, bundle schemas, project manifests, trust, export, or script ABI | Gate 0 and targeted schema tests | Manager plan/apply tests when authority changes | bundle supply-chain gate before public ecosystem release |
-| First-run initialization, InitTask, helper discovery, `doctor --fix`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native harness for CLI shape only; Gate 2 when backend preparation changes | Distribution Bootstrap gate |
+| Ecosystem foundation, bundle schemas, project manifests, trust, export, or script ABI | Gate 0 and targeted schema tests | Manager plan/apply tests when authority changes | third-party trust checks (schema validation, digest pin, permission diff confirmation) before public ecosystem release |
+| First-run initialization, InitTask, helper discovery, `doctor --fix`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native harness for CLI shape only; Gate 2 when backend preparation changes | Distribution Bootstrap acceptance (install/package smokes, run inside Gate 0) |
 | CLI parsing, profile, identity, env, audit, Boundary Summary, cleanup, or doctor | Gate 0 and the native harness | affected package tests | `--required` if behavior is externally visible |
 | Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, native harness, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
-| HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | HostFS grant gate when promoted |
+| HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | Gate 2 HostFS coverage (read/list grants) |
 | Additional passthrough mounts | Gate 0, native harness for CLI shape, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
-| Lima backend, mounts, guest bootstrap, guest command resolution, tool presets, or instance lifecycle | Gate 0 and Gate 2; native harness only for shared CLI wiring | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
+| Lima backend, mounts, guest bootstrap, guest command resolution, base image declarations, or instance lifecycle | Gate 0 and Gate 2; native harness only for shared CLI wiring | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
+| Supervised Lima real-run dogfood slice | Gate 0 and targeted test CLI tests | `scripts/test-lima-real-run.sh` as the optional Gate 2 step on macOS with Lima | `--release-candidate` remains separate |
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, native harness for shared CLI wiring, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
 | Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
@@ -170,6 +163,9 @@ Required evidence:
 - all Go packages pass;
 - markdown docs lint with zero errors, including every file under `docs/`;
 - all JSON schemas parse;
+- the install and package smokes pass (`scripts/test-install-smoke.sh` and
+  `scripts/test-package-smoke.sh`; Gate 0 runs both on every invocation,
+  which is how the Distribution Bootstrap acceptance is wired in);
 - no Required Phase 1 behavior depends on lab commands, Web UI, or a daemon.
 - every architecture document that introduces authority has a design status,
   failure behavior, and either a release gate or an explicit Later status.
@@ -179,21 +175,18 @@ Required evidence:
 - RunResult schema includes Boundary Summary as structured data derived from
   audit facts, not as a CLI-only rendering.
 
-Gate 0 enforces the last item with the phase plan preflight:
-
-```bash
-HIDEOUT_PHASE1_PRINT_PLAN=1 scripts/test-phase1.sh --required
-```
-
-The required plan must include Gate 0 through Gate 4 and must not include
-Capability Probe smoke, lab commands, Web UI, `hideoutd`, or daemon-dependent
-behavior. Release-candidate mode may include probe smoke, but required automated
-gates must remain independent of probes and optional management surfaces.
+Gate 0 enforces the last item with a single phase plan assertion: the required
+plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must
+stay independent of capability probe smoke, lab commands, Web UI, `hideoutd`,
+and daemon-dependent behavior; release-candidate mode may add probe smoke.
 
 Ecosystem contract checks belong in Gate 0 until public bundle support is
 promoted. Gate 0 should reject bundle or project schema changes that allow raw
 host execution, raw mounts, unrestricted scripts, profile identity export, or
-silent authority changes outside Manager plan/apply.
+silent authority changes outside Manager plan/apply. A declarative guest base
+image reference (name plus digest) is an allowed guest-domain artifact and must
+not be rejected by these checks; imperative environment-preparation recipes
+remain rejected.
 
 Script extension contract checks belong in Gate 0. Gate 0 should reject script
 ABI or SDK changes that expose raw Go standard library packages, host filesystem
@@ -201,10 +194,33 @@ handles, network clients, process APIs, environment APIs, backend driver
 handles, broker tokens, mutable Manager state, or any capability execution path
 outside validated proposals.
 
+Redaction contract checks belong in Gate 0 and package tests. Redaction is
+deterministic: tests must prove Hideout-minted control-plane credentials
+(broker `cap_`/UI `ui_` token values, `HIDEOUT_SECRET_*` backing names and
+values adjacent to those names, generated machine-id, and Core control-plane
+detail field names) never appear in script context, audit, API/WebUI
+responses, or exports. Known gap: the machine-id strip is currently defeated
+by identity-ID derivation (stripping the `id_` prefix from a displayed
+identityId yields the raw machine-id); the redactor contract itself holds,
+and closing the derivation gap is tracked as a STATUS known issue. Tests must
+also prove that user/application data (URLs, argv, query
+values, headers) is preserved verbatim on local surfaces — including a bare
+proxy-shaped string that carries no `HIDEOUT_SECRET_*` label, which Core
+cannot distinguish from a user URL. Keeping raw proxy URLs out of target
+output and evidence is a flow obligation on the Hideout-managed proxy secret
+flow, checked by this plan's raw-proxy-URL leak assertions, not by a redactor
+scan. The same deterministic control-plane rule governs policy and
+lab proposal resources: user URLs and query values are accepted, only
+control-plane material is rejected. Heuristic user-data redaction (key-name,
+flag, header, or query-parameter guessing) must not be reintroduced in audit,
+the policy validator, or `schemas/policy.schema.json`.
+
 InitTask contract checks also belong in Gate 0. Gate 0 should reject first-run
 or remediation designs that rely on arbitrary shell, `host.exec`, raw mounts,
 raw routes, bundle init scripts, project init scripts, or automatic profile
-authority mutation outside Manager plan/apply.
+authority mutation outside Manager plan/apply. A declared base image reference
+is declarative guest-domain data compiled into the backend prepare plan, not a
+prohibited init script; imperative recipes remain rejected.
 
 ### Gate 1: Native Development Harness
 
@@ -292,6 +308,8 @@ Prerequisites:
   HostFS daemon for the current `GOARCH`;
 - generated Lima YAML validates;
 - guest has shell, git, and a minimal HTTP client such as `curl`;
+- when the profile declares a base image reference, the gate validates that the
+  declared image supplies this minimal toolset before required checks run;
 - guest has `python3` for HostFS ordinary API coverage;
 - optional Node HostFS API coverage is skipped by the default lightweight gate
   when Node is absent from the guest. Set `HIDEOUT_GATE2_REQUIRE_NODE=1` to make
@@ -347,6 +365,38 @@ Required checks:
 - `doctor` distinguishes missing Lima, invalid YAML, broken mount, invalid
   profile, bad proxy secret, broker failure, and policy script failure.
 
+#### Optional Gate 2 Step: Lima Real-Run Reference Smoke
+
+Purpose: prove one supervised dogfood reference workload in the real Lima
+backend without binding Hideout to a product-specific agent. The target is
+`hideout-test-cli workload`, compiled for the Linux guest into a temporary
+sanitized workspace. It writes and verifies a deterministic workspace artifact,
+reaches a declared endpoint through the selected network mode, and prints only
+stable non-secret `lima-real-run:` markers; host-side verification is limited
+to read-only assertions over the workspace artifact and redacted evidence.
+
+Commands:
+
+```bash
+scripts/test-lima-real-run.sh
+scripts/test-phase1.sh --lima-real-run
+```
+
+The smoke exercises a fixed boundary action set — denied `host.open` for a
+localhost/private target, denied HostFS access plus a reserved-store grant
+rejection, session start/end and network setup evidence, and one
+`preview.open` / `endpoint.expose.host-to-guest` event. Evidence is derived
+from `hideout run --verbose` output and
+`hideout audit show --session <id> --json`; the smoke must not recompute
+boundary facts independently.
+
+Privacy variant: set `HIDEOUT_SECRET_DEFAULT_PROXY` and
+`HIDEOUT_LIMA_REAL_RUN_NETWORK=privacy` to route through the existing
+`tun2socks` run options; the smoke fails closed if the operator proxy or
+guest-side route preparation is unavailable, and the raw proxy URL must not
+appear in target output, control output, audit JSON, or smoke logs. Gate 3
+remains the dedicated hidden-proxy release gate.
+
 ### Supplemental: Generic Test CLI Dogfood Smoke
 
 Purpose: prove the product mechanics needed by a CLI-style tool
@@ -355,10 +405,10 @@ without putting a specific third-party product into Hideout code or tests.
 The smoke uses `hideout-test-cli`, a fake test CLI binary, and
 `hideout-gate-lab-target`, a fake bearer-token API. It verifies:
 
-- a profile can opt into the generic `node-dev` tool preset and receive
-  `node`/`npm` in the Lima guest;
-- a profile can declare a generic npm global package and required command names
-  without Hideout knowing the tool's business semantics;
+- the guest runtime needed by the test CLI comes from the declared base image
+  or default guest, not from a Hideout-shipped package-installation provider;
+  any extra setup runs as an ordinary operator-authored in-boundary
+  `hideout run`;
 - a target can run a local callback listener, complete a callback, and store
   its own authentication state under the isolated profile identity home;
 - `preview.open` can expose a declared guest-local callback listener to the
@@ -371,8 +421,10 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
   the guest callback, proving host loopback and guest loopback remain separate
   without a typed endpoint exposure owner;
 - profile identity home can be seeded through the generic
-  `hideout profile home import` primitive without exposing source paths or
-  credential contents in smoke output;
+  `hideout profile home import --from <host-path> --to
+  <relative-profile-home-path>` primitive without exposing source paths or
+  credential contents in smoke output; `--force` re-import keeps reruns against
+  the same store deterministic;
 - that authentication state persists across reused Lima runs for the same
   profile and workspace;
 - the target can make an authenticated HTTP request from inside the guest to a
@@ -382,15 +434,15 @@ The smoke uses `hideout-test-cli`, a fake test CLI binary, and
 - HostFS cannot grant the Hideout control-plane store into the guest.
 
 This smoke is not an adapter for any real product. It is a product-mechanism
-proof: runtime supply, user-declared tool installation, guest-local callback
-flow, typed preview callback reach-back, host redirect boundary, environment
-policy, profile-state persistence, network request, and control-plane store
-protection.
+proof: guest-local callback flow, typed preview callback reach-back, host
+redirect boundary, environment policy, profile-state persistence, network
+request, and control-plane store protection.
 
-The smoke runs with `--network direct`. It proves generic tool supply and CLI
-mechanics, not proxy-routed first-time provisioning. Changes to tool
-provisioning order, setup env filtering, `tun2socks` bootstrap, or proxy secret
-handling must also run Gate 3 or an equivalent `tun2socks` provisioning smoke.
+The smoke runs with `--network direct`. It proves CLI product mechanics over an
+already-provisioned guest, not proxy-routed traffic. A base image declaration
+change, or a change to `tun2socks` bootstrap, setup env filtering, or proxy
+secret handling, must also run Gate 3 or an equivalent smoke that proves the
+first `tun2socks`-routed connection.
 
 The automated smoke sets `HIDEOUT_BROWSER_PATH` to a fake browser shim that
 accepts the normal Chromium-style arguments and follows the host-visible URL
@@ -417,65 +469,6 @@ Command:
 ```bash
 scripts/test-phase1.sh --dogfood-cli
 ```
-
-### Supplemental: Operator CLI Smoke
-
-Purpose: let maintainers dogfood a real CLI without committing product-specific
-logic, package names, API keys, or workflow semantics into Hideout.
-
-The operator-supplied smoke is explicitly opt-in:
-
-```bash
-HIDEOUT_OPERATOR_NPM_PACKAGE=<npm-spec> \
-HIDEOUT_OPERATOR_COMMAND=<command> \
-HIDEOUT_OPERATOR_VERSION_ARGS='--version' \
-HIDEOUT_OPERATOR_ENV_KEYS=TOKEN_ENV \
-HIDEOUT_OPERATOR_HOME_IMPORTS=$'/host/state.json=.tool/state.json\n/host/state=.tool/state' \
-HIDEOUT_OPERATOR_AUTH_COMMAND='<optional guest login command>' \
-HIDEOUT_OPERATOR_STATUS_COMMAND='<guest command that proves login state>' \
-HIDEOUT_OPERATOR_REQUEST_COMMAND='<guest command that proves one request>' \
-  scripts/test-phase1.sh --operator-cli
-```
-
-Real-product values must stay outside the repository. Put them in the invoking
-shell, a local ignored wrapper, or a secrets manager, then call the generic
-operator smoke. Do not add a product-specific smoke script, package name, API
-key, account identifier, or prompt fixture to Hideout Core, docs, or default
-gates.
-
-When a real CLI requires pre-existing local auth state, the operator may seed
-that state with `hideout profile home <profile> import --from <host-path> --to
-<relative-profile-home-path>`. This is still operator-controlled test setup, not
-a product-specific Hideout default. The import command must not print source
-paths or credential contents, and the smoke must prove subsequent status/request
-commands read state from the isolated profile identity home.
-`HIDEOUT_OPERATOR_HOME_IMPORTS` is a newline-separated list of
-`<host-path>=<profile-home-relative-path>` entries. The smoke imports these
-entries with `--force` before the first run, so rerunning a local smoke against
-the same temporary or operator-selected store remains deterministic.
-
-Required checks:
-
-- the profile is configured through Hideout-managed tool setup (`hideout init`
-  or `doctor --fix` tool flags, or lower-level `hideout profile tools`), not by
-  editing profile JSON directly;
-- `node-dev` and the user-declared npm tool are provisioned into a Lima guest;
-- the first run creates a tool-matched reusable environment and the second run
-  reuses the same environment;
-- operator-selected env keys are passed through `--env` only for the run, while
-  Hideout runtime env remains controlled by the normal env policy;
-- an optional operator-supplied auth command can run inside the isolated profile
-  identity home, using the operator's terminal for login flows such as browser
-  plus paste-code;
-- an optional operator-supplied status command proves that auth state persisted
-  in the reusable environment/profile identity, not in the host home;
-- an optional operator-supplied request command succeeds from inside the guest;
-- HostFS grants covering the Hideout store are rejected.
-
-This smoke is not part of the default automated gate because it depends on
-operator-held credentials or accounts. It is the correct place to verify a real
-tool before daily dogfood, while `--dogfood-cli` remains the product-mechanism
-gate that can run in CI and release-candidate verification.
 
 ### Gate 3: Hidden Proxy
 
@@ -560,19 +553,21 @@ Required checks:
 - cleanup stops `tun2socks`, restores the prior default route when known, removes
   `hideout0`, and deletes runtime proxy files.
 
+Known coverage gap: Gate 3 does not yet verify DNS leak behavior. Backend-specific
+DNS verification is outstanding hardening owned by
+[network-privacy-architecture.md](network-privacy-architecture.md); until it
+ships and adds a Gate 3 check, `tun2socks` runs carry the explicit DNS
+non-claim recorded in [threat-model.md](threat-model.md).
+
 Suggested target command:
 
 ```bash
-node -e 'console.log({
-  http: process.env.HTTP_PROXY,
-  https: process.env.HTTPS_PROXY,
-  all: process.env.ALL_PROXY,
-  no: process.env.NO_PROXY
-})'
+sh -c 'env | grep -iE "^(http_proxy|https_proxy|all_proxy|no_proxy)=" || echo proxy-env-absent'
 ```
 
-Pass condition: all printed values are absent or empty while an independent
-HTTP(S) route check proves traffic uses the configured proxy.
+Pass condition: the target prints `proxy-env-absent` because no proxy variables
+exist in its env, while an independent HTTP(S) route check, such as a `curl`
+request from the guest, proves traffic uses the configured proxy.
 
 ### Gate 4: Host Escape Boundary
 
@@ -756,7 +751,7 @@ scripts/test-lab-probes.sh
 | Audit redaction | required | required | required | no |
 | Doctor diagnostics | required | required | required | no |
 | Cleanup removes secret-bearing state | required | required | required | no |
-| PortBridge and Endpoint Exposure product path | required | optional | optional | no |
+| PortBridge and Endpoint Exposure product path | required | optional | required | no |
 | Browser-control lab isolation | partial | optional | optional | maybe |
 
 ## Environment Resume Acceptance
@@ -810,12 +805,12 @@ The minimal Manager API init and run surfaces are design-ready for TUI/WebUI and
 automation integration. Required checks:
 
 - `POST /api/v1/init/plan` returns the same `InitPlan` shape as Manager Core,
-  accepts generic tool presets and user-declared npm global tools, includes
-  structured next steps, and performs planning only;
+  accepts and validates a declarative base image reference (name plus digest)
+  and expected-command diagnostics, includes structured next steps, and
+  performs planning only;
 - `POST /api/v1/init/apply` reaches `Core.ApplyInit`, uses typed init tasks
-  rather than a raw profile writer, persists generic tool supply policy, and
-  fails closed for confirmation-required tasks because API v1 has no prompt
-  channel;
+  rather than a raw profile writer, and fails closed for confirmation-required
+  tasks because API v1 has no prompt channel;
 - `POST /api/v1/run/plan` returns the same `RunPlan` shape as Manager Core and
   performs planning only;
 - `POST /api/v1/run/apply` reaches `Core.ApplyRun` through a configured backend
@@ -825,8 +820,7 @@ automation integration. Required checks:
 - `GET /api/v1/run/status` returns session summaries and rejects invalid session
   filters;
 - responses do not expose broker tokens, broker socket paths, proxy secret
-  values, raw helper search paths, package-manager credentials, or arbitrary
-  host file contents;
+  values, raw helper search paths, or arbitrary host file contents;
 - the local server binds only to `127.0.0.1`, enforces token and origin/host
   checks, and does not expose lab or host-control routes as API resources.
 
@@ -892,8 +886,11 @@ Required checks:
   `profile fs`, performs planning without creating profile state, and rejects
   raw host command or raw profile-writer request shapes;
 - `hideout profile env` and `hideout profile tools` manage durable profile
-  policy without introducing a second representation; env list output reports
-  names only and must not echo stored values;
+  policy without introducing a second representation; `profile tools`
+  converges on recording declared expected guest commands as diagnostics
+  data, not installation actions — its npm-backed subcommands still exist
+  today and are being removed (002); env list output reports names only and
+  must not echo stored values;
 - Manager API `profile/env/plan|apply` manages durable profile env policy
   using the same profile validator as CLI `profile env`, performs planning
   without creating profile state, rejects raw host command or raw profile-writer
@@ -952,6 +949,10 @@ Required implementation tests:
 Distribution Bootstrap is the release-candidate proof that Hideout can start
 from a clean installation without manual hidden setup.
 
+How to run: `scripts/test-gate0.sh` executes `scripts/test-install-smoke.sh`
+and `scripts/test-package-smoke.sh` on every invocation (including
+`--quick`); the full local install flow is `scripts/install-local.sh`.
+
 Required checks:
 
 - start from a clean temporary store and packaged or release-like artifact
@@ -965,24 +966,14 @@ Required checks:
 - install smoke proves installed `doctor --fix --dry-run` does not create state
   and installed safe `doctor --fix` writes current init metadata plus
   `doctor.fix.apply` audit;
-- package smoke proves a release-like tarball contains binaries, helper
-  manifests, a package manifest with schema/build/git/target/layout metadata,
-  package-relative manifest paths that match the extracted layout, SHA-256
-  checksums for critical package files that match the extracted files, English
-  and Chinese README entrypoints, a package-root installer, schemas, docs,
-  packaging metadata, can run extracted `hideout init --no-input` plus
-  `hideout doctor`, can render extracted `hideout tui --once`, start extracted
-  `hideout ui --print-url` without opening a browser or blocking, can run
-  package-root `install.sh` into a separate temporary prefix/store, can discover
-  packaged Lima Linux helpers from the installed prefix without rebuilding from
-  the source tree, and verifies `install.sh --skip-init` copies binaries without
-  writing init state;
-- package smoke proves package-root `install.sh` fails before copying binaries
-  when the extracted package layout is missing `package-manifest.json`, the host
-  shim, Linux guest shim, Linux HostFS daemon, or when a manifest-declared
-  checksum does not match the extracted file;
-- Gate 0 statically validates the draft Homebrew formula and its
-  `hideout init --no-input` formula smoke contract when Ruby is available;
+- package smoke proves the release-like tarball can be unpacked, its package
+  manifest checksums match the extracted files, and extracted
+  `hideout init --no-input` plus `hideout doctor` run from the unpacked layout;
+  package-root `install.sh` fails before copying binaries when the layout or a
+  manifest-declared checksum is broken;
+- the existing TUI (`hideout tui --once`) and WebUI (`hideout ui --print-url`)
+  render smokes remain in the package smoke as later MVP-ordered checks after
+  the unpack, checksum, and init plus doctor proof;
 - omitted or `auto` backend first-run repair resolves to Lima, matching
   `hideout run`, and plans Linux helper repair when store helpers are missing;
 - `hideout init --no-input --backend native --network direct` succeeds without
@@ -996,9 +987,8 @@ Required checks:
 - `hideout doctor` reports core checks after init;
 - `hideout doctor --fix --dry-run` shows safe fixes without executing unsafe
   tasks;
-- `hideout init --npm-package <spec> --npm-command <name>` and
-  `hideout doctor --fix --dry-run --npm-package <spec> --npm-command <name>`
-  plan generic CLI tool supply without product-specific logic;
+- init planning accepts and validates a declarative base image reference (name
+  plus digest) without product-specific Core logic or raw profile edits;
 - `hideout init --network tun2socks --proxy-secret <ref>` and Manager
   `init/apply` persist only the proxy secret ref, not a proxy URL or backing env
   var name;
@@ -1038,26 +1028,18 @@ separate from HostFS and represent explicit broad filesystem sharing.
 
 Required checks:
 
-- no path outside the workspace is mounted unless the user explicitly declares a
-  mount;
-- workspace safety guard rejects the host home, the effective Hideout store
-  root, credential roots, browser profile roots, symlinks to those roots, and
-  parent directories that would mount them into the guest;
-- workspace safety guard allows ordinary project directories under the host home
-  when they do not contain the protected roots;
-- the explicit unsafe-workspace override is required before such a high-risk
-  workspace can be mounted;
-- `rw` mounts permit read/write from the guest and changes are visible on the
-  host;
-- `ro` mounts permit reads and reject guest writes;
-- mounted paths are shown in `explain`, audit, and UI with host path, guest path,
-  mode, and high-risk classification;
-- high-risk mount roots such as home, root, Docker sockets, SSH agent sockets,
-  browser profiles, keychains, and credential directories require explicit
-  high-risk policy handling;
-- HostFS grants do not create backend mounts and backend mounts do not create
-  HostFS grants;
-- cleanup never deletes the mounted host path.
+- mounts are explicit: no path outside the workspace is mounted unless the user
+  declares it, and high-risk roots require the explicit unsafe/high-risk
+  override;
+- the safety guard rejects the host home, the effective Hideout store root,
+  credential roots, browser profile roots, and symlinks or parent directories
+  that would mount them, while allowing ordinary project directories under the
+  host home;
+- the declared mode is enforced (`rw` changes are visible on the host, `ro`
+  rejects guest writes) and every mount is visible in `explain`, audit, and UI
+  with host path, guest path, mode, and high-risk classification;
+- HostFS grants and backend mounts never create each other, and cleanup never
+  deletes the mounted host path.
 
 ## Test Artifacts
 
@@ -1073,26 +1055,17 @@ enabled:
 - redacted Lima YAML validation output;
 - lab probe audit when a lab command is used.
 
-`scripts/test-release-dogfood.sh` always writes a release evidence bundle. By
-default it is placed under `.hideout-release-evidence/`; set
-`HIDEOUT_RELEASE_EVIDENCE_DIR` for an exact output path or
-`HIDEOUT_RELEASE_EVIDENCE_ROOT` for a different parent directory. The bundle
-contains:
-
-- `manifest.json` with command, git revision, host prerequisites, tool versions,
-  gate list, exit code, operator proxy presence, and the generated release-like
-  tarball file name, SHA-256, byte size, and post-run cleanup counts for Gate 4
-  browser processes, Gate 4 temporary directories, and Hideout Lima instances.
-  It must conform to `schemas/release-dogfood.schema.json`;
-- `hideout-<os>-<arch>-<commit>.tar.gz`, the release-like artifact built from
-  the same worktree before gates run;
-- `test-release-dogfood.log` with redacted gate output.
-
-The manifest must record `operatorProxy.url` as `redacted` and the log must not
-contain the raw `HIDEOUT_SECRET_DEFAULT_PROXY` value. Gate 0 verifies that the
-recorded release artifact exists in the evidence directory, that its SHA-256
-matches the manifest, and that cleanup counts are zero for a passed release
-candidate.
+`scripts/test-release-dogfood.sh` always writes a release evidence bundle under
+`.hideout-release-evidence/` by default; `HIDEOUT_RELEASE_EVIDENCE_DIR` or
+`HIDEOUT_RELEASE_EVIDENCE_ROOT` override the location. The bundle contains a
+`manifest.json` conforming to `schemas/release-dogfood.schema.json`, the
+release-like tarball built from the same worktree before gates run, and
+`test-release-dogfood.log` with redacted gate output. The manifest records
+`operatorProxy.url` as `redacted`, and the log must not contain the raw
+`HIDEOUT_SECRET_DEFAULT_PROXY` value: keeping raw proxy URLs out of evidence is
+a flow obligation on the Hideout-managed proxy secret flow. Gate 0 verifies the
+recorded release artifact exists in the evidence directory and its SHA-256
+matches the manifest.
 
 The following must never be copied into normal diagnostic exports:
 

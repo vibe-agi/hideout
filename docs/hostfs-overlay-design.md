@@ -85,6 +85,12 @@ that writes go to an overlay, not the host.
 Avoid naming this `write:` in the product CLI because users may interpret it as
 real host mutation.
 
+Overlay follows the Go-primitive-plus-JS-decision split from
+[architecture-principles.md](architecture-principles.md): a constrained JS
+policy decision point may decide the overlay write disposition (allow, ask,
+audit-only), while copy-up, whiteout, diff computation, apply execution, and
+conflict detection always run in Go.
+
 ## File Semantics
 
 ### Read
@@ -108,8 +114,8 @@ Creates a whiteout record. Guest view hides the path. Host file remains.
 
 ### Rename
 
-V2 should initially support rename within the same overlay authority. Cross-root
-rename is later.
+Rename is unsupported in the initial overlay and fails closed. Later increments
+may add rename within one overlay authority.
 
 ### chmod/chown/xattr
 
@@ -133,13 +139,7 @@ Session-scoped overlay:
   base-index.json
 ```
 
-Environment-scoped overlay may be added later for persistent sandboxes:
-
-```text
-~/.hideout/environments/<environment-id>/hostfs-overlay/
-```
-
-Default should be session-scoped to avoid surprising persistent mutations.
+Overlay state is session-scoped to avoid surprising persistent mutations.
 
 ## Base Index
 
@@ -167,9 +167,6 @@ Overlay diff should classify:
 created
 modified
 deleted
-renamed
-binary-changed
-metadata-changed
 conflicted
 ```
 
@@ -194,15 +191,6 @@ Default apply is conservative:
 - write via temporary file and atomic rename when possible;
 - record apply audit events;
 - keep a backup or rollback record when practical.
-
-Conflict choices may be added later:
-
-```text
-skip
-overwrite
-manual merge
-apply selected hunks
-```
 
 ## Audit
 
@@ -270,31 +258,16 @@ The backend should not mount a writable host directory.
 - discard session overlay;
 - apply with conflict detection.
 
-### V2b: Directory Overlay
-
-- create files under `overlay-dir`;
-- delete through whiteouts;
-- filtered list merges lower and upper;
-- diff created/deleted files.
-
-### V2c: Tree And Glob Overlay
-
-- recursive directory overlay;
-- glob overlay selectors;
-- rename support;
-- richer review UI.
-
 ### Later
 
+- directory, tree, and glob overlay authorities with whiteout-backed delete and
+  merged listings;
+- rename support;
 - real host write grants;
 - cross-session persistent overlays;
-- automatic merge;
-- hunk-level apply;
-- filesystem watcher integration.
+- richer review, merge, and hunk-level apply workflows.
 
 ## Open Questions
 
 - Should exact-file overlay require an initial host file to exist?
-- Should overlay state be tied to session or environment by default?
-- How should binary diffs be represented in TUI/WebUI?
-- Which editor workflow should `hideout review` support first?
+- Should overlay state ever become environment-scoped, or stay session-only?

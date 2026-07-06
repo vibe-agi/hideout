@@ -17,31 +17,34 @@ different user problems.
 
 ```text
 TUI
-  local, fast, keyboard-first, setup and monitoring
+  lightweight panel surface: audit observation and session management
 
 WebUI
-  visual, searchable, better for audit and policy editing
+  fuller management surface: policy editing, environment management,
+  audit search
 ```
 
 Both surfaces must use the same Manager Core/API domain resources. WebUI uses
 the local Manager API transport; terminal surfaces may call Manager Core
 in-process, but must not rebuild state by reading subsystem files directly.
-When `hideoutd` is promoted, both surfaces should become daemon clients for
-live state and event streams instead of inventing their own file watchers.
+The steady-state model is daemon-first: `hideoutd` hosts the Manager API, and
+both surfaces are its clients for live state and event streams rather than
+inventing their own file watchers.
 
 ## TUI Role
 
 The TUI is the always-on local operator surface. It is meant to run in a
 separate terminal while another terminal runs `hideout run -- <agent-or-tool>`.
-It must behave like a persistent session observer and control plane, not like a
-post-run log printout.
+It must behave like a persistent session observer with lightweight session
+controls, not like a post-run log printout.
 
 Phase 1 ships a read-only smoke dashboard over Manager overview and redacted
 audit data. It can refresh in place and can render a single snapshot for tests,
-but it is not the final interactive TUI. The product target is a full-screen,
-keyboard-first interface with selectable rows, drill-down panes, and controlled
-Manager plan/apply actions. Interactive first-run and doctor flows are product
-increments, not the current default init path.
+but it is not the final interactive TUI. The product target is the lightweight
+pane: side-by-side panels with keyboard shortcuts for audit observation and
+session management, backed by controlled Manager plan/apply actions.
+Interactive first-run and doctor flows are product increments, not the current
+default init path.
 
 Recommended implementation stack:
 
@@ -71,23 +74,36 @@ hideout doctor --fix --dry-run
 
 ## WebUI Role
 
-The WebUI is the richer inspection and editing surface.
+The WebUI is the fuller management surface.
 
 Best use cases:
 
 - audit search and filtering;
-- session timeline;
-- HostFS access graph;
 - policy editing;
-- OpenTarget topology;
+- environment management;
 - network route and DNS explanation;
 - onboarding and documentation.
 
 The WebUI should not be required for first successful `hideout run`.
 
-## Shared Resource Pages
+## Surface Division
 
-Both TUI and WebUI should represent the same resources:
+Both TUI and WebUI read the same Manager data model, but the page sets are
+intentionally not mirrored: the TUI carries an observation and session
+management subset, while the WebUI is the fuller management system.
+Differences are coverage and layout, never data model or policy semantics.
+
+TUI page set:
+
+```text
+Dashboard
+Sessions
+Environments
+Audit
+Doctor
+```
+
+WebUI page set:
 
 ```text
 Dashboard
@@ -99,11 +115,13 @@ Network
 OpenTargets
 Audit
 Doctor
-Install
+Helpers
+Bundles
 Policy Scripts
 ```
 
-Surface differences are layout differences, not data model differences.
+The Helpers page is limited to helper artifacts: discovery status, helper
+manifests, and repair plans. It is not a package installation surface.
 
 ## TUI Initial Pages
 
@@ -128,15 +146,9 @@ The dashboard shows:
 - recent denied audit events;
 - recent audit events.
 
-Design-ready additions:
-
-- full-screen Bubble Tea layout;
-- keyboard navigation across profiles, environments, sessions, audit rows, and
-  denied events;
-- drill-down panes for selected sessions, HostFS requests, OpenTarget events,
-  network setup, and cleanup state;
-- non-authoritative follow mode for active runs;
-- install/doctor warnings.
+Design-ready additions stay within the panel model: side-by-side panels with
+keyboard shortcuts for audit observation and session management, plus doctor
+warnings.
 
 ### Doctor
 
@@ -148,21 +160,6 @@ Shows checks and repair actions:
 - invalid profile;
 - stale environment;
 - schema metadata repair needed.
-
-### HostFS
-
-Current smoke surface shows:
-
-- profile grant and deny counts in TUI and WebUI overview;
-- profile HostFS allow/deny plan/apply in WebUI through Manager API;
-- CLI hints for listing and adding durable profile HostFS rules.
-
-Later product views should add:
-
-- run-scoped grants for active sessions;
-- recent requested paths;
-- deny hits;
-- richer add/remove/edit rule actions.
 
 ### Sessions
 
@@ -189,9 +186,9 @@ Design-ready interactive session observer:
   as `hideout audit show`;
 - explicit commands or plan/apply actions for cleanup, stop, and doctor repair.
 
-The live tail should come from Manager/daemon event streams. Until daemon mode
-ships, polling Manager overview and redacted audit is acceptable for the smoke
-surface.
+The live tail comes from daemon event streams in the steady state. Polling
+Manager overview and redacted audit is a usable MVP-stage transition, not the
+product end state.
 
 ### Environments
 
@@ -203,16 +200,6 @@ state. TUI currently renders a capped dashboard summary with copyable
 resume/stop/clean command hints; richer terminal lifecycle controls should call
 the same Manager environment endpoints rather than reimplementing store or
 backend cleanup logic.
-
-### Network
-
-Shows:
-
-- direct vs tun2socks;
-- proxy secret presence;
-- route verification status;
-- DNS policy status;
-- leak risk.
 
 ## WebUI Initial Pages
 
@@ -240,6 +227,38 @@ Design-ready search by:
 - rule ID;
 - time range.
 
+### HostFS
+
+Current smoke surface shows:
+
+- profile grant and deny counts in overview;
+- profile HostFS allow/deny plan/apply through Manager API;
+- CLI hints for listing and adding durable profile HostFS rules.
+
+Later product views should add:
+
+- run-scoped grants for active sessions;
+- recent requested paths;
+- deny hits;
+- richer add/remove/edit rule actions.
+
+### Network
+
+Shows:
+
+- direct vs tun2socks;
+- proxy secret presence;
+- route verification status;
+- DNS policy status;
+- leak risk.
+
+### Bundles
+
+Installed bundle status, permission diff, and verification results. Phase 1
+scope follows
+[policy-config-supply-chain.md](policy-config-supply-chain.md); marketplace
+views are Later.
+
 ### Policy Editor
 
 Edit:
@@ -250,17 +269,6 @@ Edit:
 - network mode;
 - policy script refs.
 
-### Session Timeline
-
-Show:
-
-- command start/end;
-- broker events;
-- HostFS access;
-- OpenTargets;
-- network setup;
-- doctor warnings.
-
 ## Security Rules
 
 - UI tokens are short-lived.
@@ -270,7 +278,9 @@ Show:
 - Browser UI responses use `Cache-Control: no-store`, `Referrer-Policy:
   no-referrer`, frame denial, and a restrictive CSP that permits the embedded
   inline bundle and same-origin Manager API calls only.
-- No sensitive secret values are rendered.
+- Hideout-minted control-plane credentials are never rendered;
+  user/application data shown locally follows the deterministic redaction
+  contract in [privacy-run-design.md](privacy-run-design.md).
 - Authority-changing UI actions call Manager plan/apply.
 - Every apply operation emits audit.
 - TUI and WebUI must not read arbitrary host paths except through Manager Core
@@ -285,8 +295,10 @@ Show:
   long-lived observer window while a separate terminal runs the target command.
 - `hideout tui --once` is the script and smoke-test mode. It is not the product
   interaction model.
-- A future daemon should improve freshness and interaction; it must not change
-  TUI authority. The TUI remains a Manager client.
+- `hideoutd` improves freshness and interaction; it does not change TUI
+  authority. The TUI remains a Manager client.
+- Audit search is backed by JSONL scan over the redacted Manager audit view;
+  Hideout does not maintain a separate indexed audit store.
 - `hideout init` applies safe InitTasks now through the CLI. A future
   interactive TUI wizard must use the same InitTask plan/apply contract rather
   than introducing a second initialization path.
@@ -298,42 +310,39 @@ Show:
 
 ## Phase Plan
 
-### TUI First Increment
+MVP delivery order: CLI plus `explain` first, the TUI panel second, the WebUI
+after that.
+
+### CLI And Explain First
+
+- `hideout run`, `hideout init`, `hideout doctor`, and `explain` remain the
+  primary MVP surface;
+- boundary evidence ships through CLI, audit, and Boundary Summary before
+  either UI grows.
+
+### TUI Panel
 
 - terminal dashboard over Manager overview;
 - persistent local refresh by default;
 - explicit `--once` snapshot mode for tests and scripts;
 - per-profile env policy counts and CLI hints;
+- side-by-side panels with keyboard shortcuts for audit observation and
+  session management;
+- doctor views;
+- controlled Manager plan/apply actions for session and environment lifecycle.
 
-### TUI Next Increment
-
-- full-screen Bubble Tea shell;
-- keyboard navigation and row selection;
-- active session observer and event detail panes;
-- doctor;
-- HostFS rules;
-- recent audit events;
-- controlled Manager plan/apply actions.
-
-### WebUI First Increment
+### WebUI Management Surface
 
 - read-only dashboard;
-- init/tool setup plan and apply;
-- init next-step rendering;
+- init plan and apply with next-step rendering;
 - controlled run plan and apply;
-- audit explorer;
-- session detail;
-- profile summary, including tool presets and user-declared npm globals.
-
-### Later
-
-- full policy editor;
-- interactive OpenTarget topology;
-- HostFS overlay diff/review;
-- browser-control monitor.
+- audit explorer and session detail;
+- profile policy editing through Manager plan/apply;
+- environment management;
+- profile summary, including expected-command diagnostics and the declared
+  guest base image reference.
 
 ## Open Questions
 
 - Should WebUI be embedded static assets or served from a separate package?
 - Which operations need confirmation in TUI before apply?
-- Should audit search be backed by JSONL scan first or an indexed store?

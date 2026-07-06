@@ -53,8 +53,7 @@ helper.install
 backend.probe
 backend.prepare
 environment.prepare
-toolPreset.check
-toolPreset.prepare
+command.expected.check
 doctor.fix.safe
 project.manifest.create
 project.manifest.apply
@@ -87,7 +86,7 @@ InitPlan
   ordered plan with typed InitTasks, risk labels, inputs, outputs, and review
 
 InitTask
-  one typed action with idempotency, apply, verify, rollback or repair behavior
+  one typed action, idempotent where practical and safe to re-run
 
 InitRun
   execution record for one applied plan
@@ -110,11 +109,12 @@ inputs
 outputs
 idempotencyKey
 requiresConfirmation
-applyMode
-verifyMode
-rollbackBehavior
 auditRef
 ```
+
+Tasks follow one convention instead of per-task mode fields: every task is
+idempotent by default and safe to re-run, and verification and repair behavior
+belong to the task kind.
 
 Allowed `source` values:
 
@@ -129,6 +129,13 @@ local-dev-override
 
 `project` and `bundle` sources may declare requirements or hints. They must not
 provide executable task bodies.
+
+A project or bundle may also declare a guest base image reference — an image
+name plus digest. Manager compiles that declaration into a typed
+backend-prepare task with digest verification and environment-fingerprint
+compatibility checks. A bad image is contained by the backend boundary, so the
+declaration is guest-domain data rather than host authority; it never becomes
+an executable task body.
 
 ## Phase 1 Task Set
 
@@ -147,6 +154,7 @@ helper.install.linux-hostfsd
 backend.probe
 network.mode.select
 doctor.check.light
+doctor.fix.safe
 project.manifest.create
 ```
 
@@ -158,7 +166,7 @@ backend.template.download
 doctor.fix.permissions
 doctor.fix.stale-session-cleanup
 project.manifest.apply
-bundle.enable
+bundle.install.confirm
 ```
 
 Design-ready but not Phase 1 default:
@@ -167,9 +175,14 @@ Design-ready but not Phase 1 default:
 system.backend.install
 system.tun.prepare
 browser.profile.create
-toolPreset.prepare
+backend.image.verify
 environment.deep-prepare
 ```
+
+`backend.image.verify` is the compiled form of a declared guest base image
+reference: it fetches or locates the referenced image, verifies its digest,
+and checks environment-fingerprint compatibility before backend prepare uses
+it.
 
 Disallowed:
 
@@ -189,6 +202,12 @@ sshConfig.modify
 browserProfile.import
 profileAuthority.autoGrant
 ```
+
+A declared guest base image reference is not on this list: referencing an
+existing image is data consumed by backend prepare, not a step Hideout
+executes. Ecosystem-supplied imperative preparation steps — install scripts,
+first-boot hooks, provisioning fragments — stay disallowed until a dedicated
+trust design.
 
 ## First-Run Flow
 
@@ -224,9 +243,10 @@ hideout init --no-input
 hideout doctor --fix
 ```
 
-`auto` and omitted backends resolve to the same backend as `hideout run`: Lima.
-The weak native backend is available only when the operator explicitly selects
-`--backend native`.
+`auto` and omitted backends resolve to the same backend as `hideout run`: Lima
+on supported macOS hosts. Hosts without a supported product backend fail closed
+instead of implicitly selecting a weaker backend. The weak native backend is
+available only when the operator explicitly selects `--backend native`.
 
 ## Product Command Scope
 
@@ -252,11 +272,12 @@ Bundle lifecycle:
 
 ```bash
 hideout bundle install <source>
-hideout bundle enable <name> --profile default
+hideout bundle list
 hideout bundle verify <name>
-hideout bundle update <name>
-hideout bundle rollback <name>
+hideout bundle remove <name>
 ```
+
+`bundle update` and `bundle rollback` are later increments.
 
 Profile commands should focus on identity, clone, rotate, path, diff, and
 explain. Bundle lifecycle should stay under `hideout bundle`.
@@ -296,9 +317,9 @@ project Hideoutfile and bundle permission diff
 ```
 
 WebUI should not be required for first successful run. The current WebUI smoke
-surface can render Manager init/tool setup plans and controlled applies. Richer
-audit exploration, session timelines, policy visualization, bundle permission
-review, and network explanations remain future product work through Manager API.
+surface can render Manager init plans and controlled applies. Richer audit
+exploration, policy editing, bundle permission review, and network
+explanations remain future product work through Manager API.
 
 ## Audit
 
@@ -352,10 +373,9 @@ Minimum acceptance:
 - repeated init is idempotent and does not rotate identity or grant new
   authority;
 - `doctor --fix --dry-run` shows safe fixes without applying unsafe actions;
-- `hideout init --npm-package <spec> --npm-command <name>` and matching
-  `doctor --fix --dry-run` compile generic CLI tool supply into explicit
-  `tools.preset.add` and `tools.npm-global.add` tasks, not product-specific
-  install scripts;
+- expected-command diagnostic inputs compile into explicit typed diagnostic
+  tasks that report command presence, not install scripts, raw profile writes,
+  or any package-manager assumption;
 - init plans include structured `nextSteps` entries for doctor verification,
   smoke runs, configured generic CLI commands, or blocked-task resolution;
 - `hideout init --network tun2socks --proxy-secret <ref>` compiles proxy
@@ -397,11 +417,10 @@ Minimum acceptance:
 - interactive TUI wizard;
 - helper official install flow;
 - project init/diff/apply;
-- bundle enable through Manager plan/apply.
+- bundle install confirmation through Manager plan/apply.
 
 ### Later
 
 - system backend installation guidance;
 - signed helper downloads;
-- team-managed init policy;
 - binary extension model, only after a separate security design.

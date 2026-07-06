@@ -2,16 +2,13 @@
 
 [简体中文](README.zh-CN.md)
 
-Hideout is a local privacy runner for untrusted developer tools and agentic
-CLIs. It runs the target inside a reusable Lima environment, gives it an
-isolated identity, routes host access through typed capabilities, and records
-boundary evidence.
+Hideout runs untrusted developer tools and agentic CLIs inside an isolated
+backend boundary (currently a reusable Lima VM), mediates every host access
+through typed, audited, fail-closed gates, and records evidence you can
+inspect. Privacy hardening is one of the benefits, not the definition.
 
-Current status: private alpha / supervised dogfood. The core v1 path has one
-local release-candidate evidence bundle covering Gate 0, Gate 1, Gate 2 Lima
-E2E, Gate 3 strict proxy, Gate 4 real browser host escape, capability probes,
-and generic CLI dogfood smoke. Public GA still requires repeatable evidence for
-release artifacts and release-specific signoff.
+Current status: private alpha; run supervised. Gates and release evidence are
+defined in [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md).
 
 ## What Hideout Protects
 
@@ -20,6 +17,9 @@ Hideout replaces ambient host authority with explicit capabilities:
 - the target gets an isolated home, XDG paths, machine identity, and git config;
 - the project workspace is mounted read/write for normal development;
 - host files outside the workspace require explicit HostFS grants;
+- environment variables follow profile env policy: explicit public values,
+  allowlisted inherits, and deny patterns (`profile.env.public`,
+  `profile.env.inherit`, `profile.env.deny`);
 - host escapes such as `open` and `preview.open` go through typed brokered
   routes;
 - proxy credentials can be used by Hideout without appearing in target env;
@@ -79,6 +79,16 @@ The source-tree installer builds:
 - the Linux guest shim;
 - the Linux HostFS daemon.
 
+## Quickstart
+
+```bash
+hideout init --no-input --backend lima --network direct
+hideout run -- <cli>
+hideout run --fs read:/absolute/file -- <cli>
+hideout explain -- <cli>
+hideout audit show --limit 20
+```
+
 ## First Run
 
 Use a dedicated project checkout. Do not run Hideout from `$HOME`, `~/.hideout`,
@@ -94,9 +104,8 @@ hideout run --profile smoke --backend lima --network direct -- pwd
 for `doctor`, a smoke run, and any configured generic CLI tool.
 
 This first run should only verify the backend, workspace mount, and isolated
-identity. Use a dedicated `smoke` profile so existing `default` profile tool
-policy cannot trigger package provisioning during the first check. Do not
-configure CLI tool provisioning until the next section.
+identity. Use a dedicated `smoke` profile so existing `default` profile policy
+cannot trigger extra guest setup during the first check.
 
 Reusable Lima environments are keyed by profile, workspace, backend, and tool
 policy. Use `hideout list` to see resumable environments:
@@ -116,41 +125,34 @@ hideout run --profile smoke --rm -- <command>
 
 ## Running A CLI Tool
 
-Hideout does not hardcode product-specific CLIs. Configure generic tool
-provisioning on the profile, then run the command.
+Hideout does not hardcode product-specific CLIs, and it does not ship package
+installation providers. Guest tools arrive on two paths:
 
-For an npm-based CLI:
+- the environment's base image supplies the baseline toolchain;
+- the operator installs anything else by running ordinary setup commands
+  inside the boundary, under the same network policy and audit as any other
+  run.
+
+The npm-based provisioning path is being removed.
+
+Use `init` and `doctor` to create the profile, then run the CLI you want:
 
 ```bash
 hideout init \
   --profile agent \
   --backend lima \
-  --network direct \
-  --npm-package <npm-package> \
-  --npm-command <command>
+  --network direct
+
+hideout doctor --fix --dry-run --profile agent
 
 hideout run --profile agent --backend lima -- <command> --version
 ```
 
-`node-dev` and npm global installs run during managed guest setup after the
-selected network mode has been applied. They are provisioned for the reusable
-environment before the target command starts, so the first run after changing
-tool policy may download packages even when the target command itself is small.
-
-The same setup can be planned or repaired later:
+If a tool is missing from the base image, install it in-boundary with a normal
+run against the reusable environment:
 
 ```bash
-hideout doctor --fix --dry-run \
-  --profile agent \
-  --npm-package <npm-package> \
-  --npm-command <command>
-```
-
-For lower-level profile edits:
-
-```bash
-hideout profile tools agent preset add node-dev
-hideout profile tools agent npm add --package <npm-package> --command <command>
+hideout run --profile agent -- <installer command>
 ```
 
 If a CLI needs persistent login state, put it in the isolated profile home, not
@@ -286,6 +288,10 @@ hideout tui --once --profile agent
 terminal while another terminal runs an agent or CLI. `--once` is for scripts
 and snapshots.
 
+`hideout ui --no-open --print-url` serves the WebUI smoke surface over the
+local Manager API and prints its address; it is the fuller management view
+and is not required for any first-run flow.
+
 Useful cleanup commands:
 
 ```bash
@@ -305,6 +311,18 @@ secret-bearing files while preserving audit by default.
 `stop` and `clean` keep backend control output quiet by default. Add `--verbose`
 to those lifecycle commands when debugging `limactl` behavior.
 
+## Programmable Policy And Sharing
+
+Boundary decisions can be scripted through constrained JavaScript (goja)
+entrypoints such as `command.decide` and `audit.redact`: scripts decide,
+classify, and redact within supplied context, and never gain filesystem,
+network, or process access. Ecosystem sharing covers policy scripts,
+non-sensitive configuration, and declarative base image references; secrets
+are parameterized as SecretRef inputs that each user fills locally. See
+[docs/script-extension-architecture.md](docs/script-extension-architecture.md)
+and
+[docs/ecosystem-foundation-design.md](docs/ecosystem-foundation-design.md).
+
 ## Verification
 
 Fast local check:
@@ -313,23 +331,8 @@ Fast local check:
 scripts/test-phase1.sh --quick
 ```
 
-Required automated gates:
-
-```bash
-scripts/test-phase1.sh --required
-```
-
-Release dogfood proof on macOS with Lima, a real browser, and an operator proxy:
-
-```bash
-export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
-scripts/test-release-dogfood.sh
-```
-
-This runs Gate 0, the native harness, real Lima E2E, strict hidden proxy,
-real-browser host escape, capability probes, and the generic CLI dogfood smoke.
-It writes a redacted evidence bundle under `.hideout-release-evidence/` by
-default. Set `HIDEOUT_RELEASE_EVIDENCE_DIR` to choose an exact output directory.
+Full gates and release evidence procedures are defined in
+[docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md).
 
 ## Documentation Map
 
@@ -340,3 +343,5 @@ default. Set `HIDEOUT_RELEASE_EVIDENCE_DIR` to choose an exact output directory.
 - [Network Privacy](docs/network-privacy-architecture.md)
 - [OpenTarget Architecture](docs/opentarget-architecture.md)
 - [Distribution Bootstrap](docs/distribution-bootstrap.md)
+- [Ecosystem Foundation](docs/ecosystem-foundation-design.md)
+- [Script Extension Architecture](docs/script-extension-architecture.md)

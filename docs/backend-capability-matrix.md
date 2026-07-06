@@ -50,40 +50,6 @@ Expected role:
 - should match Lima feature semantics where possible;
 - may use container runtime, namespaces, or a dedicated sandbox runner.
 
-### SSH
-
-Remote sandbox backend.
-
-Expected role:
-
-- run target on a remote machine;
-- useful for users who want compute or isolation elsewhere;
-- must redefine host interactions because "host" from the target's perspective
-  is remote, while product host is local.
-
-SSH is important, but it is not equivalent to local containers.
-
-### Apple Container
-
-Research backend.
-
-Expected role:
-
-- possible macOS-native local sandbox;
-- considered only if startup, maintenance, and capability coverage are better
-  than Lima for key workflows.
-
-### Docker / Devcontainer
-
-Compatibility backend.
-
-Expected role:
-
-- integrate with existing developer environments;
-- not define Hideout's core architecture;
-- likely useful for workspace execution, but HostFS, browser, and network
-  privacy semantics must still be Hideout-owned.
-
 ### Native
 
 Weak development harness.
@@ -127,29 +93,44 @@ tbd
   Requires design before product support.
 ```
 
-| Capability | Lima | Linux Container | SSH | Apple Container | Docker/Devcontainer | Native |
-| --- | --- | --- | --- | --- | --- | --- |
-| Workspace read/write | required | required | required | required | required | weak |
-| Fake home/config/cache/data | required | required | required | required | required | weak |
-| Env hiding | required | required | required | required | required | weak |
-| Command Proxy shims | required | required | tbd | required | tbd | weak |
-| Host Broker | required | required | tbd | required | tbd | weak |
-| HostFS read-only | required | required | tbd | tbd | tbd | weak |
-| HostFS glob/filter list | required | required | tbd | tbd | tbd | weak |
-| HostFS overlay | later | later | tbd | tbd | tbd | no |
-| `host.open` | required | required | tbd | required | tbd | weak |
-| Isolated browser profile | required | required | tbd | required | tbd | weak |
-| `endpoint.expose.host-to-guest` | required | tbd | tbd | tbd | tbd | weak |
-| `endpoint.expose.guest-to-host` | lab | lab | tbd | tbd | tbd | lab |
-| `endpoint.observe` | later | later | tbd | tbd | tbd | weak |
-| Browser control | lab | tbd | tbd | tbd | tbd | lab |
-| Direct network | required | required | required | required | required | weak |
-| Tun2socks | required | required | tbd | tbd | tbd | no |
-| DNS verification | required | required | tbd | tbd | tbd | no |
-| Audit | required | required | required | required | required | required |
-| Cleanup | required | required | required | required | required | required |
-| Warm environment reuse | required | required | tbd | tbd | tbd | no |
-| Guest helper distribution | required | required | required | required | required | no |
+| Capability | Lima | Linux Container | Native |
+| --- | --- | --- | --- |
+| Workspace read/write | required | required | weak |
+| Fake home/config/cache/data | required | required | weak |
+| Env hiding | required | required | weak |
+| Command Proxy shims | required | required | weak |
+| Host Broker | required | required | weak |
+| HostFS read-only | required | required | weak |
+| HostFS glob/filter list | required | required | weak |
+| HostFS overlay | later | later | no |
+| In-process policy filesystem server | no | later | no |
+| Declarative base image reference (guest-domain artifact) | required | required | no |
+| `host.open` | required | required | weak |
+| Isolated browser profile | required | required | weak |
+| `endpoint.expose.host-to-guest` | required | tbd | weak |
+| `endpoint.expose.guest-to-host` | lab | lab | lab |
+| `endpoint.observe` | later | later | weak |
+| Browser control | lab | tbd | lab |
+| Direct network | required | required | weak |
+| Tun2socks | required | required | no |
+| DNS verification | required | required | no |
+| Audit | required | required | required |
+| Cleanup | required | required | required |
+| Warm environment reuse | required | required | no |
+| Guest helper distribution | required | required | no |
+
+Matrix rows are eligibility requirements, not implementation status;
+[STATUS.md](STATUS.md) owns delivery state. Known open item: DNS verification is
+`required` for Lima but has not shipped, so `tun2socks` currently carries an
+explicit DNS non-claim in [threat-model.md](threat-model.md). Closing that row
+is release-gate work, not a reason to relax the requirement.
+
+Guest helper distribution covers Hideout's own helper binaries, such as the
+guest shim and `hideout-hostfsd`; it is not a tool installation channel. The
+in-process policy filesystem server row is a Later virtiofs-grade performance
+path for the HostFS grant channel: Apple's virtiofs server in Lima's vz stack
+is closed to Hideout, a Linux container backend can host such a server
+naturally, and a QEMU-based backend could possibly support one.
 
 ## Backend Selection Rules
 
@@ -166,43 +147,15 @@ Linux -> linux-container when available, otherwise explicit native weak mode
 Windows -> unsupported or later
 ```
 
-SSH must be explicit:
-
-```text
-hideout run --backend ssh://profile-name -- command
-```
-
 Native must require weak isolation acknowledgement for privacy-sensitive paths.
-
-## SSH Backend Semantics
-
-SSH introduces a new host split:
-
-```text
-Product host
-  The user's local machine running Hideout UI/Manager.
-
-Execution host
-  The remote machine reached by SSH.
-
-Target guest
-  The environment in which the command runs on the execution host.
-```
-
-Open questions for SSH:
-
-- Does HostFS expose local product-host files, remote execution-host files, or
-  both?
-- Does `host.open` open a local browser or remote browser?
-- How are local workspace changes synchronized?
-- How are broker tokens transported?
-- How are audit logs collected?
-
-Until these are answered, SSH is design target, not a drop-in backend.
 
 ## Backend Capability API
 
-Each backend should expose:
+The current Go backend interface is the Phase 1 contract owned by
+[privacy-run-design.md](privacy-run-design.md): `Name()`, `Available()`,
+`Prepare()`, `Run()`, and `Cleanup()`.
+
+A future formal backend capability API should extend it toward:
 
 ```text
 Name()
@@ -222,6 +175,7 @@ Capabilities should include:
 filesystem.workspace
 filesystem.hostfs.read
 filesystem.hostfs.overlay
+guestImage
 commandProxy
 hostBroker
 hostOpen
@@ -234,8 +188,10 @@ warmReuse
 guestHelperInstall
 ```
 
-Feature code must check capabilities instead of branching on backend names when
-possible.
+Once the capability API ships, feature code must check capabilities instead of
+branching on backend names. Current code still branches on backend names in
+places; each such branch is migration debt for the capability API increment,
+not license for new name-based product semantics.
 
 ## Phase Plan
 
@@ -248,18 +204,26 @@ possible.
 
 - formal backend capability API;
 - Linux container backend design;
-- SSH semantics document;
 - backend capability output in `doctor` and Manager API.
 
 ### Later
 
-- Apple container decision;
-- Docker/devcontainer compatibility;
+- other backend candidate decisions;
 - Windows backend.
+
+## Other Backend Candidates
+
+SSH, Apple Container, and Docker/devcontainer are candidates, not product
+paths, and stay out of the capability matrix until each has a design contract
+and gate coverage. SSH splits "host" into a local product host and a remote
+execution host, so HostFS sourcing, `host.open` locality, workspace
+synchronization, and broker/audit transport must be redesigned before it can be
+a backend. Apple Container is considered only if it beats Lima on startup,
+maintenance, and capability coverage for key workflows. Docker/devcontainer
+would integrate with existing developer environments while HostFS, browser, and
+network privacy semantics remain Hideout-owned.
 
 ## Open Questions
 
 - Which Linux container substrate should be first?
-- Is SSH a backend or a workspace sync plus remote runner product mode?
-- Should Docker support be strict Hideout-managed or devcontainer-compatible?
 - What minimum capability set qualifies a backend as "privacy backend"?

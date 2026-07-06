@@ -8,7 +8,6 @@ Network Privacy defines how Hideout routes guest network traffic while keeping
 proxy credentials out of the target process environment.
 
 This document follows [architecture-principles.md](architecture-principles.md).
-It does not make per-socket firewalling a Phase 1 requirement.
 
 ## Product Position
 
@@ -84,7 +83,9 @@ Proxy env in target: absent
 ```
 
 Direct mode is allowed because many tools need compatibility. It must not be
-marketed as hiding IP address, DNS behavior, or network origin.
+marketed as hiding IP address, DNS behavior, or network origin. These `explain`
+and `doctor` declarations are the product answer for direct-mode risk; no extra
+acknowledgment flow is required in WebUI or TUI.
 
 ## Tun2socks Mode
 
@@ -118,7 +119,11 @@ blocked-until-defined
 
 Phase 1 may keep direct mode as `backend-default` and supports tun2socks privacy
 mode with route verification. DNS verification remains backend-specific
-hardening governed by this policy and the release gates.
+hardening governed by this policy and the release gates. Until that hardening
+ships, `tun2socks` mode does not claim DNS leak protection: a guest resolver on
+a connected backend subnet can bypass the TUN default route.
+[threat-model.md](threat-model.md) records this as an explicit non-claim, and
+Gate 3 does not yet include a DNS leak check.
 
 ## Route Verification
 
@@ -162,16 +167,11 @@ environment that is not inherited by the target command.
 
 ## Backend Requirements
 
-For each backend, the capability matrix must state:
-
-- can create TUN device;
-- can run tun2socks binary;
-- can set default route;
-- can set proxy endpoint bypass route;
-- DNS behavior;
-- required privileges;
-- verification method;
-- cleanup method.
+For each backend, the capability matrix records tun2socks support, DNS
+verification, and cleanup. Finer-grained facts — TUN device creation, default
+route and proxy bypass route setup, and required privileges — are backend
+adapter implementation concerns validated by the network gates, not separate
+matrix rows.
 
 ## Phase Plan
 
@@ -190,15 +190,12 @@ For each backend, the capability matrix must state:
 
 ### Later
 
-- per-domain policy;
-- per-process or per-socket firewalling;
-- packet audit;
-- Tor-specific mode;
-- team-managed proxy policy.
+- per-domain policy: the allow/deny/route judgment is a constrained JS decision
+  point, while route setup, verification, and fail-closed behavior stay in Go;
+- Tor-specific mode.
 
 ## Open Questions
 
 - Should tun2socks be opt-in or onboarding-recommended?
 - Which proxy schemes are supported first?
 - How should DNS verification work in Lima vs Linux container?
-- Should direct mode require an explicit warning acknowledgment in WebUI/TUI?

@@ -51,6 +51,11 @@ The bottom layer must support:
 The user-facing ecosystem can evolve later. The architecture cannot rely on a
 future marketplace to enforce privacy boundaries.
 
+The scope is a professional individual operator on their own machine.
+Ecosystem machinery in this document serves that prosumer operator installing
+artifacts from Git; organization-scale distribution, approval workflows, and
+policy servers are out of scope.
+
 ## Non-Negotiable Ecosystem Principles
 
 ### 1. Artifacts Declare, Manager Applies
@@ -73,21 +78,26 @@ Manager resources
 Effective policy
 ```
 
-A bundle install is not a policy enable. A project manifest discovery is not a
-profile mutation. A script package is not an arbitrary plugin.
+A bundle install does not by itself change effective policy. A project
+manifest discovery is not a profile mutation. A script package is not an
+arbitrary plugin.
 
-### 2. Install Is Separate From Enable
+### 2. Install Never Takes Effect Silently
 
-Install places a verified artifact into the local bundle store. Enable links a
-bundle version or recipe into a profile or project scope.
+Installing a bundle places a verified artifact into the local bundle store.
+Taking effect requires an explicit confirmed step, presented inside the same
+single review-and-confirm install flow: the install plan shows the permission
+diff, the user confirms, and only then does the bundle reference participate
+in effective policy for the selected profile or project scope. An unconfirmed
+install leaves a stored artifact with no policy effect.
 
-This separation keeps update and rollback understandable:
+This keeps update and rollback understandable:
 
 ```text
 installed bundle version
   may be inspected, verified, updated, or removed
 
-enabled bundle reference
+confirmed bundle reference
   participates in effective policy composition
 ```
 
@@ -123,7 +133,6 @@ Examples:
 
 ```text
 command.decide
-command.fake.select
 audit.redact
 hostfs.template
 opentarget.template
@@ -131,8 +140,11 @@ network.recommend
 doctor.check
 project.requirement
 init.requirement
-toolPreset.check
+command.expected.check
 ```
+
+`doctor.check` is a declarative permission: it contributes check definitions
+consumed as data by the doctor engine. It is not a goja entrypoint.
 
 Disallowed:
 
@@ -160,7 +172,9 @@ The script runtime must provide:
 - fixed output schema per entrypoint;
 - timeout and interrupt support;
 - panic recovery;
-- no filesystem, network, process, timer, or module APIs;
+- no filesystem, network, process, timer, or module APIs beyond the
+  constrained context/query API defined in
+  [script-extension-architecture.md](script-extension-architecture.md);
 - no mutable global state shared across users or profiles;
 - validator-owned final decisions.
 
@@ -182,9 +196,11 @@ An adapter maps product intent into Hideout capability proposals. Examples:
 Adapters may use only the constrained script SDK described in
 [script-extension-architecture.md](script-extension-architecture.md). They may
 classify input, choose templates, construct proposals, add audit tags, and
-redact presentation fields. They must not read host state, open network
-connections, spawn processes, mutate profiles, allocate ports, or execute
-capabilities.
+redact presentation fields. They must not read host state beyond the
+constrained context/query API defined in
+[script-extension-architecture.md](script-extension-architecture.md), and
+must not open network connections, spawn processes, mutate profiles, allocate
+ports, or execute capabilities.
 
 Persona recipes compose adapters with policy templates, environment hints,
 doctor checks, and sensitive-path deny templates. They are the community-facing
@@ -234,8 +250,8 @@ release gate.
 ### 9. Init Requirements Are Declarative
 
 Bundles and project manifests may declare initialization requirements, setup
-checks, package hints, or tool preset expectations. They must not ship
-executable initialization scripts.
+checks, and expected-command declarations. They must not ship executable
+initialization scripts.
 
 Allowed:
 
@@ -260,6 +276,31 @@ modify profile grants automatically
 Manager compiles requirements into an InitPlan. The user applies the plan when
 it changes authority.
 
+### 10. Guest Base Environment Is Declarative Data
+
+An ecosystem artifact may declare a guest base image reference: an image name
+plus digest, nothing more. Backends consume that reference to start the guest.
+
+The dividing line is data consumed versus steps executed. Referencing an
+existing image is data. Ecosystem-shared preparation steps that Hideout would
+execute — Dockerfile-like RUN, install scripts, first-boot hooks — remain
+prohibited until a dedicated trust design.
+
+A bad image degrades to the threats the boundary already contains: hostile
+code running inside the guest, the A2/A3 adversary classes in
+[threat-model.md](threat-model.md). It gains no host authority, so a declared
+image reference does not trigger the host trust gate and does not touch the
+host isolation claims.
+
+The image digest participates in the environment fingerprint. Changing the
+image reference means a new environment, not a mutation of the existing one.
+
+Backend configuration — mounts, port forwards, network, provisioning
+fragments — is host domain and is always generated by Hideout, never injected
+by ecosystem artifacts. An image may carry in-guest autostart behavior; that
+behavior runs in the guest domain and is contained by the boundary, but
+Hideout never executes any host-side hook carried by an image.
+
 ## Layered Architecture
 
 ```text
@@ -280,7 +321,7 @@ Permission Analyzer
         |
         v
 Manager Plan
-  install / enable / project apply / init / update / rollback / export
+  install / project apply / init / update / rollback / export
         |
         v
 Policy Compiler
@@ -307,6 +348,9 @@ tarball
 git URL
 github:owner/repo/path@ref
 ```
+
+The trust vocabulary for resolved sources is defined by the Trust Model in
+[policy-config-supply-chain.md](policy-config-supply-chain.md#trust-model).
 
 The resolver records:
 
@@ -335,7 +379,8 @@ Required checks:
 - local absolute path scan;
 - checksum verification when lock data exists.
 
-The verifier produces `CompatibilityReport` and `VerificationReport`.
+The verifier produces a `VerificationReport`, which carries the compatibility
+result as a field.
 
 ### Bundle Store
 
@@ -349,7 +394,7 @@ Rules:
 
 - installed versions are content-addressed or checksum recorded;
 - updates install a new version instead of mutating the old one;
-- rollback changes enabled references, not stored content;
+- rollback changes confirmed references, not stored content;
 - local edits to installed bundle content make verification fail.
 
 ### Permission Analyzer
@@ -400,17 +445,11 @@ runtime must not expose raw Go standard library packages or subsystem handles.
 
 ### Trust Store
 
-Tracks where installed artifacts came from and what verification was performed.
-
-Trust levels:
-
-```text
-local
-git-unverified
-verified-checksum
-signed
-official
-```
+Tracks where installed artifacts came from and what verification was
+performed. The trust vocabulary is defined by the Trust Model in
+[policy-config-supply-chain.md](policy-config-supply-chain.md#trust-model):
+two levels, `local` and `third-party`, recorded as a field of local install
+state.
 
 Trust affects warnings and review UX. It does not bypass runtime validation.
 
@@ -427,17 +466,17 @@ BundleReference
 BundleEntrypoint
 BundlePermission
 Recipe
+GuestImageRef
 InitRequirement
 InitPlan
 ProjectManifest
 ProjectLock
 ProjectApplyPlan
-CompatibilityReport
 VerificationReport
-TrustPolicy
-ExportPlan
-RedactionRule
 ```
+
+Compatibility results are fields of `VerificationReport`. The trust level is a
+field of local install state, not a separate resource.
 
 Each resource needs:
 
@@ -496,7 +535,8 @@ Recipe is a smaller reusable policy pattern inside a bundle. Persona recipes are
 higher-level recipes for developer workflows, such as H5 development,
 Android-assisted workflows, iOS-assisted workflows, backend agents, or general
 AI-agent workflows. Recipes may compose adapters, policy templates,
-environment hints, doctor checks, and sensitive-path deny templates.
+environment hints, doctor checks, and sensitive-path deny templates, and may
+declare a guest base image reference (see Principle 10).
 
 ## Hideoutfile Contract
 
@@ -527,6 +567,12 @@ Preferred shape:
       "name": "web-agent-safe"
     }
   ],
+  "environment": {
+    "baseImage": {
+      "ref": "ghcr.io/vibe-agi/hideout-guest-node:22",
+      "digest": "sha256:5b0bcabd1ed22e9fb1310cf6c2dec7cdef19f0ad69efa1f392e94a4333501270"
+    }
+  },
   "projectPolicy": {
     "network": {
       "mode": "direct",
@@ -547,6 +593,10 @@ Preferred shape:
 
 Avoid a top-level `profile` field in project manifests. The project can request
 policy, but it does not own the user's profile.
+
+A project-declared base image is a suggestion like any other project
+declaration: it still flows through the project diff/apply review before it
+affects any environment.
 
 ## Lock And Local State
 
@@ -601,8 +651,9 @@ sequenceDiagram
   M->>A: audit bundle.install
 ```
 
-Install does not enable the bundle for any profile unless the plan explicitly
-contains an enable step.
+The install plan presents the permission diff, and the confirmation step is
+part of the same install flow. Without that confirmation, the stored bundle
+contributes nothing to effective policy.
 
 ## Sequence: Project Apply
 
@@ -670,11 +721,13 @@ command never talks to bundle scripts directly.
 
 ## Export Safety Matrix
 
-`hideout bundle export --from-profile` must be conservative.
+`hideout bundle export --from-profile` is a later increment. The matrix below
+is the contract it must satisfy when it ships, and it must be conservative.
 
 | Data | Default export | Reason |
 | --- | --- | --- |
 | Bundle references | allow | Shareable dependency graph |
+| Base image reference | allow | Guest-domain data, digest-pinned |
 | Command policy templates | allow | Reviewable policy |
 | HostFS templates with variables | allow | No local path leak |
 | Resolved local HostFS grants | reject | Host path leak |
@@ -711,8 +764,8 @@ Ecosystem foundation needs tests before public bundle usage:
 
 - schema validation for bundle and project manifests;
 - forbidden file and secret scan fixtures;
-- install plan/apply separation;
-- enable plan/apply separation;
+- install review-and-confirm flow: an unconfirmed install contributes nothing
+  to effective policy;
 - lock checksum mismatch fail-closed;
 - project manifest cannot mutate profile identity;
 - export redaction matrix tests;
@@ -734,14 +787,16 @@ not introduce a second ecosystem roadmap.
 - document ecosystem resource model;
 - define bundle and Hideoutfile schemas;
 - keep bundles config/script/docs/tests only;
-- keep install separate from enable;
+- keep install a single review-and-confirm flow that never takes effect
+  silently;
 - keep init requirements declarative;
 - route all ecosystem state through Manager resources;
 - define export safety matrix.
 
 ### First Product Increment
 
-- `hideout bundle install/list/verify/remove`;
+- `hideout bundle install/list/verify/remove` with the single review-and-confirm
+  install flow; no separate enable command;
 - local and Git source resolver;
 - bundle store;
 - project diff/apply;
@@ -753,7 +808,13 @@ not introduce a second ecosystem roadmap.
 
 - signed bundles;
 - official registry;
-- team policy server;
 - marketplace;
 - binary extension model, only after a separate security design;
-- automated compatibility farm.
+- imperative environment recipe artifacts: a declarative guest base image
+  reference is already an allowed guest-domain artifact field (Principle 10);
+  what stays gated is the imperative class — ecosystem-shared preparation
+  steps that Hideout would execute (Dockerfile-like RUN, install scripts,
+  first-boot hooks) — which needs a dedicated trust design covering source
+  identity, review, pinning, and setup-phase evidence. Until then, imperative
+  setup stays operator-authored and runs as ordinary in-boundary target
+  execution.

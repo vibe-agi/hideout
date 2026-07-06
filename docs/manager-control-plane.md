@@ -80,11 +80,11 @@ Minimum resource model:
 Profile
 Identity
 Environment
+GuestImageRef
 Session
 HostFSRule
 HostFSOverlay
 NetworkPlan
-AccessSensor
 CommandProxyRule
 OpenTarget
 PortBridge
@@ -99,34 +99,35 @@ InitPlan
 InitTask
 InitRun
 InitResult
-InstallTask, as an InitTask subtype for artifact placement
 BundleSource
 Bundle
 BundleVersion
 BundleReference
 BundleEntrypoint
 BundlePermission
-Recipe
 ProjectManifest
 ProjectLock
 ProjectApplyPlan
-CompatibilityReport
-VerificationReport
-TrustPolicy
-ExportPlan
-RedactionRule
 ```
+
+This list covers implemented resources plus near-term increments, not an
+implementation status table; [STATUS.md](STATUS.md) owns which resources exist
+today, and referencing an unimplemented resource fails closed.
+
+Environment covers the named environment model: the shared `default`
+environment plus explicitly named environments, registered in one environment
+registry.
+
+GuestImageRef means a declarative guest base image reference: an image name
+plus digest. It is guest-domain data consumed by backend prepare, it does not
+pass the host trust gate, and its digest participates in the environment
+fingerprint.
 
 CapabilityAdapter means a Manager-visible script adapter reference: entrypoint,
 bundle/version, declared permissions, required Core primitives, and risk labels
 for a domain workflow. It is not a backend adapter and does not execute
 authority directly. Backend adapters remain Go-owned backend substrate
 integrations.
-
-AccessSensor means the Later observation plane for guest filesystem, process, or
-network probes. It is a reporting and warning resource, not an authorization
-mechanism. Manager should use this term instead of defining separate
-filesystem/network sensors unless a future design intentionally splits them.
 
 Each resource needs:
 
@@ -171,14 +172,8 @@ ApplyDoctorFix(planId) -> InitRun
 PlanBundleInstall(source) -> InstallPlan
 ApplyBundleInstall(planId) -> BundleVersion
 
-PlanBundleEnable(profile, bundleRef) -> PolicyChangePlan
-ApplyBundleEnable(planId) -> BundleReference
-
 PlanProjectApply(projectPath) -> ProjectApplyPlan
 ApplyProjectApply(planId) -> ProjectManifest
-
-PlanBundleExport(profile, options) -> ExportPlan
-ApplyBundleExport(planId) -> ExportResult
 ```
 
 Plan output should be readable by CLI, TUI, and WebUI.
@@ -222,7 +217,7 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   state.
 - Manager API exposes the minimal run surface: `POST /api/v1/run/plan`,
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
-- Manager API exposes the minimal init/tool setup surface:
+- Manager API exposes the minimal init surface:
   `POST /api/v1/init/plan` and `POST /api/v1/init/apply`.
 - Manager API exposes controlled reusable environment lifecycle actions:
   `POST /api/v1/environment/stop/plan`,
@@ -244,6 +239,12 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   mutate only durable `profile.env.public`, `profile.env.inherit`, and
   `profile.env.deny` policy, use the same profile validator as CLI
   `profile env`, and must not return public env values in plan/apply responses.
+- The profile mutation endpoints above describe the current implemented
+  surface accurately. As the API stabilizes they converge to a single
+  `POST /api/v1/profile/policy/plan` and `POST /api/v1/profile/policy/apply`
+  pair with a `kind` discriminator (`command-proxy`, `hostfs`, `env`).
+  Convergence changes endpoint shape only; validators, plan/apply semantics,
+  and authority bounds are unchanged.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
   `hideout ui` server wires this factory to the same backend adapters used by
   CLI `run`; tests may install a fake backend. API handlers must not construct
@@ -277,7 +278,7 @@ Manager API may expose:
 - HostFS requested paths and rule IDs;
 - bundle permission diffs;
 - project manifest status;
-- compatibility and verification reports;
+- bundle verification status;
 - init plans, init task status, and redacted init results;
 - doctor remediation suggestions.
 
@@ -285,8 +286,9 @@ Current API v1 init and run resources:
 
 ```text
 POST /api/v1/init/plan
-  Input: InitAPIRequest with profile, backend, network, tool presets, and
-  user-declared npm global tools.
+  Input: InitAPIRequest with profile, backend, network, machine-setup inputs,
+  expected-command diagnostic declarations, and an optional guest base image
+  declaration.
   Output: InitPlan with typed InitTasks and structured nextSteps.
   Authority: planning only; no profile mutation, helper build, backend prepare,
   broker, HostFS service, package install, or host command execution.
@@ -295,9 +297,9 @@ POST /api/v1/init/apply
   Input: InitAPIRequest.
   Output: InitResult with the same plan/nextSteps shape.
   Authority: applies the same PlanInit -> ApplyInit chain as CLI init and
-  doctor fix. It may create store/profile state, write install metadata, and
-  update profile tool supply policy. It runs without an interactive prompt
-  channel in API v1, so confirmation-required tasks fail closed.
+  doctor fix. It may create store/profile state and write helper-artifact
+  install metadata. It runs without an interactive prompt channel in API v1,
+  so confirmation-required tasks fail closed.
 
 POST /api/v1/run/plan
   Input: RunAPIRequest with profile, backend, workspace, network override,
@@ -341,33 +343,51 @@ POST /api/v1/environment/clean/apply
   VM commands, broker tokens, proxy secret values, or host file handles.
 ```
 
+The environment lifecycle endpoints above also describe the current
+implemented surface accurately. As the API stabilizes they converge to a
+single environment lifecycle plan/apply pair carrying an `action` field
+(`stop` or `clean`), with the same target/skipped/apply model and authority
+bounds.
+
 The init API is intentionally not a generic profile-write endpoint. It exposes
-only typed init tasks and generic tool-supply fields validated by the profile
-schema. The run API is intentionally not a generic `host.exec` endpoint. Native
+only typed init tasks and expected-command diagnostic fields validated by the
+profile schema. The run API is intentionally not a generic `host.exec` endpoint. Native
 backend execution still requires explicit weak-isolation acknowledgement and is
 audited as a backend selection decision.
 
 ## Daemon Role
 
-Long term, Hideout should have a per-user local daemon:
+The steady-state architecture is daemon-first, in the Docker model: `hideoutd`
+is the resident Manager runtime, and CLI, TUI, and WebUI are its clients.
 
 ```text
 hideoutd
-  local Manager runtime and event hub
+  resident Manager runtime, environment registry owner, and event hub
 
 hideout CLI / TUI / WebUI
   authenticated clients over protected local transport
 ```
 
-The daemon exists to make observation and control continuous across CLI
-invocations. It is appropriate for:
+The daemon makes observation and control continuous across CLI invocations. It
+owns:
 
+- the environment registry: the shared `default` environment and explicitly
+  named environments;
 - live session and environment state;
 - redacted event streams for TUI/WebUI;
-- audit indexing and filtering;
-- prompt and approval channels;
+- in-memory audit filtering for event streams (there is no separate indexed
+  audit store; see
+  [tui-webui-experience.md](tui-webui-experience.md));
+- interactive confirmation prompt channels;
 - background cleanup, idle stop, and orphan repair;
 - local Manager API serving.
+
+The daemon stays in single-operator form: one operator token with full access,
+plus an optional read-only token for observation surfaces. Client role
+matrices, per-operation authorization grades, delegated approval protocols,
+and per-subscriber redaction tiers are enterprise shapes and are out of scope.
+Approval means the operator confirming an action interactively on their own
+machine, and every confirmation is recorded in audit.
 
 The daemon is not a new authority layer. It must call the same Manager Core
 plan/apply operations as CLI, TUI, and WebUI. It must not expose arbitrary host
@@ -375,6 +395,9 @@ execution, raw VM commands, broker tokens, proxy secret values, host file
 handles, or a raw profile writer. Per-run authority remains session-scoped and
 must be regenerated for each `hideout run` even when `hideoutd` is already
 running.
+
+The daemon introduces no tool installation channel: guest tools come from the
+declared base image or from operator-authored setup run inside the boundary.
 
 Daemon transport is security-sensitive:
 
@@ -386,41 +409,25 @@ Daemon transport is security-sensitive:
   visible to the guest.
 - Host loopback is not a sufficient trust boundary for the daemon API. A
   loopback HTTP listener may be used for a command-scoped browser UI only when
-  protected by a short-lived token and role; it must not be the default
-  long-lived daemon authority transport.
-- Every client must authenticate. Unix-socket clients should use OS peer
-  credentials when available; browser clients use short-lived tokens. Peer
-  credentials are not sufficient by themselves for weak native-backend
-  scenarios where the target and operator share the host UID; path
-  unreachability, tokens, and per-client roles still apply. Each authenticated
-  client gets a role such as read-only observer, operator, or prompt approver.
-- Authorization is per client and per operation. Read-only event subscription,
-  plan creation, apply, cleanup, and approval are separate permissions.
-- The guest must not learn daemon socket paths, daemon tokens, UI tokens, or
-  approval tokens. Endpoint exposure and PortBridge providers must not expose
-  the daemon API back into the guest.
+  protected by a short-lived token; it must not be the default long-lived
+  daemon authority transport.
+- Every client must authenticate with the operator token or the read-only
+  token. OS peer credentials on the Unix socket are a useful additional check,
+  but they are not sufficient by themselves for weak native-backend scenarios
+  where the target and operator share the host UID; path unreachability and
+  tokens still apply.
+- The guest must not learn daemon socket paths, daemon tokens, or UI tokens.
+  Endpoint exposure and PortBridge providers must not expose the daemon API
+  back into the guest.
 
-Approval channels are also authority-bearing. A prompt approval must be bound
-to the exact request fingerprint, session ID, requester, client role, expiry,
-and single-use nonce. The fingerprint is computed by Manager from the validated
-and canonicalized request; clients must not provide their own fingerprint
-string. Daemon-mediated approval must emit audit and must fail closed if the
-approving client is unauthenticated, lacks the approval role, or submits a
-replayed or mismatched approval.
+After a daemon restart, the daemon fails closed: live resources that cannot be
+re-associated with an active session are cleaned up or treated as unavailable
+instead of being adopted.
 
-Event streams must be redacted per subscriber. A daemon may aggregate sessions
-for indexing, but each subscriber receives only the fields and scope allowed by
-its role, profile/session filter, and local authentication state.
-
-After daemon restart, live resources are valid only when the daemon can prove
-they still belong to an active session using session-scoped state such as an
-epoch, nonce, pid/lock, or backend lease recorded by Manager. Resources that
-cannot be proven active must be cleaned up or treated as unavailable.
-
-Phase 1 uses embedded Manager Core in each command so `hideout run` remains
-available without starting a resident process. Promoting `hideoutd` is a
-product increment for persistent TUI/WebUI observation, prompts, and background
-maintenance.
+`hideoutd` is not implemented yet. Today each command embeds Manager Core, so
+`hideout run` works without a resident process, and that embedded mode remains
+supported. Delivering `hideoutd` as the resident steady-state Manager runtime
+is core roadmap work, sequenced after the CLI-first MVP surface.
 
 ## CLI, TUI, and WebUI Roles
 
@@ -448,12 +455,15 @@ best for:
 - recent denied paths;
 - network status;
 - init next steps.
-- per-profile tool and command-proxy state with CLI setup hints.
+- per-profile expected-command diagnostics and command-proxy state with CLI
+  setup hints.
 
-Future TUI increments can add full-screen keyboard navigation, selectable
-sessions and audit rows, first-run initialization, interactive doctor, HostFS
-rule management, and install-task apply flows. They must still call Manager
-Core operations instead of mutating stores or backends directly.
+The TUI stays the lightweight pane: side-by-side panels with keyboard
+shortcuts for audit observation and session management. Future TUI increments
+can add keyboard navigation, selectable sessions and audit rows, first-run
+initialization, interactive doctor, and helper repair apply flows; HostFS
+rule management belongs to the WebUI. They must still call Manager Core operations instead of mutating
+stores or backends directly.
 
 Suggested command:
 
@@ -470,27 +480,34 @@ terminal, uses Go, and can share process-level code with Hideout.
 ### WebUI
 
 Current WebUI smoke surface is a local Manager API client for overview,
-audit/resource summaries, generic tool setup, controlled run plan/apply, and
-reusable environment stop/clean plan/apply. It is best for:
+audit/resource summaries, expected-command diagnostics, controlled run
+plan/apply, and reusable environment stop/clean plan/apply. The WebUI is the
+fuller management surface. It is best for:
 
 - audit search and filtering;
+- policy editing;
+- environment management;
 - basic operations that benefit from visual review;
 - larger visual explanations;
-- onboarding;
-- session timeline.
+- onboarding.
 
-Future WebUI increments can add full policy editing, OpenTarget and port
-topology, HostFS overlay review, and richer session timelines.
+Future WebUI increments deepen that management role: full policy editing,
+environment management, and richer audit search and session detail views.
 
 WebUI should call Manager API and must not implement separate policy logic.
 
 ## Local API Security
 
-Default API exposure:
+Current implemented exposure:
 
 ```text
-Unix socket on macOS/Linux
-or 127.0.0.1 with random token for browser UI
+127.0.0.1 with a short-lived random token for the command-scoped WebUI server
+```
+
+Design-ready exposure, owned by the `hideoutd` daemon design:
+
+```text
+Unix socket under the Hideout runtime state directory on macOS/Linux
 ```
 
 Rules:
@@ -498,7 +515,10 @@ Rules:
 - no unauthenticated remote listener;
 - short-lived browser UI tokens;
 - audit all authority-changing operations;
-- sensitive values are redacted before API response;
+- Hideout-minted control-plane credentials are never included in API
+  responses; user/application data in local authenticated views follows the
+  deterministic redaction contract in
+  [privacy-run-design.md](privacy-run-design.md);
 - manager socket path lives under Hideout runtime state.
 - typed command-proxy mutation endpoints are limited to `host.open` command
   symbol registration and must not accept host command paths, provider code, or
@@ -536,8 +556,9 @@ mutate unrelated stores directly.
 - Manager packages exist;
 - CLI remains the primary user surface;
 - `hideout tui` exists as a read-only persistent smoke dashboard over Manager
-  overview, including per-profile tool and command-proxy visibility with CLI
-  setup hints. `--once` is the script/package-smoke snapshot mode.
+  overview, including per-profile expected-command diagnostic and
+  command-proxy visibility with CLI setup hints. `--once` is the
+  script/package-smoke snapshot mode.
 - `hideout ui` exists as a local WebUI smoke/operations surface backed by
   Manager API.
 - Manager overview exposes initial init, bundle, and project status summaries;
@@ -559,29 +580,26 @@ mutate unrelated stores directly.
 ### Next Product Increment
 
 - formal Manager resource schema;
-- per-user `hideoutd` design and implementation for persistent event streams,
-  prompt channels, background cleanup, and local API serving;
+- `hideoutd` implementation as the steady-state resident Manager runtime —
+  environment registry ownership, persistent event streams, confirmation
+  prompt channels, background cleanup, and local API serving — with CLI, TUI,
+  and WebUI as its clients;
 - expand InitTask resource schema and plan/apply operations beyond machine
   setup;
 - plan/apply operations for HostFS, network, OpenTarget, and broader
   profile/config mutations beyond typed command-proxy registration;
-- plan/apply operations for bundle install, bundle enable, project apply, and
-  bundle export;
+- plan/apply operations for bundle install confirmation and project apply;
 - TUI first-run wizard and interactive doctor;
 - richer WebUI audit/session/profile views beyond the current smoke surface;
 - ensure CLI paths call Manager Core for shared operations.
 
 ### Later
 
-- multi-user local policy;
-- team policy sync;
-- remote manager;
-- prompt/approval workflows.
+- richer interactive confirmation flows through the daemon prompt channel.
 
 ## Open Questions
 
 - Which `hideoutd` responsibilities must ship before interactive prompt flows:
-  event stream, background cleanup, approval channel, or all three?
+  event stream, background cleanup, confirmation prompt channel, or all three?
 - Which operations require plan/apply before product release?
-- Should TUI be the default first-run experience?
 - What is the smallest read-only WebUI worth shipping?

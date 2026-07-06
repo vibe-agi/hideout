@@ -2,15 +2,13 @@
 
 [English](README.md)
 
-Hideout 是一个面向不可信开发工具和 agent CLI 的本地隐私运行器。
-它把目标命令运行在可复用的 Lima 环境里，为目标提供隔离身份，
-通过类型化能力路由主机访问，并记录边界证据。
+Hideout 把不可信的开发工具和 agent CLI 运行在隔离的 backend 边界内
+（当前实现是可复用的 Lima 虚拟机），所有主机访问都经过类型化、可审计、
+fail-closed 的门进行中介，并记录可供检查的证据。隐私加固是收益之一，
+不是产品定义本身。
 
-当前状态：private alpha / supervised dogfood。核心 v1 路径已经产出一份本机
-release-candidate 证据，覆盖 Gate 0、Gate 1、Gate 2 Lima E2E、Gate 3
-严格代理、Gate 4 真实浏览器 host escape、capability probes 和通用 CLI
-dogfood smoke。公开 GA 仍需要面向 release artifact 的可重复证据、打包/分发
-证据以及发布签核。
+当前状态：private alpha；请在有人监督下运行。gate 与发布证据定义见
+[docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md)。
 
 ## Hideout 保护什么
 
@@ -19,6 +17,9 @@ Hideout 用显式能力替代主机上的 ambient authority：
 - 目标命令会获得隔离的 home、XDG 路径、机器身份和 git 配置；
 - 项目 workspace 会以读写方式挂载，用于保持正常开发体验；
 - workspace 之外的主机文件需要显式 HostFS 授权；
+- 环境变量遵循 profile env policy：显式 public 值、允许列表 inherit 和
+  deny 模式（`profile.env.public`、`profile.env.inherit`、
+  `profile.env.deny`）；
 - `open` 和 `preview.open` 这类主机逃逸通过类型化 broker 路由；
 - 代理凭证可以被 Hideout 使用，但不会出现在目标进程 env 里；
 - 每次运行都会写入 audit 和边界摘要证据。
@@ -75,6 +76,16 @@ hideout doctor
 - Linux guest shim；
 - Linux HostFS daemon。
 
+## 快速开始
+
+```bash
+hideout init --no-input --backend lima --network direct
+hideout run -- <cli>
+hideout run --fs read:/absolute/file -- <cli>
+hideout explain -- <cli>
+hideout audit show --limit 20
+```
+
 ## 第一次运行
 
 请使用专用的项目 checkout。不要从 `$HOME`、`~/.hideout` 或包含主机凭证
@@ -89,9 +100,8 @@ hideout run --profile smoke --backend lima --network direct -- pwd
 包括 `doctor` 检查、smoke run，以及已配置的通用 CLI 工具。
 
 第一次运行只应该验证 backend、workspace mount 和隔离身份。这里使用
-独立的 `smoke` profile，这样已有 `default` profile 上的工具策略不会在
-第一次检查时触发软件包供给。不要在这一步配置 CLI 工具供给；工具供给从
-下一节开始。
+独立的 `smoke` profile，这样已有 `default` profile 上的策略不会在
+第一次检查时触发额外的 guest setup。
 
 可复用 Lima 环境按 profile、workspace、backend 和工具策略建立索引。
 使用 `hideout list` 查看可 resume 的环境：
@@ -111,41 +121,33 @@ hideout run --profile smoke --rm -- <command>
 
 ## 运行一个 CLI 工具
 
-Hideout 不会 hardcode 某个具体产品的 CLI。你需要在 profile 上配置通用
-工具供给，然后运行命令。
+Hideout 不会 hardcode 某个具体产品的 CLI，也不 ship 软件包安装
+provider。guest 工具来自两条路径：
 
-对于 npm CLI：
+- 环境的 base image 提供基础工具链；
+- 其余工具由 operator 在边界内用普通 setup 命令自行安装，和任何其他
+  run 一样受同样的网络策略与审计约束。
+
+基于 npm 的供给路径正在被移除。
+
+先用 `init` 和 `doctor` 创建 profile，然后运行你想要的 CLI：
 
 ```bash
 hideout init \
   --profile agent \
   --backend lima \
-  --network direct \
-  --npm-package <npm-package> \
-  --npm-command <command>
+  --network direct
+
+hideout doctor --fix --dry-run --profile agent
 
 hideout run --profile agent --backend lima -- <command> --version
 ```
 
-`node-dev` 和 npm global 安装会在受管理的 guest setup 阶段运行，并且
-会在所选网络模式已经生效之后执行。它们会在目标命令启动前为可复用环境
-完成 provision，所以改变工具策略后的第一次运行，即使目标命令本身很小，
-也可能下载软件包。
-
-同一套 setup 可以先规划或后续修复：
+如果 base image 里缺少某个工具，用一次针对可复用环境的普通 run 在
+边界内安装：
 
 ```bash
-hideout doctor --fix --dry-run \
-  --profile agent \
-  --npm-package <npm-package> \
-  --npm-command <command>
-```
-
-如果需要更底层地编辑 profile：
-
-```bash
-hideout profile tools agent preset add node-dev
-hideout profile tools agent npm add --package <npm-package> --command <command>
+hideout run --profile agent -- <installer command>
 ```
 
 如果某个 CLI 需要持久化登录状态，把它放到隔离的 profile home，而不是
@@ -170,7 +172,8 @@ Hidden proxy mode 会在 guest 内使用 `tun2socks`。代理 secret 保存在
 host-only secret ref 中，不会传给目标进程。
 
 如果你的主机代理监听在 `127.0.0.1:7890`，Lima guest 应该通过
-`host.lima.internal:7890` 访问它。建议配置到一个专用 profile，让网络默认值明确且可复用：
+`host.lima.internal:7890` 访问它。建议配置到一个专用 profile，让网络
+默认值明确且可重复：
 
 ```bash
 export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
@@ -274,6 +277,9 @@ hideout tui --once --profile agent
 `hideout tui` 是终端观察台，适合在第二个终端里常驻运行，用来观察另一个
 终端里的 agent 或 CLI 行为。`--once` 只用于脚本和快照。
 
+`hideout ui --no-open --print-url` 在本机 Manager API 之上启动 WebUI
+体验面并打印地址；它是更完整的管理视图，任何首跑流程都不依赖它。
+
 常用清理命令：
 
 ```bash
@@ -293,6 +299,17 @@ hideout cleanup
 `stop` 和 `clean` 默认也会保持 backend 控制输出安静。排查 `limactl`
 行为时，可以给这些生命周期命令加 `--verbose`。
 
+## 可编程策略与共享
+
+边界决策可以通过受约束的 JavaScript（goja）entrypoint 编程，例如
+`command.decide` 和 `audit.redact`：脚本只在提供的 context 内做决策、
+分类和脱敏，永远不会获得文件系统、网络或进程访问。生态共享覆盖策略
+脚本、非敏感配置和声明式 base image reference；secret 通过 SecretRef
+参数化，由每个用户在本地自行填入。参见
+[docs/script-extension-architecture.md](docs/script-extension-architecture.md)
+和
+[docs/ecosystem-foundation-design.md](docs/ecosystem-foundation-design.md)。
+
 ## 验证
 
 快速本地检查：
@@ -301,23 +318,8 @@ hideout cleanup
 scripts/test-phase1.sh --quick
 ```
 
-必需自动化 gate：
-
-```bash
-scripts/test-phase1.sh --required
-```
-
-在 macOS + Lima + 真实浏览器 + operator proxy 上验证 release dogfood：
-
-```bash
-export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
-scripts/test-release-dogfood.sh
-```
-
-这会运行 Gate 0、native harness、真实 Lima E2E、严格 hidden proxy、
-真实浏览器 host escape、capability probes 和 generic CLI dogfood smoke。
-默认会在 `.hideout-release-evidence/` 下写入已脱敏的证据包。设置
-`HIDEOUT_RELEASE_EVIDENCE_DIR` 可以指定精确输出目录。
+完整 gate 与发布证据流程定义见
+[docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md)。
 
 ## 文档地图
 
@@ -328,3 +330,5 @@ scripts/test-release-dogfood.sh
 - [网络隐私](docs/network-privacy-architecture.md)
 - [OpenTarget 架构](docs/opentarget-architecture.md)
 - [分发与初始化](docs/distribution-bootstrap.md)
+- [生态基础设计](docs/ecosystem-foundation-design.md)
+- [脚本扩展架构](docs/script-extension-architecture.md)

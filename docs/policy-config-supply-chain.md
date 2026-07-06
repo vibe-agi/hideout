@@ -57,8 +57,8 @@ contracts for artifact verification, permission review, Manager resources,
 effective policy compilation, audit attribution, and release gates.
 
 Initialization requirements are declarative. Bundles and project manifests may
-declare required capabilities, setup checks, package hints, and tool preset
-expectations, but they must not carry executable install or init scripts.
+declare required capabilities, setup checks, and expected-command
+declarations, but they must not carry executable install or init scripts.
 
 ## Core Principle
 
@@ -103,13 +103,12 @@ web-agent-safe
   network recommendation: tun2socks preferred, direct allowed with warning
 ```
 
-### Tool Presets
+### Expected-Command Declarations
 
 Shareable:
 
 - guest required commands;
 - setup checks;
-- package install hints;
 - environment assumptions;
 - command proxy registrations.
 
@@ -119,8 +118,29 @@ Not shareable as authority:
 - host-specific binary paths;
 - user-specific install secrets.
 
-Tool presets may produce `InitRequirement` records. Manager turns those
-requirements into an InitPlan before anything is applied.
+Hideout ships no package-installation providers. Guest tools come from the
+declared base image or from operator-authored setup executed as ordinary
+in-boundary target execution. An expected-command declaration may check that
+a tool is present and explain how the operator can provide it; it must not
+supply installation steps for Hideout to execute.
+
+Expected-command declarations may produce `InitRequirement` records. Manager
+turns those requirements into an InitPlan before anything is applied.
+
+### Guest Base Environment References
+
+Shareable:
+
+- a guest base image reference: image name plus digest, nothing more.
+
+The reference is declarative guest-domain data, per the ecosystem foundation
+principle
+[Guest Base Environment Is Declarative Data](ecosystem-foundation-design.md#10-guest-base-environment-is-declarative-data).
+Backends consume it to start the guest; backend configuration itself —
+mounts, port forwards, network, provisioning fragments — is always generated
+by Hideout. References must be digest-pinned and must not embed registry
+credentials. The digest participates in the environment fingerprint, so a
+changed reference means a new environment.
 
 ### HostFS Templates
 
@@ -198,21 +218,9 @@ Shareable:
 
 - `command.decide`;
 - `audit.redact`;
-- future `network.decide`;
 - future `opentarget.decide`.
 
 Every script package must declare its entrypoints and required context fields.
-
-### Test Recipes
-
-Shareable:
-
-- expected denied paths;
-- expected OpenTarget behavior;
-- tool compatibility smoke tests;
-- bundle self-tests.
-
-These help the community maintain bundles as Hideout evolves.
 
 ### Documentation And Explanations
 
@@ -258,7 +266,7 @@ entrypoints, permissions, and the Policy Compiler composition order.
 This document does not redefine those shapes. It adds supply-chain rules:
 
 - sources must be pinned to a ref, digest, or local content checksum before an
-  artifact can be enabled;
+  artifact can take effect;
 - local absolute paths must stay in local overrides unless explicitly marked as
   examples;
 - project discovery must become a reviewable plan before any local policy
@@ -307,8 +315,6 @@ Later:
 
 ```text
 official registry
-private registry
-team policy server
 signed marketplace
 ```
 
@@ -330,6 +336,10 @@ hideout bundle verify web-agent-safe
 hideout bundle export --from-profile default --out ./my-policy
 ```
 
+`hideout bundle export --from-profile` is a later increment. The redaction
+and rejection rules in [What Must Not Be Shared](#what-must-not-be-shared)
+and [Validation](#validation) define what it may emit when it ships.
+
 Project commands:
 
 ```bash
@@ -346,11 +356,11 @@ hideout profile diff default
 hideout profile explain default
 ```
 
-Bundle enablement should stay under `hideout bundle`:
-
-```bash
-hideout bundle enable web-agent-safe --profile default
-```
+Bundle installation is a single review-and-confirm flow: `hideout bundle
+install` presents the permission diff, and the bundle takes effect for the
+selected profile or project scope only after the user confirms inside that
+flow. There is no separate enable command, and an unconfirmed install has no
+policy effect.
 
 Profile commands should focus on identity, clone, rotate, path, diff, and
 explain.
@@ -362,8 +372,8 @@ The ecosystem resource registry is owned by
 Supply-chain operations must use those Manager resources instead of writing
 profiles, bundle store state, project locks, or trust state directly.
 
-All install, update, remove, enable, project apply, rollback, and export
-operations should be plan/apply:
+All install, update, remove, project apply, rollback, and export operations
+should be plan/apply:
 
 ```text
 PlanBundleInstall(source) -> InstallPlan
@@ -374,8 +384,8 @@ ApplyBundleUpdate(planId) -> BundleVersion
 ```
 
 Plans must show permission changes before apply. Apply must audit the artifact
-source, resolved digest or ref, trust result, changed enabled references, and
-the profile or project scope affected.
+source, resolved digest or ref, trust result, changed confirmed references,
+and the profile or project scope affected.
 
 ## TUI And WebUI Surfaces
 
@@ -417,33 +427,38 @@ Update diff should show:
 - changed HostFS templates;
 - changed OpenTarget defaults;
 - changed network recommendations;
+- changed base image reference;
 - changed init requirements;
 - new or removed recipes;
 - schema contract changes.
 
 ## Trust Model
 
-Initial trust levels:
+Two trust levels:
 
 ```text
 local
-  User-authored local bundle.
+  Authored by the operator on this machine. No warning.
 
-git-unverified
-  Installed from Git without signature. Show warning and digest.
-
-verified-checksum
-  Digest pinned in lock file.
-
-signed
-  Future signed bundle.
-
-official
-  Future Hideout-maintained source.
+third-party
+  Anything not authored locally. Requires a digest pin, a permission diff,
+  and one explicit confirmation before it takes effect.
 ```
 
-Trust does not bypass runtime validation. A signed bundle can still only use
-declared permissions and constrained script APIs.
+The trust level is recorded as a field of local install state, not as a
+separate policy resource. A local trust override is the operator manually
+adjusting that recorded field (for example marking a personal fork as
+locally trusted); it lives in local install state, is never shareable, and
+never weakens validator authority. Trust does not bypass runtime validation: a trusted
+bundle can still only use declared permissions and constrained script APIs.
+
+Signing, revocation/kill-switch, publisher identity, and namespace protection
+are day-1 requirements of a public marketplace launch and are not designed
+ahead of that launch. When a marketplace exists, its review pipeline —
+including LLM-assisted review — is a probabilistic screen, not a security
+boundary: it governs store admission and review UX only, runtime authority
+still ends at the Go validators, and any review miss must be contained by the
+boundary.
 
 ## Validation
 
@@ -457,7 +472,9 @@ Install must validate:
 - checksums;
 - no forbidden files;
 - no absolute local paths in shareable templates unless marked as example;
-- no embedded secret-looking values when detectable.
+- no embedded secret-looking values when detectable;
+- base image references are digest-pinned;
+- no embedded registry credentials.
 
 Runtime must validate again when applying the effective policy.
 
@@ -488,9 +505,9 @@ Recommended ecosystem structure:
 
 ```text
 hideout-bundles/
-  official/
+  curated/
     web-agent-safe/
-    node-dev/
+    web-dev/
     browser-preview/
   community/
     android-basic/
@@ -498,10 +515,14 @@ hideout-bundles/
     python-data/
 ```
 
+Directory names carry no trust: a bundle under `curated/` is still
+`third-party` until the operator confirms it locally.
+
 Community contribution requirements:
 
 - README explains purpose and risks;
-- bundle self-test exists;
+- bundle self-test exists, covering expected denied paths, expected
+  OpenTarget behavior, and tool compatibility smoke tests;
 - changelog exists;
 - permissions are minimal;
 - no secret values;
@@ -524,10 +545,11 @@ must not be read as a second roadmap or a second phase plan:
   forbidden-file, and secret-looking-value validation;
 - local directory and Git source resolution;
 - install/update/remove as Manager plan/apply operations;
-- explicit install-vs-enable separation;
+- single review-and-confirm install flow with no silent effect;
 - export redaction and rejection reports;
 - TUI/WebUI bundle list, update, trust, and diff surfaces;
-- future signatures, publisher trust, registry, and compatibility farm design.
+- marketplace day-1 trust machinery (signing, revocation, publisher identity,
+  namespace protection) when a public marketplace launches.
 
 If this checklist conflicts with the ecosystem delivery sequence, the sequence
 wins and this section must be updated to point at the new source of truth.

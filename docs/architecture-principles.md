@@ -21,8 +21,18 @@ engineering rules.
 
 ## Product North Star
 
-Hideout is a local privacy runtime for running curious or untrusted developer
-tools while preserving normal project ergonomics.
+Hideout runs an observed command inside a backend boundary and mediates every
+host capability it needs — environment variables, host files, network egress,
+command interception, and typed host actions — through gates that are
+configurable, dynamically decidable by constrained JS policy, audited, and
+fail-closed.
+
+Identity synthesis (fake home, env, machine identity) is how a guest is
+initialized — a virtualenv for machine identity. The boundary and the mediated
+gates are the product; privacy outcomes are benefits delivered by those gates,
+not a separate mechanism. Shared policy, scripts, and recipes grow an ecosystem
+of boundary policy plus declarative guest environment selection (base image
+references), not of imperative environment building.
 
 The target user should experience:
 
@@ -70,6 +80,12 @@ typed authority:
 - Network setup;
 - SecretRef used by Hideout setup, not by the target env.
 
+Inside the workspace subtree the workspace authority wins: the workspace is a
+uniform read/write zone, and HostFS rules do not apply to paths inside it.
+Planning and doctor surfaces must warn loudly when a HostFS rule is shadowed
+by the workspace, and workspace membership is decided by real file identity
+(`os.SameFile`-level normalization), never by string prefix.
+
 ### 3. Every Host Escape Is Typed
 
 Hideout must not grow a generic "run this on the host" mechanism. Host escapes
@@ -96,7 +112,7 @@ host.fs passthrough mount without policy
 
 ### 4. UI And Daemon Are Not Authority
 
-CLI, TUI, WebUI, and any future `hideoutd` daemon are interaction or transport
+CLI, TUI, WebUI, and the `hideoutd` daemon are interaction or transport
 surfaces over the same Manager Control Plane. They must not own policy
 semantics, backend authority, or filesystem mutation rules.
 
@@ -114,11 +130,27 @@ Profile / Session / Environment / Backend / Broker / HostFS / Network / Policy /
 
 If the WebUI and TUI disagree, the domain model is wrong.
 
-`hideoutd` may keep live state, event streams, API sockets, prompt channels,
-and cleanup workers alive across CLI invocations. It must not become a generic
-host execution service, a long-lived bearer of per-run capability tokens, or a
-path around Manager plan/apply validation. Per-run authority still belongs to
-the session, broker, and typed capability records described below.
+The steady-state architecture is daemon-first, in the Docker model: `hideoutd`
+hosts the Manager API and owns cross-invocation state — the environment
+registry, session state, event streams, prompt channels, and cleanup workers —
+and CLI, TUI, and WebUI are its clients. The daemon stays in single-operator
+form: an operator token with full access plus an optional read-only token.
+Client role matrices, delegated approval channels, per-subscriber redaction
+tiers, and replay-protection protocols are enterprise shapes and are out of
+scope; approval is the operator confirming interactively on their own machine,
+recorded in audit.
+
+The daemon must not become a generic host execution service, a long-lived
+bearer of per-run capability tokens, or a path around Manager plan/apply
+validation. Per-run authority still belongs to the session, broker, and typed
+capability records described below. The daemon also must not grow tool
+installation channels: guest tools come from the declared base image or from
+operator-authored setup run inside the boundary.
+
+Surface division: the TUI is the lightweight pane — panels and shortcuts for
+watching audit and managing sessions; the WebUI is the fuller management
+surface. Both read the same Manager data model; neither owns policy semantics,
+and the page sets are not required to mirror each other.
 
 ### 5. Session Authority Is Ephemeral
 
@@ -137,6 +169,18 @@ Per-run authority includes:
 
 Every `hideout run` refreshes these even when it resumes a warm environment.
 
+Environments are named, user-selected runtime boxes. A shared `default`
+environment gives zero-configuration runs from any directory; a named
+environment created explicitly gives isolation and a statically mounted
+workspace. Inside a shared environment each session sees only its own
+workspace plus HostFS grants: the session mount namespace scopes that view
+for ordinary target processes, but it is not a wall against guest root — a
+guest-root target in a shared environment may reach other attached
+workspaces. Operators who need the VM-level wall between projects create a
+dedicated environment. Changing an environment's pinned
+configuration (base image digest, backend, profile binding) is drift: the
+product fails closed and offers recreation, never a silent switch.
+
 ### 6. Policy Is Composed, Deny Wins
 
 Profile, environment, run flags, and scripts may add authority only through the
@@ -144,6 +188,10 @@ same effective policy model. User-configured deny rules reduce authority and
 win over allow rules.
 
 No layer may implement "last flag wins" for privacy authority.
+
+Policy is live: grant and deny changes, script updates, and env policy edits
+take effect on the next evaluated request without restarting the environment.
+Only physical mounts follow the environment lifecycle.
 
 ### 7. Observable By Default
 
@@ -156,10 +204,19 @@ Every material boundary decision must be visible in at least one of:
 - TUI/WebUI summary.
 
 Audit must be useful to the user. For HostFS, requested paths are recorded so
-the user can inspect what the target program probed. Secrets, broker tokens,
-user-provided rule reasons, and extra resolved implementation paths must not be
-recorded. Read-only HostFS write attempts are recorded as audit events too, but
-must not mutate the host filesystem.
+the user can inspect what the target program probed. Redaction is
+deterministic, not heuristic: Hideout-minted control-plane credentials (broker
+tokens, UI tokens, `HIDEOUT_SECRET_*` backing values under their self-known
+names, generated machine-id) must never be recorded, and user-provided rule
+reasons and extra resolved implementation paths stay out of audit. Raw proxy
+URLs stay out because the Hideout-managed proxy secret flow must not emit
+them and the redactor strips their `HIDEOUT_SECRET_*`-labeled forms; the
+redactor does not scan for proxy-shaped user strings. User/application data
+inside requests is recorded verbatim as host-local evidence, because Core cannot
+reliably identify which user values are secrets; redacting user data belongs to
+the export/share boundary and user-owned `audit.redact` policy. Read-only
+HostFS write attempts are recorded as audit events too, but must not mutate the
+host filesystem.
 
 ### 8. Backend Is A Substrate, Not The Product
 
@@ -187,6 +244,12 @@ must not become arbitrary plugins.
 Scripts may decide or redact only within supplied context. They must not access
 filesystem, network, process APIs, Node APIs, timers, or mutable Hideout state.
 The builtin validator remains the final authority.
+
+Script capability grows along the expressiveness axis, never the authority
+axis: strengthen what scripts can see, decide, and propose; never what they can
+execute. Rich decision context and bounded factual queries are welcome;
+execution paths, tokens, and raw authority-bearing outputs are not. Scripts
+carry zero authority precisely so they can be shared.
 
 ### 10. Core Owns Capabilities, Scripts Compose Them
 
@@ -233,6 +296,40 @@ These rules apply to Command Proxy, OpenTarget, Endpoint Exposure, Network,
 HostFS, and future host reach-back features. A feature that needs a
 product-specific judgment should put that judgment in an adapter or recipe. A
 feature that touches host authority must end in a typed Go capability provider.
+
+The default is positive as well as restrictive: a new flexible product
+judgment is built as a Go primitive plus a constrained JS decision point.
+Hard-coding such a judgment into compiled Go requires a recorded reason.
+Capability execution, validators, redaction, and transport remain Go-owned
+always.
+
+Tool supply follows the same split. A target command is just a guest process,
+and an expected-command declaration is diagnostic and environment-fingerprint
+input, not an installation request. Hideout does not materialize guest tools:
+they come from the declared base image or from operator-authored setup run
+inside the boundary. A package manager, editor, browser, or agent CLI name
+must not become Core product semantics.
+
+Hideout does not own tool installation as a product domain; it owns the
+boundary once a tool runs. Guest tools come from two paths: the declared base
+image, and operator-authored setup executed as an ordinary in-boundary
+`hideout run` (see principle 14). Hideout ships no package-installation
+providers.
+
+The base image is declarative guest-domain data, not host authority. An
+ecosystem artifact may declare a base image reference — a name plus digest,
+nothing more — and backends consume that reference to start the guest. A bad
+image is contained by the boundary, so image references do not pass the host
+trust gate; the image digest participates in the environment fingerprint, and
+changing it means a new environment. The dividing line is data consumed
+versus steps executed: referencing an existing image is data;
+ecosystem-shared preparation steps that Hideout would execute (Dockerfile
+RUN, install scripts, first-boot hooks) remain prohibited until a dedicated
+trust design promotes them
+([ecosystem-foundation-design.md](ecosystem-foundation-design.md)). Backend
+configuration — mounts, port forwards, network, provisioning fragments — is
+host domain and is always generated by Hideout, never injected by ecosystem
+artifacts.
 
 The normative script SDK classes and runtime restrictions are defined in
 [script-extension-architecture.md](script-extension-architecture.md). The SDK
@@ -285,8 +382,11 @@ Git, versioned, and installable.
 
 Local profile instances are not the shareable unit. They may contain identity
 material, host paths, secret refs, local overrides, and usage-derived decisions.
-Shared artifacts must express templates, defaults, scripts, recipes, and
-declared inputs instead of exporting private local state.
+Shared artifacts must express templates, defaults, scripts, recipes, base
+image references, and declared inputs instead of exporting private local
+state. Secrets are parameterized through SecretRef declared inputs: the shared
+artifact names what it needs, the user supplies the value locally, and the
+artifact body never contains sensitive material.
 
 ### 13. Ecosystem Artifacts Are Not Authority
 
@@ -303,7 +403,9 @@ No bundle, project file, or goja script may silently mutate a profile, enable a
 HostFS grant, add a passthrough mount, launch a host app, bridge a port, change a
 network route, or apply a HostFS overlay without an explicit Manager operation.
 
-Install is separate from enable. Project discovery is separate from project
+Installing an artifact never silently grants effect: taking effect requires an
+explicit confirmed step, which may be presented inside the same install flow
+as a single review-and-confirm. Project discovery is separate from project
 apply. Export is separate from share.
 
 ### 14. Initialization Is Planned, Not Scripted
@@ -331,6 +433,34 @@ guest shell bootstrap supplied by ecosystem code
 
 Session bootstrap files are generated by Hideout for a specific run. They are
 not a user or ecosystem extension point.
+
+A declared base image reference is not scripted initialization: it is data
+compiled into the backend prepare plan (principle 10). The prohibition above
+targets executable steps supplied by ecosystem code, not declarative inputs.
+
+Preparing a reusable environment by running setup commands as an ordinary
+`hideout run` target is not initialization and is not restricted by this
+principle. That path already carries the full boundary: selected network
+policy, no ambient host authority, audit, and fail-closed behavior. The
+prohibition above is about initialization mechanisms and ecosystem extension
+points, not about what an operator deliberately executes inside the boundary.
+
+### 15. One Operator, MVP First
+
+Hideout is built for a professional individual operator on their own machine.
+Every security mechanism must map to a threat that operator actually faces:
+an untrusted CLI inside the boundary, and occasionally a third-party artifact
+pulled from Git. Machinery that defends threats which only exist at
+organization scale — role systems, approval workflows, policy distribution,
+compliance evidence, supply-chain infrastructure — is not built, and designs
+must not accrete it speculatively. Ecosystem trust machinery (signing,
+revocation, publisher identity, namespace protection) becomes a day-1
+requirement when a public marketplace launches and is not designed ahead of
+that launch.
+
+The user-facing concept set stays small: environment, workspace, permission,
+audit. New features that force a new noun into the first-run path need a
+recorded reason.
 
 ## Capability Lifecycle
 

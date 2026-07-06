@@ -202,7 +202,7 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	if !strings.Contains(string(manifest), `"runtimeVerify": true`) {
 		t.Fatalf("manifest missing runtimeVerify: %s", manifest)
 	}
-	if !strings.Contains(string(manifest), `"dnsPolicy": "proxy endpoint uses IP literal or guest /etc/hosts only before TUN; target DNS follows TUN route after bootstrap"`) {
+	if !strings.Contains(string(manifest), `"dnsPolicy": "proxy endpoint uses IP literal or guest /etc/hosts only before TUN; target DNS follows the TUN default route after bootstrap; connected-subnet resolvers are not yet verified"`) {
 		t.Fatalf("manifest missing tun2socks DNS policy: %s", manifest)
 	}
 	if !strings.Contains(string(manifest), `"localBypassHosts": [

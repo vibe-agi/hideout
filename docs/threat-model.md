@@ -61,6 +61,7 @@ Not in TCB:
 - Goja script code;
 - CLI, TUI, or WebUI presentation code;
 - workspace contents;
+- guest base image contents, including images referenced by shared artifacts;
 - browser pages opened by the target;
 - remote package registries, npm scripts, or project build tools.
 
@@ -74,27 +75,26 @@ boundary is the host-side broker validator, HostFS policy, explicit user
 grants, and audited TCB execution path, not the assumption that guest root
 cannot read the token.
 
-Future `hideoutd` daemon mode is part of the local management TCB when enabled.
-Its transport must be unreachable from backend guests by construction. A Unix
+The `hideoutd` daemon is part of the local management TCB when enabled. Its
+transport must be unreachable from backend guests by construction. A Unix
 socket must live under a runtime subdirectory of the effective Hideout store
 root with private ancestors, not under workspace, HostFS grants, passthrough
 mounts, or any guest-visible path. This reuses the existing store-reserved
 HostFS guard and workspace mount safety guard rather than creating a separate
 guest-unreachability mechanism.
 Host loopback is not a trust boundary for daemon authority: loopback HTTP is
-acceptable only as short-lived browser UI transport with explicit client tokens
-and roles, not as an unauthenticated daemon API.
+acceptable only as short-lived browser UI transport with explicit client
+tokens, not as an unauthenticated daemon API.
 
-Daemon clients must be authenticated and authorized per operation. Read-only
-event subscription, plan creation, apply, cleanup, and prompt approval are
-separate permissions. OS peer credentials are not sufficient by themselves for
-weak native-backend targets that share the host UID with operator clients.
-Approval records must bind to the exact request fingerprint, session ID,
-requester, approving client role, expiry, and a single-use nonce. The
-fingerprint must be computed by Manager from the validated canonical request,
-not supplied by the client. Event streams must be redacted per subscriber.
-After restart, the daemon must fail closed for live resources it cannot prove
-still belong to an active session.
+The daemon serves one operator on one machine. Clients authenticate with an
+operator token (full access) or an optional read-only token; there are no
+per-operation role matrices, delegated approval channels, or per-subscriber
+redaction tiers. OS peer credentials are not sufficient by themselves for
+weak native-backend targets that share the host UID with operator clients,
+which is why a token is required at all. Approval is the operator confirming
+interactively, recorded in audit against the Manager-computed canonical
+request. After restart, the daemon must fail closed for live resources it
+cannot prove still belong to an active session.
 
 ## Assets
 
@@ -116,6 +116,13 @@ The workspace is intentionally shared unless a later workspace-filtering
 feature is enabled. Project-local secrets inside the workspace are not protected
 by the Phase 1 default workspace model.
 
+When the shared default environment ships, sessions from different workspaces
+share one guest kernel: cross-workspace isolation inside that environment is
+session mount-namespace level, which is weaker than the VM boundary between
+environments. Guest-root target code (A3) in a shared environment may reach
+other attached workspaces. Operators who need the VM-level wall between
+projects create a dedicated named environment.
+
 ## Adversaries
 
 Phase 1 designs against:
@@ -124,7 +131,10 @@ Phase 1 designs against:
   config, network settings, machine identity, or browser state;
 - A2: malicious target code running as the target user inside the guest;
 - A3: malicious target code that gains guest root inside the sandbox;
-- A4: malicious policy bundle or script attempting to request or hide authority;
+- A4: malicious policy bundle or script attempting to request or hide
+  authority, including a shared artifact that declares a malicious guest base
+  image — the image's worst case degrades to A2/A3 (code inside the boundary),
+  which is why declarative image references need no host trust review;
 - A5: malicious workspace content that influences tools running inside the
   guest.
 
@@ -188,15 +198,29 @@ the default policy profile:
   include HostFS backing secrets, broker tokens, proxy secrets, browser
   automation secrets, endpoint secrets, or full sensitive target paths.
 
+Claims that reference audit evidence assume the default audit-enabled profile
+state. Disabling JSONL audit (`audit.enabled=false` or `--audit off`) removes
+the persistent evidence trail for that run without disabling policy
+enforcement, broker validation, or cleanup; the Audit and Explain contract in
+[privacy-run-design.md](privacy-run-design.md) owns that behavior.
+
 ## Non-Claims
 
 Hideout Phase 1 does not claim:
 
 - workspace secrets are hidden from the target by default;
 - network exfiltration is impossible in `direct` mode;
+- DNS leak protection in `tun2socks` mode. Route verification proves the
+  default-route swap and the proxy endpoint bypass, but backend-specific DNS
+  verification has not shipped: a guest resolver on a connected backend subnet
+  can bypass the TUN default route. The DNS policy and its release gates are
+  owned by [network-privacy-architecture.md](network-privacy-architecture.md);
 - HostFS write overlay is product-ready;
 - Endpoint Exposure, Browser Control, Preview Open, adb, simulator, or IDE
   integrations are product-ready only when separately promoted;
+- identifying user/application secrets embedded in runtime data. Redaction is
+  deterministic over Hideout-minted control-plane credentials; local audit is
+  full-fidelity host-local evidence for user data;
 - policy scripts are trusted code;
 - OS-level isolation for the native backend. Native is only a weak development
   harness and is not dogfood or release evidence for backend isolation;
@@ -366,6 +390,26 @@ Boundary Summary is intentionally lossy. It should answer "what classes of host
 authority were touched?" without disclosing sensitive target paths, broker
 tokens, proxy secrets, backing paths, or endpoint secrets.
 
+Redaction in evidence is deterministic, not heuristic. Hideout-minted
+control-plane credentials (broker `cap_` / UI `ui_` token values,
+`HIDEOUT_SECRET_*` backing names and values adjacent to those names, generated
+machine-id, and Core's own control-plane detail field names) never enter audit
+or summaries; these namespaces, values, and field names are self-known, so
+stripping them is exact. Raw proxy URLs stay out of evidence as a flow
+obligation: the Hideout-managed proxy secret flow must not emit them, and the
+redactor strips the `HIDEOUT_SECRET_*`-labeled forms in which they can appear
+— it does not scan for arbitrary proxy-shaped strings, because a bare
+`socks5://...` value is indistinguishable from a user URL. User/application
+request data is recorded verbatim in host-local audit because Core cannot
+reliably identify user secrets, and false redaction breaks both policy and
+evidence fidelity. One deliberate exception to "never enter script context":
+`command.decide` scripts receive the canonicalized request `target` and `argv`
+raw, because the requesting guest already possesses them and real policy needs
+them; if a guest embeds its own token there, the script sees it, but audit
+still strips control-plane token shapes. Audit that leaves the machine passes
+the export boundary: deterministic control-plane stripping plus user-owned
+redaction.
+
 ## Phase 1 Status
 
 Required:
@@ -400,4 +444,6 @@ Design-ready or later:
 - adb, simulator, and IDE adapters;
 - additional endpoint exposure directions and provider promotion beyond
   host-to-guest;
-- full bundle signing, revocation, and workspace trust UX.
+- marketplace trust machinery — signing, revocation/kill-switch, publisher
+  identity, and namespace protection are day-1 requirements when a public
+  marketplace launches, and are not designed ahead of that launch.

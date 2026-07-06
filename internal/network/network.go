@@ -133,7 +133,7 @@ func Prepare(spec Spec) (Plan, error) {
 			return plan, err
 		}
 		plan.Engine = ModeTun2Socks
-		plan.DNSPolicy = "proxy endpoint uses IP literal or guest /etc/hosts only before TUN; target DNS follows TUN route after bootstrap"
+		plan.DNSPolicy = "proxy endpoint uses IP literal or guest /etc/hosts only before TUN; target DNS follows the TUN default route after bootstrap; connected-subnet resolvers are not yet verified"
 		plan.ProxySecretRef = ref
 		plan.Verified = spec.Verified
 		plan.RuntimeVerify = spec.RuntimeVerify
