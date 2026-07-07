@@ -205,11 +205,10 @@ deterministic: tests must prove Hideout-minted control-plane credentials
 (broker `cap_`/UI `ui_` token values, `HIDEOUT_SECRET_*` backing names and
 values adjacent to those names, generated machine-id, and Core control-plane
 detail field names) never appear in script context, audit, API/WebUI
-responses, or exports. Known gap: the machine-id strip is currently defeated
-by identity-ID derivation (stripping the `id_` prefix from a displayed
-identityId yields the raw machine-id); the redactor contract itself holds,
-and closing the derivation gap is tracked as a STATUS known issue. Tests must
-also prove that user/application data (URLs, argv, query
+responses, or exports. Machine-id display IDs are decoupled from generated
+machine-id material, and legacy coupled IDs rotate through the profile metadata
+path, so the redaction contract is not defeated by identity-ID derivation. Tests
+must also prove that user/application data (URLs, argv, query
 values, headers) is preserved verbatim on local surfaces — including a bare
 proxy-shaped string that carries no `HIDEOUT_SECRET_*` label, which Core
 cannot distinguish from a user URL. Keeping raw proxy URLs out of target
@@ -559,11 +558,15 @@ Required checks:
 - cleanup stops `tun2socks`, restores the prior default route when known, removes
   `hideout0`, and deletes runtime proxy files.
 
-Known coverage gap: Gate 3 does not yet verify DNS leak behavior. Backend-specific
-DNS verification is outstanding hardening owned by
-[network-privacy-architecture.md](network-privacy-architecture.md); until it
-ships and adds a Gate 3 check, `tun2socks` runs carry the explicit DNS
-non-claim recorded in [threat-model.md](threat-model.md).
+Gate 3 verifies the DNS closure end to end on real Lima: with privacy mode it
+confirms the guest resolver is the DoH stub (`dns_mediated=yes`), resolves a name
+through the mediated DoH path and fetches over HTTPS (`https_request=ok`), and
+that the connected-subnet resolver is blocked, while the proxy secret stays
+hidden. It requires `HIDEOUT_GATE3_MEDIATED_RESOLVER` (a DoH server IP, default
+`1.1.1.1`). The DNS closure and its architecture are owned by
+[network-privacy-architecture.md](network-privacy-architecture.md). The residual
+A3 guest-root routing bypass remains a non-claim in
+[threat-model.md](threat-model.md).
 
 Suggested target command:
 

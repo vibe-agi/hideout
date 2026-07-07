@@ -71,6 +71,13 @@ type Network struct {
 	Mode            string `json:"mode"`
 	ProxyEnvVisible bool   `json:"proxyEnvVisible"`
 	ProxySecretRef  string `json:"proxySecretRef,omitempty"`
+	// MediatedResolver is the operator-declared DNS resolver carrier for
+	// privacy-mode DNS mediation. Privacy mode points the guest resolver at the
+	// guest-local DoH stub, which forwards each query as DoH/HTTPS to this
+	// resolver over the privacy path, and blocks the connected-subnet resolvers;
+	// the guest bootstrap fails closed when privacy-mode DNS mediation is required
+	// but no resolver is declared. Validated as an IP address when set.
+	MediatedResolver string `json:"mediatedResolver,omitempty"`
 }
 
 // EnvironmentConfig carries profile-level environment defaults. BaseImage is
@@ -510,7 +517,7 @@ func EphemeralIdentityProfile(p Profile) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	machineID, err := machineIDFromIdentityID(id)
+	machineID, err := newMachineID()
 	if err != nil {
 		return Profile{}, err
 	}
@@ -643,6 +650,13 @@ func (p Profile) Validate() error {
 			return fmt.Errorf("network.proxySecretRef: %w", err)
 		}
 	}
+	if mr := strings.TrimSpace(p.Network.MediatedResolver); mr != "" {
+		if net.ParseIP(mr) == nil {
+			return fmt.Errorf("network.mediatedResolver %q is not an IP literal", mr)
+		}
+	}
+	// A tun2socks profile without a mediated resolver remains valid until the
+	// DNS route block and bidirectional proof are implemented atomically.
 	if len(p.Tools.Presets) > 0 || len(p.Tools.LegacyPresets) > 0 {
 		return errors.New("tools.presets has been removed; use tools.expectedCommands for diagnostics only")
 	}
@@ -1215,8 +1229,11 @@ func ensureMetadata(p *Profile, mode, source string) error {
 		}
 		p.Metadata["identityId"] = id
 	}
-	if p.Metadata["machineId"] == "" {
-		machineID, err := machineIDFromIdentityID(p.Metadata["identityId"])
+	if p.Metadata["machineId"] == "" || isLegacyCoupledMachineID(p.Metadata["identityId"], p.Metadata["machineId"]) {
+		// Generate a fresh machine-id, and rotate any legacy value that was
+		// derived from the identity ID by the removed "strip id_ prefix" scheme
+		// so it can no longer be recovered from a displayed identity reference.
+		machineID, err := newMachineID()
 		if err != nil {
 			return err
 		}
@@ -1251,7 +1268,7 @@ func assignNewIdentity(p *Profile, oldIdentityID, operation string) error {
 		p.Metadata = map[string]string{}
 	}
 	p.Metadata["identityId"] = id
-	machineID, err := machineIDFromIdentityID(id)
+	machineID, err := newMachineID()
 	if err != nil {
 		return err
 	}
@@ -1264,11 +1281,12 @@ func assignNewIdentity(p *Profile, oldIdentityID, operation string) error {
 	return nil
 }
 
-func machineIDFromIdentityID(identityID string) (string, error) {
-	body := strings.TrimPrefix(strings.ToLower(identityID), "id_")
-	if len(body) == 32 && isLowerHex(body) {
-		return body, nil
-	}
+// newMachineID returns a fresh random 32-hex machine identifier. It is
+// deliberately independent of the identity ID: no displayed identity reference
+// can be reduced to the raw machine-id by stripping a prefix or any other
+// deterministic derivation. The machine-id is generated once and persisted, so
+// it does not need to be reproducible from the identity ID.
+func newMachineID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -1276,14 +1294,15 @@ func machineIDFromIdentityID(identityID string) (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func isLowerHex(value string) bool {
-	for _, r := range value {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
-			continue
-		}
+// isLegacyCoupledMachineID reports whether machineID was derived from identityID
+// by the removed "strip id_ prefix" scheme, i.e. it can be recovered from a
+// displayed identity reference. Such values are rotated on load to close the
+// leak for profiles created before machine-id derivation was decoupled.
+func isLegacyCoupledMachineID(identityID, machineID string) bool {
+	if machineID == "" {
 		return false
 	}
-	return true
+	return machineID == strings.TrimPrefix(strings.ToLower(identityID), "id_")
 }
 
 func archiveIdentityState(profileDir, archiveDir string) error {

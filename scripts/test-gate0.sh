@@ -90,3 +90,9 @@ if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; the
   exit 1
 fi
 rm -rf "$release_tmp"
+
+# Isolation-evidence machine-readable contract (no Lima): per-gate emission,
+# manifest aggregation shape, and release-dogfood schema for isolationGates /
+# environmentSnapshot.
+scripts/test-isolation-evidence-smoke.sh
+

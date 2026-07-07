@@ -333,6 +333,16 @@ func materializeLimaShims(dir string, registry cmdproxy.Registry, netPlan netpol
 				return err
 			}
 		}
+		// The DoH DNS stub mediates guest DNS over the privacy path when a
+		// mediated resolver is declared. Best-effort like tun2socks: the guest
+		// bootstrap fails closed if the stub is missing at run time.
+		if netPlan.MediatedResolver != "" {
+			if source := ResolveLinuxDNSStubPath(); source != "" {
+				if err := copyExecutable(source, filepath.Join(dir, "hideout-dns-stub")); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -362,6 +372,10 @@ func ResolveLinuxShimPath() string {
 
 func ResolveLinuxTun2SocksPath() string {
 	return helperbin.ResolveLinuxTun2SocksPath(runtime.GOARCH)
+}
+
+func ResolveLinuxDNSStubPath() string {
+	return helperbin.ResolveLinuxDNSStubPath(runtime.GOARCH)
 }
 
 func ResolveLinuxHostFSDPath() string {

@@ -755,6 +755,7 @@ type runOptions struct {
 	backendName           string
 	networkMode           string
 	proxySecret           string
+	mediatedResolver      string
 	workspace             string
 	guestWorkspace        string
 	auditPath             string
@@ -799,6 +800,7 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		Backend:              opts.backendName,
 		NetworkMode:          opts.networkMode,
 		ProxySecretRef:       opts.proxySecret,
+		MediatedResolver:     opts.mediatedResolver,
 		Workspace:            opts.workspace,
 		GuestWorkspace:       opts.guestWorkspace,
 		AllowUnsafeWorkspace: opts.allowUnsafeWorkspace,
@@ -1094,6 +1096,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	fs.StringVar(&opts.backendName, "backend", "auto", "backend")
 	fs.StringVar(&opts.networkMode, "network", "", "network mode")
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
+	fs.StringVar(&opts.mediatedResolver, "mediated-resolver", "", "tun2socks mediated DNS resolver IP")
 	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
 	fs.StringVar(&opts.auditPath, "audit", "", "audit path or off")
@@ -1789,6 +1792,9 @@ func (a app) doctor(args []string) error {
 	if opts.proxySecret != "" {
 		p.Network.ProxySecretRef = opts.proxySecret
 	}
+	if opts.mediatedResolver != "" {
+		p.Network.MediatedResolver = opts.mediatedResolver
+	}
 	if err := p.Validate(); err != nil {
 		report("profile", "error", err.Error())
 	}
@@ -1902,16 +1908,17 @@ func sortedMapKeys(values map[string]string) []string {
 }
 
 type doctorOptions struct {
-	profileName    string
-	backendName    string
-	networkMode    string
-	proxySecret    string
-	workspace      string
-	guestWorkspace string
-	ephemeral      bool
-	fix            bool
-	dryRun         bool
-	tools          toolSupplyOptions
+	profileName      string
+	backendName      string
+	networkMode      string
+	proxySecret      string
+	mediatedResolver string
+	workspace        string
+	guestWorkspace   string
+	ephemeral        bool
+	fix              bool
+	dryRun           bool
+	tools            toolSupplyOptions
 }
 
 func parseDoctorOptions(args []string) (doctorOptions, error) {
@@ -1922,6 +1929,7 @@ func parseDoctorOptions(args []string) (doctorOptions, error) {
 	fs.StringVar(&opts.backendName, "backend", "auto", "backend")
 	fs.StringVar(&opts.networkMode, "network", "", "network mode")
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
+	fs.StringVar(&opts.mediatedResolver, "mediated-resolver", "", "tun2socks mediated DNS resolver IP")
 	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
 	registerToolSupplyFlags(fs, &opts.tools)

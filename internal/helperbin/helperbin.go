@@ -124,6 +124,36 @@ func ResolveLinuxTun2SocksPath(goarch string) string {
 	return ""
 }
 
+// ResolveLinuxDNSStubPath locates the prebuilt guest DNS stub (DoH resolver)
+// binary, mirroring ResolveLinuxTun2SocksPath: HIDEOUT_LINUX_DNS_STUB_PATH, then
+// a binary next to the current executable, then PATH.
+func ResolveLinuxDNSStubPath(goarch string) string {
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	if path := os.Getenv("HIDEOUT_LINUX_DNS_STUB_PATH"); path != "" {
+		if FileExists(path) {
+			return path
+		}
+		return ""
+	}
+	names := []string{"hideout-dns-stub-linux-" + goarch, "hideout-dns-stub-linux"}
+	if exe, err := os.Executable(); err == nil {
+		for _, name := range names {
+			candidate := filepath.Join(filepath.Dir(exe), name)
+			if FileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 func ResolveLinuxHostFSDPath(storeRoot, goarch string) string {
 	if goarch == "" {
 		goarch = runtime.GOARCH

@@ -99,6 +99,7 @@ fi
 built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 shim_linux="bin/hideout-shim-linux-$linux_guest_arch"
 hostfsd_linux="bin/hideout-hostfsd-linux-$linux_guest_arch"
+dns_stub_linux="bin/hideout-dns-stub-linux-$linux_guest_arch"
 shim_linux_manifest="$shim_linux.manifest.json"
 hostfsd_linux_manifest="$hostfsd_linux.manifest.json"
 cat >"$prefix/package-manifest.json" <<EOF
@@ -120,7 +121,8 @@ cat >"$prefix/package-manifest.json" <<EOF
       "bin/hideout",
       "bin/hideout-shim",
       "$shim_linux",
-      "$hostfsd_linux"
+      "$hostfsd_linux",
+      "$dns_stub_linux"
     ],
     "entrypoints": [
       "install.sh",
@@ -163,6 +165,11 @@ cat >"$prefix/package-manifest.json" <<EOF
       "path": "$hostfsd_linux_manifest",
       "kind": "helper-manifest",
       "sha256": "$(sha256_file "$prefix/$hostfsd_linux_manifest")"
+    },
+    {
+      "path": "$dns_stub_linux",
+      "kind": "linux-helper",
+      "sha256": "$(sha256_file "$prefix/$dns_stub_linux")"
     },
     {
       "path": "install.sh",

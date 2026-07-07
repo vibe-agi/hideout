@@ -210,11 +210,17 @@ Hideout Phase 1 does not claim:
 
 - workspace secrets are hidden from the target by default;
 - network exfiltration is impossible in `direct` mode;
-- DNS leak protection in `tun2socks` mode. Route verification proves the
-  default-route swap and the proxy endpoint bypass, but backend-specific DNS
-  verification has not shipped: a guest resolver on a connected backend subnet
-  can bypass the TUN default route. The DNS policy and its release gates are
-  owned by [network-privacy-architecture.md](network-privacy-architecture.md);
+- protection against a target that has gained guest root: adversary A3 can
+  rewrite the guest routing table or resolver configuration to restore a DNS
+  bypass, and constraining the target's in-guest network privileges is out of
+  scope. (The connected-subnet DNS leak for non-root targets IS closed and
+  validated on real Lima — privacy mode blocks the connected-subnet resolver
+  routes, points the guest resolver at a guest-local DoH stub that forwards each
+  query as DoH/HTTPS to the declared mediated resolver over the privacy path, and
+  refuses a connected-subnet-only environment (fail closed), with Gate 3 proving
+  it end to end; that closure is a claim owned by
+  [network-privacy-architecture.md](network-privacy-architecture.md), not a
+  non-claim);
 - HostFS write overlay is product-ready;
 - Endpoint Exposure, Browser Control, Preview Open, adb, simulator, or IDE
   integrations are product-ready only when separately promoted;

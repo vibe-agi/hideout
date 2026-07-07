@@ -117,13 +117,30 @@ blocked-until-defined
   Fail closed when Hideout cannot verify DNS behavior for the selected backend.
 ```
 
-Phase 1 may keep direct mode as `backend-default` and supports tun2socks privacy
-mode with route verification. DNS verification remains backend-specific
-hardening governed by this policy and the release gates. Until that hardening
-ships, `tun2socks` mode does not claim DNS leak protection: a guest resolver on
-a connected backend subnet can bypass the TUN default route.
-[threat-model.md](threat-model.md) records this as an explicit non-claim, and
-Gate 3 does not yet include a DNS leak check.
+Phase 1 keeps direct mode as `backend-default` and enforces `proxy-mediated`
+DNS for tun2socks privacy mode structurally. After the default route moves to
+the TUN, the guest bootstrap:
+
+1. starts a guest-local DoH stub (`hideout-dns-stub`) that receives ordinary DNS
+   on `127.0.0.1:53` and forwards each query as DoH (RFC 8484, HTTPS) to the
+   declared mediated resolver, reached by IP (for example
+   `https://1.1.1.1/dns-query`). The DoH request is HTTPS, so it traverses the
+   TUN, tun2socks, and the SOCKS CONNECT proxy like any other connection — no
+   SOCKS UDP ASSOCIATE is needed;
+2. points the guest resolver at the stub (overriding `/etc/resolv.conf` and, when
+   present, systemd-resolved via `resolvectl`);
+3. blackholes the connected-subnet resolvers so no query can bypass the TUN, and
+   rolls everything back at cleanup.
+
+Because blocking the bypass closes the leak but does not by itself provide
+working DNS, privacy mode requires a mediated resolver and refuses a
+connected-subnet-only environment (fail closed). A target that gains guest root
+(A3) can still rewrite the routing table or resolver configuration to restore a
+bypass; that is a recorded non-claim in [threat-model.md](threat-model.md).
+
+This closure is validated on real Lima: Gate 3 proves it end to end — the guest
+resolves a name through the mediated DoH path and fetches over HTTPS while the
+connected-subnet leak is blocked and the proxy secret stays hidden.
 
 ## Route Verification
 

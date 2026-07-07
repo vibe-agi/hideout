@@ -111,10 +111,58 @@ func TestSecretResolverErrorsDoNotExposeBackingEnvName(t *testing.T) {
 	}
 }
 
+func TestTun2SocksWithoutMediatedResolverFailsClosed(t *testing.T) {
+	// With the DNS closure enforced (bootstrap DNAT + connected-subnet block), a
+	// connected-subnet-only environment is refused: privacy mode requires a
+	// mediated resolver reachable through the privacy path.
+	p := profile.Default("test")
+	p.Network.Mode = ModeTun2Socks
+	p.Network.ProxySecretRef = "default-proxy"
+	sessionDir := t.TempDir()
+	plan, err := Prepare(Spec{
+		Profile:       p,
+		SessionDir:    sessionDir,
+		RuntimeVerify: true,
+		Resolver: EnvSecretResolver{Env: []string{
+			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
+		}},
+	})
+	if err == nil || !plan.FailClosed {
+		t.Fatalf("expected fail closed without a mediated resolver, got plan=%+v err=%v", plan, err)
+	}
+	if !strings.Contains(plan.Reason, "mediated resolver") {
+		t.Fatalf("fail-closed reason should name the mediated resolver requirement: %q", plan.Reason)
+	}
+	if plan.Mode == ModeDirect || plan.Engine == ModeDirect {
+		t.Fatalf("privacy-mode failure must not fall back to direct: %+v", plan)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "network", "proxy.url")); !os.IsNotExist(err) {
+		t.Fatalf("fail-closed plan must not write the proxy secret; err=%v", err)
+	}
+}
+
+func TestTun2SocksInvalidMediatedResolverFailsClosed(t *testing.T) {
+	p := profile.Default("test")
+	p.Network.Mode = ModeTun2Socks
+	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "not-an-ip"
+	plan, err := Prepare(Spec{
+		Profile:    p,
+		SessionDir: t.TempDir(),
+		Resolver: EnvSecretResolver{Env: []string{
+			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
+		}},
+	})
+	if err == nil || !plan.FailClosed {
+		t.Fatalf("expected fail closed on a non-IP mediated resolver, got plan=%+v err=%v", plan, err)
+	}
+}
+
 func TestTun2SocksDoesNotWriteSecretWhenRoutingCannotBeVerified(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
 		Profile:    p,
@@ -158,6 +206,7 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
 		Profile:          p,
@@ -202,8 +251,11 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	if !strings.Contains(string(manifest), `"runtimeVerify": true`) {
 		t.Fatalf("manifest missing runtimeVerify: %s", manifest)
 	}
-	if !strings.Contains(string(manifest), `"dnsPolicy": "proxy endpoint uses IP literal or guest /etc/hosts only before TUN; target DNS follows the TUN default route after bootstrap; connected-subnet resolvers are not yet verified"`) {
-		t.Fatalf("manifest missing tun2socks DNS policy: %s", manifest)
+	if !strings.Contains(string(manifest), `"dnsPolicy": "guest DNS is redirected to the declared mediated resolver over the TUN privacy path; connected-subnet resolvers are blocked so no query bypasses the TUN; a connected-subnet-only environment is refused"`) {
+		t.Fatalf("manifest missing enforced tun2socks DNS policy: %s", manifest)
+	}
+	if strings.Contains(string(manifest), "not yet verified") {
+		t.Fatalf("DNS policy must not claim the old unverified state: %s", manifest)
 	}
 	if !strings.Contains(string(manifest), `"localBypassHosts": [
     "host.lima.internal"
@@ -216,6 +268,38 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	}
 	if !strings.Contains(string(bootstrap), "tun2socks --device tun://hideout0 --proxy \"$proxy_url\"") {
 		t.Fatalf("runtime verify bootstrap missing tun2socks start: %s", bootstrap)
+	}
+	// DNS closure: start the DoH stub, redirect guest :53 to it, and blackhole
+	// connected-subnet resolvers, established after the default route is on TUN.
+	if !strings.Contains(string(bootstrap), "hideout-dns-stub --listen 127.0.0.1:53 --doh-server \"$mediated_resolver\"") {
+		t.Fatalf("bootstrap missing DoH stub start: %s", bootstrap)
+	}
+	if !strings.Contains(string(bootstrap), "nameserver 127.0.0.1") {
+		t.Fatalf("bootstrap missing guest resolver override to the stub: %s", bootstrap)
+	}
+	if !strings.Contains(string(bootstrap), `iptables -I OUTPUT 1 -p "$proto" --dport 53 -d "$ns" -j DROP`) {
+		t.Fatalf("bootstrap missing connected-subnet resolver block: %s", bootstrap)
+	}
+	if !strings.Contains(string(bootstrap), "guest resolver was not pointed at the DNS stub") {
+		t.Fatalf("bootstrap missing DNS mediation structural verification: %s", bootstrap)
+	}
+	stubIdx := strings.Index(string(bootstrap), "hideout-dns-stub --listen")
+	defRouteIdx := strings.Index(string(bootstrap), "ip route replace default dev hideout0")
+	if stubIdx < 0 || defRouteIdx < 0 || stubIdx < defRouteIdx {
+		t.Fatalf("DNS mediation must be established after the default route moves to hideout0")
+	}
+	mediationCleanup, err := os.ReadFile(plan.CleanupPath)
+	if err != nil {
+		t.Fatalf("read cleanup: %v", err)
+	}
+	if !strings.Contains(string(mediationCleanup), "dns-stub.pid") {
+		t.Fatalf("cleanup missing DoH stub teardown: %s", mediationCleanup)
+	}
+	if !strings.Contains(string(mediationCleanup), "/etc/resolv.conf") {
+		t.Fatalf("cleanup missing resolv.conf restore: %s", mediationCleanup)
+	}
+	if !strings.Contains(string(mediationCleanup), `iptables -D OUTPUT -p "$proto" --dport 53 -d "$ns" -j DROP`) {
+		t.Fatalf("cleanup missing resolver block rollback: %s", mediationCleanup)
 	}
 	assertShellSyntaxNetworkTest(t, plan.BootstrapPath)
 	if !strings.Contains(string(bootstrap), "default-route.before") {
@@ -284,6 +368,7 @@ func TestTun2SocksProxySecretWriteFailsClosedOnExistingSymlink(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	networkDir := filepath.Join(sessionDir, "network")
 	if err := os.MkdirAll(networkDir, 0o700); err != nil {
@@ -327,6 +412,7 @@ func TestTun2SocksRemovesProxySecretWhenArtifactWriteFails(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(sessionDir, "network-plan.json"), 0o700); err != nil {
 		t.Fatal(err)
@@ -354,6 +440,7 @@ func TestTun2SocksDryRunDoesNotWriteArtifactsOrSecret(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
 		Profile:       p,
@@ -381,6 +468,7 @@ func TestTun2SocksVerifiedPlan(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	plan, err := Prepare(Spec{
 		Profile:    p,
 		SessionDir: t.TempDir(),

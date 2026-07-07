@@ -22,6 +22,7 @@ type RunPlanOptions struct {
 	Backend              string
 	NetworkMode          string
 	ProxySecretRef       string
+	MediatedResolver     string
 	Workspace            string
 	GuestWorkspace       string
 	AllowUnsafeWorkspace bool
@@ -65,6 +66,9 @@ func (c Core) PlanRun(opts RunPlanOptions) (RunPlan, error) {
 	}
 	if opts.ProxySecretRef != "" {
 		p.Network.ProxySecretRef = opts.ProxySecretRef
+	}
+	if opts.MediatedResolver != "" {
+		p.Network.MediatedResolver = opts.MediatedResolver
 	}
 	if err := p.Validate(); err != nil {
 		return RunPlan{}, err

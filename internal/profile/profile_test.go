@@ -245,6 +245,91 @@ func TestLoadOrInitBackfillsMissingMetadata(t *testing.T) {
 	}
 }
 
+func TestMachineIDNotDerivableFromIdentityID(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	loaded, err := store.LoadOrInit("manual")
+	if err != nil {
+		t.Fatalf("LoadOrInit: %v", err)
+	}
+	identityID := loaded.Metadata["identityId"]
+	machineID := loaded.Metadata["machineId"]
+	if identityID == "" || machineID == "" {
+		t.Fatalf("missing identity metadata: %+v", loaded.Metadata)
+	}
+	// The historical leak was machineId == identityId with the "id_" prefix
+	// stripped. No deterministic derivation from a displayed identity reference
+	// may yield the raw machine-id.
+	if body := strings.TrimPrefix(identityID, "id_"); body == machineID {
+		t.Fatalf("machineId is derivable from identityId by prefix strip: identityId=%q machineId=%q", identityID, machineID)
+	}
+	if strings.Contains(identityID, machineID) || strings.Contains(machineID, strings.TrimPrefix(identityID, "id_")) {
+		t.Fatalf("machineId shares its body with identityId: identityId=%q machineId=%q", identityID, machineID)
+	}
+	if len(machineID) != 32 {
+		t.Fatalf("machineId is not 32 hex: %q", machineID)
+	}
+}
+
+func TestLegacyCoupledMachineIDRotatedOnLoad(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	// Simulate a profile created before decoupling: machineId is the identityId
+	// body (the removed "strip id_ prefix" derivation), so it is recoverable.
+	p := Default("legacy")
+	identityID := "id_0123456789abcdef0123456789abcdef"
+	coupled := "0123456789abcdef0123456789abcdef"
+	p.Metadata = map[string]string{
+		"profileId":  "prf_0000000000000000000000000000abcd",
+		"identityId": identityID,
+		"machineId":  coupled,
+		"createdAt":  "2026-01-01T00:00:00Z",
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := store.ProfilePath("legacy")
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadOrInit("legacy")
+	if err != nil {
+		t.Fatalf("LoadOrInit: %v", err)
+	}
+	if loaded.Metadata["machineId"] == coupled {
+		t.Fatal("legacy-coupled machineId was not rotated on load")
+	}
+	if strings.TrimPrefix(loaded.Metadata["identityId"], "id_") == loaded.Metadata["machineId"] {
+		t.Fatalf("rotated machineId is still derivable from identityId: %q %q",
+			loaded.Metadata["identityId"], loaded.Metadata["machineId"])
+	}
+}
+
+func TestMachineIDIndependentAcrossIdentityChange(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	loaded, err := store.LoadOrInit("manual")
+	if err != nil {
+		t.Fatalf("LoadOrInit: %v", err)
+	}
+	// A freshly forked identity must not let the new identityId reveal the new
+	// machineId either.
+	forked, err := EphemeralIdentityProfile(loaded)
+	if err != nil {
+		t.Fatalf("EphemeralIdentityProfile: %v", err)
+	}
+	fID := forked.Metadata["identityId"]
+	fMachine := forked.Metadata["machineId"]
+	if fID == "" || fMachine == "" {
+		t.Fatalf("forked identity metadata missing: %+v", forked.Metadata)
+	}
+	if strings.TrimPrefix(fID, "id_") == fMachine {
+		t.Fatalf("forked machineId derivable from forked identityId: %q %q", fID, fMachine)
+	}
+}
+
 func TestLoadOrInitRematerializesEditedProfileIdentityFiles(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	p := Default("manual")

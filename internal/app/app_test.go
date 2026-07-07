@@ -4622,6 +4622,7 @@ func TestRunLimaTun2SocksRunsNetworkBootstrapBeforeTargetWithoutProxyEnv(t *test
 		"--workspace", workspace,
 		"--network", "tun2socks",
 		"--proxy-secret", "default-proxy",
+		"--mediated-resolver", "1.1.1.1",
 		"--",
 		"sh", "-c", "true",
 	}, &out, &errOut)
@@ -5410,6 +5411,7 @@ func TestTun2SocksFailsClosedBeforeCommandRuns(t *testing.T) {
 		"--allow-weak-isolation",
 		"--network", "tun2socks",
 		"--proxy-secret", "default-proxy",
+		"--mediated-resolver", "1.1.1.1",
 		"--",
 		"sh", "-c", "touch " + marker,
 	}, &out, &errOut)
@@ -5556,7 +5558,7 @@ func TestExplainLimaTun2SocksShowsRuntimeVerification(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_SECRET_DEFAULT_PROXY", "socks5://user:pass@127.0.0.1:1080")
 	var out, errOut bytes.Buffer
-	code := Main([]string{"explain", "--backend", "lima", "--network", "tun2socks", "--proxy-secret", "default-proxy", "--", "echo", "hi"}, &out, &errOut)
+	code := Main([]string{"explain", "--backend", "lima", "--network", "tun2socks", "--proxy-secret", "default-proxy", "--mediated-resolver", "1.1.1.1", "--", "echo", "hi"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}

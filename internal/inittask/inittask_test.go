@@ -3,6 +3,7 @@ package inittask
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -425,6 +426,45 @@ func compileInitAuditSchema(t *testing.T) *jsonschema.Schema {
 		t.Fatalf("compile init audit schema: %v", err)
 	}
 	return schema
+}
+
+func TestInitAuditPassesThroughDeterministicRedaction(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "init-audit.jsonl")
+	w, err := openAudit(ApplyOptions{AuditPath: auditPath})
+	if err != nil {
+		t.Fatalf("openAudit: %v", err)
+	}
+	plan := Plan{Profile: "default", Backend: "lima", Network: "tun2socks"}
+	task := Task{
+		ID:      "t1",
+		Kind:    "store.create",
+		Message: "setup HIDEOUT_SECRET_DEFAULT_PROXY=socks5://user:pass@127.0.0.1:1080",
+		Inputs:  []string{"token cap_0123456789abcdef", "plain-user-data"},
+		Outputs: []string{"guestMachineId ui_fedcba9876543210"},
+	}
+	if err := emitTaskAudit(w, plan, task, "apply", "allow", "ok", errors.New("failed HIDEOUT_SECRET_DEFAULT_PROXY=socks5://leak")); err != nil {
+		t.Fatalf("emitTaskAudit: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	events := readInitAuditEvents(t, auditPath)
+	if len(events) != 1 {
+		t.Fatalf("want 1 audit event, got %d", len(events))
+	}
+	ev := events[0]
+	blob := ev.Message + " " + strings.Join(ev.Inputs, " ") + " " + strings.Join(ev.Outputs, " ") + " " + ev.Error
+	for _, leak := range []string{"HIDEOUT_SECRET_DEFAULT_PROXY", "cap_0123456789abcdef", "ui_fedcba9876543210"} {
+		if strings.Contains(blob, leak) {
+			t.Fatalf("init audit leaked control-plane material %q: %s", leak, blob)
+		}
+	}
+	// User/application data is preserved verbatim.
+	if !strings.Contains(blob, "plain-user-data") {
+		t.Fatalf("init audit dropped user data: %s", blob)
+	}
 }
 
 func readInitAuditEvents(t *testing.T, path string) []AuditEvent {

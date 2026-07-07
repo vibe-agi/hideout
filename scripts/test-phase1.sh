@@ -7,7 +7,7 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/test-phase1.sh [--quick|--required|--all|--release-candidate|--lima|--lima-real-run|--env-image|--proxy|--real-browser|--probes|--dogfood-cli|--operator-cli]
+  scripts/test-phase1.sh [--quick|--required|--all|--isolation-evidence|--release-candidate|--lima|--lima-real-run|--env-image|--proxy|--real-browser|--probes|--dogfood-cli|--operator-cli]
 
 Modes:
   --quick         Run fast local gates: Gate 0, Gate 1, Gate 4 dry-run.
@@ -42,6 +42,44 @@ run_gate() {
   "$@"
 }
 
+# Expected isolation gates the evidence bundle must account for.
+ISOLATION_GATE_IDS="gate2-lima gate3-hidden-proxy gate4-host-escape env-image"
+isolation_gate_failed=0
+
+# run_isolation_gate <id> <name> <cmd...>
+# When collecting evidence (HIDEOUT_RELEASE_EVIDENCE_DIR set) the gate runs
+# non-fatally and the orchestrator records passed/failed for <id>, so a failed
+# gate becomes an explicit "failed" entry instead of vanishing from the manifest.
+# Otherwise it behaves like run_gate (fatal under set -e).
+run_isolation_gate() {
+  local id="$1" name="$2"
+  shift 2
+  echo "phase1: $name"
+  if [ -z "${HIDEOUT_RELEASE_EVIDENCE_DIR:-}" ]; then
+    "$@"
+    return
+  fi
+  . scripts/lib/gate-result.sh
+  # Capture the gate's output so the per-gate result carries real references:
+  # the named environment it exercised and the retained evidence log / boundary
+  # summary (the gate's own store is ephemeral, so these are the durable refs).
+  local out; out="$(mktemp "${TMPDIR:-/tmp}/hideout-gate-out.XXXXXX")"
+  local status=0
+  if "$@" >"$out" 2>&1; then status=0; else status=$?; fi
+  cat "$out"
+  local env_name audit_ref boundary_ref
+  env_name="$(grep -oE 'Hideout environment name: .+' "$out" | head -n1 | sed 's/^Hideout environment name: //')"
+  audit_ref="$HIDEOUT_RELEASE_EVIDENCE_DIR/test-release-dogfood.log"
+  grep -q 'Boundary Summary' "$out" && boundary_ref="boundary-summary:present" || boundary_ref=""
+  rm -f "$out"
+  if [ "$status" -eq 0 ]; then
+    emit_gate_result "$id" "lima" "passed" "" "$audit_ref" "$boundary_ref" "$env_name"
+  else
+    emit_gate_result "$id" "lima" "failed" "gate exited $status" "$audit_ref" "$boundary_ref" "$env_name"
+    isolation_gate_failed=1
+  fi
+}
+
 print_plan() {
   echo "phase1-plan: Gate 0 static contract"
   echo "phase1-plan: Gate 1 native smoke"
@@ -49,11 +87,9 @@ print_plan() {
     echo "phase1-plan: Gate 2 Lima E2E"
   fi
   if [ "$include_env_image" -eq 1 ]; then
-  echo "phase1: env-image declared-image gate"
-  scripts/test-env-image.sh
-fi
-
-if [ "$include_lima_real_run" -eq 1 ]; then
+    echo "phase1-plan: env-image declared-image gate"
+  fi
+  if [ "$include_lima_real_run" -eq 1 ]; then
     echo "phase1-plan: Lima real-run reference smoke"
   fi
   if [ "$include_proxy" -eq 1 ]; then
@@ -108,8 +144,22 @@ while [ "$#" -gt 0 ]; do
       include_lima=1
       include_proxy=1
       real_browser=1
+      include_env_image=1
       include_probes=1
       include_dogfood_cli=1
+      require_operator_proxy=1
+      ;;
+    --isolation-evidence)
+      # Enable the isolation-sensitive gates (Gate 2/3/4 + env-image). Each emits
+      # a per-gate result via scripts/lib/gate-result.sh when
+      # HIDEOUT_RELEASE_EVIDENCE_DIR is set; the release-dogfood manifest writer
+      # aggregates them into isolationGates. The gate0/gate1 baseline still runs;
+      # the probes and dogfood-cli gates are not selected.
+      mode="isolation-evidence"
+      include_lima=1
+      include_proxy=1
+      real_browser=1
+      include_env_image=1
       require_operator_proxy=1
       ;;
     --lima)
@@ -162,7 +212,7 @@ if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-}" = "1" ]; then
 fi
 
 if [ "$require_operator_proxy" -eq 1 ] && [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
-  echo "phase1: --release-candidate requires operator-supplied HIDEOUT_SECRET_DEFAULT_PROXY" >&2
+  echo "phase1: mode=$mode requires operator-supplied HIDEOUT_SECRET_DEFAULT_PROXY" >&2
   exit 2
 fi
 
@@ -178,7 +228,19 @@ run_gate "Gate 0 static contract" scripts/test-gate0.sh
 run_gate "Gate 1 native smoke" scripts/test-gate1-native.sh
 
 if [ "$include_lima" -eq 1 ]; then
-  run_gate "Gate 2 Lima E2E" scripts/test-gate2-lima.sh
+  run_isolation_gate "gate2-lima" "Gate 2 Lima E2E" scripts/test-gate2-lima.sh
+fi
+
+if [ "$include_env_image" -eq 1 ]; then
+  if [ -n "${HIDEOUT_ENV_IMAGE_URL:-}" ]; then
+    run_isolation_gate "env-image" "Env-image declared-image gate" scripts/test-env-image.sh
+  else
+    echo "phase1: env-image gate not-run (no HIDEOUT_ENV_IMAGE_URL declared)"
+    if [ -n "${HIDEOUT_RELEASE_EVIDENCE_DIR:-}" ]; then
+      . scripts/lib/gate-result.sh
+      emit_gate_result "env-image" "lima" "not-run" "no image URL declared"
+    fi
+  fi
 fi
 
 if [ "$include_lima_real_run" -eq 1 ]; then
@@ -187,16 +249,16 @@ fi
 
 if [ "$include_proxy" -eq 1 ]; then
   if [ "$require_operator_proxy" -eq 1 ]; then
-    run_gate "Gate 3 hidden proxy with operator-supplied proxy" env HIDEOUT_GATE3_REQUIRE_OPERATOR_PROXY=1 scripts/test-gate3-hidden-proxy.sh
+    run_isolation_gate "gate3-hidden-proxy" "Gate 3 hidden proxy with operator-supplied proxy" env HIDEOUT_GATE3_REQUIRE_OPERATOR_PROXY=1 scripts/test-gate3-hidden-proxy.sh
   else
-    run_gate "Gate 3 hidden proxy" scripts/test-gate3-hidden-proxy.sh
+    run_isolation_gate "gate3-hidden-proxy" "Gate 3 hidden proxy" scripts/test-gate3-hidden-proxy.sh
   fi
 fi
 
 if [ "$real_browser" -eq 1 ]; then
-  run_gate "Gate 4 host escape boundary with real browser external URL" env HIDEOUT_GATE4_REAL_BROWSER=1 scripts/test-gate4-host-escape.sh
+  run_isolation_gate "gate4-host-escape" "Gate 4 host escape boundary with real browser external URL" env HIDEOUT_GATE4_REAL_BROWSER=1 scripts/test-gate4-host-escape.sh
 else
-  run_gate "Gate 4 host escape boundary dry-run" scripts/test-gate4-host-escape.sh
+  run_isolation_gate "gate4-host-escape" "Gate 4 host escape boundary dry-run" scripts/test-gate4-host-escape.sh
 fi
 
 if [ "$include_probes" -eq 1 ]; then
@@ -209,6 +271,19 @@ fi
 
 if [ "$include_operator_cli" -eq 1 ]; then
   run_gate "Operator-supplied real CLI smoke" scripts/test-operator-cli-smoke.sh
+fi
+
+# Account for every expected isolation gate in the evidence bundle: any gate
+# without a result (not selected in this run) is recorded not-run, and the run
+# fails if any isolation gate failed.
+if [ -n "${HIDEOUT_RELEASE_EVIDENCE_DIR:-}" ]; then
+  . scripts/lib/gate-result.sh
+  # shellcheck disable=SC2086
+  reconcile_isolation_gates $ISOLATION_GATE_IDS
+  if [ "$isolation_gate_failed" -ne 0 ]; then
+    echo "phase1: one or more isolation gates failed" >&2
+    exit 1
+  fi
 fi
 
 echo "phase1: passed"

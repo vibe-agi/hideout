@@ -945,6 +945,7 @@ func TestCorePrepareRunNetworkLimaTun2SocksHidesProxySecret(t *testing.T) {
 	p := profile.Default("proxy")
 	p.Network.Mode = network.ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}

@@ -106,6 +106,10 @@ echo "install-local: building linux hostfsd for $arch"
   --goarch "$arch" \
   --source "$source" >/dev/null
 
+echo "install-local: building linux DoH DNS stub for $arch"
+GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+  go build -trimpath -o "$prefix/bin/hideout-dns-stub-linux-$arch" ./cmd/hideout-dns-stub >/dev/null
+
 if [ "$run_init" -eq 1 ]; then
   echo "install-local: running hideout init --no-input"
   init_args=(init --no-input --backend "$backend" --network "$network")

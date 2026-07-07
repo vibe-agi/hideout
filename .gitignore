@@ -22,3 +22,6 @@ vendor/
 .agents/
 .claude/
 .specify/
+
+# Stray cmd build artifacts at repo root
+/hideout-gate-*

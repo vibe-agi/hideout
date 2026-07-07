@@ -185,25 +185,52 @@ lima_home="$tmp/lima"
 workspace="$tmp/workspace"
 mkdir -p "$bin" "$store" "$lima_home" "$workspace"
 
+prepare_linux_dns_stub() {
+  if [ -n "${HIDEOUT_LINUX_DNS_STUB_PATH:-}" ]; then
+    if [ ! -x "$HIDEOUT_LINUX_DNS_STUB_PATH" ]; then
+      echo "gate3: HIDEOUT_LINUX_DNS_STUB_PATH is not executable: $HIDEOUT_LINUX_DNS_STUB_PATH" >&2
+      exit 126
+    fi
+    return
+  fi
+  local arch
+  arch="$(go env GOARCH)"
+  echo "gate3: building temporary Linux hideout-dns-stub for $arch"
+  HIDEOUT_LINUX_DNS_STUB_PATH="$bin/hideout-dns-stub-linux-$arch"
+  GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -o "$HIDEOUT_LINUX_DNS_STUB_PATH" ./cmd/hideout-dns-stub
+  chmod 0700 "$HIDEOUT_LINUX_DNS_STUB_PATH"
+  export HIDEOUT_LINUX_DNS_STUB_PATH
+}
+
 hideout="$bin/hideout"
 go build -o "$hideout" ./cmd/hideout
 prepare_linux_shim
 prepare_linux_tun2socks
+prepare_linux_dns_stub
 if [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
   start_local_proxy
 else
   echo "gate3: using HIDEOUT_SECRET_DEFAULT_PROXY from environment"
 fi
 
+# Privacy mode enforces DNS mediation: connected-subnet resolvers are blocked and
+# the guest resolver is pointed at the DoH stub, which forwards each query as DoH
+# (HTTPS) to the mediated resolver over the TUN and the SOCKS CONNECT proxy. The
+# mediated resolver is a DoH server reached by IP; it defaults to a public one
+# and the operator may override it. The gate proves the closure end to end: the
+# guest resolves and fetches through the mediated path while the leak is blocked.
+mediated_resolver="${HIDEOUT_GATE3_MEDIATED_RESOLVER:-1.1.1.1}"
+echo "gate3: using mediated DoH resolver $mediated_resolver"
+
 echo "gate3: checking doctor hidden proxy plan"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" \
-  "$hideout" doctor --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" HIDEOUT_LINUX_DNS_STUB_PATH="$HIDEOUT_LINUX_DNS_STUB_PATH" \
+  "$hideout" doctor --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver"
 
 echo "gate3: running hidden proxy env and route smoke"
 stdout="$tmp/run.out"
 stderr="$tmp/run.err"
-if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" \
-  "$hideout" run --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy -- sh -eu -c '
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" HIDEOUT_LINUX_DNS_STUB_PATH="$HIDEOUT_LINUX_DNS_STUB_PATH" \
+  "$hideout" run --verbose --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver" -- sh -eu -c '
 for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
   eval "value=\${$name:-}"
   if [ -n "$value" ]; then
@@ -212,11 +239,38 @@ for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all
   fi
 done
 printf "proxy_env_absent=yes\n"
+# DNS mediation: the guest resolver is the DoH stub; connected-subnet resolvers
+# are blocked. Confirm the resolver is the stub, then resolve+fetch (DNS now goes
+# over DoH through the privacy path).
+grep -q "^nameserver 127.0.0.1" /etc/resolv.conf || { echo "guest resolver not pointed at DNS stub" >&2; exit 44; }
+printf "dns_mediated=yes\n"
+# Reverse proof (mandatory): every real upstream (connected-subnet) resolver
+# captured before the override must now be unreachable — a direct query to it
+# must fail. This proves the leak is blocked and the check is not theater. Not
+# being able to run the check (no captured resolvers, no query tool) fails
+# closed rather than silently passing.
+[ -r /hideout/session/network/resolvers.before ] || { echo "reverse proof: resolvers.before is missing" >&2; exit 46; }
+query_resolver() {
+  if command -v dig >/dev/null 2>&1; then dig @"$1" example.com +time=3 +tries=1 +short >/dev/null 2>&1
+  elif command -v nslookup >/dev/null 2>&1; then nslookup -timeout=3 example.com "$1" >/dev/null 2>&1
+  else return 2; fi
+}
+blocked_any=no
+for ns in $(cat /hideout/session/network/resolvers.before); do
+  case "$ns" in 127.*|::1|"") continue ;; esac
+  rc=0
+  query_resolver "$ns" || rc=$?
+  if [ "$rc" -eq 2 ]; then echo "reverse proof: guest needs dig or nslookup" >&2; exit 46; fi
+  if [ "$rc" -eq 0 ]; then echo "leak: connected-subnet resolver $ns still reachable after closure" >&2; exit 45; fi
+  blocked_any=yes
+done
+[ "$blocked_any" = yes ] || { echo "reverse proof: no connected-subnet resolver was captured to verify closure" >&2; exit 46; }
+printf "connected_subnet_blocked=yes\n"
 if command -v curl >/dev/null 2>&1; then
-  curl -fsS --max-time 20 https://example.com/ >/dev/null
+  curl -fsS --max-time 30 https://example.com/ >/dev/null
   printf "https_request=ok\n"
 elif command -v wget >/dev/null 2>&1; then
-  wget -q -T 20 -O /dev/null https://example.com/
+  wget -q -T 30 -O /dev/null https://example.com/
   printf "https_request=ok\n"
 else
   echo "guest requires curl or wget for gate3 route proof" >&2
@@ -232,7 +286,13 @@ fi
 fi
 
 cat "$stdout"
+# Surface the run's environment name and Boundary Summary (from --verbose, on
+# either stream) so the evidence orchestrator records real references.
+grep -h 'Hideout environment name:' "$stdout" "$stderr" 2>/dev/null | head -n1 || true
+grep -qh 'Hideout boundary:' "$stdout" "$stderr" 2>/dev/null && echo "Boundary Summary present" || true
 grep -q 'proxy_env_absent=yes' "$stdout"
+grep -q 'dns_mediated=yes' "$stdout"
+grep -q 'connected_subnet_blocked=yes' "$stdout"
 grep -q 'https_request=ok' "$stdout"
 
 if grep -R --fixed-strings "$HIDEOUT_SECRET_DEFAULT_PROXY" "$store" >/dev/null 2>&1; then

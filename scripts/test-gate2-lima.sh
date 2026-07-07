@@ -245,6 +245,12 @@ grep -q 'Hideout environment name: ' "$stderr"
 grep -q 'run again: hideout run --env ' "$stderr"
 test "$(cat "$workspace/output.txt")" = "workspace-write"
 
+# Surface the run's environment name and Boundary Summary (from --verbose, on
+# either stream) so the evidence orchestrator records real references, matching
+# the isolation-evidence contract (env name applicable + Boundary Summary ref).
+grep -h 'Hideout environment name:' "$stdout" "$stderr" 2>/dev/null | head -n1 || true
+grep -qh 'Hideout boundary:' "$stdout" "$stderr" 2>/dev/null && echo "Boundary Summary present" || true
+
 prepare_guest_node
 
 echo "gate2: running hostfs grant smoke"

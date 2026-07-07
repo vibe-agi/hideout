@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/secrets"
@@ -596,6 +597,14 @@ func emitTaskAudit(w *auditWriter, plan Plan, task Task, operation, decision, re
 	if taskErr != nil {
 		event.Error = taskErr.Error()
 	}
+	// Route free-text fields through the shared deterministic control-plane
+	// redaction so InitTask audit strips the same Hideout-minted material
+	// (HIDEOUT_SECRET_* names/values, Core tokens, machine-id) as the rest of
+	// audit, and preserves user/application data verbatim.
+	event.Message = audit.RedactString(event.Message)
+	event.Inputs = audit.RedactArgv(event.Inputs)
+	event.Outputs = audit.RedactArgv(event.Outputs)
+	event.Error = audit.RedactString(event.Error)
 	return w.enc.Encode(event)
 }
 

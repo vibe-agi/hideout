@@ -18,7 +18,9 @@
     "operatorProxy",
     "browser",
     "gates",
-    "cleanup"
+    "cleanup",
+    "isolationGates",
+    "environmentSnapshot"
   ],
   "properties": {
     "schema": {
@@ -43,7 +45,10 @@
       "format": "date-time"
     },
     "command": {
-      "const": "scripts/test-phase1.sh --release-candidate"
+      "enum": [
+        "scripts/test-phase1.sh --release-candidate",
+        "scripts/test-phase1.sh --isolation-evidence"
+      ]
     },
     "evidence": {
       "type": "object",
@@ -291,6 +296,126 @@
         "hideoutLimaInstances": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "isolationGates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "backend",
+          "result"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "gate2-lima",
+              "gate3-hidden-proxy",
+              "gate4-host-escape",
+              "env-image"
+            ]
+          },
+          "backend": {
+            "type": "string",
+            "minLength": 1
+          },
+          "environmentName": {
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "failed",
+              "not-run"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "auditPath": {
+            "type": "string"
+          },
+          "boundarySummary": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "result": {
+                  "const": "not-run"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "reason": {
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "result": {
+                  "const": "passed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "backend": {
+                  "not": {
+                    "const": "native"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "environmentSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proxyMode",
+        "hostPrerequisites",
+        "externalContext"
+      ],
+      "properties": {
+        "proxyMode": {
+          "enum": [
+            "direct",
+            "tun2socks"
+          ]
+        },
+        "hostPrerequisites": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "gate4Browser",
+            "envImageURL"
+          ],
+          "properties": {
+            "gate4Browser": {
+              "type": "boolean"
+            },
+            "envImageURL": {
+              "type": "boolean"
+            }
+          }
+        },
+        "externalContext": {
+          "type": "string"
         }
       }
     }

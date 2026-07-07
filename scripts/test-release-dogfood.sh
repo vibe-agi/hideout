@@ -110,6 +110,10 @@ stamp="$(date -u +"%Y%m%dT%H%M%SZ")"
 commit="$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
 evidence_root="${HIDEOUT_RELEASE_EVIDENCE_ROOT:-$ROOT/.hideout-release-evidence}"
 evidence_dir="${HIDEOUT_RELEASE_EVIDENCE_DIR:-$evidence_root/release-dogfood-$stamp-$commit}"
+# Export so the gate subprocess and its per-gate emission (scripts/lib/gate-result.sh)
+# write into this bundle; without the export the gates no-op and isolationGates
+# aggregates empty.
+export HIDEOUT_RELEASE_EVIDENCE_DIR="$evidence_dir"
 mkdir -p "$evidence_dir"
 
 log_path="$evidence_dir/test-release-dogfood.log"
@@ -268,6 +272,14 @@ write_manifest() {
   local status="$1"
   local exit_code="$2"
   local ended_at="$3"
+  # Aggregate the per-gate result files emitted by isolation gates (via
+  # scripts/lib/gate-result.sh) into isolationGates. Absent gates dir => [].
+  local isolation_gates="[]"
+  if ls "$evidence_dir"/gates/*.json >/dev/null 2>&1; then
+    isolation_gates=$(jq -s '.' "$evidence_dir"/gates/*.json)
+  fi
+  local env_image_declared=false
+  [ -n "${HIDEOUT_ENV_IMAGE_URL:-}" ] && env_image_declared=true
   jq -n \
     --arg schema "hideout.release-dogfood.v1" \
     --arg status "$status" \
@@ -298,6 +310,10 @@ write_manifest() {
     --argjson cleanupGate4BrowserProcesses "$cleanup_gate4_browser_processes" \
     --argjson cleanupGate4TempDirs "$cleanup_gate4_temp_dirs" \
     --argjson cleanupHideoutLimaInstances "$cleanup_hideout_lima_instances" \
+    --argjson isolationGates "$isolation_gates" \
+    --argjson gate4Browser "$browser_path_provided" \
+    --argjson envImageDeclared "$env_image_declared" \
+    --arg externalContext "$uname_value" \
     '{
       schema: $schema,
       status: $status,
@@ -357,6 +373,15 @@ write_manifest() {
         gate4BrowserProcesses: $cleanupGate4BrowserProcesses,
         gate4TempDirs: $cleanupGate4TempDirs,
         hideoutLimaInstances: $cleanupHideoutLimaInstances
+      },
+      isolationGates: $isolationGates,
+      environmentSnapshot: {
+        proxyMode: "tun2socks",
+        hostPrerequisites: {
+          gate4Browser: $gate4Browser,
+          envImageURL: $envImageDeclared
+        },
+        externalContext: $externalContext
       }
     }' >"$manifest_path"
   validate_manifest

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +17,11 @@ import (
 const (
 	ModeDirect    = "direct"
 	ModeTun2Socks = "tun2socks"
+
+	// dnsStubAddr is the guest-local address the DoH DNS stub listens on; the
+	// guest resolver is pointed here and connected-subnet resolvers are blocked.
+	dnsStubAddr = "127.0.0.1:53"
+	dnsStubIP   = "127.0.0.1"
 )
 
 var ErrRoutingUnverified = errors.New("tun2socks routing is not verified")
@@ -49,6 +55,7 @@ type Plan struct {
 	ProxySecretRef       string   `json:"proxySecretRef,omitempty"`
 	ProxySecretPath      string   `json:"-"`
 	GuestProxySecretPath string   `json:"guestProxySecretPath,omitempty"`
+	MediatedResolver     string   `json:"mediatedResolver,omitempty"`
 	Verified             bool     `json:"verified"`
 	RuntimeVerify        bool     `json:"runtimeVerify"`
 	FailClosed           bool     `json:"failClosed"`
@@ -132,8 +139,24 @@ func Prepare(spec Spec) (Plan, error) {
 			_ = maybeWriteArtifacts(plan, spec.DryRun)
 			return plan, err
 		}
+		mediatedResolver := strings.TrimSpace(spec.Profile.Network.MediatedResolver)
+		if mediatedResolver == "" {
+			plan.FailClosed = true
+			plan.ProxySecretRef = ref
+			plan.Reason = "tun2socks requires a mediated resolver: blocking the connected-subnet bypass closes the DNS leak but does not provide working DNS, so a mediated resolver reachable through the privacy path must be declared; a connected-subnet-only environment is refused"
+			_ = maybeWriteArtifacts(plan, spec.DryRun)
+			return plan, errors.New(plan.Reason)
+		}
+		if net.ParseIP(mediatedResolver) == nil {
+			plan.FailClosed = true
+			plan.ProxySecretRef = ref
+			plan.Reason = fmt.Sprintf("network.mediatedResolver %q is not an IP literal", mediatedResolver)
+			_ = maybeWriteArtifacts(plan, spec.DryRun)
+			return plan, errors.New(plan.Reason)
+		}
+		plan.MediatedResolver = mediatedResolver
 		plan.Engine = ModeTun2Socks
-		plan.DNSPolicy = "proxy endpoint uses IP literal or guest /etc/hosts only before TUN; target DNS follows the TUN default route after bootstrap; connected-subnet resolvers are not yet verified"
+		plan.DNSPolicy = "guest DNS is redirected to the declared mediated resolver over the TUN privacy path; connected-subnet resolvers are blocked so no query bypasses the TUN; a connected-subnet-only environment is refused"
 		plan.ProxySecretRef = ref
 		plan.Verified = spec.Verified
 		plan.RuntimeVerify = spec.RuntimeVerify
@@ -391,6 +414,7 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("  *' dev hideout0'|*' dev hideout0 '* ) ;;\n")
 		b.WriteString("  *) echo 'hideout: tun2socks default route verification failed' >&2; exit 127 ;;\n")
 		b.WriteString("esac\n")
+		writeDNSMediationSetup(&b, plan.MediatedResolver)
 		for i, host := range plan.LocalBypassHosts {
 			writeLocalBypassVerify(&b, i, host)
 		}
@@ -401,6 +425,7 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("  *' dev hideout0'|*' dev hideout0 '* ) echo 'hideout: proxy endpoint route loops through tun2socks' >&2; exit 127 ;;\n")
 		b.WriteString("esac\n")
 		b.WriteString("kill -0 \"$(cat /hideout/session/network/tun2socks.pid)\" 2>/dev/null || { echo 'hideout: tun2socks stopped during route verification' >&2; exit 127; }\n")
+		writeDNSMediationVerify(&b, plan.MediatedResolver)
 		b.WriteString("write_status 'tun2socks route verified'\n")
 		return b.String()
 	default:
@@ -425,6 +450,7 @@ func CleanupScript(plan Plan) string {
 		b.WriteString("  pid=$(sed -n '1p' /hideout/session/network/tun2socks.pid)\n")
 		b.WriteString("  if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; fi\n")
 		b.WriteString("fi\n")
+		writeDNSMediationCleanup(&b)
 		b.WriteString("if command -v ip >/dev/null 2>&1; then\n")
 		b.WriteString("  if [ -s /hideout/session/network/default-route.before ]; then\n")
 		b.WriteString("    default_route=$(sed -n '1p' /hideout/session/network/default-route.before)\n")
@@ -479,6 +505,101 @@ func writeLocalBypassVerify(b *strings.Builder, index int, host string) {
 	fmt.Fprintf(b, "case \"$%s_route_after\" in\n", prefix)
 	fmt.Fprintf(b, "  *' dev hideout0'|*' dev hideout0 '* ) echo %s >&2; exit 127 ;;\n", shellQuote("hideout: local bypass route for "+host+" loops through tun2socks"))
 	b.WriteString("esac\n")
+}
+
+// writeDNSMediationSetup emits the structural DNS closure. It starts the
+// guest-local DoH stub (which forwards each DNS query as DoH/HTTPS to the
+// declared mediated resolver over the TUN and the SOCKS CONNECT proxy),
+// redirects all guest DNS to the stub, and blackholes the connected-subnet
+// resolvers so no query bypasses the TUN. Emitted only when a mediated resolver
+// is declared (required in tun2socks mode). Requires iptables and the stub.
+func writeDNSMediationSetup(b *strings.Builder, mediatedResolver string) {
+	if mediatedResolver == "" {
+		return
+	}
+	b.WriteString("command -v ip >/dev/null 2>&1 || { echo 'hideout: ip is required for DNS mediation' >&2; exit 127; }\n")
+	b.WriteString("[ -x /hideout/session/shims/hideout-dns-stub ] || { echo 'hideout: hideout-dns-stub is missing from session shims' >&2; exit 127; }\n")
+	fmt.Fprintf(b, "mediated_resolver=%s\n", shellQuote(mediatedResolver))
+	b.WriteString("printf '%s\\n' \"$mediated_resolver\" > /hideout/session/network/mediated-resolver\n")
+	// Capture the guest's real upstream resolvers before repointing DNS: both the
+	// /etc/resolv.conf nameservers and, when systemd-resolved is in use, its
+	// actual upstream DNS servers (the connected-subnet resolver such as
+	// 192.168.5.3 is systemd-resolved's upstream, not a resolv.conf nameserver).
+	b.WriteString("ns_list=$( { awk '/^[[:space:]]*nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null; if command -v resolvectl >/dev/null 2>&1; then resolvectl status 2>/dev/null | awk -F: '/DNS Servers/{n=split($2,a,\" \"); for (i=1;i<=n;i++) if (a[i] != \"\") print a[i]}'; fi; } | sort -u | tr '\\n' ' ')\n")
+	b.WriteString("printf '%s\\n' \"$ns_list\" > /hideout/session/network/resolvers.before\n")
+	b.WriteString("chmod 0644 /hideout/session/network/resolvers.before 2>/dev/null || true\n")
+	// Start the DoH stub on 127.0.0.1:53. DNS in on :53, DoH out over HTTPS to
+	// the mediated resolver, which routes through the TUN and the CONNECT proxy.
+	fmt.Fprintf(b, "/hideout/session/shims/hideout-dns-stub --listen %s --doh-server \"$mediated_resolver\" > /hideout/session/network/dns-stub.log 2>&1 &\n", dnsStubAddr)
+	b.WriteString("echo $! > /hideout/session/network/dns-stub.pid\n")
+	b.WriteString("sleep 0.2\n")
+	b.WriteString("kill -0 \"$(cat /hideout/session/network/dns-stub.pid)\" 2>/dev/null || { echo 'hideout: hideout-dns-stub failed to start' >&2; exit 127; }\n")
+	// Point the guest resolver at the stub. Overriding /etc/resolv.conf (which is
+	// usually a systemd-resolved symlink) makes libc's DNS use the stub directly;
+	// resolvectl repoints systemd-resolved (the nss-resolve path) at the stub too.
+	b.WriteString("if [ -L /etc/resolv.conf ] || [ -f /etc/resolv.conf ]; then cp -a /etc/resolv.conf /hideout/session/network/resolv.conf.orig 2>/dev/null || readlink /etc/resolv.conf > /hideout/session/network/resolv.conf.link 2>/dev/null || true; fi\n")
+	fmt.Fprintf(b, "rm -f /etc/resolv.conf 2>/dev/null || true; printf 'nameserver %s\\noptions edns0\\n' > /etc/resolv.conf 2>/dev/null || true\n", dnsStubIP)
+	b.WriteString("if command -v resolvectl >/dev/null 2>&1; then\n")
+	b.WriteString("  default_link=$(ip route show default | awk '{for (i=1;i<=NF;i++) if ($i==\"dev\") print $(i+1); exit}')\n")
+	fmt.Fprintf(b, "  [ -n \"$default_link\" ] && resolvectl dns \"$default_link\" %s >/dev/null 2>&1 || true\n", dnsStubIP)
+	b.WriteString("  resolvectl flush-caches >/dev/null 2>&1 || true\n")
+	b.WriteString("fi\n")
+	// Structural leak closure: DROP DNS (udp/tcp :53) to every connected-subnet
+	// resolver so no query reaches it off the TUN, even if an app hardcodes it.
+	// Blocking only :53 (not the whole IP) keeps the resolver host usable on
+	// other ports — e.g. the proxy endpoint at the Lima gateway. Skip the
+	// mediated resolver, the loopback stub, and resolvers already via the TUN. A
+	// resolver that cannot be blocked leaves the leak open, so failure fails the
+	// run closed.
+	b.WriteString("command -v iptables >/dev/null 2>&1 || { echo 'hideout: iptables is required to block connected-subnet resolvers' >&2; exit 127; }\n")
+	b.WriteString("for ns in $ns_list; do\n")
+	b.WriteString("  [ \"$ns\" = \"$mediated_resolver\" ] && continue\n")
+	fmt.Fprintf(b, "  [ \"$ns\" = %s ] && continue\n", shellQuote(dnsStubIP))
+	b.WriteString("  case \"$ns\" in 127.*|::1) continue ;; esac\n")
+	b.WriteString("  ns_route=$(ip route get \"$ns\" 2>/dev/null | head -n 1 || true)\n")
+	b.WriteString("  case \"$ns_route\" in *' dev hideout0'*) continue ;; esac\n")
+	b.WriteString("  for proto in udp tcp; do\n")
+	b.WriteString("    iptables -C OUTPUT -p \"$proto\" --dport 53 -d \"$ns\" -j DROP 2>/dev/null \\\n")
+	b.WriteString("      || iptables -I OUTPUT 1 -p \"$proto\" --dport 53 -d \"$ns\" -j DROP \\\n")
+	b.WriteString("      || { echo \"hideout: failed to block connected-subnet resolver $ns\" >&2; exit 127; }\n")
+	b.WriteString("  done\n")
+	b.WriteString("done\n")
+}
+
+// writeDNSMediationVerify confirms the guest resolver is pointed at the DoH stub
+// and the stub is alive before the target launches (a structural check). The
+// observable bidirectional proof (forward: a target-style resolution plus HTTPS
+// fetch traverse the mediated DoH path; reverse: every captured connected-subnet
+// resolver is unreachable — a direct query fails) is performed by Gate 3.
+func writeDNSMediationVerify(b *strings.Builder, mediatedResolver string) {
+	if mediatedResolver == "" {
+		return
+	}
+	fmt.Fprintf(b, "grep -q '^nameserver %s' /etc/resolv.conf 2>/dev/null || { echo 'hideout: guest resolver was not pointed at the DNS stub' >&2; exit 127; }\n", dnsStubIP)
+	b.WriteString("kill -0 \"$(cat /hideout/session/network/dns-stub.pid)\" 2>/dev/null || { echo 'hideout: hideout-dns-stub stopped before target launch' >&2; exit 127; }\n")
+	b.WriteString("write_status 'dns mediation enforced'\n")
+}
+
+// writeDNSMediationCleanup stops the stub and removes the DNS redirect rules and
+// blackhole routes, symmetric with writeDNSMediationSetup.
+func writeDNSMediationCleanup(b *strings.Builder) {
+	b.WriteString("if [ -r /hideout/session/network/dns-stub.pid ]; then\n")
+	b.WriteString("  dns_stub_pid=$(sed -n '1p' /hideout/session/network/dns-stub.pid)\n")
+	b.WriteString("  if [ -n \"$dns_stub_pid\" ]; then kill \"$dns_stub_pid\" 2>/dev/null || true; fi\n")
+	b.WriteString("fi\n")
+	// Restore /etc/resolv.conf (original symlink or file) and remove blackholes.
+	b.WriteString("if [ -f /hideout/session/network/resolv.conf.link ]; then\n")
+	b.WriteString("  ln -sf \"$(cat /hideout/session/network/resolv.conf.link)\" /etc/resolv.conf 2>/dev/null || true\n")
+	b.WriteString("elif [ -f /hideout/session/network/resolv.conf.orig ]; then\n")
+	b.WriteString("  cp -a /hideout/session/network/resolv.conf.orig /etc/resolv.conf 2>/dev/null || true\n")
+	b.WriteString("fi\n")
+	b.WriteString("if command -v resolvectl >/dev/null 2>&1; then resolvectl revert \"$(ip route show default | awk '{for (i=1;i<=NF;i++) if ($i==\"dev\") print $(i+1); exit}')\" >/dev/null 2>&1 || true; fi\n")
+	b.WriteString("if command -v iptables >/dev/null 2>&1 && [ -r /hideout/session/network/resolvers.before ]; then\n")
+	b.WriteString("  for ns in $(cat /hideout/session/network/resolvers.before); do\n")
+	b.WriteString("    for proto in udp tcp; do iptables -D OUTPUT -p \"$proto\" --dport 53 -d \"$ns\" -j DROP 2>/dev/null || true; done\n")
+	b.WriteString("  done\n")
+	b.WriteString("fi\n")
+	b.WriteString("rm -f /hideout/session/network/mediated-resolver /hideout/session/network/dns-stub.pid /hideout/session/network/resolvers.before\n")
 }
 
 func shellQuote(value string) string {
