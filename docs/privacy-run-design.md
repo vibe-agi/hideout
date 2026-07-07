@@ -3736,15 +3736,15 @@ Audit redaction is deterministic, not heuristic:
   break policy and evidence fidelity. The local audit file is `0600`
   host-local evidence in the same trust domain as any other local log.
 - Redacting user data is user-owned: `audit.redact` policy scripts rewrite
-  presentation fields, and the export/share boundary must strip control-plane
-  credentials and apply user-selected redaction before audit leaves the
-  machine.
+  presentation fields, and the implemented export/share boundary strips
+  control-plane credentials and applies user-selected redaction before audit
+  leaves the machine.
 - Secret references such as `proxySecretRef` are preserved because they are
   identifiers, not secret values.
 
 This deterministic model is implemented for local audit, local authenticated
-Manager/WebUI views, and script context. The dedicated export/share redaction
-surface is design-ready; see [STATUS.md](STATUS.md).
+Manager/WebUI views, script context, and the dedicated export/share redaction
+surface; see [STATUS.md](STATUS.md).
 
 `explain` must show:
 

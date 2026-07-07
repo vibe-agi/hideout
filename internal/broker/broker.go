@@ -945,7 +945,7 @@ func (s *Server) redactAuditDetails(req Request, resp Response, details map[stri
 }
 
 func preserveBrokerAuditMetadata(current, immutable map[string]any) {
-	for _, key := range []string{"requestId", "subject", "command", "route", "requestedAction", "status", "error"} {
+	for _, key := range audit.EvidentiaryKeys {
 		if value, ok := immutable[key]; ok {
 			current[key] = value
 		}

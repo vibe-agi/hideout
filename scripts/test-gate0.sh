@@ -15,6 +15,7 @@ test -f schemas/helper-manifest.schema.json
 test -f schemas/run-plan.schema.json
 test -f schemas/run-result.schema.json
 test -f schemas/release-dogfood.schema.json
+test -f schemas/export-artifact.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -96,3 +97,6 @@ rm -rf "$release_tmp"
 # environmentSnapshot.
 scripts/test-isolation-evidence-smoke.sh
 
+# Export/share redaction boundary (no Lima): three source surfaces, schema,
+# control-plane cleanliness, user selection, and evidentiary fail-closed.
+scripts/test-export-redaction-smoke.sh

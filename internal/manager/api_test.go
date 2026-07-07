@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -541,6 +542,68 @@ func TestAPIProfileEnvPlanAndApplyDoesNotEchoValues(t *testing.T) {
 	}
 	if loaded.Env.Public["SERVICE_TOKEN"] != "secret-value" {
 		t.Fatalf("env value was not persisted: %+v", loaded.Env.Public)
+	}
+}
+
+func TestAPIEvidenceExportPlanAndApply(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	writeManagerExportProfile(t, store, "default", `
+function redactAudit(ctx) {
+  const details = ctx.details;
+  const selected = ctx.extra.exportRedaction || [];
+  for (let i = 0; i < selected.length; i++) {
+    details[selected[i]] = "REDACTED_BY_POLICY";
+  }
+  return { details };
+}`)
+	writeManagerExportAudit(t, store.Root, "ses_export_api", audit.Event{
+		Session:  "ses_export_api",
+		Profile:  "default",
+		Backend:  "native",
+		Action:   "host.open",
+		Decision: "allow",
+		Details:  map[string]any{"target": "api-secret", "note": "keep-api"},
+	})
+	api := API{Core: New(store), Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute)}
+	schema := compileManagerAPISchema(t)
+	out := filepath.Join(t.TempDir(), "artifact.json")
+	reqBody := ExportAPIRequest{
+		Source:  "audit",
+		Session: "ses_export_api",
+		Out:     out,
+		Redact:  []string{"target"},
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/evidence/export/plan", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"evidence/export/plan"`) ||
+		!strings.Contains(resp.Body.String(), `"recordCount":1`) {
+		t.Fatalf("export plan response mismatch: %s", resp.Body.String())
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/evidence/export/apply", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"evidence/export/apply"`) ||
+		!strings.Contains(resp.Body.String(), `"artifactPath":"`+out+`"`) {
+		t.Fatalf("export apply response mismatch: %s", resp.Body.String())
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "api-secret") || !strings.Contains(string(data), "REDACTED_BY_POLICY") || !strings.Contains(string(data), "keep-api") {
+		t.Fatalf("export API artifact redaction mismatch:\n%s", data)
 	}
 }
 

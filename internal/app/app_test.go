@@ -5863,6 +5863,50 @@ func TestCheckBrokerReportsStartFailure(t *testing.T) {
 	}
 }
 
+func TestAuditExportProducesCleanArtifactAndLeavesLocalAuditFullFidelity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	storeRoot := filepath.Join(home, ".hideout")
+	sessionID := "ses_export_cli"
+	auditPath := filepath.Join(storeRoot, "sessions", sessionID, "audit.jsonl")
+	mustWriteAppTest(t, auditPath, `{"time":"2026-07-07T00:00:00Z","session":"`+sessionID+`","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://user:pass@example.com/path?token=abc","capabilityToken":"cap_0123456789abcdef0123456789abcdef","machineId":"0123456789abcdef0123456789abcdef"}}`+"\n")
+
+	outPath := filepath.Join(t.TempDir(), "artifact.json")
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"audit", "export",
+		"--session", sessionID,
+		"--out", outPath,
+		"--acknowledge-full-fidelity",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("audit export exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+	artifact, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(artifact)
+	if !strings.Contains(text, "https://user:pass@example.com/path?token=abc") {
+		t.Fatalf("export should preserve acknowledged user data:\n%s", text)
+	}
+	for _, leaked := range []string{"cap_0123456789abcdef", "capabilityToken", "0123456789abcdef0123456789abcdef"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("export leaked control-plane material %q:\n%s", leaked, text)
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"audit", "show", "--session", sessionID, "--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("audit show exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "https://user:pass@example.com/path?token=abc") {
+		t.Fatalf("local audit show should preserve user data verbatim:\n%s", out.String())
+	}
+}
+
 func buildShim(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "hideout-shim")

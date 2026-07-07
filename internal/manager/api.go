@@ -12,6 +12,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	exportboundary "github.com/vibe-agi/hideout/internal/export"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/session"
 )
@@ -91,6 +92,21 @@ type ProfileEnvAPIRequest struct {
 	Operation   string `json:"operation"`
 	Name        string `json:"name,omitempty"`
 	Value       string `json:"value,omitempty"`
+}
+
+type ExportAPIRequest struct {
+	Source                  string   `json:"source,omitempty"`
+	Session                 string   `json:"session,omitempty"`
+	Profile                 string   `json:"profile,omitempty"`
+	Action                  string   `json:"action,omitempty"`
+	Decision                string   `json:"decision,omitempty"`
+	Limit                   int      `json:"limit,omitempty"`
+	BundlePath              string   `json:"bundle,omitempty"`
+	From                    string   `json:"from,omitempty"`
+	Out                     string   `json:"out,omitempty"`
+	Redact                  []string `json:"redact,omitempty"`
+	PolicyProfile           string   `json:"policyProfile,omitempty"`
+	AcknowledgeFullFidelity bool     `json:"acknowledgeFullFidelity,omitempty"`
 }
 
 func NewAPI(core Core, token string, ttl time.Duration) API {
@@ -195,6 +211,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveProfileEnvPlan(w, r)
 	case "profile/env/apply":
 		api.serveProfileEnvApply(w, r)
+	case "evidence/export/plan":
+		api.serveExportPlan(w, r)
+	case "evidence/export/apply":
+		api.serveExportApply(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -315,6 +335,49 @@ func (api API) runOpenerForSession(req RunAPIRequest, plan RunPlan) func(RunSess
 	return func(runSession RunSession) broker.Opener {
 		return api.RunOpener(req, plan, runSession)
 	}
+}
+
+func (api API) serveExportPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeExportAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanExport(exportOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "evidence/export/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveExportApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeExportAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts := exportOptionsFromAPIRequest(req)
+	plan, err := api.Core.PlanExport(opts)
+	if err != nil {
+		plan = exportboundary.Plan{Artifact: exportboundary.Artifact{Version: exportboundary.ArtifactVersion}}
+	}
+	result, applyErr := api.Core.ApplyExport(plan, opts)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "evidence/export/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
 }
 
 func (api API) serveEnvironmentStopPlan(w http.ResponseWriter, r *http.Request) {
@@ -661,6 +724,19 @@ func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (Profile
 	return req, nil
 }
 
+func decodeExportAPIRequest(w http.ResponseWriter, r *http.Request) (ExportAPIRequest, error) {
+	var req ExportAPIRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return req, errors.New("invalid export request")
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return req, errors.New("invalid export request")
+	}
+	return req, nil
+}
+
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
 		ProfileName:    req.ProfileName,
@@ -708,6 +784,27 @@ func profileEnvOptionsFromAPIRequest(req ProfileEnvAPIRequest) ProfileEnvOptions
 		Operation:   req.Operation,
 		Name:        req.Name,
 		Value:       req.Value,
+	}
+}
+
+func exportOptionsFromAPIRequest(req ExportAPIRequest) ExportOptions {
+	source := exportboundary.SourceKind(req.Source)
+	if source == "" {
+		source = exportboundary.SourceAudit
+	}
+	return ExportOptions{
+		Source:                  source,
+		Session:                 req.Session,
+		Profile:                 req.Profile,
+		Action:                  req.Action,
+		Decision:                req.Decision,
+		Limit:                   req.Limit,
+		BundlePath:              req.BundlePath,
+		From:                    req.From,
+		Out:                     req.Out,
+		Redact:                  append([]string(nil), req.Redact...),
+		PolicyProfile:           req.PolicyProfile,
+		AcknowledgeFullFidelity: req.AcknowledgeFullFidelity,
 	}
 }
 

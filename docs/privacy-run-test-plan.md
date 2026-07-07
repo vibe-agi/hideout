@@ -180,6 +180,11 @@ Required evidence:
   invariants before new PortBridge-backed capabilities are promoted.
 - RunResult schema includes Boundary Summary as structured data derived from
   audit facts, not as a CLI-only rendering.
+- Export/share redaction smoke (`scripts/test-export-redaction-smoke.sh`)
+  exercises audit, release-evidence bundle, and Boundary Summary export
+  sources; validates `schemas/export-artifact.schema.json`; proves
+  control-plane cleanliness, user-selected redaction, reference resolution, and
+  evidentiary fail-closed behavior without a real backend.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must

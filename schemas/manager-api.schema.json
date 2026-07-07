@@ -39,7 +39,9 @@
         "profile/hostfs/plan",
         "profile/hostfs/apply",
         "profile/env/plan",
-        "profile/env/apply"
+        "profile/env/apply",
+        "evidence/export/plan",
+        "evidence/export/apply"
       ]
     },
     "data": {

@@ -33,6 +33,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
+	exportboundary "github.com/vibe-agi/hideout/internal/export"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/hostopen"
@@ -156,6 +157,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
+	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
 	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]")
@@ -3702,6 +3704,21 @@ type auditShowOptions struct {
 	json     bool
 }
 
+type auditExportOptions struct {
+	source                  string
+	session                 string
+	profile                 string
+	action                  string
+	decision                string
+	limit                   int
+	bundle                  string
+	from                    string
+	out                     string
+	redact                  stringListFlag
+	policyProfile           string
+	acknowledgeFullFidelity bool
+}
+
 func parseAuditShowOptions(args []string) (auditShowOptions, error) {
 	fs := flag.NewFlagSet("audit show", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -3726,11 +3743,13 @@ func parseAuditShowOptions(args []string) (auditShowOptions, error) {
 
 func (a app) auditCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
+		return errors.New("usage: hideout audit show|export")
 	}
 	switch args[0] {
 	case "show":
 		return a.auditShow(args[1:])
+	case "export":
+		return a.auditExport(args[1:])
 	default:
 		return fmt.Errorf("unknown audit command %q", args[0])
 	}
@@ -3762,6 +3781,110 @@ func (a app) auditShow(args []string) error {
 	}
 	writeAuditShowEvents(a.stdout, events)
 	return nil
+}
+
+func parseAuditExportOptions(args []string) (auditExportOptions, error) {
+	fs := flag.NewFlagSet("audit export", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	opts := auditExportOptions{source: string(exportboundary.SourceAudit), limit: 50}
+	fs.StringVar(&opts.source, "source", opts.source, "audit, bundle, or boundary-summary")
+	fs.StringVar(&opts.session, "session", "", "session id")
+	fs.StringVar(&opts.profile, "profile", "", "profile name")
+	fs.StringVar(&opts.action, "action", "", "audit action")
+	fs.StringVar(&opts.decision, "decision", "", "audit decision")
+	fs.IntVar(&opts.limit, "limit", opts.limit, "maximum audit events")
+	fs.StringVar(&opts.bundle, "bundle", "", "release evidence bundle directory or manifest")
+	fs.StringVar(&opts.from, "from", "", "run audit path for boundary-summary")
+	fs.StringVar(&opts.out, "out", "", "local export artifact path")
+	fs.Var(&opts.redact, "redact", "detail field selector to redact; may be repeated")
+	fs.StringVar(&opts.policyProfile, "policy-profile", "", "profile whose audit.redact policy applies")
+	fs.BoolVar(&opts.acknowledgeFullFidelity, "acknowledge-full-fidelity", false, "include residual user data after configured redaction")
+	if err := fs.Parse(args); err != nil {
+		return auditExportOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return auditExportOptions{}, errors.New("usage: hideout audit export --source audit|bundle|boundary-summary --out <path>")
+	}
+	if opts.limit <= 0 {
+		return auditExportOptions{}, errors.New("--limit must be greater than zero")
+	}
+	return opts, nil
+}
+
+func (a app) auditExport(args []string) error {
+	opts, err := parseAuditExportOptions(args)
+	if err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	managerOpts := manager.ExportOptions{
+		Source:                  exportboundary.SourceKind(opts.source),
+		Session:                 opts.session,
+		Profile:                 opts.profile,
+		Action:                  opts.action,
+		Decision:                opts.decision,
+		Limit:                   opts.limit,
+		BundlePath:              opts.bundle,
+		From:                    opts.from,
+		Out:                     opts.out,
+		Redact:                  append([]string(nil), opts.redact...),
+		PolicyProfile:           opts.policyProfile,
+		AcknowledgeFullFidelity: opts.acknowledgeFullFidelity,
+		Commit:                  Commit,
+	}
+	plan, err := core.PlanExport(managerOpts)
+	if err != nil {
+		if metaErr := core.RecordExportFailure(managerOpts, err.Error()); metaErr != nil {
+			return metaErr
+		}
+		return err
+	}
+	fmt.Fprint(a.stdout, plan.Review.Text())
+	if plan.Review.DecisionRequired {
+		if !stdinIsTerminal() {
+			return errors.New("user data is present; choose --redact or --acknowledge-full-fidelity")
+		}
+		ok, err := confirmExport()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("export refused by operator")
+		}
+		managerOpts.InteractiveConfirmed = true
+	}
+	result, err := core.ApplyExport(plan, managerOpts)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "export: %s\n", result.ArtifactPath)
+	if result.MetaAuditPath != "" {
+		fmt.Fprintf(a.stdout, "meta-audit: %s\n", result.MetaAuditPath)
+	}
+	return nil
+}
+
+func stdinIsTerminal() bool {
+	st, err := os.Stdin.Stat()
+	return err == nil && (st.Mode()&os.ModeCharDevice) != 0
+}
+
+func confirmExport() (bool, error) {
+	fmt.Fprint(os.Stderr, "Proceed with export? [y/N] ")
+	var answer string
+	if _, err := fmt.Fscanln(os.Stdin, &answer); err != nil {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func writeAuditShowEvents(w io.Writer, events []audit.Event) {

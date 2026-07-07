@@ -41,6 +41,7 @@
         "portbridge.host-to-guest",
         "endpoint.expose.host-to-guest",
         "preview.open",
+        "evidence.export",
         "portbridge.probe",
         "browser.control.probe",
         "preview.open.probe"

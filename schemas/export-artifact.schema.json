@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/export-artifact.schema.json",
+  "title": "Hideout Exported Evidence Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "provenance", "recordCount", "body"],
+  "properties": {
+    "version": {
+      "const": "hideout.export/v1"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "createdAt", "redactionStages", "decision"],
+      "properties": {
+        "source": {
+          "enum": ["audit", "bundle", "boundary-summary"]
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "redactionStages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "entrypoint": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "channel"],
+          "properties": {
+            "mode": {
+              "enum": ["redact", "acknowledge-full-fidelity"]
+            },
+            "channel": {
+              "enum": ["flag", "interactive"]
+            }
+          }
+        }
+      }
+    },
+    "recordCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "body": {},
+    "notice": {
+      "type": "string"
+    }
+  }
+}

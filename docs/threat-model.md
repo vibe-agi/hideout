@@ -197,6 +197,12 @@ the default policy profile:
 - A1-A4: Boundary Summary is derived from structured audit facts and must not
   include HostFS backing secrets, broker tokens, proxy secrets, browser
   automation secrets, endpoint secrets, or full sensitive target paths.
+- A1-A4: evidence that leaves the local trust zone through
+  `hideout audit export` is mediated by the export/share boundary. The boundary
+  reasserts deterministic control-plane stripping, resolves referenced local
+  evidence inline or refuses, applies the operator's configured `audit.redact`
+  policy to selected user/application data, and fails closed without a partial
+  artifact when a required decision or redaction stage is missing.
 
 Claims that reference audit evidence assume the default audit-enabled profile
 state. Disabling JSONL audit (`audit.enabled=false` or `--audit off`) removes
