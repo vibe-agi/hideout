@@ -86,11 +86,13 @@ func (c Core) ApplyEnvironmentStop(ctx context.Context, plan EnvironmentActionPl
 	if err != nil {
 		return EnvironmentActionResult{Plan: plan}, err
 	}
+	c.emitOperation("environment", "start", map[string]any{"action": string(EnvironmentActionStop)})
 	operator := environmentOperatorOrDefault(opts.Operator)
 	result := EnvironmentActionResult{Plan: plan, Applied: []EnvironmentActionTarget{}, Skipped: append([]EnvironmentActionTarget(nil), plan.Skipped...)}
 	for _, target := range plan.Targets {
 		applied, skipped, err := applyEnvironmentStopTarget(ctx, store, operator, target.ID)
 		if err != nil {
+			c.emitOperation("environment", "failed", map[string]any{"action": string(EnvironmentActionStop)})
 			return result, err
 		}
 		if skipped.Reason != "" {
@@ -99,6 +101,7 @@ func (c Core) ApplyEnvironmentStop(ctx context.Context, plan EnvironmentActionPl
 		}
 		result.Applied = append(result.Applied, applied)
 	}
+	c.emitOperation("environment", "complete", map[string]any{"action": string(EnvironmentActionStop), "applied": len(result.Applied)})
 	return result, nil
 }
 
@@ -114,15 +117,18 @@ func (c Core) ApplyEnvironmentClean(ctx context.Context, plan EnvironmentActionP
 	if err != nil {
 		return EnvironmentActionResult{Plan: plan}, err
 	}
+	c.emitOperation("environment", "start", map[string]any{"action": string(EnvironmentActionClean)})
 	operator := environmentOperatorOrDefault(opts.Operator)
 	result := EnvironmentActionResult{Plan: plan, Applied: []EnvironmentActionTarget{}, Skipped: append([]EnvironmentActionTarget(nil), plan.Skipped...)}
 	for _, target := range plan.Targets {
 		applied, err := applyEnvironmentCleanTarget(ctx, store, operator, target.ID)
 		if err != nil {
+			c.emitOperation("environment", "failed", map[string]any{"action": string(EnvironmentActionClean)})
 			return result, err
 		}
 		result.Applied = append(result.Applied, applied)
 	}
+	c.emitOperation("environment", "complete", map[string]any{"action": string(EnvironmentActionClean), "applied": len(result.Applied)})
 	return result, nil
 }
 

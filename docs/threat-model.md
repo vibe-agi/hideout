@@ -75,8 +75,10 @@ boundary is the host-side broker validator, HostFS policy, explicit user
 grants, and audited TCB execution path, not the assumption that guest root
 cannot read the token.
 
-The `hideoutd` daemon is part of the local management TCB when enabled. Its
-transport must be unreachable from backend guests by construction. A Unix
+The `hideoutd` daemon is part of the local management TCB (implemented; see
+[STATUS.md](STATUS.md)). Its transport is unreachable from real backend guests by
+construction; for a weak native target that shares the operator UID, placement is
+not a boundary and the operator token is the sole defense. A Unix
 socket must live under a runtime subdirectory of the effective Hideout store
 root with private ancestors, not under workspace, HostFS grants, passthrough
 mounts, or any guest-visible path. This reuses the existing store-reserved

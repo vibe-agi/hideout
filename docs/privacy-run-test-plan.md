@@ -185,6 +185,13 @@ Required evidence:
   sources; validates `schemas/export-artifact.schema.json`; proves
   control-plane cleanliness, user-selected redaction, reference resolution, and
   evidentiary fail-closed behavior without a real backend.
+- `hideoutd` local control-plane smoke (`scripts/test-daemon-smoke.sh`, wired into
+  Gate 0) exercises daemon start over a store-rooted guest-unreachable socket,
+  token-authenticated Manager parity (including the special-cased GET routes),
+  audited unauthenticated refusals with no token material, the daemon status
+  endpoint against `schemas/daemon-status.schema.json`, and an ordered stop — with
+  no real backend. Daemon lifecycle, auth, event redaction, restart fail-closed,
+  and background status are covered by `go test ./internal/daemon/...`.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must

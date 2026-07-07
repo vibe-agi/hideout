@@ -58,13 +58,23 @@ The current Manager API surface is **16 POST + 16 GET = 32 routes**.
 
 ## Daemon-Specific Endpoints (separate surface, not the Manager subrouter)
 
-The daemon adds its own local lifecycle/observability endpoints, which are NOT part
-of the parity-locked Manager subrouter and are inventoried here explicitly:
+The daemon adds its own local lifecycle/observability/control endpoints, which are
+NOT part of the parity-locked Manager subrouter and are inventoried here explicitly
+(all under `/daemon/…`, all operator-token authenticated):
 
-- daemon status/inventory (backs `hideout daemon status`; `schemas/daemon-status.schema.json`).
-- event subscription (the live stream; `schemas/daemon-event.schema.json`).
+- `GET /daemon/status` — status/inventory, backs `hideout daemon status`
+  (`schemas/daemon-status.schema.json`).
+- `POST /daemon/stop` — ordered shutdown, backs `hideout daemon stop`.
+- `GET /daemon/events` — the live event subscription (SSE;
+  `schemas/daemon-event.schema.json`).
+- `POST /daemon/background` — submit an existing typed environment stop/clean apply
+  as background work (FR-010). It runs the same `Core.ApplyEnvironmentStop`/
+  `ApplyEnvironmentClean` and rejects any other op class; it adds no new Manager
+  operation class.
 
-These add no Manager operation class, no raw profile write, and no host execution.
+These endpoints add no Manager operation class, no raw profile write, and no host
+execution. This list is the complete daemon-specific surface; any addition MUST be
+inventoried here.
 
 ## Rules
 

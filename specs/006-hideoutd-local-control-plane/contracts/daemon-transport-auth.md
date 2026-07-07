@@ -15,6 +15,18 @@
 - A stale socket/lock from a crash is detected on the next start and either safely
   reclaimed or the start fails closed with a diagnostic.
 
+## Daemon-Specific Endpoints (separate surface, all under `/daemon/…`)
+
+All are operator-token authenticated and add no Manager operation class:
+
+- `GET /daemon/status` — status/inventory (`schemas/daemon-status.schema.json`).
+- `POST /daemon/stop` — ordered shutdown.
+- `GET /daemon/events` — live redacted event stream (SSE;
+  `schemas/daemon-event.schema.json`).
+- `POST /daemon/background` — submit an existing typed environment stop/clean apply
+  as background work (`{"op":"environment-stop"|"environment-clean","ids":[...]}`);
+  it runs the same Core apply and rejects any other op class.
+
 ## Primary Transport (guest-unreachable placement)
 
 - A Unix socket at `<store-runtime-dir>/hideoutd.sock`. Placement MUST be validated by

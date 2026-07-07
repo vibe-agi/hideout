@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/daemon-event.schema.json",
+  "title": "Hideout daemon live event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "kind", "seq"],
+  "properties": {
+    "version": {
+      "const": "hideout.daemon-event/v1"
+    },
+    "kind": {
+      "enum": ["operation", "environment", "audit", "export", "cleanup", "terminal"]
+    },
+    "phase": {
+      "enum": ["start", "progress", "complete", "failed"]
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

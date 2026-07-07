@@ -27,9 +27,15 @@ WebUI
 Both surfaces must use the same Manager Core/API domain resources. WebUI uses
 the local Manager API transport; terminal surfaces may call Manager Core
 in-process, but must not rebuild state by reading subsystem files directly.
-The steady-state model is daemon-first: `hideoutd` hosts the Manager API, and
-both surfaces are its clients for live state and event streams rather than
-inventing their own file watchers.
+The steady-state model is daemon-first and implemented (see [STATUS.md](STATUS.md)):
+`hideoutd` hosts the Manager API over a store-rooted socket plus a live, redacted
+event stream, and also serves the WebUI over a tokened loopback UI transport. The
+WebUI panels open an `EventSource` on `/daemon/events` and the TUI consumes the same
+stream via `daemon.SubscribeEvents`, so both surfaces refresh on events (event-triggered
+re-fetch; no polling timer) rather than polling, falling back to their prior behavior when
+no daemon runs. Building panel state directly from event payloads (zero further reads) and
+end-to-end user-visible refresh verification are a deferred follow-on (the fuller operations
+console), not part of 006.
 
 ## TUI Role
 

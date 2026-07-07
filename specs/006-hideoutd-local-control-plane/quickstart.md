@@ -76,22 +76,30 @@ that operations and other subscribers are unaffected and daemon memory stays bou
 
 ## 8b. Daemon-Specific Endpoints Are A Separate Surface (unit) — FR-016
 
-Assert the daemon's status/inventory and event-subscription endpoints live outside
-`/api/v1/…`, add no Manager operation class, and are subject to the same
-authentication and redaction as Manager routes.
+Assert the daemon's own endpoints — `GET /daemon/status`, `POST /daemon/stop`,
+`GET /daemon/events`, and `POST /daemon/background` — live outside `/api/v1/…`, add
+no Manager operation class, and are subject to the same authentication and redaction
+as Manager routes.
 
 ## 9. Surfaces Consume Events (unit) — FR-009
 
-Assert the existing TUI/WebUI smoke panels reflect an environment/run state change
-from streamed events alone (their current panels; no console redesign), and that TUI
-stays lightweight parity.
+Scope: 006 delivers event-triggered refresh, verified at the plumbing level. Assert
+the WebUI is served over the daemon loopback UI transport and its HTML opens an
+`EventSource` on `/daemon/events` (browser query-param token accepted; wrong token
+refused), so the panels re-fetch on events rather than on a polling timer. Assert
+the TUI consumes the same stream via `daemon.SubscribeEvents` (a refresh signal per
+event; the channel closes when the stream ends and the TUI falls back to interval
+polling). No console redesign; TUI stays lightweight parity. Payload-driven panel
+state (zero further overview reads) and end-to-end user-visible live-refresh
+verification are deferred (FR-009 scope note).
 
 ## 10. Background Ownership And Status (unit) — FR-010, SC-008
 
-Submit an existing typed environment stop/clean apply as background work; assert
-status transitions through completion under the same plan/apply semantics as
-foreground, and that daemon stop leaves zero headless work and zero live transport
-endpoints. Assert no new typed operation class was added (session cleanup and
+Submit an existing typed environment stop/clean apply as background work through the
+`POST /daemon/background` product endpoint; assert status transitions through
+completion under the same plan/apply semantics as foreground, and that daemon stop
+leaves zero headless work and zero live transport endpoints. Assert no new typed
+operation class was added (session cleanup and
 run/status are out of v1 background scope).
 
 ## 11. Restart Fails Closed For Orphans (unit) — FR-011, SC-005

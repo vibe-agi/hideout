@@ -16,7 +16,8 @@ same 32 routes (16 POST at `internal/manager/api.go:186-216`; 16 GET = the
 `serveGetResource` switch `:971-997` plus the two special-cased GET resources
 `audit/events` `:154` and `run/status` `:163`), the same `authorize` (Bearer /
 `X-Hideout-UI-Token`, constant-time, TTL) and `checkHost`/`checkOrigin` guards. The
-daemon's own lifecycle/status/event endpoints are a separate surface outside
+daemon's own lifecycle/status/event/background endpoints (all under `/daemon/…`)
+are a separate surface outside
 `/api/v1/…` (not the parity-locked Manager subrouter). The Unix socket lives under a private runtime
 subdirectory of the store (reusing the store-reserved and workspace-safety
 guards), which structurally excludes real backend guests (Lima); for a weak
@@ -164,7 +165,7 @@ internal/
 │                       # mounts manager.API.Handler() as the parity-locked Manager
 │                       # subrouter behind an auth-refusal recorder (logs 401s to the
 │                       # daemon audit log without altering responses); serves its own
-│                       # status + event-subscribe endpoints (separate surface); the
+│                       # status/stop/events/background endpoints (separate surface); the
 │                       # live event fan-out (bounded per subscriber); the persistent
 │                       # daemon-local audit log; and the background-operation registry
 │                       # (v1: env stop/clean apply only).

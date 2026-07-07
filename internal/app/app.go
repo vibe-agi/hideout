@@ -31,6 +31,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/native"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/daemon"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
@@ -98,6 +99,8 @@ func (a app) run(args []string) error {
 		return a.auditCommand(args[1:])
 	case "ui":
 		return a.ui(args[1:])
+	case "daemon":
+		return a.daemonCommand(args[1:])
 	case "tui":
 		return a.tui(args[1:])
 	case "version", "--version", "-v":
@@ -4365,6 +4368,117 @@ func (a app) ui(args []string) error {
 	}
 }
 
+func (a app) daemonCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout daemon start|status|stop")
+	}
+	switch args[0] {
+	case "start":
+		return a.daemonStart(args[1:])
+	case "status":
+		return a.daemonStatus(args[1:])
+	case "stop":
+		return a.daemonStop(args[1:])
+	default:
+		return fmt.Errorf("unknown daemon command %q", args[0])
+	}
+}
+
+func (a app) daemonStart(args []string) error {
+	fs := flag.NewFlagSet("daemon start", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	ttl := fs.Duration("ttl", 15*time.Minute, "operator token TTL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(store.Root, 0o700); err != nil {
+		return err
+	}
+	d, err := daemon.Start(daemon.Options{
+		Store:      store,
+		TTL:        *ttl,
+		RunBackend: a.runAPIBackend,
+		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
+			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
+		},
+	})
+	if err != nil {
+		if daemon.IsAlreadyRunning(err) {
+			fmt.Fprintf(a.stdout, "hideoutd already running for this store: %s\n", daemon.SocketPath(store.Root))
+			return nil
+		}
+		return err
+	}
+	fmt.Fprintf(a.stdout, "hideoutd serving: %s\n", d.Socket())
+	fmt.Fprintf(a.stdout, "token: %s\n", filepath.Join(d.RuntimeDir(), "token"))
+	if url := d.UIURL(); url != "" {
+		fmt.Fprintf(a.stdout, "WebUI: %s\n", url)
+	}
+	fmt.Fprintln(a.stdout, "Press Ctrl-C to stop.")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	select {
+	case <-sig:
+		return d.Stop(context.Background())
+	case <-d.Done():
+		// Stopped out of band (e.g. via `hideout daemon stop`).
+		return nil
+	}
+}
+
+func (a app) daemonStatus(args []string) error {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	body, err := a.daemonRequest(store.Root, http.MethodGet, "/daemon/status", nil)
+	if err != nil {
+		return err
+	}
+	a.stdout.Write(body)
+	return nil
+}
+
+func (a app) daemonStop(args []string) error {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if _, err := a.daemonRequest(store.Root, http.MethodPost, "/daemon/stop", nil); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.stdout, "hideoutd stopping")
+	return nil
+}
+
+func (a app) daemonRequest(storeRoot, method, path string, body io.Reader) ([]byte, error) {
+	client, base, token, err := daemon.DialClient(storeRoot)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, base+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Host = "localhost"
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon not reachable: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("daemon request failed (%s): %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return data, nil
+}
+
 func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (backend.Backend, error) {
 	opts := runOptions{
 		backendName:        plan.Backend,
@@ -4445,11 +4559,36 @@ func (a app) tui(args []string) error {
 	if !opts.watch {
 		return render(false)
 	}
+	// When a daemon is running, refresh strictly on its event stream (no polling
+	// timer); only after the stream ends do we fall back to interval polling.
+	var eventCh <-chan struct{}
+	if ch, err := daemon.SubscribeEvents(ctx, store.Root); err == nil {
+		eventCh = ch
+	}
+	return watchDashboard(ctx, eventCh, opts.interval, func() error { return render(true) })
+}
+
+// watchDashboard drives the TUI refresh loop. It renders once up front and then,
+// while a daemon event stream is present, refreshes strictly on events (no polling
+// timer while the stream is live). Only after the stream ends (channel closed) does
+// it fall back to interval polling.
+func watchDashboard(ctx context.Context, eventCh <-chan struct{}, interval time.Duration, render func() error) error {
 	for {
-		if err := render(true); err != nil {
+		if err := render(); err != nil {
 			return err
 		}
-		timer := time.NewTimer(opts.interval)
+		if eventCh != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			case _, ok := <-eventCh:
+				if !ok {
+					eventCh = nil // stream ended; fall back to interval polling
+				}
+			}
+			continue
+		}
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

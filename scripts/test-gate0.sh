@@ -16,6 +16,8 @@ test -f schemas/run-plan.schema.json
 test -f schemas/run-result.schema.json
 test -f schemas/release-dogfood.schema.json
 test -f schemas/export-artifact.schema.json
+test -f schemas/daemon-status.schema.json
+test -f schemas/daemon-event.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -100,3 +102,8 @@ scripts/test-isolation-evidence-smoke.sh
 # Export/share redaction boundary (no Lima): three source surfaces, schema,
 # control-plane cleanliness, user selection, and evidentiary fail-closed.
 scripts/test-export-redaction-smoke.sh
+
+# hideoutd local control-plane boundary (no Lima): lifecycle, guest-unreachable
+# socket placement, token auth + audited refusals, Manager parity, event stream,
+# and ordered stop.
+scripts/test-daemon-smoke.sh

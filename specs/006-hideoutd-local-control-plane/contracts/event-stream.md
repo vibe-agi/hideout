@@ -16,7 +16,11 @@
 
 - A subscriber authenticates like any request (operator token).
 - On (re)connect, the client seeds current state with a single `overview` read and then
-  consumes events; steady-state operation performs zero polling reads.
+  consumes events; the stream supports steady-state operation with zero polling
+  reads. Note: the existing TUI/WebUI smoke surfaces currently do event-triggered
+  re-fetch (they re-read `overview` on each event, with no polling timer); building
+  panel state from event payloads alone (zero further reads) is a deferred follow-on
+  (see spec FR-009 scope note).
 - A restart replays no historical events; the client re-seeds via `overview`.
 
 ## Event Shape

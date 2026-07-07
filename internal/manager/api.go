@@ -123,6 +123,15 @@ func (api API) Handler() http.Handler {
 	return http.HandlerFunc(api.ServeHTTP)
 }
 
+// Authorize reports whether the request carries a valid operator credential,
+// using the exact same check as the served Manager routes. It lets the daemon
+// (internal/daemon) apply identical authentication to its own status/event
+// endpoints without reimplementing token handling (FR-016). It does not alter any
+// request or response.
+func (api API) Authorize(r *http.Request) error {
+	return api.authorize(r)
+}
+
 func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

@@ -580,10 +580,20 @@ mutate unrelated stores directly.
 ### Next Product Increment
 
 - formal Manager resource schema;
-- `hideoutd` implementation as the steady-state resident Manager runtime —
-  environment registry ownership, persistent event streams, confirmation
-  prompt channels, background cleanup, and local API serving — with CLI, TUI,
-  and WebUI as its clients;
+- `hideoutd` is implemented as the steady-state resident Manager runtime (see
+  [STATUS.md](STATUS.md)): it mounts the existing typed Manager API over a
+  store-rooted, guest-unreachable Unix socket (parity by construction), serves a
+  live redacted event stream (operation lifecycle + session audit tail; no durable
+  log; streams end on credential expiry), runs existing typed environment
+  stop/clean as background work with queryable status, and fails closed after
+  restart for live resources it cannot prove it owns. Its own status/event
+  endpoints are a separate surface outside `/api/v1/`. Confirmation prompt channels
+  remain a follow-on (the daemon fails closed for confirmation-required ops rather
+  than prompting). It also serves the WebUI over a tokened loopback UI transport;
+  the WebUI panels refresh on its event stream via `EventSource` and the TUI via
+  `daemon.SubscribeEvents` (event-triggered re-fetch, no polling timer). Payload-driven
+  panel updates and end-to-end UI verification are a deferred follow-on. CLI, TUI, and
+  WebUI are all its clients;
 - expand InitTask resource schema and plan/apply operations beyond machine
   setup;
 - plan/apply operations for HostFS, network, OpenTarget, and broader

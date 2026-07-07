@@ -4077,6 +4077,68 @@ func TestTUIOptionsDefaultToPersistentObserver(t *testing.T) {
 	}
 }
 
+// FR-009 (event-triggered refresh, no polling timer): while a daemon event stream
+// is live but idle, the TUI must refresh strictly on events — it must NOT also
+// re-render on the interval. A single seed render and then silence proves there is
+// no parallel interval polling racing the event channel.
+func TestWatchDashboardEventDrivenDoesNotIntervalPoll(t *testing.T) {
+	eventCh := make(chan struct{}) // live stream, never delivers an event
+	renders := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := watchDashboard(ctx, eventCh, 20*time.Millisecond, func() error {
+		renders++
+		return nil
+	}); err != nil {
+		t.Fatalf("watchDashboard: %v", err)
+	}
+	// With the pre-fix parallel timer, 300ms at a 20ms interval would yield ~15
+	// renders. Event-triggered refresh yields exactly the one seed render.
+	if renders != 1 {
+		t.Fatalf("live idle event stream must not interval-poll: want 1 seed render, got %d", renders)
+	}
+}
+
+// A delivered event triggers exactly one refresh; the interval never fires here.
+func TestWatchDashboardRendersOncePerEvent(t *testing.T) {
+	eventCh := make(chan struct{}, 2)
+	eventCh <- struct{}{}
+	eventCh <- struct{}{}
+	renders := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := watchDashboard(ctx, eventCh, time.Hour, func() error {
+		renders++
+		return nil
+	}); err != nil {
+		t.Fatalf("watchDashboard: %v", err)
+	}
+	// Seed render plus one render per delivered event; the 1h interval cannot fire.
+	if renders != 3 {
+		t.Fatalf("want 3 renders (seed + 2 events), got %d", renders)
+	}
+}
+
+// Only after the stream ends (channel closed) does the TUI fall back to interval
+// polling — the daemon-less behavior.
+func TestWatchDashboardFallsBackToIntervalWhenStreamCloses(t *testing.T) {
+	eventCh := make(chan struct{})
+	close(eventCh) // stream already ended
+	renders := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := watchDashboard(ctx, eventCh, 20*time.Millisecond, func() error {
+		renders++
+		return nil
+	}); err != nil {
+		t.Fatalf("watchDashboard: %v", err)
+	}
+	// After the close it polls on the 20ms interval; 200ms yields several renders.
+	if renders < 3 {
+		t.Fatalf("after stream close, want interval polling (>=3 renders), got %d", renders)
+	}
+}
+
 func TestRunNativeExecutesWithWeakIsolationFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -6387,5 +6449,31 @@ func TestRunWarnsShadowedHostFSRules(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "shadowed by the workspace") {
 		t.Fatalf("run should warn about shadowed hostfs rule: %s", errOut.String())
+	}
+}
+
+// TestDaemonAbsentDegradesGracefully (T013) — with no daemon running, the daemon
+// client commands fail closed cleanly (no panic/hang) and existing embedded
+// commands are unaffected, proving daemon absence does not regress daemon-less
+// operation (FR-006).
+func TestDaemonAbsentDegradesGracefully(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"daemon", "status"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("daemon status with no daemon should fail closed, got exit 0")
+	}
+	if !strings.Contains(errOut.String(), "no running daemon") &&
+		!strings.Contains(errOut.String(), "not reachable") {
+		t.Fatalf("daemon status should report no running daemon, got: %s", errOut.String())
+	}
+
+	// Embedded operation is unaffected.
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"help"}, &out, &errOut); code != 0 {
+		t.Fatalf("embedded help should still work with no daemon: exit=%d stderr=%s", code, errOut.String())
 	}
 }

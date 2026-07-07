@@ -27,6 +27,10 @@ type Core struct {
 	Backends     []BackendCheck
 	SecretEnv    []string
 	CommandProxy cmdproxy.Registry
+	// Observer, when set, receives operation-lifecycle notifications. It is nil in
+	// embedded construction (New), so embedded mode emits nothing; the daemon sets
+	// it to its event publisher.
+	Observer EventObserver
 }
 
 type BackendCheck struct {

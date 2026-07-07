@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/daemon-status.schema.json",
+  "title": "Hideout daemon status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "state", "transport"],
+  "properties": {
+    "version": {
+      "const": "hideout.daemon-status/v1"
+    },
+    "state": {
+      "enum": ["starting", "serving", "stopping", "stopped"]
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["socket"],
+      "properties": {
+        "socket": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "background": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "op", "status"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["queued", "running", "completed", "failed"]
+          }
+        }
+      }
+    }
+  }
+}

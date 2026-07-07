@@ -170,6 +170,13 @@ func validateLocalListenAddr(addr string) error {
 	return nil
 }
 
+// ServeUIRoot serves the WebUI root HTML. The daemon (internal/daemon) reuses it
+// to serve the same WebUI over its loopback UI transport so the existing panels
+// can consume the daemon event stream.
+func ServeUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
+	serveUIRoot(w, r, expiresAt)
+}
+
 func serveUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
 	setUIRootSecurityHeaders(w.Header())
 	if r.Method != http.MethodGet {
@@ -1210,6 +1217,22 @@ document.getElementById("tabs").addEventListener("click", function(event) {
 });
 document.getElementById("refresh").addEventListener("click", load);
 load();
+// Live refresh from the hideoutd event stream when served over the daemon's
+// loopback UI transport (the panels reflect state changes from events, not a
+// polling timer). When absent (command-scoped ui), the EventSource errors and is
+// closed, and manual refresh keeps working unchanged.
+try {
+  if (window.EventSource && token) {
+    const es = new EventSource("/daemon/events?token=" + encodeURIComponent(token));
+    let pending = false;
+    es.onmessage = function() {
+      if (pending) return;
+      pending = true;
+      setTimeout(function() { pending = false; load(); }, 150);
+    };
+    es.onerror = function() { es.close(); };
+  }
+} catch (e) {}
 </script>
 </body>
 </html>`
