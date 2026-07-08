@@ -15,7 +15,9 @@ when reviewing architecture changes.
    reach-back invariants.
 4. [STATUS.md](STATUS.md) summarizes current implementation status. Update this
    file when code changes the delivered product surface.
-5. [privacy-run-test-plan.md](privacy-run-test-plan.md) defines gates and
+5. [support-matrix.md](support-matrix.md) defines the alpha platform/backend,
+   gate-required feature, schema/ABI, and non-claim matrix.
+6. [privacy-run-test-plan.md](privacy-run-test-plan.md) defines gates and
    release evidence.
 
 Subsystem documents:
@@ -32,6 +34,7 @@ Subsystem documents:
 | OpenTarget and host reach-back | [opentarget-architecture.md](opentarget-architecture.md) |
 | Policy/config supply chain | [policy-config-supply-chain.md](policy-config-supply-chain.md): authoring, source resolution, install, update, trust, override, and export behavior for the ecosystem model. |
 | Script adapters | [script-extension-architecture.md](script-extension-architecture.md) |
+| Support matrix | [support-matrix.md](support-matrix.md) |
 | TUI/Web UI | [tui-webui-experience.md](tui-webui-experience.md) |
 
 ## Authority
@@ -42,6 +45,8 @@ Subsystem documents:
 - `privacy-run-design.md` owns the Phase 1 product contract.
 - `threat-model.md` owns security claims and non-claims.
 - `STATUS.md` owns current implementation status.
+- `support-matrix.md` mirrors the Go-owned alpha support matrix and release
+  readiness/non-claim posture.
 - `ecosystem-foundation-design.md` owns the ecosystem resource model,
   effective policy composition order, project manifest authority model, the
   guest base-environment artifact class (declarative base image references,

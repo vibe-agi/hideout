@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/release-readiness.schema.json",
+  "title": "Hideout Release Readiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "mode",
+    "evidenceClass",
+    "releaseReady",
+    "status",
+    "commit",
+    "platform",
+    "matrix",
+    "commands",
+    "gates",
+    "nonClaims",
+    "redaction"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.release-readiness/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mode": {
+      "enum": ["local-fast", "release-candidate"]
+    },
+    "evidenceClass": {
+      "enum": ["local-fast", "real-gate"]
+    },
+    "releaseReady": {
+      "type": "boolean"
+    },
+    "status": {
+      "enum": ["passed", "failed", "not-release"]
+    },
+    "commit": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch"],
+      "properties": {
+        "os": { "type": "string" },
+        "arch": { "type": "string" }
+      }
+    },
+    "matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "version"],
+      "properties": {
+        "schema": { "const": "hideout.support-matrix/v1" },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "summary"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "enum": ["passed", "failed", "skipped", "not-run"] },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "required", "status", "summary"],
+        "properties": {
+          "id": { "type": "string" },
+          "required": { "type": "boolean" },
+          "status": { "enum": ["passed", "failed", "missing", "skipped", "not-run"] },
+          "evidencePath": { "type": "string" },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "nonClaims": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "const": "control-plane"
+        }
+      }
+    }
+  }
+}

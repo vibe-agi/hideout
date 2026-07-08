@@ -159,6 +159,7 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 		"Inspect and manage:",
 		"Advanced and developer:",
 		"  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only",
+		"  hideout support matrix [--json]",
 		"  hideout version",
 		"Lab probes:",
 		"  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>",
@@ -172,6 +173,117 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	}
 	if strings.Index(text, "Advanced and developer:") > strings.Index(text, "Lab probes:") {
 		t.Fatalf("help should keep lab probes after advanced commands:\n%s", text)
+	}
+}
+
+func TestSupportMatrixCommandOutputsJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "matrix", "--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	var decoded struct {
+		Schema  string `json:"schema"`
+		Version string `json:"version"`
+		Entries []struct {
+			Subject string `json:"subject"`
+			Level   string `json:"level"`
+		} `json:"entries"`
+		NonClaims []struct {
+			ID string `json:"id"`
+		} `json:"nonClaims"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode support matrix: %v\n%s", err, out.String())
+	}
+	if decoded.Schema != "hideout.support-matrix/v1" {
+		t.Fatalf("schema=%s", decoded.Schema)
+	}
+	if len(decoded.Entries) == 0 || len(decoded.NonClaims) == 0 {
+		t.Fatalf("matrix missing entries or non-claims: %+v", decoded)
+	}
+}
+
+func TestVersionIncludesSupportMatrix(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"version"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	text := out.String()
+	for _, want := range []string{
+		"hideout ",
+		"platform: ",
+		"supportMatrix: hideout.support-matrix/v1",
+		"support: platform=platform/",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("version output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestDoctorIncludesSupportMatrixFinding(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	var decoded struct {
+		Findings []struct {
+			CheckID string `json:"checkId"`
+			Status  string `json:"status"`
+			Summary string `json:"summary"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode doctor report: %v\n%s", err, out.String())
+	}
+	for _, finding := range decoded.Findings {
+		if finding.CheckID == "support-matrix" {
+			if finding.Status != "warn" {
+				t.Fatalf("native support matrix should warn, got %+v", finding)
+			}
+			if !strings.Contains(finding.Summary, "backend/native:degraded") {
+				t.Fatalf("finding summary missing native degradation: %+v", finding)
+			}
+			return
+		}
+	}
+	t.Fatalf("doctor report missing support-matrix finding: %+v", decoded.Findings)
+}
+
+func TestSupportReadinessReleaseCandidateMissingEvidenceFails(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "readiness.json")
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "readiness", "--mode", "release-candidate", "--out", outPath}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("candidate without evidence unexpectedly passed stdout=%s", out.String())
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read readiness artifact: %v", err)
+	}
+	var decoded struct {
+		Schema       string `json:"schema"`
+		ReleaseReady bool   `json:"releaseReady"`
+		Status       string `json:"status"`
+		Gates        []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"gates"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("decode readiness: %v\n%s", err, string(data))
+	}
+	if decoded.Schema != "hideout.release-readiness/v1" || decoded.ReleaseReady || decoded.Status != "failed" {
+		t.Fatalf("unexpected readiness: %+v", decoded)
+	}
+	if len(decoded.Gates) != 2 || decoded.Gates[0].Status != "missing" || decoded.Gates[1].Status != "missing" {
+		t.Fatalf("expected missing real gates: %+v", decoded.Gates)
 	}
 }
 

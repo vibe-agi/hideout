@@ -447,6 +447,13 @@ still strips control-plane token shapes. Audit that leaves the machine passes
 the export boundary: deterministic control-plane stripping plus user-owned
 redaction.
 
+The alpha support matrix in `docs/support-matrix.md` is the release-facing
+index of these claims and non-claims. It does not add new authority; it records
+which claims require real Gate 2/Gate 3 evidence and preserves non-claims such
+as guest root containment, workspace write blocking/DLP, native backend
+isolation, browser security, public marketplace trust, and unsupported
+platforms.
+
 ## Phase 1 Status
 
 Required:
@@ -471,7 +478,7 @@ Required:
 
 Design-ready or later:
 
-- interactive approval;
+- richer approval UX beyond the current local decision center;
 - endpoint observation;
 - project-declared endpoint candidates and workspace trust review;
 - direct JS endpoint exposure proposal entrypoints and richer candidate

@@ -48,6 +48,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/profiletemplate"
+	"github.com/vibe-agi/hideout/internal/releasecompat"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -90,6 +91,8 @@ func (a app) run(args []string) error {
 		return a.runCommand(args[1:], true)
 	case "doctor":
 		return a.doctor(args[1:])
+	case "support":
+		return a.supportCommand(args[1:])
 	case "profile":
 		return a.profile(args[1:])
 	case "env":
@@ -178,6 +181,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout hostfs write status|plan|claim|apply|discard")
 	fmt.Fprintln(a.stdout, "  hideout decision list|inspect|claim|approve|deny|watch")
 	fmt.Fprintln(a.stdout, "  hideout notice list|inspect|ack")
+	fmt.Fprintln(a.stdout, "  hideout support matrix [--json]")
 	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]")
@@ -204,6 +208,142 @@ func (a app) version() {
 	fmt.Fprintf(a.stdout, "builtAt: %s\n", BuildTime)
 	fmt.Fprintf(a.stdout, "go: %s\n", runtime.Version())
 	fmt.Fprintf(a.stdout, "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(a.stdout, "supportMatrix: %s %s\n", releasecompat.MatrixSchema, releasecompat.MatrixVersion)
+	fmt.Fprintf(a.stdout, "support: %s\n", releasecompat.CurrentSupportSummary("auto"))
+}
+
+func (a app) supportUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout support matrix [--json]")
+	fmt.Fprintln(a.stdout, "  hideout support readiness --mode local-fast|release-candidate [--out <path>] [--gate2-evidence <path>] [--gate3-evidence <path>]")
+}
+
+func (a app) supportCommand(args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		a.supportUsage()
+		return nil
+	}
+	switch args[0] {
+	case "matrix":
+		return a.supportMatrix(args[1:])
+	case "readiness":
+		return a.supportReadiness(args[1:])
+	default:
+		return fmt.Errorf("unknown support command %q", args[0])
+	}
+}
+
+func (a app) supportMatrix(args []string) error {
+	fs := flag.NewFlagSet("support matrix", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON support matrix")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected support matrix argument %q", fs.Arg(0))
+	}
+	matrix := releasecompat.BuiltinMatrix()
+	if err := releasecompat.ValidateMatrix(matrix); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return releasecompat.WriteMatrixJSON(a.stdout, matrix)
+	}
+	fmt.Fprintln(a.stdout, "Hideout support matrix")
+	fmt.Fprintf(a.stdout, "schema: %s\n", matrix.Schema)
+	fmt.Fprintf(a.stdout, "version: %s\n", matrix.Version)
+	for _, entry := range matrix.Entries {
+		fmt.Fprintf(a.stdout, "%s: %s (%s)\n", entry.Subject, entry.Level, entry.Guidance)
+	}
+	return nil
+}
+
+func (a app) supportReadiness(args []string) error {
+	fs := flag.NewFlagSet("support readiness", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	mode := fs.String("mode", "local-fast", "local-fast or release-candidate")
+	out := fs.String("out", "", "write readiness JSON to path")
+	gate2 := fs.String("gate2-evidence", "", "real Gate 2 evidence path")
+	gate3 := fs.String("gate3-evidence", "", "real Gate 3 evidence path")
+	localStatus := fs.String("local-status", "passed", "passed or failed")
+	commit := fs.String("commit", Commit, "commit identifier")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected support readiness argument %q", fs.Arg(0))
+	}
+	localPassed := true
+	switch *localStatus {
+	case "passed":
+		localPassed = true
+	case "failed":
+		localPassed = false
+	default:
+		return fmt.Errorf("unsupported --local-status %q", *localStatus)
+	}
+	ready, err := releasecompat.BuildReadiness(releasecompat.ReadinessOptions{
+		Mode:          *mode,
+		Commit:        *commit,
+		Gate2Evidence: *gate2,
+		Gate3Evidence: *gate3,
+		LocalPassed:   localPassed,
+	})
+	if err != nil {
+		return err
+	}
+	if err := releasecompat.ValidateReadiness(ready); err != nil {
+		return err
+	}
+	if *out != "" {
+		if err := writeReadinessFile(*out, ready); err != nil {
+			return err
+		}
+	} else if err := releasecompat.WriteReadinessJSON(a.stdout, ready); err != nil {
+		return err
+	}
+	if !localPassed {
+		return errors.New("release readiness local checks failed")
+	}
+	if ready.Mode == "release-candidate" && !ready.ReleaseReady {
+		return errors.New("release readiness is missing required real gate evidence")
+	}
+	return nil
+}
+
+func writeReadinessFile(path string, ready releasecompat.Readiness) error {
+	clean := filepath.Clean(path)
+	if err := os.MkdirAll(filepath.Dir(clean), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(clean), "."+filepath.Base(clean)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	keepTemp := true
+	defer func() {
+		if keepTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := releasecompat.WriteReadinessJSON(tmp, ready); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, clean); err != nil {
+		return err
+	}
+	keepTemp = false
+	return nil
 }
 
 func (a app) initUsage() {
@@ -1995,6 +2135,7 @@ func (a app) doctor(args []string) error {
 	report("store", "ok", "writable")
 	checkManager(store, report)
 	report("guest-privilege", "ok", doctorGuestPrivilegeMessage(context.Background(), store, opts.profileName))
+	report("support-matrix", doctorSupportMatrixStatus(doctorReq.Backend), doctorSupportMatrixMessage(doctorReq.Backend))
 
 	p, profileLoaded := loadDoctorProfile(store, opts.profileName, report)
 	if opts.networkMode != "" {
@@ -2102,6 +2243,26 @@ func checkManager(store profile.Store, report func(string, string, string)) {
 		len(overview.Capabilities.CommandProxies),
 		len(overview.Secrets),
 	))
+}
+
+func doctorSupportMatrixStatus(backendName string) string {
+	matrix := releasecompat.BuiltinMatrix()
+	platform, ok := releasecompat.FindEntry(matrix, releasecompat.CurrentPlatformSubject())
+	if !ok || platform.Level == releasecompat.LevelUnsupported {
+		return "error"
+	}
+	backend, ok := releasecompat.FindEntry(matrix, releasecompat.BackendSubject(backendName))
+	if !ok || backend.Level == releasecompat.LevelUnsupported {
+		return "error"
+	}
+	if platform.Level == releasecompat.LevelDegraded || backend.Level == releasecompat.LevelDegraded {
+		return "warn"
+	}
+	return "ok"
+}
+
+func doctorSupportMatrixMessage(backendName string) string {
+	return fmt.Sprintf("matrix=%s %s", releasecompat.MatrixVersion, releasecompat.CurrentSupportSummary(backendName))
 }
 
 func availableBackends(backends []manager.BackendSummary) int {

@@ -67,6 +67,14 @@ HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
 HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
   scripts/test-release-dogfood.sh
 
+# Release-hardening readiness artifact. Local-fast is development evidence,
+# not release evidence; release-candidate mode requires real Gate 2/Gate 3
+# evidence paths.
+scripts/test-release-readiness.sh --local-fast --out /tmp/hideout-readiness.json
+HIDEOUT_GATE2_EVIDENCE=/path/to/gate2.json \
+HIDEOUT_GATE3_EVIDENCE=/path/to/gate3.json \
+  scripts/test-release-readiness.sh --release-candidate --out /tmp/hideout-rc.json
+
 # Include command-level capability probe smoke after product gates.
 scripts/test-phase1.sh --quick --probes
 
@@ -223,6 +231,14 @@ Required evidence:
   validates the 015 local/light doctor report path: human output, JSON schema,
   required-failure exit, warning/degraded zero exit, explicit doctor report
   export, deterministic control-plane redaction, and safe recovery dry-run.
+- Release hardening smoke (`scripts/test-release-hardening-smoke.sh`, wired into
+  Gate 0) validates the 016 support matrix schema, `hideout support matrix`,
+  `hideout version` matrix summary, doctor support-matrix finding,
+  compatibility fixture inventory, redacted readiness artifact shape,
+  local-fast non-release honesty, release-candidate missing-evidence
+  fail-closed behavior, and docs drift/non-claim checks. Full
+  `scripts/test-release-readiness.sh --release-candidate` still requires real
+  Gate 2 and Gate 3 evidence; Gate 0 smoke must not replace those gates.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must

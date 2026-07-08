@@ -102,7 +102,7 @@ tbd
 | Host Broker | required | required | weak |
 | HostFS read-only | required | required | weak |
 | HostFS glob/filter list | required | required | weak |
-| HostFS overlay | later | later | no |
+| HostFS overlay | required | required | no |
 | In-process policy filesystem server | no | later | no |
 | Declarative base image reference (guest-domain artifact) | required | required | no |
 | `host.open` | required | required | weak |

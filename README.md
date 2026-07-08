@@ -9,6 +9,11 @@ inspect. Privacy hardening is one of the benefits, not the definition.
 
 Current status: private alpha; run supervised. Gates and release evidence are
 defined in [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md).
+The alpha support matrix is inspectable with `hideout support matrix` and is
+documented in [docs/support-matrix.md](docs/support-matrix.md). It labels macOS
+arm64 as the first-class alpha host, Linux amd64/aarch64 as supported with
+narrower smoke coverage, and `--backend native` as a development harness rather
+than isolation evidence.
 
 ## What Hideout Protects
 
