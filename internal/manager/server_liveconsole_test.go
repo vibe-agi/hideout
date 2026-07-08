@@ -20,6 +20,7 @@ func TestWebUILiveConsoleUsesSeedAndTypedEvents(t *testing.T) {
 		"applyLiveEvent(JSON.parse(message.data))",
 		"overview.environments = upsertByID(overview.environments, payload)",
 		"overview.sessions = upsertByID(overview.sessions, payload)",
+		"overview.hostfsWrites = upsertByID(overview.hostfsWrites",
 		"auditEvents = capTail([row].concat(auditEvents), 20)",
 	} {
 		if !strings.Contains(html, want) {
@@ -84,6 +85,48 @@ func TestWebUILiveConsoleReducerIsAuthorityReadOnly(t *testing.T) {
 	}
 }
 
+func TestWebUIProfilesRenderCommandAdapterSummary(t *testing.T) {
+	html := renderUIHTML(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
+	helpers := between(t, html, "function esc(value)", "function boundaryRowsFromSummary(summary)")
+	rt := goja.New()
+	value, err := rt.RunString(helpers + `
+JSON.stringify(commandAdapterLabels([
+  {id:"adapter", enabled:true, commands:["tool-x"]},
+  {id:"disabled", enabled:false, commands:[]}
+]));
+`)
+	if err != nil {
+		t.Fatalf("run WebUI command adapter helper: %v", err)
+	}
+	var labels []string
+	if err := json.Unmarshal([]byte(value.String()), &labels); err != nil {
+		t.Fatalf("decode labels: %v\n%s", err, value.String())
+	}
+	if len(labels) != 2 || labels[0] != "adapter:on(tool-x)" || labels[1] != "disabled:off(none)" {
+		t.Fatalf("unexpected command adapter labels: %+v", labels)
+	}
+}
+
+func TestWebUISessionsRenderGuestPrivilegeSummary(t *testing.T) {
+	html := renderUIHTML(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
+	helpers := between(t, html, "function esc(value)", "function boundaryRowsFromSummary(summary)")
+	rt := goja.New()
+	value, err := rt.RunString(helpers + `
+guestPrivilegeLabel({
+  status: "degraded",
+  targetUid: "1000",
+  setupKind: "shared-sudo",
+  reason: "target user can run passwordless sudo"
+});
+`)
+	if err != nil {
+		t.Fatalf("run WebUI privilege helper: %v", err)
+	}
+	if got, want := value.String(), "degraded uid=1000 setup=shared-sudo target user can run passwordless sudo"; got != want {
+		t.Fatalf("privilege label=%q want %q", got, want)
+	}
+}
+
 func TestWebUILiveConsoleProofArtifact(t *testing.T) {
 	html := renderUIHTML(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
 	onMessage := between(t, html, "es.onmessage = function(message)", "es.onerror = function()")
@@ -133,8 +176,9 @@ results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"audit",seq:2,payload:{action:"host.open",decision:"deny",profile:"default",session:"ses_1",details:{target:"https://example.com"}}}));
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"export",seq:3,payload:{status:"completed",source:"audit",artifactPath:"/tmp/export.json",decision:"redact"}}));
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"cleanup",seq:4,payload:{status:"completed",sessions:1,removed:["tmp"],secretState:"removed"}}));
-results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"future-kind",seq:5,payload:{id:"future"}}));
-results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment",seq:6,payload:{id:"env_2",name:"env-two",status:"stopped",profile:"default"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"hostfs-write",seq:5,payload:{decisionId:"hfwdec_123",operationId:"hfwop_123",status:"pending",operation:"replace",path:"/Users/alice/file.txt",privilegeStatus:"enforced"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"future-kind",seq:6,payload:{id:"future"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment",seq:7,payload:{id:"env_2",name:"env-two",status:"stopped",profile:"default"}}));
 JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetchCount, liveStreamState, liveStreamReason, liveLastSeq, statuses});
 `
 	value, err := rt.RunString(script)
@@ -161,6 +205,14 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 				Removed     []string `json:"removed"`
 				SecretState string   `json:"secretState"`
 			} `json:"cleanupOutcomes"`
+			HostFSWrites []struct {
+				DecisionID      string `json:"decisionId"`
+				OperationID     string `json:"operationId"`
+				Status          string `json:"status"`
+				Operation       string `json:"operation"`
+				Path            string `json:"path"`
+				PrivilegeStatus string `json:"privilegeStatus"`
+			} `json:"hostfsWrites"`
 		} `json:"overview"`
 		AuditEvents []struct {
 			Action   string         `json:"action"`
@@ -180,7 +232,7 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 	if proof.FetchCount != 0 {
 		t.Fatalf("live reducer fetched during event apply: %+v", proof)
 	}
-	if len(proof.Results) != 6 || !proof.Results[0] || !proof.Results[1] || !proof.Results[2] || !proof.Results[3] || proof.Results[4] || !proof.Results[5] {
+	if len(proof.Results) != 7 || !proof.Results[0] || !proof.Results[1] || !proof.Results[2] || !proof.Results[3] || !proof.Results[4] || proof.Results[5] || !proof.Results[6] {
 		t.Fatalf("unexpected apply results: %+v", proof.Results)
 	}
 	if len(proof.Overview.Environments) != 2 || proof.Overview.Environments[0].ID != "env_2" || proof.Overview.Environments[1].ID != "env_1" {
@@ -195,7 +247,10 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 	if len(proof.Overview.CleanupOutcomes) != 1 || proof.Overview.CleanupOutcomes[0].SecretState != "removed" {
 		t.Fatalf("cleanup event did not update visible state: %+v", proof.Overview.CleanupOutcomes)
 	}
-	if proof.RenderCount < 5 || proof.LiveLastSeq != 6 || proof.LiveStreamState != "live" || proof.LiveStreamReason != "" {
+	if len(proof.Overview.HostFSWrites) != 1 || proof.Overview.HostFSWrites[0].DecisionID != "hfwdec_123" {
+		t.Fatalf("HostFS write event did not update visible state: %+v", proof.Overview.HostFSWrites)
+	}
+	if proof.RenderCount < 6 || proof.LiveLastSeq != 7 || proof.LiveStreamState != "live" || proof.LiveStreamReason != "" {
 		t.Fatalf("stream proof mismatch: %+v", proof)
 	}
 }

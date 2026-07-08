@@ -85,7 +85,10 @@ Session
 HostFSRule
 HostFSOverlay
 NetworkPlan
+GuestPrivilegeStatus
+PrivilegedSetupEvent
 CommandProxyRule
+CommandAdapter
 OpenTarget
 PortBridge
 AuditEvent
@@ -128,6 +131,11 @@ bundle/version, declared permissions, required Core primitives, and risk labels
 for a domain workflow. It is not a backend adapter and does not execute
 authority directly. Backend adapters remain Go-owned backend substrate
 integrations.
+
+CommandAdapter is the implemented 008 profile-scoped command adapter record:
+local artifact or built-in root-sensitive adapter, digest, entrypoint, command
+symbols, allowed proposal capabilities, and enablement state. It is managed
+through typed Manager Core plan/apply and CLI, not by raw profile writes.
 
 Each resource needs:
 
@@ -215,6 +223,11 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
 - CLI `list` renders reusable environment records from Manager overview, so the
   terminal, TUI, WebUI, and API share one observation path for environment
   state.
+- Manager Core owns command-adapter profile changes through
+  `PlanCommandAdapter` and `ApplyCommandAdapter`: add local adapter, add the
+  built-in root-sensitive adapter, enable, disable, refresh digest, and remove.
+  Plans show command ownership, digest, allowed proposal capabilities, and
+  root-intent warnings. Apply recomputes under the profile mutation lock.
 - Manager API exposes the minimal run surface: `POST /api/v1/run/plan`,
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
 - Manager API exposes the minimal init surface:
@@ -234,6 +247,11 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   `POST /api/v1/profile/hostfs/apply`. These mutate only durable
   `profile.hostfs.grants` and `profile.hostfs.deny` rules and must use the same
   HostFS rule grammar and profile validator as CLI `profile fs`.
+- Manager API exposes controlled HostFS write decision actions:
+  `POST /api/v1/hostfs/write/plan`, `claim`, `apply`, `discard`, and
+  `GET /api/v1/hostfs/write/status`. These resolve only staged overlay
+  operations created by HostFS policy, require expected version and claim-token
+  validation, and never expose raw host filesystem authority to UI clients.
 - Manager API exposes controlled profile env policy actions:
   `POST /api/v1/profile/env/plan` and `POST /api/v1/profile/env/apply`. These
   mutate only durable `profile.env.public`, `profile.env.inherit`, and
@@ -566,6 +584,9 @@ mutate unrelated stores directly.
   command symbols.
 - Manager API and WebUI expose typed profile HostFS rule plan/apply for durable
   HostFS allow/deny rules.
+- Manager API, CLI, TUI, and WebUI expose typed HostFS write decision
+  status/plan/claim/apply/discard for staged overlay writes. Go-owned Manager
+  apply performs the only host mutation.
 - Manager API and WebUI expose typed profile env policy plan/apply for durable
   public/inherit/deny env policy without echoing env values.
 - A resident `hideoutd` is implemented; CLI, TUI, and WebUI still support

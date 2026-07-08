@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -38,6 +39,18 @@ type RunSpec struct {
 	InstanceName              string
 	PreserveInstance          bool
 	AuditPath                 string
+	NetworkPrivilegedSetup    bool
+	PrivilegedSetupRequired   bool
+	PrivilegeStatusSink       func(privilege.Status) error
+	PrivilegedSetupEventSink  func(PrivilegedSetupEvent) error
+}
+
+type PrivilegedSetupEvent struct {
+	Action   string
+	Category string
+	Status   string
+	Setup    privilege.SetupIdentity
+	Reason   string
 }
 
 type Session struct {
@@ -66,6 +79,11 @@ type Session struct {
 	InstanceName              string
 	PreserveInstance          bool
 	Broker                    broker.Endpoint
+	NetworkPrivilegedSetup    bool
+	PrivilegedSetupRequired   bool
+	PrivilegeStatus           *privilege.Status
+	PrivilegeStatusSink       func(privilege.Status) error
+	PrivilegedSetupEventSink  func(PrivilegedSetupEvent) error
 }
 
 type PortBridgeEndpoint struct {

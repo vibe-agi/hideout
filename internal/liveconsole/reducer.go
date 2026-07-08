@@ -42,6 +42,8 @@ func Apply(state *State, ev Event) ApplyResult {
 		state.CleanupOutcomes = appendCappedOutcome(state.CleanupOutcomes, OutcomeRow{
 			Status: ev.Payload.Status, Sessions: ev.Payload.Sessions, Removed: ev.Payload.Removed, SecretState: ev.Payload.SecretState,
 		})
+	case KindHostFSWrite:
+		upsertHostFSWrite(state, ev.Payload)
 	case KindTerminal:
 		switch ev.Payload.Reason {
 		case "credential invalidated":
@@ -210,4 +212,27 @@ func appendCappedOutcome(values []OutcomeRow, next OutcomeRow) []OutcomeRow {
 		return out[:tailLimit]
 	}
 	return out
+}
+
+func upsertHostFSWrite(state *State, p EventPayload) {
+	row := HostFSWriteRow{
+		DecisionID:      p.DecisionID,
+		OperationID:     p.OperationID,
+		Status:          p.Status,
+		Operation:       p.Operation,
+		Path:            p.Path,
+		DestinationPath: p.DestinationPath,
+		PrivilegeStatus: p.PrivilegeStatus,
+		Reason:          p.Reason,
+	}
+	for i := range state.HostFSWrites {
+		if state.HostFSWrites[i].DecisionID == p.DecisionID {
+			state.HostFSWrites[i] = row
+			return
+		}
+	}
+	state.HostFSWrites = append([]HostFSWriteRow{row}, state.HostFSWrites...)
+	if len(state.HostFSWrites) > tailLimit {
+		state.HostFSWrites = state.HostFSWrites[:tailLimit]
+	}
 }

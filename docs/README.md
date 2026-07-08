@@ -79,11 +79,14 @@ Hideout uses separate registries for different layers:
 - policy and broker action names use forms such as `host.open`,
   `host.fs.read`, and `endpoint.expose.host-to-guest`;
 - backend capability flags use forms such as `filesystem.hostfs.read`,
-  `network.tun2socks`, and `portBridge`;
-- capability decision, command outcome, and route vocabularies are owned by
-  [privacy-run-design.md](privacy-run-design.md): decisions
-  `allow/deny/ask/audit-only`; outcomes
-  `deny/ask/simulate/rewrite-guest/invoke-capability`; routes
+  `network.tun2socks`, `guestPrivilege`, and `portBridge`;
+- privilege evidence uses `guest.privilege.status`,
+  `hideout.privileged_setup`, `hideout.privileged_cleanup`, and
+  `target.root_attempt`;
+- capability decision, command-adapter outcome, and route vocabularies are owned
+  by [privacy-run-design.md](privacy-run-design.md): decisions
+  `allow/deny/ask/audit-only`; 008 adapter outcomes
+  `deny/simulate/rewriteGuest/proposeCapability`; routes
   `guest-direct/guest-exec/host-broker/fake/deny/portbridge/lab-probe`. Other
   documents must reuse these words instead of coining synonyms.
 

@@ -27,6 +27,8 @@ func TestTUILiveConsoleRendersTypedEvents(t *testing.T) {
 		"ses_alpha",
 		"bg-1  op=environment-clean  status=completed",
 		"host.open",
+		"HostFS Writes",
+		"hfwdec_123",
 		"Exports",
 		"source=audit",
 		"Cleanup",

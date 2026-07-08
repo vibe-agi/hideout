@@ -10,7 +10,7 @@
       "const": "hideout.daemon-event/v1"
     },
     "kind": {
-      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "terminal"]
+      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "hostfs-write", "terminal"]
     },
     "phase": {
       "enum": ["start", "progress", "complete", "failed"]
@@ -25,7 +25,7 @@
       "required": ["kind"],
       "properties": {
         "kind": {
-          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "stream"]
+          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "hostfs-write", "stream"]
         },
         "id": {
           "type": "string"
@@ -139,6 +139,24 @@
         },
         "reason": {
           "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "destinationPath": {
+          "type": "string"
+        },
+        "privilegeStatus": {
+          "type": "string"
         }
       }
     }
@@ -248,6 +266,24 @@
         "properties": {
           "payload": {
             "required": ["status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "hostfs-write"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["decisionId", "operationId", "status"]
           }
         }
       }

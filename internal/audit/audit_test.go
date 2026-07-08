@@ -12,7 +12,7 @@ import (
 func TestRedactDetailsStripsAllControlPlaneFieldNames(t *testing.T) {
 	// Every Core control-plane field name in controlPlaneKeys must be stripped,
 	// so none can be silently dropped from the set without a test failing.
-	for _, key := range []string{"capabilityToken", "brokerToken", "uiToken", "managerToken"} {
+	for _, key := range []string{"capabilityToken", "brokerToken", "uiToken", "managerToken", "claimToken", "tokenHash", "overlayObject", "contentObject"} {
 		got := RedactDetails(map[string]any{key: "sensitive-control-plane-value"})
 		if got[key] != "REDACTED" {
 			t.Fatalf("control-plane field %q should be redacted, got %+v", key, got)
@@ -69,6 +69,32 @@ func TestRedactStringPreservesUserURLData(t *testing.T) {
 		if got := RedactString(in); got != in {
 			t.Fatalf("user URL data should be preserved verbatim: in=%q got=%q", in, got)
 		}
+	}
+}
+
+func TestRedactStringStripsSetupCredentialAssignments(t *testing.T) {
+	in := "setupCredential=raw-secret rootControlSSHConfig=/Users/null/.lima/hideout/ssh.config setupToken:cap_0123456789abcdef0123456789abcdef keep-user-data"
+	got := RedactString(in)
+	for _, leaked := range []string{"raw-secret", "rootControlSSHConfig=/Users", "cap_0123456789abcdef"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("setup credential assignment leaked %q: %s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "keep-user-data") {
+		t.Fatalf("user data should remain: %s", got)
+	}
+}
+
+func TestRedactStringStripsHostFSOverlayObjectPathsAndClaimTokens(t *testing.T) {
+	in := "/Users/null/.hideout/sessions/ses_1/hostfs-overlay/objects/hfwobj_secret claim_0123456789abcdef0123456789abcdef keep-user-path=/Users/alice/project/config.json"
+	got := RedactString(in)
+	for _, leaked := range []string{"hfwobj_secret", "claim_0123456789abcdef"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("HostFS control-plane material leaked %q: %s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "keep-user-path=/Users/alice/project/config.json") {
+		t.Fatalf("user path should remain: %s", got)
 	}
 }
 

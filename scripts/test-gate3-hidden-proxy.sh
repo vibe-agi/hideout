@@ -39,6 +39,13 @@ with_timeout() {
   return "$status"
 }
 
+latest_audit_log() {
+  local store_root="$1"
+  local logs=("$store_root"/sessions/*/audit.jsonl)
+  [ -e "${logs[0]}" ] || return 0
+  ls -t "${logs[@]}" 2>/dev/null | head -n 1
+}
+
 prepare_linux_shim() {
   if [ -n "${HIDEOUT_LINUX_SHIM_PATH:-}" ]; then
     if [ ! -x "$HIDEOUT_LINUX_SHIM_PATH" ]; then
@@ -162,6 +169,7 @@ fi
 
 require_command go
 require_command limactl
+require_command jq
 
 validate_operator_proxy_url
 
@@ -294,6 +302,27 @@ grep -q 'proxy_env_absent=yes' "$stdout"
 grep -q 'dns_mediated=yes' "$stdout"
 grep -q 'connected_subnet_blocked=yes' "$stdout"
 grep -q 'https_request=ok' "$stdout"
+
+audit_path="$(latest_audit_log "$store")"
+[ -n "$audit_path" ] || { echo "gate3: audit log missing" >&2; exit 1; }
+jq -e '
+  select(.action == "guest.privilege.status") |
+  .details.status == "enforced" and
+  .details["target.uid"] != 0 and
+  .details["target.sudoN"] == "fail" and
+  .details["target.absoluteSudoN"] == "fail" and
+  .details["setup.kind"] == "root-control-ssh"
+' "$audit_path" >/dev/null
+jq -e '
+  select(.action == "hideout.privileged_setup") |
+  .decision == "allow" and
+  .details.status == "succeeded" and
+  .details.category == "network" and
+  .details.setupIdentityKind == "root-control-ssh" and
+  .details.separateFromTarget == true
+' "$audit_path" >/dev/null
+echo "privilege_status=enforced"
+echo "privileged_setup=network"
 
 if grep -R --fixed-strings "$HIDEOUT_SECRET_DEFAULT_PROXY" "$store" >/dev/null 2>&1; then
   echo "gate3: proxy secret leaked into store artifacts" >&2

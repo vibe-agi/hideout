@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/guest-privilege-status.schema.json",
+  "title": "Hideout Guest Privilege Status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "status",
+    "targetIdentity",
+    "setupIdentity",
+    "checks",
+    "reason"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.guest-privilege-status/v1"
+    },
+    "status": {
+      "enum": [
+        "enforced",
+        "degraded",
+        "unknown"
+      ]
+    },
+    "profile": {
+      "type": "string"
+    },
+    "backend": {
+      "type": "string"
+    },
+    "environmentId": {
+      "type": "string"
+    },
+    "targetIdentity": {
+      "$ref": "#/$defs/targetIdentity"
+    },
+    "setupIdentity": {
+      "$ref": "#/$defs/setupIdentity"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/checkResult"
+      }
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "guidance": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "targetIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canPasswordlessSudo",
+        "passwordlessSudoKnown"
+      ],
+      "properties": {
+        "user": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "home": {
+          "type": "string"
+        },
+        "sudoN": {
+          "$ref": "#/$defs/checkResult"
+        },
+        "absoluteSudoN": {
+          "$ref": "#/$defs/checkResult"
+        },
+        "canPasswordlessSudo": {
+          "type": "boolean"
+        },
+        "passwordlessSudoKnown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "setupIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "available",
+        "separateFromTarget"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "root-control-ssh",
+            "root-helper",
+            "shared-sudo",
+            "none-required"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "separateFromTarget": {
+          "type": "boolean"
+        },
+        "credentialLocation": {
+          "type": "string"
+        },
+        "proof": {
+          "type": "string"
+        }
+      }
+    },
+    "checkResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "target.uid",
+            "target.sudo-n",
+            "target.absolute-sudo-n",
+            "setup.identity",
+            "setup.credential-location"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "unsupported",
+            "error"
+          ]
+        },
+        "observed": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "checkedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

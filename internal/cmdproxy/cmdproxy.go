@@ -11,11 +11,17 @@ import (
 )
 
 const (
-	ActionHostOpen     = "host.open"
-	ArgvSchemaOpenV1   = "open-target-v1"
-	StreamMetadataOnly = "metadata-only"
-	DefaultModeAllow   = "allow"
-	RouteHostBroker    = "host-broker"
+	ActionHostOpen       = "host.open"
+	ActionCommandAdapter = "command.adapter"
+	ArgvSchemaOpenV1     = "open-target-v1"
+	ArgvSchemaAdapterV1  = "command-adapter-v1"
+	StreamMetadataOnly   = "metadata-only"
+	DefaultModeAllow     = "allow"
+	DefaultModeAdapter   = "adapter"
+	RouteHostBroker      = "host-broker"
+	RouteCommandAdapter  = "command-adapter"
+	OwnerHostOpen        = "host-open"
+	OwnerCommandAdapter  = "command-adapter"
 )
 
 type Registration struct {
@@ -26,6 +32,8 @@ type Registration struct {
 	StreamPolicy   string   `json:"streamPolicy"`
 	DefaultMode    string   `json:"defaultMode"`
 	AllowedTargets []string `json:"allowedTargets"`
+	OwnerType      string   `json:"ownerType,omitempty"`
+	AdapterID      string   `json:"adapterId,omitempty"`
 }
 
 type Registry struct {
@@ -59,6 +67,7 @@ func HostOpenRegistry(aliases []string) (Registry, error) {
 			StreamPolicy:   StreamMetadataOnly,
 			DefaultMode:    DefaultModeAllow,
 			AllowedTargets: []string{"url:http", "url:https", "workspace-file"},
+			OwnerType:      OwnerHostOpen,
 		},
 	})
 }
@@ -99,7 +108,24 @@ func RegistryFromProfile(p profile.Profile) (Registry, error) {
 			StreamPolicy:   StreamMetadataOnly,
 			DefaultMode:    DefaultModeAllow,
 			AllowedTargets: []string{"url:http", "url:https", "workspace-file"},
+			OwnerType:      OwnerHostOpen,
 		})
+	}
+	for adapterID, adapter := range p.CommandAdapters.Adapters {
+		if !adapter.Enabled {
+			continue
+		}
+		for _, name := range adapter.Commands {
+			registrations = append(registrations, Registration{
+				Name:         name,
+				Action:       ActionCommandAdapter,
+				ArgvSchema:   ArgvSchemaAdapterV1,
+				StreamPolicy: StreamMetadataOnly,
+				DefaultMode:  DefaultModeAdapter,
+				OwnerType:    OwnerCommandAdapter,
+				AdapterID:    adapterID,
+			})
+		}
 	}
 	return NewRegistry(registrations)
 }
@@ -227,6 +253,8 @@ func (r Registry) Normalize(command string, args []string, cwd string) (Request,
 	switch reg.ArgvSchema {
 	case ArgvSchemaOpenV1:
 		return NormalizeHostOpenCommand(command, args, cwd)
+	case ArgvSchemaAdapterV1:
+		return NormalizeAdapterCommand(command, args, cwd, reg.AdapterID)
 	default:
 		return Request{}, fmt.Errorf("unsupported argv schema %q for command proxy %q", reg.ArgvSchema, command)
 	}
@@ -280,6 +308,33 @@ func NormalizeHostOpenCommand(command string, args []string, cwd string) (Reques
 		Payload: map[string]any{
 			"target": args[0],
 			"cwd":    cwd,
+		},
+	}, nil
+}
+
+func NormalizeAdapterCommand(command string, args []string, cwd, adapterID string) (Request, error) {
+	command, err := normalizeRegistryName("command adapter proxy", filepath.Base(command))
+	if err != nil {
+		return Request{}, err
+	}
+	cwd, err = normalizeCWD(cwd)
+	if err != nil {
+		return Request{}, err
+	}
+	if strings.TrimSpace(adapterID) == "" {
+		return Request{}, errors.New("command adapter id is required")
+	}
+	argv := append([]string{command}, args...)
+	return Request{
+		Subject: "command:" + command,
+		Command: command,
+		Argv:    argv,
+		CWD:     cwd,
+		Action:  ActionCommandAdapter,
+		Route:   RouteCommandAdapter,
+		Payload: map[string]any{
+			"cwd":       cwd,
+			"adapterId": adapterID,
 		},
 	}, nil
 }

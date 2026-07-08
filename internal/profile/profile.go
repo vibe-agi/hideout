@@ -39,6 +39,7 @@ type Profile struct {
 	EndpointExposure EndpointExposure  `json:"endpointExposure,omitempty"`
 	HostFS           hostfs.Config     `json:"hostfs,omitempty"`
 	CommandProxy     CommandProxy      `json:"commandProxy"`
+	CommandAdapters  CommandAdapters   `json:"commandAdapters,omitempty"`
 	Policy           Policy            `json:"policy"`
 	Audit            Audit             `json:"audit"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
@@ -132,6 +133,21 @@ type CommandProxyCommand struct {
 	Route      string `json:"route"`
 	Action     string `json:"action"`
 	ArgvSchema string `json:"argvSchema,omitempty"`
+}
+
+type CommandAdapters struct {
+	Adapters map[string]CommandAdapter `json:"adapters,omitempty"`
+}
+
+type CommandAdapter struct {
+	Enabled                     bool     `json:"enabled"`
+	Path                        string   `json:"path,omitempty"`
+	Digest                      string   `json:"digest,omitempty"`
+	Entrypoint                  string   `json:"entrypoint,omitempty"`
+	Commands                    []string `json:"commands,omitempty"`
+	AllowedProposalCapabilities []string `json:"allowedProposalCapabilities,omitempty"`
+	Description                 string   `json:"description,omitempty"`
+	Builtin                     string   `json:"builtin,omitempty"`
 }
 
 type Policy struct {
@@ -733,6 +749,9 @@ func (p Profile) Validate() error {
 	if err := p.validateCommandProxy(); err != nil {
 		return err
 	}
+	if err := p.validateCommandAdapters(); err != nil {
+		return err
+	}
 	if err := validateMetadata(p.Metadata); err != nil {
 		return err
 	}
@@ -1046,6 +1065,82 @@ func (p Profile) validateCommandProxy() error {
 	return nil
 }
 
+func (p Profile) validateCommandAdapters() error {
+	if len(p.CommandAdapters.Adapters) == 0 {
+		return nil
+	}
+	owners := map[string]string{}
+	for name := range p.CommandProxy.Commands {
+		owners[name] = "commandProxy.commands." + name
+	}
+	for id, adapter := range p.CommandAdapters.Adapters {
+		label := "commandAdapters.adapters." + id
+		if err := validateCommandAdapterID(id); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		if strings.TrimSpace(adapter.Description) != adapter.Description {
+			return fmt.Errorf("%s.description must not contain surrounding whitespace", label)
+		}
+		if adapter.Entrypoint == "" {
+			adapter.Entrypoint = "decideCommandAdapter"
+		}
+		if err := validateCommandAdapterEntrypoint(adapter.Entrypoint); err != nil {
+			return fmt.Errorf("%s.entrypoint: %w", label, err)
+		}
+		if adapter.Path == "" && adapter.Builtin == "" {
+			return fmt.Errorf("%s.path is required", label)
+		}
+		if adapter.Path != "" {
+			if err := validateCommandAdapterPath(adapter.Path); err != nil {
+				return fmt.Errorf("%s.path: %w", label, err)
+			}
+		}
+		if adapter.Builtin != "" && adapter.Builtin != "root-sensitive" {
+			return fmt.Errorf("%s.builtin %q is unsupported", label, adapter.Builtin)
+		}
+		if adapter.Enabled {
+			if adapter.Digest == "" {
+				return fmt.Errorf("%s.digest is required when enabled", label)
+			}
+			if err := validateCommandAdapterDigest(adapter.Digest); err != nil {
+				return fmt.Errorf("%s.digest: %w", label, err)
+			}
+			if len(adapter.Commands) == 0 {
+				return fmt.Errorf("%s.commands is required when enabled", label)
+			}
+		} else if adapter.Digest != "" {
+			if err := validateCommandAdapterDigest(adapter.Digest); err != nil {
+				return fmt.Errorf("%s.digest: %w", label, err)
+			}
+		}
+		if err := validateUniqueStrings(label+".commands", adapter.Commands); err != nil {
+			return err
+		}
+		for i, command := range adapter.Commands {
+			if err := validateCommandProxyName(command); err != nil {
+				return fmt.Errorf("%s.commands[%d]: %w", label, i, err)
+			}
+			if adapter.Enabled {
+				if previous := owners[command]; previous != "" {
+					return fmt.Errorf("%s.commands[%d] duplicates command owner %s", label, i, previous)
+				}
+				owners[command] = label + ".commands"
+			}
+		}
+		if err := validateUniqueStrings(label+".allowedProposalCapabilities", adapter.AllowedProposalCapabilities); err != nil {
+			return err
+		}
+		for i, capability := range adapter.AllowedProposalCapabilities {
+			switch capability {
+			case "guest.privilege.plan":
+			default:
+				return fmt.Errorf("%s.allowedProposalCapabilities[%d] %q is unsupported", label, i, capability)
+			}
+		}
+	}
+	return nil
+}
+
 func validateCommandProxyName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("command proxy name is required")
@@ -1055,6 +1150,83 @@ func validateCommandProxyName(name string) error {
 	}
 	if name == "." || name == ".." || name == "hideout-shim" || strings.ContainsAny(name, `/\`) || strings.ContainsFunc(name, unicode.IsSpace) {
 		return fmt.Errorf("command proxy %q must be a simple command name", name)
+	}
+	return nil
+}
+
+func validateCommandAdapterID(id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("adapter id is required")
+	}
+	if strings.TrimSpace(id) != id {
+		return fmt.Errorf("adapter id %q must not contain surrounding whitespace", id)
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return fmt.Errorf("adapter id %q contains unsupported characters", id)
+		}
+	}
+	return nil
+}
+
+func validateCommandAdapterEntrypoint(value string) error {
+	if value == "" || strings.TrimSpace(value) != value {
+		return errors.New("entrypoint must be a non-empty JavaScript identifier")
+	}
+	for i, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r == '_', r == '$':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return fmt.Errorf("entrypoint %q is not a simple JavaScript identifier", value)
+		}
+	}
+	return nil
+}
+
+func validateCommandAdapterPath(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("path is required")
+	}
+	if strings.TrimSpace(value) != value {
+		return errors.New("path must not contain surrounding whitespace")
+	}
+	if strings.Contains(value, "\x00") {
+		return errors.New("path must not contain NUL")
+	}
+	if strings.Contains(value, `\`) {
+		return errors.New("path must use slash-separated paths")
+	}
+	if strings.HasPrefix(value, "builtin:") {
+		return errors.New("builtin adapters must use the builtin field")
+	}
+	if !filepath.IsAbs(value) {
+		clean := slashpath.Clean(value)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+			return errors.New("relative path must not escape the profile directory")
+		}
+		if clean != value {
+			return errors.New("relative path must be normalized")
+		}
+	}
+	return nil
+}
+
+func validateCommandAdapterDigest(value string) error {
+	digest, ok := strings.CutPrefix(value, "sha256:")
+	if !ok {
+		return errors.New("digest must use sha256:<hex>")
+	}
+	if len(digest) != 64 || !isLowerHexString(digest) {
+		return errors.New("digest must be sha256 followed by 64 lowercase hex characters")
 	}
 	return nil
 }

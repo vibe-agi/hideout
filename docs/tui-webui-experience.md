@@ -129,10 +129,19 @@ Doctor
 Helpers
 Bundles
 Policy Scripts
+Command Adapters
 ```
 
 The Helpers page is limited to helper artifacts: discovery status, helper
 manifests, and repair plans. It is not a package installation surface.
+
+Command Adapter configuration is a Manager-owned profile resource, not a UI-owned
+policy engine. TUI/WebUI surfaces may show enabled adapter IDs, owned command
+symbols, digest status, and recent adapter decisions from redacted audit events.
+Any add/enable/disable/refresh/remove flow must call the same Manager
+plan/apply operations as the CLI and must keep the 008 root-sensitive wording as
+command-name intent capture enriched by 009 privilege status, never as an
+absolute-path, syscall, setuid, or post-guest-root containment claim.
 
 ## TUI Initial Pages
 
@@ -244,6 +253,8 @@ Current smoke surface shows:
 
 - profile grant and deny counts in overview;
 - profile HostFS allow/deny plan/apply through Manager API;
+- pending HostFS write decisions with claim/apply/discard controls backed by
+  Manager `hostfs/write/*` routes;
 - CLI hints for listing and adding durable profile HostFS rules.
 
 Later product views should add:

@@ -69,6 +69,7 @@ type ProfileSummary struct {
 	EnvInherit                 []string                    `json:"envInherit,omitempty"`
 	EnvDeny                    []string                    `json:"envDeny,omitempty"`
 	CommandProxies             []string                    `json:"commandProxies,omitempty"`
+	CommandAdapters            []CommandAdapterSummary     `json:"commandAdapters,omitempty"`
 	HostFSGrants               int                         `json:"hostfsGrants"`
 	HostFSDeny                 int                         `json:"hostfsDeny"`
 	PolicyEngine               string                      `json:"policyEngine"`
@@ -78,6 +79,16 @@ type ProfileSummary struct {
 	IdentityPath               string                      `json:"identityPath"`
 	ValidationError            string                      `json:"validationError,omitempty"`
 	profile                    profile.Profile
+}
+
+type CommandAdapterSummary struct {
+	ID                          string   `json:"id"`
+	Enabled                     bool     `json:"enabled"`
+	Digest                      string   `json:"digest,omitempty"`
+	Commands                    []string `json:"commands,omitempty"`
+	AllowedProposalCapabilities []string `json:"allowedProposalCapabilities,omitempty"`
+	Builtin                     string   `json:"builtin,omitempty"`
+	Description                 string   `json:"description,omitempty"`
 }
 
 type ExpectedCommandDiagnostic struct {
@@ -104,16 +115,17 @@ const (
 )
 
 type SessionSummary struct {
-	ID                 string `json:"id"`
-	Profile            string `json:"profile,omitempty"`
-	Path               string `json:"path"`
-	AuditPath          string `json:"auditPath,omitempty"`
-	HasAudit           bool   `json:"hasAudit"`
-	HasBrokerEndpoint  bool   `json:"hasBrokerEndpoint"`
-	HasNetworkPlan     bool   `json:"hasNetworkPlan"`
-	HasProxySecretFile bool   `json:"hasProxySecretFile"`
-	HasEphemeralState  bool   `json:"hasEphemeralState"`
-	NetworkMode        string `json:"networkMode,omitempty"`
+	ID                 string                    `json:"id"`
+	Profile            string                    `json:"profile,omitempty"`
+	Path               string                    `json:"path"`
+	AuditPath          string                    `json:"auditPath,omitempty"`
+	HasAudit           bool                      `json:"hasAudit"`
+	HasBrokerEndpoint  bool                      `json:"hasBrokerEndpoint"`
+	HasNetworkPlan     bool                      `json:"hasNetworkPlan"`
+	HasProxySecretFile bool                      `json:"hasProxySecretFile"`
+	HasEphemeralState  bool                      `json:"hasEphemeralState"`
+	NetworkMode        string                    `json:"networkMode,omitempty"`
+	GuestPrivilege     *BoundaryPrivilegeSummary `json:"guestPrivilege,omitempty"`
 }
 
 type EnvironmentSummary struct {
@@ -579,15 +591,39 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			})
 			summary.HostFSGrants = len(p.HostFS.Grants)
 			summary.HostFSDeny = len(p.HostFS.Deny)
-			registry, err := cmdproxy.RegistryFromProfile(p)
-			if err == nil {
-				summary.CommandProxies = registry.ShimNames()
-			}
+			summary.CommandProxies = commandProxyNames(p)
+			summary.CommandAdapters = commandAdapterSummaries(p)
 		}
 		out = append(out, summary)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, errs
+}
+
+func commandAdapterSummaries(p profile.Profile) []CommandAdapterSummary {
+	ids := make([]string, 0, len(p.CommandAdapters.Adapters))
+	for id := range p.CommandAdapters.Adapters {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]CommandAdapterSummary, 0, len(ids))
+	for _, id := range ids {
+		adapter := p.CommandAdapters.Adapters[id]
+		commands := append([]string(nil), adapter.Commands...)
+		sort.Strings(commands)
+		capabilities := append([]string(nil), adapter.AllowedProposalCapabilities...)
+		sort.Strings(capabilities)
+		out = append(out, CommandAdapterSummary{
+			ID:                          id,
+			Enabled:                     adapter.Enabled,
+			Digest:                      adapter.Digest,
+			Commands:                    commands,
+			AllowedProposalCapabilities: capabilities,
+			Builtin:                     adapter.Builtin,
+			Description:                 adapter.Description,
+		})
+	}
+	return out
 }
 
 func BuildExpectedCommandDiagnostics(expected []string, check ExpectedCommandCheckContext) []ExpectedCommandDiagnostic {
@@ -650,6 +686,7 @@ func (c Core) sessionSummaries() ([]SessionSummary, int) {
 		if summary.HasAudit {
 			auditCount++
 			summary.Profile = readSessionAuditProfile(summary.AuditPath)
+			summary.GuestPrivilege = readSessionPrivilegeSummary(summary.AuditPath)
 		}
 		if mode := readNetworkMode(filepath.Join(dir, "network-plan.json")); mode != "" {
 			summary.NetworkMode = mode
@@ -678,6 +715,27 @@ func readSessionAuditProfile(path string) string {
 		}
 	}
 	return ""
+}
+
+func readSessionPrivilegeSummary(path string) *BoundaryPrivilegeSummary {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 16*1024), 256*1024)
+	var latest *BoundaryPrivilegeSummary
+	for scanner.Scan() {
+		var event audit.Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		if event.Action == "guest.privilege.status" {
+			latest = boundaryPrivilege(event.Details)
+		}
+	}
+	return latest
 }
 
 func (c Core) backendSummaries(ctx context.Context) []BackendSummary {

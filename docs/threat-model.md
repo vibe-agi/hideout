@@ -69,6 +69,14 @@ Scripts and bundles may classify intent and propose policy decisions. They must
 not execute host authority directly. New authority must be represented as a Core
 primitive, validated by Go code, audited, and then executed by a TCB component.
 
+008 command capability adapters are constrained scripts bound to explicit
+profile command symbols. They can deny, simulate, rewrite non-privileged guest
+commands, or propose non-applied Core capabilities after Go validation. They do
+not execute authority and are not a root boundary. The built-in root-sensitive
+adapter records command-name intent and attaches the current 009 privilege
+status; `enforced` means target command execution is non-root/no-sudo with a
+separate setup identity, while `degraded` and `unknown` remain audit/risk states.
+
 The per-run broker token is a bearer credential for the guest-side shim and
 HostFS daemon. It is not treated as secret from A3 guest root. The security
 boundary is the host-side broker validator, HostFS policy, explicit user
@@ -196,6 +204,10 @@ the default policy profile:
 - A4: policy bundles and scripts may classify intent and propose decisions, but
   they cannot execute host authority or bypass Go-side validators for Core
   primitives.
+- A4: command adapters may classify command-name intent and return strict
+  outcomes, but Go validates the adapter artifact digest, declared command
+  ownership, proposed capability, output schema, and redaction before any broker
+  response is accepted.
 - A1-A4: Boundary Summary is derived from structured audit facts and must not
   include HostFS backing secrets, broker tokens, proxy secrets, browser
   automation secrets, endpoint secrets, or full sensitive target paths.
@@ -217,6 +229,11 @@ enforcement, broker validation, or cleanup; the Audit and Explain contract in
 Hideout Phase 1 does not claim:
 
 - workspace secrets are hidden from the target by default;
+- command adapters intercept absolute paths, direct syscalls, setuid binaries,
+  or guest-root behavior outside command-name routing;
+- 008 root-sensitive intent capture does not block root escalation by itself, and
+  009 enforced privilege separation still does not protect after guest root is
+  obtained;
 - network exfiltration is impossible in `direct` mode;
 - protection against a target that has gained guest root: adversary A3 can
   rewrite the guest routing table or resolver configuration to restore a DNS
@@ -229,7 +246,9 @@ Hideout Phase 1 does not claim:
   it end to end; that closure is a claim owned by
   [network-privacy-architecture.md](network-privacy-architecture.md), not a
   non-claim);
-- HostFS write overlay is product-ready;
+- HostFS write overlay blocks normal workspace writes, provides broad DLP, or
+  is the only possible host mutation path when 009 privilege status is
+  degraded/unknown;
 - Endpoint Exposure, Browser Control, Preview Open, adb, simulator, or IDE
   integrations are product-ready only when separately promoted;
 - identifying user/application secrets embedded in runtime data. Redaction is
@@ -429,6 +448,9 @@ redaction.
 Required:
 
 - HostFS read/list/stat policy and audit;
+- HostFS write overlay for explicit overlay grants: staged guest write-class
+  operations, local claimed Manager apply, conflict fail-closed behavior, and
+  redacted audit/export evidence;
 - `host.open` external URL and workspace file broker path;
 - run-scoped `portbridge.host-to-guest` transport validation, audit, cleanup,
   Boundary Summary evidence, and fail-closed behavior when a backend provider is
@@ -445,7 +467,6 @@ Required:
 
 Design-ready or later:
 
-- HostFS write overlay;
 - interactive approval;
 - endpoint observation;
 - project-declared endpoint candidates and workspace trust review;

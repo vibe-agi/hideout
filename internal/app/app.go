@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/backend/native"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/daemon"
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -113,6 +114,8 @@ func (a app) run(args []string) error {
 		return a.shim(args[1:])
 	case "hostfsd":
 		return a.hostfsd(args[1:])
+	case "hostfs":
+		return a.hostfsCommand(args[1:])
 	case "package":
 		return a.packageCommand(args[1:])
 	case "help", "-h", "--help":
@@ -162,6 +165,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
 	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
+	fmt.Fprintln(a.stdout, "  hideout hostfs write status|plan|claim|apply|discard")
 	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]")
@@ -300,6 +304,7 @@ func (a app) profileUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile home <name> import --from <path> --to <relative-path> [--force]")
 	fmt.Fprintln(a.stdout, "  hideout profile tools <name> <list|expected>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> <list|add-open|remove>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> <list|add-local|add-builtin-root-sensitive|enable|disable|refresh-digest|remove>")
 }
 
 func (a app) profileFSUsage() {
@@ -323,6 +328,17 @@ func (a app) profileCommandProxyUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> list")
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> add-open <command>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> remove <command>")
+}
+
+func (a app) profileCommandAdapterUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> list")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> add-local --id <id> --path <path> --command <command> [--capability <capability>]")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> add-builtin-root-sensitive [--id <id>]")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> enable <id>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> disable <id>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> refresh-digest <id>")
+	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> remove <id>")
 }
 
 func (a app) profileEnvUsage() {
@@ -913,6 +929,22 @@ func (a app) writeRunResultSummary(result manager.RunResult) {
 	if result.BoundarySummary.AuditPath != "" {
 		fmt.Fprintf(a.stderr, "  audit: %s\n", result.BoundarySummary.AuditPath)
 	}
+	if privilege := result.BoundarySummary.Privilege; privilege != nil {
+		fmt.Fprintf(a.stderr, "  privilege: status=%s", dash(privilege.Status))
+		if privilege.TargetUID != "" {
+			fmt.Fprintf(a.stderr, " targetUID=%s", privilege.TargetUID)
+		}
+		if privilege.SetupKind != "" {
+			fmt.Fprintf(a.stderr, " setup=%s", privilege.SetupKind)
+		}
+		if privilege.Reason != "" {
+			fmt.Fprintf(a.stderr, " reason=%s", privilege.Reason)
+		}
+		if privilege.NonClaim != "" {
+			fmt.Fprintf(a.stderr, " nonClaim=%s", privilege.NonClaim)
+		}
+		fmt.Fprintln(a.stderr)
+	}
 	for _, capability := range result.BoundarySummary.Capabilities {
 		fmt.Fprintf(a.stderr, "  %s: allowed=%d denied=%d", capability.Capability, capability.Allowed, capability.Denied)
 		if capability.Capability == "hostfs" || capability.Unsupported > 0 {
@@ -956,6 +988,24 @@ func presence(value string) string {
 		return "absent"
 	}
 	return "present"
+}
+
+func doctorGuestPrivilegeMessage(ctx context.Context, store profile.Store, profileName string) string {
+	overview, err := manager.New(store).Overview(ctx)
+	if err != nil {
+		return "status unavailable: " + err.Error()
+	}
+	for i := len(overview.Sessions) - 1; i >= 0; i-- {
+		session := overview.Sessions[i]
+		if profileName != "" && session.Profile != "" && session.Profile != profileName {
+			continue
+		}
+		if session.GuestPrivilege == nil {
+			continue
+		}
+		return "latest=" + privilegeForTUI(session.GuestPrivilege)
+	}
+	return "recorded per run; no guest privilege evidence found yet"
 }
 
 func runtimeIdentityDir(layout session.Layout, profileDir string, opts runOptions) string {
@@ -1790,6 +1840,7 @@ func (a app) doctor(args []string) error {
 	}
 	report("store", "ok", "writable")
 	checkManager(store, report)
+	report("guest-privilege", "ok", doctorGuestPrivilegeMessage(context.Background(), store, opts.profileName))
 
 	p, profileLoaded := loadDoctorProfile(store, opts.profileName, report)
 	if opts.networkMode != "" {
@@ -2416,26 +2467,32 @@ func checkBroker(p profile.Profile, backendName string, layout session.Layout, h
 		report("broker", "error", err.Error())
 		return
 	}
+	adapters, err := cmdadapter.Compile(p, profileDir)
+	if err != nil {
+		report("broker", "error", err.Error())
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	endpoint := brokerEndpointForBackend(backendName, layout)
 	server := &broker.Server{
-		SessionID:     layout.ID,
-		Token:         token,
-		Socket:        layout.BrokerSock,
-		Endpoint:      endpoint,
-		HostRoot:      hostRoot,
-		GuestRoot:     guestRoot,
-		Profile:       p.Name,
-		ProfileDir:    profileDir,
-		Backend:       backendName,
-		WorkspaceMode: p.Workspace.Mode,
-		NetworkMode:   p.Network.Mode,
-		Commands:      registry.ShimNames(),
-		ScriptRefs:    p.Policy.ScriptRefs,
-		Evaluator:     policy.NewEvaluator(p),
-		Audit:         audit.NewDiscard(),
-		Opener:        broker.NoopOpener{},
+		SessionID:       layout.ID,
+		Token:           token,
+		Socket:          layout.BrokerSock,
+		Endpoint:        endpoint,
+		HostRoot:        hostRoot,
+		GuestRoot:       guestRoot,
+		Profile:         p.Name,
+		ProfileDir:      profileDir,
+		Backend:         backendName,
+		WorkspaceMode:   p.Workspace.Mode,
+		NetworkMode:     p.Network.Mode,
+		Commands:        registry.ShimNames(),
+		CommandAdapters: adapters,
+		ScriptRefs:      p.Policy.ScriptRefs,
+		Evaluator:       policy.NewEvaluator(p),
+		Audit:           audit.NewDiscard(),
+		Opener:          broker.NoopOpener{},
 	}
 	if err := server.StartEndpoint(ctx, endpoint); err != nil {
 		report("broker", "error", err.Error())
@@ -2657,6 +2714,8 @@ func (a app) profile(args []string) error {
 		return a.profileTools(store, args[1:])
 	case "command-proxy":
 		return a.profileCommandProxy(store, args[1:])
+	case "command-adapter":
+		return a.profileCommandAdapter(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
@@ -3308,6 +3367,159 @@ func (a app) profileCommandProxy(store profile.Store, args []string) error {
 	}
 }
 
+func (a app) profileCommandAdapter(store profile.Store, args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		a.profileCommandAdapterUsage()
+		return nil
+	}
+	if len(args) < 2 {
+		return errors.New("usage: hideout profile command-adapter <name> <list|add-local|add-builtin-root-sensitive|enable|disable|refresh-digest|remove>")
+	}
+	name := args[0]
+	command := args[1]
+	core := manager.New(store)
+	switch command {
+	case "list":
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile command-adapter <name> list")
+		}
+		p, err := store.LoadOrInit(name)
+		if err != nil {
+			return err
+		}
+		return writeProfileCommandAdapters(a.stdout, p)
+	case "add-local":
+		opts, err := parseProfileCommandAdapterAddLocal(name, args[2:])
+		if err != nil {
+			return err
+		}
+		plan, err := core.PlanCommandAdapter(opts)
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyCommandAdapter(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	case "add-builtin-root-sensitive":
+		fs := flag.NewFlagSet("profile command-adapter add-builtin-root-sensitive", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		id := fs.String("id", cmdadapter.BuiltinRootSensitiveID, "adapter id")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected command-adapter argument %q", fs.Arg(0))
+		}
+		plan, err := core.PlanCommandAdapter(manager.CommandAdapterOptions{
+			ProfileName: name,
+			Operation:   "add-builtin-root-sensitive",
+			AdapterID:   *id,
+			Builtin:     cmdadapter.BuiltinRootSensitiveKey,
+		})
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyCommandAdapter(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	case "enable", "disable", "refresh-digest", "remove":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: hideout profile command-adapter <name> %s <id>", command)
+		}
+		plan, err := core.PlanCommandAdapter(manager.CommandAdapterOptions{
+			ProfileName: name,
+			Operation:   command,
+			AdapterID:   args[2],
+		})
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyCommandAdapter(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	default:
+		return fmt.Errorf("unknown profile command-adapter command %q", command)
+	}
+}
+
+func parseProfileCommandAdapterAddLocal(profileName string, args []string) (manager.CommandAdapterOptions, error) {
+	fs := flag.NewFlagSet("profile command-adapter add-local", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	id := fs.String("id", "", "adapter id")
+	path := fs.String("path", "", "adapter script path")
+	entrypoint := fs.String("entrypoint", cmdadapter.DefaultEntrypoint, "adapter entrypoint")
+	var commands stringListFlag
+	var capabilities stringListFlag
+	fs.Var(&commands, "command", "command symbol to route; may be repeated")
+	fs.Var(&capabilities, "capability", "proposal capability; may be repeated")
+	if err := fs.Parse(args); err != nil {
+		return manager.CommandAdapterOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return manager.CommandAdapterOptions{}, fmt.Errorf("unexpected command-adapter argument %q", fs.Arg(0))
+	}
+	return manager.CommandAdapterOptions{
+		ProfileName:                 profileName,
+		Operation:                   "add-local",
+		AdapterID:                   *id,
+		Path:                        *path,
+		Entrypoint:                  *entrypoint,
+		Commands:                    []string(commands),
+		AllowedProposalCapabilities: []string(capabilities),
+	}, nil
+}
+
+type profileCommandAdapterOutput struct {
+	Profile  string                               `json:"profile"`
+	Adapters []profileCommandAdapterAdapterOutput `json:"adapters"`
+}
+
+type profileCommandAdapterAdapterOutput struct {
+	ID                          string   `json:"id"`
+	Enabled                     bool     `json:"enabled"`
+	Path                        string   `json:"path,omitempty"`
+	Digest                      string   `json:"digest,omitempty"`
+	Entrypoint                  string   `json:"entrypoint,omitempty"`
+	Commands                    []string `json:"commands,omitempty"`
+	AllowedProposalCapabilities []string `json:"allowedProposalCapabilities,omitempty"`
+	Builtin                     string   `json:"builtin,omitempty"`
+	Description                 string   `json:"description,omitempty"`
+}
+
+func writeProfileCommandAdapters(w io.Writer, p profile.Profile) error {
+	ids := make([]string, 0, len(p.CommandAdapters.Adapters))
+	for id := range p.CommandAdapters.Adapters {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]profileCommandAdapterAdapterOutput, 0, len(ids))
+	for _, id := range ids {
+		adapter := p.CommandAdapters.Adapters[id]
+		commands := append([]string(nil), adapter.Commands...)
+		sort.Strings(commands)
+		capabilities := append([]string(nil), adapter.AllowedProposalCapabilities...)
+		sort.Strings(capabilities)
+		out = append(out, profileCommandAdapterAdapterOutput{
+			ID:                          id,
+			Enabled:                     adapter.Enabled,
+			Path:                        adapter.Path,
+			Digest:                      adapter.Digest,
+			Entrypoint:                  adapter.Entrypoint,
+			Commands:                    commands,
+			AllowedProposalCapabilities: capabilities,
+			Builtin:                     adapter.Builtin,
+			Description:                 adapter.Description,
+		})
+	}
+	return writeJSONLine(w, profileCommandAdapterOutput{Profile: p.Name, Adapters: out})
+}
+
 type profileCommandProxyCommandOutput struct {
 	Name       string `json:"name"`
 	Route      string `json:"route"`
@@ -3571,6 +3783,7 @@ type profileFSRuleOutput struct {
 	Effect    string       `json:"effect"`
 	HostPath  string       `json:"hostPath"`
 	Ops       []hostfs.Op  `json:"ops,omitempty"`
+	Overlay   bool         `json:"overlay,omitempty"`
 	Scope     hostfs.Scope `json:"scope"`
 	Reason    string       `json:"reason"`
 	CreatedAt string       `json:"createdAt,omitempty"`
@@ -3613,6 +3826,7 @@ func profileFSRuleOutputFromRule(rule hostfs.Rule, deny bool) profileFSRuleOutpu
 		Effect:    effect,
 		HostPath:  rule.HostPath,
 		Ops:       append([]hostfs.Op(nil), rule.Ops...),
+		Overlay:   rule.Overlay,
 		Scope:     rule.Scope,
 		Reason:    rule.Reason,
 		CreatedAt: createdAt,
@@ -3870,6 +4084,153 @@ func (a app) auditExport(args []string) error {
 		fmt.Fprintf(a.stdout, "meta-audit: %s\n", result.MetaAuditPath)
 	}
 	return nil
+}
+
+func (a app) hostfsCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout hostfs write status|plan|claim|apply|discard")
+	}
+	switch args[0] {
+	case "write":
+		return a.hostfsWriteCommand(args[1:])
+	default:
+		return fmt.Errorf("unknown hostfs command %q", args[0])
+	}
+}
+
+func (a app) hostfsWriteCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout hostfs write status|plan|claim|apply|discard")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	switch args[0] {
+	case "status":
+		return a.hostfsWriteStatus(core, args[1:])
+	case "plan":
+		return a.hostfsWritePlan(core, args[1:])
+	case "claim":
+		return a.hostfsWriteClaim(core, args[1:])
+	case "apply":
+		return a.hostfsWriteApply(core, args[1:])
+	case "discard":
+		return a.hostfsWriteDiscard(core, args[1:])
+	default:
+		return fmt.Errorf("unknown hostfs write command %q", args[0])
+	}
+}
+
+func (a app) hostfsWriteStatus(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("hostfs write status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	sessionID := fs.String("session", "", "session id")
+	state := fs.String("state", "", "decision state")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout hostfs write status [--session <id>] [--state <state>]")
+	}
+	status, err := core.HostFSWriteStatus(manager.HostFSWriteStatusRequest{Session: *sessionID, State: *state})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, status)
+}
+
+func (a app) hostfsWritePlan(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("hostfs write plan", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	operationID := fs.String("operation", "", "operation id")
+	includePreview := fs.Bool("preview", true, "include staged preview")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 1 {
+		return errors.New("usage: hideout hostfs write plan [--preview=false] <operation-id>")
+	}
+	if *operationID == "" && fs.NArg() == 1 {
+		*operationID = fs.Arg(0)
+	}
+	plan, err := core.PlanHostFSWrite(manager.HostFSWritePlanRequest{OperationID: *operationID, IncludePreview: *includePreview})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, plan)
+}
+
+func (a app) hostfsWriteClaim(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("hostfs write claim", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	surface := fs.String("surface", "cli", "claiming surface")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout hostfs write claim [--surface cli|tui|webui] <decision-id>")
+	}
+	claim, err := core.ClaimHostFSWrite(manager.HostFSWriteClaimRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: manager.HostFSWritePlanVersion,
+		Surface:         *surface,
+	})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, claim)
+}
+
+func (a app) hostfsWriteApply(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("hostfs write apply", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	claimToken := fs.String("claim-token", "", "claim token returned by claim")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout hostfs write apply --claim-token <token> <decision-id>")
+	}
+	result, err := core.ApplyHostFSWrite(manager.HostFSWriteApplyRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: manager.HostFSWritePlanVersion,
+		ClaimToken:      *claimToken,
+	})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, result)
+}
+
+func (a app) hostfsWriteDiscard(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("hostfs write discard", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	claimToken := fs.String("claim-token", "", "claim token returned by claim")
+	reason := fs.String("reason", "operator-denied", "discard reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout hostfs write discard --claim-token <token> [--reason <text>] <decision-id>")
+	}
+	result, err := core.DiscardHostFSWrite(manager.HostFSWriteDiscardRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: manager.HostFSWritePlanVersion,
+		ClaimToken:      *claimToken,
+		Reason:          *reason,
+	})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, result)
+}
+
+func writeIndentedJSON(w io.Writer, value any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
 }
 
 func stdinIsTerminal() bool {
@@ -4678,7 +5039,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  expected=%s  commandProxies=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ExpectedCommands), listForTUI(p.CommandProxies), p.HostFSGrants, p.HostFSDeny, status)
+		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  expected=%s  commandProxies=%s  commandAdapters=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ExpectedCommands), listForTUI(p.CommandProxies), commandAdaptersForTUI(p.CommandAdapters), p.HostFSGrants, p.HostFSDeny, status)
 		next := profileNextCommandsForTUI(p)
 		if len(next) > 0 {
 			for _, command := range next {
@@ -4749,7 +5110,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		fmt.Fprintf(w, "  showing newest %d of %d\n", len(sessions), len(overview.Sessions))
 	}
 	for _, s := range sessions {
-		fmt.Fprintf(w, "  - %s  profile=%s  audit=%t  network=%s  runtime=%t\n", dash(s.ID), dash(s.Profile), s.HasAudit, dash(s.NetworkMode), s.HasEphemeralState)
+		fmt.Fprintf(w, "  - %s  profile=%s  audit=%t  network=%s  privilege=%s  runtime=%t\n", dash(s.ID), dash(s.Profile), s.HasAudit, dash(s.NetworkMode), privilegeForTUI(s.GuestPrivilege), s.HasEphemeralState)
 		next := sessionNextCommandsForTUI(s)
 		if len(next) > 0 {
 			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))
@@ -4787,6 +5148,15 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	}
 	for _, bg := range state.Background {
 		fmt.Fprintf(w, "  - %s  op=%s  status=%s\n", dash(bg.ID), dash(bg.Op), dash(bg.Status))
+	}
+
+	fmt.Fprintln(w, "\nHostFS Writes")
+	if len(state.HostFSWrites) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, row := range state.HostFSWrites {
+		fmt.Fprintf(w, "  - %s  op=%s  status=%s  privilege=%s  path=%s\n", dash(row.DecisionID), dash(row.Operation), dash(row.Status), dash(row.PrivilegeStatus), dash(row.Path))
+		fmt.Fprintf(w, "    next: claim=hideout hostfs write claim %s  apply=hideout hostfs write apply %s  discard=hideout hostfs write discard %s\n", dash(row.DecisionID), dash(row.DecisionID), dash(row.DecisionID))
 	}
 
 	fmt.Fprintln(w, "\nExports")
@@ -4938,6 +5308,35 @@ func listForTUI(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ",")
+}
+
+func commandAdaptersForTUI(adapters []manager.CommandAdapterSummary) string {
+	if len(adapters) == 0 {
+		return "none"
+	}
+	rows := make([]string, 0, len(adapters))
+	for _, adapter := range adapters {
+		state := "off"
+		if adapter.Enabled {
+			state = "on"
+		}
+		rows = append(rows, fmt.Sprintf("%s:%s(%s)", dash(adapter.ID), state, listForTUI(adapter.Commands)))
+	}
+	return strings.Join(rows, ",")
+}
+
+func privilegeForTUI(summary *manager.BoundaryPrivilegeSummary) string {
+	if summary == nil || summary.Status == "" {
+		return "unknown"
+	}
+	parts := []string{summary.Status}
+	if summary.TargetUID != "" {
+		parts = append(parts, "uid="+summary.TargetUID)
+	}
+	if summary.SetupKind != "" {
+		parts = append(parts, "setup="+summary.SetupKind)
+	}
+	return strings.Join(parts, ":")
 }
 
 type labPortbridgeLoopbackOptions struct {

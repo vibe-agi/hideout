@@ -187,6 +187,100 @@ func TestAPIRunPlanAndStatus(t *testing.T) {
 	}
 }
 
+func TestAPIHostFSWritePlanClaimApplyDiscardStatus(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := Core{Store: store}
+	op, decision := stageHostFSWriteFixture(t, core)
+	api := API{
+		Core:      core,
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+
+	planResp := httptest.NewRecorder()
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/hostfs/write/plan", HostFSWritePlanRequest{OperationID: op.ID, IncludePreview: true})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	api.ServeHTTP(planResp, req)
+	if planResp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", planResp.Code, planResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, planResp.Body.Bytes())
+	if !strings.Contains(planResp.Body.String(), `"resource":"hostfs/write/plan"`) || !strings.Contains(planResp.Body.String(), decision.DecisionID) {
+		t.Fatalf("plan response mismatch: %s", planResp.Body.String())
+	}
+
+	claimResp := httptest.NewRecorder()
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/hostfs/write/claim", HostFSWriteClaimRequest{DecisionID: decision.DecisionID, ExpectedVersion: HostFSWritePlanVersion, Surface: "webui"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	api.ServeHTTP(claimResp, req)
+	if claimResp.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", claimResp.Code, claimResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, claimResp.Body.Bytes())
+	var claimAPI APIResponse
+	if err := json.Unmarshal(claimResp.Body.Bytes(), &claimAPI); err != nil {
+		t.Fatal(err)
+	}
+	claimData := claimAPI.Data.(map[string]any)
+	claimToken, _ := claimData["claimToken"].(string)
+	if claimToken == "" {
+		t.Fatalf("claim response missing claim token: %+v", claimData)
+	}
+
+	statusResp := httptest.NewRecorder()
+	req = newAPIRequest(http.MethodGet, "/api/v1/hostfs/write/status")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	api.ServeHTTP(statusResp, req)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", statusResp.Code, statusResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, statusResp.Body.Bytes())
+	if strings.Contains(statusResp.Body.String(), claimToken) || strings.Contains(statusResp.Body.String(), "tokenHash") {
+		t.Fatalf("status leaked claim token material: %s", statusResp.Body.String())
+	}
+
+	applyResp := httptest.NewRecorder()
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/hostfs/write/apply", HostFSWriteApplyRequest{DecisionID: decision.DecisionID, ExpectedVersion: HostFSWritePlanVersion, ClaimToken: claimToken})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	api.ServeHTTP(applyResp, req)
+	if applyResp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", applyResp.Code, applyResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, applyResp.Body.Bytes())
+	if !strings.Contains(applyResp.Body.String(), `"status":"applied"`) {
+		t.Fatalf("apply response mismatch: %s", applyResp.Body.String())
+	}
+
+	_, discardDecision := stageHostFSWriteFixture(t, core)
+	claimResp = httptest.NewRecorder()
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/hostfs/write/claim", HostFSWriteClaimRequest{DecisionID: discardDecision.DecisionID, ExpectedVersion: HostFSWritePlanVersion, Surface: "webui"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	api.ServeHTTP(claimResp, req)
+	if claimResp.Code != http.StatusOK {
+		t.Fatalf("discard claim status=%d body=%s", claimResp.Code, claimResp.Body.String())
+	}
+	if err := json.Unmarshal(claimResp.Body.Bytes(), &claimAPI); err != nil {
+		t.Fatal(err)
+	}
+	claimData = claimAPI.Data.(map[string]any)
+	claimToken, _ = claimData["claimToken"].(string)
+	if claimToken == "" {
+		t.Fatalf("discard claim response missing claim token: %+v", claimData)
+	}
+	discardResp := httptest.NewRecorder()
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/hostfs/write/discard", HostFSWriteDiscardRequest{DecisionID: discardDecision.DecisionID, ExpectedVersion: HostFSWritePlanVersion, ClaimToken: claimToken, Reason: "operator-denied"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	api.ServeHTTP(discardResp, req)
+	if discardResp.Code != http.StatusOK {
+		t.Fatalf("discard status=%d body=%s", discardResp.Code, discardResp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, discardResp.Body.Bytes())
+	if !strings.Contains(discardResp.Body.String(), `"status":"discarded"`) {
+		t.Fatalf("discard response mismatch: %s", discardResp.Body.String())
+	}
+}
+
 func TestAPIInitRejectsLegacyToolSupplyPayload(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	api := API{

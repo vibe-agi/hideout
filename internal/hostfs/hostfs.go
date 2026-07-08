@@ -20,13 +20,18 @@ type TTL string
 type Source string
 
 const (
-	OpStat   Op = "stat"
-	OpRead   Op = "read"
-	OpList   Op = "list"
-	OpWrite  Op = "write"
-	OpCreate Op = "create"
-	OpDelete Op = "delete"
-	OpRename Op = "rename"
+	OpStat     Op = "stat"
+	OpRead     Op = "read"
+	OpList     Op = "list"
+	OpWrite    Op = "write"
+	OpCreate   Op = "create"
+	OpAppend   Op = "append"
+	OpTruncate Op = "truncate"
+	OpMkdir    Op = "mkdir"
+	OpDelete   Op = "delete"
+	OpRename   Op = "rename"
+	OpChmod    Op = "chmod"
+	OpChown    Op = "chown"
 
 	ScopeExactFile    Scope = "exact-file"
 	ScopeGlob         Scope = "glob"
@@ -50,7 +55,7 @@ const (
 	ReservedRootReason = "Hideout control-plane path is reserved"
 )
 
-var writeOps = []Op{OpWrite, OpCreate, OpDelete, OpRename}
+var writeOps = []Op{OpWrite, OpCreate, OpAppend, OpTruncate, OpMkdir, OpDelete, OpRename, OpChmod, OpChown}
 
 type Config struct {
 	Grants []Rule `json:"grants,omitempty"`
@@ -62,6 +67,7 @@ type Rule struct {
 	HostPath  string     `json:"hostPath"`
 	GuestPath string     `json:"guestPath,omitempty"`
 	Ops       []Op       `json:"ops,omitempty"`
+	Overlay   bool       `json:"overlay,omitempty"`
 	Scope     Scope      `json:"scope"`
 	Subject   Subject    `json:"subject,omitempty"`
 	TTL       TTL        `json:"ttl,omitempty"`
@@ -148,6 +154,27 @@ func ParseRuleSpec(flagName, value, reason string) (Rule, error) {
 			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
 		}
 		rule.Ops = []Op{OpRead, OpList}
+		rule.Scope = ScopeRecursiveDir
+	case "overlay":
+		rule.Ops = append([]Op(nil), writeOps...)
+		rule.Overlay = true
+		rule.Scope = ScopeExactFile
+		if hasGlob {
+			rule.Scope = ScopeGlob
+		}
+	case "overlay-dir":
+		if hasGlob {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use overlay: for glob selectors", flagName, kind)
+		}
+		rule.Ops = append([]Op(nil), writeOps...)
+		rule.Overlay = true
+		rule.Scope = ScopeDir
+	case "overlay-tree":
+		if hasGlob {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use overlay: for glob selectors", flagName, kind)
+		}
+		rule.Ops = append([]Op(nil), writeOps...)
+		rule.Overlay = true
 		rule.Scope = ScopeRecursiveDir
 	default:
 		return Rule{}, fmt.Errorf("unsupported %s kind %q", flagName, kind)
@@ -255,7 +282,7 @@ func (p EffectivePolicy) Summary() map[string]any {
 		"denyRules":     len(p.Deny),
 		"reservedRoots": len(p.ReservedRoots),
 		"default":       "hidden",
-		"write":         "unsupported",
+		"write":         writeSummary(p.Grants),
 	}
 }
 
@@ -329,7 +356,7 @@ func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time
 	if deny {
 		rule.Ops, err = normalizeDenyOps(rule.Ops)
 	} else {
-		rule.Ops, err = normalizeGrantOps(rule.Ops)
+		rule.Ops, err = normalizeGrantOps(rule)
 	}
 	if err != nil {
 		return Grant{}, err
@@ -340,7 +367,8 @@ func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time
 	return Grant{Rule: rule, Source: source, Index: index}, nil
 }
 
-func normalizeGrantOps(ops []Op) ([]Op, error) {
+func normalizeGrantOps(rule Rule) ([]Op, error) {
+	ops := rule.Ops
 	if len(ops) == 0 {
 		return nil, errors.New("ops are required")
 	}
@@ -350,10 +378,14 @@ func normalizeGrantOps(ops []Op) ([]Op, error) {
 	}
 	for _, op := range normalized {
 		if slices.Contains(writeOps, op) {
-			return nil, fmt.Errorf("HostFS op %q is write-class and unsupported in v1", op)
+			if !rule.Overlay {
+				return nil, fmt.Errorf("HostFS op %q is write-class and requires an explicit overlay grant", op)
+			}
+		} else if rule.Overlay {
+			return nil, fmt.Errorf("HostFS overlay grant cannot include non-write op %q", op)
 		}
 	}
-	if slices.Contains(normalized, OpRead) || slices.Contains(normalized, OpList) {
+	if !rule.Overlay && (slices.Contains(normalized, OpRead) || slices.Contains(normalized, OpList)) {
 		normalized = appendMissingOp(normalized, OpStat)
 	}
 	sortOps(normalized)
@@ -393,7 +425,7 @@ func normalizeOps(ops []Op) ([]Op, error) {
 
 func validateKnownOp(op Op) error {
 	switch op {
-	case OpStat, OpRead, OpList, OpWrite, OpCreate, OpDelete, OpRename:
+	case OpStat, OpRead, OpList, OpWrite, OpCreate, OpAppend, OpTruncate, OpMkdir, OpDelete, OpRename, OpChmod, OpChown:
 		return nil
 	default:
 		return fmt.Errorf("unsupported HostFS op %q", op)
@@ -425,13 +457,32 @@ func opRank(op Op) int {
 		return 3
 	case OpCreate:
 		return 4
-	case OpDelete:
+	case OpAppend:
 		return 5
-	case OpRename:
+	case OpTruncate:
 		return 6
+	case OpMkdir:
+		return 7
+	case OpDelete:
+		return 8
+	case OpRename:
+		return 9
+	case OpChmod:
+		return 10
+	case OpChown:
+		return 11
 	default:
 		return 100
 	}
+}
+
+func writeSummary(grants []Grant) string {
+	for _, grant := range grants {
+		if grant.Overlay {
+			return "overlay-staged"
+		}
+	}
+	return "unsupported"
 }
 
 func ruleMatches(rule Rule, op Op, hostPath string, deny bool) bool {

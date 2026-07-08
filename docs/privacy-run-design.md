@@ -711,13 +711,16 @@ HostFS actions:
 | `host.fs.stat` | HostFS guest daemon | Host Broker validates HostPathGrant and returns filtered metadata. | Revealing existence for ungranted paths. |
 | `host.fs.read` | HostFS guest daemon | Host Broker validates exact-file or directory grant and streams file bytes. | Broad host home mount. |
 | `host.fs.list` | HostFS guest daemon | Host Broker validates directory grant and returns grant-filtered entries. | Enumerating ungranted host directories. |
-| `host.fs.write` | HostFS guest daemon | Later write-class operation with explicit grant and audit. | Default write access to host files. |
+| `host.fs.write` | HostFS guest daemon | Stages write-class operations through explicit overlay grants; host mutation requires claimed Manager apply. | Default write access to host files, workspace blocking, or guest-root containment. |
 
 `host.fs.stat`, `host.fs.read`, and `host.fs.list` are implemented for the
-Phase 1 read-only HostFS data plane. `host.fs.write` remains a Later
-write-class action and fails closed in Phase 1. Phase 1 write-class attempts
-must not mutate the host filesystem; they return a read-only or unsupported
-failure and emit audit with `policyEffect=unsupported`.
+HostFS data plane. 010 implements `host.fs.write` as a staged overlay action:
+supported write-class operations are durable only after overlay staging, guest
+reads in the same session see the overlay, and host lower files remain unchanged
+until a local authenticated operator claims and applies the Manager decision.
+Missing overlay grants, deny rules, reserved roots, unsafe symlinks, stale
+claims, conflicts, timeout, or privilege-requiring `chown` fail closed before
+host mutation.
 
 Capability Probe action matrix:
 
@@ -781,8 +784,16 @@ Required Phase 1 scripts may:
 
 For the required Phase 1 `open` and `xdg-open` proxies, the only side-effecting
 route is `host-broker` for `host.open`; `deny` is the only required negative
-route. `guest-exec` and `fake` are stable protocol vocabulary, but they do not
-become executable routes until a registered implementation exists.
+route. `guest-exec` and `fake` are stable protocol vocabulary and become
+executable only behind registered command-adapter `rewriteGuest` or `simulate`
+outcomes.
+
+008 command adapters extend this constrained runtime with a separate
+`decideCommandAdapter(ctx)` ABI for explicitly owned command symbols. Adapter
+scripts may return only strict Go-validated outcomes: `deny`, `simulate`,
+`rewriteGuest`, or non-applied `proposeCapability`. They do not gain raw host
+execution, filesystem, network, process, environment, backend, broker-token, or
+Manager mutation authority.
 
 Command argument normalization is required in Phase 1, but it is builtin and
 registry-owned. User-influenced normalization, if ever needed, is an
@@ -807,9 +818,12 @@ redacting them from the decision hook has no confidentiality value and breaks
 legitimate policy such as redirect-URI parsing or query-parameter rules.
 Script context still never exposes host env, process env, Hideout-minted
 control-plane credentials (broker tokens, secret backing values, proxy URLs,
-UI tokens), real home paths, or arbitrary filesystem reads. Design-ready
-command adapters may receive richer local runtime facts through bounded context
-queries, but those facts are still not authority.
+UI tokens), real home paths, or arbitrary filesystem reads. Command adapters
+may receive richer local runtime facts through bounded context queries, but
+those facts are still not authority. The built-in root-sensitive adapter is
+command-name intent capture enriched by 009 privilege status; it must not be
+described as blocking absolute-path, syscall, setuid, or post-guest-root
+escalation by itself.
 
 Domain-specific behavior belongs in adapters and recipes above Core. For
 example, browser preview, browser control, adb access, simulator workflows, MCP
@@ -2345,6 +2359,12 @@ verification or DNS/proxy check failures fail closed; and the resulting
 environment is locked to its environment fingerprint so target runs do not
 silently reuse stale or differently provisioned guests.
 
+Hideout-owned privileged setup is separate from operator-authored target setup.
+For Lima, network route/DNS bootstrap and HostFS daemon setup/cleanup run through
+the 009 root-control setup identity; target commands run as the non-root target
+user. If target passwordless sudo is still reachable, the run is reported as
+`degraded` and must not be described as a guest-root containment boundary.
+
 Persistent profile home seeding:
 
 ```sh
@@ -2811,10 +2831,9 @@ contract:
 | Outcome | Host authority | Guest execution | Required guard |
 | --- | --- | --- | --- |
 | `deny` | none | none | deterministic exit code and audit |
-| `ask` | none until approved | none until approved | prompt exists, otherwise fail closed |
 | `simulate` | none | none | bounded stdout/stderr/exit code, audit |
-| `rewrite-guest` | none | yes, guest only | real guest binary lookup, recursion guard, env denylist |
-| `invoke-capability` | typed provider only | optional | allowed capability/provider, structured resource validation |
+| `rewriteGuest` | none | yes, guest only | real guest binary lookup, recursion guard, env denylist |
+| `proposeCapability` | none in 008 | none in 008 | declared capability, structured resource validation, non-applied proposal |
 
 The detailed binding declaration shape, adapter obligations, outcome
 semantics, whitelist-based provider argv construction, and bounded context
@@ -2822,7 +2841,8 @@ query classes are specified in
 [script-extension-architecture.md](script-extension-architecture.md). Core
 supplies facts, not risk conclusions, and it fails closed when a proposal
 uses a capability, provider, resource kind, route, or outcome that the
-binding did not allow.
+binding did not allow. Prompting and approval outcomes remain later work unless
+a typed Manager plan/apply workflow explicitly owns them.
 
 Phase 1 delivered command proxy route:
 
@@ -2862,6 +2882,24 @@ runtime validator all consume the same profile state. This command does not
 create host app providers, raw host command execution, or product-specific
 semantics for the command name.
 
+008 adds command-adapter bindings for explicit command symbols:
+
+```text
+<configured adapter command symbol> -> command-adapter -> Go-validated adapter outcome
+```
+
+Adapter bindings are profile-scoped, digest-pinned local artifacts or the
+built-in root-sensitive adapter. They cannot overlap with existing command
+proxy symbols, and the broker fails closed if the artifact digest changes, an
+outcome requests an undeclared capability, or the adapter attempts an
+unsupported route. The built-in root-sensitive adapter records command intent
+and may deny or produce a non-applied proposal. It reads 009's current privilege
+status: `enforced` means target commands are non-root/no-sudo and privileged
+Hideout setup uses a separate root-control identity; `degraded` means the base
+environment still gives the target passwordless sudo and must not be described
+as a root boundary. In every status it does not claim to contain absolute paths,
+direct syscalls, setuid binaries, or guest-root escalation.
+
 Normal commands run inside the guest boundary by default:
 
 ```text
@@ -2885,19 +2923,19 @@ guest shim command
 ```
 
 The protocol supports several routes so the model can grow without changing the
-envelope. Required Phase 1 implements only the registered `host.open` command
-path and deny handling. A profile, script, or broker request that selects an
-unimplemented route fails closed.
+envelope. Required Phase 1 implements the registered `host.open` command path,
+deny handling, and 008 command-adapter request path. A profile, script, or
+broker request that selects an unimplemented route fails closed.
 
 Adapter outcomes are policy-level results. Routes are the lower-level execution
 paths used after validation:
 
 ```text
 simulate          -> route=fake
-rewrite-guest     -> route=guest-exec
-invoke-capability -> route=host-broker, route=portbridge, or another typed
-                     provider route owned by the requested capability
-deny / ask-denied -> route=deny
+rewriteGuest      -> route=guest-exec
+proposeCapability -> route=proposal-unavailable in 008; later typed
+                     provider plan/apply owns any execution
+deny              -> route=deny
 ```
 
 The session broker endpoint is the per-session transport endpoint owned by Host
@@ -2930,10 +2968,11 @@ deny
   Return a deterministic failure.
 ```
 
-Phase 1 requires only this registered host action route:
+Phase 1 requires these registered command routes:
 
 ```text
 <configured command symbol> -> host-broker -> host.open
+<configured adapter command symbol> -> command-adapter -> Go-validated outcome
 ```
 
 `guest-direct`, `guest-exec`, `fake`, and `deny` are part of the canonical route
@@ -2944,14 +2983,18 @@ Required Phase 1 route behavior:
 
 - `guest-direct` describes the top-level command and unproxied guest commands;
 - `host-broker` is implemented for configured `host.open` command symbols;
+- `guest-exec` is implemented only for validated adapter `rewriteGuest`
+  outcomes and must resolve the real guest binary outside the shim directory;
+- `fake` is implemented only for validated adapter `simulate` outcomes;
 - `deny` is implemented for invalid, disabled, unsupported, or policy-denied
   command proxy requests.
 
 Design-ready route behavior:
 
-- `guest-exec` and `fake` remain stable protocol routes, but no default Phase 1
-  profile depends on them. Selecting either route without a registered
-  implementation fails closed.
+- proposal execution remains design-ready. 008 records
+  `proposeCapability` as non-applied and returns a clear
+  `proposal-unavailable` result unless a later typed Manager plan/apply feature
+  owns the capability.
 
 Key rules:
 
@@ -2975,7 +3018,9 @@ Key rules:
   workspace after cleaning. It must not be a URL, a host path outside the
   workspace, or an opaque string passed through to scripts or audit;
 - command proxy policy compiles into canonical capability policy;
-- scripts return proposals only;
+- `command.decide` scripts return policy proposals only;
+- command adapters return strict outcomes only, and Core validates those
+  outcomes before any route executes;
 - adapter outcomes are typed and must map to implemented routes;
 - host actions are executed only by Host Broker;
 - paths must be normalized and mapped before policy;
@@ -2989,7 +3034,10 @@ Key rules:
   be exported as public audit evidence;
 - capability providers are Go-owned TCB. Bundles may ship adapters and recipes,
   not provider implementations;
-- high-risk host mutation commands are Later and opt-in.
+- high-risk host mutation commands are Later and opt-in;
+- root-sensitive command adapters remain intent capture and status evidence with
+  009 privilege separation; they must not claim absolute
+  path, syscall, setuid, or post-guest-root containment.
 
 When `guest-exec` is implemented for a registered shim, it must avoid recursive
 shim execution by resolving the real guest binary from a PATH that excludes the

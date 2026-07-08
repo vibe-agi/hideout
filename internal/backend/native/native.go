@@ -7,6 +7,7 @@ import (
 	"os/exec"
 
 	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/privilege"
 )
 
 type Backend struct {
@@ -28,6 +29,7 @@ func (b Backend) Available(context.Context) error {
 }
 
 func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Session, error) {
+	privilegedSetupRequired := spec.PrivilegedSetupRequired || spec.NetworkPrivilegedSetup || spec.HostFSEnabled
 	return &backend.Session{
 		ID:                        spec.SessionID,
 		Backend:                   b.Name(),
@@ -46,12 +48,35 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		NetworkCleanupPath:        spec.NetworkCleanupPath,
 		NetworkCleanupGuestPath:   spec.NetworkCleanupGuestPath,
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
+		NetworkPrivilegedSetup:    spec.NetworkPrivilegedSetup,
+		PrivilegedSetupRequired:   privilegedSetupRequired,
+		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
+		PrivilegedSetupEventSink:  spec.PrivilegedSetupEventSink,
 	}, nil
 }
 
 func (b Backend) Run(ctx context.Context, session *backend.Session, command []string, env []string) error {
 	if len(command) == 0 {
 		return errors.New("command is required")
+	}
+	if session != nil && session.PrivilegeStatusSink != nil {
+		status, err := privilege.Classify(privilege.ClassificationInput{
+			Backend: session.Backend,
+			Target:  privilege.TargetIdentity{},
+			Setup:   privilege.SetupIdentity{Kind: privilege.SetupNoneRequired},
+			Checks: []privilege.CheckResult{{
+				Name:   privilege.CheckTargetUID,
+				Status: privilege.CheckUnsupported,
+				Error:  "native backend is a weak development harness and cannot prove guest privilege state",
+			}},
+		})
+		if err != nil {
+			return err
+		}
+		if err := session.PrivilegeStatusSink(status); err != nil {
+			return err
+		}
+		session.PrivilegeStatus = &status
 	}
 	path, err := backend.LookPathInEnv(command[0], env)
 	if err != nil {

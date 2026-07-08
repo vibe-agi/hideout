@@ -114,16 +114,19 @@ tbd
 | Direct network | required | required | weak |
 | Tun2socks | required | required | no |
 | DNS verification | required | required | no |
+| Guest privilege separation status | required | required | weak |
+| Separate privileged setup identity | required | required | no |
 | Audit | required | required | required |
 | Cleanup | required | required | required |
 | Warm environment reuse | required | required | no |
 | Guest helper distribution | required | required | no |
 
 Matrix rows are eligibility requirements, not implementation status;
-[STATUS.md](STATUS.md) owns delivery state. Known open item: DNS verification is
-`required` for Lima but has not shipped, so `tun2socks` currently carries an
-explicit DNS non-claim in [threat-model.md](threat-model.md). Closing that row
-is release-gate work, not a reason to relax the requirement.
+[STATUS.md](STATUS.md) owns delivery state. Lima currently satisfies the DNS
+verification row through the Gate 3 DoH mediation proof, and satisfies guest
+privilege separation through target non-root/no-sudo checks plus a separate
+root-control setup identity. Native remains weak because it shares the host user
+context and cannot provide a guest-unreachable setup identity.
 
 Guest helper distribution covers Hideout's own helper binaries, such as the
 guest shim and `hideout-hostfsd`; it is not a tool installation channel. The

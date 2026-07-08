@@ -104,6 +104,76 @@ func TestExportControlPlaneCleanAcrossSourcesAndResolvesReferences(t *testing.T)
 	}
 }
 
+func TestExportStripsPrivilegedSetupCredentials(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "artifact.json")
+	_, err := Apply(baseRequest(out, t.TempDir(), []AuditEvent{{
+		Time:     time.Date(2026, 7, 7, 0, 0, 0, 0, time.UTC),
+		Session:  "ses_1",
+		Profile:  "default",
+		Backend:  "lima",
+		Action:   "hideout.privileged_setup",
+		Decision: "succeeded",
+		Details: map[string]any{
+			"category":           "network",
+			"setupIdentityKind":  "root-control-ssh",
+			"separateFromTarget": true,
+			"reason":             "setupCredential=raw-secret rootControlSSHConfig=/Users/null/.lima/hideout/ssh.config",
+		},
+	}}))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, leaked := range []string{"raw-secret", "rootControlSSHConfig", "/Users/null/.lima/hideout/ssh.config"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("privileged setup export leaked %q:\n%s", leaked, text)
+		}
+	}
+	if !strings.Contains(text, `"setupIdentityKind": "root-control-ssh"`) {
+		t.Fatalf("privileged setup export lost non-secret evidence:\n%s", text)
+	}
+}
+
+func TestExportIncludesHostFSWriteEvidenceWithoutClaimTokenOrOverlayObjectPath(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "artifact.json")
+	event := testAuditEvent(map[string]any{
+		"operation":       "replace",
+		"path":            "/Users/alice/project/config.json",
+		"operationId":     "hfwop_123",
+		"decisionId":      "hfwdec_123",
+		"status":          "applied",
+		"changedPaths":    []string{"/Users/alice/project/config.json"},
+		"claimToken":      "claim_0123456789abcdef0123456789abcdef",
+		"tokenHash":       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"overlayObject":   "/Users/alice/.hideout/sessions/ses_1/hostfs-overlay/objects/hfwobj_secret",
+		"privilegeStatus": "enforced",
+	})
+	event.Action = "host.fs.overlay.apply"
+	_, err := Apply(baseRequest(out, t.TempDir(), []AuditEvent{event}))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"host.fs.overlay.apply", "hfwop_123", "hfwdec_123", "/Users/alice/project/config.json"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("artifact missing HostFS write evidence %q:\n%s", want, text)
+		}
+	}
+	for _, leaked := range []string{"claim_0123456789abcdef", "tokenHash", "hfwobj_secret", "hostfs-overlay/objects"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("artifact leaked %q:\n%s", leaked, text)
+		}
+	}
+}
+
 func TestExportEmptyAuditSelectionProducesZeroRecordArtifact(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "artifact.json")
 	result, err := Apply(Request{

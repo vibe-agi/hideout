@@ -34,6 +34,14 @@ func ValidateEvent(ev Event) error {
 		return require(ev.Payload.Status, "export.status")
 	case KindCleanup:
 		return require(ev.Payload.Status, "cleanup.status")
+	case KindHostFSWrite:
+		if err := require(ev.Payload.DecisionID, "hostfs-write.decisionId"); err != nil {
+			return err
+		}
+		if err := require(ev.Payload.OperationID, "hostfs-write.operationId"); err != nil {
+			return err
+		}
+		return require(ev.Payload.Status, "hostfs-write.status")
 	case KindTerminal:
 		return require(ev.Payload.Reason, "terminal.reason")
 	default:

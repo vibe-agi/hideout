@@ -4,12 +4,19 @@
 
 ## Contract
 
-HostFS Overlay is a future HostFS V2 capability that gives the guest a writable
-view of selected host paths without changing the host files until the user
-explicitly applies a diff.
+HostFS Overlay is the HostFS write path that gives the guest a writable view of
+selected host paths without changing the host files until the operator
+explicitly applies a Manager decision.
 
 This document follows [architecture-principles.md](architecture-principles.md)
 and extends the HostFS V1 read-only model in [privacy-run-design.md](privacy-run-design.md).
+
+Status note: 010 implements the staged overlay path for `create`, `replace`,
+`append`, `truncate`, `mkdir`, `delete`, `rename`, `chmod`, and constrained
+`chown` through explicit Manager plan/claim/apply. The core rule is unchanged:
+guest writes stage overlay intent first, and host mutation happens only after
+Go-owned apply. Workspace writes remain outside HostFS and are not blocked by
+this feature.
 
 ## Product Goal
 
@@ -70,7 +77,7 @@ glob read/stat
 deny
 ```
 
-V2 overlay authorities should be explicit:
+Overlay authorities are explicit:
 
 ```text
 overlay:/absolute/file
@@ -79,8 +86,8 @@ overlay-tree:/absolute/directory
 overlay:/absolute/dir/*.txt
 ```
 
-The exact CLI grammar may change, but the user-facing word should communicate
-that writes go to an overlay, not the host.
+The user-facing word communicates that writes go to an overlay, not directly to
+the host.
 
 Avoid naming this `write:` in the product CLI because users may interpret it as
 real host mutation.
@@ -114,13 +121,17 @@ Creates a whiteout record. Guest view hides the path. Host file remains.
 
 ### Rename
 
-Rename is unsupported in the initial overlay and fails closed. Later increments
-may add rename within one overlay authority.
+010 supports staged rename when both source and destination are covered by the
+effective overlay authority. Apply revalidates source identity,
+destination absence or replace semantics, symlink resolution, reserved roots, and
+conflict state before any host mutation.
 
 ### chmod/chown/xattr
 
-Default V2 should fail unsupported or store overlay-only metadata. It must not
-modify host metadata.
+010 supports staged `chmod` and constrained `chown` through explicit Manager
+apply. `chown` applies only when the requested owner/group does not require
+additional host privilege; privilege-requiring ownership changes fail closed.
+xattr and ACL mutation remain out of scope.
 
 ### Symlink
 
@@ -134,9 +145,9 @@ Session-scoped overlay:
 ```text
 ~/.hideout/sessions/<session-id>/hostfs-overlay/
   objects/
-  metadata.json
-  whiteouts.json
-  base-index.json
+  objects/
+  operations/
+  decisions/
 ```
 
 Overlay state is session-scoped to avoid surprising persistent mutations.
@@ -197,13 +208,12 @@ Default apply is conservative:
 Overlay write events include:
 
 ```text
-action=host.fs.overlay.write
+action=host.fs.overlay.stage
 path=<requested host path>
 decision
 ruleId
 source
 hostChanged=false
-overlayObject=<opaque id>
 bytes
 ```
 
@@ -219,7 +229,8 @@ result
 ```
 
 Audit must not expose overlay object paths as authority-bearing filesystem
-paths to the target.
+paths to the target or exported artifacts. Terminal decisions clean staged
+content objects while preserving operation/decision records and audit evidence.
 
 ## Failure Behavior
 
@@ -250,19 +261,18 @@ The backend should not mount a writable host directory.
 
 ## Phase Plan
 
-### V2a: Exact File Overlay
+### Implemented In 010
 
-- overlay existing exact files;
-- read own writes;
-- diff modified files;
-- discard session overlay;
-- apply with conflict detection.
+- exact, directory, and tree overlay grants;
+- content operations: create, replace, append, truncate;
+- path/metadata operations: mkdir, delete, rename, chmod, constrained chown;
+- same-session read/list overlay view;
+- local CLI/WebUI/TUI/Manager decision surfaces;
+- claim-token one-winner resolution, timeout default deny, and conflict
+  detection at apply.
 
 ### Later
 
-- directory, tree, and glob overlay authorities with whiteout-backed delete and
-  merged listings;
-- rename support;
 - real host write grants;
 - cross-session persistent overlays;
 - richer review, merge, and hunk-level apply workflows.

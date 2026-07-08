@@ -314,6 +314,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
   <button class="tab" type="button" data-panel="environments">Environments</button>
   <button class="tab" type="button" data-panel="sessions">Sessions</button>
   <button class="tab" type="button" data-panel="capabilities">Capabilities</button>
+  <button class="tab" type="button" data-panel="hostfs-writes">HostFS Writes</button>
   <button class="tab" type="button" data-panel="broker">Broker</button>
   <button class="tab" type="button" data-panel="network">Network</button>
   <button class="tab" type="button" data-panel="backends">Backends</button>
@@ -387,6 +388,23 @@ function expectedCommandDiagnosticLabels(value) {
     const blocks = diag.blocksRequestedRun ? " blocks-run" : "";
     return diag.command + ":" + status + blocks;
   });
+}
+function commandAdapterLabels(value) {
+  if (!Array.isArray(value) || !value.length) return [];
+  return value.map(function(adapter) {
+    if (!adapter || !adapter.id) return "unknown:off";
+    const state = adapter.enabled ? "on" : "off";
+    const commands = Array.isArray(adapter.commands) && adapter.commands.length ? adapter.commands.join("|") : "none";
+    return adapter.id + ":" + state + "(" + commands + ")";
+  });
+}
+function guestPrivilegeLabel(value) {
+  if (!value || !value.status) return "unknown";
+  const parts = [value.status];
+  if (value.targetUid) parts.push("uid=" + value.targetUid);
+  if (value.setupKind) parts.push("setup=" + value.setupKind);
+  if (value.reason) parts.push(value.reason);
+  return parts.join(" ");
 }
 function pill(label, tone) {
   return '<span class="pill ' + esc(tone || "") + '">' + esc(label) + "</span>";
@@ -530,6 +548,7 @@ function renderSummary() {
   const sessions = overview.sessions || [];
   const backends = overview.backends || [];
   const background = overview.background || [];
+  const hostfsWrites = overview.hostfsWrites || [];
   const available = backends.filter(function(b) { return b.available; }).length;
   const networkModes = (overview.network && overview.network.profileDefaults || []).map(function(n) { return normalizedNetworkMode(n.mode); });
   const denied = deniedAuditEvents();
@@ -539,6 +558,7 @@ function renderSummary() {
     metric("Sessions", sessions.length, sessions.filter(function(s) { return s.hasAudit; }).length + " with audit"),
     metric("Backends", available + "/" + backends.length, backends.map(function(b) { return b.name; }).join(", ")),
     metric("Background", background.length, background.slice(0, 3).map(function(b) { return (b.op || "op") + ":" + (b.status || "unknown"); }).join(", ")),
+    metric("HostFS Writes", hostfsWrites.length, hostfsWrites.slice(0, 3).map(function(w) { return (w.operation || "op") + ":" + (w.status || "pending"); }).join(", ")),
     metric("Denied", denied.length, denied.slice(0, 3).map(function(e) { return e.action || "event"; }).join(", ")),
     metric("Network", networkModes.length || "direct", networkModes.join(", ") || "direct")
   ].join("");
@@ -559,6 +579,7 @@ function renderPanel() {
     bindCommandProxyPanel();
     bindHostFSPanel();
   }
+  if (activePanel === "hostfs-writes") bindHostFSWritePanel();
   if (activePanel === "audit") bindAuditPanel();
   });
 }
@@ -571,6 +592,7 @@ function domainOwner(name) {
     environments: "manager/environment",
     sessions: "manager/backend",
     capabilities: "policy/cmdproxy",
+    "hostfs-writes": "manager/hostfs-overlay",
     broker: "broker",
     network: "network/secrets",
     backends: "backend",
@@ -588,16 +610,31 @@ const renderers = {
     const background = overview.background || [];
     const exports = overview.exportOutcomes || [];
     const cleanups = overview.cleanupOutcomes || [];
+    const hostfsWrites = overview.hostfsWrites || [];
     return '<div class="items">' + [
       item("Manager", overview.version || "hideout.manager/v1", [["storageRoot", overview.storageRoot], ["storeRoot", s.storeRoot], ["maxCapabilities", c.maxCapabilities || []]], "ok"),
       item("Init", init.initialized ? "initialized" : "needs setup", [["profile", init.profile], ["pendingTasks", init.pendingTasks], ["nextSteps", initSteps.map(function(step) { return (step.label || step.id) + ": " + step.command; })]], init.pendingTasks ? "warn" : "ok"),
       item("Broker", "host boundary", [["actions", overview.broker && overview.broker.actions], ["commandProxies", overview.broker && overview.broker.commandProxies]], "info"),
       item("Environments", "reusable guest state", [["count", (overview.environments || []).length], ["running", (overview.environments || []).filter(function(e) { return e.status === "running"; }).length]], "info"),
       item("Background", "daemon work", [["count", background.length], ["recent", background.slice(0, 5).map(function(b) { return (b.id || "bg") + ":" + (b.op || "op") + ":" + (b.status || "unknown"); })]], background.some(function(b) { return b.status === "failed"; }) ? "error" : "info"),
+      item("HostFS Writes", "staged host mutations", [["pending", hostfsWrites.length], ["recent", hostfsWrites.slice(0, 5).map(function(w) { return (w.operation || "op") + ":" + (w.status || "pending") + ":" + (w.path || ""); })]], hostfsWrites.some(function(w) { return w.status === "failed" || w.status === "conflict"; }) ? "error" : "warn"),
       item("Exports", "share boundary", [["recent", exports.slice(0, 5).map(function(e) { return (e.source || "source") + ":" + (e.status || "unknown") + ":" + (e.decision || ""); })]], exports.some(function(e) { return e.status === "failed"; }) ? "error" : "ok"),
       item("Cleanup", "local lifecycle", [["recent", cleanups.slice(0, 5).map(function(c) { return (c.status || "unknown") + ":sessions=" + (c.sessions || 0) + ":" + (c.secretState || ""); })]], cleanups.some(function(c) { return c.status === "failed"; }) ? "error" : "ok"),
       item("Audit", "redacted JSONL", [["sessionAuditFiles", overview.audit && overview.audit.sessionAuditFiles], ["eventsLoaded", auditEvents.length]], "ok")
     ].join("") + "</div>";
+  },
+  "hostfs-writes": function() {
+    const rows = overview.hostfsWrites || [];
+    if (!rows.length) return empty("No pending HostFS write decisions");
+    return '<div class="items">' + rows.map(function(row) {
+      const details = [["operationId", row.operationId], ["decisionId", row.decisionId], ["operation", row.operation], ["path", row.path], ["destination", row.destinationPath], ["privilege", row.privilegeStatus], ["reason", row.reason]];
+      const actions = '<div class="action-row">' +
+        '<button class="action secondary" type="button" data-hostfs-write-action="claim" data-decision-id="' + esc(row.decisionId) + '">Claim</button>' +
+        '<button class="action" type="button" data-hostfs-write-action="apply" data-decision-id="' + esc(row.decisionId) + '">Apply</button>' +
+        '<button class="action secondary" type="button" data-hostfs-write-action="discard" data-decision-id="' + esc(row.decisionId) + '">Discard</button>' +
+        '</div>';
+      return item(row.decisionId || row.operationId || "pending", row.status || "pending", details, row.privilegeStatus === "enforced" ? "warn" : "error") + actions;
+    }).join("") + '<div class="result" id="hostFSWriteStatus"></div></div>';
   },
   setup: function() {
     const profiles = overview.profiles || [];
@@ -650,7 +687,7 @@ const renderers = {
     if (!profiles.length) return envForm + empty("No profiles");
     return envForm + '<div class="items">' + profiles.map(function(p) {
       const tone = p.validationError ? "error" : "ok";
-      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["envPublic", p.envPublic], ["envInherit", p.envInherit], ["envDeny", p.envDeny], ["expectedCommands", p.expectedCommands], ["expectedDiagnostics", expectedCommandDiagnosticLabels(p.expectedCommandDiagnostics)], ["commandProxies", p.commandProxies], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
+      return item(p.name || "invalid", p.validationError || p.lineageMode || "profile", [["profileId", p.profileId], ["identityId", p.identityId], ["previousIdentityId", p.previousIdentityId], ["networkMode", p.networkMode], ["proxySecretRef", p.proxySecretRef], ["envPublic", p.envPublic], ["envInherit", p.envInherit], ["envDeny", p.envDeny], ["expectedCommands", p.expectedCommands], ["expectedDiagnostics", expectedCommandDiagnosticLabels(p.expectedCommandDiagnostics)], ["commandProxies", p.commandProxies], ["commandAdapters", commandAdapterLabels(p.commandAdapters)], ["hostfs", "allow=" + (p.hostfsGrants || 0) + " deny=" + (p.hostfsDeny || 0)]], tone);
     }).join("") + "</div>";
   },
   environments: function() {
@@ -676,7 +713,7 @@ const renderers = {
     if (!sessions.length) return empty("No sessions");
     const visibleSessions = visibleSessionsForPanel(sessions);
     return panelLimitNotice("sessions", visibleSessions.length, sessions.length) + '<div class="items">' + visibleSessions.map(function(s) {
-      return item(s.id, s.profile || "session", [["backend", s.backend], ["networkMode", s.networkMode], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.hasProxySecretFile ? "warn" : "ok");
+      return item(s.id, s.profile || "session", [["backend", s.backend], ["networkMode", s.networkMode], ["guestPrivilege", guestPrivilegeLabel(s.guestPrivilege)], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.hasProxySecretFile ? "warn" : "ok");
     }).join("") + "</div>";
   },
   capabilities: function() {
@@ -1053,6 +1090,55 @@ function bindHostFSPanel() {
     });
   });
 }
+function findHostFSWriteRow(decisionId) {
+  const rows = overview.hostfsWrites || [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].decisionId === decisionId) return rows[i];
+  }
+  return null;
+}
+function setHostFSWriteStatus(text, tone) {
+  const status = document.getElementById("hostFSWriteStatus");
+  if (!status) return;
+  status.className = tone === "error" ? "error-box" : "meta";
+  status.textContent = text || "";
+}
+function bindHostFSWritePanel() {
+  document.querySelectorAll("[data-hostfs-write-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-hostfs-write-action");
+      const decisionId = button.getAttribute("data-decision-id");
+      const row = findHostFSWriteRow(decisionId);
+      if (!row) {
+        setHostFSWriteStatus("decision not found", "error");
+        return;
+      }
+      try {
+        if (action === "claim") {
+          const response = await apiPost("hostfs/write/claim", {decisionId: decisionId, expectedVersion: "hideout.hostfs-write-plan/v1", surface: "webui"});
+          if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+          row.claimToken = response.data && response.data.claimToken;
+          row.status = "claimed";
+          setHostFSWriteStatus("claimed " + decisionId, "ok");
+          renderPanel();
+          return;
+        }
+        if (!row.claimToken) {
+          setHostFSWriteStatus("claim this decision before " + action, "error");
+          return;
+        }
+        const resource = action === "discard" ? "hostfs/write/discard" : "hostfs/write/apply";
+        const response = await apiPost(resource, {decisionId: decisionId, expectedVersion: "hideout.hostfs-write-plan/v1", claimToken: row.claimToken, reason: "operator-denied"});
+        if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+        row.status = response.data && response.data.status || action;
+        setHostFSWriteStatus(action + " " + row.status, "ok");
+        renderPanel();
+      } catch (error) {
+        setHostFSWriteStatus(error.message || String(error), "error");
+      }
+    });
+  });
+}
 function profileEnvPayloadFromForm() {
   return {
     profile: document.getElementById("profileEnvProfile").value,
@@ -1199,7 +1285,7 @@ function daemonAPI(path) {
   });
 }
 function seedEmptyOverview() {
-  return {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}, background: [], exportOutcomes: [], cleanupOutcomes: []};
+  return {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}, background: [], exportOutcomes: [], cleanupOutcomes: [], hostfsWrites: []};
 }
 function ensureLiveCollections() {
   if (!overview) overview = seedEmptyOverview();
@@ -1208,6 +1294,7 @@ function ensureLiveCollections() {
   if (!Array.isArray(overview.background)) overview.background = [];
   if (!Array.isArray(overview.exportOutcomes)) overview.exportOutcomes = [];
   if (!Array.isArray(overview.cleanupOutcomes)) overview.cleanupOutcomes = [];
+  if (!Array.isArray(overview.hostfsWrites)) overview.hostfsWrites = [];
 }
 function upsertByID(values, row) {
   const rows = Array.isArray(values) ? values.slice() : [];
@@ -1281,6 +1368,8 @@ function applyLiveEvent(event) {
     overview.exportOutcomes = capTail([{status: payload.status, source: payload.source, artifactPath: payload.artifactPath, decision: payload.decision}].concat(overview.exportOutcomes), 20);
   } else if (event.kind === "cleanup") {
     overview.cleanupOutcomes = capTail([{status: payload.status, sessions: payload.sessions, removed: payload.removed, secretState: payload.secretState}].concat(overview.cleanupOutcomes), 20);
+  } else if (event.kind === "hostfs-write") {
+    overview.hostfsWrites = upsertByID(overview.hostfsWrites, {id: payload.decisionId, decisionId: payload.decisionId, operationId: payload.operationId, status: payload.status, operation: payload.operation, path: payload.path, destinationPath: payload.destinationPath, privilegeStatus: payload.privilegeStatus, reason: payload.reason});
   } else {
     return false;
   }
@@ -1308,6 +1397,12 @@ async function seedLiveConsole() {
       const status = await daemonAPI("status");
       overview.background = Array.isArray(status.background) ? status.background : [];
     } catch {}
+    try {
+      const hostfsStatus = await api("hostfs/write/status");
+      overview.hostfsWrites = hostfsStatus.data && Array.isArray(hostfsStatus.data.pending) ? hostfsStatus.data.pending.map(function(row) { return Object.assign({id: row.decisionId}, row); }) : [];
+    } catch {
+      overview.hostfsWrites = [];
+    }
     liveLastSeq = 0;
     liveStreamState = "live";
     liveStreamReason = "";

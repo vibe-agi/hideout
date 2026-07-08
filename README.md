@@ -16,13 +16,19 @@ Hideout replaces ambient host authority with explicit capabilities:
 
 - the target gets an isolated home, XDG paths, machine identity, and git config;
 - the project workspace is mounted read/write for normal development;
-- host files outside the workspace require explicit HostFS grants;
+- host files outside the workspace require explicit HostFS grants; write-class
+  HostFS operations require separate overlay grants and local operator apply
+  before the host lower files change;
 - environment variables follow profile env policy: explicit public values,
   allowlisted inherits, and deny patterns (`profile.env.public`,
   `profile.env.inherit`, `profile.env.deny`);
 - host escapes such as `open` and `preview.open` go through typed brokered
   routes;
 - proxy credentials can be used by Hideout without appearing in target env;
+- Lima target commands run as a non-root target user when Hideout can prove
+  target `sudo -n` and `/usr/bin/sudo -n` are unavailable; privileged Hideout
+  setup such as network bootstrap and HostFS daemon startup uses a separate
+  root-control setup identity and is audited;
 - every run writes audit and boundary summary evidence.
 
 Important non-claims:
@@ -31,6 +37,9 @@ Important non-claims:
 - `direct` network mode does not hide network identity;
 - `tun2socks` hides the network origin path, but it is not a data-loss
   prevention system;
+- Hideout does not claim protection after a target has obtained guest root, and
+  weak/pre-009 images that still allow target passwordless sudo are surfaced as
+  degraded with recreate/base-image guidance;
 - `--backend native` is a development harness, not isolation.
 
 ## Install Requirements
@@ -86,6 +95,8 @@ The source-tree installer builds:
 hideout init --no-input --backend lima --network direct
 hideout run -- <cli>
 hideout run --fs read:/absolute/file -- <cli>
+hideout run --fs overlay-dir:/absolute/directory -- <cli>
+hideout hostfs write status
 hideout explain -- <cli>
 hideout audit show --limit 20
 ```
@@ -249,6 +260,22 @@ hideout profile command-proxy default list
 hideout profile command-proxy default remove browser-open
 ```
 
+Profiles can also register local command adapters for explicit command symbols.
+Adapters are digest-pinned JavaScript artifacts, or the built-in root-sensitive
+intent adapter, and their outcomes are validated by Go before anything happens:
+
+```bash
+hideout profile command-adapter default add-builtin-root-sensitive
+hideout profile command-adapter default list
+```
+
+The root-sensitive adapter records and can deny/propose privileged command
+intent such as `sudo`, package managers, mounts, resolver edits, and firewall
+changes. 009 privilege separation reports whether the current Lima target is
+`enforced`, `degraded`, or `unknown`; even when enforced, command adapters do
+not claim to intercept absolute paths, syscalls, setuid binaries, or a target
+that already has guest root.
+
 To expose a guest dev server to the host browser:
 
 ```bash
@@ -340,9 +367,10 @@ to those lifecycle commands when debugging `limactl` behavior.
 ## Programmable Policy And Sharing
 
 Boundary decisions can be scripted through constrained JavaScript (goja)
-entrypoints such as `command.decide` and `audit.redact`: scripts decide,
-classify, and redact within supplied context, and never gain filesystem,
-network, or process access. Ecosystem sharing covers policy scripts,
+entrypoints such as `command.decide`, `decideCommandAdapter`, and
+`audit.redact`: scripts decide, classify, and redact within supplied context,
+and never gain filesystem, network, or process access. Ecosystem sharing covers
+policy scripts,
 non-sensitive configuration, and declarative base image references; secrets
 are parameterized as SecretRef inputs that each user fills locally. See
 [docs/script-extension-architecture.md](docs/script-extension-architecture.md)

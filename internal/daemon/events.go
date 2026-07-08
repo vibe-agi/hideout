@@ -74,6 +74,14 @@ func (b *eventBus) OperationEvent(kind, phase string, details map[string]any) {
 			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindCleanup, ID: payload.ID},
 			Payload: payload,
 		})
+	case liveconsole.KindHostFSWrite:
+		payload := hostFSWritePayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindHostFSWrite,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindHostFSWrite, ID: payload.DecisionID},
+			Payload: payload,
+		})
 	case liveconsole.KindSession, "run", "operation":
 		payload := sessionPayload(kind, details, phase)
 		b.publish(Event{
@@ -318,6 +326,30 @@ func cleanupPayload(details map[string]any, phase string) liveconsole.EventPaylo
 	}
 	if payload.ID == "" {
 		payload.ID = "cleanup"
+	}
+	return payload
+}
+
+func hostFSWritePayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:              firstString(details, "decisionId", "operationId", "id"),
+		OperationID:     stringValue(details, "operationId"),
+		DecisionID:      stringValue(details, "decisionId"),
+		Status:          firstString(details, "status", "state"),
+		Operation:       firstString(details, "operation", "op"),
+		Path:            stringValue(details, "path"),
+		DestinationPath: stringValue(details, "destinationPath"),
+		PrivilegeStatus: stringValue(details, "privilegeStatus"),
+		Reason:          stringValue(details, "reason"),
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.DecisionID == "" {
+		payload.DecisionID = payload.ID
+	}
+	if payload.OperationID == "" {
+		payload.OperationID = payload.ID
 	}
 	return payload
 }

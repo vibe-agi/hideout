@@ -140,7 +140,11 @@ bypass; that is a recorded non-claim in [threat-model.md](threat-model.md).
 
 This closure is validated on real Lima: Gate 3 proves it end to end — the guest
 resolves a name through the mediated DoH path and fetches over HTTPS while the
-connected-subnet leak is blocked and the proxy secret stays hidden.
+connected-subnet leak is blocked and the proxy secret stays hidden. For Lima,
+the privileged route/DNS bootstrap runs through Hideout's root-control setup
+identity, not through target-user passwordless sudo; Gate 3 also asserts
+`privilege_status=enforced` and `privileged_setup=network` so DNS closure is tied
+to the 009 setup path.
 
 ## Route Verification
 
@@ -185,10 +189,10 @@ environment that is not inherited by the target command.
 ## Backend Requirements
 
 For each backend, the capability matrix records tun2socks support, DNS
-verification, and cleanup. Finer-grained facts — TUN device creation, default
-route and proxy bypass route setup, and required privileges — are backend
-adapter implementation concerns validated by the network gates, not separate
-matrix rows.
+verification, guest privilege separation, setup identity, and cleanup.
+Finer-grained facts — TUN device creation, default route and proxy bypass route
+setup, and exact helper commands — are backend adapter implementation concerns
+validated by the network and privilege gates.
 
 ## Phase Plan
 
@@ -197,11 +201,13 @@ matrix rows.
 - direct mode;
 - proxy env hidden from target;
 - tun2socks route bootstrap for privacy mode;
+- DNS mediation through the guest-local DoH stub with Gate 3 forward/reverse
+  proof;
+- Lima privileged network setup through the 009 setup identity;
 - audit and doctor explain direct risk.
 
 ### Next Product Increment
 
-- add DNS verification per supported backend;
 - add `doctor --fix` for missing tun2socks;
 - expose network state in Manager/TUI/WebUI.
 

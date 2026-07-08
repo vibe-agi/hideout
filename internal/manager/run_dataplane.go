@@ -15,9 +15,11 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	hostfsoverlay "github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -81,6 +83,10 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err := MaterializeCommandProxyShims(runSession.RuntimeShimDir, runSession.Plan.Backend, registry, runNetwork.Plan); err != nil {
 		return RunDataPlane{}, err
 	}
+	adapters, err := cmdadapter.Compile(runSession.Plan.RuntimeProfile, runSession.ProfileDir)
+	if err != nil {
+		return RunDataPlane{}, err
+	}
 	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{
 		Profile:   HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants),
 		Run:       opts.HostFSRun,
@@ -94,6 +100,22 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		return RunDataPlane{}, err
 	}
 	hostFSService := hostfs.NewService(hostFSPolicy)
+	if hostFSPolicyHasOverlay(hostFSPolicy) {
+		overlayStore, err := hostfsoverlay.NewStore(filepath.Join(runSession.Layout.Dir, "hostfs-overlay"))
+		if err != nil {
+			return RunDataPlane{}, err
+		}
+		hostFSService.Overlay = overlayStore
+		hostFSService.Context = hostfs.OverlayContext{
+			SessionID: runSession.Layout.ID,
+			Profile:   runSession.Plan.ProfileName,
+			Backend:   runSession.Plan.Backend,
+			Privilege: hostfsoverlay.Privilege{
+				Status: "unknown",
+				Reason: "guest privilege separation is recorded by 009; HostFS write apply remains operator-gated",
+			},
+		}
+	}
 	brokerCtx, cancel := context.WithCancel(ctx)
 	listenEndpoint := BrokerEndpointForBackend(runSession.Plan.Backend, runSession.Layout)
 	opener := opts.Opener
@@ -101,23 +123,24 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		opener = broker.NoopOpener{}
 	}
 	server := &broker.Server{
-		SessionID:     runSession.Layout.ID,
-		Token:         token,
-		Socket:        runSession.Layout.BrokerSock,
-		Endpoint:      listenEndpoint,
-		HostRoot:      runSession.Plan.Workspace,
-		GuestRoot:     runSession.Plan.GuestWorkspace,
-		Profile:       runSession.Plan.ProfileName,
-		ProfileDir:    runSession.ProfileDir,
-		Backend:       runSession.Plan.Backend,
-		WorkspaceMode: runSession.Plan.RuntimeProfile.Workspace.Mode,
-		NetworkMode:   runSession.Plan.RuntimeProfile.Network.Mode,
-		Commands:      registry.ShimNames(),
-		ScriptRefs:    runSession.Plan.RuntimeProfile.Policy.ScriptRefs,
-		Evaluator:     policy.NewEvaluator(runSession.Plan.RuntimeProfile),
-		Audit:         runSession.Audit,
-		Opener:        opener,
-		HostFS:        &hostFSService,
+		SessionID:       runSession.Layout.ID,
+		Token:           token,
+		Socket:          runSession.Layout.BrokerSock,
+		Endpoint:        listenEndpoint,
+		HostRoot:        runSession.Plan.Workspace,
+		GuestRoot:       runSession.Plan.GuestWorkspace,
+		Profile:         runSession.Plan.ProfileName,
+		ProfileDir:      runSession.ProfileDir,
+		Backend:         runSession.Plan.Backend,
+		WorkspaceMode:   runSession.Plan.RuntimeProfile.Workspace.Mode,
+		NetworkMode:     runSession.Plan.RuntimeProfile.Network.Mode,
+		Commands:        registry.ShimNames(),
+		CommandAdapters: adapters,
+		ScriptRefs:      runSession.Plan.RuntimeProfile.Policy.ScriptRefs,
+		Evaluator:       policy.NewEvaluator(runSession.Plan.RuntimeProfile),
+		Audit:           runSession.Audit,
+		Opener:          opener,
+		HostFS:          &hostFSService,
 	}
 	if err := server.StartEndpoint(brokerCtx, listenEndpoint); err != nil {
 		cancel()
@@ -243,6 +266,15 @@ func HostFSProfileForRun(p profile.Profile, disableProfileGrants bool) hostfs.Co
 	return config
 }
 
+func hostFSPolicyHasOverlay(policy hostfs.EffectivePolicy) bool {
+	for _, grant := range policy.Grants {
+		if grant.Overlay {
+			return true
+		}
+	}
+	return false
+}
+
 func HostFSGrafts(policy hostfs.EffectivePolicy) []string {
 	seen := map[string]bool{}
 	var grafts []string
@@ -295,15 +327,13 @@ func MaterializeCommandProxyShims(dir, backendName string, registry cmdproxy.Reg
 }
 
 func materializeNativeShims(dir string, registry cmdproxy.Registry) error {
-	script := ""
-	if shimPath := ResolveShimPath(); shimPath != "" {
-		script = fmt.Sprintf("#!/bin/sh\nexec %q \"$(basename \"$0\")\" \"$@\"\n", shimPath)
-	} else {
-		script = "#!/bin/sh\necho 'hideout-shim unavailable' >&2\nexit 69\n"
-	}
-	for _, name := range registry.ShimNames() {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
-			return err
+	shimPath := ResolveShimPath()
+	for _, reg := range registry.Registrations() {
+		script := nativeShimScript(shimPath, reg)
+		for _, name := range append([]string{reg.Name}, reg.Aliases...) {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -321,10 +351,12 @@ func materializeLimaShims(dir string, registry cmdproxy.Registry, netPlan netpol
 	} else {
 		return errors.New("lima backend requires a prebuilt linux hideout-shim; set HIDEOUT_LINUX_SHIM_PATH or install hideout-shim-linux")
 	}
-	script := "#!/bin/sh\nshim_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nexec \"$shim_dir/hideout-shim\" \"$(basename \"$0\")\" \"$@\"\n"
-	for _, name := range registry.ShimNames() {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
-			return err
+	for _, reg := range registry.Registrations() {
+		script := limaShimScript(reg)
+		for _, name := range append([]string{reg.Name}, reg.Aliases...) {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
+				return err
+			}
 		}
 	}
 	if netPlan.Mode == netpolicy.ModeTun2Socks {
@@ -345,6 +377,29 @@ func materializeLimaShims(dir string, registry cmdproxy.Registry, netPlan netpol
 		}
 	}
 	return nil
+}
+
+func nativeShimScript(shimPath string, reg cmdproxy.Registration) string {
+	if shimPath == "" {
+		return "#!/bin/sh\necho 'hideout-shim unavailable' >&2\nexit 69\n"
+	}
+	return shimPreamble() + shimEnv(reg) + fmt.Sprintf("HIDEOUT_COMMAND_PROXY_SHIM_DIR=\"$shim_dir\" exec %q \"$(basename \"$0\")\" \"$@\"\n", shimPath)
+}
+
+func limaShimScript(reg cmdproxy.Registration) string {
+	return shimPreamble() + shimEnv(reg) + "HIDEOUT_COMMAND_PROXY_SHIM_DIR=\"$shim_dir\" exec \"$shim_dir/hideout-shim\" \"$(basename \"$0\")\" \"$@\"\n"
+}
+
+func shimPreamble() string {
+	return "#!/bin/sh\nshim_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
+}
+
+func shimEnv(reg cmdproxy.Registration) string {
+	script := ""
+	if reg.Action == cmdproxy.ActionCommandAdapter {
+		script += fmt.Sprintf("HIDEOUT_COMMAND_PROXY_ACTION=%q HIDEOUT_COMMAND_PROXY_ADAPTER_ID=%q \\\n", reg.Action, reg.AdapterID)
+	}
+	return script
 }
 
 func MaterializeHostFSD(dir, backendName string, enabled bool) error {

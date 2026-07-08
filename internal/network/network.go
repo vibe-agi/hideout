@@ -357,10 +357,7 @@ func BootstrapScript(plan Plan) string {
 			b.WriteString("exit 125\n")
 			return b.String()
 		}
-		b.WriteString("if [ \"$(id -u)\" -ne 0 ]; then\n")
-		b.WriteString("  command -v sudo >/dev/null 2>&1 || { echo 'hideout: sudo is required for tun2socks setup' >&2; exit 127; }\n")
-		b.WriteString("  exec sudo -n env PATH=\"$PATH\" HOME=\"${HOME:-}\" /bin/sh \"$0\" \"$@\"\n")
-		b.WriteString("fi\n")
+		b.WriteString("[ \"$(id -u)\" -eq 0 ] || { echo 'hideout: tun2socks setup requires the Hideout setup identity' >&2; exit 127; }\n")
 		proxyPath := plan.GuestProxySecretPath
 		if proxyPath == "" {
 			proxyPath = "/hideout/session/network/proxy.url"
@@ -442,10 +439,7 @@ func CleanupScript(plan Plan) string {
 	b.WriteString(networkStatusHelpers())
 	switch plan.Mode {
 	case ModeTun2Socks:
-		b.WriteString("if [ \"$(id -u)\" -ne 0 ]; then\n")
-		b.WriteString("  command -v sudo >/dev/null 2>&1 || exit 0\n")
-		b.WriteString("  exec sudo -n env PATH=\"$PATH\" HOME=\"${HOME:-}\" /bin/sh \"$0\" \"$@\"\n")
-		b.WriteString("fi\n")
+		b.WriteString("[ \"$(id -u)\" -eq 0 ] || { echo 'hideout: tun2socks cleanup requires the Hideout setup identity' >&2; exit 0; }\n")
 		b.WriteString("if [ -r /hideout/session/network/tun2socks.pid ]; then\n")
 		b.WriteString("  pid=$(sed -n '1p' /hideout/session/network/tun2socks.pid)\n")
 		b.WriteString("  if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; fi\n")

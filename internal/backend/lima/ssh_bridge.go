@@ -82,9 +82,16 @@ func normalizeGuestLoopbackTarget(address string) (string, string, error) {
 }
 
 func (b Backend) newSSHClient(ctx context.Context, instanceName string) (*ssh.Client, error) {
+	return b.newSSHClientForUser(ctx, instanceName, "")
+}
+
+func (b Backend) newSSHClientForUser(ctx context.Context, instanceName, user string) (*ssh.Client, error) {
 	cfg, err := readLimaSSHConfig(instanceName)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(user) != "" {
+		cfg.User = strings.TrimSpace(user)
 	}
 	clientConfig, err := cfg.clientConfig()
 	if err != nil {

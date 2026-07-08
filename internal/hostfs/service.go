@@ -7,8 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/hostfs/overlay"
 )
 
 const DefaultMaxReadBytes int64 = 1 << 20
@@ -21,6 +24,15 @@ var (
 type Service struct {
 	Policy       EffectivePolicy
 	MaxReadBytes int64
+	Overlay      *overlay.Store
+	Context      OverlayContext
+}
+
+type OverlayContext struct {
+	SessionID string
+	Profile   string
+	Backend   string
+	Privilege overlay.Privilege
 }
 
 type NodeInfo struct {
@@ -44,11 +56,36 @@ type DirEntry struct {
 	Mode string `json:"mode"`
 }
 
+type WriteRequest struct {
+	Op              Op
+	Path            string
+	DestinationPath string
+	Data            []byte
+	Offset          int64
+	Size            int64
+	Mode            string
+	UID             *int64
+	GID             *int64
+}
+
+type WriteResult struct {
+	OperationID string `json:"operationId"`
+	DecisionID  string `json:"decisionId"`
+	Staged      bool   `json:"staged"`
+	HostChanged bool   `json:"hostChanged"`
+}
+
 func NewService(policy EffectivePolicy) Service {
 	return Service{Policy: canonicalizePolicy(policy), MaxReadBytes: DefaultMaxReadBytes}
 }
 
 func (s Service) Stat(path string) (NodeInfo, error) {
+	if info, ok, err := s.overlayInfo(path); err != nil || ok {
+		if err != nil {
+			return NodeInfo{}, err
+		}
+		return info, nil
+	}
 	if s.syntheticDir(path) {
 		return syntheticDirInfo(), nil
 	}
@@ -76,6 +113,9 @@ func (s Service) Read(path string, offset, size int64) (ReadResult, error) {
 	}
 	if size == 0 || size > maxRead {
 		size = maxRead
+	}
+	if result, ok, err := s.overlayRead(path, offset, size); err != nil || ok {
+		return result, err
 	}
 	resolved, err := s.authorizePath(OpRead, path)
 	if err != nil {
@@ -143,11 +183,105 @@ func (s Service) List(path string) ([]DirEntry, error) {
 		})
 	}
 	out = appendMissingEntries(out, s.syntheticEntries(dir)...)
+	if s.Overlay != nil {
+		overlayEntries, err := s.Overlay.Entries(dir)
+		if err != nil {
+			return nil, err
+		}
+		out = mergeOverlayEntries(out, overlayEntries)
+	}
 	return out, nil
 }
 
 func (s Service) WriteUnsupported() error {
 	return ErrUnsupported
+}
+
+func (s Service) StageWrite(req WriteRequest) (WriteResult, error) {
+	if s.Overlay == nil {
+		return WriteResult{}, ErrUnsupported
+	}
+	decision, err := s.authorizeWritePath(req.Op, req.Path)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if req.DestinationPath != "" {
+		if _, err := s.authorizeWritePath(req.Op, req.DestinationPath); err != nil {
+			return WriteResult{}, err
+		}
+	}
+	stageReq := overlay.StageRequest{
+		SessionID:       s.Context.SessionID,
+		Profile:         s.Context.Profile,
+		Backend:         s.Context.Backend,
+		Operation:       opOperation(req.Op),
+		Path:            req.Path,
+		DestinationPath: req.DestinationPath,
+		GrantID:         decision.RuleID,
+		GrantSource:     string(decision.Source),
+		Data:            req.Data,
+		Offset:          req.Offset,
+		Size:            req.Size,
+		Mode:            req.Mode,
+		Privilege:       s.Context.Privilege,
+	}
+	if req.UID != nil {
+		stageReq.Owner = fmt.Sprintf("%d", *req.UID)
+	}
+	if req.GID != nil {
+		stageReq.Group = fmt.Sprintf("%d", *req.GID)
+	}
+	result, err := s.Overlay.Stage(stageReq)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	return WriteResult{
+		OperationID: result.Operation.ID,
+		DecisionID:  result.Decision.DecisionID,
+		Staged:      true,
+		HostChanged: false,
+	}, nil
+}
+
+func (s Service) overlayInfo(path string) (NodeInfo, bool, error) {
+	if s.Overlay == nil {
+		return NodeInfo{}, false, nil
+	}
+	view, ok, err := s.Overlay.View(path)
+	if err != nil || !ok {
+		return NodeInfo{}, ok, err
+	}
+	if view.Deleted {
+		return NodeInfo{}, true, ErrNotFound
+	}
+	return NodeInfo{Kind: view.Kind, Size: view.Size, Mode: view.Mode}, true, nil
+}
+
+func (s Service) overlayRead(path string, offset, size int64) (ReadResult, bool, error) {
+	if s.Overlay == nil {
+		return ReadResult{}, false, nil
+	}
+	view, ok, err := s.Overlay.View(path)
+	if err != nil || !ok {
+		return ReadResult{}, ok, err
+	}
+	if view.Deleted || view.Kind != "file" {
+		return ReadResult{}, true, ErrNotFound
+	}
+	if offset > int64(len(view.Data)) {
+		return ReadResult{Info: NodeInfo{Kind: "file", Size: int64(len(view.Data)), Mode: view.Mode}, EOF: true}, true, nil
+	}
+	end := offset + size
+	if end > int64(len(view.Data)) {
+		end = int64(len(view.Data))
+	}
+	data := append([]byte(nil), view.Data[offset:end]...)
+	return ReadResult{
+		Info:  NodeInfo{Kind: "file", Size: int64(len(view.Data)), Mode: view.Mode},
+		Data:  data,
+		Bytes: len(data),
+		EOF:   end >= int64(len(view.Data)),
+	}, true, nil
 }
 
 func (s Service) authorizePath(op Op, path string) (string, error) {
@@ -174,6 +308,38 @@ func (s Service) authorizePath(op Op, path string) (string, error) {
 		return "", ErrNotFound
 	}
 	return resolved, nil
+}
+
+func (s Service) authorizeWritePath(op Op, path string) (Decision, error) {
+	clean, err := cleanHostPath(path)
+	if err != nil {
+		return Decision{}, ErrNotFound
+	}
+	if pathInReservedRoots(clean, s.Policy.ReservedRoots) {
+		return Decision{}, ErrNotFound
+	}
+	cleanDecision := s.Policy.Decide(op, clean)
+	if cleanDecision.Effect == "deny" {
+		return cleanDecision, ErrNotFound
+	}
+	if info, err := os.Lstat(clean); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return Decision{}, ErrNotFound
+		}
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != clean {
+			resolvedDecision := s.Policy.Decide(op, resolved)
+			if resolvedDecision.Effect == "deny" || !resolvedDecision.Allowed {
+				return resolvedDecision, ErrNotFound
+			}
+			return resolvedDecision, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Decision{}, ErrNotFound
+	}
+	if !cleanDecision.Allowed {
+		return cleanDecision, ErrNotFound
+	}
+	return cleanDecision, nil
 }
 
 func (s Service) entryVisible(requestedChild, resolvedChild string, info os.FileInfo) bool {
@@ -371,6 +537,53 @@ func appendMissingEntries(entries []DirEntry, synthetic ...DirEntry) []DirEntry 
 		seen[entry.Name] = true
 	}
 	return entries
+}
+
+func mergeOverlayEntries(entries []DirEntry, overlayEntries []overlay.ViewEntry) []DirEntry {
+	byName := map[string]DirEntry{}
+	for _, entry := range entries {
+		byName[entry.Name] = entry
+	}
+	for _, entry := range overlayEntries {
+		if entry.Deleted {
+			delete(byName, entry.Name)
+			continue
+		}
+		byName[entry.Name] = DirEntry{Name: entry.Name, Kind: entry.Kind, Size: entry.Size, Mode: entry.Mode}
+	}
+	out := make([]DirEntry, 0, len(byName))
+	for _, entry := range byName {
+		out = append(out, entry)
+	}
+	slices.SortFunc(out, func(a, b DirEntry) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+func opOperation(op Op) string {
+	switch op {
+	case OpCreate:
+		return "create"
+	case OpWrite:
+		return "replace"
+	case OpAppend:
+		return "append"
+	case OpTruncate:
+		return "truncate"
+	case OpMkdir:
+		return "mkdir"
+	case OpDelete:
+		return "delete"
+	case OpRename:
+		return "rename"
+	case OpChmod:
+		return "chmod"
+	case OpChown:
+		return "chown"
+	default:
+		return string(op)
+	}
 }
 
 func isAncestorPath(parent, child string) bool {

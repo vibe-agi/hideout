@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/portbridge"
+	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
@@ -87,6 +88,18 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	if strings.Contains(cfg.Provision[0].Script, "rm -rf \"$profile_home\"") ||
 		strings.Contains(cfg.Provision[0].Script, "ln -s /hideout/profile/home") {
 		t.Fatalf("provision must not replace Lima login home and break SSH authorization: %s", cfg.Provision[0].Script)
+	}
+	for _, want := range []string{
+		"target_user='developer'",
+		"/root/.ssh/authorized_keys",
+		"PermitRootLogin prohibit-password",
+		"gpasswd -d \"$target_user\" sudo",
+		"/etc/sudoers.d/99-hideout-target-no-sudo",
+		"$target_user\" > /etc/sudoers.d/99-hideout-target-no-sudo",
+	} {
+		if !strings.Contains(cfg.Provision[0].Script, want) {
+			t.Fatalf("provision missing setup separation fragment %q:\n%s", want, cfg.Provision[0].Script)
+		}
 	}
 	if !strings.Contains(cfg.Provision[0].Script, "printf '%s\\n' 'devbox' > /etc/hostname") {
 		t.Fatalf("provision should set profile hostname: %s", cfg.Provision[0].Script)
@@ -561,6 +574,81 @@ func TestGuestBrokerEndpointUsesLimaHostAlias(t *testing.T) {
 	}
 }
 
+func TestRunProbesGuestPrivilegeBeforeTargetCommand(t *testing.T) {
+	statusEmitted := false
+	runner := &privilegeProbeRunner{statusEmitted: &statusEmitted}
+	session := &backend.Session{
+		ID:           "ses_1",
+		Backend:      "lima",
+		ConfigPath:   "/tmp/lima.yaml",
+		GuestWork:    "/workspace",
+		GuestHome:    "/home/hideout",
+		InstanceName: "hideout-test",
+		PrivilegeStatusSink: func(status privilege.Status) error {
+			statusEmitted = true
+			if status.Status != privilege.StatusEnforced {
+				t.Fatalf("status=%q want enforced: %+v", status.Status, status)
+			}
+			return nil
+		},
+	}
+	if err := (Backend{Runner: runner}).Run(context.Background(), session, []string{"echo", "ok"}, []string{"PATH=/usr/bin:/bin"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !statusEmitted {
+		t.Fatal("privilege status was not emitted")
+	}
+	if runner.targetBeforeStatus {
+		t.Fatal("target command ran before privilege status emission")
+	}
+}
+
+func TestRunReportsDegradedWhenTargetCanPasswordlessSudo(t *testing.T) {
+	runner := &privilegeProbeRunner{sudoSucceeds: true}
+	var got privilege.Status
+	session := &backend.Session{
+		ID:           "ses_1",
+		Backend:      "lima",
+		ConfigPath:   "/tmp/lima.yaml",
+		GuestWork:    "/workspace",
+		GuestHome:    "/home/hideout",
+		InstanceName: "hideout-test",
+		PrivilegeStatusSink: func(status privilege.Status) error {
+			got = status
+			return nil
+		},
+	}
+	if err := (Backend{Runner: runner}).Run(context.Background(), session, []string{"true"}, []string{"PATH=/usr/bin:/bin"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Status != privilege.StatusDegraded || !strings.Contains(got.Reason, "passwordless sudo") {
+		t.Fatalf("status=%+v want degraded passwordless sudo", got)
+	}
+}
+
+func TestRunReportsUnknownWhenPrivilegeProbeAmbiguous(t *testing.T) {
+	runner := &privilegeProbeRunner{uidOutput: "not-a-uid\n"}
+	var got privilege.Status
+	session := &backend.Session{
+		ID:           "ses_1",
+		Backend:      "lima",
+		ConfigPath:   "/tmp/lima.yaml",
+		GuestWork:    "/workspace",
+		GuestHome:    "/home/hideout",
+		InstanceName: "hideout-test",
+		PrivilegeStatusSink: func(status privilege.Status) error {
+			got = status
+			return nil
+		},
+	}
+	if err := (Backend{Runner: runner}).Run(context.Background(), session, []string{"true"}, []string{"PATH=/usr/bin:/bin"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Status != privilege.StatusUnknown {
+		t.Fatalf("status=%+v want unknown", got)
+	}
+}
+
 func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
@@ -627,6 +715,70 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 		if strings.Contains(hostEnv, "HTTP_PROXY=") || strings.Contains(hostEnv, "HIDEOUT_SECRET_") || strings.Contains(hostEnv, "SERVICE_TOKEN=") {
 			t.Fatalf("limactl host env leaked sensitive values: %s", hostEnv)
 		}
+	}
+}
+
+func TestRunUsesSetupIdentityForPrivilegedNetworkBootstrap(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.NetworkPrivilegedSetup = true
+	spec.PrivilegedSetupRequired = true
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
+	setup := &recordingSetupRunner{}
+	b := Backend{Runner: runner, SetupRunner: setup, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	runEnv := []string{
+		"HOME=/hideout/profile/home",
+		"PATH=/hideout/session/shims:/usr/bin",
+		"SERVICE_TOKEN=secret",
+		"HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1",
+	}
+	if err := b.Run(context.Background(), session, []string{"sh", "-c", "pwd"}, runEnv); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(setup.calls) != 2 {
+		t.Fatalf("setup calls=%+v", setup.calls)
+	}
+	if !setup.calls[0].check {
+		t.Fatalf("first setup call should prove setup identity: %+v", setup.calls)
+	}
+	gotNetwork := setup.calls[1]
+	if gotNetwork.workdir != GuestSessionDir+"/tmp" || !reflect.DeepEqual(gotNetwork.command, []string{GuestNetworkBootstrap}) {
+		t.Fatalf("network setup call=%+v", gotNetwork)
+	}
+	setupText := strings.Join(gotNetwork.env, "\n")
+	if strings.Contains(setupText, "SERVICE_TOKEN=") || strings.Contains(setupText, "HIDEOUT_BROKER_ENDPOINT=") {
+		t.Fatalf("network setup leaked target env: %s", setupText)
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("target runner calls=%+v", runner.calls)
+	}
+	if strings.Contains(strings.Join(runner.calls[1].args, "\x00"), GuestNetworkBootstrap) {
+		t.Fatalf("privileged network bootstrap must not use target shell: %+v", runner.calls)
+	}
+}
+
+func TestRunFailsClosedWhenSetupIdentityUnavailable(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.NetworkPrivilegedSetup = true
+	spec.PrivilegedSetupRequired = true
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
+	setup := &recordingSetupRunner{failCheck: true}
+	b := Backend{Runner: runner, SetupRunner: setup, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	err = b.Run(context.Background(), session, []string{"sh", "-c", "pwd"}, []string{"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin"})
+	if err == nil || !strings.Contains(err.Error(), "privileged setup identity is unavailable") {
+		t.Fatalf("expected setup identity fail-closed, got %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("setup identity failure should stop after start; calls=%+v", runner.calls)
 	}
 }
 
@@ -702,7 +854,8 @@ func TestRunStartsHostFSBeforeCommandCheckWhenEnabled(t *testing.T) {
 	spec.HostFSEnabled = true
 	spec.HostFSGrafts = []string{"/Users/alice/Downloads"}
 	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
-	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	setup := &recordingSetupRunner{}
+	b := Backend{Runner: runner, SetupRunner: setup, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -713,18 +866,24 @@ func TestRunStartsHostFSBeforeCommandCheckWhenEnabled(t *testing.T) {
 	if err := b.Run(context.Background(), session, []string{"sh", "-c", "pwd"}, []string{"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(runner.calls) != 6 {
+	if len(runner.calls) != 5 {
 		t.Fatalf("calls=%+v", runner.calls)
 	}
-	hostFSStart := strings.Join(runner.calls[3].args, "\x00")
+	if len(setup.calls) != 2 {
+		t.Fatalf("setup calls=%+v", setup.calls)
+	}
+	hostFSStart := strings.Join(setup.calls[1].command, "\x00")
 	if !strings.Contains(hostFSStart, "hideout-hostfsd") ||
 		!strings.Contains(hostFSStart, "/hideout/hostfs") ||
 		!strings.Contains(hostFSStart, "/Users/alice/Downloads") {
-		t.Fatalf("HostFS start command missing daemon or mountpoint: %v", runner.calls[3].args)
+		t.Fatalf("HostFS start command missing daemon or mountpoint: %v", setup.calls[1].command)
 	}
-	commandCheck := strings.Join(runner.calls[4].args, "\x00")
+	if setup.calls[1].workdir != session.GuestWork {
+		t.Fatalf("HostFS setup workdir=%q want %q", setup.calls[1].workdir, session.GuestWork)
+	}
+	commandCheck := strings.Join(runner.calls[3].args, "\x00")
 	if !strings.Contains(commandCheck, "hideout-command-check") {
-		t.Fatalf("command check should happen after HostFS start: %v", runner.calls[4].args)
+		t.Fatalf("command check should happen after HostFS start: %v", runner.calls[3].args)
 	}
 }
 
@@ -733,7 +892,8 @@ func TestRunFailsClosedWhenHostFSStartFails(t *testing.T) {
 	spec := testRunSpec(root)
 	spec.HostFSEnabled = true
 	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", failCall: 4}
-	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	setup := &recordingSetupRunner{failRun: true}
+	b := Backend{Runner: runner, SetupRunner: setup, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -742,8 +902,11 @@ func TestRunFailsClosedWhenHostFSStartFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "hostfs start") {
 		t.Fatalf("expected hostfs start failure, got %v", err)
 	}
-	if len(runner.calls) != 4 {
+	if len(runner.calls) != 3 {
 		t.Fatalf("HostFS start failure should stop before command check; calls=%+v", runner.calls)
+	}
+	if len(setup.calls) != 2 {
+		t.Fatalf("expected setup check + hostfs attempt, calls=%+v", setup.calls)
 	}
 }
 
@@ -751,18 +914,22 @@ func TestHostFSStartScriptFailsClosedOnMissingPrerequisites(t *testing.T) {
 	script := HostFSStartScript([]string{"/Users/alice/Downloads"})
 	for _, want := range []string{
 		"fusermount3 -u /hideout/hostfs",
-		"sudo -n umount /hideout/hostfs",
+		"setup identity cannot create /hideout/hostfs",
 		"existing HostFS mount could not be reset",
 		"[ ! -e /dev/fuse ]",
 		"HostFS requires /dev/fuse",
 		"[ ! -x /hideout/session/shims/hideout-hostfsd ]",
 		"hideout-hostfsd is missing",
 		"exit 70",
-		"sudo -n mkdir -p \"$(dirname '/Users/alice/Downloads')\" 2>/dev/null || true",
+		"mkdir -p \"$(dirname '/Users/alice/Downloads')\" 2>/dev/null || true",
+		"nohup env",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("HostFS start script missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, "sudo -n") {
+		t.Fatalf("HostFS setup script must not fall back to target sudo:\n%s", script)
 	}
 }
 
@@ -990,12 +1157,15 @@ func TestCleanupDeletesInstanceEvenWhenNetworkCleanupFails(t *testing.T) {
 
 func TestCleanupUsesFreshContextAfterRunCancellation(t *testing.T) {
 	runner := &cleanupContextRunner{lookPath: "/opt/homebrew/bin/limactl"}
-	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	setup := &recordingSetupRunner{}
+	b := Backend{Runner: runner, SetupRunner: setup, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session := &backend.Session{
 		InstanceName:            "hideout-canceled-session",
 		GuestWork:               "/workspace",
 		HostFSEnabled:           true,
+		PrivilegedSetupRequired: true,
 		NetworkCleanupGuestPath: GuestSessionDir + "/network/cleanup.sh",
+		NetworkPrivilegedSetup:  false,
 		Env:                     []string{"PATH=/usr/bin:/bin"},
 		PreserveInstance:        false,
 	}
@@ -1004,10 +1174,13 @@ func TestCleanupUsesFreshContextAfterRunCancellation(t *testing.T) {
 	if err := b.Cleanup(ctx, session); err != nil {
 		t.Fatalf("Cleanup with canceled run context: %v", err)
 	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("cleanup should run hostfs cleanup, network cleanup, and delete: %+v", runner.calls)
+	if len(setup.calls) != 2 {
+		t.Fatalf("cleanup should run hostfs cleanup through setup identity: %+v", setup.calls)
 	}
-	if !reflect.DeepEqual(runner.calls[2].args, []string{"delete", "-f", session.InstanceName}) {
+	if len(runner.calls) != 2 {
+		t.Fatalf("cleanup should run network cleanup and delete through lima runner: %+v", runner.calls)
+	}
+	if !reflect.DeepEqual(runner.calls[1].args, []string{"delete", "-f", session.InstanceName}) {
 		t.Fatalf("cleanup must delete session instance after cancellation: %+v", runner.calls)
 	}
 }
@@ -1174,6 +1347,14 @@ type recordedCall struct {
 	env  []string
 }
 
+type recordedSetupCall struct {
+	instance string
+	workdir  string
+	env      []string
+	command  []string
+	check    bool
+}
+
 func (r *recordingRunner) LookPath(string) (string, error) {
 	return r.lookPath, nil
 }
@@ -1190,6 +1371,82 @@ func (r *recordingRunner) Run(_ context.Context, name string, args []string, env
 		_, _ = io.WriteString(stdout, r.listOutput)
 	}
 	return nil
+}
+
+type recordingSetupRunner struct {
+	calls     []recordedSetupCall
+	failCheck bool
+	failRun   bool
+}
+
+func (r *recordingSetupRunner) Check(_ context.Context, instanceName string) error {
+	r.calls = append(r.calls, recordedSetupCall{instance: instanceName, check: true})
+	if r.failCheck {
+		return errors.New("setup identity unavailable")
+	}
+	return nil
+}
+
+func (r *recordingSetupRunner) Run(_ context.Context, instanceName, workdir string, env []string, command []string, _ io.Reader, _ io.Writer, _ io.Writer) error {
+	r.calls = append(r.calls, recordedSetupCall{
+		instance: instanceName,
+		workdir:  workdir,
+		env:      append([]string(nil), env...),
+		command:  append([]string(nil), command...),
+	})
+	if r.failRun {
+		return errors.New("setup run failed")
+	}
+	return nil
+}
+
+type privilegeProbeRunner struct {
+	uidOutput          string
+	sudoSucceeds       bool
+	statusEmitted      *bool
+	targetBeforeStatus bool
+}
+
+func (r *privilegeProbeRunner) LookPath(string) (string, error) {
+	return "/opt/homebrew/bin/limactl", nil
+}
+
+func (r *privilegeProbeRunner) Run(_ context.Context, _ string, args []string, _ []string, _ io.Reader, stdout, stderr io.Writer) error {
+	joined := strings.Join(args, " ")
+	switch {
+	case len(args) >= 1 && args[0] == "start":
+		return nil
+	case strings.Contains(joined, "id -u"):
+		out := r.uidOutput
+		if out == "" {
+			out = "1000\n"
+		}
+		_, _ = io.WriteString(stdout, out)
+		return nil
+	case strings.Contains(joined, "/usr/bin/sudo -n true"):
+		if r.sudoSucceeds {
+			return nil
+		}
+		_, _ = io.WriteString(stderr, "sudo: a password is required\n")
+		return errors.New("exit status 1")
+	case strings.Contains(joined, "sudo -n true"):
+		if r.sudoSucceeds {
+			return nil
+		}
+		_, _ = io.WriteString(stderr, "sudo: a password is required\n")
+		return errors.New("exit status 1")
+	case strings.Contains(joined, GuestBootstrapPath):
+		return nil
+	case strings.Contains(joined, "command -v"):
+		return nil
+	case strings.Contains(joined, " echo ok") || strings.HasSuffix(joined, " true"):
+		if r.statusEmitted != nil && !*r.statusEmitted {
+			r.targetBeforeStatus = true
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 type cleanupContextRunner struct {

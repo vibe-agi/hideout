@@ -231,6 +231,44 @@ func TestEventBusBuildsExportAndCleanupPayloadsFromOperationEvents(t *testing.T)
 	}
 }
 
+func TestEventBusBuildsHostFSWritePayloadsWithoutClaimTokens(t *testing.T) {
+	bus := newEventBus()
+	sub := bus.subscribe(8)
+	statuses := []string{"pending", "claimed", "applied", "discarded", "expired", "conflict"}
+	var ev liveconsole.Event
+	for i, status := range statuses {
+		bus.OperationEvent(liveconsole.KindHostFSWrite, status, map[string]any{
+			"operationId":     "hfwop_123",
+			"decisionId":      "hfwdec_123",
+			"status":          status,
+			"operation":       "replace",
+			"path":            "/Users/alice/file.txt",
+			"privilegeStatus": "enforced",
+			"claimToken":      "claim_0123456789abcdef",
+		})
+		ev = <-sub.ch
+		if ev.Kind != liveconsole.KindHostFSWrite || ev.Payload.DecisionID != "hfwdec_123" || ev.Payload.OperationID != "hfwop_123" || ev.Payload.Status != status {
+			t.Fatalf("HostFS write payload mismatch at %d: %+v", i, ev)
+		}
+		assertValidDaemonEvent(t, ev)
+		data, _ := json.Marshal(ev)
+		if strings.Contains(string(data), "claim_0123456789abcdef") {
+			t.Fatalf("HostFS write event leaked claim token: %s", data)
+		}
+	}
+	state := liveconsole.NewState(liveconsole.BuildSeed(liveconsole.SeedInput{StreamHealth: liveconsole.HealthLive}))
+	result := liveconsole.Apply(&state, liveconsole.Event{
+		Version: ev.Version,
+		Kind:    ev.Kind,
+		Seq:     ev.Seq,
+		Entity:  ev.Entity,
+		Payload: ev.Payload,
+	})
+	if result.Status != liveconsole.ResultApplied || len(state.HostFSWrites) != 1 || state.HostFSWrites[0].DecisionID != "hfwdec_123" {
+		t.Fatalf("HostFS write reducer result=%+v state=%+v", result, state.HostFSWrites)
+	}
+}
+
 // T024: the subscribe endpoint is a separate surface outside /api/v1/ with the
 // same auth.
 func TestEventsEndpointSeparateSurfaceAndAuth(t *testing.T) {

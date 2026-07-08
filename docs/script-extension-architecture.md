@@ -18,10 +18,14 @@ and is subordinate to [privacy-run-design.md](privacy-run-design.md).
 Status:
 
 ```text
-Script runtime for command policy and audit redaction: Required Phase 1.
-Adapter ABI beyond command.decide and audit.redact: Design-ready.
+Script runtime for command policy, command adapters, and audit redaction:
+Implemented.
+Command adapter ABI: Implemented for local profile-scoped artifacts and the
+built-in root-sensitive intent adapter. Supported outcomes are `deny`,
+`simulate`, `rewriteGuest`, and non-applied `proposeCapability`.
 Safe context queries: Design-ready. First expressiveness increment together
-with raw decision context and the `simulate` and `rewrite-guest` outcomes.
+with bounded factual queries beyond the command context supplied to 008
+adapters.
 Endpoint exposure proposal builders: Later. Each builder is gated by the
 corresponding direction-specific exposure primitive being promoted to a product
 path.
@@ -175,18 +179,22 @@ Command adapters follow the same split:
 
 ```text
 Binding
-  Declares the adapter, allowed outcomes, allowed capabilities, and allowed
-  providers for one guest command symbol.
+  Declares the local adapter artifact, digest, command symbols, entrypoint, and
+  allowed proposal capabilities for one profile.
 
 Adapter
-  Reads the decision context, performs bounded factual queries, and proposes an
-  outcome. It may simulate, deny, ask, `rewrite-guest`, or request a declared
-  capability.
+  Reads the decision context and proposes an outcome. In 008 it may deny,
+  simulate, `rewriteGuest`, or request a declared non-applied capability
+  proposal. It does not perform bounded factual queries yet.
 
 Provider
-  Go-owned executor that rebuilds host-side effects from validated structured
-  resources. Bundles and recipes may reference providers but must not ship
-  provider code.
+  Go-owned executor that rebuilds side effects from validated structured
+  resources. 008 has no adapter-applied privileged provider; proposals stay
+  non-applied until a specific Go-owned Manager plan/apply provider exists.
+  009 added privilege status and privileged setup evidence, not script-applied
+  authority. 010 adds HostFS write plan/claim/apply while keeping all actual
+  host mutation in Go-owned Manager/Core; JavaScript can only propose or
+  classify capability intent.
 ```
 
 Adapters must not pass through target argv to a host provider. Host argv, file
@@ -204,19 +212,18 @@ deny
   No execution. Return a deterministic failure.
 
 ask
-  No execution until an approved prompt exists. Without a prompt channel, fail
-  closed as deny.
+  Later. Without a prompt channel, fail closed as deny.
 
 simulate
   No execution. Return bounded stdout, stderr, and exit code.
 
-rewrite-guest
+rewriteGuest
   Guest execution only. Rewrite command name, argv, or restricted guest env for a
-  real guest binary. Never target a host command.
+  real guest binary. Never target a host command or a root-sensitive command.
 
-invoke-capability
-  Host or managed capability execution. Request a declared capability and
-  provider using structured resources; Go validates and executes it.
+proposeCapability
+  Request a declared capability and provider-specific intent using structured
+  resources. 008 records the proposal but never applies it.
 ```
 
 Raw argv is input to the adapter's parser. It is not output authority. If an

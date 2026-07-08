@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/command-adapter.schema.json",
+  "title": "Hideout Command Adapter Outcome",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/deny"
+    },
+    {
+      "$ref": "#/$defs/simulate"
+    },
+    {
+      "$ref": "#/$defs/rewriteGuest"
+    },
+    {
+      "$ref": "#/$defs/proposeCapability"
+    }
+  ],
+  "$defs": {
+    "audit": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "deny": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "reason"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "deny"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/$defs/intent"
+        },
+        "audit": {
+          "$ref": "#/$defs/audit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "simulate": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "reason",
+        "exitCode"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "simulate"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "audit": {
+          "$ref": "#/$defs/audit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rewriteGuest": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "reason",
+        "argv"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "rewriteGuest"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "audit": {
+          "$ref": "#/$defs/audit"
+        }
+      },
+      "additionalProperties": false
+    },
+    "proposeCapability": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "reason",
+        "capability",
+        "intent"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "proposeCapability"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "capability": {
+          "const": "guest.privilege.plan"
+        },
+        "intent": {
+          "$ref": "#/$defs/intent"
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "audit": {
+          "$ref": "#/$defs/audit"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

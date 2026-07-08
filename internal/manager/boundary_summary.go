@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -16,7 +17,17 @@ type BoundarySummary struct {
 	Version      string                      `json:"version"`
 	Evidence     string                      `json:"evidence"`
 	AuditPath    string                      `json:"auditPath,omitempty"`
+	Privilege    *BoundaryPrivilegeSummary   `json:"privilege,omitempty"`
 	Capabilities []BoundaryCapabilitySummary `json:"capabilities"`
+}
+
+type BoundaryPrivilegeSummary struct {
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
+	Guidance  string `json:"guidance,omitempty"`
+	TargetUID string `json:"targetUid,omitempty"`
+	SetupKind string `json:"setupKind,omitempty"`
+	NonClaim  string `json:"nonClaim,omitempty"`
 }
 
 type BoundaryCapabilitySummary struct {
@@ -60,6 +71,7 @@ func SummarizeRunBoundary(auditPath string) BoundarySummary {
 type boundarySummaryBuilder struct {
 	auditPath    string
 	evidence     string
+	privilege    *BoundaryPrivilegeSummary
 	capabilities map[string]*BoundaryCapabilitySummary
 }
 
@@ -71,10 +83,15 @@ func newBoundarySummary(auditPath string) *boundarySummaryBuilder {
 	}
 	builder.capability("hostfs")
 	builder.capability("host.open")
+	builder.capability("command.adapter")
 	return builder
 }
 
 func (b *boundarySummaryBuilder) observe(event audit.Event) {
+	if event.Action == "guest.privilege.status" {
+		b.privilege = boundaryPrivilege(event.Details)
+		return
+	}
 	capability := boundaryCapability(event.Action)
 	if capability == "" {
 		return
@@ -131,7 +148,26 @@ func (b *boundarySummaryBuilder) snapshot() BoundarySummary {
 		Version:      BoundarySummaryVersion,
 		Evidence:     b.evidence,
 		AuditPath:    b.auditPath,
+		Privilege:    b.privilege,
 		Capabilities: capabilities,
+	}
+}
+
+func boundaryPrivilege(details map[string]any) *BoundaryPrivilegeSummary {
+	if details == nil {
+		return nil
+	}
+	status := stringDetail(details, "status")
+	if status == "" {
+		return nil
+	}
+	return &BoundaryPrivilegeSummary{
+		Status:    status,
+		Reason:    stringDetail(details, "reason"),
+		Guidance:  stringDetail(details, "guidance"),
+		TargetUID: detailString(details, "target.uid"),
+		SetupKind: stringDetail(details, "setup.kind"),
+		NonClaim:  stringDetail(details, "nonClaim"),
 	}
 }
 
@@ -141,6 +177,10 @@ func boundaryCapability(action string) string {
 		return "hostfs"
 	case action == "host.open":
 		return "host.open"
+	case action == "command.adapter":
+		return "command.adapter"
+	case action == "target.root_attempt":
+		return "command.adapter"
 	case action == "preview.open":
 		return "preview.open"
 	case strings.HasPrefix(action, "endpoint.expose."):
@@ -197,4 +237,24 @@ func stringDetail(details map[string]any, key string) string {
 		return ""
 	}
 	return out
+}
+
+func detailString(details map[string]any, key string) string {
+	value, ok := details[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		if v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strings.TrimSuffix(strings.TrimSuffix(strconv.FormatFloat(v, 'f', 3, 64), "0"), ".")
+	case int:
+		return strconv.Itoa(v)
+	default:
+		return ""
+	}
 }

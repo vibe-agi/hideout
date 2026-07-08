@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
+	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -1080,6 +1082,91 @@ func TestCoreStartRunDataPlaneOwnsBrokerShimsHostFSAndSessionStartAudit(t *testi
 	}
 }
 
+func TestCoreStartRunDataPlaneWiresHostFSOverlayStore(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	hostFile := filepath.Join(t.TempDir(), "write.txt")
+	if err := os.WriteFile(hostFile, []byte("before\n"), 0o600); err != nil {
+		t.Fatalf("write host file: %v", err)
+	}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspace,
+		Command:     []string{"echo", "hi"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	runSession, err := core.BeginRunSession(plan, RunEnvironment{}, RunSessionOptions{})
+	if err != nil {
+		t.Fatalf("BeginRunSession: %v", err)
+	}
+	runSession, err = core.OpenRunSessionAudit(runSession, RunAuditOptions{})
+	if err != nil {
+		t.Fatalf("OpenRunSessionAudit: %v", err)
+	}
+	runNetwork, err := core.PrepareRunNetwork(runSession, RunNetworkOptions{})
+	if err != nil {
+		t.Fatalf("PrepareRunNetwork: %v", err)
+	}
+	dataPlane, err := core.StartRunDataPlane(context.Background(), runSession, runNetwork, RunDataPlaneOptions{
+		HostFSRun: hostfs.Config{Grants: []hostfs.Rule{{
+			HostPath: hostFile,
+			Scope:    hostfs.ScopeExactFile,
+			Overlay:  true,
+			Ops:      []hostfs.Op{hostfs.OpWrite, hostfs.OpCreate, hostfs.OpAppend, hostfs.OpTruncate},
+			Reason:   "test overlay grant",
+		}}},
+		Opener: broker.NoopOpener{},
+	})
+	if err != nil {
+		t.Fatalf("StartRunDataPlane: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := core.CloseRunDataPlane(dataPlane); err != nil {
+			t.Fatalf("CloseRunDataPlane: %v", err)
+		}
+		if _, err := core.CloseRunSession(runSession); err != nil {
+			t.Fatalf("CloseRunSession: %v", err)
+		}
+	})
+	reqID, err := broker.NewRequestID()
+	if err != nil {
+		t.Fatalf("NewRequestID: %v", err)
+	}
+	resp := broker.ClientOpenEndpoint(context.Background(), dataPlane.BrokerGuestEndpoint, broker.Request{
+		ID:              reqID,
+		SessionID:       runSession.Layout.ID,
+		CapabilityToken: envValueForManagerTest(dataPlane.Env, broker.EnvToken),
+		Subject:         "hostfs:daemon",
+		Route:           "host-broker",
+		Action:          "host.fs.write.replace",
+		Args: map[string]any{
+			"path":       hostFile,
+			"dataBase64": base64.StdEncoding.EncodeToString([]byte("after\n")),
+		},
+	})
+	if resp.Status != "ok" || resp.Data["staged"] != true {
+		t.Fatalf("HostFS overlay write was not staged: %+v", resp)
+	}
+	hostData, err := os.ReadFile(hostFile)
+	if err != nil {
+		t.Fatalf("read host file: %v", err)
+	}
+	if got := string(hostData); got != "before\n" {
+		t.Fatalf("overlay write mutated host before apply: %q", got)
+	}
+	status, err := core.HostFSWriteStatus(HostFSWriteStatusRequest{Session: runSession.Layout.ID})
+	if err != nil {
+		t.Fatalf("HostFSWriteStatus: %v", err)
+	}
+	if len(status.Pending) != 1 || status.Pending[0].Path != hostFile || status.Pending[0].Operation != "replace" {
+		t.Fatalf("pending HostFS write mismatch: %+v", status.Pending)
+	}
+}
+
 func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
@@ -1399,6 +1486,167 @@ func TestCoreApplyRunExposesPreviewOpenHostToGuestEndpoint(t *testing.T) {
 	for _, leaked := range []string{targetAddr, bridgeAddr, openerURLs[0]} {
 		if leaked != "" && strings.Contains(auditText, leaked) {
 			t.Fatalf("endpoint audit leaked %q:\n%s", leaked, auditText)
+		}
+	}
+}
+
+func TestCoreApplyRunEmitsGuestPrivilegeStatusOnce(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	fake := &applyRunFakeBackend{
+		runFunc: func(session *backend.Session) error {
+			if session.PrivilegeStatusSink == nil {
+				return errors.New("missing privilege status sink")
+			}
+			status, err := privilege.Classify(privilege.ClassificationInput{
+				Profile: "default",
+				Backend: "native",
+				Target: privilege.TargetIdentity{
+					User:                  "hideout",
+					UID:                   privilege.Int(1000),
+					SudoN:                 privilege.CheckFailed(privilege.CheckTargetSudoN, "exit 1"),
+					AbsoluteSudoN:         privilege.CheckFailed(privilege.CheckTargetAbsoluteSudo, "exit 1"),
+					PasswordlessSudoKnown: true,
+				},
+				Setup: privilege.SetupIdentity{Kind: privilege.SetupNoneRequired},
+			})
+			if err != nil {
+				return err
+			}
+			return session.PrivilegeStatusSink(status)
+		},
+	}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspace,
+		Ephemeral:   true,
+		Command:     []string{"tool"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:            fake,
+		RequestedBackend:   "native",
+		AllowWeakIsolation: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRun: %v", err)
+	}
+	auditData, err := os.ReadFile(result.AuditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	auditText := string(auditData)
+	if got := strings.Count(auditText, `"action":"guest.privilege.status"`); got != 1 {
+		t.Fatalf("guest privilege status event count=%d want 1:\n%s", got, auditText)
+	}
+	for _, want := range []string{
+		`"status":"enforced"`,
+		`"target.uid":1000`,
+		`"setup.kind":"none-required"`,
+	} {
+		if !strings.Contains(auditText, want) {
+			t.Fatalf("guest privilege audit missing %q:\n%s", want, auditText)
+		}
+	}
+	if result.BoundarySummary == nil || result.BoundarySummary.Privilege == nil {
+		t.Fatalf("boundary summary missing privilege status: %+v", result.BoundarySummary)
+	}
+	if result.BoundarySummary.Privilege.Status != "enforced" ||
+		result.BoundarySummary.Privilege.TargetUID != "1000" ||
+		result.BoundarySummary.Privilege.SetupKind != "none-required" {
+		t.Fatalf("boundary privilege mismatch: %+v", result.BoundarySummary.Privilege)
+	}
+	overview, err := core.Overview(context.Background())
+	if err != nil {
+		t.Fatalf("Overview: %v", err)
+	}
+	var found *BoundaryPrivilegeSummary
+	for _, session := range overview.Sessions {
+		if session.ID == result.SessionID {
+			found = session.GuestPrivilege
+			break
+		}
+	}
+	if found == nil || found.Status != "enforced" || found.TargetUID != "1000" {
+		t.Fatalf("overview missing guest privilege summary: %+v", overview.Sessions)
+	}
+}
+
+func TestCoreApplyRunEmitsPrivilegedSetupEvents(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	fake := &applyRunFakeBackend{
+		runFunc: func(session *backend.Session) error {
+			if session.PrivilegedSetupEventSink == nil {
+				return errors.New("missing privileged setup event sink")
+			}
+			setup := privilege.SetupIdentity{
+				Kind:               privilege.SetupRootControlSSH,
+				Available:          true,
+				SeparateFromTarget: true,
+				CredentialLocation: "rootControlSSHConfig=/tmp/secret",
+				Proof:              "root-control-ssh",
+			}
+			if err := session.PrivilegedSetupEventSink(backend.PrivilegedSetupEvent{
+				Action:   privilege.ActionPrivilegedSetup,
+				Category: "network",
+				Status:   "succeeded",
+				Setup:    setup,
+				Reason:   "setupCredential=raw-secret completed",
+			}); err != nil {
+				return err
+			}
+			return session.PrivilegedSetupEventSink(backend.PrivilegedSetupEvent{
+				Action:   privilege.ActionPrivilegedCleanup,
+				Category: "network",
+				Status:   "succeeded",
+				Setup:    setup,
+				Reason:   "cleanup completed",
+			})
+		},
+	}
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default",
+		Backend:     "native",
+		Workspace:   workspace,
+		Ephemeral:   true,
+		Command:     []string{"tool"},
+	})
+	if err != nil {
+		t.Fatalf("PlanRun: %v", err)
+	}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend:            fake,
+		RequestedBackend:   "native",
+		AllowWeakIsolation: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRun: %v", err)
+	}
+	auditData, err := os.ReadFile(result.AuditPath)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	auditText := string(auditData)
+	for _, want := range []string{
+		`"action":"hideout.privileged_setup"`,
+		`"action":"hideout.privileged_cleanup"`,
+		`"category":"network"`,
+		`"setupIdentityKind":"root-control-ssh"`,
+		`"separateFromTarget":true`,
+	} {
+		if !strings.Contains(auditText, want) {
+			t.Fatalf("privileged setup audit missing %q:\n%s", want, auditText)
+		}
+	}
+	for _, leaked := range []string{"raw-secret", "/tmp/secret", "rootControlSSHConfig"} {
+		if strings.Contains(auditText, leaked) {
+			t.Fatalf("privileged setup audit leaked %q:\n%s", leaked, auditText)
 		}
 	}
 }
@@ -1752,6 +2000,15 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 				"endpoint":         "127.0.0.1:49152",
 			},
 		},
+		{
+			Action:   "target.root_attempt",
+			Decision: "deny",
+			Details: map[string]any{
+				"command":          "sudo",
+				"separationStatus": "degraded",
+				"nonClaim":         "Hideout does not claim guest-root containment for this run because privilege separation is degraded.",
+			},
+		},
 	}
 	for _, event := range events {
 		if err := aw.Emit(event); err != nil {
@@ -1781,6 +2038,10 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	if portBridgeBoundary.Allowed != 1 || portBridgeBoundary.Owner != "preview.open" ||
 		portBridgeBoundary.Lifetime != "run" || portBridgeBoundary.EndpointCategory != "host-loopback" {
 		t.Fatalf("portbridge boundary shape mismatch: %+v", portBridgeBoundary)
+	}
+	commandAdapterBoundary := boundarySummaryCapability(t, summary, "command.adapter")
+	if commandAdapterBoundary.Denied != 1 {
+		t.Fatalf("target root attempt should count under command.adapter: %+v", commandAdapterBoundary)
 	}
 	summaryData, err := json.Marshal(summary)
 	if err != nil {
@@ -2738,6 +2999,16 @@ func containsEnvPrefixManagerTest(env []string, prefix string) bool {
 	return false
 }
 
+func envValueForManagerTest(env []string, key string) string {
+	prefix := key + "="
+	for _, value := range env {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimPrefix(value, prefix)
+		}
+	}
+	return ""
+}
+
 func startManagerEchoServer(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -2890,6 +3161,10 @@ func (b *applyRunFakeBackend) Prepare(_ context.Context, spec backend.RunSpec) (
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
 		InstanceName:              spec.InstanceName,
 		PreserveInstance:          spec.PreserveInstance,
+		NetworkPrivilegedSetup:    spec.NetworkPrivilegedSetup,
+		PrivilegedSetupRequired:   spec.PrivilegedSetupRequired,
+		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
+		PrivilegedSetupEventSink:  spec.PrivilegedSetupEventSink,
 	}, nil
 }
 

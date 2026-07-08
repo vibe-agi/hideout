@@ -19,6 +19,7 @@ func TestCleanupEphemeralRemovesSensitiveSessionStateAndKeepsAudit(t *testing.T)
 	mustWrite(t, filepath.Join(dir, "network-plan.json"), "{}")
 	mustWrite(t, filepath.Join(dir, "network", "bootstrap.sh"), "#!/bin/sh")
 	mustWrite(t, filepath.Join(dir, "network", "proxy.url"), "socks5://user:pass@127.0.0.1:1080")
+	mustWrite(t, filepath.Join(dir, "hostfs-overlay", "objects", "hfwobj_test"), "payload")
 	mustWrite(t, filepath.Join(dir, "audit.jsonl"), "{}\n")
 
 	result, err := CleanupEphemeral(root, "", false)
@@ -41,6 +42,9 @@ func TestCleanupEphemeralRemovesSensitiveSessionStateAndKeepsAudit(t *testing.T)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be removed; err=%v", path, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hostfs-overlay", "objects", "hfwobj_test")); err != nil {
+		t.Fatalf("pending HostFS overlay object should be kept until terminal apply/discard/timeout cleanup: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "audit.jsonl")); err != nil {
 		t.Fatalf("audit should be kept: %v", err)

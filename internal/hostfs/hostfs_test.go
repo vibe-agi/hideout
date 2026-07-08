@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	overlaypkg "github.com/vibe-agi/hideout/internal/hostfs/overlay"
 )
 
 func TestBuildComposesProfileEnvironmentAndRunGrants(t *testing.T) {
@@ -251,8 +253,122 @@ func TestWriteClassGrantFailsValidation(t *testing.T) {
 	rule := readGrant("/Users/alice/Downloads/file.txt", ScopeExactFile, "write")
 	rule.Ops = []Op{OpWrite}
 	_, err := Build(BuildInput{Profile: Config{Grants: []Rule{rule}}})
-	if err == nil || !strings.Contains(err.Error(), "write-class") {
+	if err == nil || !strings.Contains(err.Error(), "explicit overlay grant") {
 		t.Fatalf("expected write-class validation failure, got %v", err)
+	}
+}
+
+func TestOverlayGrantRequiredForWriteStaging(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(path, []byte("lower"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := Build(BuildInput{Profile: Config{Grants: []Rule{readGrant(path, ScopeExactFile, "read only")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := overlaypkg.NewStore(filepath.Join(root, ".overlay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(policy)
+	service.Overlay = store
+	if _, err := service.StageWrite(WriteRequest{Op: OpWrite, Path: path, Data: []byte("staged")}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("read grant should not permit overlay write, got %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "lower" {
+		t.Fatalf("lower host file changed or unreadable: %q err=%v", got, err)
+	}
+}
+
+func TestOverlayGrantDoesNotGrantLowerReadBeforeStage(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(path, []byte("lower-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := Build(BuildInput{Profile: Config{Grants: []Rule{withRuleID(overlayGrant(path, ScopeExactFile, "operator write"), "hfs_overlay")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := overlaypkg.NewStore(filepath.Join(root, ".overlay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(policy)
+	service.Overlay = store
+	if _, err := service.Read(path, 0, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("overlay grant must not grant lower read before stage, got %v", err)
+	}
+	if _, err := service.StageWrite(WriteRequest{Op: OpWrite, Path: path, Data: []byte("staged")}); err != nil {
+		t.Fatalf("StageWrite: %v", err)
+	}
+	result, err := service.Read(path, 0, 0)
+	if err != nil {
+		t.Fatalf("overlay read after stage: %v", err)
+	}
+	if got := ReadResultDataString(result); got != "staged" {
+		t.Fatalf("overlay read=%q want staged", got)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "lower-secret" {
+		t.Fatalf("lower host file changed or unreadable: %q err=%v", got, err)
+	}
+}
+
+func TestStageWriteFailsClosedForDenyReservedAndSymlink(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, ".hideout")
+	target := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(target, []byte("lower"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	store, err := overlaypkg.NewStore(filepath.Join(root, ".overlay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := Build(BuildInput{
+		Profile: Config{
+			Grants: []Rule{
+				withRuleID(overlayGrant(target, ScopeExactFile, "operator write"), "hfs_overlay_target"),
+				withRuleID(overlayGrant(link, ScopeExactFile, "operator write"), "hfs_overlay_link"),
+			},
+			Deny: []Rule{{
+				ID:       "hfs_deny",
+				HostPath: target,
+				Ops:      []Op{OpWrite},
+				Scope:    ScopeExactFile,
+				Reason:   "deny target",
+			}},
+		},
+		StoreRoot: storeRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(policy)
+	service.Overlay = store
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{name: "deny rule", path: target},
+		{name: "reserved root", path: filepath.Join(storeRoot, "sessions", "x")},
+		{name: "unsafe symlink", path: link},
+		{name: "ungranted outside", path: filepath.Join(filepath.Dir(root), "outside.txt")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := service.StageWrite(WriteRequest{Op: OpWrite, Path: tt.path, Data: []byte("staged")}); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("StageWrite should fail closed, got %v", err)
+			}
+		})
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "lower" {
+		t.Fatalf("lower host file changed or unreadable: %q err=%v", got, err)
 	}
 }
 
@@ -662,6 +778,16 @@ func readGrant(path string, scope Scope, reason string) Rule {
 	return Rule{
 		HostPath: path,
 		Ops:      []Op{OpRead},
+		Scope:    scope,
+		Reason:   reason,
+	}
+}
+
+func overlayGrant(path string, scope Scope, reason string) Rule {
+	return Rule{
+		HostPath: path,
+		Ops:      append([]Op(nil), writeOps...),
+		Overlay:  true,
 		Scope:    scope,
 		Reason:   reason,
 	}

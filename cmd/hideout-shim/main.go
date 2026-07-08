@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/broker"
@@ -21,7 +24,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
 		return 2
 	}
-	normalized, err := cmdproxy.NormalizeHostOpenCommand(command, args, mustGetwd())
+	normalized, err := normalizeInvocation(command, args, mustGetwd())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
 		return 2
@@ -55,6 +58,9 @@ func run() int {
 		Action:          normalized.Action,
 		Args:            normalized.Payload,
 	})
+	if resp.Status == "rewrite-guest" {
+		return runRewrite(resp)
+	}
 	if resp.Stdout != "" {
 		fmt.Fprint(os.Stdout, resp.Stdout)
 	}
@@ -62,6 +68,86 @@ func run() int {
 		fmt.Fprintln(os.Stderr, resp.Stderr)
 	}
 	return resp.ExitCode
+}
+
+func runRewrite(resp broker.Response) int {
+	argv, ok := rewriteArgv(resp.Data["rewriteArgv"])
+	if !ok || len(argv) == 0 {
+		fmt.Fprintln(os.Stderr, "hideout-shim: invalid rewrite response")
+		return 69
+	}
+	path, err := rewriteCommandPath(argv[0], os.Getenv("HIDEOUT_COMMAND_PROXY_SHIM_DIR"), os.Getenv("PATH"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hideout-shim: rewrite failed: %v\n", err)
+		return 127
+	}
+	cmd := exec.Command(path, argv[1:]...)
+	if cwd, ok := resp.Data["rewriteCwd"].(string); ok && cwd != "" {
+		cmd.Dir = cwd
+	}
+	cmd.Env = append(os.Environ(), "HIDEOUT_COMMAND_PROXY_ACTIVE=1")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "hideout-shim: rewrite failed: %v\n", err)
+		return 127
+	}
+	return 0
+}
+
+func rewriteCommandPath(name, shimDir, pathEnv string) (string, error) {
+	if filepath.Base(name) != name || strings.ContainsAny(name, `/\`) {
+		return "", errors.New("rewrite command must be a simple command name")
+	}
+	shimDir = filepath.Clean(shimDir)
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		cleanDir := filepath.Clean(dir)
+		if shimDir != "." && cleanDir == shimDir {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("real guest command %q not found outside shim directory", name)
+}
+
+func rewriteArgv(value any) ([]string, bool) {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...), true
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func normalizeInvocation(command string, args []string, cwd string) (cmdproxy.Request, error) {
+	switch os.Getenv("HIDEOUT_COMMAND_PROXY_ACTION") {
+	case cmdproxy.ActionCommandAdapter:
+		return cmdproxy.NormalizeAdapterCommand(command, args, cwd, os.Getenv("HIDEOUT_COMMAND_PROXY_ADAPTER_ID"))
+	default:
+		return cmdproxy.NormalizeHostOpenCommand(command, args, cwd)
+	}
 }
 
 func brokerEndpointFromEnv() (broker.Endpoint, error) {

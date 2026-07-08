@@ -19,6 +19,10 @@ test -f schemas/export-artifact.schema.json
 test -f schemas/daemon-status.schema.json
 test -f schemas/daemon-event.schema.json
 test -f schemas/live-console-seed.schema.json
+test -f schemas/command-adapter.schema.json
+test -f schemas/guest-privilege-status.schema.json
+test -f schemas/hostfs-write-decision.schema.json
+test -f schemas/hostfs-write-event.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -112,3 +116,15 @@ scripts/test-daemon-smoke.sh
 # Daemon live operations console (no Lima): typed seed/event contracts and
 # payload-driven UI proof. Initially a skeleton smoke, expanded by 007.
 scripts/test-live-console-smoke.sh
+
+# Command capability adapters (no isolation claim): strict adapter schema,
+# local digest pinning, command-name routing, and root-sensitive intent wording.
+scripts/test-command-adapter-smoke.sh
+
+# Guest privilege separation and risk audit (Lima proof added by 009 polish):
+# status schema/classifier and no guest-root containment overclaim.
+scripts/test-privilege-separation-smoke.sh
+
+# HostFS write overlay (010): staged write/apply schema presence. Expanded by
+# 010 implementation and real Gate 2 HostFS smoke.
+scripts/test-hostfs-write-overlay-smoke.sh

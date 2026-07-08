@@ -142,6 +142,19 @@ func (c *brokerClient) list(path string) ([]dirEntry, syscall.Errno) {
 	return parseEntries(resp.Data)
 }
 
+func (c *brokerClient) writeClass(action, path string, args map[string]any) syscall.Errno {
+	if args == nil {
+		args = map[string]any{}
+	}
+	args["path"] = path
+	resp := c.call(action, args)
+	if resp.Status != "ok" {
+		fmt.Fprintf(os.Stderr, "hideout-hostfsd: %s path=%s status=%s stderr=%q\n", action, path, resp.Status, resp.Stderr)
+		return responseErrno(resp)
+	}
+	return 0
+}
+
 func (c *brokerClient) call(action string, args map[string]any) broker.Response {
 	id, err := broker.NewRequestID()
 	if err != nil {
@@ -180,6 +193,18 @@ type hostFSNode struct {
 	path   string
 	kind   string
 	size   uint64
+}
+
+type hostFSFileHandle struct {
+	node *hostFSNode
+}
+
+func (h *hostFSFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	return h.node.Read(ctx, h, dest, off)
+}
+
+func (h *hostFSFileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+	return h.node.Write(ctx, h, data, off)
 }
 
 func (n *hostFSNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -233,14 +258,11 @@ func (n *hostFSNode) Readdir(_ context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(out), 0
 }
 
-func (n *hostFSNode) Open(_ context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	if flags&uint32(syscall.O_ACCMODE) != uint32(os.O_RDONLY) {
-		return nil, 0, syscall.EROFS
-	}
+func (n *hostFSNode) Open(_ context.Context, _ uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if n.kind == "dir" {
 		return nil, 0, syscall.EISDIR
 	}
-	return nil, fuse.FOPEN_DIRECT_IO, 0
+	return &hostFSFileHandle{node: n}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func (n *hostFSNode) Read(_ context.Context, _ fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
@@ -249,6 +271,95 @@ func (n *hostFSNode) Read(_ context.Context, _ fs.FileHandle, dest []byte, off i
 		return nil, errno
 	}
 	return fuse.ReadResultData(data), 0
+}
+
+func (n *hostFSNode) Write(_ context.Context, _ fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	errno := n.client.writeClass("host.fs.write.replace", n.path, map[string]any{
+		"offset":     off,
+		"dataBase64": base64.StdEncoding.EncodeToString(data),
+	})
+	if errno != 0 {
+		return 0, errno
+	}
+	return uint32(len(data)), 0
+}
+
+func (n *hostFSNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	path := childPath(n.path, name)
+	args := map[string]any{
+		"dataBase64": "",
+		"mode":       fmt.Sprintf("%04o", mode&0o7777),
+	}
+	action := "host.fs.write.create"
+	if flags&syscall.O_EXCL == 0 && flags&syscall.O_TRUNC != 0 {
+		action = "host.fs.write.truncate"
+		args = map[string]any{"size": int64(0)}
+	}
+	errno := n.client.writeClass(action, path, args)
+	if errno != 0 {
+		return nil, nil, 0, errno
+	}
+	child := &hostFSNode{client: n.client, path: path, kind: "file"}
+	fillAttr(&out.Attr, nodeInfo{Kind: "file", Mode: fmt.Sprintf("%04o", mode&0o7777)})
+	return n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG}), &hostFSFileHandle{node: child}, fuse.FOPEN_DIRECT_IO, 0
+}
+
+func (n *hostFSNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	path := childPath(n.path, name)
+	errno := n.client.writeClass("host.fs.write.mkdir", path, map[string]any{"mode": fmt.Sprintf("%04o", mode&0o7777)})
+	if errno != 0 {
+		return nil, errno
+	}
+	child := &hostFSNode{client: n.client, path: path, kind: "dir"}
+	fillAttr(&out.Attr, nodeInfo{Kind: "dir", Mode: fmt.Sprintf("%04o", mode&0o7777)})
+	return n.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+}
+
+func (n *hostFSNode) Unlink(_ context.Context, name string) syscall.Errno {
+	return n.client.writeClass("host.fs.write.delete", childPath(n.path, name), nil)
+}
+
+func (n *hostFSNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	return n.Unlink(ctx, name)
+}
+
+func (n *hostFSNode) Rename(_ context.Context, name string, newParent fs.InodeEmbedder, newName string, _ uint32) syscall.Errno {
+	parent, ok := newParent.EmbeddedInode().Operations().(*hostFSNode)
+	if !ok || parent == nil {
+		return syscall.EIO
+	}
+	return n.client.writeClass("host.fs.write.rename", childPath(n.path, name), map[string]any{"destinationPath": childPath(parent.path, newName)})
+}
+
+func (n *hostFSNode) Setattr(_ context.Context, _ fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	if size, ok := in.GetSize(); ok {
+		if errno := n.client.writeClass("host.fs.write.truncate", n.path, map[string]any{"size": int64(size)}); errno != 0 {
+			return errno
+		}
+	}
+	if mode, ok := in.GetMode(); ok {
+		if errno := n.client.writeClass("host.fs.write.chmod", n.path, map[string]any{"mode": fmt.Sprintf("%04o", mode&0o7777)}); errno != 0 {
+			return errno
+		}
+	}
+	args := map[string]any{}
+	if uid, ok := in.GetUID(); ok {
+		args["uid"] = int64(uid)
+	}
+	if gid, ok := in.GetGID(); ok {
+		args["gid"] = int64(gid)
+	}
+	if len(args) > 0 {
+		if errno := n.client.writeClass("host.fs.write.chown", n.path, args); errno != 0 {
+			return errno
+		}
+	}
+	info, errno := n.client.stat(n.path)
+	if errno != 0 {
+		return errno
+	}
+	fillAttr(&out.Attr, info)
+	return 0
 }
 
 func childPath(parent, name string) string {
@@ -275,9 +386,9 @@ func stableMode(kind string) uint32 {
 }
 
 func fillAttr(attr *fuse.Attr, info nodeInfo) {
-	mode := uint32(0o444)
+	mode := uint32(0o666)
 	if info.Kind == "dir" {
-		mode = 0o555
+		mode = 0o777
 	}
 	attr.Mode = stableMode(info.Kind) | mode
 	attr.Size = info.Size

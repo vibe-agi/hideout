@@ -41,7 +41,12 @@
         "profile/env/plan",
         "profile/env/apply",
         "evidence/export/plan",
-        "evidence/export/apply"
+        "evidence/export/apply",
+        "hostfs/write/plan",
+        "hostfs/write/claim",
+        "hostfs/write/apply",
+        "hostfs/write/discard",
+        "hostfs/write/status"
       ]
     },
     "data": {

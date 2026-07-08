@@ -439,6 +439,14 @@ func (e Evaluator) RunAuditRedactScript(source, entrypoint string, ctx AuditCont
 	return redaction, nil
 }
 
+func (e Evaluator) RunCommandAdapterScript(source, entrypoint string, ctx any, dst any) error {
+	out, err := runPolicyScript(source, entrypoint, ctx)
+	if err != nil {
+		return err
+	}
+	return decodeStrictScriptOutput(out, dst)
+}
+
 func decodeStrictScriptOutput(data []byte, dst any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()

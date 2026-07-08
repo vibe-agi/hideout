@@ -31,6 +31,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
@@ -166,6 +167,113 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	}
 	if strings.Index(text, "Advanced and developer:") > strings.Index(text, "Lab probes:") {
 		t.Fatalf("help should keep lab probes after advanced commands:\n%s", text)
+	}
+}
+
+func TestHostFSWriteCLIClaimAndDiscard(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	sessionID := "ses_20260708T010000Z_00112233445566778899"
+	overlayStore, err := overlay.NewStore(filepath.Join(store.Root, "sessions", sessionID, "hostfs-overlay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.txt")
+	result, err := overlayStore.Stage(overlay.StageRequest{
+		SessionID:   sessionID,
+		Profile:     "default",
+		Backend:     "native",
+		Operation:   "create",
+		Path:        target,
+		GrantID:     "hfs_overlay",
+		GrantSource: "profile",
+		Data:        []byte("staged"),
+		Privilege:   overlay.Privilege{Status: "enforced", Reason: "target-no-sudo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"hostfs", "write", "status"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("status exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), result.Decision.DecisionID) {
+		t.Fatalf("status missing decision: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"hostfs", "write", "claim", result.Decision.DecisionID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("claim exit=%d stderr=%s", code, errOut.String())
+	}
+	var claim overlay.ClaimResponse
+	if err := json.Unmarshal(out.Bytes(), &claim); err != nil {
+		t.Fatal(err)
+	}
+	if claim.ClaimToken == "" || claim.DecisionID != result.Decision.DecisionID {
+		t.Fatalf("bad claim: %+v body=%s", claim, out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"hostfs", "write", "status"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("status after claim exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), claim.ClaimToken) || strings.Contains(out.String(), "tokenHash") {
+		t.Fatalf("status leaked claim token material: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"hostfs", "write", "apply", "--claim-token", claim.ClaimToken, result.Decision.DecisionID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("apply exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"status": "applied"`) {
+		t.Fatalf("apply output mismatch: %s", out.String())
+	}
+	if body, err := os.ReadFile(target); err != nil || string(body) != "staged" {
+		t.Fatalf("apply host body=%q err=%v", body, err)
+	}
+
+	discardTarget := filepath.Join(t.TempDir(), "discard.txt")
+	discardResult, err := overlayStore.Stage(overlay.StageRequest{
+		SessionID:   sessionID,
+		Profile:     "default",
+		Backend:     "native",
+		Operation:   "create",
+		Path:        discardTarget,
+		GrantID:     "hfs_overlay",
+		GrantSource: "profile",
+		Data:        []byte("discard"),
+		Privilege:   overlay.Privilege{Status: "enforced", Reason: "target-no-sudo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"hostfs", "write", "claim", discardResult.Decision.DecisionID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("discard claim exit=%d stderr=%s", code, errOut.String())
+	}
+	var discardClaim overlay.ClaimResponse
+	if err := json.Unmarshal(out.Bytes(), &discardClaim); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"hostfs", "write", "discard", "--claim-token", discardClaim.ClaimToken, discardResult.Decision.DecisionID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("discard exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"status": "discarded"`) {
+		t.Fatalf("discard output mismatch: %s", out.String())
 	}
 }
 
@@ -1117,6 +1225,107 @@ func TestProfileCommandProxyManageHostOpenSymbols(t *testing.T) {
 	}
 }
 
+func TestProfileCommandAdapterManageLocalAdapter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	adapterDir := filepath.Join(store.ProfileDir("default"), "adapters")
+	if err := os.MkdirAll(adapterDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(adapterDir, "tool.js")
+	if err := os.WriteFile(scriptPath, []byte(`function decideCommandAdapter(){return {outcome:"deny",reason:"x"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"profile", "command-adapter", "default", "add-local", "--id", "tool", "--path", "adapters/tool.js", "--command", "tool-x"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-adapter add-local exit=%d stderr=%s", code, errOut.String())
+	}
+	var added struct {
+		Plan struct {
+			AdapterID string   `json:"adapterId"`
+			Enabled   bool     `json:"enabled"`
+			Commands  []string `json:"commands"`
+			Digest    string   `json:"digest"`
+			Changed   bool     `json:"changed"`
+		} `json:"plan"`
+		Applied bool `json:"applied"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &added); err != nil {
+		t.Fatalf("decode command-adapter add output: %v\n%s", err, out.String())
+	}
+	if !added.Applied || added.Plan.AdapterID != "tool" || !added.Plan.Enabled || added.Plan.Digest == "" || !slices.Contains(added.Plan.Commands, "tool-x") {
+		t.Fatalf("unexpected command-adapter add output: %+v", added)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-adapter", "default", "list"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-adapter list exit=%d stderr=%s", code, errOut.String())
+	}
+	var listed struct {
+		Profile  string `json:"profile"`
+		Adapters []struct {
+			ID       string   `json:"id"`
+			Enabled  bool     `json:"enabled"`
+			Commands []string `json:"commands"`
+			Digest   string   `json:"digest"`
+		} `json:"adapters"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &listed); err != nil {
+		t.Fatalf("decode command-adapter list output: %v\n%s", err, out.String())
+	}
+	if listed.Profile != "default" || len(listed.Adapters) != 1 || listed.Adapters[0].ID != "tool" || !listed.Adapters[0].Enabled {
+		t.Fatalf("unexpected command-adapter list: %+v", listed)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-adapter", "default", "disable", "tool"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-adapter disable exit=%d stderr=%s", code, errOut.String())
+	}
+	if err := os.WriteFile(scriptPath, []byte(`function decideCommandAdapter(){return {outcome:"deny",reason:"changed"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-adapter", "default", "refresh-digest", "tool"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-adapter refresh exit=%d stderr=%s", code, errOut.String())
+	}
+	loaded, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CommandAdapters.Adapters["tool"].Enabled {
+		t.Fatal("refresh-digest should not re-enable disabled adapter")
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-adapter", "default", "enable", "tool"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-adapter enable exit=%d stderr=%s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"profile", "command-adapter", "default", "remove", "tool"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("command-adapter remove exit=%d stderr=%s", code, errOut.String())
+	}
+	loaded, err = store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.CommandAdapters.Adapters["tool"]; ok {
+		t.Fatalf("command adapter was not removed: %+v", loaded.CommandAdapters.Adapters)
+	}
+}
+
 func TestProfileCommandProxyRejectsInvalidCommandWithoutCreatingProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1662,6 +1871,10 @@ func TestRunSuppressesControlSummaryUnlessVerbose(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "Hideout boundary:") {
 		t.Fatalf("verbose run should print boundary summary:\n%s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "privilege: status=unknown") ||
+		!strings.Contains(errOut.String(), "does not claim guest-root containment") {
+		t.Fatalf("verbose run should print privilege non-claim:\n%s", errOut.String())
 	}
 }
 
@@ -3826,6 +4039,15 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	store := profile.Store{Root: filepath.Join(home, ".hideout")}
 	p := profile.Default("default")
 	p.Tools.ExpectedCommands = []string{"agent-cli", "agent-helper"}
+	p.CommandAdapters.Adapters = map[string]profile.CommandAdapter{
+		"adapter": {
+			Enabled:    true,
+			Path:       "adapters/tool.js",
+			Digest:     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Entrypoint: "decideCommandAdapter",
+			Commands:   []string{"tool-x"},
+		},
+	}
 	if err := store.Save(p); err != nil {
 		t.Fatal(err)
 	}
@@ -3882,6 +4104,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Profiles\n  - default",
 		"expected=agent-cli,agent-helper",
 		"commandProxies=open,xdg-open",
+		"commandAdapters=adapter:on(tool-x)",
 		"next: tools=hideout profile tools default list",
 		"next: expect-command=hideout profile tools default expected add <command>",
 		"next: command-proxy=hideout profile command-proxy default list",
@@ -3896,6 +4119,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		"Sessions",
 		"showing newest 10 of 12",
 		"ses_20260704T010212Z_12",
+		"privilege=unknown",
 		"next: audit=hideout audit show --session ses_20260704T010212Z_12  cleanup-check=hideout cleanup --session ses_20260704T010212Z_12 --dry-run",
 		"Recent Denied Audit",
 		"Recent Audit",
@@ -4631,7 +4855,7 @@ exit 0
 	}
 }
 
-func TestRunLimaTun2SocksRunsNetworkBootstrapBeforeTargetWithoutProxyEnv(t *testing.T) {
+func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	fakeBin := t.TempDir()
@@ -4663,35 +4887,22 @@ func TestRunLimaTun2SocksRunsNetworkBootstrapBeforeTargetWithoutProxyEnv(t *test
 		"--",
 		"sh", "-c", "true",
 	}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	if code == 0 {
+		t.Fatalf("expected setup identity failure; stdout=%s stderr=%s", out.String(), errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "privileged setup identity is unavailable") {
+		t.Fatalf("stderr should explain setup identity failure, got %s", errOut.String())
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read fake limactl log: %v", err)
 	}
 	log := string(logData)
-	for _, want := range []string{
-		"/hideout/session/bootstrap/bootstrap.sh",
-		"/hideout/session/network/bootstrap.sh",
-		"hideout-command-check sh",
-		"sh -c true",
-		"/hideout/session/network/cleanup.sh",
-	} {
-		if !strings.Contains(log, want) {
-			t.Fatalf("fake limactl log missing %q:\n%s", want, log)
-		}
-	}
-	networkBootstrap := strings.Index(log, "/hideout/session/network/bootstrap.sh")
-	toolBootstrap := strings.Index(log, "/hideout/session/bootstrap/bootstrap.sh")
-	commandCheck := strings.Index(log, "hideout-command-check sh")
-	target := strings.Index(log, "sh -c true")
-	if networkBootstrap < 0 || toolBootstrap < 0 || commandCheck < 0 || target < 0 ||
-		!(networkBootstrap < toolBootstrap && toolBootstrap < commandCheck && commandCheck < target) {
-		t.Fatalf("network bootstrap should run before tool bootstrap, command check, and target:\n%s", log)
-	}
 	if strings.Contains(log, "HTTP_PROXY=") || strings.Contains(log, "HTTPS_PROXY=") || strings.Contains(log, "socks5://127.0.0.1:1080") {
 		t.Fatalf("lima shell args leaked proxy env or proxy secret:\n%s", log)
+	}
+	if strings.Contains(log, "/hideout/session/network/bootstrap.sh") || strings.Contains(log, "hideout-command-check sh") || strings.Contains(log, "sh -c true") {
+		t.Fatalf("target/network setup should not run after setup identity failure:\n%s", log)
 	}
 	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
 	if err != nil {
@@ -4708,6 +4919,10 @@ func TestRunLimaTun2SocksRunsNetworkBootstrapBeforeTargetWithoutProxyEnv(t *test
 	localBypass, ok := networkEvent.Details["localBypass"].([]any)
 	if !ok || len(localBypass) != 1 || localBypass[0] != "host.lima.internal" {
 		t.Fatalf("network.setup audit missing lima local bypass: %+v", networkEvent.Details)
+	}
+	setupEvent := lastAuditEventByActionForAppTest(t, auditFiles[0], "hideout.privileged_setup")
+	if setupEvent.Decision != "error" || setupEvent.Details["category"] != "network" || setupEvent.Details["status"] != "failed" {
+		t.Fatalf("privileged setup failure audit mismatch: %+v", setupEvent)
 	}
 	auditData, err := os.ReadFile(auditFiles[0])
 	if err != nil {

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/hostfs-write-decision.schema.json",
+  "title": "Hideout HostFS write decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "decisionId", "operationId", "state"],
+  "properties": {
+    "version": {
+      "const": "hideout.hostfs-write-plan/v1"
+    },
+    "decisionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "enum": ["pending", "claimed", "applied", "discarded", "expired", "conflict", "failed"]
+    }
+  }
+}

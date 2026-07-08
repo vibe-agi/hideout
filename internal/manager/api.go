@@ -164,6 +164,10 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		api.serveAuditEvents(w, r)
 		return
 	}
+	if resource == "hostfs/write/status" {
+		api.serveHostFSWriteStatus(w, r)
+		return
+	}
 	overview, err := api.Core.Overview(r.Context())
 	if err != nil && overview.Version == "" {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -224,6 +228,14 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveExportPlan(w, r)
 	case "evidence/export/apply":
 		api.serveExportApply(w, r)
+	case "hostfs/write/plan":
+		api.serveHostFSWritePlan(w, r)
+	case "hostfs/write/claim":
+		api.serveHostFSWriteClaim(w, r)
+	case "hostfs/write/apply":
+		api.serveHostFSWriteApply(w, r)
+	case "hostfs/write/discard":
+		api.serveHostFSWriteDiscard(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -387,6 +399,99 @@ func (api API) serveExportApply(w http.ResponseWriter, r *http.Request) {
 		resp.Errors = []string{applyErr.Error()}
 	}
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveHostFSWritePlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostFSWritePlanRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanHostFSWrite(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "hostfs/write/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveHostFSWriteClaim(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostFSWriteClaimRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	claim, err := api.Core.ClaimHostFSWrite(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "hostfs/write/claim",
+		Data:     claim,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveHostFSWriteApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostFSWriteApplyRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyHostFSWrite(req)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "hostfs/write/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveHostFSWriteDiscard(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostFSWriteDiscardRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, discardErr := api.Core.DiscardHostFSWrite(req)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "hostfs/write/discard",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if discardErr != nil {
+		resp.Errors = []string{discardErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveHostFSWriteStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := api.Core.HostFSWriteStatus(HostFSWriteStatusRequest{
+		Session: r.URL.Query().Get("session"),
+		State:   r.URL.Query().Get("state"),
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "hostfs/write/status",
+		Data:     status,
+		Errors:   []string{},
+	})
 }
 
 func (api API) serveEnvironmentStopPlan(w http.ResponseWriter, r *http.Request) {
@@ -720,6 +825,38 @@ func decodeProfileHostFSAPIRequest(w http.ResponseWriter, r *http.Request) (Prof
 	return req, nil
 }
 
+func decodeHostFSWritePlanRequest(w http.ResponseWriter, r *http.Request) (HostFSWritePlanRequest, error) {
+	var req HostFSWritePlanRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid hostfs-write plan request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeHostFSWriteClaimRequest(w http.ResponseWriter, r *http.Request) (HostFSWriteClaimRequest, error) {
+	var req HostFSWriteClaimRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid hostfs-write claim request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeHostFSWriteApplyRequest(w http.ResponseWriter, r *http.Request) (HostFSWriteApplyRequest, error) {
+	var req HostFSWriteApplyRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid hostfs-write apply request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeHostFSWriteDiscardRequest(w http.ResponseWriter, r *http.Request) (HostFSWriteDiscardRequest, error) {
+	var req HostFSWriteDiscardRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid hostfs-write discard request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
 func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileEnvAPIRequest, error) {
 	var req ProfileEnvAPIRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -731,6 +868,18 @@ func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (Profile
 		return req, errors.New("invalid profile-env request")
 	}
 	return req, nil
+}
+
+func decodeStrictJSON(w http.ResponseWriter, r *http.Request, out any, message string) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return errors.New(message)
+	}
+	if decoder.Decode(&struct{}{}) == nil {
+		return errors.New(message)
+	}
+	return nil
 }
 
 func decodeExportAPIRequest(w http.ResponseWriter, r *http.Request) (ExportAPIRequest, error) {

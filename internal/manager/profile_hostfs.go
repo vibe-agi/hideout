@@ -24,6 +24,7 @@ type ProfileHostFSRuleSummary struct {
 	Effect    string       `json:"effect"`
 	HostPath  string       `json:"hostPath"`
 	Ops       []hostfs.Op  `json:"ops,omitempty"`
+	Overlay   bool         `json:"overlay,omitempty"`
 	Scope     hostfs.Scope `json:"scope"`
 	Reason    string       `json:"reason,omitempty"`
 	CreatedAt string       `json:"createdAt,omitempty"`
@@ -264,6 +265,7 @@ func profileHostFSRuleSummary(rule hostfs.Rule, deny bool) ProfileHostFSRuleSumm
 		Effect:    effect,
 		HostPath:  rule.HostPath,
 		Ops:       append([]hostfs.Op(nil), rule.Ops...),
+		Overlay:   rule.Overlay,
 		Scope:     rule.Scope,
 		Reason:    rule.Reason,
 		CreatedAt: createdAt,

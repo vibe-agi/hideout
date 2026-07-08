@@ -17,6 +17,9 @@
           "$ref": "#/$defs/hostOpenRequest"
         },
         {
+          "$ref": "#/$defs/commandAdapterRequest"
+        },
+        {
           "$ref": "#/$defs/hostFSRequest"
         }
       ]
@@ -147,6 +150,76 @@
       ],
       "additionalProperties": false
     },
+    "commandAdapterRequest": {
+      "type": "object",
+      "required": [
+        "id",
+        "sessionId",
+        "capabilityToken",
+        "subject",
+        "command",
+        "argv",
+        "route",
+        "action",
+        "args"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilityToken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "type": "string",
+          "pattern": "^command:[^\\\\/\\s]+$"
+        },
+        "command": {
+          "type": "string",
+          "pattern": "^[^\\\\/\\s]+$"
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "route": {
+          "const": "command-adapter"
+        },
+        "action": {
+          "const": "command.adapter"
+        },
+        "args": {
+          "type": "object",
+          "required": [
+            "cwd",
+            "adapterId"
+          ],
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/"
+            },
+            "adapterId": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "hostFSRequest": {
       "type": "object",
       "required": [
@@ -182,7 +255,16 @@
             "host.fs.stat",
             "host.fs.read",
             "host.fs.list",
-            "host.fs.write"
+            "host.fs.write",
+            "host.fs.write.create",
+            "host.fs.write.replace",
+            "host.fs.write.append",
+            "host.fs.write.truncate",
+            "host.fs.write.mkdir",
+            "host.fs.write.delete",
+            "host.fs.write.rename",
+            "host.fs.write.chmod",
+            "host.fs.write.chown"
           ]
         },
         "args": {
@@ -211,6 +293,26 @@
             "size": {
               "type": "integer",
               "minimum": 0
+            },
+            "destinationPath": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^/"
+            },
+            "dataBase64": {
+              "type": "string"
+            },
+            "truncate": {
+              "type": "boolean"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "uid": {
+              "type": "integer"
+            },
+            "gid": {
+              "type": "integer"
             }
           },
           "additionalProperties": false
@@ -266,10 +368,10 @@
           "type": "string"
         },
         "decision": {
-          "enum": ["allow", "deny"]
+          "enum": ["allow", "deny", "audit-only"]
         },
         "status": {
-          "enum": ["ok", "denied", "error", "broker-unavailable", "bad-request"]
+          "enum": ["ok", "denied", "error", "broker-unavailable", "bad-request", "simulated", "rewrite-guest", "proposal-unavailable"]
         },
         "exitCode": {
           "type": "integer",
@@ -324,7 +426,7 @@
                 "const": "deny"
               },
               "exitCode": {
-                "const": 126
+                "minimum": 1
               }
             }
           }

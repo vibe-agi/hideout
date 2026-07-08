@@ -226,6 +226,56 @@ func TestRegistryFromProfileSupportsConfiguredHostOpenCommandName(t *testing.T) 
 	}
 }
 
+func TestRegistryFromProfileSupportsAdapterOwnedCommandName(t *testing.T) {
+	p := profile.Default("test")
+	p.CommandAdapters.Adapters = map[string]profile.CommandAdapter{
+		"adapter": {
+			Enabled:    true,
+			Path:       "adapters/tool.js",
+			Digest:     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Entrypoint: "decideCommandAdapter",
+			Commands:   []string{"tool-x"},
+		},
+	}
+	registry, err := RegistryFromProfile(p)
+	if err != nil {
+		t.Fatalf("RegistryFromProfile: %v", err)
+	}
+	reg, ok := registry.Lookup("tool-x")
+	if !ok {
+		t.Fatal("adapter command not registered")
+	}
+	if reg.OwnerType != OwnerCommandAdapter || reg.AdapterID != "adapter" || reg.Action != ActionCommandAdapter || reg.ArgvSchema != ArgvSchemaAdapterV1 {
+		t.Fatalf("unexpected adapter registration: %+v", reg)
+	}
+	req, err := registry.Normalize("tool-x", []string{"--version"}, "/workspace")
+	if err != nil {
+		t.Fatalf("Normalize adapter command: %v", err)
+	}
+	if req.Subject != "command:tool-x" || req.Action != ActionCommandAdapter || req.Route != RouteCommandAdapter {
+		t.Fatalf("unexpected adapter request: %+v", req)
+	}
+	if req.Payload["adapterId"] != "adapter" || !reflect.DeepEqual(req.Argv, []string{"tool-x", "--version"}) {
+		t.Fatalf("adapter payload mismatch: %+v argv=%v", req.Payload, req.Argv)
+	}
+}
+
+func TestRegistryFromProfileRejectsAdapterCommandConflict(t *testing.T) {
+	p := profile.Default("test")
+	p.CommandAdapters.Adapters = map[string]profile.CommandAdapter{
+		"adapter": {
+			Enabled:    true,
+			Path:       "adapters/open.js",
+			Digest:     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Entrypoint: "decideCommandAdapter",
+			Commands:   []string{"open"},
+		},
+	}
+	if _, err := RegistryFromProfile(p); err == nil {
+		t.Fatal("expected duplicate command owner to fail")
+	}
+}
+
 func TestRegistryFromProfileRejectsUnsupportedHostEscape(t *testing.T) {
 	p := profile.Default("test")
 	p.CommandProxy.Commands["shell"] = profile.CommandProxyCommand{

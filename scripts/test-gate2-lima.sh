@@ -77,17 +77,6 @@ prepare_linux_hostfsd() {
 
   local arch
   arch="$(go env GOARCH)"
-  if command -v "hideout-hostfsd-linux-$arch" >/dev/null 2>&1; then
-    HIDEOUT_LINUX_HOSTFSD_PATH="$(command -v "hideout-hostfsd-linux-$arch")"
-    export HIDEOUT_LINUX_HOSTFSD_PATH
-    return
-  fi
-  if command -v hideout-hostfsd-linux >/dev/null 2>&1; then
-    HIDEOUT_LINUX_HOSTFSD_PATH="$(command -v hideout-hostfsd-linux)"
-    export HIDEOUT_LINUX_HOSTFSD_PATH
-    return
-  fi
-
   HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch"
   export HIDEOUT_LINUX_HOSTFSD_PATH
   "$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
@@ -137,7 +126,12 @@ require_command go
 require_command limactl
 
 tmp="$(mktemp -d "/tmp/hideout-gate2.XXXXXX")"
+named_guard_pid=""
 cleanup() {
+  if [ -n "${named_guard_pid:-}" ] && kill -0 "$named_guard_pid" 2>/dev/null; then
+    kill "$named_guard_pid" 2>/dev/null || true
+    wait "$named_guard_pid" 2>/dev/null || true
+  fi
   if [ -x "${hideout:-}" ]; then
     HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
   fi
@@ -168,6 +162,7 @@ hostfs_tree="$hostfs_root/tree"
 hostfs_glob_dir="$hostfs_root/glob"
 hostfs_ungranted="$hostfs_root/hidden/secret.txt"
 hostfs_run_denied="$hostfs_root/denied.txt"
+hostfs_write_file="$hostfs_root/write.txt"
 printf 'hostfs-read\n' > "$hostfs_file"
 printf 'hostfs-dir\n' > "$hostfs_dir/visible.txt"
 printf 'hostfs-tree\n' > "$hostfs_tree/nested/visible.txt"
@@ -175,6 +170,7 @@ printf 'hostfs-glob\n' > "$hostfs_glob_dir/visible.txt"
 printf 'hostfs-jpg\n' > "$hostfs_glob_dir/hidden.jpg"
 printf 'hostfs-hidden\n' > "$hostfs_ungranted"
 printf 'hostfs-denied\n' > "$hostfs_run_denied"
+printf 'hostfs-before\n' > "$hostfs_write_file"
 GOOS=linux GOARCH="$(go env GOARCH)" CGO_ENABLED=0 \
   go build -trimpath -o "$workspace/hideout-gate-fsread" ./cmd/hideout-gate-fsread
 
@@ -325,6 +321,80 @@ else
 fi
 grep -q 'hostfs_denied=yes' "$tmp/hostfs.out"
 
+echo "gate2: running hostfs write overlay smoke"
+if ! with_timeout "$GATE_TIMEOUT" env \
+  HIDEOUT_STORE_ROOT="$store" \
+  LIMA_HOME="$lima_home" \
+  "$hideout" run --backend lima --workspace "$workspace" \
+    --fs "overlay:$hostfs_write_file" \
+    -- sh -eu -c '
+dump_hostfs_debug() {
+  echo "hostfs_debug_mounts:" >&2
+  grep " /hideout/hostfs " /proc/mounts >&2 || true
+  echo "hostfs_debug_log:" >&2
+  cat /hideout/session/tmp/hostfsd.log >&2 2>/dev/null || true
+}
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text(\"hostfs-after\\n\"); print(\"hostfs_overlay_guest=\" + pathlib.Path(sys.argv[1]).read_text().strip())" "$1" || {
+    dump_hostfs_debug
+    exit 1
+  }
+else
+  printf "hostfs-after\n" > "$1" || {
+    dump_hostfs_debug
+    exit 1
+  }
+  printf "hostfs_overlay_guest=%s\n" "$(cat "$1")"
+fi
+' gate2-hostfs-write "$hostfs_write_file" >"$tmp/hostfs-write.out" 2>"$tmp/hostfs-write.err"; then
+  echo "gate2: hostfs write overlay guest smoke failed" >&2
+  echo "gate2: stdout" >&2
+  cat "$tmp/hostfs-write.out" >&2
+  echo "gate2: stderr" >&2
+  cat "$tmp/hostfs-write.err" >&2
+  exit 1
+fi
+cat "$tmp/hostfs-write.out"
+grep -q 'hostfs_overlay_guest=hostfs-after' "$tmp/hostfs-write.out"
+test "$(cat "$hostfs_write_file")" = "hostfs-before"
+
+HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write status >"$tmp/hostfs-write-status.json"
+HOSTFS_WRITE_FILE="$hostfs_write_file" jq -e '
+  .pending[] |
+  select(.path == env.HOSTFS_WRITE_FILE and (.operation == "replace" or .operation == "create" or .operation == "append" or .operation == "truncate"))
+' "$tmp/hostfs-write-status.json" >/dev/null
+decision_id="$(HOSTFS_WRITE_FILE="$hostfs_write_file" jq -r '
+  .pending[] |
+  select(.path == env.HOSTFS_WRITE_FILE and (.operation == "replace" or .operation == "create" or .operation == "append")) |
+  .decisionId
+' "$tmp/hostfs-write-status.json" | head -n 1)"
+if [ -z "$decision_id" ]; then
+  decision_id="$(HOSTFS_WRITE_FILE="$hostfs_write_file" jq -r '
+    .pending[] |
+    select(.path == env.HOSTFS_WRITE_FILE and .operation == "truncate") |
+    .decisionId
+  ' "$tmp/hostfs-write-status.json" | head -n 1)"
+fi
+if [ -z "$decision_id" ]; then
+  echo "gate2: no HostFS write decision found" >&2
+  cat "$tmp/hostfs-write-status.json" >&2
+  exit 1
+fi
+HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write claim "$decision_id" >"$tmp/hostfs-write-claim.json"
+claim_token="$(jq -r '.claimToken' "$tmp/hostfs-write-claim.json")"
+test -n "$claim_token"
+HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write apply --claim-token "$claim_token" "$decision_id" >"$tmp/hostfs-write-apply.json"
+jq -e '.status == "applied" and .decision == "allow"' "$tmp/hostfs-write-apply.json" >/dev/null
+test "$(cat "$hostfs_write_file")" = "hostfs-after"
+latest_audit="$(find "$store/sessions" -name audit.jsonl -print | sort | tail -n 1)"
+test -n "$latest_audit"
+jq -e 'select(.action == "host.fs.overlay.apply" and .details.decisionId == "'"$decision_id"'")' "$latest_audit" >/dev/null
+if rg -n 'claim_[0-9a-f]|hostfs-overlay/objects|hfwobj_' "$latest_audit" "$tmp/hostfs-write-status.json" "$tmp/hostfs-write-apply.json" >/dev/null; then
+  echo "gate2: HostFS write evidence leaked claim token or overlay object path" >&2
+  exit 1
+fi
+printf "hostfs_write_overlay=applied\n"
+
 echo "gate2: running missing-command no-host-fallback smoke"
 if with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" -- hideout-missing-command >"$tmp/missing.out" 2>"$tmp/missing.err"; then
   echo "gate2: missing command unexpectedly succeeded" >&2
@@ -412,15 +482,47 @@ printf "named_ok=yes\n"
   exit 1
 fi
 grep -q 'named_ok=yes' "$tmp/env-named.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-named.out"
+named_env_id="$(awk -F'\t' 'NR > 1 && $1 == "gate2-named" { print $9; exit }' "$tmp/env-list-named.out")"
+if [ -z "$named_env_id" ]; then
+  echo "gate2: gate2-named environment missing from list" >&2
+  cat "$tmp/env-list-named.out" >&2
+  exit 1
+fi
 
 # recreate refuses a running guest without --force, then rebuilds under the
 # same name with --force.
+env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$named_ws" --env gate2-named -- sh -eu -c '
+printf "named_guard_started=yes\n"
+sleep 120
+' >"$tmp/env-named-guard.out" 2>"$tmp/env-named-guard.err" &
+named_guard_pid=$!
+named_status=""
+for _ in $(seq 1 90); do
+  named_status="$(awk -F'"' '/"status"/ { print $4; exit }' "$store/environments/$named_env_id/environment.json" 2>/dev/null || true)"
+  if [ "$named_status" = "running" ]; then
+    break
+  fi
+  if ! kill -0 "$named_guard_pid" 2>/dev/null; then
+    echo "gate2: named guard run exited before environment became running" >&2
+    cat "$tmp/env-named-guard.out" "$tmp/env-named-guard.err" >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
+if [ "$named_status" != "running" ]; then
+  echo "gate2: gate2-named did not become running; status=$named_status" >&2
+  cat "$store/environments/$named_env_id/environment.json" >&2 || true
+  exit 1
+fi
 if HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env recreate gate2-named >"$tmp/env-recreate-refuse.out" 2>"$tmp/env-recreate-refuse.err"; then
   echo "gate2: recreate of a running guest should refuse without --force" >&2
   exit 1
 fi
 grep -q 'hideout stop gate2-named' "$tmp/env-recreate-refuse.err"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env recreate gate2-named --force >"$tmp/env-recreate.out"
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env recreate gate2-named --force >"$tmp/env-recreate.out" 2>"$tmp/env-recreate.err"
+wait "$named_guard_pid" 2>/dev/null || true
+named_guard_pid=""
 grep -q 'recreated environment gate2-named' "$tmp/env-recreate.out"
 
 # --rm stays record-less: no new reusable environment, no resume hint.
@@ -439,9 +541,11 @@ if grep -q 'run again: hideout run --env' "$tmp/env-rm.err"; then
   exit 1
 fi
 
-# clean by name removes the named environment (stop first, it is running).
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop gate2-named >"$tmp/env-stop-named.out" || true
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean --stopped gate2-named >"$tmp/env-clean-named.out"
+# clean by name removes the named environment record and any remaining backend
+# instance. The preceding recreate leaves it ready, so do not apply the
+# --stopped filter here.
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop gate2-named >"$tmp/env-stop-named.out" 2>"$tmp/env-stop-named.err" || true
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" clean gate2-named >"$tmp/env-clean-named.out"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-after.out"
 if awk -F'\t' 'NR > 1 && $1 == "gate2-named" { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after.out"; then
   echo "gate2: cleaned named environment is still listed" >&2

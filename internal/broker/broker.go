@@ -21,8 +21,11 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/cmdadapter"
+	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/policy"
+	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -117,29 +120,31 @@ func (NoopOpener) OpenURL(context.Context, string) error  { return nil }
 func (NoopOpener) OpenFile(context.Context, string) error { return nil }
 
 type Server struct {
-	SessionID     string
-	Token         string
-	Socket        string
-	Endpoint      Endpoint
-	HostRoot      string
-	GuestRoot     string
-	Profile       string
-	ProfileDir    string
-	Backend       string
-	WorkspaceMode string
-	NetworkMode   string
-	Commands      []string
-	ScriptRefs    []profile.ScriptRef
-	Evaluator     policy.Evaluator
-	Audit         *audit.Writer
-	Opener        Opener
-	HostFS        *hostfs.Service
+	SessionID       string
+	Token           string
+	Socket          string
+	Endpoint        Endpoint
+	HostRoot        string
+	GuestRoot       string
+	Profile         string
+	ProfileDir      string
+	Backend         string
+	WorkspaceMode   string
+	NetworkMode     string
+	Commands        []string
+	CommandAdapters cmdadapter.Runtime
+	ScriptRefs      []profile.ScriptRef
+	Evaluator       policy.Evaluator
+	Audit           *audit.Writer
+	Opener          Opener
+	HostFS          *hostfs.Service
 
-	listener net.Listener
-	once     sync.Once
-	mu       sync.Mutex
-	closed   bool
-	handlers sync.WaitGroup
+	listener       net.Listener
+	once           sync.Once
+	mu             sync.Mutex
+	closed         bool
+	guestPrivilege privilege.Status
+	handlers       sync.WaitGroup
 }
 
 func NewToken() (string, error) {
@@ -284,6 +289,9 @@ func (s *Server) Handle(ctx context.Context, req Request) Response {
 	}
 	if isHostFSAction(req.Action) {
 		return s.handleHostFS(ctx, req, resp)
+	}
+	if req.Action == cmdproxy.ActionCommandAdapter {
+		return s.handleCommandAdapter(ctx, req, resp)
 	}
 	if req.Action != "host.open" {
 		resp.Stderr = "unsupported broker action"
@@ -432,6 +440,182 @@ func (s *Server) Handle(ctx context.Context, req Request) Response {
 	return resp
 }
 
+func (s *Server) handleCommandAdapter(ctx context.Context, req Request, resp Response) Response {
+	inv, adapter, err := s.validateCommandAdapterRequest(req)
+	if err != nil {
+		resp.Status = "bad-request"
+		resp.ExitCode = 2
+		resp.Stderr = err.Error()
+		s.emit(req, resp, cmdadapter.FailureEvidence(inv, err.Error()))
+		return resp
+	}
+	evalCtx := s.commandAdapterContext(req, adapter)
+	outcome, err := cmdadapter.Evaluate(ctx, s.Evaluator, adapter, evalCtx)
+	if err != nil {
+		reason := fmt.Sprintf("command adapter %s: %s", adapter.ID, err)
+		resp.Stderr = reason
+		s.emit(req, resp, cmdadapter.FailureEvidence(inv, reason))
+		return resp
+	}
+	if outcome.ExitCode == 0 && outcome.Outcome == cmdadapter.OutcomeDeny {
+		outcome.ExitCode = 126
+	}
+	details := cmdadapter.Evidence(inv, outcome)
+	if adapter.RootSensitive {
+		status := s.GuestPrivilegeStatus()
+		details["separationStatus"] = string(status.Status)
+		details["nonClaim"] = privilege.NonClaim(status.Status)
+		if intent, ok := details["intent"].(map[string]any); ok {
+			intent["separationStatus"] = string(status.Status)
+			intent["nonClaim"] = privilege.NonClaim(status.Status)
+		}
+		defer func() {
+			s.emitAction(privilege.ActionTargetRootAttempt, req, resp, privilege.TargetRootAttemptDetails(req.Command, req.Argv, status, adapter.ID, resp.Decision, firstNonEmptyString(outcome.Reason, resp.Stderr)))
+		}()
+	}
+	switch outcome.Outcome {
+	case cmdadapter.OutcomeDeny:
+		resp.Decision = string(policy.Deny)
+		resp.Status = "denied"
+		resp.ExitCode = outcome.ExitCode
+		resp.Stderr = outcome.Stderr
+		if resp.Stderr == "" {
+			resp.Stderr = outcome.Reason
+		}
+	case cmdadapter.OutcomeSimulate:
+		resp.Decision = string(policy.AuditOnly)
+		resp.Status = "simulated"
+		resp.ExitCode = outcome.ExitCode
+		resp.Stdout = outcome.Stdout
+		resp.Stderr = outcome.Stderr
+	case cmdadapter.OutcomeRewriteGuest:
+		resp.Decision = string(policy.AuditOnly)
+		resp.Status = "rewrite-guest"
+		resp.ExitCode = 0
+		resp.Data = map[string]any{"rewriteArgv": append([]string(nil), outcome.Argv...)}
+		if outcome.CWD != "" {
+			resp.Data["rewriteCwd"] = outcome.CWD
+		}
+	case cmdadapter.OutcomeProposeCapability:
+		resp.Decision = string(policy.AuditOnly)
+		resp.Status = "proposal-unavailable"
+		resp.ExitCode = 126
+		resp.Stderr = outcome.Reason
+		resp.Data = map[string]any{
+			"proposal": map[string]any{
+				"capability": outcome.Capability,
+				"intent":     outcome.Intent,
+				"status":     "non-applied",
+			},
+		}
+	default:
+		resp.Stderr = "unsupported command adapter outcome"
+	}
+	s.emit(req, resp, details)
+	return resp
+}
+
+func (s *Server) SetGuestPrivilegeStatus(status privilege.Status) {
+	s.mu.Lock()
+	s.guestPrivilege = status
+	s.mu.Unlock()
+}
+
+func (s *Server) GuestPrivilegeStatus() privilege.Status {
+	s.mu.Lock()
+	status := s.guestPrivilege
+	s.mu.Unlock()
+	if status.Status == "" {
+		status.Status = privilege.StatusUnknown
+		status.Reason = "guest privilege status has not been emitted"
+		status.Guidance = "wait for guest privilege status before trusting adapter context"
+	}
+	return status
+}
+
+func (s *Server) validateCommandAdapterRequest(req Request) (cmdadapter.Invocation, cmdadapter.RuntimeAdapter, error) {
+	inv := cmdadapter.Invocation{
+		Profile: s.Profile,
+		Session: s.SessionID,
+		Command: req.Command,
+		Argv:    append([]string(nil), req.Argv...),
+	}
+	if err := cmdadapter.ValidateRuntime(s.CommandAdapters); err != nil {
+		return inv, cmdadapter.RuntimeAdapter{}, err
+	}
+	if req.Route != cmdproxy.RouteCommandAdapter {
+		return inv, cmdadapter.RuntimeAdapter{}, fmt.Errorf("command adapter route %q is not allowed", req.Route)
+	}
+	if strings.TrimSpace(req.ID) == "" {
+		return inv, cmdadapter.RuntimeAdapter{}, errors.New("broker request id is required")
+	}
+	if err := s.validateRegisteredCommand(req); err != nil {
+		return inv, cmdadapter.RuntimeAdapter{}, err
+	}
+	if len(req.Argv) == 0 {
+		return inv, cmdadapter.RuntimeAdapter{}, errors.New("broker request argv is required")
+	}
+	cwd, _ := req.Args["cwd"].(string)
+	if strings.TrimSpace(cwd) == "" {
+		return inv, cmdadapter.RuntimeAdapter{}, errors.New("command adapter request args.cwd is required")
+	}
+	if !filepath.IsAbs(cwd) || hasURLScheme(cwd) {
+		return inv, cmdadapter.RuntimeAdapter{}, errors.New("command adapter request args.cwd must be an absolute guest path")
+	}
+	inv.CWD = filepath.Clean(cwd)
+	adapterID, _ := req.Args["adapterId"].(string)
+	adapter, ok := cmdadapter.AdapterForCommand(s.CommandAdapters, req.Command)
+	if !ok {
+		return inv, cmdadapter.RuntimeAdapter{}, fmt.Errorf("command adapter for command %q is not enabled by profile", req.Command)
+	}
+	if adapterID != "" && adapterID != adapter.ID {
+		return inv, cmdadapter.RuntimeAdapter{}, fmt.Errorf("command adapter id %q does not own command %q", adapterID, req.Command)
+	}
+	inv.Adapter = adapter
+	return inv, adapter, nil
+}
+
+func (s *Server) commandAdapterContext(req Request, adapter cmdadapter.RuntimeAdapter) cmdadapter.EvalContext {
+	workspaceMode := s.WorkspaceMode
+	if workspaceMode == "" {
+		workspaceMode = "read-write"
+	}
+	status := s.GuestPrivilegeStatus()
+	return cmdadapter.EvalContext{
+		Version: "command-adapter/v1",
+		Profile: map[string]string{
+			"name": s.Profile,
+		},
+		Session: map[string]any{
+			"id":               s.SessionID,
+			"backend":          s.Backend,
+			"separationStatus": string(status.Status),
+			"nonClaim":         privilege.NonClaim(status.Status),
+		},
+		Adapter: map[string]any{
+			"id":     adapter.ID,
+			"digest": adapter.Digest,
+		},
+		Command: map[string]any{
+			"name": req.Command,
+			"argv": append([]string(nil), req.Argv...),
+			"cwd":  req.Args["cwd"],
+		},
+		Env: map[string]any{
+			"keys":    []string{},
+			"classes": []string{},
+			"count":   0,
+		},
+		Workspace: map[string]any{
+			"guestRoot": s.GuestRoot,
+			"mode":      workspaceMode,
+		},
+		Network: map[string]any{
+			"mode": s.NetworkMode,
+		},
+	}
+}
+
 func capabilityTokenEqual(got, want string) bool {
 	if got == "" || want == "" {
 		return false
@@ -450,6 +634,15 @@ func hostOpenFailureMessage(err error, isURL bool) string {
 		return "host URL opener failed"
 	}
 	return "host workspace file opener failed"
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func validateBrokerRoute(req Request) error {
@@ -866,6 +1059,25 @@ func (s *Server) emit(req Request, resp Response, details map[string]any) {
 		return
 	}
 	s.emitPrepared(req, resp, prepared)
+}
+
+func (s *Server) emitAction(action string, req Request, resp Response, details map[string]any) {
+	if s.Audit == nil {
+		return
+	}
+	prepared, err := s.prepareAuditDetails(req, resp, details)
+	if err != nil {
+		s.emitAuditRedactionFailure(req, resp, err)
+		return
+	}
+	_ = s.Audit.Emit(audit.Event{
+		Session:  s.SessionID,
+		Profile:  s.Profile,
+		Backend:  s.Backend,
+		Action:   action,
+		Decision: resp.Decision,
+		Details:  prepared,
+	})
 }
 
 func (s *Server) prepareAuditDetails(req Request, resp Response, details map[string]any) (map[string]any, error) {

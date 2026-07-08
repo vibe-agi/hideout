@@ -17,6 +17,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/vibe-agi/hideout/internal/audit"
 	hostfspkg "github.com/vibe-agi/hideout/internal/hostfs"
+	overlaypkg "github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
@@ -106,6 +107,23 @@ func testHostFSService(t *testing.T, config hostfspkg.Config) *hostfspkg.Service
 	}
 	service := hostfspkg.NewService(policy)
 	return &service
+}
+
+func testHostFSOverlayService(t *testing.T, config hostfspkg.Config, overlayRoot string) *hostfspkg.Service {
+	t.Helper()
+	service := testHostFSService(t, config)
+	store, err := overlaypkg.NewStore(overlayRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Overlay = store
+	service.Context = hostfspkg.OverlayContext{
+		SessionID: "ses_1",
+		Profile:   "default",
+		Backend:   "native",
+		Privilege: overlaypkg.Privilege{Status: "enforced", Reason: "target-no-sudo"},
+	}
+	return service
 }
 
 func auditPathFragment(t *testing.T, path string) string {
@@ -602,6 +620,101 @@ func TestHandleHostFSWriteIsUnsupported(t *testing.T) {
 		if !strings.Contains(string(auditData), want) {
 			t.Fatalf("HostFS write audit missing %q: %s", want, auditData)
 		}
+	}
+}
+
+func TestHandleHostFSWriteStagesWithoutHostMutation(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	writer, err := audit.NewFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(path, []byte("lower"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := Server{
+		SessionID: "ses_1",
+		Token:     "cap_good",
+		HostFS: testHostFSOverlayService(t, hostfspkg.Config{Grants: []hostfspkg.Rule{{
+			ID:       "hfs_overlay",
+			HostPath: path,
+			Ops:      []hostfspkg.Op{hostfspkg.OpWrite},
+			Overlay:  true,
+			Scope:    hostfspkg.ScopeExactFile,
+			Reason:   "operator write",
+		}}}, filepath.Join(root, ".overlay")),
+		Audit: writer,
+	}
+	resp := server.Handle(context.Background(), hostFSRequest("req_write_stage", "host.fs.write.replace", path, map[string]any{"dataBase64": base64.StdEncoding.EncodeToString([]byte("staged"))}))
+	if resp.Status != "ok" || resp.ExitCode != 0 {
+		t.Fatalf("expected staged write ok, got %+v", resp)
+	}
+	if resp.Data["staged"] != true || resp.Data["hostChanged"] != false || resp.Data["operationId"] == "" || resp.Data["decisionId"] == "" {
+		t.Fatalf("staged response missing evidence fields: %+v", resp.Data)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "lower" {
+		t.Fatalf("lower host file changed: %q err=%v", got, err)
+	}
+	result, err := server.HostFS.Read(path, 0, 0)
+	if err != nil {
+		t.Fatalf("overlay read: %v", err)
+	}
+	if got := hostfspkg.ReadResultDataString(result); got != "staged" {
+		t.Fatalf("overlay read=%q want staged", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	auditData, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"action":"host.fs.write.replace"`,
+		`"action":"host.fs.overlay.stage"`,
+		`"action":"host.fs.overlay.pending"`,
+		`"decision":"allow"`,
+		`"staged":true`,
+		`"hostChanged":false`,
+		`"operationId":"hfwop_`,
+		`"decisionId":"hfwdec_`,
+	} {
+		if !strings.Contains(string(auditData), want) {
+			t.Fatalf("HostFS write audit missing %q: %s", want, auditData)
+		}
+	}
+	if strings.Contains(string(auditData), base64.StdEncoding.EncodeToString([]byte("staged"))) {
+		t.Fatalf("HostFS write audit leaked raw data payload: %s", auditData)
+	}
+}
+
+func TestHandleHostFSWriteEnvelopeValidation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	server := Server{
+		SessionID: "ses_1",
+		Token:     "cap_good",
+		HostFS:    testHostFSService(t, hostfspkg.Config{}),
+	}
+	for _, tt := range []struct {
+		name   string
+		action string
+		extra  map[string]any
+		want   string
+	}{
+		{name: "unknown arg", action: "host.fs.write.replace", extra: map[string]any{"dataBase64": "ZA==", "surprise": true}, want: "args.surprise"},
+		{name: "missing content", action: "host.fs.write.create", extra: nil, want: "dataBase64 is required"},
+		{name: "rename missing destination", action: "host.fs.write.rename", extra: nil, want: "destinationPath is required"},
+		{name: "bad base64", action: "host.fs.write.replace", extra: map[string]any{"dataBase64": "not base64!"}, want: "valid base64"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := server.Handle(context.Background(), hostFSRequest("req_bad_"+tt.name, tt.action, path, tt.extra))
+			if resp.Status != "bad-request" || !strings.Contains(resp.Stderr, tt.want) {
+				t.Fatalf("response=%+v want bad-request containing %q", resp, tt.want)
+			}
+		})
 	}
 }
 

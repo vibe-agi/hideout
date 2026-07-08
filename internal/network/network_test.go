@@ -496,6 +496,22 @@ func TestTun2SocksVerifiedPlan(t *testing.T) {
 	if !strings.Contains(string(bootstrap), "tun2socks route verified") {
 		t.Fatalf("bootstrap missing runtime route verification status: %s", bootstrap)
 	}
+	if !strings.Contains(string(bootstrap), "tun2socks setup requires the Hideout setup identity") {
+		t.Fatalf("bootstrap should require setup identity instead of target sudo: %s", bootstrap)
+	}
+	if strings.Contains(string(bootstrap), "sudo -n") {
+		t.Fatalf("bootstrap must not fall back to target sudo: %s", bootstrap)
+	}
+	cleanup, err := os.ReadFile(plan.CleanupPath)
+	if err != nil {
+		t.Fatalf("read cleanup: %v", err)
+	}
+	if !strings.Contains(string(cleanup), "tun2socks cleanup requires the Hideout setup identity") {
+		t.Fatalf("cleanup should require setup identity instead of target sudo: %s", cleanup)
+	}
+	if strings.Contains(string(cleanup), "sudo -n") {
+		t.Fatalf("cleanup must not fall back to target sudo: %s", cleanup)
+	}
 	assertShellSyntaxNetworkTest(t, plan.BootstrapPath)
 	assertShellSyntaxNetworkTest(t, plan.CleanupPath)
 }

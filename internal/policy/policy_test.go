@@ -29,6 +29,31 @@ func TestValidateRejectsGenericHostExec(t *testing.T) {
 	}
 }
 
+func TestRunCommandAdapterScriptUsesStrictSandbox(t *testing.T) {
+	e := NewEvaluator(profile.Default("test"))
+	var out struct {
+		Outcome string `json:"outcome"`
+		Reason  string `json:"reason"`
+	}
+	err := e.RunCommandAdapterScript(`function decideCommandAdapter(ctx) {
+		return {outcome: "deny", reason: ctx.env.values ? "bad" : "ok"};
+	}`, "decideCommandAdapter", map[string]any{
+		"env": map[string]any{"keys": []string{"TERM"}, "count": 1},
+	}, &out)
+	if err != nil {
+		t.Fatalf("RunCommandAdapterScript: %v", err)
+	}
+	if out.Outcome != "deny" || out.Reason != "ok" {
+		t.Fatalf("unexpected adapter output: %+v", out)
+	}
+	err = e.RunCommandAdapterScript(`function decideCommandAdapter() {
+		return {outcome: "deny", reason: String(require)};
+	}`, "decideCommandAdapter", map[string]any{}, &out)
+	if err == nil {
+		t.Fatal("expected unavailable process/file API to fail")
+	}
+}
+
 func TestEvaluateOpenKeepsLocalhostDeniedForPreviewBoundary(t *testing.T) {
 	e := NewEvaluator(profile.Default("test"))
 	proposal, err := e.EvaluateOpen("http://127.0.0.1:5173")

@@ -57,6 +57,7 @@ type Daemon struct {
 	uiURL      string
 	lockFile   *os.File
 	tailStop   chan struct{}
+	hostFSStop chan struct{}
 	done       chan struct{}
 
 	mu    sync.Mutex
@@ -127,6 +128,7 @@ func Start(opts Options) (*Daemon, error) {
 		own:        newOwnership(),
 		ln:         ln,
 		lockFile:   lockFile,
+		hostFSStop: make(chan struct{}),
 		done:       make(chan struct{}),
 		state:      "serving",
 		api: manager.API{
@@ -141,6 +143,7 @@ func Start(opts Options) (*Daemon, error) {
 	}
 	d.server = &http.Server{Handler: d.buildHandler()}
 	d.startAuditTail()
+	d.startHostFSWriteTimeoutWorker()
 	d.startLoopbackUI()
 	d.audit.record("daemon.start", "allow", map[string]any{"socket": sock})
 
@@ -235,6 +238,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.tailStop != nil {
 		close(d.tailStop)
 	}
+	if d.hostFSStop != nil {
+		close(d.hostFSStop)
+	}
 	if d.bus != nil {
 		d.bus.closeAll()
 	}
@@ -259,3 +265,18 @@ func (d *Daemon) Stop(ctx context.Context) error {
 // Done returns a channel closed when the daemon has fully stopped (for example
 // after a /daemon/stop request), so a foreground `daemon start` can exit.
 func (d *Daemon) Done() <-chan struct{} { return d.done }
+
+func (d *Daemon) startHostFSWriteTimeoutWorker() {
+	ticker := time.NewTicker(time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_, _ = d.api.Core.ExpireHostFSWriteTimeouts(time.Now().UTC())
+			case <-d.hostFSStop:
+				return
+			}
+		}
+	}()
+}

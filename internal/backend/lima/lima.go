@@ -56,6 +56,7 @@ func (ExecRunner) Run(ctx context.Context, name string, args []string, env []str
 type Backend struct {
 	LimactlPath   string
 	Runner        CommandRunner
+	SetupRunner   SetupCommandRunner
 	Stdout        io.Writer
 	Stderr        io.Writer
 	ControlStdout io.Writer
@@ -190,6 +191,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	if err := WriteConfig(configPath, cfg); err != nil {
 		return nil, err
 	}
+	privilegedSetupRequired := spec.PrivilegedSetupRequired || spec.NetworkPrivilegedSetup || spec.HostFSEnabled
 	return &backend.Session{
 		ID:                        spec.SessionID,
 		EnvironmentID:             spec.EnvironmentID,
@@ -216,6 +218,10 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
 		InstanceName:              instance,
 		PreserveInstance:          spec.PreserveInstance,
+		NetworkPrivilegedSetup:    spec.NetworkPrivilegedSetup,
+		PrivilegedSetupRequired:   privilegedSetupRequired,
+		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
+		PrivilegedSetupEventSink:  spec.PrivilegedSetupEventSink,
 	}, nil
 }
 
@@ -245,18 +251,31 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 		return err
 	}
+	if session.PrivilegeStatusSink != nil {
+		status := b.probeGuestPrivilege(ctx, session, runner, hostEnv, GuestEnv(env))
+		session.PrivilegeStatus = &status
+		if err := session.PrivilegeStatusSink(status); err != nil {
+			return err
+		}
+	}
 	setupEnv := SetupEnv(env)
 	setupWorkdir := GuestSessionDir + "/tmp"
 	if session.NetworkBootstrapGuestPath != "" {
-		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{session.NetworkBootstrapGuestPath}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
-			return err
+		if session.NetworkPrivilegedSetup {
+			if err := b.runSetupCommand(ctx, session, setupCategoryNetwork, setupWorkdir, setupEnv, []string{session.NetworkBootstrapGuestPath}, b.stdin()); err != nil {
+				return err
+			}
+		} else {
+			if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{session.NetworkBootstrapGuestPath}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
+				return err
+			}
 		}
 	}
 	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, setupWorkdir, setupEnv, []string{GuestBootstrapPath}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
 		return err
 	}
 	if session.HostFSEnabled {
-		if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{"sh", "-c", HostFSStartScript(session.HostFSGrafts)}), hostEnv, b.stdin(), b.controlStdout(), b.controlStderr()); err != nil {
+		if err := b.runSetupCommand(ctx, session, setupCategoryHostFS, session.GuestWork, env, []string{"sh", "-c", HostFSStartScript(session.HostFSGrafts)}, b.stdin()); err != nil {
 			return fmt.Errorf("hostfs start: %w", err)
 		}
 	}
@@ -305,13 +324,17 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	if session.HostFSEnabled {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
-		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}), hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
+		} else if err := b.runSetupCleanup(cleanupCtx, session, setupCategoryHostFS, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}); err != nil {
 			errs = append(errs, fmt.Errorf("hostfs cleanup: %w", err))
 		}
 	}
 	if session.NetworkCleanupGuestPath != "" {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
+		} else if session.NetworkPrivilegedSetup {
+			if err := b.runSetupCleanup(cleanupCtx, session, setupCategoryNetwork, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}); err != nil {
+				errs = append(errs, fmt.Errorf("network cleanup: %w", err))
+			}
 		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}), hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 			errs = append(errs, fmt.Errorf("network cleanup: %w", err))
 		}
@@ -485,8 +508,35 @@ func ConfigForRunSpec(spec backend.RunSpec) (limaConfig, error) {
 				Mode: "system",
 				Script: strings.TrimSpace(fmt.Sprintf(`#!/bin/sh
 set -eu
+target_user=%s
 	mkdir -p /hideout/profile/home /hideout/profile/config /hideout/profile/cache /hideout/profile/data /hideout/profile/browser /hideout/profile/machine /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap /hideout/hostfs
 chown %s:%s /hideout /hideout/hostfs /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap 2>/dev/null || true
+target_home=$(getent passwd "$target_user" 2>/dev/null | awk -F: '{print $6}' || true)
+if [ -n "$target_home" ] && [ -r "$target_home/.ssh/authorized_keys" ]; then
+  mkdir -p /root/.ssh
+  chmod 0700 /root/.ssh
+  touch /root/.ssh/authorized_keys
+  cat "$target_home/.ssh/authorized_keys" >> /root/.ssh/authorized_keys
+  awk '!seen[$0]++' /root/.ssh/authorized_keys > /root/.ssh/authorized_keys.tmp
+  mv /root/.ssh/authorized_keys.tmp /root/.ssh/authorized_keys
+  chmod 0600 /root/.ssh/authorized_keys
+fi
+mkdir -p /etc/ssh/sshd_config.d 2>/dev/null || true
+if [ -d /etc/ssh/sshd_config.d ]; then
+  printf 'PermitRootLogin prohibit-password\nPubkeyAuthentication yes\n' > /etc/ssh/sshd_config.d/99-hideout-root-control.conf
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || service sshd reload 2>/dev/null || true
+fi
+if command -v gpasswd >/dev/null 2>&1; then
+  gpasswd -d "$target_user" sudo 2>/dev/null || true
+  gpasswd -d "$target_user" wheel 2>/dev/null || true
+fi
+if command -v deluser >/dev/null 2>&1; then
+  deluser "$target_user" sudo 2>/dev/null || true
+fi
+if [ -d /etc/sudoers.d ]; then
+  printf '%%s ALL=(ALL:ALL) !ALL\n' "$target_user" > /etc/sudoers.d/99-hideout-target-no-sudo
+  chmod 0440 /etc/sudoers.d/99-hideout-target-no-sudo
+fi
 for root in Users Volumes private; do
   if [ ! -e "/$root" ]; then
     ln -s "/hideout/hostfs/$root" "/$root" 2>/dev/null || true
@@ -502,7 +552,7 @@ if [ -r /hideout/profile/machine/machine-id ]; then
   mkdir -p /var/lib/dbus
   cp /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
 fi
-`, shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.Hostname), shellQuote(spec.Profile.Identity.Hostname))) + "\n",
+	`, shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.User), shellQuote(spec.Profile.Identity.Hostname), shellQuote(spec.Profile.Identity.Hostname))) + "\n",
 			},
 		},
 		Message: "Hideout managed Lima instance. Do not mount the real host home.",
@@ -603,16 +653,16 @@ func HostFSStartScript(grafts []string) string {
 	var b strings.Builder
 	b.WriteString(`set -eu
 if grep -qs ' /hideout/hostfs ' /proc/mounts; then
-  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || sudo -n umount /hideout/hostfs 2>/dev/null || true
+  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || true
 fi
 mkdir -p /hideout/session/tmp 2>/dev/null || true
 mkdir -p /hideout/hostfs 2>/dev/null || {
-  sudo -n mkdir -p /hideout/hostfs
-  sudo -n chown "$(id -un):$(id -gn)" /hideout/hostfs 2>/dev/null || true
+  echo 'hideout: setup identity cannot create /hideout/hostfs' >&2
+  exit 70
 }
 for root in Users Volumes private; do
   if [ ! -e "/$root" ]; then
-    ln -s "/hideout/hostfs/$root" "/$root" 2>/dev/null || sudo -n ln -s "/hideout/hostfs/$root" "/$root" 2>/dev/null || true
+    ln -s "/hideout/hostfs/$root" "/$root" 2>/dev/null || true
   fi
 done
 `)
@@ -622,10 +672,10 @@ done
 			continue
 		}
 		fmt.Fprintf(&b, `if [ ! -e %s ] && [ ! -L %s ]; then
-  mkdir -p "$(dirname %s)" 2>/dev/null || sudo -n mkdir -p "$(dirname %s)" 2>/dev/null || true
-  ln -s %s %s 2>/dev/null || sudo -n ln -s %s %s 2>/dev/null || true
+  mkdir -p "$(dirname %s)" 2>/dev/null || true
+  ln -s %s %s 2>/dev/null || true
 fi
-`, shellQuote(graft), shellQuote(graft), shellQuote(graft), shellQuote(graft), shellQuote("/hideout/hostfs"+graft), shellQuote(graft), shellQuote("/hideout/hostfs"+graft), shellQuote(graft))
+`, shellQuote(graft), shellQuote(graft), shellQuote(graft), shellQuote("/hideout/hostfs"+graft), shellQuote(graft))
 	}
 	b.WriteString(`
 if grep -qs ' /hideout/hostfs ' /proc/mounts; then
@@ -641,15 +691,11 @@ if [ ! -x /hideout/session/shims/hideout-hostfsd ]; then
   exit 70
 fi
 rm -f /hideout/session/tmp/hostfsd.pid /hideout/session/tmp/hostfsd.log
-if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-  nohup sudo -n env \
-    HIDEOUT_BROKER_ENDPOINT="$HIDEOUT_BROKER_ENDPOINT" \
-    HIDEOUT_SESSION_ID="$HIDEOUT_SESSION_ID" \
-    HIDEOUT_CAPABILITY_TOKEN="$HIDEOUT_CAPABILITY_TOKEN" \
-    /hideout/session/shims/hideout-hostfsd --mount /hideout/hostfs > /hideout/session/tmp/hostfsd.log 2>&1 &
-else
-  nohup /hideout/session/shims/hideout-hostfsd --mount /hideout/hostfs > /hideout/session/tmp/hostfsd.log 2>&1 &
-fi
+nohup env \
+  HIDEOUT_BROKER_ENDPOINT="$HIDEOUT_BROKER_ENDPOINT" \
+  HIDEOUT_SESSION_ID="$HIDEOUT_SESSION_ID" \
+  HIDEOUT_CAPABILITY_TOKEN="$HIDEOUT_CAPABILITY_TOKEN" \
+  /hideout/session/shims/hideout-hostfsd --mount /hideout/hostfs > /hideout/session/tmp/hostfsd.log 2>&1 &
 echo "$!" > /hideout/session/tmp/hostfsd.pid
 i=0
 while [ "$i" -lt 50 ]; do
@@ -672,7 +718,7 @@ exit 70
 func HostFSCleanupScript() string {
 	return `set +e
 if grep -qs ' /hideout/hostfs ' /proc/mounts; then
-  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || sudo -n umount /hideout/hostfs 2>/dev/null || true
+  fusermount3 -u /hideout/hostfs 2>/dev/null || fusermount -u /hideout/hostfs 2>/dev/null || umount /hideout/hostfs 2>/dev/null || true
 fi
 if [ -f /hideout/session/tmp/hostfsd.pid ]; then
   kill "$(cat /hideout/session/tmp/hostfsd.pid)" 2>/dev/null || true

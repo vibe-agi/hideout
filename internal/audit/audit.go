@@ -28,7 +28,9 @@ var (
 	// deliberate — conservative for a self-known secret namespace.
 	hideoutSecretAssignmentRE = regexp.MustCompile(`(?i)\bHIDEOUT_SECRET_[A-Z0-9_]*\s*[:=]\s*[^\s&;]+`)
 	hideoutSecretJSONRE       = regexp.MustCompile(`(?i)"HIDEOUT_SECRET_[A-Z0-9_]*"\s*:\s*"[^"]*"`)
-	controlPlaneTokenRE       = regexp.MustCompile(`\b(?:cap|ui)_[0-9a-f]{16,}\b`)
+	setupSecretAssignmentRE   = regexp.MustCompile(`(?i)\b(?:setupPrivateKey|setupToken|setupCredential|rootControlSSH|rootControlSSHConfig)\s*[:=]\s*[^\s&;]+`)
+	controlPlaneTokenRE       = regexp.MustCompile(`\b(?:cap|ui|claim)_[0-9a-f]{16,}\b`)
+	hostFSOverlayObjectPathRE = regexp.MustCompile(`(?:^|[/\\])hostfs-overlay[/\\]objects[/\\][^\\s\"']+`)
 	machineIDValueRE          = regexp.MustCompile(`(?i)\b((?:guest[-_ ]?)?machine[-_ ]?id\s*(?:[:=]|\s+)\s*)[0-9a-f]{32}\b`)
 )
 
@@ -36,10 +38,22 @@ var (
 // these exactly is self-knowledge, not heuristic guessing: they are field
 // names Hideout itself emits, never user business fields.
 var controlPlaneKeys = map[string]bool{
-	"capabilitytoken": true,
-	"brokertoken":     true,
-	"uitoken":         true,
-	"managertoken":    true,
+	"capabilitytoken":         true,
+	"brokertoken":             true,
+	"uitoken":                 true,
+	"managertoken":            true,
+	"setupcredential":         true,
+	"setupcredentialpath":     true,
+	"setupidentityprivatekey": true,
+	"setupprivatekey":         true,
+	"setuptoken":              true,
+	"rootcontrolssh":          true,
+	"rootcontrolsshconfig":    true,
+	"claimtoken":              true,
+	"tokenhash":               true,
+	"overlayobject":           true,
+	"overlayobjectpath":       true,
+	"contentobject":           true,
 }
 
 type Event struct {
@@ -178,7 +192,9 @@ func RedactString(s string) string {
 	s = hideoutSecretJSONRE.ReplaceAllString(s, `"HIDEOUT_*":"REDACTED"`)
 	s = hideoutSecretAssignmentRE.ReplaceAllString(s, "HIDEOUT_*=REDACTED")
 	s = hideoutSecretNameRE.ReplaceAllString(s, "HIDEOUT_*")
+	s = setupSecretAssignmentRE.ReplaceAllString(s, "setupCredential=REDACTED")
 	s = controlPlaneTokenRE.ReplaceAllString(s, "REDACTED")
+	s = hostFSOverlayObjectPathRE.ReplaceAllString(s, "/hostfs-overlay/objects/REDACTED")
 	s = machineIDValueRE.ReplaceAllString(s, "${1}REDACTED")
 	return s
 }

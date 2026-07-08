@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
+	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -433,6 +434,39 @@ func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlan
 		InstanceName:              runEnv.InstanceName,
 		PreserveInstance:          runEnv.PreserveInstance,
 		AuditPath:                 runSession.AuditPath,
+		NetworkPrivilegedSetup:    runNetwork.Plan.Mode == netpolicy.ModeTun2Socks,
+		PrivilegedSetupRequired:   runNetwork.Plan.Mode == netpolicy.ModeTun2Socks || dataPlane.HostFSEnabled,
+		PrivilegeStatusSink: func(status privilege.Status) error {
+			if dataPlane.Broker != nil {
+				dataPlane.Broker.SetGuestPrivilegeStatus(status)
+			}
+			return runSession.Audit.Emit(audit.Event{
+				Session:  runSession.Layout.ID,
+				Profile:  runSession.Plan.ProfileName,
+				Backend:  runSession.Plan.Backend,
+				Action:   privilege.ActionGuestPrivilegeStatus,
+				Decision: "allow",
+				Details:  privilege.StatusDetails(status),
+			})
+		},
+		PrivilegedSetupEventSink: func(event backend.PrivilegedSetupEvent) error {
+			action := event.Action
+			if action == "" {
+				action = privilege.ActionPrivilegedSetup
+			}
+			decision := "allow"
+			if event.Status == "failed" {
+				decision = "error"
+			}
+			return runSession.Audit.Emit(audit.Event{
+				Session:  runSession.Layout.ID,
+				Profile:  runSession.Plan.ProfileName,
+				Backend:  runSession.Plan.Backend,
+				Action:   action,
+				Decision: decision,
+				Details:  privilege.PrivilegedSetupDetails(event.Category, event.Status, event.Setup, event.Reason),
+			})
+		},
 	}
 }
 

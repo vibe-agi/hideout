@@ -38,6 +38,27 @@ func TestRunRejectsInvalidOpenShapeBeforeBroker(t *testing.T) {
 	}
 }
 
+func TestRewriteCommandPathExcludesShimDirectory(t *testing.T) {
+	shimDir := t.TempDir()
+	realDir := t.TempDir()
+	for dir := range map[string]bool{shimDir: true, realDir: true} {
+		path := filepath.Join(dir, "tool-real")
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := rewriteCommandPath("tool-real", shimDir, shimDir+string(os.PathListSeparator)+realDir)
+	if err != nil {
+		t.Fatalf("rewriteCommandPath: %v", err)
+	}
+	if got != filepath.Join(realDir, "tool-real") {
+		t.Fatalf("rewrite path=%q want real dir", got)
+	}
+	if _, err := rewriteCommandPath("tool-real", shimDir, shimDir); err == nil {
+		t.Fatal("expected missing real command outside shim dir to fail")
+	}
+}
+
 func TestBrokerEndpointFromEnvPrefersEndpoint(t *testing.T) {
 	t.Setenv(broker.EnvEndpoint, "tcp://127.0.0.1:1234")
 	t.Setenv(broker.EnvSock, "/tmp/ignored.sock")

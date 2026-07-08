@@ -14,6 +14,7 @@ func PanelEventCoverage() map[string][]string {
 		"denied-audit": {KindAudit},
 		"exports":      {KindExport},
 		"cleanup":      {KindCleanup},
+		"hostfs-write": {KindHostFSWrite},
 		"stream":       {KindTerminal},
 	}
 }
@@ -87,8 +88,17 @@ func RepresentativeEvents() []Event {
 		},
 		{
 			Version: EventVersion,
-			Kind:    KindTerminal,
+			Kind:    KindHostFSWrite,
 			Seq:     8,
+			Entity:  EntityRef{Kind: KindHostFSWrite, ID: "hfwdec_123"},
+			Payload: EventPayload{
+				DecisionID: "hfwdec_123", OperationID: "hfwop_123", Status: "pending", Operation: "replace", Path: "/Users/alice/project-notes.txt", PrivilegeStatus: "enforced",
+			},
+		},
+		{
+			Version: EventVersion,
+			Kind:    KindTerminal,
+			Seq:     9,
 			Entity:  EntityRef{Kind: "stream"},
 			Payload: EventPayload{Reason: "stream closed"},
 		},

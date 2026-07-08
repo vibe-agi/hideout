@@ -105,7 +105,7 @@ Change-to-gate mapping:
 | Environment model: naming, auto-name resolution, drift semantics, record versioning, or image declaration plumbing | Gate 0 and targeted environment/manager/app tests | `scripts/test-env-image.sh` (via `--env-image`) proves declared-image boot, digest-drift fail-closed, and recreate recovery on macOS with Lima | `--release-candidate` remains separate |
 | Supervised Lima real-run dogfood slice | Gate 0 and targeted test CLI tests | `scripts/test-lima-real-run.sh` as the optional Gate 2 step on macOS with Lima | `--release-candidate` remains separate |
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, native harness for shared CLI wiring, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
-| Policy scripts, Goja ABI, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests | `--required` if a required route is affected |
+| Policy scripts, Goja ABI, command adapters, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests; command-adapter smoke for profile/broker wiring | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
 | Endpoint Exposure product actions | Gate 0 and targeted Manager/PortBridge tests for implemented directions | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` when a new direction or consumer becomes user-facing |
 | Browser Control or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
@@ -199,6 +199,10 @@ Required evidence:
   reducer proof with no post-seed fetches, TUI terminal proof, stream-health
   propagation, and control-plane redaction scans — with no real backend, headless
   browser, or external browser dependency.
+- Command-adapter smoke (`scripts/test-command-adapter-smoke.sh`, wired into
+  Gate 0) validates the 008 profile schema, command-adapter schema, Manager
+  plan/apply path, broker outcomes, root-sensitive intent wording, and digest
+  fail-closed behavior without claiming root containment.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must
@@ -217,7 +221,10 @@ Script extension contract checks belong in Gate 0. Gate 0 should reject script
 ABI or SDK changes that expose raw Go standard library packages, host filesystem
 handles, network clients, process APIs, environment APIs, backend driver
 handles, broker tokens, mutable Manager state, or any capability execution path
-outside validated proposals.
+outside validated proposals. Command-adapter ABI checks must additionally reject
+unknown outcomes, unknown fields, undeclared proposal capabilities, root-sensitive
+successful system-mutation simulation, and any 008 wording that claims root
+escalation is blocked without 009 enforced privilege separation.
 
 Redaction contract checks belong in Gate 0 and package tests. Redaction is
 deterministic: tests must prove Hideout-minted control-plane credentials
@@ -585,7 +592,10 @@ hidden. It requires `HIDEOUT_GATE3_MEDIATED_RESOLVER` (a DoH server IP, default
 `1.1.1.1`). The DNS closure and its architecture are owned by
 [network-privacy-architecture.md](network-privacy-architecture.md). The residual
 A3 guest-root routing bypass remains a non-claim in
-[threat-model.md](threat-model.md).
+[threat-model.md](threat-model.md). Since 009, the same gate also asserts the
+Lima privilege setup evidence: `privilege_status=enforced` and
+`privileged_setup=network`, proving privacy-mode route/DNS bootstrap used the
+root-control setup identity rather than target-user passwordless sudo.
 
 Suggested target command:
 
@@ -897,8 +907,18 @@ Required checks:
   passthrough mounts;
 - glob deny rules win over matching allow rules and still audit the requested
   path plus matched deny rule ID/source;
-- HostFS v1 write, create, delete, rename, truncate, chmod, chown, and xattr
-  attempts fail as read-only or unsupported;
+- read-only HostFS grants do not permit write, create, delete, rename,
+  truncate, chmod, chown, or xattr attempts;
+- explicit HostFS overlay grants allow supported write-class operations
+  (`create`, `replace`, `append`, `truncate`, `mkdir`, `delete`, `rename`,
+  `chmod`, constrained `chown`) to stage durable overlay records while leaving
+  host lower files unchanged before apply;
+- HostFS write decisions are visible through Manager/CLI/WebUI/TUI surfaces,
+  require one winning claim token, default to deny on timeout, and apply only
+  after base snapshot revalidation succeeds;
+- HostFS write apply conflict, stale claim, missing overlay grant, deny rule,
+  reserved root, symlink swap, destination appearance, unsupported metadata, or
+  privilege-requiring `chown` fails closed before host mutation;
 - HostFS read grants are live views, not snapshots; host-side changes during a
   guest read use normal host OS read semantics and must not be described as
   consistent snapshots;
@@ -942,13 +962,14 @@ Required checks:
 - path canonicalization happens on the host side before policy evaluation;
 - HostFS RPC requires the current session token and cannot be replayed by a
   previous session or environment;
-- audit records first access, deny, directory listing, and unsupported
-  write-class attempts with the requested host path so the user can inspect what
-  the target program probed. Audit records must still avoid raw broker tokens,
-  unrelated filenames, user-provided rule reasons, extra symlink target paths,
-  and backend mount implementation paths. HostFS audit details include policy
-  effect, safe policy reason, rule ID when matched, source, operation, requested
-  path, `policyEffect=unsupported` for read-only write attempts, and
+- audit records first access, deny, directory listing, staged writes, claims,
+  apply/discard/timeout/conflict/cleanup, and unsupported write-class attempts
+  with the requested host path so the user can inspect what the target program
+  probed. Audit records must still avoid raw broker tokens, claim tokens,
+  overlay object paths, unrelated filenames, user-provided rule reasons, extra
+  symlink target paths, and backend mount implementation paths. HostFS audit
+  details include policy effect, safe policy reason, rule ID when matched,
+  source, operation, requested path, `hostChanged=false` before apply, and
   `canonicalized=true` when the request passed through a host symlink;
 - the guest daemon can be restarted without gaining broader authority;
 - Linux guest FUSE adapter works under Lima on macOS and under a Linux host

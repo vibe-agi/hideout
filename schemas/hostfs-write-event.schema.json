@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/hostfs-write-event.schema.json",
+  "title": "Hideout HostFS write event payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decisionId", "operationId", "status"],
+  "properties": {
+    "decisionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": ["pending", "claimed", "applied", "discarded", "expired", "conflict", "failed"]
+    },
+    "operation": {
+      "enum": ["create", "replace", "append", "truncate", "mkdir", "delete", "rename", "chmod", "chown"]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "destinationPath": {
+      "type": "string"
+    },
+    "privilegeStatus": {
+      "enum": ["enforced", "degraded", "unknown"]
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}

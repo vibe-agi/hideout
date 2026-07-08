@@ -17,6 +17,7 @@ const (
 	KindAudit       = "audit"
 	KindExport      = "export"
 	KindCleanup     = "cleanup"
+	KindHostFSWrite = "hostfs-write"
 	KindTerminal    = "terminal"
 
 	HealthSeeding           = "seeding"
@@ -81,6 +82,12 @@ type EventPayload struct {
 	Removed           []string       `json:"removed,omitempty"`
 	SecretState       string         `json:"secretState,omitempty"`
 	Reason            string         `json:"reason,omitempty"`
+	OperationID       string         `json:"operationId,omitempty"`
+	DecisionID        string         `json:"decisionId,omitempty"`
+	Operation         string         `json:"operation,omitempty"`
+	Path              string         `json:"path,omitempty"`
+	DestinationPath   string         `json:"destinationPath,omitempty"`
+	PrivilegeStatus   string         `json:"privilegeStatus,omitempty"`
 }
 
 type BackgroundRow struct {
@@ -97,6 +104,17 @@ type OutcomeRow struct {
 	Sessions     int      `json:"sessions,omitempty"`
 	Removed      []string `json:"removed,omitempty"`
 	SecretState  string   `json:"secretState,omitempty"`
+}
+
+type HostFSWriteRow struct {
+	DecisionID      string `json:"decisionId"`
+	OperationID     string `json:"operationId"`
+	Status          string `json:"status"`
+	Operation       string `json:"operation,omitempty"`
+	Path            string `json:"path,omitempty"`
+	DestinationPath string `json:"destinationPath,omitempty"`
+	PrivilegeStatus string `json:"privilegeStatus,omitempty"`
+	Reason          string `json:"reason,omitempty"`
 }
 
 type StreamHealth struct {
@@ -133,6 +151,7 @@ type State struct {
 	Background      []BackgroundRow            `json:"background,omitempty"`
 	ExportOutcomes  []OutcomeRow               `json:"exportOutcomes,omitempty"`
 	CleanupOutcomes []OutcomeRow               `json:"cleanupOutcomes,omitempty"`
+	HostFSWrites    []HostFSWriteRow           `json:"hostfsWrites,omitempty"`
 	StreamHealth    StreamHealth               `json:"streamHealth"`
 	LastSeq         int                        `json:"lastSeq"`
 	ProfileScope    string                     `json:"profileScope,omitempty"`
