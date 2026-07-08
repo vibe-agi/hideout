@@ -97,6 +97,10 @@ Hideout uses separate registries for different layers:
   actionable decisions (`hostfs.write`, `adapter.proposal`, `evidence.share`)
   are not informational notices (`privilege.status`, `background.status`);
   claim tokens and provider refs are never public record fields.
+- package lifecycle vocabulary is owned by the 013 contracts: package artifact
+  manifests describe extracted tarballs; installed-state manifests describe a
+  concrete install prefix and are the authority for verify, upgrade, and
+  uninstall ownership.
 
 Do not treat similar suffixes as interchangeable. Action names describe
 authority requested by a policy decision. Backend capability flags describe what

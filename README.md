@@ -58,19 +58,9 @@ copying the prebuilt artifacts from the extracted package.
 
 For local source-tree development, Go is also required.
 
-For local development, install from the source tree. The default install path
-initializes a Lima-backed profile with direct networking:
-
-```bash
-scripts/install-local.sh
-export PATH="$HOME/.local/bin:$PATH"
-hideout version
-hideout doctor
-```
-
-For a release-like tarball, extract it and run the package installer from the
-package root. The package installer follows the same default init path and does
-not require Go:
+For the alpha package path, extract the tarball and run the package installer
+from the package root. The package installer follows the same default init path
+and does not require Go:
 
 ```bash
 tar -xzf hideout-<platform>.tar.gz
@@ -78,16 +68,36 @@ cd hideout
 ./install.sh
 export PATH="$HOME/.local/bin:$PATH"
 hideout version
+hideout package verify "$HOME/.local"
 hideout doctor
 ```
 
-The source-tree installer builds:
+Installing a newer package to the same prefix upgrades package-owned files and
+preserves profiles, audit, evidence, adapter packs, decisions, and notices.
+Package uninstall removes only package-owned files by default; durable user
+state is removed only with an explicit purge:
+
+```bash
+hideout package uninstall --prefix "$HOME/.local" --dry-run
+hideout package uninstall --prefix "$HOME/.local"
+hideout package uninstall --prefix "$HOME/.local" --purge
+```
+
+For local source-tree development, Go is required. The source-tree installer
+builds:
 
 - `hideout`;
 - the host command shim;
 - the Linux guest shim;
 - the Linux HostFS daemon;
 - the guest-local DNS-over-HTTPS stub used by privacy-mode DNS mediation.
+
+```bash
+scripts/install-local.sh
+export PATH="$HOME/.local/bin:$PATH"
+hideout version
+hideout doctor
+```
 
 ## Quickstart
 

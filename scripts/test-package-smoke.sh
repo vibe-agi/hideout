@@ -17,6 +17,10 @@ mkdir -p "$workspace" "$tmp/install"
 
 scripts/package-local.sh --out "$pkg" >"$tmp/package.out"
 test -f "$pkg"
+grep -q 'For the alpha package path' README.md
+grep -q 'hideout package verify "$HOME/.local"' README.md
+grep -q 'For local source-tree development' README.md
+grep -q 'Alpha package lifecycle' docs/STATUS.md
 
 tar -xzf "$pkg" -C "$tmp/install"
 prefix="$tmp/install/hideout"
@@ -134,7 +138,7 @@ jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$prefix/package-manifest.json
     exit 1
   fi
   case "$kind" in
-    binary|linux-helper|helper-manifest|installer|entrypoint|schema)
+    binary|linux-helper|helper-manifest|installer|entrypoint|schema|doc|script|packaging)
       ;;
     *)
       echo "package-smoke: manifest file has unknown kind: $rel ($kind)" >&2
@@ -201,7 +205,7 @@ if "$broken_missing_helper/install.sh" --prefix "$tmp/broken-helper-install" --s
   echo "package-smoke: installer accepted package missing Linux HostFS daemon" >&2
   exit 1
 fi
-grep -q 'missing Linux HostFS daemon' "$tmp/broken-helper.err"
+grep -q 'bin/hideout-hostfsd-linux' "$tmp/broken-helper.err"
 if [ -e "$tmp/broken-helper-install/bin/hideout" ]; then
   echo "package-smoke: broken helper package copied binaries before failing" >&2
   exit 1
@@ -214,7 +218,7 @@ if "$broken_missing_manifest/install.sh" --prefix "$tmp/broken-manifest-install"
   echo "package-smoke: installer accepted package missing package manifest" >&2
   exit 1
 fi
-grep -q 'missing package manifest' "$tmp/broken-manifest.err"
+grep -q 'open package-manifest.json' "$tmp/broken-manifest.err"
 if [ -e "$tmp/broken-manifest-install/bin/hideout" ]; then
   echo "package-smoke: broken manifest package copied binaries before failing" >&2
   exit 1
@@ -236,15 +240,64 @@ fi
 installed_prefix="$tmp/package-installed"
 installed_store="$tmp/package-store"
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --backend native --network direct >"$tmp/package-install.out"
+installed_prefix_real="$(cd "$installed_prefix" && pwd -P)"
+installed_store_real="$(cd "$installed_store" && pwd -P)"
 test -x "$installed_prefix/bin/hideout"
 test -x "$installed_prefix/bin/hideout-shim"
 test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
+test -f "$installed_prefix/share/hideout/package-manifest.json"
+test -f "$installed_prefix/share/hideout/schemas/package-manifest.schema.json"
+test -f "$installed_prefix/share/hideout/docs/README.md"
+test -f "$installed_prefix/share/hideout/docs/STATUS.md"
+go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$installed_prefix/share/hideout/package-manifest.json"
+"$installed_prefix/bin/hideout" package verify "$installed_prefix" >"$tmp/package-installed-verify.out"
+grep -q 'package: ok mode=installed' "$tmp/package-installed-verify.out"
+grep -q "\"installPrefix\": \"$installed_prefix_real\"" "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_store/install-state.json"
 test -f "$installed_store/profiles/default/profile.json"
 HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/package-installed-doctor.out"
 grep -q 'store: ok writable' "$tmp/package-installed-doctor.out"
 grep -q 'profile: ok default' "$tmp/package-installed-doctor.out"
+
+durable_fixture="$installed_store/evidence/keep.json"
+mkdir -p "$(dirname "$durable_fixture")"
+printf '{"keep":true}\n' >"$durable_fixture"
+before_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
+"$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-upgrade.out"
+grep -q 'package: upgrade' "$tmp/package-upgrade.out"
+test -f "$durable_fixture"
+after_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
+test "$before_upgrade_sha" = "$after_upgrade_sha"
+
+bad_upgrade="$tmp/package-bad-upgrade"
+cp -R "$prefix" "$bad_upgrade"
+jq '.migration.fromInstalledSchemas = ["hideout.package-install-state.v0"]' "$bad_upgrade/package-manifest.json" >"$bad_upgrade/package-manifest.json.tmp"
+mv "$bad_upgrade/package-manifest.json.tmp" "$bad_upgrade/package-manifest.json"
+if "$bad_upgrade/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-bad-upgrade.out" 2>"$tmp/package-bad-upgrade.err"; then
+  echo "package-smoke: incompatible migration range was accepted" >&2
+  exit 1
+fi
+grep -q 'outside migration range' "$tmp/package-bad-upgrade.err"
+test "$after_upgrade_sha" = "$(sha256_file "$installed_prefix/bin/hideout")"
+
+unrelated_installed="$installed_prefix/bin/not-hideout"
+printf 'operator-owned\n' >"$unrelated_installed"
+"$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" --dry-run >"$tmp/package-uninstall-dry.out"
+grep -q 'package: uninstall dry-run' "$tmp/package-uninstall-dry.out"
+grep -q 'remove bin/hideout' "$tmp/package-uninstall-dry.out"
+test -x "$installed_prefix/bin/hideout"
+test -f "$durable_fixture"
+"$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" >"$tmp/package-uninstall.out"
+grep -q 'durableState=preserved' "$tmp/package-uninstall.out"
+test ! -e "$installed_prefix/bin/hideout"
+test -f "$unrelated_installed"
+test -f "$durable_fixture"
+"$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-reinstall-for-purge.out"
+"$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" --purge >"$tmp/package-uninstall-purge.out"
+grep -q 'durableState=purged' "$tmp/package-uninstall-purge.out"
+grep -q "purge store=$installed_store_real" "$tmp/package-uninstall-purge.out"
+test ! -e "$installed_store"
 
 default_installed_prefix="$tmp/package-default-installed"
 default_installed_store="$tmp/package-default-store"
@@ -270,15 +323,6 @@ fi
 HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-shim: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
-
-HIDEOUT_STORE_ROOT="$tmp/package-installed-lima-store" "$installed_prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/package-installed-lima-doctor-fix-dry.out"
-grep -q 'task helper.install.linux-shim: ok' "$tmp/package-installed-lima-doctor-fix-dry.out"
-grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/package-installed-lima-doctor-fix-dry.out"
-if [ -e "$tmp/package-installed-lima-store/install-state.json" ]; then
-  echo "package-smoke: installed package lima dry-run repair created install state" >&2
-  cat "$tmp/package-installed-lima-doctor-fix-dry.out" >&2
-  exit 1
-fi
 
 skip_installed_prefix="$tmp/package-skip-installed"
 skip_installed_store="$tmp/package-skip-store"

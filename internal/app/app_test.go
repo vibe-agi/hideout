@@ -36,6 +36,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/packagekit"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 )
@@ -539,7 +540,7 @@ func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "package: ok root=") {
+	if !strings.Contains(out.String(), "package: ok mode=artifact root=") {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
 }
@@ -566,11 +567,11 @@ func TestPackageVerifyRejectsLayoutFileWithoutChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest packageManifest
+	var manifest packagekit.Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	var files []packageManifestFile
+	var files []packagekit.File
 	for _, file := range manifest.Files {
 		if file.Path != "bin/hideout-shim" {
 			files = append(files, file)
@@ -644,7 +645,7 @@ func writeTestPackageRoot(t *testing.T) string {
 		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
 	}
-	manifest := packageManifest{Schema: "hideout.package-manifest.v1"}
+	manifest := packagekit.Manifest{Schema: packagekit.ArtifactSchema}
 	manifest.BuiltAt = "2026-01-01T00:00:00Z"
 	manifest.Git.Commit = "test"
 	manifest.Target.HostOS = runtime.GOOS
@@ -659,6 +660,8 @@ func writeTestPackageRoot(t *testing.T) string {
 	}
 	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
 	manifest.Layout.Directories = []string{"schemas", "docs", "packaging"}
+	manifest.Migration.InstallStateSchema = packagekit.InstallStateSchema
+	manifest.Migration.FromInstalledSchemas = []string{packagekit.InstallStateSchema}
 	for rel, spec := range files {
 		full := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -668,13 +671,14 @@ func writeTestPackageRoot(t *testing.T) string {
 			t.Fatal(err)
 		}
 		sum := sha256.Sum256([]byte(spec.data))
-		manifest.Files = append(manifest.Files, packageManifestFile{
-			Path:   rel,
-			Kind:   spec.kind,
-			SHA256: hex.EncodeToString(sum[:]),
+		manifest.Files = append(manifest.Files, packagekit.File{
+			Path:       rel,
+			Kind:       spec.kind,
+			SHA256:     hex.EncodeToString(sum[:]),
+			Executable: spec.mode&0o111 != 0,
 		})
 	}
-	slices.SortFunc(manifest.Files, func(a, b packageManifestFile) int {
+	slices.SortFunc(manifest.Files, func(a, b packagekit.File) int {
 		return strings.Compare(a.Path, b.Path)
 	})
 	data, err := json.MarshalIndent(manifest, "", "  ")

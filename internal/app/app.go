@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -44,6 +41,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/packagekit"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -184,7 +182,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "Advanced and developer:")
 	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
 	fmt.Fprintln(a.stdout, "  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only")
-	fmt.Fprintln(a.stdout, "  hideout package verify <package-root>")
+	fmt.Fprintln(a.stdout, "  hideout package install|verify|uninstall")
 	fmt.Fprintln(a.stdout, "  hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
 	fmt.Fprintln(a.stdout, "  hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
 	fmt.Fprintln(a.stdout)
@@ -382,7 +380,159 @@ func (a app) profileHomeUsage() {
 
 func (a app) packageUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
-	fmt.Fprintln(a.stdout, "  hideout package verify <package-root>")
+	fmt.Fprintln(a.stdout, "  hideout package verify <package-root-or-install-prefix>")
+	fmt.Fprintln(a.stdout, "  hideout package install <package-root> --prefix <dir> [--store <dir>] [--backend native|lima|auto] [--network direct|tun2socks] [--proxy-secret <ref>] [--skip-init]")
+	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge]")
+}
+
+func (a app) packageCommand(args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.packageUsage()
+		return nil
+	}
+	switch args[0] {
+	case "verify":
+		if len(args) == 2 && isHelpToken(args[1]) {
+			a.packageUsage()
+			return nil
+		}
+		if len(args) != 2 {
+			return errors.New("usage: hideout package verify <package-root-or-install-prefix>")
+		}
+		result, err := packagekit.Verify(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "package: ok mode=%s root=%s files=%d\n", result.Mode, result.Root, result.Files)
+		return nil
+	case "install":
+		return a.packageInstall(args[1:])
+	case "uninstall":
+		return a.packageUninstall(args[1:])
+	default:
+		return fmt.Errorf("unknown package command %q", args[0])
+	}
+}
+
+func (a app) packageInstall(args []string) error {
+	if containsHelpToken(args) {
+		a.packageUsage()
+		return nil
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return errors.New("usage: hideout package install <package-root> --prefix <dir> [--store <dir>]")
+	}
+	packageRoot := args[0]
+	opts := struct {
+		prefix      string
+		store       string
+		backend     string
+		network     string
+		proxySecret string
+		skipInit    bool
+	}{backend: "auto", network: "direct"}
+	fs := flag.NewFlagSet("package install", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.prefix, "prefix", "", "install prefix")
+	fs.StringVar(&opts.store, "store", "", "durable store root")
+	fs.StringVar(&opts.backend, "backend", "auto", "backend for init")
+	fs.StringVar(&opts.network, "network", "direct", "network mode for init")
+	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
+	fs.BoolVar(&opts.skipInit, "skip-init", false, "skip typed init after install")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout package install <package-root> --prefix <dir> [--store <dir>]")
+	}
+	if opts.store == "" {
+		opts.store = os.Getenv("HIDEOUT_STORE_ROOT")
+	}
+	if opts.store == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		opts.store = filepath.Join(home, ".hideout")
+	}
+	result, err := packagekit.Install(packagekit.InstallOptions{
+		PackageRoot: packageRoot,
+		Prefix:      opts.prefix,
+		StoreRoot:   opts.store,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "package: %s prefix=%s store=%s files=%d manifest=%s\n", result.Operation, result.Prefix, result.StoreRoot, result.FilesCopied, result.ManifestPath)
+	if !opts.skipInit {
+		initArgs := []string{"init", "--no-input", "--backend", opts.backend, "--network", opts.network}
+		if opts.proxySecret != "" {
+			initArgs = append(initArgs, "--proxy-secret", opts.proxySecret)
+		}
+		priorStore := os.Getenv("HIDEOUT_STORE_ROOT")
+		if err := os.Setenv("HIDEOUT_STORE_ROOT", result.StoreRoot); err != nil {
+			return err
+		}
+		defer func() {
+			if priorStore == "" {
+				_ = os.Unsetenv("HIDEOUT_STORE_ROOT")
+			} else {
+				_ = os.Setenv("HIDEOUT_STORE_ROOT", priorStore)
+			}
+		}()
+		if err := a.initCommand(initArgs[1:]); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(a.stdout, "package: init skipped")
+	}
+	return nil
+}
+
+func (a app) packageUninstall(args []string) error {
+	if containsHelpToken(args) {
+		a.packageUsage()
+		return nil
+	}
+	opts := struct {
+		prefix string
+		store  string
+		dryRun bool
+		purge  bool
+	}{}
+	fs := flag.NewFlagSet("package uninstall", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.prefix, "prefix", "", "install prefix")
+	fs.StringVar(&opts.store, "store", "", "durable store root")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "print uninstall plan without removing files")
+	fs.BoolVar(&opts.purge, "purge", false, "remove durable store state")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || opts.prefix == "" {
+		return errors.New("usage: hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge]")
+	}
+	result, err := packagekit.Uninstall(packagekit.UninstallOptions{
+		Prefix: opts.prefix,
+		Store:  opts.store,
+		DryRun: opts.dryRun,
+		Purge:  opts.purge,
+	})
+	if err != nil {
+		return err
+	}
+	action := "uninstall"
+	if result.DryRun {
+		action = "uninstall dry-run"
+	}
+	fmt.Fprintf(a.stdout, "package: %s prefix=%s files=%d durableState=%s\n", action, result.Prefix, len(result.Files), result.DurableAction)
+	for _, rel := range result.Files {
+		fmt.Fprintf(a.stdout, "remove %s\n", rel)
+	}
+	if result.Purge {
+		fmt.Fprintf(a.stdout, "purge store=%s\n", result.StoreRoot)
+	}
+	return nil
 }
 
 func (a app) shimUsage() {
@@ -410,250 +560,6 @@ func (a app) labPortbridgeUsage() {
 	fmt.Fprintln(a.stdout, "  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
 	fmt.Fprintln(a.stdout, "  hideout lab portbridge guest-to-host --enable-lab --target 127.0.0.1:<port>")
 	fmt.Fprintln(a.stdout, "  hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>")
-}
-
-type packageManifest struct {
-	Schema  string `json:"schema"`
-	BuiltAt string `json:"builtAt"`
-	Git     struct {
-		Commit string `json:"commit"`
-		Dirty  bool   `json:"dirty"`
-	} `json:"git"`
-	Target struct {
-		HostOS         string `json:"hostOS"`
-		HostArch       string `json:"hostArch"`
-		LinuxGuestArch string `json:"linuxGuestArch"`
-	} `json:"target"`
-	Layout struct {
-		Root        string   `json:"root"`
-		Binaries    []string `json:"binaries"`
-		Entrypoints []string `json:"entrypoints"`
-		Directories []string `json:"directories"`
-	} `json:"layout"`
-	Files []packageManifestFile `json:"files"`
-}
-
-type packageManifestFile struct {
-	Path   string `json:"path"`
-	Kind   string `json:"kind"`
-	SHA256 string `json:"sha256"`
-}
-
-func (a app) packageCommand(args []string) error {
-	if len(args) == 0 || isHelpToken(args[0]) {
-		a.packageUsage()
-		return nil
-	}
-	switch args[0] {
-	case "verify":
-		if len(args) == 2 && isHelpToken(args[1]) {
-			a.packageUsage()
-			return nil
-		}
-		if len(args) != 2 {
-			return errors.New("usage: hideout package verify <package-root>")
-		}
-		result, err := verifyPackageRoot(args[1])
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(a.stdout, "package: ok root=%s files=%d\n", result.Root, result.Files)
-		return nil
-	default:
-		return fmt.Errorf("unknown package command %q", args[0])
-	}
-}
-
-type packageVerifyResult struct {
-	Root  string
-	Files int
-}
-
-func verifyPackageRoot(root string) (packageVerifyResult, error) {
-	if strings.TrimSpace(root) == "" {
-		return packageVerifyResult{}, errors.New("package root is required")
-	}
-	cleanRoot, err := filepath.Abs(root)
-	if err != nil {
-		return packageVerifyResult{}, err
-	}
-	cleanRoot, err = filepath.EvalSymlinks(cleanRoot)
-	if err != nil {
-		return packageVerifyResult{}, fmt.Errorf("resolve package root: %w", err)
-	}
-	if st, err := os.Stat(cleanRoot); err != nil {
-		return packageVerifyResult{}, fmt.Errorf("stat package root: %w", err)
-	} else if !st.IsDir() {
-		return packageVerifyResult{}, fmt.Errorf("package root is not a directory: %s", cleanRoot)
-	}
-	manifestPath := filepath.Join(cleanRoot, "package-manifest.json")
-	f, err := os.Open(manifestPath)
-	if err != nil {
-		return packageVerifyResult{}, fmt.Errorf("open package-manifest.json: %w", err)
-	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	var manifest packageManifest
-	if err := dec.Decode(&manifest); err != nil {
-		return packageVerifyResult{}, fmt.Errorf("parse package-manifest.json: %w", err)
-	}
-	if manifest.Schema != "hideout.package-manifest.v1" {
-		return packageVerifyResult{}, fmt.Errorf("unsupported package manifest schema %q", manifest.Schema)
-	}
-	if strings.TrimSpace(manifest.BuiltAt) == "" {
-		return packageVerifyResult{}, errors.New("package manifest builtAt is required")
-	}
-	if strings.TrimSpace(manifest.Git.Commit) == "" {
-		return packageVerifyResult{}, errors.New("package manifest git.commit is required")
-	}
-	if strings.TrimSpace(manifest.Target.HostOS) == "" || strings.TrimSpace(manifest.Target.HostArch) == "" || strings.TrimSpace(manifest.Target.LinuxGuestArch) == "" {
-		return packageVerifyResult{}, errors.New("package manifest target hostOS, hostArch, and linuxGuestArch are required")
-	}
-	if manifest.Layout.Root != "hideout" {
-		return packageVerifyResult{}, fmt.Errorf("package manifest layout.root must be hideout")
-	}
-	if len(manifest.Files) == 0 {
-		return packageVerifyResult{}, errors.New("package manifest has no files")
-	}
-	if err := verifyPackageLayout(cleanRoot, manifest); err != nil {
-		return packageVerifyResult{}, err
-	}
-	seenFiles := map[string]struct{}{}
-	for _, file := range manifest.Files {
-		if _, ok := seenFiles[file.Path]; ok {
-			return packageVerifyResult{}, fmt.Errorf("package manifest contains duplicate file path %q", file.Path)
-		}
-		seenFiles[file.Path] = struct{}{}
-		if err := verifyPackageManifestFile(cleanRoot, file); err != nil {
-			return packageVerifyResult{}, err
-		}
-	}
-	for _, rel := range append(append([]string{}, manifest.Layout.Binaries...), manifest.Layout.Entrypoints...) {
-		if _, ok := seenFiles[rel]; !ok {
-			return packageVerifyResult{}, fmt.Errorf("package manifest layout path %q is not covered by files checksums", rel)
-		}
-	}
-	return packageVerifyResult{Root: cleanRoot, Files: len(manifest.Files)}, nil
-}
-
-func verifyPackageLayout(root string, manifest packageManifest) error {
-	if !containsString(manifest.Layout.Binaries, "bin/hideout") {
-		return errors.New("package manifest layout.binaries must include bin/hideout")
-	}
-	if !containsString(manifest.Layout.Entrypoints, "install.sh") {
-		return errors.New("package manifest layout.entrypoints must include install.sh")
-	}
-	if !containsString(manifest.Layout.Entrypoints, "README.md") {
-		return errors.New("package manifest layout.entrypoints must include README.md")
-	}
-	if !containsString(manifest.Layout.Directories, "schemas") {
-		return errors.New("package manifest layout.directories must include schemas")
-	}
-	for _, rel := range manifest.Layout.Binaries {
-		joined, err := packageRelativePath(root, rel)
-		if err != nil {
-			return fmt.Errorf("package manifest binary path %q: %w", rel, err)
-		}
-		if err := requirePackageRegularFile(joined, true); err != nil {
-			return fmt.Errorf("package manifest binary %q: %w", rel, err)
-		}
-	}
-	for _, rel := range manifest.Layout.Entrypoints {
-		joined, err := packageRelativePath(root, rel)
-		if err != nil {
-			return fmt.Errorf("package manifest entrypoint path %q: %w", rel, err)
-		}
-		if err := requirePackageRegularFile(joined, false); err != nil {
-			return fmt.Errorf("package manifest entrypoint %q: %w", rel, err)
-		}
-	}
-	for _, rel := range manifest.Layout.Directories {
-		joined, err := packageRelativePath(root, rel)
-		if err != nil {
-			return fmt.Errorf("package manifest directory path %q: %w", rel, err)
-		}
-		st, err := os.Lstat(joined)
-		if err != nil {
-			return fmt.Errorf("package manifest directory %q: %w", rel, err)
-		}
-		if st.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("package manifest directory %q must not be a symlink", rel)
-		}
-		if !st.IsDir() {
-			return fmt.Errorf("package manifest directory %q is not a directory", rel)
-		}
-	}
-	return nil
-}
-
-func verifyPackageManifestFile(root string, file packageManifestFile) error {
-	joined, err := packageRelativePath(root, file.Path)
-	if err != nil {
-		return fmt.Errorf("package manifest file path %q: %w", file.Path, err)
-	}
-	switch file.Kind {
-	case "binary", "linux-helper", "helper-manifest", "installer", "entrypoint", "schema":
-	default:
-		return fmt.Errorf("package manifest file %q has unsupported kind %q", file.Path, file.Kind)
-	}
-	requireExecutable := file.Kind == "binary" || file.Kind == "linux-helper" || file.Kind == "installer"
-	if err := requirePackageRegularFile(joined, requireExecutable); err != nil {
-		return fmt.Errorf("package manifest file %q: %w", file.Path, err)
-	}
-	if len(file.SHA256) != 64 {
-		return fmt.Errorf("package manifest file %q has invalid sha256", file.Path)
-	}
-	data, err := os.ReadFile(joined)
-	if err != nil {
-		return fmt.Errorf("read package manifest file %q: %w", file.Path, err)
-	}
-	sum := sha256.Sum256(data)
-	got := hex.EncodeToString(sum[:])
-	if got != file.SHA256 {
-		return fmt.Errorf("package checksum mismatch for %s: want %s got %s", file.Path, file.SHA256, got)
-	}
-	return nil
-}
-
-func packageRelativePath(root, rel string) (string, error) {
-	if rel == "" || filepath.IsAbs(rel) {
-		return "", errors.New("path must be package-relative")
-	}
-	if strings.Contains(rel, `\`) {
-		return "", errors.New("path must use slash separators")
-	}
-	clean := path.Clean(rel)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", errors.New("path must stay inside the package")
-	}
-	return filepath.Join(root, filepath.FromSlash(clean)), nil
-}
-
-func requirePackageRegularFile(path string, executable bool) error {
-	st, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if st.Mode()&os.ModeSymlink != 0 {
-		return errors.New("must not be a symlink")
-	}
-	if !st.Mode().IsRegular() {
-		return errors.New("is not a regular file")
-	}
-	if executable && st.Mode()&0o111 == 0 {
-		return errors.New("is not executable")
-	}
-	return nil
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 type initCommandOptions struct {

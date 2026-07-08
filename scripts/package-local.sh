@@ -135,66 +135,98 @@ cat >"$prefix/package-manifest.json" <<EOF
       "packaging"
     ]
   },
+  "migration": {
+    "installStateSchema": "hideout.package-install-state.v1",
+    "fromInstalledSchemas": [
+      "hideout.package-install-state.v1"
+    ],
+    "minimumPackageSchema": "hideout.package-manifest.v1",
+    "maximumPackageSchema": "hideout.package-manifest.v1"
+  },
   "files": [
     {
       "path": "bin/hideout",
       "kind": "binary",
-      "sha256": "$(sha256_file "$prefix/bin/hideout")"
+      "sha256": "$(sha256_file "$prefix/bin/hideout")",
+      "executable": true
     },
     {
       "path": "bin/hideout-shim",
       "kind": "binary",
-      "sha256": "$(sha256_file "$prefix/bin/hideout-shim")"
+      "sha256": "$(sha256_file "$prefix/bin/hideout-shim")",
+      "executable": true
     },
     {
       "path": "$shim_linux",
       "kind": "linux-helper",
-      "sha256": "$(sha256_file "$prefix/$shim_linux")"
+      "sha256": "$(sha256_file "$prefix/$shim_linux")",
+      "executable": true
     },
     {
       "path": "$shim_linux_manifest",
       "kind": "helper-manifest",
-      "sha256": "$(sha256_file "$prefix/$shim_linux_manifest")"
+      "sha256": "$(sha256_file "$prefix/$shim_linux_manifest")",
+      "executable": false
     },
     {
       "path": "$hostfsd_linux",
       "kind": "linux-helper",
-      "sha256": "$(sha256_file "$prefix/$hostfsd_linux")"
+      "sha256": "$(sha256_file "$prefix/$hostfsd_linux")",
+      "executable": true
     },
     {
       "path": "$hostfsd_linux_manifest",
       "kind": "helper-manifest",
-      "sha256": "$(sha256_file "$prefix/$hostfsd_linux_manifest")"
+      "sha256": "$(sha256_file "$prefix/$hostfsd_linux_manifest")",
+      "executable": false
     },
     {
       "path": "$dns_stub_linux",
       "kind": "linux-helper",
-      "sha256": "$(sha256_file "$prefix/$dns_stub_linux")"
+      "sha256": "$(sha256_file "$prefix/$dns_stub_linux")",
+      "executable": true
     },
     {
       "path": "install.sh",
       "kind": "installer",
-      "sha256": "$(sha256_file "$prefix/install.sh")"
+      "sha256": "$(sha256_file "$prefix/install.sh")",
+      "executable": true
     },
     {
       "path": "README.md",
       "kind": "entrypoint",
-      "sha256": "$(sha256_file "$prefix/README.md")"
+      "sha256": "$(sha256_file "$prefix/README.md")",
+      "executable": false
     },
     {
       "path": "README.zh-CN.md",
       "kind": "entrypoint",
-      "sha256": "$(sha256_file "$prefix/README.zh-CN.md")"
+      "sha256": "$(sha256_file "$prefix/README.zh-CN.md")",
+      "executable": false
     },
     {
       "path": "schemas/package-manifest.schema.json",
       "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/package-manifest.schema.json")"
+      "sha256": "$(sha256_file "$prefix/schemas/package-manifest.schema.json")",
+      "executable": false
     },
     {
       "path": "schemas/release-dogfood.schema.json",
       "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/release-dogfood.schema.json")"
+      "sha256": "$(sha256_file "$prefix/schemas/release-dogfood.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "docs/README.md",
+      "kind": "doc",
+      "sha256": "$(sha256_file "$prefix/docs/README.md")",
+      "executable": false
+    },
+    {
+      "path": "docs/STATUS.md",
+      "kind": "doc",
+      "sha256": "$(sha256_file "$prefix/docs/STATUS.md")",
+      "executable": false
     }
   ]
 }

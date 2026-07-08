@@ -171,7 +171,11 @@ Required evidence:
 - all JSON schemas parse;
 - the install and package smokes pass (`scripts/test-install-smoke.sh` and
   `scripts/test-package-smoke.sh`; Gate 0 runs both on every invocation,
-  which is how the Distribution Bootstrap acceptance is wired in);
+  which is how the Distribution Bootstrap acceptance is wired in). Package
+  smoke proves artifact verification, installed-prefix verification without
+  source checkout paths, helper/schema discovery, missing helper/checksum
+  fail-closed behavior, compatible upgrade preservation, incompatible migration
+  denial, uninstall dry-run, uninstall preserve, and explicit purge;
 - no Required Phase 1 behavior depends on lab commands, Web UI, or a daemon.
 - every architecture document that introduces authority has a design status,
   failure behavior, and either a release gate or an explicit Later status.
@@ -1014,7 +1018,10 @@ from a clean installation without manual hidden setup.
 
 How to run: `scripts/test-gate0.sh` executes `scripts/test-install-smoke.sh`
 and `scripts/test-package-smoke.sh` on every invocation (including
-`--quick`); the full local install flow is `scripts/install-local.sh`.
+`--quick`). The source-tree development install flow is
+`scripts/install-local.sh`; the alpha package flow is
+`scripts/package-local.sh` plus packaged `install.sh`, backed by
+`hideout package install|verify|uninstall`.
 
 Required checks:
 
@@ -1029,11 +1036,17 @@ Required checks:
 - install smoke proves installed `doctor --fix --dry-run` does not create state
   and installed safe `doctor --fix` writes current init metadata plus
   `doctor.fix.apply` audit;
-- package smoke proves the release-like tarball can be unpacked, its package
+- package smoke proves the release-like tarball can be unpacked, its artifact
   manifest checksums match the extracted files, and extracted
   `hideout init --no-input` plus `hideout doctor` run from the unpacked layout;
-  package-root `install.sh` fails before copying binaries when the layout or a
-  manifest-declared checksum is broken;
+  package-root `install.sh` fails before copying binaries when the layout,
+  helper, or manifest-declared checksum is broken;
+- package smoke proves the installed prefix writes an installed-state manifest
+  with the actual prefix and verifies without source checkout paths;
+- package smoke proves compatible upgrade preserves durable store state,
+  incompatible migration fails before mutation, uninstall dry-run removes
+  nothing, uninstall without purge preserves durable state, and `--purge` is
+  required for durable state deletion;
 - the existing TUI (`hideout tui --once`) and WebUI (`hideout ui --print-url`)
   render smokes remain in the package smoke as later MVP-ordered checks after
   the unpack, checksum, and init plus doctor proof;
