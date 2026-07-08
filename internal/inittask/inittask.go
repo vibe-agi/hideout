@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profiletemplate"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
@@ -30,13 +31,25 @@ const (
 )
 
 type Options struct {
-	ProfileName    string
-	Backend        string
-	Network        string
-	ProxySecretRef string
-	NoInput        bool
-	ToolPresets    []string
-	NPMGlobals     []profile.NPMGlobalPackage
+	ProfileName           string
+	Backend               string
+	Network               string
+	ProxySecretRef        string
+	MediatedResolver      string
+	TemplateID            string
+	PrivilegeStatus       string
+	PrivilegeReason       string
+	PrivilegeGuidance     string
+	PrivilegeSource       string
+	AllowDegradedTemplate bool
+	Onboarding            bool
+	ExplicitProfile       bool
+	ExplicitTemplate      bool
+	ExplicitBackend       bool
+	ExplicitNetwork       bool
+	NoInput               bool
+	ToolPresets           []string
+	NPMGlobals            []profile.NPMGlobalPackage
 }
 
 type ApplyOptions struct {
@@ -47,13 +60,26 @@ type ApplyOptions struct {
 }
 
 type Plan struct {
-	Version   string     `json:"version"`
-	StoreRoot string     `json:"storeRoot"`
-	Profile   string     `json:"profile"`
-	Backend   string     `json:"backend"`
-	Network   string     `json:"network"`
-	Tasks     []Task     `json:"tasks"`
-	NextSteps []NextStep `json:"nextSteps"`
+	Version               string     `json:"version"`
+	StoreRoot             string     `json:"storeRoot"`
+	Profile               string     `json:"profile"`
+	Backend               string     `json:"backend"`
+	Network               string     `json:"network"`
+	ProxySecretRef        string     `json:"proxySecretRef,omitempty"`
+	MediatedResolver      string     `json:"mediatedResolver,omitempty"`
+	TemplateID            string     `json:"templateId,omitempty"`
+	EffectivePosture      string     `json:"effectivePosture,omitempty"`
+	PrivilegeStatus       string     `json:"privilegeStatus,omitempty"`
+	PrivilegeReason       string     `json:"privilegeReason,omitempty"`
+	PrivilegeGuidance     string     `json:"privilegeGuidance,omitempty"`
+	PrivilegeSource       string     `json:"privilegeSource,omitempty"`
+	AllowDegradedTemplate bool       `json:"allowDegradedTemplate,omitempty"`
+	EvidencePath          string     `json:"evidencePath,omitempty"`
+	Warnings              []string   `json:"warnings,omitempty"`
+	NonClaims             []string   `json:"nonClaims,omitempty"`
+	ReviewLines           []string   `json:"reviewLines,omitempty"`
+	Tasks                 []Task     `json:"tasks"`
+	NextSteps             []NextStep `json:"nextSteps"`
 }
 
 type NextStep struct {
@@ -78,11 +104,12 @@ type Task struct {
 }
 
 type Result struct {
-	Version   string `json:"version"`
-	Plan      Plan   `json:"plan"`
-	AuditPath string `json:"auditPath,omitempty"`
-	Applied   []Task `json:"applied"`
-	Skipped   []Task `json:"skipped"`
+	Version      string `json:"version"`
+	Plan         Plan   `json:"plan"`
+	AuditPath    string `json:"auditPath,omitempty"`
+	EvidencePath string `json:"evidencePath,omitempty"`
+	Applied      []Task `json:"applied"`
+	Skipped      []Task `json:"skipped"`
 }
 
 type StoreSummary struct {
@@ -139,6 +166,25 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 	if strings.TrimSpace(store.Root) == "" {
 		return Plan{}, errors.New("init store root is required")
 	}
+	if normalized.Onboarding {
+		rendered, err := profiletemplate.Render(onboardingRequestFromOptions(store, normalized))
+		if err != nil {
+			return Plan{}, err
+		}
+		plan.TemplateID = rendered.Template.ID
+		plan.EffectivePosture = rendered.EffectivePosture
+		plan.PrivilegeStatus = rendered.Evidence.Privilege.Status
+		plan.PrivilegeReason = rendered.Evidence.Privilege.Reason
+		plan.PrivilegeGuidance = rendered.Evidence.Privilege.Guidance
+		plan.PrivilegeSource = rendered.Evidence.Privilege.Source
+		plan.AllowDegradedTemplate = normalized.AllowDegradedTemplate
+		plan.ProxySecretRef = normalized.ProxySecretRef
+		plan.MediatedResolver = normalized.MediatedResolver
+		plan.EvidencePath = rendered.EvidencePath
+		plan.Warnings = append([]string(nil), rendered.Warnings...)
+		plan.NonClaims = append([]string(nil), rendered.NonClaims...)
+		plan.ReviewLines = append([]string(nil), rendered.Review.Lines...)
+	}
 	plan.Tasks = append(plan.Tasks, storeTask(store.Root))
 	plan.Tasks = append(plan.Tasks, stateTask(store.Root))
 	profileTask, profileExists, err := profileTask(store, normalized.ProfileName)
@@ -153,7 +199,7 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		}
 		plan.Tasks = append(plan.Tasks, identityTask)
 	}
-	networkTask, err := networkTask(store, normalized.ProfileName, normalized.Network, normalized.ProxySecretRef, profileExists)
+	networkTask, err := networkTask(store, normalized.ProfileName, normalized.Network, normalized.ProxySecretRef, normalized.MediatedResolver, profileExists)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -291,6 +337,24 @@ func ApplyMachine(store profile.Store, plan Plan, opts ApplyOptions) (Result, er
 			return result, err
 		}
 	}
+	if plan.TemplateID != "" && !opts.DryRun {
+		rendered, err := profiletemplate.Render(onboardingRequestFromPlan(store, plan))
+		if err != nil {
+			return result, err
+		}
+		evidence := rendered.Evidence
+		evidence.InitAuditPath = result.AuditPath
+		evidence.NextSteps = initNextStepCommands(plan.NextSteps)
+		evidence = profiletemplate.RedactEvidence(evidence)
+		evidencePath := plan.EvidencePath
+		if evidencePath == "" {
+			evidencePath = profiletemplate.EvidencePath(store, plan.Profile)
+		}
+		if err := profiletemplate.WriteEvidence(evidencePath, evidence); err != nil {
+			return result, err
+		}
+		result.EvidencePath = evidencePath
+	}
 	return result, nil
 }
 
@@ -346,10 +410,14 @@ func normalizeOptions(opts Options) (Options, error) {
 		return opts, errors.New("legacy tool-supply init options are no longer supported; declare tools.expectedCommands for diagnostics only")
 	}
 	opts.ProxySecretRef = strings.TrimSpace(opts.ProxySecretRef)
+	opts.MediatedResolver = strings.TrimSpace(opts.MediatedResolver)
 	switch opts.Network {
 	case "direct":
 		if opts.ProxySecretRef != "" {
 			return opts, errors.New("direct network mode does not use a proxy secret ref")
+		}
+		if opts.MediatedResolver != "" {
+			return opts, errors.New("direct network mode does not use a mediated resolver")
 		}
 	case "tun2socks":
 		if opts.ProxySecretRef == "" {
@@ -359,7 +427,74 @@ func normalizeOptions(opts Options) (Options, error) {
 			return opts, fmt.Errorf("proxy secret ref: %w", err)
 		}
 	}
+	opts.TemplateID = strings.TrimSpace(opts.TemplateID)
+	opts.PrivilegeStatus = strings.TrimSpace(opts.PrivilegeStatus)
+	opts.PrivilegeReason = strings.TrimSpace(opts.PrivilegeReason)
+	opts.PrivilegeGuidance = strings.TrimSpace(opts.PrivilegeGuidance)
+	opts.PrivilegeSource = strings.TrimSpace(opts.PrivilegeSource)
 	return opts, nil
+}
+
+func onboardingRequestFromOptions(store profile.Store, opts Options) profiletemplate.Request {
+	return profiletemplate.Request{
+		ProfileName:           opts.ProfileName,
+		TemplateID:            opts.TemplateID,
+		Backend:               opts.Backend,
+		Network:               opts.Network,
+		ProxySecretRef:        opts.ProxySecretRef,
+		MediatedResolver:      opts.MediatedResolver,
+		Privilege:             onboardingPrivilegeFromOptions(opts),
+		AllowDegradedTemplate: opts.AllowDegradedTemplate,
+		NoInput:               opts.NoInput,
+		ExplicitProfile:       opts.ExplicitProfile,
+		ExplicitTemplate:      opts.ExplicitTemplate,
+		ExplicitBackend:       opts.ExplicitBackend,
+		ExplicitNetwork:       opts.ExplicitNetwork,
+		CheckExistingProfile:  opts.Onboarding,
+		Store:                 store,
+		AdditionalWarning:     "",
+		AdditionalNonClaim:    "",
+	}
+}
+
+func onboardingRequestFromPlan(store profile.Store, plan Plan) profiletemplate.Request {
+	return profiletemplate.Request{
+		ProfileName:           plan.Profile,
+		TemplateID:            plan.TemplateID,
+		Backend:               plan.Backend,
+		Network:               plan.Network,
+		ProxySecretRef:        plan.ProxySecretRef,
+		MediatedResolver:      plan.MediatedResolver,
+		Privilege:             onboardingPrivilegeFromPlan(plan),
+		AllowDegradedTemplate: plan.AllowDegradedTemplate,
+		NoInput:               true,
+		ExplicitProfile:       true,
+		ExplicitTemplate:      true,
+		ExplicitBackend:       true,
+		ExplicitNetwork:       true,
+		CheckExistingProfile:  false,
+		Store:                 store,
+		AdditionalWarning:     "",
+		AdditionalNonClaim:    "",
+	}
+}
+
+func onboardingPrivilegeFromOptions(opts Options) profiletemplate.PrivilegeFact {
+	return profiletemplate.PrivilegeFact{
+		Status:   opts.PrivilegeStatus,
+		Reason:   opts.PrivilegeReason,
+		Guidance: opts.PrivilegeGuidance,
+		Source:   opts.PrivilegeSource,
+	}
+}
+
+func onboardingPrivilegeFromPlan(plan Plan) profiletemplate.PrivilegeFact {
+	return profiletemplate.PrivilegeFact{
+		Status:   plan.PrivilegeStatus,
+		Reason:   plan.PrivilegeReason,
+		Guidance: plan.PrivilegeGuidance,
+		Source:   plan.PrivilegeSource,
+	}
 }
 
 func storeTask(root string) Task {
@@ -469,10 +604,16 @@ func identityTask(store profile.Store, name string) (Task, error) {
 	}, nil
 }
 
-func networkTask(store profile.Store, name, mode, proxySecretRef string, profileExists bool) (Task, error) {
+func networkTask(store profile.Store, name, mode, proxySecretRef, mediatedResolver string, profileExists bool) (Task, error) {
 	inputs := []string{mode}
 	if proxySecretRef != "" {
 		inputs = append(inputs, proxySecretRef)
+	}
+	if mediatedResolver != "" {
+		if proxySecretRef == "" {
+			inputs = append(inputs, "")
+		}
+		inputs = append(inputs, mediatedResolver)
 	}
 	task := Task{
 		ID:                 "init_network_select",
@@ -497,7 +638,7 @@ func networkTask(store profile.Store, name, mode, proxySecretRef string, profile
 	if err != nil {
 		return Task{}, err
 	}
-	if p.Network.Mode == mode && strings.TrimSpace(p.Network.ProxySecretRef) == proxySecretRef {
+	if p.Network.Mode == mode && strings.TrimSpace(p.Network.ProxySecretRef) == proxySecretRef && strings.TrimSpace(p.Network.MediatedResolver) == mediatedResolver {
 		return task, nil
 	}
 	task.Status = "pending"
@@ -620,6 +761,13 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 	case "schema.metadata.write":
 		return writeState(filepath.Join(store.Root, StateFile))
 	case "profile.create":
+		if plan.TemplateID != "" {
+			rendered, err := profiletemplate.Render(onboardingRequestFromPlan(store, plan))
+			if err != nil {
+				return err
+			}
+			return store.Create(rendered.Profile)
+		}
 		_, err := store.LoadOrInit(plan.Profile)
 		return err
 	case "identity.materialize":
@@ -629,18 +777,23 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 		}
 		return profile.MaterializeIdentityState(store.ProfileDir(plan.Profile), p)
 	case "network.mode.select":
-		if len(task.Inputs) < 1 || len(task.Inputs) > 2 {
-			return fmt.Errorf("network.mode.select task requires mode and optional proxy secret ref inputs")
+		if len(task.Inputs) < 1 || len(task.Inputs) > 3 {
+			return fmt.Errorf("network.mode.select task requires mode, optional proxy secret ref, and optional mediated resolver inputs")
 		}
 		p, err := store.LoadOrInit(plan.Profile)
 		if err != nil {
 			return err
 		}
 		p.Network.Mode = task.Inputs[0]
-		if len(task.Inputs) == 2 {
+		if len(task.Inputs) >= 2 {
 			p.Network.ProxySecretRef = task.Inputs[1]
 		} else {
 			p.Network.ProxySecretRef = ""
+		}
+		if len(task.Inputs) == 3 {
+			p.Network.MediatedResolver = task.Inputs[2]
+		} else {
+			p.Network.MediatedResolver = plan.MediatedResolver
 		}
 		return store.Save(p)
 	case "helper.install.linux-shim":
@@ -650,6 +803,16 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 	default:
 		return fmt.Errorf("unsupported init task %q", task.Kind)
 	}
+}
+
+func initNextStepCommands(steps []NextStep) []string {
+	out := make([]string, 0, len(steps))
+	for _, step := range steps {
+		if step.Command != "" {
+			out = append(out, step.Command)
+		}
+	}
+	return out
 }
 
 func normalizeStringList(values []string) []string {

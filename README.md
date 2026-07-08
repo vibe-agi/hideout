@@ -102,7 +102,15 @@ hideout doctor
 ## Quickstart
 
 ```bash
-hideout init --no-input --backend lima --network direct
+export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
+hideout init \
+  --template privacy \
+  --profile default \
+  --backend lima \
+  --network tun2socks \
+  --proxy-secret proxy-url \
+  --mediated-resolver 1.1.1.1 \
+  --no-input
 hideout run -- <cli>
 hideout run --fs read:/absolute/file -- <cli>
 hideout run --fs overlay-dir:/absolute/directory -- <cli>
@@ -127,6 +135,18 @@ hideout run --profile smoke --backend lima --network direct -- pwd
 
 `hideout init` and `hideout doctor --fix` print copyable next-step commands
 for `doctor`, a smoke run, and any configured generic CLI tool.
+
+For a local weak-isolation development harness, create a separately labeled dev
+profile instead of calling it privacy:
+
+```bash
+hideout init \
+  --template dev \
+  --profile local-dev \
+  --backend native \
+  --network direct \
+  --no-input
+```
 
 This first run should only verify the backend, workspace mount, and isolated
 identity. Use a dedicated `smoke` profile so existing `default` profile policy
@@ -201,7 +221,12 @@ hideout profile home agent import \
 Direct mode is the compatibility default:
 
 ```bash
-hideout init --no-input --backend lima --network direct
+hideout init \
+  --template dev \
+  --profile local-dev \
+  --backend native \
+  --network direct \
+  --no-input
 hideout run --backend lima --network direct -- <command>
 ```
 
@@ -217,9 +242,11 @@ export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
 
 hideout init --no-input \
   --profile privacy \
+  --template privacy \
   --backend lima \
   --network tun2socks \
-  --proxy-secret default-proxy
+  --proxy-secret default-proxy \
+  --mediated-resolver 1.1.1.1
 
 hideout run --profile privacy --backend lima \
   -- <command>

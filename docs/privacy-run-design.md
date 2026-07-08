@@ -4113,7 +4113,7 @@ hideout run -- <command> [args...]
 hideout run --profile <name> -- <command> [args...]
 hideout run --explain -- <command> [args...]
 hideout explain --profile <name> -- <command> [args...]
-hideout init --no-input
+hideout init --template dev --profile default --backend native --network direct --no-input
 hideout doctor
 hideout doctor --fix --dry-run
 hideout cleanup

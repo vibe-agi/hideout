@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/onboarding-evidence.schema.json",
+  "title": "Hideout Onboarding Evidence",
+  "type": "object",
+  "required": [
+    "version",
+    "time",
+    "profile",
+    "template",
+    "effectivePosture",
+    "backend",
+    "network",
+    "hostfsPosture",
+    "adapterPackPosture",
+    "privilege",
+    "warnings",
+    "nonClaims",
+    "profilePath",
+    "nextSteps"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.onboarding-evidence/v1"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "template": {
+      "enum": ["privacy", "hardened", "dev", "debug"]
+    },
+    "effectivePosture": {
+      "enum": ["privacy", "hardened", "hardened-degraded", "dev", "debug-local"]
+    },
+    "backend": {
+      "enum": ["native", "lima"]
+    },
+    "network": {
+      "enum": ["direct", "tun2socks"]
+    },
+    "proxySecretRef": {
+      "type": "string"
+    },
+    "mediatedResolver": {
+      "type": "string"
+    },
+    "hostfsPosture": {
+      "const": "none-by-default"
+    },
+    "adapterPackPosture": {
+      "const": "none-by-default"
+    },
+    "privilege": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": ["enforced", "degraded", "unknown"]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "guidance": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nonClaims": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "profilePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "initAuditPath": {
+      "type": "string"
+    },
+    "nextSteps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

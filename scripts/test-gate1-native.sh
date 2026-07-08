@@ -6,7 +6,7 @@ cd "$ROOT"
 
 APP_TEST_NAMES=(
   ExplainInitializesProfileAndPrintsBoundary
-  InitNoInputCreatesStoreProfileAndIsIdempotent
+  InitNoInputCreatesTemplateProfileAndFailsOnCollision
   DoctorFixDryRunDoesNotCreateProfile
   ExplainAndRunUseConfiguredIdentityEnv
   ExplainRequiresTargetCommandBeforeStateCreation

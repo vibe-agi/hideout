@@ -279,7 +279,7 @@ prepare_linux_hostfsd
 operator_env_flags
 
 echo "operator-cli: initializing profile"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --backend lima --network direct >/dev/null
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --profile default --template dev --backend lima --network direct >/dev/null
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" profile tools "$profile_name" expected add "$command_name" >/dev/null
 operator_home_imports
 

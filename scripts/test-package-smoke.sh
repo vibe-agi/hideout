@@ -158,7 +158,7 @@ jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$prefix/package-manifest.json
   fi
 done
 
-HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --backend native --network direct >"$tmp/init.out"
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --profile default --template dev --backend native --network direct >"$tmp/init.out"
 grep -q 'Hideout init' "$tmp/init.out"
 test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
@@ -342,6 +342,7 @@ proxy_installed_store="$tmp/package-proxy-store"
 HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@127.0.0.1:7890" \
   "$prefix/install.sh" --prefix "$proxy_installed_prefix" --store "$proxy_installed_store" --backend native --network tun2socks --proxy-secret default-proxy >"$tmp/package-proxy-install.out"
 jq -e '.network.mode == "tun2socks" and .network.proxySecretRef == "default-proxy" and (.network.proxyEnvVisible == false)' "$proxy_installed_store/profiles/default/profile.json" >/dev/null
+jq -e '.network.mediatedResolver == "1.1.1.1" and .metadata.templateId == "privacy"' "$proxy_installed_store/profiles/default/profile.json" >/dev/null
 if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_installed_store" >/dev/null 2>&1; then
   echo "package-smoke: package installer persisted raw proxy URL" >&2
   exit 1

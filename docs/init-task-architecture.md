@@ -231,7 +231,7 @@ In non-interactive environments, missing confirmation fails with a clear next
 step:
 
 ```bash
-hideout init --no-input
+hideout init --template dev --profile default --backend native --network direct --no-input
 hideout doctor --fix --dry-run
 ```
 
@@ -239,7 +239,7 @@ Explicit initialization remains available:
 
 ```bash
 hideout init
-hideout init --no-input
+hideout init --template privacy --profile default --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input
 hideout doctor --fix
 ```
 
@@ -302,7 +302,7 @@ that CLI, TUI, and WebUI can render.
 ## TUI And WebUI
 
 Phase 1 uses CLI `hideout init` and `hideout doctor --fix` as the product init
-surface. `hideout init --no-input` is the scripting and CI path. A future TUI
+surface. `hideout init --template ... --no-input` is the scripting and CI path. A future TUI
 wizard must still use this same InitTask plan/apply engine; it must not create a
 second initialization model.
 
@@ -365,12 +365,13 @@ used for missing privacy contracts.
 
 Minimum acceptance:
 
-- `hideout init --no-input --network direct` plans the default Lima first-run
+- `hideout init --template dev --profile default --backend lima --network direct --no-input` plans the default Lima first-run
   path, including Linux guest helper tasks when official helpers are missing;
-- `hideout init --no-input --backend native --network direct` creates store
+- `hideout init --template dev --profile native-dev --backend native --network direct --no-input` creates store
   directories, default profile, identity state, schema metadata, and runtime
   directories under a temporary store for the explicit weak-isolation smoke;
-- repeated init is idempotent and does not rotate identity or grant new
+- repeated doctor repair is idempotent, while template-aware `hideout init`
+  rejects an existing profile instead of rotating identity or granting new
   authority;
 - `doctor --fix --dry-run` shows safe fixes without applying unsafe actions;
 - expected-command diagnostic inputs compile into explicit typed diagnostic
@@ -378,9 +379,10 @@ Minimum acceptance:
   or any package-manager assumption;
 - init plans include structured `nextSteps` entries for doctor verification,
   smoke runs, configured generic CLI commands, or blocked-task resolution;
-- `hideout init --network tun2socks --proxy-secret <ref>` compiles proxy
-  configuration into `network.mode.select`, persists only `network.proxySecretRef`,
-  and fails closed when the ref is missing or invalid;
+- `hideout init --template privacy --network tun2socks --proxy-secret <ref>
+  --mediated-resolver <ip>` compiles proxy and DNS mediation configuration into
+  `network.mode.select`, persists only non-secret references, and fails closed
+  when the ref or resolver is missing or invalid;
 - helper discovery succeeds from official store path or explicit development
   override and fails closed when the binary is missing or mismatched;
 - store-built helpers have sibling `hideout.helper-manifest/v1` manifests, and

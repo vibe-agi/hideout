@@ -415,10 +415,12 @@ func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
 	reqBody := InitAPIRequest{
-		ProfileName:    "api-privacy",
-		Backend:        "native",
-		Network:        "tun2socks",
-		ProxySecretRef: "default-proxy",
+		ProfileName:      "api-privacy",
+		TemplateID:       "privacy",
+		Backend:          "native",
+		Network:          "tun2socks",
+		ProxySecretRef:   "default-proxy",
+		MediatedResolver: "1.1.1.1",
 	}
 	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", reqBody)
 	req.Header.Set("Authorization", "Bearer ui_token")
@@ -434,6 +436,9 @@ func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
 		`"kind":"network.mode.select"`,
 		`"tun2socks"`,
 		`"default-proxy"`,
+		`"templateId":"privacy"`,
+		`"mediatedResolver":"1.1.1.1"`,
+		`"evidencePath"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("init/apply missing %q: %s", want, body)
@@ -446,8 +451,11 @@ func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Network.Mode != network.ModeTun2Socks || loaded.Network.ProxySecretRef != "default-proxy" {
+	if loaded.Network.Mode != network.ModeTun2Socks || loaded.Network.ProxySecretRef != "default-proxy" || loaded.Network.MediatedResolver != "1.1.1.1" {
 		t.Fatalf("network settings were not persisted: %+v", loaded.Network)
+	}
+	if loaded.Metadata["templateId"] != "privacy" {
+		t.Fatalf("template metadata missing: %+v", loaded.Metadata)
 	}
 }
 

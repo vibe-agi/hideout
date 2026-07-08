@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,12 +46,14 @@ import (
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profiletemplate"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
 type app struct {
 	stdout io.Writer
 	stderr io.Writer
+	stdin  io.Reader
 }
 
 var (
@@ -60,7 +63,7 @@ var (
 )
 
 func Main(args []string, stdout, stderr io.Writer) int {
-	a := app{stdout: stdout, stderr: stderr}
+	a := app{stdout: stdout, stderr: stderr, stdin: os.Stdin}
 	if err := a.run(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			a.usage()
@@ -133,12 +136,12 @@ func (a app) run(args []string) error {
 
 func (a app) usage() {
 	fmt.Fprintln(a.stdout, "Usage:")
-	fmt.Fprintln(a.stdout, "  hideout init [--no-input] [--backend lima|auto] [--network direct]")
+	fmt.Fprintln(a.stdout, "  hideout init --template privacy --profile <name> --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input")
 	fmt.Fprintln(a.stdout, "  hideout doctor")
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "First run:")
-	fmt.Fprintln(a.stdout, "  hideout doctor --fix [--dry-run]")
+	fmt.Fprintln(a.stdout, "  hideout init --template privacy --profile default --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Run and explain:")
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
@@ -209,14 +212,18 @@ func (a app) initUsage() {
 	fmt.Fprintln(a.stdout, "Initialize or repair Hideout machine/profile state through typed init tasks.")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Common:")
-	fmt.Fprintln(a.stdout, "  hideout init --no-input --backend lima --network direct")
-	fmt.Fprintln(a.stdout, "  hideout init --dry-run --profile agent --backend lima")
+	fmt.Fprintln(a.stdout, "  hideout init --template privacy --profile agent --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver 1.1.1.1 --no-input")
+	fmt.Fprintln(a.stdout, "  hideout init --template dev --profile agent-dev --backend native --network direct --no-input")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Flags:")
 	fmt.Fprintln(a.stdout, "  --profile <name>          profile to initialize (default: default)")
+	fmt.Fprintln(a.stdout, "  --template <id>           privacy, hardened, dev, or debug")
 	fmt.Fprintln(a.stdout, "  --backend <name>          auto or lima for product isolation; native is a weak dev harness")
 	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
 	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      host-only proxy secret ref for tun2socks")
+	fmt.Fprintln(a.stdout, "  --mediated-resolver <ip>  DNS resolver IP for tun2socks DoH mediation")
+	fmt.Fprintln(a.stdout, "  --privilege-status <s>    enforced, degraded, or unknown")
+	fmt.Fprintln(a.stdout, "  --allow-degraded-template allow visibly degraded hardened fallback")
 	fmt.Fprintln(a.stdout, "  --no-input                do not ask for confirmation")
 	fmt.Fprintln(a.stdout, "  --dry-run                 print the init plan without applying it")
 }
@@ -381,7 +388,7 @@ func (a app) profileHomeUsage() {
 func (a app) packageUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout package verify <package-root-or-install-prefix>")
-	fmt.Fprintln(a.stdout, "  hideout package install <package-root> --prefix <dir> [--store <dir>] [--backend native|lima|auto] [--network direct|tun2socks] [--proxy-secret <ref>] [--skip-init]")
+	fmt.Fprintln(a.stdout, "  hideout package install <package-root> --prefix <dir> [--store <dir>] [--backend native|lima|auto] [--network direct|tun2socks] [--proxy-secret <ref>] [--mediated-resolver <ip>] [--skip-init]")
 	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge]")
 }
 
@@ -429,8 +436,9 @@ func (a app) packageInstall(args []string) error {
 		backend     string
 		network     string
 		proxySecret string
+		resolver    string
 		skipInit    bool
-	}{backend: "auto", network: "direct"}
+	}{backend: "auto", network: "direct", resolver: "1.1.1.1"}
 	fs := flag.NewFlagSet("package install", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.prefix, "prefix", "", "install prefix")
@@ -438,6 +446,7 @@ func (a app) packageInstall(args []string) error {
 	fs.StringVar(&opts.backend, "backend", "auto", "backend for init")
 	fs.StringVar(&opts.network, "network", "direct", "network mode for init")
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
+	fs.StringVar(&opts.resolver, "mediated-resolver", "1.1.1.1", "mediated DNS resolver IP for tun2socks init")
 	fs.BoolVar(&opts.skipInit, "skip-init", false, "skip typed init after install")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -465,9 +474,23 @@ func (a app) packageInstall(args []string) error {
 	}
 	fmt.Fprintf(a.stdout, "package: %s prefix=%s store=%s files=%d manifest=%s\n", result.Operation, result.Prefix, result.StoreRoot, result.FilesCopied, result.ManifestPath)
 	if !opts.skipInit {
-		initArgs := []string{"init", "--no-input", "--backend", opts.backend, "--network", opts.network}
+		templateID := profiletemplate.Dev
+		if opts.network == "tun2socks" {
+			templateID = profiletemplate.Privacy
+		}
+		initArgs := []string{
+			"init",
+			"--no-input",
+			"--profile", "default",
+			"--template", templateID,
+			"--backend", opts.backend,
+			"--network", opts.network,
+		}
 		if opts.proxySecret != "" {
 			initArgs = append(initArgs, "--proxy-secret", opts.proxySecret)
+		}
+		if opts.network == "tun2socks" {
+			initArgs = append(initArgs, "--mediated-resolver", opts.resolver)
 		}
 		priorStore := os.Getenv("HIDEOUT_STORE_ROOT")
 		if err := os.Setenv("HIDEOUT_STORE_ROOT", result.StoreRoot); err != nil {
@@ -563,13 +586,24 @@ func (a app) labPortbridgeUsage() {
 }
 
 type initCommandOptions struct {
-	profileName string
-	backendName string
-	networkMode string
-	proxySecret string
-	noInput     bool
-	dryRun      bool
-	tools       toolSupplyOptions
+	profileName           string
+	backendName           string
+	networkMode           string
+	proxySecret           string
+	mediatedResolver      string
+	templateID            string
+	privilegeStatus       string
+	privilegeReason       string
+	privilegeGuidance     string
+	privilegeSource       string
+	allowDegradedTemplate bool
+	explicitProfile       bool
+	explicitTemplate      bool
+	explicitBackend       bool
+	explicitNetwork       bool
+	noInput               bool
+	dryRun                bool
+	tools                 toolSupplyOptions
 }
 
 type toolSupplyOptions struct {
@@ -587,17 +621,36 @@ func (a app) initCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	var initInput *bufio.Reader
+	if !opts.noInput {
+		initInput = bufio.NewReader(a.stdin)
+		if err := a.collectInteractiveInitOptions(&opts, initInput); err != nil {
+			return err
+		}
+	}
 	store, err := profile.DefaultStore()
 	if err != nil {
 		return err
 	}
 	core := manager.New(store)
 	plan, err := core.PlanInit(inittask.Options{
-		ProfileName:    opts.profileName,
-		Backend:        opts.backendName,
-		Network:        opts.networkMode,
-		ProxySecretRef: opts.proxySecret,
-		NoInput:        opts.noInput,
+		ProfileName:           opts.profileName,
+		Backend:               opts.backendName,
+		Network:               opts.networkMode,
+		ProxySecretRef:        opts.proxySecret,
+		MediatedResolver:      opts.mediatedResolver,
+		TemplateID:            opts.templateID,
+		PrivilegeStatus:       opts.privilegeStatus,
+		PrivilegeReason:       opts.privilegeReason,
+		PrivilegeGuidance:     opts.privilegeGuidance,
+		PrivilegeSource:       opts.privilegeSource,
+		AllowDegradedTemplate: opts.allowDegradedTemplate,
+		Onboarding:            true,
+		ExplicitProfile:       opts.explicitProfile,
+		ExplicitTemplate:      opts.explicitTemplate,
+		ExplicitBackend:       opts.explicitBackend,
+		ExplicitNetwork:       opts.explicitNetwork,
+		NoInput:               opts.noInput,
 	})
 	if err != nil {
 		return err
@@ -605,6 +658,16 @@ func (a app) initCommand(args []string) error {
 	if opts.dryRun {
 		writeInitPlan(a.stdout, "Hideout init plan", plan)
 		return nil
+	}
+	if !opts.noInput {
+		writeInitReview(a.stdout, plan)
+		confirmed, err := a.confirmInit(initInput)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return errors.New("init cancelled")
+		}
 	}
 	result, err := core.ApplyInit(plan, inittask.ApplyOptions{
 		NoInput: opts.noInput,
@@ -617,13 +680,25 @@ func (a app) initCommand(args []string) error {
 }
 
 func parseInitCommandOptions(args []string) (initCommandOptions, error) {
-	opts := initCommandOptions{profileName: "default", backendName: "auto", networkMode: "direct"}
+	opts := initCommandOptions{profileName: "default", backendName: "auto"}
+	explicit := explicitLongFlags(args)
+	opts.explicitProfile = explicit["profile"]
+	opts.explicitTemplate = explicit["template"]
+	opts.explicitBackend = explicit["backend"]
+	opts.explicitNetwork = explicit["network"]
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
+	fs.StringVar(&opts.templateID, "template", "", "profile template: privacy, hardened, dev, or debug")
 	fs.StringVar(&opts.backendName, "backend", "auto", "backend: auto/lima for isolation; native is a dev-only weak harness")
-	fs.StringVar(&opts.networkMode, "network", "direct", "network mode")
+	fs.StringVar(&opts.networkMode, "network", "", "network mode")
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref for tun2socks network mode")
+	fs.StringVar(&opts.mediatedResolver, "mediated-resolver", "", "mediated DNS resolver IP for tun2socks")
+	fs.StringVar(&opts.privilegeStatus, "privilege-status", "", "guest privilege status: enforced, degraded, or unknown")
+	fs.StringVar(&opts.privilegeReason, "privilege-reason", "", "guest privilege status reason")
+	fs.StringVar(&opts.privilegeGuidance, "privilege-guidance", "", "guest privilege status guidance")
+	fs.StringVar(&opts.privilegeSource, "privilege-source", "", "guest privilege status source")
+	fs.BoolVar(&opts.allowDegradedTemplate, "allow-degraded-template", false, "allow visibly degraded hardened fallback")
 	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.noInput, "no-input", false, "do not ask for confirmation")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print init plan without applying")
@@ -639,12 +714,95 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	return opts, nil
 }
 
+func explicitLongFlags(args []string) map[string]bool {
+	out := map[string]bool{}
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "--") || arg == "--" {
+			continue
+		}
+		name := strings.TrimPrefix(arg, "--")
+		if before, _, ok := strings.Cut(name, "="); ok {
+			name = before
+		}
+		out[name] = true
+	}
+	return out
+}
+
+func (a app) collectInteractiveInitOptions(opts *initCommandOptions, reader *bufio.Reader) error {
+	if strings.TrimSpace(opts.templateID) == "" {
+		opts.templateID = profiletemplate.Recommended().ID
+	}
+	tmpl, ok := profiletemplate.Lookup(opts.templateID)
+	if !ok {
+		return fmt.Errorf("unsupported profile template %q", opts.templateID)
+	}
+	if strings.TrimSpace(opts.backendName) == "" || opts.backendName == "auto" {
+		opts.backendName = "lima"
+	}
+	if strings.TrimSpace(opts.networkMode) == "" {
+		opts.networkMode = tmpl.DefaultNetwork
+	}
+	if opts.networkMode == "tun2socks" {
+		if strings.TrimSpace(opts.proxySecret) == "" {
+			value, err := a.promptLine(reader, "Proxy secret ref")
+			if err != nil {
+				return err
+			}
+			opts.proxySecret = value
+		}
+		if strings.TrimSpace(opts.mediatedResolver) == "" {
+			value, err := a.promptLine(reader, "Mediated resolver IP")
+			if err != nil {
+				return err
+			}
+			opts.mediatedResolver = value
+		}
+	}
+	if opts.templateID == profiletemplate.Hardened && strings.TrimSpace(opts.privilegeStatus) == "" {
+		value, err := a.promptLine(reader, "Privilege status [enforced/degraded/unknown]")
+		if err != nil {
+			return err
+		}
+		opts.privilegeStatus = value
+	}
+	opts.explicitProfile = true
+	opts.explicitTemplate = true
+	opts.explicitBackend = true
+	opts.explicitNetwork = true
+	return nil
+}
+
+func (a app) promptLine(reader *bufio.Reader, label string) (string, error) {
+	fmt.Fprintf(a.stdout, "%s: ", label)
+	value, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	return value, nil
+}
+
+func (a app) confirmInit(reader *bufio.Reader) (bool, error) {
+	fmt.Fprint(a.stdout, "Create profile? [y/N]: ")
+	value, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "y" || value == "yes", nil
+}
+
 func writeInitPlan(w io.Writer, title string, plan inittask.Plan) {
 	fmt.Fprintln(w, title)
 	fmt.Fprintf(w, "storage: %s\n", plan.StoreRoot)
 	fmt.Fprintf(w, "profile: %s\n", plan.Profile)
 	fmt.Fprintf(w, "backend: %s\n", plan.Backend)
 	fmt.Fprintf(w, "network: %s\n", plan.Network)
+	writeInitTemplateSummary(w, plan)
 	for _, task := range plan.Tasks {
 		fmt.Fprintf(w, "task %s: %s risk=%s %s\n", task.Kind, task.Status, task.Risk, task.Message)
 	}
@@ -656,8 +814,12 @@ func writeInitResult(w io.Writer, title string, result inittask.Result) {
 	fmt.Fprintf(w, "profile: %s\n", result.Plan.Profile)
 	fmt.Fprintf(w, "backend: %s\n", result.Plan.Backend)
 	fmt.Fprintf(w, "network: %s\n", result.Plan.Network)
+	writeInitTemplateSummary(w, result.Plan)
 	if result.AuditPath != "" {
 		fmt.Fprintf(w, "audit=%s\n", result.AuditPath)
+	}
+	if result.EvidencePath != "" {
+		fmt.Fprintf(w, "evidence=%s\n", result.EvidencePath)
 	}
 	for _, task := range result.Applied {
 		fmt.Fprintf(w, "task %s: applied risk=%s %s\n", task.Kind, task.Risk, task.Message)
@@ -666,6 +828,39 @@ func writeInitResult(w io.Writer, title string, result inittask.Result) {
 		fmt.Fprintf(w, "task %s: %s risk=%s %s\n", task.Kind, task.Status, task.Risk, task.Message)
 	}
 	writeInitNextSteps(w, result.Plan)
+}
+
+func writeInitTemplateSummary(w io.Writer, plan inittask.Plan) {
+	if plan.TemplateID == "" {
+		return
+	}
+	fmt.Fprintf(w, "template: %s\n", plan.TemplateID)
+	fmt.Fprintf(w, "posture: %s\n", plan.EffectivePosture)
+	if plan.MediatedResolver != "" {
+		fmt.Fprintf(w, "mediatedResolver: %s\n", plan.MediatedResolver)
+	}
+	if plan.PrivilegeStatus != "" {
+		fmt.Fprintf(w, "privilege: %s\n", plan.PrivilegeStatus)
+	}
+	if plan.EvidencePath != "" {
+		fmt.Fprintf(w, "evidencePlan: %s\n", plan.EvidencePath)
+	}
+	for _, warning := range plan.Warnings {
+		fmt.Fprintf(w, "warning: %s\n", warning)
+	}
+	for _, nonClaim := range plan.NonClaims {
+		fmt.Fprintf(w, "non-claim: %s\n", nonClaim)
+	}
+}
+
+func writeInitReview(w io.Writer, plan inittask.Plan) {
+	if len(plan.ReviewLines) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "Review:")
+	for _, line := range plan.ReviewLines {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
 }
 
 func writeInitNextSteps(w io.Writer, plan inittask.Plan) {

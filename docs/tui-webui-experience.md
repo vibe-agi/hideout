@@ -341,7 +341,7 @@ Edit:
 - `hideout init` applies safe InitTasks now through the CLI. A future
   interactive TUI wizard must use the same InitTask plan/apply contract rather
   than introducing a second initialization path.
-- `hideout init --no-input` is the scripting and CI path.
+- `hideout init --template ... --no-input` is the scripting and CI path.
 - WebUI is not required for first successful run.
 - Phase 1 WebUI remains read-only or plan/apply-only through Manager API.
 - Bundle marketplace views are Later. Phase 1 needs installed bundle status,

@@ -24,7 +24,7 @@ mkdir -p "$store"
 bin="$tmp/hideout"
 go build -o "$bin" ./cmd/hideout
 
-"$bin" init --no-input --backend native --network direct >/dev/null
+"$bin" init --no-input --profile default --template dev --backend native --network direct >/dev/null
 
 # Start the daemon in the background.
 "$bin" daemon start >"$tmp/start.out" 2>&1 &

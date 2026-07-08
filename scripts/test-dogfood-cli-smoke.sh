@@ -213,7 +213,7 @@ GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
   go build -trimpath -o "$workspace/hideout-test-cli" ./cmd/hideout-test-cli
 
 echo "dogfood-cli: initializing profile"
-HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --backend lima --network direct >/dev/null
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init --no-input --profile default --template dev --backend lima --network direct >/dev/null
 configure_expected_commands
 
 echo "dogfood-cli: verifying user-declared expected command and test CLI presence"

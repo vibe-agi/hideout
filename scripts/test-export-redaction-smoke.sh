@@ -15,7 +15,7 @@ trap cleanup EXIT
 store="$tmp/store"
 export HIDEOUT_STORE_ROOT="$store"
 
-go run ./cmd/hideout init --no-input --backend native --network direct >/dev/null
+go run ./cmd/hideout init --no-input --profile default --template dev --backend native --network direct >/dev/null
 
 profile_path="$store/profiles/default/profile.json"
 policy_path="$store/profiles/default/policy/export-redact.js"

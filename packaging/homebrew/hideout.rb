@@ -27,7 +27,8 @@ class Hideout < Formula
     workspace.mkpath
 
     ENV["HIDEOUT_STORE_ROOT"] = store
-    system bin/"hideout", "init", "--no-input", "--backend", "native", "--network", "direct"
+    system bin/"hideout", "init", "--no-input", "--profile", "default",
+      "--template", "dev", "--backend", "native", "--network", "direct"
     system bin/"hideout", "doctor", "--backend", "native", "--workspace", workspace
 
     assert_path_exists store/"install-state.json"

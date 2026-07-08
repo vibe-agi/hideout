@@ -60,11 +60,18 @@ type RunStatusResponse struct {
 }
 
 type InitAPIRequest struct {
-	ProfileName    string `json:"profile,omitempty"`
-	Backend        string `json:"backend,omitempty"`
-	Network        string `json:"network,omitempty"`
-	ProxySecretRef string `json:"proxySecretRef,omitempty"`
-	DryRun         bool   `json:"dryRun,omitempty"`
+	ProfileName           string `json:"profile,omitempty"`
+	Backend               string `json:"backend,omitempty"`
+	Network               string `json:"network,omitempty"`
+	ProxySecretRef        string `json:"proxySecretRef,omitempty"`
+	MediatedResolver      string `json:"mediatedResolver,omitempty"`
+	TemplateID            string `json:"template,omitempty"`
+	PrivilegeStatus       string `json:"privilegeStatus,omitempty"`
+	PrivilegeReason       string `json:"privilegeReason,omitempty"`
+	PrivilegeGuidance     string `json:"privilegeGuidance,omitempty"`
+	PrivilegeSource       string `json:"privilegeSource,omitempty"`
+	AllowDegradedTemplate bool   `json:"allowDegradedTemplate,omitempty"`
+	DryRun                bool   `json:"dryRun,omitempty"`
 }
 
 type EnvironmentActionAPIRequest struct {
@@ -1328,11 +1335,23 @@ func decodeExportAPIRequest(w http.ResponseWriter, r *http.Request) (ExportAPIRe
 
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
-		ProfileName:    req.ProfileName,
-		Backend:        req.Backend,
-		Network:        req.Network,
-		ProxySecretRef: req.ProxySecretRef,
-		NoInput:        true,
+		ProfileName:           req.ProfileName,
+		Backend:               req.Backend,
+		Network:               req.Network,
+		ProxySecretRef:        req.ProxySecretRef,
+		MediatedResolver:      req.MediatedResolver,
+		TemplateID:            req.TemplateID,
+		PrivilegeStatus:       req.PrivilegeStatus,
+		PrivilegeReason:       req.PrivilegeReason,
+		PrivilegeGuidance:     req.PrivilegeGuidance,
+		PrivilegeSource:       req.PrivilegeSource,
+		AllowDegradedTemplate: req.AllowDegradedTemplate,
+		Onboarding:            req.TemplateID != "",
+		ExplicitProfile:       req.ProfileName != "",
+		ExplicitTemplate:      req.TemplateID != "",
+		ExplicitBackend:       req.Backend != "",
+		ExplicitNetwork:       req.Network != "",
+		NoInput:               true,
 	}
 }
 

@@ -278,7 +278,7 @@ always declare weak isolation in output.
 
 Scope:
 
-- `hideout init --no-input --backend native --network direct`;
+- `hideout init --template dev --profile native-dev --backend native --network direct --no-input`;
 - `profile init`, `profile clone`, `profile path`;
 - `run --backend native --allow-weak-isolation`;
 - `explain`;
@@ -288,10 +288,12 @@ Scope:
 
 Required checks:
 
-- explicit native init creates store directories, default profile, profile
-  identity, schema metadata, and runtime directories under a temporary store;
-- repeated init is idempotent and does not rotate identity, enable bundles,
-  add HostFS grants, or create new authority;
+- explicit native dev-template init creates store directories, default profile,
+  profile identity, schema metadata, and runtime directories under a temporary
+  store;
+- repeated doctor repair is idempotent, while template-aware init rejects an
+  existing profile instead of rotating identity, enabling bundles, adding HostFS
+  grants, or creating new authority;
 - `doctor --fix --dry-run` reports safe fixes without applying unsafe actions;
 - `pwd` resolves to the configured workspace;
 - workspace read/write works;
@@ -387,9 +389,10 @@ HIDEOUT_GATE2_REQUIRE_NODE=1 HIDEOUT_GATE_TIMEOUT=45m scripts/test-gate2-lima.sh
 
 Required checks:
 
-- default `hideout init --no-input` and `hideout init --backend lima` validate
-  Lima prerequisites, helper discovery, and generated backend metadata without
-  starting the VM unless a deep check is explicitly requested;
+- template-aware `hideout init --template dev ... --no-input` and
+  `hideout init --template privacy ...` validate Lima prerequisites, helper
+  discovery, template evidence, and generated backend metadata without starting
+  the VM unless a deep check is explicitly requested;
 - initialized helper discovery is reused by the first Lima run without falling
   back to host binaries;
 - `hideout run --backend lima -- pwd` reports guest workspace or alias;
@@ -583,9 +586,10 @@ Required checks:
   SecretRef references;
 - direct mode init makes `explain` and `doctor` report that network identity is
   visible;
-- `hideout init --network tun2socks --proxy-secret <ref>` persists only
-  `network.proxySecretRef`, and `tun2socks` init without a proxy secret ref
-  fails closed before profile mutation;
+- `hideout init --template privacy --network tun2socks --proxy-secret <ref>
+  --mediated-resolver <ip>` persists only `network.proxySecretRef` plus the
+  mediated resolver IP, and `tun2socks` init without a proxy secret ref or
+  resolver fails closed before profile mutation;
 - `tun2socks` mode init never writes proxy values into profile, audit, or
   target env;
 - init does not change system routes; route setup belongs to per-session
@@ -1038,7 +1042,8 @@ Required checks:
   `doctor.fix.apply` audit;
 - package smoke proves the release-like tarball can be unpacked, its artifact
   manifest checksums match the extracted files, and extracted
-  `hideout init --no-input` plus `hideout doctor` run from the unpacked layout;
+  template-aware `hideout init --template dev ... --no-input` plus
+  `hideout doctor` run from the unpacked layout;
   package-root `install.sh` fails before copying binaries when the layout,
   helper, or manifest-declared checksum is broken;
 - package smoke proves the installed prefix writes an installed-state manifest
@@ -1052,12 +1057,12 @@ Required checks:
   the unpack, checksum, and init plus doctor proof;
 - omitted or `auto` backend first-run repair resolves to Lima, matching
   `hideout run`, and plans Linux helper repair when store helpers are missing;
-- `hideout init --no-input --backend native --network direct` succeeds without
+- `hideout init --template dev --profile native-dev --backend native --network direct --no-input` succeeds without
   using arbitrary shell scripts as an explicit weak-isolation smoke;
 - Manager API run status tests must cover a real `run/apply` session, not only
   an empty store, and must prove status exposes only session summaries and
   presence booleans for broker/proxy artifacts;
-- `hideout init` is idempotent and does not rotate identity, enable bundles, add
+- typed init repair is idempotent and does not rotate identity, enable bundles, add
   HostFS grants, create passthrough mounts, open host apps, create PortBridge, or
   change network routes;
 - `hideout doctor` reports core checks after init;
@@ -1065,9 +1070,7 @@ Required checks:
   tasks;
 - init planning accepts and validates a declarative base image reference (name
   plus digest) without product-specific Core logic or raw profile edits;
-- `hideout init --network tun2socks --proxy-secret <ref>` and Manager
-  `init/apply` persist only the proxy secret ref, not a proxy URL or backing env
-  var name;
+- `hideout init --template privacy --network tun2socks --proxy-secret <ref> --mediated-resolver <ip>` and Manager `init/apply` persist only the proxy secret ref and resolver IP, not a proxy URL or backing env var name;
 - `hideout doctor --fix --dry-run --backend lima` includes
   `helper.install.linux-shim` and `helper.install.linux-hostfsd` when the
   official store helpers are missing and a source-tree repair is available;

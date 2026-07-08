@@ -77,20 +77,23 @@ func TestExplainInitializesProfileAndPrintsBoundary(t *testing.T) {
 	}
 }
 
-func TestInitNoInputCreatesStoreProfileAndIsIdempotent(t *testing.T) {
+func TestInitNoInputCreatesTemplateProfileAndFailsOnCollision(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
-	code := Main([]string{"init", "--no-input", "--backend", "native", "--network", "direct"}, &out, &errOut)
+	code := Main([]string{"init", "--no-input", "--profile", "default", "--template", "dev", "--backend", "native", "--network", "direct"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("init exit=%d stderr=%s", code, errOut.String())
 	}
 	for _, want := range []string{
 		"Hideout init",
+		"template: dev",
+		"posture: dev",
 		"task store.create: applied",
 		"task schema.metadata.write: applied",
 		"task profile.create: applied",
 		"audit=",
+		"evidence=",
 		"next:",
 		"check: hideout doctor --profile default --backend native",
 		"smoke: hideout run --profile default --backend native --allow-weak-isolation -- pwd",
@@ -119,12 +122,12 @@ func TestInitNoInputCreatesStoreProfileAndIsIdempotent(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	code = Main([]string{"init", "--no-input", "--backend", "native", "--network", "direct"}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("second init exit=%d stderr=%s", code, errOut.String())
+	code = Main([]string{"init", "--no-input", "--profile", "default", "--template", "dev", "--backend", "native", "--network", "direct"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("second onboarding unexpectedly succeeded stdout=%s", out.String())
 	}
-	if strings.Contains(out.String(), "task profile.create: applied") {
-		t.Fatalf("second init should be idempotent, got:\n%s", out.String())
+	if !strings.Contains(errOut.String(), "already exists") {
+		t.Fatalf("second onboarding should fail on collision, got stderr=%s", errOut.String())
 	}
 	reloaded, err := store.Load("default")
 	if err != nil {
@@ -147,7 +150,7 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Usage:",
-		"  hideout init [--no-input] [--backend lima|auto] [--network direct]",
+		"  hideout init --template privacy --profile <name> --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input",
 		"  hideout doctor",
 		"  hideout run [flags] -- <command> [args...]",
 		"First run:",
@@ -812,15 +815,19 @@ func TestInitConfiguresTun2SocksProxySecretRef(t *testing.T) {
 		"init",
 		"--no-input",
 		"--profile", "privacy",
+		"--template", "privacy",
 		"--backend", "native",
 		"--network", "tun2socks",
 		"--proxy-secret", "default-proxy",
+		"--mediated-resolver", "1.1.1.1",
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("init tun2socks exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
 	for _, want := range []string{
 		"network: tun2socks",
+		"template: privacy",
+		"mediatedResolver: 1.1.1.1",
 		"task network.mode.select: applied",
 		"set profile network mode to tun2socks",
 	} {
@@ -833,7 +840,7 @@ func TestInitConfiguresTun2SocksProxySecretRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load privacy profile: %v", err)
 	}
-	if loaded.Network.Mode != "tun2socks" || loaded.Network.ProxySecretRef != "default-proxy" {
+	if loaded.Network.Mode != "tun2socks" || loaded.Network.ProxySecretRef != "default-proxy" || loaded.Network.MediatedResolver != "1.1.1.1" {
 		t.Fatalf("network settings were not persisted: %+v", loaded.Network)
 	}
 }
@@ -845,6 +852,8 @@ func TestInitTun2SocksRequiresProxySecretRef(t *testing.T) {
 	code := Main([]string{
 		"init",
 		"--no-input",
+		"--profile", "privacy",
+		"--template", "privacy",
 		"--backend", "native",
 		"--network", "tun2socks",
 	}, &out, &errOut)
@@ -853,6 +862,104 @@ func TestInitTun2SocksRequiresProxySecretRef(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "tun2socks network mode requires a proxy secret ref") {
 		t.Fatalf("init error should explain missing proxy secret, got %s", errOut.String())
+	}
+}
+
+func TestInitNoInputRequiresExplicitTemplateChoices(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"init", "--no-input"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("init without explicit choices unexpectedly succeeded: %s", out.String())
+	}
+	for _, want := range []string{"--profile", "--template", "--backend", "--network"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Fatalf("missing-choice error should mention %s, got %s", want, errOut.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("missing-choice init should not create profile, stat err=%v", err)
+	}
+}
+
+func TestInitHardenedDegradedGuidanceAndFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	args := []string{
+		"init",
+		"--no-input",
+		"--profile", "hard",
+		"--template", "hardened",
+		"--backend", "native",
+		"--network", "tun2socks",
+		"--proxy-secret", "proxy-url",
+		"--mediated-resolver", "1.1.1.1",
+		"--privilege-status", "degraded",
+	}
+	code := Main(args, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("hardened degraded unexpectedly succeeded: %s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "hardened requires enforced") || !strings.Contains(errOut.String(), "no-sudo base image") {
+		t.Fatalf("hardened degraded guidance missing: %s", errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "hard", "profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("hardened denial should not create profile, stat err=%v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	args = append(args, "--allow-degraded-template")
+	code = Main(args, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("hardened degraded fallback exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "posture: hardened-degraded") || !strings.Contains(out.String(), "not a hardened privilege boundary") {
+		t.Fatalf("fallback output missing degraded posture/non-claim:\n%s", out.String())
+	}
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	p, err := store.Load("hard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Metadata["templateDegraded"] != "true" {
+		t.Fatalf("degraded metadata missing: %+v", p.Metadata)
+	}
+}
+
+func TestInitInteractiveCancelAndConfirm(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("proxy-url\n1.1.1.1\nn\n")}
+	err := a.run([]string{"init"})
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("interactive cancel error=%v stdout=%s", err, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("cancel should not create profile, stat err=%v", err)
+	}
+	for _, want := range []string{"recommended template: privacy", "HostFS: none-by-default", "adapter packs: none-by-default"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("interactive review missing %q:\n%s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	a = app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("proxy-url\n1.1.1.1\ny\n")}
+	if err := a.run([]string{"init"}); err != nil {
+		t.Fatalf("interactive confirm: %v stderr=%s stdout=%s", err, errOut.String(), out.String())
+	}
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	p, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Metadata["templateId"] != "privacy" || p.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("interactive profile mismatch: metadata=%v network=%+v", p.Metadata, p.Network)
 	}
 }
 

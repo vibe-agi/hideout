@@ -22,6 +22,54 @@
     "network": {
       "enum": ["direct", "tun2socks"]
     },
+    "proxySecretRef": {
+      "type": "string"
+    },
+    "mediatedResolver": {
+      "type": "string"
+    },
+    "templateId": {
+      "enum": ["privacy", "hardened", "dev", "debug"]
+    },
+    "effectivePosture": {
+      "enum": ["privacy", "hardened", "hardened-degraded", "dev", "debug-local"]
+    },
+    "privilegeStatus": {
+      "enum": ["enforced", "degraded", "unknown"]
+    },
+    "privilegeReason": {
+      "type": "string"
+    },
+    "privilegeGuidance": {
+      "type": "string"
+    },
+    "privilegeSource": {
+      "type": "string"
+    },
+    "allowDegradedTemplate": {
+      "type": "boolean"
+    },
+    "evidencePath": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nonClaims": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reviewLines": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "tasks": {
       "type": "array",
       "items": {

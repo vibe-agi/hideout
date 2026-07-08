@@ -311,7 +311,8 @@ Hideout should not silently install privileged system components.
 
 Source-tree installs use `scripts/install-local.sh` during the private
 pre-release phase. It builds `hideout`, the host command shim, and Linux guest
-helpers into one prefix, then runs `hideout init --no-input` through the normal
+helpers into one prefix, then runs template-aware `hideout init --no-input`
+through the normal
 Manager-owned Init Task Engine unless `--skip-init` is set. This is not a
 separate bootstrap path and must not grow its own initialization semantics.
 The default install backend follows the runtime default, Lima; native remains an
@@ -332,7 +333,7 @@ binary to validate `package-manifest.json` and recalculate manifest-declared
 SHA-256 checksums before copying binaries. `scripts/test-package-smoke.sh`
 extracts that tarball into a temporary prefix, validates the manifest, proves
 each manifest-declared path exists with the expected file type, recalculates
-declared file checksums, then runs extracted `hideout init --no-input`,
+declared file checksums, then runs extracted template-aware `hideout init`,
 `hideout doctor`, `hideout tui --once`, and `hideout ui --no-open --print-url`. It also
 runs package-root `install.sh` into a separate temporary prefix/store, verifies
 the installed layout works without source-tree state, verifies installed Lima
@@ -357,8 +358,9 @@ bin/hideout-hostfsd-linux-<arch>
 ```
 
 Package installers may leave `hideout init` to the first run, but package or
-formula smoke tests must prove that `hideout init --no-input`, `hideout doctor`,
-helper discovery, and helper manifests work from the installed layout.
+formula smoke tests must prove that template-aware `hideout init --no-input`,
+`hideout doctor`, helper discovery, and helper manifests work from the
+installed layout.
 
 ## Linux Distribution
 
@@ -399,7 +401,7 @@ Release candidate should verify:
 - env overrides exist;
 - `doctor` reports many core checks.
 - `scripts/install-local.sh` provides a source-tree install path for private
-  pre-release development and runs typed `hideout init --no-input` by default;
+  pre-release development and runs typed template-aware `hideout init --no-input` by default;
 - `scripts/test-install-smoke.sh` verifies installed binaries, helper
   manifests, init metadata, idempotent init, doctor, `doctor --fix --dry-run`,
   and safe `doctor --fix` from temporary prefix/store roots;
@@ -408,7 +410,7 @@ Release candidate should verify:
   `install.sh`, and initialized without hidden repository state;
 - `packaging/homebrew/hideout.rb` defines the draft Homebrew `--HEAD` formula
   and its formula-level `init`/`doctor` smoke;
-- `hideout init --no-input` applies safe machine initialization tasks;
+- template-aware `hideout init --no-input` applies safe machine initialization tasks;
 - `hideout run` applies pending lightweight store/profile/schema metadata
   InitTasks through Manager before starting a session or backend prepare step;
 - `doctor --fix --dry-run` and safe `doctor --fix` use InitTask plan/apply;

@@ -205,6 +205,93 @@ func TestApplyMachineWritesTaskAudit(t *testing.T) {
 	}
 }
 
+func TestApplyMachinePrivacyTemplateWritesProfileAndEvidence(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	plan, err := PlanMachine(store, Options{
+		ProfileName:      "privacy",
+		TemplateID:       "privacy",
+		Backend:          "native",
+		Network:          "tun2socks",
+		ProxySecretRef:   "proxy-url",
+		MediatedResolver: "1.1.1.1",
+		Onboarding:       true,
+		ExplicitProfile:  true,
+		ExplicitTemplate: true,
+		ExplicitBackend:  true,
+		ExplicitNetwork:  true,
+		NoInput:          true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.TemplateID != "privacy" || plan.EffectivePosture != "privacy" || plan.EvidencePath == "" {
+		t.Fatalf("bad privacy plan: %+v", plan)
+	}
+	validateInitPlanWithSchema(t, plan)
+	result, err := ApplyMachine(store, plan, ApplyOptions{NoInput: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.EvidencePath == "" {
+		t.Fatalf("evidence path not surfaced: %+v", result)
+	}
+	p, err := store.Load("privacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Network.Mode != "tun2socks" || p.Network.ProxySecretRef != "proxy-url" || p.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("network not persisted: %+v", p.Network)
+	}
+	if p.Metadata["templateId"] != "privacy" || p.Metadata["templatePosture"] != "privacy" {
+		t.Fatalf("template metadata missing: %+v", p.Metadata)
+	}
+	if _, err := os.Stat(result.EvidencePath); err != nil {
+		t.Fatalf("evidence missing: %v", err)
+	}
+}
+
+func TestPlanMachineHardenedRequiresEnforcedPrivilege(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	base := Options{
+		ProfileName:      "hardened",
+		TemplateID:       "hardened",
+		Backend:          "native",
+		Network:          "tun2socks",
+		ProxySecretRef:   "proxy-url",
+		MediatedResolver: "1.1.1.1",
+		Onboarding:       true,
+		ExplicitProfile:  true,
+		ExplicitTemplate: true,
+		ExplicitBackend:  true,
+		ExplicitNetwork:  true,
+		NoInput:          true,
+	}
+	if _, err := PlanMachine(store, base); err == nil || !strings.Contains(err.Error(), "hardened requires enforced") {
+		t.Fatalf("hardened unknown should fail, got %v", err)
+	}
+	degraded := base
+	degraded.PrivilegeStatus = "degraded"
+	degraded.AllowDegradedTemplate = true
+	plan, err := PlanMachine(store, degraded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.EffectivePosture != "hardened-degraded" || !plan.AllowDegradedTemplate {
+		t.Fatalf("bad degraded plan: %+v", plan)
+	}
+	validateInitPlanWithSchema(t, plan)
+	enforced := base
+	enforced.ProfileName = "hardened-ok"
+	enforced.PrivilegeStatus = "enforced"
+	plan, err = PlanMachine(store, enforced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.EffectivePosture != "hardened" || plan.PrivilegeStatus != "enforced" {
+		t.Fatalf("bad enforced plan: %+v", plan)
+	}
+}
+
 func TestApplyMachineDryRunDoesNotWriteTaskAudit(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	plan, err := PlanMachine(store, Options{ProfileName: "default", Backend: "native", Network: "direct"})

@@ -27,12 +27,14 @@ test -f schemas/hostfs-write-decision.schema.json
 test -f schemas/hostfs-write-event.schema.json
 test -f schemas/decision-record.schema.json
 test -f schemas/notice-record.schema.json
+test -f schemas/onboarding-evidence.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
 fi
 grep -q 'head "https://github.com/vibe-agi/hideout.git", branch: "master"' packaging/homebrew/hideout.rb
-grep -q '"init", "--no-input"' packaging/homebrew/hideout.rb
+grep -q '"init", "--no-input", "--profile", "default"' packaging/homebrew/hideout.rb
+grep -q '"--template", "dev"' packaging/homebrew/hideout.rb
 grep -q 'Initialization Is Planned, Not Scripted' docs/architecture-principles.md
 grep -q 'bundle.installScript' docs/ecosystem-foundation-design.md
 grep -q 'project.initScript' docs/ecosystem-foundation-design.md
@@ -137,3 +139,8 @@ scripts/test-privilege-separation-smoke.sh
 # HostFS write overlay (010): staged write/apply schema presence. Expanded by
 # 010 implementation and real Gate 2 HostFS smoke.
 scripts/test-hostfs-write-overlay-smoke.sh
+
+# Profile templates and first-run onboarding (014): built-in templates,
+# hardened privilege honesty, no default HostFS/adapter authority, evidence
+# schema, and docs commands.
+scripts/test-onboarding-smoke.sh

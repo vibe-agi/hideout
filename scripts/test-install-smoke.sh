@@ -49,12 +49,12 @@ grep -q 'store: ok writable' "$tmp/doctor.out"
 grep -q 'profile: ok default' "$tmp/doctor.out"
 grep -q 'manager: ok' "$tmp/doctor.out"
 
-HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --backend native --network direct >"$tmp/init2.out"
-if grep -q 'task profile.create: applied' "$tmp/init2.out"; then
-  echo "install-smoke: second init recreated profile" >&2
+if HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --profile default --template dev --backend native --network direct >"$tmp/init2.out" 2>"$tmp/init2.err"; then
+  echo "install-smoke: second template init unexpectedly succeeded" >&2
   cat "$tmp/init2.out" >&2
   exit 1
 fi
+grep -q 'already exists' "$tmp/init2.err"
 
 fix_store="$tmp/fix-store"
 HIDEOUT_STORE_ROOT="$fix_store" "$prefix/bin/hideout" doctor --fix --dry-run --backend native >"$tmp/doctor-fix-dry.out"
@@ -80,6 +80,7 @@ proxy_prefix="$tmp/proxy-prefix"
 HIDEOUT_SECRET_DEFAULT_PROXY="socks5://user:pass@127.0.0.1:7890" \
   scripts/install-local.sh --prefix "$proxy_prefix" --store "$proxy_store" --backend native --network tun2socks --proxy-secret default-proxy >"$tmp/install-proxy.out"
 jq -e '.network.mode == "tun2socks" and .network.proxySecretRef == "default-proxy" and (.network.proxyEnvVisible == false)' "$proxy_store/profiles/default/profile.json" >/dev/null
+jq -e '.network.mediatedResolver == "1.1.1.1" and .metadata.templateId == "privacy"' "$proxy_store/profiles/default/profile.json" >/dev/null
 if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_store" >/dev/null 2>&1; then
   echo "install-smoke: proxy install persisted raw proxy URL" >&2
   exit 1

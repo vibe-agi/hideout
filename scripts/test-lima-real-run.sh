@@ -277,6 +277,7 @@ configure_network() {
     direct)
       run_network_args=(--network direct)
       init_network_args=(--network direct)
+      init_template="dev"
       ;;
     privacy|tun2socks)
       network_label="privacy"
@@ -285,7 +286,8 @@ configure_network() {
       fi
       prepare_linux_tun2socks
       run_network_args=(--network tun2socks --proxy-secret default-proxy)
-      init_network_args=(--network tun2socks --proxy-secret default-proxy)
+      init_network_args=(--network tun2socks --proxy-secret default-proxy --mediated-resolver 1.1.1.1)
+      init_template="privacy"
       endpoint_url="${HIDEOUT_LIMA_REAL_RUN_ENDPOINT_URL:-https://example.com/}"
       endpoint_status="${HIDEOUT_LIMA_REAL_RUN_EXPECT_STATUS:-200}"
       ;;
@@ -650,7 +652,7 @@ prepare_workspace() {
 
 run_doctor_and_init() {
   echo "lima-real-run: initializing isolated profile"
-  run_env "$hideout" init --no-input --backend lima "${init_network_args[@]}" >/dev/null
+  run_env "$hideout" init --no-input --profile default --template "$init_template" --backend lima "${init_network_args[@]}" >/dev/null
   run_env "$hideout" doctor --backend lima --workspace "$workspace" "${run_network_args[@]}" >/dev/null
 }
 

@@ -8,7 +8,7 @@ usage() {
 Usage:
   scripts/install-local.sh [--prefix <dir>] [--store <dir>] [--source <dir>]
                            [--backend native|lima|auto] [--network direct|tun2socks]
-                           [--proxy-secret <ref>]
+                           [--proxy-secret <ref>] [--mediated-resolver <ip>]
                            [--skip-init]
 
 Build and install Hideout from the current source tree, then run a typed
@@ -22,6 +22,7 @@ source="$ROOT"
 backend="auto"
 network="direct"
 proxy_secret=""
+mediated_resolver="1.1.1.1"
 run_init=1
 
 while [ "$#" -gt 0 ]; do
@@ -48,6 +49,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --proxy-secret)
       proxy_secret="${2:-}"
+      shift 2
+      ;;
+    --mediated-resolver)
+      mediated_resolver="${2:-}"
       shift 2
       ;;
     --skip-init)
@@ -112,9 +117,16 @@ GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
 
 if [ "$run_init" -eq 1 ]; then
   echo "install-local: running hideout init --no-input"
-  init_args=(init --no-input --backend "$backend" --network "$network")
+  template="dev"
+  if [ "$network" = "tun2socks" ]; then
+    template="privacy"
+  fi
+  init_args=(init --no-input --profile default --template "$template" --backend "$backend" --network "$network")
   if [ -n "$proxy_secret" ]; then
     init_args+=(--proxy-secret "$proxy_secret")
+  fi
+  if [ "$network" = "tun2socks" ]; then
+    init_args+=(--mediated-resolver "$mediated_resolver")
   fi
   HIDEOUT_STORE_ROOT="$store" "$hideout" "${init_args[@]}"
 else

@@ -53,7 +53,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$bin" init --no-input --backend lima --network direct
+"$bin" init --no-input --profile default --template dev --backend lima --network direct
 
 echo "env-image: create named environment from declared image"
 (cd "$workspace" && "$bin" env create imgtest --image "$IMAGE_DECL")
