@@ -46,7 +46,11 @@
         "hostfs/write/claim",
         "hostfs/write/apply",
         "hostfs/write/discard",
-        "hostfs/write/status"
+        "hostfs/write/status",
+        "adapter-packs",
+        "adapter-pack/inspect",
+        "adapter-pack/plan",
+        "adapter-pack/apply"
       ]
     },
     "data": {

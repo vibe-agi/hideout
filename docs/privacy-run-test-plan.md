@@ -105,7 +105,7 @@ Change-to-gate mapping:
 | Environment model: naming, auto-name resolution, drift semantics, record versioning, or image declaration plumbing | Gate 0 and targeted environment/manager/app tests | `scripts/test-env-image.sh` (via `--env-image`) proves declared-image boot, digest-drift fail-closed, and recreate recovery on macOS with Lima | `--release-candidate` remains separate |
 | Supervised Lima real-run dogfood slice | Gate 0 and targeted test CLI tests | `scripts/test-lima-real-run.sh` as the optional Gate 2 step on macOS with Lima | `--release-candidate` remains separate |
 | Network setup, proxy secrets, route verification, or `tun2socks` | Gate 0, native harness for shared CLI wiring, and Gate 3 | Gate 3 with auto proxy; Gate 2 if bootstrap changes | Gate 3 strict operator proxy |
-| Policy scripts, Goja ABI, command adapters, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests; command-adapter smoke for profile/broker wiring | `--required` if a required route is affected |
+| Policy scripts, Goja ABI, command adapters, adapter packs, or scriptable extension points | Gate 0 and native harness where CLI-visible | relevant denied and allowed path tests; command-adapter smoke for profile/broker wiring; adapter-pack smoke for registry/test/enable/revoke wiring | `--required` if a required route is affected |
 | Manager core, run API, or Web UI | targeted manager tests and Gate 0 | run plan/apply/status tests and redaction checks when execution authority changes | optional product smoke |
 | Endpoint Exposure product actions | Gate 0 and targeted Manager/PortBridge tests for implemented directions | candidate validation, direction-specific exposure validation, lifecycle, audit, cleanup, Boundary Summary, and backend fail-closed tests | `--required` when a new direction or consumer becomes user-facing |
 | Browser Control or other lab probes | package tests and `scripts/test-lab-probes.sh` | probe audit evidence only | probe smoke in `--release-candidate` |
@@ -203,6 +203,13 @@ Required evidence:
   Gate 0) validates the 008 profile schema, command-adapter schema, Manager
   plan/apply path, broker outcomes, root-sensitive intent wording, and digest
   fail-closed behavior without claiming root containment.
+- Adapter-pack smoke (`scripts/test-adapter-pack-smoke.sh`, wired into Gate 0)
+  validates the 011 local pack lifecycle: manifest/registry schema presence,
+  install/list/test/enable/revoke CLI wiring, mandatory tests before enable,
+  exact profile binding of pack id/revision/adapter/source digest, runtime
+  fail-closed behavior for revoked packs, and preservation of the 008
+  non-applied proposal model. 011 is local registry and script lifecycle work;
+  it does not require real Lima proof.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must

@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/adapterpack"
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
@@ -99,6 +100,8 @@ func (a app) run(args []string) error {
 		return a.cleanup(args[1:])
 	case "audit":
 		return a.auditCommand(args[1:])
+	case "adapter-pack":
+		return a.adapterPackCommand(args[1:])
 	case "ui":
 		return a.ui(args[1:])
 	case "daemon":
@@ -138,6 +141,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "Run and explain:")
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout run --explain [flags] -- <command> [args...]")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack <install|list|inspect|test|enable|disable|upgrade|revoke>")
 	fmt.Fprintln(a.stdout, "  hideout explain [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
@@ -339,6 +343,19 @@ func (a app) profileCommandAdapterUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> disable <id>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> refresh-digest <id>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> remove <id>")
+}
+
+func (a app) adapterPackUsage() {
+	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack install --path <dir>")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack install --git <url> --commit <sha>")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack list")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack inspect <pack-id>")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack test [--revision <id>] <pack-id>")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack enable --profile <name> --pack <id> --revision <id> --adapter <id> [--id <command-adapter-id>] [--command <cmd>] [--capability <capability>]")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack disable --profile <name> <command-adapter-id>")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack upgrade --path <dir>")
+	fmt.Fprintln(a.stdout, "  hideout adapter-pack revoke <pack-id>")
 }
 
 func (a app) profileEnvUsage() {
@@ -1905,7 +1922,7 @@ func (a app) doctor(args []string) error {
 	checkEnv(env, report)
 	checkPolicy(runtimeProfile, profileDir, report)
 	checkNetwork(runtimeProfile, backendName, layout, env, report)
-	checkBroker(runtimeProfile, backendName, layout, workspace, guestWorkspace, profileDir, report)
+	checkBroker(store.Root, runtimeProfile, backendName, layout, workspace, guestWorkspace, profileDir, report)
 	checkCommandProxyRuntime(backendName, report)
 	checkHostFSRuntime(backendName, runtimeProfile, report)
 	checkHostOpen(runtimeProfile, identityDir, report)
@@ -2456,7 +2473,7 @@ func checkNetwork(p profile.Profile, backendName string, layout session.Layout, 
 	report("network", status, fmt.Sprintf("mode=%s engine=%s runtimeVerify=%t localBypass=%s reason=%s", plan.Mode, plan.Engine, plan.RuntimeVerify, explainList(plan.LocalBypassHosts), plan.Reason))
 }
 
-func checkBroker(p profile.Profile, backendName string, layout session.Layout, hostRoot, guestRoot, profileDir string, report func(string, string, string)) {
+func checkBroker(storeRoot string, p profile.Profile, backendName string, layout session.Layout, hostRoot, guestRoot, profileDir string, report func(string, string, string)) {
 	token, err := broker.NewToken()
 	if err != nil {
 		report("broker", "error", err.Error())
@@ -2467,7 +2484,7 @@ func checkBroker(p profile.Profile, backendName string, layout session.Layout, h
 		report("broker", "error", err.Error())
 		return
 	}
-	adapters, err := cmdadapter.Compile(p, profileDir)
+	adapters, err := cmdadapter.CompileWithResolver(p, profileDir, adapterpack.RuntimeResolver{Store: adapterpack.NewStore(storeRoot)})
 	if err != nil {
 		report("broker", "error", err.Error())
 		return
@@ -3473,6 +3490,187 @@ func parseProfileCommandAdapterAddLocal(profileName string, args []string) (mana
 		Commands:                    []string(commands),
 		AllowedProposalCapabilities: []string(capabilities),
 	}, nil
+}
+
+func (a app) adapterPackCommand(args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		a.adapterPackUsage()
+		return nil
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	switch args[0] {
+	case "install", "upgrade":
+		opts, err := parseAdapterPackSource(args[0], args[1:])
+		if err != nil {
+			return err
+		}
+		opts.Operation = args[0]
+		plan, err := core.PlanAdapterPack(opts)
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyAdapterPack(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	case "list":
+		if len(args) != 1 {
+			return errors.New("usage: hideout adapter-pack list")
+		}
+		packs, err := core.ListAdapterPacks()
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, map[string]any{"adapterPacks": packs})
+	case "inspect":
+		if len(args) != 2 {
+			return errors.New("usage: hideout adapter-pack inspect <pack-id>")
+		}
+		entry, err := core.InspectAdapterPack(args[1])
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, entry)
+	case "test":
+		opts, err := parseAdapterPackTest(args[1:])
+		if err != nil {
+			return err
+		}
+		plan, err := core.PlanAdapterPack(opts)
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyAdapterPack(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	case "enable":
+		opts, err := parseAdapterPackEnable(args[1:])
+		if err != nil {
+			return err
+		}
+		plan, err := core.PlanAdapterPack(opts)
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyAdapterPack(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	case "disable":
+		opts, err := parseAdapterPackDisable(args[1:])
+		if err != nil {
+			return err
+		}
+		plan, err := core.PlanAdapterPack(opts)
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyAdapterPack(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	case "revoke":
+		if len(args) != 2 {
+			return errors.New("usage: hideout adapter-pack revoke <pack-id>")
+		}
+		plan, err := core.PlanAdapterPack(manager.AdapterPackOptions{Operation: "revoke", PackID: args[1]})
+		if err != nil {
+			return err
+		}
+		result, err := core.ApplyAdapterPack(plan)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(a.stdout, result)
+	default:
+		return fmt.Errorf("unknown adapter-pack command %q", args[0])
+	}
+}
+
+func parseAdapterPackSource(command string, args []string) (manager.AdapterPackOptions, error) {
+	fs := flag.NewFlagSet("adapter-pack "+command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	path := fs.String("path", "", "local adapter pack directory")
+	gitURL := fs.String("git", "", "git repository URL")
+	commit := fs.String("commit", "", "exact git commit")
+	if err := fs.Parse(args); err != nil {
+		return manager.AdapterPackOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return manager.AdapterPackOptions{}, fmt.Errorf("unexpected adapter-pack argument %q", fs.Arg(0))
+	}
+	if *path != "" && *gitURL != "" {
+		return manager.AdapterPackOptions{}, errors.New("choose either --path or --git")
+	}
+	if *gitURL != "" {
+		return manager.AdapterPackOptions{SourceKind: adapterpack.SourceGit, SourceURL: *gitURL, SourceCommit: *commit}, nil
+	}
+	return manager.AdapterPackOptions{SourceKind: adapterpack.SourceLocal, SourcePath: *path}, nil
+}
+
+func parseAdapterPackTest(args []string) (manager.AdapterPackOptions, error) {
+	fs := flag.NewFlagSet("adapter-pack test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	revision := fs.String("revision", "", "revision id")
+	if err := fs.Parse(args); err != nil {
+		return manager.AdapterPackOptions{}, err
+	}
+	if fs.NArg() != 1 {
+		return manager.AdapterPackOptions{}, errors.New("usage: hideout adapter-pack test [--revision <id>] <pack-id>")
+	}
+	return manager.AdapterPackOptions{Operation: "test", PackID: fs.Arg(0), RevisionID: *revision}, nil
+}
+
+func parseAdapterPackEnable(args []string) (manager.AdapterPackOptions, error) {
+	fs := flag.NewFlagSet("adapter-pack enable", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	profileName := fs.String("profile", "default", "profile name")
+	packID := fs.String("pack", "", "pack id")
+	revisionID := fs.String("revision", "", "revision id")
+	adapterID := fs.String("adapter", "", "pack adapter id")
+	commandAdapterID := fs.String("id", "", "profile command adapter id")
+	var commands stringListFlag
+	var capabilities stringListFlag
+	fs.Var(&commands, "command", "command symbol to route; may be repeated")
+	fs.Var(&capabilities, "capability", "proposal capability; may be repeated")
+	if err := fs.Parse(args); err != nil {
+		return manager.AdapterPackOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return manager.AdapterPackOptions{}, fmt.Errorf("unexpected adapter-pack argument %q", fs.Arg(0))
+	}
+	return manager.AdapterPackOptions{
+		Operation:                   "enable",
+		ProfileName:                 *profileName,
+		PackID:                      *packID,
+		RevisionID:                  *revisionID,
+		AdapterID:                   *adapterID,
+		CommandAdapterID:            *commandAdapterID,
+		Commands:                    []string(commands),
+		AllowedProposalCapabilities: []string(capabilities),
+	}, nil
+}
+
+func parseAdapterPackDisable(args []string) (manager.AdapterPackOptions, error) {
+	fs := flag.NewFlagSet("adapter-pack disable", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	profileName := fs.String("profile", "default", "profile name")
+	if err := fs.Parse(args); err != nil {
+		return manager.AdapterPackOptions{}, err
+	}
+	if fs.NArg() != 1 {
+		return manager.AdapterPackOptions{}, errors.New("usage: hideout adapter-pack disable --profile <name> <command-adapter-id>")
+	}
+	return manager.AdapterPackOptions{Operation: "disable", ProfileName: *profileName, CommandAdapterID: fs.Arg(0)}, nil
 }
 
 type profileCommandAdapterOutput struct {

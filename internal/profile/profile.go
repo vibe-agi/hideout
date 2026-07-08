@@ -148,6 +148,10 @@ type CommandAdapter struct {
 	AllowedProposalCapabilities []string `json:"allowedProposalCapabilities,omitempty"`
 	Description                 string   `json:"description,omitempty"`
 	Builtin                     string   `json:"builtin,omitempty"`
+	PackID                      string   `json:"packId,omitempty"`
+	PackRevisionID              string   `json:"packRevisionId,omitempty"`
+	PackAdapterID               string   `json:"packAdapterId,omitempty"`
+	PackLockDigest              string   `json:"packLockDigest,omitempty"`
 }
 
 type Policy struct {
@@ -1087,7 +1091,8 @@ func (p Profile) validateCommandAdapters() error {
 		if err := validateCommandAdapterEntrypoint(adapter.Entrypoint); err != nil {
 			return fmt.Errorf("%s.entrypoint: %w", label, err)
 		}
-		if adapter.Path == "" && adapter.Builtin == "" {
+		packBacked := adapter.PackID != "" || adapter.PackRevisionID != "" || adapter.PackAdapterID != "" || adapter.PackLockDigest != ""
+		if adapter.Path == "" && adapter.Builtin == "" && !packBacked {
 			return fmt.Errorf("%s.path is required", label)
 		}
 		if adapter.Path != "" {
@@ -1095,15 +1100,37 @@ func (p Profile) validateCommandAdapters() error {
 				return fmt.Errorf("%s.path: %w", label, err)
 			}
 		}
+		if packBacked {
+			if adapter.Path != "" || adapter.Builtin != "" {
+				return fmt.Errorf("%s pack-backed adapters must not set path or builtin", label)
+			}
+			if err := validateCommandAdapterID(adapter.PackID); err != nil {
+				return fmt.Errorf("%s.packId: %w", label, err)
+			}
+			if err := validateCommandAdapterID(adapter.PackRevisionID); err != nil {
+				return fmt.Errorf("%s.packRevisionId: %w", label, err)
+			}
+			if err := validateCommandAdapterID(adapter.PackAdapterID); err != nil {
+				return fmt.Errorf("%s.packAdapterId: %w", label, err)
+			}
+			if adapter.PackLockDigest == "" {
+				return fmt.Errorf("%s.packLockDigest is required for pack-backed adapters", label)
+			}
+			if err := validateCommandAdapterDigest(adapter.PackLockDigest); err != nil {
+				return fmt.Errorf("%s.packLockDigest: %w", label, err)
+			}
+		}
 		if adapter.Builtin != "" && adapter.Builtin != "root-sensitive" {
 			return fmt.Errorf("%s.builtin %q is unsupported", label, adapter.Builtin)
 		}
 		if adapter.Enabled {
-			if adapter.Digest == "" {
+			if adapter.Digest == "" && !packBacked {
 				return fmt.Errorf("%s.digest is required when enabled", label)
 			}
-			if err := validateCommandAdapterDigest(adapter.Digest); err != nil {
-				return fmt.Errorf("%s.digest: %w", label, err)
+			if adapter.Digest != "" {
+				if err := validateCommandAdapterDigest(adapter.Digest); err != nil {
+					return fmt.Errorf("%s.digest: %w", label, err)
+				}
 			}
 			if len(adapter.Commands) == 0 {
 				return fmt.Errorf("%s.commands is required when enabled", label)
@@ -1132,7 +1159,7 @@ func (p Profile) validateCommandAdapters() error {
 		}
 		for i, capability := range adapter.AllowedProposalCapabilities {
 			switch capability {
-			case "guest.privilege.plan":
+			case "guest.privilege.plan", "host.fs.write.plan":
 			default:
 				return fmt.Errorf("%s.allowedProposalCapabilities[%d] %q is unsupported", label, i, capability)
 			}

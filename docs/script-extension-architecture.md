@@ -197,6 +197,19 @@ Provider
   classify capability intent.
 ```
 
+011 promotes adapter sharing from ad hoc local files to local adapter packs. An
+adapter pack is still not authority: it is a versioned source tree with a
+manifest, command adapter scripts, declared commands, declared proposal
+capabilities, and deterministic test vectors. Hideout locks local directories
+or exact-commit git sources by digest into a store-wide registry, then a profile
+may explicitly enable one tested revision. Core validation is the primary gate:
+schema shape, known outcomes, command ownership, capability subset checks,
+digest drift, revoked packs, and Go-owned proposal validation all fail closed
+even if a pack's own tests pass. Pack tests are mandatory before enablement, but
+they are supporting evidence rather than a trust boundary. Public marketplace
+trust, publisher identity, signing, remote revocation, and namespace protection
+remain out of scope until a public marketplace exists.
+
 Adapters must not pass through target argv to a host provider. Host argv, file
 locations, endpoint targets, and other authority-bearing parameters are rebuilt
 by Go providers from validated structured resources. For resource-opening
@@ -430,14 +443,16 @@ Current entrypoints:
 | Domain entrypoint | Phase 1 profile ABI | Phase | Owner | Adapter use |
 | --- | --- | --- | --- | --- |
 | `command.decide` | `decideCommand(ctx)` | Required Phase 1 | Policy Engine | Command Proxy decisions for registered `host.open` command symbols such as the default `open` and `xdg-open`. |
+| `command.adapter` | `decideCommandAdapter(ctx)` | Required Phase 1 | Command Adapter Runtime | Profile-scoped or adapter-pack-scoped command adapters that return strict Go-validated outcomes for explicitly owned command symbols. |
 | `audit.redact` | `redactAudit(ctx)` | Required Phase 1 | Policy Engine | Presentation redaction for exported or viewed audit details. |
 
-`command.decide` and `audit.redact` are the domain entrypoint names used by
-bundle and ecosystem contracts. The Phase 1 profile schema and goja evaluator
-still bind concrete script files by the ABI function names `decideCommand` and
-`redactAudit`. Documentation that describes bundle permissions should use the
-domain names. Documentation that describes profile `scriptRefs` or executable
-JavaScript should use the ABI names.
+`command.decide`, `command.adapter`, and `audit.redact` are the domain
+entrypoint names used by bundle, adapter-pack, and ecosystem contracts. The
+Phase 1 profile schema and goja evaluator still bind concrete script files by
+the ABI function names `decideCommand`, `decideCommandAdapter`, and
+`redactAudit`. Documentation that describes bundle or pack permissions should
+use the domain names. Documentation that describes profile `scriptRefs`,
+adapter manifests, or executable JavaScript should use the ABI names.
 
 Design-ready and Later entrypoints:
 
@@ -484,7 +499,7 @@ the current effective policy.
 
 ### Design-Ready
 
-- Script adapter packaging as bundle entries.
+- Local adapter pack lifecycle for command adapters.
 - Safe context query SDK backed by immutable per-evaluation snapshots.
 - Persona recipe references to adapters without granting authority directly.
 - Adapter permission diff in Manager and UI surfaces.

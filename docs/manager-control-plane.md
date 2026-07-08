@@ -89,6 +89,7 @@ GuestPrivilegeStatus
 PrivilegedSetupEvent
 CommandProxyRule
 CommandAdapter
+AdapterPack
 OpenTarget
 PortBridge
 AuditEvent
@@ -136,6 +137,12 @@ CommandAdapter is the implemented 008 profile-scoped command adapter record:
 local artifact or built-in root-sensitive adapter, digest, entrypoint, command
 symbols, allowed proposal capabilities, and enablement state. It is managed
 through typed Manager Core plan/apply and CLI, not by raw profile writes.
+
+AdapterPack is the implemented 011 local lifecycle resource for command
+adapters. It records a store-wide pack identity, installed revisions, source
+facts, digest locks, validation/test status, lifecycle state, and profile
+enable bindings. It is not a public marketplace, publisher identity system, or
+remote trust mechanism.
 
 Each resource needs:
 
@@ -228,6 +235,12 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   built-in root-sensitive adapter, enable, disable, refresh digest, and remove.
   Plans show command ownership, digest, allowed proposal capabilities, and
   root-intent warnings. Apply recomputes under the profile mutation lock.
+- Manager Core owns adapter-pack lifecycle through `PlanAdapterPack` and
+  `ApplyAdapterPack`: install or upgrade local/exact-commit sources, run pack
+  tests, enable a tested revision in a profile, disable a profile binding, and
+  revoke a store-wide pack. Enable recomputes under the profile mutation lock
+  and fails closed when pack tests have not passed, commands/capabilities exceed
+  the manifest, the source digest drifts, or the pack is revoked.
 - Manager API exposes the minimal run surface: `POST /api/v1/run/plan`,
   `POST /api/v1/run/apply`, and `GET /api/v1/run/status`.
 - Manager API exposes the minimal init surface:
@@ -257,6 +270,12 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   mutate only durable `profile.env.public`, `profile.env.inherit`, and
   `profile.env.deny` policy, use the same profile validator as CLI
   `profile env`, and must not return public env values in plan/apply responses.
+- Manager API exposes controlled adapter-pack lifecycle actions:
+  `GET /api/v1/adapter-packs`, `GET /api/v1/adapter-pack/inspect`, and
+  `POST /api/v1/adapter-pack/plan|apply`. These routes install, test, enable,
+  disable, upgrade, or revoke only through Manager Core validation. They do not
+  expose a raw profile writer, run unpinned remote code at runtime, or grant
+  marketplace trust.
 - The profile mutation endpoints above describe the current implemented
   surface accurately. As the API stabilizes they converge to a single
   `POST /api/v1/profile/policy/plan` and `POST /api/v1/profile/policy/apply`

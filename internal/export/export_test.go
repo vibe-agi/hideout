@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/adapterpack"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -168,6 +169,40 @@ func TestExportIncludesHostFSWriteEvidenceWithoutClaimTokenOrOverlayObjectPath(t
 		}
 	}
 	for _, leaked := range []string{"claim_0123456789abcdef", "tokenHash", "hfwobj_secret", "hostfs-overlay/objects"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("artifact leaked %q:\n%s", leaked, text)
+		}
+	}
+}
+
+func TestExportIncludesAdapterPackLifecycleEvidenceWithoutControlPlaneSecrets(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "artifact.json")
+	event := testAuditEvent(map[string]any{
+		"operation":      "enable",
+		"packId":         "example.pack",
+		"state":          "installed",
+		"revisionId":     "rev_abc",
+		"manifestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"sourceDigest":   "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"testStatus":     "passed",
+		"reason":         "cap_0123456789abcdef0123456789abcdef HIDEOUT_SECRET_PACK=raw",
+	})
+	event.Action = adapterpack.Action
+	_, err := Apply(baseRequest(out, t.TempDir(), []AuditEvent{event}))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{adapterpack.Action, "example.pack", "rev_abc", "passed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("artifact missing adapter-pack evidence %q:\n%s", want, text)
+		}
+	}
+	for _, leaked := range []string{"cap_0123456789abcdef", "HIDEOUT_SECRET_PACK", "raw"} {
 		if strings.Contains(text, leaked) {
 			t.Fatalf("artifact leaked %q:\n%s", leaked, text)
 		}

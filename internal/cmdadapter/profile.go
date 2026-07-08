@@ -14,15 +14,26 @@ import (
 )
 
 const (
-	DefaultEntrypoint       = "decideCommandAdapter"
-	BuiltinRootSensitiveID  = "root-sensitive"
-	BuiltinRootSensitiveKey = "root-sensitive"
-	CapabilityGuestPrivPlan = "guest.privilege.plan"
+	DefaultEntrypoint         = "decideCommandAdapter"
+	BuiltinRootSensitiveID    = "root-sensitive"
+	BuiltinRootSensitiveKey   = "root-sensitive"
+	CapabilityGuestPrivPlan   = "guest.privilege.plan"
+	CapabilityHostFSWritePlan = "host.fs.write.plan"
 )
 
 type Runtime struct {
 	Adapters  map[string]RuntimeAdapter
 	ByCommand map[string]string
+}
+
+type SourceResolver interface {
+	ResolveCommandAdapter(profileDir, id string, adapter profile.CommandAdapter) (ResolvedSource, error)
+}
+
+type ResolvedSource struct {
+	Source string
+	Digest string
+	Path   string
 }
 
 type RuntimeAdapter struct {
@@ -36,9 +47,17 @@ type RuntimeAdapter struct {
 	Builtin                     string
 	RootSensitive               bool
 	Source                      string
+	PackID                      string
+	PackRevisionID              string
+	PackAdapterID               string
+	PackLockDigest              string
 }
 
 func Compile(p profile.Profile, profileDir string) (Runtime, error) {
+	return CompileWithResolver(p, profileDir, nil)
+}
+
+func CompileWithResolver(p profile.Profile, profileDir string, resolver SourceResolver) (Runtime, error) {
 	rt := Runtime{
 		Adapters:  map[string]RuntimeAdapter{},
 		ByCommand: map[string]string{},
@@ -47,7 +66,7 @@ func Compile(p profile.Profile, profileDir string) (Runtime, error) {
 		if !adapter.Enabled {
 			continue
 		}
-		compiled, err := CompileAdapter(profileDir, id, adapter)
+		compiled, err := CompileAdapterWithResolver(profileDir, id, adapter, resolver)
 		if err != nil {
 			return Runtime{}, err
 		}
@@ -63,6 +82,10 @@ func Compile(p profile.Profile, profileDir string) (Runtime, error) {
 }
 
 func CompileAdapter(profileDir, id string, adapter profile.CommandAdapter) (RuntimeAdapter, error) {
+	return CompileAdapterWithResolver(profileDir, id, adapter, nil)
+}
+
+func CompileAdapterWithResolver(profileDir, id string, adapter profile.CommandAdapter, resolver SourceResolver) (RuntimeAdapter, error) {
 	entrypoint := adapter.Entrypoint
 	if entrypoint == "" {
 		entrypoint = DefaultEntrypoint
@@ -77,14 +100,21 @@ func CompileAdapter(profileDir, id string, adapter profile.CommandAdapter) (Runt
 		Description:                 adapter.Description,
 		Builtin:                     adapter.Builtin,
 		RootSensitive:               adapter.Builtin == BuiltinRootSensitiveKey || id == BuiltinRootSensitiveID,
+		PackID:                      adapter.PackID,
+		PackRevisionID:              adapter.PackRevisionID,
+		PackAdapterID:               adapter.PackAdapterID,
+		PackLockDigest:              adapter.PackLockDigest,
 	}
-	source, digest, err := ResolveSource(profileDir, out)
+	source, digest, path, err := ResolveSourceWithResolver(profileDir, out, adapter, resolver)
 	if err != nil {
 		return RuntimeAdapter{}, err
 	}
 	out.Source = source
+	if path != "" {
+		out.Path = path
+	}
 	if out.Digest == "" {
-		return RuntimeAdapter{}, fmt.Errorf("command adapter %s digest is required", id)
+		out.Digest = digest
 	}
 	if digest != out.Digest {
 		return RuntimeAdapter{}, fmt.Errorf("command adapter %s digest mismatch: expected %s got %s", id, out.Digest, digest)
@@ -93,36 +123,52 @@ func CompileAdapter(profileDir, id string, adapter profile.CommandAdapter) (Runt
 }
 
 func ResolveSource(profileDir string, adapter RuntimeAdapter) (string, string, error) {
+	source, digest, _, err := ResolveSourceWithResolver(profileDir, adapter, profile.CommandAdapter{}, nil)
+	return source, digest, err
+}
+
+func ResolveSourceWithResolver(profileDir string, adapter RuntimeAdapter, original profile.CommandAdapter, resolver SourceResolver) (string, string, string, error) {
+	if adapter.PackID != "" || adapter.PackRevisionID != "" || adapter.PackAdapterID != "" {
+		if resolver == nil {
+			return "", "", "", fmt.Errorf("command adapter %s is pack-backed but no adapter pack resolver is configured", adapter.ID)
+		}
+		resolved, err := resolver.ResolveCommandAdapter(profileDir, adapter.ID, original)
+		if err != nil {
+			return "", "", "", err
+		}
+		return resolved.Source, resolved.Digest, resolved.Path, nil
+	}
 	var data []byte
 	switch adapter.Builtin {
 	case "":
 		path := adapter.Path
 		if path == "" {
-			return "", "", fmt.Errorf("command adapter %s path is required", adapter.ID)
+			return "", "", "", fmt.Errorf("command adapter %s path is required", adapter.ID)
 		}
 		if !filepath.IsAbs(path) {
 			if profileDir == "" {
-				return "", "", fmt.Errorf("command adapter %s profile directory is required", adapter.ID)
+				return "", "", "", fmt.Errorf("command adapter %s profile directory is required", adapter.ID)
 			}
 			path = filepath.Join(profileDir, path)
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			return "", "", fmt.Errorf("command adapter %s: %w", adapter.ID, err)
+			return "", "", "", fmt.Errorf("command adapter %s: %w", adapter.ID, err)
 		}
 		if !info.Mode().IsRegular() {
-			return "", "", fmt.Errorf("command adapter %s path must be a regular file", adapter.ID)
+			return "", "", "", fmt.Errorf("command adapter %s path must be a regular file", adapter.ID)
 		}
 		data, err = os.ReadFile(path)
 		if err != nil {
-			return "", "", fmt.Errorf("command adapter %s: %w", adapter.ID, err)
+			return "", "", "", fmt.Errorf("command adapter %s: %w", adapter.ID, err)
 		}
+		adapter.Path = path
 	case BuiltinRootSensitiveKey:
 		data = []byte(BuiltinRootSensitiveSource)
 	default:
-		return "", "", fmt.Errorf("command adapter %s builtin %q is unsupported", adapter.ID, adapter.Builtin)
+		return "", "", "", fmt.Errorf("command adapter %s builtin %q is unsupported", adapter.ID, adapter.Builtin)
 	}
-	return string(data), DigestBytes(data), nil
+	return string(data), DigestBytes(data), adapter.Path, nil
 }
 
 func DigestBytes(data []byte) string {

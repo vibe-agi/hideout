@@ -20,6 +20,8 @@ test -f schemas/daemon-status.schema.json
 test -f schemas/daemon-event.schema.json
 test -f schemas/live-console-seed.schema.json
 test -f schemas/command-adapter.schema.json
+test -f schemas/adapter-pack-manifest.schema.json
+test -f schemas/adapter-pack-registry.schema.json
 test -f schemas/guest-privilege-status.schema.json
 test -f schemas/hostfs-write-decision.schema.json
 test -f schemas/hostfs-write-event.schema.json
@@ -120,6 +122,7 @@ scripts/test-live-console-smoke.sh
 # Command capability adapters (no isolation claim): strict adapter schema,
 # local digest pinning, command-name routing, and root-sensitive intent wording.
 scripts/test-command-adapter-smoke.sh
+scripts/test-adapter-pack-smoke.sh
 
 # Guest privilege separation and risk audit (Lima proof added by 009 polish):
 # status schema/classifier and no guest-root containment overclaim.

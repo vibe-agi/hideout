@@ -143,6 +143,14 @@ plan/apply operations as the CLI and must keep the 008 root-sensitive wording as
 command-name intent capture enriched by 009 privilege status, never as an
 absolute-path, syscall, setuid, or post-guest-root containment claim.
 
+Adapter-pack visibility is also Manager-owned. TUI/WebUI may list installed
+packs, built-in metadata, active revision IDs, lifecycle state, test status, and
+profile bindings from Manager overview/API. Install, test, enable, disable,
+upgrade, and revoke remain typed Manager operations; the first consumer is CLI,
+and any future UI controls must call the same `adapter-pack/plan|apply` routes.
+These surfaces must describe packs as local digest-locked extensions, not as a
+trusted public marketplace.
+
 ## TUI Initial Pages
 
 ### Dashboard
@@ -280,6 +288,11 @@ Installed bundle status, permission diff, and verification results. Phase 1
 scope follows
 [policy-config-supply-chain.md](policy-config-supply-chain.md); marketplace
 views are Later.
+
+Adapter packs are a narrower implemented local lifecycle for command adapters:
+show installed/revoked/built-in packs, active revisions, test status, digest
+locks, and profile binding counts. Public marketplace browsing, publisher
+trust, and remote revocation views remain Later.
 
 ### Policy Editor
 

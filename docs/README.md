@@ -89,6 +89,10 @@ Hideout uses separate registries for different layers:
   `deny/simulate/rewriteGuest/proposeCapability`; routes
   `guest-direct/guest-exec/host-broker/fake/deny/portbridge/lab-probe`. Other
   documents must reuse these words instead of coining synonyms.
+- local adapter-pack schema, registry, lifecycle state, and profile binding
+  vocabulary are owned by the 011 contracts and implemented through
+  `hideout.adapter-pack/v1`, `hideout.adapter-pack-registry/v1`, and Manager
+  `adapter-pack/*` routes. This is not public marketplace terminology.
 
 Do not treat similar suffixes as interchangeable. Action names describe
 authority requested by a policy decision. Backend capability flags describe what

@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/adapter-pack-manifest.schema.json",
+  "title": "Hideout Adapter Pack Manifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "adapters"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "hideout.adapter-pack/v1"
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "adapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "script",
+          "commands"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "entrypoint": {
+            "type": "string",
+            "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"
+          },
+          "script": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "commands": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/command"
+            },
+            "uniqueItems": true
+          },
+          "allowedProposalCapabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/proposalCapability"
+            },
+            "uniqueItems": true
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "adapterId",
+          "context",
+          "expect"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "adapterId": {
+            "$ref": "#/$defs/id"
+          },
+          "context": {
+            "type": "object",
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "argv"
+                ],
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/command"
+                  },
+                  "argv": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "cwd": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "expect": {
+            "type": "object",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "deny",
+                  "simulate",
+                  "rewriteGuest",
+                  "proposeCapability"
+                ]
+              },
+              "capability": {
+                "$ref": "#/$defs/proposalCapability"
+              },
+              "reasonContains": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\\\/\\s]+$",
+      "not": {
+        "enum": [
+          ".",
+          "..",
+          "hideout-shim"
+        ]
+      }
+    },
+    "proposalCapability": {
+      "enum": [
+        "guest.privilege.plan",
+        "host.fs.write.plan"
+      ]
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "\\\\"
+          },
+          {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          },
+          {
+            "pattern": "(^|/)\\.(/|$)"
+          },
+          {
+            "pattern": "//"
+          }
+        ]
+      }
+    }
+  }
+}

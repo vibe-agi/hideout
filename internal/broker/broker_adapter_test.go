@@ -15,6 +15,53 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
+type brokerPackResolver struct{}
+
+func (brokerPackResolver) ResolveCommandAdapter(profileDir, id string, adapter profile.CommandAdapter) (cmdadapter.ResolvedSource, error) {
+	return cmdadapter.ResolvedSource{
+		Source: `function decideCommandAdapter() {
+			return {outcome: "deny", reason: "pack blocked", exitCode: 73, stderr: "pack blocked"};
+		}`,
+		Digest: "sha256:e1e08121184db26dbaae5fde71fd2a97b561ef87151f7f50d72c5b37a586f7cd",
+		Path:   filepath.Join(profileDir, "adapter-pack", id+".js"),
+	}, nil
+}
+
+func TestPackBackedCommandAdapterRoutesThroughBroker(t *testing.T) {
+	p := profile.Default("pack-test")
+	p.CommandAdapters.Adapters = map[string]profile.CommandAdapter{
+		"pack-tool": {
+			Enabled:        true,
+			PackID:         "example.pack",
+			PackRevisionID: "rev_abc",
+			PackAdapterID:  "tool",
+			PackLockDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Entrypoint:     cmdadapter.DefaultEntrypoint,
+			Commands:       []string{"tool-x"},
+		},
+	}
+	rt, err := cmdadapter.CompileWithResolver(p, t.TempDir(), brokerPackResolver{})
+	if err != nil {
+		t.Fatalf("compile pack-backed runtime: %v", err)
+	}
+	server := &Server{
+		SessionID:       "session",
+		Token:           "token",
+		Profile:         "pack-test",
+		GuestRoot:       "/workspace",
+		HostRoot:        "/tmp/workspace",
+		Commands:        []string{"tool-x"},
+		CommandAdapters: rt,
+		Evaluator:       policy.NewEvaluator(p),
+	}
+	req := testAdapterRequest()
+	req.Args["adapterId"] = "pack-tool"
+	resp := server.Handle(context.Background(), req)
+	if resp.Status != "denied" || resp.ExitCode != 73 || !strings.Contains(resp.Stderr, "pack blocked") {
+		t.Fatalf("pack-backed adapter did not route through broker: %+v", resp)
+	}
+}
+
 func TestCommandAdapterBrokerOutcomes(t *testing.T) {
 	tests := []struct {
 		name       string

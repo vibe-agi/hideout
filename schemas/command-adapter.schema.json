@@ -137,7 +137,10 @@
           "$ref": "#/$defs/reason"
         },
         "capability": {
-          "const": "guest.privilege.plan"
+          "enum": [
+            "guest.privilege.plan",
+            "host.fs.write.plan"
+          ]
         },
         "intent": {
           "$ref": "#/$defs/intent"

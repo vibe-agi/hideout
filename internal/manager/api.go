@@ -79,6 +79,22 @@ type CommandProxyAPIRequest struct {
 	Command     string `json:"command"`
 }
 
+type AdapterPackAPIRequest struct {
+	Operation                   string           `json:"operation,omitempty"`
+	SourceKind                  string           `json:"sourceKind,omitempty"`
+	SourcePath                  string           `json:"sourcePath,omitempty"`
+	SourceURL                   string           `json:"sourceUrl,omitempty"`
+	SourceCommit                string           `json:"sourceCommit,omitempty"`
+	ProfileName                 string           `json:"profile,omitempty"`
+	PackID                      string           `json:"packId,omitempty"`
+	RevisionID                  string           `json:"revisionId,omitempty"`
+	AdapterID                   string           `json:"adapterId,omitempty"`
+	CommandAdapterID            string           `json:"commandAdapterId,omitempty"`
+	Commands                    []string         `json:"commands,omitempty"`
+	AllowedProposalCapabilities []string         `json:"allowedProposalCapabilities,omitempty"`
+	Plan                        *AdapterPackPlan `json:"plan,omitempty"`
+}
+
 type ProfileHostFSAPIRequest struct {
 	ProfileName string `json:"profile,omitempty"`
 	Operation   string `json:"operation"`
@@ -168,6 +184,14 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		api.serveHostFSWriteStatus(w, r)
 		return
 	}
+	if resource == "adapter-packs" {
+		api.serveAdapterPacks(w, r)
+		return
+	}
+	if resource == "adapter-pack/inspect" {
+		api.serveAdapterPackInspect(w, r)
+		return
+	}
 	overview, err := api.Core.Overview(r.Context())
 	if err != nil && overview.Version == "" {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -236,6 +260,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveHostFSWriteApply(w, r)
 	case "hostfs/write/discard":
 		api.serveHostFSWriteDiscard(w, r)
+	case "adapter-pack/plan":
+		api.serveAdapterPackPlan(w, r)
+	case "adapter-pack/apply":
+		api.serveAdapterPackApply(w, r)
 	default:
 		writeAPIMethodNotAllowed(w, http.MethodGet)
 	}
@@ -492,6 +520,91 @@ func (api API) serveHostFSWriteStatus(w http.ResponseWriter, r *http.Request) {
 		Data:     status,
 		Errors:   []string{},
 	})
+}
+
+func (api API) serveAdapterPacks(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("packId") != "" {
+		api.serveAdapterPackInspect(w, r)
+		return
+	}
+	packs, err := api.Core.ListAdapterPacks()
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "adapter-packs",
+		Data:     packs,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveAdapterPackInspect(w http.ResponseWriter, r *http.Request) {
+	packID := r.URL.Query().Get("packId")
+	if packID == "" {
+		writeAPIError(w, http.StatusBadRequest, "packId is required")
+		return
+	}
+	entry, err := api.Core.InspectAdapterPack(packID)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "adapter-pack/inspect",
+		Data:     entry,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveAdapterPackPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeAdapterPackAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanAdapterPack(adapterPackOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "adapter-pack/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveAdapterPackApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeAdapterPackAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan := AdapterPackPlan{}
+	if req.Plan != nil {
+		plan = *req.Plan
+	} else {
+		plan, err = api.Core.PlanAdapterPack(adapterPackOptionsFromAPIRequest(req))
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	result, applyErr := api.Core.ApplyAdapterPack(plan)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "adapter-pack/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
 }
 
 func (api API) serveEnvironmentStopPlan(w http.ResponseWriter, r *http.Request) {
@@ -812,6 +925,14 @@ func decodeCommandProxyAPIRequest(w http.ResponseWriter, r *http.Request) (Comma
 	return req, nil
 }
 
+func decodeAdapterPackAPIRequest(w http.ResponseWriter, r *http.Request) (AdapterPackAPIRequest, error) {
+	var req AdapterPackAPIRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid adapter-pack request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
 func decodeProfileHostFSAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileHostFSAPIRequest, error) {
 	var req ProfileHostFSAPIRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -923,6 +1044,23 @@ func commandProxyOptionsFromAPIRequest(req CommandProxyAPIRequest) CommandProxyO
 		ProfileName: req.ProfileName,
 		Operation:   req.Operation,
 		Command:     req.Command,
+	}
+}
+
+func adapterPackOptionsFromAPIRequest(req AdapterPackAPIRequest) AdapterPackOptions {
+	return AdapterPackOptions{
+		Operation:                   req.Operation,
+		SourceKind:                  req.SourceKind,
+		SourcePath:                  req.SourcePath,
+		SourceURL:                   req.SourceURL,
+		SourceCommit:                req.SourceCommit,
+		ProfileName:                 req.ProfileName,
+		PackID:                      req.PackID,
+		RevisionID:                  req.RevisionID,
+		AdapterID:                   req.AdapterID,
+		CommandAdapterID:            req.CommandAdapterID,
+		Commands:                    append([]string(nil), req.Commands...),
+		AllowedProposalCapabilities: append([]string(nil), req.AllowedProposalCapabilities...),
 	}
 }
 
@@ -1154,6 +1292,8 @@ func overviewResource(overview Overview, resource string) (any, bool) {
 		return overview.Bundles, true
 	case "projects":
 		return overview.Projects, true
+	case "adapter-packs":
+		return nonNilSlice(overview.AdapterPacks), true
 	default:
 		return nil, false
 	}

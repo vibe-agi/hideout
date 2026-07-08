@@ -55,6 +55,7 @@ type Overview struct {
 	Init         InitSummary          `json:"init"`
 	Bundles      BundleSummary        `json:"bundles"`
 	Projects     ProjectSummary       `json:"projects"`
+	AdapterPacks []AdapterPackSummary `json:"adapterPacks,omitempty"`
 }
 
 type ProfileSummary struct {
@@ -343,15 +344,24 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 			Actions:        []string{"host.open"},
 			CommandProxies: registry.ShimNames(),
 		},
-		Secrets:  secretSummaries(profiles, c.SecretEnv),
-		Audit:    AuditSummary{SessionAuditFiles: auditCount},
-		Settings: SettingsSummary{StoreRoot: c.Store.Root},
-		Init:     initSummary(c.Store),
-		Bundles:  bundleSummary(c.Store.Root),
+		Secrets:      secretSummaries(profiles, c.SecretEnv),
+		Audit:        AuditSummary{SessionAuditFiles: auditCount},
+		Settings:     SettingsSummary{StoreRoot: c.Store.Root},
+		Init:         initSummary(c.Store),
+		Bundles:      bundleSummary(c.Store.Root),
+		AdapterPacks: adapterPackSummaries(c),
 		Projects: ProjectSummary{
 			Status: "not-configured",
 		},
 	}, errors.Join(profileErrors...)
+}
+
+func adapterPackSummaries(c Core) []AdapterPackSummary {
+	packs, err := c.ListAdapterPacks()
+	if err != nil {
+		return []AdapterPackSummary{}
+	}
+	return packs
 }
 
 func (c Core) AuditEvents(filter AuditEventFilter) ([]audit.Event, error) {

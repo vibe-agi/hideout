@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/adapter-pack-registry.schema.json",
+  "title": "Hideout Adapter Pack Registry",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "packs"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "hideout.adapter-pack-registry/v1"
+    },
+    "packs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "packId",
+          "state",
+          "revisions"
+        ],
+        "properties": {
+          "packId": {
+            "$ref": "#/$defs/id"
+          },
+          "state": {
+            "enum": [
+              "installed",
+              "revoked",
+              "built-in"
+            ]
+          },
+          "activeRevisionId": {
+            "$ref": "#/$defs/id"
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "revisions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "revisionId",
+                "version",
+                "source",
+                "manifestDigest",
+                "sourceDigest",
+                "validationStatus"
+              ],
+              "properties": {
+                "revisionId": {
+                  "$ref": "#/$defs/id"
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "local",
+                        "git"
+                      ]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{40}$"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "manifestDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "sourceDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "adapterDigests": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/digest"
+                  }
+                },
+                "testResultId": {
+                  "$ref": "#/$defs/id"
+                },
+                "testStatus": {
+                  "enum": [
+                    "passed",
+                    "failed",
+                    "blocked"
+                  ]
+                },
+                "validationStatus": {
+                  "enum": [
+                    "passed",
+                    "failed"
+                  ]
+                },
+                "installedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "evidenceRefs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

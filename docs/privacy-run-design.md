@@ -2900,6 +2900,18 @@ environment still gives the target passwordless sudo and must not be described
 as a root boundary. In every status it does not claim to contain absolute paths,
 direct syscalls, setuid binaries, or guest-root escalation.
 
+011 adds a local adapter-pack lifecycle around the same runtime contract:
+`hideout adapter-pack install|upgrade|test|enable|disable|revoke` and Manager
+`adapter-pack/*` routes lock local directories or exact-commit git sources into
+a store-wide registry, then bind one tested pack revision into one profile by
+pack id, revision id, adapter id, and source digest. Profile bindings remain
+the runtime authority edge. Pack manifests cannot grant HostFS write apply,
+privilege setup, host execution, endpoint exposure, network setup, profile
+mutation, or marketplace trust. Pack-provided tests are mandatory before
+enablement, but Go-owned manifest validation, command ownership, capability
+subset checks, digest validation, revoked-pack checks, and adapter outcome
+validation are the primary safety gates.
+
 Normal commands run inside the guest boundary by default:
 
 ```text
@@ -3021,6 +3033,9 @@ Key rules:
 - `command.decide` scripts return policy proposals only;
 - command adapters return strict outcomes only, and Core validates those
   outcomes before any route executes;
+- adapter packs are local digest-locked distribution records for command
+  adapters; they do not add JavaScript authority beyond the enabled profile
+  binding and declared non-applied proposal capabilities;
 - adapter outcomes are typed and must map to implemented routes;
 - host actions are executed only by Host Broker;
 - paths must be normalized and mapped before policy;

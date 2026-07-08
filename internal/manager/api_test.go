@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/adapterpack"
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
@@ -455,6 +456,77 @@ func TestAPICommandProxyRejectsUnknownFieldsAndHostExecShape(t *testing.T) {
 				t.Fatalf("expected %q rejection, got %s", tc.want, resp.Body.String())
 			}
 		})
+	}
+}
+
+func TestAPIAdapterPackPlanApplyListInspect(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	api := API{
+		Core:      New(store),
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+	packDir := writeManagerPackFixture(t, `function decideCommandAdapter() { return {outcome: "deny", reason: "blocked unsafe"} }`)
+	reqBody := AdapterPackAPIRequest{
+		Operation:  "install",
+		SourceKind: adapterpack.SourceLocal,
+		SourcePath: packDir,
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/adapter-pack/plan", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"adapter-pack/plan"`) ||
+		!strings.Contains(resp.Body.String(), `"operation":"install"`) {
+		t.Fatalf("adapter-pack plan response mismatch: %s", resp.Body.String())
+	}
+	if packs, _ := adapterpack.NewStore(store.Root).List(); len(packs) != 0 {
+		t.Fatalf("adapter-pack plan mutated registry: %+v", packs)
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/adapter-pack/apply", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"adapter-pack/apply"`) ||
+		!strings.Contains(resp.Body.String(), `"applied":true`) ||
+		!strings.Contains(resp.Body.String(), `"packId":"example.pack"`) {
+		t.Fatalf("adapter-pack apply response mismatch: %s", resp.Body.String())
+	}
+
+	req = newAPIRequest(http.MethodGet, "/api/v1/adapter-packs")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"adapter-packs"`) ||
+		!strings.Contains(resp.Body.String(), `"example.pack"`) {
+		t.Fatalf("adapter-pack list response mismatch: %s", resp.Body.String())
+	}
+
+	req = newAPIRequest(http.MethodGet, "/api/v1/adapter-pack/inspect?packId=example.pack")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"adapter-pack/inspect"`) ||
+		!strings.Contains(resp.Body.String(), `"activeRevisionId"`) {
+		t.Fatalf("adapter-pack inspect response mismatch: %s", resp.Body.String())
 	}
 }
 

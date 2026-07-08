@@ -680,7 +680,10 @@
         "allowedProposalCapabilities": {
           "type": "array",
           "items": {
-            "const": "guest.privilege.plan"
+            "enum": [
+              "guest.privilege.plan",
+              "host.fs.write.plan"
+            ]
           },
           "uniqueItems": true
         },
@@ -689,6 +692,19 @@
         },
         "builtin": {
           "const": "root-sensitive"
+        },
+        "packId": {
+          "$ref": "#/$defs/adapterId"
+        },
+        "packRevisionId": {
+          "$ref": "#/$defs/adapterId"
+        },
+        "packAdapterId": {
+          "$ref": "#/$defs/adapterId"
+        },
+        "packLockDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
         }
       },
       "additionalProperties": false

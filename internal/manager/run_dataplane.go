@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vibe-agi/hideout/internal/adapterpack"
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
@@ -83,7 +84,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err := MaterializeCommandProxyShims(runSession.RuntimeShimDir, runSession.Plan.Backend, registry, runNetwork.Plan); err != nil {
 		return RunDataPlane{}, err
 	}
-	adapters, err := cmdadapter.Compile(runSession.Plan.RuntimeProfile, runSession.ProfileDir)
+	adapters, err := cmdadapter.CompileWithResolver(runSession.Plan.RuntimeProfile, runSession.ProfileDir, adapterpack.RuntimeResolver{Store: adapterpack.NewStore(c.Store.Root)})
 	if err != nil {
 		return RunDataPlane{}, err
 	}

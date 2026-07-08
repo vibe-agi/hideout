@@ -6036,7 +6036,7 @@ func TestCheckBrokerUsesTCPForLima(t *testing.T) {
 	layout := sessionTestLayout(t)
 	p := profile.Default("default")
 	var reports []string
-	checkBroker(p, "lima", layout, t.TempDir(), "/workspace", t.TempDir(), func(name, status, message string) {
+	checkBroker(t.TempDir(), p, "lima", layout, t.TempDir(), "/workspace", t.TempDir(), func(name, status, message string) {
 		reports = append(reports, name+": "+status+" "+message)
 	})
 	got := strings.Join(reports, "\n")
@@ -6103,7 +6103,7 @@ func TestCheckBrokerReportsStartFailure(t *testing.T) {
 
 	p := profile.Default("default")
 	var reports []string
-	checkBroker(p, "native", layout, t.TempDir(), "/workspace", t.TempDir(), func(name, status, message string) {
+	checkBroker(t.TempDir(), p, "native", layout, t.TempDir(), "/workspace", t.TempDir(), func(name, status, message string) {
 		reports = append(reports, name+": "+status+" "+message)
 	})
 	got := strings.Join(reports, "\n")

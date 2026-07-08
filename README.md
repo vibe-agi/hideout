@@ -269,6 +269,21 @@ hideout profile command-adapter default add-builtin-root-sensitive
 hideout profile command-adapter default list
 ```
 
+Reusable command behavior can be installed as a local adapter pack, tested, and
+then enabled explicitly per profile:
+
+```bash
+hideout adapter-pack install --path ./hideout-adapters
+hideout adapter-pack test example.pack
+hideout adapter-pack enable --profile default --pack example.pack \
+  --revision rev_... --adapter tool
+```
+
+Adapter packs are local digest-locked extensions, not a public marketplace or a
+publisher-trust system. Pack tests are required before enablement, but Core
+validation still owns command ownership, allowed proposal capabilities, digest
+drift, and revoked-pack fail-closed behavior.
+
 The root-sensitive adapter records and can deny/propose privileged command
 intent such as `sudo`, package managers, mounts, resolver edits, and firewall
 changes. 009 privilege separation reports whether the current Lima target is
