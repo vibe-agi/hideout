@@ -26,7 +26,7 @@ func (d *Daemon) startLoopbackUI() {
 	uiAPI.AllowedHosts = []string{ln.Addr().String()}
 	uiAPI.AllowedOrigins = []string{baseURL}
 	mux := http.NewServeMux()
-	mux.Handle(apiPrefix, d.authRecorder(d.opEmitter(uiAPI.Handler())))
+	mux.Handle(apiPrefix, d.authRecorder(uiAPI.Handler()))
 	mux.Handle(statusPath, d.authRecorder(http.HandlerFunc(d.serveStatus)))
 	mux.Handle(stopPath, d.authRecorder(http.HandlerFunc(d.serveStop)))
 	mux.Handle(eventsPath, d.authRecorder(http.HandlerFunc(d.serveEvents)))

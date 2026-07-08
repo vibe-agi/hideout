@@ -2,7 +2,6 @@ package daemon
 
 const (
 	statusVersion = "hideout.daemon-status/v1"
-	eventVersion  = "hideout.daemon-event/v1"
 )
 
 // Status is the daemon status/inventory shape (schemas/daemon-status.schema.json).

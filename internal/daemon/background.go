@@ -55,18 +55,19 @@ type bgOp struct {
 
 // bgRegistry tracks background operations the daemon runs, with queryable status.
 type bgRegistry struct {
-	mu     sync.Mutex
-	ops    map[string]*bgOp
-	seq    int
-	wg     sync.WaitGroup
-	stop   bool
-	ctx    context.Context
-	cancel context.CancelFunc
+	mu      sync.Mutex
+	ops     map[string]*bgOp
+	seq     int
+	wg      sync.WaitGroup
+	stop    bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	publish func(id, op, status string)
 }
 
-func newBGRegistry() *bgRegistry {
+func newBGRegistry(publish func(id, op, status string)) *bgRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &bgRegistry{ops: map[string]*bgOp{}, ctx: ctx, cancel: cancel}
+	return &bgRegistry{ops: map[string]*bgOp{}, ctx: ctx, cancel: cancel, publish: publish}
 }
 
 func (r *bgRegistry) submit(op string, run func(context.Context) error) (string, error) {
@@ -84,6 +85,7 @@ func (r *bgRegistry) submit(op string, run func(context.Context) error) (string,
 	r.ops[id] = rec
 	r.wg.Add(1)
 	r.mu.Unlock()
+	r.publishStatus(id, op, "queued")
 
 	go func() {
 		defer r.wg.Done()
@@ -100,10 +102,21 @@ func (r *bgRegistry) submit(op string, run func(context.Context) error) (string,
 
 func (r *bgRegistry) setStatus(id, status string) {
 	r.mu.Lock()
+	var op string
 	if rec, ok := r.ops[id]; ok {
 		rec.Status = status
+		op = rec.Op
 	}
 	r.mu.Unlock()
+	if op != "" {
+		r.publishStatus(id, op, status)
+	}
+}
+
+func (r *bgRegistry) publishStatus(id, op, status string) {
+	if r.publish != nil {
+		r.publish(id, op, status)
+	}
 }
 
 func (r *bgRegistry) status(id string) (string, bool) {

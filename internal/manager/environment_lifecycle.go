@@ -86,22 +86,23 @@ func (c Core) ApplyEnvironmentStop(ctx context.Context, plan EnvironmentActionPl
 	if err != nil {
 		return EnvironmentActionResult{Plan: plan}, err
 	}
-	c.emitOperation("environment", "start", map[string]any{"action": string(EnvironmentActionStop)})
 	operator := environmentOperatorOrDefault(opts.Operator)
 	result := EnvironmentActionResult{Plan: plan, Applied: []EnvironmentActionTarget{}, Skipped: append([]EnvironmentActionTarget(nil), plan.Skipped...)}
 	for _, target := range plan.Targets {
+		c.emitOperation("environment", "start", environmentOperationDetails(EnvironmentActionStop, target, "running"))
 		applied, skipped, err := applyEnvironmentStopTarget(ctx, store, operator, target.ID)
 		if err != nil {
-			c.emitOperation("environment", "failed", map[string]any{"action": string(EnvironmentActionStop)})
+			c.emitOperation("environment", "failed", environmentOperationDetails(EnvironmentActionStop, target, "failed"))
 			return result, err
 		}
 		if skipped.Reason != "" {
 			result.Skipped = append(result.Skipped, skipped)
+			c.emitOperation("environment", "complete", environmentOperationDetails(EnvironmentActionStop, skipped, "skipped"))
 			continue
 		}
 		result.Applied = append(result.Applied, applied)
+		c.emitOperation("environment", "complete", environmentOperationDetails(EnvironmentActionStop, applied, applied.Status))
 	}
-	c.emitOperation("environment", "complete", map[string]any{"action": string(EnvironmentActionStop), "applied": len(result.Applied)})
 	return result, nil
 }
 
@@ -117,19 +118,44 @@ func (c Core) ApplyEnvironmentClean(ctx context.Context, plan EnvironmentActionP
 	if err != nil {
 		return EnvironmentActionResult{Plan: plan}, err
 	}
-	c.emitOperation("environment", "start", map[string]any{"action": string(EnvironmentActionClean)})
 	operator := environmentOperatorOrDefault(opts.Operator)
 	result := EnvironmentActionResult{Plan: plan, Applied: []EnvironmentActionTarget{}, Skipped: append([]EnvironmentActionTarget(nil), plan.Skipped...)}
 	for _, target := range plan.Targets {
+		c.emitOperation("environment", "start", environmentOperationDetails(EnvironmentActionClean, target, "running"))
 		applied, err := applyEnvironmentCleanTarget(ctx, store, operator, target.ID)
 		if err != nil {
-			c.emitOperation("environment", "failed", map[string]any{"action": string(EnvironmentActionClean)})
+			c.emitOperation("environment", "failed", environmentOperationDetails(EnvironmentActionClean, target, "failed"))
 			return result, err
 		}
 		result.Applied = append(result.Applied, applied)
+		c.emitOperation("environment", "complete", environmentOperationDetails(EnvironmentActionClean, applied, "removed"))
 	}
-	c.emitOperation("environment", "complete", map[string]any{"action": string(EnvironmentActionClean), "applied": len(result.Applied)})
 	return result, nil
+}
+
+func environmentOperationDetails(action string, target EnvironmentActionTarget, status string) map[string]any {
+	details := map[string]any{
+		"action":         string(action),
+		"id":             target.ID,
+		"profile":        target.Profile,
+		"backend":        target.Backend,
+		"status":         status,
+		"workspace":      target.Workspace,
+		"guestWorkspace": target.GuestWorkspace,
+		"instanceName":   target.InstanceName,
+		"lastSessionId":  target.LastSessionID,
+		"lastCommand":    target.LastCommand,
+		"createdAt":      target.CreatedAt,
+		"lastStartedAt":  target.LastStartedAt,
+		"lastEndedAt":    target.LastEndedAt,
+	}
+	if details["status"] == "" {
+		details["status"] = target.Status
+	}
+	if target.Reason != "" {
+		details["reason"] = target.Reason
+	}
+	return details
 }
 
 func (c Core) planEnvironmentAction(action string, opts EnvironmentActionOptions) (EnvironmentActionPlan, error) {

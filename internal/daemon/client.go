@@ -3,10 +3,13 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/vibe-agi/hideout/internal/liveconsole"
 )
 
 // SocketPath returns the daemon socket path for a store root (client side).
@@ -31,12 +34,11 @@ func DialClient(storeRoot string) (client *http.Client, baseURL, token string, e
 	return c, "http://localhost", tok, nil
 }
 
-// SubscribeEvents connects to a running daemon's event stream and returns a channel
-// that receives a signal for each event, so a client (for example the TUI) can
-// refresh on state changes instead of polling. The channel closes when the stream
-// ends (daemon stop / credential expiry). Returns an error if no daemon is
-// reachable, so callers can fall back to their daemon-less behavior.
-func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan struct{}, error) {
+// SubscribeEvents connects to a running daemon's event stream and returns typed
+// live-console events. The channel closes when the stream ends (daemon stop /
+// credential expiry). Returns an error if no daemon is reachable, so callers can
+// fall back to their daemon-less behavior.
+func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan liveconsole.Event, error) {
 	client, base, token, err := DialClient(storeRoot)
 	if err != nil {
 		return nil, err
@@ -55,7 +57,7 @@ func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan struct{}, er
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("daemon events: %s", resp.Status)
 	}
-	ch := make(chan struct{}, 8)
+	ch := make(chan liveconsole.Event, 8)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
@@ -63,8 +65,15 @@ func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan struct{}, er
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for sc.Scan() {
 			if strings.HasPrefix(sc.Text(), "data: ") {
+				var ev liveconsole.Event
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(sc.Text(), "data: ")), &ev); err != nil {
+					return
+				}
+				if err := liveconsole.ValidateEvent(ev); err != nil {
+					return
+				}
 				select {
-				case ch <- struct{}{}:
+				case ch <- ev:
 				default:
 				}
 			}

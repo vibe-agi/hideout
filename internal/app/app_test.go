@@ -4077,50 +4077,25 @@ func TestTUIOptionsDefaultToPersistentObserver(t *testing.T) {
 	}
 }
 
-// FR-009 (event-triggered refresh, no polling timer): while a daemon event stream
-// is live but idle, the TUI must refresh strictly on events — it must NOT also
-// re-render on the interval. A single seed render and then silence proves there is
-// no parallel interval polling racing the event channel.
-func TestWatchDashboardEventDrivenDoesNotIntervalPoll(t *testing.T) {
-	eventCh := make(chan struct{}) // live stream, never delivers an event
+// Daemon-less fallback keeps the prior interval polling behavior. Typed daemon
+// stream behavior is covered by app_liveconsole_test.go.
+func TestWatchDashboardDaemonlessIntervalPolls(t *testing.T) {
 	renders := 0
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 160*time.Millisecond)
 	defer cancel()
-	if err := watchDashboard(ctx, eventCh, 20*time.Millisecond, func() error {
+	if err := watchDashboard(ctx, nil, 20*time.Millisecond, func() error {
 		renders++
 		return nil
 	}); err != nil {
 		t.Fatalf("watchDashboard: %v", err)
 	}
-	// With the pre-fix parallel timer, 300ms at a 20ms interval would yield ~15
-	// renders. Event-triggered refresh yields exactly the one seed render.
-	if renders != 1 {
-		t.Fatalf("live idle event stream must not interval-poll: want 1 seed render, got %d", renders)
+	if renders < 3 {
+		t.Fatalf("daemon-less fallback should interval-poll, got %d renders", renders)
 	}
 }
 
-// A delivered event triggers exactly one refresh; the interval never fires here.
-func TestWatchDashboardRendersOncePerEvent(t *testing.T) {
-	eventCh := make(chan struct{}, 2)
-	eventCh <- struct{}{}
-	eventCh <- struct{}{}
-	renders := 0
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	if err := watchDashboard(ctx, eventCh, time.Hour, func() error {
-		renders++
-		return nil
-	}); err != nil {
-		t.Fatalf("watchDashboard: %v", err)
-	}
-	// Seed render plus one render per delivered event; the 1h interval cannot fire.
-	if renders != 3 {
-		t.Fatalf("want 3 renders (seed + 2 events), got %d", renders)
-	}
-}
-
-// Only after the stream ends (channel closed) does the TUI fall back to interval
-// polling — the daemon-less behavior.
+// If a legacy refresh-signal stream is handed to watchDashboard and closes, it
+// falls back to daemon-less interval polling.
 func TestWatchDashboardFallsBackToIntervalWhenStreamCloses(t *testing.T) {
 	eventCh := make(chan struct{})
 	close(eventCh) // stream already ended

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/live-console-seed.schema.json",
+  "title": "Hideout live console seed",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "overview", "auditTail", "deniedAuditTail", "streamHealth"],
+  "properties": {
+    "version": {
+      "const": "hideout.live-console-seed/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "overview": {
+      "type": "object"
+    },
+    "auditTail": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "deniedAuditTail": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "background": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "op", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "op": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["queued", "running", "completed", "failed", "stale"]
+          }
+        }
+      }
+    },
+    "streamHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["seeding", "live", "idle-live", "stale", "disconnected", "credential-expired", "schema-mismatch", "daemon-less"]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "profileScope": {
+      "type": "string"
+    }
+  }
+}

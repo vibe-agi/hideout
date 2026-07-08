@@ -378,14 +378,15 @@ owns:
 - in-memory audit filtering for event streams (there is no separate indexed
   audit store; see
   [tui-webui-experience.md](tui-webui-experience.md));
-- interactive confirmation prompt channels;
-- background cleanup, idle stop, and orphan repair;
+- fail-closed handling for confirmation-required operations; interactive
+  prompt channels are later work;
+- background execution for existing typed environment stop/clean operations;
 - local Manager API serving.
 
-The daemon stays in single-operator form: one operator token with full access,
-plus an optional read-only token for observation surfaces. Client role
-matrices, per-operation authorization grades, delegated approval protocols,
-and per-subscriber redaction tiers are enterprise shapes and are out of scope.
+The daemon stays in single-operator form: one operator token with full access.
+Read-only tokens, client role matrices, per-operation authorization grades,
+delegated approval protocols, and per-subscriber redaction tiers are enterprise
+shapes and are out of scope for the current implementation.
 Approval means the operator confirming an action interactively on their own
 machine, and every confirmation is recorded in audit.
 
@@ -411,8 +412,8 @@ Daemon transport is security-sensitive:
   loopback HTTP listener may be used for a command-scoped browser UI only when
   protected by a short-lived token; it must not be the default long-lived
   daemon authority transport.
-- Every client must authenticate with the operator token or the read-only
-  token. OS peer credentials on the Unix socket are a useful additional check,
+- Every client must authenticate with the operator token. OS peer credentials on
+  the Unix socket are a useful additional check,
   but they are not sufficient by themselves for weak native-backend scenarios
   where the target and operator share the host UID; path unreachability and
   tokens still apply.
@@ -421,13 +422,11 @@ Daemon transport is security-sensitive:
   back into the guest.
 
 After a daemon restart, the daemon fails closed: live resources that cannot be
-re-associated with an active session are cleaned up or treated as unavailable
-instead of being adopted.
+proved owned by the current instance are reported and audited as orphaned. The
+daemon does not silently re-adopt or destroy them.
 
-`hideoutd` is not implemented yet. Today each command embeds Manager Core, so
-`hideout run` works without a resident process, and that embedded mode remains
-supported. Delivering `hideoutd` as the resident steady-state Manager runtime
-is core roadmap work, sequenced after the CLI-first MVP surface.
+`hideoutd` is implemented as the resident steady-state Manager runtime, while
+embedded CLI/TUI/WebUI paths remain supported when no daemon is running.
 
 ## CLI, TUI, and WebUI Roles
 
@@ -498,16 +497,11 @@ WebUI should call Manager API and must not implement separate policy logic.
 
 ## Local API Security
 
-Current implemented exposure:
+Current implemented exposures:
 
 ```text
-127.0.0.1 with a short-lived random token for the command-scoped WebUI server
-```
-
-Design-ready exposure, owned by the `hideoutd` daemon design:
-
-```text
-Unix socket under the Hideout runtime state directory on macOS/Linux
+Unix socket under the Hideout runtime state directory for hideoutd authority.
+127.0.0.1 with a short-lived random token for command-scoped or daemon-served WebUI.
 ```
 
 Rules:
@@ -574,26 +568,30 @@ mutate unrelated stores directly.
   HostFS allow/deny rules.
 - Manager API and WebUI expose typed profile env policy plan/apply for durable
   public/inherit/deny env policy without echoing env values.
-- A resident `hideoutd` is not implemented; CLI, TUI, and WebUI use embedded
-  Manager Core or the local WebUI server process.
+- A resident `hideoutd` is implemented; CLI, TUI, and WebUI still support
+  embedded Manager Core or the local WebUI server process when no daemon runs.
+
+### Implemented Resident Runtime
+
+- `hideoutd` is the steady-state resident Manager runtime (see
+  [STATUS.md](STATUS.md)): it mounts the existing typed Manager API over a
+  store-rooted, guest-unreachable Unix socket (parity by construction), serves a
+  typed redacted event stream from real operation sources (environment stop/clean
+  lifecycle, daemon-mediated run sessions, daemon background work, daemon audit
+  tail, `evidence/export/apply`, and existing run session cleanup; no durable
+  log; streams end on credential expiry), runs existing typed environment
+  stop/clean as background work with queryable status, and fails closed after
+  restart for live resources it cannot prove it owns. Its own status/event and
+  background endpoints are a separate surface outside `/api/v1/`.
+  Confirmation prompt channels remain a follow-on (the daemon fails closed for
+  confirmation-required ops rather than prompting). It also serves the WebUI over
+  a tokened loopback UI transport; WebUI and TUI seed once from Manager data and
+  then apply `liveconsole.Event` payloads without steady-state overview/audit
+  polling while the stream is healthy. CLI, TUI, and WebUI are all its clients.
 
 ### Next Product Increment
 
 - formal Manager resource schema;
-- `hideoutd` is implemented as the steady-state resident Manager runtime (see
-  [STATUS.md](STATUS.md)): it mounts the existing typed Manager API over a
-  store-rooted, guest-unreachable Unix socket (parity by construction), serves a
-  live redacted event stream (operation lifecycle + session audit tail; no durable
-  log; streams end on credential expiry), runs existing typed environment
-  stop/clean as background work with queryable status, and fails closed after
-  restart for live resources it cannot prove it owns. Its own status/event
-  endpoints are a separate surface outside `/api/v1/`. Confirmation prompt channels
-  remain a follow-on (the daemon fails closed for confirmation-required ops rather
-  than prompting). It also serves the WebUI over a tokened loopback UI transport;
-  the WebUI panels refresh on its event stream via `EventSource` and the TUI via
-  `daemon.SubscribeEvents` (event-triggered re-fetch, no polling timer). Payload-driven
-  panel updates and end-to-end UI verification are a deferred follow-on. CLI, TUI, and
-  WebUI are all its clients;
 - expand InitTask resource schema and plan/apply operations beyond machine
   setup;
 - plan/apply operations for HostFS, network, OpenTarget, and broader
@@ -609,7 +607,5 @@ mutate unrelated stores directly.
 
 ## Open Questions
 
-- Which `hideoutd` responsibilities must ship before interactive prompt flows:
-  event stream, background cleanup, confirmation prompt channel, or all three?
-- Which operations require plan/apply before product release?
-- What is the smallest read-only WebUI worth shipping?
+- Which remaining CLI-direct operations require typed Manager plan/apply before
+  product release?

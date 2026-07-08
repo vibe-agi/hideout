@@ -32,15 +32,29 @@ func (c Core) PlanExport(opts ExportOptions) (exportboundary.Plan, error) {
 	return exportboundary.BuildPlan(req)
 }
 
-func (c Core) ApplyExport(plan exportboundary.Plan, opts ExportOptions) (exportboundary.Result, error) {
+func (c Core) ApplyExport(plan exportboundary.Plan, opts ExportOptions) (result exportboundary.Result, err error) {
+	c.emitOperation("export", "start", exportOperationDetails(opts, plan, result, "running", ""))
+	defer func() {
+		status := "completed"
+		phase := "complete"
+		reason := ""
+		if err != nil {
+			status = "failed"
+			phase = "failed"
+			reason = err.Error()
+		}
+		c.emitOperation("export", phase, exportOperationDetails(opts, plan, result, status, reason))
+	}()
 	if plan.Artifact.Version == "" {
-		return exportboundary.Result{}, errors.New("export plan is required")
+		err = errors.New("export plan is required")
+		return result, err
 	}
 	req, err := c.exportRequest(opts)
 	if err != nil {
-		return exportboundary.Result{}, err
+		return result, err
 	}
-	return exportboundary.Apply(req)
+	result, err = exportboundary.Apply(req)
+	return result, err
 }
 
 func (c Core) RecordExportFailure(opts ExportOptions, reason string) error {
@@ -125,4 +139,34 @@ func exportAuditEvents(events []audit.Event) []exportboundary.AuditEvent {
 		}
 	}
 	return out
+}
+
+func exportOperationDetails(opts ExportOptions, plan exportboundary.Plan, result exportboundary.Result, status, reason string) map[string]any {
+	source := opts.Source
+	if source == "" {
+		source = exportboundary.SourceAudit
+	}
+	artifactPath := result.ArtifactPath
+	if artifactPath == "" {
+		artifactPath = opts.Out
+	}
+	id := artifactPath
+	if id == "" {
+		id = string(source)
+	}
+	details := map[string]any{
+		"id":           id,
+		"source":       string(source),
+		"out":          opts.Out,
+		"artifactPath": artifactPath,
+		"profile":      opts.Profile,
+		"status":       status,
+	}
+	if decision := plan.Artifact.Provenance.Decision.Mode; decision != "" {
+		details["decision"] = string(decision)
+	}
+	if reason != "" {
+		details["reason"] = reason
+	}
+	return details
 }

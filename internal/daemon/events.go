@@ -1,25 +1,23 @@
 package daemon
 
 import (
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/liveconsole"
 )
 
-// Event is one item in the live stream (schemas/daemon-event.schema.json). It is
-// non-durable: the bus keeps no history and a restart replays nothing.
-type Event struct {
-	Version string         `json:"version"`
-	Kind    string         `json:"kind"`
-	Phase   string         `json:"phase,omitempty"`
-	Seq     int            `json:"seq"`
-	Payload map[string]any `json:"payload,omitempty"`
-}
+// Event is one item in the live stream (schemas/daemon-event.schema.json).
+// It is non-durable: the bus keeps no history and a restart replays nothing.
+type Event = liveconsole.Event
 
 type subscriber struct {
 	ch   chan Event
 	done chan struct{}
 	once sync.Once
+	seq  int
 }
 
 func (s *subscriber) terminate() { s.once.Do(func() { close(s.done) }) }
@@ -42,35 +40,149 @@ func newEventBus() *eventBus {
 
 // OperationEvent implements manager.EventObserver.
 func (b *eventBus) OperationEvent(kind, phase string, details map[string]any) {
-	b.publish(kind, phase, audit.RedactDetails(details))
+	details = audit.RedactDetails(details)
+	switch kind {
+	case liveconsole.KindEnvironment:
+		payload := environmentPayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindEnvironment,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindEnvironment, ID: payload.ID, Profile: payload.Profile},
+			Payload: payload,
+		})
+	case liveconsole.KindBackground:
+		payload := backgroundPayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindBackground,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindBackground, ID: payload.ID},
+			Payload: payload,
+		})
+	case liveconsole.KindExport:
+		payload := exportPayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindExport,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindExport, ID: payload.ID, Profile: payload.Profile},
+			Payload: payload,
+		})
+	case liveconsole.KindCleanup:
+		payload := cleanupPayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindCleanup,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindCleanup, ID: payload.ID},
+			Payload: payload,
+		})
+	case liveconsole.KindSession, "run", "operation":
+		payload := sessionPayload(kind, details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindSession,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindSession, ID: payload.ID, Profile: payload.Profile, Session: payload.Session},
+			Payload: payload,
+		})
+	default:
+		payload := sessionPayload(kind, details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindSession,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindSession, ID: payload.ID, Profile: payload.Profile, Session: payload.Session},
+			Payload: payload,
+		})
+	}
 }
 
 // publishAudit republishes a daemon audit record as a redacted audit event.
 func (b *eventBus) publishAudit(action, decision string, details map[string]any) {
-	payload := map[string]any{"action": action, "decision": decision}
-	for k, v := range audit.RedactDetails(details) {
-		payload[k] = v
+	b.publishAuditEvent(audit.Event{
+		Time:     time.Now().UTC(),
+		Profile:  "daemon",
+		Backend:  "native",
+		Action:   action,
+		Decision: decision,
+		Details:  details,
+	})
+}
+
+func (b *eventBus) publishAuditEvent(ev audit.Event) {
+	payload := liveconsole.EventPayload{
+		Time:     ev.Time,
+		Session:  ev.Session,
+		Profile:  ev.Profile,
+		Backend:  ev.Backend,
+		Action:   ev.Action,
+		Decision: ev.Decision,
+		Details:  audit.RedactDetails(ev.Details),
 	}
-	b.publish("audit", "", payload)
+	if payload.Profile == "" {
+		payload.Profile = "daemon"
+	}
+	if payload.Backend == "" {
+		payload.Backend = "native"
+	}
+	if payload.Time.IsZero() {
+		payload.Time = time.Now().UTC()
+	}
+	b.publish(Event{
+		Kind:    liveconsole.KindAudit,
+		Entity:  liveconsole.EntityRef{Kind: liveconsole.KindAudit, Profile: payload.Profile, Session: payload.Session},
+		Payload: payload,
+	})
+}
+
+func (b *eventBus) publishBackground(id, op, status string) {
+	b.publish(Event{
+		Kind:   liveconsole.KindBackground,
+		Entity: liveconsole.EntityRef{Kind: liveconsole.KindBackground, ID: id},
+		Payload: liveconsole.EventPayload{
+			ID:     id,
+			Op:     op,
+			Status: status,
+		},
+	})
 }
 
 // publish fans an event out to current subscribers. A subscriber whose bounded
 // buffer is full is dropped and terminated (backpressure), never blocked on.
-func (b *eventBus) publish(kind, phase string, payload map[string]any) {
+func (b *eventBus) publish(ev Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
 		return
 	}
 	b.seq++
-	ev := Event{Version: eventVersion, Kind: kind, Phase: phase, Seq: b.seq, Payload: payload}
+	if ev.Version == "" {
+		ev.Version = liveconsole.EventVersion
+	}
+	ev.Seq = b.seq
+	if ev.Entity.Kind == "" && ev.Kind != liveconsole.KindTerminal {
+		ev.Entity.Kind = ev.Kind
+	}
 	for s := range b.subs {
 		select {
 		case s.ch <- ev:
+			s.seq = ev.Seq
 		default:
 			delete(b.subs, s)
 			s.terminate()
 		}
+	}
+}
+
+func (b *eventBus) terminalEvent(s *subscriber, reason string) Event {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	seq := 1
+	if s != nil && s.seq > 0 {
+		seq = s.seq + 1
+	}
+	return Event{
+		Version: liveconsole.EventVersion,
+		Kind:    liveconsole.KindTerminal,
+		Seq:     seq,
+		Entity:  liveconsole.EntityRef{Kind: "stream"},
+		Payload: liveconsole.EventPayload{Reason: reason},
 	}
 }
 
@@ -111,4 +223,195 @@ func (b *eventBus) closeAll() {
 	for _, s := range subs {
 		s.terminate()
 	}
+}
+
+func environmentPayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:             firstString(details, "id", "name", "action"),
+		Name:           stringValue(details, "name"),
+		Profile:        stringValue(details, "profile"),
+		Backend:        stringValue(details, "backend"),
+		Status:         firstString(details, "status", "reason"),
+		Workspace:      stringValue(details, "workspace"),
+		GuestWorkspace: stringValue(details, "guestWorkspace"),
+		ImageRef:       stringValue(details, "imageRef"),
+		InstanceName:   stringValue(details, "instanceName"),
+		LastSessionID:  stringValue(details, "lastSessionId"),
+		LastCommand:    stringValue(details, "lastCommand"),
+		CreatedAt:      timeValue(details, "createdAt"),
+		LastStartedAt:  timeValue(details, "lastStartedAt"),
+		LastEndedAt:    timeValue(details, "lastEndedAt"),
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.ID == "" {
+		payload.ID = "environment"
+	}
+	return payload
+}
+
+func sessionPayload(kind string, details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:                firstString(details, "id", "session", "path", "action"),
+		Profile:           stringValue(details, "profile"),
+		Backend:           stringValue(details, "backend"),
+		Status:            stringValue(details, "status"),
+		NetworkMode:       stringValue(details, "networkMode"),
+		HasAudit:          boolValue(details, "hasAudit"),
+		HasEphemeralState: boolValue(details, "hasEphemeralState"),
+		Session:           stringValue(details, "session"),
+		Details:           details,
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.ID == "" {
+		payload.ID = kind
+	}
+	return payload
+}
+
+func backgroundPayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:     firstString(details, "id", "op"),
+		Op:     stringValue(details, "op"),
+		Status: stringValue(details, "status"),
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.ID == "" {
+		payload.ID = "background"
+	}
+	if payload.Op == "" {
+		payload.Op = payload.ID
+	}
+	return payload
+}
+
+func exportPayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:           firstString(details, "id", "out", "artifactPath", "source"),
+		Status:       stringValue(details, "status"),
+		Profile:      stringValue(details, "profile"),
+		Source:       stringValue(details, "source"),
+		ArtifactPath: firstString(details, "artifactPath", "out"),
+		Decision:     stringValue(details, "decision"),
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	return payload
+}
+
+func cleanupPayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:          firstString(details, "id", "session", "source"),
+		Status:      stringValue(details, "status"),
+		Sessions:    intValue(details, "sessions"),
+		Removed:     stringSliceValue(details, "removed", "removedTypes"),
+		SecretState: stringValue(details, "secretState"),
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.ID == "" {
+		payload.ID = "cleanup"
+	}
+	return payload
+}
+
+func statusFromPhase(phase string) string {
+	switch phase {
+	case "start", "progress":
+		return "running"
+	case "complete":
+		return "completed"
+	case "failed":
+		return "failed"
+	default:
+		return phase
+	}
+}
+
+func firstString(details map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v := stringValue(details, key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func stringValue(details map[string]any, key string) string {
+	if details == nil {
+		return ""
+	}
+	switch v := details[key].(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return ""
+	}
+}
+
+func boolValue(details map[string]any, key string) bool {
+	if details == nil {
+		return false
+	}
+	v, _ := details[key].(bool)
+	return v
+}
+
+func intValue(details map[string]any, key string) int {
+	if details == nil {
+		return 0
+	}
+	switch v := details[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func stringSliceValue(details map[string]any, keys ...string) []string {
+	if details == nil {
+		return nil
+	}
+	for _, key := range keys {
+		switch v := details[key].(type) {
+		case []string:
+			return append([]string(nil), v...)
+		case []any:
+			out := make([]string, 0, len(v))
+			for _, item := range v {
+				s, ok := item.(string)
+				if !ok {
+					out = nil
+					break
+				}
+				out = append(out, s)
+			}
+			if out != nil {
+				return out
+			}
+		}
+	}
+	return nil
+}
+
+func timeValue(details map[string]any, key string) time.Time {
+	if details == nil {
+		return time.Time{}
+	}
+	v, _ := details[key].(time.Time)
+	return v
 }

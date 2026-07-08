@@ -529,6 +529,7 @@ function renderSummary() {
   const environments = overview.environments || [];
   const sessions = overview.sessions || [];
   const backends = overview.backends || [];
+  const background = overview.background || [];
   const available = backends.filter(function(b) { return b.available; }).length;
   const networkModes = (overview.network && overview.network.profileDefaults || []).map(function(n) { return normalizedNetworkMode(n.mode); });
   const denied = deniedAuditEvents();
@@ -537,6 +538,7 @@ function renderSummary() {
     metric("Environments", environments.length, environments.slice(0, 3).map(function(e) { return (e.status || "unknown") + ":" + (e.profile || "-"); }).join(", ")),
     metric("Sessions", sessions.length, sessions.filter(function(s) { return s.hasAudit; }).length + " with audit"),
     metric("Backends", available + "/" + backends.length, backends.map(function(b) { return b.name; }).join(", ")),
+    metric("Background", background.length, background.slice(0, 3).map(function(b) { return (b.op || "op") + ":" + (b.status || "unknown"); }).join(", ")),
     metric("Denied", denied.length, denied.slice(0, 3).map(function(e) { return e.action || "event"; }).join(", ")),
     metric("Network", networkModes.length || "direct", networkModes.join(", ") || "direct")
   ].join("");
@@ -583,11 +585,17 @@ const renderers = {
     const c = overview.capabilities || {};
     const init = overview.init || {};
     const initSteps = init.nextSteps || [];
+    const background = overview.background || [];
+    const exports = overview.exportOutcomes || [];
+    const cleanups = overview.cleanupOutcomes || [];
     return '<div class="items">' + [
       item("Manager", overview.version || "hideout.manager/v1", [["storageRoot", overview.storageRoot], ["storeRoot", s.storeRoot], ["maxCapabilities", c.maxCapabilities || []]], "ok"),
       item("Init", init.initialized ? "initialized" : "needs setup", [["profile", init.profile], ["pendingTasks", init.pendingTasks], ["nextSteps", initSteps.map(function(step) { return (step.label || step.id) + ": " + step.command; })]], init.pendingTasks ? "warn" : "ok"),
       item("Broker", "host boundary", [["actions", overview.broker && overview.broker.actions], ["commandProxies", overview.broker && overview.broker.commandProxies]], "info"),
       item("Environments", "reusable guest state", [["count", (overview.environments || []).length], ["running", (overview.environments || []).filter(function(e) { return e.status === "running"; }).length]], "info"),
+      item("Background", "daemon work", [["count", background.length], ["recent", background.slice(0, 5).map(function(b) { return (b.id || "bg") + ":" + (b.op || "op") + ":" + (b.status || "unknown"); })]], background.some(function(b) { return b.status === "failed"; }) ? "error" : "info"),
+      item("Exports", "share boundary", [["recent", exports.slice(0, 5).map(function(e) { return (e.source || "source") + ":" + (e.status || "unknown") + ":" + (e.decision || ""); })]], exports.some(function(e) { return e.status === "failed"; }) ? "error" : "ok"),
+      item("Cleanup", "local lifecycle", [["recent", cleanups.slice(0, 5).map(function(c) { return (c.status || "unknown") + ":sessions=" + (c.sessions || 0) + ":" + (c.secretState || ""); })]], cleanups.some(function(c) { return c.status === "failed"; }) ? "error" : "ok"),
       item("Audit", "redacted JSONL", [["sessionAuditFiles", overview.audit && overview.audit.sessionAuditFiles], ["eventsLoaded", auditEvents.length]], "ok")
     ].join("") + "</div>";
   },
@@ -1171,12 +1179,121 @@ function setStatus(text, tone) {
   statusEl.textContent = text;
   statusEl.className = "status " + (tone || "");
 }
-async function load() {
+let liveLastSeq = 0;
+let liveStreamState = "seeding";
+let liveStreamReason = "";
+
+function renderAll() {
+  syncProfileScopeOptions();
+  renderSummary();
+  renderPanel();
+  renderAuditTail();
+}
+function daemonAPI(path) {
+  return fetch("/daemon/" + path, {headers: {"X-Hideout-UI-Token": token}}).then(async function(response) {
+    const text = await response.text();
+    let body = {};
+    try { body = JSON.parse(text); } catch { body = {error: text}; }
+    if (!response.ok) throw new Error(body.error || response.statusText);
+    return body;
+  });
+}
+function seedEmptyOverview() {
+  return {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}, background: [], exportOutcomes: [], cleanupOutcomes: []};
+}
+function ensureLiveCollections() {
+  if (!overview) overview = seedEmptyOverview();
+  if (!Array.isArray(overview.environments)) overview.environments = [];
+  if (!Array.isArray(overview.sessions)) overview.sessions = [];
+  if (!Array.isArray(overview.background)) overview.background = [];
+  if (!Array.isArray(overview.exportOutcomes)) overview.exportOutcomes = [];
+  if (!Array.isArray(overview.cleanupOutcomes)) overview.cleanupOutcomes = [];
+}
+function upsertByID(values, row) {
+  const rows = Array.isArray(values) ? values.slice() : [];
+  const id = row && row.id;
+  if (!id) return rows;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].id === id) {
+      rows[i] = Object.assign({}, rows[i], row);
+      return rows;
+    }
+  }
+  rows.unshift(row);
+  return rows;
+}
+function capTail(values, limit) {
+  const rows = Array.isArray(values) ? values.slice(0, limit || 20) : [];
+  return rows;
+}
+function eventAuditRow(payload) {
+  return {
+    time: payload.time,
+    session: payload.session,
+    profile: payload.profile,
+    backend: payload.backend,
+    action: payload.action,
+    decision: payload.decision,
+    details: payload.details || {}
+  };
+}
+function markLiveHealth(state, reason) {
+  liveStreamState = state;
+  liveStreamReason = reason || "";
+  const tone = state === "live" || state === "idle-live" ? "ok" : "error";
+  setStatus(state + (liveStreamReason ? " · " + liveStreamReason : ""), tone);
+}
+function validateLiveEvent(event) {
+  if (!event || event.version !== "hideout.daemon-event/v1" || !event.kind || typeof event.seq !== "number") {
+    markLiveHealth("schema-mismatch", "invalid event");
+    return false;
+  }
+  if (event.seq <= liveLastSeq) return false;
+  if (liveLastSeq && event.seq !== liveLastSeq + 1) {
+    markLiveHealth("stale", "event sequence gap");
+    return false;
+  }
+  liveLastSeq = event.seq;
+  return true;
+}
+function applyLiveEvent(event) {
+  if (!validateLiveEvent(event)) return false;
+  ensureLiveCollections();
+  const payload = event.payload || {};
+  if (event.kind === "terminal") {
+    markLiveHealth(payload.reason === "credential invalidated" ? "credential-expired" : "disconnected", payload.reason || "stream closed");
+    renderAll();
+    return false;
+  }
+  liveStreamState = "live";
+  liveStreamReason = "";
+  if (event.kind === "environment") {
+    overview.environments = upsertByID(overview.environments, payload);
+  } else if (event.kind === "session") {
+    overview.sessions = upsertByID(overview.sessions, payload);
+  } else if (event.kind === "background") {
+    overview.background = upsertByID(overview.background, {id: payload.id, op: payload.op, status: payload.status});
+  } else if (event.kind === "audit") {
+    const row = eventAuditRow(payload);
+    auditEvents = capTail([row].concat(auditEvents), 20);
+    if (row.decision === "deny") deniedEvents = capTail([row].concat(deniedEvents), 20);
+  } else if (event.kind === "export") {
+    overview.exportOutcomes = capTail([{status: payload.status, source: payload.source, artifactPath: payload.artifactPath, decision: payload.decision}].concat(overview.exportOutcomes), 20);
+  } else if (event.kind === "cleanup") {
+    overview.cleanupOutcomes = capTail([{status: payload.status, sessions: payload.sessions, removed: payload.removed, secretState: payload.secretState}].concat(overview.cleanupOutcomes), 20);
+  } else {
+    return false;
+  }
+  renderAll();
+  const expiry = tokenExpiryLabel();
+  setStatus("live · " + freshnessLabel() + (expiry ? " · " + expiry : ""), "ok");
+  return true;
+}
+async function seedLiveConsole() {
   setStatus("connecting", "");
   try {
     const overviewResp = await api("overview");
-    overview = overviewResp.data || {};
-    syncProfileScopeOptions();
+    overview = Object.assign(seedEmptyOverview(), overviewResp.data || {});
     try {
       const profileQuery = selectedProfile ? "&profile=" + encodeURIComponent(selectedProfile) : "";
       const auditResp = await api("audit/events?limit=20" + profileQuery);
@@ -1187,13 +1304,18 @@ async function load() {
       auditEvents = [];
       deniedEvents = [];
     }
-    renderSummary();
-    renderPanel();
-    renderAuditTail();
+    try {
+      const status = await daemonAPI("status");
+      overview.background = Array.isArray(status.background) ? status.background : [];
+    } catch {}
+    liveLastSeq = 0;
+    liveStreamState = "live";
+    liveStreamReason = "";
+    renderAll();
     const expiry = tokenExpiryLabel();
     setStatus("connected · " + freshnessLabel() + (expiry ? " · " + expiry : ""), "ok");
   } catch (error) {
-    overview = {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}};
+    overview = seedEmptyOverview();
     syncProfileScopeOptions();
     auditEvents = [];
     deniedEvents = [];
@@ -1202,6 +1324,9 @@ async function load() {
     auditBodyEl.innerHTML = empty("No audit events");
     setStatus("error", "error");
   }
+}
+async function load() {
+  return seedLiveConsole();
 }
 profileScopeEl.addEventListener("change", function() {
   selectedProfile = profileScopeEl.value;
@@ -1216,21 +1341,23 @@ document.getElementById("tabs").addEventListener("click", function(event) {
   if (overview) renderPanel();
 });
 document.getElementById("refresh").addEventListener("click", load);
-load();
-// Live refresh from the hideoutd event stream when served over the daemon's
-// loopback UI transport (the panels reflect state changes from events, not a
-// polling timer). When absent (command-scoped ui), the EventSource errors and is
-// closed, and manual refresh keeps working unchanged.
+seedLiveConsole();
+// Live state from the hideoutd event stream when served over the daemon's
+// loopback UI transport. The stream applies typed event payloads to local state
+// and renders without overview/audit re-fetches while healthy. When absent
+// (command-scoped ui), the EventSource errors and is closed, and manual refresh
+// keeps working unchanged.
 try {
   if (window.EventSource && token) {
     const es = new EventSource("/daemon/events?token=" + encodeURIComponent(token));
-    let pending = false;
-    es.onmessage = function() {
-      if (pending) return;
-      pending = true;
-      setTimeout(function() { pending = false; load(); }, 150);
+    es.onmessage = function(message) {
+      try {
+        applyLiveEvent(JSON.parse(message.data));
+      } catch {
+        markLiveHealth("schema-mismatch", "invalid event json");
+      }
     };
-    es.onerror = function() { es.close(); };
+    es.onerror = function() { markLiveHealth("disconnected", "event stream closed"); es.close(); };
   }
 } catch (e) {}
 </script>

@@ -68,15 +68,7 @@ func (d *Daemon) tailFile(path string, seen map[string]int) {
 		if json.Unmarshal(lines[i], &ev) != nil {
 			continue
 		}
-		payload := map[string]any{
-			"session":  ev.Session,
-			"action":   ev.Action,
-			"decision": ev.Decision,
-		}
-		for k, v := range audit.RedactDetails(ev.Details) {
-			payload[k] = v
-		}
-		d.bus.publish("audit", "", payload)
+		d.bus.publishAuditEvent(ev)
 	}
 	seen[path] = len(lines)
 }

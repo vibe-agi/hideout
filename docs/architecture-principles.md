@@ -132,13 +132,13 @@ If the WebUI and TUI disagree, the domain model is wrong.
 
 The steady-state architecture is daemon-first, in the Docker model: `hideoutd`
 hosts the Manager API and owns cross-invocation state — the environment
-registry, session state, event streams, prompt channels, and cleanup workers —
-and CLI, TUI, and WebUI are its clients. The daemon stays in single-operator
-form: an operator token with full access plus an optional read-only token.
-Client role matrices, delegated approval channels, per-subscriber redaction
-tiers, and replay-protection protocols are enterprise shapes and are out of
-scope; approval is the operator confirming interactively on their own machine,
-recorded in audit.
+registry, session state, typed event streams, daemon-local audit, and background
+execution for existing environment stop/clean operations — and CLI, TUI, and
+WebUI are its clients. The daemon stays in single-operator form: an operator
+token with full access. Read-only tokens, client role matrices, delegated
+approval channels, per-subscriber redaction tiers, and replay-protection
+protocols are enterprise shapes and are out of scope. Confirmation-required
+daemon operations fail closed until an explicit prompt channel exists.
 
 The daemon must not become a generic host execution service, a long-lived
 bearer of per-run capability tokens, or a path around Manager plan/apply

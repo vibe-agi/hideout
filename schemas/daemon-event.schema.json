@@ -10,7 +10,7 @@
       "const": "hideout.daemon-event/v1"
     },
     "kind": {
-      "enum": ["operation", "environment", "audit", "export", "cleanup", "terminal"]
+      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "terminal"]
     },
     "phase": {
       "enum": ["start", "progress", "complete", "failed"]
@@ -19,8 +19,256 @@
       "type": "integer",
       "minimum": 0
     },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "stream"]
+        },
+        "id": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      }
+    },
     "payload": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "autoNamed": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "guestWorkspace": {
+          "type": "string"
+        },
+        "imageRef": {
+          "type": "string"
+        },
+        "instanceName": {
+          "type": "string"
+        },
+        "lastSessionId": {
+          "type": "string"
+        },
+        "lastCommand": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastStartedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastEndedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "networkMode": {
+          "type": "string"
+        },
+        "hasAudit": {
+          "type": "boolean"
+        },
+        "hasEphemeralState": {
+          "type": "boolean"
+        },
+        "op": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "session": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        },
+        "source": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secretState": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "environment"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["id"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "session"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["id"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "background"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["id", "op", "status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "audit"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["action", "decision"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "export"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "cleanup"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "terminal"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["payload"],
+        "properties": {
+          "payload": {
+            "required": ["reason"]
+          }
+        }
+      }
+    }
+  ]
 }

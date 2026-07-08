@@ -18,6 +18,7 @@ test -f schemas/release-dogfood.schema.json
 test -f schemas/export-artifact.schema.json
 test -f schemas/daemon-status.schema.json
 test -f schemas/daemon-event.schema.json
+test -f schemas/live-console-seed.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -107,3 +108,7 @@ scripts/test-export-redaction-smoke.sh
 # socket placement, token auth + audited refusals, Manager parity, event stream,
 # and ordered stop.
 scripts/test-daemon-smoke.sh
+
+# Daemon live operations console (no Lima): typed seed/event contracts and
+# payload-driven UI proof. Initially a skeleton smoke, expanded by 007.
+scripts/test-live-console-smoke.sh

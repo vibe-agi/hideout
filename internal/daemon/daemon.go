@@ -123,7 +123,7 @@ func Start(opts Options) (*Daemon, error) {
 		startedAt:  now,
 		audit:      al,
 		bus:        bus,
-		bg:         newBGRegistry(),
+		bg:         newBGRegistry(bus.publishBackground),
 		own:        newOwnership(),
 		ln:         ln,
 		lockFile:   lockFile,

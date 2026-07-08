@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -45,12 +44,11 @@ const (
 )
 
 // buildHandler mounts the parity-locked Manager API under /api/v1/ behind an
-// auth-refusal recorder and an operation-event emitter, plus the daemon's own
-// status/stop/events endpoints (a separate surface outside /api/v1/). Every route
-// requires the operator token.
+// auth-refusal recorder, plus the daemon's own status/stop/events endpoints (a
+// separate surface outside /api/v1/). Every route requires the operator token.
 func (d *Daemon) buildHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle(apiPrefix, d.authRecorder(d.opEmitter(d.api.Handler())))
+	mux.Handle(apiPrefix, d.authRecorder(d.api.Handler()))
 	mux.Handle(statusPath, d.authRecorder(http.HandlerFunc(d.serveStatus)))
 	mux.Handle(stopPath, d.authRecorder(http.HandlerFunc(d.serveStop)))
 	mux.Handle(eventsPath, d.authRecorder(http.HandlerFunc(d.serveEvents)))
@@ -91,26 +89,6 @@ func (d *Daemon) serveBackground(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "op": req.Op, "status": "queued"})
 }
 
-// opEmitter publishes an operation lifecycle event around each apply request, so
-// any served apply produces start/complete events on the live stream in addition
-// to the finer-grained Core observer events.
-func (d *Daemon) opEmitter(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if d.bus == nil || r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/apply") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		d.bus.publish("operation", "start", map[string]any{"path": r.URL.Path})
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-		phase := "complete"
-		if rec.status >= 400 {
-			phase = "failed"
-		}
-		d.bus.publish("operation", phase, map[string]any{"path": r.URL.Path})
-	})
-}
-
 // serveEvents streams live events as SSE. It authenticates like any request, then
 // fans out events until the client disconnects, the credential expires/rotates
 // mid-stream (terminal event, re-subscribe required), or the daemon stops.
@@ -139,7 +117,7 @@ func (d *Daemon) serveEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-sub.done:
-			writeSSE(w, Event{Version: eventVersion, Kind: "terminal", Payload: map[string]any{"reason": "stream closed"}})
+			writeSSE(w, d.bus.terminalEvent(sub, "stream closed"))
 			flusher.Flush()
 			return
 		case <-ticker.C:
@@ -147,7 +125,7 @@ func (d *Daemon) serveEvents(w http.ResponseWriter, r *http.Request) {
 			// rotated, or the daemon is stopping — terminate and require a fresh
 			// credential to re-subscribe.
 			if d.authorizeStream(r) != nil {
-				writeSSE(w, Event{Version: eventVersion, Kind: "terminal", Payload: map[string]any{"reason": "credential invalidated"}})
+				writeSSE(w, d.bus.terminalEvent(sub, "credential invalidated"))
 				flusher.Flush()
 				return
 			}

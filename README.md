@@ -77,7 +77,8 @@ The source-tree installer builds:
 - `hideout`;
 - the host command shim;
 - the Linux guest shim;
-- the Linux HostFS daemon.
+- the Linux HostFS daemon;
+- the guest-local DNS-over-HTTPS stub used by privacy-mode DNS mediation.
 
 ## Quickstart
 
@@ -287,17 +288,35 @@ instead of reading raw JSONL by hand:
 hideout audit show --limit 20
 hideout audit show --decision deny
 hideout audit show --session <session-id> --json
+hideout daemon start
 hideout tui --profile agent
 hideout tui --once --profile agent
 ```
 
 `hideout tui` is the terminal observer surface. Keep it open in a second
-terminal while another terminal runs an agent or CLI. `--once` is for scripts
+terminal while another terminal runs an agent or CLI. When `hideoutd` is
+running, it seeds once from Manager data and then applies typed daemon event
+payloads without steady-state overview/audit polling. `--once` is for scripts
 and snapshots.
 
 `hideout ui --no-open --print-url` serves the WebUI smoke surface over the
 local Manager API and prints its address; it is the fuller management view
 and is not required for any first-run flow.
+
+For the resident local control plane, run:
+
+```bash
+hideout daemon start
+hideout daemon status
+hideout daemon stop
+```
+
+`hideoutd` serves the same Manager API over a store-rooted Unix socket, serves
+the WebUI over a tokened loopback URL, emits typed redacted live events for
+daemon-mediated operations, and runs existing environment stop/clean operations
+as background work. WebUI and TUI live panels use one seed plus those events
+while the stream is healthy, and fall back to daemon-less behavior when no
+daemon is running.
 
 Useful cleanup commands:
 

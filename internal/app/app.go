@@ -39,6 +39,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/hostopen"
 	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
@@ -4536,36 +4537,79 @@ func (a app) tui(args []string) error {
 	core := manager.New(store)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	render := func(clear bool) error {
-		overview, overviewErr := core.Overview(ctx)
-		overview = filterOverviewForTUI(overview, opts.profileName)
-		eventGroups, auditErr := core.AuditEventGroups(
-			manager.AuditEventFilter{Profile: opts.profileName, Limit: 5},
-			manager.AuditEventFilter{Profile: opts.profileName, Decision: "deny", Limit: 5},
-		)
-		events, deniedEvents := []audit.Event{}, []audit.Event{}
-		if len(eventGroups) > 0 {
-			events = eventGroups[0]
-		}
-		if len(eventGroups) > 1 {
-			deniedEvents = eventGroups[1]
-		}
+	renderSnapshot := func(clear bool) error {
+		state, snapshotErr := buildTUILiveState(ctx, core, opts.profileName, liveconsole.HealthDaemonless)
 		if clear {
 			fmt.Fprint(a.stdout, "\033[H\033[2J")
 		}
-		writeTUIDashboard(a.stdout, overview, events, deniedEvents, errors.Join(overviewErr, auditErr), opts.profileName)
+		writeTUIDashboard(a.stdout, state.Overview, state.AuditTail, state.DeniedAuditTail, snapshotErr, opts.profileName)
 		return nil
 	}
 	if !opts.watch {
-		return render(false)
+		return renderSnapshot(false)
 	}
-	// When a daemon is running, refresh strictly on its event stream (no polling
-	// timer); only after the stream ends do we fall back to interval polling.
-	var eventCh <-chan struct{}
 	if ch, err := daemon.SubscribeEvents(ctx, store.Root); err == nil {
-		eventCh = ch
+		state, seedErr := buildTUILiveState(ctx, core, opts.profileName, liveconsole.HealthLive)
+		renderLive := func(state liveconsole.State) error {
+			if seedErr != nil {
+				state.StreamHealth = liveconsole.StreamHealth{State: liveconsole.HealthStale, Reason: seedErr.Error()}
+			}
+			fmt.Fprint(a.stdout, "\033[H\033[2J")
+			writeTUILiveDashboard(a.stdout, state, seedErr, opts.profileName)
+			return nil
+		}
+		return watchLiveDashboard(ctx, ch, opts.interval, &state, renderLive, func() error { return renderSnapshot(true) })
 	}
-	return watchDashboard(ctx, eventCh, opts.interval, func() error { return render(true) })
+	return watchDashboard(ctx, nil, opts.interval, func() error { return renderSnapshot(true) })
+}
+
+func buildTUILiveState(ctx context.Context, core manager.Core, profileName, health string) (liveconsole.State, error) {
+	overview, overviewErr := core.Overview(ctx)
+	eventGroups, auditErr := core.AuditEventGroups(
+		manager.AuditEventFilter{Profile: profileName, Limit: 5},
+		manager.AuditEventFilter{Profile: profileName, Decision: "deny", Limit: 5},
+	)
+	events, deniedEvents := []audit.Event{}, []audit.Event{}
+	if len(eventGroups) > 0 {
+		events = eventGroups[0]
+	}
+	if len(eventGroups) > 1 {
+		deniedEvents = eventGroups[1]
+	}
+	seed := liveconsole.BuildSeed(liveconsole.SeedInput{
+		Overview:        overview,
+		AuditTail:       events,
+		DeniedAuditTail: deniedEvents,
+		ProfileScope:    profileName,
+		StreamHealth:    health,
+	})
+	return liveconsole.NewState(seed), errors.Join(overviewErr, auditErr)
+}
+
+func watchLiveDashboard(ctx context.Context, eventCh <-chan liveconsole.Event, interval time.Duration, state *liveconsole.State, render func(liveconsole.State) error, fallback func() error) error {
+	if state == nil {
+		return errors.New("live dashboard state is required")
+	}
+	for {
+		if err := render(*state); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case ev, ok := <-eventCh:
+			if !ok {
+				if state.StreamHealth.State != liveconsole.HealthCredentialExpired {
+					state.StreamHealth = liveconsole.StreamHealth{State: liveconsole.HealthDisconnected, Reason: "event stream closed"}
+				}
+				if err := render(*state); err != nil {
+					return err
+				}
+				return watchDashboard(ctx, nil, interval, fallback)
+			}
+			liveconsole.Apply(state, ev)
+		}
+	}
 }
 
 // watchDashboard drives the TUI refresh loop. It renders once up front and then,
@@ -4726,6 +4770,39 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	}
 	for _, event := range events {
 		fmt.Fprintf(w, "  - %s  action=%s  decision=%s  session=%s\n", dash(event.Profile), dash(event.Action), dash(event.Decision), dash(event.Session))
+	}
+}
+
+func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, profileFilter string) {
+	writeTUIDashboard(w, state.Overview, state.AuditTail, state.DeniedAuditTail, err, profileFilter)
+	fmt.Fprintf(w, "\nStream: %s", dash(state.StreamHealth.State))
+	if state.StreamHealth.Reason != "" {
+		fmt.Fprintf(w, " (%s)", state.StreamHealth.Reason)
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "\nBackground")
+	if len(state.Background) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, bg := range state.Background {
+		fmt.Fprintf(w, "  - %s  op=%s  status=%s\n", dash(bg.ID), dash(bg.Op), dash(bg.Status))
+	}
+
+	fmt.Fprintln(w, "\nExports")
+	if len(state.ExportOutcomes) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, row := range state.ExportOutcomes {
+		fmt.Fprintf(w, "  - status=%s  source=%s  decision=%s  artifact=%s\n", dash(row.Status), dash(row.Source), dash(row.Decision), dash(row.ArtifactPath))
+	}
+
+	fmt.Fprintln(w, "\nCleanup")
+	if len(state.CleanupOutcomes) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, row := range state.CleanupOutcomes {
+		fmt.Fprintf(w, "  - status=%s  sessions=%d  removed=%s  secrets=%s\n", dash(row.Status), row.Sessions, listForTUI(row.Removed), dash(row.SecretState))
 	}
 }
 

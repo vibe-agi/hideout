@@ -89,14 +89,14 @@ acceptable only as short-lived browser UI transport with explicit client
 tokens, not as an unauthenticated daemon API.
 
 The daemon serves one operator on one machine. Clients authenticate with an
-operator token (full access) or an optional read-only token; there are no
-per-operation role matrices, delegated approval channels, or per-subscriber
-redaction tiers. OS peer credentials are not sufficient by themselves for
-weak native-backend targets that share the host UID with operator clients,
-which is why a token is required at all. Approval is the operator confirming
-interactively, recorded in audit against the Manager-computed canonical
-request. After restart, the daemon must fail closed for live resources it
-cannot prove still belong to an active session.
+operator token (full access); read-only tokens, per-operation role matrices,
+delegated approval channels, and per-subscriber redaction tiers are not
+implemented. OS peer credentials are not sufficient by themselves for weak
+native-backend targets that share the host UID with operator clients, which is
+why a token is required at all. Confirmation-required daemon operations fail
+closed until an explicit prompt channel exists. After restart, the daemon must
+fail closed for live resources it cannot prove are owned by the current daemon
+instance.
 
 ## Assets
 

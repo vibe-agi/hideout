@@ -130,6 +130,16 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	result.AuditPath = runSession.AuditPath
+	c.emitOperation("session", "start", runSessionOperationDetails(runSession, "running"))
+	defer func() {
+		status := "completed"
+		phase := "complete"
+		if retErr != nil {
+			status = "failed"
+			phase = "failed"
+		}
+		c.emitOperation("session", phase, runSessionOperationDetails(runSession, status))
+	}()
 	if err := emitRunSetupAudit(runSession.Audit, runSession, opts, c.Store.Root); err != nil {
 		return result, err
 	}

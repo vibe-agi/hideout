@@ -3839,15 +3839,15 @@ Path disclosure contract:
 - discovered host paths outside configured workspace/store state must not be
   added to manager or Web UI responses.
 
-Design-ready Phase 1:
+Implemented steady-state local control plane:
 
 ```text
 hideoutd
-  Per-user local Manager runtime and the steady-state architecture direction.
-  It owns cross-invocation state — the environment registry, session state,
-  event streams, prompt channels, and background cleanup workers — and serves
-  profiles, sessions, backend lifecycle, broker lifecycle, secrets, audit, and
-  Web UI API through the same Manager Core plan/apply contracts used by CLI.
+  Per-user local Manager runtime. It owns cross-invocation observation for
+  environment/session state, typed redacted event streams, daemon-local audit,
+  and background execution for existing environment stop/clean plan/apply
+  operations. It serves the same Manager API through Manager Core, plus
+  daemon-specific status/event/background endpoints outside /api/v1.
 ```
 
 Later:
@@ -3885,22 +3885,24 @@ Daemon invariants:
   transport is command-scoped UI transport with short-lived tokens, not the
   default long-lived daemon authority channel.
 - The daemon stays in single-operator form: an operator token with full
-  access plus an optional read-only token. Client role matrices, delegated
-  approval channels, per-subscriber redaction tiers, and replay-protection
-  protocols are enterprise shapes and are not built. Approval is the operator
-  confirming interactively on their own machine, recorded in audit. OS peer
-  credentials are useful for Unix-socket clients but are not enough by
-  themselves for weak native-backend targets that share the host UID.
+  access. Read-only tokens, client role matrices, delegated approval channels,
+  per-subscriber redaction tiers, and replay-protection protocols are enterprise
+  shapes and are not built. Confirmation-required operations fail closed until
+  an explicit prompt channel exists. OS peer credentials are useful for
+  Unix-socket clients but are not enough by themselves for weak native-backend
+  targets that share the host UID.
 - Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
   exposure leases, and audit handles remain session-scoped even when the daemon
   is long-lived.
-- TUI and WebUI may subscribe to daemon event streams, but authority-changing
-  actions still go through Manager plan/apply and emit audit. Event streams
-  carry the same deterministic redaction as local audit views.
-- A daemon restart must not grant new authority. It may reconstruct observable
-  state from stores and audit, then fail closed for any live resource it cannot
-  prove still belongs to an active session using session-scoped state such as
-  an epoch, pid/lock, or backend lease.
+- TUI and WebUI subscribe to daemon event streams when `hideoutd` is running.
+  They seed once from Manager overview/redacted audit, then apply typed
+  `liveconsole.Event` payloads without steady-state overview/audit polling
+  while the stream is healthy. Authority-changing actions still go through
+  Manager plan/apply and emit audit. Event streams carry the same deterministic
+  redaction as local audit views.
+- A daemon restart must not grant new authority. It reports and audits any
+  live resource it cannot prove belongs to the current daemon instance, and it
+  does not silently re-adopt or destroy that resource.
 
 Design-ready local HTTP resources:
 
@@ -4129,12 +4131,16 @@ the user stops it. `--print-url` is a nonblocking diagnostic/test mode: it
 allocates the server, prints the URL/API/token metadata, closes the server, and
 does not promise an interactive UI session.
 
-`hideout tui` is the terminal observer surface. By default it stays alive and
-refreshes Manager overview and redacted audit data so an operator can keep it
-open beside another terminal running an agent or CLI. It does not start a local
-HTTP server, mint a UI token, or open a browser. `--once` renders the same
-domain view once for scripts, package smoke, and documentation snapshots; it is
-not the product interaction model.
+`hideout tui` is the terminal observer surface. By default it stays alive so an
+operator can keep it open beside another terminal running an agent or CLI. When
+`hideoutd` is running, the TUI reads one Manager/audit seed, consumes typed
+daemon events through `daemon.SubscribeEvents`, and renders from the live
+reducer without interval overview/audit polling while the stream is healthy. If
+no daemon is running or the stream closes, it falls back to the daemon-less
+snapshot/interval behavior. It does not start a local HTTP server, mint a UI
+token, or open a browser. `--once` renders the same domain view once for
+scripts, package smoke, and documentation snapshots; it is not the product
+interaction model.
 
 The local manager server exposes minimal init and run resources for future
 TUI/WebUI control: `POST /api/v1/init/plan`, `POST /api/v1/init/apply`,

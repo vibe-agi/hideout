@@ -30,12 +30,17 @@ in-process, but must not rebuild state by reading subsystem files directly.
 The steady-state model is daemon-first and implemented (see [STATUS.md](STATUS.md)):
 `hideoutd` hosts the Manager API over a store-rooted socket plus a live, redacted
 event stream, and also serves the WebUI over a tokened loopback UI transport. The
-WebUI panels open an `EventSource` on `/daemon/events` and the TUI consumes the same
-stream via `daemon.SubscribeEvents`, so both surfaces refresh on events (event-triggered
-re-fetch; no polling timer) rather than polling, falling back to their prior behavior when
-no daemon runs. Building panel state directly from event payloads (zero further reads) and
-end-to-end user-visible refresh verification are a deferred follow-on (the fuller operations
-console), not part of 006.
+WebUI panels open an `EventSource` on `/daemon/events` and the TUI consumes the
+same stream via `daemon.SubscribeEvents`, so both surfaces apply typed event
+payloads to a seeded live-console reducer with no steady-state overview/audit
+polling while the stream is healthy. Typed run/session and cleanup rows are live
+for daemon-mediated Manager operations; standalone CLI invocations still surface
+through audit-tail events unless they go through the daemon. Environment live
+events currently cover the Manager stop/clean lifecycle. Both surfaces fall back
+to their prior behavior when no daemon runs or the stream closes. The current
+proof is a Gate 0 deterministic JavaScript reducer harness, production
+emit-source tests, and TUI terminal capture; richer browser-driven UX automation
+remains a later product-hardening task.
 
 ## TUI Role
 
@@ -192,9 +197,9 @@ Design-ready interactive session observer:
   as `hideout audit show`;
 - explicit commands or plan/apply actions for cleanup, stop, and doctor repair.
 
-The live tail comes from daemon event streams in the steady state. Polling
-Manager overview and redacted audit is a usable MVP-stage transition, not the
-product end state.
+The live tail comes from daemon event streams in the steady state. TUI now seeds
+once from Manager overview/redacted audit, applies typed daemon events locally,
+and polls only in daemon-less fallback.
 
 ### Environments
 

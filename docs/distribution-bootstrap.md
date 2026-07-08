@@ -340,7 +340,8 @@ helper discovery from that prefix, and checks that `install.sh --skip-init`
 copies binaries without writing init state. The package-root installer must fail
 before copying binaries when the extracted package is missing
 `package-manifest.json`, the host shim, Linux guest shim, Linux HostFS daemon,
-or any manifest-declared checksum does not match the extracted file.
+guest-local DNS stub, or any manifest-declared checksum does not match the
+extracted file.
 Release-like tarball installs must not require Go; they use the packaged
 `hideout` binary for package verification and packaged Linux helpers for Lima.
 

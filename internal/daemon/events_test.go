@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/liveconsole"
 )
 
 func readEventStream(t *testing.T, d *Daemon, token string, timeout time.Duration) []Event {
@@ -45,6 +47,7 @@ func readEventStream(t *testing.T, d *Daemon, token string, timeout time.Duratio
 		}
 		var ev Event
 		if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev) == nil {
+			assertValidDaemonEvent(t, ev)
 			events = append(events, ev)
 			if ev.Kind == "terminal" {
 				return events
@@ -67,19 +70,21 @@ func TestEventBusRedactsOrdersAndKeepsNoHistory(t *testing.T) {
 	bus.publishAudit("host.open", "allow", map[string]any{"target": "user-url"})
 
 	first := <-sub.ch
-	if first.Seq != 1 || first.Kind != "operation" {
+	if first.Seq != 1 || first.Kind != liveconsole.KindSession {
 		t.Fatalf("unexpected first event: %+v", first)
 	}
-	if got := first.Payload["capabilityToken"]; got != "REDACTED" && got != nil {
+	assertValidDaemonEvent(t, first)
+	if got := first.Payload.Details["capabilityToken"]; got != "REDACTED" && got != nil {
 		t.Fatalf("control-plane token not redacted on stream: %v", first.Payload)
 	}
-	if first.Payload["note"] != "keep-me" {
+	if first.Payload.Details["note"] != "keep-me" {
 		t.Fatalf("local user data should be verbatim: %v", first.Payload)
 	}
 	second := <-sub.ch
-	if second.Seq != 2 || second.Kind != "audit" {
+	if second.Seq != 2 || second.Kind != liveconsole.KindAudit {
 		t.Fatalf("events out of order: %+v", second)
 	}
+	assertValidDaemonEvent(t, second)
 
 	// No history: a late subscriber receives nothing already published.
 	late := bus.subscribe(4)
@@ -98,7 +103,19 @@ func TestEventBusBackpressureDropsSlowSubscriber(t *testing.T) {
 	fast := bus.subscribe(64)
 
 	for i := 0; i < 5; i++ {
-		bus.publish("operation", "progress", map[string]any{"i": i})
+		bus.publish(Event{
+			Kind:  liveconsole.KindSession,
+			Phase: "progress",
+			Entity: liveconsole.EntityRef{
+				Kind: liveconsole.KindSession,
+				ID:   "op",
+			},
+			Payload: liveconsole.EventPayload{
+				ID:      "op",
+				Status:  "running",
+				Details: map[string]any{"i": i},
+			},
+		})
 	}
 
 	select {
@@ -109,11 +126,108 @@ func TestEventBusBackpressureDropsSlowSubscriber(t *testing.T) {
 	// The fast subscriber is unaffected.
 	select {
 	case ev := <-fast.ch:
-		if ev.Kind != "operation" {
+		if ev.Kind != liveconsole.KindSession {
 			t.Fatalf("fast subscriber got wrong event: %+v", ev)
 		}
+		assertValidDaemonEvent(t, ev)
 	case <-time.After(time.Second):
 		t.Fatal("fast subscriber should still receive events")
+	}
+}
+
+func TestEventBusBackpressureDoesNotBlockOtherSubscribers(t *testing.T) {
+	bus := newEventBus()
+	slow := bus.subscribe(1)
+	fastA := bus.subscribe(16)
+	fastB := bus.subscribe(16)
+
+	for i := 0; i < 6; i++ {
+		bus.OperationEvent(liveconsole.KindSession, "progress", map[string]any{"id": "op"})
+	}
+	select {
+	case <-slow.done:
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber should be terminated when its buffer fills")
+	}
+	for name, sub := range map[string]*subscriber{"fastA": fastA, "fastB": fastB} {
+		for i := 0; i < 6; i++ {
+			select {
+			case ev := <-sub.ch:
+				if ev.Kind != liveconsole.KindSession || ev.Payload.ID != "op" {
+					t.Fatalf("%s got unexpected event: %+v", name, ev)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s was blocked by the slow subscriber", name)
+			}
+		}
+	}
+}
+
+func TestTerminalEventDoesNotConsumeBroadcastSequence(t *testing.T) {
+	bus := newEventBus()
+	expiring := bus.subscribe(8)
+	other := bus.subscribe(8)
+	bus.OperationEvent(liveconsole.KindEnvironment, "complete", map[string]any{"id": "env-1"})
+	if ev := <-expiring.ch; ev.Seq != 1 {
+		t.Fatalf("expiring subscriber first seq=%d", ev.Seq)
+	}
+	if ev := <-other.ch; ev.Seq != 1 {
+		t.Fatalf("other subscriber first seq=%d", ev.Seq)
+	}
+	terminal := bus.terminalEvent(expiring, "credential invalidated")
+	if terminal.Seq != 2 {
+		t.Fatalf("terminal seq=%d want subscriber-local 2", terminal.Seq)
+	}
+	bus.OperationEvent(liveconsole.KindEnvironment, "complete", map[string]any{"id": "env-2"})
+	next := <-other.ch
+	if next.Seq != 2 {
+		t.Fatalf("terminal event consumed global sequence; other subscriber got seq=%d, want 2", next.Seq)
+	}
+	state := liveconsole.NewState(liveconsole.BuildSeed(liveconsole.SeedInput{StreamHealth: liveconsole.HealthLive}))
+	if result := liveconsole.Apply(&state, liveconsole.Event{Version: liveconsole.EventVersion, Kind: liveconsole.KindEnvironment, Seq: 1, Payload: liveconsole.EventPayload{ID: "env-1"}}); result.Status != liveconsole.ResultApplied {
+		t.Fatalf("apply first event: %+v", result)
+	}
+	if result := liveconsole.Apply(&state, liveconsole.Event{Version: liveconsole.EventVersion, Kind: liveconsole.KindEnvironment, Seq: next.Seq, Payload: liveconsole.EventPayload{ID: "env-2"}}); result.Status != liveconsole.ResultApplied {
+		t.Fatalf("other subscriber should not see a sequence gap: %+v", result)
+	}
+}
+
+func TestEventBusBuildsExportAndCleanupPayloadsFromOperationEvents(t *testing.T) {
+	bus := newEventBus()
+	sub := bus.subscribe(8)
+	bus.OperationEvent(liveconsole.KindExport, "complete", map[string]any{
+		"source":          "audit",
+		"artifactPath":    "/tmp/export.json",
+		"decision":        "redact",
+		"capabilityToken": "cap_0123456789abcdef0123456789abcdef",
+	})
+	exportEvent := <-sub.ch
+	if exportEvent.Kind != liveconsole.KindExport || exportEvent.Payload.Source != "audit" || exportEvent.Payload.ArtifactPath != "/tmp/export.json" || exportEvent.Payload.Status != "completed" {
+		t.Fatalf("export payload mismatch: %+v", exportEvent)
+	}
+	data, _ := json.Marshal(exportEvent)
+	if strings.Contains(string(data), "cap_0123456789abcdef") {
+		t.Fatalf("export event leaked control-plane material: %s", data)
+	}
+
+	bus.OperationEvent(liveconsole.KindCleanup, "complete", map[string]any{
+		"id":                           "ses_cleanup",
+		"sessions":                     1,
+		"removedTypes":                 []string{"tmp", "brokerSocket"},
+		"secretState":                  "removed",
+		"machineId":                    "0123456789abcdef0123456789abcdef",
+		"HIDEOUT_SECRET_DEFAULT_PROXY": "socks5://127.0.0.1:1",
+	})
+	cleanupEvent := <-sub.ch
+	if cleanupEvent.Kind != liveconsole.KindCleanup || cleanupEvent.Payload.ID != "ses_cleanup" || cleanupEvent.Payload.Sessions != 1 || cleanupEvent.Payload.SecretState != "removed" {
+		t.Fatalf("cleanup payload mismatch: %+v", cleanupEvent)
+	}
+	if len(cleanupEvent.Payload.Removed) != 2 || cleanupEvent.Payload.Removed[0] != "tmp" {
+		t.Fatalf("cleanup removed types mismatch: %+v", cleanupEvent.Payload.Removed)
+	}
+	data, _ = json.Marshal(cleanupEvent)
+	if strings.Contains(string(data), "0123456789abcdef0123456789abcdef") || strings.Contains(string(data), "socks5://127.0.0.1:1") {
+		t.Fatalf("cleanup event leaked control-plane material: %s", data)
 	}
 }
 
@@ -144,7 +258,8 @@ func TestEventsStreamDeliversRedactedEvents(t *testing.T) {
 	events := <-done
 	sawOp := false
 	for _, ev := range events {
-		if ev.Kind == "operation" {
+		assertValidDaemonEvent(t, ev)
+		if ev.Kind == liveconsole.KindSession {
 			sawOp = true
 			if s, _ := json.Marshal(ev); strings.Contains(string(s), "cap_0123456789abcdef") {
 				t.Fatalf("stream leaked control-plane token: %s", s)
@@ -169,6 +284,7 @@ func TestEventsMidStreamCredentialInvalidation(t *testing.T) {
 	events := readEventStream(t, d, d.Token(), 3*time.Second)
 	sawTerminal := false
 	for _, ev := range events {
+		assertValidDaemonEvent(t, ev)
 		if ev.Kind == "terminal" {
 			sawTerminal = true
 		}
@@ -179,5 +295,12 @@ func TestEventsMidStreamCredentialInvalidation(t *testing.T) {
 	// The now-expired token is refused on resubscribe (and is auditable via T009).
 	if code, _ := daemonDo(t, d, http.MethodGet, eventsPath, d.Token()); code != http.StatusUnauthorized {
 		t.Fatalf("resubscribe with expired token: want 401, got %d", code)
+	}
+}
+
+func assertValidDaemonEvent(t *testing.T, ev Event) {
+	t.Helper()
+	if err := liveconsole.ValidateEvent(ev); err != nil {
+		t.Fatalf("invalid daemon event %+v: %v", ev, err)
 	}
 }

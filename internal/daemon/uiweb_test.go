@@ -34,13 +34,28 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("UI root: want 200, got %d", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), "EventSource") || !strings.Contains(string(body), "/daemon/events") {
+	html := string(body)
+	if !strings.Contains(html, "EventSource") || !strings.Contains(html, "/daemon/events") {
 		t.Fatalf("WebUI does not consume the daemon event stream (no EventSource on /daemon/events)")
+	}
+	for _, want := range []string{
+		"function applyLiveEvent(event)",
+		"applyLiveEvent(JSON.parse(message.data))",
+		"overview.environments = upsertByID(overview.environments, payload)",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("loopback WebUI missing typed event consumer %q", want)
+		}
 	}
 	// Event-triggered scope (FR-009): refresh is driven by events, not a polling
 	// timer — the served WebUI has no setInterval.
-	if strings.Contains(string(body), "setInterval") {
+	if strings.Contains(html, "setInterval") {
 		t.Fatalf("WebUI must refresh on events, not a polling timer (found setInterval)")
+	}
+	eventHandler := html[strings.Index(html, "es.onmessage = function(message)"):]
+	eventHandler = eventHandler[:strings.Index(eventHandler, "es.onerror = function()")]
+	if strings.Contains(eventHandler, "load()") || strings.Contains(eventHandler, `api("overview")`) || strings.Contains(eventHandler, `api("audit/events`) {
+		t.Fatalf("loopback WebUI event handler must not re-fetch seed data:\n%s", eventHandler)
 	}
 
 	// The event endpoint accepts a browser query-param token (EventSource cannot set
@@ -90,8 +105,9 @@ func getStatusAuthed(t *testing.T, client *http.Client, url, token string) int {
 }
 
 // T033: a client (the TUI) consumes the daemon event stream via SubscribeEvents,
-// receiving a refresh signal per event and a closed channel when the stream ends.
-func TestSubscribeEventsDeliversRefreshSignals(t *testing.T) {
+// receiving a typed event per daemon event and a closed channel when the stream
+// ends.
+func TestSubscribeEventsDeliversTypedRefreshEvents(t *testing.T) {
 	d := startTestDaemon(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -102,12 +118,15 @@ func TestSubscribeEventsDeliversRefreshSignals(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // ensure the subscription is attached
 	d.bus.OperationEvent("environment", "complete", map[string]any{"action": "clean"})
 	select {
-	case _, ok := <-ch:
+	case ev, ok := <-ch:
 		if !ok {
 			t.Fatal("channel closed before delivering the event")
 		}
+		if ev.Kind != "environment" || ev.Payload.ID == "" {
+			t.Fatalf("unexpected typed event: %+v", ev)
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("no refresh signal delivered for the event")
+		t.Fatal("no typed refresh event delivered")
 	}
 	// When the daemon stops, the stream ends and the channel closes.
 	_ = d.Stop(context.Background())
@@ -121,13 +140,5 @@ func TestSubscribeEventsDeliversRefreshSignals(t *testing.T) {
 		case <-deadline:
 			t.Fatal("channel did not close after daemon stop")
 		}
-	}
-}
-
-// SubscribeEvents on a store with no daemon returns an error (client falls back).
-func TestSubscribeEventsNoDaemon(t *testing.T) {
-	store := testStore(t)
-	if _, err := SubscribeEvents(context.Background(), store.Root); err == nil {
-		t.Fatal("SubscribeEvents should error when no daemon is running")
 	}
 }

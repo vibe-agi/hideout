@@ -92,10 +92,23 @@ func (c Core) CloseRunSession(runSession RunSession) (session.CleanupResult, err
 	result, cleanupErr := session.CleanupEphemeral(c.Store.Root, runSession.Layout.ID, false)
 	decision := "allow"
 	details := CleanupAuditDetails(result)
+	details["id"] = runSession.Layout.ID
+	details["session"] = runSession.Layout.ID
+	details["profile"] = runSession.Plan.ProfileName
+	details["backend"] = runSession.Plan.Backend
+	details["status"] = "completed"
+	details["secretState"] = "removed"
 	if cleanupErr != nil {
 		decision = "error"
 		details["error"] = cleanupErr.Error()
+		details["status"] = "failed"
+		details["secretState"] = "failed"
 	}
+	phase := "complete"
+	if cleanupErr != nil {
+		phase = "failed"
+	}
+	c.emitOperation("cleanup", phase, details)
 	aw := runSession.Audit
 	if aw == nil {
 		aw = audit.NewDiscard()
@@ -149,6 +162,19 @@ func CleanupAuditDetails(result session.CleanupResult) map[string]any {
 		"sessions":     result.Sessions,
 		"removedCount": len(result.Removed),
 		"removedTypes": types,
+	}
+}
+
+func runSessionOperationDetails(runSession RunSession, status string) map[string]any {
+	return map[string]any{
+		"id":                runSession.Layout.ID,
+		"session":           runSession.Layout.ID,
+		"profile":           runSession.Plan.ProfileName,
+		"backend":           runSession.Plan.Backend,
+		"status":            status,
+		"networkMode":       runSession.Plan.NetworkMode,
+		"hasAudit":          runSession.AuditPath != "" && runSession.AuditPath != "off",
+		"hasEphemeralState": true,
 	}
 }
 

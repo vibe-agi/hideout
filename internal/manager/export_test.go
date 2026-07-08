@@ -139,8 +139,65 @@ function redactAudit(ctx) {
 	}
 }
 
+func TestCoreExportEmitsLiveOperationEvents(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	writeManagerExportAudit(t, store.Root, "ses_export", audit.Event{
+		Session:  "ses_export",
+		Profile:  "default",
+		Backend:  "native",
+		Action:   "host.open",
+		Decision: "allow",
+		Details:  map[string]any{"target": "https://example.com"},
+	})
+	obs := &exportRecordingObserver{}
+	core := New(store)
+	core.Observer = obs
+	out := filepath.Join(t.TempDir(), "artifact.json")
+	opts := ExportOptions{Source: exportboundary.SourceAudit, Session: "ses_export", Out: out, AcknowledgeFullFidelity: true}
+	plan, err := core.PlanExport(opts)
+	if err != nil {
+		t.Fatalf("PlanExport: %v", err)
+	}
+	result, err := core.ApplyExport(plan, opts)
+	if err != nil {
+		t.Fatalf("ApplyExport: %v", err)
+	}
+	if result.ArtifactPath != out {
+		t.Fatalf("artifact path=%q want %q", result.ArtifactPath, out)
+	}
+	if got := obs.events; len(got) != 2 || got[0].kind != "export" || got[0].phase != "start" || got[1].kind != "export" || got[1].phase != "complete" {
+		t.Fatalf("export live events mismatch: %+v", got)
+	}
+	if obs.events[1].details["artifactPath"] != out || obs.events[1].details["status"] != "completed" || obs.events[1].details["source"] != "audit" {
+		t.Fatalf("export completion details mismatch: %+v", obs.events[1].details)
+	}
+
+	obs.events = nil
+	_, err = core.ApplyExport(exportboundary.Plan{}, opts)
+	if err == nil {
+		t.Fatal("ApplyExport without plan should fail")
+	}
+	if got := obs.events; len(got) != 2 || got[0].phase != "start" || got[1].phase != "failed" || got[1].details["status"] != "failed" {
+		t.Fatalf("export failure live events mismatch: %+v", got)
+	}
+}
+
 func SourceAuditForManagerTest() exportboundary.SourceKind {
 	return exportboundary.SourceAudit
+}
+
+type exportRecordingObserver struct {
+	events []exportRecordedEvent
+}
+
+type exportRecordedEvent struct {
+	kind    string
+	phase   string
+	details map[string]any
+}
+
+func (o *exportRecordingObserver) OperationEvent(kind, phase string, details map[string]any) {
+	o.events = append(o.events, exportRecordedEvent{kind: kind, phase: phase, details: details})
 }
 
 func writeManagerExportProfile(t *testing.T, store profile.Store, name, source string) {

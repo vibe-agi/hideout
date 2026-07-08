@@ -192,6 +192,13 @@ Required evidence:
   endpoint against `schemas/daemon-status.schema.json`, and an ordered stop — with
   no real backend. Daemon lifecycle, auth, event redaction, restart fail-closed,
   and background status are covered by `go test ./internal/daemon/...`.
+- Daemon live operations console smoke (`scripts/test-live-console-smoke.sh`,
+  wired into Gate 0) validates the typed daemon event and live-console seed
+  schemas, catalog/reducer drift guards, production emit-source coverage,
+  daemon multi-subscriber/backpressure behavior, WebUI deterministic JavaScript
+  reducer proof with no post-seed fetches, TUI terminal proof, stream-health
+  propagation, and control-plane redaction scans — with no real backend, headless
+  browser, or external browser dependency.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must
