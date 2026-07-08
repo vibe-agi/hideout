@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/vibe-agi/hideout/internal/doctor"
 )
 
 type sourceData struct {
@@ -30,9 +32,33 @@ func readSource(req Request) (sourceData, error) {
 		return readBundleSource(req.BundlePath)
 	case SourceBoundarySummary:
 		return readBoundarySummarySource(req.BoundarySummary, req.BoundaryAuditPath)
+	case SourceDoctorReport:
+		return readDoctorReportSource(req.DoctorReportPath)
 	default:
 		return sourceData{}, fmt.Errorf("unsupported export source %q", req.Source)
 	}
+}
+
+func readDoctorReportSource(path string) (sourceData, error) {
+	if path == "" {
+		return sourceData{}, errors.New("doctor report path is required")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return sourceData{}, fmt.Errorf("read doctor report: %w", err)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(data, &report); err != nil {
+		return sourceData{}, fmt.Errorf("parse doctor report: %w", err)
+	}
+	if schema, _ := report["schema"].(string); schema != doctor.Schema {
+		return sourceData{}, fmt.Errorf("doctor report schema %q is not supported", schema)
+	}
+	count := 1
+	if findings, ok := report["findings"].([]any); ok {
+		count = len(findings)
+	}
+	return sourceData{Body: report, RecordCount: count}, nil
 }
 
 func readBundleSource(path string) (sourceData, error) {

@@ -56,6 +56,9 @@ pane: side-by-side panels with keyboard shortcuts for audit observation and
 session management, backed by controlled Manager plan/apply actions.
 Interactive first-run and doctor flows are product increments, not the current
 default init path.
+015 adds a redacted `hideout.doctor-report/v1` JSON report that future UI
+doctor panels can render, but the current TUI/WebUI does not auto-run doctor or
+turn report findings into implicit repairs.
 
 Recommended implementation stack:
 

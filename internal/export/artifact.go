@@ -13,6 +13,7 @@ const (
 	SourceAudit           SourceKind = "audit"
 	SourceBundle          SourceKind = "bundle"
 	SourceBoundarySummary SourceKind = "boundary-summary"
+	SourceDoctorReport    SourceKind = "doctor-report"
 )
 
 type DecisionMode string
@@ -63,6 +64,7 @@ type Request struct {
 	BundlePath        string
 	BoundarySummary   any
 	BoundaryAuditPath string
+	DoctorReportPath  string
 
 	Out                     string
 	StoreRoot               string

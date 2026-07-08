@@ -35,7 +35,7 @@ Users should be able to run:
 ```bash
 scripts/install-local.sh
 hideout init
-hideout doctor --fix
+hideout doctor --fix --apply
 hideout run -- example-cli
 ```
 
@@ -127,8 +127,9 @@ without printing the full search path list.
 ## First-Run Flow
 
 First-run setup is an `InitPlan`, not a script. `hideout init`,
-`hideout doctor --fix`, future TUI first-run, and automatic safe setup triggered
-by `hideout run` must use the same Manager-owned Init Task Engine.
+`hideout doctor --fix --dry-run|--apply`, future TUI first-run, and automatic
+safe setup triggered by `hideout run` must use the same Manager-owned Init Task
+Engine.
 
 ```text
 hideout init
@@ -171,8 +172,8 @@ hideout tui
 
 ## Doctor Fix Flow
 
-`doctor` explains. `doctor --fix` builds an InitPlan that remediates safe
-missing pieces.
+`doctor` explains. `doctor --fix --dry-run` builds an InitPlan preview;
+`doctor --fix --apply` remediates safe missing pieces.
 
 Safe fixes:
 
@@ -190,7 +191,7 @@ Safe fixes:
   `hideout.helper-manifest/v1`, the expected command, `linux/<arch>`, artifact
   name, and matching SHA-256. Explicit development override paths and packaged
   helpers outside the store may be used without a store manifest, but store
-helpers without a current manifest are repairable by `doctor --fix`;
+helpers without a current manifest are repairable by `doctor --fix --apply`;
 - repair file permissions;
 - download backend template metadata;
 - repair current schema/version metadata;
@@ -204,8 +205,8 @@ present. Dry runs do not write init audit. `hideout run` only writes these audit
 events when pending lightweight store/profile/schema metadata InitTasks actually
 need to be applied. Run-triggered auto init does not build backend helper
 binaries; helper repair stays under explicit `hideout init --backend ...` or
-`hideout doctor --fix`, and runtime still fails closed if a required helper is
-missing.
+`hideout doctor --fix --apply`, and runtime still fails closed if a required
+helper is missing.
 
 When `scripts/install-local.sh` is asked to initialize `tun2socks`, it must pass
 only the proxy secret ref to `hideout init`. The raw proxy URL remains in the
@@ -317,7 +318,7 @@ Manager-owned Init Task Engine unless `--skip-init` is set. This is not a
 separate bootstrap path and must not grow its own initialization semantics.
 The default install backend follows the runtime default, Lima; native remains an
 explicit weak-isolation development option. Source-tree repair may use
-`HIDEOUT_SOURCE_ROOT` when `doctor --fix` is run outside the repository.
+`HIDEOUT_SOURCE_ROOT` when `doctor --fix --apply` is run outside the repository.
 Source-tree installs require Go.
 
 Release-like tarball packaging uses `scripts/package-local.sh` during private
@@ -404,7 +405,7 @@ Release candidate should verify:
   pre-release development and runs typed template-aware `hideout init --no-input` by default;
 - `scripts/test-install-smoke.sh` verifies installed binaries, helper
   manifests, init metadata, idempotent init, doctor, `doctor --fix --dry-run`,
-  and safe `doctor --fix` from temporary prefix/store roots;
+  and safe `doctor --fix --apply` from temporary prefix/store roots;
 - `scripts/package-local.sh` and `scripts/test-package-smoke.sh` verify a
   release-like tarball layout can be extracted, installed through package-root
   `install.sh`, and initialized without hidden repository state;
@@ -413,7 +414,7 @@ Release candidate should verify:
 - template-aware `hideout init --no-input` applies safe machine initialization tasks;
 - `hideout run` applies pending lightweight store/profile/schema metadata
   InitTasks through Manager before starting a session or backend prepare step;
-- `doctor --fix --dry-run` and safe `doctor --fix` use InitTask plan/apply;
+- `doctor --fix --dry-run` and safe `doctor --fix --apply` use InitTask plan/apply;
 - Manager API exposes initial init, bundle, and project status summaries.
 
 ### Next Product Increment
@@ -423,8 +424,8 @@ Release candidate should verify:
 - package release artifacts with the same helper layout verified by
   `scripts/test-install-smoke.sh`;
 - add package smoke install for the chosen channel;
-- add richer `doctor --fix` remediation coverage for backend prerequisites and
-  helper repair beyond source-tree builds;
+- add richer `doctor --fix --dry-run|--apply` remediation coverage for backend
+  prerequisites and helper repair beyond source-tree builds;
 - decide whether `tun2socks` ships as a bundled helper or an explicitly checked
   external prerequisite.
 

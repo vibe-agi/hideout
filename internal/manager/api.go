@@ -125,6 +125,7 @@ type ExportAPIRequest struct {
 	Decision                string   `json:"decision,omitempty"`
 	Limit                   int      `json:"limit,omitempty"`
 	BundlePath              string   `json:"bundle,omitempty"`
+	DoctorReportPath        string   `json:"doctorReport,omitempty"`
 	From                    string   `json:"from,omitempty"`
 	Out                     string   `json:"out,omitempty"`
 	Redact                  []string `json:"redact,omitempty"`
@@ -1425,6 +1426,7 @@ func exportOptionsFromAPIRequest(req ExportAPIRequest) ExportOptions {
 		Decision:                req.Decision,
 		Limit:                   req.Limit,
 		BundlePath:              req.BundlePath,
+		DoctorReportPath:        req.DoctorReportPath,
 		From:                    req.From,
 		Out:                     req.Out,
 		Redact:                  append([]string(nil), req.Redact...),

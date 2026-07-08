@@ -4229,23 +4229,23 @@ when `HIDEOUT_LINUX_HOSTFSD_PATH` is not set and no packaged daemon is next to
 the `hideout` binary or on `PATH`. It writes the same manifest shape next to the
 store-built daemon.
 
-`hideout doctor --fix --backend lima` plans safe helper repair tasks for the
+`hideout doctor --fix --dry-run --backend lima` plans safe helper repair tasks for the
 same store paths: `helper.install.linux-shim` and
 `helper.install.linux-hostfsd`. When running from a Hideout source tree, those
 tasks build the Linux helpers with `go build`; packaged releases should install
 the helpers directly so the tasks are already `ok`. If a default store helper is
 present without a current manifest, the helper task remains pending so
-`doctor --fix` can rebuild or repair it.
+`doctor --fix --apply` can rebuild or repair it.
 Source-tree repair locates the Hideout source root from `HIDEOUT_SOURCE_ROOT`,
 the current `hideout` executable path, or the working directory, in that order.
 
-The omitted or `auto` backend for `hideout init` and `hideout doctor --fix`
-matches `hideout run`: Lima. `--backend native` remains available as an explicit
-weak-isolation development path, but it must not be the implicit first-run
-repair target.
+The omitted or `auto` backend for `hideout init` and
+`hideout doctor --fix --dry-run|--apply` matches `hideout run`: Lima.
+`--backend native` remains available as an explicit weak-isolation development
+path, but it must not be the implicit first-run repair target.
 
-`hideout init` and non-dry-run `hideout doctor --fix` append typed init audit
-events to `~/.hideout/logs/init-audit.jsonl`. The audit schema is
+`hideout init` and `hideout doctor --fix --apply` append typed init audit events
+to `~/.hideout/logs/init-audit.jsonl`. The audit schema is
 `hideout.init-audit/v1`; dry-run plans do not write audit events.
 
 Capability Probe lab commands:

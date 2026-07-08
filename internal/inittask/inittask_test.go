@@ -130,7 +130,7 @@ func TestPlanMachineNextStepsBlockRunSuggestionsWhenBlocked(t *testing.T) {
 		}},
 	}
 	plan.NextSteps = initNextSteps(plan)
-	assertNextStepCommand(t, plan.NextSteps, "resolve-blocked", "hideout doctor --fix --profile default --backend lima")
+	assertNextStepCommand(t, plan.NextSteps, "resolve-blocked", "hideout doctor --fix --apply --profile default --backend lima")
 	for _, forbidden := range []string{"doctor-check", "smoke-run", "cli-smoke"} {
 		if nextStepByID(plan.NextSteps, forbidden) != nil {
 			t.Fatalf("blocked init plan must not include %s: %+v", forbidden, plan.NextSteps)

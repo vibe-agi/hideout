@@ -77,6 +77,56 @@ function redactAudit(ctx) {
 	}
 }
 
+func TestCoreExportDoctorReportSource(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	reportPath := filepath.Join(t.TempDir(), "doctor-report.json")
+	if err := os.WriteFile(reportPath, []byte(`{
+  "schema": "hideout.doctor-report/v1",
+  "generatedAt": "2026-07-07T00:00:00Z",
+  "profile": "default",
+  "backend": "native",
+  "level": "light",
+  "summary": {"pass": 1, "warn": 0, "error": 0, "skipped": 0, "unsupported": 0, "failed": false, "exitCode": 0},
+  "findings": [{
+    "checkId": "store",
+    "category": "store",
+    "status": "pass",
+    "severity": "info",
+    "required": false,
+    "summary": "manager-doctor-evidence"
+  }],
+  "redaction": {"mode": "control-plane"}
+}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "artifact.json")
+	opts := ExportOptions{
+		Source:                  exportboundary.SourceDoctorReport,
+		DoctorReportPath:        reportPath,
+		Out:                     out,
+		AcknowledgeFullFidelity: true,
+	}
+	core := New(store)
+	plan, err := core.PlanExport(opts)
+	if err != nil {
+		t.Fatalf("PlanExport doctor-report: %v", err)
+	}
+	if plan.Review.Source != exportboundary.SourceDoctorReport || plan.Review.RecordCount != 1 {
+		t.Fatalf("doctor-report review mismatch: %+v", plan.Review)
+	}
+	if _, err := core.ApplyExport(plan, opts); err != nil {
+		t.Fatalf("ApplyExport doctor-report: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"source": "doctor-report"`) || !strings.Contains(text, "manager-doctor-evidence") {
+		t.Fatalf("doctor-report export artifact mismatch:\n%s", text)
+	}
+}
+
 func TestCoreExportFailClosedParityAndAckPolicy(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	writeManagerExportAudit(t, store.Root, "ses_export", audit.Event{

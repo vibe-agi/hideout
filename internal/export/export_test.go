@@ -139,6 +139,70 @@ func TestExportStripsPrivilegedSetupCredentials(t *testing.T) {
 	}
 }
 
+func TestExportIncludesDoctorReportOnlyWhenExplicitlySelected(t *testing.T) {
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "doctor-report.json")
+	mustWriteExportTest(t, reportPath, `{
+  "schema": "hideout.doctor-report/v1",
+  "generatedAt": "2026-07-07T00:00:00Z",
+  "profile": "default",
+  "backend": "native",
+  "level": "light",
+  "summary": {"pass": 1, "warn": 0, "error": 0, "skipped": 0, "unsupported": 0, "failed": false, "exitCode": 0},
+  "findings": [{
+    "checkId": "store",
+    "category": "store",
+    "status": "pass",
+    "severity": "info",
+    "required": false,
+    "summary": "doctor-user-note HIDEOUT_SECRET_TOKEN=raw cap_0123456789abcdef0123456789abcdef",
+    "details": {"machineId": "0123456789abcdef0123456789abcdef", "note": "doctor-user-note"}
+  }],
+  "redaction": {"mode": "control-plane"}
+}`)
+	out := filepath.Join(dir, "doctor-export.json")
+	_, err := Apply(Request{
+		Source:                  SourceDoctorReport,
+		DoctorReportPath:        reportPath,
+		Out:                     out,
+		StoreRoot:               t.TempDir(),
+		AcknowledgeFullFidelity: true,
+	})
+	if err != nil {
+		t.Fatalf("Apply doctor report: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{`"source": "doctor-report"`, "doctor-user-note", `"recordCount": 1`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("doctor-report artifact missing %q:\n%s", want, text)
+		}
+	}
+	for _, leaked := range []string{"HIDEOUT_SECRET_TOKEN", "raw", "cap_0123456789abcdef", "0123456789abcdef0123456789abcdef"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("doctor-report artifact leaked %q:\n%s", leaked, text)
+		}
+	}
+
+	auditOut := filepath.Join(dir, "audit-export.json")
+	_, err = Apply(baseRequest(auditOut, t.TempDir(), []AuditEvent{testAuditEvent(map[string]any{
+		"target": "https://example.com/audit-only",
+	})}))
+	if err != nil {
+		t.Fatalf("Apply audit: %v", err)
+	}
+	auditData, err := os.ReadFile(auditOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(auditData), "doctor-user-note") || strings.Contains(string(auditData), "doctor-report") {
+		t.Fatalf("audit export silently included doctor report:\n%s", auditData)
+	}
+}
+
 func TestExportIncludesHostFSWriteEvidenceWithoutClaimTokenOrOverlayObjectPath(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "artifact.json")
 	event := testAuditEvent(map[string]any{

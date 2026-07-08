@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hideout.doctor-report.schema.json",
+  "title": "Hideout Doctor Report",
+  "type": "object",
+  "required": [
+    "schema",
+    "generatedAt",
+    "profile",
+    "backend",
+    "level",
+    "summary",
+    "findings",
+    "redaction"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.doctor-report/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "backend": {
+      "type": "string"
+    },
+    "level": {
+      "enum": ["light", "deep"]
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["pass", "warn", "error", "skipped", "unsupported", "failed", "exitCode"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "unsupported": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "boolean" },
+        "exitCode": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["checkId", "category", "status", "severity", "required", "summary"],
+        "properties": {
+          "checkId": { "type": "string" },
+          "category": { "type": "string" },
+          "status": {
+            "enum": ["pass", "warn", "error", "skipped", "unsupported"]
+          },
+          "severity": {
+            "enum": ["info", "warning", "error"]
+          },
+          "required": { "type": "boolean" },
+          "summary": { "type": "string" },
+          "details": { "type": "object" },
+          "nextActions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

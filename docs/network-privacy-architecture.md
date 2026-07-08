@@ -208,7 +208,7 @@ validated by the network and privilege gates.
 
 ### Next Product Increment
 
-- add `doctor --fix` for missing tun2socks;
+- add `doctor --fix --dry-run|--apply` for missing tun2socks;
 - expose network state in Manager/TUI/WebUI.
 
 ### Later

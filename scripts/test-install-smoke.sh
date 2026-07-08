@@ -66,7 +66,7 @@ if [ -e "$fix_store/profiles/default/profile.json" ]; then
   exit 1
 fi
 
-HIDEOUT_STORE_ROOT="$fix_store" "$prefix/bin/hideout" doctor --fix --backend native >"$tmp/doctor-fix.out"
+HIDEOUT_STORE_ROOT="$fix_store" "$prefix/bin/hideout" doctor --fix --apply --backend native >"$tmp/doctor-fix.out"
 grep -q 'Hideout doctor fix' "$tmp/doctor-fix.out"
 grep -q 'task store.create: applied' "$tmp/doctor-fix.out"
 grep -q 'task profile.create: applied' "$tmp/doctor-fix.out"

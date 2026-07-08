@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/daemon"
+	doctorpkg "github.com/vibe-agi/hideout/internal/doctor"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
@@ -173,7 +174,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
-	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
+	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary|doctor-report --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
 	fmt.Fprintln(a.stdout, "  hideout hostfs write status|plan|claim|apply|discard")
 	fmt.Fprintln(a.stdout, "  hideout decision list|inspect|claim|approve|deny|watch")
 	fmt.Fprintln(a.stdout, "  hideout notice list|inspect|ack")
@@ -279,24 +280,30 @@ func (a app) runUsage(commandName string) {
 func (a app) doctorUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout doctor [flags]")
-	fmt.Fprintln(a.stdout, "  hideout doctor --fix [--dry-run] [flags]")
+	fmt.Fprintln(a.stdout, "  hideout doctor --fix (--dry-run|--apply) [flags]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Check Hideout setup, or apply safe initialization repairs through InitTask.")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Common:")
 	fmt.Fprintln(a.stdout, "  hideout doctor --profile default --backend lima --network direct")
+	fmt.Fprintln(a.stdout, "  hideout doctor --format json --feature dns")
 	fmt.Fprintln(a.stdout, "  hideout doctor --fix --dry-run --profile agent --backend lima")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Flags:")
 	fmt.Fprintln(a.stdout, "  --profile <name>          profile name (default: default)")
 	fmt.Fprintln(a.stdout, "  --backend <name>          backend to diagnose (default: auto)")
+	fmt.Fprintln(a.stdout, "  --format <human|json>     output format (default: human)")
+	fmt.Fprintln(a.stdout, "  --level <light|deep>      diagnostic depth (default: light)")
+	fmt.Fprintln(a.stdout, "  --feature <name>          include a feature diagnostic; may be repeated")
 	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
 	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      proxy secret ref for tun2socks")
+	fmt.Fprintln(a.stdout, "  --evidence-out <path>     save a redacted doctor report")
 	fmt.Fprintln(a.stdout, "  --workspace <path>        host workspace (default: current directory)")
 	fmt.Fprintln(a.stdout, "  --guest-workspace <path>  guest workspace path")
 	fmt.Fprintln(a.stdout, "  --ephemeral               diagnose session-local identity state")
 	fmt.Fprintln(a.stdout, "  --fix                     apply safe initialization repairs")
 	fmt.Fprintln(a.stdout, "  --dry-run                 print the fix plan without applying it")
+	fmt.Fprintln(a.stdout, "  --apply                   apply the safe fix plan")
 }
 
 func isHelpToken(value string) bool {
@@ -1946,20 +1953,43 @@ func (a app) doctor(args []string) error {
 		return err
 	}
 	failed := false
+	doctorReq := doctorpkg.Request{
+		Profile:      opts.profileName,
+		Backend:      resolveBackendName(opts.backendName),
+		Workspace:    opts.workspace,
+		Level:        opts.level,
+		Features:     opts.features,
+		EvidencePath: opts.evidenceOut,
+	}
+	builder := doctorpkg.NewBuilder(doctorReq)
+	humanOutput := opts.format != "json"
 	report := func(name, status, message string) {
-		if message == "" {
-			fmt.Fprintf(a.stdout, "%s: %s\n", name, status)
-		} else {
-			fmt.Fprintf(a.stdout, "%s: %s %s\n", name, status, message)
+		builder.Add(name, name, status, message)
+		if humanOutput {
+			if message == "" {
+				fmt.Fprintf(a.stdout, "%s: %s\n", name, status)
+			} else {
+				fmt.Fprintf(a.stdout, "%s: %s %s\n", name, status, message)
+			}
 		}
 		if status == "error" {
 			failed = true
 		}
 	}
-	fmt.Fprintln(a.stdout, "Hideout doctor")
-	fmt.Fprintf(a.stdout, "storage: %s\n", store.Root)
+	if humanOutput {
+		fmt.Fprintln(a.stdout, "Hideout doctor")
+		fmt.Fprintf(a.stdout, "storage: %s\n", store.Root)
+	}
 	if err := os.MkdirAll(store.Root, 0o700); err != nil {
 		report("store", "error", err.Error())
+		if opts.evidenceOut != "" {
+			if _, writeErr := builder.WriteEvidence(opts.evidenceOut); writeErr != nil {
+				return writeErr
+			}
+		}
+		if opts.format == "json" {
+			_ = doctorpkg.WriteJSON(a.stdout, builder.Report())
+		}
 		return errors.New("doctor found errors")
 	}
 	report("store", "ok", "writable")
@@ -2036,6 +2066,21 @@ func (a app) doctor(args []string) error {
 	if !profileLoaded {
 		report("profile-init", "warn", "run or profile init will materialize profile state")
 	}
+	doctorpkg.AddSelectedFeaturePlaceholders(doctorReq, builder)
+	if opts.evidenceOut != "" {
+		evidencePath, err := builder.WriteEvidence(opts.evidenceOut)
+		if err != nil {
+			return err
+		}
+		if humanOutput {
+			fmt.Fprintf(a.stdout, "doctor-evidence: ok %s\n", evidencePath)
+		}
+	}
+	if opts.format == "json" {
+		if err := doctorpkg.WriteJSON(a.stdout, builder.Report()); err != nil {
+			return err
+		}
+	}
 	if failed {
 		return errors.New("doctor found errors")
 	}
@@ -2091,32 +2136,42 @@ func sortedMapKeys(values map[string]string) []string {
 type doctorOptions struct {
 	profileName      string
 	backendName      string
+	format           string
+	level            string
+	features         stringListFlag
 	networkMode      string
 	proxySecret      string
 	mediatedResolver string
+	evidenceOut      string
 	workspace        string
 	guestWorkspace   string
 	ephemeral        bool
 	fix              bool
 	dryRun           bool
+	apply            bool
 	tools            toolSupplyOptions
 }
 
 func parseDoctorOptions(args []string) (doctorOptions, error) {
-	opts := doctorOptions{profileName: "default", backendName: "auto"}
+	opts := doctorOptions{profileName: "default", backendName: "auto", format: "human", level: doctorpkg.LevelLight}
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
 	fs.StringVar(&opts.backendName, "backend", "auto", "backend")
+	fs.StringVar(&opts.format, "format", "human", "output format: human or json")
+	fs.StringVar(&opts.level, "level", doctorpkg.LevelLight, "diagnostic level: light or deep")
+	fs.Var(&opts.features, "feature", "include feature diagnostic")
 	fs.StringVar(&opts.networkMode, "network", "", "network mode")
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
 	fs.StringVar(&opts.mediatedResolver, "mediated-resolver", "", "tun2socks mediated DNS resolver IP")
+	fs.StringVar(&opts.evidenceOut, "evidence-out", "", "write a redacted doctor report")
 	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
 	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "diagnose session-local identity state")
 	fs.BoolVar(&opts.fix, "fix", false, "apply safe initialization repairs")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print fix plan without applying")
+	fs.BoolVar(&opts.apply, "apply", false, "apply safe initialization repairs")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
@@ -2126,10 +2181,24 @@ func parseDoctorOptions(args []string) (doctorOptions, error) {
 	if err := opts.tools.validate(); err != nil {
 		return opts, err
 	}
+	switch opts.format {
+	case "human", "json":
+	default:
+		return opts, fmt.Errorf("unsupported doctor format %q", opts.format)
+	}
+	if err := doctorpkg.ValidateRequest(doctorpkg.Request{Level: opts.level, Features: opts.features}); err != nil {
+		return opts, err
+	}
+	if opts.dryRun && opts.apply {
+		return opts, errors.New("--dry-run and --apply are mutually exclusive")
+	}
 	return opts, nil
 }
 
 func (a app) doctorFix(opts doctorOptions) error {
+	if !opts.dryRun && !opts.apply {
+		return errors.New("doctor --fix requires --dry-run or --apply")
+	}
 	store, err := profile.DefaultStore()
 	if err != nil {
 		return err
@@ -2140,11 +2209,12 @@ func (a app) doctorFix(opts doctorOptions) error {
 	}
 	core := manager.New(store)
 	plan, err := core.PlanDoctorFix(inittask.Options{
-		ProfileName:    opts.profileName,
-		Backend:        opts.backendName,
-		Network:        networkMode,
-		ProxySecretRef: opts.proxySecret,
-		NoInput:        true,
+		ProfileName:      opts.profileName,
+		Backend:          opts.backendName,
+		Network:          networkMode,
+		ProxySecretRef:   opts.proxySecret,
+		MediatedResolver: opts.mediatedResolver,
+		NoInput:          true,
 	})
 	if err != nil {
 		return err
@@ -4235,6 +4305,7 @@ type auditExportOptions struct {
 	decision                string
 	limit                   int
 	bundle                  string
+	doctorReport            string
 	from                    string
 	out                     string
 	redact                  stringListFlag
@@ -4311,13 +4382,14 @@ func parseAuditExportOptions(args []string) (auditExportOptions, error) {
 	fs := flag.NewFlagSet("audit export", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	opts := auditExportOptions{source: string(exportboundary.SourceAudit), limit: 50}
-	fs.StringVar(&opts.source, "source", opts.source, "audit, bundle, or boundary-summary")
+	fs.StringVar(&opts.source, "source", opts.source, "audit, bundle, boundary-summary, or doctor-report")
 	fs.StringVar(&opts.session, "session", "", "session id")
 	fs.StringVar(&opts.profile, "profile", "", "profile name")
 	fs.StringVar(&opts.action, "action", "", "audit action")
 	fs.StringVar(&opts.decision, "decision", "", "audit decision")
 	fs.IntVar(&opts.limit, "limit", opts.limit, "maximum audit events")
 	fs.StringVar(&opts.bundle, "bundle", "", "release evidence bundle directory or manifest")
+	fs.StringVar(&opts.doctorReport, "doctor-report", "", "redacted doctor report path")
 	fs.StringVar(&opts.from, "from", "", "run audit path for boundary-summary")
 	fs.StringVar(&opts.out, "out", "", "local export artifact path")
 	fs.Var(&opts.redact, "redact", "detail field selector to redact; may be repeated")
@@ -4328,7 +4400,7 @@ func parseAuditExportOptions(args []string) (auditExportOptions, error) {
 		return auditExportOptions{}, err
 	}
 	if fs.NArg() != 0 {
-		return auditExportOptions{}, errors.New("usage: hideout audit export --source audit|bundle|boundary-summary --out <path>")
+		return auditExportOptions{}, errors.New("usage: hideout audit export --source audit|bundle|boundary-summary|doctor-report --out <path>")
 	}
 	if opts.limit <= 0 {
 		return auditExportOptions{}, errors.New("--limit must be greater than zero")
@@ -4354,6 +4426,7 @@ func (a app) auditExport(args []string) error {
 		Decision:                opts.decision,
 		Limit:                   opts.limit,
 		BundlePath:              opts.bundle,
+		DoctorReportPath:        opts.doctorReport,
 		From:                    opts.from,
 		Out:                     opts.out,
 		Redact:                  append([]string(nil), opts.redact...),

@@ -368,7 +368,7 @@ The product must own:
 - guest helper binary discovery or installation;
 - backend prerequisite checks;
 - schema/version metadata repair;
-- `doctor --fix` style remediation;
+- `doctor --fix --dry-run|--apply` style remediation;
 - release gate verification.
 
 If a feature requires the user to manually assemble hidden runtime parts, it is
@@ -412,9 +412,9 @@ apply. Export is separate from share.
 
 Hideout supports initialization tasks, not arbitrary initialization scripts.
 
-First-run setup, `doctor --fix`, helper installation, schema metadata repair,
-backend preparation, project bootstrap, and bundle enablement must compile into typed
-`InitTask` plans owned by Manager.
+First-run setup, `doctor --fix --dry-run|--apply`, helper installation, schema
+metadata repair, backend preparation, project bootstrap, and bundle enablement
+must compile into typed `InitTask` plans owned by Manager.
 
 Allowed direction:
 

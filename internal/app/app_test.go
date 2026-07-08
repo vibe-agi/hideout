@@ -501,7 +501,7 @@ func TestPrimaryCommandHelpIsSpecific(t *testing.T) {
 		want string
 	}{
 		{[]string{"init", "--help"}, "hideout init [flags]"},
-		{[]string{"doctor", "--help"}, "hideout doctor --fix [--dry-run] [flags]"},
+		{[]string{"doctor", "--help"}, "hideout doctor --fix (--dry-run|--apply) [flags]"},
 		{[]string{"run", "--help"}, "hideout run [flags] -- <command> [args...]"},
 		{[]string{"explain", "--help"}, "hideout explain [flags] -- <command> [args...]"},
 	}
@@ -715,7 +715,7 @@ func TestDoctorFixAppliesAndWritesInitAudit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--fix", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--fix", "--apply", "--backend", "native"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("doctor --fix exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
@@ -778,7 +778,7 @@ func TestWriteInitResultDoesNotSuggestRunWhenPlanHasBlockedTasks(t *testing.T) {
 			NextSteps: []inittask.NextStep{{
 				ID:      "resolve-blocked",
 				Label:   "Resolve blocked tasks",
-				Command: "hideout doctor --fix --profile blocked --backend lima",
+				Command: "hideout doctor --fix --apply --profile blocked --backend lima",
 				Message: "Fix blocked tasks above, then rerun doctor fix.",
 			}},
 		},
@@ -791,7 +791,7 @@ func TestWriteInitResultDoesNotSuggestRunWhenPlanHasBlockedTasks(t *testing.T) {
 	for _, want := range []string{
 		"task helper.install.linux-shim: blocked",
 		"next:",
-		"resolve: hideout doctor --fix --profile blocked --backend lima",
+		"resolve: hideout doctor --fix --apply --profile blocked --backend lima",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("init output missing %q:\n%s", want, out.String())
@@ -3568,6 +3568,85 @@ func TestDoctorReportsCoreChecks(t *testing.T) {
 	}
 	if strings.Contains(out.String(), filepath.Join(home, ".hideout", "profiles", "default", "browser")) {
 		t.Fatalf("doctor output leaked isolated browser profile path:\n%s", out.String())
+	}
+}
+
+func TestDoctorJSONOutputMatchesSchema(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor json exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	if strings.Contains(out.String(), "Hideout doctor") {
+		t.Fatalf("json output included human header:\n%s", out.String())
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(out.Bytes()))
+	if err != nil {
+		t.Fatalf("decode doctor json: %v\n%s", err, out.String())
+	}
+	if err := compileDoctorSchemaForAppTest(t).Validate(doc); err != nil {
+		t.Fatalf("doctor json schema mismatch: %v\n%s", err, out.String())
+	}
+	var report struct {
+		Schema  string `json:"schema"`
+		Summary struct {
+			ExitCode int `json:"exitCode"`
+		} `json:"summary"`
+		Findings []struct {
+			CheckID string `json:"checkId"`
+			Status  string `json:"status"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Schema != "hideout.doctor-report/v1" || report.Summary.ExitCode != 0 {
+		t.Fatalf("unexpected doctor report summary: %+v", report)
+	}
+	if len(report.Findings) == 0 {
+		t.Fatalf("doctor report should contain findings: %s", out.String())
+	}
+}
+
+func TestDoctorEvidenceOutWritesRedactedReport(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	outPath := filepath.Join(t.TempDir(), "doctor-report.json")
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--evidence-out", outPath}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor evidence exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	if !strings.Contains(out.String(), "doctor-evidence: ok") {
+		t.Fatalf("doctor evidence output missing saved marker:\n%s", out.String())
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode saved doctor report: %v\n%s", err, data)
+	}
+	if err := compileDoctorSchemaForAppTest(t).Validate(doc); err != nil {
+		t.Fatalf("saved doctor report schema mismatch: %v\n%s", err, data)
+	}
+}
+
+func TestDoctorFixRequiresDryRunOrApply(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--fix", "--backend", "native"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("doctor --fix without mode succeeded stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "requires --dry-run or --apply") {
+		t.Fatalf("doctor --fix error mismatch: %s", errOut.String())
 	}
 }
 
@@ -6624,6 +6703,27 @@ func compileAuditSchemaForAppTest(t *testing.T) *jsonschema.Schema {
 	schema, err := compiler.Compile("audit-event.schema.json")
 	if err != nil {
 		t.Fatalf("compile audit schema: %v", err)
+	}
+	return schema
+}
+
+func compileDoctorSchemaForAppTest(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "doctor-report.schema.json"))
+	if err != nil {
+		t.Fatalf("read doctor schema: %v", err)
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode doctor schema: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("doctor-report.schema.json", doc); err != nil {
+		t.Fatalf("add doctor schema: %v", err)
+	}
+	schema, err := compiler.Compile("doctor-report.schema.json")
+	if err != nil {
+		t.Fatalf("compile doctor schema: %v", err)
 	}
 	return schema
 }

@@ -133,8 +133,10 @@ cd /path/to/sanitized/project
 hideout run --profile smoke --backend lima --network direct -- pwd
 ```
 
-`hideout init` and `hideout doctor --fix` print copyable next-step commands
-for `doctor`, a smoke run, and any configured generic CLI tool.
+`hideout init` and `hideout doctor --fix --dry-run` print copyable next-step
+commands for `doctor`, a smoke run, and any configured generic CLI tool. Safe
+doctor repairs require an explicit mode: `--dry-run` previews and `--apply`
+applies typed InitTask repairs.
 
 For a local weak-isolation development harness, create a separately labeled dev
 profile instead of calling it privacy:
@@ -198,6 +200,17 @@ hideout init \
 hideout doctor --fix --dry-run --profile agent
 
 hideout run --profile agent --backend lima -- <command> --version
+```
+
+`hideout doctor` also has a stable JSON report and opt-in feature scope for CI
+or support cases:
+
+```bash
+hideout doctor --backend native --format json > doctor.json
+hideout doctor --profile agent --feature dns --format json
+hideout doctor --format json --evidence-out doctor-report.json
+hideout audit export --source doctor-report --doctor-report doctor-report.json \
+  --out doctor-export.json --acknowledge-full-fidelity
 ```
 
 If a tool is missing from the base image, install it in-boundary with a normal

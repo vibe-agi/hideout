@@ -579,10 +579,10 @@ project apply plans.
 Trust Store owns source trust, checksums, future signatures, and local trust
 overrides.
 
-Init Task Engine owns first-run setup, `doctor --fix`, helper discovery or
-installation, schema/version metadata repair, backend preparation, project
-bootstrap, and other typed initialization tasks. It does not execute arbitrary
-shell scripts.
+Init Task Engine owns first-run setup, `doctor --fix --dry-run|--apply`,
+helper discovery or installation, schema/version metadata repair, backend
+preparation, project bootstrap, and other typed initialization tasks. It does
+not execute arbitrary shell scripts.
 
 Manager Core owns cross-resource consistency. Individual modules should not
 mutate unrelated stores directly.
@@ -601,7 +601,7 @@ mutate unrelated stores directly.
   Manager API.
 - Manager overview exposes initial init, bundle, and project status summaries;
 - InitTask has a minimal machine setup engine used by `hideout init` and
-  `doctor --fix` through Manager Core.
+  `doctor --fix --dry-run|--apply` through Manager Core.
 - Init summary exposes init audit path and event count; the log itself remains a
   typed `hideout.init-audit/v1` JSONL file under the store logs directory.
 - Manager API exposes minimal run plan/apply/status resources over the local

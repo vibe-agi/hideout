@@ -28,6 +28,7 @@ test -f schemas/hostfs-write-event.schema.json
 test -f schemas/decision-record.schema.json
 test -f schemas/notice-record.schema.json
 test -f schemas/onboarding-evidence.schema.json
+test -f schemas/doctor-report.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -144,3 +145,8 @@ scripts/test-hostfs-write-overlay-smoke.sh
 # hardened privilege honesty, no default HostFS/adapter authority, evidence
 # schema, and docs commands.
 scripts/test-onboarding-smoke.sh
+
+# Doctor diagnostics and recovery (015): local/light report, JSON schema,
+# explicit doctor evidence export, required failure, warning exit semantics, and
+# safe recovery dry-run.
+scripts/test-doctor-smoke.sh

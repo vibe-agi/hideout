@@ -266,7 +266,7 @@ func initDoctorCommand(plan Plan) string {
 }
 
 func initDoctorFixCommand(plan Plan) string {
-	return strings.Join([]string{"hideout", "doctor", "--fix", "--profile", plan.Profile, "--backend", plan.Backend}, " ")
+	return strings.Join([]string{"hideout", "doctor", "--fix", "--apply", "--profile", plan.Profile, "--backend", plan.Backend}, " ")
 }
 
 func initRunCommand(plan Plan, command string) string {

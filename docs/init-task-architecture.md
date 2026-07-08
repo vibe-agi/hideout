@@ -240,7 +240,7 @@ Explicit initialization remains available:
 ```bash
 hideout init
 hideout init --template privacy --profile default --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input
-hideout doctor --fix
+hideout doctor --fix --apply
 ```
 
 `auto` and omitted backends resolve to the same backend as `hideout run`: Lima
@@ -257,7 +257,8 @@ Machine setup:
 ```bash
 hideout init
 hideout doctor
-hideout doctor --fix
+hideout doctor --fix --dry-run
+hideout doctor --fix --apply
 ```
 
 Project setup:
@@ -301,10 +302,11 @@ that CLI, TUI, and WebUI can render.
 
 ## TUI And WebUI
 
-Phase 1 uses CLI `hideout init` and `hideout doctor --fix` as the product init
-surface. `hideout init --template ... --no-input` is the scripting and CI path. A future TUI
-wizard must still use this same InitTask plan/apply engine; it must not create a
-second initialization model.
+Phase 1 uses CLI `hideout init` and
+`hideout doctor --fix --dry-run|--apply` as the product init surface.
+`hideout init --template ... --no-input` is the scripting and CI path. A future
+TUI wizard must still use this same InitTask plan/apply engine; it must not
+create a second initialization model.
 
 The TUI first-run wizard should stay within five steps:
 
@@ -397,7 +399,7 @@ Minimum acceptance:
   `hideout.init-audit/v1` JSONL in `logs/init-audit.jsonl` without leaking
   secrets. `hideout init` emits `init.apply`; automatic lightweight
   store/profile/schema metadata setup during `hideout run` emits
-  `run.init.apply`; `doctor --fix` emits `doctor.fix.apply`; dry runs do not
+  `run.init.apply`; `doctor --fix --apply` emits `doctor.fix.apply`; dry runs do not
   write audit.
 
 ## Phase Plan
@@ -409,7 +411,7 @@ Minimum acceptance:
   `schema.metadata.write`, `profile.create`, `identity.materialize`,
   `network.mode.select`, `backend.probe`, `helper.install.linux-shim`,
   `helper.install.linux-hostfsd`, and `doctor.check.light`;
-- make `doctor --fix --dry-run` and safe `doctor --fix` use the same task
+- make `doctor --fix --dry-run` and safe `doctor --fix --apply` use the same task
   engine;
 - keep bundle/project requirements declarative;
 - add static gates and native development harness gates.

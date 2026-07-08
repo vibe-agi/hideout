@@ -23,6 +23,7 @@ type ExportOptions struct {
 	Decision                string
 	Limit                   int
 	BundlePath              string
+	DoctorReportPath        string
 	From                    string
 	Out                     string
 	Redact                  []string
@@ -251,6 +252,7 @@ func (c Core) exportRequest(opts ExportOptions) (exportboundary.Request, error) 
 		Source:                  source,
 		BundlePath:              opts.BundlePath,
 		BoundaryAuditPath:       opts.From,
+		DoctorReportPath:        opts.DoctorReportPath,
 		Out:                     opts.Out,
 		StoreRoot:               c.Store.Root,
 		ProfileName:             opts.Profile,
@@ -281,6 +283,10 @@ func (c Core) exportRequest(opts ExportOptions) (exportboundary.Request, error) 
 	case exportboundary.SourceBundle:
 		if opts.BundlePath == "" {
 			return exportboundary.Request{}, errors.New("--bundle is required for bundle export")
+		}
+	case exportboundary.SourceDoctorReport:
+		if opts.DoctorReportPath == "" {
+			return exportboundary.Request{}, errors.New("--doctor-report is required for doctor-report export")
 		}
 	default:
 		return exportboundary.Request{}, errors.New("unsupported export source")

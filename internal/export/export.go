@@ -71,7 +71,7 @@ func Apply(req Request) (Result, error) {
 
 func validateRequest(req Request, requireOut bool) error {
 	switch req.Source {
-	case SourceAudit, SourceBundle, SourceBoundarySummary:
+	case SourceAudit, SourceBundle, SourceBoundarySummary, SourceDoctorReport:
 	default:
 		return fmt.Errorf("unsupported export source %q", req.Source)
 	}
@@ -88,6 +88,9 @@ func validateRequest(req Request, requireOut bool) error {
 	}
 	if req.Source == SourceBoundarySummary && req.BoundarySummary == nil {
 		return errors.New("--from is required for boundary-summary export")
+	}
+	if req.Source == SourceDoctorReport && req.DoctorReportPath == "" {
+		return errors.New("--doctor-report is required for doctor-report export")
 	}
 	return nil
 }

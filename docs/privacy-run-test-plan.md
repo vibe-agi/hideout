@@ -96,7 +96,7 @@ Change-to-gate mapping:
 | --- | --- | --- | --- |
 | Docs, schemas, and generated examples | Gate 0 | none | Gate 0 |
 | Ecosystem foundation, bundle schemas, project manifests, trust, export, or script ABI | Gate 0 and targeted schema tests | Manager plan/apply tests when authority changes | third-party trust checks (schema validation, digest pin, permission diff confirmation) before public ecosystem release |
-| First-run initialization, InitTask, helper discovery, `doctor --fix`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native harness for CLI shape only; Gate 2 when backend preparation changes | Distribution Bootstrap acceptance (install/package smokes, run inside Gate 0) |
+| First-run initialization, InitTask, helper discovery, `doctor --fix --dry-run\|--apply`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native harness for CLI shape only; Gate 2 when backend preparation changes | Distribution Bootstrap acceptance (install/package smokes, run inside Gate 0) |
 | CLI parsing, profile, identity, env, audit, Boundary Summary, cleanup, or doctor | Gate 0 and the native harness | affected package tests | `--required` if behavior is externally visible |
 | Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, native harness, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
 | HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | Gate 2 HostFS coverage (read/list grants) |
@@ -219,6 +219,10 @@ Required evidence:
   fail-closed behavior for revoked packs, and preservation of the 008
   non-applied proposal model. 011 is local registry and script lifecycle work;
   it does not require real Lima proof.
+- Doctor diagnostics smoke (`scripts/test-doctor-smoke.sh`, wired into Gate 0)
+  validates the 015 local/light doctor report path: human output, JSON schema,
+  required-failure exit, warning/degraded zero exit, explicit doctor report
+  export, deterministic control-plane redaction, and safe recovery dry-run.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must
@@ -1038,7 +1042,7 @@ Required checks:
   --proxy-secret <ref>` passes only the proxy secret ref into InitTask and does
   not persist the raw operator proxy URL;
 - install smoke proves installed `doctor --fix --dry-run` does not create state
-  and installed safe `doctor --fix` writes current init metadata plus
+  and installed safe `doctor --fix --apply` writes current init metadata plus
   `doctor.fix.apply` audit;
 - package smoke proves the release-like tarball can be unpacked, its artifact
   manifest checksums match the extracted files, and extracted
