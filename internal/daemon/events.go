@@ -82,6 +82,22 @@ func (b *eventBus) OperationEvent(kind, phase string, details map[string]any) {
 			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindHostFSWrite, ID: payload.DecisionID},
 			Payload: payload,
 		})
+	case liveconsole.KindDecision:
+		payload := decisionPayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindDecision,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindDecision, ID: payload.DecisionID, Profile: payload.Profile, Session: payload.Session},
+			Payload: payload,
+		})
+	case liveconsole.KindNotice:
+		payload := noticePayload(details, phase)
+		b.publish(Event{
+			Kind:    liveconsole.KindNotice,
+			Phase:   phase,
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindNotice, ID: payload.NoticeID, Profile: payload.Profile, Session: payload.Session},
+			Payload: payload,
+		})
 	case liveconsole.KindSession, "run", "operation":
 		payload := sessionPayload(kind, details, phase)
 		b.publish(Event{
@@ -350,6 +366,52 @@ func hostFSWritePayload(details map[string]any, phase string) liveconsole.EventP
 	}
 	if payload.OperationID == "" {
 		payload.OperationID = payload.ID
+	}
+	return payload
+}
+
+func decisionPayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:             firstString(details, "decisionId", "id"),
+		DecisionID:     firstString(details, "decisionId", "id"),
+		RecordKind:     stringValue(details, "kind"),
+		Status:         firstString(details, "status", "state"),
+		Profile:        stringValue(details, "profile"),
+		Session:        stringValue(details, "session"),
+		Backend:        stringValue(details, "backend"),
+		DefaultOutcome: stringValue(details, "defaultOutcome"),
+		Reason:         stringValue(details, "reason"),
+		Preview:        details["preview"],
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.DecisionID == "" {
+		payload.DecisionID = "decision"
+		payload.ID = payload.DecisionID
+	}
+	return payload
+}
+
+func noticePayload(details map[string]any, phase string) liveconsole.EventPayload {
+	payload := liveconsole.EventPayload{
+		ID:           firstString(details, "noticeId", "id"),
+		NoticeID:     firstString(details, "noticeId", "id"),
+		RecordKind:   stringValue(details, "kind"),
+		Status:       stringValue(details, "status"),
+		Severity:     stringValue(details, "severity"),
+		Profile:      stringValue(details, "profile"),
+		Session:      stringValue(details, "session"),
+		Backend:      stringValue(details, "backend"),
+		Acknowledged: boolValue(details, "acknowledged"),
+		Preview:      details["preview"],
+	}
+	if payload.Status == "" {
+		payload.Status = statusFromPhase(phase)
+	}
+	if payload.NoticeID == "" {
+		payload.NoticeID = "notice"
+		payload.ID = payload.NoticeID
 	}
 	return payload
 }

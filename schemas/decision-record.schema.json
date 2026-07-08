@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/decision-record.schema.json",
+  "title": "Hideout Operator Decision Record",
+  "type": "object",
+  "required": [
+    "version",
+    "id",
+    "kind",
+    "state",
+    "preview",
+    "defaultOutcome",
+    "timeoutAt",
+    "auditRef",
+    "revision"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.decision/v1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": ["hostfs.write", "adapter.proposal", "evidence.share"]
+    },
+    "source": {
+      "type": "object"
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "claimed",
+        "approved",
+        "applied",
+        "denied",
+        "discarded",
+        "timed-out",
+        "failed",
+        "stale"
+      ]
+    },
+    "risk": {
+      "type": "object"
+    },
+    "proposedAction": {
+      "type": "object"
+    },
+    "preview": {
+      "type": "object"
+    },
+    "allowedActions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "defaultOutcome": {
+      "enum": ["deny", "discard", "no-release"]
+    },
+    "timeoutAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "claim": {
+      "type": "object",
+      "not": {
+        "required": ["token"]
+      }
+    },
+    "providerRef": {
+      "type": "object"
+    },
+    "auditRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

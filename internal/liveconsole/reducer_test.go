@@ -32,6 +32,12 @@ func TestReducerAppliesRepresentativeEvents(t *testing.T) {
 	if len(state.AuditTail) == 0 || len(state.DeniedAuditTail) == 0 {
 		t.Fatalf("audit tails not applied: audit=%+v denied=%+v", state.AuditTail, state.DeniedAuditTail)
 	}
+	if len(state.Decisions) != 1 {
+		t.Fatalf("decision not applied: %+v", state.Decisions)
+	}
+	if len(state.Notices) != 1 {
+		t.Fatalf("notice not applied: %+v", state.Notices)
+	}
 }
 
 func TestReducerIgnoresDuplicateAndOldEvents(t *testing.T) {
@@ -113,6 +119,73 @@ func TestReducerRedactsControlPlaneDetailsFromAuditEvents(t *testing.T) {
 	}
 	if !strings.Contains(text, "keep-me") {
 		t.Fatalf("user data should remain local and visible: %s", text)
+	}
+}
+
+func TestReducerUpdatesDecisionAndNoticePanels(t *testing.T) {
+	state := NewState(BuildSeed(SeedInput{StreamHealth: HealthLive}))
+	decision := Event{
+		Version: EventVersion,
+		Kind:    KindDecision,
+		Seq:     1,
+		Entity:  EntityRef{Kind: KindDecision, ID: "dec_1", Profile: "default", Session: "ses_1"},
+		Payload: EventPayload{
+			DecisionID:     "dec_1",
+			RecordKind:     "hostfs.write",
+			Status:         "pending",
+			DefaultOutcome: "discard",
+			Profile:        "default",
+			Session:        "ses_1",
+			Backend:        "native",
+		},
+	}
+	if result := Apply(&state, decision); result.Status != ResultApplied {
+		t.Fatalf("decision event should apply: %+v", result)
+	}
+	if len(state.Decisions) != 1 || state.Decisions[0].ID != "dec_1" || state.Decisions[0].Status != "pending" {
+		t.Fatalf("decision row mismatch: %+v", state.Decisions)
+	}
+
+	decision.Payload.Status = "applied"
+	decision.Payload.Reason = "operator-approved"
+	decision.Seq = 2
+	if result := Apply(&state, decision); result.Status != ResultApplied {
+		t.Fatalf("decision update should apply: %+v", result)
+	}
+	if len(state.Decisions) != 1 || state.Decisions[0].Status != "applied" || state.Decisions[0].Reason != "operator-approved" {
+		t.Fatalf("decision update mismatch: %+v", state.Decisions)
+	}
+
+	notice := Event{
+		Version: EventVersion,
+		Kind:    KindNotice,
+		Seq:     3,
+		Entity:  EntityRef{Kind: KindNotice, ID: "notice_1", Profile: "default", Session: "ses_1"},
+		Payload: EventPayload{
+			NoticeID:     "notice_1",
+			RecordKind:   "privilege.status",
+			Status:       "degraded",
+			Severity:     "warning",
+			Acknowledged: false,
+			Profile:      "default",
+			Session:      "ses_1",
+			Backend:      "lima",
+		},
+	}
+	if result := Apply(&state, notice); result.Status != ResultApplied {
+		t.Fatalf("notice event should apply: %+v", result)
+	}
+	if len(state.Notices) != 1 || state.Notices[0].ID != "notice_1" || state.Notices[0].Acknowledged {
+		t.Fatalf("notice row mismatch: %+v", state.Notices)
+	}
+
+	notice.Payload.Acknowledged = true
+	notice.Seq = 4
+	if result := Apply(&state, notice); result.Status != ResultApplied {
+		t.Fatalf("notice ack update should apply: %+v", result)
+	}
+	if len(state.Notices) != 1 || !state.Notices[0].Acknowledged || state.Notices[0].Severity != "warning" {
+		t.Fatalf("notice ack update mismatch: %+v", state.Notices)
 	}
 }
 

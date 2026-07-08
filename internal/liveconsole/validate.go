@@ -42,6 +42,22 @@ func ValidateEvent(ev Event) error {
 			return err
 		}
 		return require(ev.Payload.Status, "hostfs-write.status")
+	case KindDecision:
+		if err := require(ev.Payload.DecisionID, "decision.decisionId"); err != nil {
+			return err
+		}
+		if err := require(ev.Payload.RecordKind, "decision.kind"); err != nil {
+			return err
+		}
+		return require(ev.Payload.Status, "decision.status")
+	case KindNotice:
+		if err := require(ev.Payload.NoticeID, "notice.noticeId"); err != nil {
+			return err
+		}
+		if err := require(ev.Payload.RecordKind, "notice.kind"); err != nil {
+			return err
+		}
+		return require(ev.Payload.Status, "notice.status")
 	case KindTerminal:
 		return require(ev.Payload.Reason, "terminal.reason")
 	default:

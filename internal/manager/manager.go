@@ -40,22 +40,25 @@ type BackendCheck struct {
 }
 
 type Overview struct {
-	Version      string               `json:"version"`
-	StorageRoot  string               `json:"storageRoot"`
-	Profiles     []ProfileSummary     `json:"profiles"`
-	Sessions     []SessionSummary     `json:"sessions"`
-	Environments []EnvironmentSummary `json:"environments"`
-	Backends     []BackendSummary     `json:"backends"`
-	Capabilities CapabilitySummary    `json:"capabilities"`
-	Network      NetworkSummary       `json:"network"`
-	Broker       BrokerSummary        `json:"broker"`
-	Secrets      []SecretSummary      `json:"secrets"`
-	Audit        AuditSummary         `json:"audit"`
-	Settings     SettingsSummary      `json:"settings"`
-	Init         InitSummary          `json:"init"`
-	Bundles      BundleSummary        `json:"bundles"`
-	Projects     ProjectSummary       `json:"projects"`
-	AdapterPacks []AdapterPackSummary `json:"adapterPacks,omitempty"`
+	Version        string               `json:"version"`
+	StorageRoot    string               `json:"storageRoot"`
+	Profiles       []ProfileSummary     `json:"profiles"`
+	Sessions       []SessionSummary     `json:"sessions"`
+	Environments   []EnvironmentSummary `json:"environments"`
+	Backends       []BackendSummary     `json:"backends"`
+	Capabilities   CapabilitySummary    `json:"capabilities"`
+	Network        NetworkSummary       `json:"network"`
+	Broker         BrokerSummary        `json:"broker"`
+	Secrets        []SecretSummary      `json:"secrets"`
+	Audit          AuditSummary         `json:"audit"`
+	Settings       SettingsSummary      `json:"settings"`
+	Init           InitSummary          `json:"init"`
+	Bundles        BundleSummary        `json:"bundles"`
+	Projects       ProjectSummary       `json:"projects"`
+	AdapterPacks   []AdapterPackSummary `json:"adapterPacks,omitempty"`
+	Decisions      DecisionSummary      `json:"decisions,omitempty"`
+	Notices        NoticeSummary        `json:"notices,omitempty"`
+	DecisionStatus DecisionStatus       `json:"decisionStatus,omitempty"`
 }
 
 type ProfileSummary struct {
@@ -225,6 +228,17 @@ type ProjectSummary struct {
 	LockPresent        bool   `json:"lockPresent"`
 }
 
+type DecisionSummary struct {
+	Pending  int `json:"pending"`
+	Claimed  int `json:"claimed"`
+	Terminal int `json:"terminal"`
+}
+
+type NoticeSummary struct {
+	Unacknowledged int `json:"unacknowledged"`
+	Total          int `json:"total"`
+}
+
 type AuditEventFilter struct {
 	Session  string
 	Profile  string
@@ -331,6 +345,8 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 	sessions, auditCount := c.sessionSummaries()
 	registry := c.commandProxy(profiles)
 	capabilities := capabilitySummary(profiles, registry)
+	decisionStatus, _ := c.DecisionStatus()
+	notices, _ := c.ListNotices(NoticeListRequest{})
 	return Overview{
 		Version:      "hideout.manager/v1",
 		StorageRoot:  c.Store.Root,
@@ -353,6 +369,16 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 		Projects: ProjectSummary{
 			Status: "not-configured",
 		},
+		Decisions: DecisionSummary{
+			Pending:  decisionStatus.PendingDecisions,
+			Claimed:  decisionStatus.ClaimedDecisions,
+			Terminal: decisionStatus.TerminalDecisions,
+		},
+		Notices: NoticeSummary{
+			Unacknowledged: decisionStatus.UnackedNotices,
+			Total:          len(notices),
+		},
+		DecisionStatus: decisionStatus,
 	}, errors.Join(profileErrors...)
 }
 

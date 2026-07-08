@@ -44,6 +44,10 @@ func Apply(state *State, ev Event) ApplyResult {
 		})
 	case KindHostFSWrite:
 		upsertHostFSWrite(state, ev.Payload)
+	case KindDecision:
+		upsertDecision(state, ev.Payload)
+	case KindNotice:
+		upsertNotice(state, ev.Payload)
 	case KindTerminal:
 		switch ev.Payload.Reason {
 		case "credential invalidated":
@@ -234,5 +238,51 @@ func upsertHostFSWrite(state *State, p EventPayload) {
 	state.HostFSWrites = append([]HostFSWriteRow{row}, state.HostFSWrites...)
 	if len(state.HostFSWrites) > tailLimit {
 		state.HostFSWrites = state.HostFSWrites[:tailLimit]
+	}
+}
+
+func upsertDecision(state *State, p EventPayload) {
+	row := DecisionRow{
+		ID:             p.DecisionID,
+		Kind:           p.RecordKind,
+		Status:         p.Status,
+		DefaultOutcome: p.DefaultOutcome,
+		Profile:        p.Profile,
+		Session:        p.Session,
+		Backend:        p.Backend,
+		Reason:         p.Reason,
+	}
+	for i := range state.Decisions {
+		if state.Decisions[i].ID == p.DecisionID {
+			state.Decisions[i] = row
+			return
+		}
+	}
+	state.Decisions = append([]DecisionRow{row}, state.Decisions...)
+	if len(state.Decisions) > tailLimit {
+		state.Decisions = state.Decisions[:tailLimit]
+	}
+}
+
+func upsertNotice(state *State, p EventPayload) {
+	row := NoticeRow{
+		ID:           p.NoticeID,
+		Kind:         p.RecordKind,
+		Status:       p.Status,
+		Severity:     p.Severity,
+		Acknowledged: p.Acknowledged,
+		Profile:      p.Profile,
+		Session:      p.Session,
+		Backend:      p.Backend,
+	}
+	for i := range state.Notices {
+		if state.Notices[i].ID == p.NoticeID {
+			state.Notices[i] = row
+			return
+		}
+	}
+	state.Notices = append([]NoticeRow{row}, state.Notices...)
+	if len(state.Notices) > tailLimit {
+		state.Notices = state.Notices[:tailLimit]
 	}
 }

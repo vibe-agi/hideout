@@ -1,9 +1,17 @@
 package manager
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/decision"
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
 )
 
@@ -21,6 +29,9 @@ type ExportOptions struct {
 	PolicyProfile           string
 	AcknowledgeFullFidelity bool
 	InteractiveConfirmed    bool
+	Share                   bool
+	ShareDecisionID         string
+	ShareApproved           bool
 	Commit                  string
 }
 
@@ -29,10 +40,27 @@ func (c Core) PlanExport(opts ExportOptions) (exportboundary.Plan, error) {
 	if err != nil {
 		return exportboundary.Plan{}, err
 	}
-	return exportboundary.BuildPlan(req)
+	plan, err := exportboundary.BuildPlan(req)
+	if err != nil {
+		return exportboundary.Plan{}, err
+	}
+	if opts.Share && !opts.ShareApproved {
+		if plan.Review.DecisionRequired {
+			return exportboundary.Plan{}, errors.New("share export still requires redaction or explicit full-fidelity acknowledgement")
+		}
+		d, err := c.createShareExportDecision(opts, plan)
+		if err != nil {
+			return exportboundary.Plan{}, err
+		}
+		plan.DecisionID = d.ID
+	}
+	return plan, nil
 }
 
 func (c Core) ApplyExport(plan exportboundary.Plan, opts ExportOptions) (result exportboundary.Result, err error) {
+	if opts.Share && !opts.ShareApproved {
+		return result, errors.New("share export requires approved evidence.share decision")
+	}
 	c.emitOperation("export", "start", exportOperationDetails(opts, plan, result, "running", ""))
 	defer func() {
 		status := "completed"
@@ -55,6 +83,141 @@ func (c Core) ApplyExport(plan exportboundary.Plan, opts ExportOptions) (result 
 	}
 	result, err = exportboundary.Apply(req)
 	return result, err
+}
+
+type shareExportRequest struct {
+	Version    string        `json:"version"`
+	DecisionID string        `json:"decisionId"`
+	Options    ExportOptions `json:"options"`
+}
+
+func (c Core) createShareExportDecision(opts ExportOptions, plan exportboundary.Plan) (decision.Decision, error) {
+	if opts.Out == "" {
+		return decision.Decision{}, errors.New("--out is required for share export")
+	}
+	id := opts.ShareDecisionID
+	if id == "" {
+		var err error
+		id, err = newShareDecisionID()
+		if err != nil {
+			return decision.Decision{}, err
+		}
+	}
+	opts.Share = false
+	opts.ShareDecisionID = id
+	opts.ShareApproved = true
+	if err := c.saveShareExportRequest(id, opts); err != nil {
+		return decision.Decision{}, err
+	}
+	now := time.Now().UTC()
+	return c.CreateDecision(decision.Decision{
+		ID:   id,
+		Kind: decision.KindEvidenceShare,
+		Source: decision.Source{
+			Profile: opts.Profile,
+			Surface: "export-share",
+		},
+		State: decision.StatePending,
+		Risk: map[string]any{
+			"leavesMachine": true,
+			"recordCount":   plan.Artifact.RecordCount,
+			"source":        string(plan.Artifact.Provenance.Source),
+		},
+		ProposedAction: map[string]any{
+			"source": string(plan.Artifact.Provenance.Source),
+			"out":    opts.Out,
+		},
+		Preview: decision.Preview{
+			Summary:         fmt.Sprintf("share %d %s export records", plan.Artifact.RecordCount, plan.Artifact.Provenance.Source),
+			UserDataPresent: len(plan.Review.ResidualKeys) > 0,
+			Facts: map[string]any{
+				"source":      string(plan.Artifact.Provenance.Source),
+				"recordCount": plan.Artifact.RecordCount,
+				"out":         opts.Out,
+			},
+		},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeNoRelease,
+		TimeoutAt:      now.Add(5 * time.Minute),
+		ProviderRef: decision.ProviderRef{
+			Provider:    decision.KindEvidenceShare,
+			OperationID: id,
+		},
+		AuditRef: "audit:evidence-share:" + id,
+	})
+}
+
+func newShareDecisionID() (string, error) {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return "share_" + hex.EncodeToString(buf[:]), nil
+}
+
+func (c Core) saveShareExportRequest(id string, opts ExportOptions) error {
+	if c.Store.Root == "" {
+		return errors.New("manager store root is required")
+	}
+	dir := filepath.Join(c.Store.Root, "operator-center", "share")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(shareExportRequest{Version: "hideout.share-export-request/v1", DecisionID: id, Options: opts}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	path := filepath.Join(dir, id+".json")
+	tmp, err := os.CreateTemp(dir, "."+id+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	keep := true
+	defer func() {
+		if keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	keep = false
+	return nil
+}
+
+func (c Core) loadShareExportRequest(id string) (ExportOptions, error) {
+	if c.Store.Root == "" {
+		return ExportOptions{}, errors.New("manager store root is required")
+	}
+	path := filepath.Join(c.Store.Root, "operator-center", "share", id+".json")
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return ExportOptions{}, err
+	}
+	var req shareExportRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return ExportOptions{}, err
+	}
+	if req.DecisionID != id {
+		return ExportOptions{}, errors.New("share export decision id mismatch")
+	}
+	req.Options.Share = true
+	req.Options.ShareDecisionID = id
+	req.Options.ShareApproved = true
+	return req.Options, nil
 }
 
 func (c Core) RecordExportFailure(opts ExportOptions, reason string) error {

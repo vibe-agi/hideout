@@ -21,6 +21,8 @@ func TestWebUILiveConsoleUsesSeedAndTypedEvents(t *testing.T) {
 		"overview.environments = upsertByID(overview.environments, payload)",
 		"overview.sessions = upsertByID(overview.sessions, payload)",
 		"overview.hostfsWrites = upsertByID(overview.hostfsWrites",
+		"overview.decisionRows = upsertByID(overview.decisionRows",
+		"overview.noticeRows = upsertByID(overview.noticeRows",
 		"auditEvents = capTail([row].concat(auditEvents), 20)",
 	} {
 		if !strings.Contains(html, want) {
@@ -177,8 +179,11 @@ results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"audit",seq:
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"export",seq:3,payload:{status:"completed",source:"audit",artifactPath:"/tmp/export.json",decision:"redact"}}));
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"cleanup",seq:4,payload:{status:"completed",sessions:1,removed:["tmp"],secretState:"removed"}}));
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"hostfs-write",seq:5,payload:{decisionId:"hfwdec_123",operationId:"hfwop_123",status:"pending",operation:"replace",path:"/Users/alice/file.txt",privilegeStatus:"enforced"}}));
-results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"future-kind",seq:6,payload:{id:"future"}}));
-results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment",seq:7,payload:{id:"env_2",name:"env-two",status:"stopped",profile:"default"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"decision",seq:6,payload:{decisionId:"dec_share_123",recordKind:"evidence.share",status:"pending",defaultOutcome:"deny",profile:"default",session:"ses_1",backend:"native"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"notice",seq:7,payload:{noticeId:"notice_priv_123",recordKind:"privilege.status",status:"degraded",severity:"warning",acknowledged:false,profile:"default",session:"ses_1",backend:"lima"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"notice",seq:8,payload:{noticeId:"notice_priv_123",recordKind:"privilege.status",status:"degraded",severity:"warning",acknowledged:true,profile:"default",session:"ses_1",backend:"lima"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"future-kind",seq:9,payload:{id:"future"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment",seq:10,payload:{id:"env_2",name:"env-two",status:"stopped",profile:"default"}}));
 JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetchCount, liveStreamState, liveStreamReason, liveLastSeq, statuses});
 `
 	value, err := rt.RunString(script)
@@ -213,6 +218,28 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 				Path            string `json:"path"`
 				PrivilegeStatus string `json:"privilegeStatus"`
 			} `json:"hostfsWrites"`
+			DecisionRows []struct {
+				ID             string `json:"id"`
+				Kind           string `json:"kind"`
+				Status         string `json:"status"`
+				DefaultOutcome string `json:"defaultOutcome"`
+			} `json:"decisionRows"`
+			NoticeRows []struct {
+				ID           string `json:"id"`
+				Kind         string `json:"kind"`
+				Status       string `json:"status"`
+				Severity     string `json:"severity"`
+				Acknowledged bool   `json:"acknowledged"`
+			} `json:"noticeRows"`
+			Decisions struct {
+				Pending  int `json:"pending"`
+				Claimed  int `json:"claimed"`
+				Terminal int `json:"terminal"`
+			} `json:"decisions"`
+			Notices struct {
+				Unacknowledged int `json:"unacknowledged"`
+				Total          int `json:"total"`
+			} `json:"notices"`
 		} `json:"overview"`
 		AuditEvents []struct {
 			Action   string         `json:"action"`
@@ -232,7 +259,7 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 	if proof.FetchCount != 0 {
 		t.Fatalf("live reducer fetched during event apply: %+v", proof)
 	}
-	if len(proof.Results) != 7 || !proof.Results[0] || !proof.Results[1] || !proof.Results[2] || !proof.Results[3] || !proof.Results[4] || proof.Results[5] || !proof.Results[6] {
+	if len(proof.Results) != 10 || !proof.Results[0] || !proof.Results[1] || !proof.Results[2] || !proof.Results[3] || !proof.Results[4] || !proof.Results[5] || !proof.Results[6] || !proof.Results[7] || proof.Results[8] || !proof.Results[9] {
 		t.Fatalf("unexpected apply results: %+v", proof.Results)
 	}
 	if len(proof.Overview.Environments) != 2 || proof.Overview.Environments[0].ID != "env_2" || proof.Overview.Environments[1].ID != "env_1" {
@@ -250,7 +277,13 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 	if len(proof.Overview.HostFSWrites) != 1 || proof.Overview.HostFSWrites[0].DecisionID != "hfwdec_123" {
 		t.Fatalf("HostFS write event did not update visible state: %+v", proof.Overview.HostFSWrites)
 	}
-	if proof.RenderCount < 6 || proof.LiveLastSeq != 7 || proof.LiveStreamState != "live" || proof.LiveStreamReason != "" {
+	if len(proof.Overview.DecisionRows) != 1 || proof.Overview.DecisionRows[0].ID != "dec_share_123" || proof.Overview.Decisions.Pending != 1 {
+		t.Fatalf("decision event did not update visible state: %+v summary=%+v", proof.Overview.DecisionRows, proof.Overview.Decisions)
+	}
+	if len(proof.Overview.NoticeRows) != 1 || proof.Overview.NoticeRows[0].ID != "notice_priv_123" || !proof.Overview.NoticeRows[0].Acknowledged || proof.Overview.Notices.Unacknowledged != 0 {
+		t.Fatalf("notice event did not update visible state: %+v summary=%+v", proof.Overview.NoticeRows, proof.Overview.Notices)
+	}
+	if proof.RenderCount < 9 || proof.LiveLastSeq != 10 || proof.LiveStreamState != "live" || proof.LiveStreamReason != "" {
 		t.Fatalf("stream proof mismatch: %+v", proof)
 	}
 }

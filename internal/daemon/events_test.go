@@ -231,6 +231,41 @@ func TestEventBusBuildsExportAndCleanupPayloadsFromOperationEvents(t *testing.T)
 	}
 }
 
+func TestEventBusBuildsDecisionAndNoticePayloads(t *testing.T) {
+	bus := newEventBus()
+	sub := bus.subscribe(8)
+	bus.OperationEvent(liveconsole.KindDecision, "created", map[string]any{
+		"decisionId":     "dec-1",
+		"kind":           "hostfs.write",
+		"status":         "pending",
+		"defaultOutcome": "discard",
+		"profile":        "default",
+		"claimToken":     "claim_0123456789abcdef0123456789abcdef",
+	})
+	decisionEvent := <-sub.ch
+	if decisionEvent.Kind != liveconsole.KindDecision || decisionEvent.Payload.DecisionID != "dec-1" || decisionEvent.Payload.RecordKind != "hostfs.write" {
+		t.Fatalf("decision payload mismatch: %+v", decisionEvent)
+	}
+	assertValidDaemonEvent(t, decisionEvent)
+	data, _ := json.Marshal(decisionEvent)
+	if strings.Contains(string(data), "claim_0123456789abcdef") {
+		t.Fatalf("decision event leaked claim token: %s", data)
+	}
+
+	bus.OperationEvent(liveconsole.KindNotice, "created", map[string]any{
+		"noticeId":     "notice-1",
+		"kind":         "privilege.status",
+		"status":       "degraded",
+		"severity":     "warning",
+		"acknowledged": false,
+	})
+	noticeEvent := <-sub.ch
+	if noticeEvent.Kind != liveconsole.KindNotice || noticeEvent.Payload.NoticeID != "notice-1" || noticeEvent.Payload.RecordKind != "privilege.status" {
+		t.Fatalf("notice payload mismatch: %+v", noticeEvent)
+	}
+	assertValidDaemonEvent(t, noticeEvent)
+}
+
 func TestEventBusBuildsHostFSWritePayloadsWithoutClaimTokens(t *testing.T) {
 	bus := newEventBus()
 	sub := bus.subscribe(8)

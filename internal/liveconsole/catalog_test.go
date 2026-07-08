@@ -104,6 +104,10 @@ func requiredPayloadFields(kind string) []string {
 		return []string{"status"}
 	case KindHostFSWrite:
 		return []string{"decisionId", "operationId", "status"}
+	case KindDecision:
+		return []string{"decisionId", "recordKind", "status"}
+	case KindNotice:
+		return []string{"noticeId", "recordKind", "status"}
 	case KindTerminal:
 		return []string{"reason"}
 	default:
@@ -129,5 +133,9 @@ func clearPayloadField(payload *EventPayload, field string) {
 		payload.DecisionID = ""
 	case "operationId":
 		payload.OperationID = ""
+	case "recordKind":
+		payload.RecordKind = ""
+	case "noticeId":
+		payload.NoticeID = ""
 	}
 }

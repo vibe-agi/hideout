@@ -263,6 +263,10 @@ Current smoke surface shows:
 - profile HostFS allow/deny plan/apply through Manager API;
 - pending HostFS write decisions with claim/apply/discard controls backed by
   Manager `hostfs/write/*` routes;
+- operator decision center panels for actionable decisions and informational
+  notices. HostFS write controls remain compatibility controls over the generic
+  `hostfs.write` decision record; share/export decisions and privilege/background
+  notices are observed through the same live-console reducer state;
 - CLI hints for listing and adding durable profile HostFS rules.
 
 Later product views should add:

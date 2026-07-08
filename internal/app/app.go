@@ -102,6 +102,10 @@ func (a app) run(args []string) error {
 		return a.auditCommand(args[1:])
 	case "adapter-pack":
 		return a.adapterPackCommand(args[1:])
+	case "decision":
+		return a.decisionCommand(args[1:])
+	case "notice":
+		return a.noticeCommand(args[1:])
 	case "ui":
 		return a.ui(args[1:])
 	case "daemon":
@@ -170,6 +174,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
 	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
 	fmt.Fprintln(a.stdout, "  hideout hostfs write status|plan|claim|apply|discard")
+	fmt.Fprintln(a.stdout, "  hideout decision list|inspect|claim|approve|deny|watch")
+	fmt.Fprintln(a.stdout, "  hideout notice list|inspect|ack")
 	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
 	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]")
@@ -4133,6 +4139,7 @@ type auditExportOptions struct {
 	redact                  stringListFlag
 	policyProfile           string
 	acknowledgeFullFidelity bool
+	share                   bool
 }
 
 func parseAuditShowOptions(args []string) (auditShowOptions, error) {
@@ -4215,6 +4222,7 @@ func parseAuditExportOptions(args []string) (auditExportOptions, error) {
 	fs.Var(&opts.redact, "redact", "detail field selector to redact; may be repeated")
 	fs.StringVar(&opts.policyProfile, "policy-profile", "", "profile whose audit.redact policy applies")
 	fs.BoolVar(&opts.acknowledgeFullFidelity, "acknowledge-full-fidelity", false, "include residual user data after configured redaction")
+	fs.BoolVar(&opts.share, "share", false, "stage a leaving-machine share decision instead of writing immediately")
 	if err := fs.Parse(args); err != nil {
 		return auditExportOptions{}, err
 	}
@@ -4250,6 +4258,7 @@ func (a app) auditExport(args []string) error {
 		Redact:                  append([]string(nil), opts.redact...),
 		PolicyProfile:           opts.policyProfile,
 		AcknowledgeFullFidelity: opts.acknowledgeFullFidelity,
+		Share:                   opts.share,
 		Commit:                  Commit,
 	}
 	plan, err := core.PlanExport(managerOpts)
@@ -4260,6 +4269,14 @@ func (a app) auditExport(args []string) error {
 		return err
 	}
 	fmt.Fprint(a.stdout, plan.Review.Text())
+	if opts.share {
+		if plan.DecisionID == "" {
+			return errors.New("share export did not create a decision")
+		}
+		fmt.Fprintf(a.stdout, "share decision: %s\n", plan.DecisionID)
+		fmt.Fprintf(a.stdout, "next: hideout decision claim %s\n", plan.DecisionID)
+		return nil
+	}
 	if plan.Review.DecisionRequired {
 		if !stdinIsTerminal() {
 			return errors.New("user data is present; choose --redact or --acknowledge-full-fidelity")
@@ -4423,6 +4440,237 @@ func (a app) hostfsWriteDiscard(core manager.Core, args []string) error {
 		return err
 	}
 	return writeIndentedJSON(a.stdout, result)
+}
+
+func (a app) decisionCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout decision list|inspect|claim|approve|deny|watch")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	switch args[0] {
+	case "list":
+		return a.decisionList(core, args[1:])
+	case "inspect":
+		return a.decisionInspect(core, args[1:])
+	case "claim":
+		return a.decisionClaim(core, args[1:])
+	case "approve":
+		return a.decisionResolve(core, args[1:], true)
+	case "deny":
+		return a.decisionResolve(core, args[1:], false)
+	case "watch":
+		return a.decisionWatch(core, args[1:])
+	default:
+		return fmt.Errorf("unknown decision command %q", args[0])
+	}
+}
+
+func (a app) decisionList(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("decision list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	kind := fs.String("kind", "", "decision kind")
+	state := fs.String("state", "", "decision state")
+	profileName := fs.String("profile", "", "profile")
+	sessionID := fs.String("session", "", "session id")
+	includeTerminal := fs.Bool("include-terminal", false, "include terminal decisions")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout decision list [--kind <kind>] [--state <state>] [--include-terminal]")
+	}
+	decisions, err := core.ListDecisions(manager.DecisionListRequest{
+		Kind:            *kind,
+		State:           *state,
+		Profile:         *profileName,
+		Session:         *sessionID,
+		IncludeTerminal: *includeTerminal,
+	})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, decisions)
+}
+
+func (a app) decisionInspect(core manager.Core, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: hideout decision inspect <decision-id>")
+	}
+	d, err := core.InspectDecision(args[0])
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, d)
+}
+
+func (a app) decisionClaim(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("decision claim", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	surface := fs.String("surface", "cli", "claiming surface")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout decision claim [--surface cli|tui|webui] <decision-id>")
+	}
+	claim, err := core.ClaimDecision(manager.DecisionClaimRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: "hideout.decision/v1",
+		Surface:         *surface,
+	})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, claim)
+}
+
+func (a app) decisionResolve(core manager.Core, args []string, approve bool) error {
+	name := "decision deny"
+	if approve {
+		name = "decision approve"
+	}
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	claimToken := fs.String("claim-token", "", "claim token returned by claim")
+	reason := fs.String("reason", "operator-denied", "decision reason")
+	if approve {
+		*reason = "operator-approved"
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		if approve {
+			return errors.New("usage: hideout decision approve --claim-token <token> <decision-id>")
+		}
+		return errors.New("usage: hideout decision deny --claim-token <token> [--reason <text>] <decision-id>")
+	}
+	req := manager.DecisionResolveRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: "hideout.decision/v1",
+		ClaimToken:      *claimToken,
+		Reason:          *reason,
+	}
+	var (
+		result any
+		err    error
+	)
+	if approve {
+		result, err = core.ApproveDecision(req)
+	} else {
+		result, err = core.DenyDecision(req)
+	}
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, result)
+}
+
+func (a app) decisionWatch(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("decision watch", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	includeTerminal := fs.Bool("include-terminal", true, "include terminal decisions")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout decision watch [--include-terminal=false]")
+	}
+	decisions, err := core.ListDecisions(manager.DecisionListRequest{IncludeTerminal: *includeTerminal})
+	if err != nil {
+		return err
+	}
+	notices, err := core.ListNotices(manager.NoticeListRequest{})
+	if err != nil {
+		return err
+	}
+	status, err := core.DecisionStatus()
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, map[string]any{
+		"status":    status,
+		"decisions": decisions,
+		"notices":   notices,
+	})
+}
+
+func (a app) noticeCommand(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: hideout notice list|inspect|ack")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	switch args[0] {
+	case "list":
+		return a.noticeList(core, args[1:])
+	case "inspect":
+		return a.noticeInspect(core, args[1:])
+	case "ack":
+		return a.noticeAck(core, args[1:])
+	default:
+		return fmt.Errorf("unknown notice command %q", args[0])
+	}
+}
+
+func (a app) noticeList(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("notice list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	kind := fs.String("kind", "", "notice kind")
+	severity := fs.String("severity", "", "notice severity")
+	profileName := fs.String("profile", "", "profile")
+	sessionID := fs.String("session", "", "session id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout notice list [--kind <kind>] [--severity <level>]")
+	}
+	notices, err := core.ListNotices(manager.NoticeListRequest{
+		Kind:     *kind,
+		Severity: *severity,
+		Profile:  *profileName,
+		Session:  *sessionID,
+	})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, notices)
+}
+
+func (a app) noticeInspect(core manager.Core, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: hideout notice inspect <notice-id>")
+	}
+	n, err := core.InspectNotice(args[0])
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, n)
+}
+
+func (a app) noticeAck(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("notice ack", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	surface := fs.String("surface", "cli", "acknowledging surface")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout notice ack [--surface cli|tui|webui] <notice-id>")
+	}
+	ack, err := core.AckNotice(manager.NoticeAckRequest{NoticeID: fs.Arg(0), Surface: *surface})
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, ack)
 }
 
 func writeIndentedJSON(w io.Writer, value any) error {
@@ -5355,6 +5603,25 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	for _, row := range state.HostFSWrites {
 		fmt.Fprintf(w, "  - %s  op=%s  status=%s  privilege=%s  path=%s\n", dash(row.DecisionID), dash(row.Operation), dash(row.Status), dash(row.PrivilegeStatus), dash(row.Path))
 		fmt.Fprintf(w, "    next: claim=hideout hostfs write claim %s  apply=hideout hostfs write apply %s  discard=hideout hostfs write discard %s\n", dash(row.DecisionID), dash(row.DecisionID), dash(row.DecisionID))
+	}
+
+	fmt.Fprintln(w, "\nDecisions")
+	if len(state.Decisions) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, row := range state.Decisions {
+		fmt.Fprintf(w, "  - %s  kind=%s  status=%s  default=%s  profile=%s  session=%s\n", dash(row.ID), dash(row.Kind), dash(row.Status), dash(row.DefaultOutcome), dash(row.Profile), dash(row.Session))
+		if row.Reason != "" {
+			fmt.Fprintf(w, "    reason=%s\n", row.Reason)
+		}
+	}
+
+	fmt.Fprintln(w, "\nNotices")
+	if len(state.Notices) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, row := range state.Notices {
+		fmt.Fprintf(w, "  - %s  kind=%s  status=%s  severity=%s  acknowledged=%t  profile=%s  session=%s\n", dash(row.ID), dash(row.Kind), dash(row.Status), dash(row.Severity), row.Acknowledged, dash(row.Profile), dash(row.Session))
 	}
 
 	fmt.Fprintln(w, "\nExports")

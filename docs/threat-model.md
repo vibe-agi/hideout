@@ -249,6 +249,10 @@ Hideout Phase 1 does not claim:
 - HostFS write overlay blocks normal workspace writes, provides broad DLP, or
   is the only possible host mutation path when 009 privilege status is
   degraded/unknown;
+- the operator decision center provides remote approval, organization roles,
+  delegated policy, compliance workflow, or daemon-implied approval. It is a
+  local authenticated queue; missing approval, stale claims, provider absence,
+  and timeouts fail closed, while notices remain informational only;
 - Endpoint Exposure, Browser Control, Preview Open, adb, simulator, or IDE
   integrations are product-ready only when separately promoted;
 - identifying user/application secrets embedded in runtime data. Redaction is

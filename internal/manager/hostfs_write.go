@@ -76,6 +76,9 @@ func (c Core) PlanHostFSWrite(req HostFSWritePlanRequest) (HostFSWritePlan, erro
 	if err != nil {
 		return HostFSWritePlan{}, err
 	}
+	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
+		return HostFSWritePlan{}, err
+	}
 	decision := publicHostFSWriteDecision(ref.decision)
 	if !req.IncludePreview {
 		decision.Preview = overlay.Preview{}
@@ -127,6 +130,9 @@ func (c Core) ClaimHostFSWrite(req HostFSWriteClaimRequest) (HostFSWriteClaim, e
 	if err := ref.store.SaveDecision(ref.decision); err != nil {
 		return HostFSWriteClaim{}, err
 	}
+	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
+		return HostFSWriteClaim{}, err
+	}
 	c.emitHostFSWriteAudit(ref, overlay.ActionClaim, "allow", overlay.ClaimDetails(ref.decision, surface))
 	c.emitHostFSWrite(ref.decision, "claimed", "")
 	return HostFSWriteClaim{
@@ -161,6 +167,9 @@ func (c Core) DiscardHostFSWrite(req HostFSWriteDiscardRequest) (HostFSWriteResu
 	if err := ref.store.SaveOperation(ref.operation); err != nil {
 		return HostFSWriteResult{}, err
 	}
+	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
+		return HostFSWriteResult{}, err
+	}
 	result := overlay.Result{
 		Version:     overlay.ResultVersion,
 		DecisionID:  ref.decision.DecisionID,
@@ -192,6 +201,9 @@ func (c Core) ApplyHostFSWrite(req HostFSWriteApplyRequest) (HostFSWriteResult, 
 	result, op, decision, applyErr := ref.store.Apply(ref.decision.DecisionID)
 	ref.operation = op
 	ref.decision = decision
+	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
+		return result, err
+	}
 	action := overlay.ActionApply
 	auditDecision := overlay.DecisionAllow
 	reason := ""
@@ -281,6 +293,9 @@ func (c Core) expireHostFSWriteRef(ref hostFSWriteRef) error {
 		return err
 	}
 	if err := ref.store.SaveOperation(ref.operation); err != nil {
+		return err
+	}
+	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
 		return err
 	}
 	c.emitHostFSWriteAudit(ref, overlay.ActionTimeout, overlay.DecisionDeny, overlay.TimeoutDetails(ref.decision))

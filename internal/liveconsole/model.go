@@ -18,6 +18,8 @@ const (
 	KindExport      = "export"
 	KindCleanup     = "cleanup"
 	KindHostFSWrite = "hostfs-write"
+	KindDecision    = "decision"
+	KindNotice      = "notice"
 	KindTerminal    = "terminal"
 
 	HealthSeeding           = "seeding"
@@ -88,6 +90,12 @@ type EventPayload struct {
 	Path              string         `json:"path,omitempty"`
 	DestinationPath   string         `json:"destinationPath,omitempty"`
 	PrivilegeStatus   string         `json:"privilegeStatus,omitempty"`
+	NoticeID          string         `json:"noticeId,omitempty"`
+	RecordKind        string         `json:"recordKind,omitempty"`
+	Severity          string         `json:"severity,omitempty"`
+	Acknowledged      bool           `json:"acknowledged,omitempty"`
+	DefaultOutcome    string         `json:"defaultOutcome,omitempty"`
+	Preview           any            `json:"preview,omitempty"`
 }
 
 type BackgroundRow struct {
@@ -115,6 +123,28 @@ type HostFSWriteRow struct {
 	DestinationPath string `json:"destinationPath,omitempty"`
 	PrivilegeStatus string `json:"privilegeStatus,omitempty"`
 	Reason          string `json:"reason,omitempty"`
+}
+
+type DecisionRow struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Status         string `json:"status"`
+	DefaultOutcome string `json:"defaultOutcome,omitempty"`
+	Profile        string `json:"profile,omitempty"`
+	Session        string `json:"session,omitempty"`
+	Backend        string `json:"backend,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+type NoticeRow struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Status       string `json:"status"`
+	Severity     string `json:"severity,omitempty"`
+	Acknowledged bool   `json:"acknowledged"`
+	Profile      string `json:"profile,omitempty"`
+	Session      string `json:"session,omitempty"`
+	Backend      string `json:"backend,omitempty"`
 }
 
 type StreamHealth struct {
@@ -152,6 +182,8 @@ type State struct {
 	ExportOutcomes  []OutcomeRow               `json:"exportOutcomes,omitempty"`
 	CleanupOutcomes []OutcomeRow               `json:"cleanupOutcomes,omitempty"`
 	HostFSWrites    []HostFSWriteRow           `json:"hostfsWrites,omitempty"`
+	Decisions       []DecisionRow              `json:"decisions,omitempty"`
+	Notices         []NoticeRow                `json:"notices,omitempty"`
 	StreamHealth    StreamHealth               `json:"streamHealth"`
 	LastSeq         int                        `json:"lastSeq"`
 	ProfileScope    string                     `json:"profileScope,omitempty"`

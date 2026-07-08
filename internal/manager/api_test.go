@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -280,6 +281,105 @@ func TestAPIHostFSWritePlanClaimApplyDiscardStatus(t *testing.T) {
 	if !strings.Contains(discardResp.Body.String(), `"status":"discarded"`) {
 		t.Fatalf("discard response mismatch: %s", discardResp.Body.String())
 	}
+}
+
+func TestAPIDecisionAndNoticeRoutes(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := Core{Store: store}
+	op, decisionRec := stageHostFSWriteFixture(t, core)
+	if _, err := core.PlanHostFSWrite(HostFSWritePlanRequest{OperationID: op.ID, IncludePreview: true}); err != nil {
+		t.Fatalf("PlanHostFSWrite: %v", err)
+	}
+	if _, err := core.CreateNotice(decisionNoticeFixture()); err != nil {
+		t.Fatalf("CreateNotice: %v", err)
+	}
+	api := API{
+		Core:      core,
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+
+	req := newAPIRequest(http.MethodGet, "/api/v1/decisions?kind=hostfs.write")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("decisions status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), decisionRec.DecisionID) || strings.Contains(resp.Body.String(), "tokenHash") {
+		t.Fatalf("decisions response mismatch: %s", resp.Body.String())
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/decision/claim", DecisionClaimRequest{DecisionID: decisionRec.DecisionID, ExpectedVersion: "hideout.decision/v1", Surface: "webui"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	var claimResp APIResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &claimResp); err != nil {
+		t.Fatal(err)
+	}
+	claimData := claimResp.Data.(map[string]any)
+	claimToken, _ := claimData["claimToken"].(string)
+	if claimToken == "" {
+		t.Fatalf("claim response missing token: %s", resp.Body.String())
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/decision/deny", DecisionResolveRequest{DecisionID: decisionRec.DecisionID, ExpectedVersion: "hideout.decision/v1", ClaimToken: "claim_wrong"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), "claimToken is invalid") {
+		t.Fatalf("wrong deny should fail closed in response body: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/decision/deny", DecisionResolveRequest{DecisionID: decisionRec.DecisionID, ExpectedVersion: "hideout.decision/v1", ClaimToken: claimToken, Reason: "operator-denied"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("deny status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"status":"discarded"`) {
+		t.Fatalf("deny response mismatch: %s", resp.Body.String())
+	}
+
+	req = newAPIRequest(http.MethodGet, "/api/v1/notices")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("notices status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if strings.Contains(resp.Body.String(), "defaultOutcome") || strings.Contains(resp.Body.String(), "claimToken") {
+		t.Fatalf("notice response exposed decision fields: %s", resp.Body.String())
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/notice/ack", NoticeAckRequest{NoticeID: "privilege-degraded-default", Surface: "cli"})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("notice ack status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+
+	req = newAPIRequest(http.MethodGet, "/api/v1/decision/status")
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("decision status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
 }
 
 func TestAPIInitRejectsLegacyToolSupplyPayload(t *testing.T) {
@@ -1522,6 +1622,17 @@ func validateManagerAPIResponse(t *testing.T, schema *jsonschema.Schema, data []
 	}
 	if err := schema.Validate(doc); err != nil {
 		t.Fatalf("manager API response does not match schema: %v\n%s", err, data)
+	}
+}
+
+func decisionNoticeFixture() decision.Notice {
+	return decision.Notice{
+		ID:       "privilege-degraded-default",
+		Kind:     decision.KindPrivilegeStatus,
+		Severity: decision.NoticeSeverityWarning,
+		Status:   "degraded",
+		Preview:  decision.Preview{Summary: "target can passwordless sudo"},
+		AuditRef: "audit:privilege",
 	}
 }
 

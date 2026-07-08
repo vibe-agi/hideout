@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	"github.com/vibe-agi/hideout/internal/helperbin"
@@ -274,6 +275,113 @@ func TestHostFSWriteCLIClaimAndDiscard(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"status": "discarded"`) {
 		t.Fatalf("discard output mismatch: %s", out.String())
+	}
+}
+
+func TestDecisionAndNoticeCLI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	sessionID := "ses_20260708T020000Z_00112233445566778899"
+	overlayStore, err := overlay.NewStore(filepath.Join(store.Root, "sessions", sessionID, "hostfs-overlay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.txt")
+	result, err := overlayStore.Stage(overlay.StageRequest{
+		SessionID:   sessionID,
+		Profile:     "default",
+		Backend:     "native",
+		Operation:   "create",
+		Path:        target,
+		GrantID:     "hfs_overlay",
+		GrantSource: "profile",
+		Data:        []byte("staged"),
+		Privilege:   overlay.Privilege{Status: "enforced", Reason: "target-no-sudo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := manager.New(store)
+	if _, err := core.CreateNotice(decision.Notice{
+		ID:       "privilege-degraded-default",
+		Kind:     decision.KindPrivilegeStatus,
+		Severity: decision.NoticeSeverityWarning,
+		Status:   "degraded",
+		Preview:  decision.Preview{Summary: "target can passwordless sudo"},
+		AuditRef: "audit:privilege",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"decision", "list", "--kind", "hostfs.write"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("decision list exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), result.Decision.DecisionID) || strings.Contains(out.String(), "tokenHash") {
+		t.Fatalf("decision list mismatch: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"decision", "claim", result.Decision.DecisionID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("decision claim exit=%d stderr=%s", code, errOut.String())
+	}
+	var claim decision.ClaimResponse
+	if err := json.Unmarshal(out.Bytes(), &claim); err != nil {
+		t.Fatal(err)
+	}
+	if claim.ClaimToken == "" {
+		t.Fatalf("missing claim token: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"decision", "deny", "--claim-token", "claim_wrong", result.Decision.DecisionID}, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "claimToken is invalid") {
+		t.Fatalf("wrong token should fail closed: code=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"decision", "deny", "--claim-token", claim.ClaimToken, result.Decision.DecisionID}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("decision deny exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"status": "discarded"`) {
+		t.Fatalf("decision deny mismatch: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"notice", "list", "--severity", "warning"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("notice list exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "defaultOutcome") || strings.Contains(out.String(), "claimToken") {
+		t.Fatalf("notice list exposed decision semantics: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"notice", "ack", "privilege-degraded-default"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("notice ack exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"surface": "cli"`) {
+		t.Fatalf("notice ack mismatch: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"decision", "watch"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("decision watch exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"unackedNotices": 0`) || strings.Contains(out.String(), "hostfs-overlay") {
+		t.Fatalf("decision watch diagnostic mismatch: %s", out.String())
 	}
 }
 

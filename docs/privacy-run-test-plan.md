@@ -199,6 +199,11 @@ Required evidence:
   reducer proof with no post-seed fetches, TUI terminal proof, stream-health
   propagation, and control-plane redaction scans — with no real backend, headless
   browser, or external browser dependency.
+- Operator decision center smoke (`scripts/test-decision-center-smoke.sh`,
+  wired into Gate 0) validates actionable decision vs informational notice
+  contracts, public redaction of claim tokens and provider-private refs, local
+  export compatibility, `evidence.share` claim/approve release, and CLI/watch
+  convergence without a real backend.
 - Command-adapter smoke (`scripts/test-command-adapter-smoke.sh`, wired into
   Gate 0) validates the 008 profile schema, command-adapter schema, Manager
   plan/apply path, broker outcomes, root-sensitive intent wording, and digest

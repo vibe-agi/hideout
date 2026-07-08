@@ -93,6 +93,10 @@ Hideout uses separate registries for different layers:
   vocabulary are owned by the 011 contracts and implemented through
   `hideout.adapter-pack/v1`, `hideout.adapter-pack-registry/v1`, and Manager
   `adapter-pack/*` routes. This is not public marketplace terminology.
+- operator decision center vocabulary is owned by the 012 contracts:
+  actionable decisions (`hostfs.write`, `adapter.proposal`, `evidence.share`)
+  are not informational notices (`privilege.status`, `background.status`);
+  claim tokens and provider refs are never public record fields.
 
 Do not treat similar suffixes as interchangeable. Action names describe
 authority requested by a policy decision. Backend capability flags describe what

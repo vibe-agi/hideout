@@ -265,6 +265,13 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   `GET /api/v1/hostfs/write/status`. These resolve only staged overlay
   operations created by HostFS policy, require expected version and claim-token
   validation, and never expose raw host filesystem authority to UI clients.
+- Manager API exposes the operator decision center:
+  `GET /api/v1/decisions`, `GET /api/v1/decisions/{id}`,
+  `POST /api/v1/decisions/{id}/claim|approve|deny`,
+  `GET /api/v1/notices`, `GET /api/v1/notices/{id}`, and
+  `POST /api/v1/notices/{id}/ack`. HostFS write routes are compatibility
+  shims over `hostfs.write` decision records; notices such as privilege and
+  background status are informational and cannot be claimed or approved.
 - Manager API exposes controlled profile env policy actions:
   `POST /api/v1/profile/env/plan` and `POST /api/v1/profile/env/apply`. These
   mutate only durable `profile.env.public`, `profile.env.inherit`, and
@@ -606,6 +613,11 @@ mutate unrelated stores directly.
 - Manager API, CLI, TUI, and WebUI expose typed HostFS write decision
   status/plan/claim/apply/discard for staged overlay writes. Go-owned Manager
   apply performs the only host mutation.
+- Manager API, CLI, TUI, WebUI, and daemon events expose the operator decision
+  center. Actionable records (`hostfs.write`, `adapter.proposal` when a
+  promoted provider exists, and `evidence.share`) use claim/lease/resolve
+  semantics; informational records (`privilege.status`, `background.status`)
+  support acknowledgement only.
 - Manager API and WebUI expose typed profile env policy plan/apply for durable
   public/inherit/deny env policy without echoing env values.
 - A resident `hideoutd` is implemented; CLI, TUI, and WebUI still support

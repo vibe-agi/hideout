@@ -86,8 +86,9 @@ type AuditEvent struct {
 }
 
 type Plan struct {
-	Artifact Artifact `json:"artifact"`
-	Review   Review   `json:"review"`
+	Artifact   Artifact `json:"artifact"`
+	Review     Review   `json:"review"`
+	DecisionID string   `json:"decisionId,omitempty"`
 }
 
 type Result struct {

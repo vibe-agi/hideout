@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/notice-record.schema.json",
+  "title": "Hideout Operator Notice Record",
+  "type": "object",
+  "required": [
+    "version",
+    "id",
+    "kind",
+    "severity",
+    "status",
+    "preview",
+    "acknowledged",
+    "auditRef",
+    "revision"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.notice/v1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": ["privilege.status", "background.status"]
+    },
+    "source": {
+      "type": "object"
+    },
+    "severity": {
+      "enum": ["info", "warning", "error"]
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {
+      "type": "object"
+    },
+    "preview": {
+      "type": "object"
+    },
+    "acknowledged": {
+      "type": "boolean"
+    },
+    "acknowledgedBy": {
+      "type": "string"
+    },
+    "acknowledgedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "auditRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "required": ["claim"]
+      },
+      {
+        "required": ["defaultOutcome"]
+      },
+      {
+        "required": ["providerRef"]
+      },
+      {
+        "required": ["timeoutAt"]
+      }
+    ]
+  },
+  "additionalProperties": false
+}

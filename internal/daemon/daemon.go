@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
@@ -116,6 +117,23 @@ func Start(opts Options) (*Daemon, error) {
 	al.publish = bus.publishAudit
 	core := manager.New(opts.Store)
 	core.Observer = bus
+	publishBackground := func(id, op, status string) {
+		bus.publishBackground(id, op, status)
+		_, _ = core.CreateNotice(decision.Notice{
+			ID:       "background-" + id,
+			Kind:     decision.KindBackgroundStatus,
+			Severity: backgroundNoticeSeverity(status),
+			Status:   status,
+			Source:   decision.Source{Surface: "daemon"},
+			Payload: map[string]any{
+				"id":     id,
+				"op":     op,
+				"status": status,
+			},
+			Preview:  decision.Preview{Summary: "background " + op + " is " + status},
+			AuditRef: "audit:background:" + id,
+		})
+	}
 	d := &Daemon{
 		store:      opts.Store,
 		runtimeDir: dir,
@@ -124,7 +142,7 @@ func Start(opts Options) (*Daemon, error) {
 		startedAt:  now,
 		audit:      al,
 		bus:        bus,
-		bg:         newBGRegistry(bus.publishBackground),
+		bg:         newBGRegistry(publishBackground),
 		own:        newOwnership(),
 		ln:         ln,
 		lockFile:   lockFile,
@@ -163,6 +181,17 @@ func Start(opts Options) (*Daemon, error) {
 
 	go func() { _ = d.server.Serve(ln) }()
 	return d, nil
+}
+
+func backgroundNoticeSeverity(status string) string {
+	switch status {
+	case "failed":
+		return decision.NoticeSeverityError
+	case "queued", "running":
+		return decision.NoticeSeverityInfo
+	default:
+		return decision.NoticeSeverityWarning
+	}
 }
 
 // SubmitBackground runs an allowed background operation (v1: environment

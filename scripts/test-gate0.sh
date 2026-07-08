@@ -25,6 +25,8 @@ test -f schemas/adapter-pack-registry.schema.json
 test -f schemas/guest-privilege-status.schema.json
 test -f schemas/hostfs-write-decision.schema.json
 test -f schemas/hostfs-write-event.schema.json
+test -f schemas/decision-record.schema.json
+test -f schemas/notice-record.schema.json
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -118,6 +120,10 @@ scripts/test-daemon-smoke.sh
 # Daemon live operations console (no Lima): typed seed/event contracts and
 # payload-driven UI proof. Initially a skeleton smoke, expanded by 007.
 scripts/test-live-console-smoke.sh
+
+# Operator decision center (no Lima): actionable decisions vs notices,
+# share/export approval, redaction, and local UI/watch contracts.
+scripts/test-decision-center-smoke.sh
 
 # Command capability adapters (no isolation claim): strict adapter schema,
 # local digest pinning, command-name routing, and root-sensitive intent wording.

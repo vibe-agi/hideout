@@ -10,7 +10,7 @@
       "const": "hideout.daemon-event/v1"
     },
     "kind": {
-      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "hostfs-write", "terminal"]
+      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "terminal"]
     },
     "phase": {
       "enum": ["start", "progress", "complete", "failed"]
@@ -25,7 +25,7 @@
       "required": ["kind"],
       "properties": {
         "kind": {
-          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "hostfs-write", "stream"]
+          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "stream"]
         },
         "id": {
           "type": "string"
@@ -157,6 +157,24 @@
         },
         "privilegeStatus": {
           "type": "string"
+        },
+        "noticeId": {
+          "type": "string"
+        },
+        "recordKind": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "acknowledged": {
+          "type": "boolean"
+        },
+        "defaultOutcome": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "object"
         }
       }
     }
@@ -284,6 +302,42 @@
         "properties": {
           "payload": {
             "required": ["decisionId", "operationId", "status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "decision"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["decisionId", "recordKind", "status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "notice"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": ["noticeId", "recordKind", "status"]
           }
         }
       }

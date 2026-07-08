@@ -123,6 +123,7 @@ type ExportAPIRequest struct {
 	Redact                  []string `json:"redact,omitempty"`
 	PolicyProfile           string   `json:"policyProfile,omitempty"`
 	AcknowledgeFullFidelity bool     `json:"acknowledgeFullFidelity,omitempty"`
+	Share                   bool     `json:"share,omitempty"`
 }
 
 func NewAPI(core Core, token string, ttl time.Duration) API {
@@ -184,6 +185,34 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		api.serveHostFSWriteStatus(w, r)
 		return
 	}
+	if resource == "decisions" {
+		api.serveDecisions(w, r)
+		return
+	}
+	if strings.HasPrefix(resource, "decisions/") {
+		api.serveDecisionInspect(w, r, strings.TrimPrefix(resource, "decisions/"))
+		return
+	}
+	if resource == "decision/inspect" {
+		api.serveDecisionInspect(w, r, r.URL.Query().Get("id"))
+		return
+	}
+	if resource == "decision/status" {
+		api.serveDecisionStatus(w, r)
+		return
+	}
+	if resource == "notices" {
+		api.serveNotices(w, r)
+		return
+	}
+	if strings.HasPrefix(resource, "notices/") {
+		api.serveNoticeInspect(w, r, strings.TrimPrefix(resource, "notices/"))
+		return
+	}
+	if resource == "notice/inspect" {
+		api.serveNoticeInspect(w, r, r.URL.Query().Get("id"))
+		return
+	}
 	if resource == "adapter-packs" {
 		api.serveAdapterPacks(w, r)
 		return
@@ -219,6 +248,14 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resource string) {
+	if strings.HasPrefix(resource, "decisions/") {
+		api.serveDecisionMemberPost(w, r, resource)
+		return
+	}
+	if strings.HasPrefix(resource, "notices/") {
+		api.serveNoticeMemberPost(w, r, resource)
+		return
+	}
 	switch resource {
 	case "init/plan":
 		api.serveInitPlan(w, r)
@@ -260,6 +297,14 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveHostFSWriteApply(w, r)
 	case "hostfs/write/discard":
 		api.serveHostFSWriteDiscard(w, r)
+	case "decision/claim":
+		api.serveDecisionClaim(w, r)
+	case "decision/approve":
+		api.serveDecisionApprove(w, r)
+	case "decision/deny":
+		api.serveDecisionDeny(w, r)
+	case "notice/ack":
+		api.serveNoticeAck(w, r)
 	case "adapter-pack/plan":
 		api.serveAdapterPackPlan(w, r)
 	case "adapter-pack/apply":
@@ -520,6 +565,247 @@ func (api API) serveHostFSWriteStatus(w http.ResponseWriter, r *http.Request) {
 		Data:     status,
 		Errors:   []string{},
 	})
+}
+
+func (api API) serveDecisions(w http.ResponseWriter, r *http.Request) {
+	includeTerminal, err := strconv.ParseBool(defaultString(r.URL.Query().Get("includeTerminal"), "false"))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid includeTerminal")
+		return
+	}
+	decisions, err := api.Core.ListDecisions(DecisionListRequest{
+		Kind:            r.URL.Query().Get("kind"),
+		State:           r.URL.Query().Get("state"),
+		Profile:         r.URL.Query().Get("profile"),
+		Session:         r.URL.Query().Get("session"),
+		IncludeTerminal: includeTerminal,
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "decisions",
+		Data:     decisions,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveDecisionInspect(w http.ResponseWriter, r *http.Request, id string) {
+	decision, err := api.Core.InspectDecision(id)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "decision/inspect",
+		Data:     decision,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveDecisionStatus(w http.ResponseWriter, r *http.Request) {
+	status, err := api.Core.DecisionStatus()
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "decision/status",
+		Data:     status,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveDecisionClaim(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeDecisionClaimRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	claim, err := api.Core.ClaimDecision(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "decision/claim",
+		Data:     claim,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveDecisionApprove(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeDecisionResolveRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApproveDecision(req)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "decision/approve",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveDecisionDeny(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeDecisionResolveRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, denyErr := api.Core.DenyDecision(req)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "decision/deny",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if denyErr != nil {
+		resp.Errors = []string{denyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveNotices(w http.ResponseWriter, r *http.Request) {
+	notices, err := api.Core.ListNotices(NoticeListRequest{
+		Kind:     r.URL.Query().Get("kind"),
+		Profile:  r.URL.Query().Get("profile"),
+		Session:  r.URL.Query().Get("session"),
+		Severity: r.URL.Query().Get("severity"),
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "notices",
+		Data:     notices,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveNoticeInspect(w http.ResponseWriter, r *http.Request, id string) {
+	notice, err := api.Core.InspectNotice(id)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "notice/inspect",
+		Data:     notice,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveNoticeAck(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeNoticeAckRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ack, err := api.Core.AckNotice(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "notice/ack",
+		Data:     ack,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveDecisionMemberPost(w http.ResponseWriter, r *http.Request, resource string) {
+	parts := strings.Split(strings.TrimPrefix(resource, "decisions/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+		return
+	}
+	switch parts[1] {
+	case "claim":
+		req, err := decodeDecisionClaimRequest(w, r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.DecisionID == "" {
+			req.DecisionID = parts[0]
+		}
+		claim, err := api.Core.ClaimDecision(req)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "decision/claim", Data: claim, Errors: []string{}})
+	case "approve":
+		req, err := decodeDecisionResolveRequest(w, r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.DecisionID == "" {
+			req.DecisionID = parts[0]
+		}
+		result, applyErr := api.Core.ApproveDecision(req)
+		resp := APIResponse{Version: APIVersion, Resource: "decision/approve", Data: result, Errors: []string{}}
+		if applyErr != nil {
+			resp.Errors = []string{applyErr.Error()}
+		}
+		writeAPIJSON(w, http.StatusOK, resp)
+	case "deny":
+		req, err := decodeDecisionResolveRequest(w, r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.DecisionID == "" {
+			req.DecisionID = parts[0]
+		}
+		result, denyErr := api.Core.DenyDecision(req)
+		resp := APIResponse{Version: APIVersion, Resource: "decision/deny", Data: result, Errors: []string{}}
+		if denyErr != nil {
+			resp.Errors = []string{denyErr.Error()}
+		}
+		writeAPIJSON(w, http.StatusOK, resp)
+	default:
+		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+	}
+}
+
+func (api API) serveNoticeMemberPost(w http.ResponseWriter, r *http.Request, resource string) {
+	parts := strings.Split(strings.TrimPrefix(resource, "notices/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "ack" {
+		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+		return
+	}
+	req, err := decodeNoticeAckRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.NoticeID == "" {
+		req.NoticeID = parts[0]
+	}
+	ack, err := api.Core.AckNotice(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "notice/ack", Data: ack, Errors: []string{}})
 }
 
 func (api API) serveAdapterPacks(w http.ResponseWriter, r *http.Request) {
@@ -978,6 +1264,30 @@ func decodeHostFSWriteDiscardRequest(w http.ResponseWriter, r *http.Request) (Ho
 	return req, nil
 }
 
+func decodeDecisionClaimRequest(w http.ResponseWriter, r *http.Request) (DecisionClaimRequest, error) {
+	var req DecisionClaimRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid decision claim request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeDecisionResolveRequest(w http.ResponseWriter, r *http.Request) (DecisionResolveRequest, error) {
+	var req DecisionResolveRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid decision resolve request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeNoticeAckRequest(w http.ResponseWriter, r *http.Request) (NoticeAckRequest, error) {
+	var req NoticeAckRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid notice ack request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
 func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileEnvAPIRequest, error) {
 	var req ProfileEnvAPIRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -1101,6 +1411,7 @@ func exportOptionsFromAPIRequest(req ExportAPIRequest) ExportOptions {
 		Redact:                  append([]string(nil), req.Redact...),
 		PolicyProfile:           req.PolicyProfile,
 		AcknowledgeFullFidelity: req.AcknowledgeFullFidelity,
+		Share:                   req.Share,
 	}
 }
 
@@ -1294,6 +1605,12 @@ func overviewResource(overview Overview, resource string) (any, bool) {
 		return overview.Projects, true
 	case "adapter-packs":
 		return nonNilSlice(overview.AdapterPacks), true
+	case "decisions":
+		return overview.Decisions, true
+	case "notices":
+		return overview.Notices, true
+	case "decision/status":
+		return overview.DecisionStatus, true
 	default:
 		return nil, false
 	}
@@ -1323,6 +1640,13 @@ func auditEventFilterFromQuery(r *http.Request) (AuditEventFilter, error) {
 func nonNilSlice[S ~[]E, E any](value S) S {
 	if value == nil {
 		return S{}
+	}
+	return value
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
 	}
 	return value
 }

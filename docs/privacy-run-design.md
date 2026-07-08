@@ -4079,6 +4079,7 @@ Design-ready feature; otherwise the page stays read-only for that domain.
 | Capabilities | policy, cmdproxy | Capability matrix, command proxy rules, script hooks. |
 | Sessions | manager, backend | Command, workspace, env, network, explain, status. |
 | Broker | broker | Pending host capability requests and decision history. |
+| Decisions | manager, provider cores | Actionable local decisions with claim/lease/resolve semantics plus informational notices with acknowledgement only. |
 | Audit | audit | Filtered JSONL event view and redacted export. |
 | Network | network, secrets | direct/tun2socks mode, proxy secret refs, leak checks. |
 | Backends | backend | Lima health, image state, doctor checks. |

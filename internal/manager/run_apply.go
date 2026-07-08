@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
@@ -171,7 +172,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			retErr = closeErr
 		}
 	}()
-	session, err := opts.Backend.Prepare(ctx, runSpec(runSession, runEnv, dataPlane, runNetwork))
+	session, err := opts.Backend.Prepare(ctx, c.runSpec(runSession, runEnv, dataPlane, runNetwork))
 	if err != nil {
 		return result, err
 	}
@@ -407,7 +408,7 @@ func waitForPreviewHTTPReady(ctx context.Context, target string) error {
 	}
 }
 
-func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlane, runNetwork RunNetwork) backend.RunSpec {
+func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlane, runNetwork RunNetwork) backend.RunSpec {
 	return backend.RunSpec{
 		SessionID:                 runSession.Layout.ID,
 		EnvironmentID:             runEnv.Record.ID,
@@ -440,7 +441,7 @@ func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlan
 			if dataPlane.Broker != nil {
 				dataPlane.Broker.SetGuestPrivilegeStatus(status)
 			}
-			return runSession.Audit.Emit(audit.Event{
+			auditErr := runSession.Audit.Emit(audit.Event{
 				Session:  runSession.Layout.ID,
 				Profile:  runSession.Plan.ProfileName,
 				Backend:  runSession.Plan.Backend,
@@ -448,6 +449,24 @@ func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlan
 				Decision: "allow",
 				Details:  privilege.StatusDetails(status),
 			})
+			var noticeErr error
+			if status.Status != "enforced" {
+				_, noticeErr = c.CreateNotice(decision.Notice{
+					ID:       "privilege-" + runSession.Layout.ID,
+					Kind:     decision.KindPrivilegeStatus,
+					Severity: privilegeNoticeSeverity(status),
+					Status:   string(status.Status),
+					Source: decision.Source{
+						Profile: runSession.Plan.ProfileName,
+						Session: runSession.Layout.ID,
+						Backend: runSession.Plan.Backend,
+					},
+					Payload:  privilege.StatusDetails(status),
+					Preview:  decision.Preview{Summary: "guest privilege status is " + string(status.Status), Facts: privilege.StatusDetails(status)},
+					AuditRef: "audit:privilege:" + runSession.Layout.ID,
+				})
+			}
+			return errors.Join(auditErr, noticeErr)
 		},
 		PrivilegedSetupEventSink: func(event backend.PrivilegedSetupEvent) error {
 			action := event.Action
@@ -467,6 +486,17 @@ func runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlan
 				Details:  privilege.PrivilegedSetupDetails(event.Category, event.Status, event.Setup, event.Reason),
 			})
 		},
+	}
+}
+
+func privilegeNoticeSeverity(status privilege.Status) string {
+	switch status.Status {
+	case "degraded":
+		return decision.NoticeSeverityWarning
+	case "unknown":
+		return decision.NoticeSeverityError
+	default:
+		return decision.NoticeSeverityInfo
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,26 @@ func TestBackgroundEnvCleanTransitionsStatus(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("background op not in status inventory: %+v", d.Status().Background)
+	}
+	notices, err := d.api.Core.ListNotices(manager.NoticeListRequest{Kind: "background.status"})
+	if err != nil {
+		t.Fatalf("ListNotices: %v", err)
+	}
+	if len(notices) == 0 {
+		t.Fatalf("background status did not create informational notice")
+	}
+	foundNotice := false
+	for _, notice := range notices {
+		if notice.ID == "background-"+id && notice.Status == "completed" {
+			foundNotice = true
+		}
+		data, _ := json.Marshal(notice)
+		if strings.Contains(string(data), "defaultOutcome") || strings.Contains(string(data), "claimToken") {
+			t.Fatalf("background notice exposed decision semantics: %s", data)
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("background notice not updated to completed: %+v", notices)
 	}
 }
 

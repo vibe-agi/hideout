@@ -15,6 +15,8 @@ func PanelEventCoverage() map[string][]string {
 		"exports":      {KindExport},
 		"cleanup":      {KindCleanup},
 		"hostfs-write": {KindHostFSWrite},
+		"decisions":    {KindDecision},
+		"notices":      {KindNotice},
 		"stream":       {KindTerminal},
 	}
 }
@@ -97,8 +99,28 @@ func RepresentativeEvents() []Event {
 		},
 		{
 			Version: EventVersion,
-			Kind:    KindTerminal,
+			Kind:    KindDecision,
 			Seq:     9,
+			Entity:  EntityRef{Kind: KindDecision, ID: "dec_share_123", Profile: "alpha", Session: "ses_alpha"},
+			Payload: EventPayload{
+				ID: "dec_share_123", DecisionID: "dec_share_123", RecordKind: "evidence.share", Status: "pending", DefaultOutcome: "deny",
+				Profile: "alpha", Session: "ses_alpha", Backend: "native",
+			},
+		},
+		{
+			Version: EventVersion,
+			Kind:    KindNotice,
+			Seq:     10,
+			Entity:  EntityRef{Kind: KindNotice, ID: "notice_priv_123", Profile: "alpha", Session: "ses_alpha"},
+			Payload: EventPayload{
+				ID: "notice_priv_123", NoticeID: "notice_priv_123", RecordKind: "privilege.status", Status: "degraded", Severity: "warning",
+				Profile: "alpha", Session: "ses_alpha", Backend: "lima", Acknowledged: false,
+			},
+		},
+		{
+			Version: EventVersion,
+			Kind:    KindTerminal,
+			Seq:     11,
 			Entity:  EntityRef{Kind: "stream"},
 			Payload: EventPayload{Reason: "stream closed"},
 		},

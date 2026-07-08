@@ -97,8 +97,11 @@ hideout run -- <cli>
 hideout run --fs read:/absolute/file -- <cli>
 hideout run --fs overlay-dir:/absolute/directory -- <cli>
 hideout hostfs write status
+hideout decision list
+hideout notice list
 hideout explain -- <cli>
 hideout audit show --limit 20
+hideout audit export --share --source audit --out /tmp/share.json --acknowledge-full-fidelity
 ```
 
 ## First Run

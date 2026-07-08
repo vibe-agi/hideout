@@ -182,6 +182,92 @@ func TestCoreExportEmitsLiveOperationEvents(t *testing.T) {
 	}
 }
 
+func TestCoreShareExportRequiresDecisionApproval(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	writeManagerExportAudit(t, store.Root, "ses_export", audit.Event{
+		Session:  "ses_export",
+		Profile:  "default",
+		Backend:  "native",
+		Action:   "host.open",
+		Decision: "allow",
+		Details:  map[string]any{"target": "https://example.com"},
+	})
+	core := New(store)
+
+	localOut := filepath.Join(t.TempDir(), "local.json")
+	localOpts := ExportOptions{Source: exportboundary.SourceAudit, Session: "ses_export", Out: localOut, AcknowledgeFullFidelity: true}
+	localPlan, err := core.PlanExport(localOpts)
+	if err != nil {
+		t.Fatalf("local PlanExport: %v", err)
+	}
+	if localPlan.DecisionID != "" {
+		t.Fatalf("local export should not create a decision: %+v", localPlan)
+	}
+	if _, err := core.ApplyExport(localPlan, localOpts); err != nil {
+		t.Fatalf("local ApplyExport: %v", err)
+	}
+	decisions, err := core.ListDecisions(DecisionListRequest{Kind: "evidence.share", IncludeTerminal: true})
+	if err != nil {
+		t.Fatalf("list local decisions: %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("local export created share decisions: %+v", decisions)
+	}
+
+	shareOut := filepath.Join(t.TempDir(), "share.json")
+	shareOpts := ExportOptions{Source: exportboundary.SourceAudit, Session: "ses_export", Out: shareOut, AcknowledgeFullFidelity: true, Share: true}
+	sharePlan, err := core.PlanExport(shareOpts)
+	if err != nil {
+		t.Fatalf("share PlanExport: %v", err)
+	}
+	if sharePlan.DecisionID == "" {
+		t.Fatalf("share export did not create decision: %+v", sharePlan)
+	}
+	if _, statErr := os.Stat(shareOut); !os.IsNotExist(statErr) {
+		t.Fatalf("share plan should not release artifact: %v", statErr)
+	}
+	if _, err := core.ApplyExport(sharePlan, shareOpts); err == nil {
+		t.Fatal("share ApplyExport without decision approval should fail closed")
+	}
+	if _, statErr := os.Stat(shareOut); !os.IsNotExist(statErr) {
+		t.Fatalf("unapproved share apply should not release artifact: %v", statErr)
+	}
+	claim, err := core.ClaimDecision(DecisionClaimRequest{DecisionID: sharePlan.DecisionID, ExpectedVersion: "hideout.decision/v1", Surface: "cli"})
+	if err != nil {
+		t.Fatalf("claim share decision: %v", err)
+	}
+	if _, err := core.DenyDecision(DecisionResolveRequest{DecisionID: sharePlan.DecisionID, ExpectedVersion: "hideout.decision/v1", ClaimToken: claim.ClaimToken, Reason: "do not share"}); err != nil {
+		t.Fatalf("deny share decision: %v", err)
+	}
+	if _, statErr := os.Stat(shareOut); !os.IsNotExist(statErr) {
+		t.Fatalf("denied share should not release artifact: %v", statErr)
+	}
+
+	approvedOut := filepath.Join(t.TempDir(), "approved-share.json")
+	approvedPlan, err := core.PlanExport(ExportOptions{Source: exportboundary.SourceAudit, Session: "ses_export", Out: approvedOut, AcknowledgeFullFidelity: true, Share: true})
+	if err != nil {
+		t.Fatalf("approved share PlanExport: %v", err)
+	}
+	approvedClaim, err := core.ClaimDecision(DecisionClaimRequest{DecisionID: approvedPlan.DecisionID, ExpectedVersion: "hideout.decision/v1", Surface: "cli"})
+	if err != nil {
+		t.Fatalf("claim approved share decision: %v", err)
+	}
+	resolution, err := core.ApproveDecision(DecisionResolveRequest{DecisionID: approvedPlan.DecisionID, ExpectedVersion: "hideout.decision/v1", ClaimToken: approvedClaim.ClaimToken, Reason: "share approved"})
+	if err != nil {
+		t.Fatalf("approve share decision: %v", err)
+	}
+	if resolution.Status != "applied" || resolution.Decision != "allow" {
+		t.Fatalf("share resolution mismatch: %+v", resolution)
+	}
+	data, err := os.ReadFile(approvedOut)
+	if err != nil {
+		t.Fatalf("approved share artifact missing: %v", err)
+	}
+	if !strings.Contains(string(data), "https://example.com") {
+		t.Fatalf("approved share artifact missing audit evidence:\n%s", data)
+	}
+}
+
 func SourceAuditForManagerTest() exportboundary.SourceKind {
 	return exportboundary.SourceAudit
 }
