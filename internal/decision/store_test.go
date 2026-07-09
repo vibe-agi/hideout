@@ -3,6 +3,7 @@ package decision
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -88,6 +89,51 @@ func TestStoreListFilterAndScale(t *testing.T) {
 	}
 	if status.PendingDecisions != 100 || status.UnackedNotices != 100 {
 		t.Fatalf("status=%#v", status)
+	}
+}
+
+func TestStoreClaimDecisionUsesFileLockAcrossStoreInstances(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 7, 8, 4, 0, 0, 0, time.UTC)
+	store := NewStoreAt(root)
+	store.SetNow(func() time.Time { return now })
+	if _, err := store.CreateOrUpdateDecision(sampleDecision("dec-race", now.Add(time.Hour))); err != nil {
+		t.Fatalf("CreateOrUpdateDecision: %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 16)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := NewStoreAt(root)
+			s.SetNow(func() time.Time { return now })
+			<-start
+			_, _, err := s.ClaimDecision("dec-race", "webui", time.Minute)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var successes int
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful claims=%d, want exactly 1", successes)
+	}
+	got, err := store.Decision("dec-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateClaimed || got.Claim == nil {
+		t.Fatalf("decision was not claimed once: %+v", got)
 	}
 }
 

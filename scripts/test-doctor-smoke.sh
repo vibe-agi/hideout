@@ -53,8 +53,16 @@ assert_clean "$tmp/doctor.json"
 run_hideout doctor --backend native --workspace "$tmp/workspace" --feature dns --format json >"$tmp/doctor-dns.json"
 jq -e '
   (.features == ["dns"]) and
-  ([.findings[] | select(.checkId == "feature-dns" and .status == "skipped")] | length) == 1
+  ([.findings[] | select(.checkId == "feature-dns" and .status == "warn")] | length) == 1
 ' "$tmp/doctor-dns.json" >/dev/null
+
+run_hideout doctor --backend native --workspace "$tmp/workspace" --level deep --format json >"$tmp/doctor-deep.json"
+jq -e '
+  .level == "deep" and
+  ([.findings[] | select(.checkId | startswith("feature-"))] | length) >= 10 and
+  ([.findings[] | select(.checkId == "feature-decisions" and .status == "pass")] | length) == 1 and
+  ([.findings[] | select(.checkId == "feature-adapters" and .status == "pass")] | length) == 1
+' "$tmp/doctor-deep.json" >/dev/null
 
 if run_hideout doctor --backend native --workspace "$tmp/missing" --format json >"$tmp/doctor-bad.json" 2>"$tmp/doctor-bad.err"; then
   echo "doctor-smoke: missing workspace unexpectedly passed" >&2

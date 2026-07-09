@@ -58,10 +58,10 @@ func TestReleaseCandidateWithEvidenceCanPass(t *testing.T) {
 	dir := t.TempDir()
 	gate2 := filepath.Join(dir, "gate2.json")
 	gate3 := filepath.Join(dir, "gate3.json")
-	if err := os.WriteFile(gate2, []byte(`{"status":"passed"}`), 0o600); err != nil {
+	if err := os.WriteFile(gate2, []byte(`{"id":"gate2-lima","backend":"lima","result":"passed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(gate3, []byte(`{"status":"passed"}`), 0o600); err != nil {
+	if err := os.WriteFile(gate3, []byte(`{"id":"gate3-hidden-proxy","backend":"lima","result":"passed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ready, err := BuildReadiness(ReadinessOptions{Mode: "release-candidate", LocalPassed: true, Gate2Evidence: gate2, Gate3Evidence: gate3})
@@ -73,6 +73,70 @@ func TestReleaseCandidateWithEvidenceCanPass(t *testing.T) {
 	}
 	if !ready.ReleaseReady || ready.Status != "passed" {
 		t.Fatalf("candidate with evidence not ready: %+v", ready)
+	}
+}
+
+func TestReleaseCandidateRejectsEmptyOrWrongGateEvidence(t *testing.T) {
+	dir := t.TempDir()
+	gate2 := filepath.Join(dir, "gate2.json")
+	gate3 := filepath.Join(dir, "gate3.json")
+	if err := os.WriteFile(gate2, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gate3, []byte(`{"id":"gate2-lima","backend":"lima","result":"passed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := BuildReadiness(ReadinessOptions{Mode: "release-candidate", LocalPassed: true, Gate2Evidence: gate2, Gate3Evidence: gate3})
+	if err != nil {
+		t.Fatalf("build readiness: %v", err)
+	}
+	if ready.ReleaseReady {
+		t.Fatal("candidate with empty/wrong evidence claimed releaseReady")
+	}
+	if ready.Gates[0].Status != "failed" || ready.Gates[1].Status != "failed" {
+		t.Fatalf("expected failed gates, got %+v", ready.Gates)
+	}
+}
+
+func TestReleaseCandidateRejectsNativeGateEvidence(t *testing.T) {
+	dir := t.TempDir()
+	gate2 := filepath.Join(dir, "gate2.json")
+	gate3 := filepath.Join(dir, "gate3.json")
+	if err := os.WriteFile(gate2, []byte(`{"id":"gate2-lima","backend":"native","result":"passed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gate3, []byte(`{"id":"gate3-hidden-proxy","backend":"lima","result":"passed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := BuildReadiness(ReadinessOptions{Mode: "release-candidate", LocalPassed: true, Gate2Evidence: gate2, Gate3Evidence: gate3})
+	if err != nil {
+		t.Fatalf("build readiness: %v", err)
+	}
+	if ready.ReleaseReady || ready.Gates[0].Status != "failed" {
+		t.Fatalf("native evidence accepted: %+v", ready)
+	}
+}
+
+func TestReleaseCandidateAcceptsReleaseDogfoodManifest(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "manifest.json")
+	data := []byte(`{
+  "schema": "hideout.release-dogfood.v1",
+  "status": "passed",
+  "isolationGates": [
+    {"id":"gate2-lima","backend":"lima","result":"passed"},
+    {"id":"gate3-hidden-proxy","backend":"lima","result":"passed"}
+  ]
+}`)
+	if err := os.WriteFile(manifest, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := BuildReadiness(ReadinessOptions{Mode: "release-candidate", LocalPassed: true, Gate2Evidence: manifest, Gate3Evidence: manifest})
+	if err != nil {
+		t.Fatalf("build readiness: %v", err)
+	}
+	if !ready.ReleaseReady {
+		t.Fatalf("dogfood manifest was not accepted: %+v", ready)
 	}
 }
 

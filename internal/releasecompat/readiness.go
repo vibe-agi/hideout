@@ -138,10 +138,76 @@ func evidenceGate(id, path string) GateResult {
 	if path == "" {
 		return GateResult{ID: id, Required: true, Status: "missing", Summary: "required real gate evidence is missing"}
 	}
-	if _, err := os.Stat(path); err != nil {
+	summary, err := validateGateEvidence(id, path)
+	if err != nil {
 		return GateResult{ID: id, Required: true, Status: "failed", EvidencePath: audit.RedactString(path), Summary: audit.RedactString(err.Error())}
 	}
-	return GateResult{ID: id, Required: true, Status: "passed", EvidencePath: audit.RedactString(path), Summary: "real gate evidence present"}
+	return GateResult{ID: id, Required: true, Status: "passed", EvidencePath: audit.RedactString(path), Summary: summary}
+}
+
+type gateEvidence struct {
+	ID      string `json:"id"`
+	Backend string `json:"backend"`
+	Result  string `json:"result"`
+}
+
+type releaseDogfoodEvidence struct {
+	Schema         string         `json:"schema"`
+	Status         string         `json:"status"`
+	IsolationGates []gateEvidence `json:"isolationGates"`
+}
+
+func validateGateEvidence(id, path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return "", fmt.Errorf("%s evidence is empty", id)
+	}
+	var gate gateEvidence
+	if err := json.Unmarshal(data, &gate); err == nil && gate.ID != "" {
+		if err := validateSingleGate(id, gate); err != nil {
+			return "", err
+		}
+		return "real gate result passed", nil
+	}
+	var manifest releaseDogfoodEvidence
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", fmt.Errorf("%s evidence is not valid JSON gate evidence: %w", id, err)
+	}
+	if manifest.Schema != "hideout.release-dogfood.v1" {
+		return "", fmt.Errorf("%s evidence has unsupported schema %q", id, manifest.Schema)
+	}
+	if manifest.Status != "passed" {
+		return "", fmt.Errorf("%s release dogfood evidence status is %q", id, manifest.Status)
+	}
+	for _, candidate := range manifest.IsolationGates {
+		if candidate.ID != id {
+			continue
+		}
+		if err := validateSingleGate(id, candidate); err != nil {
+			return "", err
+		}
+		return "release dogfood manifest includes passed gate", nil
+	}
+	return "", fmt.Errorf("%s release dogfood evidence does not include the required gate", id)
+}
+
+func validateSingleGate(id string, gate gateEvidence) error {
+	if gate.ID != id {
+		return fmt.Errorf("gate evidence id %q does not match required %q", gate.ID, id)
+	}
+	if gate.Result != "passed" {
+		return fmt.Errorf("%s evidence result is %q", id, gate.Result)
+	}
+	if strings.TrimSpace(gate.Backend) == "" {
+		return fmt.Errorf("%s evidence backend is missing", id)
+	}
+	if gate.Backend == "native" {
+		return fmt.Errorf("%s evidence cannot be satisfied by native backend", id)
+	}
+	return nil
 }
 
 func gatesPassed(gates []GateResult) bool {

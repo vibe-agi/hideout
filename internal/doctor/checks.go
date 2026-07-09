@@ -25,12 +25,3 @@ func CheckStoreWritable(storeRoot string, b *Builder) {
 	_ = os.Remove(probe)
 	b.Add("store", "store", StatusPass, "writable")
 }
-
-func AddSelectedFeaturePlaceholders(req Request, b *Builder) {
-	if b == nil {
-		return
-	}
-	for _, feature := range NormalizeFeatures(req.Features) {
-		b.Add("feature-"+feature, feature, StatusSkipped, "feature scope selected; local doctor did not run a real backend or network probe", WithRequired(false))
-	}
-}

@@ -53,7 +53,8 @@ if [ -z "$mode" ]; then
   mode="local-fast"
 fi
 if [ -z "$out" ]; then
-  out="$(mktemp "${TMPDIR:-/tmp}/hideout-release-readiness.XXXXXX.json")"
+  out_dir="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-readiness.XXXXXX")"
+  out="$out_dir/readiness.json"
 fi
 
 commit="$(git rev-parse HEAD 2>/dev/null || printf unknown)"
@@ -68,10 +69,8 @@ run_local_fast_checks() {
     scripts/test-gate0.sh
 }
 
-if [ "$mode" = "local-fast" ]; then
-  if ! run_local_fast_checks; then
-    local_status="failed"
-  fi
+if ! run_local_fast_checks; then
+  local_status="failed"
 fi
 
 set +e

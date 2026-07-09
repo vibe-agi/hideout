@@ -284,10 +284,15 @@ func TestPlanMachineHardenedRequiresEnforcedPrivilege(t *testing.T) {
 	enforced.ProfileName = "hardened-ok"
 	enforced.PrivilegeStatus = "enforced"
 	plan, err = PlanMachine(store, enforced)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "native backend") {
+		t.Fatalf("native hardened enforced should fail, got plan=%+v err=%v", plan, err)
 	}
-	if plan.EffectivePosture != "hardened" || plan.PrivilegeStatus != "enforced" {
+	enforced.Backend = "lima"
+	plan, err = PlanMachine(store, enforced)
+	if err != nil {
+		t.Fatalf("lima hardened enforced: %v", err)
+	}
+	if plan.EffectivePosture != "hardened" || plan.PrivilegeStatus != "enforced" || plan.Backend != "lima" {
 		t.Fatalf("bad enforced plan: %+v", plan)
 	}
 }

@@ -445,6 +445,9 @@ func normalizeRequest(req Request) (Request, Template, error) {
 	if tmpl.ID == Hardened && req.Privilege.Status != PrivilegeEnforced && !req.AllowDegradedTemplate {
 		return req, Template{}, fmt.Errorf("hardened requires enforced privilege separation; status=%s; recreate with a no-sudo base image or pass --allow-degraded-template to create a visibly degraded profile", req.Privilege.Status)
 	}
+	if tmpl.ID == Hardened && req.Backend == "native" && req.Privilege.Status == PrivilegeEnforced {
+		return req, Template{}, errors.New("hardened cannot claim enforced privilege separation on the native backend; use a Lima profile with observed privilege separation or pass --allow-degraded-template with degraded/unknown status")
+	}
 	return req, tmpl, nil
 }
 

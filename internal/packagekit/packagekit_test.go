@@ -161,6 +161,14 @@ func TestUninstallDryRunPreserveAndPurge(t *testing.T) {
 	if _, err := os.Stat(store); !os.IsNotExist(err) {
 		t.Fatalf("store not purged: %v", err)
 	}
+	purgeAudit := filepath.Join(filepath.Dir(store), "hideout-package-purge-audit.jsonl")
+	data, err := os.ReadFile(purgeAudit)
+	if err != nil {
+		t.Fatalf("purge audit missing: %v", err)
+	}
+	if !strings.Contains(string(data), `"operation":"uninstall"`) || !strings.Contains(string(data), `"purge":true`) {
+		t.Fatalf("purge audit missing uninstall/purge event: %s", data)
+	}
 }
 
 func writeTestArtifact(t *testing.T, overrides map[string]string) string {

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -41,6 +42,11 @@ func (s *Store) SetNow(now func() time.Time) {
 }
 
 func (s *Store) CreateOrUpdateDecision(d Decision) (Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Decision{}, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -124,6 +130,11 @@ func (s *Store) Decisions(filter ListFilter) ([]Decision, error) {
 }
 
 func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimResponse, Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return ClaimResponse{}, Decision{}, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -177,6 +188,11 @@ func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimRes
 }
 
 func (s *Store) ResolveDecision(id, token, state, decision, reason string, providerResult map[string]any) (Resolution, Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -218,6 +234,11 @@ func (s *Store) ResolveDecision(id, token, state, decision, reason string, provi
 }
 
 func (s *Store) ValidateDecisionClaim(id, token string) (Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Decision{}, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -238,6 +259,19 @@ func (s *Store) ValidateDecisionClaim(id, token string) (Decision, error) {
 }
 
 func (s *Store) TimeoutExpired(now time.Time) (int, error) {
+	timedOut, err := s.TimeoutExpiredDecisions(now)
+	if err != nil {
+		return 0, err
+	}
+	return len(timedOut), nil
+}
+
+func (s *Store) TimeoutExpiredDecisions(now time.Time) ([]Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if now.IsZero() {
@@ -246,11 +280,11 @@ func (s *Store) TimeoutExpired(now time.Time) (int, error) {
 	entries, err := os.ReadDir(s.decisionsDir())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
+			return []Decision{}, nil
 		}
-		return 0, err
+		return nil, err
 	}
-	var count int
+	var out []Decision
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -258,17 +292,17 @@ func (s *Store) TimeoutExpired(now time.Time) (int, error) {
 		var d Decision
 		path := filepath.Join(s.decisionsDir(), entry.Name())
 		if err := readJSON(path, &d); err != nil {
-			return count, err
+			return out, err
 		}
 		if !expiredDecision(d, now) {
 			continue
 		}
 		if err := s.timeoutDecisionLocked(&d, now); err != nil {
-			return count, err
+			return out, err
 		}
-		count++
+		out = append(out, RedactDecision(d))
 	}
-	return count, nil
+	return out, nil
 }
 
 func (s *Store) timeoutDecisionLocked(d *Decision, now time.Time) error {
@@ -280,6 +314,11 @@ func (s *Store) timeoutDecisionLocked(d *Decision, now time.Time) error {
 }
 
 func (s *Store) CreateOrUpdateNotice(n Notice) (Notice, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Notice{}, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -361,6 +400,11 @@ func (s *Store) Notices(filter ListFilter) ([]Notice, error) {
 }
 
 func (s *Store) AckNotice(id, surface string) (Acknowledgement, Notice, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Acknowledgement{}, Notice{}, err
+	}
+	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -445,6 +489,34 @@ func (s *Store) decisionPath(id string) string {
 
 func (s *Store) noticePath(id string) string {
 	return filepath.Join(s.noticesDir(), id+".json")
+}
+
+func (s *Store) lockFile() (func() error, error) {
+	if s == nil {
+		return nil, errors.New("decision store is nil")
+	}
+	if s.root == "" {
+		return nil, errors.New("decision store root is required")
+	}
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() error {
+		unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		closeErr := file.Close()
+		if unlockErr != nil {
+			return unlockErr
+		}
+		return closeErr
+	}, nil
 }
 
 func decisionMatches(d Decision, f ListFilter) bool {

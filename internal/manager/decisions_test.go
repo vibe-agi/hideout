@@ -127,6 +127,45 @@ func TestDecisionStatusIsMachineReadableAndProviderPrivateFree(t *testing.T) {
 	}
 }
 
+func TestDecisionStatusExpiresGenericDecisionsAndAuditsTimeout(t *testing.T) {
+	core := Core{Store: profile.Store{Root: t.TempDir()}}
+	expiredAt := time.Now().Add(-time.Minute)
+	if _, err := core.CreateDecision(decision.Decision{
+		ID:             "share-timeout-1",
+		Kind:           decision.KindEvidenceShare,
+		State:          decision.StatePending,
+		Source:         decision.Source{Profile: "default", Session: "ses_timeout", Backend: "lima"},
+		Preview:        decision.Preview{Summary: "share evidence"},
+		DefaultOutcome: decision.DefaultOutcomeDeny,
+		TimeoutAt:      expiredAt,
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		AuditRef:       "audit:share-timeout-1",
+	}); err != nil {
+		t.Fatalf("CreateDecision: %v", err)
+	}
+	status, err := core.DecisionStatus()
+	if err != nil {
+		t.Fatalf("DecisionStatus: %v", err)
+	}
+	if status.PendingDecisions != 0 || status.TerminalDecisions != 1 {
+		t.Fatalf("status did not expire decision: %+v", status)
+	}
+	decisions, err := core.ListDecisions(DecisionListRequest{Kind: decision.KindEvidenceShare, IncludeTerminal: true})
+	if err != nil {
+		t.Fatalf("ListDecisions: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].State != decision.StateTimedOut {
+		t.Fatalf("decision did not time out: %+v", decisions)
+	}
+	body := readOperatorCenterAudit(t, core.Store.Root)
+	if !strings.Contains(body, decision.ActionDecisionTimeout) {
+		t.Fatalf("timeout audit missing: %s", body)
+	}
+	if _, err := core.ClaimDecision(DecisionClaimRequest{DecisionID: "share-timeout-1", ExpectedVersion: decision.DecisionVersion, Surface: "cli"}); err == nil {
+		t.Fatalf("timed-out decision should not be claimable")
+	}
+}
+
 func TestAdapterProposalWithoutProviderFailsClosed(t *testing.T) {
 	core := Core{Store: profile.Store{Root: t.TempDir()}}
 	d, err := core.CreateDecision(decision.Decision{

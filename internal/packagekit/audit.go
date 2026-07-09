@@ -26,11 +26,25 @@ func writeAudit(storeRoot string, event AuditEvent) {
 	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return
 	}
+	writeAuditFile(filepath.Join(logDir, "package-audit.jsonl"), event)
+}
+
+func writePurgeAudit(storeRoot string, event AuditEvent) {
+	if storeRoot == "" {
+		return
+	}
+	parent := filepath.Dir(filepath.Clean(storeRoot))
+	if parent == "" || parent == "." {
+		return
+	}
+	writeAuditFile(filepath.Join(parent, "hideout-package-purge-audit.jsonl"), event)
+}
+
+func writeAuditFile(path string, event AuditEvent) {
 	event.Schema = "hideout.package-audit.v1"
 	if event.Time == "" {
 		event.Time = time.Now().UTC().Format(time.RFC3339)
 	}
-	path := filepath.Join(logDir, "package-audit.jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return

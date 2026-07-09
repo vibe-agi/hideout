@@ -2207,7 +2207,7 @@ func (a app) doctor(args []string) error {
 	if !profileLoaded {
 		report("profile-init", "warn", "run or profile init will materialize profile state")
 	}
-	doctorpkg.AddSelectedFeaturePlaceholders(doctorReq, builder)
+	a.addDoctorFeatureDiagnostics(doctorReq, store, runtimeProfile, backendName, workspace, builder)
 	if opts.evidenceOut != "" {
 		evidencePath, err := builder.WriteEvidence(opts.evidenceOut)
 		if err != nil {
@@ -2263,6 +2263,129 @@ func doctorSupportMatrixStatus(backendName string) string {
 
 func doctorSupportMatrixMessage(backendName string) string {
 	return fmt.Sprintf("matrix=%s %s", releasecompat.MatrixVersion, releasecompat.CurrentSupportSummary(backendName))
+}
+
+func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.Store, p profile.Profile, backendName string, workspace string, builder *doctorpkg.Builder) {
+	features := selectedDoctorDiagnosticFeatures(req)
+	if len(features) == 0 || builder == nil {
+		return
+	}
+	core := manager.New(store)
+	overview, overviewErr := core.Overview(context.Background())
+	decisionStatus, decisionErr := core.DecisionStatus()
+	for _, feature := range features {
+		switch feature {
+		case "adapters":
+			enabled := countEnabledAdapters(p)
+			packs := 0
+			if overviewErr == nil {
+				packs = len(overview.AdapterPacks)
+			}
+			builder.Add("feature-adapters", "adapters", doctorpkg.StatusPass, fmt.Sprintf("enabledAdapters=%d adapterPacks=%d", enabled, packs), doctorpkg.WithRequired(false))
+		case "cleanup":
+			if overviewErr != nil {
+				builder.Add("feature-cleanup", "cleanup", doctorpkg.StatusWarn, "manager overview unavailable: "+overviewErr.Error(), doctorpkg.WithRequired(false))
+				continue
+			}
+			builder.Add("feature-cleanup", "cleanup", doctorpkg.StatusPass, fmt.Sprintf("sessions=%d environments=%d", len(overview.Sessions), len(overview.Environments)), doctorpkg.WithRequired(false))
+		case "daemon":
+			builder.Add("feature-daemon", "daemon", doctorpkg.StatusPass, "daemon command and schemas are packaged; runtime availability is checked by daemon smoke", doctorpkg.WithRequired(false))
+		case "decisions":
+			if decisionErr != nil {
+				builder.Add("feature-decisions", "decisions", doctorpkg.StatusWarn, "decision status unavailable: "+decisionErr.Error(), doctorpkg.WithRequired(false))
+				continue
+			}
+			builder.Add("feature-decisions", "decisions", doctorpkg.StatusPass, fmt.Sprintf("pending=%d claimed=%d terminal=%d notices=%d", decisionStatus.PendingDecisions, decisionStatus.ClaimedDecisions, decisionStatus.TerminalDecisions, decisionStatus.UnackedNotices), doctorpkg.WithRequired(false))
+		case "dns":
+			status, msg := doctorDNSFeatureStatus(p, backendName)
+			builder.Add("feature-dns", "dns", status, msg, doctorpkg.WithRequired(false))
+		case "export":
+			builder.Add("feature-export", "export", doctorpkg.StatusPass, "export/share schema and doctor-report source are available; use hideout audit export for shareable evidence", doctorpkg.WithRequired(false))
+		case "hostfs":
+			builder.Add("feature-hostfs", "hostfs", doctorpkg.StatusPass, fmt.Sprintf("grants=%d denyRules=%d overlayGrants=%d workspace=%s", len(p.HostFS.Grants), len(p.HostFS.Deny), countOverlayGrants(p), audit.RedactString(workspace)), doctorpkg.WithRequired(false))
+		case "lima":
+			status, msg := doctorLimaFeatureStatus(overview, overviewErr, backendName)
+			builder.Add("feature-lima", "lima", status, msg, doctorpkg.WithRequired(false))
+		case "packaging":
+			builder.Add("feature-packaging", "packaging", doctorpkg.StatusPass, "package install/verify/uninstall commands are available; package smoke validates artifact ownership", doctorpkg.WithRequired(false))
+		case "privilege":
+			builder.Add("feature-privilege", "privilege", doctorpkg.StatusPass, doctorGuestPrivilegeMessage(context.Background(), store, req.Profile), doctorpkg.WithRequired(false))
+		}
+	}
+}
+
+func selectedDoctorDiagnosticFeatures(req doctorpkg.Request) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(feature string) {
+		feature = strings.TrimSpace(feature)
+		if feature == "" || seen[feature] {
+			return
+		}
+		seen[feature] = true
+		out = append(out, feature)
+	}
+	for _, feature := range doctorpkg.NormalizeFeatures(req.Features) {
+		add(feature)
+	}
+	if doctorpkg.DeepSelected(req) {
+		for _, feature := range doctorpkg.SupportedFeatures {
+			add(feature)
+		}
+	}
+	return out
+}
+
+func countEnabledAdapters(p profile.Profile) int {
+	count := 0
+	for _, adapter := range p.CommandAdapters.Adapters {
+		if adapter.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
+func countOverlayGrants(p profile.Profile) int {
+	count := 0
+	for _, grant := range p.HostFS.Grants {
+		if grant.Overlay {
+			count++
+		}
+	}
+	return count
+}
+
+func doctorDNSFeatureStatus(p profile.Profile, backendName string) (string, string) {
+	if p.Network.Mode != "tun2socks" {
+		return doctorpkg.StatusWarn, "network mode is " + p.Network.Mode + "; DNS mediation requires tun2socks privacy mode"
+	}
+	if strings.TrimSpace(p.Network.MediatedResolver) == "" {
+		return doctorpkg.StatusWarn, "tun2socks is selected but mediated resolver is not configured"
+	}
+	if backendName == "native" {
+		return doctorpkg.StatusWarn, "mediated resolver configured, but native backend is not DNS isolation evidence"
+	}
+	return doctorpkg.StatusPass, "tun2socks mediated resolver configured; release claim still requires Gate 3"
+}
+
+func doctorLimaFeatureStatus(overview manager.Overview, overviewErr error, backendName string) (string, string) {
+	if backendName != "lima" {
+		return doctorpkg.StatusWarn, "requested backend is " + backendName + "; Lima proof requires --backend lima"
+	}
+	if overviewErr != nil {
+		return doctorpkg.StatusWarn, "manager overview unavailable: " + overviewErr.Error()
+	}
+	for _, backend := range overview.Backends {
+		if backend.Name != "lima" {
+			continue
+		}
+		if backend.Available {
+			return doctorpkg.StatusPass, "lima backend is available"
+		}
+		return doctorpkg.StatusWarn, "lima backend unavailable: " + backend.Error
+	}
+	return doctorpkg.StatusWarn, "lima backend status not reported"
 }
 
 func availableBackends(backends []manager.BackendSummary) int {

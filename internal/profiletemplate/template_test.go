@@ -130,6 +130,14 @@ func TestHardenedPrivilegeRules(t *testing.T) {
 	if !contains(rendered.NonClaims, "not a hardened privilege boundary") {
 		t.Fatalf("degraded fallback missing non-claim: %v", rendered.NonClaims)
 	}
+
+	req = validRequest(Hardened)
+	req.Backend = "native"
+	req.Privilege.Status = PrivilegeEnforced
+	_, err = Render(req)
+	if err == nil || !strings.Contains(err.Error(), "native backend") {
+		t.Fatalf("native hardened enforced should fail, got %v", err)
+	}
 }
 
 func TestEvidenceRedactionAndWrite(t *testing.T) {

@@ -94,6 +94,14 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 		if err := os.RemoveAll(store); err != nil {
 			return result, fmt.Errorf("purge durable store: %w", err)
 		}
+		writePurgeAudit(store, AuditEvent{
+			Operation: "uninstall",
+			Status:    "passed",
+			Prefix:    prefix,
+			StoreRoot: store,
+			Files:     len(files),
+			Purge:     opts.Purge,
+		})
 	} else {
 		writeAudit(store, AuditEvent{
 			Operation: "uninstall",

@@ -59,6 +59,9 @@ func (c Core) ListDecisions(req DecisionListRequest) ([]decision.Decision, error
 	if err := c.syncHostFSWriteDecisions(); err != nil {
 		return nil, err
 	}
+	if err := c.expireDecisionTimeouts(); err != nil {
+		return nil, err
+	}
 	store, err := c.decisionStore()
 	if err != nil {
 		return nil, err
@@ -76,6 +79,9 @@ func (c Core) InspectDecision(id string) (decision.Decision, error) {
 	if err := c.syncHostFSWriteDecisions(); err != nil {
 		return decision.Decision{}, err
 	}
+	if err := c.expireDecisionTimeouts(); err != nil {
+		return decision.Decision{}, err
+	}
 	store, err := c.decisionStore()
 	if err != nil {
 		return decision.Decision{}, err
@@ -85,6 +91,9 @@ func (c Core) InspectDecision(id string) (decision.Decision, error) {
 
 func (c Core) inspectDecisionPrivate(id string) (decision.Decision, error) {
 	if err := c.syncHostFSWriteDecisions(); err != nil {
+		return decision.Decision{}, err
+	}
+	if err := c.expireDecisionTimeouts(); err != nil {
 		return decision.Decision{}, err
 	}
 	store, err := c.decisionStore()
@@ -116,6 +125,11 @@ func (c Core) ClaimDecision(req DecisionClaimRequest) (decision.ClaimResponse, e
 	}
 	d, err := c.inspectDecisionPrivate(req.DecisionID)
 	if err != nil {
+		return decision.ClaimResponse{}, err
+	}
+	if decision.DecisionTerminal(d.State) {
+		err := fmt.Errorf("decision %s is %s", d.ID, d.State)
+		_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
 		return decision.ClaimResponse{}, err
 	}
 	if d.Kind == decision.KindHostFSWrite {
@@ -168,6 +182,11 @@ func (c Core) resolveDecision(req DecisionResolveRequest, approve bool) (decisio
 	}
 	d, err := c.inspectDecisionPrivate(req.DecisionID)
 	if err != nil {
+		return decision.Resolution{}, err
+	}
+	if decision.DecisionTerminal(d.State) {
+		err := fmt.Errorf("decision %s is %s", d.ID, d.State)
+		_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
 		return decision.Resolution{}, err
 	}
 	if d.Kind == decision.KindHostFSWrite {
@@ -319,11 +338,32 @@ func (c Core) DecisionStatus() (DecisionStatus, error) {
 	if err := c.syncHostFSWriteDecisions(); err != nil {
 		return DecisionStatus{}, err
 	}
+	if err := c.expireDecisionTimeouts(); err != nil {
+		return DecisionStatus{}, err
+	}
 	store, err := c.decisionStore()
 	if err != nil {
 		return DecisionStatus{}, err
 	}
 	return store.Status()
+}
+
+func (c Core) expireDecisionTimeouts() error {
+	store, err := c.decisionStore()
+	if err != nil {
+		return err
+	}
+	timedOut, err := store.TimeoutExpiredDecisions(time.Time{})
+	if err != nil {
+		return err
+	}
+	for _, d := range timedOut {
+		if err := c.emitDecisionAudit(decision.ActionDecisionTimeout, "deny", d, map[string]any{"reason": "decision timed out"}); err != nil {
+			return err
+		}
+		c.emitDecision(d, decision.StateTimedOut, "decision timed out")
+	}
+	return nil
 }
 
 func (c Core) syncHostFSWriteDecisions() error {

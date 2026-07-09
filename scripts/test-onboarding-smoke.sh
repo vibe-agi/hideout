@@ -74,6 +74,22 @@ fi
 grep -q 'hardened requires enforced' "$tmp/hardened-deny.err"
 test ! -e "$store/profiles/alpha-hard/profile.json"
 
+store="$tmp/hardened-native-enforced-store"
+if run_hideout init \
+  --profile alpha-hard-native \
+  --template hardened \
+  --backend native \
+  --network tun2socks \
+  --proxy-secret proxy-url \
+  --mediated-resolver 1.1.1.1 \
+  --privilege-status enforced \
+  --no-input >"$tmp/hardened-native-enforced.out" 2>"$tmp/hardened-native-enforced.err"; then
+  echo "onboarding-smoke: native hardened enforced unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'native backend' "$tmp/hardened-native-enforced.err"
+test ! -e "$store/profiles/alpha-hard-native/profile.json"
+
 store="$tmp/hardened-fallback-store"
 run_hideout init \
   --profile alpha-hard-degraded \
