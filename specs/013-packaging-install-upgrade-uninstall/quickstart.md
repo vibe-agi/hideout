@@ -102,7 +102,8 @@ Expected:
 
 - durable state remains without `--purge`;
 - durable state is removed only with `--purge`;
-- purge is visible in output or package audit evidence.
+- purge is visible in output and survivor package audit evidence outside the
+  deleted store.
 
 ## Scenario 7: Docs Use Packaged Path
 

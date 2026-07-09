@@ -21,7 +21,8 @@ It must prove:
 - uninstall without purge removes package-owned files and preserves durable
   store fixture files;
 - uninstall with purge removes durable store fixture files and records the purge
-  action in output or package audit evidence.
+  action in output plus survivor package audit evidence outside the deleted
+  store.
 
 Smoke must not require real Lima unless a later feature changes the packaging
 contract to include real isolation behavior.

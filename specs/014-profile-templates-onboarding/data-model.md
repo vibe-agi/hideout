@@ -54,7 +54,8 @@ Validation:
   mediated resolver;
 - `tun2socks` requires proxy secret ref and mediated resolver;
 - `direct` rejects proxy secret ref and mediated resolver;
-- hardened requires `privilegeStatus=enforced`;
+- hardened requires `privilegeStatus=enforced` and a non-native backend capable
+  of product isolation evidence;
 - degraded hardened fallback requires `allowDegradedTemplate=true` and must be
   marked in metadata/evidence;
 - profile collisions fail before mutation.
@@ -72,7 +73,8 @@ Fields:
 
 Rules:
 
-- `enforced` allows hardened.
+- `enforced` allows hardened only on a non-native backend capable of product
+  isolation evidence.
 - `degraded` and `unknown` block hardened unless degraded fallback is explicit.
 - non-hardened templates may continue with warnings and non-claims.
 

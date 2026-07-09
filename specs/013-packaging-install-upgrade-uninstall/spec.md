@@ -56,7 +56,7 @@ An operator can preview and perform uninstall of package-owned files while prese
 
 1. **Given** an installed package, **When** the operator runs uninstall dry-run, **Then** Hideout reports the exact package-owned files and directories that would be removed and does not remove anything.
 2. **Given** an installed package and durable user state, **When** the operator runs uninstall without `--purge`, **Then** package-owned files are removed but profiles, audit, evidence, adapter registry, decisions, and store data remain.
-3. **Given** an installed package and durable user state, **When** the operator runs uninstall with `--purge`, **Then** durable state removal is explicit in the plan and audit evidence records the purge decision.
+3. **Given** an installed package and durable user state, **When** the operator runs uninstall with `--purge`, **Then** durable state removal is explicit in the plan and survivor audit evidence outside the deleted store records the purge decision.
 
 ---
 
@@ -107,7 +107,7 @@ A new operator following README and docs sees packaged commands as the main path
 - **FR-008**: System MUST make reinstall to the same prefix idempotent when the package and installed state already match.
 - **FR-009**: System MUST provide uninstall dry-run that reports exactly which package-owned files and directories would be removed without removing them.
 - **FR-010**: System MUST uninstall package-owned files without deleting profiles, audit, evidence, adapter registry, decisions, or durable store state unless `--purge` is explicitly selected.
-- **FR-011**: System MUST require explicit purge before durable user state is removed, and purge MUST be visible in uninstall output and audit evidence when a store is available.
+- **FR-011**: System MUST require explicit purge before durable user state is removed, and purge MUST be visible in uninstall output plus survivor audit evidence when a store path is available.
 - **FR-012**: System MUST ignore unrelated files that are not recorded as package-owned in the installed manifest during uninstall.
 - **FR-013**: System MUST include package smoke in Gate 0 and prove the installed layout can run without a source checkout.
 - **FR-014**: System MUST update README and docs so the main external-alpha path uses packaged commands, while source checkout commands are labeled development-only.

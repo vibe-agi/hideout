@@ -72,7 +72,7 @@
 - [X] T018 [P] [US2] Add feature-selection tests proving `--feature dns|hostfs|lima|privilege|adapters|packaging|daemon|decisions|export|cleanup` includes only selected checks in `internal/doctor/runner_test.go` (FR-004)
 - [X] T019 [P] [US2] Add DNS prerequisite, gate-required marker, and no-weak-fallback tests in `internal/doctor/checks_test.go` (FR-011)
 - [X] T020 [P] [US2] Add HostFS local-readiness, gate-required marker, reserved-root, and no-weak-fallback tests in `internal/doctor/checks_test.go` (FR-012)
-- [X] T021 [P] [US2] Add adapter registry, decision queue, daemon status, export/redaction, and cleanup health tests in `internal/doctor/checks_test.go` (FR-007, FR-008, FR-009, FR-010, SC-003)
+- [X] T021 [P] [US2] Add adapter inventory, decision status, daemon status, export/redaction, and cleanup health tests in `internal/doctor/checks_test.go` (FR-007, FR-008, FR-009, FR-010, SC-003)
 
 ### Implementation for User Story 2
 
@@ -80,7 +80,7 @@
 - [X] T023 [US2] Implement DNS/network diagnostic checks using existing dry-run plan facts and explicit gate-required markers in `internal/doctor/checks.go` (FR-011)
 - [X] T024 [US2] Implement HostFS local-readiness checks and explicit gate-required markers in `internal/doctor/checks.go` (FR-012)
 - [X] T025 [US2] Implement Lima/backend and privilege status checks preserving enforced/degraded/unknown non-claims in `internal/doctor/checks.go` (FR-013, SC-005)
-- [X] T026 [US2] Implement adapter registry, decision queue, daemon, export/redaction, package, and cleanup checks from existing stores in `internal/doctor/checks.go` (FR-007, FR-008, FR-009, FR-010)
+- [X] T026 [US2] Implement adapter inventory, decision status, daemon, export/redaction, package, and cleanup checks from existing stores in `internal/doctor/checks.go` (FR-007, FR-008, FR-009, FR-010)
 - [X] T027 [US2] Update CLI feature/deep output ordering and summaries in `internal/app/app.go`
 
 **Checkpoint**: US1 and US2 both work independently.

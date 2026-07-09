@@ -17,8 +17,8 @@ hideout doctor --fix --apply [same scope flags]
 
 - No level flag means `light`.
 - No feature flag means run the checks selected by the level.
-- `--feature <name>` includes that feature's local checks or explicit
-  gate-required marker even in light mode.
+- `--feature <name>` includes that feature's local inventory/status checks or
+  explicit gate-required marker even in light mode.
 - `--level deep` includes deep checks, but checks with unavailable prerequisites
   report error, skipped, or unsupported; they do not silently fall back to weak
   evidence.

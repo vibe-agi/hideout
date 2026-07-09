@@ -94,7 +94,8 @@ Rules:
 
 - Preserved by install and upgrade.
 - Preserved by uninstall unless `--purge` is explicitly present.
-- Purge must be visible in output and package audit evidence when possible.
+- Purge must be visible in output and survivor package audit evidence outside
+  the deleted store when possible.
 
 ## Package Operation Result
 

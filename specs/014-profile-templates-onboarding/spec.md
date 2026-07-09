@@ -34,11 +34,11 @@ An operator who chooses `hardened` expects it to mean enforced privilege separat
 
 **Why this priority**: The 009 work deliberately avoided overclaiming a boundary. 014 must not reintroduce that overclaim through a template name.
 
-**Independent Test**: Run hardened onboarding with enforced privilege facts and verify success; run with degraded/unknown facts and verify refusal; then run an explicit degraded fallback request and verify the profile name and evidence clearly say degraded.
+**Independent Test**: Run hardened onboarding with Lima plus enforced privilege facts and verify success; run with degraded/unknown facts or native-backend enforced claims and verify refusal; then run an explicit degraded fallback request and verify the profile name and evidence clearly say degraded.
 
 **Acceptance Scenarios**:
 
-1. **Given** privilege separation is enforced, **When** the operator chooses `hardened`, **Then** onboarding creates a hardened profile and evidence records `privilege=required-enforced`.
+1. **Given** privilege separation is enforced on a backend that can support product isolation evidence, **When** the operator chooses `hardened`, **Then** onboarding creates a hardened profile and evidence records `privilege=required-enforced`.
 2. **Given** privilege separation is degraded or unknown, **When** the operator chooses `hardened`, **Then** onboarding refuses before profile creation with recreate/base-image guidance.
 3. **Given** privilege separation is degraded or unknown, **When** the operator explicitly chooses a degraded fallback, **Then** Hideout creates a separately named degraded profile and evidence states that hardened was not achieved.
 
@@ -78,6 +78,7 @@ An operator running in a TTY gets a short guided flow that recommends a template
 
 - Existing profile name must fail closed unless an explicit replace/recreate mode is provided by a later feature.
 - `hardened` must not silently become `privacy`; a degraded profile must have a distinct name or explicit degraded marker.
+- Native backend cannot create an effective `hardened` profile, even when an operator declares `--privilege-status enforced`; it may only create an explicitly degraded fallback.
 - `privacy` warns when privilege status is degraded or unknown but does not claim guest-root containment.
 - `dev` and `debug` may use weaker settings, but evidence must label those settings as weaker/development posture.
 - No template may create workspace-external HostFS grants by default.
@@ -104,7 +105,7 @@ An operator running in a TTY gets a short guided flow that recommends a template
 - **FR-002**: The recommended default template MUST be `privacy`.
 - **FR-003**: Template-created profiles MUST validate against the existing profile schema.
 - **FR-004**: The `privacy` template MUST require `tun2socks` with an explicit proxy secret ref and mediated resolver, and MUST configure strict evidence defaults without granting workspace-external HostFS access by default.
-- **FR-005**: The `hardened` template MUST require enforced privilege separation plus `tun2socks` with an explicit proxy secret ref and mediated resolver, and MUST fail closed when selected backend/base-image facts are degraded or unknown.
+- **FR-005**: The `hardened` template MUST require enforced privilege separation on a backend that can support product isolation evidence, plus `tun2socks` with an explicit proxy secret ref and mediated resolver, and MUST fail closed when selected backend/base-image facts are degraded, unknown, or native-backend operator declarations.
 - **FR-006**: If hardened cannot be enforced, System MUST NOT silently create a profile named or labeled `hardened`; any degraded fallback must be explicitly requested and separately named or marked.
 - **FR-007**: The `dev` template MAY choose practical weaker defaults, but generated evidence MUST label weaker or degraded posture and non-claims.
 - **FR-008**: The `debug` template MUST label itself local/development-only and MUST NOT make privacy or hardened claims.
@@ -132,7 +133,7 @@ An operator running in a TTY gets a short guided flow that recommends a template
 
 - **SC-001**: All four built-in templates validate into schema-valid profiles in targeted tests.
 - **SC-002**: `privacy` non-interactive onboarding creates a profile with zero HostFS grants and zero adapter-pack bindings.
-- **SC-003**: `hardened` onboarding succeeds with enforced privilege facts and fails 100% of degraded/unknown privilege fact tests before profile creation.
+- **SC-003**: `hardened` onboarding succeeds with Lima enforced privilege facts and fails 100% of degraded/unknown/native-backend privilege fact tests before profile creation.
 - **SC-004**: Hardened degraded fallback, when explicitly requested, creates a profile whose name or metadata clearly contains `degraded`.
 - **SC-005**: Non-interactive onboarding without required choices fails 100% of missing-choice tests before profile creation.
 - **SC-006**: Interactive cancellation creates 0 profile files and 0 success evidence summaries.

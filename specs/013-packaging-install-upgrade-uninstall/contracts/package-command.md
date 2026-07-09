@@ -86,4 +86,5 @@ Output must name:
 
 - package-owned files that would be or were removed;
 - durable state action: preserved or purged;
-- explicit purge warning when `--purge` is present.
+- explicit purge warning when `--purge` is present;
+- survivor purge audit path when durable store state is deleted.

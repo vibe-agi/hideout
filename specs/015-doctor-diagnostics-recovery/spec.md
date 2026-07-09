@@ -30,11 +30,11 @@ An operator runs `hideout doctor` after install or first-run setup and receives 
 
 ### User Story 2 - Run Explicit Deep Or Feature Diagnostics (Priority: P2)
 
-An operator debugging a specific problem can opt into deeper local diagnostics for DNS, HostFS, Lima, privilege separation, adapter packs, packaging, daemon health, decision queue health, or export redaction without surprise guest or network probes in the default path. Checks that require real backend/DNS proof must be surfaced as explicit skipped/unsupported gate-required findings unless the operator runs the corresponding real gate.
+An operator debugging a specific problem can opt into deeper local diagnostics for DNS, HostFS, Lima, privilege separation, adapter packs, packaging, daemon health, decision queue health, or export redaction without surprise guest or network probes in the default path. V1 feature checks are local inventory/status summaries plus explicit gate-required markers for facts that require real backend proof.
 
 **Why this priority**: Deep diagnostics are useful but can be slow, require host tools, start guests, or touch network paths. They must be explicit to preserve operator control.
 
-**Independent Test**: Run doctor with `--level deep` and individual `--feature` selectors against controlled fixtures and fake/available dependencies; verify selected scopes appear, unselected deep checks do not run, unavailable prerequisites produce actionable errors, and real-gate facts are not claimed from local placeholders.
+**Independent Test**: Run doctor with `--level deep` and individual `--feature` selectors against controlled fixtures and fake/available dependencies; verify selected scopes appear, unselected deep checks do not run, unavailable prerequisites produce actionable warnings/errors, and real-gate facts are not claimed from local placeholders.
 
 **Acceptance Scenarios**:
 
@@ -106,9 +106,9 @@ An operator preparing a bug report can intentionally include a doctor report as 
 - **FR-005**: Doctor MUST include package/install integrity and helper-binary presence/checksum checks when package state exists.
 - **FR-006**: Doctor MUST include profile schema, template/onboarding metadata, migration, and store writability checks.
 - **FR-007**: Doctor MUST include daemon status, daemon transport/auth status, and background operation health checks when daemon state exists.
-- **FR-008**: Doctor MUST include adapter-pack registry digest-lock and profile binding health checks.
-- **FR-009**: Doctor MUST include decision queue health checks for pending, expired, stuck, and resolved decision records.
-- **FR-010**: Doctor MUST include export/audit redaction sanity checks without automatically adding doctor reports to exports.
+- **FR-008**: Doctor MUST include local adapter-pack and command-adapter inventory/status checks and MUST NOT treat them as a substitute for adapter-pack smoke or digest-lock enforcement.
+- **FR-009**: Doctor MUST include decision queue status checks for pending, claimed, terminal, timeout-risk, and notice counts without leaking claim tokens or provider-private refs.
+- **FR-010**: Doctor MUST include export/audit availability and redaction-scope checks without automatically adding doctor reports to exports.
 - **FR-011**: Doctor deep/feature DNS checks MUST distinguish local mediated-DNS prerequisite facts, missing proxy/resolver prerequisites, and real connected-subnet proof that is not available without the relevant gate.
 - **FR-012**: Doctor deep/feature HostFS checks MUST distinguish local read-only/write-overlay readiness facts, unavailable local state, and real backend proof that is not available without the relevant gate.
 - **FR-013**: Doctor privilege checks MUST report enforced, degraded, or unknown status and MUST preserve the non-claim when guest-root containment is not proven.
@@ -133,7 +133,7 @@ An operator preparing a bug report can intentionally include a doctor report as 
 
 - **SC-001**: Default doctor completes on a fresh local package install without starting a guest or performing hidden network probes.
 - **SC-002**: JSON output covers 100% of human-output findings with the same check ids, statuses, severities, required markers, and next actions.
-- **SC-003**: Fixture tests cover at least one pass, warning, and error result in package/helper, profile/schema, daemon, adapter, decision, privilege, DNS, HostFS, export/redaction, and cleanup categories.
+- **SC-003**: Fixture tests cover at least one pass, warning, or error result in package/helper, profile/schema, daemon, adapter inventory, decision status, privilege, DNS, HostFS, export/redaction, and cleanup categories.
 - **SC-004**: Missing helper/package/profile required-check fixtures produce nonzero exit 100% of the time.
 - **SC-005**: Declared warning/degraded fixtures produce zero exit unless the selected level/feature marks the check required.
 - **SC-006**: `doctor --fix --dry-run` writes 0 durable state files in tests.

@@ -95,7 +95,31 @@ Expected:
 
 Covers: FR-005, FR-006, SC-003.
 
-## Scenario 5: Explicit Hardened Degraded Fallback
+## Scenario 5: Hardened Native Enforced Fails Closed
+
+Command:
+
+```sh
+hideout init \
+  --profile alpha-hardened-native \
+  --template hardened \
+  --backend native \
+  --network tun2socks \
+  --proxy-secret env:HIDEOUT_PROXY_URL \
+  --mediated-resolver 1.1.1.1 \
+  --privilege-status enforced \
+  --no-input
+```
+
+Expected:
+
+- non-zero exit;
+- no profile or success evidence is created;
+- diagnostic says native backend cannot claim enforced hardened posture.
+
+Covers: FR-005, SC-003.
+
+## Scenario 6: Explicit Hardened Degraded Fallback
 
 Command:
 
@@ -120,7 +144,7 @@ Expected:
 
 Covers: FR-006, SC-004.
 
-## Scenario 6: Dev And Debug Are Weaker By Design
+## Scenario 7: Dev And Debug Are Weaker By Design
 
 Commands:
 
@@ -137,7 +161,7 @@ Expected:
 
 Covers: FR-007, FR-008, SC-001.
 
-## Scenario 7: Interactive Cancellation
+## Scenario 8: Interactive Cancellation
 
 Run `hideout init` in a simulated TTY, answer no at confirmation.
 

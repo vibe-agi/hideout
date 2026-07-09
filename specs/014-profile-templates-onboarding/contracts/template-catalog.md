@@ -22,8 +22,11 @@
   resolver.
 - HostFS: no workspace-external HostFS grants by default.
 - Adapter packs: none installed or enabled by default.
-- Privilege: requires `enforced`.
+- Privilege: requires `enforced` on a non-native backend capable of product
+  isolation evidence.
 - Evidence label: `hardened`.
+- Backend: native cannot produce effective `hardened`, even if the operator
+  declares privilege status as enforced.
 - Failure: `degraded` or `unknown` privilege facts fail before profile
   creation unless degraded fallback is explicitly requested.
 

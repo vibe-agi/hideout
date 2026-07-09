@@ -40,7 +40,9 @@ Additional rules:
 - `--network direct` rejects `--proxy-secret` and `--mediated-resolver`.
 - `--template privacy` and `--template hardened` require
   `--network tun2socks`.
-- `--template hardened` requires `--privilege-status enforced`.
+- `--template hardened` requires `--privilege-status enforced` on a non-native
+  backend capable of product isolation evidence; native backend enforced
+  declarations fail closed.
 - `--template hardened --privilege-status degraded|unknown` requires
   `--allow-degraded-template` to create a degraded fallback.
 
