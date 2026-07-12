@@ -11,9 +11,115 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/helperbin"
+	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/profiletemplate"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 )
+
+func TestRuntimeSelectionPlanApplyAndCatalogDrift(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	installTestLimaHelpers(t, store)
+	resolve := func(selection runtimecatalog.Selection) (runtimecatalog.Resolution, error) {
+		return testRuntimeResolution(selection, strings.Repeat("a", 64)), nil
+	}
+	plan, err := PlanMachine(store, Options{
+		ProfileName: "default", Backend: "lima", Network: "direct",
+		RuntimeFamily: "developer-standard", ResolveRuntime: resolve,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RuntimeSelection == nil || plan.RuntimeSelection.Family != "developer-standard" || plan.ImageRef != plan.RuntimeSelection.ImageRef() {
+		t.Fatalf("runtime selection missing from plan: %+v", plan)
+	}
+	result, err := ApplyMachine(store, plan, ApplyOptions{NoInput: true, ResolveRuntime: resolve})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Applied) == 0 {
+		t.Fatal("runtime init applied no tasks")
+	}
+	p, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Environment.Runtime == nil || *p.Environment.Runtime != *plan.RuntimeSelection || p.Environment.BaseImage != "" {
+		t.Fatalf("profile runtime selection not persisted: %+v", p.Environment)
+	}
+
+	driftStore := profile.Store{Root: t.TempDir()}
+	installTestLimaHelpers(t, driftStore)
+	driftPlan, err := PlanMachine(driftStore, Options{
+		ProfileName: "drift", Backend: "lima", Network: "direct",
+		RuntimeFamily: "developer-standard", ResolveRuntime: resolve,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := func(selection runtimecatalog.Selection) (runtimecatalog.Resolution, error) {
+		return testRuntimeResolution(selection, strings.Repeat("b", 64)), nil
+	}
+	if _, err := ApplyMachine(driftStore, driftPlan, ApplyOptions{NoInput: true, ResolveRuntime: drifted}); err == nil || !strings.Contains(err.Error(), "catalog changed") {
+		t.Fatalf("catalog drift should fail before apply, got %v", err)
+	}
+	if _, err := driftStore.Load("drift"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("catalog drift wrote profile state: %v", err)
+	}
+}
+
+func TestRuntimeSelectionRejectsCustomImageAndWeakBackend(t *testing.T) {
+	resolve := func(selection runtimecatalog.Selection) (runtimecatalog.Resolution, error) {
+		return testRuntimeResolution(selection, strings.Repeat("a", 64)), nil
+	}
+	for name, opts := range map[string]Options{
+		"runtime plus image": {
+			ProfileName: "default", Backend: "lima", Network: "direct", RuntimeFamily: "developer-standard",
+			ImageRef: environment.BuiltinBaseImage, ResolveRuntime: resolve,
+		},
+		"runtime on native": {
+			ProfileName: "default", Backend: "native", Network: "direct", RuntimeFamily: "developer-standard", ResolveRuntime: resolve,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := PlanMachine(profile.Store{Root: t.TempDir()}, opts); err == nil {
+				t.Fatal("expected fail-closed selection error")
+			}
+		})
+	}
+}
+
+func installTestLimaHelpers(t *testing.T, store profile.Store) {
+	t.Helper()
+	for _, helper := range []struct{ command, path string }{
+		{"hideout-shim", helperbin.DefaultLinuxShimPath(store.Root, runtime.GOARCH)},
+		{"hideout-hostfsd", helperbin.DefaultLinuxHostFSDPath(store.Root, runtime.GOARCH)},
+	} {
+		if err := os.MkdirAll(filepath.Dir(helper.path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(helper.path, []byte(helper.command), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := helperbin.WriteStoreHelperManifest(helper.path, helper.command, runtime.GOARCH); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func testRuntimeResolution(selection runtimecatalog.Selection, artifactSHA string) runtimecatalog.Resolution {
+	provenance := environment.RuntimeProvenance{
+		Family: "developer-standard", Revision: "2026.07.0", CatalogRelease: "2026.07.0",
+		ContractID: "developer-standard/v1", ContractDigest: "sha256:" + strings.Repeat("c", 64),
+		ArtifactLocation: "https://example.invalid/runtime/2026.07.0/developer-standard.qcow2",
+		ArtifactSHA256:   artifactSHA, PackageInventoryDigest: "sha256:" + strings.Repeat("d", 64),
+		HostOS: runtime.GOOS, HostArch: runtime.GOARCH, GuestArch: map[string]string{"arm64": "aarch64", "amd64": "x86_64"}[runtime.GOARCH], Maturity: "preview",
+		DownloadBytes: 512 << 20, VirtualBytes: 12 << 30,
+	}
+	return runtimecatalog.Resolution{ImageRef: provenance.ImageRef(), Provenance: provenance}
+}
 
 func TestPlanMachineLimaHelpersRequireStoreManifest(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
@@ -247,6 +353,73 @@ func TestApplyMachinePrivacyTemplateWritesProfileAndEvidence(t *testing.T) {
 	}
 	if _, err := os.Stat(result.EvidencePath); err != nil {
 		t.Fatalf("evidence missing: %v", err)
+	}
+}
+
+func TestPlanAndApplyMachineCarriesHostFSVisibilityThroughEvidence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	base := Options{
+		ProfileName:        "visible",
+		TemplateID:         "dev",
+		Backend:            "native",
+		Network:            "direct",
+		Onboarding:         true,
+		ExplicitProfile:    true,
+		ExplicitTemplate:   true,
+		ExplicitBackend:    true,
+		ExplicitNetwork:    true,
+		ExplicitVisibility: true,
+		NoInput:            true,
+	}
+	homeTree := base
+	homeTree.VisibilitySelection = profiletemplate.VisibilityHomeTree
+	if _, err := PlanMachine(store, homeTree); err == nil || !strings.Contains(err.Error(), "name-disclosure acknowledgement") {
+		t.Fatalf("home-tree without acknowledgement should fail closed: %v", err)
+	}
+
+	base.VisibilitySelection = profiletemplate.VisibilityLandmarks
+	base.VisibilityRoots = []string{filepath.Join(home, "Desktop"), filepath.Join(home, "Documents")}
+	plan, err := PlanMachine(store, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateInitPlanWithSchema(t, plan)
+	if plan.HostFSVisibility != profiletemplate.VisibilityLandmarks || len(plan.HostFSVisibilityRoots) != 2 || len(plan.HostFSVisibilityRuleIDs) != 2 {
+		t.Fatalf("visibility plan fields were not preserved: %+v", plan)
+	}
+	if len(plan.Warnings) == 0 || len(plan.NonClaims) == 0 || !strings.Contains(strings.Join(plan.ReviewLines, "\n"), "HostFS visibility") {
+		t.Fatalf("visibility disclosure review is incomplete: warnings=%v nonClaims=%v review=%v", plan.Warnings, plan.NonClaims, plan.ReviewLines)
+	}
+
+	result, err := ApplyMachine(store, plan, ApplyOptions{NoInput: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.Load("visible")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.HostFS.Grants) != 2 {
+		t.Fatalf("visibility grants=%v want two landmarks", p.HostFS.Grants)
+	}
+	for i, rule := range p.HostFS.Grants {
+		if rule.Scope != hostfs.ScopeDir || len(rule.Ops) != 1 || rule.Ops[0] != hostfs.OpDiscover || rule.ID != plan.HostFSVisibilityRuleIDs[i] {
+			t.Fatalf("visibility grant[%d]=%+v plan IDs=%v", i, rule, plan.HostFSVisibilityRuleIDs)
+		}
+	}
+
+	body, err := os.ReadFile(result.EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence profiletemplate.EvidenceSummary
+	if err := json.Unmarshal(body, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.HostFSVisibility != profiletemplate.VisibilityLandmarks || len(evidence.HostFSVisibilityRoots) != 2 || len(evidence.HostFSVisibilityRuleIds) != 2 {
+		t.Fatalf("visibility evidence fields were not preserved: %+v", evidence)
 	}
 }
 

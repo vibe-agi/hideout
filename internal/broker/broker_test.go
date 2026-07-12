@@ -16,11 +16,23 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	hostfspkg "github.com/vibe-agi/hideout/internal/hostfs"
 	overlaypkg "github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
+
+func TestServerRequestTimeoutIsExtendedOnlyForHostAppOpen(t *testing.T) {
+	if got := serverRequestTimeout(Request{Action: cmdproxy.ActionHostAppOpenResource}); got != 20*time.Second {
+		t.Fatalf("host-app timeout=%s", got)
+	}
+	for _, action := range []string{"", cmdproxy.ActionHostOpen, cmdproxy.ActionCommandAdapter} {
+		if got := serverRequestTimeout(Request{Action: action}); got != 5*time.Second {
+			t.Fatalf("action %q timeout=%s", action, got)
+		}
+	}
+}
 
 type recordingOpener struct {
 	urls  []string
@@ -376,8 +388,12 @@ func TestHandleHostFSDeniesUngrantPathWithoutLeak(t *testing.T) {
 		Audit:     writer,
 	}
 	resp := server.Handle(context.Background(), hostFSRequest("req_deny", "host.fs.read", path, nil))
-	if resp.Status != "denied" || resp.ExitCode != 126 || resp.Stderr != "hostfs path not found" {
+	if resp.Status != "denied" || resp.ExitCode != 126 || resp.Stderr != "hostfs path not found" || resp.Error == nil || resp.Error.Code != HostFSErrorPathHidden || resp.Error.Errno != ErrnoENOENT {
 		t.Fatalf("expected hidden denial, got %+v", resp)
+	}
+	statResp := server.Handle(context.Background(), hostFSRequest("req_stat_hidden", "host.fs.stat", path, nil))
+	if statResp.Status != "denied" || statResp.Error == nil || statResp.Error.Code != HostFSErrorPathHidden || statResp.Error.Errno != ErrnoENOENT {
+		t.Fatalf("hidden stat did not preserve typed ENOENT: %+v", statResp)
 	}
 	if strings.Contains(resp.Stderr, root) || strings.Contains(resp.Stderr, "secret.txt") {
 		t.Fatalf("HostFS response leaked host path: %+v", resp)

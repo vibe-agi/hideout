@@ -23,7 +23,7 @@
       "minLength": 1
     },
     "kind": {
-      "enum": ["hostfs.write", "adapter.proposal", "evidence.share"]
+      "enum": ["hostfs.write", "hostfs.read", "host-app.open-resource", "adapter.proposal", "evidence.share"]
     },
     "source": {
       "type": "object"

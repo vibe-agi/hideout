@@ -184,6 +184,7 @@ Rules:
 Query parameters:
 
 - `session`: optional session id filter.
+- `profile`: optional profile filter.
 - `state`: optional decision state filter.
 
 Response data:
@@ -195,6 +196,7 @@ Response data:
     {
       "decisionId": "hfwdec_123",
       "operationId": "hfwop_123",
+      "profile": "default",
       "state": "pending",
       "operation": "replace",
       "path": "/Users/alice/project-notes.txt",

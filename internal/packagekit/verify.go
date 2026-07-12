@@ -14,9 +14,10 @@ import (
 )
 
 type VerifyResult struct {
-	Root  string
-	Mode  string
-	Files int
+	Root          string
+	Mode          string
+	Files         int
+	Prerequisites []ExternalPrerequisiteStatus
 }
 
 func Verify(root string) (VerifyResult, error) {
@@ -38,7 +39,7 @@ func Verify(root string) (VerifyResult, error) {
 		if err := VerifyArtifact(cleanRoot, manifest); err != nil {
 			return VerifyResult{}, err
 		}
-		return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files)}, nil
+		return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files), Prerequisites: ExternalPrerequisites()}, nil
 	}
 	statePath := filepath.Join(cleanRoot, filepath.FromSlash(InstalledManifest))
 	state, err := LoadInstallState(statePath)
@@ -48,7 +49,7 @@ func Verify(root string) (VerifyResult, error) {
 	if err := VerifyInstalled(cleanRoot, state); err != nil {
 		return VerifyResult{}, err
 	}
-	return VerifyResult{Root: cleanRoot, Mode: "installed", Files: len(state.Files)}, nil
+	return VerifyResult{Root: cleanRoot, Mode: "installed", Files: len(state.Files), Prerequisites: ExternalPrerequisites()}, nil
 }
 
 func LoadManifest(path string) (Manifest, error) {
@@ -132,32 +133,18 @@ func VerifyInstalled(prefix string, state InstallState) error {
 	if err != nil {
 		return err
 	}
-	recorded, err := filepath.Abs(state.InstallPrefix)
-	if err != nil {
+	if err := verifyInstalledActive(cleanPrefix, state); err != nil {
 		return err
 	}
-	if resolved, err := filepath.EvalSymlinks(recorded); err == nil {
-		recorded = resolved
-	}
-	if recorded != cleanPrefix {
-		return fmt.Errorf("installed package prefix mismatch: manifest=%s actual=%s; hint: reinstall Hideout instead of relocating package files", recorded, cleanPrefix)
-	}
-	for _, rel := range state.Directories {
-		joined, err := JoinRelative(cleanPrefix, rel)
+	for _, stale := range state.ObsoleteFiles {
+		joined, err := JoinRelative(cleanPrefix, stale.Path)
 		if err != nil {
-			return fmt.Errorf("installed package directory path %q: %w", rel, err)
-		}
-		st, err := os.Lstat(joined)
-		if err != nil {
-			return fmt.Errorf("installed package directory %q: %w", rel, err)
-		}
-		if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
-			return fmt.Errorf("installed package directory %q must be a real directory", rel)
-		}
-	}
-	for _, file := range state.Files {
-		if err := verifyFile(cleanPrefix, file); err != nil {
 			return err
+		}
+		if _, err := os.Lstat(joined); err == nil {
+			return fmt.Errorf("obsolete package-owned file %q remains from previous package; hint: run hideout package repair --prefix %s", stale.Path, cleanPrefix)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("obsolete package-owned file %q: %w", stale.Path, err)
 		}
 	}
 	return nil
@@ -184,6 +171,12 @@ func validateManifest(manifest Manifest) error {
 	}
 	if manifest.Migration.InstallStateSchema == "" {
 		return errors.New("package manifest migration.installStateSchema is required")
+	}
+	if len(manifest.Migration.FromInstalledSchemas) == 0 {
+		return errors.New("package manifest migration.fromInstalledSchemas is required")
+	}
+	if strings.TrimSpace(manifest.Migration.MinimumPackageSchema) == "" || strings.TrimSpace(manifest.Migration.MaximumPackageSchema) == "" {
+		return errors.New("package manifest migration minimumPackageSchema and maximumPackageSchema are required")
 	}
 	return nil
 }
@@ -239,6 +232,42 @@ func verifyFile(root string, file File) error {
 	return nil
 }
 
+func verifyInstalledActive(prefix string, state InstallState) error {
+	cleanPrefix, err := CleanRoot(prefix, "install prefix")
+	if err != nil {
+		return err
+	}
+	recorded, err := filepath.Abs(state.InstallPrefix)
+	if err != nil {
+		return err
+	}
+	if resolved, err := filepath.EvalSymlinks(recorded); err == nil {
+		recorded = resolved
+	}
+	if recorded != cleanPrefix {
+		return fmt.Errorf("installed package prefix mismatch: manifest=%s actual=%s; hint: reinstall Hideout instead of relocating package files", recorded, cleanPrefix)
+	}
+	for _, rel := range state.Directories {
+		joined, err := JoinRelative(cleanPrefix, rel)
+		if err != nil {
+			return fmt.Errorf("installed package directory path %q: %w", rel, err)
+		}
+		st, err := os.Lstat(joined)
+		if err != nil {
+			return fmt.Errorf("installed package directory %q: %w", rel, err)
+		}
+		if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
+			return fmt.Errorf("installed package directory %q must be a real directory", rel)
+		}
+	}
+	for _, file := range state.Files {
+		if err := verifyFile(cleanPrefix, file); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func requirePath(root, rel string, executable bool, regular bool) error {
 	joined, err := JoinRelative(root, rel)
 	if err != nil {
@@ -280,6 +309,11 @@ func isSupportedKind(kind string) bool {
 		"doc",
 		"script",
 		"packaging",
+		"host-app-core-data",
+		"host-app-example",
+		"runtime-catalog",
+		"runtime-contract",
+		"runtime-build",
 	}, kind)
 }
 

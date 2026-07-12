@@ -7,13 +7,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 )
 
 const (
@@ -361,55 +365,209 @@ func environmentOperatorOrDefault(operator EnvironmentOperator) EnvironmentOpera
 // The record is written without booting a guest and without any network
 // activity; the first run boots it.
 type EnvironmentCreateOptions struct {
-	Name           string
-	ImageRef       string
-	Profile        string
-	Backend        string
-	Workspace      string
-	GuestWorkspace string
-	AutoNamed      bool
+	Name            string
+	ImageRef        string
+	Profile         string
+	Backend         string
+	Workspace       string
+	GuestWorkspace  string
+	AutoNamed       bool
+	RuntimeFamily   string
+	RuntimeRevision string
 }
 
-// CreateEnvironment validates and persists a named environment record.
-// Declaration precedence: explicit ImageRef > profile environment.baseImage >
-// built-in default.
-func (c Core) CreateEnvironment(opts EnvironmentCreateOptions) (environment.Record, error) {
-	store, err := c.environmentStore()
-	if err != nil {
-		return environment.Record{}, err
+const EnvironmentCreatePlanVersion = "hideout.environment-create-plan/v1"
+
+type EnvironmentCreatePlan struct {
+	Version              string                         `json:"version"`
+	Name                 string                         `json:"name"`
+	AutoNamed            bool                           `json:"autoNamed,omitempty"`
+	Profile              string                         `json:"profile"`
+	ProfileWillCreate    bool                           `json:"profileWillCreate,omitempty"`
+	Backend              string                         `json:"backend"`
+	Workspace            string                         `json:"workspace"`
+	GuestWorkspace       string                         `json:"guestWorkspace"`
+	ImageRef             string                         `json:"imageRef"`
+	ImageSource          string                         `json:"imageSource"`
+	Runtime              *environment.RuntimeProvenance `json:"runtime,omitempty"`
+	RuntimeDownloadBytes int64                          `json:"runtimeDownloadBytes,omitempty"`
+	RuntimeVirtualBytes  int64                          `json:"runtimeVirtualBytes,omitempty"`
+}
+
+// PlanEnvironmentCreate resolves immutable inputs without writing profile or
+// environment state. Apply revalidates every mutable dependency.
+func (c Core) PlanEnvironmentCreate(opts EnvironmentCreateOptions) (EnvironmentCreatePlan, error) {
+	if _, err := c.environmentStore(); err != nil {
+		return EnvironmentCreatePlan{}, err
 	}
 	profileName := strings.TrimSpace(opts.Profile)
 	if profileName == "" {
 		profileName = "default"
 	}
-	p, err := c.Store.LoadOrInit(profileName)
-	if err != nil {
-		return environment.Record{}, err
+	if err := profile.ValidateName(profileName); err != nil {
+		return EnvironmentCreatePlan{}, err
+	}
+	if err := environment.ValidateName(opts.Name); err != nil {
+		return EnvironmentCreatePlan{}, err
 	}
 	backendName := ResolveBackendName(opts.Backend)
 	imageRef := strings.TrimSpace(opts.ImageRef)
-	if imageRef == "" {
+	runtimeFamily := strings.TrimSpace(opts.RuntimeFamily)
+	if imageRef != "" && runtimeFamily != "" {
+		return EnvironmentCreatePlan{}, errors.New("--runtime and --image are mutually exclusive")
+	}
+	if runtimeFamily != "" && backendName != "lima" {
+		return EnvironmentCreatePlan{}, errors.New("catalog runtimes require the Lima backend")
+	}
+	p, err := c.Store.Load(profileName)
+	profileWillCreate := false
+	if errors.Is(err, os.ErrNotExist) {
+		p = profile.Default(profileName)
+		profileWillCreate = true
+	} else if err != nil {
+		return EnvironmentCreatePlan{}, err
+	}
+	var runtimeProvenance *environment.RuntimeProvenance
+	var runtimeArtifact *runtimecatalog.Artifact
+	imageSource := "explicit"
+	if runtimeFamily != "" {
+		resolver := c.RuntimeResolver
+		if resolver == nil {
+			resolver = runtimecatalog.ResolveEmbedded
+		}
+		resolved, err := resolver(runtimecatalog.Selection{
+			Family: runtimeFamily, Revision: strings.TrimSpace(opts.RuntimeRevision), HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+		})
+		if err != nil {
+			return EnvironmentCreatePlan{}, fmt.Errorf("resolve runtime %q: %w", runtimeFamily, err)
+		}
+		imageRef = resolved.ImageRef
+		imageSource = "runtime-explicit"
+		provenance := resolved.Provenance
+		runtimeProvenance = &provenance
+		artifact := resolved.Artifact
+		runtimeArtifact = &artifact
+	} else if imageRef == "" {
 		imageRef = p.BaseImageOrBuiltin()
+		imageSource = "profile"
+		if p.Environment.Runtime != nil {
+			resolver := c.RuntimeResolver
+			if resolver == nil {
+				resolver = runtimecatalog.ResolveEmbedded
+			}
+			resolved, err := resolver(runtimecatalog.Selection{
+				Family: p.Environment.Runtime.Family, Revision: p.Environment.Runtime.Revision, HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+			})
+			if err != nil || resolved.Provenance != *p.Environment.Runtime || resolved.ImageRef != imageRef {
+				return EnvironmentCreatePlan{}, errors.New("profile runtime provenance no longer matches the package catalog; existing environments remain pinned but a new environment cannot be created")
+			}
+			imageSource = "runtime-profile"
+			provenance := resolved.Provenance
+			runtimeProvenance = &provenance
+			artifact := resolved.Artifact
+			runtimeArtifact = &artifact
+		}
 	}
 	if _, err := environment.ParseImageDeclaration(imageRef); err != nil {
-		return environment.Record{}, err
+		return EnvironmentCreatePlan{}, err
 	}
 	workspace, guestWorkspace, err := ResolveWorkspaceMapping(opts.Workspace, opts.GuestWorkspace, p)
 	if err != nil {
-		return environment.Record{}, err
+		return EnvironmentCreatePlan{}, err
 	}
 	if err := ValidateWorkspaceMountSafety(workspace, c.Store.Root); err != nil {
+		return EnvironmentCreatePlan{}, err
+	}
+	if runtimeArtifact != nil {
+		if err := c.checkRuntimeDisk(*runtimeArtifact); err != nil {
+			return EnvironmentCreatePlan{}, err
+		}
+	}
+	plan := EnvironmentCreatePlan{
+		Version: EnvironmentCreatePlanVersion, Name: opts.Name, AutoNamed: opts.AutoNamed,
+		Profile: profileName, ProfileWillCreate: profileWillCreate, Backend: backendName,
+		Workspace: workspace, GuestWorkspace: guestWorkspace, ImageRef: imageRef,
+		ImageSource: imageSource, Runtime: runtimeProvenance,
+	}
+	if runtimeArtifact != nil {
+		plan.RuntimeDownloadBytes = runtimeArtifact.DownloadBytes
+		plan.RuntimeVirtualBytes = runtimeArtifact.VirtualBytes
+	}
+	return plan, nil
+}
+
+func (c Core) ApplyEnvironmentCreate(plan EnvironmentCreatePlan) (environment.Record, error) {
+	if plan.Version != EnvironmentCreatePlanVersion {
+		return environment.Record{}, fmt.Errorf("unsupported environment create plan %q", plan.Version)
+	}
+	store, err := c.environmentStore()
+	if err != nil {
 		return environment.Record{}, err
 	}
-	spec := RunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
-	spec.Name = opts.Name
-	spec.AutoNamed = opts.AutoNamed
-	spec.ImageRef = imageRef
+	if _, err := environment.ParseImageDeclaration(plan.ImageRef); err != nil {
+		return environment.Record{}, err
+	}
+	if plan.Runtime != nil {
+		resolver := c.RuntimeResolver
+		if resolver == nil {
+			resolver = runtimecatalog.ResolveEmbedded
+		}
+		resolved, err := resolver(runtimecatalog.Selection{
+			Family: plan.Runtime.Family, Revision: plan.Runtime.Revision, HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+		})
+		if err != nil || resolved.Provenance != *plan.Runtime || resolved.ImageRef != plan.ImageRef || resolved.Artifact.DownloadBytes != plan.RuntimeDownloadBytes || resolved.Artifact.VirtualBytes != plan.RuntimeVirtualBytes {
+			return environment.Record{}, errors.New("runtime catalog changed between environment plan and apply")
+		}
+		if err := c.checkRuntimeDisk(resolved.Artifact); err != nil {
+			return environment.Record{}, err
+		}
+	}
+	p, err := c.Store.Load(plan.Profile)
+	if plan.ProfileWillCreate {
+		if err == nil {
+			return environment.Record{}, errors.New("profile appeared between environment plan and apply")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return environment.Record{}, err
+		}
+		p = profile.Default(plan.Profile)
+		if err := c.Store.Create(p); err != nil {
+			return environment.Record{}, err
+		}
+		p, err = c.Store.Load(plan.Profile)
+	} else if err != nil {
+		return environment.Record{}, err
+	}
+	if err != nil {
+		return environment.Record{}, err
+	}
+	workspace, guestWorkspace, err := ResolveWorkspaceMapping(plan.Workspace, plan.GuestWorkspace, p)
+	if err != nil || workspace != plan.Workspace || guestWorkspace != plan.GuestWorkspace {
+		return environment.Record{}, errors.New("profile workspace mapping changed between environment plan and apply")
+	}
+	if plan.ImageSource == "profile" || plan.ImageSource == "runtime-profile" {
+		if p.BaseImageOrBuiltin() != plan.ImageRef {
+			return environment.Record{}, errors.New("profile image changed between environment plan and apply")
+		}
+		if (plan.Runtime == nil && p.Environment.Runtime != nil) || (plan.Runtime != nil && (p.Environment.Runtime == nil || *p.Environment.Runtime != *plan.Runtime)) {
+			return environment.Record{}, errors.New("profile runtime changed between environment plan and apply")
+		}
+	}
+	spec := RunEnvironmentSpec(p, plan.Backend, workspace, guestWorkspace)
+	spec.Name = plan.Name
+	spec.AutoNamed = plan.AutoNamed
+	spec.ImageRef = plan.ImageRef
+	if plan.Runtime != nil {
+		provenance := *plan.Runtime
+		spec.Runtime = &provenance
+	} else {
+		spec.Runtime = nil
+	}
 	rec, err := store.Create(spec)
 	if err != nil {
 		return environment.Record{}, err
 	}
-	if backendName == "lima" {
+	if plan.Backend == "lima" {
 		rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, rec.ID)
 		if err := store.Save(rec); err != nil {
 			return environment.Record{}, err
@@ -425,6 +583,80 @@ func (c Core) CreateEnvironment(opts EnvironmentCreateOptions) (environment.Reco
 		"profile":         rec.Profile,
 	})
 	return rec, nil
+}
+
+// CreateEnvironment preserves the existing direct Core API while enforcing
+// the typed plan/apply contract internally.
+func (c Core) CreateEnvironment(opts EnvironmentCreateOptions) (environment.Record, error) {
+	plan, err := c.PlanEnvironmentCreate(opts)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	return c.ApplyEnvironmentCreate(plan)
+}
+
+func (c Core) checkRuntimeDisk(artifact runtimecatalog.Artifact) error {
+	return c.checkRuntimeDiskSizes(artifact.DownloadBytes, artifact.VirtualBytes)
+}
+
+func (c Core) checkRuntimeDiskProvenance(provenance environment.RuntimeProvenance) error {
+	return c.checkRuntimeDiskSizes(provenance.DownloadBytes, provenance.VirtualBytes)
+}
+
+func (c Core) checkRuntimeDiskSizes(downloadBytes, virtualBytes int64) error {
+	const workingBytes = int64(1 << 30)
+	required := downloadBytes + virtualBytes + workingBytes
+	root, err := limaDataRoot()
+	if err != nil {
+		return fmt.Errorf("runtime.disk.insufficient: cannot determine Lima data root: %w", err)
+	}
+	checker := c.RuntimeDiskCheck
+	if checker == nil {
+		checker = requireFreeBytes
+	}
+	if err := checker(root, required); err != nil {
+		return fmt.Errorf("runtime.disk.insufficient: need %d bytes on Lima data filesystem: %w", required, err)
+	}
+	return nil
+}
+
+func limaDataRoot() (string, error) {
+	if root := strings.TrimSpace(os.Getenv("LIMA_HOME")); root != "" {
+		if !filepath.IsAbs(root) {
+			return "", errors.New("LIMA_HOME must be absolute")
+		}
+		return root, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".lima"), nil
+}
+
+func requireFreeBytes(path string, required int64) error {
+	probe := filepath.Clean(path)
+	for {
+		if _, err := os.Stat(probe); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return errors.New("no existing ancestor for disk probe")
+		}
+		probe = parent
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(probe, &stat); err != nil {
+		return err
+	}
+	available := int64(stat.Bavail) * int64(stat.Bsize)
+	if available < required {
+		return fmt.Errorf("available %d bytes", available)
+	}
+	return nil
 }
 
 // EnvironmentByName resolves a named environment record.

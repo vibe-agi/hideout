@@ -1,13 +1,76 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
+
+func TestHostAppLifecycleActionsAreAcceptedByAuditSchema(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "audit-event.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode audit schema: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("audit-event.schema.json", doc); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("audit-event.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	actions := []string{
+		"host.app.install",
+		"host.app.validate",
+		"host.app.test",
+		"host.app.trust",
+		"host.app.enable",
+		"host.app.update",
+		"host.app.permission-diff",
+		"host.app.conflict",
+		"host.app.disable",
+		"host.app.revoke",
+		"host.app.remove",
+		"host.app.launch",
+		"host.app.refuse",
+		"host.app.identity-drift",
+		"host.app.digest-mismatch",
+	}
+	for _, action := range actions {
+		event := Event{
+			Time:     time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
+			Session:  "session-032",
+			Profile:  "default",
+			Backend:  "native",
+			Action:   action,
+			Decision: "allow",
+			Details:  map[string]any{"packId": "community.editor"},
+		}
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(value); err != nil {
+			t.Fatalf("audit action %q rejected by schema: %v", action, err)
+		}
+	}
+}
 
 func TestRedactDetailsStripsAllControlPlaneFieldNames(t *testing.T) {
 	// Every Core control-plane field name in controlPlaneKeys must be stripped,

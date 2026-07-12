@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/profiletemplate"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
@@ -31,55 +33,69 @@ const (
 )
 
 type Options struct {
-	ProfileName           string
-	Backend               string
-	Network               string
-	ProxySecretRef        string
-	MediatedResolver      string
-	TemplateID            string
-	PrivilegeStatus       string
-	PrivilegeReason       string
-	PrivilegeGuidance     string
-	PrivilegeSource       string
-	AllowDegradedTemplate bool
-	Onboarding            bool
-	ExplicitProfile       bool
-	ExplicitTemplate      bool
-	ExplicitBackend       bool
-	ExplicitNetwork       bool
-	NoInput               bool
-	ToolPresets           []string
-	NPMGlobals            []profile.NPMGlobalPackage
+	ProfileName                string
+	Backend                    string
+	Network                    string
+	ProxySecretRef             string
+	MediatedResolver           string
+	TemplateID                 string
+	PrivilegeStatus            string
+	PrivilegeReason            string
+	PrivilegeGuidance          string
+	PrivilegeSource            string
+	AllowDegradedTemplate      bool
+	Onboarding                 bool
+	ExplicitProfile            bool
+	ExplicitTemplate           bool
+	ExplicitBackend            bool
+	ExplicitNetwork            bool
+	NoInput                    bool
+	VisibilitySelection        string
+	VisibilityRoots            []string
+	NameDisclosureAcknowledged bool
+	ExplicitVisibility         bool
+	ToolPresets                []string
+	NPMGlobals                 []profile.NPMGlobalPackage
+	RuntimeFamily              string
+	ImageRef                   string
+	ResolveRuntime             func(runtimecatalog.Selection) (runtimecatalog.Resolution, error)
 }
 
 type ApplyOptions struct {
-	NoInput   bool
-	DryRun    bool
-	Operation string
-	AuditPath string
+	NoInput        bool
+	DryRun         bool
+	Operation      string
+	AuditPath      string
+	ResolveRuntime func(runtimecatalog.Selection) (runtimecatalog.Resolution, error)
 }
 
 type Plan struct {
-	Version               string     `json:"version"`
-	StoreRoot             string     `json:"storeRoot"`
-	Profile               string     `json:"profile"`
-	Backend               string     `json:"backend"`
-	Network               string     `json:"network"`
-	ProxySecretRef        string     `json:"proxySecretRef,omitempty"`
-	MediatedResolver      string     `json:"mediatedResolver,omitempty"`
-	TemplateID            string     `json:"templateId,omitempty"`
-	EffectivePosture      string     `json:"effectivePosture,omitempty"`
-	PrivilegeStatus       string     `json:"privilegeStatus,omitempty"`
-	PrivilegeReason       string     `json:"privilegeReason,omitempty"`
-	PrivilegeGuidance     string     `json:"privilegeGuidance,omitempty"`
-	PrivilegeSource       string     `json:"privilegeSource,omitempty"`
-	AllowDegradedTemplate bool       `json:"allowDegradedTemplate,omitempty"`
-	EvidencePath          string     `json:"evidencePath,omitempty"`
-	Warnings              []string   `json:"warnings,omitempty"`
-	NonClaims             []string   `json:"nonClaims,omitempty"`
-	ReviewLines           []string   `json:"reviewLines,omitempty"`
-	Tasks                 []Task     `json:"tasks"`
-	NextSteps             []NextStep `json:"nextSteps"`
+	Version                    string                         `json:"version"`
+	StoreRoot                  string                         `json:"storeRoot"`
+	Profile                    string                         `json:"profile"`
+	Backend                    string                         `json:"backend"`
+	Network                    string                         `json:"network"`
+	ProxySecretRef             string                         `json:"proxySecretRef,omitempty"`
+	MediatedResolver           string                         `json:"mediatedResolver,omitempty"`
+	TemplateID                 string                         `json:"templateId,omitempty"`
+	EffectivePosture           string                         `json:"effectivePosture,omitempty"`
+	PrivilegeStatus            string                         `json:"privilegeStatus,omitempty"`
+	PrivilegeReason            string                         `json:"privilegeReason,omitempty"`
+	PrivilegeGuidance          string                         `json:"privilegeGuidance,omitempty"`
+	PrivilegeSource            string                         `json:"privilegeSource,omitempty"`
+	AllowDegradedTemplate      bool                           `json:"allowDegradedTemplate,omitempty"`
+	EvidencePath               string                         `json:"evidencePath,omitempty"`
+	Warnings                   []string                       `json:"warnings,omitempty"`
+	NonClaims                  []string                       `json:"nonClaims,omitempty"`
+	ReviewLines                []string                       `json:"reviewLines,omitempty"`
+	HostFSVisibility           string                         `json:"hostfsVisibility,omitempty"`
+	HostFSVisibilityRoots      []string                       `json:"hostfsVisibilityRoots,omitempty"`
+	HostFSVisibilityRuleIDs    []string                       `json:"hostfsVisibilityRuleIds,omitempty"`
+	NameDisclosureAcknowledged bool                           `json:"nameDisclosureAcknowledged,omitempty"`
+	RuntimeSelection           *environment.RuntimeProvenance `json:"runtimeSelection,omitempty"`
+	ImageRef                   string                         `json:"imageRef,omitempty"`
+	Tasks                      []Task                         `json:"tasks"`
+	NextSteps                  []NextStep                     `json:"nextSteps"`
 }
 
 type NextStep struct {
@@ -163,6 +179,9 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		Backend:   normalized.Backend,
 		Network:   normalized.Network,
 	}
+	if err := resolvePlanRuntime(&plan, normalized); err != nil {
+		return Plan{}, err
+	}
 	if strings.TrimSpace(store.Root) == "" {
 		return Plan{}, errors.New("init store root is required")
 	}
@@ -184,6 +203,10 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		plan.Warnings = append([]string(nil), rendered.Warnings...)
 		plan.NonClaims = append([]string(nil), rendered.NonClaims...)
 		plan.ReviewLines = append([]string(nil), rendered.Review.Lines...)
+		plan.HostFSVisibility = normalized.VisibilitySelection
+		plan.HostFSVisibilityRoots = append([]string(nil), rendered.Evidence.HostFSVisibilityRoots...)
+		plan.HostFSVisibilityRuleIDs = append([]string(nil), rendered.VisibilityRuleIDs...)
+		plan.NameDisclosureAcknowledged = normalized.NameDisclosureAcknowledged
 	}
 	plan.Tasks = append(plan.Tasks, storeTask(store.Root))
 	plan.Tasks = append(plan.Tasks, stateTask(store.Root))
@@ -192,6 +215,11 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		return Plan{}, err
 	}
 	plan.Tasks = append(plan.Tasks, profileTask)
+	if task, ok, err := profileEnvironmentTask(store, normalized.ProfileName, profileExists, plan); err != nil {
+		return Plan{}, err
+	} else if ok {
+		plan.Tasks = append(plan.Tasks, task)
+	}
 	if profileExists {
 		identityTask, err := identityTask(store, normalized.ProfileName)
 		if err != nil {
@@ -289,6 +317,9 @@ func initPlanHasBlockedTasks(plan Plan) bool {
 
 func ApplyMachine(store profile.Store, plan Plan, opts ApplyOptions) (Result, error) {
 	result := Result{Version: Version, Plan: plan}
+	if err := revalidatePlanRuntime(plan, opts.ResolveRuntime); err != nil {
+		return result, err
+	}
 	if opts.Operation == "" {
 		opts.Operation = OperationInitApply
 	}
@@ -432,50 +463,120 @@ func normalizeOptions(opts Options) (Options, error) {
 	opts.PrivilegeReason = strings.TrimSpace(opts.PrivilegeReason)
 	opts.PrivilegeGuidance = strings.TrimSpace(opts.PrivilegeGuidance)
 	opts.PrivilegeSource = strings.TrimSpace(opts.PrivilegeSource)
+	opts.VisibilitySelection = strings.TrimSpace(opts.VisibilitySelection)
+	opts.VisibilityRoots = normalizeStringList(opts.VisibilityRoots)
+	opts.RuntimeFamily = strings.TrimSpace(opts.RuntimeFamily)
+	opts.ImageRef = strings.TrimSpace(opts.ImageRef)
+	if opts.RuntimeFamily != "" && opts.ImageRef != "" {
+		return opts, errors.New("--runtime and --image are mutually exclusive")
+	}
+	if opts.RuntimeFamily != "" && opts.Backend != "lima" {
+		return opts, errors.New("catalog runtimes require the Lima backend")
+	}
+	if opts.ImageRef != "" {
+		if _, err := environment.ParseImageDeclaration(opts.ImageRef); err != nil {
+			return opts, fmt.Errorf("init image: %w", err)
+		}
+	}
 	return opts, nil
+}
+
+func resolvePlanRuntime(plan *Plan, opts Options) error {
+	if plan == nil || opts.RuntimeFamily == "" {
+		if plan != nil {
+			plan.ImageRef = opts.ImageRef
+		}
+		return nil
+	}
+	resolver := opts.ResolveRuntime
+	if resolver == nil {
+		resolver = runtimecatalog.ResolveEmbedded
+	}
+	resolved, err := resolver(runtimecatalog.Selection{
+		Family: opts.RuntimeFamily, HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve runtime %q: %w", opts.RuntimeFamily, err)
+	}
+	provenance := resolved.Provenance
+	plan.RuntimeSelection = &provenance
+	plan.ImageRef = resolved.ImageRef
+	return nil
+}
+
+func revalidatePlanRuntime(plan Plan, resolver func(runtimecatalog.Selection) (runtimecatalog.Resolution, error)) error {
+	if plan.RuntimeSelection == nil {
+		if plan.ImageRef == "" {
+			return nil
+		}
+		_, err := environment.ParseImageDeclaration(plan.ImageRef)
+		return err
+	}
+	if resolver == nil {
+		resolver = runtimecatalog.ResolveEmbedded
+	}
+	want := *plan.RuntimeSelection
+	resolved, err := resolver(runtimecatalog.Selection{
+		Family: want.Family, Revision: want.Revision, HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+	})
+	if err != nil {
+		return fmt.Errorf("re-resolve runtime %q: %w", want.Family, err)
+	}
+	if resolved.Provenance != want || resolved.ImageRef != plan.ImageRef {
+		return errors.New("runtime catalog changed between plan and apply; create a new plan")
+	}
+	return nil
 }
 
 func onboardingRequestFromOptions(store profile.Store, opts Options) profiletemplate.Request {
 	return profiletemplate.Request{
-		ProfileName:           opts.ProfileName,
-		TemplateID:            opts.TemplateID,
-		Backend:               opts.Backend,
-		Network:               opts.Network,
-		ProxySecretRef:        opts.ProxySecretRef,
-		MediatedResolver:      opts.MediatedResolver,
-		Privilege:             onboardingPrivilegeFromOptions(opts),
-		AllowDegradedTemplate: opts.AllowDegradedTemplate,
-		NoInput:               opts.NoInput,
-		ExplicitProfile:       opts.ExplicitProfile,
-		ExplicitTemplate:      opts.ExplicitTemplate,
-		ExplicitBackend:       opts.ExplicitBackend,
-		ExplicitNetwork:       opts.ExplicitNetwork,
-		CheckExistingProfile:  opts.Onboarding,
-		Store:                 store,
-		AdditionalWarning:     "",
-		AdditionalNonClaim:    "",
+		ProfileName:                opts.ProfileName,
+		TemplateID:                 opts.TemplateID,
+		Backend:                    opts.Backend,
+		Network:                    opts.Network,
+		ProxySecretRef:             opts.ProxySecretRef,
+		MediatedResolver:           opts.MediatedResolver,
+		Privilege:                  onboardingPrivilegeFromOptions(opts),
+		AllowDegradedTemplate:      opts.AllowDegradedTemplate,
+		NoInput:                    opts.NoInput,
+		ExplicitProfile:            opts.ExplicitProfile,
+		ExplicitTemplate:           opts.ExplicitTemplate,
+		ExplicitBackend:            opts.ExplicitBackend,
+		ExplicitNetwork:            opts.ExplicitNetwork,
+		CheckExistingProfile:       opts.Onboarding,
+		Store:                      store,
+		AdditionalWarning:          "",
+		AdditionalNonClaim:         "",
+		VisibilitySelection:        opts.VisibilitySelection,
+		VisibilityRoots:            append([]string(nil), opts.VisibilityRoots...),
+		NameDisclosureAcknowledged: opts.NameDisclosureAcknowledged,
+		ExplicitVisibility:         opts.ExplicitVisibility,
 	}
 }
 
 func onboardingRequestFromPlan(store profile.Store, plan Plan) profiletemplate.Request {
 	return profiletemplate.Request{
-		ProfileName:           plan.Profile,
-		TemplateID:            plan.TemplateID,
-		Backend:               plan.Backend,
-		Network:               plan.Network,
-		ProxySecretRef:        plan.ProxySecretRef,
-		MediatedResolver:      plan.MediatedResolver,
-		Privilege:             onboardingPrivilegeFromPlan(plan),
-		AllowDegradedTemplate: plan.AllowDegradedTemplate,
-		NoInput:               true,
-		ExplicitProfile:       true,
-		ExplicitTemplate:      true,
-		ExplicitBackend:       true,
-		ExplicitNetwork:       true,
-		CheckExistingProfile:  false,
-		Store:                 store,
-		AdditionalWarning:     "",
-		AdditionalNonClaim:    "",
+		ProfileName:                plan.Profile,
+		TemplateID:                 plan.TemplateID,
+		Backend:                    plan.Backend,
+		Network:                    plan.Network,
+		ProxySecretRef:             plan.ProxySecretRef,
+		MediatedResolver:           plan.MediatedResolver,
+		Privilege:                  onboardingPrivilegeFromPlan(plan),
+		AllowDegradedTemplate:      plan.AllowDegradedTemplate,
+		NoInput:                    true,
+		ExplicitProfile:            true,
+		ExplicitTemplate:           true,
+		ExplicitBackend:            true,
+		ExplicitNetwork:            true,
+		CheckExistingProfile:       false,
+		Store:                      store,
+		AdditionalWarning:          "",
+		AdditionalNonClaim:         "",
+		VisibilitySelection:        plan.HostFSVisibility,
+		VisibilityRoots:            append([]string(nil), plan.HostFSVisibilityRoots...),
+		NameDisclosureAcknowledged: plan.NameDisclosureAcknowledged,
+		ExplicitVisibility:         true,
 	}
 }
 
@@ -602,6 +703,50 @@ func identityTask(store profile.Store, name string) (Task, error) {
 		Outputs:            []string{store.ProfileDir(name)},
 		Message:            message,
 	}, nil
+}
+
+func profileEnvironmentTask(store profile.Store, name string, profileExists bool, plan Plan) (Task, bool, error) {
+	if plan.RuntimeSelection == nil && plan.ImageRef == "" {
+		return Task{}, false, nil
+	}
+	task := Task{
+		ID:                 "init_profile_environment_select",
+		Kind:               "profile.environment.select",
+		Source:             "builtin",
+		Status:             "pending",
+		TargetScope:        "profile",
+		CapabilityBoundary: "guest-image",
+		Risk:               "safe",
+		Outputs:            []string{store.ProfilePath(name)},
+		Message:            "select immutable profile guest image",
+	}
+	if plan.RuntimeSelection != nil {
+		task.Inputs = []string{plan.RuntimeSelection.Family, plan.RuntimeSelection.Revision, plan.RuntimeSelection.ArtifactSHA256}
+	} else {
+		task.Inputs = []string{plan.ImageRef}
+	}
+	if !profileExists {
+		return task, true, nil
+	}
+	p, err := store.Load(name)
+	if err != nil {
+		return Task{}, false, err
+	}
+	same := false
+	if plan.RuntimeSelection != nil && p.Environment.Runtime != nil {
+		same = *p.Environment.Runtime == *plan.RuntimeSelection && p.Environment.BaseImage == ""
+	} else if plan.RuntimeSelection == nil {
+		same = p.Environment.Runtime == nil && p.Environment.BaseImage == plan.ImageRef
+	}
+	if same {
+		task.Status = "ok"
+		task.Message = "profile guest image selection already matches"
+		return task, true, nil
+	}
+	task.Risk = "requires-confirmation"
+	task.RequiresConfirm = true
+	task.Message = "changing an existing profile guest image requires confirmation and environment recreation"
+	return task, true, nil
 }
 
 func networkTask(store profile.Store, name, mode, proxySecretRef, mediatedResolver string, profileExists bool) (Task, error) {
@@ -776,6 +921,20 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 			return err
 		}
 		return profile.MaterializeIdentityState(store.ProfileDir(plan.Profile), p)
+	case "profile.environment.select":
+		p, err := store.LoadOrInit(plan.Profile)
+		if err != nil {
+			return err
+		}
+		if plan.RuntimeSelection != nil {
+			provenance := *plan.RuntimeSelection
+			p.Environment.Runtime = &provenance
+			p.Environment.BaseImage = ""
+		} else {
+			p.Environment.Runtime = nil
+			p.Environment.BaseImage = plan.ImageRef
+		}
+		return store.Save(p)
 	case "network.mode.select":
 		if len(task.Inputs) < 1 || len(task.Inputs) > 3 {
 			return fmt.Errorf("network.mode.select task requires mode, optional proxy secret ref, and optional mediated resolver inputs")

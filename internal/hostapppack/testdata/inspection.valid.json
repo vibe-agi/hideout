@@ -1,0 +1,56 @@
+{
+  "schema": "hideout.host-app-inspection/v1",
+  "generatedAt": "2026-07-11T00:00:00Z",
+  "entries": [
+    {
+      "summary": {
+        "command": "cursor",
+        "app": "Cursor",
+        "profile": "privacy",
+        "access": "ask-each-run",
+        "readiness": "ready"
+      },
+      "package": {
+        "id": "community.cursor",
+        "revisionId": "rev_aaaaaaaaaaaaaaaa",
+        "sourceKind": "local",
+        "sourceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "testStatus": "passed"
+      },
+      "permissions": {
+        "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "status": "accepted",
+        "diff": []
+      },
+      "appIdentity": {
+        "verification": "unverified",
+        "rootClass": "applications",
+        "ownerClass": "operator",
+        "bundleId": "com.todesktop.230313mzl4w4u92",
+        "teamId": "VDXQ22DGB9",
+        "contentDigest": "bundle-tree-v1:sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "binding": {
+        "id": "cursor-command",
+        "commands": ["cursor"],
+        "resourceKinds": ["workspace", "hostfs-portal"],
+        "capabilityId": "host.app.open-resource",
+        "grammar": "open-resource-v1",
+        "resultPolicy": "none",
+        "shadowStatus": "owned"
+      },
+      "safety": {
+        "posture": "elevated"
+      },
+      "runtime": {
+        "activeInCurrentRun": false,
+        "grantState": "not-required"
+      },
+      "hint": {
+        "untrusted": true,
+        "text": "Install Cursor from its official site",
+        "url": "https://cursor.com"
+      }
+    }
+  ]
+}

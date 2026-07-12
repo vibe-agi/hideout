@@ -12,6 +12,8 @@
     "backend",
     "network",
     "hostfsPosture",
+    "hostfsVisibility",
+    "nameDisclosureAcknowledged",
     "adapterPackPosture",
     "privilege",
     "warnings",
@@ -50,7 +52,21 @@
       "type": "string"
     },
     "hostfsPosture": {
-      "const": "none-by-default"
+      "enum": ["none-by-default", "landmarks-one-level", "home-tree-names-visible"]
+    },
+    "hostfsVisibility": {
+      "enum": ["none", "landmarks", "home-tree"]
+    },
+    "hostfsVisibilityRoots": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "hostfsVisibilityRuleIds": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "nameDisclosureAcknowledged": {
+      "type": "boolean"
     },
     "adapterPackPosture": {
       "const": "none-by-default"

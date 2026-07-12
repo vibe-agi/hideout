@@ -1,39 +1,47 @@
 package cmdproxy
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/vibe-agi/hideout/internal/cmdgrammar"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
 const (
-	ActionHostOpen       = "host.open"
-	ActionCommandAdapter = "command.adapter"
-	ArgvSchemaOpenV1     = "open-target-v1"
-	ArgvSchemaAdapterV1  = "command-adapter-v1"
-	StreamMetadataOnly   = "metadata-only"
-	DefaultModeAllow     = "allow"
-	DefaultModeAdapter   = "adapter"
-	RouteHostBroker      = "host-broker"
-	RouteCommandAdapter  = "command-adapter"
-	OwnerHostOpen        = "host-open"
-	OwnerCommandAdapter  = "command-adapter"
+	ActionHostOpen            = "host.open"
+	ActionCommandAdapter      = "command.adapter"
+	ActionHostAppOpenResource = "host.app.open-resource"
+	ArgvSchemaOpenV1          = "open-target-v1"
+	ArgvSchemaAdapterV1       = "command-adapter-v1"
+	ArgvSchemaOpenResourceV1  = cmdgrammar.GrammarOpenResourceV1
+	ArgvSchemaCodeOpenV1      = ArgvSchemaOpenResourceV1 // 030 typed compatibility alias
+	StreamMetadataOnly        = "metadata-only"
+	DefaultModeAllow          = "allow"
+	DefaultModeAdapter        = "adapter"
+	RouteHostBroker           = "host-broker"
+	RouteCommandAdapter       = "command-adapter"
+	OwnerHostOpen             = "host-open"
+	OwnerCommandAdapter       = "command-adapter"
+	OwnerHostAppProjection    = "host-app-projection"
 )
 
 type Registration struct {
-	Name           string   `json:"name"`
-	Aliases        []string `json:"aliases,omitempty"`
-	Action         string   `json:"action"`
-	ArgvSchema     string   `json:"argvSchema"`
-	StreamPolicy   string   `json:"streamPolicy"`
-	DefaultMode    string   `json:"defaultMode"`
-	AllowedTargets []string `json:"allowedTargets"`
-	OwnerType      string   `json:"ownerType,omitempty"`
-	AdapterID      string   `json:"adapterId,omitempty"`
+	Name                string                          `json:"name"`
+	Aliases             []string                        `json:"aliases,omitempty"`
+	Action              string                          `json:"action"`
+	ArgvSchema          string                          `json:"argvSchema"`
+	StreamPolicy        string                          `json:"streamPolicy"`
+	DefaultMode         string                          `json:"defaultMode"`
+	AllowedTargets      []string                        `json:"allowedTargets"`
+	OwnerType           string                          `json:"ownerType,omitempty"`
+	AdapterID           string                          `json:"adapterId,omitempty"`
+	BindingDigest       string                          `json:"bindingDigest,omitempty"`
+	OpenResourceGrammar *cmdgrammar.OpenResourceGrammar `json:"-"`
 }
 
 type Registry struct {
@@ -77,6 +85,13 @@ func mustRegistry(registry Registry, err error) Registry {
 		panic(err)
 	}
 	return registry
+}
+
+// WithProjection returns a new registry that also contains the projection
+// recipe bindings.
+func WithProjection(base Registry, extra ...Registration) (Registry, error) {
+	regs := append(base.Registrations(), extra...)
+	return NewRegistry(regs)
 }
 
 func RegistryFromProfile(p profile.Profile) (Registry, error) {
@@ -195,6 +210,20 @@ func (r Registry) Lookup(name string) (Registration, bool) {
 	return cloneRegistration(reg), ok
 }
 
+// LookupExact is the security-boundary lookup used by the broker. Unlike the
+// guest invocation convenience lookup, it never canonicalizes attacker input
+// through filepath.Base.
+func (r Registry) LookupExact(name string) (Registration, bool) {
+	if name == "" || filepath.Base(name) != name || strings.TrimSpace(name) != name || strings.ContainsAny(name, "/\\\x00\r\n") {
+		return Registration{}, false
+	}
+	if canonical, ok := r.aliases[name]; ok {
+		name = canonical
+	}
+	reg, ok := r.commands[name]
+	return cloneRegistration(reg), ok
+}
+
 func (r Registry) ShimNames() []string {
 	names := make([]string, 0, len(r.commands)+len(r.aliases))
 	for name, reg := range r.commands {
@@ -217,6 +246,8 @@ func (r Registry) Registrations() []Registration {
 	}
 	return out
 }
+
+func (r Registry) Empty() bool { return len(r.commands) == 0 && len(r.aliases) == 0 }
 
 func (r Registry) Explain() string {
 	names := r.ShimNames()
@@ -255,6 +286,11 @@ func (r Registry) Normalize(command string, args []string, cwd string) (Request,
 		return NormalizeHostOpenCommand(command, args, cwd)
 	case ArgvSchemaAdapterV1:
 		return NormalizeAdapterCommand(command, args, cwd, reg.AdapterID)
+	case ArgvSchemaOpenResourceV1:
+		if reg.OpenResourceGrammar == nil || reg.BindingDigest == "" {
+			return Request{}, fmt.Errorf("host-app binding metadata is unavailable for %q", command)
+		}
+		return NormalizeOpenResourceProjectionCommand(command, args, cwd, *reg.OpenResourceGrammar, reg.BindingDigest)
 	default:
 		return Request{}, fmt.Errorf("unsupported argv schema %q for command proxy %q", reg.ArgvSchema, command)
 	}
@@ -339,6 +375,50 @@ func NormalizeAdapterCommand(command string, args []string, cwd, adapterID strin
 	}, nil
 }
 
+func NormalizeOpenResourceProjectionCommand(command string, args []string, cwd string, grammar cmdgrammar.OpenResourceGrammar, bindingDigest string) (Request, error) {
+	command, err := normalizeRegistryName("host app projection", filepath.Base(command))
+	if err != nil {
+		return Request{}, err
+	}
+	cwd, err = normalizeCWD(cwd)
+	if err != nil {
+		return Request{}, err
+	}
+	argv := append([]string{command}, args...)
+	intent, err := cmdgrammar.ParseOpenResource(grammar, argv, cwd)
+	if err != nil {
+		return Request{}, err
+	}
+	intentMap, err := jsonToMap(intent)
+	if err != nil {
+		return Request{}, err
+	}
+	return Request{
+		Subject: "command:" + command,
+		Command: command,
+		CWD:     cwd,
+		Action:  ActionHostAppOpenResource,
+		Route:   RouteHostBroker,
+		Payload: map[string]any{
+			"intent":        intentMap,
+			"cwd":           cwd,
+			"bindingDigest": bindingDigest,
+		},
+	}, nil
+}
+
+func jsonToMap(v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func normalizeCWD(cwd string) (string, error) {
 	if strings.TrimSpace(cwd) == "" {
 		return "", errors.New("command proxy cwd is required")
@@ -356,5 +436,12 @@ func normalizeCWD(cwd string) (string, error) {
 func cloneRegistration(reg Registration) Registration {
 	reg.Aliases = append([]string(nil), reg.Aliases...)
 	reg.AllowedTargets = append([]string(nil), reg.AllowedTargets...)
+	if reg.OpenResourceGrammar != nil {
+		grammar := *reg.OpenResourceGrammar
+		grammar.GotoFlags = append([]string(nil), grammar.GotoFlags...)
+		grammar.NewWindowFlags = append([]string(nil), grammar.NewWindowFlags...)
+		grammar.ReuseWindowFlags = append([]string(nil), grammar.ReuseWindowFlags...)
+		reg.OpenResourceGrammar = &grammar
+	}
 	return reg
 }

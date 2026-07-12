@@ -11,6 +11,9 @@ Usage:
 
 Environment:
   HIDEOUT_SECRET_DEFAULT_PROXY   Required operator-controlled proxy URL.
+  HIDEOUT_RUNTIME_BUILD_PROVENANCE
+                                 Required exact runtime build-provenance JSON.
+  HIDEOUT_RELEASE_RUNTIME_FAMILY Optional runtime family (default developer-standard).
   HIDEOUT_RELEASE_EVIDENCE_DIR   Optional exact evidence output directory.
   HIDEOUT_RELEASE_EVIDENCE_ROOT  Optional parent directory for generated evidence.
 
@@ -40,6 +43,13 @@ Set it to an operator-controlled proxy, for example:
   HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> scripts/test-release-dogfood.sh
 MSG
   exit 2
+fi
+
+if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-0}" != "1" ]; then
+  if [ -z "${HIDEOUT_RUNTIME_BUILD_PROVENANCE:-}" ] || [ ! -f "$HIDEOUT_RUNTIME_BUILD_PROVENANCE" ]; then
+    echo "release-dogfood: HIDEOUT_RUNTIME_BUILD_PROVENANCE must name the exact candidate build provenance" >&2
+    exit 2
+  fi
 fi
 
 require_command() {

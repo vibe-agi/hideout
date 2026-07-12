@@ -28,7 +28,9 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/helperbin"
+	"github.com/vibe-agi/hideout/internal/hostcap/appopen"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/hostfs/readgrant"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
@@ -1004,6 +1006,7 @@ func TestCorePrepareRunNetworkLimaTun2SocksHidesProxySecret(t *testing.T) {
 func TestCoreStartRunDataPlaneOwnsBrokerShimsHostFSAndSessionStartAudit(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
+	configureManagerHostAppIdentity(t, &core, t.TempDir())
 	plan, err := core.PlanRun(RunPlanOptions{
 		ProfileName: "default",
 		Backend:     "native",
@@ -1040,6 +1043,26 @@ func TestCoreStartRunDataPlaneOwnsBrokerShimsHostFSAndSessionStartAudit(t *testi
 	if dataPlane.Broker == nil || dataPlane.BrokerGuestEndpoint.Network != broker.EndpointUnix {
 		t.Fatalf("broker endpoint mismatch: %+v", dataPlane)
 	}
+	wantSafeDataDir := filepath.Join(runSession.ProfileDir, "host-app", "state")
+	if dataPlane.Broker.HostApp == nil || dataPlane.Broker.HostApp.SafeUserDataDir != wantSafeDataDir || strings.HasPrefix(wantSafeDataDir, runSession.Layout.Dir+string(filepath.Separator)) {
+		t.Fatalf("safe IDE state must be profile-owned, not orphaned session state: hostApp=%+v", dataPlane.Broker.HostApp)
+	}
+	info, err := os.Stat(wantSafeDataDir)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("safe IDE state info=%v err=%v, want mode 0700", info, err)
+	}
+	binding, ok := dataPlane.Broker.HostApp.Bindings.ResolveCommand("code")
+	if !ok {
+		t.Fatal("built-in code binding is missing")
+	}
+	qualifiedRunRoot, err := appopen.QualifiedRunStateRoot(wantSafeDataDir, binding.QualifiedAppRef, runSession.Layout.ID)
+	if err != nil || !strings.HasPrefix(qualifiedRunRoot, wantSafeDataDir+string(filepath.Separator)) || qualifiedRunRoot == wantSafeDataDir {
+		t.Fatalf("qualified app/run state root=%q err=%v", qualifiedRunRoot, err)
+	}
+	otherRunRoot, err := appopen.QualifiedRunStateRoot(wantSafeDataDir, binding.QualifiedAppRef, "other-run")
+	if err != nil || otherRunRoot == qualifiedRunRoot {
+		t.Fatalf("safe state is not isolated by run: current=%q other=%q err=%v", qualifiedRunRoot, otherRunRoot, err)
+	}
 	if !dataPlane.HostFSEnabled || !reflect.DeepEqual(dataPlane.HostFSGrafts, []string{"/Users/alice/Downloads"}) {
 		t.Fatalf("hostfs data plane mismatch: enabled=%v grafts=%v", dataPlane.HostFSEnabled, dataPlane.HostFSGrafts)
 	}
@@ -1061,8 +1084,14 @@ func TestCoreStartRunDataPlaneOwnsBrokerShimsHostFSAndSessionStartAudit(t *testi
 	if !strings.Contains(string(endpointData), `"network": "unix"`) {
 		t.Fatalf("broker endpoint file mismatch:\n%s", endpointData)
 	}
+	if err := readgrant.ProbeOwner(runSession.Layout.HostFSReadOwnerLock); err != nil {
+		t.Fatalf("running data plane did not hold HostFS read owner lock: %v", err)
+	}
 	if err := core.CloseRunDataPlane(dataPlane); err != nil {
 		t.Fatalf("CloseRunDataPlane: %v", err)
+	}
+	if err := readgrant.ProbeOwner(runSession.Layout.HostFSReadOwnerLock); !errors.Is(err, readgrant.ErrSessionNotLive) {
+		t.Fatalf("closed data plane still appeared live: %v", err)
 	}
 	if _, err := core.CloseRunSession(runSession); err != nil {
 		t.Fatalf("CloseRunSession: %v", err)
@@ -1933,6 +1962,18 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	}
 	events := []audit.Event{
 		{
+			Action:   "session.start",
+			Decision: "allow",
+			Details: map[string]any{
+				"hostfsVisibilityPosture":  "landmarks-one-level",
+				"hostfsDiscoverGrants":     3,
+				"hostfsDiscoverDeny":       2,
+				"hostfsMaxListEntries":     hostfs.DefaultMaxListEntries,
+				"hostfsMaxDepth":           hostfs.MaxDiscoverDepth,
+				"hostfsVisibilityNonClaim": hostFSVisibilityNonClaim,
+			},
+		},
+		{
 			Action:   "host.fs.read",
 			Decision: "allow",
 			Details: map[string]any{
@@ -2025,6 +2066,9 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	}
 	if summary.Evidence != "available" {
 		t.Fatalf("summary evidence mismatch: %+v", summary)
+	}
+	if summary.HostFSVisibility == nil || summary.HostFSVisibility.Posture != "landmarks-one-level" || summary.HostFSVisibility.DiscoverGrants != 3 || summary.HostFSVisibility.DiscoverDeny != 2 || summary.HostFSVisibility.MaxListEntries != hostfs.DefaultMaxListEntries || summary.HostFSVisibility.MaxDepth != hostfs.MaxDiscoverDepth || summary.HostFSVisibility.NonClaim != hostFSVisibilityNonClaim {
+		t.Fatalf("HostFS visibility posture mismatch: %+v", summary.HostFSVisibility)
 	}
 	hostFSBoundary := boundarySummaryCapability(t, summary, "hostfs")
 	if hostFSBoundary.Allowed != 1 || hostFSBoundary.Denied != 2 || hostFSBoundary.Unsupported != 1 {
@@ -2205,6 +2249,69 @@ func TestCoreApplyRunAppliesPendingSafeInitBeforeBackend(t *testing.T) {
 	if !strings.Contains(initAuditText, `"operation":"run.init.apply"`) ||
 		!strings.Contains(initAuditText, `"taskKind":"schema.metadata.write"`) {
 		t.Fatalf("run init audit missing metadata repair:\n%s", initAuditText)
+	}
+}
+
+func TestEnsureRunInitializedPreservesConfiguredMediatedResolver(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	p := profile.Default("privacy")
+	p.Network.Mode = network.ModeTun2Socks
+	p.Network.ProxySecretRef = "projection-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "privacy",
+		Backend:     "lima",
+		Workspace:   t.TempDir(),
+		Command:     []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.EnsureRunInitialized(plan); err != nil {
+		t.Fatalf("EnsureRunInitialized treated the stored resolver as a network change: %v", err)
+	}
+	loaded, err := store.Load("privacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Network.MediatedResolver != "1.1.1.1" || loaded.Network.ProxySecretRef != "projection-proxy" || loaded.Network.Mode != network.ModeTun2Socks {
+		t.Fatalf("run initialization changed network policy: %+v", loaded.Network)
+	}
+}
+
+func TestEnsureRunInitializedDoesNotCarryRuntimeResolverIntoStoredDirectMode(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	p := profile.Default("direct")
+	p.Network.Mode = network.ModeDirect
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName:      "direct",
+		Backend:          "native",
+		Workspace:        t.TempDir(),
+		Command:          []string{"true"},
+		NetworkMode:      network.ModeTun2Socks,
+		ProxySecretRef:   "runtime-proxy",
+		MediatedResolver: "1.1.1.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.EnsureRunInitialized(plan); err != nil {
+		t.Fatalf("EnsureRunInitialized carried a runtime-only resolver into stored direct policy: %v", err)
+	}
+	loaded, err := store.Load("direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Network.Mode != network.ModeDirect || loaded.Network.MediatedResolver != "" || loaded.Network.ProxySecretRef != "" {
+		t.Fatalf("run initialization changed stored direct policy: %+v", loaded.Network)
 	}
 }
 
@@ -3074,6 +3181,7 @@ func managerPreviewHTTPGet(addr, path string) (*http.Response, error) {
 }
 
 type applyRunFakeBackend struct {
+	name         string
 	availableErr error
 	prepareErr   error
 	runErr       error
@@ -3081,6 +3189,7 @@ type applyRunFakeBackend struct {
 	calls        []string
 	spec         backend.RunSpec
 	runFunc      func(*backend.Session) error
+	verifyFunc   func(*backend.Session) error
 	runSession   backend.Session
 	runCommand   []string
 	runEnv       []string
@@ -3124,6 +3233,9 @@ func (o *managerRecordingOpener) waitForURL(timeout time.Duration) bool {
 }
 
 func (b *applyRunFakeBackend) Name() string {
+	if b.name != "" {
+		return b.name
+	}
 	return "native"
 }
 
@@ -3165,6 +3277,10 @@ func (b *applyRunFakeBackend) Prepare(_ context.Context, spec backend.RunSpec) (
 		PrivilegedSetupRequired:   spec.PrivilegedSetupRequired,
 		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
 		PrivilegedSetupEventSink:  spec.PrivilegedSetupEventSink,
+		RuntimeContract:           backend.CloneRuntimeContract(spec.RuntimeContract),
+		RuntimeInstanceExpected:   spec.RuntimeInstanceExpected,
+		RuntimeResultSink:         spec.RuntimeResultSink,
+		RuntimeCompletionSink:     spec.RuntimeCompletionSink,
 	}, nil
 }
 
@@ -3178,8 +3294,23 @@ func (b *applyRunFakeBackend) Run(_ context.Context, session *backend.Session, c
 	}
 	b.runCommand = append([]string(nil), command...)
 	b.runEnv = append([]string(nil), env...)
+	var err error
 	if b.runFunc != nil {
-		return b.runFunc(session)
+		err = b.runFunc(session)
+	} else {
+		err = b.runErr
+	}
+	if session != nil && session.RuntimeCompletionSink != nil {
+		err = errors.Join(err, session.RuntimeCompletionSink(err))
+	}
+	return err
+}
+
+func (b *applyRunFakeBackend) VerifyRuntime(_ context.Context, session *backend.Session, env []string) error {
+	b.calls = append(b.calls, "verify-runtime")
+	b.runEnv = append([]string(nil), env...)
+	if b.verifyFunc != nil {
+		return b.verifyFunc(session)
 	}
 	return b.runErr
 }

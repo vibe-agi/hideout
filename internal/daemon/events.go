@@ -79,7 +79,7 @@ func (b *eventBus) OperationEvent(kind, phase string, details map[string]any) {
 		b.publish(Event{
 			Kind:    liveconsole.KindHostFSWrite,
 			Phase:   phase,
-			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindHostFSWrite, ID: payload.DecisionID},
+			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindHostFSWrite, ID: payload.DecisionID, Profile: payload.Profile, Session: payload.Session},
 			Payload: payload,
 		})
 	case liveconsole.KindDecision:
@@ -97,6 +97,15 @@ func (b *eventBus) OperationEvent(kind, phase string, details map[string]any) {
 			Phase:   phase,
 			Entity:  liveconsole.EntityRef{Kind: liveconsole.KindNotice, ID: payload.NoticeID, Profile: payload.Profile, Session: payload.Session},
 			Payload: payload,
+		})
+	case "host-app":
+		b.publishAuditEvent(audit.Event{
+			Time:     time.Now().UTC(),
+			Profile:  stringValue(details, "profile"),
+			Backend:  "native",
+			Action:   stringValue(details, "action"),
+			Decision: stringValue(details, "decision"),
+			Details:  details,
 		})
 	case liveconsole.KindSession, "run", "operation":
 		payload := sessionPayload(kind, details, phase)
@@ -351,6 +360,9 @@ func hostFSWritePayload(details map[string]any, phase string) liveconsole.EventP
 		ID:              firstString(details, "decisionId", "operationId", "id"),
 		OperationID:     stringValue(details, "operationId"),
 		DecisionID:      stringValue(details, "decisionId"),
+		Profile:         stringValue(details, "profile"),
+		Session:         stringValue(details, "session"),
+		Backend:         stringValue(details, "backend"),
 		Status:          firstString(details, "status", "state"),
 		Operation:       firstString(details, "operation", "op"),
 		Path:            stringValue(details, "path"),
