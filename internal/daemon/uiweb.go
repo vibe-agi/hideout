@@ -27,11 +27,8 @@ func (d *Daemon) startLoopbackUI() {
 	uiAPI.AllowedOrigins = []string{baseURL}
 	mux := http.NewServeMux()
 	mux.Handle(apiPrefix, d.authRecorder(uiAPI.Handler()))
-	mux.Handle(statusPath, d.authRecorder(http.HandlerFunc(d.serveStatus)))
-	mux.Handle(stopPath, d.authRecorder(http.HandlerFunc(d.serveStop)))
-	mux.Handle(eventsPath, d.authRecorder(http.HandlerFunc(d.serveEvents)))
-	mux.Handle(backgroundPath, d.authRecorder(http.HandlerFunc(d.serveBackground)))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	d.mountDaemonEndpoints(mux)
+	mux.HandleFunc(loopbackUIPath, func(w http.ResponseWriter, r *http.Request) {
 		manager.ServeUIRoot(w, r, d.api.ExpiresAt)
 	})
 	d.uiServer = &http.Server{Handler: mux}

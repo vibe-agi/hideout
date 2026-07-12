@@ -10,6 +10,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+copy_artifacts() {
+  if [ -z "${HIDEOUT_PACKAGE_SMOKE_ARTIFACT_DIR:-}" ]; then
+    return
+  fi
+  mkdir -p "$HIDEOUT_PACKAGE_SMOKE_ARTIFACT_DIR"
+  for rel in \
+    package-stale-upgrade.out \
+    package-stale-verify.out \
+    package-stale-verify.err \
+    package-repair-dry.out \
+    package-repair.out \
+    package-repair-summary.json \
+    package-repaired-verify.out \
+    package-uninstall-dry.out \
+    package-uninstall.out \
+    package-uninstall-purge.out \
+    package-installed-doctor-packaging.json
+  do
+    if [ -f "$tmp/$rel" ]; then
+      cp "$tmp/$rel" "$HIDEOUT_PACKAGE_SMOKE_ARTIFACT_DIR/$rel"
+    fi
+  done
+}
+
 pkg="$tmp/hideout.tar.gz"
 store="$tmp/store"
 workspace="$tmp/workspace"
@@ -56,8 +80,24 @@ for path in \
   "$prefix/README.zh-CN.md" \
   "$prefix/schemas/package-manifest.schema.json" \
   "$prefix/schemas/release-dogfood.schema.json" \
+  "$prefix/schemas/runtime-catalog.schema.json" \
+  "$prefix/schemas/runtime-verification.schema.json" \
+  "$prefix/schemas/capability-descriptor.schema.json" \
+  "$prefix/schemas/host-app-pack.schema.json" \
+  "$prefix/schemas/host-app-pack-registry.schema.json" \
+  "$prefix/schemas/host-app-enablement.schema.json" \
+  "$prefix/schemas/host-app-inspection.schema.json" \
+  "$prefix/schemas/open-resource-intent.schema.json" \
   "$prefix/schemas/profile.schema.json" \
   "$prefix/schemas/run-plan.schema.json" \
+  "$prefix/runtime/catalog.json" \
+  "$prefix/runtime/contract.json" \
+  "$prefix/runtime/developer-standard/sources.lock.json" \
+  "$prefix/runtime/developer-standard/build.sh" \
+  "$prefix/host-app/recipes/builtin-vscode.json" \
+  "$prefix/host-app/recipes/safety-profiles.json" \
+  "$prefix/examples/host-app-packs/cursor/hideout.host-app-pack.json" \
+  "$prefix/examples/host-app-packs/zed/hideout.host-app-pack.json" \
   "$prefix/docs/privacy-run-design.md" \
   "$prefix/packaging/homebrew/hideout.rb"
 do
@@ -70,6 +110,13 @@ done
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$prefix/package-manifest.json"
+for manifest in \
+  "$prefix/host-app/recipes/builtin-vscode.json" \
+  "$prefix/examples/host-app-packs/cursor/hideout.host-app-pack.json" \
+  "$prefix/examples/host-app-packs/zed/hideout.host-app-pack.json"
+do
+  go run ./cmd/hideout-schema-validate "$prefix/schemas/host-app-pack.schema.json" "$manifest"
+done
 jq -e \
   --arg host_os "$(go env GOOS)" \
   --arg host_arch "$arch" \
@@ -89,15 +136,35 @@ jq -e \
     (.layout.entrypoints | index("README.zh-CN.md")) and
     (.layout.directories | index("schemas")) and
     (.layout.directories | index("docs")) and
+    (.layout.directories | index("host-app")) and
+    (.layout.directories | index("examples")) and
     (.layout.directories | index("packaging")) and
+    (.layout.directories | index("runtime")) and
+    .migration.installStateSchema == "hideout.package-install-state.v1" and
+    (.migration.fromInstalledSchemas | index("hideout.package-install-state.v1")) and
+    .migration.minimumPackageSchema == "hideout.package-manifest.v1" and
+    .migration.maximumPackageSchema == "hideout.package-manifest.v1" and
     (.files | type == "array" and length >= 8) and
     any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "install.sh" and .kind == "installer" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
-    any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$")))
+    any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/runtime-catalog.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/runtime-verification.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/host-app-pack.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/host-app-enablement.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "host-app/recipes/builtin-vscode.json" and .kind == "host-app-core-data" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "host-app/recipes/safety-profiles.json" and .kind == "host-app-core-data" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "examples/host-app-packs/cursor/hideout.host-app-pack.json" and .kind == "host-app-example" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "runtime/catalog.json" and .kind == "runtime-catalog" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "runtime/contract.json" and .kind == "runtime-contract" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "runtime/developer-standard/sources.lock.json" and .kind == "runtime-build" and (.sha256 | test("^[a-f0-9]{64}$")))
   ' "$prefix/package-manifest.json" >/dev/null
+
+cmp internal/runtimecatalog/catalog.json "$prefix/runtime/catalog.json"
+cmp internal/runtimecatalog/contract.json "$prefix/runtime/contract.json"
 
 jq -r '.layout.binaries[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do
   if ! manifest_relative_path "$rel"; then
@@ -138,7 +205,7 @@ jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$prefix/package-manifest.json
     exit 1
   fi
   case "$kind" in
-    binary|linux-helper|helper-manifest|installer|entrypoint|schema|doc|script|packaging)
+    binary|linux-helper|helper-manifest|installer|entrypoint|schema|doc|script|packaging|host-app-core-data|host-app-example|runtime-catalog|runtime-contract|runtime-build)
       ;;
     *)
       echo "package-smoke: manifest file has unknown kind: $rel ($kind)" >&2
@@ -248,17 +315,32 @@ test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -f "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_prefix/share/hideout/schemas/package-manifest.schema.json"
+test -f "$installed_prefix/share/hideout/schemas/runtime-catalog.schema.json"
+test -f "$installed_prefix/share/hideout/schemas/runtime-verification.schema.json"
+test -f "$installed_prefix/share/hideout/schemas/host-app-pack.schema.json"
+test -f "$installed_prefix/share/hideout/schemas/host-app-enablement.schema.json"
+test -f "$installed_prefix/share/hideout/host-app/recipes/builtin-vscode.json"
+test -f "$installed_prefix/share/hideout/host-app/recipes/safety-profiles.json"
+test -f "$installed_prefix/share/hideout/examples/host-app-packs/cursor/hideout.host-app-pack.json"
 test -f "$installed_prefix/share/hideout/docs/README.md"
 test -f "$installed_prefix/share/hideout/docs/STATUS.md"
+cmp internal/runtimecatalog/catalog.json "$installed_prefix/share/hideout/runtime/catalog.json"
+cmp internal/runtimecatalog/contract.json "$installed_prefix/share/hideout/runtime/contract.json"
+cmp runtime/developer-standard/sources.lock.json "$installed_prefix/share/hideout/runtime/developer-standard/sources.lock.json"
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$installed_prefix/share/hideout/package-manifest.json"
 "$installed_prefix/bin/hideout" package verify "$installed_prefix" >"$tmp/package-installed-verify.out"
 grep -q 'package: ok mode=installed' "$tmp/package-installed-verify.out"
+grep -q 'external-prerequisite name=tun2socks' "$tmp/package-installed-verify.out"
+grep -q 'packageOwned=false' "$tmp/package-installed-verify.out"
 grep -q "\"installPrefix\": \"$installed_prefix_real\"" "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_store/install-state.json"
 test -f "$installed_store/profiles/default/profile.json"
 HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/package-installed-doctor.out"
 grep -q 'store: ok writable' "$tmp/package-installed-doctor.out"
 grep -q 'profile: ok default' "$tmp/package-installed-doctor.out"
+HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" --feature packaging --format json >"$tmp/package-installed-doctor-packaging.json"
+grep -q 'external-prerequisite tun2socks=' "$tmp/package-installed-doctor-packaging.json"
+grep -q 'packageOwned=false' "$tmp/package-installed-doctor-packaging.json"
 
 durable_fixture="$installed_store/evidence/keep.json"
 mkdir -p "$(dirname "$durable_fixture")"
@@ -269,6 +351,58 @@ grep -q 'package: upgrade' "$tmp/package-upgrade.out"
 test -f "$durable_fixture"
 after_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
 test "$before_upgrade_sha" = "$after_upgrade_sha"
+
+stale_upgrade="$tmp/package-stale-upgrade"
+cp -R "$prefix" "$stale_upgrade"
+jq '
+  .layout.entrypoints = (.layout.entrypoints | map(select(. != "README.zh-CN.md"))) |
+  .files = (.files | map(select(.path != "README.zh-CN.md")))
+' "$stale_upgrade/package-manifest.json" >"$stale_upgrade/package-manifest.json.tmp"
+mv "$stale_upgrade/package-manifest.json.tmp" "$stale_upgrade/package-manifest.json"
+"$stale_upgrade/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-stale-upgrade.out"
+grep -q 'stale=1' "$tmp/package-stale-upgrade.out"
+grep -q 'obsolete share/hideout/README.zh-CN.md' "$tmp/package-stale-upgrade.out"
+test -f "$installed_prefix/share/hideout/README.zh-CN.md"
+if "$installed_prefix/bin/hideout" package verify "$installed_prefix" >"$tmp/package-stale-verify.out" 2>"$tmp/package-stale-verify.err"; then
+  echo "package-smoke: verify accepted obsolete package-owned file" >&2
+  cat "$tmp/package-stale-verify.out" >&2
+  exit 1
+fi
+grep -q 'package repair --prefix' "$tmp/package-stale-verify.err"
+HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" --feature packaging --format json >"$tmp/package-stale-doctor-packaging.json"
+jq -e '
+  ([.findings[] | select(
+    .checkId == "feature-packaging" and
+    .status == "warn" and
+    (.summary | contains("installed package verification failed")) and
+    (.details.observedFacts | tostring | contains("installedPackageVerification=failed"))
+  )] | length) == 1
+' "$tmp/package-stale-doctor-packaging.json" >/dev/null
+repair_unrelated="$installed_prefix/share/hideout/operator-note.txt"
+printf 'operator-owned\n' >"$repair_unrelated"
+"$installed_prefix/bin/hideout" package repair --prefix "$installed_prefix" --dry-run >"$tmp/package-repair-dry.out"
+grep -q 'package: repair dry-run' "$tmp/package-repair-dry.out"
+grep -q 'consider share/hideout/README.zh-CN.md' "$tmp/package-repair-dry.out"
+test -f "$installed_prefix/share/hideout/README.zh-CN.md"
+test -f "$repair_unrelated"
+"$installed_prefix/bin/hideout" package repair --prefix "$installed_prefix" >"$tmp/package-repair.out"
+grep -q 'removed share/hideout/README.zh-CN.md' "$tmp/package-repair.out"
+grep -q 'durableState=preserved' "$tmp/package-repair.out"
+test ! -e "$installed_prefix/share/hideout/README.zh-CN.md"
+test -f "$repair_unrelated"
+"$installed_prefix/bin/hideout" package verify "$installed_prefix" >"$tmp/package-repaired-verify.out"
+grep -q 'package: ok mode=installed' "$tmp/package-repaired-verify.out"
+cat >"$tmp/package-repair-summary.json" <<JSON
+{
+  "obsoleteFile": "share/hideout/README.zh-CN.md",
+  "verifyBefore": "failed",
+  "dryRunRemoved": false,
+  "applyRemovedObsolete": true,
+  "verifyAfter": "passed",
+  "durableStatePreserved": true,
+  "unrelatedFilePreserved": true
+}
+JSON
 
 bad_upgrade="$tmp/package-bad-upgrade"
 cp -R "$prefix" "$bad_upgrade"
@@ -348,4 +482,5 @@ if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_installed_store" >/dev/nu
   exit 1
 fi
 
+copy_artifacts
 echo "package-smoke: passed"

@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/daemon"
+	"github.com/vibe-agi/hideout/internal/decision"
 	doctorpkg "github.com/vibe-agi/hideout/internal/doctor"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
@@ -46,9 +47,13 @@ import (
 	"github.com/vibe-agi/hideout/internal/packagekit"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/portbridge"
+	"github.com/vibe-agi/hideout/internal/productevidence"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/profiletemplate"
+	"github.com/vibe-agi/hideout/internal/recovery"
 	"github.com/vibe-agi/hideout/internal/releasecompat"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
+	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -97,6 +102,8 @@ func (a app) run(args []string) error {
 		return a.profile(args[1:])
 	case "env":
 		return a.envCommand(args[1:])
+	case "runtime":
+		return a.runtimeCommand(args[1:])
 	case "stop":
 		return a.stopEnvironments(args[1:])
 	case "clean":
@@ -107,6 +114,8 @@ func (a app) run(args []string) error {
 		return a.auditCommand(args[1:])
 	case "adapter-pack":
 		return a.adapterPackCommand(args[1:])
+	case "app":
+		return a.hostAppCommand(args[1:])
 	case "decision":
 		return a.decisionCommand(args[1:])
 	case "notice":
@@ -151,6 +160,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout run --explain [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout adapter-pack <install|list|inspect|test|enable|disable|upgrade|revoke>")
+	fmt.Fprintln(a.stdout, "  hideout app <init|add|list|inspect|validate|test|enable>")
 	fmt.Fprintln(a.stdout, "  hideout explain [flags] -- <command> [args...]")
 	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
@@ -173,18 +183,19 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Inspect and manage:")
 	fmt.Fprintln(a.stdout, "  hideout env create|inspect|list|recreate|remove")
+	fmt.Fprintln(a.stdout, "  hideout runtime list|inspect|verify")
 	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
 	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
 	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary|doctor-report --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
 	fmt.Fprintln(a.stdout, "  hideout hostfs write status|plan|claim|apply|discard")
-	fmt.Fprintln(a.stdout, "  hideout decision list|inspect|claim|approve|deny|watch")
+	fmt.Fprintln(a.stdout, "  hideout decision list|inspect|claim|approve|deny|reopen|watch")
 	fmt.Fprintln(a.stdout, "  hideout notice list|inspect|ack")
 	fmt.Fprintln(a.stdout, "  hideout support matrix [--json]")
 	fmt.Fprintln(a.stdout, "  hideout version")
 	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
-	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]")
+	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]  # interval is daemon-less fallback only")
 	fmt.Fprintln(a.stdout, "  hideout tui --once [--profile <name>]  # script/smoke mode")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Advanced and developer:")
@@ -215,7 +226,9 @@ func (a app) version() {
 func (a app) supportUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout support matrix [--json]")
-	fmt.Fprintln(a.stdout, "  hideout support readiness --mode local-fast|release-candidate [--out <path>] [--gate2-evidence <path>] [--gate3-evidence <path>]")
+	fmt.Fprintln(a.stdout, "  hideout support proof-registry --json")
+	fmt.Fprintln(a.stdout, "  hideout support recovery-codes --json")
+	fmt.Fprintln(a.stdout, "  hideout support readiness --mode local-fast|release-candidate [--out <path>] [--gate2-evidence <path>] [--gate3-evidence <path>] [--product-evidence <path>] [--runtime-family <id>] [--package-root <path>]")
 }
 
 func (a app) supportCommand(args []string) error {
@@ -226,11 +239,60 @@ func (a app) supportCommand(args []string) error {
 	switch args[0] {
 	case "matrix":
 		return a.supportMatrix(args[1:])
+	case "proof-registry":
+		return a.supportProofRegistry(args[1:])
+	case "recovery-codes":
+		return a.supportRecoveryCodes(args[1:])
 	case "readiness":
 		return a.supportReadiness(args[1:])
 	default:
 		return fmt.Errorf("unknown support command %q", args[0])
 	}
+}
+
+func (a app) supportProofRegistry(args []string) error {
+	fs := flag.NewFlagSet("support proof-registry", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON proof registry")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected support proof-registry argument %q", fs.Arg(0))
+	}
+	if !*jsonOut {
+		fmt.Fprintln(a.stdout, "Hideout proof registry")
+		view, err := productevidence.RegistryView()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "schema: %s\n", view.Schema)
+		for _, req := range view.Requirements {
+			fmt.Fprintf(a.stdout, "%s %s %s %s\n", req.FeatureID, req.ProofID, req.Layer, req.RequiredFor)
+		}
+		return nil
+	}
+	return productevidence.WriteRegistryJSON(a.stdout)
+}
+
+func (a app) supportRecoveryCodes(args []string) error {
+	fs := flag.NewFlagSet("support recovery-codes", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write JSON recovery code registry")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected support recovery-codes argument %q", fs.Arg(0))
+	}
+	if !*jsonOut {
+		fmt.Fprintln(a.stdout, "Hideout recovery codes")
+		for _, entry := range recovery.All() {
+			fmt.Fprintf(a.stdout, "%s severity=%s hint=%s\n", entry.Code, entry.Severity, entry.Hint)
+		}
+		return nil
+	}
+	return recovery.WriteJSON(a.stdout)
 }
 
 func (a app) supportMatrix(args []string) error {
@@ -266,6 +328,10 @@ func (a app) supportReadiness(args []string) error {
 	out := fs.String("out", "", "write readiness JSON to path")
 	gate2 := fs.String("gate2-evidence", "", "real Gate 2 evidence path")
 	gate3 := fs.String("gate3-evidence", "", "real Gate 3 evidence path")
+	runtimeFamily := fs.String("runtime-family", "", "require exact packaged runtime evidence for family")
+	packageRoot := fs.String("package-root", "", "verified package artifact or install prefix providing release identity")
+	var productEvidence stringListFlag
+	fs.Var(&productEvidence, "product-evidence", "supporting product-hardening evidence path (repeatable)")
 	localStatus := fs.String("local-status", "passed", "passed or failed")
 	commit := fs.String("commit", Commit, "commit identifier")
 	if err := fs.Parse(args); err != nil {
@@ -283,12 +349,33 @@ func (a app) supportReadiness(args []string) error {
 	default:
 		return fmt.Errorf("unsupported --local-status %q", *localStatus)
 	}
+	var runtimeExpectation *productevidence.RuntimeExpectation
+	if strings.TrimSpace(*runtimeFamily) != "" {
+		resolved, err := runtimecatalog.ResolveEmbedded(runtimecatalog.Selection{
+			Family: *runtimeFamily, HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+		})
+		if err != nil {
+			return fmt.Errorf("resolve runtime readiness expectation: %w", err)
+		}
+		runtimeExpectation = runtimeReadinessExpectation(resolved)
+	}
+	var packageIdentity *productevidence.PackageIdentity
+	if strings.TrimSpace(*packageRoot) != "" {
+		identity, err := readinessPackageIdentity(*packageRoot)
+		if err != nil {
+			return fmt.Errorf("resolve release package identity: %w", err)
+		}
+		packageIdentity = &identity
+	}
 	ready, err := releasecompat.BuildReadiness(releasecompat.ReadinessOptions{
-		Mode:          *mode,
-		Commit:        *commit,
-		Gate2Evidence: *gate2,
-		Gate3Evidence: *gate3,
-		LocalPassed:   localPassed,
+		Mode:            *mode,
+		Commit:          *commit,
+		Gate2Evidence:   *gate2,
+		Gate3Evidence:   *gate3,
+		ProductEvidence: productEvidence.Values(),
+		LocalPassed:     localPassed,
+		Runtime:         runtimeExpectation,
+		Package:         packageIdentity,
 	})
 	if err != nil {
 		return err
@@ -310,6 +397,69 @@ func (a app) supportReadiness(args []string) error {
 		return errors.New("release readiness is missing required real gate evidence")
 	}
 	return nil
+}
+
+func runtimeReadinessExpectation(resolved runtimecatalog.Resolution) *productevidence.RuntimeExpectation {
+	return &productevidence.RuntimeExpectation{
+		Family: resolved.Family.ID, Revision: resolved.Revision.ID,
+		ArtifactSHA256: resolved.Artifact.SHA256, HostOS: resolved.Artifact.HostOS,
+		HostArch: resolved.Artifact.HostArch, GuestArch: resolved.Artifact.GuestArch,
+		CandidateCommit: resolved.Artifact.Source.BuildCommit, RequireClean: true,
+	}
+}
+
+func readinessPackageIdentity(root string) (productevidence.PackageIdentity, error) {
+	verification, err := packagekit.Verify(root)
+	if err != nil {
+		return productevidence.PackageIdentity{}, err
+	}
+	var git packagekit.GitInfo
+	switch verification.Mode {
+	case "artifact":
+		manifest, err := packagekit.LoadManifest(filepath.Join(verification.Root, "package-manifest.json"))
+		if err != nil {
+			return productevidence.PackageIdentity{}, err
+		}
+		git = manifest.Git
+	case "installed":
+		state, err := packagekit.LoadInstallState(filepath.Join(verification.Root, filepath.FromSlash(packagekit.InstalledManifest)))
+		if err != nil {
+			return productevidence.PackageIdentity{}, err
+		}
+		git = state.Package.Git
+	default:
+		return productevidence.PackageIdentity{}, fmt.Errorf("unsupported verified package mode %q", verification.Mode)
+	}
+	if git.Dirty {
+		return productevidence.PackageIdentity{}, errors.New("release package identity is dirty")
+	}
+	commit := strings.TrimSpace(git.Commit)
+	if commit == "" || commit == "unknown" {
+		return productevidence.PackageIdentity{}, errors.New("release package commit is not canonical")
+	}
+	return productevidence.PackageIdentity{Name: packagekit.DefaultPackageRoot, Version: commit}, nil
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("value is required")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
+func (f stringListFlag) Values() []string {
+	return append([]string(nil), f...)
 }
 
 func writeReadinessFile(path string, ready releasecompat.Readiness) error {
@@ -365,6 +515,9 @@ func (a app) initUsage() {
 	fmt.Fprintln(a.stdout, "  --mediated-resolver <ip>  DNS resolver IP for tun2socks DoH mediation")
 	fmt.Fprintln(a.stdout, "  --privilege-status <s>    enforced, degraded, or unknown")
 	fmt.Fprintln(a.stdout, "  --allow-degraded-template allow visibly degraded hardened fallback")
+	fmt.Fprintln(a.stdout, "  --hostfs-visibility <none|landmarks|home-tree>  explicit name-visibility preset (default: none)")
+	fmt.Fprintln(a.stdout, "  --hostfs-landmark <absolute-path>              selected Desktop/Documents/Downloads root; may repeat")
+	fmt.Fprintln(a.stdout, "  --acknowledge-name-disclosure                  acknowledge home-tree names may enter target/model context")
 	fmt.Fprintln(a.stdout, "  --no-input                do not ask for confirmation")
 	fmt.Fprintln(a.stdout, "  --dry-run                 print the init plan without applying it")
 }
@@ -438,6 +591,7 @@ func (a app) doctorUsage() {
 	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
 	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      proxy secret ref for tun2socks")
 	fmt.Fprintln(a.stdout, "  --evidence-out <path>     save a redacted doctor report")
+	fmt.Fprintln(a.stdout, "  --probe-hostfs-root <path> explicitly probe one HostFS root; may trigger macOS TCC")
 	fmt.Fprintln(a.stdout, "  --workspace <path>        host workspace (default: current directory)")
 	fmt.Fprintln(a.stdout, "  --guest-workspace <path>  guest workspace path")
 	fmt.Fprintln(a.stdout, "  --ephemeral               diagnose session-local identity state")
@@ -475,6 +629,7 @@ func (a app) profileFSUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> add --fs <kind:/path> [--reason <text>]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> remove <rule-id>")
+	fmt.Fprintln(a.stdout, "  hideout profile fs <name> migrate-list --map <rule-id>=see-dir|see-tree [--map ...] --reason <text> [--yes]")
 }
 
 func (a app) profileToolsUsage() {
@@ -536,6 +691,7 @@ func (a app) packageUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout package verify <package-root-or-install-prefix>")
 	fmt.Fprintln(a.stdout, "  hideout package install <package-root> --prefix <dir> [--store <dir>] [--backend native|lima|auto] [--network direct|tun2socks] [--proxy-secret <ref>] [--mediated-resolver <ip>] [--skip-init]")
+	fmt.Fprintln(a.stdout, "  hideout package repair --prefix <dir> [--dry-run]")
 	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge]")
 }
 
@@ -555,12 +711,21 @@ func (a app) packageCommand(args []string) error {
 		}
 		result, err := packagekit.Verify(args[1])
 		if err != nil {
-			return err
+			return a.withPackageRecoveryCode(err, args[1])
 		}
 		fmt.Fprintf(a.stdout, "package: ok mode=%s root=%s files=%d\n", result.Mode, result.Root, result.Files)
+		for _, prereq := range result.Prerequisites {
+			code := ""
+			if prereq.Status != packagekit.PrerequisiteAvailable && !prereq.PackageOwned {
+				code = " code=" + recovery.CodePackagePrerequisiteMissing
+			}
+			fmt.Fprintf(a.stdout, "external-prerequisite name=%s status=%s packageOwned=%t%s hint=%s\n", prereq.Name, prereq.Status, prereq.PackageOwned, code, prereq.Hint)
+		}
 		return nil
 	case "install":
 		return a.packageInstall(args[1:])
+	case "repair":
+		return a.packageRepair(args[1:])
 	case "uninstall":
 		return a.packageUninstall(args[1:])
 	default:
@@ -619,7 +784,10 @@ func (a app) packageInstall(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "package: %s prefix=%s store=%s files=%d manifest=%s\n", result.Operation, result.Prefix, result.StoreRoot, result.FilesCopied, result.ManifestPath)
+	fmt.Fprintf(a.stdout, "package: %s prefix=%s store=%s files=%d stale=%d manifest=%s\n", result.Operation, result.Prefix, result.StoreRoot, result.FilesCopied, len(result.ObsoleteFiles), result.ManifestPath)
+	for _, stale := range result.ObsoleteFiles {
+		fmt.Fprintf(a.stdout, "obsolete %s code=%s reason=%s hint=hideout package repair --prefix %s\n", stale.Path, recovery.CodePackageObsoleteLeftover, stale.Reason, result.Prefix)
+	}
 	if !opts.skipInit {
 		templateID := profiletemplate.Dev
 		if opts.network == "tun2socks" {
@@ -657,6 +825,78 @@ func (a app) packageInstall(args []string) error {
 		fmt.Fprintln(a.stdout, "package: init skipped")
 	}
 	return nil
+}
+
+func (a app) withPackageRecoveryCode(err error, prefix string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "obsolete package-owned file") {
+		entry, _ := recovery.Lookup(recovery.CodePackageObsoleteLeftover)
+		return fmt.Errorf("code=%s reason=%s hint=hideout package repair --prefix %s: %w", entry.Code, entry.Reason, prefix, err)
+	}
+	return err
+}
+
+func (a app) packageRepair(args []string) error {
+	if containsHelpToken(args) {
+		a.packageUsage()
+		return nil
+	}
+	opts := struct {
+		prefix string
+		dryRun bool
+	}{}
+	fs := flag.NewFlagSet("package repair", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.prefix, "prefix", "", "install prefix")
+	fs.BoolVar(&opts.dryRun, "dry-run", false, "print repair plan without removing files")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || opts.prefix == "" {
+		return errors.New("usage: hideout package repair --prefix <dir> [--dry-run]")
+	}
+	result, err := packagekit.RepairObsoleteFiles(packagekit.RepairOptions{
+		Prefix: opts.prefix,
+		DryRun: opts.dryRun,
+	})
+	if err != nil {
+		return err
+	}
+	action := "repair"
+	if result.DryRun {
+		action = "repair dry-run"
+	}
+	fmt.Fprintf(a.stdout, "package: %s prefix=%s considered=%d removed=%d rejected=%d durableState=%s\n", action, result.Prefix, len(result.Considered), len(result.Removed), len(result.Rejected), result.DurableAction)
+	for _, rel := range result.Considered {
+		fmt.Fprintf(a.stdout, "consider %s\n", rel)
+	}
+	for _, rel := range result.Removed {
+		fmt.Fprintf(a.stdout, "removed %s\n", rel)
+	}
+	for _, rejection := range result.Rejected {
+		fmt.Fprintf(a.stdout, "reject %s reason=%s\n", rejection.Path, rejection.Reason)
+	}
+	return nil
+}
+
+func codedInitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "requires a proxy secret ref"):
+		entry, _ := recovery.Lookup(recovery.CodeInitProxySecretMissing)
+		return fmt.Errorf("code=%s reason=%s hint=%s: %w", entry.Code, entry.Reason, entry.Hint, err)
+	case strings.Contains(msg, "requires a mediated resolver"):
+		entry, _ := recovery.Lookup(recovery.CodeInitMediatedResolverMissing)
+		return fmt.Errorf("code=%s reason=%s hint=%s: %w", entry.Code, entry.Reason, entry.Hint, err)
+	default:
+		return err
+	}
 }
 
 func (a app) packageUninstall(args []string) error {
@@ -733,24 +973,30 @@ func (a app) labPortbridgeUsage() {
 }
 
 type initCommandOptions struct {
-	profileName           string
-	backendName           string
-	networkMode           string
-	proxySecret           string
-	mediatedResolver      string
-	templateID            string
-	privilegeStatus       string
-	privilegeReason       string
-	privilegeGuidance     string
-	privilegeSource       string
-	allowDegradedTemplate bool
-	explicitProfile       bool
-	explicitTemplate      bool
-	explicitBackend       bool
-	explicitNetwork       bool
-	noInput               bool
-	dryRun                bool
-	tools                 toolSupplyOptions
+	profileName               string
+	backendName               string
+	networkMode               string
+	proxySecret               string
+	mediatedResolver          string
+	templateID                string
+	privilegeStatus           string
+	privilegeReason           string
+	privilegeGuidance         string
+	privilegeSource           string
+	allowDegradedTemplate     bool
+	explicitProfile           bool
+	explicitTemplate          bool
+	explicitBackend           bool
+	explicitNetwork           bool
+	noInput                   bool
+	hostFSVisibility          string
+	hostFSLandmarks           stringListFlag
+	acknowledgeNameDisclosure bool
+	explicitVisibility        bool
+	dryRun                    bool
+	tools                     toolSupplyOptions
+	runtimeFamily             string
+	imageRef                  string
 }
 
 type toolSupplyOptions struct {
@@ -781,26 +1027,32 @@ func (a app) initCommand(args []string) error {
 	}
 	core := manager.New(store)
 	plan, err := core.PlanInit(inittask.Options{
-		ProfileName:           opts.profileName,
-		Backend:               opts.backendName,
-		Network:               opts.networkMode,
-		ProxySecretRef:        opts.proxySecret,
-		MediatedResolver:      opts.mediatedResolver,
-		TemplateID:            opts.templateID,
-		PrivilegeStatus:       opts.privilegeStatus,
-		PrivilegeReason:       opts.privilegeReason,
-		PrivilegeGuidance:     opts.privilegeGuidance,
-		PrivilegeSource:       opts.privilegeSource,
-		AllowDegradedTemplate: opts.allowDegradedTemplate,
-		Onboarding:            true,
-		ExplicitProfile:       opts.explicitProfile,
-		ExplicitTemplate:      opts.explicitTemplate,
-		ExplicitBackend:       opts.explicitBackend,
-		ExplicitNetwork:       opts.explicitNetwork,
-		NoInput:               opts.noInput,
+		ProfileName:                opts.profileName,
+		Backend:                    opts.backendName,
+		Network:                    opts.networkMode,
+		ProxySecretRef:             opts.proxySecret,
+		MediatedResolver:           opts.mediatedResolver,
+		TemplateID:                 opts.templateID,
+		PrivilegeStatus:            opts.privilegeStatus,
+		PrivilegeReason:            opts.privilegeReason,
+		PrivilegeGuidance:          opts.privilegeGuidance,
+		PrivilegeSource:            opts.privilegeSource,
+		AllowDegradedTemplate:      opts.allowDegradedTemplate,
+		Onboarding:                 true,
+		ExplicitProfile:            opts.explicitProfile,
+		ExplicitTemplate:           opts.explicitTemplate,
+		ExplicitBackend:            opts.explicitBackend,
+		ExplicitNetwork:            opts.explicitNetwork,
+		NoInput:                    opts.noInput,
+		VisibilitySelection:        opts.hostFSVisibility,
+		VisibilityRoots:            opts.hostFSLandmarks.Values(),
+		NameDisclosureAcknowledged: opts.acknowledgeNameDisclosure,
+		ExplicitVisibility:         opts.explicitVisibility,
+		RuntimeFamily:              opts.runtimeFamily,
+		ImageRef:                   opts.imageRef,
 	})
 	if err != nil {
-		return err
+		return codedInitError(err)
 	}
 	if opts.dryRun {
 		writeInitPlan(a.stdout, "Hideout init plan", plan)
@@ -820,7 +1072,7 @@ func (a app) initCommand(args []string) error {
 		NoInput: opts.noInput,
 	})
 	if err != nil {
-		return err
+		return codedInitError(err)
 	}
 	writeInitResult(a.stdout, "Hideout init", result)
 	return nil
@@ -833,6 +1085,7 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	opts.explicitTemplate = explicit["template"]
 	opts.explicitBackend = explicit["backend"]
 	opts.explicitNetwork = explicit["network"]
+	opts.explicitVisibility = explicit["hostfs-visibility"]
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.profileName, "profile", "default", "profile name")
@@ -846,6 +1099,11 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	fs.StringVar(&opts.privilegeGuidance, "privilege-guidance", "", "guest privilege status guidance")
 	fs.StringVar(&opts.privilegeSource, "privilege-source", "", "guest privilege status source")
 	fs.BoolVar(&opts.allowDegradedTemplate, "allow-degraded-template", false, "allow visibly degraded hardened fallback")
+	fs.StringVar(&opts.hostFSVisibility, "hostfs-visibility", "", "HostFS visibility: none, landmarks, or home-tree")
+	fs.StringVar(&opts.runtimeFamily, "runtime", "", "package-owned runtime family")
+	fs.StringVar(&opts.imageRef, "image", "", "custom image declaration (mutually exclusive with --runtime)")
+	fs.Var(&opts.hostFSLandmarks, "hostfs-landmark", "selected Desktop/Documents/Downloads absolute path; may repeat")
+	fs.BoolVar(&opts.acknowledgeNameDisclosure, "acknowledge-name-disclosure", false, "acknowledge home-tree name disclosure")
 	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.noInput, "no-input", false, "do not ask for confirmation")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print init plan without applying")
@@ -857,6 +1115,9 @@ func parseInitCommandOptions(args []string) (initCommandOptions, error) {
 	}
 	if err := opts.tools.validate(); err != nil {
 		return opts, err
+	}
+	if strings.TrimSpace(opts.runtimeFamily) != "" && strings.TrimSpace(opts.imageRef) != "" {
+		return opts, errors.New("--runtime and --image are mutually exclusive")
 	}
 	return opts, nil
 }
@@ -949,6 +1210,11 @@ func writeInitPlan(w io.Writer, title string, plan inittask.Plan) {
 	fmt.Fprintf(w, "profile: %s\n", plan.Profile)
 	fmt.Fprintf(w, "backend: %s\n", plan.Backend)
 	fmt.Fprintf(w, "network: %s\n", plan.Network)
+	if plan.RuntimeSelection != nil {
+		fmt.Fprintf(w, "runtime: %s revision=%s maturity=%s\n", plan.RuntimeSelection.Family, plan.RuntimeSelection.Revision, plan.RuntimeSelection.Maturity)
+	} else if plan.ImageRef != "" {
+		fmt.Fprintf(w, "image: %s (custom/unverified)\n", abbreviateImageRef(plan.ImageRef))
+	}
 	writeInitTemplateSummary(w, plan)
 	for _, task := range plan.Tasks {
 		fmt.Fprintf(w, "task %s: %s risk=%s %s\n", task.Kind, task.Status, task.Risk, task.Message)
@@ -1215,6 +1481,12 @@ func (a app) writeRunResultSummary(result manager.RunResult) {
 			fmt.Fprintf(a.stderr, " nonClaim=%s", privilege.NonClaim)
 		}
 		fmt.Fprintln(a.stderr)
+	}
+	if visibility := result.BoundarySummary.HostFSVisibility; visibility != nil {
+		fmt.Fprintf(a.stderr, "  hostfs visibility: posture=%s grants=%d deny=%d maxEntries=%d maxDepth=%d\n", visibility.Posture, visibility.DiscoverGrants, visibility.DiscoverDeny, visibility.MaxListEntries, visibility.MaxDepth)
+		if visibility.NonClaim != "" {
+			fmt.Fprintf(a.stderr, "    non-claim: %s\n", visibility.NonClaim)
+		}
 	}
 	for _, capability := range result.BoundarySummary.Capabilities {
 		fmt.Fprintf(a.stderr, "  %s: allowed=%d denied=%d", capability.Capability, capability.Allowed, capability.Denied)
@@ -1573,17 +1845,6 @@ func normalizePreviewEndpoint(value string) (string, error) {
 		return "", errors.New("preview endpoint must use localhost or a loopback IP")
 	}
 	return net.JoinHostPort(host, port), nil
-}
-
-type stringListFlag []string
-
-func (f *stringListFlag) String() string {
-	return strings.Join(*f, ",")
-}
-
-func (f *stringListFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
 }
 
 type hostFSFlagInput struct {
@@ -2092,7 +2353,6 @@ func (a app) doctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	failed := false
 	doctorReq := doctorpkg.Request{
 		Profile:      opts.profileName,
 		Backend:      resolveBackendName(opts.backendName),
@@ -2105,30 +2365,29 @@ func (a app) doctor(args []string) error {
 	humanOutput := opts.format != "json"
 	report := func(name, status, message string) {
 		builder.Add(name, name, status, message)
-		if humanOutput {
-			if message == "" {
-				fmt.Fprintf(a.stdout, "%s: %s\n", name, status)
-			} else {
-				fmt.Fprintf(a.stdout, "%s: %s %s\n", name, status, message)
-			}
-		}
-		if status == "error" {
-			failed = true
-		}
 	}
-	if humanOutput {
-		fmt.Fprintln(a.stdout, "Hideout doctor")
-		fmt.Fprintf(a.stdout, "storage: %s\n", store.Root)
+	renderReport := func(evidencePath string) error {
+		if opts.format == "json" {
+			return doctorpkg.WriteJSON(a.stdout, builder.Report())
+		}
+		doctorpkg.WriteHuman(a.stdout, builder.Report())
+		if evidencePath != "" && humanOutput {
+			fmt.Fprintf(a.stdout, "doctor-evidence: ok %s\n", evidencePath)
+		}
+		return nil
 	}
 	if err := os.MkdirAll(store.Root, 0o700); err != nil {
 		report("store", "error", err.Error())
+		evidencePath := ""
 		if opts.evidenceOut != "" {
-			if _, writeErr := builder.WriteEvidence(opts.evidenceOut); writeErr != nil {
+			var writeErr error
+			evidencePath, writeErr = builder.WriteEvidence(opts.evidenceOut)
+			if writeErr != nil {
 				return writeErr
 			}
 		}
-		if opts.format == "json" {
-			_ = doctorpkg.WriteJSON(a.stdout, builder.Report())
+		if renderErr := renderReport(evidencePath); renderErr != nil {
+			return renderErr
 		}
 		return errors.New("doctor found errors")
 	}
@@ -2172,10 +2431,10 @@ func (a app) doctor(args []string) error {
 	layout, err := session.New(store.Root)
 	if err != nil {
 		report("session", "error", err.Error())
-		if failed {
-			return errors.New("doctor found errors")
+		if renderErr := renderReport(""); renderErr != nil {
+			return renderErr
 		}
-		return nil
+		return errors.New("doctor found errors")
 	}
 	defer os.RemoveAll(layout.Dir)
 
@@ -2207,22 +2466,21 @@ func (a app) doctor(args []string) error {
 	if !profileLoaded {
 		report("profile-init", "warn", "run or profile init will materialize profile state")
 	}
-	a.addDoctorFeatureDiagnostics(doctorReq, store, runtimeProfile, backendName, workspace, builder)
+	if opts.probeHostFSRoot != "" {
+		fmt.Fprintf(a.stderr, "warning: explicit HostFS root probe may trigger a macOS privacy (TCC) prompt: %s\n", audit.RedactString(opts.probeHostFSRoot))
+	}
+	a.addDoctorFeatureDiagnostics(doctorReq, store, runtimeProfile, backendName, workspace, opts.probeHostFSRoot, builder)
+	evidencePath := ""
 	if opts.evidenceOut != "" {
-		evidencePath, err := builder.WriteEvidence(opts.evidenceOut)
+		evidencePath, err = builder.WriteEvidence(opts.evidenceOut)
 		if err != nil {
 			return err
 		}
-		if humanOutput {
-			fmt.Fprintf(a.stdout, "doctor-evidence: ok %s\n", evidencePath)
-		}
 	}
-	if opts.format == "json" {
-		if err := doctorpkg.WriteJSON(a.stdout, builder.Report()); err != nil {
-			return err
-		}
+	if err := renderReport(evidencePath); err != nil {
+		return err
 	}
-	if failed {
+	if builder.Report().Summary.Failed {
 		return errors.New("doctor found errors")
 	}
 	return nil
@@ -2265,7 +2523,7 @@ func doctorSupportMatrixMessage(backendName string) string {
 	return fmt.Sprintf("matrix=%s %s", releasecompat.MatrixVersion, releasecompat.CurrentSupportSummary(backendName))
 }
 
-func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.Store, p profile.Profile, backendName string, workspace string, builder *doctorpkg.Builder) {
+func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.Store, p profile.Profile, backendName string, workspace, probeHostFSRoot string, builder *doctorpkg.Builder) {
 	features := selectedDoctorDiagnosticFeatures(req)
 	if len(features) == 0 || builder == nil {
 		return
@@ -2281,37 +2539,264 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 			if overviewErr == nil {
 				packs = len(overview.AdapterPacks)
 			}
-			builder.Add("feature-adapters", "adapters", doctorpkg.StatusPass, fmt.Sprintf("enabledAdapters=%d adapterPacks=%d", enabled, packs), doctorpkg.WithRequired(false))
+			status := doctorpkg.StatusPass
+			candidates := []string(nil)
+			if enabled == 0 {
+				status = doctorpkg.StatusWarn
+				candidates = append(candidates, "no command adapters are enabled for this profile")
+			}
+			addDoctorFeatureFinding(builder, "feature-adapters", "adapters", status,
+				fmt.Sprintf("enabledAdapters=%d adapterPacks=%d", enabled, packs),
+				[]string{
+					fmt.Sprintf("enabledAdapters=%d", enabled),
+					fmt.Sprintf("adapterPacks=%d", packs),
+				},
+				candidates,
+				nil,
+				[]string{"hideout adapter-pack list", "run adapter pack tests before enabling untrusted pack changes"},
+			)
 		case "cleanup":
 			if overviewErr != nil {
-				builder.Add("feature-cleanup", "cleanup", doctorpkg.StatusWarn, "manager overview unavailable: "+overviewErr.Error(), doctorpkg.WithRequired(false))
+				addDoctorFeatureFinding(builder, "feature-cleanup", "cleanup", doctorpkg.StatusWarn,
+					"manager overview unavailable: "+overviewErr.Error(),
+					nil,
+					[]string{"manager overview could not be read"},
+					nil,
+					[]string{"rerun hideout doctor after resolving manager overview errors"},
+				)
 				continue
 			}
-			builder.Add("feature-cleanup", "cleanup", doctorpkg.StatusPass, fmt.Sprintf("sessions=%d environments=%d", len(overview.Sessions), len(overview.Environments)), doctorpkg.WithRequired(false))
+			addDoctorFeatureFinding(builder, "feature-cleanup", "cleanup", doctorpkg.StatusPass,
+				fmt.Sprintf("sessions=%d environments=%d", len(overview.Sessions), len(overview.Environments)),
+				[]string{
+					fmt.Sprintf("sessions=%d", len(overview.Sessions)),
+					fmt.Sprintf("environments=%d", len(overview.Environments)),
+				},
+				nil,
+				nil,
+				[]string{"hideout cleanup --dry-run", "hideout clean --dry-run --stopped"},
+			)
 		case "daemon":
-			builder.Add("feature-daemon", "daemon", doctorpkg.StatusPass, "daemon command and schemas are packaged; runtime availability is checked by daemon smoke", doctorpkg.WithRequired(false))
+			addDoctorFeatureFinding(builder, "feature-daemon", "daemon", doctorpkg.StatusPass,
+				"daemon command and schemas are packaged; runtime availability is checked by daemon smoke",
+				[]string{"daemon CLI and schemas are present in this build"},
+				nil,
+				[]string{"daemon live socket/auth proof requires daemon smoke or a running daemon"},
+				[]string{"hideout daemon status", "scripts/test-daemon-smoke.sh"},
+			)
 		case "decisions":
 			if decisionErr != nil {
-				builder.Add("feature-decisions", "decisions", doctorpkg.StatusWarn, "decision status unavailable: "+decisionErr.Error(), doctorpkg.WithRequired(false))
+				addDoctorFeatureFinding(builder, "feature-decisions", "decisions", doctorpkg.StatusWarn,
+					"decision status unavailable: "+decisionErr.Error(),
+					nil,
+					[]string{"decision store could not be read"},
+					nil,
+					[]string{"inspect the decision store and rerun hideout doctor --feature decisions"},
+				)
 				continue
 			}
-			builder.Add("feature-decisions", "decisions", doctorpkg.StatusPass, fmt.Sprintf("pending=%d claimed=%d terminal=%d notices=%d", decisionStatus.PendingDecisions, decisionStatus.ClaimedDecisions, decisionStatus.TerminalDecisions, decisionStatus.UnackedNotices), doctorpkg.WithRequired(false))
+			status := doctorpkg.StatusPass
+			candidates := []string(nil)
+			actions := []string{"hideout decision list --include-terminal"}
+			if decisionStatus.TimeoutRisk > 0 || decisionStatus.ClaimedDecisions > 0 {
+				status = doctorpkg.StatusWarn
+				candidates = append(candidates, "claimed or near-timeout decisions may need operator attention")
+				actions = append(actions, "resolve, discard, or let timed-out decisions default deny")
+			}
+			addDoctorFeatureFinding(builder, "feature-decisions", "decisions", status,
+				fmt.Sprintf("pending=%d claimed=%d terminal=%d timeoutRisk=%d notices=%d", decisionStatus.PendingDecisions, decisionStatus.ClaimedDecisions, decisionStatus.TerminalDecisions, decisionStatus.TimeoutRisk, decisionStatus.UnackedNotices),
+				[]string{
+					fmt.Sprintf("pending=%d", decisionStatus.PendingDecisions),
+					fmt.Sprintf("claimed=%d", decisionStatus.ClaimedDecisions),
+					fmt.Sprintf("terminal=%d", decisionStatus.TerminalDecisions),
+					fmt.Sprintf("timeoutRisk=%d", decisionStatus.TimeoutRisk),
+					fmt.Sprintf("unackedNotices=%d", decisionStatus.UnackedNotices),
+				},
+				candidates,
+				nil,
+				actions,
+			)
 		case "dns":
 			status, msg := doctorDNSFeatureStatus(p, backendName)
-			builder.Add("feature-dns", "dns", status, msg, doctorpkg.WithRequired(false))
+			gates := []string{"Gate 3 real Lima forward and reverse DNS proof is required for a release DNS claim"}
+			addDoctorFeatureFinding(builder, "feature-dns", "dns", status, msg,
+				[]string{
+					"networkMode=" + p.Network.Mode,
+					"mediatedResolverConfigured=" + strconv.FormatBool(strings.TrimSpace(p.Network.MediatedResolver) != ""),
+					"backend=" + backendName,
+				},
+				nil,
+				gates,
+				[]string{"scripts/test-gate3-hidden-proxy.sh"},
+			)
 		case "export":
-			builder.Add("feature-export", "export", doctorpkg.StatusPass, "export/share schema and doctor-report source are available; use hideout audit export for shareable evidence", doctorpkg.WithRequired(false))
+			addDoctorFeatureFinding(builder, "feature-export", "export", doctorpkg.StatusPass,
+				"export/share schema and doctor-report source are available; use hideout audit export for shareable evidence",
+				[]string{"doctor-report export source is registered", "export schema is available"},
+				nil,
+				nil,
+				[]string{"hideout audit export --source doctor-report --doctor-report <path> --out <path> --acknowledge-full-fidelity"},
+			)
 		case "hostfs":
-			builder.Add("feature-hostfs", "hostfs", doctorpkg.StatusPass, fmt.Sprintf("grants=%d denyRules=%d overlayGrants=%d workspace=%s", len(p.HostFS.Grants), len(p.HostFS.Deny), countOverlayGrants(p), audit.RedactString(workspace)), doctorpkg.WithRequired(false))
+			addDoctorFeatureFinding(builder, "feature-hostfs", "hostfs", doctorpkg.StatusPass,
+				fmt.Sprintf("grants=%d denyRules=%d overlayGrants=%d workspace=%s", len(p.HostFS.Grants), len(p.HostFS.Deny), countOverlayGrants(p), audit.RedactString(workspace)),
+				[]string{
+					fmt.Sprintf("grants=%d", len(p.HostFS.Grants)),
+					fmt.Sprintf("denyRules=%d", len(p.HostFS.Deny)),
+					fmt.Sprintf("overlayGrants=%d", countOverlayGrants(p)),
+					"workspace=" + audit.RedactString(workspace),
+				},
+				nil,
+				[]string{"Gate 2 real Lima HostFS proof is required for backend HostFS claims"},
+				[]string{"scripts/test-gate2-lima.sh"},
+			)
+			if probeHostFSRoot == "" {
+				addDoctorFeatureFinding(builder, "feature-hostfs-root-probe", "hostfs", doctorpkg.StatusSkipped,
+					"HostFS root access is unprobed; doctor performed no TCC-sensitive directory access",
+					[]string{"hostfsRootProbe=unprobed"}, nil,
+					[]string{"real HostFS behavior still requires Gate 2"},
+					[]string{"hideout doctor --feature hostfs --probe-hostfs-root <absolute-root>"},
+				)
+				continue
+			}
+			entries, probeErr := os.ReadDir(probeHostFSRoot)
+			if probeErr != nil {
+				addDoctorFeatureFinding(builder, "feature-hostfs-root-probe", "hostfs", doctorpkg.StatusWarn,
+					"explicit HostFS root probe failed; this is a host prerequisite fact, not an approval decision",
+					[]string{"hostfsRootProbe=failed", "root=" + audit.RedactString(probeHostFSRoot)},
+					[]string{"macOS TCC may deny the host process", "the selected root may be missing or unreadable"},
+					[]string{"real HostFS behavior still requires Gate 2"},
+					[]string{"review the macOS privacy prompt/settings, then rerun the same explicit probe"},
+				)
+				continue
+			}
+			addDoctorFeatureFinding(builder, "feature-hostfs-root-probe", "hostfs", doctorpkg.StatusPass,
+				fmt.Sprintf("explicit HostFS root probe succeeded with %d entries", len(entries)),
+				[]string{"hostfsRootProbe=observed", fmt.Sprintf("entryCount=%d", len(entries)), "root=" + audit.RedactString(probeHostFSRoot)},
+				nil, []string{"real HostFS behavior still requires Gate 2"}, []string{"scripts/test-gate2-lima.sh"},
+			)
+		case "runtime":
+			var statuses []manager.EnvironmentSummary
+			if overviewErr == nil {
+				for _, environment := range overview.Environments {
+					if environment.Profile == p.Name && environment.Runtime != nil {
+						statuses = append(statuses, environment)
+					}
+				}
+			}
+			if overviewErr != nil {
+				addDoctorFeatureFinding(builder, "feature-runtime", "runtime", doctorpkg.StatusWarn,
+					"runtime status unavailable: "+overviewErr.Error(), nil,
+					[]string{"manager environment inventory could not be read"}, nil,
+					[]string{"hideout env list", "hideout doctor --feature runtime"})
+				continue
+			}
+			if len(statuses) == 0 {
+				addDoctorFeatureFinding(builder, "feature-runtime", "runtime", doctorpkg.StatusSkipped,
+					"no environment for this profile has catalog runtime provenance",
+					[]string{"runtimeEnvironments=0"}, nil,
+					[]string{"preview runtime claims require a selected runtime and real Lima verification"},
+					[]string{"hideout runtime list"})
+				continue
+			}
+			findingStatus := doctorpkg.StatusPass
+			recoveryCode := ""
+			facts := make([]string, 0, len(statuses))
+			for _, environment := range statuses {
+				facts = append(facts, fmt.Sprintf("environment=%s status=%s revision=%s", environment.Name, environment.Runtime.Status, environment.Runtime.Revision))
+				if environment.Runtime.Status != runtimeverify.StatusPreviewReady {
+					findingStatus = doctorpkg.StatusWarn
+					if recoveryCode == "" {
+						recoveryCode = environment.Runtime.RecoveryCode
+					}
+				}
+			}
+			addDoctorFeatureFindingWithRecovery(builder, "feature-runtime", "runtime", findingStatus,
+				fmt.Sprintf("runtimeEnvironments=%d", len(statuses)), facts, nil,
+				[]string{"real Gate 2 and Gate 3 on the exact promoted digest are required for preview claims"},
+				[]string{"hideout runtime verify --env <name>", "hideout runtime inspect developer-standard"}, recoveryCode)
 		case "lima":
 			status, msg := doctorLimaFeatureStatus(overview, overviewErr, backendName)
-			builder.Add("feature-lima", "lima", status, msg, doctorpkg.WithRequired(false))
+			addDoctorFeatureFinding(builder, "feature-lima", "lima", status, msg,
+				[]string{"backend=" + backendName},
+				nil,
+				[]string{"real Lima gates are required for isolation evidence; native is a weak harness"},
+				[]string{"hideout support readiness --mode release-candidate --gate2-evidence <manifest> --gate3-evidence <manifest>"},
+			)
 		case "packaging":
-			builder.Add("feature-packaging", "packaging", doctorpkg.StatusPass, "package install/verify/uninstall commands are available; package smoke validates artifact ownership", doctorpkg.WithRequired(false))
+			packaging := doctorPackagingDiagnosticForExecutable(currentExecutable())
+			addDoctorFeatureFindingWithRecovery(builder, "feature-packaging", "packaging", packaging.Status,
+				packaging.Summary,
+				packaging.ObservedFacts,
+				packaging.CandidateCauses,
+				nil,
+				[]string{"hideout package verify <package-root-or-install-prefix>", "hideout package repair --prefix <dir> --dry-run"},
+				packaging.RecoveryCode,
+			)
 		case "privilege":
-			builder.Add("feature-privilege", "privilege", doctorpkg.StatusPass, doctorGuestPrivilegeMessage(context.Background(), store, req.Profile), doctorpkg.WithRequired(false))
+			privilegeSummary := doctorGuestPrivilegeMessage(context.Background(), store, req.Profile)
+			addDoctorFeatureFindingWithRecovery(builder, "feature-privilege", "privilege", doctorpkg.StatusPass,
+				privilegeSummary,
+				[]string{"privilege status is read from onboarding/profile evidence when available"},
+				nil,
+				[]string{"real guest privilege separation proof requires the relevant backend gate; guest-root containment remains a non-claim"},
+				[]string{"hideout doctor --feature lima --backend lima"},
+				doctorPrivilegeRecoveryCode(privilegeSummary),
+			)
+		case "projection":
+			inspection, inspectErr := core.ProjectionInspection(req.Profile)
+			if inspectErr != nil {
+				addDoctorFeatureFinding(builder, "feature-projection", "projection", doctorpkg.StatusError,
+					"projection inspection failed", nil, []string{inspectErr.Error()},
+					[]string{"real macOS arm64 Lima Gate 2 is still required"},
+					[]string{"hideout profile ide-mode " + req.Profile},
+				)
+				continue
+			}
+			summary := "projection is configured, but guest PATH and run-bound authority are not fully observed"
+			if inspection.Status == doctorpkg.StatusError {
+				summary = "projection configuration has a fail-closed error"
+			}
+			addDoctorFeatureFinding(builder, "feature-projection", "projection", inspection.Status,
+				summary,
+				inspection.ObservedFacts(),
+				inspection.CandidateCauses(),
+				inspection.GateRequired,
+				[]string{"hideout profile ide-mode " + req.Profile, "hideout decision list --kind host-app.open-resource --include-terminal", "hideout run --profile " + req.Profile + " -- code ."},
+			)
 		}
 	}
+}
+
+func addDoctorFeatureFinding(builder *doctorpkg.Builder, checkID, category, status, summary string, observedFacts, candidateCauses, gateRequired, nextActions []string) {
+	addDoctorFeatureFindingWithRecovery(builder, checkID, category, status, summary, observedFacts, candidateCauses, gateRequired, nextActions, "")
+}
+
+func addDoctorFeatureFindingWithRecovery(builder *doctorpkg.Builder, checkID, category, status, summary string, observedFacts, candidateCauses, gateRequired, nextActions []string, recoveryCode string) {
+	details := map[string]any{}
+	if len(observedFacts) > 0 {
+		details["observedFacts"] = observedFacts
+	}
+	if len(candidateCauses) > 0 {
+		details["candidateCauses"] = candidateCauses
+	}
+	if len(gateRequired) > 0 {
+		details["gateRequired"] = gateRequired
+	}
+	if len(details) == 0 {
+		details = nil
+	}
+	options := []doctorpkg.FindingOption{
+		doctorpkg.WithRequired(false),
+		doctorpkg.WithDetails(details),
+		doctorpkg.WithNextActions(nextActions...),
+	}
+	if recoveryCode != "" {
+		options = append(options, doctorpkg.WithRecovery(recoveryCode))
+	}
+	builder.Add(checkID, category, status, summary,
+		options...,
+	)
 }
 
 func selectedDoctorDiagnosticFeatures(req doctorpkg.Request) []string {
@@ -2388,6 +2873,89 @@ func doctorLimaFeatureStatus(overview manager.Overview, overviewErr error, backe
 	return doctorpkg.StatusWarn, "lima backend status not reported"
 }
 
+type packagingDoctorDiagnostic struct {
+	Status          string
+	Summary         string
+	ObservedFacts   []string
+	CandidateCauses []string
+	RecoveryCode    string
+}
+
+func currentExecutable() string {
+	path, _ := os.Executable()
+	return path
+}
+
+func doctorPackagingDiagnosticForExecutable(executable string) packagingDoctorDiagnostic {
+	result := packagingDoctorDiagnostic{
+		Status:        doctorpkg.StatusSkipped,
+		Summary:       "installed package verification is not applicable to this development/source executable",
+		ObservedFacts: []string{"package commands=verify,install,repair,uninstall", "installedPackage=not-detected"},
+	}
+	prefix, installed := installedPackagePrefix(executable)
+	var verifyErr error
+	if installed {
+		verification, err := packagekit.Verify(prefix)
+		verifyErr = err
+		result.ObservedFacts = append(result.ObservedFacts, "installPrefix="+audit.RedactString(prefix))
+		if err != nil {
+			result.Status = doctorpkg.StatusWarn
+			result.Summary = "installed package verification failed: " + err.Error()
+			result.ObservedFacts = append(result.ObservedFacts, "installedPackageVerification=failed")
+			result.CandidateCauses = append(result.CandidateCauses, err.Error())
+		} else {
+			result.Status = doctorpkg.StatusPass
+			result.Summary = fmt.Sprintf("installed package verified mode=%s files=%d", verification.Mode, verification.Files)
+			result.ObservedFacts = append(result.ObservedFacts,
+				"installedPackageVerification=passed",
+				"packageMode="+verification.Mode,
+				fmt.Sprintf("packageFiles=%d", verification.Files),
+			)
+		}
+	}
+	var prerequisiteSummaries []string
+	for _, prereq := range packagekit.ExternalPrerequisites() {
+		prerequisiteSummaries = append(prerequisiteSummaries, fmt.Sprintf("external-prerequisite %s=%s packageOwned=%t", prereq.Name, prereq.Status, prereq.PackageOwned))
+		result.ObservedFacts = append(result.ObservedFacts, fmt.Sprintf("external-prerequisite name=%s status=%s packageOwned=%t", prereq.Name, prereq.Status, prereq.PackageOwned))
+		if prereq.Status != packagekit.PrerequisiteAvailable && !prereq.PackageOwned {
+			result.Status = doctorpkg.StatusWarn
+			result.CandidateCauses = append(result.CandidateCauses, fmt.Sprintf("external prerequisite %s is %s", prereq.Name, prereq.Status))
+			if result.RecoveryCode == "" {
+				result.RecoveryCode = recovery.CodePackagePrerequisiteMissing
+			}
+		}
+	}
+	if verifyErr != nil && strings.Contains(verifyErr.Error(), "obsolete package-owned file") {
+		result.RecoveryCode = recovery.CodePackageObsoleteLeftover
+	}
+	if len(prerequisiteSummaries) > 0 {
+		result.Summary += "; " + strings.Join(prerequisiteSummaries, "; ")
+	}
+	return result
+}
+
+func installedPackagePrefix(executable string) (string, bool) {
+	executable = strings.TrimSpace(executable)
+	if executable == "" {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	prefix := filepath.Dir(filepath.Dir(executable))
+	manifest := filepath.Join(prefix, filepath.FromSlash(packagekit.InstalledManifest))
+	info, err := os.Stat(manifest)
+	return prefix, err == nil && info.Mode().IsRegular()
+}
+
+func doctorPrivilegeRecoveryCode(summary string) string {
+	lower := strings.ToLower(summary)
+	if strings.Contains(lower, "degraded") || strings.Contains(lower, "unknown") {
+		return recovery.CodePrivilegeStatusDegraded
+	}
+	return ""
+}
+
 func availableBackends(backends []manager.BackendSummary) int {
 	count := 0
 	for _, backend := range backends {
@@ -2427,6 +2995,7 @@ type doctorOptions struct {
 	proxySecret      string
 	mediatedResolver string
 	evidenceOut      string
+	probeHostFSRoot  string
 	workspace        string
 	guestWorkspace   string
 	ephemeral        bool
@@ -2449,6 +3018,7 @@ func parseDoctorOptions(args []string) (doctorOptions, error) {
 	fs.StringVar(&opts.proxySecret, "proxy-secret", "", "proxy secret ref")
 	fs.StringVar(&opts.mediatedResolver, "mediated-resolver", "", "tun2socks mediated DNS resolver IP")
 	fs.StringVar(&opts.evidenceOut, "evidence-out", "", "write a redacted doctor report")
+	fs.StringVar(&opts.probeHostFSRoot, "probe-hostfs-root", "", "explicitly probe one HostFS root")
 	fs.StringVar(&opts.workspace, "workspace", "", "host workspace")
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
 	registerToolSupplyFlags(fs, &opts.tools)
@@ -2472,6 +3042,14 @@ func parseDoctorOptions(args []string) (doctorOptions, error) {
 	}
 	if err := doctorpkg.ValidateRequest(doctorpkg.Request{Level: opts.level, Features: opts.features}); err != nil {
 		return opts, err
+	}
+	if opts.probeHostFSRoot != "" {
+		if !filepath.IsAbs(opts.probeHostFSRoot) || filepath.Clean(opts.probeHostFSRoot) != opts.probeHostFSRoot {
+			return opts, errors.New("--probe-hostfs-root must be a clean absolute path")
+		}
+		if !slices.Contains(doctorpkg.NormalizeFeatures(opts.features), "hostfs") {
+			return opts, errors.New("--probe-hostfs-root requires --feature hostfs")
+		}
 	}
 	if opts.dryRun && opts.apply {
 		return opts, errors.New("--dry-run and --apply are mutually exclusive")
@@ -3194,9 +3772,52 @@ func (a app) profile(args []string) error {
 		return a.profileCommandProxy(store, args[1:])
 	case "command-adapter":
 		return a.profileCommandAdapter(store, args[1:])
+	case "ide-mode":
+		return a.profileIdeMode(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
+}
+
+// profileIdeMode reads or sets the host-app projection IDE mode for a profile.
+//
+//	hideout profile ide-mode <name>                     # show current mode
+//	hideout profile ide-mode <name> safe                # default; isolated editor
+//	hideout profile ide-mode <name> trusted-host-ide    # explicit opt-in
+//
+// trusted-host-ide opens the guest-writable workspace in the operator's full
+// editor and is an explicit, revocable operator grant held in guest-unreachable
+// control-plane state. Selecting safe revokes it.
+func (a app) profileIdeMode(store profile.Store, args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		fmt.Fprintln(a.stdout, "usage: hideout profile ide-mode <name> [safe|trusted-host-ide]")
+		return nil
+	}
+	name := args[0]
+	if err := profile.ValidateName(name); err != nil {
+		return err
+	}
+	core := manager.New(store)
+	if len(args) == 1 {
+		mode, err := core.ProjectionIdeMode(name)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, mode)
+		return nil
+	}
+	if len(args) != 2 {
+		return errors.New("usage: hideout profile ide-mode <name> [safe|trusted-host-ide]")
+	}
+	mode := args[1]
+	if mode == manager.ProjectionIdeModeTrusted {
+		fmt.Fprintln(a.stderr, "warning: trusted-host-ide opens the guest-writable workspace in your full editor, which may run workspace tasks and extensions; the default safe mode isolates the editor.")
+	}
+	if err := core.SetProjectionIdeMode(name, mode); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "ide-mode for %s set to %s\n", name, mode)
+	return nil
 }
 
 func (a app) profileHome(store profile.Store, args []string) error {
@@ -4300,7 +4921,7 @@ func (a app) profileFS(store profile.Store, args []string) error {
 		return nil
 	}
 	if len(args) < 2 {
-		return errors.New("usage: hideout profile fs <name> <list|add|deny|remove>")
+		return errors.New("usage: hideout profile fs <name> <list|add|deny|remove|migrate-list>")
 	}
 	name := args[0]
 	command := args[1]
@@ -4323,9 +4944,66 @@ func (a app) profileFS(store profile.Store, args []string) error {
 			return errors.New("usage: hideout profile fs <name> remove <rule-id>")
 		}
 		return a.profileFSRemove(store, name, args[2])
+	case "migrate-list":
+		return a.profileFSMigrateList(store, name, args[2:])
 	default:
 		return fmt.Errorf("unknown profile fs command %q", command)
 	}
+}
+
+func (a app) profileFSMigrateList(store profile.Store, name string, args []string) error {
+	var mappings stringListFlag
+	fs := flag.NewFlagSet("profile fs migrate-list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Var(&mappings, "map", "legacy rule mapping <rule-id>=see-dir|see-tree; repeat for every list rule")
+	reason := fs.String("reason", "", "review reason")
+	yes := fs.Bool("yes", false, "apply the reviewed migration without an interactive prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || len(mappings) == 0 || strings.TrimSpace(*reason) == "" {
+		return errors.New("usage: hideout profile fs <name> migrate-list --map <rule-id>=see-dir|see-tree [--map ...] --reason <text> [--yes]")
+	}
+	items := make([]manager.ProfileHostFSMigration, 0, len(mappings))
+	for _, raw := range mappings {
+		id, selector, ok := strings.Cut(raw, "=")
+		if !ok {
+			return fmt.Errorf("--map %q must use <rule-id>=see-dir|see-tree", raw)
+		}
+		items = append(items, manager.ProfileHostFSMigration{RuleID: strings.TrimSpace(id), Selector: strings.TrimSpace(selector)})
+	}
+	core := manager.New(store)
+	plan, err := core.PlanProfileHostFS(manager.ProfileHostFSOptions{
+		ProfileName: name,
+		Operation:   "migrate-list",
+		Reason:      *reason,
+		Migrations:  items,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "HostFS list migration: profile=%s rules=%d requires-confirmation=%t\n", plan.Profile, len(plan.Migrations), plan.RequiresConfirmation)
+	for _, migration := range plan.Migrations {
+		fmt.Fprintf(a.stdout, "  %s %s %s -> %s (%s)\n", migration.RuleID, migration.Effect, migration.HostPath, migration.NewSelector, migration.NewDisclosure)
+	}
+	if !*yes {
+		fmt.Fprint(a.stdout, "Apply this disclosure migration? [y/N] ")
+		reader := bufio.NewReader(a.stdin)
+		answer, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(a.stdout, "cancelled; profile unchanged")
+			return nil
+		}
+	}
+	result, err := core.ApplyProfileHostFS(plan)
+	if err != nil {
+		return err
+	}
+	return writeIndentedJSON(a.stdout, result)
 }
 
 type profileFSAddOptions struct {
@@ -4830,7 +5508,7 @@ func (a app) hostfsWritePlan(core manager.Core, args []string) error {
 	}
 	plan, err := core.PlanHostFSWrite(manager.HostFSWritePlanRequest{OperationID: *operationID, IncludePreview: *includePreview})
 	if err != nil {
-		return err
+		return codedHostFSWriteError(err)
 	}
 	return writeIndentedJSON(a.stdout, plan)
 }
@@ -4851,7 +5529,7 @@ func (a app) hostfsWriteClaim(core manager.Core, args []string) error {
 		Surface:         *surface,
 	})
 	if err != nil {
-		return err
+		return codedHostFSWriteError(err)
 	}
 	return writeIndentedJSON(a.stdout, claim)
 }
@@ -4872,7 +5550,7 @@ func (a app) hostfsWriteApply(core manager.Core, args []string) error {
 		ClaimToken:      *claimToken,
 	})
 	if err != nil {
-		return err
+		return codedHostFSWriteError(err)
 	}
 	return writeIndentedJSON(a.stdout, result)
 }
@@ -4895,14 +5573,29 @@ func (a app) hostfsWriteDiscard(core manager.Core, args []string) error {
 		Reason:          *reason,
 	})
 	if err != nil {
-		return err
+		return codedHostFSWriteError(err)
 	}
 	return writeIndentedJSON(a.stdout, result)
 }
 
+func codedHostFSWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "reserved") || strings.Contains(msg, "control-plane path"):
+		return withRecoveryCode(err, recovery.CodeHostFSReservedRootDenied)
+	case strings.Contains(msg, "expired") || strings.Contains(msg, "timed out") || strings.Contains(msg, " is claimed") || strings.Contains(msg, " is applied") || strings.Contains(msg, " is discarded"):
+		return withRecoveryCode(err, recovery.CodeDecisionClaimExpired)
+	default:
+		return err
+	}
+}
+
 func (a app) decisionCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hideout decision list|inspect|claim|approve|deny|watch")
+		return errors.New("usage: hideout decision list|inspect|claim|approve|deny|reopen|revoke|watch")
 	}
 	store, err := profile.DefaultStore()
 	if err != nil {
@@ -4920,11 +5613,57 @@ func (a app) decisionCommand(args []string) error {
 		return a.decisionResolve(core, args[1:], true)
 	case "deny":
 		return a.decisionResolve(core, args[1:], false)
+	case "reopen":
+		return a.decisionReopen(core, args[1:])
+	case "revoke":
+		return a.decisionRevoke(core, args[1:])
 	case "watch":
 		return a.decisionWatch(core, args[1:])
 	default:
 		return fmt.Errorf("unknown decision command %q", args[0])
 	}
+}
+
+func (a app) decisionRevoke(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("decision revoke", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	reason := fs.String("reason", "operator-revoked", "operator reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout decision revoke [--reason <text>] <decision-id>")
+	}
+	result, err := core.RevokeDecision(manager.DecisionRevokeRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: "hideout.decision/v1",
+		Reason:          *reason,
+	})
+	if err != nil {
+		return codedDecisionError(err)
+	}
+	return writeIndentedJSON(a.stdout, result)
+}
+
+func (a app) decisionReopen(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("decision reopen", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	reason := fs.String("reason", "operator-reopened", "operator reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout decision reopen [--reason <text>] <decision-id>")
+	}
+	result, err := core.ReopenDecision(manager.HostFSReadReopenRequest{
+		DecisionID:      fs.Arg(0),
+		ExpectedVersion: "hideout.decision/v1",
+		Reason:          *reason,
+	})
+	if err != nil {
+		return codedDecisionError(err)
+	}
+	return writeIndentedJSON(a.stdout, result)
 }
 
 func (a app) decisionList(core manager.Core, args []string) error {
@@ -4981,7 +5720,7 @@ func (a app) decisionClaim(core manager.Core, args []string) error {
 		Surface:         *surface,
 	})
 	if err != nil {
-		return err
+		return codedDecisionError(err)
 	}
 	return writeIndentedJSON(a.stdout, claim)
 }
@@ -5023,9 +5762,31 @@ func (a app) decisionResolve(core manager.Core, args []string, approve bool) err
 		result, err = core.DenyDecision(req)
 	}
 	if err != nil {
-		return err
+		return codedDecisionError(err)
 	}
 	return writeIndentedJSON(a.stdout, result)
+}
+
+func codedDecisionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "expired") || strings.Contains(msg, "timed out") || strings.Contains(msg, " is claimed") || strings.Contains(msg, " is approved") || strings.Contains(msg, " is denied") || strings.Contains(msg, " is discarded") {
+		return withRecoveryCode(err, recovery.CodeDecisionClaimExpired)
+	}
+	return err
+}
+
+func withRecoveryCode(err error, code string) error {
+	if err == nil || strings.TrimSpace(code) == "" {
+		return err
+	}
+	entry, ok := recovery.Lookup(code)
+	if !ok {
+		return err
+	}
+	return fmt.Errorf("code=%s reason=%s hint=%s: %w", entry.Code, entry.Reason, entry.Hint, err)
 }
 
 func (a app) decisionWatch(core manager.Core, args []string) error {
@@ -5232,6 +5993,168 @@ func (a app) envList(args []string) error {
 	return nil
 }
 
+func (a app) runtimeCommand(args []string) error {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	return a.runtimeCommandWithCore(manager.New(store), args)
+}
+
+func (a app) runtimeCommandWithCore(core manager.Core, args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		fmt.Fprintln(a.stdout, "Usage:")
+		fmt.Fprintln(a.stdout, "  hideout runtime list [--json]")
+		fmt.Fprintln(a.stdout, "  hideout runtime inspect <family> [--revision <id>] [--json]")
+		fmt.Fprintln(a.stdout, "  hideout runtime verify --env <name> [--json]")
+		return nil
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("runtime list", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		jsonOut := fs.Bool("json", false, "write JSON")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: hideout runtime list [--json]")
+		}
+		view, err := core.RuntimeCatalog()
+		if err != nil {
+			return err
+		}
+		if *jsonOut {
+			return writeIndentedJSON(a.stdout, view)
+		}
+		fmt.Fprintf(a.stdout, "Runtime catalog %s\n", view.CatalogRelease)
+		fmt.Fprintln(a.stdout, "FAMILY\tCURRENT\tMATURITY\tHOSTS")
+		for _, family := range view.Families {
+			hosts := []string{}
+			for _, revision := range family.Revisions {
+				if revision.ID != family.CurrentRevision {
+					continue
+				}
+				for _, artifact := range revision.Artifacts {
+					hosts = append(hosts, artifact.HostOS+"/"+artifact.HostArch)
+				}
+			}
+			slices.Sort(hosts)
+			fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\n", family.ID, family.CurrentRevision, family.Maturity, strings.Join(hosts, ","))
+		}
+		return nil
+	case "inspect":
+		if len(args) < 2 || strings.HasPrefix(args[1], "-") {
+			return errors.New("usage: hideout runtime inspect <family> [--revision <id>] [--json]")
+		}
+		family := args[1]
+		fs := flag.NewFlagSet("runtime inspect", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		revision := fs.String("revision", "", "exact runtime revision")
+		jsonOut := fs.Bool("json", false, "write JSON")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: hideout runtime inspect <family> [--revision <id>] [--json]")
+		}
+		view, err := core.InspectRuntime(family, *revision)
+		if err != nil {
+			return err
+		}
+		if *jsonOut {
+			return writeIndentedJSON(a.stdout, view)
+		}
+		fmt.Fprintf(a.stdout, "runtime: %s\n", view.Family.ID)
+		fmt.Fprintf(a.stdout, "  revision: %s current=%t maturity=%s status=%s\n", view.Revision.ID, view.Current, view.Family.Maturity, view.Revision.Status)
+		fmt.Fprintf(a.stdout, "  contract: %s %s\n", view.Revision.ContractID, view.Revision.ContractDigest)
+		for _, artifact := range view.Revision.Artifacts {
+			fmt.Fprintf(a.stdout, "  artifact: %s/%s guest=%s bytes=%d virtual=%d sha256=%s source=%s\n",
+				artifact.HostOS, artifact.HostArch, artifact.GuestArch, artifact.DownloadBytes, artifact.VirtualBytes,
+				artifact.SHA256, artifact.Location)
+			fmt.Fprintf(a.stdout, "    supply=%s inventory=%s sbom=%s license=%s\n",
+				artifact.SupplyMode, artifact.PackageInventoryDigest, artifact.SBOM.Status, artifact.Source.LicenseReview)
+		}
+		fmt.Fprintln(a.stdout, "  observations:")
+		for _, observation := range view.Contract.Observations {
+			fmt.Fprintf(a.stdout, "    %s class=%s command=%s args=%s\n", observation.ID, observation.Class, observation.Command, strings.Join(observation.VersionArgs, " "))
+		}
+		return nil
+	case "verify":
+		fs := flag.NewFlagSet("runtime verify", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		environmentName := fs.String("env", "", "named environment")
+		jsonOut := fs.Bool("json", false, "write JSON")
+		verbose := fs.Bool("verbose", false, "show backend control output")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || strings.TrimSpace(*environmentName) == "" {
+			return errors.New("usage: hideout runtime verify --env <name> [--json] [--verbose]")
+		}
+		plan, err := core.PlanRuntimeVerify(*environmentName)
+		if err != nil {
+			return err
+		}
+		result, applyErr := core.ApplyRuntimeVerify(context.Background(), plan, a.backend(plan.Backend, runOptions{backendName: plan.Backend, verbose: *verbose}))
+		if *jsonOut {
+			if err := writeIndentedJSON(a.stdout, result); err != nil {
+				return err
+			}
+		} else {
+			writeRuntimeVerifyResult(a.stdout, result)
+		}
+		return applyErr
+	default:
+		return fmt.Errorf("unknown runtime subcommand %q", args[0])
+	}
+}
+
+func writeRuntimeVerifyResult(w io.Writer, result manager.RuntimeVerifyResult) {
+	fmt.Fprintf(w, "Runtime verification: %s\n", result.Status.Status)
+	fmt.Fprintf(w, "  environment: %s (%s)\n", result.EnvironmentName, result.EnvironmentID)
+	writeRuntimeStatus(w, "  runtime", result.Status)
+	if result.AuditPath != "" && result.AuditPath != "off" {
+		fmt.Fprintf(w, "  audit: %s\n", result.AuditPath)
+	}
+}
+
+func writeRuntimeStatus(w io.Writer, prefix string, status runtimeverify.StatusView) {
+	fmt.Fprintf(w, "%s: %s\n", prefix, status.Status)
+	if status.Family != "" {
+		fmt.Fprintf(w, "    family: %s revision=%s maturity=%s\n", status.Family, status.Revision, status.Maturity)
+	}
+	if status.ArtifactSHA256 != "" {
+		digest := status.ArtifactSHA256
+		if len(digest) > 12 {
+			digest = digest[:12]
+		}
+		fmt.Fprintf(w, "    artifact-sha256: %s\n", digest)
+	}
+	fmt.Fprintf(w, "    running: %t\n", status.Running)
+	if status.ObservedAt != "" {
+		fmt.Fprintf(w, "    observed-at: %s\n", status.ObservedAt)
+	}
+	if len(status.FailedIDs) > 0 {
+		fmt.Fprintf(w, "    failed: %s\n", strings.Join(status.FailedIDs, ","))
+	}
+	if status.PrivilegeStatus != "" {
+		fmt.Fprintf(w, "    privilege: %s\n", status.PrivilegeStatus)
+	}
+	if status.Reason != "" {
+		fmt.Fprintf(w, "    reason: %s\n", status.Reason)
+	}
+	if status.RecoveryCode != "" {
+		fmt.Fprintf(w, "    recovery: %s\n", status.RecoveryCode)
+		if status.Recovery != nil {
+			fmt.Fprintf(w, "    hint: %s\n", status.Recovery.Hint)
+			for _, action := range status.Recovery.NextActions {
+				fmt.Fprintf(w, "    next: %s\n", action)
+			}
+		}
+	}
+}
+
 // abbreviateImageRef keeps listing columns readable: URL digests collapse to
 // their first 12 hex characters.
 func abbreviateImageRef(ref string) string {
@@ -5344,18 +6267,19 @@ func (a app) envCreate(args []string) error {
 	fs := flag.NewFlagSet("env create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	image := fs.String("image", "", "base image declaration (template:<name> or https URL with #sha256:<digest>)")
+	runtimeFamily := fs.String("runtime", "", "package-owned runtime family")
 	workspace := fs.String("workspace", "", "workspace to pin (defaults to the current directory)")
 	profileName := fs.String("profile", "default", "profile the environment belongs to")
 	backendName := fs.String("backend", "lima", "backend for the environment")
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("usage: hideout env create <name> [--image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]")
+		return errors.New("usage: hideout env create <name> [--runtime <family> | --image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]")
 	}
 	name := args[0]
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: hideout env create <name> [--image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]")
+		return errors.New("usage: hideout env create <name> [--runtime <family> | --image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]")
 	}
 	ws := strings.TrimSpace(*workspace)
 	if ws == "" {
@@ -5370,11 +6294,12 @@ func (a app) envCreate(args []string) error {
 		return err
 	}
 	rec, err := manager.New(store).CreateEnvironment(manager.EnvironmentCreateOptions{
-		Name:      name,
-		ImageRef:  *image,
-		Profile:   *profileName,
-		Backend:   *backendName,
-		Workspace: ws,
+		Name:          name,
+		ImageRef:      *image,
+		Profile:       *profileName,
+		Backend:       *backendName,
+		Workspace:     ws,
+		RuntimeFamily: *runtimeFamily,
 	})
 	if err != nil {
 		return err
@@ -5415,6 +6340,10 @@ func (a app) envInspect(args []string) error {
 	fmt.Fprintf(a.stdout, "  backend: %s profile: %s\n", rec.Backend, rec.Profile)
 	if rec.InstanceName != "" {
 		fmt.Fprintf(a.stdout, "  instance: %s\n", rec.InstanceName)
+	}
+	status, statusErr := manager.New(store).RuntimeStatus(rec.ID)
+	if statusErr == nil {
+		writeRuntimeStatus(a.stdout, "  runtime", status)
 	}
 	return nil
 }
@@ -5767,7 +6696,7 @@ func parseTUIOptions(args []string) (tuiOptions, error) {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&opts.once, "once", false, "render the terminal dashboard once and exit")
-	fs.DurationVar(&opts.interval, "interval", opts.interval, "watch refresh interval")
+	fs.DurationVar(&opts.interval, "interval", opts.interval, "daemon-less fallback refresh interval")
 	fs.StringVar(&opts.profileName, "profile", "", "filter dashboard and audit rows to one profile")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
@@ -5830,6 +6759,9 @@ func (a app) tui(args []string) error {
 
 func buildTUILiveState(ctx context.Context, core manager.Core, profileName, health string) (liveconsole.State, error) {
 	overview, overviewErr := core.Overview(ctx)
+	hostFSStatus, hostFSErr := core.HostFSWriteStatus(manager.HostFSWriteStatusRequest{Profile: profileName})
+	decisions, decisionErr := core.ListDecisions(manager.DecisionListRequest{Profile: profileName, IncludeTerminal: true})
+	notices, noticeErr := core.ListNotices(manager.NoticeListRequest{Profile: profileName})
 	eventGroups, auditErr := core.AuditEventGroups(
 		manager.AuditEventFilter{Profile: profileName, Limit: 5},
 		manager.AuditEventFilter{Profile: profileName, Decision: "deny", Limit: 5},
@@ -5841,14 +6773,102 @@ func buildTUILiveState(ctx context.Context, core manager.Core, profileName, heal
 	if len(eventGroups) > 1 {
 		deniedEvents = eventGroups[1]
 	}
+	hostFSWrites := make([]liveconsole.HostFSWriteRow, 0, len(hostFSStatus.Pending))
+	for _, row := range hostFSStatus.Pending {
+		hostFSWrites = append(hostFSWrites, liveconsole.HostFSWriteRow{
+			DecisionID:      audit.RedactString(row.DecisionID),
+			OperationID:     audit.RedactString(row.OperationID),
+			Profile:         audit.RedactString(row.Profile),
+			Status:          audit.RedactString(row.State),
+			Operation:       audit.RedactString(row.Operation),
+			Path:            audit.RedactString(row.Path),
+			DestinationPath: audit.RedactString(row.DestinationPath),
+			PrivilegeStatus: audit.RedactString(row.PrivilegeStatus),
+		})
+	}
+	decisionRows := make([]liveconsole.DecisionRow, 0, len(decisions))
+	for _, row := range decisions {
+		reason := row.Preview.Summary
+		if row.Kind == decision.KindHostFSRead {
+			if untrusted, ok := row.Preview.Facts["untrustedReason"].(string); ok && strings.TrimSpace(untrusted) != "" {
+				reason = "untrusted target input: " + untrusted
+			}
+		}
+		decisionRows = append(decisionRows, liveconsole.DecisionRow{
+			ID:             audit.RedactString(row.ID),
+			Kind:           audit.RedactString(row.Kind),
+			Status:         audit.RedactString(row.State),
+			DefaultOutcome: audit.RedactString(row.DefaultOutcome),
+			Profile:        audit.RedactString(row.Source.Profile),
+			Session:        audit.RedactString(row.Source.Session),
+			Backend:        audit.RedactString(row.Source.Backend),
+			Reason:         audit.RedactString(reason),
+		})
+	}
+	noticeRows := make([]liveconsole.NoticeRow, 0, len(notices))
+	for _, row := range notices {
+		noticeRows = append(noticeRows, liveconsole.NoticeRow{
+			ID:           audit.RedactString(row.ID),
+			Kind:         audit.RedactString(row.Kind),
+			Status:       audit.RedactString(row.Status),
+			Severity:     audit.RedactString(row.Severity),
+			Acknowledged: row.Acknowledged,
+			Profile:      audit.RedactString(row.Source.Profile),
+			Session:      audit.RedactString(row.Source.Session),
+			Backend:      audit.RedactString(row.Source.Backend),
+		})
+	}
+	var background []liveconsole.BackgroundRow
+	var daemonStatusErr error
+	if health == liveconsole.HealthLive {
+		status, err := daemon.FetchStatus(ctx, core.Store.Root)
+		daemonStatusErr = err
+		if err == nil {
+			background = make([]liveconsole.BackgroundRow, 0, len(status.Background))
+			for _, row := range status.Background {
+				background = append(background, liveconsole.BackgroundRow{ID: audit.RedactString(row.ID), Op: audit.RedactString(row.Op), Status: audit.RedactString(row.Status)})
+			}
+		}
+	}
 	seed := liveconsole.BuildSeed(liveconsole.SeedInput{
 		Overview:        overview,
 		AuditTail:       events,
 		DeniedAuditTail: deniedEvents,
+		Background:      background,
+		HostFSWrites:    hostFSWrites,
+		Decisions:       decisionRows,
+		Notices:         noticeRows,
+		StatusRows:      tuiConsoleStatusRows(overview),
 		ProfileScope:    profileName,
 		StreamHealth:    health,
 	})
-	return liveconsole.NewState(seed), errors.Join(overviewErr, auditErr)
+	return liveconsole.NewState(seed), errors.Join(overviewErr, hostFSErr, decisionErr, noticeErr, auditErr, daemonStatusErr)
+}
+
+func tuiConsoleStatusRows(overview manager.Overview) []liveconsole.StatusRow {
+	return []liveconsole.StatusRow{
+		{
+			ID:     "doctor",
+			Label:  "Doctor",
+			Status: "explicit",
+			Detail: "not run from TUI load; run light or deep diagnostics explicitly",
+			Next:   "hideout doctor --level light",
+		},
+		{
+			ID:     "package",
+			Label:  "Package",
+			Status: "read-only",
+			Detail: fmt.Sprintf("bundles=%d enabled=%d adapterPacks=%d", overview.Bundles.Installed, overview.Bundles.Enabled, len(overview.AdapterPacks)),
+			Next:   "hideout package verify <install-prefix>",
+		},
+		{
+			ID:     "support",
+			Label:  "Support",
+			Status: "matrix",
+			Detail: releasecompat.CurrentSupportSummary("auto"),
+			Next:   "hideout support matrix",
+		},
+	}
 }
 
 func watchLiveDashboard(ctx context.Context, eventCh <-chan liveconsole.Event, interval time.Duration, state *liveconsole.State, render func(liveconsole.State) error, fallback func() error) error {
@@ -5943,7 +6963,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		if p.ValidationError != "" {
 			status = "error: " + p.ValidationError
 		}
-		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  expected=%s  commandProxies=%s  commandAdapters=%s  hostfs=allow:%d/deny:%d  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ExpectedCommands), listForTUI(p.CommandProxies), commandAdaptersForTUI(p.CommandAdapters), p.HostFSGrants, p.HostFSDeny, status)
+		fmt.Fprintf(w, "  - %s  network=%s  env=public:%d/inherit:%d/deny:%d  expected=%s  commandProxies=%s  commandAdapters=%s  hostfs=allow:%d/deny:%d visibility:%s  status=%s\n", dash(p.Name), dash(p.NetworkMode), len(p.EnvPublic), len(p.EnvInherit), len(p.EnvDeny), listForTUI(p.ExpectedCommands), listForTUI(p.CommandProxies), commandAdaptersForTUI(p.CommandAdapters), p.HostFSGrants, p.HostFSDeny, dash(p.HostFSVisibility.Posture), status)
 		next := profileNextCommandsForTUI(p)
 		if len(next) > 0 {
 			for _, command := range next {
@@ -6046,6 +7066,19 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	}
 	fmt.Fprintln(w)
 
+	actionRequired := liveconsole.ActionRequired(state)
+	fmt.Fprintln(w, "\nOperator Console")
+	fmt.Fprintf(w, "  action-required total=%d hostfs=%d decisions=%d notices=%d\n", actionRequired.Total, actionRequired.HostFSWrites, actionRequired.Decisions, actionRequired.Notices)
+	if len(state.StatusRows) == 0 {
+		fmt.Fprintln(w, "  status: none")
+	}
+	for _, row := range state.StatusRows {
+		fmt.Fprintf(w, "  - %s  status=%s  detail=%s\n", dash(row.Label), dash(row.Status), dash(row.Detail))
+		if row.Next != "" {
+			fmt.Fprintf(w, "    next: %s\n", row.Next)
+		}
+	}
+
 	fmt.Fprintln(w, "\nBackground")
 	if len(state.Background) == 0 {
 		fmt.Fprintln(w, "  none")
@@ -6060,6 +7093,9 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	}
 	for _, row := range state.HostFSWrites {
 		fmt.Fprintf(w, "  - %s  op=%s  status=%s  privilege=%s  path=%s\n", dash(row.DecisionID), dash(row.Operation), dash(row.Status), dash(row.PrivilegeStatus), dash(row.Path))
+		if row.Reason != "" {
+			fmt.Fprintf(w, "    reason=%s\n", row.Reason)
+		}
 		fmt.Fprintf(w, "    next: claim=hideout hostfs write claim %s  apply=hideout hostfs write apply %s  discard=hideout hostfs write discard %s\n", dash(row.DecisionID), dash(row.DecisionID), dash(row.DecisionID))
 	}
 
@@ -6071,6 +7107,11 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 		fmt.Fprintf(w, "  - %s  kind=%s  status=%s  default=%s  profile=%s  session=%s\n", dash(row.ID), dash(row.Kind), dash(row.Status), dash(row.DefaultOutcome), dash(row.Profile), dash(row.Session))
 		if row.Reason != "" {
 			fmt.Fprintf(w, "    reason=%s\n", row.Reason)
+		}
+		if row.Kind == decision.KindHostFSRead && (row.Status == decision.StateDenied || row.Status == decision.StateTimedOut) {
+			fmt.Fprintf(w, "    next: hideout decision reopen %s\n", dash(row.ID))
+		} else if row.Status == decision.StatePending || row.Status == decision.StateClaimed || row.Status == "" {
+			fmt.Fprintf(w, "    next: claim=hideout decision claim %s  approve=hideout decision approve %s  deny=hideout decision deny %s\n", dash(row.ID), dash(row.ID), dash(row.ID))
 		}
 	}
 

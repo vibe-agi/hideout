@@ -43,9 +43,8 @@ client-supplied token material appears anywhere in the log.
 
 ## 5. Embedded Parity (unit) — FR-005, SC-002
 
-Assert the daemon-served Manager route set equals the embedded handler's set — all
-32 routes (16 POST + 16 GET, including the two special-cased GET resources
-`audit/events` and `run/status`) — as a drift guard. Run at least one plan/apply
+Assert the daemon-served Manager route set equals the embedded handler's complete
+production `manager.ManagerRoutes()` registry as a drift guard. Run at least one plan/apply
 through the daemon and assert plan, apply, and result are identical to the
 embedded-mode equivalent. Assert the daemon's own status/event endpoints live
 outside `/api/v1/…`.
@@ -76,10 +75,10 @@ that operations and other subscribers are unaffected and daemon memory stays bou
 
 ## 8b. Daemon-Specific Endpoints Are A Separate Surface (unit) — FR-016
 
-Assert the daemon's own endpoints — `GET /daemon/status`, `POST /daemon/stop`,
-`GET /daemon/events`, and `POST /daemon/background` — live outside `/api/v1/…`, add
-no Manager operation class, and are subject to the same authentication and redaction
-as Manager routes.
+Assert the daemon's own endpoints — loopback-only `GET /`, `GET /daemon/status`,
+`POST /daemon/stop`, `GET /daemon/events`, and `POST /daemon/background` — live
+outside `/api/v1/…`, add no Manager operation class, and are subject to the same
+authentication and redaction as Manager routes.
 
 ## 9. Surfaces Consume Events (unit) — FR-009
 

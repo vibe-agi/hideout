@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"time"
 )
 
@@ -20,11 +19,12 @@ type InstallOptions struct {
 }
 
 type InstallResult struct {
-	Operation    string
-	Prefix       string
-	StoreRoot    string
-	ManifestPath string
-	FilesCopied  int
+	Operation     string
+	Prefix        string
+	StoreRoot     string
+	ManifestPath  string
+	FilesCopied   int
+	ObsoleteFiles []ObsoleteFile
 }
 
 func Install(opts InstallOptions) (InstallResult, error) {
@@ -55,15 +55,21 @@ func Install(opts InstallOptions) (InstallResult, error) {
 	existing, err := loadExistingState(prefix)
 	if err == nil {
 		operation = "upgrade"
-		if !slices.Contains(manifest.Migration.FromInstalledSchemas, existing.Schema) {
-			return InstallResult{}, fmt.Errorf("installed package schema %q is outside migration range %v", existing.Schema, manifest.Migration.FromInstalledSchemas)
+		if _, err := CheckMigrationCompatibility(manifest, existing); err != nil {
+			return InstallResult{}, err
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return InstallResult{}, err
 	}
 
-	installedFiles := make([]File, 0, len(manifest.Files))
-	dirs := []string{"bin", packageMetadataRoot}
+	installedFiles, dirs, err := plannedInstalledState(packageRoot, manifest)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	var obsolete []ObsoleteFile
+	if operation == "upgrade" {
+		obsolete = DetectObsoleteFiles(existing, installedFiles)
+	}
 	for _, file := range manifest.Files {
 		src, err := JoinRelative(packageRoot, file.Path)
 		if err != nil {
@@ -80,9 +86,49 @@ func Install(opts InstallOptions) (InstallResult, error) {
 		if err := copyFile(src, dst, file.Executable); err != nil {
 			return InstallResult{}, fmt.Errorf("copy %s: %w", file.Path, err)
 		}
-		sum, err := FileSHA256(dst)
+	}
+	state := NewInstallState(prefix, store, manifest, installedFiles, dirs, now)
+	state.ObsoleteFiles = obsolete
+	manifestPath, err := JoinRelative(prefix, InstalledManifest)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if err := saveInstallState(prefix, state); err != nil {
+		return InstallResult{}, err
+	}
+	writeAudit(store, AuditEvent{
+		Operation:  operation,
+		Status:     "passed",
+		Prefix:     prefix,
+		StoreRoot:  store,
+		Files:      len(installedFiles),
+		StaleFiles: len(obsolete),
+	})
+	return InstallResult{
+		Operation:     operation,
+		Prefix:        prefix,
+		StoreRoot:     store,
+		ManifestPath:  manifestPath,
+		FilesCopied:   len(installedFiles),
+		ObsoleteFiles: obsolete,
+	}, nil
+}
+
+func plannedInstalledState(packageRoot string, manifest Manifest) ([]File, []string, error) {
+	installedFiles := make([]File, 0, len(manifest.Files))
+	dirs := []string{"bin", packageMetadataRoot}
+	for _, file := range manifest.Files {
+		dstRel, err := installPathForArtifact(file.Path)
 		if err != nil {
-			return InstallResult{}, err
+			return nil, nil, err
+		}
+		src, err := JoinRelative(packageRoot, file.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+		sum, err := FileSHA256(src)
+		if err != nil {
+			return nil, nil, err
 		}
 		installedFiles = append(installedFiles, File{
 			Path:       dstRel,
@@ -92,29 +138,15 @@ func Install(opts InstallOptions) (InstallResult, error) {
 		})
 		dirs = appendInstallDirs(dirs, dstRel)
 	}
-	dirs = uniqueStrings(dirs)
-	state := NewInstallState(prefix, store, manifest, installedFiles, dirs, now)
+	return installedFiles, uniqueStrings(dirs), nil
+}
+
+func saveInstallState(prefix string, state InstallState) error {
 	manifestPath, err := JoinRelative(prefix, InstalledManifest)
 	if err != nil {
-		return InstallResult{}, err
+		return err
 	}
-	if err := writeJSONFile(manifestPath, state, 0o644); err != nil {
-		return InstallResult{}, err
-	}
-	writeAudit(store, AuditEvent{
-		Operation: operation,
-		Status:    "passed",
-		Prefix:    prefix,
-		StoreRoot: store,
-		Files:     len(installedFiles),
-	})
-	return InstallResult{
-		Operation:    operation,
-		Prefix:       prefix,
-		StoreRoot:    store,
-		ManifestPath: manifestPath,
-		FilesCopied:  len(installedFiles),
-	}, nil
+	return writeJSONFile(manifestPath, state, 0o644)
 }
 
 func loadExistingState(prefix string) (InstallState, error) {

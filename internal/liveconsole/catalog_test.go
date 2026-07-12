@@ -27,7 +27,7 @@ func TestEventCatalogRepresentativeEventsValidate(t *testing.T) {
 func TestEventCatalogRejectsMissingRequiredFields(t *testing.T) {
 	schema := compileSchema(t, "../../schemas/daemon-event.schema.json")
 	for _, ev := range RepresentativeEvents() {
-		for _, field := range requiredPayloadFields(ev.Kind) {
+		for _, field := range RequiredPayloadFields(ev.Kind) {
 			t.Run(ev.Kind+"."+field, func(t *testing.T) {
 				mutated := ev
 				clearPayloadField(&mutated.Payload, field)
@@ -43,15 +43,78 @@ func TestEventCatalogRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestEventCatalogCoversEveryLivePanel(t *testing.T) {
-	representative := RepresentativeEventKinds()
+	cataloged := catalogKinds()
 	for panel, kinds := range PanelEventCoverage() {
 		t.Run(panel, func(t *testing.T) {
 			for _, kind := range kinds {
-				if !representative[kind] {
-					t.Fatalf("panel %s depends on event kind %s but no representative event covers it", panel, kind)
+				entry, ok := cataloged[kind]
+				if !ok {
+					t.Fatalf("panel %s depends on event kind %s but no catalog entry covers it", panel, kind)
+				}
+				if entry.Source == "" {
+					t.Fatalf("panel %s depends on event kind %s without source classification", panel, kind)
 				}
 			}
 		})
+	}
+}
+
+func TestEventCatalogRowsAreStructuredAndUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, entry := range EventCatalog() {
+		if entry.Kind == "" {
+			t.Fatal("catalog entry missing kind")
+		}
+		if seen[entry.Kind] {
+			t.Fatalf("duplicate catalog entry for %s", entry.Kind)
+		}
+		seen[entry.Kind] = true
+		if entry.Source == "" {
+			t.Fatalf("%s missing source classification", entry.Kind)
+		}
+		if entry.Source == EventSourceProduction && entry.ProductionSite == "" {
+			t.Fatalf("%s production row missing source", entry.Kind)
+		}
+		if entry.Redaction != RedactionControlPlaneStripped {
+			t.Fatalf("%s redaction=%q", entry.Kind, entry.Redaction)
+		}
+		if !entry.GoReducer {
+			t.Fatalf("%s missing Go reducer coverage", entry.Kind)
+		}
+		if !entry.JSReducer {
+			t.Fatalf("%s missing JS reducer coverage", entry.Kind)
+		}
+		if len(entry.RequiredFields) == 0 {
+			t.Fatalf("%s missing required field declaration", entry.Kind)
+		}
+	}
+}
+
+func TestEventCatalogCoversReducerBranches(t *testing.T) {
+	cataloged := catalogKinds()
+	for _, kind := range ReducerEventKinds() {
+		if _, ok := cataloged[kind]; !ok {
+			t.Fatalf("reducer branch %s has no catalog row", kind)
+		}
+	}
+}
+
+func TestEventCatalogProducerMappingsAreExplicit(t *testing.T) {
+	mappings := EventProducerMappings()
+	for _, producer := range []string{
+		KindEnvironment, KindSession, KindBackground, KindAudit, KindExport,
+		KindCleanup, KindHostFSWrite, KindDecision, KindNotice, KindTerminal,
+		"host-app", "run", "operation", "*",
+	} {
+		if mappings[producer] == "" {
+			t.Fatalf("producer/remap %s is not cataloged", producer)
+		}
+	}
+	if mappings["run"] != KindSession || mappings["operation"] != KindSession || mappings["*"] != KindSession {
+		t.Fatalf("session remaps not cataloged correctly: %+v", mappings)
+	}
+	if mappings["host-app"] != KindAudit {
+		t.Fatalf("host-app lifecycle producer must map to audit, got %+v", mappings)
 	}
 }
 
@@ -88,33 +151,6 @@ func validateJSON(schema *jsonschema.Schema, value any) error {
 	return schema.Validate(doc)
 }
 
-func requiredPayloadFields(kind string) []string {
-	switch kind {
-	case KindEnvironment:
-		return []string{"id"}
-	case KindSession:
-		return []string{"id"}
-	case KindBackground:
-		return []string{"id", "op", "status"}
-	case KindAudit:
-		return []string{"action", "decision"}
-	case KindExport:
-		return []string{"status"}
-	case KindCleanup:
-		return []string{"status"}
-	case KindHostFSWrite:
-		return []string{"decisionId", "operationId", "status"}
-	case KindDecision:
-		return []string{"decisionId", "recordKind", "status"}
-	case KindNotice:
-		return []string{"noticeId", "recordKind", "status"}
-	case KindTerminal:
-		return []string{"reason"}
-	default:
-		return nil
-	}
-}
-
 func clearPayloadField(payload *EventPayload, field string) {
 	switch field {
 	case "id":
@@ -138,4 +174,12 @@ func clearPayloadField(payload *EventPayload, field string) {
 	case "noticeId":
 		payload.NoticeID = ""
 	}
+}
+
+func catalogKinds() map[string]EventCatalogEntry {
+	out := map[string]EventCatalogEntry{}
+	for _, entry := range EventCatalog() {
+		out[entry.Kind] = entry
+	}
+	return out
 }

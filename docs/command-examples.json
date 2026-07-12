@@ -1,0 +1,209 @@
+{
+  "schema": "hideout.command-examples/v1",
+  "examples": [
+    {
+      "id": "version",
+      "classification": "execute-temp-store",
+      "command": ["version"],
+      "reason": "read-only CLI identity check"
+    },
+    {
+      "id": "doctor-help",
+      "classification": "parse-only",
+      "command": ["doctor", "--help"],
+      "reason": "validates doctor command recognition without mutating state"
+    },
+    {
+      "id": "init-help",
+      "classification": "parse-only",
+      "command": ["init", "--help"],
+      "reason": "validates init command recognition without creating a profile"
+    },
+    {
+      "id": "package-help",
+      "classification": "parse-only",
+      "command": ["package", "--help"],
+      "reason": "validates package command recognition without touching an install prefix"
+    },
+    {
+      "id": "audit-export-help",
+      "classification": "parse-only",
+      "command": ["audit", "export", "--help"],
+      "reason": "validates export command recognition without writing an artifact"
+    },
+    {
+      "id": "real-gate2",
+      "classification": "real-gate",
+      "command": ["run", "--backend", "lima", "--", "pwd"],
+      "reason": "requires Lima/backend prerequisites and is covered by Gate 2, not docs truth smoke"
+    },
+    {
+      "id": "privacy-network-run",
+      "classification": "real-gate",
+      "command": ["run", "--profile", "privacy", "--backend", "lima", "--", "pwd"],
+      "reason": "requires Lima plus configured privacy profile and is covered by Gate 3/release modes"
+    },
+    {
+      "id": "hostfs-discover-run",
+      "classification": "real-gate",
+      "command": ["run", "--backend", "lima", "--fs", "see-dir:/absolute/directory", "--", "find", "/absolute/directory", "-maxdepth", "1"],
+      "reason": "touches an operator-selected host directory and requires real Lima Gate 2 HostFS proof"
+    },
+    {
+      "id": "hostfs-read-approve",
+      "classification": "intentionally-not-executed",
+      "command": ["decision", "approve", "--claim-token", "<claim-token>", "<decision-id>"],
+      "reason": "requires an authenticated live hostfs.read decision and must never be fabricated by docs truth smoke"
+    },
+    {
+      "id": "hostfs-list-migration",
+      "classification": "intentionally-not-executed",
+      "command": ["profile", "fs", "<profile>", "migrate-list", "--map", "<rule-id>=see-dir", "--reason", "reviewed name disclosure"],
+      "reason": "requires a real legacy profile and an operator mapping for every stored list-only rule"
+    },
+    {
+      "id": "hostfs-root-probe",
+      "classification": "intentionally-not-executed",
+      "command": ["doctor", "--feature", "hostfs", "--probe-hostfs-root", "/absolute/directory"],
+      "reason": "deliberately touches an operator-selected macOS root and may trigger a TCC prompt"
+    },
+    {
+      "id": "hostfs-apply",
+      "classification": "intentionally-not-executed",
+      "command": ["hostfs", "write", "apply", "<decision>"],
+      "reason": "requires a live operator decision and must not be fabricated by docs truth smoke"
+    },
+    {
+      "id": "projection-doctor",
+      "classification": "execute-temp-store",
+      "command": ["doctor", "--feature", "projection", "--format", "json"],
+      "reason": "exercises the host-path-free projection inspection model against an isolated store"
+    },
+    {
+      "id": "projection-code-open",
+      "classification": "real-gate",
+      "command": ["run", "--profile", "privacy", "--backend", "lima", "--", "code", "."],
+      "reason": "requires a real Lima guest, a verified signed host VS Code bundle, and Gate 2 host-effect observation"
+    },
+    {
+      "id": "projection-trusted-mode",
+      "classification": "intentionally-not-executed",
+      "command": ["profile", "ide-mode", "privacy", "trusted-host-ide"],
+      "reason": "changes a real profile request and requires a live run-bound decision before it carries authority"
+    },
+    {
+      "id": "projection-grant-revoke",
+      "classification": "intentionally-not-executed",
+      "command": ["decision", "revoke", "<decision-id>"],
+      "reason": "requires an approved live host-app.open-resource decision"
+    },
+    {
+      "id": "host-app-help",
+      "availability": "current",
+      "classification": "parse-only",
+      "command": ["app", "--help"],
+      "reason": "recognizes the implemented 032 command family without installing or enabling a pack"
+    },
+    {
+      "id": "host-app-init",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "init", "--dir", "<new-pack-directory>", "--id", "community.editor", "--app-id", "editor", "--command", "editor", "--bundle", "Editor.app", "--executable", "Contents/MacOS/Editor"],
+      "reason": "writes an operator-selected scaffold directory and therefore is documented rather than executed by docs truth"
+    },
+    {
+      "id": "host-app-add-local",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "add", "--path", "<local-pack-directory>", "--profile", "default", "--access", "safe"],
+      "reason": "requires source, app, permission, and access review before store mutation"
+    },
+    {
+      "id": "host-app-add-exact-commit",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "add", "--git", "https://example.invalid/community/editor-pack.git", "--commit", "<40-hex-commit>", "--profile", "default", "--access", "ask-each-run"],
+      "reason": "requires a real repository, full commit, immutable digest review, and explicit acceptance"
+    },
+    {
+      "id": "host-app-inspect",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "inspect", "--profile", "default", "<pack-id>"],
+      "reason": "requires an installed exact revision in an operator store"
+    },
+    {
+      "id": "host-app-validate",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "validate", "--revision", "<revision-id>", "<pack-id>"],
+      "reason": "requires an installed exact revision; source-mode validation is covered by contributor tests"
+    },
+    {
+      "id": "host-app-test",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "test", "--revision", "<revision-id>", "<pack-id>"],
+      "reason": "requires an installed exact revision and yields advisory package quality evidence, never security verification"
+    },
+    {
+      "id": "host-app-enable",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "enable", "--profile", "default", "--pack", "<pack-id>", "--revision", "<revision-id>", "--access", "ask-each-run"],
+      "reason": "requires exact plan review and mutates future-run profile authority"
+    },
+    {
+      "id": "host-app-update",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "update", "--path", "<local-pack-directory>", "--pack", "<pack-id>", "--profile", "default", "--access", "ask-each-run"],
+      "reason": "requires an installed pack, exact source review, and confirmation before selecting a new revision"
+    },
+    {
+      "id": "host-app-disable",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "disable", "--pack", "<pack-id>", "--profile", "default"],
+      "reason": "requires an installed enabled pack and confirmation before changing future runs"
+    },
+    {
+      "id": "host-app-remove",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "remove", "--pack", "<pack-id>"],
+      "reason": "requires proven package ownership, exact review, and confirmation before removing owned snapshots"
+    },
+    {
+      "id": "host-app-revoke",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["app", "revoke", "--pack", "<pack-id>", "--revision", "<revision-id>"],
+      "reason": "requires an installed exact revision and confirmation for the terminal store-wide revocation"
+    },
+    {
+      "id": "runtime-list",
+      "classification": "intentionally-not-executed",
+      "command": ["runtime", "list", "--json"],
+      "reason": "requires a promoted packaged runtime catalog; the current source catalog is deliberately empty"
+    },
+    {
+      "id": "runtime-inspect",
+      "classification": "intentionally-not-executed",
+      "command": ["runtime", "inspect", "developer-standard", "--json"],
+      "reason": "requires an exact promoted family/revision and reports catalog provenance without booting a guest"
+    },
+    {
+      "id": "runtime-verify",
+      "classification": "real-gate",
+      "command": ["runtime", "verify", "--env", "<environment>", "--json"],
+      "reason": "requires a live catalog-selected Lima environment and performs only the runtime observation path"
+    },
+    {
+      "id": "runtime-release-evidence",
+      "classification": "intentionally-not-executed",
+      "command": ["support", "readiness", "--mode", "release-candidate", "--runtime-family", "developer-standard", "--gate2-evidence", "<gate2.json>", "--gate3-evidence", "<gate3.json>", "--product-evidence", "<runtime-product.json>"],
+      "reason": "requires retained exact-image Gate 2, Gate 3, clean candidate, and typed 031 product evidence"
+    }
+  ]
+}

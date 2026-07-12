@@ -233,6 +233,154 @@ func (s *Store) ResolveDecision(id, token, state, decision, reason string, provi
 	return RedactResolution(res), RedactDecision(d), nil
 }
 
+// RevokeGrantedDecision revokes an active terminal grant. It is deliberately
+// separate from ResolveDecision: revocation does not reuse a stale claim token
+// and is restricted to the expected provider kind and approved state.
+func (s *Store) RevokeGrantedDecision(id, expectedKind, reason string) (Resolution, Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, err := s.decisionLocked(id)
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	if d.Kind != expectedKind || d.State != StateApproved {
+		return Resolution{}, RedactDecision(d), fmt.Errorf("decision %s is not an approved %s grant", d.ID, expectedKind)
+	}
+	d.State = StateDenied
+	d.Claim = nil
+	d.Revision++
+	d.UpdatedAt = s.now().UTC()
+	if err := s.writeJSONAtomic(s.decisionPath(d.ID), d); err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	res := Resolution{
+		Version:    DecisionResultVersion,
+		DecisionID: d.ID,
+		Kind:       d.Kind,
+		Status:     d.State,
+		Decision:   ActionRevoke,
+		Reason:     reason,
+		AuditRef:   d.AuditRef,
+		Revision:   d.Revision,
+	}
+	return RedactResolution(res), RedactDecision(d), nil
+}
+
+// InvalidateProviderDecision removes authority when its owning lifecycle can
+// no longer be proven. It can invalidate pending, claimed, or approved records;
+// already non-authoritative terminal outcomes are left unchanged.
+func (s *Store) InvalidateProviderDecision(id, expectedKind, reason string) (Resolution, Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, err := s.decisionLocked(id)
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	if d.Kind != expectedKind {
+		return Resolution{}, RedactDecision(d), fmt.Errorf("decision %s kind %q cannot be invalidated by %q provider", d.ID, d.Kind, expectedKind)
+	}
+	if d.State != StatePending && d.State != StateClaimed && d.State != StateApproved {
+		return RedactResolution(Resolution{Version: DecisionResultVersion, DecisionID: d.ID, Kind: d.Kind, Status: d.State, Decision: "unchanged", Reason: reason, AuditRef: d.AuditRef, Revision: d.Revision}), RedactDecision(d), nil
+	}
+	d.State = StateStale
+	d.Claim = nil
+	d.Revision++
+	d.UpdatedAt = s.now().UTC()
+	if err := s.writeJSONAtomic(s.decisionPath(d.ID), d); err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	res := Resolution{Version: DecisionResultVersion, DecisionID: d.ID, Kind: d.Kind, Status: d.State, Decision: "invalidate", Reason: reason, AuditRef: d.AuditRef, Revision: d.Revision}
+	return RedactResolution(res), RedactDecision(d), nil
+}
+
+func (s *Store) ReopenProviderDecision(id, expectedKind string, timeout time.Duration, reason string) (Resolution, Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if timeout <= 0 {
+		return Resolution{}, Decision{}, errors.New("provider reopen timeout must be positive")
+	}
+	d, err := s.decisionLocked(id)
+	if err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	if d.Kind != expectedKind {
+		return Resolution{}, RedactDecision(d), fmt.Errorf("decision %s kind %q cannot be reopened by %q provider", d.ID, d.Kind, expectedKind)
+	}
+	if d.State != StateDenied && d.State != StateTimedOut {
+		return Resolution{}, RedactDecision(d), fmt.Errorf("decision %s state %q is not reopenable", d.ID, d.State)
+	}
+	now := s.now().UTC()
+	d.State = StatePending
+	d.Claim = nil
+	d.TimeoutAt = now.Add(timeout)
+	d.Revision++
+	d.UpdatedAt = now
+	if err := ValidateDecision(d); err != nil {
+		return Resolution{}, RedactDecision(d), err
+	}
+	if err := s.writeJSONAtomic(s.decisionPath(d.ID), d); err != nil {
+		return Resolution{}, Decision{}, err
+	}
+	res := Resolution{
+		Version:    DecisionResultVersion,
+		DecisionID: d.ID,
+		Kind:       d.Kind,
+		Status:     StatePending,
+		Decision:   ActionReopen,
+		Reason:     reason,
+		AuditRef:   d.AuditRef,
+		Revision:   d.Revision,
+	}
+	return RedactResolution(res), RedactDecision(d), nil
+}
+
+func (s *Store) FailAppliedProviderDecision(id, expectedKind string) (Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Decision{}, err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, err := s.decisionLocked(id)
+	if err != nil {
+		return Decision{}, err
+	}
+	if d.Kind != expectedKind || d.State != StateApplied {
+		return RedactDecision(d), fmt.Errorf("decision %s is not an applied %s provider decision", d.ID, expectedKind)
+	}
+	d.State = StateFailed
+	d.Claim = nil
+	d.Revision++
+	d.UpdatedAt = s.now().UTC()
+	if d.Preview.Facts == nil {
+		d.Preview.Facts = map[string]any{}
+	}
+	d.Preview.Facts["activation"] = "failed"
+	if err := ValidateDecision(d); err != nil {
+		return RedactDecision(d), err
+	}
+	if err := s.writeJSONAtomic(s.decisionPath(d.ID), d); err != nil {
+		return Decision{}, err
+	}
+	return RedactDecision(d), nil
+}
+
 func (s *Store) ValidateDecisionClaim(id, token string) (Decision, error) {
 	unlock, err := s.lockFile()
 	if err != nil {

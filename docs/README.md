@@ -19,6 +19,9 @@ when reviewing architecture changes.
    gate-required feature, schema/ABI, and non-claim matrix.
 6. [privacy-run-test-plan.md](privacy-run-test-plan.md) defines gates and
    release evidence.
+7. [first-run-alpha.md](first-run-alpha.md) is the canonical external-alpha
+   first-run path for package install, privacy init, doctor, first run, and
+   recovery.
 
 Subsystem documents:
 
@@ -26,8 +29,12 @@ Subsystem documents:
 | --- | --- |
 | Backend capability | [backend-capability-matrix.md](backend-capability-matrix.md) |
 | Distribution and first run | [distribution-bootstrap.md](distribution-bootstrap.md) |
+| External alpha first run | [first-run-alpha.md](first-run-alpha.md) |
 | Ecosystem foundation | [ecosystem-foundation-design.md](ecosystem-foundation-design.md): canonical resource model, policy composition, Hideoutfile contract, guest base-environment artifact class (declarative base image references; distinct from imperative environment recipes, which remain prohibited), and ecosystem delivery sequence. |
 | HostFS overlay | [hostfs-overlay-design.md](hostfs-overlay-design.md) |
+| Host capability projection | [host-capability-projection.md](host-capability-projection.md) |
+| Community Host-App Recipes | [host-app-recipes.md](host-app-recipes.md): implemented 032 operator/contributor lifecycle, authority boundary, CLI shape, and proof requirements. |
+| Supported CLI runtime preview | [031 spec](../specs/031-supported-cli-runtime/spec.md), [runtime contracts](../specs/031-supported-cli-runtime/contracts/runtime-catalog.md) |
 | Init tasks | [init-task-architecture.md](init-task-architecture.md) |
 | Manager control plane | [manager-control-plane.md](manager-control-plane.md) |
 | Network privacy | [network-privacy-architecture.md](network-privacy-architecture.md) |
@@ -64,6 +71,10 @@ contract statement.
 implemented
   Code exists and is covered by local tests or gates.
 
+implementing / claim pending
+  Code or contracts may exist, but required completion evidence is unfinished
+  and the feature must not be described as implemented or validated.
+
 product path
   Implemented user-facing path for supported backends.
 
@@ -98,8 +109,15 @@ Hideout uses separate registries for different layers:
   vocabulary are owned by the 011 contracts and implemented through
   `hideout.adapter-pack/v1`, `hideout.adapter-pack-registry/v1`, and Manager
   `adapter-pack/*` routes. This is not public marketplace terminology.
-- operator decision center vocabulary is owned by the 012 contracts:
-  actionable decisions (`hostfs.write`, `adapter.proposal`, `evidence.share`)
+- community host-app pack source, revision, binding, access, and lifecycle
+  vocabulary is owned by the 032 contracts and
+  [host-app-recipes.md](host-app-recipes.md). It is separate from adapter packs:
+  v1 host-app recipes carry no JavaScript and can bind only the existing
+  `host.app.open-resource` provider. The 032 lifecycle is implemented with
+  Gate 0 and external-pack real Gate 2 evidence.
+- operator decision center vocabulary is owned by the 012 contracts and typed
+  feature providers: actionable decisions (`hostfs.write`, `adapter.proposal`,
+  `evidence.share`, `host-app.open-resource`)
   are not informational notices (`privilege.status`, `background.status`);
   claim tokens and provider refs are never public record fields.
 - package lifecycle vocabulary is owned by the 013 contracts: package artifact

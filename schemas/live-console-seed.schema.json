@@ -49,6 +49,24 @@
         }
       }
     },
+	"hostfsWrites": {
+	  "type": "array",
+	  "items": {
+		"type": "object"
+	  }
+	},
+	"decisions": {
+	  "type": "array",
+	  "items": {
+		"type": "object"
+	  }
+	},
+	"notices": {
+	  "type": "array",
+	  "items": {
+		"type": "object"
+	  }
+	},
     "streamHealth": {
       "type": "object",
       "additionalProperties": false,
