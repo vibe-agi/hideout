@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/hostcap"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/privilege"
@@ -44,6 +45,7 @@ const (
 const (
 	clientOpenDefaultTimeout    = 5 * time.Second
 	serverRequestDefaultTimeout = 5 * time.Second
+	hostAppOpenRequestTimeout   = 20 * time.Second
 )
 
 type Endpoint struct {
@@ -102,6 +104,7 @@ type Response struct {
 	ExitCode int            `json:"exitCode"`
 	Stdout   string         `json:"stdout,omitempty"`
 	Stderr   string         `json:"stderr,omitempty"`
+	Error    *ErrorRecord   `json:"error,omitempty"`
 	Data     map[string]any `json:"data,omitempty"`
 }
 
@@ -120,24 +123,27 @@ func (NoopOpener) OpenURL(context.Context, string) error  { return nil }
 func (NoopOpener) OpenFile(context.Context, string) error { return nil }
 
 type Server struct {
-	SessionID       string
-	Token           string
-	Socket          string
-	Endpoint        Endpoint
-	HostRoot        string
-	GuestRoot       string
-	Profile         string
-	ProfileDir      string
-	Backend         string
-	WorkspaceMode   string
-	NetworkMode     string
-	Commands        []string
-	CommandAdapters cmdadapter.Runtime
-	ScriptRefs      []profile.ScriptRef
-	Evaluator       policy.Evaluator
-	Audit           *audit.Writer
-	Opener          Opener
-	HostFS          *hostfs.Service
+	SessionID           string
+	Token               string
+	Socket              string
+	Endpoint            Endpoint
+	HostRoot            string
+	GuestRoot           string
+	Profile             string
+	ProfileDir          string
+	Backend             string
+	WorkspaceMode       string
+	NetworkMode         string
+	Commands            []string
+	CommandRegistry     cmdproxy.Registry
+	CommandAdapters     cmdadapter.Runtime
+	ScriptRefs          []profile.ScriptRef
+	Evaluator           policy.Evaluator
+	Audit               *audit.Writer
+	Opener              Opener
+	HostFS              *hostfs.Service
+	HostFSReadDecisions HostFSReadDecisionProvider
+	HostApp             *hostcap.ProjectionConfig
 
 	listener       net.Listener
 	once           sync.Once
@@ -145,6 +151,8 @@ type Server struct {
 	closed         bool
 	guestPrivilege privilege.Status
 	handlers       sync.WaitGroup
+	hostFSAuditMu  sync.Mutex
+	hostFSAudit    *hostFSDiscoveryAudit
 }
 
 func NewToken() (string, error) {
@@ -219,7 +227,7 @@ func (s *Server) Close() error {
 		}
 	})
 	s.handlers.Wait()
-	return err
+	return errors.Join(err, s.flushHostFSDiscoveryAudit())
 }
 
 func (s *Server) serve() {
@@ -252,10 +260,19 @@ func (s *Server) handle(conn net.Conn) {
 		_ = json.NewEncoder(conn).Encode(Response{Decision: string(policy.Deny), Status: "bad-request", ExitCode: 2, Stderr: "malformed broker request"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), serverRequestDefaultTimeout)
+	requestTimeout := serverRequestTimeout(req)
+	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	resp := s.Handle(ctx, req)
 	_ = json.NewEncoder(conn).Encode(resp)
+}
+
+func serverRequestTimeout(req Request) time.Duration {
+	if req.Action == cmdproxy.ActionHostAppOpenResource {
+		return hostAppOpenRequestTimeout
+	}
+	return serverRequestDefaultTimeout
 }
 
 func decodeRequest(r *bufio.Reader, req *Request) error {
@@ -287,11 +304,23 @@ func (s *Server) Handle(ctx context.Context, req Request) Response {
 		s.emit(req, resp, nil)
 		return resp
 	}
+	if !s.CommandRegistry.Empty() && req.Command != "" && (req.Action == cmdproxy.ActionHostOpen || req.Action == cmdproxy.ActionCommandAdapter || req.Action == cmdproxy.ActionHostAppOpenResource) {
+		registration, ok := s.CommandRegistry.LookupExact(req.Command)
+		if ok && registration.Action != req.Action {
+			resp.Stderr = "broker command action is not registered for this run"
+			resp.Data = map[string]any{"outcome": "refused", "code": hostcap.CodeCommandUnbound}
+			s.emit(req, resp, nil)
+			return resp
+		}
+	}
 	if isHostFSAction(req.Action) {
 		return s.handleHostFS(ctx, req, resp)
 	}
 	if req.Action == cmdproxy.ActionCommandAdapter {
 		return s.handleCommandAdapter(ctx, req, resp)
+	}
+	if req.Action == cmdproxy.ActionHostAppOpenResource {
+		return s.handleHostAppOpen(ctx, req, resp)
 	}
 	if req.Action != "host.open" {
 		resp.Stderr = "unsupported broker action"
@@ -1101,7 +1130,10 @@ func (s *Server) prepareAuditDetails(req Request, resp Response, details map[str
 	if req.Command != "" {
 		details["command"] = req.Command
 	}
-	if len(req.Argv) > 0 {
+	// Projection requests are audited from the validated structured intent.
+	// Raw guest argv can contain user data or host-looking bait and must never
+	// be restored by this shared metadata floor.
+	if len(req.Argv) > 0 && req.Action != cmdproxy.ActionHostAppOpenResource {
 		details["argv"] = append([]string(nil), req.Argv...)
 	}
 	if req.Route != "" {
@@ -1153,11 +1185,22 @@ func (s *Server) redactAuditDetails(req Request, resp Response, details map[stri
 		current["policyScripts"] = all
 	}
 	preserveBrokerAuditMetadata(current, immutable)
+	if req.Action == cmdproxy.ActionHostAppOpenResource {
+		preserveProjectionAuditMetadata(current, immutable)
+	}
 	return current, nil
 }
 
 func preserveBrokerAuditMetadata(current, immutable map[string]any) {
 	for _, key := range audit.EvidentiaryKeys {
+		if value, ok := immutable[key]; ok {
+			current[key] = value
+		}
+	}
+}
+
+func preserveProjectionAuditMetadata(current, immutable map[string]any) {
+	for _, key := range []string{"capability", "mode", "relativeTarget", "workspaceWritable", "outcome", "code", "packId", "revisionId", "bindingId", "qualifiedAppRef", "bindingDigest"} {
 		if value, ok := immutable[key]; ok {
 			current[key] = value
 		}
@@ -1288,6 +1331,9 @@ func (s *Server) emitPrepared(req Request, resp Response, details map[string]any
 func auditEventAction(req Request) string {
 	if req.Action == "host.open" {
 		return req.Action
+	}
+	if req.Action == cmdproxy.ActionHostAppOpenResource {
+		return "host.app.open-resource"
 	}
 	if isHostFSAction(req.Action) {
 		return req.Action

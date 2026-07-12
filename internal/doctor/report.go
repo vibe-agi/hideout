@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/hostapppack"
+	"github.com/vibe-agi/hideout/internal/recovery"
 )
 
 const (
@@ -40,6 +42,8 @@ var SupportedFeatures = []string{
 	"lima",
 	"packaging",
 	"privilege",
+	"projection",
+	"runtime",
 }
 
 type Request struct {
@@ -66,6 +70,9 @@ type Finding struct {
 	Status       string         `json:"status"`
 	Severity     string         `json:"severity"`
 	Required     bool           `json:"required"`
+	Code         string         `json:"code,omitempty"`
+	Reason       string         `json:"reason,omitempty"`
+	Hint         string         `json:"hint,omitempty"`
 	Summary      string         `json:"summary"`
 	Details      map[string]any `json:"details,omitempty"`
 	NextActions  []string       `json:"nextActions,omitempty"`
@@ -136,10 +143,55 @@ func (b *Builder) Add(checkID, category, status, summary string, opts ...Finding
 		opt(&f)
 	}
 	f.Summary = audit.RedactString(f.Summary)
+	f.Reason = audit.RedactString(f.Reason)
+	f.Hint = audit.RedactString(f.Hint)
 	f.Details = RedactDetails(f.Details)
 	f.NextActions = redactStrings(f.NextActions)
 	f.EvidenceRefs = redactStrings(f.EvidenceRefs)
 	b.report.Findings = append(b.report.Findings, f)
+}
+
+// AddHostAppInspection translates the shared Manager inspection into doctor
+// findings. Package-provided installation hints are intentionally not copied
+// into summary, details, recovery, or next actions; doctor never executes or
+// promotes package prose.
+func (b *Builder) AddHostAppInspection(inspection hostapppack.Inspection, recoveryByCommand map[string]string) {
+	for _, entry := range inspection.Entries {
+		status := StatusPass
+		switch entry.Summary.Readiness {
+		case "review-required", "new-run-required", "disabled":
+			status = StatusWarn
+		case "unavailable":
+			status = StatusError
+		}
+		details := map[string]any{
+			"command":           entry.Summary.Command,
+			"packId":            entry.Package.ID,
+			"revisionId":        entry.Package.RevisionID,
+			"readiness":         entry.Summary.Readiness,
+			"access":            entry.Summary.Access,
+			"permissionStatus":  entry.Permissions.Status,
+			"permissionDiff":    append([]string(nil), entry.Permissions.Diff...),
+			"identity":          entry.AppIdentity.Verification,
+			"safety":            entry.Safety.Posture,
+			"shadowStatus":      entry.Binding.ShadowStatus,
+			"grantState":        entry.Runtime.GrantState,
+			"lastOutcome":       entry.Runtime.LastOutcome,
+			"resourceKinds":     append([]string(nil), entry.Binding.ResourceKinds...),
+			"qualityTestStatus": entry.Package.TestStatus,
+			"capability":        entry.Binding.CapabilityID,
+			"resultPolicy":      entry.Binding.ResultPolicy,
+		}
+		opts := []FindingOption{WithRequired(false), WithDetails(details)}
+		if entry.Summary.NextAction != "" {
+			opts = append(opts, WithNextActions(entry.Summary.NextAction))
+		}
+		if code := recoveryByCommand[entry.Summary.Command]; code != "" {
+			opts = append(opts, WithRecovery(code))
+		}
+		b.Add("host-app-"+entry.Summary.Command, "host-app", status,
+			"host-app binding "+entry.Summary.Command+" is "+entry.Summary.Readiness, opts...)
+	}
 }
 
 func (b *Builder) Report() Report {
@@ -212,6 +264,19 @@ func WithNextActions(actions ...string) FindingOption {
 
 func WithEvidenceRefs(refs ...string) FindingOption {
 	return func(f *Finding) { f.EvidenceRefs = append(f.EvidenceRefs, refs...) }
+}
+
+func WithRecovery(code string) FindingOption {
+	return func(f *Finding) {
+		entry, ok := recovery.Lookup(code)
+		if !ok {
+			return
+		}
+		f.Code = entry.Code
+		f.Reason = entry.Reason
+		f.Hint = entry.Hint
+		f.NextActions = append(f.NextActions, entry.NextActions...)
+	}
 }
 
 func Summarize(findings []Finding) Summary {

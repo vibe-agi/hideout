@@ -8,11 +8,16 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/recovery"
 )
 
 func TestDoctorReportMatchesSchema(t *testing.T) {
 	b := NewBuilder(Request{Profile: "default", Backend: "native"})
 	b.Add("store", "store", StatusPass, "writable")
+	b.Add("packaging", "packaging", StatusWarn, "external prerequisite missing",
+		WithRecovery(recovery.CodePackagePrerequisiteMissing),
+		WithRequired(false),
+	)
 	report := b.Report()
 	data, err := json.Marshal(report)
 	if err != nil {

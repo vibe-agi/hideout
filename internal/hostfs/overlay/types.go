@@ -132,6 +132,7 @@ type Result struct {
 type StatusEntry struct {
 	DecisionID      string    `json:"decisionId"`
 	OperationID     string    `json:"operationId"`
+	Profile         string    `json:"profile,omitempty"`
 	State           string    `json:"state"`
 	Operation       string    `json:"operation"`
 	Path            string    `json:"path"`

@@ -14,11 +14,24 @@ import (
 const BoundarySummaryVersion = "hideout.boundary-summary/v1"
 
 type BoundarySummary struct {
-	Version      string                      `json:"version"`
-	Evidence     string                      `json:"evidence"`
-	AuditPath    string                      `json:"auditPath,omitempty"`
-	Privilege    *BoundaryPrivilegeSummary   `json:"privilege,omitempty"`
-	Capabilities []BoundaryCapabilitySummary `json:"capabilities"`
+	Version          string                      `json:"version"`
+	Evidence         string                      `json:"evidence"`
+	AuditPath        string                      `json:"auditPath,omitempty"`
+	Privilege        *BoundaryPrivilegeSummary   `json:"privilege,omitempty"`
+	HostFSVisibility *HostFSVisibilityPosture    `json:"hostfsVisibility,omitempty"`
+	Runtime          *BoundaryRuntimeSummary     `json:"runtime,omitempty"`
+	Capabilities     []BoundaryCapabilitySummary `json:"capabilities"`
+}
+
+type BoundaryRuntimeSummary struct {
+	Family          string `json:"family"`
+	Revision        string `json:"revision"`
+	Status          string `json:"status"`
+	ContractDigest  string `json:"contractDigest"`
+	ArtifactDigest  string `json:"artifactDigest"`
+	PrivilegeStatus string `json:"privilegeStatus"`
+	FailedCount     int    `json:"failedCount"`
+	RecoveryCode    string `json:"recoveryCode,omitempty"`
 }
 
 type BoundaryPrivilegeSummary struct {
@@ -42,6 +55,14 @@ type BoundaryCapabilitySummary struct {
 	Unsupported      int    `json:"unsupported,omitempty"`
 	Error            int    `json:"error,omitempty"`
 	AuditOnly        int    `json:"auditOnly,omitempty"`
+	PackID           string `json:"packId,omitempty"`
+	RevisionID       string `json:"revisionId,omitempty"`
+	BindingID        string `json:"bindingId,omitempty"`
+	QualifiedAppRef  string `json:"qualifiedAppRef,omitempty"`
+	Access           string `json:"access,omitempty"`
+	ResourceKind     string `json:"resourceKind,omitempty"`
+	LastOutcome      string `json:"lastOutcome,omitempty"`
+	RecoveryCode     string `json:"recoveryCode,omitempty"`
 }
 
 func SummarizeRunBoundary(auditPath string) BoundarySummary {
@@ -69,10 +90,12 @@ func SummarizeRunBoundary(auditPath string) BoundarySummary {
 }
 
 type boundarySummaryBuilder struct {
-	auditPath    string
-	evidence     string
-	privilege    *BoundaryPrivilegeSummary
-	capabilities map[string]*BoundaryCapabilitySummary
+	auditPath        string
+	evidence         string
+	privilege        *BoundaryPrivilegeSummary
+	hostFSVisibility *HostFSVisibilityPosture
+	runtime          *BoundaryRuntimeSummary
+	capabilities     map[string]*BoundaryCapabilitySummary
 }
 
 func newBoundarySummary(auditPath string) *boundarySummaryBuilder {
@@ -84,12 +107,34 @@ func newBoundarySummary(auditPath string) *boundarySummaryBuilder {
 	builder.capability("hostfs")
 	builder.capability("host.open")
 	builder.capability("command.adapter")
+	builder.capability("host.app.open-resource")
 	return builder
 }
 
 func (b *boundarySummaryBuilder) observe(event audit.Event) {
+	if event.Action == "session.start" {
+		if posture := stringDetail(event.Details, "hostfsVisibilityPosture"); posture != "" {
+			b.hostFSVisibility = &HostFSVisibilityPosture{
+				Posture:        posture,
+				DiscoverGrants: detailInt(event.Details, "hostfsDiscoverGrants"),
+				DiscoverDeny:   detailInt(event.Details, "hostfsDiscoverDeny"),
+				MaxListEntries: detailInt(event.Details, "hostfsMaxListEntries"),
+				MaxDepth:       detailInt(event.Details, "hostfsMaxDepth"),
+				NonClaim:       stringDetail(event.Details, "hostfsVisibilityNonClaim"),
+			}
+		}
+	}
 	if event.Action == "guest.privilege.status" {
 		b.privilege = boundaryPrivilege(event.Details)
+		return
+	}
+	if event.Action == "runtime.verify" {
+		b.runtime = &BoundaryRuntimeSummary{
+			Family: stringDetail(event.Details, "family"), Revision: stringDetail(event.Details, "revision"),
+			Status: stringDetail(event.Details, "status"), ContractDigest: stringDetail(event.Details, "contractDigest"),
+			ArtifactDigest: stringDetail(event.Details, "artifactDigest"), PrivilegeStatus: stringDetail(event.Details, "privilegeStatus"),
+			FailedCount: detailInt(event.Details, "failedCount"), RecoveryCode: stringDetail(event.Details, "recoveryCode"),
+		}
 		return
 	}
 	capability := boundaryCapability(event.Action)
@@ -124,6 +169,20 @@ func (b *boundarySummaryBuilder) observe(event audit.Event) {
 	if item.EndpointCategory == "" {
 		item.EndpointCategory = stringDetail(event.Details, "endpointCategory")
 	}
+	for target, key := range map[*string]string{
+		&item.PackID:          "packId",
+		&item.RevisionID:      "revisionId",
+		&item.BindingID:       "bindingId",
+		&item.QualifiedAppRef: "qualifiedAppRef",
+		&item.Access:          "access",
+		&item.ResourceKind:    "resourceKind",
+		&item.LastOutcome:     "outcome",
+		&item.RecoveryCode:    "recoveryCode",
+	} {
+		if value := stringDetail(event.Details, key); value != "" {
+			*target = value
+		}
+	}
 }
 
 func (b *boundarySummaryBuilder) capability(name string) *BoundaryCapabilitySummary {
@@ -145,12 +204,20 @@ func (b *boundarySummaryBuilder) snapshot() BoundarySummary {
 		return capabilities[i].Capability < capabilities[j].Capability
 	})
 	return BoundarySummary{
-		Version:      BoundarySummaryVersion,
-		Evidence:     b.evidence,
-		AuditPath:    b.auditPath,
-		Privilege:    b.privilege,
-		Capabilities: capabilities,
+		Version:          BoundarySummaryVersion,
+		Evidence:         b.evidence,
+		AuditPath:        b.auditPath,
+		Privilege:        b.privilege,
+		HostFSVisibility: b.hostFSVisibility,
+		Runtime:          b.runtime,
+		Capabilities:     capabilities,
 	}
+}
+
+func detailInt(details map[string]any, key string) int {
+	value := detailString(details, key)
+	out, _ := strconv.Atoi(value)
+	return out
 }
 
 func boundaryPrivilege(details map[string]any) *BoundaryPrivilegeSummary {
@@ -183,6 +250,8 @@ func boundaryCapability(action string) string {
 		return "command.adapter"
 	case action == "preview.open":
 		return "preview.open"
+	case strings.HasPrefix(action, "host.app."):
+		return "host.app.open-resource"
 	case strings.HasPrefix(action, "endpoint.expose."):
 		return action
 	case strings.HasPrefix(action, "portbridge."):

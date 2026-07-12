@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -555,12 +556,28 @@ func TestGuestEnvRewritesHostPaths(t *testing.T) {
 		"XDG_CACHE_HOME=/hideout/profile/cache",
 		"XDG_DATA_HOME=/hideout/profile/data",
 		"GIT_CONFIG_GLOBAL=/hideout/profile/home/.gitconfig",
-		"PATH=/hideout/session/shims:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+		"PATH=/hideout/session/shims:/hideout/profile/home/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 		"HOSTNAME=devbox",
 		"LANG=en_US.UTF-8",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("GuestEnv=%v want %v", got, want)
+	}
+}
+
+func TestGuestRuntimePathIsShimsThenDurableUserThenSystem(t *testing.T) {
+	env := GuestEnv([]string{"PATH=/Users/alice/bin:/opt/homebrew/bin:/usr/bin"})
+	got := backend.EnvValue(env, "PATH")
+	want := "/hideout/session/shims:/hideout/profile/home/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	if got != want {
+		t.Fatalf("guest PATH=%q want %q", got, want)
+	}
+	if strings.Contains(got, "/Users/alice") || strings.Contains(got, "/opt/homebrew") {
+		t.Fatalf("guest PATH imported host path: %q", got)
+	}
+	bootstrap := BootstrapScript(nil)
+	if !strings.Contains(bootstrap, "mkdir -p /hideout/profile/home/.local/bin") {
+		t.Fatalf("bootstrap does not create durable user bin: %s", bootstrap)
 	}
 }
 
@@ -1363,6 +1380,19 @@ func (r *recordingRunner) Run(_ context.Context, name string, args []string, env
 	r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
 	if r.failCall > 0 && len(r.calls) == r.failCall {
 		return errors.New("guest command not found")
+	}
+	if len(args) >= 5 && args[0] == "list" && args[1] == "--format" && args[2] == "json" {
+		_, _ = fmt.Fprintf(stdout, `{"name":"hideout-runtime-test","status":"Running","vmType":"vz","arch":"aarch64","HostOS":"darwin","HostArch":"arm64","config":{"vmType":"vz","arch":"aarch64","images":[{"location":"https://example.invalid/runtime.qcow2","arch":"aarch64","digest":"sha256:%s"}]}}`+"\n", strings.Repeat("a", 64))
+		return nil
+	}
+	joined := strings.Join(args, " ")
+	if strings.HasSuffix(joined, " cat /proc/sys/kernel/random/boot_id") {
+		_, _ = io.WriteString(stdout, "01234567-89ab-cdef-0123-456789abcdef\n")
+		return nil
+	}
+	if strings.HasSuffix(joined, " uname -m") {
+		_, _ = io.WriteString(stdout, "aarch64\n")
+		return nil
 	}
 	if r.emitOutput {
 		_, _ = io.WriteString(stdout, "call"+strconv.Itoa(len(r.calls))+"\n")

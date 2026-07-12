@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -58,6 +59,78 @@ func TestHostFSDWriteClassRPCShapes(t *testing.T) {
 	assertRequest(t, <-requests, "host.fs.write.truncate", "/Users/alice/file.txt", map[string]any{"size": float64(4)})
 	assertRequest(t, <-requests, "host.fs.write.chmod", "/Users/alice/file.txt", map[string]any{"mode": "0640"})
 	assertRequest(t, <-requests, "host.fs.write.chown", "/Users/alice/file.txt", map[string]any{"uid": float64(501), "gid": float64(20)})
+}
+
+func TestResponseErrnoUsesOnlyValidatedTypedRecord(t *testing.T) {
+	tests := []struct {
+		code string
+		want syscall.Errno
+	}{
+		{broker.HostFSErrorPathHidden, syscall.ENOENT},
+		{broker.HostFSErrorReadDenied, syscall.EACCES},
+		{broker.HostFSErrorDirectoryIncomplete, syscall.EOVERFLOW},
+		{broker.HostFSErrorHostPrerequisiteFailed, syscall.EIO},
+		{broker.HostFSErrorOperationUnsupported, syscall.EROFS},
+	}
+	for _, tt := range tests {
+		record, err := broker.NewErrorRecord(tt.code, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := responseErrno(broker.Response{Error: record, Stderr: "misleading hostfs path not found"}); got != tt.want {
+			t.Fatalf("responseErrno(%s)=%v want %v", tt.code, got, tt.want)
+		}
+	}
+	if got := responseErrno(broker.Response{Stderr: "hostfs path not found"}); got != syscall.EIO {
+		t.Fatalf("legacy stderr became errno authority: %v", got)
+	}
+	bad := &broker.ErrorRecord{Code: broker.HostFSErrorPathHidden, Errno: broker.ErrnoEACCES}
+	if got := responseErrno(broker.Response{Error: bad}); got != syscall.EIO {
+		t.Fatalf("mismatched typed error did not fail to EIO: %v", got)
+	}
+}
+
+func TestHostFSMountOptionsBoundPresentationCachesWithoutKernelAuthority(t *testing.T) {
+	opts := hostFSMountOptions(false)
+	if !opts.NullPermissions {
+		t.Fatal("HostFS must retain NullPermissions")
+	}
+	if opts.EntryTimeout == nil || *opts.EntryTimeout != time.Second || opts.AttrTimeout == nil || *opts.AttrTimeout != time.Second {
+		t.Fatalf("unexpected positive TTLs: entry=%v attr=%v", opts.EntryTimeout, opts.AttrTimeout)
+	}
+	if opts.NegativeTimeout == nil || *opts.NegativeTimeout != 0 {
+		t.Fatalf("negative TTL=%v want zero", opts.NegativeTimeout)
+	}
+	if stableMode("symlink") != syscall.S_IFLNK {
+		t.Fatal("discovered symlink lost its coarse kind")
+	}
+}
+
+func TestFillAttrUsesGenericLockedAndOrdinaryGrantedMetadata(t *testing.T) {
+	var coarse fuse.Attr
+	fillAttr(&coarse, nodeInfo{Kind: "file"})
+	if coarse.Size != 0 || coarse.Mode&0o7777 != 0o666 {
+		t.Fatalf("coarse attr exposed non-generic metadata: size=%d mode=%#o", coarse.Size, coarse.Mode)
+	}
+
+	var ordinary fuse.Attr
+	fillAttr(&ordinary, nodeInfo{Kind: "file", Size: 29, Mode: "-rw-r-----"})
+	if ordinary.Size != 29 || ordinary.Mode&0o7777 != 0o640 {
+		t.Fatalf("ordinary attr lost broker metadata: size=%d mode=%#o", ordinary.Size, ordinary.Mode)
+	}
+	for input, want := range map[string]uint32{
+		"0750":       0o750,
+		"-rwsr-x---": 0o4750,
+		"drwxrwxr-t": 0o1775,
+	} {
+		got, ok := permissionBits(input)
+		if !ok || got != want {
+			t.Fatalf("permissionBits(%q)=(%#o,%t) want %#o", input, got, ok, want)
+		}
+	}
+	if _, ok := permissionBits("not-a-mode"); ok {
+		t.Fatal("invalid permission string was accepted")
+	}
 }
 
 func fakeHostFSDBroker(t *testing.T) (*brokerClient, <-chan broker.Request, func()) {

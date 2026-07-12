@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "hideout.host-app-pack/v1",
+  "id": "builtin.vscode",
+  "version": "1",
+  "description": "Built-in Visual Studio Code open-resource recipe",
+  "apps": [
+    {
+      "id": "vscode",
+      "platforms": [
+        "darwin"
+      ],
+      "bundleNames": [
+        "Visual Studio Code.app"
+      ],
+      "executableRelativePath": "Contents/MacOS/Code",
+      "expectedBundleId": "com.microsoft.VSCode",
+      "expectedTeamId": "UBF8T346G9",
+      "requestedSafetyProfile": "vscode-family-v1",
+      "launch": {
+        "gotoFlag": "--goto",
+        "newWindowFlag": "--new-window",
+        "reuseWindowFlag": "--reuse-window",
+        "gotoSeparator": ":"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "id": "code-command",
+      "commands": [
+        "code"
+      ],
+      "appId": "vscode",
+      "capabilityId": "host.app.open-resource",
+      "resourceKinds": [
+        "workspace",
+        "hostfs-portal"
+      ],
+      "resultPolicy": "none",
+      "requestedAccess": "safe",
+      "grammar": {
+        "kind": "open-resource-v1",
+        "resourceCount": 1,
+        "gotoFlags": [
+          "-g",
+          "--goto"
+        ],
+        "newWindowFlags": [
+          "-n",
+          "--new-window"
+        ],
+        "reuseWindowFlags": [
+          "-r",
+          "--reuse-window"
+        ],
+        "unknownFlags": "deny"
+      }
+    }
+  ],
+  "tests": []
+}

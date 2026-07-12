@@ -3,8 +3,26 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/gate-result.sh"
 
 GATE_TIMEOUT="${HIDEOUT_GATE_TIMEOUT:-15m}"
+GATE2_RUNTIME_MODE="${HIDEOUT_GATE2_RUNTIME_MODE:-0}"
+GATE2_RUNTIME_FAMILY="${HIDEOUT_GATE2_RUNTIME_FAMILY:-developer-standard}"
+
+case "$GATE2_RUNTIME_MODE" in
+  0 | 1) ;;
+  *)
+    echo "gate2: HIDEOUT_GATE2_RUNTIME_MODE must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
+  # Runtime acceptance proves the selected image already carries Node. The
+  # legacy optional helper must not turn a missing image contract into
+  # first-boot provisioning.
+  HIDEOUT_GATE2_REQUIRE_NODE=1
+  export HIDEOUT_GATE2_REQUIRE_NODE
+fi
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -39,6 +57,76 @@ with_timeout() {
   return "$status"
 }
 
+wait_for_file() {
+  local path="$1"
+  local description="$2"
+  local attempts="${3:-180}"
+  local i
+  for i in $(seq 1 "$attempts"); do
+    if [ -f "$path" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "gate2: timed out waiting for $description: $path" >&2
+  return 1
+}
+
+wait_for_hostfs_read_decision() {
+  local path="$1"
+  local output="$2"
+  local i
+  for i in $(seq 1 180); do
+    if HIDEOUT_STORE_ROOT="$store" "$hideout" decision list --kind hostfs.read --include-terminal >"$output" 2>"$output.err"; then
+      if HOSTFS_READ_PATH="$path" jq -e 'any(.[]; .proposedAction.path == env.HOSTFS_READ_PATH)' "$output" >/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  echo "gate2: timed out waiting for hostfs.read decision for $path" >&2
+  cat "$output" "$output.err" >&2 2>/dev/null || true
+  return 1
+}
+
+hostfs_read_decision_id() {
+  local path="$1"
+  local input="$2"
+  HOSTFS_READ_PATH="$path" jq -r '[.[] | select(.proposedAction.path == env.HOSTFS_READ_PATH)] | sort_by(.createdAt) | last | .id // empty' "$input"
+}
+
+wait_for_projection_decision() {
+  local profile_name="$1"
+  local output="$2"
+  local i
+  for i in $(seq 1 180); do
+    if HIDEOUT_STORE_ROOT="$store" "$hideout" decision list \
+      --kind host-app.open-resource --profile "$profile_name" --include-terminal >"$output" 2>"$output.err"; then
+      if jq -e 'any(.[]; .state == "pending" or .state == "claimed")' "$output" >/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  echo "gate2: timed out waiting for trusted IDE decision" >&2
+  cat "$output" "$output.err" >&2 2>/dev/null || true
+  return 1
+}
+
+projection_vscode_bundle() {
+  for candidate in \
+    "/Applications/Visual Studio Code.app" \
+    "$HOME/Applications/Visual Studio Code.app"; do
+    if [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+. "$ROOT/scripts/lib/gate2-projection.sh"
+
 prepare_linux_shim() {
   if [ -n "${HIDEOUT_LINUX_SHIM_PATH:-}" ]; then
     if [ ! -x "$HIDEOUT_LINUX_SHIM_PATH" ]; then
@@ -50,17 +138,6 @@ prepare_linux_shim() {
 
   local arch
   arch="$(go env GOARCH)"
-  if command -v "hideout-shim-linux-$arch" >/dev/null 2>&1; then
-    HIDEOUT_LINUX_SHIM_PATH="$(command -v "hideout-shim-linux-$arch")"
-    export HIDEOUT_LINUX_SHIM_PATH
-    return
-  fi
-  if command -v hideout-shim-linux >/dev/null 2>&1; then
-    HIDEOUT_LINUX_SHIM_PATH="$(command -v hideout-shim-linux)"
-    export HIDEOUT_LINUX_SHIM_PATH
-    return
-  fi
-
   HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
   export HIDEOUT_LINUX_SHIM_PATH
   "$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
@@ -83,6 +160,10 @@ prepare_linux_hostfsd() {
 }
 
 prepare_guest_node() {
+  if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
+    echo "gate2: prepare_guest_node is forbidden in runtime acceptance mode" >&2
+    exit 49
+  fi
   if [ "${HIDEOUT_GATE2_REQUIRE_NODE:-}" != "1" ]; then
     return
   fi
@@ -127,7 +208,30 @@ require_command limactl
 
 tmp="$(mktemp -d "/tmp/hideout-gate2.XXXXXX")"
 named_guard_pid=""
+visibility_run_pid=""
+projection_run_pid=""
+projection_proxy_pid=""
+projection_safe_data_dir=""
+projection_workspace=""
+projection_control_workspace=""
+projection_trusted_workspace=""
+projection_external_workspace=""
 cleanup() {
+	if [ -n "${projection_proxy_pid:-}" ] && kill -0 "$projection_proxy_pid" 2>/dev/null; then
+		kill "$projection_proxy_pid" 2>/dev/null || true
+		wait "$projection_proxy_pid" 2>/dev/null || true
+	fi
+	if [ -n "${projection_run_pid:-}" ] && kill -0 "$projection_run_pid" 2>/dev/null; then
+		kill "$projection_run_pid" 2>/dev/null || true
+		wait "$projection_run_pid" 2>/dev/null || true
+	fi
+	if [ -n "${projection_safe_data_dir:-}" ]; then
+		projection_stop_safe_app
+	fi
+  if [ -n "${visibility_run_pid:-}" ] && kill -0 "$visibility_run_pid" 2>/dev/null; then
+    kill "$visibility_run_pid" 2>/dev/null || true
+    wait "$visibility_run_pid" 2>/dev/null || true
+  fi
   if [ -n "${named_guard_pid:-}" ] && kill -0 "$named_guard_pid" 2>/dev/null; then
     kill "$named_guard_pid" 2>/dev/null || true
     wait "$named_guard_pid" 2>/dev/null || true
@@ -135,8 +239,16 @@ cleanup() {
   if [ -x "${hideout:-}" ]; then
     HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
   fi
-  rm -rf "${hostfs_root:-}"
-  rm -rf "$tmp"
+  if [ -n "${hostfs_protected_dir:-}" ]; then
+    chmod 700 "$hostfs_protected_dir" 2>/dev/null || true
+  fi
+	rm -rf "${hostfs_root:-}" "${hostfs_visibility_root:-}"
+	rm -rf "${projection_workspace:-}" "${projection_control_workspace:-}" "${projection_trusted_workspace:-}" "${projection_external_workspace:-}"
+	if [ "${HIDEOUT_GATE2_KEEP_TMP:-0}" = "1" ]; then
+		echo "gate2: retained diagnostic directory: $tmp" >&2
+	else
+		rm -rf "$tmp"
+	fi
 }
 trap cleanup EXIT
 
@@ -151,6 +263,14 @@ go build -o "$hideout" ./cmd/hideout
 prepare_linux_shim
 prepare_linux_hostfsd
 
+if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
+  echo "gate2: selecting immutable runtime $GATE2_RUNTIME_FAMILY"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init \
+    --profile default --template dev --backend lima --network direct \
+    --runtime "$GATE2_RUNTIME_FAMILY" --no-input >"$tmp/runtime-init.out"
+  grep -q "$GATE2_RUNTIME_FAMILY" "$store/profiles/default/profile.json"
+fi
+
 printf 'workspace-read\n' > "$workspace/input.txt"
 
 hostfs_root="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate2-hostfs.XXXXXX")"
@@ -163,6 +283,7 @@ hostfs_glob_dir="$hostfs_root/glob"
 hostfs_ungranted="$hostfs_root/hidden/secret.txt"
 hostfs_run_denied="$hostfs_root/denied.txt"
 hostfs_write_file="$hostfs_root/write.txt"
+hostfs_write_dir="$hostfs_root/write-created"
 printf 'hostfs-read\n' > "$hostfs_file"
 printf 'hostfs-dir\n' > "$hostfs_dir/visible.txt"
 printf 'hostfs-tree\n' > "$hostfs_tree/nested/visible.txt"
@@ -171,6 +292,66 @@ printf 'hostfs-jpg\n' > "$hostfs_glob_dir/hidden.jpg"
 printf 'hostfs-hidden\n' > "$hostfs_ungranted"
 printf 'hostfs-denied\n' > "$hostfs_run_denied"
 printf 'hostfs-before\n' > "$hostfs_write_file"
+
+hostfs_visibility_root="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate2-hostfs-visibility.XXXXXX")"
+hostfs_visibility_root="$(cd "$hostfs_visibility_root" && pwd -P)"
+hostfs_list_root="$hostfs_visibility_root/list"
+hostfs_tree_root="$hostfs_visibility_root/tree"
+hostfs_exact_dir="$hostfs_visibility_root/exact-dir"
+hostfs_overflow_dir="$hostfs_visibility_root/overflow"
+hostfs_protected_dir="$hostfs_visibility_root/protected"
+hostfs_outside_root="$hostfs_visibility_root/outside"
+hostfs_live_root="$hostfs_visibility_root/live"
+hostfs_discover_denied_dir="$hostfs_list_root/explicit-hidden"
+mkdir -p \
+	"$hostfs_list_root/.ssh" \
+	"$hostfs_discover_denied_dir" \
+  "$hostfs_list_root/subdir" \
+  "$hostfs_tree_root/nested" \
+  "$hostfs_exact_dir" \
+  "$hostfs_overflow_dir" \
+  "$hostfs_protected_dir" \
+  "$hostfs_outside_root" \
+  "$hostfs_live_root"
+hostfs_locked_file="$hostfs_list_root/locked.txt"
+hostfs_read_denied_file="$hostfs_list_root/read-denied.txt"
+hostfs_explicit_write_file="$hostfs_list_root/write-denied.txt"
+hostfs_hidden_file="$hostfs_list_root/.ssh/id_test"
+hostfs_discover_denied_readable="$hostfs_discover_denied_dir/readable.txt"
+hostfs_outside_file="$hostfs_outside_root/outside.txt"
+hostfs_legacy_file="$hostfs_visibility_root/legacy.txt"
+hostfs_protected_file="$hostfs_protected_dir/unavailable.txt"
+printf 'visibility-locked-content\n' >"$hostfs_locked_file"
+printf 'visibility-read-denied\n' >"$hostfs_read_denied_file"
+printf 'visibility-write-denied\n' >"$hostfs_explicit_write_file"
+printf 'visibility-hidden\n' >"$hostfs_hidden_file"
+printf 'visibility-explicit-read\n' >"$hostfs_discover_denied_readable"
+printf 'visibility-outside\n' >"$hostfs_outside_file"
+printf 'visibility-legacy\n' >"$hostfs_legacy_file"
+printf 'visibility-list-child\n' >"$hostfs_list_root/visible.txt"
+printf 'visibility-subdir-child\n' >"$hostfs_list_root/subdir/child.txt"
+printf 'visibility-tree-child\n' >"$hostfs_tree_root/nested/child.txt"
+printf 'visibility-exact-dir-child\n' >"$hostfs_exact_dir/child.txt"
+printf 'visibility-protected\n' >"$hostfs_protected_file"
+chmod 0640 "$hostfs_locked_file"
+for i in $(seq 1 4097); do
+  : >"$hostfs_overflow_dir/entry-$i"
+done
+chmod 000 "$hostfs_protected_dir"
+
+hostfs_live_approve="$hostfs_live_root/approve.txt"
+hostfs_live_deny="$hostfs_live_root/deny.txt"
+hostfs_live_timeout="$hostfs_live_root/timeout.txt"
+hostfs_live_target_a="$hostfs_live_root/target-a.txt"
+hostfs_live_target_b="$hostfs_live_root/target-b.txt"
+hostfs_live_link="$hostfs_live_root/link.txt"
+printf 'approved-live-content-029\n' >"$hostfs_live_approve"
+printf 'deny-live-content-029\n' >"$hostfs_live_deny"
+printf 'timeout-live-content-029\n' >"$hostfs_live_timeout"
+printf 'symlink-target-a-029\n' >"$hostfs_live_target_a"
+printf 'symlink-target-b-029\n' >"$hostfs_live_target_b"
+chmod 0640 "$hostfs_live_approve"
+ln -s "$hostfs_live_target_a" "$hostfs_live_link"
 GOOS=linux GOARCH="$(go env GOARCH)" CGO_ENABLED=0 \
   go build -trimpath -o "$workspace/hideout-gate-fsread" ./cmd/hideout-gate-fsread
 
@@ -247,7 +428,55 @@ test "$(cat "$workspace/output.txt")" = "workspace-write"
 grep -h 'Hideout environment name:' "$stdout" "$stderr" 2>/dev/null | head -n1 || true
 grep -qh 'Hideout boundary:' "$stdout" "$stderr" 2>/dev/null && echo "Boundary Summary present" || true
 
-prepare_guest_node
+if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
+  # Starting a Lima guest always runs Hideout's Go-owned system bootstrap
+  # (identity, sudo policy, machine identity, and control-plane plumbing).
+  # Runtime acceptance forbids only the legacy package/tool provisioning path.
+  echo "runtime_hideout_system_bootstrap=required-and-run"
+  echo "runtime_package_tool_provisioning=not-run"
+else
+  prepare_guest_node
+fi
+
+if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
+  runtime_env_name="$(grep -h 'Hideout environment name:' "$stdout" "$stderr" 2>/dev/null | tail -n1 | sed 's/^.*Hideout environment name: //')"
+  if [ -z "$runtime_env_name" ]; then
+    echo "gate2: runtime mode could not resolve the managed environment name" >&2
+    exit 49
+  fi
+  if ! with_timeout "$GATE_TIMEOUT" env \
+    HIDEOUT_STORE_ROOT="$store" \
+    LIMA_HOME="$lima_home" \
+    "$hideout" runtime verify --env "$runtime_env_name" --json \
+      >"$tmp/runtime-verify.json" 2>"$tmp/runtime-verify.err"; then
+    echo "gate2: explicit runtime verification failed" >&2
+    cat "$tmp/runtime-verify.err" >&2
+    exit 49
+  fi
+  jq -e '.status.status == "preview-ready"' "$tmp/runtime-verify.json" >/dev/null
+  runtime_environment_id="$(jq -r '.environmentId // empty' "$tmp/runtime-verify.json")"
+  if [ -z "$runtime_environment_id" ]; then
+    echo "gate2: explicit runtime verification returned no environment identity" >&2
+    exit 49
+  fi
+  runtime_receipt="$store/environments/$runtime_environment_id/runtime-verification.json"
+  if [ ! -f "$runtime_receipt" ]; then
+    echo "gate2: runtime mode produced no verification receipt" >&2
+    exit 49
+  fi
+  jq -e \
+    --arg family "$GATE2_RUNTIME_FAMILY" \
+    '.schema == "hideout.runtime-verification/v1" and
+     .provenance.family == $family and
+     .backend == "lima" and .backendReal == true and .running == true and
+     .privilegeStatus == "enforced" and .status == "preview-ready" and
+     (.results | length > 0) and all(.results[]; .present and .matched)' \
+    "$runtime_receipt" >/dev/null
+  runtime_evidence_markers "$runtime_receipt"
+  echo "runtime_contract=passed"
+fi
+
+run_projection_gate2
 
 echo "gate2: running hostfs grant smoke"
 if ! with_timeout "$GATE_TIMEOUT" env \
@@ -321,12 +550,385 @@ else
 fi
 grep -q 'hostfs_denied=yes' "$tmp/hostfs.out"
 
+cat >"$workspace/hostfs-visibility-namespace.py" <<'PY'
+import errno
+import os
+import stat
+import sys
+import time
+
+(
+    outside_path,
+    hidden_path,
+    list_root,
+    tree_root,
+    exact_dir,
+    locked_file,
+    read_denied_file,
+    overflow_dir,
+    explicit_write_file,
+	legacy_file,
+	protected_dir,
+	discover_denied_readable,
+) = sys.argv[1:]
+
+
+def expect_errno(label, expected, action):
+    try:
+        action()
+    except OSError as exc:
+        if exc.errno != expected:
+            raise AssertionError(f"{label}: errno={exc.errno}, want {expected}") from exc
+        print(f"{label}=errno-{exc.errno}")
+        return
+    raise AssertionError(f"{label}: operation unexpectedly succeeded")
+
+
+expect_errno("outside_domain", errno.ENOENT, lambda: os.stat(outside_path))
+expect_errno("force_hidden", errno.ENOENT, lambda: os.stat(hidden_path))
+expect_errno("force_hidden_list", errno.ENOENT, lambda: os.listdir(os.path.dirname(hidden_path)))
+
+expected = {"locked.txt", "read-denied.txt", "subdir", "visible.txt", "write-denied.txt"}
+names = set(os.listdir(list_root))
+if names != expected:
+    raise AssertionError(f"see-dir names={sorted(names)}, want {sorted(expected)}")
+for name in names:
+    info = os.lstat(os.path.join(list_root, name))
+    if info.st_size != 0:
+        raise AssertionError(f"coarse entry {name} leaked size {info.st_size}")
+    expected_mode = 0o777 if stat.S_ISDIR(info.st_mode) else 0o666
+    if stat.S_IMODE(info.st_mode) != expected_mode:
+        raise AssertionError(f"coarse entry {name} mode={oct(stat.S_IMODE(info.st_mode))}, want {oct(expected_mode)}")
+if os.listdir(tree_root) != ["nested"] or os.listdir(os.path.join(tree_root, "nested")) != ["child.txt"]:
+    raise AssertionError("see-tree did not expose the complete recursive fixture")
+print("coarse_complete=yes")
+
+if open(discover_denied_readable, "r", encoding="utf-8").read() != "visibility-explicit-read\n":
+    raise AssertionError("discover deny revoked separately granted exact content")
+print("discover_denied_exact_read=yes")
+
+if not stat.S_ISDIR(os.stat(exact_dir).st_mode):
+    raise AssertionError("exact-visible directory lookup did not succeed")
+expect_errno("exact_dir_readdir", errno.EACCES, lambda: os.listdir(exact_dir))
+
+locked = os.stat(locked_file)
+if locked.st_size != 0:
+    raise AssertionError(f"locked stat leaked size {locked.st_size}")
+started = time.monotonic()
+expect_errno("locked_read", errno.EACCES, lambda: open(locked_file, "rb").read())
+if time.monotonic() - started >= 2:
+    raise AssertionError("locked read waited instead of returning prompt EACCES")
+expect_errno("explicit_read_deny", errno.EACCES, lambda: open(read_denied_file, "rb").read())
+expect_errno("overflow", errno.EOVERFLOW, lambda: os.listdir(overflow_dir))
+
+
+def write_one(path):
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        os.write(fd, b"x")
+    finally:
+        os.close(fd)
+
+
+expect_errno("explicit_write_deny", errno.EACCES, lambda: write_one(explicit_write_file))
+expect_errno("legacy_write_collapse", errno.EROFS, lambda: write_one(legacy_file))
+expect_errno("host_prerequisite", errno.EIO, lambda: os.listdir(protected_dir))
+PY
+
+echo "gate2: running hostfs discoverable namespace smoke"
+if ! with_timeout "$GATE_TIMEOUT" env \
+	HOME="$hostfs_list_root" \
+	HIDEOUT_STORE_ROOT="$store" \
+  LIMA_HOME="$lima_home" \
+  "$hideout" run --backend lima --workspace "$workspace" \
+    --fs "see-dir:$hostfs_list_root" \
+    --fs "see-tree:$hostfs_tree_root" \
+    --fs "see:$hostfs_exact_dir" \
+    --fs "see-dir:$hostfs_overflow_dir" \
+    --fs "see-dir:$hostfs_protected_dir" \
+	  --fs "read:$hostfs_legacy_file" \
+	  --fs "read:$hostfs_discover_denied_readable" \
+	  --no-fs "see-tree:$hostfs_discover_denied_dir" \
+	  --no-fs "read:$hostfs_read_denied_file" \
+    -- python3 ./hostfs-visibility-namespace.py \
+      "$hostfs_outside_file" \
+      "$hostfs_hidden_file" \
+      "$hostfs_list_root" \
+      "$hostfs_tree_root" \
+      "$hostfs_exact_dir" \
+      "$hostfs_locked_file" \
+      "$hostfs_read_denied_file" \
+      "$hostfs_overflow_dir" \
+      "$hostfs_explicit_write_file" \
+	    "$hostfs_legacy_file" \
+	    "$hostfs_protected_dir" \
+	    "$hostfs_discover_denied_readable" \
+      >"$tmp/hostfs-visibility-namespace.out" 2>"$tmp/hostfs-visibility-namespace.err"; then
+  echo "gate2: HostFS discoverable namespace smoke failed" >&2
+  cat "$tmp/hostfs-visibility-namespace.out" "$tmp/hostfs-visibility-namespace.err" >&2
+  exit 1
+fi
+cat "$tmp/hostfs-visibility-namespace.out"
+grep -q 'outside_domain=errno-2' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'force_hidden=errno-2' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'force_hidden_list=errno-2' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'coarse_complete=yes' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'discover_denied_exact_read=yes' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'exact_dir_readdir=errno-13' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'locked_read=errno-13' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'explicit_read_deny=errno-13' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'overflow=errno-75' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'explicit_write_deny=errno-13' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'legacy_write_collapse=errno-30' "$tmp/hostfs-visibility-namespace.out"
+grep -q 'host_prerequisite=errno-5' "$tmp/hostfs-visibility-namespace.out"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision list --kind hostfs.read --include-terminal >"$tmp/hostfs-visibility-namespace-decisions.json"
+HOSTFS_LOCKED_PATH="$hostfs_locked_file" HOSTFS_DENIED_PATH="$hostfs_read_denied_file" jq -e '
+  ([.[] | select(.proposedAction.path == env.HOSTFS_LOCKED_PATH)] | length) == 1 and
+  ([.[] | select(.proposedAction.path == env.HOSTFS_DENIED_PATH)] | length) == 0
+' "$tmp/hostfs-visibility-namespace-decisions.json" >/dev/null
+for marker in 1 2 3 4 5 6 14 15 16 17; do
+  printf 'hostfs_visibility_%s=passed\n' "$marker"
+done
+
+cat >"$workspace/hostfs-visibility-live.py" <<'PY'
+import errno
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import time
+
+workspace, approve_path, deny_path, timeout_path, link_path = sys.argv[1:]
+workspace = Path(workspace)
+
+
+def marker(name):
+    (workspace / name).write_text("yes\n")
+
+
+def wait_marker(name, timeout=180):
+    deadline = time.monotonic() + timeout
+    path = workspace / name
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {name}")
+
+
+def expect_eacces(path):
+    started = time.monotonic()
+    try:
+        Path(path).read_bytes()
+    except OSError as exc:
+        if exc.errno != errno.EACCES:
+            raise AssertionError(f"read {path}: errno={exc.errno}, want EACCES") from exc
+    else:
+        raise AssertionError(f"read {path} unexpectedly succeeded")
+    if time.monotonic() - started >= 2:
+        raise AssertionError(f"read {path} did not fail promptly")
+
+
+def broker_read(path, success, expected=""):
+    proc = subprocess.run(
+        ["./hideout-gate-fsread", "--broker-read", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if success:
+        if proc.returncode != 0 or f"hostfs_broker={expected}" not in proc.stdout:
+            raise AssertionError(f"broker read failed rc={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
+    elif proc.returncode == 0:
+        raise AssertionError(f"broker read unexpectedly succeeded: {proc.stdout!r}")
+
+
+expect_eacces(approve_path)
+marker("vis-approve-first")
+wait_marker("vis-approve-repeat")
+expect_eacces(approve_path)
+marker("vis-approve-requested")
+wait_marker("vis-approve-go")
+if Path(approve_path).read_text() != "approved-live-content-029\n":
+    raise AssertionError("approved content mismatch")
+marker("vis-approve-content")
+deadline = time.monotonic() + 1.0
+while True:
+    info = os.stat(approve_path)
+    if info.st_size == len(b"approved-live-content-029\n") and stat.S_IMODE(info.st_mode) == 0o640:
+        break
+    if time.monotonic() >= deadline:
+        raise AssertionError(f"ordinary stat metadata did not converge: size={info.st_size} mode={oct(stat.S_IMODE(info.st_mode))}")
+    time.sleep(0.02)
+marker("vis-approve-done")
+
+expect_eacces(deny_path)
+marker("vis-deny-requested")
+wait_marker("vis-deny-go")
+expect_eacces(deny_path)
+marker("vis-deny-verified")
+wait_marker("vis-reopen-go")
+expect_eacces(deny_path)
+marker("vis-reopen-verified")
+wait_marker("vis-deny-redone")
+
+expect_eacces(timeout_path)
+marker("vis-timeout-requested")
+wait_marker("vis-timeout-go")
+expect_eacces(timeout_path)
+marker("vis-timeout-verified")
+
+broker_read(link_path, False)
+marker("vis-link-requested")
+wait_marker("vis-link-go")
+broker_read(link_path, True, "symlink-target-a-029")
+marker("vis-link-read")
+wait_marker("vis-link-retarget-go")
+broker_read(link_path, False)
+marker("vis-link-retargeted")
+PY
+
+rm -f "$workspace"/vis-*
+echo "gate2: running HostFS live read-decision smoke"
+env \
+  HIDEOUT_STORE_ROOT="$store" \
+  LIMA_HOME="$lima_home" \
+  "$hideout" run --backend lima --workspace "$workspace" \
+    --fs "see-dir:$hostfs_live_root" \
+    -- python3 ./hostfs-visibility-live.py \
+      "$workspace" \
+      "$hostfs_live_approve" \
+      "$hostfs_live_deny" \
+      "$hostfs_live_timeout" \
+      "$hostfs_live_link" \
+      >"$tmp/hostfs-visibility-live.out" 2>"$tmp/hostfs-visibility-live.err" &
+visibility_run_pid=$!
+
+wait_for_file "$workspace/vis-approve-first" "first approval-eligible read"
+wait_for_hostfs_read_decision "$hostfs_live_approve" "$tmp/hostfs-live-approve-list-before.json"
+approve_id="$(hostfs_read_decision_id "$hostfs_live_approve" "$tmp/hostfs-live-approve-list-before.json")"
+test -n "$approve_id"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision inspect "$approve_id" >"$tmp/hostfs-live-approve-before.json"
+approve_timeout_before="$(jq -r '.timeoutAt' "$tmp/hostfs-live-approve-before.json")"
+approve_revision_before="$(jq -r '.revision' "$tmp/hostfs-live-approve-before.json")"
+touch "$workspace/vis-approve-repeat"
+wait_for_file "$workspace/vis-approve-requested" "deduplicated approval-eligible retry"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision list --kind hostfs.read --include-terminal >"$tmp/hostfs-live-approve-list-after.json"
+HOSTFS_READ_PATH="$hostfs_live_approve" jq -e '([.[] | select(.proposedAction.path == env.HOSTFS_READ_PATH)] | length) == 1' "$tmp/hostfs-live-approve-list-after.json" >/dev/null
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision inspect "$approve_id" >"$tmp/hostfs-live-approve-after.json"
+test "$(jq -r '.timeoutAt' "$tmp/hostfs-live-approve-after.json")" = "$approve_timeout_before"
+test "$(jq -r '.revision' "$tmp/hostfs-live-approve-after.json")" = "$approve_revision_before"
+printf 'hostfs_visibility_7=passed\n'
+printf 'hostfs_visibility_8=passed\n'
+
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision claim "$approve_id" >"$tmp/hostfs-live-approve-claim.json"
+approve_claim="$(jq -r '.claimToken' "$tmp/hostfs-live-approve-claim.json")"
+test -n "$approve_claim"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision approve --claim-token "$approve_claim" "$approve_id" >"$tmp/hostfs-live-approve-result.json"
+jq -e '.status == "applied" and .providerResult.activated == true and .providerResult.scope == "exact-file"' "$tmp/hostfs-live-approve-result.json" >/dev/null
+touch "$workspace/vis-approve-go"
+wait_for_file "$workspace/vis-approve-content" "same-session approved content retry"
+wait_for_file "$workspace/vis-approve-done" "bounded ordinary stat convergence"
+printf 'hostfs_visibility_9=passed\n'
+printf 'hostfs_visibility_10=passed\n'
+printf 'hostfs_visibility_11=passed\n'
+
+wait_for_file "$workspace/vis-deny-requested" "deniable read request"
+wait_for_hostfs_read_decision "$hostfs_live_deny" "$tmp/hostfs-live-deny-list.json"
+deny_id="$(hostfs_read_decision_id "$hostfs_live_deny" "$tmp/hostfs-live-deny-list.json")"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision claim "$deny_id" >"$tmp/hostfs-live-deny-claim.json"
+deny_claim="$(jq -r '.claimToken' "$tmp/hostfs-live-deny-claim.json")"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision deny --claim-token "$deny_claim" "$deny_id" >"$tmp/hostfs-live-deny-result.json"
+jq -e '.status == "denied"' "$tmp/hostfs-live-deny-result.json" >/dev/null
+touch "$workspace/vis-deny-go"
+wait_for_file "$workspace/vis-deny-verified" "terminal deny retry"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision reopen --reason gate2-reconsidered "$deny_id" >"$tmp/hostfs-live-reopen-result.json"
+jq -e '.status == "pending"' "$tmp/hostfs-live-reopen-result.json" >/dev/null
+touch "$workspace/vis-reopen-go"
+wait_for_file "$workspace/vis-reopen-verified" "reopened pending retry"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision claim "$deny_id" >"$tmp/hostfs-live-deny-reclaim.json"
+deny_reclaim="$(jq -r '.claimToken' "$tmp/hostfs-live-deny-reclaim.json")"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision deny --claim-token "$deny_reclaim" "$deny_id" >"$tmp/hostfs-live-deny-redone.json"
+touch "$workspace/vis-deny-redone"
+
+wait_for_file "$workspace/vis-timeout-requested" "timeout read request"
+wait_for_hostfs_read_decision "$hostfs_live_timeout" "$tmp/hostfs-live-timeout-list.json"
+timeout_id="$(hostfs_read_decision_id "$hostfs_live_timeout" "$tmp/hostfs-live-timeout-list.json")"
+timeout_file="$store/operator-center/decisions/$timeout_id.json"
+jq '.timeoutAt = "2000-01-01T00:00:00Z"' "$timeout_file" >"$timeout_file.tmp"
+chmod 0600 "$timeout_file.tmp"
+mv "$timeout_file.tmp" "$timeout_file"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision list --kind hostfs.read --include-terminal >"$tmp/hostfs-live-timeout-after.json"
+HOSTFS_TIMEOUT_ID="$timeout_id" jq -e 'any(.[]; .id == env.HOSTFS_TIMEOUT_ID and .state == "timed-out")' "$tmp/hostfs-live-timeout-after.json" >/dev/null
+touch "$workspace/vis-timeout-go"
+wait_for_file "$workspace/vis-timeout-verified" "timed-out read retry"
+printf 'hostfs_visibility_12=passed\n'
+
+wait_for_file "$workspace/vis-link-requested" "symlink broker read request"
+wait_for_hostfs_read_decision "$hostfs_live_link" "$tmp/hostfs-live-link-list.json"
+link_id="$(hostfs_read_decision_id "$hostfs_live_link" "$tmp/hostfs-live-link-list.json")"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision claim "$link_id" >"$tmp/hostfs-live-link-claim.json"
+link_claim="$(jq -r '.claimToken' "$tmp/hostfs-live-link-claim.json")"
+HIDEOUT_STORE_ROOT="$store" "$hideout" decision approve --claim-token "$link_claim" "$link_id" >"$tmp/hostfs-live-link-result.json"
+touch "$workspace/vis-link-go"
+wait_for_file "$workspace/vis-link-read" "approved canonical symlink read"
+rm "$hostfs_live_link"
+ln -s "$hostfs_live_target_b" "$hostfs_live_link"
+touch "$workspace/vis-link-retarget-go"
+wait_for_file "$workspace/vis-link-retargeted" "symlink retarget denial"
+printf 'hostfs_visibility_13=passed\n'
+
+if wait "$visibility_run_pid"; then
+  visibility_run_pid=""
+else
+  live_status=$?
+  visibility_run_pid=""
+  echo "gate2: HostFS live read-decision guest failed with status $live_status" >&2
+  cat "$tmp/hostfs-visibility-live.out" "$tmp/hostfs-visibility-live.err" >&2
+  exit "$live_status"
+fi
+cat "$tmp/hostfs-visibility-live.out"
+live_session="$(jq -r '.source.session' "$tmp/hostfs-live-approve-after.json")"
+if [ -z "$live_session" ] || [ "$live_session" = "null" ]; then
+  echo "gate2: HostFS live decision did not surface its session identity" >&2
+  cat "$tmp/hostfs-live-approve-after.json" >&2
+  exit 1
+fi
+if HIDEOUT_STORE_ROOT="$store" "$hideout" decision reopen --reason ended-session-must-fail "$deny_id" >"$tmp/hostfs-live-ended-reopen.out" 2>"$tmp/hostfs-live-ended-reopen.err"; then
+  echo "gate2: ended-session HostFS read decision reopened unexpectedly" >&2
+  exit 1
+fi
+if [ -d "$store/sessions/$live_session/hostfs-read" ]; then
+  echo "gate2: ended session retained HostFS read authority: $live_session" >&2
+  find "$store/sessions/$live_session/hostfs-read" -maxdepth 1 -print >&2 || true
+  exit 1
+fi
+printf 'hostfs_visibility_18=passed\n'
+
+operator_audit="$store/operator-center/audit.jsonl"
+test -f "$operator_audit"
+jq -e 'select(.details.kind == "hostfs.read")' "$operator_audit" >/dev/null
+if rg -n 'approved-live-content-029|symlink-target-[ab]-029|claim_[0-9a-f]{16,}|cap_[A-Za-z0-9]{12,}|hostfs-read/(grants|state|owner|provider)' \
+  "$operator_audit" \
+  "$tmp/hostfs-live-approve-after.json" \
+  "$tmp/hostfs-live-deny-result.json" \
+  "$tmp/hostfs-live-reopen-result.json" \
+  "$tmp/hostfs-live-timeout-after.json" \
+  "$tmp/hostfs-live-link-result.json" >/dev/null; then
+  echo "gate2: HostFS read evidence leaked content, token, symlink target, or private authority path" >&2
+  exit 1
+fi
+printf 'hostfs_visibility_19=passed\n'
+
 echo "gate2: running hostfs write overlay smoke"
 if ! with_timeout "$GATE_TIMEOUT" env \
   HIDEOUT_STORE_ROOT="$store" \
   LIMA_HOME="$lima_home" \
   "$hideout" run --backend lima --workspace "$workspace" \
     --fs "overlay:$hostfs_write_file" \
+    --fs "overlay-dir:$hostfs_root" \
     -- sh -eu -c '
 dump_hostfs_debug() {
   echo "hostfs_debug_mounts:" >&2
@@ -344,9 +946,18 @@ else
     dump_hostfs_debug
     exit 1
   }
-  printf "hostfs_overlay_guest=%s\n" "$(cat "$1")"
-fi
-' gate2-hostfs-write "$hostfs_write_file" >"$tmp/hostfs-write.out" 2>"$tmp/hostfs-write.err"; then
+	  printf "hostfs_overlay_guest=%s\n" "$(cat "$1")"
+	fi
+mkdir "$2" || {
+  dump_hostfs_debug
+  exit 1
+}
+test -d "$2" || {
+  dump_hostfs_debug
+  exit 1
+}
+printf "hostfs_overlay_dir_guest=yes\n"
+' gate2-hostfs-write "$hostfs_write_file" "$hostfs_write_dir" >"$tmp/hostfs-write.out" 2>"$tmp/hostfs-write.err"; then
   echo "gate2: hostfs write overlay guest smoke failed" >&2
   echo "gate2: stdout" >&2
   cat "$tmp/hostfs-write.out" >&2
@@ -356,7 +967,9 @@ fi
 fi
 cat "$tmp/hostfs-write.out"
 grep -q 'hostfs_overlay_guest=hostfs-after' "$tmp/hostfs-write.out"
+grep -q 'hostfs_overlay_dir_guest=yes' "$tmp/hostfs-write.out"
 test "$(cat "$hostfs_write_file")" = "hostfs-before"
+test ! -e "$hostfs_write_dir"
 
 HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write status >"$tmp/hostfs-write-status.json"
 HOSTFS_WRITE_FILE="$hostfs_write_file" jq -e '
@@ -386,14 +999,33 @@ test -n "$claim_token"
 HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write apply --claim-token "$claim_token" "$decision_id" >"$tmp/hostfs-write-apply.json"
 jq -e '.status == "applied" and .decision == "allow"' "$tmp/hostfs-write-apply.json" >/dev/null
 test "$(cat "$hostfs_write_file")" = "hostfs-after"
+dir_decision_id="$(HOSTFS_WRITE_DIR="$hostfs_write_dir" jq -r '
+  .pending[] |
+  select(.path == env.HOSTFS_WRITE_DIR and .operation == "mkdir") |
+  .decisionId
+' "$tmp/hostfs-write-status.json" | head -n 1)"
+if [ -z "$dir_decision_id" ]; then
+  echo "gate2: no HostFS write directory decision found" >&2
+  cat "$tmp/hostfs-write-status.json" >&2
+  exit 1
+fi
+HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write claim "$dir_decision_id" >"$tmp/hostfs-write-dir-claim.json"
+dir_claim_token="$(jq -r '.claimToken' "$tmp/hostfs-write-dir-claim.json")"
+test -n "$dir_claim_token"
+HIDEOUT_STORE_ROOT="$store" "$hideout" hostfs write apply --claim-token "$dir_claim_token" "$dir_decision_id" >"$tmp/hostfs-write-dir-apply.json"
+jq -e '.status == "applied" and .decision == "allow"' "$tmp/hostfs-write-dir-apply.json" >/dev/null
+test -d "$hostfs_write_dir"
 latest_audit="$(find "$store/sessions" -name audit.jsonl -print | sort | tail -n 1)"
 test -n "$latest_audit"
 jq -e 'select(.action == "host.fs.overlay.apply" and .details.decisionId == "'"$decision_id"'")' "$latest_audit" >/dev/null
-if rg -n 'claim_[0-9a-f]|hostfs-overlay/objects|hfwobj_' "$latest_audit" "$tmp/hostfs-write-status.json" "$tmp/hostfs-write-apply.json" >/dev/null; then
+jq -e 'select(.action == "host.fs.overlay.apply" and .details.decisionId == "'"$dir_decision_id"'")' "$latest_audit" >/dev/null
+if rg -n 'claim_[0-9a-f]|hostfs-overlay/objects|hfwobj_' "$latest_audit" "$tmp/hostfs-write-status.json" "$tmp/hostfs-write-apply.json" "$tmp/hostfs-write-dir-apply.json" >/dev/null; then
   echo "gate2: HostFS write evidence leaked claim token or overlay object path" >&2
   exit 1
 fi
 printf "hostfs_write_overlay=applied\n"
+printf "hostfs_write_dir_overlay=applied\n"
+printf 'hostfs_visibility_20=passed\n'
 
 echo "gate2: running missing-command no-host-fallback smoke"
 if with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" -- hideout-missing-command >"$tmp/missing.out" 2>"$tmp/missing.err"; then
@@ -553,4 +1185,7 @@ if awk -F'\t' 'NR > 1 && $1 == "gate2-named" { found = 1 } END { exit found ? 0 
   exit 1
 fi
 
+if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
+  echo "runtime_package_tool_provisioning_check=passed"
+fi
 echo "gate2: passed"

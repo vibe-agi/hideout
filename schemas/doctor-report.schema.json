@@ -65,6 +65,9 @@
             "enum": ["info", "warning", "error"]
           },
           "required": { "type": "boolean" },
+          "code": { "type": "string" },
+          "reason": { "type": "string" },
+          "hint": { "type": "string" },
           "summary": { "type": "string" },
           "details": { "type": "object" },
           "nextActions": {

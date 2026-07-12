@@ -15,10 +15,12 @@
 - A stale socket/lock from a crash is detected on the next start and either safely
   reclaimed or the start fails closed with a diagnostic.
 
-## Daemon-Specific Endpoints (separate surface, all under `/daemon/…`)
+## Daemon-Specific Endpoints (separate surface)
 
 All are operator-token authenticated and add no Manager operation class:
 
+- `GET /` — loopback-only operator console document; its API requests remain
+  token authenticated.
 - `GET /daemon/status` — status/inventory (`schemas/daemon-status.schema.json`).
 - `POST /daemon/stop` — ordered shutdown.
 - `GET /daemon/events` — live redacted event stream (SSE;

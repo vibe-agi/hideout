@@ -308,6 +308,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 </header>
 <nav class="tabs" id="tabs" aria-label="Hideout domains">
   <button class="tab active" type="button" data-panel="overview">Overview</button>
+  <button class="tab" type="button" data-panel="operator-console">Operator Console</button>
   <button class="tab" type="button" data-panel="setup">Setup</button>
   <button class="tab" type="button" data-panel="run">Run</button>
   <button class="tab" type="button" data-panel="profiles">Profiles</button>
@@ -377,10 +378,29 @@ function esc(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 }
+function redactText(value) {
+  if (value == null) return "";
+  return String(value)
+    .replace(/HIDEOUT_SECRET_[A-Za-z0-9_]+=[^\s,;]*/g, "HIDEOUT_*=REDACTED")
+    .replace(/HIDEOUT_SECRET_[A-Za-z0-9_]+/g, "HIDEOUT_*")
+    .replace(/setupCredential=[^\s,;]*/g, "setupCredential=REDACTED")
+    .replace(/cap_[0-9a-fA-F]{32,}/g, "REDACTED")
+    .replace(/\/hostfs-overlay\/objects\/[0-9a-fA-F]{16,}/g, "/hostfs-overlay/objects/REDACTED");
+}
+function redactValue(value) {
+  if (typeof value === "string") return redactText(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === "object") {
+    const out = {};
+    Object.keys(value).forEach(function(key) { out[redactText(key)] = redactValue(value[key]); });
+    return out;
+  }
+  return value;
+}
 function list(value) {
-  if (Array.isArray(value)) return value.length ? value.join(", ") : "none";
+  if (Array.isArray(value)) return value.length ? value.map(redactValue).join(", ") : "none";
   if (value == null || value === "") return "none";
-  return String(value);
+  return redactText(value);
 }
 function expectedCommandDiagnosticLabels(value) {
   if (!Array.isArray(value) || !value.length) return [];
@@ -417,7 +437,7 @@ function rows(items) {
   }).join("") + "</div>";
 }
 function item(title, meta, rowItems, tone) {
-  return '<article class="item"><div class="item-top"><div><div class="title">' + esc(title) + '</div><div class="meta">' + esc(meta || "") + '</div></div>' + pill(tone || "ok", tone || "ok") + '</div>' + rows(rowItems) + "</article>";
+  return '<article class="item"><div class="item-top"><div><div class="title">' + esc(redactText(title)) + '</div><div class="meta">' + esc(redactText(meta || "")) + '</div></div>' + pill(tone || "ok", tone || "ok") + '</div>' + rows(rowItems) + "</article>";
 }
 function boundaryRowsFromSummary(summary) {
   const capabilities = Array.isArray(summary && summary.capabilities) ? summary.capabilities : [];
@@ -440,10 +460,10 @@ function boundaryRowsFromSummary(summary) {
   });
 }
 function empty(label) {
-  return '<div class="empty">' + esc(label) + '</div>';
+  return '<div class="empty">' + esc(redactText(label)) + '</div>';
 }
 function metric(label, value, sub) {
-  return '<article class="metric"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div><div class="sub">' + esc(sub || "") + '</div></article>';
+  return '<article class="metric"><div class="label">' + esc(redactText(label)) + '</div><div class="value">' + esc(redactText(value)) + '</div><div class="sub">' + esc(redactText(sub || "")) + '</div></article>';
 }
 function normalizedNetworkMode(mode) {
   return mode || "direct";
@@ -487,11 +507,30 @@ function scopedOverview() {
   if (!selectedProfile) return source;
   const network = Object.assign({}, source.network || {});
   network.profileDefaults = filterByProfile(network.profileDefaults, "profile");
+	const hostfsWrites = filterByProfile(source.hostfsWrites, "profile");
+	const decisionRows = filterByProfile(source.decisionRows, "profile");
+	const noticeRows = filterByProfile(source.noticeRows, "profile");
+	const decisions = decisionRows.reduce(function(summary, row) {
+	  const status = row && row.status || "";
+	  if (status === "pending") summary.pending++;
+	  else if (status === "claimed") summary.claimed++;
+	  else summary.terminal++;
+	  return summary;
+	}, {pending: 0, claimed: 0, terminal: 0});
+	const notices = {
+	  unacknowledged: noticeRows.filter(function(row) { return row && !row.acknowledged; }).length,
+	  total: noticeRows.length
+	};
   return Object.assign({}, source, {
     profiles: filterByProfile(source.profiles, "name"),
     environments: filterByProfile(source.environments, "profile"),
     sessions: filterByProfile(source.sessions, "profile"),
-    network: network
+	  network: network,
+	  hostfsWrites: hostfsWrites,
+	  decisionRows: decisionRows,
+	  noticeRows: noticeRows,
+	  decisions: decisions,
+	  notices: notices
   });
 }
 function withScopedOverview(fn) {
@@ -525,6 +564,26 @@ function sessionNextCommands(session) {
   if (session.hasEphemeralState) commands.push("cleanup-check=hideout cleanup --session " + session.id + " --dry-run");
   return commands;
 }
+function actionableStatus(status) {
+  return !status || status === "pending" || status === "claimed" || status === "ready" || status === "requires-decision";
+}
+function consoleActionSummary() {
+  const hostfsWrites = (overview.hostfsWrites || []).filter(function(row) { return actionableStatus(row.status); }).length;
+  const decisions = (overview.decisionRows || []).filter(function(row) { return actionableStatus(row.status); }).length;
+  const notices = (overview.noticeRows || []).filter(function(row) { return row && !row.acknowledged; }).length;
+  return {hostfsWrites: hostfsWrites, decisions: decisions, notices: notices, total: hostfsWrites + decisions + notices};
+}
+function consoleStatusRows() {
+  const bundles = overview.bundles || {};
+  const packs = overview.adapterPacks || [];
+  const backends = overview.backends || [];
+  const support = backends.length ? backends.map(function(b) { return (b.name || "backend") + ":" + (b.available ? "available" : "unavailable"); }).join(", ") : "run hideout support matrix";
+  return [
+    {id: "doctor", label: "Doctor", status: "explicit", detail: "not run on console load", next: "hideout doctor --level light"},
+    {id: "package", label: "Package", status: "read-only", detail: "bundles=" + (bundles.installed || 0) + " enabled=" + (bundles.enabled || 0) + " adapterPacks=" + packs.length, next: "hideout package verify <install-prefix>"},
+    {id: "support", label: "Support", status: "matrix", detail: support, next: "hideout support matrix"}
+  ];
+}
 function api(path) {
   return fetch("/api/v1/" + path, {headers: {"X-Hideout-UI-Token": token}}).then(async function(response) {
     const text = await response.text();
@@ -553,10 +612,12 @@ function renderSummary() {
   const hostfsWrites = overview.hostfsWrites || [];
   const decisions = overview.decisionRows || [];
   const notices = overview.noticeRows || [];
+  const actionSummary = consoleActionSummary();
   const available = backends.filter(function(b) { return b.available; }).length;
   const networkModes = (overview.network && overview.network.profileDefaults || []).map(function(n) { return normalizedNetworkMode(n.mode); });
   const denied = deniedAuditEvents();
   summaryEl.innerHTML = [
+    metric("Action Required", actionSummary.total, "hostfs=" + actionSummary.hostfsWrites + " decisions=" + actionSummary.decisions + " notices=" + actionSummary.notices),
     metric("Profiles", profiles.length, profiles.map(function(p) { return p.name; }).join(", ")),
     metric("Environments", environments.length, environments.slice(0, 3).map(function(e) { return (e.status || "unknown") + ":" + (e.profile || "-"); }).join(", ")),
     metric("Sessions", sessions.length, sessions.filter(function(s) { return s.hasAudit; }).length + " with audit"),
@@ -572,7 +633,7 @@ function renderSummary() {
 }
 function renderPanel() {
   return withScopedOverview(function() {
-  const title = activePanel.charAt(0).toUpperCase() + activePanel.slice(1);
+  const title = panelTitle(activePanel);
   panelTitleEl.textContent = title;
   panelMetaEl.textContent = domainOwner(activePanel) + (selectedProfile ? " · " + selectedProfile : "");
   const renderer = renderers[activePanel] || renderers.overview;
@@ -586,12 +647,20 @@ function renderPanel() {
     bindHostFSPanel();
   }
   if (activePanel === "hostfs-writes") bindHostFSWritePanel();
+  if (activePanel === "decisions") bindDecisionPanel();
+  if (activePanel === "notices") bindNoticePanel();
   if (activePanel === "audit") bindAuditPanel();
   });
+}
+function panelTitle(name) {
+  return String(name || "overview").split("-").map(function(part) {
+    return part.charAt(0).toUpperCase() + part.slice(1);
+  }).join(" ");
 }
 function domainOwner(name) {
   return {
     overview: "manager",
+    "operator-console": "manager/operator-console",
     setup: "init/tool-supply",
     run: "manager/backend",
     profiles: "profile",
@@ -635,6 +704,27 @@ const renderers = {
       item("Audit", "redacted JSONL", [["sessionAuditFiles", overview.audit && overview.audit.sessionAuditFiles], ["eventsLoaded", auditEvents.length]], "ok")
     ].join("") + "</div>";
   },
+  "operator-console": function() {
+    const actionSummary = consoleActionSummary();
+    const background = overview.background || [];
+    const environments = overview.environments || [];
+    const hostfsWrites = overview.hostfsWrites || [];
+    const decisions = overview.decisionRows || [];
+    const notices = overview.noticeRows || [];
+    const statusRows = consoleStatusRows();
+    const streamTone = liveStreamState === "live" || liveStreamState === "idle-live" ? "ok" : liveStreamState === "daemon-less" ? "warn" : "error";
+    return '<div class="items">' + [
+      item("Action Required", "existing authority only", [["total", actionSummary.total], ["hostfsWrites", actionSummary.hostfsWrites], ["decisions", actionSummary.decisions], ["notices", actionSummary.notices]], actionSummary.total ? "warn" : "ok"),
+      item("Stream", liveStreamState || "seeding", [["state", liveStreamState], ["reason", liveStreamReason], ["lastSeq", liveLastSeq], ["fallback", liveStreamState === "disconnected" ? "manual refresh or daemon-less interval" : "none while healthy"]], streamTone),
+      item("Environments", "manager overview", [["count", environments.length], ["running", environments.filter(function(e) { return e.status === "running"; }).length], ["recent", environments.slice(0, 5).map(function(e) { return (e.name || e.id || "env") + ":" + (e.status || "unknown"); })]], "info"),
+      item("Background", "daemon env stop/clean only", [["count", background.length], ["recent", background.slice(0, 5).map(function(b) { return (b.id || "bg") + ":" + (b.op || "op") + ":" + (b.status || "unknown"); })]], background.some(function(b) { return b.status === "failed"; }) ? "error" : "info"),
+      item("HostFS Writes", "staged write decisions", [["actionable", actionSummary.hostfsWrites], ["recent", hostfsWrites.slice(0, 5).map(function(w) { return (w.decisionId || "write") + ":" + (w.status || "pending"); })]], actionSummary.hostfsWrites ? "warn" : "ok"),
+      item("Decisions", "decision center", [["actionable", actionSummary.decisions], ["summary", overview.decisions && ("pending=" + (overview.decisions.pending || 0) + " claimed=" + (overview.decisions.claimed || 0) + " terminal=" + (overview.decisions.terminal || 0))], ["recent", decisions.slice(0, 5).map(function(d) { return (d.id || "decision") + ":" + (d.status || "pending"); })]], actionSummary.decisions ? "warn" : "ok"),
+      item("Notices", "acknowledge facts", [["unacknowledged", actionSummary.notices], ["summary", overview.notices && ("unacked=" + (overview.notices.unacknowledged || 0) + " total=" + (overview.notices.total || 0))], ["recent", notices.slice(0, 5).map(function(n) { return (n.id || "notice") + ":" + (n.acknowledged ? "ack" : "open"); })]], actionSummary.notices ? "warn" : "ok")
+    ].concat(statusRows.map(function(row) {
+      return item(row.label, row.status, [["detail", row.detail], ["next", row.next]], row.status === "explicit" ? "info" : "ok");
+    })).join("") + "</div>";
+  },
   "hostfs-writes": function() {
     const rows = overview.hostfsWrites || [];
     if (!rows.length) return empty("No pending HostFS write decisions");
@@ -654,8 +744,16 @@ const renderers = {
     return '<div class="items">' + rows.map(function(row) {
       const details = [["kind", row.kind], ["status", row.status], ["defaultOutcome", row.defaultOutcome], ["profile", row.profile], ["session", row.session], ["backend", row.backend], ["reason", row.reason]];
       const tone = row.status === "failed" || row.status === "timed-out" ? "error" : row.status === "pending" || row.status === "claimed" ? "warn" : "ok";
-      return item(row.id || "decision", row.kind || "actionable", details, tone);
-    }).join("") + "</div>";
+	      const reopenable = row.kind === "hostfs.read" && (row.status === "denied" || row.status === "timed-out");
+	      const revocable = row.kind === "host-app.open-resource" && row.status === "approved";
+	      const disabled = row.status === "applied" || row.status === "denied" || row.status === "timed-out" || row.status === "failed";
+	      const actions = revocable ? '<div class="action-row"><button class="action secondary" type="button" data-decision-action="revoke" data-decision-id="' + esc(row.id) + '">Revoke</button></div>' : reopenable ? '<div class="action-row"><button class="action secondary" type="button" data-decision-action="reopen" data-decision-id="' + esc(row.id) + '">Reopen</button></div>' : disabled ? "" : '<div class="action-row">' +
+        '<button class="action secondary" type="button" data-decision-action="claim" data-decision-id="' + esc(row.id) + '">Claim</button>' +
+        '<button class="action" type="button" data-decision-action="approve" data-decision-id="' + esc(row.id) + '">Approve</button>' +
+        '<button class="action secondary" type="button" data-decision-action="deny" data-decision-id="' + esc(row.id) + '">Deny</button>' +
+        '</div>';
+      return item(row.id || "decision", row.kind || "actionable", details, tone) + actions;
+    }).join("") + '<div class="result" id="decisionStatus"></div></div>';
   },
   notices: function() {
     const rows = overview.noticeRows || [];
@@ -663,8 +761,9 @@ const renderers = {
     return '<div class="items">' + rows.map(function(row) {
       const details = [["kind", row.kind], ["status", row.status], ["severity", row.severity], ["acknowledged", row.acknowledged], ["profile", row.profile], ["session", row.session], ["backend", row.backend]];
       const tone = row.severity === "error" ? "error" : !row.acknowledged && row.severity === "warning" ? "warn" : "info";
-      return item(row.id || "notice", row.acknowledged ? "acknowledged" : "unacknowledged", details, tone);
-    }).join("") + "</div>";
+      const actions = row.acknowledged ? "" : '<div class="action-row"><button class="action secondary" type="button" data-notice-action="ack" data-notice-id="' + esc(row.id) + '">Acknowledge</button></div>';
+      return item(row.id || "notice", row.acknowledged ? "acknowledged" : "unacknowledged", details, tone) + actions;
+    }).join("") + '<div class="result" id="noticeStatus"></div></div>';
   },
   setup: function() {
     const profiles = overview.profiles || [];
@@ -1169,6 +1268,114 @@ function bindHostFSWritePanel() {
     });
   });
 }
+function findDecisionRow(decisionId) {
+  const rows = overview.decisionRows || [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].id === decisionId) return rows[i];
+  }
+  return null;
+}
+function setDecisionStatus(text, tone) {
+  const status = document.getElementById("decisionStatus");
+  if (!status) return;
+  status.className = tone === "error" ? "error-box" : "meta";
+  status.textContent = text || "";
+}
+function decisionRouteForAction(action) {
+  if (action === "deny") return "decision/deny";
+  if (action === "approve") return "decision/approve";
+  if (action === "reopen") return "decision/reopen";
+  if (action === "revoke") return "decision/revoke";
+  return "decision/claim";
+}
+function noticeAckRoute() {
+  return "notice/ack";
+}
+function bindDecisionPanel() {
+  document.querySelectorAll("[data-decision-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const action = button.getAttribute("data-decision-action");
+      const decisionId = button.getAttribute("data-decision-id");
+      const row = findDecisionRow(decisionId);
+      if (!row) {
+        setDecisionStatus("decision not found", "error");
+        return;
+      }
+      try {
+        if (action === "reopen" || action === "revoke") {
+          const reason = action === "reopen" ? "operator-reopened" : "operator-revoked";
+          const response = await apiPost(decisionRouteForAction(action), {decisionId: decisionId, expectedVersion: "hideout.decision/v1", reason: reason});
+          if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+          row.claimToken = "";
+          row.status = action === "reopen" ? "pending" : "denied";
+          updateDecisionSummary();
+          setDecisionStatus((action === "reopen" ? "reopened " : "revoked ") + decisionId, "ok");
+          renderAll();
+          return;
+        }
+        if (action === "claim") {
+          const response = await apiPost(decisionRouteForAction(action), {decisionId: decisionId, expectedVersion: "hideout.decision/v1", surface: "webui"});
+          if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+          row.claimToken = response.data && response.data.claimToken;
+          row.status = "claimed";
+          updateDecisionSummary();
+          setDecisionStatus("claimed " + decisionId, "ok");
+          renderAll();
+          return;
+        }
+        if (!row.claimToken) {
+          setDecisionStatus("claim this decision before " + action, "error");
+          return;
+        }
+        const resource = decisionRouteForAction(action);
+        const response = await apiPost(resource, {decisionId: decisionId, expectedVersion: "hideout.decision/v1", claimToken: row.claimToken, reason: action === "deny" ? "operator-denied" : "operator-approved"});
+        if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+        row.status = action === "deny" ? "denied" : "applied";
+        updateDecisionSummary();
+        setDecisionStatus(action + " " + decisionId, "ok");
+        renderAll();
+      } catch (error) {
+        setDecisionStatus(error.message || String(error), "error");
+      }
+    });
+  });
+}
+function findNoticeRow(noticeId) {
+  const rows = overview.noticeRows || [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].id === noticeId) return rows[i];
+  }
+  return null;
+}
+function setNoticeStatus(text, tone) {
+  const status = document.getElementById("noticeStatus");
+  if (!status) return;
+  status.className = tone === "error" ? "error-box" : "meta";
+  status.textContent = text || "";
+}
+function bindNoticePanel() {
+  document.querySelectorAll("[data-notice-action]").forEach(function(button) {
+    button.addEventListener("click", async function() {
+      const noticeId = button.getAttribute("data-notice-id");
+      const row = findNoticeRow(noticeId);
+      if (!row) {
+        setNoticeStatus("notice not found", "error");
+        return;
+      }
+      try {
+        const response = await apiPost(noticeAckRoute(), {noticeId: noticeId, surface: "webui"});
+        if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+        row.acknowledged = true;
+        row.status = "acknowledged";
+        updateNoticeSummary();
+        setNoticeStatus("acknowledged " + noticeId, "ok");
+        renderAll();
+      } catch (error) {
+        setNoticeStatus(error.message || String(error), "error");
+      }
+    });
+  });
+}
 function profileEnvPayloadFromForm() {
   return {
     profile: document.getElementById("profileEnvProfile").value,
@@ -1350,36 +1557,36 @@ function capTail(values, limit) {
 function eventAuditRow(payload) {
   return {
     time: payload.time,
-    session: payload.session,
-    profile: payload.profile,
-    backend: payload.backend,
-    action: payload.action,
-    decision: payload.decision,
-    details: payload.details || {}
+    session: redactText(payload.session),
+    profile: redactText(payload.profile),
+    backend: redactText(payload.backend),
+    action: redactText(payload.action),
+    decision: redactText(payload.decision),
+    details: redactValue(payload.details || {})
   };
 }
 function decisionRowFromPayload(payload) {
   return {
-    id: payload.decisionId || payload.id,
-    kind: payload.recordKind,
-    status: payload.status,
-    defaultOutcome: payload.defaultOutcome,
-    profile: payload.profile,
-    session: payload.session,
-    backend: payload.backend,
-    reason: payload.reason
+    id: redactText(payload.decisionId || payload.id),
+    kind: redactText(payload.recordKind),
+    status: redactText(payload.status),
+    defaultOutcome: redactText(payload.defaultOutcome),
+    profile: redactText(payload.profile),
+    session: redactText(payload.session),
+    backend: redactText(payload.backend),
+    reason: redactText(payload.reason)
   };
 }
 function noticeRowFromPayload(payload) {
   return {
-    id: payload.noticeId || payload.id,
-    kind: payload.recordKind,
-    status: payload.status,
-    severity: payload.severity,
+    id: redactText(payload.noticeId || payload.id),
+    kind: redactText(payload.recordKind),
+    status: redactText(payload.status),
+    severity: redactText(payload.severity),
     acknowledged: !!payload.acknowledged,
-    profile: payload.profile,
-    session: payload.session,
-    backend: payload.backend
+    profile: redactText(payload.profile),
+    session: redactText(payload.session),
+    backend: redactText(payload.backend)
   };
 }
 function updateDecisionSummary() {
@@ -1442,11 +1649,11 @@ function applyLiveEvent(event) {
     auditEvents = capTail([row].concat(auditEvents), 20);
     if (row.decision === "deny") deniedEvents = capTail([row].concat(deniedEvents), 20);
   } else if (event.kind === "export") {
-    overview.exportOutcomes = capTail([{status: payload.status, source: payload.source, artifactPath: payload.artifactPath, decision: payload.decision}].concat(overview.exportOutcomes), 20);
+    overview.exportOutcomes = capTail([{status: redactText(payload.status), source: redactText(payload.source), artifactPath: redactText(payload.artifactPath), decision: redactText(payload.decision)}].concat(overview.exportOutcomes), 20);
   } else if (event.kind === "cleanup") {
-    overview.cleanupOutcomes = capTail([{status: payload.status, sessions: payload.sessions, removed: payload.removed, secretState: payload.secretState}].concat(overview.cleanupOutcomes), 20);
+    overview.cleanupOutcomes = capTail([{status: redactText(payload.status), sessions: payload.sessions, removed: redactValue(payload.removed || []), secretState: redactText(payload.secretState)}].concat(overview.cleanupOutcomes), 20);
   } else if (event.kind === "hostfs-write") {
-    overview.hostfsWrites = upsertByID(overview.hostfsWrites, {id: payload.decisionId, decisionId: payload.decisionId, operationId: payload.operationId, status: payload.status, operation: payload.operation, path: payload.path, destinationPath: payload.destinationPath, privilegeStatus: payload.privilegeStatus, reason: payload.reason});
+	 overview.hostfsWrites = upsertByID(overview.hostfsWrites, {id: redactText(payload.decisionId), decisionId: redactText(payload.decisionId), operationId: redactText(payload.operationId), profile: redactText(payload.profile), status: redactText(payload.status), operation: redactText(payload.operation), path: redactText(payload.path), destinationPath: redactText(payload.destinationPath), privilegeStatus: redactText(payload.privilegeStatus), reason: redactText(payload.reason)});
   } else if (event.kind === "decision") {
     overview.decisionRows = upsertByID(overview.decisionRows, decisionRowFromPayload(payload));
     updateDecisionSummary();
@@ -1481,14 +1688,31 @@ async function seedLiveConsole() {
       overview.background = Array.isArray(status.background) ? status.background : [];
     } catch {}
     try {
-      const hostfsStatus = await api("hostfs/write/status");
-      overview.hostfsWrites = hostfsStatus.data && Array.isArray(hostfsStatus.data.pending) ? hostfsStatus.data.pending.map(function(row) { return Object.assign({id: row.decisionId}, row); }) : [];
+	  const hostfsStatus = await api("hostfs/write/status" + (selectedProfile ? "?profile=" + encodeURIComponent(selectedProfile) : ""));
+      overview.hostfsWrites = hostfsStatus.data && Array.isArray(hostfsStatus.data.pending) ? hostfsStatus.data.pending.map(function(row) {
+        return Object.assign({}, row, {
+          id: redactText(row.decisionId),
+          decisionId: redactText(row.decisionId),
+		  operationId: redactText(row.operationId),
+		  profile: redactText(row.profile),
+          status: redactText(row.status),
+          operation: redactText(row.operation),
+          path: redactText(row.path),
+          destinationPath: redactText(row.destinationPath),
+          privilegeStatus: redactText(row.privilegeStatus),
+          reason: redactText(row.reason)
+        });
+      }) : [];
     } catch {
       overview.hostfsWrites = [];
     }
     try {
       const decisionsResp = await api("decisions?includeTerminal=true");
-      overview.decisionRows = Array.isArray(decisionsResp.data) ? decisionsResp.data.map(function(row) { return {id: row.id, kind: row.kind, status: row.state || row.status, defaultOutcome: row.defaultOutcome, profile: row.source && row.source.profile, session: row.source && row.source.session, backend: row.source && row.source.backend}; }) : [];
+      overview.decisionRows = Array.isArray(decisionsResp.data) ? decisionsResp.data.map(function(row) {
+        const facts = row.preview && row.preview.facts || {};
+        const reason = row.kind === "hostfs.read" && facts.untrustedReason ? "untrusted target input: " + redactText(facts.untrustedReason) : row.preview && redactText(row.preview.summary);
+        return {id: redactText(row.id), kind: redactText(row.kind), status: redactText(row.state || row.status), defaultOutcome: redactText(row.defaultOutcome), profile: row.source && redactText(row.source.profile), session: row.source && redactText(row.source.session), backend: row.source && redactText(row.source.backend), reason: reason};
+      }) : [];
       updateDecisionSummary();
     } catch {
       overview.decisionRows = [];
@@ -1496,7 +1720,7 @@ async function seedLiveConsole() {
     }
     try {
       const noticesResp = await api("notices");
-      overview.noticeRows = Array.isArray(noticesResp.data) ? noticesResp.data.map(function(row) { return {id: row.id, kind: row.kind, status: row.status, severity: row.severity, acknowledged: !!row.acknowledged, profile: row.source && row.source.profile, session: row.source && row.source.session, backend: row.source && row.source.backend}; }) : [];
+      overview.noticeRows = Array.isArray(noticesResp.data) ? noticesResp.data.map(function(row) { return {id: redactText(row.id), kind: redactText(row.kind), status: redactText(row.status), severity: redactText(row.severity), acknowledged: !!row.acknowledged, profile: row.source && redactText(row.source.profile), session: row.source && redactText(row.source.session), backend: row.source && redactText(row.source.backend)}; }) : [];
       updateNoticeSummary();
     } catch {
       overview.noticeRows = [];

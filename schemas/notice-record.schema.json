@@ -23,7 +23,7 @@
       "minLength": 1
     },
     "kind": {
-      "enum": ["privilege.status", "background.status"]
+      "enum": ["privilege.status", "background.status", "runtime.status"]
     },
     "source": {
       "type": "object"

@@ -222,10 +222,14 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		PrivilegedSetupRequired:   privilegedSetupRequired,
 		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
 		PrivilegedSetupEventSink:  spec.PrivilegedSetupEventSink,
+		RuntimeContract:           backend.CloneRuntimeContract(spec.RuntimeContract),
+		RuntimeInstanceExpected:   cloneRuntimeInstanceExpectation(spec.RuntimeInstanceExpected),
+		RuntimeResultSink:         spec.RuntimeResultSink,
+		RuntimeCompletionSink:     spec.RuntimeCompletionSink,
 	}, nil
 }
 
-func (b Backend) Run(ctx context.Context, session *backend.Session, command []string, env []string) error {
+func (b Backend) Run(ctx context.Context, session *backend.Session, command []string, env []string) (retErr error) {
 	if len(command) == 0 {
 		return errors.New("command is required")
 	}
@@ -235,28 +239,12 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	if session.ConfigPath == "" || session.InstanceName == "" {
 		return errors.New("lima session is missing config path or instance name")
 	}
-	session.Env = append([]string(nil), env...)
-	runner := b.runner()
-	hostEnv := HostCommandEnv(os.Environ())
-	startArgs := []string{"start", "--tty=false", "--name", session.InstanceName, session.ConfigPath}
-	if session.PreserveInstance || session.EnvironmentID != "" {
-		exists, err := b.instanceExists(ctx, runner, hostEnv, session.InstanceName)
-		if err != nil {
-			return err
-		}
-		if exists {
-			startArgs = []string{"start", "--tty=false", session.InstanceName}
-		}
-	}
-	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
+	runner, hostEnv, err := b.startAndObserveRuntime(ctx, session, env)
+	if err != nil {
 		return err
 	}
-	if session.PrivilegeStatusSink != nil {
-		status := b.probeGuestPrivilege(ctx, session, runner, hostEnv, GuestEnv(env))
-		session.PrivilegeStatus = &status
-		if err := session.PrivilegeStatusSink(status); err != nil {
-			return err
-		}
+	if session.RuntimeCompletionSink != nil {
+		defer func() { retErr = errors.Join(retErr, session.RuntimeCompletionSink(retErr)) }()
 	}
 	setupEnv := SetupEnv(env)
 	setupWorkdir := GuestSessionDir + "/tmp"
@@ -290,6 +278,83 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	}
 	args := ShellArgs(session.InstanceName, session.GuestWork, env, command)
 	return runner.Run(ctx, b.limactl(), args, hostEnv, b.stdin(), b.stdout(), b.stderr())
+}
+
+func (b Backend) VerifyRuntime(ctx context.Context, session *backend.Session, env []string) error {
+	if session == nil || session.RuntimeContract == nil || session.RuntimeResultSink == nil {
+		return errors.New("lima runtime verification requires a prepared session, contract, and result sink")
+	}
+	_, _, err := b.startAndObserveRuntime(ctx, session, env)
+	return err
+}
+
+func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Session, env []string) (CommandRunner, []string, error) {
+	if session == nil {
+		return nil, nil, errors.New("session is required")
+	}
+	if session.ConfigPath == "" || session.InstanceName == "" {
+		return nil, nil, errors.New("lima session is missing config path or instance name")
+	}
+	session.Env = append([]string(nil), env...)
+	runner := b.runner()
+	hostEnv := HostCommandEnv(os.Environ())
+	if session.RuntimeContract != nil {
+		if session.RuntimeInstanceExpected == nil {
+			return nil, nil, errors.New("runtime observation requires an instance expectation")
+		}
+		if err := session.RuntimeInstanceExpected.Validate(); err != nil {
+			return nil, nil, err
+		}
+	}
+	startArgs := []string{"start", "--tty=false", "--name", session.InstanceName, session.ConfigPath}
+	if session.PreserveInstance || session.EnvironmentID != "" {
+		exists, err := b.instanceExists(ctx, runner, hostEnv, session.InstanceName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if exists {
+			if session.RuntimeContract != nil {
+				if _, err := b.inspectRuntimeInstance(ctx, runner, hostEnv, session, false); err != nil {
+					return nil, nil, fmt.Errorf("refuse mismatched reusable Lima instance: %w", err)
+				}
+			}
+			startArgs = []string{"start", "--tty=false", session.InstanceName}
+		}
+	}
+	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
+		return nil, nil, err
+	}
+	var (
+		instance backend.RuntimeInstanceObservation
+		err      error
+	)
+	if session.RuntimeContract != nil {
+		instance, err = b.inspectRuntimeInstance(ctx, runner, hostEnv, session, true)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if session.PrivilegeStatusSink != nil {
+		status := b.probeGuestPrivilege(ctx, session, runner, hostEnv, GuestEnv(env))
+		session.PrivilegeStatus = &status
+		if err := session.PrivilegeStatusSink(status); err != nil {
+			return nil, nil, err
+		}
+	}
+	if session.RuntimeContract != nil {
+		if err := b.observeRuntime(ctx, session, runner, hostEnv, GuestEnv(env), instance); err != nil {
+			return nil, nil, err
+		}
+	}
+	return runner, hostEnv, nil
+}
+
+func cloneRuntimeInstanceExpectation(value *backend.RuntimeInstanceExpectation) *backend.RuntimeInstanceExpectation {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (b Backend) StartHostToGuestBridge(ctx context.Context, instanceName, guestWork string, env []string, spec portbridge.Spec) (*portbridge.Bridge, error) {
@@ -638,7 +703,7 @@ func BootstrapScript(commandProxyShims []string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("set -eu\n")
-	b.WriteString("mkdir -p /hideout/profile/home /hideout/profile/config /hideout/profile/cache /hideout/profile/data /hideout/profile/browser /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap\n")
+	b.WriteString("mkdir -p /hideout/profile/home/.local/bin /hideout/profile/config /hideout/profile/cache /hideout/profile/data /hideout/profile/browser /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap\n")
 	if len(commandProxyShims) == 0 {
 		commandProxyShims = append([]string{"hideout-shim"}, cmdproxy.DefaultRegistry().ShimNames()...)
 	}
@@ -788,7 +853,7 @@ func GuestEnv(env []string) []string {
 		case "GIT_CONFIG_GLOBAL":
 			value = GuestProfileDir + "/home/.gitconfig"
 		case "PATH":
-			value = GuestSessionDir + "/shims:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+			value = GuestSessionDir + "/shims:" + GuestProfileDir + "/home/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 		}
 		out = append(out, name+"="+value)
 	}

@@ -2,6 +2,7 @@ package hostfs
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/hostpathrisk"
 )
 
 type Op string
@@ -21,6 +24,7 @@ type Source string
 
 const (
 	OpStat     Op = "stat"
+	OpDiscover Op = "discover"
 	OpRead     Op = "read"
 	OpList     Op = "list"
 	OpWrite    Op = "write"
@@ -125,6 +129,24 @@ func ParseRuleSpec(flagName, value, reason string) (Rule, error) {
 		Reason:   reason,
 	}
 	switch kind {
+	case "see":
+		if hasGlob {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors", flagName, kind)
+		}
+		rule.Ops = []Op{OpDiscover}
+		rule.Scope = ScopeExactFile
+	case "see-dir":
+		if hasGlob {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors", flagName, kind)
+		}
+		rule.Ops = []Op{OpDiscover}
+		rule.Scope = ScopeDir
+	case "see-tree":
+		if hasGlob {
+			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors", flagName, kind)
+		}
+		rule.Ops = []Op{OpDiscover}
+		rule.Scope = ScopeRecursiveDir
 	case "stat":
 		rule.Ops = []Op{OpStat}
 		rule.Scope = ScopeExactFile
@@ -138,11 +160,7 @@ func ParseRuleSpec(flagName, value, reason string) (Rule, error) {
 			rule.Scope = ScopeGlob
 		}
 	case "list":
-		if hasGlob {
-			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
-		}
-		rule.Ops = []Op{OpList}
-		rule.Scope = ScopeDir
+		return Rule{}, fmt.Errorf("%s kind %q is legacy and cannot be added; use profile fs migrate-list to review see-dir or see-tree disclosure", flagName, kind)
 	case "dir":
 		if hasGlob {
 			return Rule{}, fmt.Errorf("%s kind %q does not support glob path selectors; use read: or stat:", flagName, kind)
@@ -232,7 +250,47 @@ func Build(input BuildInput) (EffectivePolicy, error) {
 		out.Grants = append(out.Grants, policy.Grants...)
 		out.Deny = append(out.Deny, policy.Deny...)
 	}
+	if err := addImplicitBroadDiscoveryDenies(&out, input.StoreRoot); err != nil {
+		return EffectivePolicy{}, err
+	}
 	return out, nil
+}
+
+func addImplicitBroadDiscoveryDenies(policy *EffectivePolicy, storeRoot string) error {
+	if policy == nil {
+		return errors.New("HostFS policy is required")
+	}
+	var source Source
+	for _, grant := range policy.Grants {
+		if opAllowed(grant.Rule, OpDiscover) {
+			source = grant.Source
+			break
+		}
+	}
+	if source == "" {
+		return nil
+	}
+	for _, root := range hostpathrisk.BroadDiscoveryHiddenRoots(storeRoot) {
+		clean, err := cleanHostPath(root.Path)
+		if err != nil {
+			return fmt.Errorf("invalid broad-discovery hidden root: %w", err)
+		}
+		sum := sha256.Sum256([]byte("implicit-discover-deny\x00" + clean))
+		policy.Deny = append(policy.Deny, Grant{
+			Rule: Rule{
+				ID:       "hfs_implicit_" + hex.EncodeToString(sum[:6]),
+				HostPath: clean,
+				Ops:      []Op{OpDiscover},
+				Scope:    ScopeRecursiveDir,
+				Subject:  defaultSubject(source),
+				TTL:      defaultTTL(source),
+				Reason:   "implicit broad discovery exclusion: " + string(root.Category),
+			},
+			Source: source,
+			Index:  -1,
+		})
+	}
+	return nil
 }
 
 func (p EffectivePolicy) Decide(op Op, hostPath string) Decision {
@@ -333,7 +391,7 @@ func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time
 			return Grant{}, err
 		}
 	}
-	if !deny && ruleCoversReservedRoot(rule, reservedRoots) {
+	if !deny && ruleCoversReservedRoot(rule, reservedRoots) && !discoverOnlyRule(rule) {
 		return Grant{}, fmt.Errorf("HostFS grant for %s with scope %s covers Hideout control-plane store", rule.HostPath, rule.Scope)
 	}
 	if !deny && strings.TrimSpace(rule.Reason) == "" {
@@ -365,6 +423,10 @@ func normalizeRule(rule Rule, source Source, index int, deny bool, now time.Time
 		rule.ID = fmt.Sprintf("%s-%d", source, index)
 	}
 	return Grant{Rule: rule, Source: source, Index: index}, nil
+}
+
+func discoverOnlyRule(rule Rule) bool {
+	return len(rule.Ops) == 1 && rule.Ops[0] == OpDiscover && !rule.Overlay
 }
 
 func normalizeGrantOps(rule Rule) ([]Op, error) {
@@ -425,7 +487,7 @@ func normalizeOps(ops []Op) ([]Op, error) {
 
 func validateKnownOp(op Op) error {
 	switch op {
-	case OpStat, OpRead, OpList, OpWrite, OpCreate, OpAppend, OpTruncate, OpMkdir, OpDelete, OpRename, OpChmod, OpChown:
+	case OpDiscover, OpStat, OpRead, OpList, OpWrite, OpCreate, OpAppend, OpTruncate, OpMkdir, OpDelete, OpRename, OpChmod, OpChown:
 		return nil
 	default:
 		return fmt.Errorf("unsupported HostFS op %q", op)
@@ -447,30 +509,32 @@ func sortOps(ops []Op) {
 
 func opRank(op Op) int {
 	switch op {
-	case OpStat:
+	case OpDiscover:
 		return 0
-	case OpRead:
+	case OpStat:
 		return 1
-	case OpList:
+	case OpRead:
 		return 2
-	case OpWrite:
+	case OpList:
 		return 3
-	case OpCreate:
+	case OpWrite:
 		return 4
-	case OpAppend:
+	case OpCreate:
 		return 5
-	case OpTruncate:
+	case OpAppend:
 		return 6
-	case OpMkdir:
+	case OpTruncate:
 		return 7
-	case OpDelete:
+	case OpMkdir:
 		return 8
-	case OpRename:
+	case OpDelete:
 		return 9
-	case OpChmod:
+	case OpRename:
 		return 10
-	case OpChown:
+	case OpChmod:
 		return 11
+	case OpChown:
+		return 12
 	default:
 		return 100
 	}
