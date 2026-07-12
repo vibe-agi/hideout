@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/host-app-inspection.schema.json",
+  "title": "Hideout Host-App Inspection",
+  "description": "Path-free Core-derived host-app package, binding, identity, safety, and runtime inspection. HostFS is represented only as the hostfs-portal resource class; lower host paths and portal/provider tokens are not fields in this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "entries"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.host-app-inspection/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "entries": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "bundleTreeDigest": {
+      "type": "string",
+      "pattern": "^bundle-tree-v1:sha256:[a-f0-9]{64}$"
+    },
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]+$"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "app",
+        "profile",
+        "access",
+        "readiness"
+      ],
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/id"
+        },
+        "app": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "profile": {
+          "$ref": "#/$defs/id"
+        },
+        "access": {
+          "enum": [
+            "safe",
+            "ask-each-run"
+          ]
+        },
+        "readiness": {
+          "enum": [
+            "ready",
+            "review-required",
+            "new-run-required",
+            "disabled",
+            "unavailable"
+          ]
+        },
+        "nextAction": {
+          "$ref": "#/$defs/boundedText"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revisionId",
+        "sourceKind",
+        "sourceDigest",
+        "testStatus"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "revisionId": {
+          "$ref": "#/$defs/id"
+        },
+        "sourceKind": {
+          "enum": [
+            "builtin",
+            "local",
+            "git"
+          ]
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "testStatus": {
+          "enum": [
+            "not-run",
+            "passed",
+            "failed"
+          ]
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint",
+        "status",
+        "diff"
+      ],
+      "properties": {
+        "fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "review-required",
+            "revoked"
+          ]
+        },
+        "diff": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/boundedText"
+          }
+        }
+      }
+    },
+    "appIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verification",
+        "rootClass",
+        "ownerClass"
+      ],
+      "properties": {
+        "verification": {
+          "enum": [
+            "verified",
+            "unverified",
+            "absent",
+            "drifted",
+            "unsupported"
+          ]
+        },
+        "rootClass": {
+          "enum": [
+            "system-applications",
+            "applications",
+            "operator-applications",
+            "none"
+          ]
+        },
+        "ownerClass": {
+          "enum": [
+            "root",
+            "operator",
+            "unknown"
+          ]
+        },
+        "bundleId": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "teamId": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "codeIdentity": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "contentDigest": {
+          "$ref": "#/$defs/bundleTreeDigest"
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "commands",
+        "resourceKinds",
+        "capabilityId",
+        "grammar",
+        "resultPolicy",
+        "shadowStatus"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "resourceKinds": {
+          "description": "Core-validated classes the immutable binding may consume. hostfs-portal means existing same-session HostFS content/tree authority only; it does not create a grant and carries no lower host path.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "workspace",
+              "hostfs-portal"
+            ]
+          }
+        },
+        "capabilityId": {
+          "const": "host.app.open-resource"
+        },
+        "grammar": {
+          "const": "open-resource-v1"
+        },
+        "resultPolicy": {
+          "const": "none"
+        },
+        "shadowStatus": {
+          "enum": [
+            "owned",
+            "conflict",
+            "replaced",
+            "reserved"
+          ]
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "posture"
+      ],
+      "properties": {
+        "requestedProfile": {
+          "$ref": "#/$defs/id"
+        },
+        "compatibleProfile": {
+          "$ref": "#/$defs/id"
+        },
+        "posture": {
+          "enum": [
+            "safe",
+            "elevated",
+            "unverified-app",
+            "unavailable"
+          ]
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activeInCurrentRun",
+        "grantState"
+      ],
+      "properties": {
+        "activeInCurrentRun": {
+          "type": "boolean"
+        },
+        "grantState": {
+          "description": "Run-scoped host-app decision state only. Every HostFS resource is independently reauthorized at final launch, so an approved app decision cannot revive stale portal authority.",
+          "enum": [
+            "not-required",
+            "pending",
+            "approved",
+            "denied",
+            "expired",
+            "revoked"
+          ]
+        },
+        "lastOutcome": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "auditRef": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "untrusted",
+        "text"
+      ],
+      "properties": {
+        "untrusted": {
+          "const": true
+        },
+        "text": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048,
+          "pattern": "^https://"
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "package",
+        "permissions",
+        "appIdentity",
+        "binding",
+        "safety",
+        "runtime"
+      ],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/summary"
+        },
+        "package": {
+          "$ref": "#/$defs/package"
+        },
+        "permissions": {
+          "$ref": "#/$defs/permissions"
+        },
+        "appIdentity": {
+          "$ref": "#/$defs/appIdentity"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "safety": {
+          "$ref": "#/$defs/safety"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "hint": {
+          "$ref": "#/$defs/hint"
+        }
+      }
+    }
+  }
+}

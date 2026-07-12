@@ -3,6 +3,7 @@ package profile
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,28 @@ import (
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 )
+
+func TestLoadRejectsLegacyListOnlyProfileWithTypedMigrationError(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	p := Default("legacy-load")
+	p.HostFS.Grants = []hostfs.Rule{{
+		ID: "hfs_old", HostPath: t.TempDir(), Ops: []hostfs.Op{hostfs.OpList}, Scope: hostfs.ScopeDir, Reason: "legacy list",
+	}}
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Load(p.Name)
+	if !errors.Is(err, ErrLegacyListMigrationRequired) {
+		t.Fatalf("Load err=%v want typed legacy migration error", err)
+	}
+	var migrationErr *LegacyListMigrationError
+	if !errors.As(err, &migrationErr) || migrationErr.Profile != p.Name || len(migrationErr.Rules) != 1 || migrationErr.Rules[0].ID != "hfs_old" {
+		t.Fatalf("typed migration details=%+v err=%v", migrationErr, err)
+	}
+	if !strings.Contains(err.Error(), "hideout profile fs legacy-load migrate-list") {
+		t.Fatalf("migration error lacks executable guidance: %v", err)
+	}
+}
 
 func TestDefaultStoreCanUseExplicitHideoutStoreRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
@@ -405,6 +428,26 @@ func TestDefaultProfileHostFSIsHiddenByDefault(t *testing.T) {
 	p := Default("test")
 	if len(p.HostFS.Grants) != 0 || len(p.HostFS.Deny) != 0 {
 		t.Fatalf("default HostFS policy should be empty: %+v", p.HostFS)
+	}
+}
+
+func TestProfileSchemaAcceptsDiscoverWithoutContentAuthority(t *testing.T) {
+	schema := compileProfileSchema(t)
+	p := Default("discover-schema")
+	p.HostFS.Grants = []hostfs.Rule{{
+		ID:       "hfs_see",
+		HostPath: "/Users/alice/Documents",
+		Ops:      []hostfs.Op{hostfs.OpDiscover},
+		Scope:    hostfs.ScopeDir,
+		Subject:  hostfs.SubjectProfile,
+		TTL:      hostfs.TTLProfile,
+		Reason:   "navigate",
+	}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Go validation rejected discover: %v", err)
+	}
+	if err := validateProfileWithSchema(schema, p); err != nil {
+		t.Fatalf("profile schema rejected discover: %v", err)
 	}
 }
 
@@ -1730,5 +1773,45 @@ func TestEnvironmentBaseImageValidationAndDefault(t *testing.T) {
 	bad.Environment.BaseImage = "https://example.com/images/dev.img"
 	if err := validateProfileWithSchema(schema, bad); err == nil {
 		t.Fatal("schema should reject digest-less URL baseImage")
+	}
+}
+
+func TestEnvironmentRuntimeProvenanceIsExclusiveAndCloned(t *testing.T) {
+	p := Default("runtime-profile")
+	p.Environment.BaseImage = ""
+	p.Environment.Runtime = &environment.RuntimeProvenance{
+		Family:                 "developer-standard",
+		Revision:               "2026.07.0",
+		CatalogRelease:         "2026.07.0",
+		ContractID:             "developer-standard/v1",
+		ContractDigest:         "sha256:" + strings.Repeat("b", 64),
+		ArtifactLocation:       "https://github.com/vibe-agi/hideout/releases/download/runtime-2026.07.0/developer-standard.qcow2",
+		ArtifactSHA256:         strings.Repeat("a", 64),
+		PackageInventoryDigest: "sha256:" + strings.Repeat("c", 64),
+		DownloadBytes:          512 << 20,
+		VirtualBytes:           12 << 30,
+		HostOS:                 "darwin",
+		HostArch:               "arm64",
+		GuestArch:              "aarch64",
+		Maturity:               "preview",
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("runtime profile should validate: %v", err)
+	}
+	if got := p.BaseImageOrBuiltin(); got != p.Environment.Runtime.ImageRef() {
+		t.Fatalf("runtime image=%q want %q", got, p.Environment.Runtime.ImageRef())
+	}
+	clone := cloneProfile(p)
+	if clone.Environment.Runtime == p.Environment.Runtime {
+		t.Fatal("clone must not alias runtime provenance")
+	}
+	clone.Environment.Runtime.Revision = "changed"
+	if p.Environment.Runtime.Revision != "2026.07.0" {
+		t.Fatal("clone mutation changed source runtime provenance")
+	}
+
+	p.Environment.BaseImage = environment.BuiltinBaseImage
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("base image plus runtime should fail, got %v", err)
 	}
 }

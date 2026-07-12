@@ -1,0 +1,54 @@
+{
+  "schema": "hideout.runtime-source-lock/v1",
+  "architecture": "aarch64",
+  "base": {
+    "distribution": "debian",
+    "release": "13.5",
+    "build": "20260706-2531",
+    "location": "https://cloud.debian.org/images/cloud/trixie/20260706-2531/debian-13-genericcloud-arm64-20260706-2531.qcow2",
+    "sha512": "4f8ea1af9a3a89645cd30fb4139297437ce3557cf63200fd52b039dad23d5258e6dca6ae97248c62d911bae5a6d2169292fc957d23a315a3db6a0d059d6c5977",
+    "sha256": "865a923004318e1eaba93816e12f5652ab4a0f93507fb213cfcfebd4105b63a6",
+    "bytes": 335872000,
+    "virtualBytes": 3221225472
+  },
+  "debianSnapshot": {
+    "timestamp": "20260706T000000Z",
+    "packageMirror": "https://snapshot.debian.org/archive/debian/20260706T000000Z",
+    "releaseLocation": "https://snapshot.debian.org/archive/debian/20260706T000000Z/dists/trixie/Release",
+    "releaseSHA256": "db4815b92e22846fd4ab30ce3939fdb3370c823f01b22216028ba0981ba97f58",
+    "packagesLocation": "https://snapshot.debian.org/archive/debian/20260706T000000Z/dists/trixie/main/binary-arm64/Packages.xz",
+    "packagesSHA256": "5d4a0cc45158693a0fba0863f63727925018d3c52808de3c5bbc9915f0189d31",
+    "packageVersionsFile": "packages.lock",
+    "packageVersionsSHA256": "9eeb09dc79c7768c6eb58be6cc5b09cd6d443def341c850a2759cccf823dad96"
+  },
+  "builder": {
+    "hostOS": "linux",
+    "hostArch": "arm64",
+    "baseImage": "docker.io/library/debian@sha256:c8f0beb24beca8d20b134642aa45df1d5d2fd3ce5ce1437325becbb1d457bc7c",
+    "packages": [
+      "ca-certificates=20250419",
+      "curl=8.14.1-2+deb13u3",
+      "git=1:2.47.3-0+deb13u1",
+      "jq=1.7.1-6+deb13u2",
+      "libguestfs-tools=1:1.54.1-2+deb13u1",
+      "linux-image-arm64=6.12.86-1",
+      "qemu-utils=1:10.0.8+ds-0+deb13u1+b2",
+      "xz-utils=5.8.1-1"
+    ]
+  },
+  "node": {
+    "version": "22.23.1",
+    "npmVersion": "10.9.8",
+    "location": "https://nodejs.org/download/release/v22.23.1/node-v22.23.1-linux-arm64.tar.xz",
+    "sha256": "0294e8b915ab75f92c7513d2fcb830ae06e10684e6c603e99a87dbf8835389c1"
+  },
+  "go": {
+    "version": "1.26.5",
+    "location": "https://go.dev/dl/go1.26.5.linux-arm64.tar.gz",
+    "sha256": "fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
+  },
+  "output": {
+    "virtualBytes": 12884901888,
+    "format": "qcow2"
+  }
+}

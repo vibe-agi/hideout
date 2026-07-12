@@ -16,6 +16,26 @@ import (
 
 const hostFSSubject = "hostfs:daemon"
 
+type HostFSReadProposal struct {
+	SessionID       string
+	Profile         string
+	Backend         string
+	RequestedPath   string
+	CanonicalPath   string
+	Visibility      hostfs.VisibilityResult
+	UntrustedReason string
+}
+
+type HostFSReadProposalResult struct {
+	Code         string
+	DecisionRef  string
+	RetryAfterMS *int64
+}
+
+type HostFSReadDecisionProvider interface {
+	ProposeHostFSRead(context.Context, HostFSReadProposal) (HostFSReadProposalResult, error)
+}
+
 type hostFSArgs struct {
 	path            string
 	destinationPath string
@@ -33,6 +53,7 @@ type hostFSArgs struct {
 
 type hostFSPolicyAudit struct {
 	Decision      hostfs.Decision
+	Visibility    hostfs.VisibilityResult
 	Canonicalized bool
 }
 
@@ -62,16 +83,18 @@ func (s *Server) handleHostFS(ctx context.Context, req Request, resp Response) R
 		return resp
 	}
 	if s.HostFS == nil {
-		resp.Stderr = "HostFS data plane is not configured"
+		resp = hostFSErrorResponse(resp, hostfs.ErrUnsupported)
 		s.emit(req, resp, hostFSAuditDetails(req, args, nil, hostFSPolicyAudit{}))
 		return resp
 	}
 	policyAudit := s.hostFSPolicyDecision(req.Action, args.path)
 	data, err := s.executeHostFS(ctx, req.Action, args)
 	if err != nil {
-		resp = hostFSErrorResponse(resp, err)
+		resp = s.hostFSErrorResponse(ctx, resp, err)
 		details := hostFSAuditDetails(req, args, nil, policyAudit)
-		s.emit(req, resp, details)
+		if !s.recordHostFSDiscoveryAudit(req, resp, policyAudit) {
+			s.emit(req, resp, details)
+		}
 		if isHostFSWriteAction(req.Action) {
 			s.emitAction(overlay.ActionDeny, req, resp, details)
 		}
@@ -82,7 +105,9 @@ func (s *Server) handleHostFS(ctx context.Context, req Request, resp Response) R
 	resp.ExitCode = 0
 	resp.Data = data
 	details := hostFSAuditDetails(req, args, data, policyAudit)
-	s.emit(req, resp, details)
+	if !s.recordHostFSDiscoveryAudit(req, resp, policyAudit) {
+		s.emit(req, resp, details)
+	}
 	if isHostFSWriteAction(req.Action) && data["staged"] == true {
 		s.emitAction(overlay.ActionStage, req, resp, details)
 		s.emitAction(overlay.ActionPending, req, resp, details)
@@ -253,12 +278,7 @@ func (s *Server) executeHostFS(_ context.Context, action string, args hostFSArgs
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{
-			"kind":    info.Kind,
-			"size":    info.Size,
-			"mode":    info.Mode,
-			"modTime": info.ModTime,
-		}, nil
+		return hostFSNodeInfoData(info), nil
 	case "host.fs.read":
 		result, err := s.HostFS.Read(args.path, args.offset, args.size)
 		if err != nil {
@@ -280,12 +300,7 @@ func (s *Server) executeHostFS(_ context.Context, action string, args hostFSArgs
 		}
 		out := make([]map[string]any, 0, len(entries))
 		for _, entry := range entries {
-			out = append(out, map[string]any{
-				"name": entry.Name,
-				"kind": entry.Kind,
-				"size": entry.Size,
-				"mode": entry.Mode,
-			})
+			out = append(out, hostFSDirEntryData(entry))
 		}
 		return map[string]any{"entries": out}, nil
 	case "host.fs.write", "host.fs.write.create", "host.fs.write.replace", "host.fs.write.append", "host.fs.write.truncate",
@@ -326,6 +341,31 @@ func (s *Server) executeHostFS(_ context.Context, action string, args hostFSArgs
 	}
 }
 
+func hostFSNodeInfoData(info hostfs.NodeInfo) map[string]any {
+	out := map[string]any{"kind": info.Kind}
+	if info.Coarse {
+		out["locked"] = info.Locked
+		out["caps"] = append([]string(nil), info.Caps...)
+		return out
+	}
+	out["size"] = info.Size
+	out["mode"] = info.Mode
+	out["modTime"] = info.ModTime
+	return out
+}
+
+func hostFSDirEntryData(entry hostfs.DirEntry) map[string]any {
+	out := map[string]any{"name": entry.Name, "kind": entry.Kind}
+	if entry.Coarse {
+		out["locked"] = entry.Locked
+		out["caps"] = append([]string(nil), entry.Caps...)
+		return out
+	}
+	out["size"] = entry.Size
+	out["mode"] = entry.Mode
+	return out
+}
+
 func (s *Server) hostFSPolicyDecision(action, path string) hostFSPolicyAudit {
 	if s.HostFS == nil {
 		return hostFSPolicyAudit{}
@@ -338,9 +378,13 @@ func (s *Server) hostFSPolicyDecision(action, path string) hostFSPolicyAudit {
 		return hostFSPolicyAudit{Decision: hostfs.Decision{Effect: "unsupported", Reason: "HostFS v1 is read-only"}}
 	}
 	decision := s.HostFS.Policy.Decide(op, path)
+	visibility := s.HostFS.Policy.Visibility(path)
+	if decision.Effect == "none" && visibility.DiscoverDecision.Effect != "" {
+		decision = visibility.DiscoverDecision
+	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil || filepath.Clean(resolved) == filepath.Clean(path) {
-		return hostFSPolicyAudit{Decision: decision}
+		return hostFSPolicyAudit{Decision: decision, Visibility: visibility}
 	}
 	resolvedDecision := s.HostFS.Policy.Decide(op, resolved)
 	auditDecision := decision
@@ -357,7 +401,7 @@ func (s *Server) hostFSPolicyDecision(action, path string) hostFSPolicyAudit {
 	case decision.Effect == "none" && resolvedDecision.Effect != "none":
 		auditDecision = resolvedDecision
 	}
-	return hostFSPolicyAudit{Decision: auditDecision, Canonicalized: true}
+	return hostFSPolicyAudit{Decision: auditDecision, Visibility: visibility, Canonicalized: true}
 }
 
 func hostFSActionOp(action string) (hostfs.Op, bool) {
@@ -405,18 +449,84 @@ func isHostFSWriteAction(action string) bool {
 	return action == "host.fs.write" || strings.HasPrefix(action, "host.fs.write.")
 }
 
+func (s *Server) hostFSErrorResponse(ctx context.Context, resp Response, err error) Response {
+	var accessErr *hostfs.AccessError
+	if errors.Is(err, hostfs.ErrReadApprovalRequired) && errors.As(err, &accessErr) && s.HostFSReadDecisions != nil {
+		result, proposalErr := s.HostFSReadDecisions.ProposeHostFSRead(ctx, HostFSReadProposal{
+			SessionID:     s.SessionID,
+			Profile:       s.Profile,
+			Backend:       s.Backend,
+			RequestedPath: accessErr.RequestedPath,
+			CanonicalPath: accessErr.CanonicalPath,
+			Visibility:    accessErr.Visibility,
+		})
+		if proposalErr != nil {
+			return typedHostFSErrorResponse(resp, HostFSErrorBrokerUnavailable, "hostfs read approval provider failed", "", nil)
+		}
+		message := "hostfs read denied"
+		switch result.Code {
+		case HostFSErrorReadApprovalRequired:
+			message = "hostfs read is locked; operator approval is required"
+		case HostFSErrorReadRequestLimited:
+			message = "hostfs read approval request is temporarily limited"
+		case HostFSErrorBrokerUnavailable:
+			message = "hostfs read approval provider is unavailable"
+		}
+		return typedHostFSErrorResponse(resp, result.Code, message, result.DecisionRef, result.RetryAfterMS)
+	}
+	return hostFSErrorResponse(resp, err)
+}
+
 func hostFSErrorResponse(resp Response, err error) Response {
+	code := ""
 	switch hostfs.MapError(err) {
 	case hostfs.ErrNotFound:
 		resp.Stderr = "hostfs path not found"
+		code = HostFSErrorPathHidden
 	case hostfs.ErrUnsupported:
 		resp.Stderr = "hostfs operation unsupported"
+		code = HostFSErrorOperationUnsupported
+	case hostfs.ErrReadApprovalRequired:
+		resp.Stderr = "hostfs read is locked; no approval provider is available"
+		code = HostFSErrorReadDenied
+	case hostfs.ErrReadDenied:
+		resp.Stderr = "hostfs read denied"
+		code = HostFSErrorReadDenied
+	case hostfs.ErrDirectoryNotEnumerable:
+		resp.Stderr = "hostfs directory is visible but not enumerable"
+		code = HostFSErrorDirectoryNotEnumerable
+	case hostfs.ErrDirectoryIncomplete:
+		resp.Stderr = "hostfs directory listing is incomplete"
+		code = HostFSErrorDirectoryIncomplete
+	case hostfs.ErrWriteUnauthorized:
+		resp.Stderr = "hostfs write is unauthorized"
+		code = HostFSErrorWriteUnauthorized
+	case hostfs.ErrHostPrerequisite:
+		resp.Stderr = "hostfs host prerequisite failed"
+		code = HostFSErrorHostPrerequisiteFailed
 	default:
 		resp.Status = "error"
 		resp.ExitCode = 1
 		resp.Stderr = "hostfs operation failed"
+		record, recordErr := NewErrorRecord(HostFSErrorHostPrerequisiteFailed, "", nil)
+		if recordErr == nil {
+			resp.Error = record
+		}
 		return resp
 	}
+	return typedHostFSErrorResponse(resp, code, resp.Stderr, "", nil)
+}
+
+func typedHostFSErrorResponse(resp Response, code, message, decisionRef string, retryAfterMS *int64) Response {
+	record, recordErr := NewErrorRecord(code, decisionRef, retryAfterMS)
+	if recordErr != nil {
+		resp.Status = "error"
+		resp.ExitCode = 1
+		resp.Stderr = "hostfs typed error validation failed"
+		return resp
+	}
+	resp.Error = record
+	resp.Stderr = message
 	resp.Status = "denied"
 	resp.ExitCode = 126
 	return resp

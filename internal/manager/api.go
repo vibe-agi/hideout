@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
+	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/session"
 )
@@ -60,24 +62,34 @@ type RunStatusResponse struct {
 }
 
 type InitAPIRequest struct {
-	ProfileName           string `json:"profile,omitempty"`
-	Backend               string `json:"backend,omitempty"`
-	Network               string `json:"network,omitempty"`
-	ProxySecretRef        string `json:"proxySecretRef,omitempty"`
-	MediatedResolver      string `json:"mediatedResolver,omitempty"`
-	TemplateID            string `json:"template,omitempty"`
-	PrivilegeStatus       string `json:"privilegeStatus,omitempty"`
-	PrivilegeReason       string `json:"privilegeReason,omitempty"`
-	PrivilegeGuidance     string `json:"privilegeGuidance,omitempty"`
-	PrivilegeSource       string `json:"privilegeSource,omitempty"`
-	AllowDegradedTemplate bool   `json:"allowDegradedTemplate,omitempty"`
-	DryRun                bool   `json:"dryRun,omitempty"`
+	ProfileName                string   `json:"profile,omitempty"`
+	Backend                    string   `json:"backend,omitempty"`
+	Network                    string   `json:"network,omitempty"`
+	ProxySecretRef             string   `json:"proxySecretRef,omitempty"`
+	MediatedResolver           string   `json:"mediatedResolver,omitempty"`
+	TemplateID                 string   `json:"template,omitempty"`
+	PrivilegeStatus            string   `json:"privilegeStatus,omitempty"`
+	PrivilegeReason            string   `json:"privilegeReason,omitempty"`
+	PrivilegeGuidance          string   `json:"privilegeGuidance,omitempty"`
+	PrivilegeSource            string   `json:"privilegeSource,omitempty"`
+	AllowDegradedTemplate      bool     `json:"allowDegradedTemplate,omitempty"`
+	HostFSVisibility           string   `json:"hostfsVisibility,omitempty"`
+	HostFSVisibilityRoots      []string `json:"hostfsVisibilityRoots,omitempty"`
+	NameDisclosureAcknowledged bool     `json:"nameDisclosureAcknowledged,omitempty"`
+	DryRun                     bool     `json:"dryRun,omitempty"`
+	RuntimeFamily              string   `json:"runtime,omitempty"`
+	ImageRef                   string   `json:"image,omitempty"`
 }
 
 type EnvironmentActionAPIRequest struct {
 	IDs         []string `json:"ids,omitempty"`
 	Idle        string   `json:"idle,omitempty"`
 	StoppedOnly bool     `json:"stoppedOnly,omitempty"`
+}
+
+type RuntimeVerifyAPIRequest struct {
+	EnvironmentName string             `json:"environmentName,omitempty"`
+	Plan            *RuntimeVerifyPlan `json:"plan,omitempty"`
 }
 
 type CommandProxyAPIRequest struct {
@@ -102,12 +114,35 @@ type AdapterPackAPIRequest struct {
 	Plan                        *AdapterPackPlan `json:"plan,omitempty"`
 }
 
+type HostAppPackAPIRequest struct {
+	Operation      string            `json:"operation,omitempty"`
+	SourceKind     string            `json:"sourceKind,omitempty"`
+	SourcePath     string            `json:"sourcePath,omitempty"`
+	SourceURL      string            `json:"sourceUrl,omitempty"`
+	SourceCommit   string            `json:"sourceCommit,omitempty"`
+	ProfileName    string            `json:"profile,omitempty"`
+	PackID         string            `json:"packId,omitempty"`
+	RevisionID     string            `json:"revisionId,omitempty"`
+	BindingIDs     []string          `json:"bindingIds,omitempty"`
+	Access         string            `json:"access,omitempty"`
+	Replacements   map[string]string `json:"replacements,omitempty"`
+	ExpectedDigest string            `json:"expectedDigest,omitempty"`
+	InstallOnly    bool              `json:"installOnly,omitempty"`
+	Accepted       bool              `json:"accepted,omitempty"`
+	Plan           *HostAppPackPlan  `json:"plan,omitempty"`
+}
+
+type HostAppPackListAPIResponse struct {
+	HostAppPacks []HostAppPackSummary `json:"hostAppPacks"`
+}
+
 type ProfileHostFSAPIRequest struct {
-	ProfileName string `json:"profile,omitempty"`
-	Operation   string `json:"operation"`
-	Rule        string `json:"rule,omitempty"`
-	RuleID      string `json:"ruleId,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	ProfileName string                   `json:"profile,omitempty"`
+	Operation   string                   `json:"operation"`
+	Rule        string                   `json:"rule,omitempty"`
+	RuleID      string                   `json:"ruleId,omitempty"`
+	Reason      string                   `json:"reason,omitempty"`
+	Migrations  []ProfileHostFSMigration `json:"migrations,omitempty"`
 }
 
 type ProfileEnvAPIRequest struct {
@@ -178,11 +213,24 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		api.servePostResource(w, r, resource)
+		spec, ok := RecognizeManagerResource(http.MethodPost, resource)
+		if !ok {
+			if _, exists := RecognizeManagerResourceAnyMethod(resource); exists {
+				writeAPIMethodNotAllowed(w, http.MethodGet)
+				return
+			}
+			writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+			return
+		}
+		api.servePostResource(w, r, spec, resource)
 		return
 	}
 	if r.Method != http.MethodGet {
 		writeAPIMethodNotAllowed(w)
+		return
+	}
+	if _, ok := RecognizeManagerResource(http.MethodGet, resource); !ok {
+		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
 		return
 	}
 	if resource == "audit/events" {
@@ -229,6 +277,22 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		api.serveAdapterPackInspect(w, r)
 		return
 	}
+	if resource == "app/list" {
+		api.serveHostAppPacks(w, r)
+		return
+	}
+	if resource == "app/inspect" {
+		api.serveHostAppPackInspect(w, r)
+		return
+	}
+	if resource == "runtime/catalog" {
+		api.serveRuntimeCatalog(w, r)
+		return
+	}
+	if resource == "runtime/status" {
+		api.serveRuntimeStatus(w, r)
+		return
+	}
 	overview, err := api.Core.Overview(r.Context())
 	if err != nil && overview.Version == "" {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -255,16 +319,95 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
-func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resource string) {
-	if strings.HasPrefix(resource, "decisions/") {
-		api.serveDecisionMemberPost(w, r, resource)
+func (api API) serveRuntimeCatalog(w http.ResponseWriter, r *http.Request) {
+	family := strings.TrimSpace(r.URL.Query().Get("family"))
+	revision := strings.TrimSpace(r.URL.Query().Get("revision"))
+	var data any
+	var err error
+	if family == "" {
+		if revision != "" {
+			writeAPIError(w, http.StatusBadRequest, "runtime revision requires a family")
+			return
+		}
+		data, err = api.Core.RuntimeCatalog()
+	} else {
+		data, err = api.Core.InspectRuntime(family, revision)
+	}
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strings.HasPrefix(resource, "notices/") {
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "runtime/catalog", Data: data, Errors: []string{}})
+}
+
+func (api API) serveRuntimeStatus(w http.ResponseWriter, r *http.Request) {
+	handle := strings.TrimSpace(r.URL.Query().Get("env"))
+	if handle == "" {
+		writeAPIError(w, http.StatusBadRequest, "runtime status requires env query")
+		return
+	}
+	status, err := api.Core.RuntimeStatus(handle)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "runtime/status", Data: status, Errors: []string{}})
+}
+
+func (api API) serveRuntimeVerifyPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeRuntimeVerifyAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanRuntimeVerify(req.EnvironmentName)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "runtime/verify/plan", Data: plan, Errors: []string{}})
+}
+
+func (api API) serveRuntimeVerifyApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeRuntimeVerifyAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Plan == nil {
+		writeAPIError(w, http.StatusBadRequest, "runtime verify apply requires plan")
+		return
+	}
+	if api.RunBackend == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "runtime verification backend factory is unavailable")
+		return
+	}
+	backendInstance, err := api.RunBackend(
+		RunAPIRequest{Backend: req.Plan.Backend, EnvironmentName: req.Plan.EnvironmentName},
+		RunPlan{Backend: req.Plan.Backend},
+	)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyRuntimeVerify(r.Context(), *req.Plan, backendInstance)
+	resp := APIResponse{Version: APIVersion, Resource: "runtime/verify/apply", Data: result, Errors: []string{}}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec RouteSpec, resource string) {
+	switch spec.Resource {
+	case "decisions/{id}/claim", "decisions/{id}/approve", "decisions/{id}/deny", "decisions/{id}/reopen", "decisions/{id}/revoke":
+		api.serveDecisionMemberPost(w, r, resource)
+		return
+	case "notices/{id}/ack":
 		api.serveNoticeMemberPost(w, r, resource)
 		return
 	}
-	switch resource {
+	switch spec.Resource {
 	case "init/plan":
 		api.serveInitPlan(w, r)
 	case "init/apply":
@@ -311,14 +454,26 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, resourc
 		api.serveDecisionApprove(w, r)
 	case "decision/deny":
 		api.serveDecisionDeny(w, r)
+	case "decision/reopen":
+		api.serveDecisionReopen(w, r)
+	case "decision/revoke":
+		api.serveDecisionRevoke(w, r)
 	case "notice/ack":
 		api.serveNoticeAck(w, r)
 	case "adapter-pack/plan":
 		api.serveAdapterPackPlan(w, r)
 	case "adapter-pack/apply":
 		api.serveAdapterPackApply(w, r)
+	case "app/plan":
+		api.serveHostAppPackPlan(w, r)
+	case "app/apply":
+		api.serveHostAppPackApply(w, r)
+	case "runtime/verify/plan":
+		api.serveRuntimeVerifyPlan(w, r)
+	case "runtime/verify/apply":
+		api.serveRuntimeVerifyApply(w, r)
 	default:
-		writeAPIMethodNotAllowed(w, http.MethodGet)
+		writeAPIError(w, http.StatusInternalServerError, "manager route inventory has no POST handler for "+spec.Resource)
 	}
 }
 
@@ -561,6 +716,7 @@ func (api API) serveHostFSWriteDiscard(w http.ResponseWriter, r *http.Request) {
 func (api API) serveHostFSWriteStatus(w http.ResponseWriter, r *http.Request) {
 	status, err := api.Core.HostFSWriteStatus(HostFSWriteStatusRequest{
 		Session: r.URL.Query().Get("session"),
+		Profile: r.URL.Query().Get("profile"),
 		State:   r.URL.Query().Get("state"),
 	})
 	if err != nil {
@@ -685,6 +841,34 @@ func (api API) serveDecisionDeny(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (api API) serveDecisionReopen(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostFSReadReopenRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, reopenErr := api.Core.ReopenDecision(req)
+	resp := APIResponse{Version: APIVersion, Resource: "decision/reopen", Data: result, Errors: []string{}}
+	if reopenErr != nil {
+		resp.Errors = []string{reopenErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveDecisionRevoke(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeDecisionRevokeRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, revokeErr := api.Core.RevokeDecision(req)
+	resp := APIResponse{Version: APIVersion, Resource: "decision/revoke", Data: result, Errors: []string{}}
+	if revokeErr != nil {
+		resp.Errors = []string{revokeErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
 func (api API) serveNotices(w http.ResponseWriter, r *http.Request) {
 	notices, err := api.Core.ListNotices(NoticeListRequest{
 		Kind:     r.URL.Query().Get("kind"),
@@ -787,6 +971,36 @@ func (api API) serveDecisionMemberPost(w http.ResponseWriter, r *http.Request, r
 		resp := APIResponse{Version: APIVersion, Resource: "decision/deny", Data: result, Errors: []string{}}
 		if denyErr != nil {
 			resp.Errors = []string{denyErr.Error()}
+		}
+		writeAPIJSON(w, http.StatusOK, resp)
+	case "reopen":
+		req, err := decodeHostFSReadReopenRequest(w, r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.DecisionID == "" {
+			req.DecisionID = parts[0]
+		}
+		result, reopenErr := api.Core.ReopenDecision(req)
+		resp := APIResponse{Version: APIVersion, Resource: "decision/reopen", Data: result, Errors: []string{}}
+		if reopenErr != nil {
+			resp.Errors = []string{reopenErr.Error()}
+		}
+		writeAPIJSON(w, http.StatusOK, resp)
+	case "revoke":
+		req, err := decodeDecisionRevokeRequest(w, r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.DecisionID == "" {
+			req.DecisionID = parts[0]
+		}
+		result, revokeErr := api.Core.RevokeDecision(req)
+		resp := APIResponse{Version: APIVersion, Resource: "decision/revoke", Data: result, Errors: []string{}}
+		if revokeErr != nil {
+			resp.Errors = []string{revokeErr.Error()}
 		}
 		writeAPIJSON(w, http.StatusOK, resp)
 	default:
@@ -899,6 +1113,116 @@ func (api API) serveAdapterPackApply(w http.ResponseWriter, r *http.Request) {
 		resp.Errors = []string{applyErr.Error()}
 	}
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveHostAppPacks(w http.ResponseWriter, r *http.Request) {
+	packs, err := api.Core.ListHostAppPacks()
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "app/list",
+		Data:     HostAppPackListAPIResponse{HostAppPacks: packs},
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveHostAppPackInspect(w http.ResponseWriter, r *http.Request) {
+	packID := r.URL.Query().Get("packId")
+	if packID == "" {
+		writeAPIError(w, http.StatusBadRequest, "packId is required")
+		return
+	}
+	inspection, err := api.Core.InspectHostAppPack(packID, r.URL.Query().Get("profile"))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "app/inspect", Data: inspection.Status, Errors: []string{}})
+}
+
+func (api API) serveHostAppPackPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostAppPackAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanHostAppPack(hostAppPackOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "app/plan", Data: plan, Errors: []string{}})
+}
+
+func (api API) serveHostAppPackApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeHostAppPackAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Plan == nil {
+		writeAPIError(w, http.StatusBadRequest, "host-app apply requires the exact reviewed plan")
+		return
+	}
+	if req.Operation == "" || req.Operation != req.Plan.Operation {
+		writeAPIError(w, http.StatusBadRequest, "host-app apply operation must match the reviewed plan operation")
+		return
+	}
+	if !req.Accepted {
+		writeAPIError(w, http.StatusBadRequest, "host-app apply requires explicit acceptance")
+		return
+	}
+	plan, err := api.reviewedHostAppPackPlan(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyHostAppPack(plan)
+	if applyErr != nil {
+		writeAPIError(w, http.StatusBadRequest, applyErr.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "app/apply", Data: result, Errors: []string{}})
+}
+
+func (api API) reviewedHostAppPackPlan(req HostAppPackAPIRequest) (HostAppPackPlan, error) {
+	plan := *req.Plan
+	if plan.Version != HostAppPackPlanVersion {
+		return HostAppPackPlan{}, errors.New("invalid host-app plan version")
+	}
+	sourceApply := plan.Operation == "add" || plan.Operation == "update" ||
+		((plan.Operation == "validate" || plan.Operation == "test") && plan.SourceReview.Kind != "")
+	if sourceApply {
+		source := hostapppack.SourceSpec{
+			Kind:   req.SourceKind,
+			Path:   req.SourcePath,
+			URL:    req.SourceURL,
+			Commit: req.SourceCommit,
+		}
+		if source.Kind == "" {
+			return HostAppPackPlan{}, fmt.Errorf("host-app %s apply requires the original source locator alongside the reviewed plan", plan.Operation)
+		}
+		plan.Source = source
+	}
+	checked, err := api.Core.PlanHostAppPack(hostAppPackOptionsFromReviewedPlan(plan))
+	if err != nil {
+		return HostAppPackPlan{}, err
+	}
+	submittedJSON, err := json.Marshal(plan)
+	if err != nil {
+		return HostAppPackPlan{}, errors.New("invalid host-app reviewed plan")
+	}
+	checkedJSON, err := json.Marshal(checked)
+	if err != nil {
+		return HostAppPackPlan{}, errors.New("invalid host-app reviewed plan")
+	}
+	if string(submittedJSON) != string(checkedJSON) {
+		return HostAppPackPlan{}, fmt.Errorf("host-app %s reviewed plan is stale or malformed", plan.Operation)
+	}
+	return checked, nil
 }
 
 func (api API) serveEnvironmentStopPlan(w http.ResponseWriter, r *http.Request) {
@@ -1180,6 +1504,17 @@ func decodeRunAPIRequest(w http.ResponseWriter, r *http.Request) (RunAPIRequest,
 	return req, nil
 }
 
+func decodeRuntimeVerifyAPIRequest(w http.ResponseWriter, r *http.Request) (RuntimeVerifyAPIRequest, error) {
+	var req RuntimeVerifyAPIRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid runtime verify request"); err != nil {
+		return req, err
+	}
+	if strings.TrimSpace(req.EnvironmentName) == "" && req.Plan == nil {
+		return req, errors.New("runtime verify request requires environmentName or plan")
+	}
+	return req, nil
+}
+
 func decodeInitAPIRequest(w http.ResponseWriter, r *http.Request) (InitAPIRequest, error) {
 	var req InitAPIRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -1222,6 +1557,14 @@ func decodeCommandProxyAPIRequest(w http.ResponseWriter, r *http.Request) (Comma
 func decodeAdapterPackAPIRequest(w http.ResponseWriter, r *http.Request) (AdapterPackAPIRequest, error) {
 	var req AdapterPackAPIRequest
 	if err := decodeStrictJSON(w, r, &req, "invalid adapter-pack request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeHostAppPackAPIRequest(w http.ResponseWriter, r *http.Request) (HostAppPackAPIRequest, error) {
+	var req HostAppPackAPIRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid host-app request"); err != nil {
 		return req, err
 	}
 	return req, nil
@@ -1288,6 +1631,22 @@ func decodeDecisionResolveRequest(w http.ResponseWriter, r *http.Request) (Decis
 	return req, nil
 }
 
+func decodeDecisionRevokeRequest(w http.ResponseWriter, r *http.Request) (DecisionRevokeRequest, error) {
+	var req DecisionRevokeRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid decision revoke request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
+func decodeHostFSReadReopenRequest(w http.ResponseWriter, r *http.Request) (HostFSReadReopenRequest, error) {
+	var req HostFSReadReopenRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid decision reopen request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
 func decodeNoticeAckRequest(w http.ResponseWriter, r *http.Request) (NoticeAckRequest, error) {
 	var req NoticeAckRequest
 	if err := decodeStrictJSON(w, r, &req, "invalid notice ack request"); err != nil {
@@ -1336,23 +1695,29 @@ func decodeExportAPIRequest(w http.ResponseWriter, r *http.Request) (ExportAPIRe
 
 func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 	return inittask.Options{
-		ProfileName:           req.ProfileName,
-		Backend:               req.Backend,
-		Network:               req.Network,
-		ProxySecretRef:        req.ProxySecretRef,
-		MediatedResolver:      req.MediatedResolver,
-		TemplateID:            req.TemplateID,
-		PrivilegeStatus:       req.PrivilegeStatus,
-		PrivilegeReason:       req.PrivilegeReason,
-		PrivilegeGuidance:     req.PrivilegeGuidance,
-		PrivilegeSource:       req.PrivilegeSource,
-		AllowDegradedTemplate: req.AllowDegradedTemplate,
-		Onboarding:            req.TemplateID != "",
-		ExplicitProfile:       req.ProfileName != "",
-		ExplicitTemplate:      req.TemplateID != "",
-		ExplicitBackend:       req.Backend != "",
-		ExplicitNetwork:       req.Network != "",
-		NoInput:               true,
+		ProfileName:                req.ProfileName,
+		Backend:                    req.Backend,
+		Network:                    req.Network,
+		ProxySecretRef:             req.ProxySecretRef,
+		MediatedResolver:           req.MediatedResolver,
+		TemplateID:                 req.TemplateID,
+		PrivilegeStatus:            req.PrivilegeStatus,
+		PrivilegeReason:            req.PrivilegeReason,
+		PrivilegeGuidance:          req.PrivilegeGuidance,
+		PrivilegeSource:            req.PrivilegeSource,
+		AllowDegradedTemplate:      req.AllowDegradedTemplate,
+		Onboarding:                 req.TemplateID != "",
+		ExplicitProfile:            req.ProfileName != "",
+		ExplicitTemplate:           req.TemplateID != "",
+		ExplicitBackend:            req.Backend != "",
+		ExplicitNetwork:            req.Network != "",
+		NoInput:                    true,
+		VisibilitySelection:        req.HostFSVisibility,
+		VisibilityRoots:            append([]string(nil), req.HostFSVisibilityRoots...),
+		NameDisclosureAcknowledged: req.NameDisclosureAcknowledged,
+		ExplicitVisibility:         req.HostFSVisibility != "",
+		RuntimeFamily:              req.RuntimeFamily,
+		ImageRef:                   req.ImageRef,
 	}
 }
 
@@ -1394,6 +1759,35 @@ func adapterPackOptionsFromAPIRequest(req AdapterPackAPIRequest) AdapterPackOpti
 	}
 }
 
+func hostAppPackOptionsFromAPIRequest(req HostAppPackAPIRequest) HostAppPackOptions {
+	return HostAppPackOptions{
+		Operation: req.Operation, SourceKind: req.SourceKind, SourcePath: req.SourcePath,
+		SourceURL: req.SourceURL, SourceCommit: req.SourceCommit, ProfileName: req.ProfileName,
+		PackID: req.PackID, RevisionID: req.RevisionID, BindingIDs: append([]string(nil), req.BindingIDs...),
+		Access: req.Access, Replacements: cloneStringMap(req.Replacements), ExpectedDigest: req.ExpectedDigest,
+		InstallOnly: req.InstallOnly,
+	}
+}
+
+func hostAppPackOptionsFromReviewedPlan(plan HostAppPackPlan) HostAppPackOptions {
+	return HostAppPackOptions{
+		Operation:      plan.Operation,
+		SourceKind:     plan.Source.Kind,
+		SourcePath:     plan.Source.Path,
+		SourceURL:      plan.Source.URL,
+		SourceCommit:   plan.Source.Commit,
+		ProfileName:    plan.Profile,
+		PackID:         plan.PackID,
+		RevisionID:     plan.RevisionID,
+		BindingIDs:     append([]string(nil), plan.BindingIDs...),
+		Access:         plan.Access,
+		Replacements:   cloneStringMap(plan.Replacements),
+		ExpectedDigest: plan.ExpectedSourceDigest,
+		InstallOnly:    plan.InstallOnly,
+		Reason:         plan.Reason,
+	}
+}
+
 func profileHostFSOptionsFromAPIRequest(req ProfileHostFSAPIRequest) ProfileHostFSOptions {
 	return ProfileHostFSOptions{
 		ProfileName: req.ProfileName,
@@ -1401,6 +1795,7 @@ func profileHostFSOptionsFromAPIRequest(req ProfileHostFSAPIRequest) ProfileHost
 		Rule:        req.Rule,
 		RuleID:      req.RuleID,
 		Reason:      req.Reason,
+		Migrations:  append([]ProfileHostFSMigration(nil), req.Migrations...),
 	}
 }
 

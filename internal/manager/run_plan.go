@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/vibe-agi/hideout/internal/hostpathrisk"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -152,82 +153,31 @@ func ResolveWorkspaceMapping(hostWorkspace, guestWorkspace string, p profile.Pro
 	return hostWorkspace, hostWorkspace, nil
 }
 
-type workspaceRiskRoot struct {
-	path     string
-	reason   string
-	homeRoot bool
-}
-
 func ValidateWorkspaceMountSafety(workspace, storeRoot string) error {
 	workspacePath, err := canonicalExistingWorkspace(workspace)
 	if err != nil {
 		return err
 	}
-	for _, root := range workspaceSensitiveRoots(storeRoot) {
-		rootPath := canonicalPathBestEffort(root.path)
+	for _, root := range hostpathrisk.Catalog(storeRoot) {
+		if !root.WorkspaceRestricted {
+			continue
+		}
+		rootPath := canonicalPathBestEffort(root.Path)
 		if rootPath == "" {
 			continue
 		}
 		workspaceInsideRoot := pathInRoot(workspacePath, rootPath)
 		workspaceContainsRoot := pathInRoot(rootPath, workspacePath)
 		blocked := workspaceContainsRoot
-		if !root.homeRoot && workspaceInsideRoot {
+		if root.Category != hostpathrisk.CategoryHomeBoundary && workspaceInsideRoot {
 			blocked = true
 		}
 		if !blocked {
 			continue
 		}
-		return fmt.Errorf("workspace %q would mount sensitive host path %q (%s); use a dedicated project directory or rerun with --allow-unsafe-workspace", workspace, root.path, root.reason)
+		return fmt.Errorf("workspace %q would mount sensitive host path %q (%s); use a dedicated project directory or rerun with --allow-unsafe-workspace", workspace, root.Path, root.Reason)
 	}
 	return nil
-}
-
-func workspaceSensitiveRoots(storeRoot string) []workspaceRiskRoot {
-	var roots []workspaceRiskRoot
-	if strings.TrimSpace(storeRoot) != "" {
-		roots = append(roots, workspaceRiskRoot{
-			path:   storeRoot,
-			reason: "Hideout control-plane store",
-		})
-	}
-	home, err := os.UserHomeDir()
-	if err == nil && strings.TrimSpace(home) != "" {
-		roots = append(roots, workspaceRiskRoot{
-			path:     home,
-			reason:   "host home contains credentials and Hideout control-plane state",
-			homeRoot: true,
-		})
-		for _, rel := range []string{
-			".ssh",
-			".gnupg",
-			".aws",
-			".azure",
-			".kube",
-			".docker",
-			".android",
-			".config/gcloud",
-			".config/gh",
-			".config/google-chrome",
-			".config/BraveSoftware",
-			".config/microsoft-edge",
-			".mozilla",
-			"Library/Keychains",
-			"Library/Application Support/Google/Chrome",
-			"Library/Application Support/BraveSoftware",
-			"Library/Application Support/Firefox",
-			"Library/Application Support/Microsoft Edge",
-		} {
-			roots = append(roots, workspaceRiskRoot{
-				path:   filepath.Join(home, filepath.FromSlash(rel)),
-				reason: "credential or browser profile root",
-			})
-		}
-	}
-	roots = append(roots, workspaceRiskRoot{
-		path:   "/Library/Keychains",
-		reason: "system credential root",
-	})
-	return roots
 }
 
 func canonicalExistingWorkspace(path string) (string, error) {

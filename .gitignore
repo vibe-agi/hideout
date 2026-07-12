@@ -2,6 +2,7 @@
 .hideout-bin/
 .hideout-release-evidence/
 .hideout-operator*
+/dist/runtime/
 
 # Go build/test artifacts
 *.exe

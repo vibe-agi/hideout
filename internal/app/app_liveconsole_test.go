@@ -9,11 +9,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
+	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/profile"
 )
 
 func TestTUILiveConsoleRendersTypedEvents(t *testing.T) {
-	seed := liveconsole.BuildSeed(liveconsole.SeedInput{StreamHealth: liveconsole.HealthLive})
+	seed := liveconsole.BuildSeed(liveconsole.SeedInput{
+		StreamHealth: liveconsole.HealthLive,
+		StatusRows: []liveconsole.StatusRow{
+			{ID: "doctor", Label: "Doctor", Status: "explicit", Detail: "not run on load", Next: "hideout doctor --level light"},
+			{ID: "package", Label: "Package", Status: "read-only", Detail: "bundles=1 enabled=1 adapterPacks=1", Next: "hideout package verify <install-prefix>"},
+			{ID: "support", Label: "Support", Status: "matrix", Detail: "platform/darwin/arm64:first-class backend/lima:first-class", Next: "hideout support matrix"},
+		},
+	})
 	state := liveconsole.NewState(seed)
 	for _, ev := range liveconsole.RepresentativeEvents() {
 		liveconsole.Apply(&state, ev)
@@ -23,6 +33,12 @@ func TestTUILiveConsoleRendersTypedEvents(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Stream: disconnected",
+		"Operator Console",
+		"action-required total=3 hostfs=1 decisions=1 notices=1",
+		"Doctor  status=explicit",
+		"hideout doctor --level light",
+		"Package  status=read-only",
+		"Support  status=matrix",
 		"alpha-env",
 		"ses_alpha",
 		"bg-1  op=environment-clean  status=completed",
@@ -41,6 +57,125 @@ func TestTUILiveConsoleRendersTypedEvents(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("live TUI output missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestBuildTUILiveStateSeedsExistingActions(t *testing.T) {
+	core := manager.New(profile.Store{Root: t.TempDir()})
+	if _, err := core.CreateDecision(decision.Decision{
+		ID:             "dec-existing",
+		Kind:           decision.KindEvidenceShare,
+		Source:         decision.Source{Profile: "alpha"},
+		State:          decision.StatePending,
+		Preview:        decision.Preview{Summary: "share evidence"},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeNoRelease,
+		TimeoutAt:      time.Now().Add(time.Hour),
+		AuditRef:       "audit:decision:existing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.CreateNotice(decision.Notice{
+		ID:       "notice-existing",
+		Kind:     decision.KindPrivilegeStatus,
+		Source:   decision.Source{Profile: "alpha"},
+		Severity: decision.NoticeSeverityWarning,
+		Status:   "degraded",
+		Preview:  decision.Preview{Summary: "privilege degraded"},
+		AuditRef: "audit:notice:existing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := buildTUILiveState(context.Background(), core, "alpha", liveconsole.HealthDaemonless)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Decisions) != 1 || state.Decisions[0].ID != "dec-existing" {
+		t.Fatalf("existing decision missing from seed: %+v", state.Decisions)
+	}
+	if len(state.Notices) != 1 || state.Notices[0].ID != "notice-existing" {
+		t.Fatalf("existing notice missing from seed: %+v", state.Notices)
+	}
+	if summary := liveconsole.ActionRequired(state); summary.Decisions != 1 || summary.Notices != 1 {
+		t.Fatalf("seed action summary mismatch: %+v", summary)
+	}
+}
+
+func TestTUILiveConsoleDoesNotExposeUnrecognizedActionRoutes(t *testing.T) {
+	state := liveconsole.NewState(liveconsole.BuildSeed(liveconsole.SeedInput{
+		StreamHealth: liveconsole.HealthLive,
+		StatusRows: []liveconsole.StatusRow{
+			{ID: "doctor", Label: "Doctor", Status: "explicit", Next: "hideout doctor --level light"},
+			{ID: "support", Label: "Support", Status: "matrix", Next: "hideout support matrix"},
+		},
+	}))
+	for _, ev := range liveconsole.RepresentativeEvents() {
+		liveconsole.Apply(&state, ev)
+	}
+	var out bytes.Buffer
+	writeTUILiveDashboard(&out, state, nil, "")
+	text := out.String()
+	for _, forbidden := range []string{"/api/v1/", "/daemon/", "decision/claim", "notice/ack"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("TUI compact dashboard should not expose HTTP action route %q:\n%s", forbidden, text)
+		}
+	}
+	for _, want := range []string{"hideout doctor --level light", "hideout support matrix"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("TUI compact dashboard should keep copyable guidance %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestTUILiveConsoleRendersHostFSReadActionsAndTerminalReopen(t *testing.T) {
+	state := liveconsole.NewState(liveconsole.BuildSeed(liveconsole.SeedInput{StreamHealth: liveconsole.HealthLive}))
+	state.Decisions = []liveconsole.DecisionRow{
+		{ID: "dec_hfr_pending", Kind: decision.KindHostFSRead, Status: decision.StatePending, Profile: "alpha", Session: "ses_alpha", Reason: "untrusted: inspect referenced specification"},
+		{ID: "dec_hfr_denied", Kind: decision.KindHostFSRead, Status: decision.StateDenied, Profile: "alpha", Session: "ses_alpha"},
+	}
+	var out bytes.Buffer
+	writeTUILiveDashboard(&out, state, nil, "alpha")
+	text := out.String()
+	for _, want := range []string{
+		"dec_hfr_pending  kind=hostfs.read  status=pending",
+		"claim=hideout decision claim dec_hfr_pending",
+		"approve=hideout decision approve dec_hfr_pending",
+		"deny=hideout decision deny dec_hfr_pending",
+		"hideout decision reopen dec_hfr_denied",
+		"untrusted: inspect referenced specification",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("HostFS read TUI action missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestTUILiveConsoleRedactsActionRows(t *testing.T) {
+	state := liveconsole.NewState(liveconsole.BuildSeed(liveconsole.SeedInput{StreamHealth: liveconsole.HealthLive}))
+	liveconsole.Apply(&state, liveconsole.Event{
+		Version: liveconsole.EventVersion,
+		Kind:    liveconsole.KindHostFSWrite,
+		Seq:     1,
+		Payload: liveconsole.EventPayload{
+			DecisionID:  "hfwdec_secret",
+			OperationID: "hfwop_secret",
+			Status:      "pending",
+			Operation:   "replace",
+			Path:        "/hostfs-overlay/objects/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Reason:      "HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:1 keep-me",
+		},
+	})
+	var out bytes.Buffer
+	writeTUILiveDashboard(&out, state, nil, "")
+	text := out.String()
+	for _, forbidden := range []string{"0123456789abcdef0123456789abcdef", "socks5://127.0.0.1:1", "HIDEOUT_SECRET_DEFAULT_PROXY"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("TUI console leaked %q:\n%s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "keep-me") || !strings.Contains(text, "hfwdec_secret") {
+		t.Fatalf("TUI console should keep local context:\n%s", text)
 	}
 }
 

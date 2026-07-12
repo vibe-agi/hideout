@@ -3,14 +3,17 @@ package profile
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	slashpath "path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -85,7 +88,8 @@ type Network struct {
 // a base image declaration string (template:<name> or a https disk-image URL
 // with a #sha256 fragment); when absent it resolves to the built-in default.
 type EnvironmentConfig struct {
-	BaseImage string `json:"baseImage,omitempty"`
+	BaseImage string                         `json:"baseImage,omitempty"`
+	Runtime   *environment.RuntimeProvenance `json:"runtime,omitempty"`
 }
 
 type Tools struct {
@@ -172,6 +176,34 @@ type Audit struct {
 
 type Store struct {
 	Root string
+}
+
+type LegacyListRule struct {
+	ID       string
+	Effect   string
+	HostPath string
+	Scope    hostfs.Scope
+}
+
+type LegacyListCandidate struct {
+	Profile Profile
+	Digest  string
+	Rules   []LegacyListRule
+}
+
+var ErrLegacyListMigrationRequired = errors.New("legacy HostFS list migration is required")
+
+type LegacyListMigrationError struct {
+	Profile string
+	Rules   []LegacyListRule
+}
+
+func (e *LegacyListMigrationError) Error() string {
+	return fmt.Sprintf("profile %q contains %d legacy HostFS list-only rule(s); run hideout profile fs %s migrate-list", e.Profile, len(e.Rules), e.Profile)
+}
+
+func (e *LegacyListMigrationError) Unwrap() error {
+	return ErrLegacyListMigrationRequired
 }
 
 var identityStateDirs = []string{"home", "cache", "config", "data", "browser", "machine"}
@@ -322,10 +354,85 @@ func (s Store) Load(name string) (Profile, error) {
 	if err := dec.Decode(&p); err != nil {
 		return Profile{}, err
 	}
+	legacyRules, err := collectLegacyListRules(p)
+	if err != nil {
+		return Profile{}, err
+	}
+	if len(legacyRules) > 0 {
+		return Profile{}, &LegacyListMigrationError{Profile: name, Rules: legacyRules}
+	}
 	if err := p.Validate(); err != nil {
 		return Profile{}, err
 	}
 	return p, nil
+}
+
+func (s Store) LoadLegacyListCandidate(name string) (LegacyListCandidate, error) {
+	name, err := normalizeProfileName(name)
+	if err != nil {
+		return LegacyListCandidate{}, err
+	}
+	data, err := os.ReadFile(s.ProfilePath(name))
+	if err != nil {
+		return LegacyListCandidate{}, err
+	}
+	var p Profile
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return LegacyListCandidate{}, err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return LegacyListCandidate{}, errors.New("profile must contain exactly one JSON value")
+	}
+	probe := p
+	probe.HostFS.Grants = append([]hostfs.Rule(nil), p.HostFS.Grants...)
+	probe.HostFS.Deny = append([]hostfs.Rule(nil), p.HostFS.Deny...)
+	rules, err := collectLegacyListRules(p)
+	if err != nil {
+		return LegacyListCandidate{}, err
+	}
+	if len(rules) == 0 {
+		return LegacyListCandidate{}, errors.New("profile has no legacy list-only HostFS rules")
+	}
+	for i := range probe.HostFS.Grants {
+		if slices.Contains(probe.HostFS.Grants[i].Ops, hostfs.OpList) {
+			probe.HostFS.Grants[i].Ops = []hostfs.Op{hostfs.OpDiscover}
+		}
+	}
+	for i := range probe.HostFS.Deny {
+		if slices.Contains(probe.HostFS.Deny[i].Ops, hostfs.OpList) {
+			probe.HostFS.Deny[i].Ops = []hostfs.Op{hostfs.OpDiscover}
+		}
+	}
+	if err := probe.Validate(); err != nil {
+		return LegacyListCandidate{}, fmt.Errorf("profile has non-legacy validation errors: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return LegacyListCandidate{Profile: p, Digest: hex.EncodeToString(sum[:]), Rules: rules}, nil
+}
+
+func collectLegacyListRules(p Profile) ([]LegacyListRule, error) {
+	var rules []LegacyListRule
+	collect := func(values []hostfs.Rule, effect string) error {
+		for i, rule := range values {
+			if !slices.Contains(rule.Ops, hostfs.OpList) || len(rule.Ops) != 1 {
+				continue
+			}
+			if (rule.Scope != hostfs.ScopeDir && rule.Scope != hostfs.ScopeRecursiveDir) || strings.TrimSpace(rule.ID) == "" {
+				return fmt.Errorf("hostfs.%s[%d] is not a known list-only migration candidate", effect, i)
+			}
+			rules = append(rules, LegacyListRule{ID: rule.ID, Effect: effect, HostPath: rule.HostPath, Scope: rule.Scope})
+		}
+		return nil
+	}
+	if err := collect(p.HostFS.Grants, "allow"); err != nil {
+		return nil, err
+	}
+	if err := collect(p.HostFS.Deny, "deny"); err != nil {
+		return nil, err
+	}
+	return rules, nil
 }
 
 func (s Store) LoadOrInit(name string) (Profile, error) {
@@ -604,6 +711,9 @@ func copyPolicyDir(src, dst string) error {
 // back to the built-in default when the field is absent. The field is a
 // default, not identity: filling it is not record migration.
 func (p Profile) BaseImageOrBuiltin() string {
+	if p.Environment.Runtime != nil {
+		return p.Environment.Runtime.ImageRef()
+	}
 	if strings.TrimSpace(p.Environment.BaseImage) != "" {
 		return p.Environment.BaseImage
 	}
@@ -686,6 +796,14 @@ func (p Profile) Validate() error {
 	if p.Environment.BaseImage != "" {
 		if _, err := environment.ParseImageDeclaration(p.Environment.BaseImage); err != nil {
 			return fmt.Errorf("environment.baseImage: %w", err)
+		}
+	}
+	if p.Environment.Runtime != nil {
+		if p.Environment.BaseImage != "" {
+			return errors.New("environment.baseImage and environment.runtime are mutually exclusive")
+		}
+		if err := p.Environment.Runtime.Validate(); err != nil {
+			return fmt.Errorf("environment.runtime: %w", err)
 		}
 	}
 	if err := validateExpectedCommands(p.Tools.ExpectedCommands); err != nil {
@@ -1554,6 +1672,10 @@ func writeIdentityMetadata(path string, metadata map[string]string) error {
 }
 
 func cloneProfile(p Profile) Profile {
+	if p.Environment.Runtime != nil {
+		runtime := *p.Environment.Runtime
+		p.Environment.Runtime = &runtime
+	}
 	p.Env.Public = copyStringMap(p.Env.Public)
 	p.Env.Deny = copyStringSlice(p.Env.Deny)
 	p.Env.Inherit = copyStringSlice(p.Env.Inherit)

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,8 +21,72 @@ import (
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/runtimeverify"
 )
+
+func TestRuntimeVerifyManagerPlanApplyStatusParity(t *testing.T) {
+	core, record := runtimeVerifyCoreFixture(t)
+	fake := &applyRunFakeBackend{name: "lima"}
+	fake.verifyFunc = func(session *backend.Session) error {
+		if err := session.PrivilegeStatusSink(privilege.Status{Status: privilege.StatusEnforced}); err != nil {
+			return err
+		}
+		return session.RuntimeResultSink(runtimePassingReport(session))
+	}
+	api := NewAPI(core, "ui_token", time.Minute)
+	api.RunBackend = func(RunAPIRequest, RunPlan) (backend.Backend, error) { return fake, nil }
+
+	planReq := newAPIJSONRequest(http.MethodPost, "/api/v1/runtime/verify/plan", RuntimeVerifyAPIRequest{EnvironmentName: record.Name})
+	planReq.Header.Set("Authorization", "Bearer ui_token")
+	planResp := httptest.NewRecorder()
+	api.ServeHTTP(planResp, planReq)
+	if planResp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", planResp.Code, planResp.Body.String())
+	}
+	var planEnvelope struct {
+		Data RuntimeVerifyPlan `json:"data"`
+	}
+	if err := json.Unmarshal(planResp.Body.Bytes(), &planEnvelope); err != nil {
+		t.Fatal(err)
+	}
+
+	applyReq := newAPIJSONRequest(http.MethodPost, "/api/v1/runtime/verify/apply", RuntimeVerifyAPIRequest{Plan: &planEnvelope.Data})
+	applyReq.Header.Set("Authorization", "Bearer ui_token")
+	applyResp := httptest.NewRecorder()
+	api.ServeHTTP(applyResp, applyReq)
+	if applyResp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", applyResp.Code, applyResp.Body.String())
+	}
+	var applyEnvelope struct {
+		Data   RuntimeVerifyResult `json:"data"`
+		Errors []string            `json:"errors"`
+	}
+	if err := json.Unmarshal(applyResp.Body.Bytes(), &applyEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(applyEnvelope.Errors) != 0 || applyEnvelope.Data.Status.Status != runtimeverify.StatusPreviewReady {
+		t.Fatalf("apply envelope=%+v", applyEnvelope)
+	}
+
+	statusReq := newAPIRequest(http.MethodGet, "/api/v1/runtime/status?env="+record.Name)
+	statusReq.Header.Set("Authorization", "Bearer ui_token")
+	statusResp := httptest.NewRecorder()
+	api.ServeHTTP(statusResp, statusReq)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", statusResp.Code, statusResp.Body.String())
+	}
+	var statusEnvelope struct {
+		Data runtimeverify.StatusView `json:"data"`
+	}
+	if err := json.Unmarshal(statusResp.Body.Bytes(), &statusEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if statusEnvelope.Data.Status != applyEnvelope.Data.Status.Status || statusEnvelope.Data.Revision != applyEnvelope.Data.Status.Revision {
+		t.Fatalf("status/apply drift: status=%+v apply=%+v", statusEnvelope.Data, applyEnvelope.Data.Status)
+	}
+}
 
 func TestAPIDomainResourcesRequireToken(t *testing.T) {
 	schema := compileManagerAPISchema(t)
@@ -380,6 +445,39 @@ func TestAPIDecisionAndNoticeRoutes(t *testing.T) {
 		t.Fatalf("decision status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+}
+
+func TestAPIHostFSReadReopenUsesSharedInventoryAndAuthentication(t *testing.T) {
+	fixture := newHostFSReadFixture(t)
+	defer fixture.owner.Close()
+	proposal, err := fixture.provider.ProposeHostFSRead(context.Background(), fixture.proposal(fixture.file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := fixture.core.ClaimDecision(DecisionClaimRequest{DecisionID: proposal.DecisionRef, Surface: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.core.DenyDecision(DecisionResolveRequest{DecisionID: proposal.DecisionRef, ClaimToken: claim.ClaimToken}); err != nil {
+		t.Fatal(err)
+	}
+	api := NewAPI(fixture.core, "ui_token", time.Minute)
+	body := HostFSReadReopenRequest{ExpectedVersion: decision.DecisionVersion, Reason: "operator reconsidered"}
+
+	unauthorized := newAPIJSONRequest(http.MethodPost, "/api/v1/decisions/"+proposal.DecisionRef+"/reopen", body)
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, unauthorized)
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized reopen=%d %s", resp.Code, resp.Body.String())
+	}
+
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/decisions/"+proposal.DecisionRef+"/reopen", body)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"resource":"decision/reopen"`) || !strings.Contains(resp.Body.String(), `"status":"pending"`) {
+		t.Fatalf("member reopen=%d %s", resp.Code, resp.Body.String())
+	}
 }
 
 func TestAPIInitRejectsLegacyToolSupplyPayload(t *testing.T) {

@@ -19,6 +19,8 @@ packaging metadata. The archive layout is:
     README.zh-CN.md
     schemas/
     docs/
+    host-app/
+    examples/
     packaging/
 USAGE
 }
@@ -85,8 +87,15 @@ cp "$source/README.md" "$prefix/README.md"
 cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
 cp -R "$source/schemas" "$prefix/schemas"
 cp -R "$source/docs" "$prefix/docs"
+mkdir -p "$prefix/host-app" "$prefix/examples"
+cp -R "$source/internal/hostcap/recipes" "$prefix/host-app/recipes"
+cp -R "$source/examples/host-app-packs" "$prefix/examples/host-app-packs"
 mkdir -p "$prefix/packaging"
 cp -R "$source/packaging/homebrew" "$prefix/packaging/homebrew"
+mkdir -p "$prefix/runtime"
+cp "$source/internal/runtimecatalog/catalog.json" "$prefix/runtime/catalog.json"
+cp "$source/internal/runtimecatalog/contract.json" "$prefix/runtime/contract.json"
+cp -R "$source/runtime/developer-standard" "$prefix/runtime/developer-standard"
 
 host_os="$(go env GOOS)"
 host_arch="$(go env GOARCH)"
@@ -132,7 +141,10 @@ cat >"$prefix/package-manifest.json" <<EOF
     "directories": [
       "schemas",
       "docs",
-      "packaging"
+      "host-app",
+      "examples",
+      "packaging",
+      "runtime"
     ]
   },
   "migration": {
@@ -217,6 +229,54 @@ cat >"$prefix/package-manifest.json" <<EOF
       "executable": false
     },
     {
+      "path": "schemas/runtime-catalog.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/runtime-catalog.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/runtime-verification.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/runtime-verification.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/capability-descriptor.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/capability-descriptor.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/host-app-pack.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/host-app-pack.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/host-app-pack-registry.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/host-app-pack-registry.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/host-app-enablement.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/host-app-enablement.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/host-app-inspection.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/host-app-inspection.schema.json")",
+      "executable": false
+    },
+    {
+      "path": "schemas/open-resource-intent.schema.json",
+      "kind": "schema",
+      "sha256": "$(sha256_file "$prefix/schemas/open-resource-intent.schema.json")",
+      "executable": false
+    },
+    {
       "path": "docs/README.md",
       "kind": "doc",
       "sha256": "$(sha256_file "$prefix/docs/README.md")",
@@ -227,6 +287,96 @@ cat >"$prefix/package-manifest.json" <<EOF
       "kind": "doc",
       "sha256": "$(sha256_file "$prefix/docs/STATUS.md")",
       "executable": false
+    },
+    {
+      "path": "host-app/recipes/builtin-vscode.json",
+      "kind": "host-app-core-data",
+      "sha256": "$(sha256_file "$prefix/host-app/recipes/builtin-vscode.json")",
+      "executable": false
+    },
+    {
+      "path": "host-app/recipes/safety-profiles.json",
+      "kind": "host-app-core-data",
+      "sha256": "$(sha256_file "$prefix/host-app/recipes/safety-profiles.json")",
+      "executable": false
+    },
+    {
+      "path": "examples/host-app-packs/README.md",
+      "kind": "host-app-example",
+      "sha256": "$(sha256_file "$prefix/examples/host-app-packs/README.md")",
+      "executable": false
+    },
+    {
+      "path": "examples/host-app-packs/cursor/hideout.host-app-pack.json",
+      "kind": "host-app-example",
+      "sha256": "$(sha256_file "$prefix/examples/host-app-packs/cursor/hideout.host-app-pack.json")",
+      "executable": false
+    },
+    {
+      "path": "examples/host-app-packs/zed/hideout.host-app-pack.json",
+      "kind": "host-app-example",
+      "sha256": "$(sha256_file "$prefix/examples/host-app-packs/zed/hideout.host-app-pack.json")",
+      "executable": false
+    },
+    {
+      "path": "runtime/catalog.json",
+      "kind": "runtime-catalog",
+      "sha256": "$(sha256_file "$prefix/runtime/catalog.json")",
+      "executable": false
+    },
+    {
+      "path": "runtime/contract.json",
+      "kind": "runtime-contract",
+      "sha256": "$(sha256_file "$prefix/runtime/contract.json")",
+      "executable": false
+    },
+    {
+      "path": "runtime/developer-standard/README.md",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/README.md")",
+      "executable": false
+    },
+    {
+      "path": "runtime/developer-standard/build-lib.sh",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/build-lib.sh")",
+      "executable": true
+    },
+    {
+      "path": "runtime/developer-standard/build.sh",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/build.sh")",
+      "executable": true
+    },
+    {
+      "path": "runtime/developer-standard/packages.lock",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/packages.lock")",
+      "executable": false
+    },
+    {
+      "path": "runtime/developer-standard/packages.txt",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/packages.txt")",
+      "executable": false
+    },
+    {
+      "path": "runtime/developer-standard/sources.lock.json",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/sources.lock.json")",
+      "executable": false
+    },
+    {
+      "path": "runtime/developer-standard/test-build.sh",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/test-build.sh")",
+      "executable": true
+    },
+    {
+      "path": "runtime/developer-standard/verify-image.sh",
+      "kind": "runtime-build",
+      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/verify-image.sh")",
+      "executable": true
     }
   ]
 }

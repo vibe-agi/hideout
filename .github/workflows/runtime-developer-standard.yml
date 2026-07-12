@@ -1,0 +1,94 @@
+name: Runtime Developer Standard Candidate
+
+on:
+  push:
+    branches:
+      - "runtime-candidate/031-*"
+    paths:
+      - ".github/workflows/runtime-developer-standard.yml"
+      - "runtime/developer-standard/**"
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Immutable candidate revision
+        required: true
+        default: "2026.07.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-developer-standard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Build non-promoting Linux arm64 candidate
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Reclaim runner workspace
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android || true
+          df -h /
+
+      - name: Validate and build inside the locked native builder
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          REVISION="${REVISION:-2026.07.0}"
+          lock=runtime/developer-standard/sources.lock.json
+          builder_image=$(jq -r '.builder.baseImage' "$lock")
+          package_mirror=$(jq -r '.debianSnapshot.packageMirror' "$lock")
+          builder_packages=$(jq -r '.builder.packages | join(" ")' "$lock")
+          out="$RUNNER_TEMP/runtime-candidate"
+          mkdir -p "$out"
+          docker run --rm --privileged --platform linux/arm64 \
+            --env REVISION="$REVISION" \
+            --env PACKAGE_MIRROR="$package_mirror" \
+            --env HIDEOUT_RUNTIME_BUILDER_IMAGE="$builder_image" \
+            --env BUILDER_PACKAGES="$builder_packages" \
+            --env LIBGUESTFS_BACKEND=direct \
+            --volume "$GITHUB_WORKSPACE:/src:ro" \
+            --volume "$out:/out" \
+            --volume /etc/ssl/certs/ca-certificates.crt:/tmp/bootstrap-ca.crt:ro \
+            --workdir /src \
+            "$builder_image" \
+            bash -euo pipefail -c '
+              rm -f /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list
+              # Copy the host trust bundle into a writable location. Mounting it
+              # over the final path would make ca-certificates configuration fail.
+              mkdir -p /etc/ssl/certs
+              cp /tmp/bootstrap-ca.crt /etc/ssl/certs/ca-certificates.crt
+              printf "%s\n" \
+                "Acquire::https::CaInfo \"/etc/ssl/certs/ca-certificates.crt\";" \
+                "Acquire::Check-Valid-Until \"false\";" \
+                > /etc/apt/apt.conf.d/99hideout-builder-ca
+              printf "deb [check-valid-until=no] %s trixie main\n" "$PACKAGE_MIRROR" > /etc/apt/sources.list
+              apt-get update
+              test -n "$(find /var/lib/apt/lists -type f -name "*InRelease" -print -quit)"
+              apt-get install -y --no-install-recommends $BUILDER_PACKAGES
+              git config --global --add safe.directory /src
+              runtime/developer-standard/test-build.sh
+              runtime/developer-standard/build.sh --revision "$REVISION" --out-dir /out
+            '
+          printf '%s\n' \
+            'This artifact is an unpromoted development candidate.' \
+            'It is not a release asset, catalog input, preview claim, or Gate 2/Gate 3 substitute.' \
+            > "$out/README-NOT-PROMOTED.txt"
+          find "$out" -maxdepth 1 -type f -print -exec shasum -a 256 {} \;
+
+      - name: Upload short-lived candidate only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-developer-standard-${{ inputs.revision }}-${{ github.sha }}
+          path: ${{ runner.temp }}/runtime-candidate/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

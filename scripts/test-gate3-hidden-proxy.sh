@@ -3,8 +3,15 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/gate-result.sh"
 
 GATE_TIMEOUT="${HIDEOUT_GATE_TIMEOUT:-15m}"
+GATE3_RUNTIME_MODE="${HIDEOUT_GATE3_RUNTIME_MODE:-0}"
+GATE3_RUNTIME_FAMILY="${HIDEOUT_GATE3_RUNTIME_FAMILY:-developer-standard}"
+case "$GATE3_RUNTIME_MODE" in
+  0 | 1) ;;
+  *) echo "gate3: HIDEOUT_GATE3_RUNTIME_MODE must be 0 or 1" >&2; exit 2 ;;
+esac
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -57,17 +64,6 @@ prepare_linux_shim() {
 
   local arch
   arch="$(go env GOARCH)"
-  if command -v "hideout-shim-linux-$arch" >/dev/null 2>&1; then
-    HIDEOUT_LINUX_SHIM_PATH="$(command -v "hideout-shim-linux-$arch")"
-    export HIDEOUT_LINUX_SHIM_PATH
-    return
-  fi
-  if command -v hideout-shim-linux >/dev/null 2>&1; then
-    HIDEOUT_LINUX_SHIM_PATH="$(command -v hideout-shim-linux)"
-    export HIDEOUT_LINUX_SHIM_PATH
-    return
-  fi
-
   HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
   export HIDEOUT_LINUX_SHIM_PATH
   "$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
@@ -112,8 +108,12 @@ prepare_linux_tun2socks() {
 
 start_local_proxy() {
   local proxy_bin="$bin/hideout-gate-socks5"
+  local proxy_args=(--listen 127.0.0.1:0 --url-host host.lima.internal)
   go build -o "$proxy_bin" ./cmd/hideout-gate-socks5
-  "$proxy_bin" --listen 127.0.0.1:0 --url-host host.lima.internal >"$tmp/proxy.url" 2>"$tmp/proxy.log" &
+  case "${HTTPS_PROXY:-${HTTP_PROXY:-}}" in
+    http://*) proxy_args+=(--use-env-http-proxy) ;;
+  esac
+  "$proxy_bin" "${proxy_args[@]}" >"$tmp/proxy.url" 2>"$tmp/proxy.log" &
   proxy_pid=$!
   for _ in {1..100}; do
     if [ -s "$tmp/proxy.url" ]; then
@@ -176,6 +176,10 @@ validate_operator_proxy_url
 tmp="$(mktemp -d "/tmp/hideout-gate3.XXXXXX")"
 proxy_pid=""
 cleanup() {
+  if [ "${HIDEOUT_GATE3_KEEP_TMP:-0}" = "1" ]; then
+    echo "gate3: preserving debug state tmp=$tmp lima_home=${lima_home:-} store=${store:-}" >&2
+    return
+  fi
   if [ -n "$proxy_pid" ]; then
     kill "$proxy_pid" 2>/dev/null || true
     wait "$proxy_pid" 2>/dev/null || true
@@ -229,16 +233,31 @@ fi
 # guest resolves and fetches through the mediated path while the leak is blocked.
 mediated_resolver="${HIDEOUT_GATE3_MEDIATED_RESOLVER:-1.1.1.1}"
 echo "gate3: using mediated DoH resolver $mediated_resolver"
+# Keep the profile-derived instance name below macOS UNIX_PATH_MAX while the
+# isolated LIMA_HOME also lives below a temporary path.
+profile_name="g3p"
+runtime_init_args=()
+if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
+  runtime_init_args=(--runtime "$GATE3_RUNTIME_FAMILY")
+  cp "$ROOT/scripts/test-runtime-agent-install.sh" "$workspace/test-runtime-agent-install.sh"
+  chmod 0700 "$workspace/test-runtime-agent-install.sh"
+fi
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" \
+  "$hideout" init --no-input --profile "$profile_name" --template privacy --backend lima \
+  --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver" \
+  "${runtime_init_args[@]}" \
+  >"$tmp/init.out" 2>"$tmp/init.err"
 
 echo "gate3: checking doctor hidden proxy plan"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" HIDEOUT_LINUX_DNS_STUB_PATH="$HIDEOUT_LINUX_DNS_STUB_PATH" \
-  "$hideout" doctor --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver"
+  "$hideout" doctor --profile "$profile_name" --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver"
 
 echo "gate3: running hidden proxy env and route smoke"
 stdout="$tmp/run.out"
 stderr="$tmp/run.err"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" HIDEOUT_LINUX_DNS_STUB_PATH="$HIDEOUT_LINUX_DNS_STUB_PATH" \
-  "$hideout" run --verbose --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver" -- sh -eu -c '
+  "$hideout" run --verbose --profile "$profile_name" --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver" -- sh -eu -c '
+printf "guest_workspace=%s\n" "$PWD"
 for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
   eval "value=\${$name:-}"
   if [ -n "$value" ]; then
@@ -275,7 +294,20 @@ done
 [ "$blocked_any" = yes ] || { echo "reverse proof: no connected-subnet resolver was captured to verify closure" >&2; exit 46; }
 printf "connected_subnet_blocked=yes\n"
 if command -v curl >/dev/null 2>&1; then
-  curl -fsS --max-time 30 https://example.com/ >/dev/null
+  if ! curl -fsS --max-time 30 https://example.com/ >/dev/null; then
+    echo "forward proof: DNS/HTTPS request failed" >&2
+    echo "--- dns-stub.log ---" >&2
+    tail -n 80 /hideout/session/network/dns-stub.log >&2 2>/dev/null || true
+    echo "--- tun2socks.log ---" >&2
+    tail -n 80 /hideout/session/network/tun2socks.log 2>/dev/null |
+      sed -E "s#(socks5h?://)[^/@[:space:]]+@#\1[redacted]@#g" >&2 || true
+    echo "--- direct DoH endpoint reachability ---" >&2
+    ip route get 1.1.1.1 >&2 2>/dev/null || true
+    ip route show >&2 2>/dev/null || true
+    ip rule show >&2 2>/dev/null || true
+    curl -sS --max-time 15 -o /dev/null -w "status=%{http_code}\n" https://1.1.1.1/dns-query >&2 || true
+    exit 47
+  fi
   printf "https_request=ok\n"
 elif command -v wget >/dev/null 2>&1; then
   wget -q -T 30 -O /dev/null https://example.com/
@@ -302,6 +334,67 @@ grep -q 'proxy_env_absent=yes' "$stdout"
 grep -q 'dns_mediated=yes' "$stdout"
 grep -q 'connected_subnet_blocked=yes' "$stdout"
 grep -q 'https_request=ok' "$stdout"
+grep -q 'guest_workspace=/workspace' "$stdout"
+echo "projection_alias_gate3=passed"
+
+if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
+  runtime_env_name="$(grep -h 'Hideout environment name:' "$stdout" "$stderr" 2>/dev/null | tail -n1 | sed 's/^.*Hideout environment name: //')"
+  if [ -z "$runtime_env_name" ]; then
+    echo "gate3: runtime mode could not resolve the managed environment name" >&2
+    exit 49
+  fi
+  echo "gate3: installing pinned real agent through the privacy path"
+  if ! with_timeout "$GATE_TIMEOUT" env \
+    HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" \
+    HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" \
+    HIDEOUT_LINUX_DNS_STUB_PATH="$HIDEOUT_LINUX_DNS_STUB_PATH" \
+    OPENAI_API_KEY="sk-host-fixture-must-not-cross" \
+    "$hideout" run --profile "$profile_name" --backend lima --workspace "$workspace" \
+      --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver" \
+      -- sh ./test-runtime-agent-install.sh --guest \
+      >"$tmp/runtime-agent.out" 2>"$tmp/runtime-agent.err"; then
+    echo "gate3: pinned runtime agent install failed" >&2
+    cat "$tmp/runtime-agent.out" "$tmp/runtime-agent.err" >&2
+    exit 1
+  fi
+  cat "$tmp/runtime-agent.out"
+  for marker in \
+    runtime_agent_integrity=passed \
+    runtime_agent_arm64_optional=passed \
+    runtime_agent_target_owner=passed \
+    runtime_agent_no_sudo=passed \
+    runtime_agent_no_auth=passed \
+    runtime_agent_secret_scan=passed; do
+    grep -q "^${marker}$" "$tmp/runtime-agent.out"
+  done
+  grep -q '^runtime_agent_registry=https://registry.npmjs.org/$' "$tmp/runtime-agent.out"
+  if grep -R -E 'sk-host-fixture-must-not-cross|claim_[0-9a-f]{16,}|cap_[0-9a-f]{16,}|HIDEOUT_SECRET_[A-Z0-9_]+=' \
+      "$tmp/runtime-agent.out" "$tmp/runtime-agent.err" >/dev/null 2>&1; then
+    echo "gate3: runtime agent public evidence contains credential material" >&2
+    exit 1
+  fi
+  # Ordinary target runs intentionally do not mint persistent readiness. Re-run
+  # the sole authoritative verifier after the agent install so this gate binds
+  # its evidence to current guest observations rather than a historical receipt.
+  if ! with_timeout "$GATE_TIMEOUT" env \
+    HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" runtime verify --env "$runtime_env_name" --json \
+      >"$tmp/runtime-verify.json" 2>"$tmp/runtime-verify.err"; then
+    echo "gate3: explicit runtime verification failed after agent install" >&2
+    cat "$tmp/runtime-verify.err" >&2
+    exit 49
+  fi
+  jq -e '.status.status == "preview-ready"' "$tmp/runtime-verify.json" >/dev/null
+  runtime_environment_id="$(jq -r '.environmentId // empty' "$tmp/runtime-verify.json")"
+  [ -n "$runtime_environment_id" ] || { echo "gate3: runtime verification returned no environment identity" >&2; exit 49; }
+  runtime_receipt="$store/environments/$runtime_environment_id/runtime-verification.json"
+  [ -f "$runtime_receipt" ] || { echo "gate3: runtime receipt missing" >&2; exit 49; }
+  jq -e --arg family "$GATE3_RUNTIME_FAMILY" \
+    '.status == "preview-ready" and .provenance.family == $family and .privilegeStatus == "enforced"' \
+    "$runtime_receipt" >/dev/null
+  echo "runtime_agent_privacy=passed"
+fi
 
 audit_path="$(latest_audit_log "$store")"
 [ -n "$audit_path" ] || { echo "gate3: audit log missing" >&2; exit 1; }
@@ -332,6 +425,10 @@ fi
 if find "$store" -path '*/network/proxy.url' -print -quit | grep -q .; then
   echo "gate3: proxy.url was not removed by cleanup" >&2
   exit 1
+fi
+
+if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
+  runtime_evidence_markers "$runtime_receipt"
 fi
 
 echo "gate3: passed"

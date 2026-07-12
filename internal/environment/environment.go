@@ -58,6 +58,7 @@ type Spec struct {
 	Name                 string
 	AutoNamed            bool
 	ImageRef             string
+	Runtime              *RuntimeProvenance
 	Profile              string
 	Backend              string
 	BackendConfigVersion string
@@ -71,27 +72,99 @@ type Spec struct {
 }
 
 type Record struct {
-	Version              string    `json:"version"`
-	ID                   string    `json:"id"`
-	Name                 string    `json:"name"`
-	AutoNamed            bool      `json:"autoNamed,omitempty"`
-	ImageRef             string    `json:"imageRef"`
-	Profile              string    `json:"profile"`
-	Backend              string    `json:"backend"`
-	BackendConfigVersion string    `json:"backendConfigVersion,omitempty"`
-	Workspace            string    `json:"workspace"`
-	GuestWorkspace       string    `json:"guestWorkspace"`
-	ProfileID            string    `json:"profileId,omitempty"`
-	IdentityID           string    `json:"identityId,omitempty"`
-	User                 string    `json:"user,omitempty"`
-	Hostname             string    `json:"hostname,omitempty"`
-	InstanceName         string    `json:"instanceName,omitempty"`
-	Status               string    `json:"status"`
-	LastSessionID        string    `json:"lastSessionId,omitempty"`
-	LastCommand          string    `json:"lastCommand,omitempty"`
-	CreatedAt            time.Time `json:"createdAt"`
-	LastStartedAt        time.Time `json:"lastStartedAt,omitempty"`
-	LastEndedAt          time.Time `json:"lastEndedAt,omitempty"`
+	Version              string             `json:"version"`
+	ID                   string             `json:"id"`
+	Name                 string             `json:"name"`
+	AutoNamed            bool               `json:"autoNamed,omitempty"`
+	ImageRef             string             `json:"imageRef"`
+	Runtime              *RuntimeProvenance `json:"runtime,omitempty"`
+	Profile              string             `json:"profile"`
+	Backend              string             `json:"backend"`
+	BackendConfigVersion string             `json:"backendConfigVersion,omitempty"`
+	Workspace            string             `json:"workspace"`
+	GuestWorkspace       string             `json:"guestWorkspace"`
+	ProfileID            string             `json:"profileId,omitempty"`
+	IdentityID           string             `json:"identityId,omitempty"`
+	User                 string             `json:"user,omitempty"`
+	Hostname             string             `json:"hostname,omitempty"`
+	InstanceName         string             `json:"instanceName,omitempty"`
+	Status               string             `json:"status"`
+	LastSessionID        string             `json:"lastSessionId,omitempty"`
+	LastCommand          string             `json:"lastCommand,omitempty"`
+	CreatedAt            time.Time          `json:"createdAt"`
+	LastStartedAt        time.Time          `json:"lastStartedAt,omitempty"`
+	LastEndedAt          time.Time          `json:"lastEndedAt,omitempty"`
+}
+
+type RuntimeProvenance struct {
+	Family                 string `json:"family"`
+	Revision               string `json:"revision"`
+	CatalogRelease         string `json:"catalogRelease"`
+	ContractID             string `json:"contractId"`
+	ContractDigest         string `json:"contractDigest"`
+	ArtifactLocation       string `json:"artifactLocation"`
+	ArtifactSHA256         string `json:"artifactSHA256"`
+	PackageInventoryDigest string `json:"packageInventoryDigest"`
+	DownloadBytes          int64  `json:"downloadBytes"`
+	VirtualBytes           int64  `json:"virtualBytes"`
+	HostOS                 string `json:"hostOS"`
+	HostArch               string `json:"hostArch"`
+	GuestArch              string `json:"guestArch"`
+	Maturity               string `json:"maturity"`
+}
+
+func (p RuntimeProvenance) ImageRef() string {
+	return p.ArtifactLocation + "#sha256:" + p.ArtifactSHA256
+}
+
+func (p RuntimeProvenance) Validate() error {
+	for label, value := range map[string]string{
+		"family": p.Family, "revision": p.Revision, "catalogRelease": p.CatalogRelease,
+		"contractId": p.ContractID,
+	} {
+		if strings.TrimSpace(value) == "" || len(value) > 64 || strings.TrimSpace(value) != value {
+			return fmt.Errorf("runtime provenance %s is required and bounded", label)
+		}
+	}
+	if !strings.HasPrefix(p.ContractDigest, "sha256:") || !isLowerHex(strings.TrimPrefix(p.ContractDigest, "sha256:"), 64) {
+		return errors.New("runtime provenance contractDigest is invalid")
+	}
+	if !isLowerHex(p.ArtifactSHA256, 64) {
+		return errors.New("runtime provenance artifactSHA256 is invalid")
+	}
+	if !strings.HasPrefix(p.PackageInventoryDigest, "sha256:") || !isLowerHex(strings.TrimPrefix(p.PackageInventoryDigest, "sha256:"), 64) {
+		return errors.New("runtime provenance packageInventoryDigest is invalid")
+	}
+	if p.DownloadBytes <= 0 || p.DownloadBytes > 4<<30 || p.VirtualBytes <= 0 || p.VirtualBytes > 16<<30 {
+		return errors.New("runtime provenance artifact sizes are invalid")
+	}
+	u, err := url.Parse(p.ArtifactLocation)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || filepath.Ext(u.Path) != ".qcow2" {
+		return errors.New("runtime provenance artifactLocation must be a credential-free, query-free HTTPS qcow2 URL")
+	}
+	guestForHost := map[string]string{"arm64": "aarch64", "amd64": "x86_64"}
+	if (p.HostOS != "darwin" && p.HostOS != "linux") || guestForHost[p.HostArch] != p.GuestArch {
+		return fmt.Errorf("runtime provenance host/guest tuple %s/%s/%s is unsupported", p.HostOS, p.HostArch, p.GuestArch)
+	}
+	if p.Maturity != "preview" {
+		return fmt.Errorf("runtime provenance maturity %q is unsupported", p.Maturity)
+	}
+	if _, err := ParseImageDeclaration(p.ImageRef()); err != nil {
+		return fmt.Errorf("runtime provenance image: %w", err)
+	}
+	return nil
+}
+
+func isLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateName checks an environment name: conservative charset, bounded
@@ -257,6 +330,14 @@ func (s Store) Create(spec Spec) (Record, error) {
 	if _, err := ParseImageDeclaration(spec.ImageRef); err != nil {
 		return Record{}, err
 	}
+	if spec.Runtime != nil {
+		if err := spec.Runtime.Validate(); err != nil {
+			return Record{}, err
+		}
+		if spec.ImageRef != spec.Runtime.ImageRef() {
+			return Record{}, errors.New("runtime provenance does not match environment imageRef")
+		}
+	}
 	if existing, err := s.LoadByName(spec.Name); err == nil {
 		return Record{}, fmt.Errorf("environment named %q already exists (%s)", existing.Name, existing.ID)
 	} else if !errors.Is(err, ErrNameNotFound) {
@@ -273,6 +354,7 @@ func (s Store) Create(spec Spec) (Record, error) {
 		Name:                 spec.Name,
 		AutoNamed:            spec.AutoNamed,
 		ImageRef:             spec.ImageRef,
+		Runtime:              cloneRuntimeProvenance(spec.Runtime),
 		Profile:              spec.Profile,
 		Backend:              spec.Backend,
 		BackendConfigVersion: spec.BackendConfigVersion,
@@ -327,6 +409,14 @@ func (s Store) Save(rec Record) error {
 	if rec.Status == "" {
 		rec.Status = "ready"
 	}
+	if rec.Runtime != nil {
+		if err := rec.Runtime.Validate(); err != nil {
+			return err
+		}
+		if rec.ImageRef != rec.Runtime.ImageRef() {
+			return errors.New("runtime provenance does not match environment imageRef")
+		}
+	}
 	path := s.recordPath(rec.ID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -341,6 +431,14 @@ func (s Store) Save(rec Record) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func cloneRuntimeProvenance(in *RuntimeProvenance) *RuntimeProvenance {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func (s Store) Load(id string) (Record, error) {

@@ -107,7 +107,7 @@ Change-to-gate mapping:
 | First-run initialization, InitTask, helper discovery, `doctor --fix --dry-run\|--apply`, schema metadata repair, or project bootstrap | Gate 0 and targeted InitTask tests | Gate 1 native harness for CLI shape only; Gate 2 when backend preparation changes | Distribution Bootstrap acceptance (install/package smokes, run inside Gate 0) |
 | CLI parsing, profile, identity, env, audit, Boundary Summary, cleanup, or doctor | Gate 0 and the native harness | affected package tests | `--required` if behavior is externally visible |
 | Command Proxy, Host Broker, `host.open`, file open, or browser launcher | Gate 0, native harness, and Gate 4 dry-run | Gate 2 when guest shims or broker transport change | real-browser Gate 4 |
-| HostFS Portal, HostPathGrant, guest FUSE daemon, or host filesystem RPC | Gate 0 and targeted HostFS unit tests | Gate 2 on Linux guest backend with read/list grants | Gate 2 HostFS coverage (read/list grants) |
+| HostFS Portal, HostPathGrant, discoverable namespace, read decisions, guest FUSE daemon, or host filesystem RPC | Gate 0, targeted HostFS unit tests, and `scripts/test-hostfs-visibility-e2e.sh --local-fast` | Gate 2 on Linux guest backend with read/list/discover grants and live separate-process approval | Gate 2 HostFS coverage; local-fast cannot satisfy real namespace or live-grant proof |
 | Additional passthrough mounts | Gate 0, native harness for CLI shape, and mount contract tests | Gate 2 when backend mount config changes | required if user-facing |
 | Lima backend, mounts, guest bootstrap, guest command resolution, base image declarations, or instance lifecycle | Gate 0 and Gate 2; native harness only for shared CLI wiring | Gate 2 on macOS with Lima; `--dogfood-cli` when it affects CLI workflows | `--release-candidate` |
 | Environment model: naming, auto-name resolution, drift semantics, record versioning, or image declaration plumbing | Gate 0 and targeted environment/manager/app tests | `scripts/test-env-image.sh` (via `--env-image`) proves declared-image boot, digest-drift fail-closed, and recreate recovery on macOS with Lima | `--release-candidate` remains separate |
@@ -208,9 +208,12 @@ Required evidence:
   wired into Gate 0) validates the typed daemon event and live-console seed
   schemas, catalog/reducer drift guards, production emit-source coverage,
   daemon multi-subscriber/backpressure behavior, WebUI deterministic JavaScript
-  reducer proof with no post-seed fetches, TUI terminal proof, stream-health
-  propagation, and control-plane redaction scans — with no real backend, headless
-  browser, or external browser dependency.
+  reducer/action proof with no post-seed fetches, TUI terminal proof,
+  stream-health propagation, 019 Operator Console panel/action-route coverage,
+  027 Manager route and daemon endpoint drift guards, runtime-observed WebUI
+  action-route recognition, TUI route-boundary checks, and control-plane
+  redaction scans — with no real backend, headless browser, or external browser
+  dependency.
 - Operator decision center smoke (`scripts/test-decision-center-smoke.sh`,
   wired into Gate 0) validates actionable decision vs informational notice
   contracts, public redaction of claim tokens and provider-private refs, local
@@ -228,9 +231,12 @@ Required evidence:
   non-applied proposal model. 011 is local registry and script lifecycle work;
   it does not require real Lima proof.
 - Doctor diagnostics smoke (`scripts/test-doctor-smoke.sh`, wired into Gate 0)
-  validates the 015 local/light doctor report path: human output, JSON schema,
-  required-failure exit, warning/degraded zero exit, explicit doctor report
-  export, deterministic control-plane redaction, and safe recovery dry-run.
+  validates the local doctor report path: human output, JSON schema,
+  `--level deep`, selected feature diagnostics, structured next actions and
+  gate-required markers, required-failure exit, warning/degraded zero exit,
+  explicit doctor report export, deterministic control-plane redaction
+  injection, and safe recovery dry-run. It remains local troubleshooting
+  evidence and must not replace real Gate 2/Gate 3 proof.
 - Release hardening smoke (`scripts/test-release-hardening-smoke.sh`, wired into
   Gate 0) validates the 016 support matrix schema, `hideout support matrix`,
   `hideout version` matrix summary, doctor support-matrix finding,
@@ -239,6 +245,71 @@ Required evidence:
   fail-closed behavior, and docs drift/non-claim checks. Full
   `scripts/test-release-readiness.sh --release-candidate` still requires real
   Gate 2 and Gate 3 evidence; Gate 0 smoke must not replace those gates.
+- First-run docs smoke (`scripts/test-first-run-docs-smoke.sh`, wired into
+  Gate 0) validates the 020 external-alpha walkthrough: package verify, privacy
+  Lima init, doctor deep recovery, first run, HostFS write decision visibility,
+  daemon/TUI/WebUI entry points, native-only-as-harness wording, and no stale
+  `go run` examples in the user-facing path.
+- Alpha first-run E2E (`scripts/test-first-run-e2e.sh --local-fast`, wired into
+  Gate 0) validates the 022 package-to-first-command path: packaged install
+  with `--skip-init`, installed package verification, one weak/dev native
+  profile init, one installed-binary command, audit/Boundary capture, schema
+  validation, redaction scan, and `hideout.product-hardening-evidence/v1`
+  output. This is local package mechanics evidence only. The same script's
+  `--real-backend` mode records explicit pass or `not-run` evidence for the
+  Lima/privacy path, and `--require-real` is the manual/release-style mode for
+  hosts where real proof is mandatory.
+- UI E2E proof (`scripts/test-ui-e2e.sh`, wired into Gate 0) writes a
+  `hideout.product-hardening-evidence/v1` manifest. On hosts with local
+  Chrome/Chromium and `script(1)`, targeted runs can require executed browser
+  and TUI lanes: the browser lane opens the daemon-served WebUI and performs a
+  notice acknowledgement round trip; the TUI lane launches the real `hideout tui`
+  process in a terminal harness and proves live event update, no healthy-stream
+  interval polling, and stream fallback. Missing prerequisites are recorded as
+  `not-run` evidence in non-completion modes. This local UI E2E evidence does
+  not claim release readiness; `scripts/test-release-readiness.sh
+  --release-candidate` still requires the real release gates.
+- HostFS/decision E2E proof (`scripts/test-hostfs-decision-e2e.sh --local-fast`,
+  wired into Gate 0) writes a `hideout.product-hardening-evidence/v1` manifest
+  for 023. The local-fast lane proves staged overlay decision records,
+  claim-race one-winner behavior, approve/deny/timeout outcomes, live-console
+  model visibility, coverage-matrix honesty, schema validity, and public
+  artifact redaction without claiming real guest HostFS data-plane behavior.
+  The same script's `--real-gate2` lane is explicit and prerequisite-gated:
+  it either proves the real Lima guest reads staged HostFS content before
+  apply while host lower state remains unchanged, or records `not-run`
+  evidence. Native/local-fast output must never satisfy a real Gate 2 HostFS
+  claim.
+- Doctor/package recovery E2E (`scripts/test-doctor-package-recovery-e2e.sh
+  --local-fast`, wired into Gate 0) writes a
+  `hideout.product-hardening-evidence/v1` manifest for 024. It reuses the
+  existing package and doctor smoke paths, proving stale package verify,
+  package repair dry-run/apply/verify, durable and unrelated file preservation,
+  doctor deep guidance, safe doctor fix dry-run/apply, selected doctor-report
+  export, and public artifact redaction. It is local recovery evidence only:
+  doctor guidance for Lima, DNS, HostFS, privilege, or release gates remains
+  guidance and must not replace real Gate 2/Gate 3 or release-readiness proof.
+- Test and evidence spine (026, wired into Gate 0) validates that
+  `internal/productevidence` is the shared source of proof ids and evaluation
+  rules for 021-025 product-hardening evidence. `hideout support proof-registry
+  --json` exposes the same registry to shell gates and docs truth, stale
+  evidence is reported as an evaluator result rather than a manifest proof
+  status, and product-hardening evidence can appear in release readiness only as
+  supporting context that never satisfies real Gate 2/Gate 3 requirements.
+- Documentation truth smoke (`scripts/test-doc-truth-smoke.sh`, wired into
+  Gate 0) validates `docs/claim-boundaries.md`,
+  `docs/command-examples.json`, current README/docs/spec claim boundaries,
+  known overclaim patterns, curated command recognition, localized README
+  canonicality, and Gate 0/test-plan consistency for 021-024. It writes 025
+  product-hardening evidence and is a local docs truth gate only; it cannot
+  substitute for release-readiness or real backend evidence.
+- Error recovery hint contracts (028) validate the Go-owned
+  `hideout.recovery-codes/v1` registry via
+  `hideout support recovery-codes --json`, doctor human/JSON parity, package
+  and init recovery-code surfacing, release-readiness codes for missing or
+  stale evidence, and documentation references checked by doc truth. The v1
+  scope is host-observable surfaces only; Manager/daemon-wide typed error
+  migration and guest bootstrap internals remain deferred.
 
 Gate 0 enforces the last item with a single phase plan assertion: the required
 plan (Gate 0 through Gate 4, printable with `HIDEOUT_PHASE1_PRINT_PLAN=1`) must
@@ -435,6 +506,34 @@ Required checks:
 - `doctor` distinguishes missing Lima, invalid YAML, broken mount, invalid
   profile, bad proxy secret, broker failure, and policy script failure.
 
+#### Required Gate 2 Step: Host Capability Projection
+
+`scripts/test-gate2-lima.sh` includes the 030 projection lane. The evidence
+wrapper is:
+
+```bash
+scripts/test-host-capability-projection-e2e.sh --real-gate2 --require-real --out <dir>
+```
+
+The lane creates a real privacy profile and a preserve-mode control, builds the
+current tree's Linux shim (never an ambient PATH helper), and proves:
+
+- alias workspace, synthetic identity/Git, and guest mount metadata contain no
+  synthesized host username/home; each detector first matches an injected leak;
+- preserve mode exposes the host path as a positive control;
+- guest `code -g` reaches the explicit `host.app.open-resource` route and opens
+  a code-signed host VS Code bundle with a run-scoped safe user-data directory;
+- a folder-open task marker stays absent, extensions are disabled, automatic
+  tasks are off, and Workspace Trust is not disabled;
+- trusted mode refuses before approval, succeeds after claim/approve in the same
+  live session, and refuses after revoke.
+
+Required markers are `projection_privacy_three_channel=passed`,
+`projection_code_open=passed`, and `projection_trusted_grant=passed`. Local
+fixtures cannot satisfy these proof ids. The 2026-07-11 receipt is documented in
+`docs/host-capability-projection.md`; it records `dirty=true` and is not clean
+release provenance.
+
 #### Optional Gate 2 Step: Lima Real-Run Reference Smoke
 
 Purpose: prove one supervised dogfood reference workload in the real Lima
@@ -628,8 +727,13 @@ Gate 3 verifies the DNS closure end to end on real Lima: with privacy mode it
 confirms the guest resolver is the DoH stub (`dns_mediated=yes`), resolves a name
 through the mediated DoH path and fetches over HTTPS (`https_request=ok`), and
 that the connected-subnet resolver is blocked, while the proxy secret stays
-hidden. It requires `HIDEOUT_GATE3_MEDIATED_RESOLVER` (a DoH server IP, default
-`1.1.1.1`). The DNS closure and its architecture are owned by
+hidden. The same run requires `guest_workspace=/workspace` and emits
+`projection_alias_gate3=passed`, so adding projection does not regress the DNS,
+network, or privilege boundary. It requires `HIDEOUT_GATE3_MEDIATED_RESOLVER` (a
+DoH server IP, default `1.1.1.1`). The self-contained SOCKS fixture may chain
+its host-side egress through `HTTPS_PROXY` via HTTP CONNECT when the host cannot
+reach public resolver IPs directly; that host proxy value never enters the
+target environment. The DNS closure and its architecture are owned by
 [network-privacy-architecture.md](network-privacy-architecture.md). The residual
 A3 guest-root routing bypass remains a non-claim in
 [threat-model.md](threat-model.md). Since 009, the same gate also asserts the
@@ -914,9 +1018,10 @@ ungranted host filesystem state.
 
 Required checks:
 
-- without a grant, `ls`, `cat`, Go `os.ReadFile`, Python `open()`, and Node
-  `fs.readFileSync` when Node is present for a workspace-outside host path fail
-  as missing and do not reveal whether the real host path exists;
+- outside explicit discover/content domains, `ls`, `cat`, Go `os.ReadFile`,
+  Python `open()`, and Node `fs.readFileSync` when Node is present for a
+  workspace-outside host path fail as missing and do not reveal whether the
+  real host path exists;
 - HostFS mount roots exist before the target command starts and remain empty
   unless grants expose entries;
 - Lima starts the Linux `hideout-hostfsd` FUSE daemon only when active HostFS
@@ -940,8 +1045,9 @@ Required checks:
   filesystems, does not let `*` implicitly expose dotfiles, and supports
   backslash escaping for literal `*`, `?`, `[`, `]`, and backslash in CLI
   selectors;
-- `list:`, `dir:`, and `tree:` reject glob selectors instead of silently
-  treating them as broader directory grants;
+- `see:`, `see-dir:`, `see-tree:`, `dir:`, and `tree:` reject glob selectors;
+  new `list:` input is rejected with guided `migrate-list` recovery instead of
+  being silently treated as a broader discover grant;
 - glob read/stat grants allow matching files and filtered parent-directory
   listings, do not expose non-matching sibling names, and do not create backend
   passthrough mounts;
@@ -1019,6 +1125,54 @@ Required checks:
 - Access Sensor remains optional Later work and is not required for HostFS
   grant enforcement or data access.
 
+### HostFS Discoverable Namespace Gate 2 Inventory
+
+029 adds local-fast policy/decision/redaction evidence, but only real Lima Gate
+2 may promote guest namespace and same-session retry claims. The real run emits
+and the wrapper machine-checks these 20 assertions:
+
+1. Outside-domain lookup returns `ENOENT`.
+2. A manually authored broad discover rule still force-hides categorized
+   sensitive roots; direct lookup and directory enumeration both return
+   `ENOENT`.
+3. `see-dir` and `see-tree` return complete coarse names for their declared
+   depths without real size/mode disclosure; a discover-denied node stays out of
+   parent enumeration even when an exact content grant remains directly usable.
+4. `see:` directory lookup succeeds while readdir returns `EACCES` and creates
+   no decision.
+5. Visible locked file read returns prompt `EACCES`.
+6. Explicit read deny returns `EACCES` and creates no read decision.
+7. The first eligible read creates one `hostfs.read` decision.
+8. An equivalent retry reuses the decision without extending its timeout or
+   revision.
+9. A separate host CLI process claims and approves the exact-file decision.
+10. The same still-running guest reads the expected content on its next retry,
+    with no watcher or restart.
+11. Real size and mode converge through the one-second FUSE attr bound while
+    content authorization is immediate.
+12. Deny and forced timeout remain denied; authenticated live-session reopen
+    returns to pending without creating content authority.
+13. Retargeting an approved symlink fails closed against the prior canonical
+    grant.
+14. A 4097-entry directory returns `EOVERFLOW`, never a partial successful
+    listing.
+15. Unauthorized write inside an explicit discover domain returns `EACCES` and
+    creates no 029 read decision.
+16. A legacy read-only profile without `see*` preserves its prior `EROFS`
+    write behavior.
+17. Protected-directory host prerequisite failure returns typed `EIO`, not an
+    approvable content-lock error.
+18. Reopen after session end fails closed and does not recreate the private
+    provider directory or lock.
+19. Audit and public decision evidence omit content, symlink target, claim or
+    capability tokens, and private session-authority paths.
+20. Existing 010 staged write, host-lower-before-apply, and authenticated apply
+    assertions still pass.
+
+`scripts/test-hostfs-visibility-e2e.sh --real-gate2` emits the two real proof
+IDs only after all 20 markers pass and the Gate 2 log digest is recorded. When
+real prerequisites are absent it emits only the supporting `not-run` proof.
+
 Required implementation tests:
 
 - host path resolver tests for canonicalization, symlink escape, case handling
@@ -1045,7 +1199,7 @@ and `scripts/test-package-smoke.sh` on every invocation (including
 `--quick`). The source-tree development install flow is
 `scripts/install-local.sh`; the alpha package flow is
 `scripts/package-local.sh` plus packaged `install.sh`, backed by
-`hideout package install|verify|uninstall`.
+`hideout package install|verify|repair|uninstall`.
 
 Required checks:
 
@@ -1069,9 +1223,14 @@ Required checks:
 - package smoke proves the installed prefix writes an installed-state manifest
   with the actual prefix and verifies without source checkout paths;
 - package smoke proves compatible upgrade preserves durable store state,
+  obsolete package-owned files are reported rather than silently left behind,
+  explicit repair removes only proven obsolete package-owned files,
   incompatible migration fails before mutation, uninstall dry-run removes
   nothing, uninstall without purge preserves durable state, and `--purge` is
   required for durable state deletion;
+- package smoke proves `tun2socks` remains an external prerequisite in this
+  release line: diagnostics may report it as missing or undiscoverable, but
+  package verification does not claim checksum coverage for it;
 - the existing TUI (`hideout tui --once`) and WebUI (`hideout ui --print-url`)
   render smokes remain in the package smoke as later MVP-ordered checks after
   the unpack, checksum, and init plus doctor proof;
@@ -1200,3 +1359,95 @@ Phase 1 is releasable only when:
 
 Until these gates pass, the project remains an advanced prototype rather than a
 Phase 1 release candidate.
+
+## Gate 031: Supported CLI Runtime Preview
+
+Gate 0 validates the catalog and contract parsers, immutable selection,
+profile/environment provenance, probe-only verify plan/apply, status parity,
+typed recovery, package ownership, zero effective-authority delta, receipt and
+public-evidence redaction, and false-green fixtures. It cannot establish a real
+runtime claim.
+
+Real acceptance requires one retained digest-addressed macOS arm64/Linux
+aarch64 artifact and clean candidate source state. The complete existing Gate 2
+must run with guest package preparation disabled and prove the baseline,
+non-root/no-sudo boundary, HostFS visibility/read/write, projection, lifecycle,
+and cleanup. Gate 3 must use the same catalog revision and digest, then prove
+DoH forwarding, connected-subnet resolver blocking, pinned real-agent registry
+HTTPS, target ownership, and zero credential leakage.
+
+Every passing real gate emits a typed runtime binding. Product evidence and
+release readiness fail closed for absent fields, a native/local producer,
+wrong revision/digest/architecture/environment identity, dirty or stale
+candidate state, failed proof, missing artifact, or artifact digest mismatch.
+Until both real gates and the promoted asset exist, all 031 real proof IDs stay
+unsatisfied and the spec remains incomplete.
+
+## Gate 032: Community Host-App Recipes
+
+Status: **Implemented.** The three artifact-backed Gate 0 proofs and the
+external-pack real macOS arm64 Lima Gate 2 proof are current. Their retained
+real receipt records `dirty=true`, so they are not clean release provenance.
+
+### Gate 0 Topology
+
+`scripts/test-host-app-pack-smoke.sh` is the 032 Gate 0 entrypoint. Targeted
+completion requires one same-commit, artifact-backed evidence manifest with all
+three registered proofs:
+
+- `032.host-app-pack.gate0.lifecycle`: local and exact-commit snapshot intake,
+  read-only inspect/validate, advisory package tests, confirmed atomic add,
+  exact enable, update permission diff, disable/remove/revoke, profile scope,
+  future-run-only effect, CLI/Manager parity, and sanitized untrusted text;
+- `032.host-app-pack.gate0.binding`: immutable command ownership, strict intent,
+  Core-derived app/resource/provider facts, HostFS existing-authority checks,
+  run-scoped decision identity, disable/revoke invalidation, and no host/guest
+  fallback;
+- `032.host-app-pack.gate0.identity-safety`: safe application roots and
+  executable containment, Core-observed signing identity, exact-digest
+  `unverified-app` posture, Core-owned safety profiles, permission fingerprint,
+  conflicts, and public-evidence redaction.
+
+The smoke must fail if a required proof is absent, lacks a retained artifact,
+has a mismatched digest, covers the wrong commit, or substitutes a package test
+for a Core invariant. `scripts/test-doc-truth-smoke.sh` separately requires all
+four 032 registry IDs in `docs/claim-boundaries.md` and rejects known community
+pack overclaims. Docs truth is documentation evidence, not lifecycle or host
+effect evidence.
+
+### Real macOS Arm64 Lima Gate 2
+
+The 032-owned wrapper is
+`scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real --out <dir>`.
+It reuses low-level 030 projection helpers without altering or claiming the
+existing 030 proof IDs.
+
+The wrapper installs an external local pack without rebuilding Hideout and
+emits `032.host-app-pack.real-gate2.external` only after one retained real run
+proves all of the following:
+
+1. Built-in `code` and the external command use the same generic resolver,
+   renderer, provider, binding, decision, inspection, and audit paths.
+2. Workspace and already-authorized HostFS content open successfully without a
+   guest, recipe, decision preview, response, or public artifact receiving the
+   resolved host path.
+3. HostFS see-only, ungranted, stale, ended, denied, retargeted, and mismatched
+   portal resources fail before host effect.
+4. A compatible signed app can use the Core-owned safe profile; an elevated or
+   explicitly trusted unverified app uses the exact `ask-each-run` scope.
+5. Unsafe roots, writable ancestors, owner mismatch, signing/digest drift, and
+   package self-attestation fail closed.
+6. Enabling changes only the next run. The old session receives no shim; the
+   new run receives exactly the enabled command set.
+7. Disable/revoke/remove, conflict, missing provider, and forged binding facts
+   never fall through to generic host execution or a shadowed guest binary.
+8. Public evidence excludes host username/path, executable path, raw argv,
+   mutable source internals, repository credentials, decision tokens, and
+   provider-private state.
+
+The real proof requires an external pack, a real Lima guest, the real supported
+host app, and observed host effect. Native runs, local-fast tests, embedded-only
+recipes, static source checks, package self-tests, and `not-run` records are
+false-green fixtures and cannot satisfy it. The current retained real manifest
+has SHA-256 `a570514909514cd79d39493d58ec69e923bca39aa5f4ec31305181b68b536f83`
+at commit `644e6b53daaa` with `dirty=true`.

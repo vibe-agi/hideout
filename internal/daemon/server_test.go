@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -161,43 +162,19 @@ func TestDaemonExpiredTokenRefusedAndAudited(t *testing.T) {
 	}
 }
 
-// managerGETRoutes and managerPOSTRoutes are the current 32-route Manager surface
-// (16 GET + 16 POST), including the two special-cased GET resources. The drift
-// guard asserts the daemon serves exactly this set.
-var managerGETRoutes = []string{
-	"audit/events", "run/status", "overview", "profiles", "sessions",
-	"environments", "backends", "capabilities", "broker", "network",
-	"secrets", "audit", "settings", "init", "bundles", "projects",
-}
-
-var managerPOSTRoutes = []string{
-	"init/plan", "init/apply", "run/plan", "run/apply",
-	"environment/stop/plan", "environment/stop/apply",
-	"environment/clean/plan", "environment/clean/apply",
-	"profile/command-proxy/plan", "profile/command-proxy/apply",
-	"profile/hostfs/plan", "profile/hostfs/apply",
-	"profile/env/plan", "profile/env/apply",
-	"evidence/export/plan", "evidence/export/apply",
-}
-
-// T010: Manager parity drift guard — every one of the 32 routes is recognized by
+// Manager parity drift guard: every registered Manager route is recognized by
 // the daemon (not "unknown manager API resource"); an unknown resource still 404s.
 func TestDaemonServesFull32RouteManagerParity(t *testing.T) {
 	d := startTestDaemon(t)
-	if len(managerGETRoutes)+len(managerPOSTRoutes) != 32 {
-		t.Fatalf("route inventory drifted from 32: %d", len(managerGETRoutes)+len(managerPOSTRoutes))
+	routes := manager.ManagerRoutes()
+	if len(routes) == 0 {
+		t.Fatal("Manager route inventory is empty")
 	}
 	unknown := "unknown manager API resource"
-	for _, r := range managerGETRoutes {
-		code, body := daemonDo(t, d, http.MethodGet, "/api/v1/"+r, d.Token())
+	for _, r := range routes {
+		code, body := daemonDo(t, d, r.Method, r.SamplePath(), d.Token())
 		if code == http.StatusNotFound && strings.Contains(string(body), unknown) {
-			t.Fatalf("GET route %s not served (drift): %s", r, body)
-		}
-	}
-	for _, r := range managerPOSTRoutes {
-		code, body := daemonDo(t, d, http.MethodPost, "/api/v1/"+r, d.Token())
-		if code == http.StatusNotFound && strings.Contains(string(body), unknown) {
-			t.Fatalf("POST route %s not served (drift): %s", r, body)
+			t.Fatalf("%s %s not served (drift): %s", r.Method, r.SamplePath(), body)
 		}
 	}
 	// A genuinely unknown Manager resource still 404s as unknown.

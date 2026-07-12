@@ -40,7 +40,8 @@
       "enum": ["passed", "failed", "not-release"]
     },
     "commit": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "platform": {
       "type": "object",
@@ -67,9 +68,20 @@
         "additionalProperties": false,
         "required": ["name", "status", "summary"],
         "properties": {
-          "name": { "type": "string" },
+          "name": { "type": "string", "minLength": 1 },
           "status": { "enum": ["passed", "failed", "skipped", "not-run"] },
-          "summary": { "type": "string" }
+          "code": { "type": "string" },
+          "reason": { "type": "string" },
+          "hint": { "type": "string" },
+          "nextActions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "summary": { "type": "string", "minLength": 1 }
         }
       }
     },
@@ -80,11 +92,42 @@
         "additionalProperties": false,
         "required": ["id", "required", "status", "summary"],
         "properties": {
-          "id": { "type": "string" },
+          "id": { "type": "string", "minLength": 1 },
           "required": { "type": "boolean" },
           "status": { "enum": ["passed", "failed", "missing", "skipped", "not-run"] },
-          "evidencePath": { "type": "string" },
-          "summary": { "type": "string" }
+          "code": { "type": "string" },
+          "reason": { "type": "string" },
+          "hint": { "type": "string" },
+          "nextActions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "evidencePath": { "type": "string", "minLength": 1 },
+          "runtime": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema", "family", "revision", "artifactSHA256", "environmentId",
+              "hostOS", "hostArch", "guestArch", "candidateCommit", "candidateDirty"
+            ],
+            "properties": {
+              "schema": {"const": "hideout.runtime-evidence-binding/v1"},
+              "family": {"type": "string", "minLength": 1},
+              "revision": {"type": "string", "minLength": 1},
+              "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "environmentId": {"type": "string", "pattern": "^env_[a-z0-9]+$"},
+              "hostOS": {"type": "string", "minLength": 1},
+              "hostArch": {"type": "string", "minLength": 1},
+              "guestArch": {"type": "string", "minLength": 1},
+              "candidateCommit": {"type": "string", "minLength": 1},
+              "candidateDirty": {"type": "boolean"}
+            }
+          },
+          "summary": { "type": "string", "minLength": 1 }
         }
       }
     },
@@ -104,5 +147,107 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["releaseReady"],
+        "properties": {
+          "releaseReady": {"const": true}
+        }
+      },
+      "then": {
+        "properties": {
+          "mode": {"const": "release-candidate"},
+          "evidenceClass": {"const": "real-gate"},
+          "status": {"const": "passed"},
+          "commit": {"pattern": "^[a-f0-9]{12,40}$"},
+          "commands": {
+            "minItems": 2,
+            "maxItems": 2,
+            "allOf": [
+              {
+                "contains": {
+                  "type": "object",
+                  "required": ["name", "status", "summary"],
+                  "properties": {
+                    "name": {"const": "local-checks"},
+                    "status": {"const": "passed"},
+                    "summary": {"type": "string", "minLength": 1}
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              {
+                "contains": {
+                  "type": "object",
+                  "required": ["name", "status", "summary"],
+                  "properties": {
+                    "name": {"const": "product-hardening-evidence"},
+                    "status": {"const": "passed"},
+                    "summary": {"type": "string", "minLength": 1}
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            ]
+          },
+          "gates": {
+            "minItems": 2,
+            "maxItems": 2,
+            "allOf": [
+              {
+                "contains": {
+                  "type": "object",
+                  "required": ["id", "required", "status", "evidencePath", "runtime", "summary"],
+                  "properties": {
+                    "id": {"const": "gate2-lima"},
+                    "required": {"const": true},
+                    "status": {"const": "passed"},
+                    "evidencePath": {"type": "string", "minLength": 1},
+                    "runtime": {
+                      "type": "object",
+                      "required": ["candidateCommit", "candidateDirty"],
+                      "properties": {
+                        "candidateCommit": {"pattern": "^[a-f0-9]{12,40}$"},
+                        "candidateDirty": {"const": false}
+                      }
+                    },
+                    "summary": {"type": "string", "minLength": 1}
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              {
+                "contains": {
+                  "type": "object",
+                  "required": ["id", "required", "status", "evidencePath", "runtime", "summary"],
+                  "properties": {
+                    "id": {"const": "gate3-hidden-proxy"},
+                    "required": {"const": true},
+                    "status": {"const": "passed"},
+                    "evidencePath": {"type": "string", "minLength": 1},
+                    "runtime": {
+                      "type": "object",
+                      "required": ["candidateCommit", "candidateDirty"],
+                      "properties": {
+                        "candidateCommit": {"pattern": "^[a-f0-9]{12,40}$"},
+                        "candidateDirty": {"const": false}
+                      }
+                    },
+                    "summary": {"type": "string", "minLength": 1}
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

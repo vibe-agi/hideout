@@ -54,6 +54,67 @@
           "type": "string",
           "minLength": 1
         },
+        "hostfsVisibility": {
+          "type": "object",
+          "required": [
+            "posture",
+            "discoverGrants",
+            "discoverDeny",
+            "maxListEntries",
+            "maxDepth",
+            "nonClaim"
+          ],
+          "properties": {
+            "posture": {
+              "type": "string",
+              "minLength": 1
+            },
+            "discoverGrants": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "discoverDeny": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxListEntries": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxDepth": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "nonClaim": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "required": [
+            "family",
+            "revision",
+            "status",
+            "contractDigest",
+            "artifactDigest",
+            "privilegeStatus",
+            "failedCount"
+          ],
+          "properties": {
+            "family": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "minLength": 1},
+            "status": {"type": "string", "minLength": 1},
+            "contractDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "artifactDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "privilegeStatus": {"enum": ["enforced", "degraded", "unknown"]},
+            "failedCount": {"type": "integer", "minimum": 0},
+            "recoveryCode": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
         "capabilities": {
           "type": "array",
           "items": {
