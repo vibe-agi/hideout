@@ -1,6 +1,12 @@
 name: Runtime Developer Standard Candidate
 
 on:
+  push:
+    branches:
+      - "runtime-candidate/031-*"
+    paths:
+      - ".github/workflows/runtime-developer-standard.yml"
+      - "runtime/developer-standard/**"
   workflow_dispatch:
     inputs:
       revision:
