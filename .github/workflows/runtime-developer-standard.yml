@@ -42,6 +42,7 @@ jobs:
           REVISION: ${{ inputs.revision }}
         run: |
           set -euo pipefail
+          REVISION="${REVISION:-2026.07.0}"
           lock=runtime/developer-standard/sources.lock.json
           builder_image=$(jq -r '.builder.baseImage' "$lock")
           package_mirror=$(jq -r '.debianSnapshot.packageMirror' "$lock")
