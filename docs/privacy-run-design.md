@@ -660,16 +660,23 @@ host.fs.write
 guest.exec
 ```
 
-`host.app.open-resource` is a high-authority Design-ready capability. It covers
-opening a validated host-side resource with a declared host application provider;
-it does not mean the resource is safe. A workspace file or directory can itself
-be an execution payload for the host application, for example through editor
-workspace tasks, project settings, extensions, file associations, or other
-application-specific open hooks. Core must not guess this risk for adapters, but
-providers for this capability must open resources through constrained modes or
-provider-specific safeguards that disable automatic execution where the target
-application supports it. Providers that cannot provide such safeguards must be
-treated as higher-risk and gated by explicit policy or a later prompt flow.
+`host.app.open-resource` is an implemented capability with mode-dependent risk.
+Its safe facet opens a validated workspace resource through a registered,
+signature-checked host application recipe with provider-specific safeguards.
+Its trusted facet is high-authority and requires a visible, run-scoped operator
+grant. Neither facet means the resource itself is safe. A workspace file or
+directory can be an execution payload for the host application, for example
+through editor workspace tasks, project settings, extensions, file
+associations, or other application-specific open hooks. Core must not guess
+this risk for adapters. Providers must use constrained modes that disable
+automatic execution where the target application supports it; providers that
+cannot do so remain higher-risk and fail closed without explicit policy and a
+typed decision path.
+
+This implemented capability statement covers the built-in 030 projection and
+the 032 community-pack lifecycle around that capability. The 032 external-pack
+claim additionally depends on its retained real macOS arm64 Lima Gate 2 proof;
+package lifecycle code, schemas, or local tests alone do not establish it.
 
 `network.connect` in Phase 1 means session network setup and route verification.
 It is not a per-socket firewall, per-request audit system, or packet policy
@@ -2183,7 +2190,9 @@ read:/absolute/file
 read:/absolute/dir/*.txt
 stat:/absolute/file
 stat:/absolute/dir/*.txt
-list:/absolute/directory
+see:/absolute/node
+see-dir:/absolute/directory
+see-tree:/absolute/directory
 dir:/absolute/directory
 tree:/absolute/directory
 ```
@@ -2911,6 +2920,78 @@ mutation, or marketplace trust. Pack-provided tests are mandatory before
 enablement, but Go-owned manifest validation, command ownership, capability
 subset checks, digest validation, revoked-pack checks, and adapter outcome
 validation are the primary safety gates.
+
+### Community Host-App Recipe Lifecycle (032)
+
+032 is a separate package type from 011 adapter packs. Its only v1 runtime
+effect is the already registered Go-owned `host.app.open-resource` capability.
+A host-app pack cannot ship JavaScript, hooks, shell, raw argv, a capability or
+provider, profile mutation, a host data return channel, or generic host
+execution. Existing goja adapter authority does not transfer to this package
+type.
+
+Intake accepts only a local directory or a Git source pinned to one full
+40-hex commit. Core copies bounded regular files into private immutable storage
+before digest, test, trust, enablement, or runtime resolution. It rejects
+escaping links, special files, submodules, checkout hooks and filters, install
+hooks, and source drift. Runtime never reads the mutable intake location.
+
+The shared CLI/Manager lifecycle contract is:
+
+| Operation | Contract |
+| --- | --- |
+| `app inspect` | Read-only Core-derived source, revision, app identity, safety, command, conflict, permission, access, and readiness facts. |
+| `app validate` | Read-only schema and invariant validation; no install, trust, profile, or runtime mutation. |
+| `app test` | Bounded package quality vectors with no host resolver, filesystem, network, process, token, Manager, profile, or provider access. |
+| `app add` | Read-only plan followed by exact reacquisition and atomic snapshot publication; ordinary confirmed add may also test and enable, while install-only stores inert bytes. |
+| `app enable` | Exact revision, permission fingerprint, binding set, profile, and `safe` or `ask-each-run` acceptance. |
+| `app update` | New immutable revision plus explicit source/permission diff; no automatic binding movement or broadened trust inheritance. |
+| `app disable` | Remove one profile binding from future compilation while retaining bytes and audit. |
+| `app remove` | Disable every owned binding, remove only owned snapshots after checks, and retain tombstone/audit. |
+
+No operation gains authority from installation order or package prose. A
+non-interactive apply requires explicit acceptance of the exact plan and may
+pin its source digest. Failed, cancelled, or drifted apply leaves no new
+authority. Enablement affects future runs only; existing sessions receive no
+new shim and are never silently recreated. Existing sessions retain an
+immutable shim set, but each request rechecks disable/revoke/drift and fails
+closed without host or guest fallback.
+
+At run start, Manager compiles each command to one exact pack revision,
+binding, grammar, capability, qualified app, safety/access posture, profile,
+session, workspace, and environment. Guest intent has no app, binding,
+capability, result, resource-kind, host-path, or raw-argv selector. Core derives
+those facts and strictly revalidates the intent.
+
+Application bundle declarations are basenames resolved only under fixed
+application roots. Core rechecks containment, ownership, writable ancestors,
+the executable, and overlap with workspace, HostFS, temporary, source, runtime,
+and store paths. Core independently observes signing identity. Package Team ID,
+bundle ID, signing requirement, prose, tests, or self-signature may narrow or
+reject that observation but cannot authenticate the app.
+
+`safe` comes only from an identity-compatible, named and versioned Core safety
+profile that validates final argv, settings, and run state as one effect. A pack
+may request the profile but cannot define it. An explicitly accepted unsigned
+app remains `unverified-app`, binds a Core-computed exact bundle-tree digest,
+uses `ask-each-run`, and requires re-trust after change. `ask-each-run` approval
+binds the exact capability, app, pack revision, binding, command, session,
+profile, workspace, environment, resource class, and observed identity; it is
+not persistent profile allowance.
+
+HostFS is an input authority, not an authority supplied by the pack. Opening a
+HostFS resource requires an active same-session mapping with sufficient
+existing content/tree authority, followed by immediate recanonicalization and
+reauthorization. Discover-only `see*` visibility cannot open content. The
+recipe, guest intent, decision preview, response, and public evidence never
+receive the resolved host path.
+
+032 is implemented with all three artifact-backed Gate 0 proofs and the
+external-pack real macOS arm64 Lima Gate 2 proof. The current receipt is from a
+dirty private-alpha tree, not clean release provenance. Native, local-only,
+embedded, static-source, package-self-test, or `not-run` evidence cannot replace
+the real host-effect gate. The lifecycle guide is
+[host-app-recipes.md](host-app-recipes.md).
 
 Normal commands run inside the guest boundary by default:
 
@@ -4568,3 +4649,32 @@ depend on public source availability, external issue triage, community plugin
 review, or open-source release automation.
 
 Future open-source readiness is a release milestone, not a Phase 1 dependency.
+
+## Supported CLI Runtime Preview (031)
+
+The runtime layer is a package-owned selection and observation mechanism, not
+a new authority source. A profile may select a catalog family; Core resolves
+one immutable revision and host/guest architecture artifact, stores exact
+provenance in the profile and environment, and observes a bounded declarative
+contract in the live guest. Contract data cannot contain shell programs,
+downloads, package installation, environment mutation, or host actions.
+
+Runtime selection changes only the image declaration and provenance. Effective
+HostFS, network, endpoint, host-app, command-proxy, adapter/script, workspace,
+target-identity, and privilege authority remain those of the profile. A custom
+image remains usable but is always `custom/unverified`; native, local fixtures,
+stopped guests, malformed receipts, degraded privilege, and missing boundary
+observations cannot become `preview-ready`.
+
+Real runtime evidence uses `hideout.runtime-evidence-binding/v1`. Gate 2, Gate
+3, and 031 product proofs record the exact family, revision, artifact SHA-256,
+environment identity, architecture tuple, candidate commit, and dirty state.
+Release evaluation requires a trusted expectation resolved from the packaged
+catalog and rejects missing, mismatched, native, local, dirty, stale, or failed
+evidence. Free-form notes never define runtime freshness.
+
+The current source tree deliberately embeds an unpromoted empty catalog. The
+mechanics above are implemented and locally tested, but no retained artifact or
+clean exact-image Gate 2/Gate 3 evidence exists yet. Therefore this document
+does not claim an available preview runtime, supported image, patch SLA,
+automatic refresh, interactive agent authentication, or release readiness.

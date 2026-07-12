@@ -43,6 +43,10 @@ type RunSpec struct {
 	PrivilegedSetupRequired   bool
 	PrivilegeStatusSink       func(privilege.Status) error
 	PrivilegedSetupEventSink  func(PrivilegedSetupEvent) error
+	RuntimeContract           *RuntimeContract
+	RuntimeInstanceExpected   *RuntimeInstanceExpectation
+	RuntimeResultSink         func(RuntimeObservationReport) error
+	RuntimeCompletionSink     func(error) error
 }
 
 type PrivilegedSetupEvent struct {
@@ -84,6 +88,10 @@ type Session struct {
 	PrivilegeStatus           *privilege.Status
 	PrivilegeStatusSink       func(privilege.Status) error
 	PrivilegedSetupEventSink  func(PrivilegedSetupEvent) error
+	RuntimeContract           *RuntimeContract
+	RuntimeInstanceExpected   *RuntimeInstanceExpectation
+	RuntimeResultSink         func(RuntimeObservationReport) error
+	RuntimeCompletionSink     func(error) error
 }
 
 type PortBridgeEndpoint struct {

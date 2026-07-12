@@ -56,3 +56,26 @@ func TestSubscribeEventsNoDaemon(t *testing.T) {
 		t.Fatal("SubscribeEvents should error when no daemon is running")
 	}
 }
+
+func TestFetchStatusSeedsExistingBackgroundWork(t *testing.T) {
+	d := startTestDaemon(t)
+	release := make(chan struct{})
+	id, err := d.SubmitBackground("environment-stop", func(context.Context) error {
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close(release)
+	status, err := FetchStatus(context.Background(), d.store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range status.Background {
+		if row.ID == id && (row.Status == "queued" || row.Status == "running") {
+			return
+		}
+	}
+	t.Fatalf("background operation missing from status seed: %+v", status.Background)
+}

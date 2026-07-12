@@ -38,9 +38,21 @@ for daemon-mediated Manager operations; standalone CLI invocations still surface
 through audit-tail events unless they go through the daemon. Environment live
 events currently cover the Manager stop/clean lifecycle. Both surfaces fall back
 to their prior behavior when no daemon runs or the stream closes. The current
-proof is a Gate 0 deterministic JavaScript reducer harness, production
-emit-source tests, and TUI terminal capture; richer browser-driven UX automation
-remains a later product-hardening task.
+proof includes a Gate 0 deterministic JavaScript reducer harness, production
+emit-source tests, TUI terminal capture, and a 021 browser-driven WebUI proof
+that opens the daemon-served loopback UI in local Chrome/Chromium. That browser
+proof is test-only automation: it verifies the visible console, a live event
+update with no hidden overview/audit polling, a notice acknowledgement round
+trip through the existing Manager route, wrong-token refusal, redacted
+artifacts, and a `hideout.product-hardening-evidence/v1` manifest. It does not
+add product browser-control authority. The 021 terminal proof launches the real
+`hideout tui` command in a `script(1)` terminal session, verifies the visible
+operator-console output, proves a daemon notice event changes terminal output,
+uses a deliberately small fallback interval as a regression tripwire to prove no
+healthy-stream interval polling occurs, observes stream-closed fallback, and
+writes the same product-hardening evidence manifest. That proof is still over
+the current compact dashboard shape; the richer Bubble Tea multi-pane interface
+remains a product UI polish increment, not a separate authority model.
 
 ## TUI Role
 
@@ -59,6 +71,15 @@ default init path.
 015 adds a redacted `hideout.doctor-report/v1` JSON report that future UI
 doctor panels can render, but the current TUI/WebUI does not auto-run doctor or
 turn report findings into implicit repairs.
+
+019 adds an operator-console MVP on top of the same live-console model. It
+organizes action-required counts, HostFS write decisions, decision-center
+records, notices, background work, environments, stream health, and read-only
+doctor/package/support status. It does not create a new authority surface:
+decision buttons call existing Manager decision routes, notice acknowledgement
+calls the existing notice route, HostFS write controls stay on existing
+HostFS-write compatibility routes, and doctor is explicit command guidance
+rather than an automatic page-load probe.
 
 Recommended implementation stack:
 
@@ -219,7 +240,12 @@ Design-ready interactive session observer:
 
 The live tail comes from daemon event streams in the steady state. TUI now seeds
 once from Manager overview/redacted audit, applies typed daemon events locally,
-and polls only in daemon-less fallback.
+and polls only in daemon-less fallback. The `--interval` option is therefore a
+fallback interval, not the normal live refresh mechanism.
+The compact operator-console section shows action-required totals, explicit
+doctor/package/support commands, background status, HostFS write decisions,
+generic decisions, and notices. TUI remains command-oriented: it prints existing
+CLI/Manager commands instead of hiding local mutations behind keystrokes.
 
 ### Environments
 
@@ -227,10 +253,19 @@ Implemented WebUI smoke surface shows capped reusable environment panels and
 offers controlled stop/clean plan/apply actions through Manager API. It also
 supports a local profile scope so overview cards, environment/session panels,
 and recent audit tails can be narrowed to one profile without changing Manager
-state. TUI currently renders a capped dashboard summary with copyable
-resume/stop/clean command hints; richer terminal lifecycle controls should call
-the same Manager environment endpoints rather than reimplementing store or
-backend cleanup logic.
+state. The Operator Console tab groups Action Required, Doctor, Package/Support,
+Stream, Environments, Background, HostFS Writes, Decisions, and Notices. It uses
+the same live reducer and existing Manager API actions, with manual refresh as
+an explicit user action and no hidden steady-state polling while the daemon
+stream is healthy. The 021 browser proof exercises this page in a real local
+browser against a real daemon loopback transport; static source grep or
+reducer-only tests are not sufficient for that browser lane. TUI currently
+renders the same model as a capped dashboard summary with copyable
+resume/stop/clean and decision commands. The 021 TUI proof exercises the real
+command process under a terminal harness; render-only tests are not sufficient
+for that lane. Richer terminal lifecycle controls should call the same Manager
+environment endpoints rather than reimplementing store or backend cleanup
+logic.
 
 ## WebUI Initial Pages
 
@@ -270,6 +305,12 @@ Current smoke surface shows:
   notices. HostFS write controls remain compatibility controls over the generic
   `hostfs.write` decision record; share/export decisions and privilege/background
   notices are observed through the same live-console reducer state;
+- `host-app.open-resource` decisions with the same authenticated
+  claim/approve/deny/revoke/reopen lifecycle. The requested IDE mode is visible
+  state, not authority; only a live run-scoped grant permits trusted launch;
+- an Operator Console tab that groups action-required counts, stream health,
+  doctor/package/support status, environments, background work, HostFS writes,
+  decisions, and notices without adding new authority;
 - CLI hints for listing and adding durable profile HostFS rules.
 
 Later product views should add:

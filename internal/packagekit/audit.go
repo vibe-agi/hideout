@@ -8,14 +8,18 @@ import (
 )
 
 type AuditEvent struct {
-	Schema    string `json:"schema"`
-	Time      string `json:"time"`
-	Operation string `json:"operation"`
-	Status    string `json:"status"`
-	Prefix    string `json:"prefix,omitempty"`
-	StoreRoot string `json:"storeRoot,omitempty"`
-	Files     int    `json:"files,omitempty"`
-	Purge     bool   `json:"purge,omitempty"`
+	Schema        string `json:"schema"`
+	Time          string `json:"time"`
+	Operation     string `json:"operation"`
+	Status        string `json:"status"`
+	Prefix        string `json:"prefix,omitempty"`
+	StoreRoot     string `json:"storeRoot,omitempty"`
+	Files         int    `json:"files,omitempty"`
+	StaleFiles    int    `json:"staleFiles,omitempty"`
+	RepairRemoved int    `json:"repairRemoved,omitempty"`
+	DurableAction string `json:"durableAction,omitempty"`
+	Purge         bool   `json:"purge,omitempty"`
+	SurvivorAudit string `json:"survivorAudit,omitempty"`
 }
 
 func writeAudit(storeRoot string, event AuditEvent) {
@@ -37,7 +41,9 @@ func writePurgeAudit(storeRoot string, event AuditEvent) {
 	if parent == "" || parent == "." {
 		return
 	}
-	writeAuditFile(filepath.Join(parent, "hideout-package-purge-audit.jsonl"), event)
+	path := filepath.Join(parent, "hideout-package-purge-audit.jsonl")
+	event.SurvivorAudit = path
+	writeAuditFile(path, event)
 }
 
 func writeAuditFile(path string, event AuditEvent) {

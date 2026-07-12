@@ -172,7 +172,11 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			retErr = closeErr
 		}
 	}()
-	session, err := opts.Backend.Prepare(ctx, c.runSpec(runSession, runEnv, dataPlane, runNetwork))
+	runSpec := c.runSpec(runSession, runEnv, dataPlane, runNetwork)
+	if err := c.attachRuntimeVerification(&runSpec, runSession, runEnv, opts.Backend.Name()); err != nil {
+		return result, err
+	}
+	session, err := opts.Backend.Prepare(ctx, runSpec)
 	if err != nil {
 		return result, err
 	}
@@ -218,6 +222,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	previewCtx, cancelPreview := context.WithCancel(ctx)
 	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
 	runErr := opts.Backend.Run(ctx, session, plan.Command, dataPlane.Env)
+	runErr = runtimeRunError(runEnv, runErr)
 	cancelPreview()
 	var previewAuditErr error
 	for _, event := range <-previewEvents {

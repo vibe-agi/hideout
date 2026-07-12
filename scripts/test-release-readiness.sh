@@ -8,17 +8,26 @@ usage() {
   cat <<'USAGE'
 Usage:
   scripts/test-release-readiness.sh --local-fast [--out <path>]
-  scripts/test-release-readiness.sh --release-candidate [--out <path>]
+  scripts/test-release-readiness.sh --release-candidate \
+    --package-root <path> --product-evidence <path> [--product-evidence <path>...] \
+    [--runtime-family <id>] [--out <path>]
 
 Local-fast evidence is useful for development but is not release readiness.
 Release-candidate mode requires real Gate 2 and Gate 3 evidence through:
   HIDEOUT_GATE2_EVIDENCE
   HIDEOUT_GATE3_EVIDENCE
+
+Release-candidate defaults to runtime family developer-standard. Package and
+product evidence are explicit trusted inputs; the script never discovers an
+arbitrary nearby artifact or silently omits the product-evidence spine.
 USAGE
 }
 
 mode=""
 out=""
+runtime_family="${HIDEOUT_RELEASE_RUNTIME_FAMILY:-}"
+package_root="${HIDEOUT_RELEASE_PACKAGE_ROOT:-}"
+product_evidence=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --local-fast)
@@ -35,6 +44,22 @@ while [ "$#" -gt 0 ]; do
         echo "release-readiness: --out requires a path" >&2
         exit 2
       fi
+      shift 2
+      ;;
+    --runtime-family)
+      runtime_family="${2:-}"
+      [ -n "$runtime_family" ] || { echo "release-readiness: --runtime-family requires an id" >&2; exit 2; }
+      shift 2
+      ;;
+    --package-root)
+      package_root="${2:-}"
+      [ -n "$package_root" ] || { echo "release-readiness: --package-root requires a path" >&2; exit 2; }
+      shift 2
+      ;;
+    --product-evidence)
+      evidence_path="${2:-}"
+      [ -n "$evidence_path" ] || { echo "release-readiness: --product-evidence requires a path" >&2; exit 2; }
+      product_evidence+=("$evidence_path")
       shift 2
       ;;
     -h|--help)
@@ -57,6 +82,15 @@ if [ -z "$out" ]; then
   out="$out_dir/readiness.json"
 fi
 
+if [ "$mode" = "release-candidate" ]; then
+  runtime_family="${runtime_family:-developer-standard}"
+  [ -n "${HIDEOUT_GATE2_EVIDENCE:-}" ] || { echo "release-readiness: release-candidate requires HIDEOUT_GATE2_EVIDENCE" >&2; exit 2; }
+  [ -n "${HIDEOUT_GATE3_EVIDENCE:-}" ] || { echo "release-readiness: release-candidate requires HIDEOUT_GATE3_EVIDENCE" >&2; exit 2; }
+  [ -n "$runtime_family" ] || { echo "release-readiness: release-candidate requires --runtime-family" >&2; exit 2; }
+  [ -n "$package_root" ] || { echo "release-readiness: release-candidate requires --package-root" >&2; exit 2; }
+  [ "${#product_evidence[@]}" -gt 0 ] || { echo "release-readiness: release-candidate requires at least one --product-evidence" >&2; exit 2; }
+fi
+
 commit="$(git rev-parse HEAD 2>/dev/null || printf unknown)"
 local_status="passed"
 
@@ -73,14 +107,27 @@ if ! run_local_fast_checks; then
   local_status="failed"
 fi
 
-set +e
-go run ./cmd/hideout support readiness \
-  --mode "$mode" \
-  --out "$out" \
-  --commit "$commit" \
-  --local-status "$local_status" \
-  --gate2-evidence "${HIDEOUT_GATE2_EVIDENCE:-}" \
+readiness_args=(
+  support readiness
+  --mode "$mode"
+  --out "$out"
+  --commit "$commit"
+  --local-status "$local_status"
+  --gate2-evidence "${HIDEOUT_GATE2_EVIDENCE:-}"
   --gate3-evidence "${HIDEOUT_GATE3_EVIDENCE:-}"
+)
+if [ -n "$runtime_family" ]; then
+  readiness_args+=(--runtime-family "$runtime_family")
+fi
+if [ -n "$package_root" ]; then
+  readiness_args+=(--package-root "$package_root")
+fi
+for evidence_path in "${product_evidence[@]}"; do
+  readiness_args+=(--product-evidence "$evidence_path")
+done
+
+set +e
+go run ./cmd/hideout "${readiness_args[@]}"
 status=$?
 set -e
 

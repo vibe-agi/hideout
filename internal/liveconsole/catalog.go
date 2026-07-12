@@ -2,6 +2,27 @@ package liveconsole
 
 import "time"
 
+const (
+	EventSourceProduction = "production"
+	EventSourceSeedOnly   = "seed-only"
+	EventSourceTestOnly   = "test-only"
+
+	RedactionControlPlaneStripped = "control-plane-stripped"
+)
+
+type EventCatalogEntry struct {
+	Kind           string
+	ProducerKinds  []string
+	RemapFrom      []string
+	Source         string
+	ProductionSite string
+	RequiredFields []string
+	Redaction      string
+	GoReducer      bool
+	JSReducer      bool
+	Panels         []string
+}
+
 // PanelEventCoverage lists the event kinds each live panel depends on. Tests use
 // it as a drift guard: adding a panel or event kind requires updating the
 // representative catalog before UI code can claim live coverage.
@@ -21,10 +42,52 @@ func PanelEventCoverage() map[string][]string {
 	}
 }
 
+func EventCatalog() []EventCatalogEntry {
+	out := append([]EventCatalogEntry(nil), eventCatalog...)
+	return out
+}
+
 func RepresentativeEventKinds() map[string]bool {
 	out := map[string]bool{}
 	for _, ev := range RepresentativeEvents() {
 		out[ev.Kind] = true
+	}
+	return out
+}
+
+func RequiredPayloadFields(kind string) []string {
+	for _, entry := range eventCatalog {
+		if entry.Kind == kind {
+			return append([]string(nil), entry.RequiredFields...)
+		}
+	}
+	return nil
+}
+
+func ReducerEventKinds() []string {
+	return []string{
+		KindEnvironment,
+		KindSession,
+		KindBackground,
+		KindAudit,
+		KindExport,
+		KindCleanup,
+		KindHostFSWrite,
+		KindDecision,
+		KindNotice,
+		KindTerminal,
+	}
+}
+
+func EventProducerMappings() map[string]string {
+	out := map[string]string{}
+	for _, entry := range eventCatalog {
+		for _, producer := range entry.ProducerKinds {
+			out[producer] = entry.Kind
+		}
+		for _, producer := range entry.RemapFrom {
+			out[producer] = entry.Kind
+		}
 	}
 	return out
 }
@@ -125,4 +188,119 @@ func RepresentativeEvents() []Event {
 			Payload: EventPayload{Reason: "stream closed"},
 		},
 	}
+}
+
+var eventCatalog = []EventCatalogEntry{
+	{
+		Kind:           KindEnvironment,
+		ProducerKinds:  []string{KindEnvironment},
+		Source:         EventSourceProduction,
+		ProductionSite: "manager.Core.emitOperation(environment)",
+		RequiredFields: []string{"id"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"environments"},
+	},
+	{
+		Kind:           KindSession,
+		ProducerKinds:  []string{KindSession},
+		RemapFrom:      []string{"run", "operation", "*"},
+		Source:         EventSourceProduction,
+		ProductionSite: "daemon.eventBus.OperationEvent(session/run/operation/default)",
+		RequiredFields: []string{"id"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"sessions"},
+	},
+	{
+		Kind:           KindBackground,
+		ProducerKinds:  []string{KindBackground},
+		Source:         EventSourceProduction,
+		ProductionSite: "daemon.background + manager.Core.emitOperation(background)",
+		RequiredFields: []string{"id", "op", "status"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"background"},
+	},
+	{
+		Kind:           KindAudit,
+		ProducerKinds:  []string{KindAudit},
+		RemapFrom:      []string{"host-app"},
+		Source:         EventSourceProduction,
+		ProductionSite: "daemon audit tail",
+		RequiredFields: []string{"action", "decision"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"audit", "denied-audit"},
+	},
+	{
+		Kind:           KindExport,
+		ProducerKinds:  []string{KindExport},
+		Source:         EventSourceProduction,
+		ProductionSite: "export.ApplyExport",
+		RequiredFields: []string{"status"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"exports"},
+	},
+	{
+		Kind:           KindCleanup,
+		ProducerKinds:  []string{KindCleanup},
+		Source:         EventSourceProduction,
+		ProductionSite: "manager.CloseRunSession",
+		RequiredFields: []string{"status"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"cleanup"},
+	},
+	{
+		Kind:           KindHostFSWrite,
+		ProducerKinds:  []string{KindHostFSWrite},
+		Source:         EventSourceProduction,
+		ProductionSite: "HostFS write decision provider",
+		RequiredFields: []string{"decisionId", "operationId", "status"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"hostfs-write"},
+	},
+	{
+		Kind:           KindDecision,
+		ProducerKinds:  []string{KindDecision},
+		Source:         EventSourceProduction,
+		ProductionSite: "decision store provider",
+		RequiredFields: []string{"decisionId", "recordKind", "status"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"decisions"},
+	},
+	{
+		Kind:           KindNotice,
+		ProducerKinds:  []string{KindNotice},
+		Source:         EventSourceProduction,
+		ProductionSite: "notice store provider",
+		RequiredFields: []string{"noticeId", "recordKind", "status"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"notices"},
+	},
+	{
+		Kind:           KindTerminal,
+		ProducerKinds:  []string{KindTerminal},
+		Source:         EventSourceProduction,
+		ProductionSite: "daemon event stream termination",
+		RequiredFields: []string{"reason"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"stream"},
+	},
 }

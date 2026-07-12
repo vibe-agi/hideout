@@ -18,6 +18,61 @@ guest writes stage overlay intent first, and host mutation happens only after
 Go-owned apply. Workspace writes remain outside HostFS and are not blocked by
 this feature.
 
+## Discoverable Namespace And Read Approval
+
+029 adds name visibility without adding implicit content authority. The policy
+uses ordinary per-root HostFS rules:
+
+```text
+see:/absolute/path             exact node only; a directory is not enumerable
+see-dir:/absolute/directory    complete immediate child names
+see-tree:/absolute/directory   complete names at each lazily traversed depth
+```
+
+These selectors expose only name, coarse kind, locked state, and the generic
+`discover` capability. They expose no real size, mode, owner, timestamps,
+content, or symlink target. V1 rejects discover globs. Successful directory
+listings are complete relative to the declared visible domain; more than 4096
+entries, depth beyond 32, protected-directory failure, or child-inspection
+failure returns a typed error rather than a partial list.
+
+Target-visible errors are scoped. Outside an explicit discover domain and for
+force-hidden paths, lookup remains `ENOENT`. A visible locked read returns
+prompt `EACCES`; exact-directory readdir and unauthorized write do not create a
+read decision. Host prerequisite failure returns typed `EIO`, and incomplete
+enumeration returns `EOVERFLOW`. The Linux helper maps the validated typed error
+record, never human stderr, to errno.
+
+An eligible locked-file read creates or coalesces one five-minute
+`hostfs.read` decision and returns immediately. Manager Core owns deduplication,
+the eight-pending and eight-new-per-minute limits, terminal memory, claim,
+approve/deny, and authenticated reopen. Target-provided reason text is labeled
+untrusted, bounded, and control-plane redacted. V1 never blocks a FUSE syscall
+while waiting for a person and never approves a directory read through this
+flow.
+
+Approval writes one exact canonical-file grant into private session state only
+after policy, claim, canonical path, and live owner lock are revalidated. The
+same running guest sees content authority on its next retry; no watcher or
+polling loop is used. Positive FUSE entry and attr caches are bounded to one
+second and negative caching is disabled, so ordinary granted metadata converges
+within one second. Authorization is checked on every content operation and
+never depends on cached mode or attr state. Symlink retarget, expiry, malformed
+state, policy drift, owner loss, and cleanup all fail closed. Read-only opening
+of missing provider state cannot recreate session authority.
+
+Visibility presets expand to these same rules. `none` grants no external name
+visibility; `landmarks` creates explicit one-level roots; `home-tree` requires
+an acknowledgement that names may enter target or model context and adds the
+shared categorized sensitive-root exclusions for review. Independently of
+presets, Core compiles that single categorized exclusion source into every
+effective discover policy, so a manually authored broad rule cannot bypass it.
+An exact content grant remains directly usable but cannot make a
+discover-denied name reappear in parent enumeration. Legacy `list:` rules are
+not aliased: ordinary profile loading returns a guided migration error and an
+operator must use `hideout profile fs <profile> migrate-list` to map every
+legacy rule to `see-dir` or `see-tree` in one reviewed, atomic migration.
+
 ## Product Goal
 
 Allow tools and agents to behave as if they can edit selected host files while
@@ -231,6 +286,23 @@ result
 Audit must not expose overlay object paths as authority-bearing filesystem
 paths to the target or exported artifacts. Terminal decisions clean staged
 content objects while preserving operation/decision records and audit evidence.
+
+## Evidence
+
+023 adds product-hardening evidence for this contract without changing HostFS
+authority. `scripts/test-hostfs-decision-e2e.sh --local-fast` proves local
+decision semantics, one-winner claim behavior, deny and timeout outcomes,
+conflict fail-closed behavior, live-console model visibility, operation
+coverage-matrix honesty, and public artifact redaction. Local-fast evidence is
+not guest HostFS data-plane proof.
+
+Real guest staging claims remain owned by Gate 2. When
+`scripts/test-hostfs-decision-e2e.sh --real-gate2` runs with prerequisites, it
+wraps the Lima HostFS path and proves representative file replace and directory
+creation behavior: the guest sees staged content or directory state before
+apply, the host lower state is unchanged before apply, and apply mutates only
+the planned host path. Without prerequisites the real lane records `not-run`;
+native/local-fast evidence must not satisfy real Gate 2 HostFS claims.
 
 ## Failure Behavior
 

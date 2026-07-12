@@ -103,15 +103,15 @@ run_hideout init \
   --no-input >"$tmp/hardened-fallback.out"
 grep -q 'posture: hardened-degraded' "$tmp/hardened-fallback.out"
 jq -e '.metadata.templateDegraded == "true" and .metadata.templatePosture == "hardened-degraded"' "$store/profiles/alpha-hard-degraded/profile.json" >/dev/null
-jq -e '.effectivePosture == "hardened-degraded" and (.nonClaims[] | contains("not a hardened"))' "$store/profiles/alpha-hard-degraded/onboarding-evidence.json" >/dev/null
+jq -e '.effectivePosture == "hardened-degraded" and any(.nonClaims[]; contains("not a hardened"))' "$store/profiles/alpha-hard-degraded/onboarding-evidence.json" >/dev/null
 
 store="$tmp/dev-debug-store"
 run_hideout init --profile alpha-dev --template dev --backend native --network direct --no-input >"$tmp/dev.out"
 run_hideout init --profile alpha-debug --template debug --backend native --network direct --no-input >"$tmp/debug.out"
 jq -e '.metadata.templateId == "dev" and .network.mode == "direct"' "$store/profiles/alpha-dev/profile.json" >/dev/null
 jq -e '.metadata.templateId == "debug" and .metadata.templatePosture == "debug-local"' "$store/profiles/alpha-debug/profile.json" >/dev/null
-jq -e '.effectivePosture == "dev" and (.nonClaims[] | contains("does not claim"))' "$store/profiles/alpha-dev/onboarding-evidence.json" >/dev/null
-jq -e '.effectivePosture == "debug-local" and (.nonClaims[] | contains("does not claim"))' "$store/profiles/alpha-debug/onboarding-evidence.json" >/dev/null
+jq -e '.effectivePosture == "dev" and any(.nonClaims[]; contains("does not claim"))' "$store/profiles/alpha-dev/onboarding-evidence.json" >/dev/null
+jq -e '.effectivePosture == "debug-local" and any(.nonClaims[]; contains("does not claim"))' "$store/profiles/alpha-debug/onboarding-evidence.json" >/dev/null
 
 grep -q -- '--template privacy' README.md
 grep -q -- '--template dev' README.md

@@ -192,6 +192,30 @@ func TestStoreReservedRootGrantsAreNotExpressible(t *testing.T) {
 	}
 }
 
+func TestDiscoverAncestorMayCoverStoreButReservedRootRemainsHidden(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, ".hideout")
+	if err := os.MkdirAll(storeRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := Build(BuildInput{
+		Profile: Config{Grants: []Rule{{
+			ID: "hfs_home_see", HostPath: root, Ops: []Op{OpDiscover}, Scope: ScopeRecursiveDir, Reason: "explicit home names",
+		}}},
+		StoreRoot: storeRoot,
+	})
+	if err != nil {
+		t.Fatalf("pure discover ancestor should rely on reserved-root precedence: %v", err)
+	}
+	visibility := policy.Visibility(storeRoot)
+	if visibility.State != VisibilityHidden || !visibility.ReservedHidden {
+		t.Fatalf("reserved store became visible under discover ancestor: %+v", visibility)
+	}
+	if decision := policy.Decide(OpRead, filepath.Join(storeRoot, "profile.json")); decision.Allowed || decision.Reason != ReservedRootReason {
+		t.Fatalf("discover ancestor weakened reserved content denial: %+v", decision)
+	}
+}
+
 func TestStoreReservedRootDoesNotRejectNonCoveringParentGlob(t *testing.T) {
 	_, err := Build(BuildInput{
 		Profile: Config{Grants: []Rule{
@@ -279,6 +303,32 @@ func TestOverlayGrantRequiredForWriteStaging(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "lower" {
 		t.Fatalf("lower host file changed or unreadable: %q err=%v", got, err)
+	}
+}
+
+func TestExplicitDiscoverWriteWithoutOverlayGrantReturnsUnauthorizedWithOverlayPresent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "visible.txt")
+	if err := os.WriteFile(path, []byte("lower"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := Build(BuildInput{Profile: Config{Grants: []Rule{{
+		ID: "hfs_see", HostPath: path, Ops: []Op{OpDiscover}, Scope: ScopeExactFile, Reason: "explicit visibility",
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := overlaypkg.NewStore(filepath.Join(root, ".overlay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(policy)
+	service.Overlay = store
+	if _, err := service.StageWrite(WriteRequest{Op: OpWrite, Path: path, Data: []byte("staged")}); !errors.Is(err, ErrWriteUnauthorized) {
+		t.Fatalf("explicit discover write err=%v want ErrWriteUnauthorized", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "lower" {
+		t.Fatalf("unauthorized write changed lower file: %q err=%v", got, err)
 	}
 }
 

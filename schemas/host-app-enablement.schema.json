@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/host-app-enablement.schema.json",
+  "title": "Hideout Host-App Profile Enablement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile",
+    "packId",
+    "revisionId",
+    "bindingIds",
+    "sourceDigest",
+    "basePermissionFingerprint",
+    "permissionFingerprint",
+    "access",
+    "observedIdentityDigest",
+    "conflictReplacements",
+    "enabledAt",
+    "state",
+    "reason"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.host-app-enablement/v1"
+    },
+    "profile": {
+      "$ref": "#/$defs/id"
+    },
+    "packId": {
+      "$ref": "#/$defs/id"
+    },
+    "revisionId": {
+      "$ref": "#/$defs/id"
+    },
+    "bindingIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "sourceDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "basePermissionFingerprint": {
+      "$ref": "#/$defs/digest"
+    },
+    "permissionFingerprint": {
+      "$ref": "#/$defs/digest"
+    },
+    "access": {
+      "enum": [
+        "safe",
+        "ask-each-run"
+      ]
+    },
+    "observedIdentityDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "unverifiedAppTrust": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/unverifiedAppTrust"
+      }
+    },
+    "conflictReplacements": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "$ref": "#/$defs/command"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "enabledAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "state": {
+      "enum": [
+        "enabled",
+        "suspended",
+        "disabled",
+        "revoked"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]+$"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "unverifiedAppTrust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "qualifiedAppRef",
+        "rootClass",
+        "canonicalPathDigest",
+        "contentDigest",
+        "identityDigest",
+        "acceptedAt"
+      ],
+      "properties": {
+        "schema": {
+          "const": "hideout.unverified-app-trust/v1"
+        },
+        "qualifiedAppRef": {
+          "$ref": "#/$defs/id"
+        },
+        "rootClass": {
+          "enum": [
+            "system-applications",
+            "applications",
+            "operator-applications"
+          ]
+        },
+        "canonicalPathDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^bundle-tree-v1:sha256:[a-f0-9]{64}$"
+        },
+        "identityDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "acceptedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

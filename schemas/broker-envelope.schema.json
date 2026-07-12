@@ -384,6 +384,9 @@
           "type": "string",
           "minLength": 1
         },
+        "error": {
+          "$ref": "#/$defs/errorRecord"
+        },
         "data": {
           "type": "object",
           "additionalProperties": true
@@ -493,6 +496,115 @@
               }
             }
           }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "errorRecord": {
+      "type": "object",
+      "required": ["code", "errno", "retryable"],
+      "properties": {
+        "code": {
+          "enum": [
+            "hostfs.path.hidden",
+            "hostfs.read.approval-required",
+            "hostfs.read.denied",
+            "hostfs.read.request-limited",
+            "hostfs.directory.not-enumerable",
+            "hostfs.directory.incomplete",
+            "hostfs.write.unauthorized",
+            "hostfs.host.prerequisite-failed",
+            "hostfs.operation.unsupported",
+            "broker.unavailable"
+          ]
+        },
+        "errno": {
+          "enum": ["ENOENT", "EACCES", "EOVERFLOW", "EIO", "EROFS"]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "decisionRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryAfterMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"code": {"const": "hostfs.read.approval-required"}},
+            "required": ["code"]
+          },
+          "then": {
+            "required": ["decisionRef"],
+            "properties": {"errno": {"const": "EACCES"}, "retryable": {"const": true}}
+          },
+          "else": {
+            "not": {"required": ["decisionRef"]}
+          }
+        },
+        {
+          "if": {
+            "properties": {"code": {"enum": ["hostfs.read.request-limited", "broker.unavailable"]}},
+            "required": ["code"]
+          },
+          "else": {
+            "not": {"required": ["retryAfterMs"]}
+          }
+        },
+        {
+          "if": {
+            "properties": {"code": {"const": "hostfs.path.hidden"}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "ENOENT"}, "retryable": {"const": false}}}
+        },
+        {
+          "if": {
+            "properties": {"code": {"enum": ["hostfs.read.denied", "hostfs.directory.not-enumerable", "hostfs.write.unauthorized"]}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "EACCES"}, "retryable": {"const": false}}}
+        },
+        {
+          "if": {
+            "properties": {"code": {"const": "hostfs.read.request-limited"}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "EACCES"}, "retryable": {"const": true}}}
+        },
+        {
+          "if": {
+            "properties": {"code": {"const": "hostfs.directory.incomplete"}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "EOVERFLOW"}, "retryable": {"const": false}}}
+        },
+        {
+          "if": {
+            "properties": {"code": {"const": "hostfs.host.prerequisite-failed"}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "EIO"}, "retryable": {"const": false}}}
+        },
+        {
+          "if": {
+            "properties": {"code": {"const": "hostfs.operation.unsupported"}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "EROFS"}, "retryable": {"const": false}}}
+        },
+        {
+          "if": {
+            "properties": {"code": {"const": "broker.unavailable"}},
+            "required": ["code"]
+          },
+          "then": {"properties": {"errno": {"const": "EIO"}, "retryable": {"const": true}}}
         }
       ],
       "additionalProperties": false

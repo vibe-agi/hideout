@@ -12,57 +12,12 @@ func ValidateEvent(ev Event) error {
 	if ev.Seq < 0 {
 		return errors.New("event seq must be non-negative")
 	}
-	switch ev.Kind {
-	case KindEnvironment:
-		return require(ev.Payload.ID, "environment.id")
-	case KindSession:
-		return require(ev.Payload.ID, "session.id")
-	case KindBackground:
-		if err := require(ev.Payload.ID, "background.id"); err != nil {
+	for _, field := range RequiredPayloadFields(ev.Kind) {
+		if err := require(payloadField(ev.Payload, field), ev.Kind+"."+field); err != nil {
 			return err
 		}
-		if err := require(ev.Payload.Op, "background.op"); err != nil {
-			return err
-		}
-		return require(ev.Payload.Status, "background.status")
-	case KindAudit:
-		if err := require(ev.Payload.Action, "audit.action"); err != nil {
-			return err
-		}
-		return require(ev.Payload.Decision, "audit.decision")
-	case KindExport:
-		return require(ev.Payload.Status, "export.status")
-	case KindCleanup:
-		return require(ev.Payload.Status, "cleanup.status")
-	case KindHostFSWrite:
-		if err := require(ev.Payload.DecisionID, "hostfs-write.decisionId"); err != nil {
-			return err
-		}
-		if err := require(ev.Payload.OperationID, "hostfs-write.operationId"); err != nil {
-			return err
-		}
-		return require(ev.Payload.Status, "hostfs-write.status")
-	case KindDecision:
-		if err := require(ev.Payload.DecisionID, "decision.decisionId"); err != nil {
-			return err
-		}
-		if err := require(ev.Payload.RecordKind, "decision.kind"); err != nil {
-			return err
-		}
-		return require(ev.Payload.Status, "decision.status")
-	case KindNotice:
-		if err := require(ev.Payload.NoticeID, "notice.noticeId"); err != nil {
-			return err
-		}
-		if err := require(ev.Payload.RecordKind, "notice.kind"); err != nil {
-			return err
-		}
-		return require(ev.Payload.Status, "notice.status")
-	case KindTerminal:
-		return require(ev.Payload.Reason, "terminal.reason")
-	default:
-		return nil
 	}
+	return nil
 }
 
 func require(value, field string) error {
@@ -70,4 +25,31 @@ func require(value, field string) error {
 		return fmt.Errorf("missing required field %s", field)
 	}
 	return nil
+}
+
+func payloadField(payload EventPayload, field string) string {
+	switch field {
+	case "id":
+		return payload.ID
+	case "op":
+		return payload.Op
+	case "status":
+		return payload.Status
+	case "action":
+		return payload.Action
+	case "decision":
+		return payload.Decision
+	case "reason":
+		return payload.Reason
+	case "decisionId":
+		return payload.DecisionID
+	case "operationId":
+		return payload.OperationID
+	case "recordKind":
+		return payload.RecordKind
+	case "noticeId":
+		return payload.NoticeID
+	default:
+		return ""
+	}
 }

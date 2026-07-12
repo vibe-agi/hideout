@@ -49,11 +49,23 @@ const (
 func (d *Daemon) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(apiPrefix, d.authRecorder(d.api.Handler()))
-	mux.Handle(statusPath, d.authRecorder(http.HandlerFunc(d.serveStatus)))
-	mux.Handle(stopPath, d.authRecorder(http.HandlerFunc(d.serveStop)))
-	mux.Handle(eventsPath, d.authRecorder(http.HandlerFunc(d.serveEvents)))
-	mux.Handle(backgroundPath, d.authRecorder(http.HandlerFunc(d.serveBackground)))
+	d.mountDaemonEndpoints(mux)
 	return mux
+}
+
+func (d *Daemon) mountDaemonEndpoints(mux *http.ServeMux) {
+	for _, endpoint := range DaemonEndpoints() {
+		switch endpoint.Path {
+		case statusPath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveStatus)))
+		case stopPath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveStop)))
+		case eventsPath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveEvents)))
+		case backgroundPath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveBackground)))
+		}
+	}
 }
 
 // serveBackground is the product entry for submitting existing typed environment

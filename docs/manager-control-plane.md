@@ -267,11 +267,14 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   validation, and never expose raw host filesystem authority to UI clients.
 - Manager API exposes the operator decision center:
   `GET /api/v1/decisions`, `GET /api/v1/decisions/{id}`,
-  `POST /api/v1/decisions/{id}/claim|approve|deny`,
+  `POST /api/v1/decisions/{id}/claim|approve|deny|revoke|reopen`,
   `GET /api/v1/notices`, `GET /api/v1/notices/{id}`, and
   `POST /api/v1/notices/{id}/ack`. HostFS write routes are compatibility
   shims over `hostfs.write` decision records; notices such as privilege and
   background status are informational and cannot be claimed or approved.
+  `host-app.open-resource` decisions use the same claim/approve/revoke lifecycle;
+  approval creates only a run-scoped grant and never changes host-app policy by
+  itself.
 - Manager API exposes controlled profile env policy actions:
   `POST /api/v1/profile/env/plan` and `POST /api/v1/profile/env/apply`. These
   mutate only durable `profile.env.public`, `profile.env.inherit`, and
@@ -489,9 +492,9 @@ CLI should remain thin over Manager Core for complex operations.
 ### TUI
 
 Current TUI smoke surface is a read-only terminal dashboard over Manager
-overview and redacted audit data. The product role is a persistent operator
-window that can stay open while another terminal runs an agent or CLI. It is
-best for:
+overview and redacted audit data plus the 019 compact operator-console model.
+The product role is a persistent operator window that can stay open while
+another terminal runs an agent or CLI. It is best for:
 
 - local monitoring;
 - session/environment overview;
@@ -500,6 +503,9 @@ best for:
 - init next steps.
 - per-profile expected-command diagnostics and command-proxy state with CLI
   setup hints.
+- action-required counts, HostFS write decisions, generic decisions,
+  informational notices, background work, and explicit doctor/package/support
+  command guidance.
 
 The TUI stays the lightweight pane: side-by-side panels with keyboard
 shortcuts for audit observation and session management. Future TUI increments
@@ -524,8 +530,9 @@ terminal, uses Go, and can share process-level code with Hideout.
 
 Current WebUI smoke surface is a local Manager API client for overview,
 audit/resource summaries, expected-command diagnostics, controlled run
-plan/apply, and reusable environment stop/clean plan/apply. The WebUI is the
-fuller management surface. It is best for:
+plan/apply, reusable environment stop/clean plan/apply, and the 019 Operator
+Console tab over existing decisions/notices/HostFS writes/status rows. The
+WebUI is the fuller management surface. It is best for:
 
 - audit search and filtering;
 - policy editing;
@@ -538,6 +545,13 @@ Future WebUI increments deepen that management role: full policy editing,
 environment management, and richer audit search and session detail views.
 
 WebUI should call Manager API and must not implement separate policy logic.
+The Operator Console does not add backend authority, doctor execution authority,
+package repair authority, or new decision semantics. Its buttons call existing
+Manager routes (`decision/claim`, `decision/approve`, `decision/deny`,
+`decision/revoke`, `decision/reopen`, `notice/ack`, and HostFS write
+compatibility routes), and its doctor, package, and support rows are read-only
+or copyable commands unless the operator explicitly uses an existing CLI/API
+action.
 
 ## Local API Security
 
