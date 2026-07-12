@@ -17,6 +17,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RUNTIME_REVISION: ${{ inputs.revision || '2026.07.0' }}
+
 concurrency:
   group: runtime-developer-standard-${{ github.ref }}
   cancel-in-progress: false
@@ -39,7 +42,7 @@ jobs:
 
       - name: Validate and build inside the locked native builder
         env:
-          REVISION: ${{ inputs.revision }}
+          REVISION: ${{ env.RUNTIME_REVISION }}
         run: |
           set -euo pipefail
           REVISION="${REVISION:-2026.07.0}"
@@ -87,7 +90,7 @@ jobs:
       - name: Upload short-lived candidate only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: candidate-developer-standard-${{ inputs.revision }}-${{ github.sha }}
+          name: candidate-developer-standard-${{ env.RUNTIME_REVISION }}-${{ github.sha }}
           path: ${{ runner.temp }}/runtime-candidate/*
           if-no-files-found: error
           retention-days: 7
