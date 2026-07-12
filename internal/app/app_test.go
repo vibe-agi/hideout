@@ -28,6 +28,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/decision"
+	doctorpkg "github.com/vibe-agi/hideout/internal/doctor"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	"github.com/vibe-agi/hideout/internal/helperbin"
@@ -38,8 +39,138 @@ import (
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/packagekit"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/recovery"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
+	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
 )
+
+func TestParseInitRuntimeSelectionAndImageConflict(t *testing.T) {
+	opts, err := parseInitCommandOptions([]string{"--runtime", "developer-standard", "--backend", "lima", "--no-input"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.runtimeFamily != "developer-standard" || opts.imageRef != "" {
+		t.Fatalf("runtime flags not parsed: %+v", opts)
+	}
+	if _, err := parseInitCommandOptions([]string{"--runtime", "developer-standard", "--image", environment.BuiltinBaseImage, "--no-input"}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("runtime/image conflict should fail in CLI parsing, got %v", err)
+	}
+}
+
+func TestRuntimeCatalogCLIHumanAndJSONUseCore(t *testing.T) {
+	revision := runtimecatalog.Revision{
+		ID: "2026.07.0", Status: runtimecatalog.RevisionPreview, ContractID: "developer-standard/v1",
+		ContractDigest: "sha256:" + strings.Repeat("a", 64), ReviewedAt: "2026-07-11T00:00:00Z",
+		Artifacts: []runtimecatalog.Artifact{{HostOS: "darwin", HostArch: "arm64", GuestArch: "aarch64", DownloadBytes: 1, VirtualBytes: 2, SHA256: strings.Repeat("b", 64), Location: "https://example.invalid/runtime/2026.07.0/runtime.qcow2", SupplyMode: "hideout-built", PackageInventoryDigest: "sha256:" + strings.Repeat("c", 64), SBOM: runtimecatalog.SBOM{Status: "unavailable-preview"}, Source: runtimecatalog.ArtifactSource{LicenseReview: "reviewed"}}},
+	}
+	catalog := runtimecatalog.Catalog{
+		Schema: runtimecatalog.CatalogSchema, CatalogRelease: "2026.07.0", GeneratedAt: "2026-07-11T00:00:00Z",
+		Families: []runtimecatalog.Family{{ID: "developer-standard", DisplayName: "Developer Standard", Maturity: "preview", CurrentRevision: revision.ID, Revisions: []runtimecatalog.Revision{revision}}},
+		Contract: runtimecatalog.Contract{Schema: runtimecatalog.ContractSchema, ID: revision.ContractID, Observations: []runtimecatalog.Observation{{ID: "baseline.git", Class: runtimecatalog.ObservationBaseline, Command: "git", VersionArgs: []string{"--version"}, Description: "Git"}}},
+	}
+	core := manager.New(profile.Store{Root: t.TempDir()})
+	core.RuntimeCatalogLoader = func() (runtimecatalog.Catalog, error) { return catalog, nil }
+	var out bytes.Buffer
+	a := app{stdout: &out, stderr: io.Discard}
+	if err := a.runtimeCommandWithCore(core, []string{"list"}); err != nil {
+		t.Fatal(err)
+	}
+	if text := out.String(); !strings.Contains(text, "developer-standard") || !strings.Contains(text, "darwin/arm64") {
+		t.Fatalf("runtime list output=%s", text)
+	}
+	out.Reset()
+	if err := a.runtimeCommandWithCore(core, []string{"inspect", "developer-standard", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	if text := out.String(); !strings.Contains(text, `"revision":`) || !strings.Contains(text, `"baseline.git"`) {
+		t.Fatalf("runtime inspect JSON=%s", text)
+	}
+}
+
+func TestSupportReadinessRejectsReviewerMinimalGateRepro(t *testing.T) {
+	dir := t.TempDir()
+	gate2 := filepath.Join(dir, "gate2.json")
+	gate3 := filepath.Join(dir, "gate3.json")
+	if err := os.WriteFile(gate2, []byte(`{"id":"gate2-lima","backend":"lima","result":"passed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gate3, []byte(`{"id":"gate3-hidden-proxy","backend":"lima","result":"passed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "readiness", "--mode", "release-candidate", "--gate2-evidence", gate2, "--gate3-evidence", gate3}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("minimal gate JSON passed: %s", out.String())
+	}
+	var result struct {
+		ReleaseReady bool `json:"releaseReady"`
+		Gates        []struct {
+			Status  string `json:"status"`
+			Summary string `json:"summary"`
+		} `json:"gates"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode readiness: %v\nstdout=%s\nstderr=%s", err, out.String(), errOut.String())
+	}
+	if result.ReleaseReady || len(result.Gates) != 2 {
+		t.Fatalf("minimal gate JSON readiness=%+v", result)
+	}
+	for _, gate := range result.Gates {
+		if gate.Status != "failed" || !strings.Contains(gate.Summary, "trusted runtime expectation") {
+			t.Fatalf("gate did not fail trusted runtime binding: %+v", gate)
+		}
+	}
+}
+
+func TestRuntimeReadinessExpectationUsesPromotedCatalogBuildCommit(t *testing.T) {
+	oldCommit := Commit
+	Commit = "caller-controlled"
+	t.Cleanup(func() { Commit = oldCommit })
+	resolved := runtimecatalog.Resolution{
+		Family:   runtimecatalog.Family{ID: "developer-standard"},
+		Revision: runtimecatalog.Revision{ID: "2026.07.0"},
+		Artifact: runtimecatalog.Artifact{
+			HostOS: "darwin", HostArch: "arm64", GuestArch: "aarch64",
+			SHA256: strings.Repeat("a", 64),
+			Source: runtimecatalog.ArtifactSource{BuildCommit: "0123456789ab"},
+		},
+	}
+	expected := runtimeReadinessExpectation(resolved)
+	if expected.CandidateCommit != resolved.Artifact.Source.BuildCommit {
+		t.Fatalf("candidate commit=%q want promoted catalog build commit %q", expected.CandidateCommit, resolved.Artifact.Source.BuildCommit)
+	}
+	if expected.CandidateCommit == Commit {
+		t.Fatal("runtime expectation unexpectedly came from the running checkout commit")
+	}
+}
+
+func TestReadinessPackageIdentityRequiresVerifiedCleanPackage(t *testing.T) {
+	root := writeTestPackageRoot(t)
+	identity, err := readinessPackageIdentity(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Name != packagekit.DefaultPackageRoot || identity.Version != "test" {
+		t.Fatalf("identity=%+v", identity)
+	}
+	manifestPath := filepath.Join(root, "package-manifest.json")
+	manifest, err := packagekit.LoadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Git.Dirty = true
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readinessPackageIdentity(root); err == nil || !strings.Contains(err.Error(), "dirty") {
+		t.Fatalf("dirty package identity accepted: %v", err)
+	}
+}
 
 func TestExplainInitializesProfileAndPrintsBoundary(t *testing.T) {
 	home := t.TempDir()
@@ -74,6 +205,52 @@ func TestExplainInitializesProfileAndPrintsBoundary(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "test", "profile.json")); err != nil {
 		t.Fatalf("profile not initialized: %v", err)
+	}
+}
+
+func TestDecisionRevokeCLIRevokesTrustedIDEGrant(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadOrInit("privacy"); err != nil {
+		t.Fatal(err)
+	}
+	core := manager.New(store)
+	d, err := core.CreateDecision(decision.Decision{
+		ID:             "dec_ide_cli_revoke",
+		Kind:           decision.KindHostAppOpenResource,
+		Source:         decision.Source{Profile: "privacy", Session: "ses_cli_revoke", Backend: "lima"},
+		State:          decision.StatePending,
+		Preview:        decision.Preview{Summary: "trusted IDE grant"},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeDeny,
+		TimeoutAt:      time.Now().Add(time.Minute),
+		ProviderRef:    decision.ProviderRef{Provider: decision.KindHostAppOpenResource, SessionID: "ses_cli_revoke"},
+		AuditRef:       "audit:trusted-ide:cli-revoke",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := core.ClaimDecision(manager.DecisionClaimRequest{DecisionID: d.ID, ExpectedVersion: decision.DecisionVersion, Surface: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.ApproveDecision(manager.DecisionResolveRequest{DecisionID: d.ID, ExpectedVersion: decision.DecisionVersion, ClaimToken: claim.ClaimToken}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"decision", "revoke", d.ID}, &out, &errOut); code != 0 {
+		t.Fatalf("revoke exit=%d stderr=%s", code, errOut.String())
+	}
+	updated, err := core.InspectDecision(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State != decision.StateDenied || !strings.Contains(out.String(), `"decision": "revoke"`) {
+		t.Fatalf("revoke output=%s decision=%+v", out.String(), updated)
 	}
 }
 
@@ -204,6 +381,66 @@ func TestSupportMatrixCommandOutputsJSON(t *testing.T) {
 	}
 }
 
+func TestSupportProofRegistryCommandOutputsJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "proof-registry", "--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	var decoded struct {
+		Schema       string `json:"schema"`
+		Requirements []struct {
+			FeatureID string `json:"featureId"`
+			ProofID   string `json:"proofId"`
+		} `json:"requirements"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode proof registry: %v\n%s", err, out.String())
+	}
+	if decoded.Schema != "hideout.proof-registry/v1" {
+		t.Fatalf("schema=%s", decoded.Schema)
+	}
+	var saw021, saw025 bool
+	for _, req := range decoded.Requirements {
+		if req.FeatureID == "021-ui-e2e-proof" && req.ProofID == "021.webui.browser.console" {
+			saw021 = true
+		}
+		if req.FeatureID == "025-documentation-truth-gate" && req.ProofID == "025.docs.cross-doc-consistency" {
+			saw025 = true
+		}
+	}
+	if !saw021 || !saw025 {
+		t.Fatalf("registry missing expected requirements: saw021=%v saw025=%v", saw021, saw025)
+	}
+}
+
+func TestSupportRecoveryCodesCommandOutputsJSON(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "recovery-codes", "--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	var decoded recovery.RegistryView
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode recovery codes: %v\n%s", err, out.String())
+	}
+	if decoded.Schema != recovery.Schema {
+		t.Fatalf("schema=%s", decoded.Schema)
+	}
+	var sawPackage, sawInit bool
+	for _, entry := range decoded.Codes {
+		switch entry.Code {
+		case recovery.CodePackageObsoleteLeftover:
+			sawPackage = true
+		case recovery.CodeInitProxySecretMissing:
+			sawInit = true
+		}
+	}
+	if !sawPackage || !sawInit {
+		t.Fatalf("registry missing expected recovery codes: package=%v init=%v", sawPackage, sawInit)
+	}
+}
+
 func TestVersionIncludesSupportMatrix(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := Main([]string{"version"}, &out, &errOut)
@@ -274,6 +511,7 @@ func TestSupportReadinessReleaseCandidateMissingEvidenceFails(t *testing.T) {
 		Gates        []struct {
 			ID     string `json:"id"`
 			Status string `json:"status"`
+			Code   string `json:"code"`
 		} `json:"gates"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -284,6 +522,11 @@ func TestSupportReadinessReleaseCandidateMissingEvidenceFails(t *testing.T) {
 	}
 	if len(decoded.Gates) != 2 || decoded.Gates[0].Status != "missing" || decoded.Gates[1].Status != "missing" {
 		t.Fatalf("expected missing real gates: %+v", decoded.Gates)
+	}
+	for _, gate := range decoded.Gates {
+		if gate.Code != recovery.CodeReleaseGateEvidenceMissing {
+			t.Fatalf("missing gate should include recovery code, got %+v", gate)
+		}
 	}
 }
 
@@ -501,6 +744,40 @@ func TestDecisionAndNoticeCLI(t *testing.T) {
 	}
 }
 
+func TestDecisionClaimExpiredReportsRecoveryCode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	core := manager.New(store)
+	_, err := core.CreateDecision(decision.Decision{
+		ID:             "dec_expired",
+		Kind:           decision.KindEvidenceShare,
+		State:          decision.StatePending,
+		Preview:        decision.Preview{Summary: "expired share"},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+		DefaultOutcome: decision.DefaultOutcomeNoRelease,
+		TimeoutAt:      time.Now().Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"decision", "claim", "dec_expired"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expired decision claim unexpectedly succeeded: %s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "code="+recovery.CodeDecisionClaimExpired) {
+		t.Fatalf("expired decision should include recovery code, got %s", errOut.String())
+	}
+}
+
+func TestHostFSReservedRootErrorReportsRecoveryCode(t *testing.T) {
+	err := codedHostFSWriteError(fmt.Errorf("%s: %s", hostfs.ReservedRootReason, filepath.Join(t.TempDir(), ".hideout")))
+	if err == nil || !strings.Contains(err.Error(), "code="+recovery.CodeHostFSReservedRootDenied) {
+		t.Fatalf("reserved HostFS error should include recovery code, got %v", err)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	oldVersion, oldCommit, oldBuildTime := Version, Commit, BuildTime
 	Version = "test-version"
@@ -650,6 +927,7 @@ func TestRunTargetHelpIsNotConsumedByHideout(t *testing.T) {
 
 func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	root := writeTestPackageRoot(t)
+	t.Setenv("PATH", t.TempDir())
 	var out, errOut bytes.Buffer
 	code := Main([]string{"package", "verify", root}, &out, &errOut)
 	if code != 0 {
@@ -657,6 +935,14 @@ func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "package: ok mode=artifact root=") {
 		t.Fatalf("unexpected output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "external-prerequisite name=tun2socks") ||
+		!strings.Contains(out.String(), "packageOwned=false") {
+		t.Fatalf("verify did not report external prerequisite honestly: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "status=missing") ||
+		!strings.Contains(out.String(), "code="+recovery.CodePackagePrerequisiteMissing) {
+		t.Fatalf("verify did not attach missing prerequisite recovery code: %s", out.String())
 	}
 }
 
@@ -737,6 +1023,368 @@ func TestPackageVerifyRejectsSymlinkManifestFile(t *testing.T) {
 	}
 }
 
+func TestPackageRepairCommandDryRunAndApply(t *testing.T) {
+	first := writeTestPackageRoot(t)
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := packagekit.Install(packagekit.InstallOptions{PackageRoot: first, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	second := writeTestPackageRoot(t)
+	manifestPath := filepath.Join(second, "package-manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packagekit.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Layout.Entrypoints = []string{"install.sh", "README.md"}
+	var files []packagekit.File
+	for _, file := range manifest.Files {
+		if file.Path != "README.zh-CN.md" {
+			files = append(files, file)
+		}
+	}
+	manifest.Files = files
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := packagekit.Install(packagekit.InstallOptions{PackageRoot: second, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	obsolete := filepath.Join(prefix, "share", "hideout", "README.zh-CN.md")
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "repair", "--prefix", prefix, "--dry-run"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("dry-run exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "package: repair dry-run") ||
+		!strings.Contains(out.String(), "consider share/hideout/README.zh-CN.md") {
+		t.Fatalf("unexpected repair dry-run output:\n%s", out.String())
+	}
+	if _, err := os.Stat(obsolete); err != nil {
+		t.Fatalf("dry-run removed obsolete file: %v", err)
+	}
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"package", "repair", "--prefix", prefix}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("repair exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "removed share/hideout/README.zh-CN.md") ||
+		!strings.Contains(out.String(), "durableState=preserved") {
+		t.Fatalf("unexpected repair output:\n%s", out.String())
+	}
+	if _, err := os.Stat(obsolete); !os.IsNotExist(err) {
+		t.Fatalf("obsolete file still exists after repair: %v", err)
+	}
+}
+
+func TestPackageInstallReportsObsoleteRecoveryCode(t *testing.T) {
+	first := writeTestPackageRoot(t)
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "install", first, "--prefix", prefix, "--store", store, "--skip-init"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("first install exit=%d stderr=%s", code, errOut.String())
+	}
+
+	second := writeTestPackageRoot(t)
+	manifestPath := filepath.Join(second, "package-manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packagekit.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Layout.Entrypoints = []string{"install.sh", "README.md"}
+	var files []packagekit.File
+	for _, file := range manifest.Files {
+		if file.Path != "README.zh-CN.md" {
+			files = append(files, file)
+		}
+	}
+	manifest.Files = files
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"package", "install", second, "--prefix", prefix, "--store", store, "--skip-init"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("second install exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "obsolete share/hideout/README.zh-CN.md") ||
+		!strings.Contains(out.String(), "code="+recovery.CodePackageObsoleteLeftover) {
+		t.Fatalf("install did not attach obsolete recovery code:\n%s", out.String())
+	}
+}
+
+func TestDoctorPackagingFeatureReportsExternalPrerequisite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--feature", "packaging", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "external-prerequisite tun2socks=") ||
+		!strings.Contains(out.String(), "packageOwned=false") {
+		t.Fatalf("doctor packaging diagnostic missing external prerequisite:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), recovery.CodePackagePrerequisiteMissing) {
+		t.Fatalf("doctor packaging diagnostic missing recovery code:\n%s", out.String())
+	}
+}
+
+func TestDoctorPackagingUsesInstalledPackageVerification(t *testing.T) {
+	prefix := t.TempDir()
+	executable := filepath.Join(prefix, "bin", "hideout")
+	manifest := filepath.Join(prefix, filepath.FromSlash(packagekit.InstalledManifest))
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte("not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := doctorPackagingDiagnosticForExecutable(executable)
+	if diagnostic.Status != doctorpkg.StatusWarn || !strings.Contains(diagnostic.Summary, "installed package verification failed") ||
+		!strings.Contains(strings.Join(diagnostic.ObservedFacts, "\n"), "installedPackageVerification=failed") {
+		t.Fatalf("packaging doctor ignored installed state: %+v", diagnostic)
+	}
+}
+
+func TestDoctorDeepFeatureDiagnosticsAddStructuredFindings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	workspace := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--level", "deep", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor deep exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	report := decodeDoctorReportForAppTest(t, out.Bytes())
+	seen := map[string]doctorpkg.Finding{}
+	for _, finding := range report.Findings {
+		if strings.HasPrefix(finding.CheckID, "feature-") {
+			seen[finding.CheckID] = finding
+		}
+	}
+	for _, feature := range doctorpkg.SupportedFeatures {
+		id := "feature-" + feature
+		finding, ok := seen[id]
+		if !ok {
+			t.Fatalf("deep doctor missing %s in %v", id, doctorpkg.FindingIDs(report))
+		}
+		if len(finding.Details) == 0 {
+			t.Fatalf("%s missing structured details: %+v", id, finding)
+		}
+	}
+	dns := seen["feature-dns"]
+	if dns.Details["gateRequired"] == nil || len(dns.NextActions) == 0 {
+		t.Fatalf("dns finding should include gate marker and next action: %+v", dns)
+	}
+	packaging := seen["feature-packaging"]
+	if !strings.Contains(fmt.Sprint(packaging.Details["observedFacts"]), "external-prerequisite") ||
+		!strings.Contains(strings.Join(packaging.NextActions, "\n"), "hideout package repair") {
+		t.Fatalf("packaging finding missing 017 facts/guidance: %+v", packaging)
+	}
+	if actions := strings.Join(seen["feature-adapters"].NextActions, "\n"); !strings.Contains(actions, "hideout adapter-pack list") || strings.Contains(actions, "hideout adapter pack") {
+		t.Fatalf("adapter recovery command is not executable: %s", actions)
+	}
+	if actions := strings.Join(seen["feature-decisions"].NextActions, "\n"); !strings.Contains(actions, "hideout decision list") || strings.Contains(actions, "hideout decision status") {
+		t.Fatalf("decision recovery command is not executable: %s", actions)
+	}
+	if actions := strings.Join(seen["feature-lima"].NextActions, "\n"); !strings.Contains(actions, "--gate2-evidence") || !strings.Contains(actions, "--gate3-evidence") {
+		t.Fatalf("Lima recovery command has invalid readiness flags: %s", actions)
+	}
+}
+
+func TestDoctorFeatureSelectorIsFocused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	workspace := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--feature", "dns", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor feature exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	report := decodeDoctorReportForAppTest(t, out.Bytes())
+	foundDNS := false
+	for _, finding := range report.Findings {
+		if !strings.HasPrefix(finding.CheckID, "feature-") {
+			continue
+		}
+		if finding.CheckID == "feature-dns" {
+			foundDNS = true
+			continue
+		}
+		t.Fatalf("single feature output included unrelated finding %+v", finding)
+	}
+	if !foundDNS {
+		t.Fatalf("single feature output missing dns finding: %s", out.String())
+	}
+}
+
+func TestDoctorProjectionFeatureReportsRegistryBindingAndMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	workspace := t.TempDir()
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--feature", "projection", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor projection exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	report := decodeDoctorReportForAppTest(t, out.Bytes())
+	foundProjection := false
+	for i := range report.Findings {
+		if report.Findings[i].CheckID == "feature-projection" {
+			foundProjection = true
+			if report.Findings[i].Status == doctorpkg.StatusPass {
+				t.Fatalf("host-only projection inspection must not claim guest PATH was observed: %+v", report.Findings[i])
+			}
+		} else if strings.HasPrefix(report.Findings[i].CheckID, "feature-") {
+			t.Fatalf("single feature output included unrelated finding %+v", report.Findings[i])
+		}
+	}
+	if !foundProjection {
+		t.Fatalf("projection feature finding missing: %s", out.String())
+	}
+	blob := out.String()
+	for _, want := range []string{"host.app.open-resource", "hostApp=code pack=", "appIdentity=", "requestedMode=safe", "pathShadowPolicy=", "pathShadowObserved=not-run"} {
+		if !strings.Contains(blob, want) {
+			t.Fatalf("projection facts missing %q: %s", want, blob)
+		}
+	}
+	// This CLI-level test observes the actual host. The application may be
+	// absent or updating, so Gate 0 must require an honest bounded state rather
+	// than make an installed, stable VS Code bundle a test prerequisite. Manager
+	// tests use an injected Core resolver to prove verified + safe behavior.
+	identityStates := 0
+	for _, state := range []string{"verified", "absent", "drifted", "unsupported"} {
+		if strings.Contains(blob, "appIdentity="+state) {
+			identityStates++
+		}
+	}
+	if identityStates != 1 {
+		t.Fatalf("projection diagnostic did not report exactly one bounded host identity state: %s", blob)
+	}
+	// No host absolute path or secret should appear.
+	if strings.Contains(blob, home) {
+		t.Fatalf("projection diagnostic leaked a host path: %s", blob)
+	}
+}
+
+func TestDoctorHostFSRootProbeIsExplicitAndWarnsBeforeAccess(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	workspace := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "visible-name.txt"), []byte("content-must-not-enter-doctor"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--feature", "hostfs", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("unprobed doctor exit=%d stderr=%s output=%s", code, errOut.String(), out.String())
+	}
+	if !strings.Contains(out.String(), `"checkId": "feature-hostfs-root-probe"`) || !strings.Contains(out.String(), "hostfsRootProbe=unprobed") || strings.Contains(out.String(), `"root=`+root) {
+		t.Fatalf("unprobed doctor accessed or omitted posture: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--feature", "hostfs", "--probe-hostfs-root", root, "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("explicit probe exit=%d stderr=%s output=%s", code, errOut.String(), out.String())
+	}
+	if !strings.Contains(errOut.String(), "may trigger a macOS privacy (TCC) prompt") || !strings.Contains(out.String(), "hostfsRootProbe=observed") || !strings.Contains(out.String(), "entryCount=1") {
+		t.Fatalf("explicit probe did not surface warning/fact: stderr=%s output=%s", errOut.String(), out.String())
+	}
+	if strings.Contains(out.String(), "visible-name.txt") || strings.Contains(out.String(), "content-must-not-enter-doctor") {
+		t.Fatalf("doctor probe leaked names/content: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = Main([]string{"doctor", "--backend", "native", "--probe-hostfs-root", root}, &out, &errOut)
+	if code == 0 || !strings.Contains(errOut.String(), "requires --feature hostfs") {
+		t.Fatalf("probe without feature should fail closed: code=%d stderr=%s", code, errOut.String())
+	}
+}
+
+func TestDoctorRejectsUnknownFeature(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--feature", "browser"}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("doctor accepted unknown feature stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "unsupported doctor feature") {
+		t.Fatalf("unknown feature error mismatch: %s", errOut.String())
+	}
+}
+
+func TestDoctorHumanOutputIncludesJSONFeatureFindingsAndNextActions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setSafeBrowserPathForAppTest(t)
+	workspace := t.TempDir()
+	var jsonOut, humanOut, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--feature", "dns", "--format", "json"}, &jsonOut, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor json exit=%d stderr=%s stdout=%s", code, errOut.String(), jsonOut.String())
+	}
+	errOut.Reset()
+	code = Main([]string{"doctor", "--backend", "native", "--workspace", workspace, "--feature", "dns"}, &humanOut, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor human exit=%d stderr=%s stdout=%s", code, errOut.String(), humanOut.String())
+	}
+	report := decodeDoctorReportForAppTest(t, jsonOut.Bytes())
+	human := humanOut.String()
+	for _, finding := range report.Findings {
+		if !strings.Contains(human, finding.CheckID+":") {
+			t.Fatalf("human output missing finding %s:\n%s", finding.CheckID, human)
+		}
+		for _, action := range finding.NextActions {
+			if !strings.Contains(human, action) {
+				t.Fatalf("human output missing next action %q:\n%s", action, human)
+			}
+		}
+		if !strings.Contains(human, fmt.Sprintf("required=%t", finding.Required)) {
+			t.Fatalf("human output missing required marker for %s:\n%s", finding.CheckID, human)
+		}
+	}
+}
+
 func writeTestPackageRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -777,6 +1425,8 @@ func writeTestPackageRoot(t *testing.T) string {
 	manifest.Layout.Directories = []string{"schemas", "docs", "packaging"}
 	manifest.Migration.InstallStateSchema = packagekit.InstallStateSchema
 	manifest.Migration.FromInstalledSchemas = []string{packagekit.InstallStateSchema}
+	manifest.Migration.MinimumPackageSchema = packagekit.ArtifactSchema
+	manifest.Migration.MaximumPackageSchema = packagekit.ArtifactSchema
 	for rel, spec := range files {
 		full := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -851,6 +1501,35 @@ func TestDoctorFixAppliesAndWritesInitAudit(t *testing.T) {
 	if !strings.Contains(string(data), `"operation":"doctor.fix.apply"`) ||
 		!strings.Contains(string(data), `"taskKind":"profile.create"`) {
 		t.Fatalf("doctor fix audit missing expected events: %s", data)
+	}
+}
+
+func TestDoctorFixAuditRedactsInjectedControlPlaneLookingValues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(netpolicy.SecretEnvName("default-proxy"), "socks5://user:pass@127.0.0.1:1080")
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"doctor",
+		"--fix",
+		"--apply",
+		"--backend", "native",
+		"--network", "tun2socks",
+		"--proxy-secret", "default-proxy",
+		"--mediated-resolver", "1.1.1.1",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor --fix exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
+	}
+	auditPath := filepath.Join(home, ".hideout", "logs", "init-audit.jsonl")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read doctor fix audit: %v", err)
+	}
+	for _, leak := range []string{netpolicy.SecretEnvName("default-proxy"), "socks5://user:pass@127.0.0.1:1080"} {
+		if strings.Contains(string(data), leak) {
+			t.Fatalf("doctor fix audit leaked injected control-plane-looking value %q: %s", leak, data)
+		}
 	}
 }
 
@@ -974,6 +1653,33 @@ func TestInitTun2SocksRequiresProxySecretRef(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "tun2socks network mode requires a proxy secret ref") {
 		t.Fatalf("init error should explain missing proxy secret, got %s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "code="+recovery.CodeInitProxySecretMissing) {
+		t.Fatalf("init error should include recovery code, got %s", errOut.String())
+	}
+}
+
+func TestInitTun2SocksRequiresMediatedResolver(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := Main([]string{
+		"init",
+		"--no-input",
+		"--profile", "privacy",
+		"--template", "privacy",
+		"--backend", "native",
+		"--network", "tun2socks",
+		"--proxy-secret", "default-proxy",
+	}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("init tun2socks without mediated resolver unexpectedly succeeded stdout=%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "tun2socks network mode requires a mediated resolver") {
+		t.Fatalf("init error should explain missing mediated resolver, got %s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "code="+recovery.CodeInitMediatedResolverMissing) {
+		t.Fatalf("init error should include recovery code, got %s", errOut.String())
 	}
 }
 
@@ -5663,7 +6369,7 @@ func TestRunNativeOpenUsesBrokerShim(t *testing.T) {
 		"--backend", "native",
 		"--allow-weak-isolation",
 		"--",
-		"sh", "-c", "open https://example.com",
+		"sh", "-c", "open https://1.1.1.1",
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
@@ -5734,7 +6440,7 @@ func TestRunNativeOpenUsesBrokerShim(t *testing.T) {
 		hostOpen.Details["remoteDebugging"] != "not-exposed" {
 		t.Fatalf("host.open audit does not prove browser control channels stayed closed: %+v", hostOpen)
 	}
-	for _, want := range []string{`"subject":"command:open"`, `"command":"open"`, `"route":"host-broker"`, `"argv":["open","https://example.com"]`} {
+	for _, want := range []string{`"subject":"command:open"`, `"command":"open"`, `"route":"host-broker"`, `"argv":["open","https://1.1.1.1"]`} {
 		if !strings.Contains(string(auditData), want) {
 			t.Fatalf("audit missing command proxy metadata %q: %s", want, auditData)
 		}
@@ -5878,7 +6584,7 @@ func TestRunNativeOpenUsesUniqueBrokerRequestIDs(t *testing.T) {
 		"--backend", "native",
 		"--allow-weak-isolation",
 		"--",
-		"sh", "-c", "open https://example.com/one && open https://example.com/two",
+		"sh", "-c", "open https://1.1.1.1/one && open https://1.1.1.1/two",
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
@@ -5975,7 +6681,7 @@ func TestRunNativeUsesProfileCommandProxyManagedSymbol(t *testing.T) {
 		"--backend", "native",
 		"--allow-weak-isolation",
 		"--",
-		"sh", "-c", `"$1" browser-open https://example.com/configured`, "hideout-shim-test", shimPath,
+		"sh", "-c", `"$1" browser-open https://1.1.1.1/configured`, "hideout-shim-test", shimPath,
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
@@ -5997,7 +6703,7 @@ func TestRunNativeUsesProfileCommandProxyManagedSymbol(t *testing.T) {
 		`"decision":"allow"`,
 		`"subject":"command:browser-open"`,
 		`"command":"browser-open"`,
-		`"argv":["browser-open","https://example.com/configured"]`,
+		`"argv":["browser-open","https://1.1.1.1/configured"]`,
 	} {
 		if !strings.Contains(string(auditData), want) {
 			t.Fatalf("audit missing configured command proxy metadata %q: %s", want, auditData)
@@ -6840,6 +7546,15 @@ func compileDoctorSchemaForAppTest(t *testing.T) *jsonschema.Schema {
 	return schema
 }
 
+func decodeDoctorReportForAppTest(t *testing.T, data []byte) doctorpkg.Report {
+	t.Helper()
+	var report doctorpkg.Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("decode doctor report: %v\n%s", err, data)
+	}
+	return report
+}
+
 func TestEnvCreateAndInspect(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -7096,5 +7811,48 @@ func TestDaemonAbsentDegradesGracefully(t *testing.T) {
 	errOut.Reset()
 	if code := Main([]string{"help"}, &out, &errOut); code != 0 {
 		t.Fatalf("embedded help should still work with no daemon: exit=%d stderr=%s", code, errOut.String())
+	}
+}
+
+func TestRuntimeStatusHumanAndJSONSurfacesKeepRecoveryParity(t *testing.T) {
+	recoveryEntry, ok := recovery.Lookup(recovery.CodeRuntimeBaselineMissing)
+	if !ok {
+		t.Fatal("runtime baseline recovery is not registered")
+	}
+	for _, statusName := range []string{
+		runtimeverify.StatusPreviewReady,
+		runtimeverify.StatusPreviewFailed,
+		runtimeverify.StatusCustomUnverified,
+		runtimeverify.StatusUnknown,
+		runtimeverify.StatusNotRunning,
+	} {
+		status := runtimeverify.StatusView{
+			Status: statusName, Family: "developer-standard", Revision: "2026.07.0",
+			Maturity: "preview", ArtifactSHA256: strings.Repeat("a", 64), Running: statusName == runtimeverify.StatusPreviewReady,
+		}
+		if statusName == runtimeverify.StatusPreviewFailed {
+			status.FailedIDs = []string{"baseline.git"}
+			status.RecoveryCode = recoveryEntry.Code
+			status.Recovery = &runtimeverify.RecoveryView{
+				Code: recoveryEntry.Code, Reason: recoveryEntry.Reason, Hint: recoveryEntry.Hint,
+				NextActions: append([]string(nil), recoveryEntry.NextActions...), DocsRefs: append([]string(nil), recoveryEntry.DocsRefs...),
+			}
+		}
+		var human bytes.Buffer
+		writeRuntimeStatus(&human, "runtime", status)
+		if !strings.Contains(human.String(), "runtime: "+statusName) || !strings.Contains(human.String(), "revision=2026.07.0") {
+			t.Fatalf("human status missing fields for %s: %s", statusName, human.String())
+		}
+		data, err := json.Marshal(status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if statusName == runtimeverify.StatusPreviewFailed {
+			for _, want := range []string{recoveryEntry.Code, recoveryEntry.Reason, recoveryEntry.Hint, recoveryEntry.NextActions[0]} {
+				if !strings.Contains(human.String()+string(data), want) {
+					t.Fatalf("runtime recovery parity missing %q: human=%s json=%s", want, human.String(), data)
+				}
+			}
+		}
 	}
 }

@@ -24,6 +24,9 @@ func Apply(state *State, ev Event) ApplyResult {
 	}
 	state.LastSeq = ev.Seq
 	state.StreamHealth = StreamHealth{State: HealthLive}
+	if !eventMatchesProfile(state.ProfileScope, ev) {
+		return ApplyResult{Status: ResultIgnored, Reason: "event outside profile scope"}
+	}
 
 	switch ev.Kind {
 	case KindEnvironment:
@@ -36,11 +39,11 @@ func Apply(state *State, ev Event) ApplyResult {
 		appendAudit(state, ev.Payload)
 	case KindExport:
 		state.ExportOutcomes = appendCappedOutcome(state.ExportOutcomes, OutcomeRow{
-			Status: ev.Payload.Status, Source: ev.Payload.Source, ArtifactPath: ev.Payload.ArtifactPath, Decision: ev.Payload.Decision,
+			Status: redactText(ev.Payload.Status), Source: redactText(ev.Payload.Source), ArtifactPath: redactText(ev.Payload.ArtifactPath), Decision: redactText(ev.Payload.Decision),
 		})
 	case KindCleanup:
 		state.CleanupOutcomes = appendCappedOutcome(state.CleanupOutcomes, OutcomeRow{
-			Status: ev.Payload.Status, Sessions: ev.Payload.Sessions, Removed: ev.Payload.Removed, SecretState: ev.Payload.SecretState,
+			Status: redactText(ev.Payload.Status), Sessions: ev.Payload.Sessions, Removed: redactStringSlice(ev.Payload.Removed), SecretState: redactText(ev.Payload.SecretState),
 		})
 	case KindHostFSWrite:
 		upsertHostFSWrite(state, ev.Payload)
@@ -65,6 +68,17 @@ func Apply(state *State, ev Event) ApplyResult {
 func markHealth(state *State, health, reason string) {
 	state.StreamHealth = StreamHealth{State: health, Reason: reason}
 	state.Diagnostics = append(state.Diagnostics, reason)
+}
+
+func eventMatchesProfile(profileName string, ev Event) bool {
+	if profileName == "" {
+		return true
+	}
+	profile := ev.Payload.Profile
+	if profile == "" {
+		profile = ev.Entity.Profile
+	}
+	return profile == "" || profile == profileName
 }
 
 func upsertEnvironment(state *State, p EventPayload) {
@@ -176,9 +190,9 @@ func mergeSession(old, next manager.SessionSummary) manager.SessionSummary {
 }
 
 func upsertBackground(state *State, p EventPayload) {
-	row := BackgroundRow{ID: p.ID, Op: p.Op, Status: p.Status}
+	row := BackgroundRow{ID: redactText(p.ID), Op: redactText(p.Op), Status: redactText(p.Status)}
 	for i := range state.Background {
-		if state.Background[i].ID == p.ID {
+		if state.Background[i].ID == row.ID {
 			state.Background[i] = row
 			return
 		}
@@ -220,17 +234,18 @@ func appendCappedOutcome(values []OutcomeRow, next OutcomeRow) []OutcomeRow {
 
 func upsertHostFSWrite(state *State, p EventPayload) {
 	row := HostFSWriteRow{
-		DecisionID:      p.DecisionID,
-		OperationID:     p.OperationID,
-		Status:          p.Status,
-		Operation:       p.Operation,
-		Path:            p.Path,
-		DestinationPath: p.DestinationPath,
-		PrivilegeStatus: p.PrivilegeStatus,
-		Reason:          p.Reason,
+		DecisionID:      redactText(p.DecisionID),
+		OperationID:     redactText(p.OperationID),
+		Profile:         redactText(p.Profile),
+		Status:          redactText(p.Status),
+		Operation:       redactText(p.Operation),
+		Path:            redactText(p.Path),
+		DestinationPath: redactText(p.DestinationPath),
+		PrivilegeStatus: redactText(p.PrivilegeStatus),
+		Reason:          redactText(p.Reason),
 	}
 	for i := range state.HostFSWrites {
-		if state.HostFSWrites[i].DecisionID == p.DecisionID {
+		if state.HostFSWrites[i].DecisionID == row.DecisionID {
 			state.HostFSWrites[i] = row
 			return
 		}
@@ -243,17 +258,17 @@ func upsertHostFSWrite(state *State, p EventPayload) {
 
 func upsertDecision(state *State, p EventPayload) {
 	row := DecisionRow{
-		ID:             p.DecisionID,
-		Kind:           p.RecordKind,
-		Status:         p.Status,
-		DefaultOutcome: p.DefaultOutcome,
-		Profile:        p.Profile,
-		Session:        p.Session,
-		Backend:        p.Backend,
-		Reason:         p.Reason,
+		ID:             redactText(p.DecisionID),
+		Kind:           redactText(p.RecordKind),
+		Status:         redactText(p.Status),
+		DefaultOutcome: redactText(p.DefaultOutcome),
+		Profile:        redactText(p.Profile),
+		Session:        redactText(p.Session),
+		Backend:        redactText(p.Backend),
+		Reason:         redactText(p.Reason),
 	}
 	for i := range state.Decisions {
-		if state.Decisions[i].ID == p.DecisionID {
+		if state.Decisions[i].ID == row.ID {
 			state.Decisions[i] = row
 			return
 		}
@@ -266,17 +281,17 @@ func upsertDecision(state *State, p EventPayload) {
 
 func upsertNotice(state *State, p EventPayload) {
 	row := NoticeRow{
-		ID:           p.NoticeID,
-		Kind:         p.RecordKind,
-		Status:       p.Status,
-		Severity:     p.Severity,
+		ID:           redactText(p.NoticeID),
+		Kind:         redactText(p.RecordKind),
+		Status:       redactText(p.Status),
+		Severity:     redactText(p.Severity),
 		Acknowledged: p.Acknowledged,
-		Profile:      p.Profile,
-		Session:      p.Session,
-		Backend:      p.Backend,
+		Profile:      redactText(p.Profile),
+		Session:      redactText(p.Session),
+		Backend:      redactText(p.Backend),
 	}
 	for i := range state.Notices {
-		if state.Notices[i].ID == p.NoticeID {
+		if state.Notices[i].ID == row.ID {
 			state.Notices[i] = row
 			return
 		}
@@ -285,4 +300,19 @@ func upsertNotice(state *State, p EventPayload) {
 	if len(state.Notices) > tailLimit {
 		state.Notices = state.Notices[:tailLimit]
 	}
+}
+
+func redactText(value string) string {
+	return audit.RedactString(value)
+}
+
+func redactStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, len(values))
+	for i := range values {
+		out[i] = redactText(values[i])
+	}
+	return out
 }

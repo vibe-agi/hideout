@@ -340,6 +340,26 @@
           },
           "boundarySummary": {
             "type": "string"
+          },
+          "runtime": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema", "family", "revision", "artifactSHA256", "environmentId",
+              "hostOS", "hostArch", "guestArch", "candidateCommit", "candidateDirty"
+            ],
+            "properties": {
+              "schema": {"const": "hideout.runtime-evidence-binding/v1"},
+              "family": {"type": "string", "minLength": 1},
+              "revision": {"type": "string", "minLength": 1},
+              "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "environmentId": {"type": "string", "minLength": 1},
+              "hostOS": {"type": "string", "minLength": 1},
+              "hostArch": {"type": "string", "minLength": 1},
+              "guestArch": {"type": "string", "minLength": 1},
+              "candidateCommit": {"type": "string", "minLength": 1},
+              "candidateDirty": {"type": "boolean"}
+            }
           }
         },
         "allOf": [

@@ -34,6 +34,12 @@ type DecisionResolveRequest struct {
 	Reason          string `json:"reason,omitempty"`
 }
 
+type DecisionRevokeRequest struct {
+	DecisionID      string `json:"decisionId"`
+	ExpectedVersion string `json:"expectedVersion"`
+	Reason          string `json:"reason,omitempty"`
+}
+
 type NoticeListRequest struct {
 	Kind     string
 	Profile  string
@@ -152,6 +158,9 @@ func (c Core) ClaimDecision(req DecisionClaimRequest) (decision.ClaimResponse, e
 			Revision:       d.Revision + 1,
 		}, nil
 	}
+	if d.Kind == decision.KindHostFSRead {
+		return c.claimHostFSRead(req, d)
+	}
 	store, err := c.decisionStore()
 	if err != nil {
 		return decision.ClaimResponse{}, err
@@ -216,6 +225,31 @@ func (c Core) resolveDecision(req DecisionResolveRequest, approve bool) (decisio
 		}
 		return res, nil
 	}
+	if d.Kind == decision.KindHostFSRead {
+		if approve {
+			return c.approveHostFSRead(req, d)
+		}
+		return c.denyHostFSRead(req, d)
+	}
+	if d.Kind == decision.KindHostAppOpenResource && approve {
+		store, err := c.decisionStore()
+		if err != nil {
+			return decision.Resolution{}, err
+		}
+		res, updated, err := store.ResolveDecision(req.DecisionID, req.ClaimToken, decision.StateApproved, "allow", req.Reason, map[string]any{
+			"mode":      ProjectionIdeModeTrusted,
+			"sessionId": d.Source.Session,
+		})
+		if err != nil {
+			_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
+			return decision.Resolution{}, err
+		}
+		if err := c.emitDecisionAudit(decision.ActionDecisionApply, "allow", updated, map[string]any{"reason": req.Reason}); err != nil {
+			return decision.Resolution{}, err
+		}
+		c.emitDecision(updated, decision.StateApproved, req.Reason)
+		return res, nil
+	}
 	if d.Kind == decision.KindEvidenceShare && approve {
 		return c.approveEvidenceShareDecision(req, d)
 	}
@@ -239,6 +273,74 @@ func (c Core) resolveDecision(req DecisionResolveRequest, approve bool) (decisio
 	}
 	c.emitDecision(updated, state, req.Reason)
 	return res, nil
+}
+
+// RevokeDecision removes an approved trusted-IDE grant without reusing the
+// claim token that authorized its creation. Other decision kinds keep their
+// provider-specific lifecycle and cannot be revoked through this method.
+func (c Core) RevokeDecision(req DecisionRevokeRequest) (decision.Resolution, error) {
+	if req.ExpectedVersion != "" && req.ExpectedVersion != decision.DecisionVersion {
+		return decision.Resolution{}, errors.New("invalid decision version")
+	}
+	d, err := c.inspectDecisionPrivate(req.DecisionID)
+	if err != nil {
+		return decision.Resolution{}, err
+	}
+	if d.Kind != decision.KindHostAppOpenResource {
+		return decision.Resolution{}, fmt.Errorf("decision kind %q is not a revocable host-app open-resource grant", d.Kind)
+	}
+	store, err := c.decisionStore()
+	if err != nil {
+		return decision.Resolution{}, err
+	}
+	res, updated, err := store.RevokeGrantedDecision(d.ID, decision.KindHostAppOpenResource, req.Reason)
+	if err != nil {
+		_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
+		return decision.Resolution{}, err
+	}
+	if err := c.emitDecisionAudit(decision.ActionDecisionRevoke, "deny", updated, map[string]any{"reason": req.Reason}); err != nil {
+		return decision.Resolution{}, err
+	}
+	c.emitDecision(updated, decision.StateDenied, req.Reason)
+	return res, nil
+}
+
+// invalidateHostAppDecisions removes pending, claimed, and approved authority
+// for one exact package revision. Lifecycle state is checked separately by the
+// package store; this invalidation ensures an already-created ask-each-run
+// decision cannot outlive update, disable, revoke, or remove.
+func (c Core) invalidateHostAppDecisions(packID, revisionID, reason string) error {
+	store, err := c.decisionStore()
+	if err != nil {
+		return err
+	}
+	decisions, err := store.Decisions(decision.ListFilter{
+		Kind: decision.KindHostAppOpenResource, IncludeTerminal: true,
+	})
+	if err != nil {
+		return err
+	}
+	for _, d := range decisions {
+		binding, _ := d.ProposedAction["binding"].(map[string]any)
+		if fmt.Sprint(binding["packId"]) != packID {
+			continue
+		}
+		if revisionID != "" && fmt.Sprint(binding["revisionId"]) != revisionID {
+			continue
+		}
+		res, updated, invalidateErr := store.InvalidateProviderDecision(d.ID, decision.KindHostAppOpenResource, reason)
+		if invalidateErr != nil {
+			return invalidateErr
+		}
+		if res.Decision == "unchanged" {
+			continue
+		}
+		if err := c.emitDecisionAudit(decision.ActionDecisionRevoke, "deny", updated, map[string]any{"reason": reason}); err != nil {
+			return err
+		}
+		c.emitDecision(updated, decision.StateStale, reason)
+	}
+	return nil
 }
 
 func (c Core) approveEvidenceShareDecision(req DecisionResolveRequest, d decision.Decision) (decision.Resolution, error) {
@@ -358,7 +460,15 @@ func (c Core) expireDecisionTimeouts() error {
 		return err
 	}
 	for _, d := range timedOut {
-		if err := c.emitDecisionAudit(decision.ActionDecisionTimeout, "deny", d, map[string]any{"reason": "decision timed out"}); err != nil {
+		if err := c.syncHostFSReadDecision(d); err != nil {
+			return err
+		}
+		details := map[string]any{"reason": "decision timed out"}
+		if d.Kind == decision.KindHostFSRead {
+			details = c.hostFSReadAuditDetails(d)
+			details["reason"] = "decision timed out"
+		}
+		if err := c.emitDecisionAudit(decision.ActionDecisionTimeout, "deny", d, details); err != nil {
 			return err
 		}
 		c.emitDecision(d, decision.StateTimedOut, "decision timed out")
@@ -484,6 +594,11 @@ func hostFSWriteResolution(d decision.Decision, result HostFSWriteResult, err er
 }
 
 func (c Core) emitDecision(d decision.Decision, phase, reason string) {
+	if reason == "" && d.Kind == decision.KindHostFSRead {
+		if untrusted, ok := d.Preview.Facts["untrustedReason"].(string); ok && strings.TrimSpace(untrusted) != "" {
+			reason = "untrusted target input: " + untrusted
+		}
+	}
 	details := map[string]any{
 		"id":             d.ID,
 		"decisionId":     d.ID,

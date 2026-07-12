@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -187,6 +188,66 @@ func TestReviewNamesHighImpactDefaults(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("review missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestVisibilityPresetsExpandWithoutScanningAndRequireBroadDisclosureAcknowledgement(t *testing.T) {
+	home := "/Users/hideout-visibility-fixture-that-need-not-exist"
+	none := validRequest(Privacy)
+	none.HomeDir = home
+	rendered, err := Render(none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Evidence.HostFSVisibility != VisibilityNone || rendered.Evidence.HostFSPosture != "none-by-default" || len(rendered.Profile.HostFS.Grants) != 0 {
+		t.Fatalf("omitted visibility changed defaults: %+v profile=%+v", rendered.Evidence, rendered.Profile.HostFS)
+	}
+
+	landmarks := validRequest(Privacy)
+	landmarks.HomeDir = home
+	landmarks.VisibilitySelection = VisibilityLandmarks
+	landmarks.ExplicitVisibility = true
+	rendered, err = Render(landmarks)
+	if err != nil {
+		t.Fatalf("landmarks should not probe nonexistent roots: %v", err)
+	}
+	if rendered.Evidence.HostFSPosture != "landmarks-one-level" || len(rendered.Profile.HostFS.Grants) != 3 || len(rendered.Profile.HostFS.Deny) != 0 {
+		t.Fatalf("landmark expansion=%+v evidence=%+v", rendered.Profile.HostFS, rendered.Evidence)
+	}
+	for _, rule := range rendered.Profile.HostFS.Grants {
+		if rule.Scope != hostfs.ScopeDir || len(rule.Ops) != 1 || rule.Ops[0] != hostfs.OpDiscover || !strings.HasPrefix(rule.HostPath, home+"/") {
+			t.Fatalf("landmark rule is not one-level discover: %+v", rule)
+		}
+	}
+
+	homeTree := validRequest(Privacy)
+	homeTree.HomeDir = home
+	homeTree.VisibilitySelection = VisibilityHomeTree
+	homeTree.ExplicitVisibility = true
+	if _, err := Render(homeTree); err == nil || !strings.Contains(err.Error(), "name-disclosure acknowledgement") {
+		t.Fatalf("home-tree without acknowledgement should fail: %v", err)
+	}
+	homeTree.NameDisclosureAcknowledged = true
+	rendered, err = Render(homeTree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Evidence.HostFSPosture != "home-tree-names-visible" || !rendered.Evidence.NameDisclosureAcknowledged || len(rendered.Profile.HostFS.Grants) != 1 || len(rendered.Profile.HostFS.Deny) == 0 {
+		t.Fatalf("home-tree expansion=%+v evidence=%+v", rendered.Profile.HostFS, rendered.Evidence)
+	}
+	if rendered.Profile.HostFS.Grants[0].HostPath != home || rendered.Profile.HostFS.Grants[0].Scope != hostfs.ScopeRecursiveDir {
+		t.Fatalf("home tree grant=%+v", rendered.Profile.HostFS.Grants[0])
+	}
+	for _, deny := range rendered.Profile.HostFS.Deny {
+		if deny.HostPath == home || !strings.HasPrefix(deny.HostPath, home+"/") || deny.Ops[0] != hostfs.OpDiscover {
+			t.Fatalf("broad exclusion incorrectly used home boundary or external root: %+v", deny)
+		}
+	}
+	text := strings.Join(append(rendered.Warnings, rendered.NonClaims...), "\n")
+	for _, want := range []string{"model context", "predictable names", "does not grant file content"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("home-tree disclosure text missing %q: %s", want, text)
 		}
 	}
 }

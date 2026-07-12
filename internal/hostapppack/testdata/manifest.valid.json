@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "hideout.host-app-pack/v1",
+  "id": "community.cursor",
+  "version": "1.0.0",
+  "description": "Cursor host application projection",
+  "apps": [
+    {
+      "id": "cursor",
+      "platforms": ["darwin"],
+      "bundleNames": ["Cursor.app"],
+      "executableRelativePath": "Contents/MacOS/Cursor",
+      "expectedBundleId": "com.todesktop.230313mzl4w4u92",
+      "expectedTeamId": "VDXQ22DGB9",
+      "requestedSafetyProfile": "vscode-family-v1",
+      "launch": {
+        "gotoFlag": "--goto",
+        "newWindowFlag": "--new-window",
+        "reuseWindowFlag": "--reuse-window",
+        "gotoSeparator": ":"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "id": "cursor-command",
+      "commands": ["cursor"],
+      "appId": "cursor",
+      "capabilityId": "host.app.open-resource",
+      "resourceKinds": ["workspace", "hostfs-portal"],
+      "resultPolicy": "none",
+      "requestedAccess": "ask-each-run",
+      "grammar": {
+        "kind": "open-resource-v1",
+        "resourceCount": 1,
+        "gotoFlags": ["-g", "--goto"],
+        "newWindowFlags": ["-n", "--new-window"],
+        "reuseWindowFlags": ["-r", "--reuse-window"],
+        "unknownFlags": "deny"
+      }
+    }
+  ],
+  "tests": [
+    {
+      "id": "opens-file",
+      "bindingId": "cursor-command",
+      "argv": ["cursor", "src/main.go"],
+      "expected": {
+        "resource": "/workspace/src/main.go",
+        "windowMode": "reuse"
+      }
+    }
+  ],
+  "installHint": {
+    "text": "Install Cursor from its official site",
+    "url": "https://cursor.com"
+  }
+}

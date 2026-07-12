@@ -55,7 +55,7 @@ jq -e '
   .mode == "release-candidate" and
   .status == "failed" and
   .releaseReady == false and
-  all(.gates[]; .status == "missing")
+  all(.gates[]; .status == "missing" and .code == "release.gate-evidence.missing")
 ' "$tmp/readiness-rc.json" >/dev/null
 
 echo "release-hardening-smoke: passed"

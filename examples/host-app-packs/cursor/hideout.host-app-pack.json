@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "hideout.host-app-pack/v1",
+  "id": "community.cursor",
+  "version": "0.1.0",
+  "description": "Illustrative Cursor open-resource recipe",
+  "apps": [
+    {
+      "id": "cursor",
+      "platforms": [
+        "darwin"
+      ],
+      "bundleNames": [
+        "Cursor.app"
+      ],
+      "executableRelativePath": "Contents/MacOS/Cursor",
+      "launch": {
+        "gotoFlag": "--goto",
+        "newWindowFlag": "--new-window",
+        "reuseWindowFlag": "--reuse-window",
+        "gotoSeparator": ":"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "id": "open-resource",
+      "commands": [
+        "cursor"
+      ],
+      "appId": "cursor",
+      "capabilityId": "host.app.open-resource",
+      "resourceKinds": [
+        "workspace",
+        "hostfs-portal"
+      ],
+      "resultPolicy": "none",
+      "requestedAccess": "ask-each-run",
+      "grammar": {
+        "kind": "open-resource-v1",
+        "resourceCount": 1,
+        "gotoFlags": [
+          "-g",
+          "--goto"
+        ],
+        "newWindowFlags": [
+          "-n",
+          "--new-window"
+        ],
+        "reuseWindowFlags": [
+          "-r",
+          "--reuse-window"
+        ],
+        "unknownFlags": "deny"
+      }
+    }
+  ],
+  "tests": [
+    {
+      "id": "open-file",
+      "bindingId": "open-resource",
+      "argv": [
+        "cursor",
+        "src/main.go"
+      ],
+      "expected": {
+        "resource": "/workspace/src/main.go",
+        "windowMode": "reuse"
+      }
+    }
+  ]
+}

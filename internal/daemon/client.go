@@ -81,3 +81,31 @@ func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan liveconsole.
 	}()
 	return ch, nil
 }
+
+// FetchStatus returns the authenticated daemon seed state used before clients
+// switch to event-only updates.
+func FetchStatus(ctx context.Context, storeRoot string) (Status, error) {
+	client, base, token, err := DialClient(storeRoot)
+	if err != nil {
+		return Status{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+statusPath, nil)
+	if err != nil {
+		return Status{}, err
+	}
+	req.Host = "localhost"
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return Status{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Status{}, fmt.Errorf("daemon status: %s", resp.Status)
+	}
+	var status Status
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return Status{}, fmt.Errorf("decode daemon status: %w", err)
+	}
+	return status, nil
+}

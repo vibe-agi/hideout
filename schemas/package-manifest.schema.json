@@ -55,23 +55,29 @@
     "migration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["installStateSchema"],
+      "required": [
+        "installStateSchema",
+        "fromInstalledSchemas",
+        "minimumPackageSchema",
+        "maximumPackageSchema"
+      ],
       "properties": {
         "installStateSchema": {
           "const": "hideout.package-install-state.v1"
         },
         "fromInstalledSchemas": {
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "string",
             "minLength": 1
           }
         },
         "minimumPackageSchema": {
-          "type": "string"
+          "const": "hideout.package-manifest.v1"
         },
         "maximumPackageSchema": {
-          "type": "string"
+          "const": "hideout.package-manifest.v1"
         }
       }
     },
@@ -93,7 +99,12 @@
             "schema",
             "doc",
             "script",
-            "packaging"
+            "packaging",
+            "host-app-core-data",
+            "host-app-example",
+            "runtime-catalog",
+            "runtime-contract",
+            "runtime-build"
           ]
         },
         "sha256": {
@@ -102,6 +113,45 @@
         },
         "executable": {
           "type": "boolean"
+        }
+      }
+    },
+    "obsoleteFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "sha256", "executable", "reason"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "kind": {
+          "enum": [
+            "binary",
+            "linux-helper",
+            "helper-manifest",
+            "installer",
+            "entrypoint",
+            "schema",
+            "doc",
+            "script",
+            "packaging",
+            "host-app-core-data",
+            "host-app-example",
+            "runtime-catalog",
+            "runtime-contract",
+            "runtime-build"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "executable": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -275,6 +325,12 @@
         },
         "migration": {
           "$ref": "#/$defs/migration"
+        },
+        "obsoleteFiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/obsoleteFile"
+          }
         }
       }
     }

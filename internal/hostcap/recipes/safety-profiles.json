@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "hideout.host-app-safety-profiles/v1",
+  "profiles": [
+    {
+      "id": "vscode-family-v1",
+      "version": "1",
+      "identityMatchers": [
+        {
+          "platform": "darwin",
+          "bundleId": "com.microsoft.VSCode",
+          "teamId": "UBF8T346G9",
+          "executableRelativePath": "Contents/MacOS/Code",
+          "executableIdentityPolicy": "exact-observed-binding"
+        }
+      ],
+      "requiredArgv": [
+        "--disable-extensions"
+      ],
+      "forbiddenArgv": [
+        "--disable-workspace-trust"
+      ],
+      "launchSyntax": {
+        "allowedGotoFlags": [
+          "--goto"
+        ],
+        "allowedNewWindowFlags": [
+          "--new-window"
+        ],
+        "allowedReuseWindowFlags": [
+          "--reuse-window"
+        ],
+        "allowedGotoSeparators": [
+          ":"
+        ],
+        "allowPositionalTarget": true
+      },
+      "isolatedState": {
+        "kind": "qualified-app-run-directory",
+        "argumentFlag": "--user-data-dir",
+        "settingsRelativePath": "User/settings.json"
+      },
+      "allowedSettings": [
+        "security.workspace.trust.enabled",
+        "task.allowAutomaticTasks"
+      ],
+      "requiredSettings": {
+        "security.workspace.trust.enabled": true,
+        "task.allowAutomaticTasks": "off"
+      },
+      "forbiddenSettings": {
+        "security.workspace.trust.enabled": false,
+        "task.allowAutomaticTasks": "on"
+      },
+      "verification": [
+        "combined-effect-v1"
+      ]
+    }
+  ]
+}

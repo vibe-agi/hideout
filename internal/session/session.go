@@ -12,14 +12,19 @@ import (
 )
 
 type Layout struct {
-	Root               string
-	ID                 string
-	Dir                string
-	TmpDir             string
-	ShimDir            string
-	AuditPath          string
-	BrokerSock         string
-	BrokerEndpointPath string
+	Root                   string
+	ID                     string
+	Dir                    string
+	TmpDir                 string
+	ShimDir                string
+	AuditPath              string
+	BrokerSock             string
+	BrokerEndpointPath     string
+	HostFSReadDir          string
+	HostFSReadOwnerLock    string
+	HostFSReadProviderLock string
+	HostFSReadStatePath    string
+	HostFSReadGrantsPath   string
 }
 
 type CleanupResult struct {
@@ -37,20 +42,29 @@ func New(root string) (Layout, error) {
 	if len(brokerSock) > 100 {
 		brokerSock = filepath.Join(shortSocketDir(), "hideout-"+id+".sock")
 	}
+	hostFSReadDir := filepath.Join(dir, "hostfs-read")
 	layout := Layout{
-		Root:               root,
-		ID:                 id,
-		Dir:                dir,
-		TmpDir:             filepath.Join(dir, "tmp"),
-		ShimDir:            filepath.Join(dir, "shims"),
-		AuditPath:          filepath.Join(dir, "audit.jsonl"),
-		BrokerSock:         brokerSock,
-		BrokerEndpointPath: filepath.Join(dir, "broker-endpoint.json"),
+		Root:                   root,
+		ID:                     id,
+		Dir:                    dir,
+		TmpDir:                 filepath.Join(dir, "tmp"),
+		ShimDir:                filepath.Join(dir, "shims"),
+		AuditPath:              filepath.Join(dir, "audit.jsonl"),
+		BrokerSock:             brokerSock,
+		BrokerEndpointPath:     filepath.Join(dir, "broker-endpoint.json"),
+		HostFSReadDir:          hostFSReadDir,
+		HostFSReadOwnerLock:    filepath.Join(hostFSReadDir, "owner.lock"),
+		HostFSReadProviderLock: filepath.Join(hostFSReadDir, "provider.lock"),
+		HostFSReadStatePath:    filepath.Join(hostFSReadDir, "state.json"),
+		HostFSReadGrantsPath:   filepath.Join(hostFSReadDir, "grants.json"),
 	}
 	if err := os.MkdirAll(layout.TmpDir, 0o700); err != nil {
 		return Layout{}, err
 	}
 	if err := os.MkdirAll(layout.ShimDir, 0o700); err != nil {
+		return Layout{}, err
+	}
+	if err := os.MkdirAll(layout.HostFSReadDir, 0o700); err != nil {
 		return Layout{}, err
 	}
 	return layout, nil
@@ -135,6 +149,7 @@ func ephemeralPaths(dir, id string) []string {
 		filepath.Join(dir, "broker-endpoint.json"),
 		filepath.Join(dir, "network-plan.json"),
 		filepath.Join(dir, "network"),
+		filepath.Join(dir, "hostfs-read"),
 	}
 }
 

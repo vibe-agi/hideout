@@ -1,0 +1,29 @@
+{
+  "schema": "hideout.host-app-pack-registry/v1",
+  "updatedAt": "2026-07-11T00:00:00Z",
+  "packs": [
+    {
+      "id": "community.cursor",
+      "state": "installed",
+      "activeRevisionId": "rev_aaaaaaaaaaaaaaaa",
+      "revisions": [
+        {
+          "revisionId": "rev_aaaaaaaaaaaaaaaa",
+          "packId": "community.cursor",
+          "source": {
+            "kind": "local",
+            "localPath": "/Users/operator/recipes/cursor",
+            "acquiredAt": "2026-07-11T00:00:00Z"
+          },
+          "sourceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "basePermissionFingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "validationStatus": "passed",
+          "testStatus": "passed",
+          "installedAt": "2026-07-11T00:00:00Z",
+          "state": "installed"
+        }
+      ]
+    }
+  ]
+}

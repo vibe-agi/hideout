@@ -2,6 +2,10 @@
 
 [简体中文](README.zh-CN.md)
 
+**Run untrusted CLIs without handing them your whole machine.**
+
+让工具干活，别把整台电脑交出去。
+
 Hideout runs untrusted developer tools and agentic CLIs inside an isolated
 backend boundary (currently a reusable Lima VM), mediates every host access
 through typed, audited, fail-closed gates, and records evidence you can
@@ -54,6 +58,8 @@ For a release-like tarball on macOS:
 - Lima (`limactl`);
 - Google Chrome or another supported Chromium-compatible browser for real
   browser host-open checks;
+- optional: a code-signed Visual Studio Code installation in a supported
+  macOS Applications location for the projected `code .` workflow;
 - an optional local proxy for `tun2socks` mode.
 
 The tarball path does not require Go. It contains the host binaries, Linux guest
@@ -64,13 +70,14 @@ copying the prebuilt artifacts from the extracted package.
 For local source-tree development, Go is also required.
 
 For the alpha package path, extract the tarball and run the package installer
-from the package root. The package installer follows the same default init path
-and does not require Go:
+from the package root. Use `--skip-init` for the documented first-run path so
+package installation and profile creation stay separate. The package installer
+does not require Go:
 
 ```bash
 tar -xzf hideout-<platform>.tar.gz
 cd hideout
-./install.sh
+./install.sh --skip-init
 export PATH="$HOME/.local/bin:$PATH"
 hideout version
 hideout package verify "$HOME/.local"
@@ -79,6 +86,14 @@ hideout doctor
 
 Installing a newer package to the same prefix upgrades package-owned files and
 preserves profiles, audit, evidence, adapter packs, decisions, and notices.
+If the previous package owned files that the new package no longer owns,
+upgrade reports them as obsolete package-owned leftovers; cleanup is explicit:
+
+```bash
+hideout package repair --prefix "$HOME/.local" --dry-run
+hideout package repair --prefix "$HOME/.local"
+```
+
 Package uninstall removes only package-owned files by default; durable user
 state is removed only with an explicit purge:
 
@@ -106,6 +121,9 @@ hideout doctor
 
 ## Quickstart
 
+For a complete external-alpha walkthrough, use
+[docs/first-run-alpha.md](docs/first-run-alpha.md). The short path is:
+
 ```bash
 export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
 hideout init \
@@ -117,6 +135,7 @@ hideout init \
   --mediated-resolver 1.1.1.1 \
   --no-input
 hideout run -- <cli>
+hideout run --fs see-dir:/absolute/directory -- <cli>
 hideout run --fs read:/absolute/file -- <cli>
 hideout run --fs overlay-dir:/absolute/directory -- <cli>
 hideout hostfs write status
@@ -126,6 +145,72 @@ hideout explain -- <cli>
 hideout audit show --limit 20
 hideout audit export --share --source audit --out /tmp/share.json --acknowledge-full-fidelity
 ```
+
+The package contains the runtime catalog and verification machinery, but this
+source revision still carries an unpromoted empty catalog. Do not add
+`--runtime developer-standard` until `hideout runtime list` shows a retained,
+digest-pinned preview revision. Custom images and the existing template path
+remain available without inheriting runtime readiness.
+
+After a preview runtime is promoted, install the pinned test agent as the
+non-root target, without `sudo` or a host-global prefix:
+
+```bash
+hideout run -- sh -eu -c '
+  rm -rf "$HOME/.npm" "$HOME/.local/lib/node_modules/@openai/codex" "$HOME/.local/bin/codex"
+  npm install --global --prefix "$HOME/.local" @openai/codex@0.144.1
+  "$HOME/.local/bin/codex" --version
+'
+```
+
+This verifies installation and execution only. Interactive login and durable
+agent authentication are outside the supported-runtime preview.
+
+## Host Tools That Still Work
+
+Isolation should not make local development feel remote. Hideout can project a
+small, reviewed host capability into the guest under the command a CLI already
+knows. The command does not need to exist in the VM:
+
+```bash
+cd /path/to/sanitized/project
+hideout run --profile default -- code .
+hideout run --profile default -- code src/main.go
+hideout run --profile default -- code -g src/main.go:12:3
+```
+
+The guest sends a typed workspace reference, not the host path. Core maps it to
+the current workspace, rechecks symlink containment, verifies the registered VS
+Code app bundle and signature, and opens it on the host. There is no generic
+host-command fallback.
+
+`code` opens in safe mode by default: a run-scoped isolated editor profile,
+extensions disabled, automatic tasks off, and Workspace Trust kept enabled.
+Using the operator's normal IDE profile requires a visible, revocable decision
+bound to the live run. `open`/`xdg-open` remain separate typed host-open routes;
+adb, AppleScript, and arbitrary host execution are not provided by this feature.
+
+This flow and privacy/hardened `/workspace` aliasing are validated on real macOS
+arm64 Lima. The current receipt is from a dirty private-alpha tree, not clean
+release provenance; see
+[Host Capability Projection](docs/host-capability-projection.md).
+
+### Community Host-App Recipes
+
+The v1 community host-app recipe lifecycle is implemented for local directories
+and Git sources pinned to an exact commit. It separates read-only
+inspect/validate/test from explicit add, enable, update, disable, revoke, and
+remove. Enablement is profile-scoped and affects future runs only.
+
+A community pack can only bind declarative open-resource commands to the
+existing Core provider. It cannot ship JavaScript authority, a host effect,
+generic host execution, raw argv, HostFS authority, or marketplace signing.
+`safe` comes only from a compatible Core-owned safety profile; an accepted
+unsigned app remains unverified and uses `ask-each-run`. HostFS resources must
+already have same-session content authority; see-only visibility cannot be
+opened. The current receipt is dirty private-alpha evidence, not clean release
+provenance. See the operator and contributor workflow in
+[Community Host-App Recipes](docs/host-app-recipes.md).
 
 ## First Run
 
@@ -207,11 +292,14 @@ hideout doctor --fix --dry-run --profile agent
 hideout run --profile agent --backend lima -- <command> --version
 ```
 
-`hideout doctor` also has a stable JSON report and opt-in feature scope for CI
-or support cases:
+`hideout doctor` also has a stable JSON report, a deeper local troubleshooting
+mode, and opt-in feature scope for CI or support cases. Deep/feature findings
+report observed local facts, candidate causes, next actions, and explicit
+gate-required markers instead of treating local checks as release evidence:
 
 ```bash
 hideout doctor --backend native --format json > doctor.json
+hideout doctor --level deep
 hideout doctor --profile agent --feature dns --format json
 hideout doctor --format json --evidence-out doctor-report.json
 hideout audit export --source doctor-report --doctor-report doctor-report.json \
@@ -280,11 +368,30 @@ grants.
 Run-scoped grants:
 
 ```bash
+hideout run --backend lima --fs see:/absolute/path -- <command>
+hideout run --backend lima --fs see-dir:/absolute/directory -- <command>
+hideout run --backend lima --fs see-tree:/absolute/directory -- <command>
 hideout run --backend lima --fs read:/absolute/file -- <command>
 hideout run --backend lima --fs dir:/absolute/dir -- <command>
 hideout run --backend lima --fs tree:/absolute/dir -- <command>
 hideout run --backend lima --fs 'read:/absolute/dir/*.txt' -- <command>
 ```
+
+`see`, `see-dir`, and `see-tree` disclose names and coarse node kinds only.
+They do not grant file content, full metadata, execution, or writes. A read of a
+visible locked file fails immediately with `EACCES` and creates one local
+`hostfs.read` decision when the request is eligible. An operator can review it
+in another terminal, then the original process retries the same read:
+
+```bash
+hideout decision list --kind hostfs.read
+hideout decision claim <decision-id>
+hideout decision approve --claim-token <claim-token> <decision-id>
+```
+
+Name visibility is user-data disclosure: visible names can enter CLI or model
+context. `see*` selectors reject globs in V1. Use `read:` selectors for existing
+glob-filtered content rules.
 
 Quote HostFS glob selectors so your shell does not expand them. `*` does not
 implicitly include dotfiles such as `.env`; grant those with an explicit dotfile
@@ -295,10 +402,20 @@ Persistent profile rules:
 
 ```bash
 hideout profile fs default list
+hideout profile fs default add \
+  --fs see-dir:/absolute/directory --reason "navigate names"
 hideout profile fs default add --fs read:/absolute/file --reason "tool input"
 hideout profile fs default deny --no-fs tree:/absolute/dir --reason "too broad"
 hideout profile fs default remove <rule-id>
 ```
+
+Legacy `list:` rules require an explicit all-rule migration with a disclosure
+review; Hideout never aliases them silently to broader `see-dir`/`see-tree`
+semantics. Run `hideout profile fs default migrate-list --map
+<rule-id>=see-dir --reason "reviewed name disclosure"` (repeating `--map` for
+every legacy rule). During onboarding, `--hostfs-visibility none` is the default;
+`landmarks` adds explicit one-level roots, and `home-tree` also requires
+`--acknowledge-name-disclosure`.
 
 The Hideout store is reserved control-plane state and cannot be granted through
 HostFS.
@@ -396,12 +513,17 @@ hideout tui --once --profile agent
 `hideout tui` is the terminal observer surface. Keep it open in a second
 terminal while another terminal runs an agent or CLI. When `hideoutd` is
 running, it seeds once from Manager data and then applies typed daemon event
-payloads without steady-state overview/audit polling. `--once` is for scripts
-and snapshots.
+payloads without steady-state overview/audit polling. It now includes a compact
+operator console section for action-required counts, explicit doctor, package,
+and support commands, HostFS write decisions, decisions, notices, background
+work, and stream health. `--once` is for scripts and snapshots.
 
 `hideout ui --no-open --print-url` serves the WebUI smoke surface over the
 local Manager API and prints its address; it is the fuller management view
-and is not required for any first-run flow.
+and is not required for any first-run flow. The WebUI operator console organizes
+the same existing surfaces and actions: HostFS write claim/apply/discard,
+decision claim/approve/deny, notice acknowledge, explicit refresh, and visible
+doctor/package/support status. It does not add authority or auto-run doctor.
 
 For the resident local control plane, run:
 

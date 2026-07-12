@@ -54,9 +54,9 @@ Rules:
 
 The daemon mounts `manager.API.Handler()`; the served route set is the current
 typed surface, enumerated in [contracts/api-parity-matrix.md](contracts/api-parity-matrix.md):
-16 POST plan/apply routes and 16 GET read routes (14 via the `overviewResource`
-switch plus the two special-cased GET resources `audit/events` and `run/status`) —
-32 routes total. The daemon's own status and event-subscription endpoints are a
+the authoritative route inventory is the production `manager.ManagerRoutes()`
+registry, which both embedded and daemon dispatch consume. The daemon's own status
+and event-subscription endpoints are a
 separate surface outside `/api/v1/…`, inventoried in the parity matrix.
 
 Rules:

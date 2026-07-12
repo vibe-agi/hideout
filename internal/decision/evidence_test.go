@@ -32,3 +32,29 @@ func TestEvidenceRedactsDecisionAndNoticeLifecycle(t *testing.T) {
 		t.Fatalf("bad notice event redaction: %#v", nev)
 	}
 }
+
+func TestHostFSReadDecisionRedactsUntrustedControlPlaneTextAndProviderState(t *testing.T) {
+	d := Decision{
+		Kind:  KindHostFSRead,
+		State: StatePending,
+		ProposedAction: map[string]any{
+			"operation":       "read",
+			"untrustedReason": "inspect HIDEOUT_SECRET_PROXY=secret cap_0123456789abcdef",
+		},
+		Preview: Preview{Summary: "target says HIDEOUT_SECRET_PROXY=secret"},
+		ProviderRef: ProviderRef{
+			Provider:  KindHostFSRead,
+			SessionID: "ses_private",
+			Data:      map[string]any{"grantPath": "/private/store/grants.json"},
+		},
+	}
+	redacted := RedactDecision(d)
+	if redacted.ProviderRef.Provider != "" || redacted.ProviderRef.SessionID != "" || redacted.ProviderRef.Data != nil {
+		t.Fatalf("public decision leaked provider state: %+v", redacted.ProviderRef)
+	}
+	for _, value := range []string{redacted.Preview.Summary, redacted.ProposedAction["untrustedReason"].(string)} {
+		if strings.Contains(value, "secret") || strings.Contains(value, "cap_0123456789abcdef") {
+			t.Fatalf("public decision leaked control-plane text: %q", value)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/adapterpack"
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -18,9 +20,13 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/helperbin"
+	"github.com/vibe-agi/hideout/internal/hostcap"
+	"github.com/vibe-agi/hideout/internal/hostcap/appopen"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	hostfsoverlay "github.com/vibe-agi/hideout/internal/hostfs/overlay"
+	"github.com/vibe-agi/hideout/internal/hostfs/readgrant"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -54,6 +60,8 @@ type RunDataPlane struct {
 	auditProfile         string
 	auditBackend         string
 	cancel               context.CancelFunc
+	hostFSReadOwner      *readgrant.Owner
+	projectionGrantIDs   []string
 }
 
 func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runNetwork RunNetwork, opts RunDataPlaneOptions) (RunDataPlane, error) {
@@ -81,13 +89,6 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err != nil {
 		return RunDataPlane{}, err
 	}
-	if err := MaterializeCommandProxyShims(runSession.RuntimeShimDir, runSession.Plan.Backend, registry, runNetwork.Plan); err != nil {
-		return RunDataPlane{}, err
-	}
-	adapters, err := cmdadapter.CompileWithResolver(runSession.Plan.RuntimeProfile, runSession.ProfileDir, adapterpack.RuntimeResolver{Store: adapterpack.NewStore(c.Store.Root)})
-	if err != nil {
-		return RunDataPlane{}, err
-	}
 	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{
 		Profile:   HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants),
 		Run:       opts.HostFSRun,
@@ -96,11 +97,89 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err != nil {
 		return RunDataPlane{}, err
 	}
+	hostAppForbiddenRoots, err := c.hostAppRunForbiddenRoots(runSession, hostFSPolicy)
+	if err != nil {
+		return RunDataPlane{}, err
+	}
+	hostAppBindings, hostAppRegistrations, err := c.CompileHostAppCatalog(runSession.Plan.ProfileName, runSession.Layout.ID, hostAppForbiddenRoots)
+	if err != nil {
+		return RunDataPlane{}, err
+	}
+	hostAppLifecycle, err := c.hostAppBindingLifecycleValidator(runSession.Plan.ProfileName)
+	if err != nil {
+		return RunDataPlane{}, err
+	}
+	registry, err = cmdproxy.WithProjection(registry, hostAppRegistrations...)
+	if err != nil {
+		return RunDataPlane{}, err
+	}
+	if err := MaterializeCommandProxyShims(runSession.RuntimeShimDir, runSession.Plan.Backend, registry, runNetwork.Plan); err != nil {
+		return RunDataPlane{}, err
+	}
+	grantBindings, requiredGrantBindings := compileRunProjectionGrants(runSession, hostAppBindings.Bindings())
+	projectionGrantIDs := []string{}
+	projectionGrantTransferred := false
+	defer func() {
+		if !projectionGrantTransferred {
+			for _, decisionID := range projectionGrantIDs {
+				_ = c.invalidateProjectionGrant(decisionID, "run-start-failed")
+			}
+		}
+	}()
+	for _, grantBinding := range requiredGrantBindings {
+		grantDecision, err := c.ensureRunProjectionDecision(grantBinding)
+		if err != nil {
+			return RunDataPlane{}, err
+		}
+		projectionGrantIDs = append(projectionGrantIDs, grantDecision.ID)
+	}
+	// Keep safe host-app state under profile-owned storage so session cleanup cannot
+	// delete it while the detached GUI is alive, but isolate each run so an
+	// operator trust choice cannot silently carry into a later run.
+	safeUserDataDir := filepath.Join(runSession.ProfileDir, "host-app", "state")
+	if err := prepareProjectionSafeDataDir(safeUserDataDir); err != nil {
+		return RunDataPlane{}, err
+	}
+	hostAppProjection := &hostcap.ProjectionConfig{
+		Platform:           hostcap.CurrentPlatform(),
+		SafeUserDataDir:    safeUserDataDir,
+		Grants:             runProjectionGrantChecker{storeRoot: c.Store.Root, bindings: grantBindings},
+		Launcher:           appopen.ExecLauncher{},
+		Deduper:            newProjectionDeduper(),
+		Bindings:           hostAppBindings,
+		RunID:              runSession.Layout.ID,
+		GrantScopeBase:     projectionGrantScopeBase(runSession),
+		RevalidateIdentity: c.hostAppRunIdentityRevalidator(runSession, hostFSPolicy, hostAppForbiddenRoots),
+		ValidateLifecycle:  hostAppLifecycle,
+	}
+	adapters, err := cmdadapter.CompileWithResolver(runSession.Plan.RuntimeProfile, runSession.ProfileDir, adapterpack.RuntimeResolver{Store: adapterpack.NewStore(c.Store.Root)})
+	if err != nil {
+		return RunDataPlane{}, err
+	}
 	hostFSEnabled := len(hostFSPolicy.Grants) > 0
 	if err := MaterializeHostFSD(runSession.RuntimeShimDir, runSession.Plan.Backend, hostFSEnabled); err != nil {
 		return RunDataPlane{}, err
 	}
 	hostFSService := hostfs.NewService(hostFSPolicy)
+	var hostFSReadOwner *readgrant.Owner
+	var hostFSReadProvider *hostFSReadProvider
+	ownerTransferred := false
+	defer func() {
+		if !ownerTransferred && hostFSReadOwner != nil {
+			_ = hostFSReadOwner.Close()
+		}
+	}()
+	if hostFSEnabled {
+		hostFSReadOwner, err = readgrant.AcquireOwner(runSession.Layout.HostFSReadOwnerLock)
+		if err != nil {
+			return RunDataPlane{}, err
+		}
+		hostFSReadProvider, err = newHostFSReadProvider(c, runSession.Layout.ID, runSession.Layout.HostFSReadDir, runSession.Layout.HostFSReadOwnerLock, hostFSPolicy)
+		if err != nil {
+			return RunDataPlane{}, err
+		}
+		hostFSService.ReadAuthority = newHostAppRunResourceAuthority(hostFSReadProvider, runSession.Plan.ProfileName)
+	}
 	if hostFSPolicyHasOverlay(hostFSPolicy) {
 		overlayStore, err := hostfsoverlay.NewStore(filepath.Join(runSession.Layout.Dir, "hostfs-overlay"))
 		if err != nil {
@@ -124,24 +203,27 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		opener = broker.NoopOpener{}
 	}
 	server := &broker.Server{
-		SessionID:       runSession.Layout.ID,
-		Token:           token,
-		Socket:          runSession.Layout.BrokerSock,
-		Endpoint:        listenEndpoint,
-		HostRoot:        runSession.Plan.Workspace,
-		GuestRoot:       runSession.Plan.GuestWorkspace,
-		Profile:         runSession.Plan.ProfileName,
-		ProfileDir:      runSession.ProfileDir,
-		Backend:         runSession.Plan.Backend,
-		WorkspaceMode:   runSession.Plan.RuntimeProfile.Workspace.Mode,
-		NetworkMode:     runSession.Plan.RuntimeProfile.Network.Mode,
-		Commands:        registry.ShimNames(),
-		CommandAdapters: adapters,
-		ScriptRefs:      runSession.Plan.RuntimeProfile.Policy.ScriptRefs,
-		Evaluator:       policy.NewEvaluator(runSession.Plan.RuntimeProfile),
-		Audit:           runSession.Audit,
-		Opener:          opener,
-		HostFS:          &hostFSService,
+		SessionID:           runSession.Layout.ID,
+		Token:               token,
+		Socket:              runSession.Layout.BrokerSock,
+		Endpoint:            listenEndpoint,
+		HostRoot:            runSession.Plan.Workspace,
+		GuestRoot:           runSession.Plan.GuestWorkspace,
+		Profile:             runSession.Plan.ProfileName,
+		ProfileDir:          runSession.ProfileDir,
+		Backend:             runSession.Plan.Backend,
+		WorkspaceMode:       runSession.Plan.RuntimeProfile.Workspace.Mode,
+		NetworkMode:         runSession.Plan.RuntimeProfile.Network.Mode,
+		Commands:            registry.ShimNames(),
+		CommandRegistry:     registry,
+		CommandAdapters:     adapters,
+		ScriptRefs:          runSession.Plan.RuntimeProfile.Policy.ScriptRefs,
+		Evaluator:           policy.NewEvaluator(runSession.Plan.RuntimeProfile),
+		Audit:               runSession.Audit,
+		Opener:              opener,
+		HostFS:              &hostFSService,
+		HostFSReadDecisions: hostFSReadProvider,
+		HostApp:             hostAppProjection,
 	}
 	if err := server.StartEndpoint(brokerCtx, listenEndpoint); err != nil {
 		cancel()
@@ -168,15 +250,24 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Backend:  runSession.Plan.Backend,
 		Action:   "session.start",
 		Decision: "allow",
-		Details: map[string]any{
-			"workspace":       runSession.Plan.Workspace,
-			"guestWork":       runSession.Plan.GuestWorkspace,
-			"network":         runSession.Plan.RuntimeProfile.Network.Mode,
-			"networkPlan":     presence(runNetwork.Plan.ManifestPath),
-			"command":         strings.Join(runSession.Plan.Command, " "),
-			"brokerEndpoint":  "present",
-			"brokerTransport": guestEndpoint.Network,
-		},
+		Details: func() map[string]any {
+			visibility := summarizeHostFSVisibility(runSession.Plan.RuntimeProfile, hostFSPolicy)
+			return map[string]any{
+				"workspace":                runSession.Plan.Workspace,
+				"guestWork":                runSession.Plan.GuestWorkspace,
+				"network":                  runSession.Plan.RuntimeProfile.Network.Mode,
+				"networkPlan":              presence(runNetwork.Plan.ManifestPath),
+				"command":                  strings.Join(runSession.Plan.Command, " "),
+				"brokerEndpoint":           "present",
+				"brokerTransport":          guestEndpoint.Network,
+				"hostfsVisibilityPosture":  visibility.Posture,
+				"hostfsDiscoverGrants":     visibility.DiscoverGrants,
+				"hostfsDiscoverDeny":       visibility.DiscoverDeny,
+				"hostfsMaxListEntries":     visibility.MaxListEntries,
+				"hostfsMaxDepth":           visibility.MaxDepth,
+				"hostfsVisibilityNonClaim": visibility.NonClaim,
+			}
+		}(),
 	}); err != nil {
 		_ = server.Close()
 		cancel()
@@ -189,6 +280,8 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		cancel()
 		return RunDataPlane{}, err
 	}
+	ownerTransferred = true
+	projectionGrantTransferred = true
 	return RunDataPlane{
 		Registry:             registry,
 		HostFSPolicy:         hostFSPolicy,
@@ -205,7 +298,131 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		auditProfile:         runSession.Plan.ProfileName,
 		auditBackend:         runSession.Plan.Backend,
 		cancel:               cancel,
+		hostFSReadOwner:      hostFSReadOwner,
+		projectionGrantIDs:   append([]string(nil), projectionGrantIDs...),
 	}, nil
+}
+
+func prepareProjectionSafeDataDir(path string) error {
+	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
+		return errors.New("projection safe user-data directory must be absolute")
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errors.New("projection safe user-data path must be a real directory")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o700)
+}
+
+// compileRunProjectionGrants derives approval work only from immutable binding
+// access. Profile ide-mode compatibility has already been compiled into the
+// built-in VS Code binding by CompileHostAppCatalog.
+func compileRunProjectionGrants(runSession RunSession, appBindings []hostcap.OpenResourceBinding) (map[string]projectionGrantBinding, []projectionGrantBinding) {
+	byCommand := map[string]projectionGrantBinding{}
+	var required []projectionGrantBinding
+	for _, appBinding := range appBindings {
+		if appBinding.Access != hostcap.BindingAccessAskEachRun {
+			continue
+		}
+		for _, command := range appBinding.Commands {
+			binding := projectionGrantBindingForRun(runSession, appBinding, command)
+			byCommand[command] = binding
+			required = append(required, binding)
+		}
+	}
+	return byCommand, required
+}
+
+// ensureRunProjectionDecision creates the generic run-scoped approval used by
+// ask-each-run bindings. It intentionally does not consult profile ide-mode;
+// that setting is only a compatibility input to the built-in catalog binding.
+func (c Core) ensureRunProjectionDecision(binding projectionGrantBinding) (decision.Decision, error) {
+	store, err := c.decisionStore()
+	if err != nil {
+		return decision.Decision{}, err
+	}
+	id := binding.decisionID()
+	if existing, err := store.RawDecision(id); err == nil {
+		if !projectionGrantMatches(existing, binding) {
+			return decision.Decision{}, errors.New("host-app decision binding mismatch")
+		}
+		return decision.RedactDecision(existing), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return decision.Decision{}, err
+	}
+	now := time.Now().UTC()
+	workspaceWritable := strings.Contains(","+binding.ResourceClasses+",", ",workspace,")
+	d := decision.Decision{
+		ID:   id,
+		Kind: decision.KindHostAppOpenResource,
+		Source: decision.Source{
+			Profile: binding.Profile,
+			Session: binding.SessionID,
+			Backend: binding.Backend,
+			Surface: "projection",
+		},
+		State: decision.StatePending,
+		Risk:  map[string]any{"riskClass": "high", "workspaceWritable": workspaceWritable},
+		ProposedAction: map[string]any{
+			"capability": hostcap.CapabilityAppOpenResource,
+			"mode":       ProjectionIdeModeTrusted,
+			"binding":    binding.data(),
+		},
+		Preview: decision.Preview{
+			Summary: "Allow this exact host-app binding to open its declared resource classes for this run",
+			Facts: map[string]any{
+				"mode":            ProjectionIdeModeTrusted,
+				"workspaceId":     binding.WorkspaceID,
+				"environmentId":   binding.EnvironmentID,
+				"subject":         binding.Subject,
+				"resourceClasses": binding.ResourceClasses,
+				"hostfsAuthority": binding.HostFSAuthority,
+				"hostfsOwner":     binding.HostFSOwner,
+			},
+		},
+		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny, decision.ActionRevoke},
+		DefaultOutcome: decision.DefaultOutcomeDeny,
+		TimeoutAt:      now.Add(15 * time.Minute),
+		ProviderRef: decision.ProviderRef{
+			Provider:  decision.KindHostAppOpenResource,
+			SessionID: binding.SessionID,
+			Data:      binding.data(),
+		},
+		AuditRef:  "audit:host-app-open-resource:" + id,
+		CreatedAt: now,
+	}
+	return c.CreateDecision(d)
+}
+
+// runProjectionGrantChecker admits the exact approved decision for a binding
+// selected as ask-each-run when the run catalog was compiled.
+type runProjectionGrantChecker struct {
+	storeRoot string
+	bindings  map[string]projectionGrantBinding
+}
+
+func (g runProjectionGrantChecker) TrustedGrantActive(scope hostcap.GrantScope) bool {
+	binding, ok := g.bindings[scope.Command]
+	if !ok || g.storeRoot == "" || scope != binding.scope() {
+		return false
+	}
+	d, err := decision.NewStore(g.storeRoot).RawDecision(binding.decisionID())
+	return err == nil && d.State == decision.StateApproved && projectionGrantMatches(d, binding)
+}
+
+func (g runProjectionGrantChecker) TrustedGrantActiveForResource(scope hostcap.GrantScope, resource hostcap.ResourceRef) bool {
+	binding, ok := g.bindings[scope.Command]
+	class := hostcap.PublicResourceClass(resource.Kind)
+	if !ok || class == "" || !strings.Contains(","+binding.ResourceClasses+",", ","+class+",") {
+		return false
+	}
+	return g.TrustedGrantActive(scope)
 }
 
 func (c Core) CloseRunDataPlane(dataPlane RunDataPlane) error {
@@ -218,6 +435,16 @@ func (c Core) CloseRunDataPlane(dataPlane RunDataPlane) error {
 	}
 	if dataPlane.Broker != nil {
 		if err := dataPlane.Broker.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if dataPlane.hostFSReadOwner != nil {
+		if err := dataPlane.hostFSReadOwner.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, decisionID := range dataPlane.projectionGrantIDs {
+		if err := c.invalidateProjectionGrant(decisionID, "session-ended"); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -384,11 +611,11 @@ func nativeShimScript(shimPath string, reg cmdproxy.Registration) string {
 	if shimPath == "" {
 		return "#!/bin/sh\necho 'hideout-shim unavailable' >&2\nexit 69\n"
 	}
-	return shimPreamble() + shimEnv(reg) + fmt.Sprintf("HIDEOUT_COMMAND_PROXY_SHIM_DIR=\"$shim_dir\" exec %q \"$(basename \"$0\")\" \"$@\"\n", shimPath)
+	return shimPreamble() + shimEnv(reg) + fmt.Sprintf("HIDEOUT_COMMAND_PROXY_SHIM_DIR=\"$shim_dir\" exec %q %s \"$(basename \"$0\")\" \"$@\"\n", shimPath, shimMetadataArgs(reg))
 }
 
 func limaShimScript(reg cmdproxy.Registration) string {
-	return shimPreamble() + shimEnv(reg) + "HIDEOUT_COMMAND_PROXY_SHIM_DIR=\"$shim_dir\" exec \"$shim_dir/hideout-shim\" \"$(basename \"$0\")\" \"$@\"\n"
+	return shimPreamble() + shimEnv(reg) + fmt.Sprintf("HIDEOUT_COMMAND_PROXY_SHIM_DIR=\"$shim_dir\" exec \"$shim_dir/hideout-shim\" %s \"$(basename \"$0\")\" \"$@\"\n", shimMetadataArgs(reg))
 }
 
 func shimPreamble() string {
@@ -396,11 +623,24 @@ func shimPreamble() string {
 }
 
 func shimEnv(reg cmdproxy.Registration) string {
-	script := ""
+	script := fmt.Sprintf("HIDEOUT_COMMAND_PROXY_ACTION=%q \\\n", reg.Action)
 	if reg.Action == cmdproxy.ActionCommandAdapter {
-		script += fmt.Sprintf("HIDEOUT_COMMAND_PROXY_ACTION=%q HIDEOUT_COMMAND_PROXY_ADAPTER_ID=%q \\\n", reg.Action, reg.AdapterID)
+		script += fmt.Sprintf("HIDEOUT_COMMAND_PROXY_ADAPTER_ID=%q \\\n", reg.AdapterID)
+	}
+	if reg.Action == cmdproxy.ActionHostAppOpenResource && reg.OpenResourceGrammar != nil {
+		raw, _ := json.Marshal(reg.OpenResourceGrammar)
+		script += fmt.Sprintf("HIDEOUT_COMMAND_PROXY_BINDING_DIGEST=%q \\\n", reg.BindingDigest)
+		script += fmt.Sprintf("HIDEOUT_COMMAND_PROXY_GRAMMAR_B64=%q \\\n", base64.StdEncoding.EncodeToString(raw))
 	}
 	return script
+}
+
+func shimMetadataArgs(reg cmdproxy.Registration) string {
+	args := fmt.Sprintf("--action %q", reg.Action)
+	if reg.Action == cmdproxy.ActionCommandAdapter {
+		args += fmt.Sprintf(" --adapter-id %q", reg.AdapterID)
+	}
+	return args
 }
 
 func MaterializeHostFSD(dir, backendName string, enabled bool) error {

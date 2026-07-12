@@ -117,6 +117,7 @@ type OutcomeRow struct {
 type HostFSWriteRow struct {
 	DecisionID      string `json:"decisionId"`
 	OperationID     string `json:"operationId"`
+	Profile         string `json:"profile,omitempty"`
 	Status          string `json:"status"`
 	Operation       string `json:"operation,omitempty"`
 	Path            string `json:"path,omitempty"`
@@ -147,6 +148,21 @@ type NoticeRow struct {
 	Backend      string `json:"backend,omitempty"`
 }
 
+type StatusRow struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	Next   string `json:"next,omitempty"`
+}
+
+type ActionRequiredSummary struct {
+	HostFSWrites int `json:"hostfsWrites"`
+	Decisions    int `json:"decisions"`
+	Notices      int `json:"notices"`
+	Total        int `json:"total"`
+}
+
 type StreamHealth struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
@@ -159,6 +175,10 @@ type Seed struct {
 	AuditTail       []audit.Event    `json:"auditTail"`
 	DeniedAuditTail []audit.Event    `json:"deniedAuditTail"`
 	Background      []BackgroundRow  `json:"background,omitempty"`
+	HostFSWrites    []HostFSWriteRow `json:"hostfsWrites,omitempty"`
+	Decisions       []DecisionRow    `json:"decisions,omitempty"`
+	Notices         []NoticeRow      `json:"notices,omitempty"`
+	StatusRows      []StatusRow      `json:"statusRows,omitempty"`
 	StreamHealth    StreamHealth     `json:"streamHealth"`
 	ProfileScope    string           `json:"profileScope,omitempty"`
 }
@@ -169,6 +189,10 @@ type SeedInput struct {
 	AuditTail       []audit.Event
 	DeniedAuditTail []audit.Event
 	Background      []BackgroundRow
+	HostFSWrites    []HostFSWriteRow
+	Decisions       []DecisionRow
+	Notices         []NoticeRow
+	StatusRows      []StatusRow
 	ProfileScope    string
 	StreamHealth    string
 }
@@ -179,6 +203,7 @@ type State struct {
 	AuditTail       []audit.Event              `json:"auditTail"`
 	DeniedAuditTail []audit.Event              `json:"deniedAuditTail"`
 	Background      []BackgroundRow            `json:"background,omitempty"`
+	StatusRows      []StatusRow                `json:"statusRows,omitempty"`
 	ExportOutcomes  []OutcomeRow               `json:"exportOutcomes,omitempty"`
 	CleanupOutcomes []OutcomeRow               `json:"cleanupOutcomes,omitempty"`
 	HostFSWrites    []HostFSWriteRow           `json:"hostfsWrites,omitempty"`
@@ -194,4 +219,34 @@ type State struct {
 type ApplyResult struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+}
+
+func ActionRequired(state State) ActionRequiredSummary {
+	out := ActionRequiredSummary{}
+	for _, row := range state.HostFSWrites {
+		if actionableStatus(row.Status) {
+			out.HostFSWrites++
+		}
+	}
+	for _, row := range state.Decisions {
+		if actionableStatus(row.Status) {
+			out.Decisions++
+		}
+	}
+	for _, row := range state.Notices {
+		if !row.Acknowledged {
+			out.Notices++
+		}
+	}
+	out.Total = out.HostFSWrites + out.Decisions + out.Notices
+	return out
+}
+
+func actionableStatus(status string) bool {
+	switch status {
+	case "", "pending", "claimed", "ready", "requires-decision":
+		return true
+	default:
+		return false
+	}
 }

@@ -14,11 +14,14 @@ const (
 	NoticeVersion         = "hideout.notice/v1"
 	StatusVersion         = "hideout.decision-status/v1"
 
-	KindHostFSWrite      = "hostfs.write"
-	KindAdapterProposal  = "adapter.proposal"
-	KindEvidenceShare    = "evidence.share"
-	KindPrivilegeStatus  = "privilege.status"
-	KindBackgroundStatus = "background.status"
+	KindHostFSWrite         = "hostfs.write"
+	KindHostFSRead          = "hostfs.read"
+	KindHostAppOpenResource = "host-app.open-resource"
+	KindAdapterProposal     = "adapter.proposal"
+	KindEvidenceShare       = "evidence.share"
+	KindPrivilegeStatus     = "privilege.status"
+	KindBackgroundStatus    = "background.status"
+	KindRuntimeStatus       = "runtime.status"
 
 	StatePending   = "pending"
 	StateClaimed   = "claimed"
@@ -42,6 +45,8 @@ const (
 	ActionApply   = "apply"
 	ActionDeny    = "deny"
 	ActionDiscard = "discard"
+	ActionReopen  = "reopen"
+	ActionRevoke  = "revoke"
 )
 
 type Source struct {
@@ -269,7 +274,7 @@ func ValidateNotice(n Notice) error {
 
 func KnownDecisionKind(kind string) bool {
 	switch kind {
-	case KindHostFSWrite, KindAdapterProposal, KindEvidenceShare:
+	case KindHostFSWrite, KindHostFSRead, KindHostAppOpenResource, KindAdapterProposal, KindEvidenceShare:
 		return true
 	default:
 		return false
@@ -278,7 +283,7 @@ func KnownDecisionKind(kind string) bool {
 
 func KnownNoticeKind(kind string) bool {
 	switch kind {
-	case KindPrivilegeStatus, KindBackgroundStatus:
+	case KindPrivilegeStatus, KindBackgroundStatus, KindRuntimeStatus:
 		return true
 	default:
 		return false
