@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/capability-descriptor.schema.json",
+  "title": "Host Capability Descriptor",
+  "description": "Static, Core-owned description of one host capability in the projection registry. The registry is not runtime-extensible; this schema documents the descriptor shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "riskClass", "intentSchema", "resultPolicy", "providerRef", "decisionPolicy", "lifecyclePolicy", "platforms", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable dotted capability id, e.g. host.app.open-resource.",
+      "pattern": "^[a-z][a-z0-9.-]*$"
+    },
+    "riskClass": { "type": "string", "enum": ["low", "elevated", "high"] },
+    "intentSchema": { "type": "string" },
+    "resourceKinds": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["workspace", "hostfs", "guest-only", "url", "endpoint", "device"] }
+    },
+    "resultPolicy": {
+      "type": "string",
+      "enum": ["none", "bounded-typed", "stream", "lease"],
+      "description": "Host->guest result channel type. host.app.open-resource is none (fire-and-forget)."
+    },
+    "providerRef": { "type": "string" },
+    "decisionPolicy": { "type": "string", "enum": ["default-allow-audited", "operator-grant"] },
+    "lifecyclePolicy": { "type": "string", "enum": ["session", "run"] },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "enum": ["darwin", "linux"] }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["implemented", "design-ready"],
+      "description": "design-ready descriptors exist to prove the model accommodates the full vision and MUST fail closed if dispatched."
+    }
+  }
+}

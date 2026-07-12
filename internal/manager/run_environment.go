@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/runtimeverify"
 )
 
 const limaBackendConfigVersion = "lima-config/v3/no-default-port-forwards"
@@ -36,7 +37,19 @@ func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (Ru
 	if c.Store.Root == "" {
 		return RunEnvironment{}, errors.New("manager store root is required")
 	}
-	runEnv, err := SelectRunEnvironment(environment.Store{Root: c.Store.Root}, plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace, plan.Ephemeral, opts)
+	store := environment.Store{Root: c.Store.Root}
+	if opts.Create && !plan.Ephemeral && !opts.RemoveAfterRun {
+		provenance, err := runtimeProvenanceForRun(store, plan, opts)
+		if err != nil {
+			return RunEnvironment{}, err
+		}
+		if provenance != nil {
+			if err := c.checkRuntimeDiskProvenance(*provenance); err != nil {
+				return RunEnvironment{}, err
+			}
+		}
+	}
+	runEnv, err := SelectRunEnvironment(store, plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace, plan.Ephemeral, opts)
 	if err == nil && runEnv.Created && runEnv.Record.ID != "env_new" {
 		c.emitEnvironmentAudit("env.create", "allow", map[string]any{
 			"environmentName": runEnv.Record.Name,
@@ -56,6 +69,31 @@ func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (Ru
 		})
 	}
 	return runEnv, err
+}
+
+func runtimeProvenanceForRun(store environment.Store, plan RunPlan, opts RunEnvironmentOptions) (*environment.RuntimeProvenance, error) {
+	if name := strings.TrimSpace(opts.EnvName); name != "" {
+		rec, err := store.LoadByName(name)
+		if err != nil {
+			return nil, err
+		}
+		return cloneRuntimeProvenance(rec.Runtime), nil
+	}
+	spec := RunEnvironmentSpec(plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace)
+	if rec, err := store.LoadByName(spec.Name); err == nil {
+		return cloneRuntimeProvenance(rec.Runtime), nil
+	} else if !errors.Is(err, environment.ErrNameNotFound) {
+		return nil, err
+	}
+	return cloneRuntimeProvenance(plan.RuntimeProfile.Environment.Runtime), nil
+}
+
+func cloneRuntimeProvenance(value *environment.RuntimeProvenance) *environment.RuntimeProvenance {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func SelectRunEnvironment(store environment.Store, p profile.Profile, backendName, workspace, guestWorkspace string, ephemeral bool, opts RunEnvironmentOptions) (RunEnvironment, error) {
@@ -166,6 +204,12 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 		return runEnv, cleanupErr
 	}
 	store := environment.Store{Root: c.Store.Root}
+	if runEnv.Record.Runtime != nil {
+		// Ordinary target execution can mutate the reusable guest after the
+		// pre-run probe. Its receipt is therefore valid only for that operation;
+		// explicit runtime verify is the sole producer of persistent readiness.
+		cleanupErr = errors.Join(cleanupErr, (runtimeverify.Store{Root: c.Store.Root}).Remove(runEnv.Record.ID))
+	}
 	if err := store.ClearRuntime(runEnv.Record.ID); err != nil {
 		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("environment runtime cleanup: %w", err))
 	}
@@ -188,6 +232,11 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 }
 
 func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {
+	var runtimeProvenance *environment.RuntimeProvenance
+	if p.Environment.Runtime != nil {
+		copy := *p.Environment.Runtime
+		runtimeProvenance = &copy
+	}
 	return environment.Spec{
 		Name:                 environment.AutoName(p.Name, workspace),
 		AutoNamed:            true,
@@ -201,6 +250,7 @@ func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspac
 		IdentityID:           p.Metadata["identityId"],
 		User:                 p.Identity.User,
 		Hostname:             p.Identity.Hostname,
+		Runtime:              runtimeProvenance,
 	}
 }
 

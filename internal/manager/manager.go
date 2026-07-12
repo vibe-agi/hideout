@@ -13,12 +13,17 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/hostcap"
+	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
+	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -31,6 +36,18 @@ type Core struct {
 	// embedded construction (New), so embedded mode emits nothing; the daemon sets
 	// it to its event publisher.
 	Observer EventObserver
+	// RuntimeResolver is a test seam. Production Core construction leaves it nil
+	// and therefore resolves only the package-embedded catalog.
+	RuntimeResolver            func(runtimecatalog.Selection) (runtimecatalog.Resolution, error)
+	RuntimeDiskCheck           func(path string, requiredBytes int64) error
+	RuntimeCatalogLoader       func() (runtimecatalog.Catalog, error)
+	RuntimeInstanceInspector   func(context.Context, string, backend.RuntimeInstanceExpectation) (backend.RuntimeInstanceObservation, error)
+	HostAppIdentityResolver    func(hostcap.ApplicationExpectation, []string) (hostcap.ObservedApplicationIdentity, error)
+	HostAppIdentityRevalidator hostcap.IdentityRevalidator
+	HostAppPlatform            hostcap.Platform
+	// HostAppForbiddenRoots supplies active run/HostFS roots not represented by
+	// persisted profile and environment state. Errors fail identity review closed.
+	HostAppForbiddenRoots func(profileName string) ([]string, error)
 }
 
 type BackendCheck struct {
@@ -56,6 +73,7 @@ type Overview struct {
 	Bundles        BundleSummary        `json:"bundles"`
 	Projects       ProjectSummary       `json:"projects"`
 	AdapterPacks   []AdapterPackSummary `json:"adapterPacks,omitempty"`
+	HostAppPacks   []HostAppPackSummary `json:"hostAppPacks,omitempty"`
 	Decisions      DecisionSummary      `json:"decisions,omitempty"`
 	Notices        NoticeSummary        `json:"notices,omitempty"`
 	DecisionStatus DecisionStatus       `json:"decisionStatus,omitempty"`
@@ -76,6 +94,7 @@ type ProfileSummary struct {
 	CommandAdapters            []CommandAdapterSummary     `json:"commandAdapters,omitempty"`
 	HostFSGrants               int                         `json:"hostfsGrants"`
 	HostFSDeny                 int                         `json:"hostfsDeny"`
+	HostFSVisibility           HostFSVisibilityPosture     `json:"hostfsVisibility"`
 	PolicyEngine               string                      `json:"policyEngine"`
 	ExpectedCommands           []string                    `json:"expectedCommands,omitempty"`
 	ExpectedCommandDiagnostics []ExpectedCommandDiagnostic `json:"expectedCommandDiagnostics,omitempty"`
@@ -133,22 +152,23 @@ type SessionSummary struct {
 }
 
 type EnvironmentSummary struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name,omitempty"`
-	AutoNamed      bool      `json:"autoNamed,omitempty"`
-	ImageRef       string    `json:"imageRef,omitempty"`
-	Version        string    `json:"version,omitempty"`
-	Profile        string    `json:"profile"`
-	Backend        string    `json:"backend"`
-	Status         string    `json:"status"`
-	Workspace      string    `json:"workspace"`
-	GuestWorkspace string    `json:"guestWorkspace"`
-	InstanceName   string    `json:"instanceName,omitempty"`
-	LastSessionID  string    `json:"lastSessionId,omitempty"`
-	LastCommand    string    `json:"lastCommand,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
-	LastStartedAt  time.Time `json:"lastStartedAt,omitempty"`
-	LastEndedAt    time.Time `json:"lastEndedAt,omitempty"`
+	ID             string                    `json:"id"`
+	Name           string                    `json:"name,omitempty"`
+	AutoNamed      bool                      `json:"autoNamed,omitempty"`
+	ImageRef       string                    `json:"imageRef,omitempty"`
+	Version        string                    `json:"version,omitempty"`
+	Profile        string                    `json:"profile"`
+	Backend        string                    `json:"backend"`
+	Status         string                    `json:"status"`
+	Workspace      string                    `json:"workspace"`
+	GuestWorkspace string                    `json:"guestWorkspace"`
+	InstanceName   string                    `json:"instanceName,omitempty"`
+	LastSessionID  string                    `json:"lastSessionId,omitempty"`
+	LastCommand    string                    `json:"lastCommand,omitempty"`
+	CreatedAt      time.Time                 `json:"createdAt"`
+	LastStartedAt  time.Time                 `json:"lastStartedAt,omitempty"`
+	LastEndedAt    time.Time                 `json:"lastEndedAt,omitempty"`
+	Runtime        *runtimeverify.StatusView `json:"runtime,omitempty"`
 }
 
 type BackendSummary struct {
@@ -281,15 +301,18 @@ func (c Core) EnsureRunInitialized(plan RunPlan) (inittask.Result, error) {
 		return inittask.Result{}, err
 	}
 	proxySecretRef := ""
+	mediatedResolver := ""
 	if networkMode == "tun2socks" {
 		proxySecretRef = plan.RuntimeProfile.Network.ProxySecretRef
+		mediatedResolver = plan.RuntimeProfile.Network.MediatedResolver
 	}
 	initPlan, err := c.PlanInit(inittask.Options{
-		ProfileName:    plan.ProfileName,
-		Backend:        plan.Backend,
-		Network:        networkMode,
-		ProxySecretRef: proxySecretRef,
-		NoInput:        true,
+		ProfileName:      plan.ProfileName,
+		Backend:          plan.Backend,
+		Network:          networkMode,
+		ProxySecretRef:   proxySecretRef,
+		MediatedResolver: mediatedResolver,
+		NoInput:          true,
 	})
 	if err != nil {
 		return inittask.Result{}, err
@@ -347,6 +370,7 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 	capabilities := capabilitySummary(profiles, registry)
 	decisionStatus, _ := c.DecisionStatus()
 	notices, _ := c.ListNotices(NoticeListRequest{})
+	hostAppPacks, _ := c.ListHostAppPacks()
 	return Overview{
 		Version:      "hideout.manager/v1",
 		StorageRoot:  c.Store.Root,
@@ -366,6 +390,7 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 		Init:         initSummary(c.Store),
 		Bundles:      bundleSummary(c.Store.Root),
 		AdapterPacks: adapterPackSummaries(c),
+		HostAppPacks: hostAppPacks,
 		Projects: ProjectSummary{
 			Status: "not-configured",
 		},
@@ -496,6 +521,11 @@ func environmentSummaries(storeRoot string) []EnvironmentSummary {
 	}
 	out := make([]EnvironmentSummary, 0, len(records))
 	for _, rec := range records {
+		var receipt *runtimeverify.Receipt
+		if loaded, loadErr := (runtimeverify.Store{Root: storeRoot}).Load(rec.ID); loadErr == nil {
+			receipt = &loaded
+		}
+		runtimeStatus := runtimeverify.BuildStatus(rec, runtimeEnvironmentRunning(rec), receipt)
 		out = append(out, EnvironmentSummary{
 			ID:             rec.ID,
 			Name:           rec.Name,
@@ -513,6 +543,7 @@ func environmentSummaries(storeRoot string) []EnvironmentSummary {
 			CreatedAt:      rec.CreatedAt,
 			LastStartedAt:  rec.LastStartedAt,
 			LastEndedAt:    rec.LastEndedAt,
+			Runtime:        &runtimeStatus,
 		})
 	}
 	return out
@@ -627,6 +658,10 @@ func (c Core) profileSummaries() ([]ProfileSummary, []error) {
 			})
 			summary.HostFSGrants = len(p.HostFS.Grants)
 			summary.HostFSDeny = len(p.HostFS.Deny)
+			policy, policyErr := hostfs.Build(hostfs.BuildInput{Profile: p.HostFS, StoreRoot: c.Store.Root})
+			if policyErr == nil {
+				summary.HostFSVisibility = summarizeHostFSVisibility(p, policy)
+			}
 			summary.CommandProxies = commandProxyNames(p)
 			summary.CommandAdapters = commandAdapterSummaries(p)
 		}

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "hideout.host-app-pack/v1",
+  "id": "community.zed",
+  "version": "0.1.0",
+  "description": "Illustrative Zed open-resource recipe",
+  "apps": [
+    {
+      "id": "zed",
+      "platforms": [
+        "darwin"
+      ],
+      "bundleNames": [
+        "Zed.app"
+      ],
+      "executableRelativePath": "Contents/MacOS/zed",
+      "launch": {}
+    }
+  ],
+  "bindings": [
+    {
+      "id": "open-resource",
+      "commands": [
+        "zed"
+      ],
+      "appId": "zed",
+      "capabilityId": "host.app.open-resource",
+      "resourceKinds": [
+        "workspace",
+        "hostfs-portal"
+      ],
+      "resultPolicy": "none",
+      "requestedAccess": "ask-each-run",
+      "grammar": {
+        "kind": "open-resource-v1",
+        "resourceCount": 1,
+        "gotoFlags": [],
+        "newWindowFlags": [],
+        "reuseWindowFlags": [],
+        "unknownFlags": "deny"
+      }
+    }
+  ],
+  "tests": [
+    {
+      "id": "open-directory",
+      "bindingId": "open-resource",
+      "argv": [
+        "zed",
+        "."
+      ],
+      "expected": {
+        "resource": "/workspace",
+        "windowMode": "reuse"
+      }
+    }
+  ]
+}

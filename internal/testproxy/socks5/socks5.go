@@ -34,6 +34,10 @@ const (
 
 type Server struct {
 	Listener net.Listener
+	// DialContext optionally supplies the fixture's host-side egress. Production
+	// gates use it to chain through an operator's HTTP CONNECT proxy when the
+	// host cannot reach public resolver IPs directly.
+	DialContext func(context.Context, string, string) (net.Conn, error)
 
 	mu      sync.Mutex
 	targets []string
@@ -132,8 +136,12 @@ func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 		return
 	}
 	s.recordTarget(targetAddr)
-	dialer := net.Dialer{Timeout: connectTimeout}
-	target, err := dialer.DialContext(ctx, "tcp", targetAddr)
+	dialContext := s.DialContext
+	if dialContext == nil {
+		dialer := net.Dialer{Timeout: connectTimeout}
+		dialContext = dialer.DialContext
+	}
+	target, err := dialContext(ctx, "tcp", targetAddr)
 	if err != nil {
 		_ = writeReply(client, replyGeneral)
 		return

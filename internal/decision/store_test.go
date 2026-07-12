@@ -137,6 +137,59 @@ func TestStoreClaimDecisionUsesFileLockAcrossStoreInstances(t *testing.T) {
 	}
 }
 
+func TestStoreHostFSReadProviderReopenAndActivationFailureAreNarrow(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 7, 10, 4, 0, 0, 0, time.UTC)
+	store := NewStoreAt(root)
+	store.SetNow(func() time.Time { return now })
+	readDecision := sampleDecision("dec_hfr_test", now.Add(time.Minute))
+	readDecision.Kind = KindHostFSRead
+	readDecision.DefaultOutcome = DefaultOutcomeDeny
+	readDecision.AllowedActions = []string{ActionApprove, ActionDeny}
+	readDecision.State = StateDenied
+	if _, err := store.CreateOrUpdateDecision(readDecision); err != nil {
+		t.Fatal(err)
+	}
+	result, reopened, err := store.ReopenProviderDecision(readDecision.ID, KindHostFSRead, 5*time.Minute, "reconsider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatePending || result.Decision != ActionReopen || reopened.Revision != 2 || !reopened.TimeoutAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("reopen result=%+v decision=%+v", result, reopened)
+	}
+	if _, _, err := store.ReopenProviderDecision(readDecision.ID, KindHostFSRead, 5*time.Minute, "again"); err == nil {
+		t.Fatal("pending decision should not reopen")
+	}
+
+	writeDecision := sampleDecision("dec_write", now.Add(time.Minute))
+	writeDecision.State = StateDenied
+	if _, err := store.CreateOrUpdateDecision(writeDecision); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ReopenProviderDecision(writeDecision.ID, KindHostFSRead, 5*time.Minute, "wrong provider"); err == nil {
+		t.Fatal("provider reopen must not weaken another decision kind")
+	}
+
+	applied := sampleDecision("dec_hfr_applied", now.Add(time.Minute))
+	applied.Kind = KindHostFSRead
+	applied.DefaultOutcome = DefaultOutcomeDeny
+	applied.AllowedActions = []string{ActionApprove, ActionDeny}
+	applied.State = StateApplied
+	if _, err := store.CreateOrUpdateDecision(applied); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.FailAppliedProviderDecision(applied.ID, KindHostFSRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != StateFailed || failed.Preview.Facts["activation"] != "failed" {
+		t.Fatalf("failed activation=%+v", failed)
+	}
+	if _, err := store.FailAppliedProviderDecision(writeDecision.ID, KindHostFSRead); err == nil {
+		t.Fatal("activation failure transition must remain provider- and state-bound")
+	}
+}
+
 func TestNoticeAckDoesNotCreateProviderAuthority(t *testing.T) {
 	store := NewStoreAt(t.TempDir())
 	if _, err := store.CreateOrUpdateNotice(sampleNotice("not-1")); err != nil {

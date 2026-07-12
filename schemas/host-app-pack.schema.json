@@ -1,0 +1,355 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/host-app-pack.schema.json",
+  "title": "Hideout Host-App Pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "description",
+    "apps",
+    "bindings",
+    "tests"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "hideout.host-app-pack/v1"
+    },
+    "id": {
+      "$ref": "#/$defs/packId"
+    },
+    "version": {
+      "$ref": "#/$defs/text"
+    },
+    "description": {
+      "$ref": "#/$defs/description"
+    },
+    "apps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/app"
+      }
+    },
+    "bindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/binding"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/testVector"
+      }
+    },
+    "installHint": {
+      "$ref": "#/$defs/installHint"
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+    },
+    "packId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\x00-\\x1F\\x7F-\\x9F]+$"
+    },
+    "flag": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^--?[A-Za-z0-9][A-Za-z0-9-]*$"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+    },
+    "bundleName": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 128,
+      "pattern": "^[^/$\\\\\\x00-\\x1F\\x7F-\\x9F]+\\.app$"
+    },
+    "relativeExecutable": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^/\\\\\\x00-\\x1F\\x7F-\\x9F]+(?:/[^/\\\\\\x00-\\x1F\\x7F-\\x9F]+)*$",
+      "not": {
+        "pattern": "(^|/)\\.{1,2}(/|$)"
+      }
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gotoFlag": {
+          "$ref": "#/$defs/flag"
+        },
+        "newWindowFlag": {
+          "$ref": "#/$defs/flag"
+        },
+        "reuseWindowFlag": {
+          "$ref": "#/$defs/flag"
+        },
+        "gotoSeparator": {
+          "enum": [
+            ":"
+          ]
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "platforms",
+        "bundleNames",
+        "executableRelativePath",
+        "launch"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/slug"
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "const": "darwin"
+          }
+        },
+        "bundleNames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/bundleName"
+          }
+        },
+        "executableRelativePath": {
+          "$ref": "#/$defs/relativeExecutable"
+        },
+        "expectedBundleId": {
+          "$ref": "#/$defs/text"
+        },
+        "expectedTeamId": {
+          "$ref": "#/$defs/text"
+        },
+        "requestedSafetyProfile": {
+          "$ref": "#/$defs/slug"
+        },
+        "launch": {
+          "$ref": "#/$defs/launch"
+        }
+      }
+    },
+    "grammar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "resourceCount",
+        "gotoFlags",
+        "newWindowFlags",
+        "reuseWindowFlags",
+        "unknownFlags"
+      ],
+      "properties": {
+        "kind": {
+          "const": "open-resource-v1"
+        },
+        "resourceCount": {
+          "const": 1
+        },
+        "gotoFlags": {
+          "$ref": "#/$defs/flags"
+        },
+        "newWindowFlags": {
+          "$ref": "#/$defs/flags"
+        },
+        "reuseWindowFlags": {
+          "$ref": "#/$defs/flags"
+        },
+        "unknownFlags": {
+          "const": "deny"
+        }
+      }
+    },
+    "flags": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/flag"
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "commands",
+        "appId",
+        "capabilityId",
+        "resourceKinds",
+        "resultPolicy",
+        "requestedAccess",
+        "grammar"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/slug"
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/command"
+          }
+        },
+        "appId": {
+          "$ref": "#/$defs/slug"
+        },
+        "capabilityId": {
+          "const": "host.app.open-resource"
+        },
+        "resourceKinds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "workspace",
+              "hostfs-portal"
+            ]
+          }
+        },
+        "resultPolicy": {
+          "const": "none"
+        },
+        "requestedAccess": {
+          "enum": [
+            "safe",
+            "ask-each-run"
+          ]
+        },
+        "grammar": {
+          "$ref": "#/$defs/grammar"
+        }
+      }
+    },
+    "expectedIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "windowMode"
+      ],
+      "properties": {
+        "resource": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "windowMode": {
+          "enum": [
+            "reuse",
+            "new"
+          ]
+        }
+      }
+    },
+    "testVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "bindingId",
+        "argv",
+        "expected"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/slug"
+        },
+        "bindingId": {
+          "$ref": "#/$defs/slug"
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "expected": {
+          "$ref": "#/$defs/expectedIntent"
+        }
+      }
+    },
+    "installHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "$ref": "#/$defs/description"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "format": "uri",
+          "pattern": "^https://"
+        }
+      }
+    }
+  }
+}

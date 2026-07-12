@@ -580,9 +580,48 @@
         "baseImage": {
           "type": "string",
           "pattern": "^(template:[A-Za-z0-9._/-]+|https://[^@\\s#]+\\.(img|qcow2)#sha256:[A-Fa-f0-9]{64})$"
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "revision",
+            "catalogRelease",
+            "contractId",
+            "contractDigest",
+            "artifactLocation",
+            "artifactSHA256",
+            "packageInventoryDigest",
+            "downloadBytes",
+            "virtualBytes",
+            "hostOS",
+            "hostArch",
+            "guestArch",
+            "maturity"
+          ],
+          "properties": {
+            "family": {"type": "string", "minLength": 1, "maxLength": 64},
+            "revision": {"type": "string", "minLength": 1, "maxLength": 64},
+            "catalogRelease": {"type": "string", "minLength": 1, "maxLength": 64},
+            "contractId": {"type": "string", "minLength": 1, "maxLength": 64},
+            "contractDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+            "artifactLocation": {"type": "string", "pattern": "^https://[^@\\s?#]+\\.qcow2$"},
+            "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "packageInventoryDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+            "downloadBytes": {"type": "integer", "minimum": 1, "maximum": 4294967296},
+            "virtualBytes": {"type": "integer", "minimum": 1, "maximum": 17179869184},
+            "hostOS": {"enum": ["darwin", "linux"]},
+            "hostArch": {"enum": ["arm64", "amd64"]},
+            "guestArch": {"enum": ["aarch64", "x86_64"]},
+            "maturity": {"const": "preview"}
+          }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "required": ["baseImage", "runtime"]
+      }
     }
   },
   "additionalProperties": false,
@@ -631,6 +670,7 @@
     },
     "hostfsReadOnlyOp": {
       "enum": [
+        "discover",
         "stat",
         "read",
         "list"

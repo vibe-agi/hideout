@@ -304,6 +304,69 @@ func TestEventBusBuildsHostFSWritePayloadsWithoutClaimTokens(t *testing.T) {
 	}
 }
 
+func TestEventBusProducerMappingsMatchLiveCatalog(t *testing.T) {
+	mappings := liveconsole.EventProducerMappings()
+	cases := []struct {
+		producer string
+		want     string
+		details  map[string]any
+	}{
+		{liveconsole.KindEnvironment, liveconsole.KindEnvironment, map[string]any{"id": "env-1"}},
+		{liveconsole.KindSession, liveconsole.KindSession, map[string]any{"id": "ses-1"}},
+		{liveconsole.KindBackground, liveconsole.KindBackground, map[string]any{"id": "bg-1", "op": "environment-clean"}},
+		{liveconsole.KindExport, liveconsole.KindExport, map[string]any{"status": "completed", "source": "audit"}},
+		{liveconsole.KindCleanup, liveconsole.KindCleanup, map[string]any{"status": "completed", "id": "cleanup-1"}},
+		{liveconsole.KindHostFSWrite, liveconsole.KindHostFSWrite, map[string]any{"decisionId": "hfwdec-1", "operationId": "hfwop-1", "status": "pending"}},
+		{liveconsole.KindDecision, liveconsole.KindDecision, map[string]any{"decisionId": "dec-1", "kind": "evidence.share", "status": "pending"}},
+		{liveconsole.KindNotice, liveconsole.KindNotice, map[string]any{"noticeId": "notice-1", "kind": "privilege.status", "status": "degraded"}},
+		{"host-app", liveconsole.KindAudit, map[string]any{"action": "host.app.update", "decision": "allow", "profile": "privacy"}},
+		{"run", liveconsole.KindSession, map[string]any{"id": "ses-run"}},
+		{"operation", liveconsole.KindSession, map[string]any{"id": "op-1"}},
+		{"future-producer", liveconsole.KindSession, map[string]any{"id": "future-1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.producer, func(t *testing.T) {
+			want := mappings[tc.producer]
+			if want == "" {
+				want = mappings["*"]
+			}
+			if want != tc.want {
+				t.Fatalf("catalog maps %s to %s, want %s", tc.producer, want, tc.want)
+			}
+			bus := newEventBus()
+			sub := bus.subscribe(4)
+			bus.OperationEvent(tc.producer, "complete", tc.details)
+			ev := <-sub.ch
+			if ev.Kind != tc.want {
+				t.Fatalf("producer %s emitted %s, want %s: %+v", tc.producer, ev.Kind, tc.want, ev)
+			}
+			assertValidDaemonEvent(t, ev)
+		})
+	}
+}
+
+func TestEventBusNonOperationProducersMatchLiveCatalog(t *testing.T) {
+	mappings := liveconsole.EventProducerMappings()
+	for _, producer := range []string{liveconsole.KindAudit, liveconsole.KindTerminal} {
+		if mappings[producer] == "" {
+			t.Fatalf("producer %s missing from live catalog", producer)
+		}
+	}
+	bus := newEventBus()
+	sub := bus.subscribe(4)
+	bus.publishAudit("run", "allow", map[string]any{"note": "keep-me"})
+	auditEvent := <-sub.ch
+	if auditEvent.Kind != liveconsole.KindAudit {
+		t.Fatalf("audit producer emitted %+v", auditEvent)
+	}
+	assertValidDaemonEvent(t, auditEvent)
+	terminal := bus.terminalEvent(sub, "stream closed")
+	if terminal.Kind != liveconsole.KindTerminal {
+		t.Fatalf("terminal producer emitted %+v", terminal)
+	}
+	assertValidDaemonEvent(t, terminal)
+}
+
 // T024: the subscribe endpoint is a separate surface outside /api/v1/ with the
 // same auth.
 func TestEventsEndpointSeparateSurfaceAndAuth(t *testing.T) {

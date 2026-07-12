@@ -71,9 +71,31 @@ run_isolation_gate() {
   env_name="$(grep -oE 'Hideout environment name: .+' "$out" | head -n1 | sed 's/^Hideout environment name: //')"
   audit_ref="$HIDEOUT_RELEASE_EVIDENCE_DIR/test-release-dogfood.log"
   grep -q 'Boundary Summary' "$out" && boundary_ref="boundary-summary:present" || boundary_ref=""
+  local runtime_family runtime_revision runtime_sha runtime_environment runtime_host_os runtime_host_arch runtime_guest_arch runtime_commit runtime_dirty runtime_required
+  runtime_family="$(sed -n 's/^runtime_family=//p' "$out" | tail -n1)"
+  runtime_revision="$(sed -n 's/^runtime_revision=//p' "$out" | tail -n1)"
+  runtime_sha="$(sed -n 's/^runtime_artifact_sha256=//p' "$out" | tail -n1)"
+  runtime_environment="$(sed -n 's/^runtime_environment_id=//p' "$out" | tail -n1)"
+  runtime_host_os="$(sed -n 's/^runtime_host_os=//p' "$out" | tail -n1)"
+  runtime_host_arch="$(sed -n 's/^runtime_host_arch=//p' "$out" | tail -n1)"
+  runtime_guest_arch="$(sed -n 's/^runtime_guest_arch=//p' "$out" | tail -n1)"
+  runtime_commit="$(sed -n 's/^runtime_candidate_commit=//p' "$out" | tail -n1)"
+  runtime_dirty="$(sed -n 's/^runtime_candidate_dirty=//p' "$out" | tail -n1)"
+  runtime_required=0
+  [ -n "$runtime_family" ] && runtime_required=1
   rm -f "$out"
   if [ "$status" -eq 0 ]; then
-    emit_gate_result "$id" "lima" "passed" "" "$audit_ref" "$boundary_ref" "$env_name"
+    HIDEOUT_RUNTIME_EVIDENCE_REQUIRED="$runtime_required" \
+      HIDEOUT_RUNTIME_EVIDENCE_FAMILY="$runtime_family" \
+      HIDEOUT_RUNTIME_EVIDENCE_REVISION="$runtime_revision" \
+      HIDEOUT_RUNTIME_EVIDENCE_ARTIFACT_SHA256="$runtime_sha" \
+      HIDEOUT_RUNTIME_EVIDENCE_ENVIRONMENT_ID="$runtime_environment" \
+      HIDEOUT_RUNTIME_EVIDENCE_HOST_OS="$runtime_host_os" \
+      HIDEOUT_RUNTIME_EVIDENCE_HOST_ARCH="$runtime_host_arch" \
+      HIDEOUT_RUNTIME_EVIDENCE_GUEST_ARCH="$runtime_guest_arch" \
+      HIDEOUT_RUNTIME_EVIDENCE_CANDIDATE_COMMIT="$runtime_commit" \
+      HIDEOUT_RUNTIME_EVIDENCE_CANDIDATE_DIRTY="$runtime_dirty" \
+      emit_gate_result "$id" "lima" "passed" "" "$audit_ref" "$boundary_ref" "$env_name"
   else
     emit_gate_result "$id" "lima" "failed" "gate exited $status" "$audit_ref" "$boundary_ref" "$env_name"
     isolation_gate_failed=1
@@ -85,6 +107,9 @@ print_plan() {
   echo "phase1-plan: Gate 1 native smoke"
   if [ "$include_lima" -eq 1 ]; then
     echo "phase1-plan: Gate 2 Lima E2E"
+    if [ "$runtime_gate_mode" -eq 1 ]; then
+      echo "phase1-plan: Gate 2 exact runtime family $runtime_gate_family"
+    fi
   fi
   if [ "$include_env_image" -eq 1 ]; then
     echo "phase1-plan: env-image declared-image gate"
@@ -97,6 +122,9 @@ print_plan() {
       echo "phase1-plan: Gate 3 hidden proxy with operator-supplied proxy"
     else
       echo "phase1-plan: Gate 3 hidden proxy"
+    fi
+    if [ "$runtime_gate_mode" -eq 1 ]; then
+      echo "phase1-plan: Gate 3 exact runtime family $runtime_gate_family"
     fi
   fi
   if [ "$real_browser" -eq 1 ]; then
@@ -126,6 +154,8 @@ include_probes=0
 include_dogfood_cli=0
 include_operator_cli=0
 require_operator_proxy=0
+runtime_gate_mode=0
+runtime_gate_family="${HIDEOUT_RELEASE_RUNTIME_FAMILY:-developer-standard}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -148,6 +178,7 @@ while [ "$#" -gt 0 ]; do
       include_probes=1
       include_dogfood_cli=1
       require_operator_proxy=1
+      runtime_gate_mode=1
       ;;
     --isolation-evidence)
       # Enable the isolation-sensitive gates (Gate 2/3/4 + env-image). Each emits
@@ -204,11 +235,18 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-echo "phase1: mode=$mode lima=$include_lima lima_real_run=$include_lima_real_run proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_cli=$include_operator_cli operator_proxy=$require_operator_proxy"
+echo "phase1: mode=$mode lima=$include_lima lima_real_run=$include_lima_real_run proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_cli=$include_operator_cli operator_proxy=$require_operator_proxy runtime=$runtime_gate_mode runtime_family=$runtime_gate_family"
 
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-}" = "1" ]; then
   print_plan
   exit 0
+fi
+
+if [ "$runtime_gate_mode" -eq 1 ]; then
+  if [ -z "${HIDEOUT_RUNTIME_BUILD_PROVENANCE:-}" ] || [ ! -f "$HIDEOUT_RUNTIME_BUILD_PROVENANCE" ]; then
+    echo "phase1: runtime release gates require HIDEOUT_RUNTIME_BUILD_PROVENANCE" >&2
+    exit 2
+  fi
 fi
 
 if [ "$require_operator_proxy" -eq 1 ] && [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
@@ -228,7 +266,10 @@ run_gate "Gate 0 static contract" scripts/test-gate0.sh
 run_gate "Gate 1 native smoke" scripts/test-gate1-native.sh
 
 if [ "$include_lima" -eq 1 ]; then
-  run_isolation_gate "gate2-lima" "Gate 2 Lima E2E" scripts/test-gate2-lima.sh
+  run_isolation_gate "gate2-lima" "Gate 2 Lima E2E" env \
+    HIDEOUT_GATE2_RUNTIME_MODE="$runtime_gate_mode" \
+    HIDEOUT_GATE2_RUNTIME_FAMILY="$runtime_gate_family" \
+    scripts/test-gate2-lima.sh
 fi
 
 if [ "$include_env_image" -eq 1 ]; then
@@ -249,9 +290,16 @@ fi
 
 if [ "$include_proxy" -eq 1 ]; then
   if [ "$require_operator_proxy" -eq 1 ]; then
-    run_isolation_gate "gate3-hidden-proxy" "Gate 3 hidden proxy with operator-supplied proxy" env HIDEOUT_GATE3_REQUIRE_OPERATOR_PROXY=1 scripts/test-gate3-hidden-proxy.sh
+    run_isolation_gate "gate3-hidden-proxy" "Gate 3 hidden proxy with operator-supplied proxy" env \
+      HIDEOUT_GATE3_REQUIRE_OPERATOR_PROXY=1 \
+      HIDEOUT_GATE3_RUNTIME_MODE="$runtime_gate_mode" \
+      HIDEOUT_GATE3_RUNTIME_FAMILY="$runtime_gate_family" \
+      scripts/test-gate3-hidden-proxy.sh
   else
-    run_isolation_gate "gate3-hidden-proxy" "Gate 3 hidden proxy" scripts/test-gate3-hidden-proxy.sh
+    run_isolation_gate "gate3-hidden-proxy" "Gate 3 hidden proxy" env \
+      HIDEOUT_GATE3_RUNTIME_MODE="$runtime_gate_mode" \
+      HIDEOUT_GATE3_RUNTIME_FAMILY="$runtime_gate_family" \
+      scripts/test-gate3-hidden-proxy.sh
   fi
 fi
 

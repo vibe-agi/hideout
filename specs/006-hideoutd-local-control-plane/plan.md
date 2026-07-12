@@ -12,9 +12,8 @@ Productize the `hideoutd` per-user local control-plane daemon whose trust shape 
 already ratified in `docs/threat-model.md:78-97`. The daemon serves the existing
 typed Manager API by mounting `manager.API.Handler()` verbatim over a store-rooted
 Unix socket, so behavior parity with embedded mode holds by construction — the
-same 32 routes (16 POST at `internal/manager/api.go:186-216`; 16 GET = the
-`serveGetResource` switch `:971-997` plus the two special-cased GET resources
-`audit/events` `:154` and `run/status` `:163`), the same `authorize` (Bearer /
+same route set exported by the production `manager.ManagerRoutes()` registry
+(`internal/manager/routes.go`), the same `authorize` (Bearer /
 `X-Hideout-UI-Token`, constant-time, TTL) and `checkHost`/`checkOrigin` guards. The
 daemon's own lifecycle/status/event/background endpoints (all under `/daemon/…`)
 are a separate surface outside

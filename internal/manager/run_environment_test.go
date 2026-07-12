@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 )
 
 func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
@@ -312,5 +313,41 @@ func TestRecreateEnvironmentGuardForceAndRefresh(t *testing.T) {
 	}
 	if _, err := core.RemoveEnvironment(context.Background(), "removable", true, EnvironmentApplyOptions{Operator: fakeEnvOperator{}}); err != nil {
 		t.Fatalf("forced remove: %v", err)
+	}
+}
+
+func TestSelectRunEnvironmentRechecksPinnedRuntimeDiskBeforeCreate(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	p, err := store.LoadOrInit("runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := testManagerRuntimeResolver(runtimecatalog.Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Environment.BaseImage = ""
+	p.Environment.Runtime = &resolved.Provenance
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	plan := RunPlan{Backend: "lima", Workspace: workspace, GuestWorkspace: workspace, RuntimeProfile: p}
+	core := New(store)
+	core.RuntimeDiskCheck = func(string, int64) error { return errors.New("available 1 byte") }
+	if _, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true}); err == nil || !strings.Contains(err.Error(), "runtime.disk.insufficient") {
+		t.Fatalf("run should fail before environment creation on low disk, got %v", err)
+	}
+	records, err := (environment.Store{Root: store.Root}).List()
+	if err != nil || len(records) != 0 {
+		t.Fatalf("low-disk run wrote environment state: records=%+v err=%v", records, err)
+	}
+	core.RuntimeDiskCheck = func(string, int64) error { return nil }
+	selected, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Record.Runtime == nil || *selected.Record.Runtime != resolved.Provenance {
+		t.Fatalf("auto environment lost pinned runtime provenance: %+v", selected.Record)
 	}
 }

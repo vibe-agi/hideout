@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/cmdgrammar"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 )
 
@@ -19,12 +22,17 @@ func main() {
 }
 
 func run() int {
-	command, args, err := cmdproxy.ResolveHostOpenInvocation(filepath.Base(os.Args[0]), os.Args[1:])
+	action, adapterID, invocationArgs, err := parseInvocationMetadata(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
 		return 2
 	}
-	normalized, err := normalizeInvocation(command, args, mustGetwd())
+	command, args, err := cmdproxy.ResolveHostOpenInvocation(filepath.Base(os.Args[0]), invocationArgs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
+		return 2
+	}
+	normalized, err := normalizeInvocationForAction(command, args, mustGetwd(), action, adapterID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", err)
 		return 2
@@ -45,7 +53,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "hideout-shim: request id generation failed")
 		return 69
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), brokerRequestTimeout(normalized.Action))
 	defer cancel()
 	resp := broker.ClientOpenEndpoint(ctx, endpoint, broker.Request{
 		ID:              requestID,
@@ -68,6 +76,13 @@ func run() int {
 		fmt.Fprintln(os.Stderr, resp.Stderr)
 	}
 	return resp.ExitCode
+}
+
+func brokerRequestTimeout(action string) time.Duration {
+	if action == cmdproxy.ActionHostAppOpenResource {
+		return 20 * time.Second
+	}
+	return 5 * time.Second
 }
 
 func runRewrite(resp broker.Response) int {
@@ -142,12 +157,77 @@ func rewriteArgv(value any) ([]string, bool) {
 }
 
 func normalizeInvocation(command string, args []string, cwd string) (cmdproxy.Request, error) {
-	switch os.Getenv("HIDEOUT_COMMAND_PROXY_ACTION") {
+	return normalizeInvocationForAction(command, args, cwd, os.Getenv("HIDEOUT_COMMAND_PROXY_ACTION"), os.Getenv("HIDEOUT_COMMAND_PROXY_ADAPTER_ID"))
+}
+
+func normalizeInvocationForAction(command string, args []string, cwd, action, adapterID string) (cmdproxy.Request, error) {
+	switch action {
 	case cmdproxy.ActionCommandAdapter:
-		return cmdproxy.NormalizeAdapterCommand(command, args, cwd, os.Getenv("HIDEOUT_COMMAND_PROXY_ADAPTER_ID"))
-	default:
+		return cmdproxy.NormalizeAdapterCommand(command, args, cwd, adapterID)
+	case cmdproxy.ActionHostAppOpenResource:
+		grammar, digest, ok, err := projectionBindingFromEnv()
+		if err != nil {
+			return cmdproxy.Request{}, err
+		}
+		if !ok {
+			return cmdproxy.Request{}, errors.New("host-app binding metadata is required")
+		}
+		return cmdproxy.NormalizeOpenResourceProjectionCommand(command, args, cwd, grammar, digest)
+	case "", cmdproxy.ActionHostOpen:
 		return cmdproxy.NormalizeHostOpenCommand(command, args, cwd)
+	default:
+		return cmdproxy.Request{}, fmt.Errorf("unsupported command proxy action %q", action)
 	}
+}
+
+func projectionBindingFromEnv() (cmdgrammar.OpenResourceGrammar, string, bool, error) {
+	digest := os.Getenv("HIDEOUT_COMMAND_PROXY_BINDING_DIGEST")
+	rawB64 := os.Getenv("HIDEOUT_COMMAND_PROXY_GRAMMAR_B64")
+	if digest == "" && rawB64 == "" {
+		return cmdgrammar.OpenResourceGrammar{}, "", false, nil
+	}
+	if len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") || rawB64 == "" {
+		return cmdgrammar.OpenResourceGrammar{}, "", false, errors.New("host-app binding metadata is incomplete")
+	}
+	raw, err := base64.StdEncoding.DecodeString(rawB64)
+	if err != nil {
+		return cmdgrammar.OpenResourceGrammar{}, "", false, errors.New("host-app grammar metadata is invalid")
+	}
+	var grammar cmdgrammar.OpenResourceGrammar
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&grammar); err != nil || cmdgrammar.ValidateOpenResourceGrammar(grammar) != nil {
+		return cmdgrammar.OpenResourceGrammar{}, "", false, errors.New("host-app grammar metadata is invalid")
+	}
+	return grammar, digest, true, nil
+}
+
+// parseInvocationMetadata accepts only the fixed prefix emitted by Hideout's
+// generated wrapper. It is routing metadata, not authority: Core still validates
+// the resulting action and intent. Unknown or incomplete metadata fails closed.
+func parseInvocationMetadata(args []string) (string, string, []string, error) {
+	action := os.Getenv("HIDEOUT_COMMAND_PROXY_ACTION")
+	adapterID := os.Getenv("HIDEOUT_COMMAND_PROXY_ADAPTER_ID")
+	args = append([]string(nil), args...)
+	for len(args) > 0 {
+		switch args[0] {
+		case "--action":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				return "", "", nil, errors.New("--action requires a value")
+			}
+			action = args[1]
+			args = args[2:]
+		case "--adapter-id":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+				return "", "", nil, errors.New("--adapter-id requires a value")
+			}
+			adapterID = args[1]
+			args = args[2:]
+		default:
+			return action, adapterID, args, nil
+		}
+	}
+	return "", "", nil, errors.New("command proxy name is required")
 }
 
 func brokerEndpointFromEnv() (broker.Endpoint, error) {

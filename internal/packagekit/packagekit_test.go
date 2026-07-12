@@ -1,6 +1,7 @@
 package packagekit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 )
 
 func TestInstallWritesInstalledManifestAndVerifiesPrefix(t *testing.T) {
@@ -111,6 +114,213 @@ func TestCompatibleUpgradePreservesStoreAndUpdatesFiles(t *testing.T) {
 	}
 }
 
+func TestUpgradeReportsObsoleteFilesAndRepairRemovesOnlyThose(t *testing.T) {
+	first := writeTestArtifact(t, nil)
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := Install(InstallOptions{PackageRoot: first, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	obsoletePath := filepath.Join(prefix, "share", "hideout", "README.zh-CN.md")
+	unrelated := filepath.Join(prefix, "share", "hideout", "operator-note.txt")
+	if err := os.WriteFile(unrelated, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	second := writeTestArtifact(t, nil)
+	manifest := readManifest(t, second)
+	manifest.Layout.Entrypoints = []string{"install.sh", "README.md"}
+	var files []File
+	for _, file := range manifest.Files {
+		if file.Path != "README.zh-CN.md" {
+			files = append(files, file)
+		}
+	}
+	manifest.Files = files
+	writeManifest(t, second, manifest)
+
+	result, err := Install(InstallOptions{PackageRoot: second, Prefix: prefix, StoreRoot: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ObsoleteFiles) != 1 || result.ObsoleteFiles[0].Path != "share/hideout/README.zh-CN.md" {
+		t.Fatalf("unexpected obsolete files: %+v", result.ObsoleteFiles)
+	}
+	if _, err := os.Stat(obsoletePath); err != nil {
+		t.Fatalf("upgrade removed obsolete file without repair: %v", err)
+	}
+	if _, err := Verify(prefix); err == nil || !strings.Contains(err.Error(), "package repair --prefix") {
+		t.Fatalf("expected verify repair hint, got %v", err)
+	}
+
+	dry, err := RepairObsoleteFiles(RepairOptions{Prefix: prefix, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dry.Considered) != 1 || len(dry.Removed) != 0 {
+		t.Fatalf("unexpected dry-run repair: %+v", dry)
+	}
+	if _, err := os.Stat(obsoletePath); err != nil {
+		t.Fatalf("dry-run removed obsolete file: %v", err)
+	}
+	applied, err := RepairObsoleteFiles(RepairOptions{Prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied.Removed) != 1 || applied.Removed[0] != "share/hideout/README.zh-CN.md" {
+		t.Fatalf("unexpected repair result: %+v", applied)
+	}
+	if _, err := os.Stat(obsoletePath); !os.IsNotExist(err) {
+		t.Fatalf("obsolete file still exists after repair: %v", err)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("repair removed unrelated file: %v", err)
+	}
+	if _, err := Verify(prefix); err != nil {
+		t.Fatalf("verify after repair: %v", err)
+	}
+}
+
+func TestRepairAndUninstallRejectSymlinkedObsoleteAncestors(t *testing.T) {
+	for _, operation := range []string{"repair", "uninstall"} {
+		t.Run(operation, func(t *testing.T) {
+			artifact := writeTestArtifact(t, nil)
+			prefix := filepath.Join(t.TempDir(), "prefix")
+			store := filepath.Join(t.TempDir(), "store")
+			if _, err := Install(InstallOptions{PackageRoot: artifact, Prefix: prefix, StoreRoot: store}); err != nil {
+				t.Fatal(err)
+			}
+
+			outside := t.TempDir()
+			victim := filepath.Join(outside, "victim.txt")
+			if err := os.WriteFile(victim, []byte("outside\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(prefix, "share", "hideout", "old")
+			if err := os.Symlink(outside, link); err != nil {
+				t.Fatal(err)
+			}
+			state := readState(t, prefix)
+			state.ObsoleteFiles = append(state.ObsoleteFiles, ObsoleteFile{
+				Path:   "share/hideout/old/victim.txt",
+				Kind:   "doc",
+				SHA256: strings.Repeat("0", 64),
+				Reason: "test stale file",
+			})
+			writeState(t, prefix, state)
+
+			switch operation {
+			case "repair":
+				result, err := RepairObsoleteFiles(RepairOptions{Prefix: prefix})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(result.Rejected) != 1 || !strings.Contains(result.Rejected[0].Reason, "symbolic link") {
+					t.Fatalf("repair did not reject symlinked ancestor: %+v", result)
+				}
+			case "uninstall":
+				if _, err := Uninstall(UninstallOptions{Prefix: prefix}); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+					t.Fatalf("uninstall did not reject symlinked ancestor: %v", err)
+				}
+			}
+			if got, err := os.ReadFile(victim); err != nil || string(got) != "outside\n" {
+				t.Fatalf("outside file changed: data=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestUpgradeRejectsPreviousPackageSchemaBeforeMutation(t *testing.T) {
+	first := writeTestArtifact(t, map[string]string{"bin/hideout": "version-a\n"})
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := Install(InstallOptions{PackageRoot: first, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	state := readState(t, prefix)
+	state.Package.Schema = "hideout.package-manifest.v0"
+	writeState(t, prefix, state)
+	bin := filepath.Join(prefix, "bin", "hideout")
+	before, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := writeTestArtifact(t, map[string]string{"bin/hideout": "version-b\n"})
+	if _, err := Install(InstallOptions{PackageRoot: second, Prefix: prefix, StoreRoot: store}); err == nil || !strings.Contains(err.Error(), "previous package schema is outside migration range") {
+		t.Fatalf("expected previous package schema failure, got %v", err)
+	}
+	after, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("incompatible package schema mutated binary: before=%q after=%q", before, after)
+	}
+}
+
+func TestExternalPrerequisiteStatusDoesNotClaimPackageOwnership(t *testing.T) {
+	var found bool
+	for _, prereq := range ExternalPrerequisites() {
+		if prereq.Name != "tun2socks" {
+			continue
+		}
+		found = true
+		if prereq.PackageOwned {
+			t.Fatalf("tun2socks must be external, got %+v", prereq)
+		}
+		if prereq.Status == "" || strings.Contains(prereq.Hint, "checksum") {
+			t.Fatalf("unexpected prerequisite status: %+v", prereq)
+		}
+	}
+	if !found {
+		t.Fatal("missing tun2socks prerequisite status")
+	}
+}
+
+func TestRuntimeMetadataSourceEmbeddedPackageAndInstallParity(t *testing.T) {
+	catalog, contract := runtimecatalog.EmbeddedBytes()
+	sourceCatalog, err := os.ReadFile(filepath.Join("..", "runtimecatalog", "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceContract, err := os.ReadFile(filepath.Join("..", "runtimecatalog", "contract.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(catalog, sourceCatalog) || !bytes.Equal(contract, sourceContract) {
+		t.Fatal("embedded runtime metadata differs from source bytes")
+	}
+	artifact := writeTestArtifact(t, map[string]string{
+		"runtime/catalog.json":  string(catalog),
+		"runtime/contract.json": string(contract),
+	})
+	if _, err := Verify(artifact); err != nil {
+		t.Fatalf("Verify artifact: %v", err)
+	}
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	if _, err := Install(InstallOptions{PackageRoot: artifact, Prefix: prefix, StoreRoot: filepath.Join(t.TempDir(), "store")}); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string][]byte{
+		"share/hideout/runtime/catalog.json":  catalog,
+		"share/hideout/runtime/contract.json": contract,
+	} {
+		got, err := os.ReadFile(filepath.Join(prefix, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("installed runtime metadata %s differs", rel)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(artifact, "runtime", "catalog.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(artifact); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("runtime metadata drift should fail package verification, got %v", err)
+	}
+}
+
 func TestUninstallDryRunPreserveAndPurge(t *testing.T) {
 	root := writeTestArtifact(t, nil)
 	prefix := filepath.Join(t.TempDir(), "prefix")
@@ -190,6 +400,8 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"schemas/release-dogfood.schema.json":  {kind: "schema", executable: false, data: "{}\n"},
 		"docs/README.md":                       {kind: "doc", executable: false, data: "docs\n"},
 		"docs/STATUS.md":                       {kind: "doc", executable: false, data: "status\n"},
+		"runtime/catalog.json":                 {kind: "runtime-catalog", executable: false, data: "{}\n"},
+		"runtime/contract.json":                {kind: "runtime-contract", executable: false, data: "{}\n"},
 	}
 	for rel, data := range overrides {
 		spec := files[rel]
@@ -214,11 +426,13 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 				"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
 			},
 			Entrypoints: []string{"install.sh", "README.md", "README.zh-CN.md"},
-			Directories: []string{"schemas", "docs", "packaging"},
+			Directories: []string{"schemas", "docs", "packaging", "runtime"},
 		},
 		Migration: Migration{
 			InstallStateSchema:   InstallStateSchema,
 			FromInstalledSchemas: []string{InstallStateSchema},
+			MinimumPackageSchema: ArtifactSchema,
+			MaximumPackageSchema: ArtifactSchema,
 		},
 	}
 	if err := os.MkdirAll(filepath.Join(root, "packaging"), 0o755); err != nil {
