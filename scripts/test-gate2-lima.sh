@@ -216,6 +216,18 @@ projection_workspace=""
 projection_control_workspace=""
 projection_trusted_workspace=""
 projection_external_workspace=""
+cleanup_lima_instances() {
+  if [ -z "${lima_home:-}" ] || [ ! -d "$lima_home" ]; then
+    return
+  fi
+
+  while IFS= read -r instance; do
+    if [ -z "$instance" ]; then
+      continue
+    fi
+    LIMA_HOME="$lima_home" limactl delete --force --tty=false "$instance" >/dev/null 2>&1 || true
+  done < <(LIMA_HOME="$lima_home" limactl list --quiet 2>/dev/null || true)
+}
 cleanup() {
 	if [ -n "${projection_proxy_pid:-}" ] && kill -0 "$projection_proxy_pid" 2>/dev/null; then
 		kill "$projection_proxy_pid" 2>/dev/null || true
@@ -239,6 +251,7 @@ cleanup() {
   if [ -x "${hideout:-}" ]; then
     HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
   fi
+  cleanup_lima_instances
   if [ -n "${hostfs_protected_dir:-}" ]; then
     chmod 700 "$hostfs_protected_dir" 2>/dev/null || true
   fi
