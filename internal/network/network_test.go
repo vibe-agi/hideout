@@ -310,6 +310,9 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	}
 	for _, want := range []string{
 		"proxy endpoint route setup failed",
+		"privacy network is already active or stale",
+		"ip tuntap add mode tun dev hideout0 ||",
+		"hideout0 address setup failed",
 		"verified_default_route=$(ip route show default",
 		"default-route.after",
 		"tun2socks default route verification failed",
@@ -330,6 +333,9 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 			t.Fatalf("runtime verify bootstrap missing %q: %s", want, bootstrap)
 		}
 	}
+	if strings.Contains(string(bootstrap), "ip tuntap add mode tun dev hideout0 2>/dev/null || true") {
+		t.Fatalf("runtime verify bootstrap must not reuse an active or stale hideout0: %s", bootstrap)
+	}
 	cleanup, err := os.ReadFile(plan.CleanupPath)
 	if err != nil {
 		t.Fatalf("read cleanup: %v", err)
@@ -337,6 +343,10 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	for _, want := range []string{
 		"tun2socks.pid",
 		"kill \"$pid\"",
+		"while tun2socks_alive && [ \"$i\" -lt 50 ]",
+		"kill -KILL \"$pid\"",
+		"tun2socks did not stop during cleanup",
+		"[ \"$tun2socks_stop_failed\" -eq 0 ] || exit 1",
 		"default-route.before",
 		"route_args=${default_route#default }",
 		"ip route replace default $route_args",
@@ -349,6 +359,17 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	}
 	if strings.Contains(string(cleanup), "ip route replace default $default_route") {
 		t.Fatalf("cleanup must not duplicate the saved default route prefix: %s", cleanup)
+	}
+	waitIdx := strings.Index(string(cleanup), `while tun2socks_alive && [ "$i" -lt 50 ]`)
+	deleteTunIdx := strings.Index(string(cleanup), "ip tuntap del mode tun dev hideout0")
+	if waitIdx < 0 || deleteTunIdx < 0 || waitIdx > deleteTunIdx {
+		t.Fatalf("cleanup must quiesce tun2socks before deleting hideout0: %s", cleanup)
+	}
+	if !strings.Contains(string(bootstrap), `proxy_route_existing=$(ip route show "$proxy_route_host/32"`) ||
+		!strings.Contains(string(bootstrap), `local_bypass_0_route_existing=$(ip route show "$local_bypass_0_route_host/32"`) ||
+		!strings.Contains(string(bootstrap), `elif [ -n "$default_gw" ] && [ "$proxy_route_host" != "$default_gw" ]; then`) ||
+		!strings.Contains(string(bootstrap), `elif [ -n "$default_gw" ] && [ "$local_bypass_0_route_host" != "$default_gw" ]; then`) {
+		t.Fatalf("runtime verify bootstrap must not route a gateway address through itself: %s", bootstrap)
 	}
 	assertShellSyntaxNetworkTest(t, plan.CleanupPath)
 	if !strings.Contains(string(bootstrap), "proxy_route_host=$(awk -v host=\"$proxy_host\"") ||

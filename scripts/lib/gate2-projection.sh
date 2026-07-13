@@ -470,13 +470,33 @@ set +e
 code -n . >/dev/null 2>&1
 printf "%s\n" "$?" > trusted-first.rc
 : > trusted-ready
-while [ ! -f grant.signal ]; do sleep 0.1; done
-code -n . >/dev/null 2>&1
-printf "%s\n" "$?" > trusted-approved.rc
+attempt=0
+approved_rc=1
+while [ "$attempt" -lt 100 ]; do
+  code -n . >/dev/null 2>&1
+  approved_rc=$?
+  [ "$approved_rc" -eq 0 ] && break
+  attempt=$((attempt + 1))
+  sleep 0.2
+done
+printf "%s\n" "$approved_rc" > trusted-approved.rc
 : > trusted-approved-ready
-while [ ! -f revoke.signal ]; do sleep 0.1; done
-code -n . >/dev/null 2>&1
-printf "%s\n" "$?" > trusted-revoked.rc
+[ "$approved_rc" -eq 0 ] || exit 93
+# Guest-to-host workspace writes are observable, but host-to-guest filesystem
+# notifications are not a reliable control channel under every VZ/virtiofs
+# version. Poll the broker through its deduplicated open path until the
+# host-side gate revokes the exact grant, without using a host-written signal.
+attempt=0
+revoked_rc=0
+while [ "$attempt" -lt 100 ]; do
+  code -n . >/dev/null 2>&1
+  revoked_rc=$?
+  [ "$revoked_rc" -ne 0 ] && break
+  attempt=$((attempt + 1))
+  sleep 0.2
+done
+printf "%s\n" "$revoked_rc" > trusted-revoked.rc
+[ "$revoked_rc" -ne 0 ] || exit 94
 ' >"$tmp/projection-trusted.out" 2>"$tmp/projection-trusted.err"
   ) &
   projection_run_pid=$!
@@ -492,12 +512,10 @@ printf "%s\n" "$?" > trusted-revoked.rc
   claim_json="$(HIDEOUT_STORE_ROOT="$store" "$hideout" decision claim --surface gate2 "$decision_id")"
   claim_token="$(printf '%s' "$claim_json" | jq -r '.claimToken')"
   HIDEOUT_STORE_ROOT="$store" "$hideout" decision approve --claim-token "$claim_token" "$decision_id" >/dev/null
-  : >"$projection_trusted_workspace/grant.signal"
   wait_for_file "$projection_trusted_workspace/trusted-approved-ready" "trusted projection approval"
   test "$(cat "$projection_trusted_workspace/trusted-first.rc")" != "0"
   test "$(cat "$projection_trusted_workspace/trusted-approved.rc")" = "0"
   HIDEOUT_STORE_ROOT="$store" "$hideout" decision revoke "$decision_id" >/dev/null
-  : >"$projection_trusted_workspace/revoke.signal"
   if ! wait "$projection_run_pid"; then
     echo "gate2: trusted projection guest flow failed" >&2
     cat "$tmp/projection-trusted.out" "$tmp/projection-trusted.err" >&2
