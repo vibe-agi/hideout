@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - ".github/runtime-promotions/developer-standard-*.json"
+      - ".github/workflows/runtime-developer-standard-promote.yml"
 
 permissions:
   contents: write
@@ -30,8 +31,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mapfile -t requests < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" -- \
-            '.github/runtime-promotions/developer-standard-*.json')
+          mapfile -t requests < <(find .github/runtime-promotions -maxdepth 1 -type f \
+            -name 'developer-standard-*.json' | LC_ALL=C sort)
           test "${#requests[@]}" -eq 1
           request=${requests[0]}
 
