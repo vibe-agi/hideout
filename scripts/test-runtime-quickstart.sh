@@ -13,11 +13,12 @@ gate2_manifest="$gate2_dir/product-hardening-evidence.json"
 gate3_manifest="$gate3_dir/product-hardening-evidence.json"
 gate2_log="$gate2_dir/logs/runtime-lima.out"
 gate3_log="$gate3_dir/logs/runtime-gate3.out"
+proof_registry="$gate2_dir/proof-registry.json"
 
 for command in jq go; do
   command -v "$command" >/dev/null 2>&1 || { echo "runtime-quickstart: missing $command" >&2; exit 127; }
 done
-for path in "$gate2_manifest" "$gate3_manifest" "$gate2_log" "$gate3_log" dist/runtime/promotion.json; do
+for path in "$gate2_manifest" "$gate3_manifest" "$gate2_log" "$gate3_log" "$proof_registry" dist/runtime/promotion.json; do
   [ -f "$path" ] || { echo "runtime-quickstart: required evidence missing: $path" >&2; exit 2; }
 done
 
@@ -34,16 +35,19 @@ fi
 for manifest in "$gate2_manifest" "$gate3_manifest"; do
   go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.json \
     "$manifest" >/dev/null
-  jq -e '
+  jq -e --slurpfile registry "$proof_registry" '
+    ($registry[0].requirements |
+      map({key:.proofId,value:.runtimePolicy}) | from_entries) as $runtimePolicies |
     .dirty == false and
     (.commit | test("^[a-f0-9]{12,40}$")) and
     .packageIdentity.name == "hideout" and
     .packageIdentity.version == .commit and
     all(.proofs[];
       .status == "passed" and .redactionStatus == "passed" and
-      .runtime.schema == "hideout.runtime-evidence-binding/v1" and
-      .runtime.buildDirty == false and
-      (.runtime.buildCommit | test("^[a-f0-9]{12,40}$")))
+      (($runtimePolicies[.proofId] // "none") != "exact-real" or
+        (.runtime.schema == "hideout.runtime-evidence-binding/v1" and
+         .runtime.buildDirty == false and
+         (.runtime.buildCommit | test("^[a-f0-9]{12,40}$")))))
   ' "$manifest" >/dev/null
   while IFS=$'\t' read -r relative digest; do
     artifact="$(dirname "$manifest")/$relative"
