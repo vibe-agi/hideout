@@ -61,8 +61,17 @@ jobs:
           test "$candidate_tag" = "runtime-developer-standard-${revision}-candidate-${short_sha}"
           test "$release_tag" = "runtime-developer-standard-${revision}"
 
-          candidate_json=$(gh api \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$candidate_tag")
+          release_by_tag() {
+            local tag=$1
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+              jq -s --arg tag "$tag" '
+                [.[].[] | select(.tag_name == $tag)] |
+                if length == 1 then .[0]
+                else error("expected exactly one release with requested tag")
+                end
+              '
+          }
+          candidate_json=$(release_by_tag "$candidate_tag")
           jq -e --arg commit "$source_commit" '
             .draft == true and
             .prerelease == false and
@@ -131,8 +140,12 @@ jobs:
           EOF
           )
 
-          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag")
+          release_count=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+            jq -s --arg tag "$release_tag" '[.[].[] | select(.tag_name == $tag)] | length')
+          test "$release_count" -le 1
+          if [[ "$release_count" == 1 ]]; then
+            release_json=$(release_by_tag "$release_tag")
             jq -e --arg commit "$source_commit" '.draft == true and .target_commitish == $commit' \
               <<<"$release_json" >/dev/null
           else
@@ -151,7 +164,7 @@ jobs:
             "$candidate/verification-report.json" \
             --clobber
 
-          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq '.id')
+          release_id=$(release_by_tag "$release_tag" | jq -r '.id')
           published=false
           rollback() {
             if [[ "$published" == true ]]; then
