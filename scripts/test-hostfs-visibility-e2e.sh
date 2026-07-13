@@ -7,12 +7,14 @@ cd "$ROOT"
 mode="local-fast"
 require_real=0
 out=""
+gate2_evidence=""
 
 usage() {
   cat <<'USAGE'
 Usage:
   scripts/test-hostfs-visibility-e2e.sh [--local-fast|--real-gate2]
                                            [--require-real]
+                                           [--gate2-evidence <manifest>]
                                            [--out <dir>]
 USAGE
 }
@@ -30,6 +32,10 @@ while [ "$#" -gt 0 ]; do
     --require-real)
       require_real=1
       shift
+      ;;
+    --gate2-evidence)
+      gate2_evidence="${2:-}"
+      shift 2
       ;;
     --out)
       out="${2:-}"
@@ -248,10 +254,18 @@ write_real_not_run() {
 
 real_gate2() {
   local missing=()
-  if [ "${HIDEOUT_029_RUN_REAL_GATE2:-}" != "1" ]; then
-    missing+=("HIDEOUT_029_RUN_REAL_GATE2=1")
+  local retained_gate2_log=""
+  if [ -n "$gate2_evidence" ]; then
+    . scripts/lib/retained-gate2-evidence.sh
+    if ! retained_gate2_log="$(resolve_retained_gate2_log "$gate2_evidence" "$(git_commit)")"; then
+      missing+=("valid retained Gate 2 evidence $gate2_evidence")
+    fi
+  else
+    if [ "${HIDEOUT_029_RUN_REAL_GATE2:-}" != "1" ]; then
+      missing+=("HIDEOUT_029_RUN_REAL_GATE2=1")
+    fi
+    command -v limactl >/dev/null 2>&1 || missing+=("limactl")
   fi
-  command -v limactl >/dev/null 2>&1 || missing+=("limactl")
   if [ "${#missing[@]}" -gt 0 ]; then
     local reason="missing real Gate 2 prerequisites: ${missing[*]}"
     write_real_not_run "$reason"
@@ -263,7 +277,13 @@ real_gate2() {
     return
   fi
 
-  scripts/test-gate2-lima.sh >"$out/logs/gate2.out" 2>"$out/logs/gate2.err"
+  if [ -n "$retained_gate2_log" ]; then
+    cp "$retained_gate2_log" "$out/logs/gate2.out"
+    : >"$out/logs/gate2.err"
+  else
+    scripts/test-gate2-lima.sh >"$out/logs/gate2.out" 2>"$out/logs/gate2.err"
+  fi
+  grep -q '^gate2: passed$' "$out/logs/gate2.out"
   local i
   for i in $(seq 1 20); do
     grep -q "hostfs_visibility_${i}=passed" "$out/logs/gate2.out"

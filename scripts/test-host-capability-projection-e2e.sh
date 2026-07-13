@@ -7,14 +7,16 @@ cd "$ROOT"
 mode="local-fast"
 require_real=0
 out=""
+gate2_evidence=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --local-fast) mode="local-fast"; shift ;;
     --real-gate2) mode="real-gate2"; shift ;;
     --require-real) require_real=1; shift ;;
+    --gate2-evidence) gate2_evidence="${2:-}"; shift 2 ;;
     --out) out="${2:-}"; shift 2 ;;
     -h|--help)
-      echo "usage: scripts/test-host-capability-projection-e2e.sh [--local-fast|--real-gate2] [--require-real] [--out <dir>]"
+      echo "usage: scripts/test-host-capability-projection-e2e.sh [--local-fast|--real-gate2] [--require-real] [--gate2-evidence <manifest>] [--out <dir>]"
       exit 0
       ;;
     *) echo "projection-e2e: unknown argument: $1" >&2; exit 2 ;;
@@ -108,7 +110,20 @@ if [ "$mode" = "local-fast" ]; then
       "030.FR-013 030.FR-017") >"$proofs_file"
 else
   log="logs/real-gate2.out"
-  if ! command -v limactl >/dev/null 2>&1 || ! command -v go >/dev/null 2>&1; then
+  retained_gate2_log=""
+  if [ -n "$gate2_evidence" ]; then
+    . scripts/lib/retained-gate2-evidence.sh
+    if ! retained_gate2_log="$(resolve_retained_gate2_log "$gate2_evidence" "$(git_commit)")"; then
+      reason="retained Gate 2 evidence is invalid: $gate2_evidence"
+    fi
+  fi
+  if [ -n "$gate2_evidence" ] && [ -z "$retained_gate2_log" ]; then
+    printf '%s\n' "$reason" >"$out/$log"
+    if [ "$require_real" = "1" ]; then echo "projection-e2e: $reason" >&2; exit 1; fi
+    notrun_artifact="$(artifact_json "$log" "030 real Gate 2 not-run reason")"
+    jq -s '.' <(proof_json "030.projection.real-gate2.not-run" not-run real-gate projection-real-gate \
+      "projection real Gate 2 was not run" "$notrun_artifact" "$reason" "030.SC-008") >"$proofs_file"
+  elif [ -z "$gate2_evidence" ] && { ! command -v limactl >/dev/null 2>&1 || ! command -v go >/dev/null 2>&1; }; then
     reason="real Lima prerequisites unavailable"
     printf '%s\n' "$reason" >"$out/$log"
     if [ "$require_real" = "1" ]; then echo "projection-e2e: $reason" >&2; exit 1; fi
@@ -116,10 +131,16 @@ else
     jq -s '.' <(proof_json "030.projection.real-gate2.not-run" not-run real-gate projection-real-gate \
       "projection real Gate 2 was not run" "$notrun_artifact" "$reason" "030.SC-008") >"$proofs_file"
   else
-    if ! HIDEOUT_GATE2_REQUIRE_PROJECTION=1 scripts/test-gate2-lima.sh >"$out/$log" 2>"$out/logs/real-gate2.err"; then
-      cat "$out/$log" "$out/logs/real-gate2.err" >&2
-      exit 1
+    if [ -n "$retained_gate2_log" ]; then
+      cp "$retained_gate2_log" "$out/$log"
+      : >"$out/logs/real-gate2.err"
+    else
+      if ! HIDEOUT_GATE2_REQUIRE_PROJECTION=1 scripts/test-gate2-lima.sh >"$out/$log" 2>"$out/logs/real-gate2.err"; then
+        cat "$out/$log" "$out/logs/real-gate2.err" >&2
+        exit 1
+      fi
     fi
+    grep -q '^gate2: passed$' "$out/$log"
     for marker in projection_code_open projection_privacy_three_channel projection_trusted_grant; do
       grep -q "^${marker}=passed$" "$out/$log"
     done

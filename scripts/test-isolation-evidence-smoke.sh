@@ -12,6 +12,7 @@ cd "$ROOT"
 command -v jq >/dev/null 2>&1 || { echo "isolation-evidence-smoke: jq required" >&2; exit 127; }
 
 . scripts/lib/gate-result.sh
+. scripts/lib/retained-gate2-evidence.sh
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-isolation-evidence.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
@@ -28,6 +29,63 @@ if emit_gate_result "gate4-host-escape" "lima" "not-run" 2>/dev/null; then
 fi
 if HIDEOUT_RUNTIME_EVIDENCE_REQUIRED=1 emit_gate_result "gate3-hidden-proxy" "lima" "passed" 2>/dev/null; then
   echo "isolation-evidence-smoke: incomplete runtime evidence must fail closed" >&2
+  exit 1
+fi
+
+# A retained Gate 2 consumer trusts the same-commit evidence envelope and its
+# digest, never an unbound caller-supplied log path.
+retained_dir="$tmp/retained-gate2"
+mkdir -p "$retained_dir/logs"
+printf 'gate2: passed\n' >"$retained_dir/logs/runtime-lima.out"
+retained_sha="$(gate_sha256_file "$retained_dir/logs/runtime-lima.out")"
+retained_commit="$(git rev-parse --short=12 HEAD)"
+jq -n --arg commit "$retained_commit" --arg sha "$retained_sha" '{
+  version:"hideout.product-hardening-evidence/v1",
+  generatedAt:"2026-07-07T00:00:00Z",
+  commit:$commit,
+  dirty:false,
+  packageIdentity:{name:"hideout",version:$commit},
+  proofs:[{
+    proofId:"031.runtime.boundary-regression",
+    featureId:"031-supported-cli-runtime",
+    mode:"real-gate",
+    evidenceClass:"runtime-boundary-regression",
+    status:"passed",
+    commandSummary:"retained Gate 2 helper smoke",
+    coveredClaims:[{claimId:"031.SC-008",source:"spec",description:"boundary regression"}],
+    prerequisites:[],
+    artifacts:[{kind:"log",path:"logs/runtime-lima.out",sha256:$sha,redactionStatus:"passed"}],
+    redactionStatus:"passed",
+    runtime:{
+      schema:"hideout.runtime-evidence-binding/v1",
+      family:"developer-standard",revision:"2026.07.0",artifactSHA256:("a"*64),
+      environmentId:"env_20260707t000000z0123456789abcdef0123",
+      hostOS:"darwin",hostArch:"arm64",guestArch:"aarch64",
+      buildCommit:("1"*40),buildDirty:false
+    }
+  }]
+}' >"$retained_dir/product-hardening-evidence.json"
+resolved_retained_log="$(resolve_retained_gate2_log "$retained_dir/product-hardening-evidence.json" "$retained_commit")"
+expected_retained_log="$(cd "$retained_dir/logs" && pwd -P)/runtime-lima.out"
+test "$resolved_retained_log" = "$expected_retained_log"
+printf 'outside\n' >"$tmp/outside-gate2.out"
+outside_sha="$(gate_sha256_file "$tmp/outside-gate2.out")"
+ln -s "$tmp/outside-gate2.out" "$retained_dir/logs/escape.out"
+jq --arg sha "$outside_sha" '
+  .proofs[0].artifacts[0].path = "logs/escape.out" |
+  .proofs[0].artifacts[0].sha256 = $sha
+' "$retained_dir/product-hardening-evidence.json" >"$retained_dir/symlink-evidence.json"
+if resolve_retained_gate2_log "$retained_dir/symlink-evidence.json" "$retained_commit" >/dev/null 2>&1; then
+  echo "isolation-evidence-smoke: symlinked retained Gate 2 artifact was accepted" >&2
+  exit 1
+fi
+printf 'tampered\n' >>"$retained_dir/logs/runtime-lima.out"
+if resolve_retained_gate2_log "$retained_dir/product-hardening-evidence.json" "$retained_commit" >/dev/null 2>&1; then
+  echo "isolation-evidence-smoke: retained Gate 2 digest mismatch was accepted" >&2
+  exit 1
+fi
+if resolve_retained_gate2_log "$retained_dir/product-hardening-evidence.json" deadbeefdead >/dev/null 2>&1; then
+  echo "isolation-evidence-smoke: stale retained Gate 2 commit was accepted" >&2
   exit 1
 fi
 
