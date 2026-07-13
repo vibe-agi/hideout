@@ -13,7 +13,10 @@ runtime_evidence_sha256_file() {
 }
 
 runtime_evidence_git_commit() {
-  git rev-parse HEAD
+  # Package manifests and release binaries use the canonical 12-character
+  # candidate identity. Evidence must use the same value or readiness will
+  # correctly classify an otherwise matching proof as stale.
+  git rev-parse --short=12 HEAD
 }
 
 runtime_evidence_git_dirty() {
