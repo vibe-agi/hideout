@@ -187,10 +187,10 @@ authority; preview still does not mean supported or release-ready.
 - [X] T064 Add runtime schemas/catalog/contracts/build inputs to package layout, install/repair/uninstall verification, and stale-file handling in `scripts/package-local.sh`, `internal/packagekit/verify.go`, and `internal/packagekit/repair.go`
 - [X] T065 Add `scripts/test-runtime-smoke.sh` to Gate 0 and prove synthetic catalogs cannot satisfy real-image proof
 - [X] T066 Run `go build ./...`, `go vet ./...`, `gofmt -l internal cmd`, `git diff --check`, `go test ./...`, markdownlint, package smoke, runtime smoke, and `scripts/test-gate0.sh`
-- [ ] T067 Execute all 12 scenarios in `specs/031-supported-cli-runtime/quickstart.md` and record exact outputs/evidence references
+- [X] T067 Execute all 12 scenarios in `specs/031-supported-cli-runtime/quickstart.md` and record exact outputs/evidence references
 - [X] T068 Perform an adversarial implementation review for false-green catalog status, mutable-guest drift, target-writable evidence, hidden first-boot provisioning, secret-bearing image state, wrong-architecture fallback, and evidence fixation; resolve every Blocking/High/Medium finding
-- [ ] T069 Re-run the complete static battery and required real Gate 2/Gate 3 after review fixes; update evidence digests and source state honestly
-- [ ] T070 Mark `specs/031-supported-cli-runtime/spec.md` Implemented and all tasks complete only when the retained asset, 88 tasks, real gates, package/docs truth, and completion audit are all proven
+- [X] T069 Re-run the complete static battery and required real Gate 2/Gate 3 after review fixes; update evidence digests and source state honestly
+- [X] T070 Mark `specs/031-supported-cli-runtime/spec.md` Implemented and all tasks complete only when the retained asset, 89 tasks, real gates, package/docs truth, and completion audit are all proven
 
 ---
 
@@ -285,7 +285,7 @@ to masquerade as exact real-runtime readiness.
 - [X] T085 Keep the runtime boundary contract active under unsafe-workspace override while suppressing only trusted receipt persistence, and preserve authoritative failed verification status/failed IDs without stale running-state inference in `internal/manager/run_runtime.go`, `internal/manager/runtime.go`, and tests per FR-008/FR-010/SC-005 (contradicts)
 - [X] T086 Make the canonical phase/release lane run runtime-enabled Gate 2 and Gate 3 in independent managed environments against one exact runtime artifact and candidate, explicitly verify after ordinary runs, and pass trusted runtime/package/product evidence inputs to readiness in `scripts/test-phase1.sh`, `scripts/test-gate2-lima.sh`, `scripts/test-gate3-hidden-proxy.sh`, and `scripts/test-release-readiness.sh` per FR-018/SC-008 (contradicts)
 - [X] T087 Reject vacuous externally supplied release-readiness JSON unless it contains exact local/product command outcomes and required Gate 2/Gate 3 rows in both Go validation and `schemas/release-readiness.schema.json` per FR-018/SC-008 (contradicts)
-- [ ] T088 Re-run the complete 031 adversarial/static/real-gate battery after T081-T087, refresh clean provenance and evidence digests, and do not restore Implemented status until all external gates pass
+- [X] T088 Re-run the complete 031 adversarial/static/real-gate battery after T081-T087, refresh clean provenance and evidence digests, and do not restore Implemented status until all external gates pass
 
 ## Phase 9: Provenance Convergence
 

@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-11
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: Reviewed design draft `.tmp/031-supported-cli-runtime-draft.md`. Deliver one explicit, dependable developer runtime for macOS arm64 so ordinary users can run baseline developer tools and install a real agent CLI inside the Lima boundary without understanding guest image URLs, provisioning, or proxy credentials.
 
