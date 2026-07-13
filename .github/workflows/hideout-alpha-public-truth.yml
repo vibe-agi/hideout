@@ -28,13 +28,30 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve checked-in public release state
+        id: release_state
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schema == "hideout.published-release-inventory/v1" and
+            has("current")
+          ' releases/current.json >/dev/null
+          if jq -e '.current != null' releases/current.json >/dev/null; then
+            echo "published=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "published=false" >>"$GITHUB_OUTPUT"
+            echo "No checked-in public release; Gate 0 owns candidate-neutral docs truth."
+          fi
+
       - name: Install the declared Go toolchain
+        if: steps.release_state.outputs.published == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Validate inventory, receipt, and generated docs
+        if: steps.release_state.outputs.published == 'true'
         run: |
           set -euo pipefail
           tag=$(jq -er '.current.tag' releases/current.json)
@@ -48,6 +65,7 @@ jobs:
           ' "$out/public-release-evidence.json" >/dev/null
 
       - name: Retain bounded post-public proof
+        if: steps.release_state.outputs.published == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: hideout-public-alpha-docs-truth

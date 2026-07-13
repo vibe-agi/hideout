@@ -6,7 +6,6 @@ on:
       - master
     paths:
       - .github/release-promotions/public-alpha-*.json
-      - .github/workflows/hideout-alpha-promote.yml
   workflow_dispatch:
     inputs:
       request:
