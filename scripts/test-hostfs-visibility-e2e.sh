@@ -100,6 +100,13 @@ validate_manifest() {
       (.status == "passed" or .status == "failed" or .status == "not-run")
     )
   ' "$manifest" >"$out/logs/evidence-content.out"
+  go run ./cmd/hideout support proof-registry --json >"$out/logs/proof-registry.json"
+  jq -e --slurpfile registry "$out/logs/proof-registry.json" '
+    ($registry[0].requirements |
+      map({key: .proofId, value: (.claimIds | sort)}) | from_entries) as $registered |
+    all(.proofs[];
+      ([.coveredClaims[].claimId] | sort) == ($registered[.proofId] // []))
+  ' "$manifest" >"$out/logs/registered-claims.out"
   if grep -R -E 'claim_[0-9a-f]{16,}|cap_[A-Za-z0-9]{12,}|HIDEOUT_SECRET_[A-Z0-9_]+=|hostfs-read/(grants|state|owner|provider)|TOP-SECRET-FILE-CONTENT-029|0123456789abcdef0123456789abcdef|proxy-password-029' "$out" >/dev/null 2>&1; then
     echo "hostfs-visibility-e2e: evidence leaked injected private/control-plane material" >&2
     grep -R -n -E 'claim_[0-9a-f]{16,}|cap_[A-Za-z0-9]{12,}|HIDEOUT_SECRET_[A-Z0-9_]+=|hostfs-read/(grants|state|owner|provider)|TOP-SECRET-FILE-CONTENT-029|0123456789abcdef0123456789abcdef|proxy-password-029' "$out" >&2 || true
@@ -136,7 +143,9 @@ local_fast() {
           evidenceClass: "hostfs-visibility-policy",
           status: "passed",
           commandSummary: "targeted HostFS visibility policy and complete-listing tests",
-          coveredClaims: [{claimId: "029.FR-001", source: "spec", description: "Per-root discover selectors and bounded complete listing", scope: "hostfs"}],
+          coveredClaims: [
+            "029.FR-001", "029.FR-003", "029.FR-004", "029.FR-005", "029.FR-006"
+          ] | map({claimId: ., source: "spec", description: "Per-root discover selectors and bounded complete listing", scope: "hostfs"}),
           prerequisites: [{name: "go", status: "available"}],
           artifacts: [],
           redactionStatus: "passed",
@@ -149,7 +158,9 @@ local_fast() {
           evidenceClass: "hostfs-typed-error",
           status: "passed",
           commandSummary: "targeted broker typed-error vocabulary and mapping tests",
-          coveredClaims: [{claimId: "029.FR-014", source: "spec", description: "Typed HostFS error vocabulary is validated independently of prose", scope: "broker"}],
+          coveredClaims: [
+            "029.FR-007", "029.FR-008", "029.FR-009"
+          ] | map({claimId: ., source: "spec", description: "Typed HostFS error vocabulary is validated independently of prose", scope: "broker"}),
           prerequisites: [{name: "go", status: "available"}],
           artifacts: [],
           redactionStatus: "passed",
@@ -162,7 +173,10 @@ local_fast() {
           evidenceClass: "hostfs-read-decision",
           status: "passed",
           commandSummary: "targeted provider dedup, limits, approval, reopen, and invalidation tests",
-          coveredClaims: [{claimId: "029.FR-021", source: "spec", description: "Equivalent requests share one bounded decision lifecycle", scope: "decision"}],
+          coveredClaims: [
+            "029.FR-014", "029.FR-015", "029.FR-016", "029.FR-017",
+            "029.FR-018", "029.FR-019", "029.FR-020"
+          ] | map({claimId: ., source: "spec", description: "Equivalent requests share one bounded decision lifecycle", scope: "decision"}),
           prerequisites: [{name: "go", status: "available"}],
           artifacts: [{kind: "log", path: $log, sha256: $sha, redactionStatus: "passed", description: "targeted local-fast test log"}],
           redactionStatus: "passed",
@@ -175,7 +189,9 @@ local_fast() {
           evidenceClass: "hostfs-read-redaction",
           status: "passed",
           commandSummary: "real secret, token, content, symlink-target, and private-path injection test",
-          coveredClaims: [{claimId: "029.SC-012", source: "spec", description: "Operator evidence omits injected private and control-plane values", scope: "evidence"}],
+          coveredClaims: [
+            "029.FR-024", "029.FR-025", "029.FR-026"
+          ] | map({claimId: ., source: "spec", description: "Operator evidence omits injected private and control-plane values", scope: "evidence"}),
           prerequisites: [{name: "go", status: "available"}],
           artifacts: [{kind: "log", path: $log, sha256: $sha, redactionStatus: "passed", description: "redaction injection test log"}],
           redactionStatus: "passed",
@@ -272,7 +288,9 @@ real_gate2() {
           evidenceClass: "hostfs-visibility-e2e",
           status: "passed",
           commandSummary: "real Lima Gate 2 HostFS discoverable namespace assertions 1-6 and 14-17",
-          coveredClaims: [{claimId: "029.SC-001", source: "spec", description: "Real guest receives bounded exact, one-level, and recursive namespace semantics", scope: "lima"}],
+          coveredClaims: [
+            "029.SC-001", "029.SC-002", "029.SC-003", "029.SC-004"
+          ] | map({claimId: ., source: "spec", description: "Real guest receives bounded exact, one-level, and recursive namespace semantics", scope: "lima"}),
           prerequisites: [{name: "real-gate2", status: "available"}],
           artifacts: [{kind: "log", path: "logs/gate2.out", sha256: $sha, redactionStatus: "passed", description: "real Gate 2 machine assertions"}],
           redactionStatus: "passed"
@@ -284,7 +302,9 @@ real_gate2() {
           evidenceClass: "hostfs-read-decision-e2e",
           status: "passed",
           commandSummary: "real Lima Gate 2 separate-process approval and same-session retry assertions 7-13 and 18-20",
-          coveredClaims: [{claimId: "029.SC-006", source: "spec", description: "Separate control process activates exact read authority for the same live guest", scope: "lima"}],
+          coveredClaims: [
+            "029.SC-005", "029.SC-006", "029.SC-007", "029.SC-008"
+          ] | map({claimId: ., source: "spec", description: "Separate control process activates exact read authority for the same live guest", scope: "lima"}),
           prerequisites: [{name: "real-gate2", status: "available"}],
           artifacts: [{kind: "log", path: "logs/gate2.out", sha256: $sha, redactionStatus: "passed", description: "real Gate 2 live-grant assertions"}],
           redactionStatus: "passed"
