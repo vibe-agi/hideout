@@ -1,0 +1,14 @@
+{
+  "schema": "hideout.runtime-promotion-request/v1",
+  "revision": "2026.07.0",
+  "sourceCommit": "c51aeed1121426ef4ef8bef15105780a20bc23aa",
+  "candidateTag": "runtime-developer-standard-2026.07.0-candidate-c51aeed11214",
+  "releaseTag": "runtime-developer-standard-2026.07.0",
+  "candidateRun": 29198418379,
+  "retentionRun": 29199190498,
+  "image": {
+    "file": "developer-standard-2026.07.0-linux-aarch64.qcow2",
+    "sha256": "79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134",
+    "bytes": 1008074752
+  }
+}
