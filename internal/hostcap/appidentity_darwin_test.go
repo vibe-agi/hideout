@@ -33,6 +33,12 @@ func TestExecDarwinIdentityCommandBoundsOutput(t *testing.T) {
 	}
 }
 
+func TestDarwinIdentityProductionBudgetAllowsGatekeeperSerialization(t *testing.T) {
+	if darwinIdentityCommandTimeout < 30*time.Second {
+		t.Fatalf("production identity timeout=%s, want at least 30s for serialized Gatekeeper assessment", darwinIdentityCommandTimeout)
+	}
+}
+
 func TestObserveDarwinSigningIdentityRequiresSystemTrustAssessment(t *testing.T) {
 	type call struct {
 		executable string

@@ -14,7 +14,11 @@ import (
 
 const (
 	maxDarwinIdentityCommandOutput = 256 << 10
-	darwinIdentityCommandTimeout   = 10 * time.Second
+	// Gatekeeper serializes some spctl assessments. Under concurrent Lima and
+	// GUI startup load a valid notarized app can exceed ten seconds even though
+	// the same assessment completes immediately afterward. Keep the operation
+	// bounded, but leave enough time for the host trust service to answer.
+	darwinIdentityCommandTimeout = 30 * time.Second
 )
 
 var errDarwinIdentityOutputLimit = errors.New("darwin identity command output exceeded its Core limit")
