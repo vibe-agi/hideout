@@ -62,7 +62,7 @@ done
 required_proofs='["031.runtime.agent-install","031.runtime.agent-privacy","031.runtime.baseline","031.runtime.boundary-regression","031.runtime.readiness-parity","031.runtime.real-image"]'
 jq -s -e --argjson required "$required_proofs" '
   ([.[].proofs[].proofId] | unique) as $actual |
-  all($required[] as $proof; $actual | index($proof) != null)
+  all($required[]; . as $proof | ($actual | index($proof) != null))
 ' "$gate2_manifest" "$gate3_manifest" >/dev/null
 
 gate2_runtime="$(jq -c '[.proofs[] | select(.runtime != null)][0].runtime' "$gate2_manifest")"
@@ -76,7 +76,7 @@ catalog_sha="$(jq -r '.families[] | select(.id == "developer-standard") |
   .currentRevision as $revision | .revisions[] | select(.id == $revision) | .artifacts[] |
   select(.hostOS == "darwin" and .hostArch == "arm64") | .sha256' \
   internal/runtimecatalog/catalog.json | head -n 1)"
-promotion_sha="$(jq -r '.artifact.sha256' dist/runtime/promotion.json)"
+promotion_sha="$(jq -r '.image.sha256' dist/runtime/promotion.json)"
 [ -n "$catalog_sha" ] && [ "$catalog_sha" = "$promotion_sha" ] && \
   [ "$catalog_sha" = "$(jq -r '.artifactSHA256' <<<"$gate2_runtime")" ] || {
   echo "runtime-quickstart: catalog, promotion, and real evidence digests differ" >&2
@@ -106,6 +106,8 @@ gate2_environment="$(jq -r '.environmentId' <<<"$gate2_runtime")"
 gate3_environment="$(jq -r '.environmentId' <<<"$gate3_runtime")"
 gate2_manifest_sha="$(runtime_evidence_sha256_file "$gate2_manifest")"
 gate3_manifest_sha="$(runtime_evidence_sha256_file "$gate3_manifest")"
+gate2_manifest_ref="${gate2_manifest#"$ROOT"/}"
+gate3_manifest_ref="${gate3_manifest#"$ROOT"/}"
 cat >"$report" <<EOF
 quickstart=passed
 scenario_01=passed catalog-and-package-integrity
@@ -127,9 +129,9 @@ runtime_image_build_commit=$build_commit
 package_candidate_commit=$package_commit
 gate2_environment_id=$gate2_environment
 gate3_environment_id=$gate3_environment
-gate2_manifest=dist/runtime/evidence/031-runtime-lima/product-hardening-evidence.json
+gate2_manifest=$gate2_manifest_ref
 gate2_manifest_sha256=$gate2_manifest_sha
-gate3_manifest=dist/runtime/evidence/031-runtime-gate3/product-hardening-evidence.json
+gate3_manifest=$gate3_manifest_ref
 gate3_manifest_sha256=$gate3_manifest_sha
 EOF
 

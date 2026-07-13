@@ -211,6 +211,7 @@ cp "$tmp/drift-verify.json" "$evidence_out/logs/drift-verify.json"
 {
   cat "$tmp/env-image.out"
   cat "$tmp/gate2.out"
+  echo "runtime_durable_prefix=passed"
   echo "runtime_mutable_guest_drift=passed"
   echo "runtime_download_bytes=$download_bytes"
   echo "runtime_virtual_bytes=$virtual_bytes"
