@@ -39,9 +39,11 @@ for manifest in "$gate2_manifest" "$gate3_manifest"; do
     ($registry[0].requirements |
       map({key:.proofId,value:.runtimePolicy}) | from_entries) as $runtimePolicies |
     .dirty == false and
-    (.commit | test("^[a-f0-9]{12,40}$")) and
+    (.commit | test("^[a-f0-9]{40}$")) and
     .packageIdentity.name == "hideout" and
-    .packageIdentity.version == .commit and
+    .packageIdentity.sourceCommit == .commit and
+    (.packageIdentity.productVersion | test("^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$")) and
+    (.packageIdentity.artifactSHA256 | test("^[a-f0-9]{64}$")) and
     all(.proofs[];
       .status == "passed" and .redactionStatus == "passed" and
       (($runtimePolicies[.proofId] // "none") != "exact-real" or

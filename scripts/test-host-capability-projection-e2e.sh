@@ -38,7 +38,7 @@ sha256_file() {
   fi
 }
 
-git_commit() { git rev-parse --short=12 HEAD 2>/dev/null || printf unknown; }
+git_commit() { git rev-parse HEAD 2>/dev/null || printf unknown; }
 git_dirty() {
   if [ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]; then printf true; else printf false; fi
 }

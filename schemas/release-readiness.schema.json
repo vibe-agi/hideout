@@ -11,7 +11,7 @@
     "evidenceClass",
     "releaseReady",
     "status",
-    "commit",
+    "sourceCommit",
     "platform",
     "matrix",
     "commands",
@@ -39,10 +39,41 @@
     "status": {
       "enum": ["passed", "failed", "not-release"]
     },
-    "commit": {
+    "sourceCommit": {
       "type": "string",
       "minLength": 1
     },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "productVersion", "sourceCommit", "artifactSHA256", "hostOS", "hostArch"],
+      "properties": {
+        "name": {"const": "hideout"},
+        "productVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"},
+        "sourceCommit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "hostOS": {"type": "string", "minLength": 1},
+        "hostArch": {"type": "string", "minLength": 1}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "revision", "artifactSHA256", "hostOS", "hostArch", "guestArch", "buildCommit", "requireClean"],
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "hostOS": {"type": "string", "minLength": 1},
+        "hostArch": {"type": "string", "minLength": 1},
+        "guestArch": {"type": "string", "minLength": 1},
+        "buildCommit": {"type": "string", "pattern": "^[a-f0-9]{12,40}$"},
+        "requireClean": {"const": true}
+      }
+    },
+    "candidateStatus": {"enum": ["passed", "failed"]},
+    "signingObservationSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "notarizationObservationSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "platform": {
       "type": "object",
       "additionalProperties": false,
@@ -151,17 +182,32 @@
   "allOf": [
     {
       "if": {
+        "required": ["mode"],
+        "properties": {"mode": {"const": "release-candidate"}}
+      },
+      "then": {"required": ["candidateStatus"]}
+    },
+    {
+      "if": {
         "required": ["releaseReady"],
         "properties": {
           "releaseReady": {"const": true}
         }
       },
       "then": {
+        "required": [
+          "package",
+          "runtime",
+          "candidateStatus",
+          "signingObservationSHA256",
+          "notarizationObservationSHA256"
+        ],
         "properties": {
           "mode": {"const": "release-candidate"},
           "evidenceClass": {"const": "real-gate"},
           "status": {"const": "passed"},
-          "commit": {"pattern": "^[a-f0-9]{12,40}$"},
+          "sourceCommit": {"pattern": "^[a-f0-9]{40}$"},
+          "candidateStatus": {"const": "passed"},
           "commands": {
             "minItems": 2,
             "maxItems": 2,

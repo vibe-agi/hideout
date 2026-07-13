@@ -72,7 +72,8 @@ grep -q 'local fixture' internal/productevidence/evaluate_test.go
 grep -q 'dirty gate' internal/releasecompat/readiness_test.go
 
 . scripts/lib/runtime-product-evidence.sh
-package_commit="$(git rev-parse --short=12 HEAD)"
+package_commit="$(git rev-parse HEAD)"
+package_dirty="$(runtime_evidence_git_dirty)"
 [ "$(runtime_evidence_git_commit)" = "$package_commit" ] || {
   echo "runtime-smoke: evidence commit does not match package candidate identity" >&2
   exit 1
@@ -95,7 +96,16 @@ runtime_proofs='[]'
 runtime_proofs="$(runtime_evidence_add_proof "$runtime_proofs" "$tmp/proof-registry.json" \
   "031.runtime.real-image" "real-gate" "runtime-real-image" "synthetic writer mechanics only" \
   "runtime.log" "$(runtime_evidence_sha256_file "$tmp/runtime.log")" "$runtime_binding")"
-runtime_evidence_write_manifest "$tmp/product-hardening-evidence.json" "$runtime_proofs" "$package_commit"
+jq -n --arg commit "$package_commit" '{
+  name:"hideout",
+  productVersion:"0.1.0-alpha.1",
+  sourceCommit:$commit,
+  artifactSHA256:("b" * 64),
+  hostOS:"darwin",
+  hostArch:"arm64"
+}' >"$tmp/package-identity.json"
+runtime_evidence_write_manifest "$tmp/product-hardening-evidence.json" "$runtime_proofs" \
+  "$tmp/package-identity.json"
 go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.json \
   "$tmp/product-hardening-evidence.json" >/dev/null
 jq -e '
@@ -103,10 +113,17 @@ jq -e '
   .[0].proofId == "031.runtime.real-image" and
   .[0].runtime.buildCommit == "0123456789ab"
 ' "$tmp/product-hardening-evidence.json" >/dev/null
-jq -e --arg commit "$package_commit" '
+jq -e --arg commit "$package_commit" --argjson dirty "$package_dirty" '
   .commit == $commit and
-  .dirty == false and
-  .packageIdentity == {name:"hideout",version:$commit}
+  .dirty == $dirty and
+  .packageIdentity == {
+    name:"hideout",
+    productVersion:"0.1.0-alpha.1",
+    sourceCommit:$commit,
+    artifactSHA256:("b" * 64),
+    hostOS:"darwin",
+    hostArch:"arm64"
+  }
 ' "$tmp/product-hardening-evidence.json" >/dev/null
 
 echo "runtime-smoke: catalog state and verification contracts passed"

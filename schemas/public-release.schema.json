@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/public-release.schema.json",
+  "title": "Hideout Public Release",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "channel", "maturity", "tag", "source",
+    "license", "artifacts", "signing", "notarization", "runtime",
+    "checksums", "supportMatrixVersion", "nonClaims", "generatedAt"
+  ],
+  "properties": {
+    "schema": {"const": "hideout.public-release/v1"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"},
+    "channel": {"const": "alpha"},
+    "maturity": {"const": "public-supervised-alpha"},
+    "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"},
+    "source": {"$ref": "#/$defs/source"},
+    "license": {"$ref": "#/$defs/license"},
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "signing": {"$ref": "#/$defs/signing"},
+    "notarization": {"$ref": "#/$defs/notarization"},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "checksums": {"$ref": "#/$defs/checksums"},
+    "supportMatrixVersion": {"type": "string", "minLength": 1},
+    "nonClaims": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "generatedAt": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "commit", "dirty"],
+      "properties": {
+        "repository": {"const": "https://github.com/vibe-agi/hideout"},
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "dirty": {"const": false}
+      }
+    },
+    "license": {
+      "type": "object", "additionalProperties": false,
+      "required": ["spdx", "thirdPartyNotices"],
+      "properties": {
+        "spdx": {"const": "Apache-2.0"},
+        "thirdPartyNotices": {"const": "THIRD_PARTY_NOTICES.md"}
+      }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "name", "sha256", "bytes"],
+      "properties": {
+        "kind": {"enum": ["package", "evidence"]},
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "hostOS": {"const": "darwin"},
+        "hostArch": {"const": "arm64"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "packageManifestSHA256": {"$ref": "#/$defs/sha256"},
+        "bundleManifestSHA256": {"$ref": "#/$defs/sha256"},
+        "readinessSHA256": {"$ref": "#/$defs/sha256"},
+        "status": {"const": "passed"}
+      }
+    },
+    "signing": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "teamId", "commonName", "observationSHA256"],
+      "properties": {
+        "status": {"const": "developer-id-verified"},
+        "teamId": {"type": "string", "minLength": 1},
+        "commonName": {"type": "string", "pattern": "^Developer ID Application:"},
+        "observationSHA256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "notarization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "submissionId", "submissionSHA256", "ticketMode", "stapleStatus"],
+      "properties": {
+        "status": {"const": "accepted"},
+        "submissionId": {"type": "string", "minLength": 1},
+        "submissionSHA256": {"$ref": "#/$defs/sha256"},
+        "ticketMode": {"const": "online"},
+        "stapleStatus": {"const": "not-applicable-tar-gz"}
+      }
+    },
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["family", "revision", "catalogFileSHA256", "artifactSHA256"],
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "catalogFileSHA256": {"$ref": "#/$defs/sha256"},
+        "artifactSHA256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "checksums": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "covers"],
+      "properties": {
+        "name": {"const": "SHA256SUMS"},
+        "covers": {"type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}}
+      }
+    }
+  }
+}

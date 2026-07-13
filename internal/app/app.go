@@ -51,6 +51,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/profiletemplate"
 	"github.com/vibe-agi/hideout/internal/recovery"
+	"github.com/vibe-agi/hideout/internal/releasechannel"
 	"github.com/vibe-agi/hideout/internal/releasecompat"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
@@ -127,8 +128,7 @@ func (a app) run(args []string) error {
 	case "tui":
 		return a.tui(args[1:])
 	case "version", "--version", "-v":
-		a.version()
-		return nil
+		return a.version(args[1:])
 	case "lab":
 		return a.lab(args[1:])
 	case "shim":
@@ -213,7 +213,34 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
 }
 
-func (a app) version() {
+func (a app) version(args []string) error {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	jsonOut := fs.Bool("json", false, "write machine-readable binary identity")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected version argument %q", fs.Arg(0))
+	}
+	if *jsonOut {
+		identity := struct {
+			Schema         string `json:"schema"`
+			ProductVersion string `json:"productVersion"`
+			SourceCommit   string `json:"sourceCommit"`
+			BuiltAt        string `json:"builtAt"`
+			GoVersion      string `json:"goVersion"`
+			HostOS         string `json:"hostOS"`
+			HostArch       string `json:"hostArch"`
+			SupportMatrix  string `json:"supportMatrix"`
+		}{
+			Schema: releasechannel.BinaryIdentitySchema, ProductVersion: Version,
+			SourceCommit: Commit, BuiltAt: BuildTime, GoVersion: runtime.Version(),
+			HostOS: runtime.GOOS, HostArch: runtime.GOARCH,
+			SupportMatrix: releasecompat.MatrixVersion,
+		}
+		return json.NewEncoder(a.stdout).Encode(identity)
+	}
 	fmt.Fprintf(a.stdout, "hideout %s\n", Version)
 	fmt.Fprintf(a.stdout, "commit: %s\n", Commit)
 	fmt.Fprintf(a.stdout, "builtAt: %s\n", BuildTime)
@@ -221,6 +248,7 @@ func (a app) version() {
 	fmt.Fprintf(a.stdout, "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(a.stdout, "supportMatrix: %s %s\n", releasecompat.MatrixSchema, releasecompat.MatrixVersion)
 	fmt.Fprintf(a.stdout, "support: %s\n", releasecompat.CurrentSupportSummary("auto"))
+	return nil
 }
 
 func (a app) supportUsage() {
@@ -229,6 +257,17 @@ func (a app) supportUsage() {
 	fmt.Fprintln(a.stdout, "  hideout support proof-registry --json")
 	fmt.Fprintln(a.stdout, "  hideout support recovery-codes --json")
 	fmt.Fprintln(a.stdout, "  hideout support readiness --mode local-fast|release-candidate [--out <path>] [--gate2-evidence <path>] [--gate3-evidence <path>] [--product-evidence <path>] [--runtime-family <id>] [--package-root <path>]")
+	fmt.Fprintln(a.stdout, "  hideout support release validate --manifest <path> --asset-root <dir>")
+	fmt.Fprintln(a.stdout, "  hideout support release package-identity --archive <path> --out <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release observe-package-verification --package-root <dir> --package-identity <path> --out <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release observe-signing --package-root <dir> --out <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release observe-notarization --package-root <dir> --submission <zip> --result <json> --out <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release build-evidence --root <dir> --package-identity <path> --out <tar.gz>")
+	fmt.Fprintln(a.stdout, "  hideout support release validate-evidence --archive <tar.gz>")
+	fmt.Fprintln(a.stdout, "  hideout support release validate-receipt --receipt <path> --manifest <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release inventory-from-receipt --receipt <path> --manifest <path> --out <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release validate-signing --package-root <dir> --observation <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release validate-notarization --package-root <dir> --observation <path>")
 }
 
 func (a app) supportCommand(args []string) error {
@@ -245,9 +284,363 @@ func (a app) supportCommand(args []string) error {
 		return a.supportRecoveryCodes(args[1:])
 	case "readiness":
 		return a.supportReadiness(args[1:])
+	case "release":
+		return a.supportRelease(args[1:])
 	default:
 		return fmt.Errorf("unknown support command %q", args[0])
 	}
+}
+
+func (a app) supportRelease(args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		a.supportUsage()
+		return nil
+	}
+	switch args[0] {
+	case "validate":
+		fs := flag.NewFlagSet("support release validate", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		manifestPath := fs.String("manifest", "", "public release manifest")
+		assetRoot := fs.String("asset-root", "", "directory containing exact release assets")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || *manifestPath == "" || *assetRoot == "" {
+			return errors.New("usage: hideout support release validate --manifest <path> --asset-root <dir>")
+		}
+		var release releasechannel.PublicRelease
+		if err := releasechannel.ReadStrict(*manifestPath, releasechannel.MaxJSONBytes, &release); err != nil {
+			return fmt.Errorf("read public release manifest: %w", err)
+		}
+		if err := release.Validate(*assetRoot); err != nil {
+			return err
+		}
+		return json.NewEncoder(a.stdout).Encode(map[string]any{"schema": releasechannel.PublicReleaseSchema, "status": "passed", "version": release.Version, "tag": release.Tag})
+	case "validate-signing":
+		return a.supportReleaseSigning(args[1:])
+	case "validate-notarization":
+		return a.supportReleaseNotarization(args[1:])
+	case "package-identity":
+		return a.supportReleasePackageIdentity(args[1:])
+	case "observe-package-verification":
+		return a.supportReleaseObservePackageVerification(args[1:])
+	case "observe-signing":
+		return a.supportReleaseObserveSigning(args[1:])
+	case "observe-notarization":
+		return a.supportReleaseObserveNotarization(args[1:])
+	case "build-evidence":
+		return a.supportReleaseBuildEvidence(args[1:])
+	case "validate-evidence":
+		return a.supportReleaseValidateEvidence(args[1:])
+	case "validate-receipt":
+		return a.supportReleaseValidateReceipt(args[1:])
+	case "inventory-from-receipt":
+		return a.supportReleaseInventoryFromReceipt(args[1:])
+	default:
+		return fmt.Errorf("unknown support release command %q", args[0])
+	}
+}
+
+func (a app) supportReleasePackageIdentity(args []string) error {
+	fs := flag.NewFlagSet("support release package-identity", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	archive := fs.String("archive", "", "final package archive")
+	out := fs.String("out", "", "package identity JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *archive == "" || *out == "" {
+		return errors.New("usage: hideout support release package-identity --archive <path> --out <path>")
+	}
+	tmp, err := os.MkdirTemp("", "hideout-package-identity-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	root, err := releasechannel.ExtractPackageArchive(*archive, tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := packagekit.VerifyDistribution(root); err != nil {
+		return err
+	}
+	manifest, err := packagekit.LoadManifestForDistribution(filepath.Join(root, "package-manifest.json"))
+	if err != nil {
+		return err
+	}
+	digest, _, err := releasechannel.FileSHA256(*archive)
+	if err != nil {
+		return err
+	}
+	identity := releasechannel.PackageIdentity{
+		Name: "hideout", ProductVersion: manifest.Release.ProductVersion,
+		SourceCommit: manifest.Source.Commit, ArtifactSHA256: digest,
+		HostOS: manifest.Target.HostOS, HostArch: manifest.Target.HostArch,
+	}
+	if err := identity.Validate(); err != nil {
+		return err
+	}
+	if err := releasechannel.WriteJSONAtomic(*out, identity, 0o600); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(identity)
+}
+
+func (a app) supportReleaseObservePackageVerification(args []string) error {
+	fs := flag.NewFlagSet("support release observe-package-verification", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("package-root", "", "verified finalized package root")
+	identityPath := fs.String("package-identity", "", "canonical package identity JSON")
+	out := fs.String("out", "", "package verification observation JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *root == "" || *identityPath == "" || *out == "" {
+		return errors.New("usage: hideout support release observe-package-verification --package-root <dir> --package-identity <path> --out <path>")
+	}
+	var identity releasechannel.PackageIdentity
+	if err := releasechannel.ReadStrict(*identityPath, releasechannel.MaxJSONBytes, &identity); err != nil {
+		return err
+	}
+	observation, err := releasechannel.ObservePackageVerification(*root, identity, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if err := releasechannel.WriteJSONAtomic(*out, observation, 0o600); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(observation)
+}
+
+func (a app) supportReleaseObserveSigning(args []string) error {
+	fs := flag.NewFlagSet("support release observe-signing", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("package-root", "", "finalized package root")
+	out := fs.String("out", "", "sanitized signing observation")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *root == "" || *out == "" {
+		return errors.New("usage: hideout support release observe-signing --package-root <dir> --out <path>")
+	}
+	if _, err := packagekit.VerifyDistribution(*root); err != nil {
+		return err
+	}
+	paths, err := releasechannel.MachOPaths(*root)
+	if err != nil {
+		return err
+	}
+	observation, err := releasechannel.ObserveDarwinSigning(context.Background(), *root, paths, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if err := releasechannel.WriteJSONAtomic(*out, observation, 0o600); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"status": "passed", "teamId": observation.TeamID, "binaries": len(observation.Binaries)})
+}
+
+func (a app) supportReleaseObserveNotarization(args []string) error {
+	fs := flag.NewFlagSet("support release observe-notarization", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("package-root", "", "finalized package root")
+	submission := fs.String("submission", "", "submitted ZIP envelope")
+	result := fs.String("result", "", "notarytool JSON result")
+	out := fs.String("out", "", "sanitized notarization observation")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *root == "" || *submission == "" || *result == "" || *out == "" {
+		return errors.New("usage: hideout support release observe-notarization --package-root <dir> --submission <zip> --result <json> --out <path>")
+	}
+	if _, err := packagekit.VerifyDistribution(*root); err != nil {
+		return err
+	}
+	observation, err := releasechannel.ObserveAcceptedNotarization(*root, *submission, *result, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if err := releasechannel.WriteJSONAtomic(*out, observation, 0o600); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"status": "accepted", "submissionId": observation.SubmissionID})
+}
+
+func (a app) supportReleaseBuildEvidence(args []string) error {
+	fs := flag.NewFlagSet("support release build-evidence", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("root", "", "prepared evidence root")
+	packageIdentity := fs.String("package-identity", "", "canonical package identity JSON")
+	out := fs.String("out", "", "evidence tar.gz")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *root == "" || *packageIdentity == "" || *out == "" {
+		return errors.New("usage: hideout support release build-evidence --root <dir> --package-identity <path> --out <tar.gz>")
+	}
+	var identity releasechannel.PackageIdentity
+	if err := releasechannel.ReadStrict(*packageIdentity, releasechannel.MaxJSONBytes, &identity); err != nil {
+		return err
+	}
+	required := productevidence.RequiredProofIDsForTarget(productevidence.RequiredForReleaseCandidate)
+	bundle, err := releasechannel.BuildEvidenceBundle(*root, identity, required, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if err := releasechannel.WriteEvidenceBundle(*root, bundle); err != nil {
+		return err
+	}
+	if err := releasechannel.ArchiveEvidenceBundle(*root, *out); err != nil {
+		return err
+	}
+	digest, size, err := releasechannel.FileSHA256(*out)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"schema": releasechannel.EvidenceBundleSchema, "sha256": digest, "bytes": size, "proofs": len(bundle.ProofIDs)})
+}
+
+func (a app) supportReleaseValidateEvidence(args []string) error {
+	fs := flag.NewFlagSet("support release validate-evidence", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	archive := fs.String("archive", "", "evidence tar.gz")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *archive == "" {
+		return errors.New("usage: hideout support release validate-evidence --archive <tar.gz>")
+	}
+	tmp, err := os.MkdirTemp("", "hideout-evidence-validate-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	if err := releasechannel.ExtractEvidenceArchive(*archive, tmp); err != nil {
+		return err
+	}
+	bundle, err := releasechannel.ValidateEvidenceBundleRoot(tmp, productevidence.RequiredProofIDsForTarget(productevidence.RequiredForReleaseCandidate))
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"schema": bundle.Schema, "status": "passed", "sourceCommit": bundle.SourceCommit, "proofs": len(bundle.ProofIDs)})
+}
+
+func (a app) supportReleaseValidateReceipt(args []string) error {
+	fs := flag.NewFlagSet("support release validate-receipt", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	receiptPath := fs.String("receipt", "", "publication receipt")
+	manifestPath := fs.String("manifest", "", "public release manifest")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *receiptPath == "" || *manifestPath == "" {
+		return errors.New("usage: hideout support release validate-receipt --receipt <path> --manifest <path>")
+	}
+	var receipt releasechannel.PublicationReceipt
+	var release releasechannel.PublicRelease
+	if err := releasechannel.ReadStrict(*receiptPath, releasechannel.MaxJSONBytes, &receipt); err != nil {
+		return err
+	}
+	if err := releasechannel.ReadStrict(*manifestPath, releasechannel.MaxJSONBytes, &release); err != nil {
+		return err
+	}
+	if err := receipt.Validate(release); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"schema": receipt.Schema, "status": receipt.Status, "version": receipt.Version, "releaseId": receipt.ReleaseID})
+}
+
+func (a app) supportReleaseInventoryFromReceipt(args []string) error {
+	fs := flag.NewFlagSet("support release inventory-from-receipt", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	receiptPath := fs.String("receipt", "", "publication receipt")
+	manifestPath := fs.String("manifest", "", "public release manifest")
+	out := fs.String("out", "", "published inventory JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *receiptPath == "" || *manifestPath == "" || *out == "" {
+		return errors.New("usage: hideout support release inventory-from-receipt --receipt <path> --manifest <path> --out <path>")
+	}
+	var receipt releasechannel.PublicationReceipt
+	var release releasechannel.PublicRelease
+	if err := releasechannel.ReadStrict(*receiptPath, releasechannel.MaxJSONBytes, &receipt); err != nil {
+		return err
+	}
+	if err := releasechannel.ReadStrict(*manifestPath, releasechannel.MaxJSONBytes, &release); err != nil {
+		return err
+	}
+	if err := receipt.Validate(release); err != nil {
+		return err
+	}
+	receiptDigest, _, err := releasechannel.FileSHA256(*receiptPath)
+	if err != nil {
+		return err
+	}
+	inventory := releasechannel.PublishedInventory{
+		Schema: releasechannel.PublishedInventorySchema, GeneratedAt: receipt.ObservedAt,
+		Current: &releasechannel.InventoryEntry{
+			Version: release.Version, Tag: release.Tag, Maturity: release.Maturity,
+			Platform: "darwin/arm64", Backend: "lima", Package: receipt.Package,
+			ReleaseURL: receipt.URL, ReceiptSHA256: receiptDigest,
+			SupportMatrix: release.SupportMatrixVersion, NonClaims: append([]string(nil), release.NonClaims...),
+		},
+	}
+	if err := inventory.Validate(); err != nil {
+		return err
+	}
+	if err := releasechannel.WriteJSONAtomic(*out, inventory, 0o644); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(inventory)
+}
+
+func (a app) supportReleaseSigning(args []string) error {
+	fs := flag.NewFlagSet("support release validate-signing", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("package-root", "", "verified package root")
+	path := fs.String("observation", "", "signing observation JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *root == "" || *path == "" {
+		return errors.New("usage: hideout support release validate-signing --package-root <dir> --observation <path>")
+	}
+	if _, err := packagekit.VerifyDistribution(*root); err != nil {
+		return err
+	}
+	var observation releasechannel.SigningObservation
+	if err := releasechannel.ReadStrict(*path, releasechannel.MaxJSONBytes, &observation); err != nil {
+		return err
+	}
+	if err := releasechannel.ValidateSigningObservationForPackage(*root, observation); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"schema": releasechannel.SigningObservationSchema, "status": "passed", "teamId": observation.TeamID, "commonName": observation.CommonName})
+}
+
+func (a app) supportReleaseNotarization(args []string) error {
+	fs := flag.NewFlagSet("support release validate-notarization", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("package-root", "", "verified package root")
+	path := fs.String("observation", "", "notarization observation JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *root == "" || *path == "" {
+		return errors.New("usage: hideout support release validate-notarization --package-root <dir> --observation <path>")
+	}
+	if _, err := packagekit.VerifyDistribution(*root); err != nil {
+		return err
+	}
+	var observation releasechannel.NotarizationObservation
+	if err := releasechannel.ReadStrict(*path, releasechannel.MaxJSONBytes, &observation); err != nil {
+		return err
+	}
+	if err := releasechannel.ValidateNotarizationObservationForPackage(*root, observation); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{"schema": releasechannel.NotarizationObservationSchema, "status": "passed", "submissionId": observation.SubmissionID})
 }
 
 func (a app) supportProofRegistry(args []string) error {
@@ -318,6 +711,14 @@ func (a app) supportMatrix(args []string) error {
 	for _, entry := range matrix.Entries {
 		fmt.Fprintf(a.stdout, "%s: %s (%s)\n", entry.Subject, entry.Level, entry.Guidance)
 	}
+	if len(matrix.NonClaims) > 0 {
+		fmt.Fprintln(a.stdout, "non-claims:")
+		for _, nonClaim := range matrix.NonClaims {
+			fmt.Fprintf(a.stdout, "- %s: %s\n", nonClaim.ID, nonClaim.Summary)
+			fmt.Fprintf(a.stdout, "  applies-to: %s\n", strings.Join(nonClaim.AppliesTo, ", "))
+			fmt.Fprintf(a.stdout, "  guidance: %s\n", nonClaim.Guidance)
+		}
+	}
 	return nil
 }
 
@@ -330,6 +731,9 @@ func (a app) supportReadiness(args []string) error {
 	gate3 := fs.String("gate3-evidence", "", "real Gate 3 evidence path")
 	runtimeFamily := fs.String("runtime-family", "", "require exact packaged runtime evidence for family")
 	packageRoot := fs.String("package-root", "", "verified package artifact or install prefix providing release identity")
+	packageArtifact := fs.String("package-artifact", "", "exact package tar.gz providing archive identity")
+	signingObservation := fs.String("signing-observation", "", "independently observed signing JSON")
+	notarizationObservation := fs.String("notarization-observation", "", "accepted notarization observation JSON")
 	var productEvidence stringListFlag
 	fs.Var(&productEvidence, "product-evidence", "supporting product-hardening evidence path (repeatable)")
 	localStatus := fs.String("local-status", "passed", "passed or failed")
@@ -360,22 +764,81 @@ func (a app) supportReadiness(args []string) error {
 		runtimeExpectation = runtimeReadinessExpectation(resolved)
 	}
 	var packageIdentity *productevidence.PackageIdentity
+	packageObservationRoot := ""
+	var cleanupPackageArtifact func()
+	if strings.TrimSpace(*packageRoot) != "" && strings.TrimSpace(*packageArtifact) != "" {
+		return errors.New("--package-root and --package-artifact are mutually exclusive")
+	}
+	if strings.TrimSpace(*packageArtifact) != "" {
+		identity, root, cleanup, err := readinessPackageArtifactIdentity(*packageArtifact)
+		if err != nil {
+			return fmt.Errorf("resolve release package artifact identity: %w", err)
+		}
+		packageIdentity = &identity
+		packageObservationRoot = root
+		cleanupPackageArtifact = cleanup
+		defer cleanupPackageArtifact()
+	}
 	if strings.TrimSpace(*packageRoot) != "" {
 		identity, err := readinessPackageIdentity(*packageRoot)
 		if err != nil {
 			return fmt.Errorf("resolve release package identity: %w", err)
 		}
 		packageIdentity = &identity
+		verification, err := packagekit.Verify(*packageRoot)
+		if err != nil {
+			return err
+		}
+		if verification.Mode == "artifact" {
+			packageObservationRoot = verification.Root
+		}
+	}
+	var signingDigest, notarizationDigest string
+	if strings.TrimSpace(*signingObservation) != "" {
+		if packageObservationRoot == "" {
+			return errors.New("--signing-observation requires a package input")
+		}
+		var observation releasechannel.SigningObservation
+		if err := releasechannel.ReadStrict(*signingObservation, releasechannel.MaxJSONBytes, &observation); err != nil {
+			return fmt.Errorf("read signing observation: %w", err)
+		}
+		if err := releasechannel.ValidateSigningObservationForPackage(packageObservationRoot, observation); err != nil {
+			return err
+		}
+		digest, _, err := releasechannel.FileSHA256(*signingObservation)
+		if err != nil {
+			return err
+		}
+		signingDigest = digest
+	}
+	if strings.TrimSpace(*notarizationObservation) != "" {
+		if packageObservationRoot == "" {
+			return errors.New("--notarization-observation requires a package input")
+		}
+		var observation releasechannel.NotarizationObservation
+		if err := releasechannel.ReadStrict(*notarizationObservation, releasechannel.MaxJSONBytes, &observation); err != nil {
+			return fmt.Errorf("read notarization observation: %w", err)
+		}
+		if err := releasechannel.ValidateNotarizationObservationForPackage(packageObservationRoot, observation); err != nil {
+			return err
+		}
+		digest, _, err := releasechannel.FileSHA256(*notarizationObservation)
+		if err != nil {
+			return err
+		}
+		notarizationDigest = digest
 	}
 	ready, err := releasecompat.BuildReadiness(releasecompat.ReadinessOptions{
-		Mode:            *mode,
-		Commit:          *commit,
-		Gate2Evidence:   *gate2,
-		Gate3Evidence:   *gate3,
-		ProductEvidence: productEvidence.Values(),
-		LocalPassed:     localPassed,
-		Runtime:         runtimeExpectation,
-		Package:         packageIdentity,
+		Mode:                          *mode,
+		Commit:                        *commit,
+		Gate2Evidence:                 *gate2,
+		Gate3Evidence:                 *gate3,
+		ProductEvidence:               productEvidence.Values(),
+		LocalPassed:                   localPassed,
+		Runtime:                       runtimeExpectation,
+		Package:                       packageIdentity,
+		SigningObservationSHA256:      signingDigest,
+		NotarizationObservationSHA256: notarizationDigest,
 	})
 	if err != nil {
 		return err
@@ -413,31 +876,62 @@ func readinessPackageIdentity(root string) (productevidence.PackageIdentity, err
 	if err != nil {
 		return productevidence.PackageIdentity{}, err
 	}
-	var git packagekit.GitInfo
 	switch verification.Mode {
 	case "artifact":
 		manifest, err := packagekit.LoadManifest(filepath.Join(verification.Root, "package-manifest.json"))
 		if err != nil {
 			return productevidence.PackageIdentity{}, err
 		}
-		git = manifest.Git
+		return productevidence.PackageIdentity{
+			Name: packagekit.DefaultPackageRoot, ProductVersion: manifest.Release.ProductVersion,
+			SourceCommit: manifest.Source.Commit, HostOS: manifest.Target.HostOS,
+			HostArch: manifest.Target.HostArch,
+		}, errors.New("extracted package root cannot supply the outer archive digest; use --package-artifact")
 	case "installed":
-		state, err := packagekit.LoadInstallState(filepath.Join(verification.Root, filepath.FromSlash(packagekit.InstalledManifest)))
-		if err != nil {
-			return productevidence.PackageIdentity{}, err
-		}
-		git = state.Package.Git
+		return productevidence.PackageIdentity{}, errors.New("installed package state cannot supply the outer archive digest; use --package-artifact")
 	default:
 		return productevidence.PackageIdentity{}, fmt.Errorf("unsupported verified package mode %q", verification.Mode)
 	}
-	if git.Dirty {
-		return productevidence.PackageIdentity{}, errors.New("release package identity is dirty")
+}
+
+func readinessPackageArtifactIdentity(archive string) (productevidence.PackageIdentity, string, func(), error) {
+	digest, _, err := releasechannel.FileSHA256(archive)
+	if err != nil {
+		return productevidence.PackageIdentity{}, "", nil, err
 	}
-	commit := strings.TrimSpace(git.Commit)
-	if commit == "" || commit == "unknown" {
-		return productevidence.PackageIdentity{}, errors.New("release package commit is not canonical")
+	tmp, err := os.MkdirTemp("", "hideout-package-artifact-*")
+	if err != nil {
+		return productevidence.PackageIdentity{}, "", nil, err
 	}
-	return productevidence.PackageIdentity{Name: packagekit.DefaultPackageRoot, Version: commit}, nil
+	cleanup := func() { _ = os.RemoveAll(tmp) }
+	root, err := releasechannel.ExtractPackageArchive(archive, tmp)
+	if err != nil {
+		cleanup()
+		return productevidence.PackageIdentity{}, "", nil, err
+	}
+	if _, err := packagekit.VerifyDistribution(root); err != nil {
+		cleanup()
+		return productevidence.PackageIdentity{}, "", nil, err
+	}
+	manifest, err := packagekit.LoadManifestForDistribution(filepath.Join(root, "package-manifest.json"))
+	if err != nil {
+		cleanup()
+		return productevidence.PackageIdentity{}, "", nil, err
+	}
+	if manifest.Schema != packagekit.ArtifactSchema {
+		cleanup()
+		return productevidence.PackageIdentity{}, "", nil, errors.New("public release candidate requires the canonical package manifest")
+	}
+	identity := productevidence.PackageIdentity{
+		Name: packagekit.DefaultPackageRoot, ProductVersion: manifest.Release.ProductVersion,
+		SourceCommit: manifest.Source.Commit, ArtifactSHA256: digest,
+		HostOS: manifest.Target.HostOS, HostArch: manifest.Target.HostArch,
+	}
+	if err := identity.Validate(); err != nil {
+		cleanup()
+		return productevidence.PackageIdentity{}, "", nil, err
+	}
+	return identity, root, cleanup, nil
 }
 
 type stringListFlag []string
@@ -782,7 +1276,7 @@ func (a app) packageInstall(args []string) error {
 		StoreRoot:   opts.store,
 	})
 	if err != nil {
-		return err
+		return a.withPackageRecoveryCode(err, opts.prefix)
 	}
 	fmt.Fprintf(a.stdout, "package: %s prefix=%s store=%s files=%d stale=%d manifest=%s\n", result.Operation, result.Prefix, result.StoreRoot, result.FilesCopied, len(result.ObsoleteFiles), result.ManifestPath)
 	for _, stale := range result.ObsoleteFiles {
@@ -831,12 +1325,35 @@ func (a app) withPackageRecoveryCode(err error, prefix string) error {
 	if err == nil {
 		return nil
 	}
+	if packagekit.IsPlatformMismatch(err) {
+		entry, _ := recovery.Lookup(recovery.CodePackagePlatformUnsupported)
+		return fmt.Errorf("code=%s reason=%s hint=%s next=%s: %w", entry.Code, entry.Reason, entry.Hint, entry.NextActions[0], err)
+	}
 	msg := err.Error()
 	if strings.Contains(msg, "obsolete package-owned file") {
 		entry, _ := recovery.Lookup(recovery.CodePackageObsoleteLeftover)
 		return fmt.Errorf("code=%s reason=%s hint=hideout package repair --prefix %s: %w", entry.Code, entry.Reason, prefix, err)
 	}
+	if packageMigrationRecoveryCode(err) != "" {
+		entry, _ := recovery.Lookup(recovery.CodePackageMigrationUnsupported)
+		return fmt.Errorf("code=%s reason=%s hint=%s: %w", entry.Code, entry.Reason, entry.Hint, err)
+	}
 	return err
+}
+
+func packageMigrationRecoveryCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "migration range") ||
+		strings.Contains(msg, "unsupported installed package schema") ||
+		strings.Contains(msg, "unpublished legacy") ||
+		strings.Contains(msg, "unsupported package downgrade") ||
+		strings.Contains(msg, "same-version package identity differs") {
+		return recovery.CodePackageMigrationUnsupported
+	}
+	return ""
 }
 
 func (a app) packageRepair(args []string) error {
@@ -2927,6 +3444,8 @@ func doctorPackagingDiagnosticForExecutable(executable string) packagingDoctorDi
 	}
 	if verifyErr != nil && strings.Contains(verifyErr.Error(), "obsolete package-owned file") {
 		result.RecoveryCode = recovery.CodePackageObsoleteLeftover
+	} else if code := packageMigrationRecoveryCode(verifyErr); code != "" {
+		result.RecoveryCode = code
 	}
 	if len(prerequisiteSummaries) > 0 {
 		result.Summary += "; " + strings.Join(prerequisiteSummaries, "; ")

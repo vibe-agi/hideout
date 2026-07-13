@@ -64,7 +64,7 @@ runtime_evidence_markers() {
     echo "runtime_build_provenance_sha256=$(gate_sha256_file "$build_provenance")"
   else
     if [ -z "$commit" ]; then
-      commit="$(git rev-parse --short=12 HEAD)"
+      commit="$(git rev-parse HEAD)"
     fi
     if [ -z "$dirty" ]; then
       if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then dirty=true; else dirty=false; fi

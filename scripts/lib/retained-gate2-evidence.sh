@@ -34,7 +34,7 @@ resolve_retained_gate2_log() {
   artifact="$(jq -er --arg commit "$expected_commit" '
     select(.version == "hideout.product-hardening-evidence/v1") |
     select(.commit == $commit and .dirty == false) |
-    select(.packageIdentity.name == "hideout" and .packageIdentity.version == $commit) |
+    select(.packageIdentity.name == "hideout" and .packageIdentity.sourceCommit == $commit) |
     [.proofs[] |
       select(.proofId == "031.runtime.boundary-regression") |
       select(.mode == "real-gate" and .status == "passed" and .redactionStatus == "passed") |

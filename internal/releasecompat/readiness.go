@@ -16,36 +16,45 @@ import (
 	"github.com/vibe-agi/hideout/internal/recovery"
 )
 
-const ReadinessSchema = "hideout.release-readiness/v1"
+const (
+	ReadinessSchema = "hideout.release-readiness/v1"
+)
 
 const maxGateEvidenceBytes int64 = 8 << 20
 
 type ReadinessOptions struct {
-	Mode            string
-	Commit          string
-	Gate2Evidence   string
-	Gate3Evidence   string
-	ProductEvidence []string
-	LocalPassed     bool
-	Now             time.Time
-	Runtime         *productevidence.RuntimeExpectation
-	Package         *productevidence.PackageIdentity
+	Mode                          string
+	Commit                        string
+	Gate2Evidence                 string
+	Gate3Evidence                 string
+	ProductEvidence               []string
+	LocalPassed                   bool
+	Now                           time.Time
+	Runtime                       *productevidence.RuntimeExpectation
+	Package                       *productevidence.PackageIdentity
+	SigningObservationSHA256      string
+	NotarizationObservationSHA256 string
 }
 
 type Readiness struct {
-	Schema        string          `json:"schema"`
-	GeneratedAt   time.Time       `json:"generatedAt"`
-	Mode          string          `json:"mode"`
-	EvidenceClass string          `json:"evidenceClass"`
-	ReleaseReady  bool            `json:"releaseReady"`
-	Status        string          `json:"status"`
-	Commit        string          `json:"commit"`
-	Platform      Platform        `json:"platform"`
-	Matrix        MatrixRef       `json:"matrix"`
-	Commands      []CommandResult `json:"commands"`
-	Gates         []GateResult    `json:"gates"`
-	NonClaims     []string        `json:"nonClaims"`
-	Redaction     Redaction       `json:"redaction"`
+	Schema                        string                              `json:"schema"`
+	GeneratedAt                   time.Time                           `json:"generatedAt"`
+	Mode                          string                              `json:"mode"`
+	EvidenceClass                 string                              `json:"evidenceClass"`
+	ReleaseReady                  bool                                `json:"releaseReady"`
+	Status                        string                              `json:"status"`
+	SourceCommit                  string                              `json:"sourceCommit"`
+	Package                       *productevidence.PackageIdentity    `json:"package,omitempty"`
+	RuntimeIdentity               *productevidence.RuntimeExpectation `json:"runtime,omitempty"`
+	CandidateStatus               string                              `json:"candidateStatus,omitempty"`
+	SigningObservationSHA256      string                              `json:"signingObservationSHA256,omitempty"`
+	NotarizationObservationSHA256 string                              `json:"notarizationObservationSHA256,omitempty"`
+	Platform                      Platform                            `json:"platform"`
+	Matrix                        MatrixRef                           `json:"matrix"`
+	Commands                      []CommandResult                     `json:"commands"`
+	Gates                         []GateResult                        `json:"gates"`
+	NonClaims                     []string                            `json:"nonClaims"`
+	Redaction                     Redaction                           `json:"redaction"`
 }
 
 type Platform struct {
@@ -103,7 +112,7 @@ func BuildReadiness(opts ReadinessOptions) (Readiness, error) {
 	if mode == "release-candidate" {
 		commit = ""
 		if opts.Package != nil && opts.Package.Validate() == nil {
-			commit = opts.Package.Version
+			commit = opts.Package.Commit()
 		}
 	}
 	if commit == "" {
@@ -116,7 +125,7 @@ func BuildReadiness(opts ReadinessOptions) (Readiness, error) {
 		EvidenceClass: "local-fast",
 		ReleaseReady:  false,
 		Status:        "not-release",
-		Commit:        audit.RedactString(commit),
+		SourceCommit:  audit.RedactString(commit),
 		Platform:      Platform{OS: runtime.GOOS, Arch: runtime.GOARCH},
 		Matrix:        MatrixRef{Schema: MatrixSchema, Version: MatrixVersion},
 		Commands: []CommandResult{
@@ -125,6 +134,19 @@ func BuildReadiness(opts ReadinessOptions) (Readiness, error) {
 		},
 		NonClaims: RequiredNonClaimIDs(),
 		Redaction: Redaction{Mode: "control-plane"},
+	}
+	if mode == "release-candidate" {
+		if opts.Package != nil {
+			copy := *opts.Package
+			ready.Package = &copy
+		}
+		if opts.Runtime != nil {
+			runtimeCopy := *opts.Runtime
+			ready.RuntimeIdentity = &runtimeCopy
+		}
+		ready.CandidateStatus = "failed"
+		ready.SigningObservationSHA256 = strings.TrimSpace(opts.SigningObservationSHA256)
+		ready.NotarizationObservationSHA256 = strings.TrimSpace(opts.NotarizationObservationSHA256)
 	}
 	if mode == "local-fast" {
 		ready.Gates = []GateResult{
@@ -150,9 +172,14 @@ func BuildReadiness(opts ReadinessOptions) (Readiness, error) {
 	}
 	commandsValid := validateReleaseCommandRows(ready.Commands) == nil
 	gatesValid := validateReleaseGateRows(ready.Gates) == nil
-	ready.ReleaseReady = opts.LocalPassed && releaseTrustAnchorsValid(opts.Runtime, opts.Package, commit) && commandsValid && gatesValid
+	observationsValid := true
+	if mode == "release-candidate" {
+		observationsValid = isSHA256(ready.SigningObservationSHA256) && isSHA256(ready.NotarizationObservationSHA256)
+	}
+	ready.ReleaseReady = opts.LocalPassed && releaseTrustAnchorsValid(opts.Runtime, opts.Package, commit) && commandsValid && gatesValid && observationsValid
 	if ready.ReleaseReady {
 		ready.Status = "passed"
+		ready.CandidateStatus = "passed"
 	}
 	return RedactReadiness(ready), nil
 }
@@ -491,7 +518,19 @@ func validateSingleGate(id string, gate gateEvidence, expected *productevidence.
 }
 
 func RedactReadiness(in Readiness) Readiness {
-	in.Commit = audit.RedactString(in.Commit)
+	in.SourceCommit = audit.RedactString(in.SourceCommit)
+	if in.Package != nil {
+		copy := *in.Package
+		copy.Name = audit.RedactString(copy.Name)
+		copy.ProductVersion = audit.RedactString(copy.ProductVersion)
+		copy.SourceCommit = audit.RedactString(copy.SourceCommit)
+		copy.ArtifactSHA256 = audit.RedactString(copy.ArtifactSHA256)
+		copy.HostOS = audit.RedactString(copy.HostOS)
+		copy.HostArch = audit.RedactString(copy.HostArch)
+		in.Package = &copy
+	}
+	in.SigningObservationSHA256 = audit.RedactString(in.SigningObservationSHA256)
+	in.NotarizationObservationSHA256 = audit.RedactString(in.NotarizationObservationSHA256)
 	for i := range in.Commands {
 		in.Commands[i].Name = audit.RedactString(in.Commands[i].Name)
 		in.Commands[i].Code = audit.RedactString(in.Commands[i].Code)
@@ -528,6 +567,30 @@ func ValidateReadiness(readiness Readiness) error {
 	if readiness.Mode != "local-fast" && readiness.Mode != "release-candidate" {
 		return fmt.Errorf("unsupported readiness mode %q", readiness.Mode)
 	}
+	if readiness.Mode == "release-candidate" {
+		if readiness.CandidateStatus != "passed" && readiness.CandidateStatus != "failed" {
+			return fmt.Errorf("release-candidate readiness candidateStatus is invalid")
+		}
+		if readiness.Package != nil {
+			if err := readiness.Package.ValidateCandidateCommit(readiness.SourceCommit); err != nil {
+				return fmt.Errorf("release-candidate package identity: %w", err)
+			}
+		}
+		if readiness.RuntimeIdentity != nil && readiness.RuntimeIdentity.Validate() != nil {
+			return fmt.Errorf("release-candidate runtime identity is invalid")
+		}
+		if readiness.ReleaseReady && readiness.CandidateStatus != "passed" {
+			return fmt.Errorf("release-ready readiness requires candidateStatus=passed")
+		}
+		if readiness.ReleaseReady {
+			if readiness.Package == nil || readiness.RuntimeIdentity == nil {
+				return fmt.Errorf("release-ready readiness requires package and runtime identity")
+			}
+			if !isSHA256(readiness.SigningObservationSHA256) || !isSHA256(readiness.NotarizationObservationSHA256) {
+				return fmt.Errorf("release-ready readiness requires signing and notarization observation digests")
+			}
+		}
+	}
 	if readiness.Mode == "local-fast" {
 		if readiness.ReleaseReady {
 			return fmt.Errorf("local-fast readiness must not claim releaseReady")
@@ -545,8 +608,8 @@ func ValidateReadiness(readiness Readiness) error {
 	if readiness.EvidenceClass != "real-gate" || readiness.Status != "passed" {
 		return fmt.Errorf("releaseReady requires real-gate evidenceClass and passed status")
 	}
-	if !productevidence.IsCanonicalCommit(readiness.Commit) {
-		return fmt.Errorf("releaseReady commit must be a canonical candidate commit")
+	if !productevidence.IsCanonicalCommit(readiness.SourceCommit) {
+		return fmt.Errorf("releaseReady sourceCommit must be a canonical candidate commit")
 	}
 	if err := validateReleaseCommandRows(readiness.Commands); err != nil {
 		return fmt.Errorf("releaseReady commands: %w", err)
@@ -558,6 +621,18 @@ func ValidateReadiness(readiness Readiness) error {
 		return fmt.Errorf("releaseReady artifact contains unredacted control-plane material")
 	}
 	return nil
+}
+
+func isSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, ch := range value {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validateReleaseCommandRows(commands []CommandResult) error {

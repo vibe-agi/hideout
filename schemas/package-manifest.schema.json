@@ -1,55 +1,78 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hideout.local/schemas/package-manifest.schema.json",
-  "title": "Hideout Package Manifest",
+  "title": "Hideout Package Manifest And Install State",
   "oneOf": [
-    {
-      "$ref": "#/$defs/artifactManifest"
-    },
-    {
-      "$ref": "#/$defs/installStateManifest"
-    }
+    {"$ref": "#/$defs/artifactManifest"},
+    {"$ref": "#/$defs/installStateManifest"}
   ],
   "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "safeRelativePath": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[^/].*",
-      "not": {
-        "pattern": "(^|/)\\.\\.(/|$)"
-      }
-    },
-    "git": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["commit", "dirty"],
-      "properties": {
-        "commit": {
-          "type": "string",
-          "minLength": 1
-        },
-        "dirty": {
-          "type": "boolean"
-        }
-      }
+      "pattern": "^[^/]",
+      "not": {"pattern": "(^|/)\\.\\.(/|$)"}
     },
     "target": {
       "type": "object",
       "additionalProperties": false,
       "required": ["hostOS", "hostArch", "linuxGuestArch"],
       "properties": {
-        "hostOS": {
+        "hostOS": {"type": "string", "minLength": 1},
+        "hostArch": {"type": "string", "minLength": 1},
+        "linuxGuestArch": {"type": "string", "minLength": 1}
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["productVersion", "channel", "tag"],
+      "properties": {
+        "productVersion": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
         },
-        "hostArch": {
-          "type": "string",
-          "minLength": 1
-        },
-        "linuxGuestArch": {
-          "type": "string",
-          "minLength": 1
-        }
+        "channel": {"enum": ["alpha", "developer-preview"]},
+        "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "dirty"],
+      "properties": {
+        "repository": {"const": "https://github.com/vibe-agi/hideout"},
+        "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "dirty": {"type": "boolean"}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow", "ref"],
+      "properties": {
+        "workflow": {"type": "string", "minLength": 1},
+        "ref": {"type": "string", "minLength": 1}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "revision", "catalogFileSHA256", "artifactSHA256"],
+      "properties": {
+        "family": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "catalogFileSHA256": {"$ref": "#/$defs/sha256"},
+        "artifactSHA256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "signingSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["developer-id-observed", "developer-preview-unsigned"]}
       }
     },
     "migration": {
@@ -62,23 +85,15 @@
         "maximumPackageSchema"
       ],
       "properties": {
-        "installStateSchema": {
-          "const": "hideout.package-install-state.v1"
-        },
+        "installStateSchema": {"const": "hideout.package-install-state/v1"},
         "fromInstalledSchemas": {
           "type": "array",
           "minItems": 1,
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
+          "uniqueItems": true,
+          "items": {"const": "hideout.package-install-state/v1"}
         },
-        "minimumPackageSchema": {
-          "const": "hideout.package-manifest.v1"
-        },
-        "maximumPackageSchema": {
-          "const": "hideout.package-manifest.v1"
-        }
+        "minimumPackageSchema": {"const": "hideout.package-manifest/v1"},
+        "maximumPackageSchema": {"const": "hideout.package-manifest/v1"}
       }
     },
     "file": {
@@ -86,9 +101,7 @@
       "additionalProperties": false,
       "required": ["path", "kind", "sha256", "executable"],
       "properties": {
-        "path": {
-          "$ref": "#/$defs/safeRelativePath"
-        },
+        "path": {"$ref": "#/$defs/safeRelativePath"},
         "kind": {
           "enum": [
             "binary",
@@ -107,13 +120,8 @@
             "runtime-build"
           ]
         },
-        "sha256": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "executable": {
-          "type": "boolean"
-        }
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "executable": {"type": "boolean"}
       }
     },
     "obsoleteFile": {
@@ -121,144 +129,109 @@
       "additionalProperties": false,
       "required": ["path", "kind", "sha256", "executable", "reason"],
       "properties": {
-        "path": {
-          "$ref": "#/$defs/safeRelativePath"
+        "path": {"$ref": "#/$defs/safeRelativePath"},
+        "kind": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "executable": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "binaries", "entrypoints", "directories"],
+      "properties": {
+        "root": {"const": "hideout"},
+        "binaries": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeRelativePath"},
+          "contains": {"const": "bin/hideout"}
         },
-        "kind": {
-          "enum": [
-            "binary",
-            "linux-helper",
-            "helper-manifest",
-            "installer",
-            "entrypoint",
-            "schema",
-            "doc",
-            "script",
-            "packaging",
-            "host-app-core-data",
-            "host-app-example",
-            "runtime-catalog",
-            "runtime-contract",
-            "runtime-build"
+        "entrypoints": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeRelativePath"},
+          "allOf": [
+            {"contains": {"const": "install.sh"}},
+            {"contains": {"const": "README.md"}}
           ]
         },
-        "sha256": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "executable": {
-          "type": "boolean"
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1
+        "directories": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeRelativePath"},
+          "contains": {"const": "schemas"}
         }
       }
     },
     "artifactManifest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "builtAt", "git", "target", "layout", "files", "migration"],
+      "required": [
+        "schema",
+        "builtAt",
+        "release",
+        "source",
+        "build",
+        "target",
+        "runtime",
+        "signingSummary",
+        "layout",
+        "files",
+        "migration"
+      ],
       "properties": {
-        "schema": {
-          "const": "hideout.package-manifest.v1"
-        },
-        "builtAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "git": {
-          "$ref": "#/$defs/git"
-        },
-        "target": {
-          "$ref": "#/$defs/target"
-        },
-        "layout": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["root", "binaries", "entrypoints", "directories"],
-          "properties": {
-            "root": {
-              "const": "hideout"
-            },
-            "binaries": {
-              "type": "array",
-              "minItems": 4,
-              "items": {
-                "$ref": "#/$defs/safeRelativePath"
-              },
-              "contains": {
-                "const": "bin/hideout"
-              }
-            },
-            "entrypoints": {
-              "type": "array",
-              "minItems": 2,
-              "items": {
-                "$ref": "#/$defs/safeRelativePath"
-              },
-              "allOf": [
-                {
-                  "contains": {
-                    "const": "install.sh"
-                  }
-                },
-                {
-                  "contains": {
-                    "const": "README.md"
-                  }
-                }
-              ]
-            },
-            "directories": {
-              "type": "array",
-              "minItems": 3,
-              "items": {
-                "$ref": "#/$defs/safeRelativePath"
-              },
-              "contains": {
-                "const": "schemas"
-              }
-            }
-          }
-        },
+        "schema": {"const": "hideout.package-manifest/v1"},
+        "builtAt": {"type": "string", "format": "date-time"},
+        "release": {"$ref": "#/$defs/release"},
+        "source": {"$ref": "#/$defs/source"},
+        "build": {"$ref": "#/$defs/build"},
+        "target": {"$ref": "#/$defs/target"},
+        "runtime": {"$ref": "#/$defs/runtime"},
+        "signingSummary": {"$ref": "#/$defs/signingSummary"},
+        "layout": {"$ref": "#/$defs/layout"},
         "files": {
           "type": "array",
           "minItems": 8,
-          "items": {
-            "$ref": "#/$defs/file"
-          },
+          "items": {"$ref": "#/$defs/file"},
           "allOf": [
-            {
-              "contains": {
-                "type": "object",
-                "required": ["path"],
-                "properties": {
-                  "path": {
-                    "const": "bin/hideout"
-                  }
-                }
-              }
-            },
-            {
-              "contains": {
-                "type": "object",
-                "required": ["path", "kind"],
-                "properties": {
-                  "path": {
-                    "const": "install.sh"
-                  },
-                  "kind": {
-                    "const": "installer"
-                  }
-                }
-              }
-            }
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "bin/hideout"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "install.sh"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "README.md"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "LICENSE"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "THIRD_PARTY_NOTICES.md"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "SECURITY.md"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "runtime/catalog.json"}}}}
           ]
         },
-        "migration": {
-          "$ref": "#/$defs/migration"
+        "migration": {"$ref": "#/$defs/migration"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"release": {"properties": {"channel": {"const": "alpha"}}}}},
+          "then": {
+            "properties": {
+              "source": {"properties": {"dirty": {"const": false}}},
+              "signingSummary": {"properties": {"mode": {"const": "developer-id-observed"}}}
+            }
+          }
         }
+      ]
+    },
+    "installedSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "builtAt", "release", "source", "target"],
+      "properties": {
+        "schema": {"const": "hideout.package-manifest/v1"},
+        "builtAt": {"type": "string", "format": "date-time"},
+        "release": {"$ref": "#/$defs/release"},
+        "source": {"$ref": "#/$defs/source"},
+        "target": {"$ref": "#/$defs/target"}
       }
     },
     "installStateManifest": {
@@ -275,63 +248,15 @@
         "migration"
       ],
       "properties": {
-        "schema": {
-          "const": "hideout.package-install-state.v1"
-        },
-        "installedAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "installPrefix": {
-          "type": "string",
-          "minLength": 1
-        },
-        "storeRoot": {
-          "type": "string",
-          "minLength": 1
-        },
-        "package": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["schema", "builtAt", "git", "target"],
-          "properties": {
-            "schema": {
-              "const": "hideout.package-manifest.v1"
-            },
-            "builtAt": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "git": {
-              "$ref": "#/$defs/git"
-            },
-            "target": {
-              "$ref": "#/$defs/target"
-            }
-          }
-        },
-        "files": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "#/$defs/file"
-          }
-        },
-        "directories": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/safeRelativePath"
-          }
-        },
-        "migration": {
-          "$ref": "#/$defs/migration"
-        },
-        "obsoleteFiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/obsoleteFile"
-          }
-        }
+        "schema": {"const": "hideout.package-install-state/v1"},
+        "installedAt": {"type": "string", "format": "date-time"},
+        "installPrefix": {"type": "string", "minLength": 1},
+        "storeRoot": {"type": "string", "minLength": 1},
+        "package": {"$ref": "#/$defs/installedSource"},
+        "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/file"}},
+        "directories": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/safeRelativePath"}},
+        "migration": {"$ref": "#/$defs/migration"},
+        "obsoleteFiles": {"type": "array", "items": {"$ref": "#/$defs/obsoleteFile"}}
       }
     }
   }

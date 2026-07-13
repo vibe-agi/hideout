@@ -25,7 +25,7 @@
         "required": ["area", "subject", "level", "reason", "guidance", "requiredGates", "evidence"],
         "properties": {
           "area": {
-            "enum": ["platform", "backend", "feature", "schema", "abi", "gate", "helper", "non-claim"]
+            "enum": ["platform", "backend", "feature", "release", "schema", "abi", "gate", "helper", "non-claim"]
           },
           "subject": {
             "type": "string",

@@ -131,13 +131,16 @@ func evaluateRequirementForTarget(req ProofRequirement, target string, proof Pro
 			Summary:     "proof is not required for target=" + target,
 		}
 	}
-	return evaluateRequirement(req, proof, identity, opts, target == RequiredForReleaseCandidate)
+	return evaluateRequirement(req, proof, identity, opts, target == RequiredForReleaseCandidate || target == RequiredForPublicRelease)
 }
 
 func requirementAppliesToTarget(req ProofRequirement, target string) bool {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		target = RequiredForTargetedCompletion
+	}
+	if target == RequiredForPublicRelease {
+		return req.RequiredFor == RequiredForReleaseCandidate || req.RequiredFor == RequiredForPublicRelease
 	}
 	return req.RequiredFor == target
 }
@@ -316,14 +319,19 @@ func isStale(req ProofRequirement, identity proofFreshnessIdentity, opts Evaluat
 }
 
 func packageStale(actual, expected *PackageIdentity) bool {
-	if expected == nil || strings.TrimSpace(expected.Name) == "" || strings.TrimSpace(expected.Version) == "" {
+	if expected == nil || strings.TrimSpace(expected.Name) == "" {
 		return false
 	}
 	if actual == nil {
 		return true
 	}
-	return strings.TrimSpace(actual.Name) != strings.TrimSpace(expected.Name) ||
-		strings.TrimSpace(actual.Version) != strings.TrimSpace(expected.Version)
+	if strings.TrimSpace(actual.Name) != strings.TrimSpace(expected.Name) {
+		return true
+	}
+	return actual.ProductVersion != expected.ProductVersion ||
+		actual.SourceCommit != expected.SourceCommit ||
+		actual.ArtifactSHA256 != expected.ArtifactSHA256 ||
+		actual.HostOS != expected.HostOS || actual.HostArch != expected.HostArch
 }
 
 func staleSummary(req ProofRequirement) string {

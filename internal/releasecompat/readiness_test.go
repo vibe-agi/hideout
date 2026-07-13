@@ -252,7 +252,7 @@ func TestReleaseCandidateRejectsUnboundReleaseDogfoodManifest(t *testing.T) {
 func TestReleaseCandidateRuntimeEvidenceRequiresExactCleanCrossGateBinding(t *testing.T) {
 	expected := runtimeExpectationFixture()
 	packageIdentity := packageIdentityFixture()
-	if packageIdentity.Version == expected.BuildCommit {
+	if packageIdentity.SourceCommit == expected.BuildCommit {
 		t.Fatal("test fixture must keep package candidate and runtime image build commits distinct")
 	}
 	baseBinding := runtimeBindingFixture()
@@ -297,7 +297,7 @@ func TestReleaseCandidateRuntimeEvidenceRequiresExactCleanCrossGateBinding(t *te
 			var productPaths []string
 			if tc.product {
 				product := filepath.Join(dir, "runtime-product.json")
-				writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, proofBinding)
+				writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, proofBinding)
 				if tc.removePrior {
 					manifest, err := productevidence.ReadFile(product)
 					if err != nil {
@@ -323,6 +323,7 @@ func TestReleaseCandidateRuntimeEvidenceRequiresExactCleanCrossGateBinding(t *te
 			ready, err := BuildReadiness(ReadinessOptions{
 				Mode: "release-candidate", Commit: "caller-controlled", LocalPassed: true,
 				Gate2Evidence: gate2, Gate3Evidence: gate3, ProductEvidence: productPaths, Runtime: &expected, Package: trustedPackage,
+				SigningObservationSHA256: strings.Repeat("d", 64), NotarizationObservationSHA256: strings.Repeat("e", 64),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -330,8 +331,8 @@ func TestReleaseCandidateRuntimeEvidenceRequiresExactCleanCrossGateBinding(t *te
 			if ready.ReleaseReady != tc.wantReady {
 				t.Fatalf("releaseReady=%v want %v readiness=%+v", ready.ReleaseReady, tc.wantReady, ready)
 			}
-			if tc.wantReady && ready.Commit != packageIdentity.Version {
-				t.Fatalf("readiness commit=%q want verified package identity %q", ready.Commit, packageIdentity.Version)
+			if tc.wantReady && ready.SourceCommit != packageIdentity.SourceCommit {
+				t.Fatalf("readiness sourceCommit=%q want verified package identity %q", ready.SourceCommit, packageIdentity.SourceCommit)
 			}
 		})
 	}
@@ -373,7 +374,7 @@ func TestRuntimeReadinessRejectsAbsentStaleNativeAndFailedEvidence(t *testing.T)
 				gate2 = ""
 			}
 			product := filepath.Join(dir, "runtime-product.json")
-			writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, binding)
+			writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
 			if tc.stale || tc.failed {
 				manifest, err := productevidence.ReadFile(product)
 				if err != nil {
@@ -421,7 +422,7 @@ func TestReleaseCandidateRequiresEveryReleaseProofPackageAndArtifactDigest(t *te
 				t.Fatal(err)
 			}
 		}},
-		{name: "unrelated package identity", mutate: func(_ string, m *productevidence.Manifest) { m.PackageIdentity.Version = "unrelated" }},
+		{name: "unrelated package identity", mutate: func(_ string, m *productevidence.Manifest) { m.PackageIdentity.SourceCommit = strings.Repeat("f", 40) }},
 		{name: "dirty product manifest", mutate: func(_ string, m *productevidence.Manifest) { m.Dirty = true }},
 	}
 	for _, tc := range cases {
@@ -432,7 +433,7 @@ func TestReleaseCandidateRequiresEveryReleaseProofPackageAndArtifactDigest(t *te
 			writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", binding)
 			writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", binding)
 			product := filepath.Join(dir, "runtime-product.json")
-			writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, binding)
+			writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
 			manifest, err := productevidence.ReadFile(product)
 			if err != nil {
 				t.Fatal(err)
@@ -473,7 +474,7 @@ func TestReleaseCandidateKeepsPackageCommitIndependentFromRuntimeBuildCommit(t *
 		wantCommit    string
 	}{
 		{name: "invalid package commit", packageCommit: "pkg-0123456789ab", wantCommit: "unknown"},
-		{name: "canonical package mismatches proof", packageCommit: "fedcba987654", wantCommit: "fedcba987654"},
+		{name: "canonical package mismatches proof", packageCommit: "fedcba987654fedcba987654fedcba987654fedc", wantCommit: "fedcba987654fedcba987654fedcba987654fedc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -482,9 +483,9 @@ func TestReleaseCandidateKeepsPackageCommitIndependentFromRuntimeBuildCommit(t *
 			product := filepath.Join(dir, "runtime-product.json")
 			writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", binding)
 			writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", binding)
-			writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, binding)
+			writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
 			packageIdentity := packageIdentityFixture()
-			packageIdentity.Version = tc.packageCommit
+			packageIdentity.SourceCommit = tc.packageCommit
 			ready, err := BuildReadiness(ReadinessOptions{
 				Mode: "release-candidate", LocalPassed: true, Gate2Evidence: gate2, Gate3Evidence: gate3,
 				ProductEvidence: []string{product}, Runtime: &expected, Package: &packageIdentity,
@@ -495,8 +496,8 @@ func TestReleaseCandidateKeepsPackageCommitIndependentFromRuntimeBuildCommit(t *
 			if ready.ReleaseReady {
 				t.Fatalf("package identity mismatch produced release readiness: %+v", ready)
 			}
-			if ready.Commit != tc.wantCommit {
-				t.Fatalf("readiness commit=%q want package candidate %q", ready.Commit, tc.wantCommit)
+			if ready.SourceCommit != tc.wantCommit {
+				t.Fatalf("readiness sourceCommit=%q want package candidate %q", ready.SourceCommit, tc.wantCommit)
 			}
 		})
 	}
@@ -523,7 +524,7 @@ func TestReleaseCandidateRequiresRegistryFeatureAndFullClaimIdentity(t *testing.
 			product := filepath.Join(dir, "runtime-product.json")
 			writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", binding)
 			writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", binding)
-			writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, binding)
+			writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
 			manifest, err := productevidence.ReadFile(product)
 			if err != nil {
 				t.Fatal(err)
@@ -572,7 +573,7 @@ func TestReleaseCandidateRejectsUnknownAndSecretBearingGateFields(t *testing.T) 
 			product := filepath.Join(dir, "runtime-product.json")
 			writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", binding)
 			writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", binding)
-			writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, binding)
+			writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
 			data, err := os.ReadFile(gate2)
 			if err != nil {
 				t.Fatal(err)
@@ -641,7 +642,7 @@ func TestReleaseCandidateScansArtifactBytesDespitePassedRedactionStatus(t *testi
 	product := filepath.Join(dir, "runtime-product.json")
 	writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", binding)
 	writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", binding)
-	writeRuntimeProductEvidence(t, product, packageIdentityFixture().Version, binding)
+	writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
 	manifest, err := productevidence.ReadFile(product)
 	if err != nil {
 		t.Fatal(err)
@@ -694,7 +695,7 @@ func TestValidateReadinessRequiresExactReleaseRows(t *testing.T) {
 		{name: "reused gate environment", mutate: func(r *Readiness) { r.Gates[1].Runtime.EnvironmentID = r.Gates[0].Runtime.EnvironmentID }},
 		{name: "artifact mismatch", mutate: func(r *Readiness) { r.Gates[1].Runtime.ArtifactSHA256 = strings.Repeat("b", 64) }},
 		{name: "image build mismatch", mutate: func(r *Readiness) { r.Gates[1].Runtime.BuildCommit = "abcdef012345" }},
-		{name: "noncanonical readiness commit", mutate: func(r *Readiness) { r.Commit = "pkg-0123456789ab" }},
+		{name: "noncanonical readiness commit", mutate: func(r *Readiness) { r.SourceCommit = "pkg-0123456789ab" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -711,9 +712,13 @@ func validReleaseReadinessFixture() Readiness {
 	gate2Runtime := runtimeBindingFixture()
 	gate3Runtime := runtimeBindingFixture()
 	gate3Runtime.EnvironmentID = "env_20260711t000000z1111111111111111111"
+	packageIdentity := packageIdentityFixture()
+	runtimeIdentity := runtimeExpectationFixture()
 	return Readiness{
 		Schema: ReadinessSchema, GeneratedAt: time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC),
-		Mode: "release-candidate", EvidenceClass: "real-gate", ReleaseReady: true, Status: "passed", Commit: packageIdentityFixture().Version,
+		Mode: "release-candidate", EvidenceClass: "real-gate", ReleaseReady: true, Status: "passed",
+		SourceCommit: packageIdentity.SourceCommit, Package: &packageIdentity, RuntimeIdentity: &runtimeIdentity,
+		CandidateStatus: "passed", SigningObservationSHA256: strings.Repeat("d", 64), NotarizationObservationSHA256: strings.Repeat("e", 64),
 		Platform: Platform{OS: "darwin", Arch: "arm64"}, Matrix: MatrixRef{Schema: MatrixSchema, Version: MatrixVersion},
 		Commands: []CommandResult{
 			{Name: "local-checks", Status: "passed", Summary: "local checks passed"},
@@ -828,7 +833,11 @@ func runtimeExpectationFixture() productevidence.RuntimeExpectation {
 }
 
 func packageIdentityFixture() productevidence.PackageIdentity {
-	return productevidence.PackageIdentity{Name: "hideout", Version: "abcdef012345"}
+	return productevidence.PackageIdentity{
+		Name: "hideout", ProductVersion: "0.1.0-alpha.1",
+		SourceCommit:   "abcdef012345abcdef012345abcdef012345abcd",
+		ArtifactSHA256: strings.Repeat("c", 64), HostOS: "darwin", HostArch: "arm64",
+	}
 }
 
 func writeRuntimeGateEvidence(t *testing.T, path, id, backend string, binding productevidence.RuntimeBinding) {

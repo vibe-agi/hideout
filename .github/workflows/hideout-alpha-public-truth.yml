@@ -1,0 +1,56 @@
+name: Hideout Public Alpha Docs Truth
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - releases/current.json
+      - releases/receipts/**
+      - README.md
+      - README.zh-CN.md
+      - docs/STATUS.md
+      - docs/support-matrix.md
+      - CHANGELOG.md
+      - scripts/test-doc-truth-smoke.sh
+
+permissions:
+  contents: read
+
+jobs:
+  public-truth:
+    name: Prove receipt-bound checked-in release truth
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out checked-in public truth
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install the declared Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate inventory, receipt, and generated docs
+        run: |
+          set -euo pipefail
+          tag=$(jq -er '.current.tag' releases/current.json)
+          receipt="releases/receipts/${tag}.json"
+          test -f "$receipt"
+          out="$RUNNER_TEMP/hideout-public-docs-truth"
+          scripts/test-doc-truth-smoke.sh --out "$out" --public-receipt "$receipt"
+          jq -e '
+            ([.proofs[].proofId] | sort) ==
+            (["033.release.docs-public-truth","033.release.public-download"] | sort)
+          ' "$out/public-release-evidence.json" >/dev/null
+
+      - name: Retain bounded post-public proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hideout-public-alpha-docs-truth
+          path: ${{ runner.temp }}/hideout-public-docs-truth
+          if-no-files-found: error
+          retention-days: 90

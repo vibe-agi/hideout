@@ -175,7 +175,7 @@ require_command limactl
 require_command python3
 require_command curl
 
-tmp="$(mktemp -d "/tmp/ho-dog.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/ho-dog.XXXXXX")"
 auth_api_pid=""
 redirect_pid=""
 cleanup() {

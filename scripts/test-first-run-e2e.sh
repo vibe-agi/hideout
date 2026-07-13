@@ -190,7 +190,7 @@ add_proof() {
 }
 
 git_commit() {
-  git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown'
+  git rev-parse HEAD 2>/dev/null || printf 'unknown'
 }
 
 git_dirty() {
@@ -202,19 +202,16 @@ git_dirty() {
 }
 
 write_manifest() {
-  local pkg_version="${1:-dev}"
   jq -n \
     --arg generated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
     --arg commit "$(git_commit)" \
     --argjson dirty "$(git_dirty)" \
-    --arg pkg_version "$pkg_version" \
     --slurpfile proofs "$proofs_file" \
     '{
       version: "hideout.product-hardening-evidence/v1",
       generatedAt: $generated,
       commit: $commit,
       dirty: $dirty,
-      packageIdentity: {name: "hideout", version: $pkg_version},
       proofs: $proofs[0]
     }' >"$manifest"
 }
@@ -363,7 +360,7 @@ local_fast() {
     "failure fixtures available in first-run runner" "022.SC-004" \
     "Failure fixtures do not produce passing first-run evidence" "fail-closed" \
     "log" "logs/verify.out" "fixture support anchored by package verification"
-  write_manifest "dev"
+  write_manifest
   validate_evidence
   echo "first-run-e2e: local-fast passed evidence=$manifest"
 }
@@ -377,7 +374,7 @@ write_failed_fixture() {
     "Failure fixtures do not produce passing first-run evidence" "fail-closed" \
     "docs-report" "reports/$name.txt" "$name fixture report" \
     "" "$name" "available"
-  write_manifest "dev"
+  write_manifest
   validate_evidence
   echo "first-run-e2e: fixture $name failed closed evidence=$manifest" >&2
   exit 1
@@ -505,7 +502,7 @@ real_backend() {
       "Real backend proof is explicit and prerequisite gated" "backend" \
       "docs-report" "reports/real-backend-prerequisites.txt" \
       "real backend prerequisite report" "$reason" "real-backend" "missing" "$reason"
-    write_manifest "dev"
+    write_manifest
     validate_evidence
     echo "first-run-e2e: real-backend not-run evidence=$manifest"
     if [ "$require_real" -eq 1 ]; then
@@ -543,7 +540,7 @@ real_backend() {
     "real Lima/privacy first-run executed" "022.FR-008" \
     "Real backend proof passes only through the real backend path" "backend" \
     "log" "logs/run-real.err" "real backend Boundary output"
-  write_manifest "dev"
+  write_manifest
   validate_evidence
   echo "first-run-e2e: real-backend passed evidence=$manifest"
 }

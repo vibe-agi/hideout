@@ -14,11 +14,17 @@ func TestRegistryContainsV1CodesOnce(t *testing.T) {
 	want := []string{
 		CodePackageObsoleteLeftover,
 		CodePackagePrerequisiteMissing,
+		CodePackageMigrationUnsupported,
+		CodePackagePlatformUnsupported,
 		CodeInitProxySecretMissing,
 		CodeInitMediatedResolverMissing,
 		CodePrivilegeStatusDegraded,
 		CodeReleaseGateEvidenceMissing,
 		CodeReleaseEvidenceStale,
+		CodeReleasePackageIdentity,
+		CodeReleaseSigningRequired,
+		CodeReleaseNotarizationRequired,
+		CodeReleaseRepositoryPrereq,
 		CodeHostFSReservedRootDenied,
 		CodeDecisionClaimExpired,
 		CodeRuntimeSelectionUnsupported,
@@ -98,6 +104,18 @@ func TestHostAppRecoveryCodesAreCompleteAndActionable(t *testing.T) {
 			if !strings.HasPrefix(action, "hideout ") {
 				t.Fatalf("host-app recovery action is not a Hideout command: %+v", entry)
 			}
+		}
+	}
+}
+
+func TestSupportMatrixRecoveryActionsUseThePublicCLI(t *testing.T) {
+	for _, code := range []string{CodePackagePlatformUnsupported, CodeReleaseRepositoryPrereq} {
+		entry, ok := Lookup(code)
+		if !ok {
+			t.Fatalf("recovery code %q is not registered", code)
+		}
+		if len(entry.NextActions) != 1 || entry.NextActions[0] != "hideout support matrix --json" {
+			t.Fatalf("recovery code %q has a non-executable support action: %+v", code, entry.NextActions)
 		}
 	}
 }

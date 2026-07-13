@@ -11,6 +11,7 @@ import (
 )
 
 var canonicalCommitRE = regexp.MustCompile(`^[a-f0-9]{12,40}$`)
+var canonicalProductVersionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$`)
 
 const (
 	Feature031           = "031-supported-cli-runtime"
@@ -47,14 +48,14 @@ type RuntimeBinding struct {
 // intentionally absent because disposable real gates have independent
 // environment identities.
 type RuntimeExpectation struct {
-	Family         string
-	Revision       string
-	ArtifactSHA256 string
-	HostOS         string
-	HostArch       string
-	GuestArch      string
-	BuildCommit    string
-	RequireClean   bool
+	Family         string `json:"family"`
+	Revision       string `json:"revision"`
+	ArtifactSHA256 string `json:"artifactSHA256"`
+	HostOS         string `json:"hostOS"`
+	HostArch       string `json:"hostArch"`
+	GuestArch      string `json:"guestArch"`
+	BuildCommit    string `json:"buildCommit"`
+	RequireClean   bool   `json:"requireClean"`
 }
 
 func (e RuntimeExpectation) Validate() error {
@@ -110,8 +111,17 @@ func (p PackageIdentity) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("package identity name is required")
 	}
-	if !IsCanonicalCommit(p.Version) {
-		return errors.New("package identity version must be the canonical candidate commit")
+	if !IsCanonicalProductVersion(p.ProductVersion) {
+		return errors.New("package identity productVersion must be canonical SemVer prerelease")
+	}
+	if !isFullCommit(p.SourceCommit) {
+		return errors.New("package identity sourceCommit must be a full 40-character commit")
+	}
+	if !isLowerHexSHA256(p.ArtifactSHA256) {
+		return errors.New("package identity artifactSHA256 must be 64 lowercase hexadecimal characters")
+	}
+	if strings.TrimSpace(p.HostOS) == "" || strings.TrimSpace(p.HostArch) == "" {
+		return errors.New("package identity hostOS and hostArch are required")
 	}
 	return nil
 }
@@ -123,10 +133,26 @@ func (p PackageIdentity) ValidateCandidateCommit(candidateCommit string) error {
 	if !IsCanonicalCommit(candidateCommit) {
 		return errors.New("candidate commit is not canonical")
 	}
-	if p.Version != candidateCommit {
-		return fmt.Errorf("package candidate commit %q does not match readiness candidate commit %q", p.Version, candidateCommit)
+	if p.Commit() != candidateCommit {
+		return fmt.Errorf("package candidate commit %q does not match readiness candidate commit %q", p.Commit(), candidateCommit)
 	}
 	return nil
+}
+
+func (p PackageIdentity) HasArtifactIdentity() bool {
+	return strings.TrimSpace(p.ProductVersion) != "" || strings.TrimSpace(p.SourceCommit) != "" || strings.TrimSpace(p.ArtifactSHA256) != "" || strings.TrimSpace(p.HostOS) != "" || strings.TrimSpace(p.HostArch) != ""
+}
+
+func (p PackageIdentity) Commit() string {
+	return strings.TrimSpace(p.SourceCommit)
+}
+
+func IsCanonicalProductVersion(value string) bool {
+	return canonicalProductVersionRE.MatchString(value)
+}
+
+func isFullCommit(value string) bool {
+	return len(value) == 40 && IsCanonicalCommit(value)
 }
 
 func (b RuntimeBinding) Sanitized() RuntimeBinding {

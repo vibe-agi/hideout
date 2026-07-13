@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/published-release-inventory.schema.json",
+  "title": "Hideout Published Release Inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "generatedAt", "current"],
+  "properties": {
+    "schema": {"const": "hideout.published-release-inventory/v1"},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "current": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["version", "tag", "maturity", "platform", "backend", "package", "releaseURL", "receiptSHA256", "supportMatrix", "nonClaims"],
+          "properties": {
+            "version": {"type": "string", "minLength": 1},
+            "tag": {"type": "string", "minLength": 1},
+            "maturity": {"const": "public-supervised-alpha"},
+            "platform": {"const": "darwin/arm64"},
+            "backend": {"const": "lima"},
+            "package": {"$ref": "public-evidence-bundle.schema.json#/$defs/package"},
+            "releaseURL": {"type": "string", "pattern": "^https://github.com/vibe-agi/hideout/releases/tag/"},
+            "receiptSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "supportMatrix": {"type": "string", "minLength": 1},
+            "nonClaims": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+          }
+        }
+      ]
+    }
+  }
+}

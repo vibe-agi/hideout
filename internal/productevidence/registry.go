@@ -13,6 +13,17 @@ import (
 const RegistrySchema = "hideout.proof-registry/v1"
 
 const (
+	Feature033                  = "033-public-alpha-release-channel"
+	Proof033PackageIdentity     = "033.release.package-identity"
+	Proof033SigningNotarization = "033.release.signing-notarization"
+	Proof033CleanInstall        = "033.release.clean-install"
+	Proof033RealGateBinding     = "033.release.real-gate-binding"
+	Proof033DocsCandidateTruth  = "033.release.docs-candidate-truth"
+	Proof033PublicDownload      = "033.release.public-download"
+	Proof033DocsPublicTruth     = "033.release.docs-public-truth"
+)
+
+const (
 	LayerUnit             = "unit"
 	LayerGate0            = "gate0"
 	LayerProductHardening = "product-hardening"
@@ -22,6 +33,7 @@ const (
 	RequiredForLocalDogfood       = "local-dogfood"
 	RequiredForTargetedCompletion = "targeted-completion"
 	RequiredForReleaseCandidate   = "release-candidate"
+	RequiredForPublicRelease      = "public-release"
 	RequiredForSupportingOnly     = "supporting-only"
 
 	FreshnessNone                 = "none"
@@ -49,6 +61,7 @@ var validRequiredFor = []string{
 	RequiredForLocalDogfood,
 	RequiredForTargetedCompletion,
 	RequiredForReleaseCandidate,
+	RequiredForPublicRelease,
 	RequiredForSupportingOnly,
 }
 
@@ -151,6 +164,14 @@ func ProductHardeningRequirements() []ProofRequirement {
 		req(Feature032, Proof032Gate0Binding, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "032.FR-010", "032.FR-011", "032.FR-018", "032.FR-019", "032.FR-020", "032.FR-021", "032.FR-022", "032.FR-023", "032.FR-024", "032.FR-028", "032.FR-029"),
 		req(Feature032, Proof032Gate0IdentitySafety, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "032.FR-012", "032.FR-013", "032.FR-014", "032.FR-015", "032.FR-016", "032.FR-017", "032.FR-030"),
 		evidenceClassReq(Feature032, Proof032RealGate2External, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "host-app-pack-external-real-gate2", "032.FR-033", "032.SC-001", "032.SC-002", "032.SC-003", "032.SC-004", "032.SC-005", "032.SC-006", "032.SC-007", "032.SC-008", "032.SC-009", "032.SC-010", "032.SC-011", "032.SC-012", "032.SC-013", "032.SC-014"),
+
+		req(Feature033, Proof033PackageIdentity, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-001", "033.FR-003", "033.FR-005", "033.FR-006"),
+		req(Feature033, Proof033SigningNotarization, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-010", "033.FR-011", "033.SC-003"),
+		req(Feature033, Proof033CleanInstall, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-008", "033.FR-009", "033.FR-022", "033.FR-023"),
+		runtimeReq(Feature033, Proof033RealGateBinding, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-018", "033.FR-024", "033.SC-006", "033.SC-007"),
+		req(Feature033, Proof033DocsCandidateTruth, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-027", "033.FR-039", "033.SC-018"),
+		req(Feature033, Proof033PublicDownload, LayerReleaseCandidate, RequiredForPublicRelease, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-020", "033.SC-001", "033.SC-008"),
+		req(Feature033, Proof033DocsPublicTruth, LayerReleaseCandidate, RequiredForPublicRelease, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-027", "033.FR-039", "033.SC-011", "033.SC-018"),
 	}
 	sortRequirements(rows)
 	return rows
@@ -282,6 +303,25 @@ func RequirementsForFeature(featureID string) []ProofRequirement {
 
 func RequiredProofIDsForFeature(featureID string) []string {
 	reqs := RequirementsForFeature(featureID)
+	out := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		out = append(out, req.ProofID)
+	}
+	return out
+}
+
+func RequirementsForTarget(target string) []ProofRequirement {
+	var out []ProofRequirement
+	for _, req := range ProductHardeningRequirements() {
+		if requirementAppliesToTarget(req, target) {
+			out = append(out, req)
+		}
+	}
+	return out
+}
+
+func RequiredProofIDsForTarget(target string) []string {
+	reqs := RequirementsForTarget(target)
 	out := make([]string, 0, len(reqs))
 	for _, req := range reqs {
 		out = append(out, req.ProofID)

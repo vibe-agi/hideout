@@ -8,9 +8,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
+)
+
+var (
+	fullCommitRE     = regexp.MustCompile(`^[a-f0-9]{40}$`)
+	sha256RE         = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	productVersionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$`)
 )
 
 type VerifyResult struct {
@@ -18,6 +25,22 @@ type VerifyResult struct {
 	Mode          string
 	Files         int
 	Prerequisites []ExternalPrerequisiteStatus
+}
+
+type platformMismatchError struct {
+	packageOS   string
+	packageArch string
+	hostOS      string
+	hostArch    string
+}
+
+func (e *platformMismatchError) Error() string {
+	return fmt.Sprintf("package target %s/%s does not match host %s/%s", e.packageOS, e.packageArch, e.hostOS, e.hostArch)
+}
+
+func IsPlatformMismatch(err error) bool {
+	var mismatch *platformMismatchError
+	return errors.As(err, &mismatch)
 }
 
 func Verify(root string) (VerifyResult, error) {
@@ -52,7 +75,39 @@ func Verify(root string) (VerifyResult, error) {
 	return VerifyResult{Root: cleanRoot, Mode: "installed", Files: len(state.Files), Prerequisites: ExternalPrerequisites()}, nil
 }
 
+// VerifyDistribution validates a package artifact independently of the host
+// running the verifier. End-user package verification still enforces the host
+// target; release promotion needs to inspect exact macOS bytes on a separate
+// validation runner without pretending those bytes are runnable there.
+func VerifyDistribution(root string) (VerifyResult, error) {
+	cleanRoot, err := CleanRoot(root, "package root")
+	if err != nil {
+		return VerifyResult{}, err
+	}
+	if st, err := os.Stat(cleanRoot); err != nil {
+		return VerifyResult{}, fmt.Errorf("stat package root: %w", err)
+	} else if !st.IsDir() {
+		return VerifyResult{}, fmt.Errorf("package root is not a directory: %s", cleanRoot)
+	}
+	manifest, err := LoadManifestForDistribution(filepath.Join(cleanRoot, "package-manifest.json"))
+	if err != nil {
+		return VerifyResult{}, err
+	}
+	if err := VerifyArtifact(cleanRoot, manifest); err != nil {
+		return VerifyResult{}, err
+	}
+	return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files), Prerequisites: ExternalPrerequisites()}, nil
+}
+
 func LoadManifest(path string) (Manifest, error) {
+	return loadManifest(path, true)
+}
+
+func LoadManifestForDistribution(path string) (Manifest, error) {
+	return loadManifest(path, false)
+}
+
+func loadManifest(path string, requireHostTarget bool) (Manifest, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("open package-manifest.json: %w", err)
@@ -64,7 +119,7 @@ func LoadManifest(path string) (Manifest, error) {
 	if err := dec.Decode(&manifest); err != nil {
 		return Manifest{}, fmt.Errorf("parse package-manifest.json: %w", err)
 	}
-	if err := validateManifest(manifest); err != nil {
+	if err := validateManifest(manifest, requireHostTarget); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil
@@ -125,6 +180,11 @@ func VerifyArtifact(root string, manifest Manifest) error {
 			return fmt.Errorf("package manifest layout path %q is not covered by file checksums", rel)
 		}
 	}
+	for _, rel := range []string{"LICENSE", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "README.md", "runtime/catalog.json"} {
+		if _, ok := seen[rel]; !ok {
+			return fmt.Errorf("package manifest must checksum %q", rel)
+		}
+	}
 	return nil
 }
 
@@ -150,21 +210,42 @@ func VerifyInstalled(prefix string, state InstallState) error {
 	return nil
 }
 
-func validateManifest(manifest Manifest) error {
+func validateManifest(manifest Manifest, requireHostTarget bool) error {
 	if manifest.Schema != ArtifactSchema {
 		return fmt.Errorf("unsupported package manifest schema %q", manifest.Schema)
 	}
 	if strings.TrimSpace(manifest.BuiltAt) == "" {
 		return errors.New("package manifest builtAt is required")
 	}
-	if strings.TrimSpace(manifest.Git.Commit) == "" {
-		return errors.New("package manifest git.commit is required")
+	if !productVersionRE.MatchString(manifest.Release.ProductVersion) || manifest.Release.Tag != "v"+manifest.Release.ProductVersion {
+		return errors.New("package manifest release productVersion/tag is invalid")
+	}
+	if manifest.Release.Channel != "alpha" && manifest.Release.Channel != "developer-preview" {
+		return errors.New("package manifest release channel is invalid")
+	}
+	if manifest.Source.Repository != "https://github.com/vibe-agi/hideout" || !fullCommitRE.MatchString(manifest.Source.Commit) {
+		return errors.New("package manifest source repository/full commit is invalid")
+	}
+	if manifest.Release.Channel == "alpha" && manifest.Source.Dirty {
+		return errors.New("public alpha package source must be clean")
+	}
+	if strings.TrimSpace(manifest.Build.Workflow) == "" || strings.TrimSpace(manifest.Build.Ref) == "" {
+		return errors.New("package manifest build workflow/ref is required")
+	}
+	if manifest.Runtime.Family == "" || manifest.Runtime.Revision == "" || !sha256RE.MatchString(manifest.Runtime.CatalogFileSHA256) || !sha256RE.MatchString(manifest.Runtime.ArtifactSHA256) {
+		return errors.New("package manifest runtime identity is invalid")
+	}
+	if manifest.Release.Channel == "alpha" && manifest.SigningSummary.Mode != "developer-id-observed" {
+		return errors.New("public alpha package requires developer-id-observed signing mode")
 	}
 	if strings.TrimSpace(manifest.Target.HostOS) == "" || strings.TrimSpace(manifest.Target.HostArch) == "" || strings.TrimSpace(manifest.Target.LinuxGuestArch) == "" {
 		return errors.New("package manifest target hostOS, hostArch, and linuxGuestArch are required")
 	}
-	if manifest.Target.HostOS != runtime.GOOS || manifest.Target.HostArch != runtime.GOARCH {
-		return fmt.Errorf("package target %s/%s does not match host %s/%s", manifest.Target.HostOS, manifest.Target.HostArch, runtime.GOOS, runtime.GOARCH)
+	if requireHostTarget && (manifest.Target.HostOS != runtime.GOOS || manifest.Target.HostArch != runtime.GOARCH) {
+		return &platformMismatchError{
+			packageOS: manifest.Target.HostOS, packageArch: manifest.Target.HostArch,
+			hostOS: runtime.GOOS, hostArch: runtime.GOARCH,
+		}
 	}
 	if len(manifest.Files) == 0 {
 		return errors.New("package manifest has no files")

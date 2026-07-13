@@ -117,7 +117,7 @@ require_command go
 
 started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 stamp="$(date -u +"%Y%m%dT%H%M%SZ")"
-commit="$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
 evidence_root="${HIDEOUT_RELEASE_EVIDENCE_ROOT:-$ROOT/.hideout-release-evidence}"
 evidence_dir="${HIDEOUT_RELEASE_EVIDENCE_DIR:-$evidence_root/release-dogfood-$stamp-$commit}"
 # Export so the gate subprocess and its per-gate emission (scripts/lib/gate-result.sh)

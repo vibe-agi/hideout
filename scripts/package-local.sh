@@ -6,64 +6,78 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/package-local.sh [--out <tar.gz>] [--source <dir>]
+  scripts/package-local.sh --stage <dir> [release options]
+  scripts/package-local.sh --finalize <dir> --out <tar.gz> [--signing-mode <mode>]
+  scripts/package-local.sh [--out <tar.gz>] [release options]
 
-Build a local release-like tarball with Hideout binaries, schemas, docs, and
-packaging metadata. The archive layout is:
+Release options:
+  --source <dir>
+  --version <semver-prerelease>
+  --channel alpha|developer-preview
+  --tag <v-prefixed-version>
+  --workflow <identity>
+  --ref <git-ref>
+  --signing-mode developer-id-observed|developer-preview-unsigned
 
-  hideout/
-    bin/
-    install.sh
-    package-manifest.json
-    README.md
-    README.zh-CN.md
-    schemas/
-    docs/
-    host-app/
-    examples/
-    packaging/
+The two-phase form stages package content without a package manifest, allowing
+host binaries to be signed exactly once. Finalization inventories the frozen
+tree, writes the canonical manifest, verifies it, and creates the final archive
+without rebuilding or mutating signed binaries.
 USAGE
 }
 
 source="$ROOT"
+stage=""
+finalize=""
 out=""
+version="${HIDEOUT_VERSION:-0.1.0-dev.0}"
+channel="${HIDEOUT_RELEASE_CHANNEL:-developer-preview}"
+tag=""
+workflow="${GITHUB_WORKFLOW_REF:-local-package}"
+ref="${GITHUB_REF:-local}"
+signing_mode=""
+signing_mode_set=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --out)
-      out="${2:-}"
-      shift 2
-      ;;
-    --source)
-      source="${2:-}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "package-local: unknown option: $1" >&2
-      usage >&2
-      exit 2
-      ;;
+    --stage) stage="${2:-}"; shift 2 ;;
+    --finalize) finalize="${2:-}"; shift 2 ;;
+    --out) out="${2:-}"; shift 2 ;;
+    --source) source="${2:-}"; shift 2 ;;
+    --version) version="${2:-}"; shift 2 ;;
+    --channel) channel="${2:-}"; shift 2 ;;
+    --tag) tag="${2:-}"; shift 2 ;;
+    --workflow) workflow="${2:-}"; shift 2 ;;
+    --ref) ref="${2:-}"; shift 2 ;;
+    --signing-mode) signing_mode="${2:-}"; signing_mode_set=1; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "package-local: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 source="$(cd "$source" && pwd -P)"
-if [ -z "$out" ]; then
-  out="$source/dist/hideout-$(go env GOOS)-$(go env GOARCH).tar.gz"
+if [ -z "$tag" ]; then
+  tag="v$version"
 fi
-case "$out" in
-  /*) ;;
-  *) out="$PWD/$out" ;;
+if [ "$tag" != "v$version" ]; then
+  echo "package-local: --tag must equal v<version>" >&2
+  exit 2
+fi
+case "$channel" in
+  alpha|developer-preview) ;;
+  *) echo "package-local: unsupported channel: $channel" >&2; exit 2 ;;
 esac
-
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-package.XXXXXX")"
-cleanup() {
-  rm -rf "$tmp"
-}
-trap cleanup EXIT
+if [ -z "$signing_mode" ]; then
+  if [ "$channel" = "alpha" ]; then
+    signing_mode="developer-id-observed"
+  else
+    signing_mode="developer-preview-unsigned"
+  fi
+fi
+case "$signing_mode" in
+  developer-id-observed|developer-preview-unsigned) ;;
+  *) echo "package-local: unsupported signing mode: $signing_mode" >&2; exit 2 ;;
+esac
 
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -76,315 +90,186 @@ sha256_file() {
   fi
 }
 
-stage="$tmp/stage"
-prefix="$stage/hideout"
-mkdir -p "$prefix"
-
-"$source/scripts/install-local.sh" --prefix "$prefix" --store "$tmp/store" --source "$source" --skip-init >/dev/null
-cp "$source/packaging/install-package.sh" "$prefix/install.sh"
-chmod 0755 "$prefix/install.sh"
-cp "$source/README.md" "$prefix/README.md"
-cp "$source/README.zh-CN.md" "$prefix/README.zh-CN.md"
-cp -R "$source/schemas" "$prefix/schemas"
-cp -R "$source/docs" "$prefix/docs"
-mkdir -p "$prefix/host-app" "$prefix/examples"
-cp -R "$source/internal/hostcap/recipes" "$prefix/host-app/recipes"
-cp -R "$source/examples/host-app-packs" "$prefix/examples/host-app-packs"
-mkdir -p "$prefix/packaging"
-cp -R "$source/packaging/homebrew" "$prefix/packaging/homebrew"
-mkdir -p "$prefix/runtime"
-cp "$source/internal/runtimecatalog/catalog.json" "$prefix/runtime/catalog.json"
-cp "$source/internal/runtimecatalog/contract.json" "$prefix/runtime/contract.json"
-cp -R "$source/runtime/developer-standard" "$prefix/runtime/developer-standard"
-
-host_os="$(go env GOOS)"
-host_arch="$(go env GOARCH)"
-linux_guest_arch="$host_arch"
-git_commit="$(git -C "$source" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
-git_dirty=false
-if git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -n "$(git -C "$source" status --porcelain)" ]; then
-  git_dirty=true
-fi
-built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-shim_linux="bin/hideout-shim-linux-$linux_guest_arch"
-hostfsd_linux="bin/hideout-hostfsd-linux-$linux_guest_arch"
-dns_stub_linux="bin/hideout-dns-stub-linux-$linux_guest_arch"
-shim_linux_manifest="$shim_linux.manifest.json"
-hostfsd_linux_manifest="$hostfsd_linux.manifest.json"
-cat >"$prefix/package-manifest.json" <<EOF
-{
-  "schema": "hideout.package-manifest.v1",
-  "builtAt": "$built_at",
-  "git": {
-    "commit": "$git_commit",
-    "dirty": $git_dirty
-  },
-  "target": {
-    "hostOS": "$host_os",
-    "hostArch": "$host_arch",
-    "linuxGuestArch": "$linux_guest_arch"
-  },
-  "layout": {
-    "root": "hideout",
-    "binaries": [
-      "bin/hideout",
-      "bin/hideout-shim",
-      "$shim_linux",
-      "$hostfsd_linux",
-      "$dns_stub_linux"
-    ],
-    "entrypoints": [
-      "install.sh",
-      "README.md",
-      "README.zh-CN.md"
-    ],
-    "directories": [
-      "schemas",
-      "docs",
-      "host-app",
-      "examples",
-      "packaging",
-      "runtime"
-    ]
-  },
-  "migration": {
-    "installStateSchema": "hideout.package-install-state.v1",
-    "fromInstalledSchemas": [
-      "hideout.package-install-state.v1"
-    ],
-    "minimumPackageSchema": "hideout.package-manifest.v1",
-    "maximumPackageSchema": "hideout.package-manifest.v1"
-  },
-  "files": [
-    {
-      "path": "bin/hideout",
-      "kind": "binary",
-      "sha256": "$(sha256_file "$prefix/bin/hideout")",
-      "executable": true
-    },
-    {
-      "path": "bin/hideout-shim",
-      "kind": "binary",
-      "sha256": "$(sha256_file "$prefix/bin/hideout-shim")",
-      "executable": true
-    },
-    {
-      "path": "$shim_linux",
-      "kind": "linux-helper",
-      "sha256": "$(sha256_file "$prefix/$shim_linux")",
-      "executable": true
-    },
-    {
-      "path": "$shim_linux_manifest",
-      "kind": "helper-manifest",
-      "sha256": "$(sha256_file "$prefix/$shim_linux_manifest")",
-      "executable": false
-    },
-    {
-      "path": "$hostfsd_linux",
-      "kind": "linux-helper",
-      "sha256": "$(sha256_file "$prefix/$hostfsd_linux")",
-      "executable": true
-    },
-    {
-      "path": "$hostfsd_linux_manifest",
-      "kind": "helper-manifest",
-      "sha256": "$(sha256_file "$prefix/$hostfsd_linux_manifest")",
-      "executable": false
-    },
-    {
-      "path": "$dns_stub_linux",
-      "kind": "linux-helper",
-      "sha256": "$(sha256_file "$prefix/$dns_stub_linux")",
-      "executable": true
-    },
-    {
-      "path": "install.sh",
-      "kind": "installer",
-      "sha256": "$(sha256_file "$prefix/install.sh")",
-      "executable": true
-    },
-    {
-      "path": "README.md",
-      "kind": "entrypoint",
-      "sha256": "$(sha256_file "$prefix/README.md")",
-      "executable": false
-    },
-    {
-      "path": "README.zh-CN.md",
-      "kind": "entrypoint",
-      "sha256": "$(sha256_file "$prefix/README.zh-CN.md")",
-      "executable": false
-    },
-    {
-      "path": "schemas/package-manifest.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/package-manifest.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/release-dogfood.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/release-dogfood.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/runtime-catalog.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/runtime-catalog.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/runtime-verification.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/runtime-verification.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/capability-descriptor.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/capability-descriptor.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/host-app-pack.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/host-app-pack.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/host-app-pack-registry.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/host-app-pack-registry.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/host-app-enablement.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/host-app-enablement.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/host-app-inspection.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/host-app-inspection.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "schemas/open-resource-intent.schema.json",
-      "kind": "schema",
-      "sha256": "$(sha256_file "$prefix/schemas/open-resource-intent.schema.json")",
-      "executable": false
-    },
-    {
-      "path": "docs/README.md",
-      "kind": "doc",
-      "sha256": "$(sha256_file "$prefix/docs/README.md")",
-      "executable": false
-    },
-    {
-      "path": "docs/STATUS.md",
-      "kind": "doc",
-      "sha256": "$(sha256_file "$prefix/docs/STATUS.md")",
-      "executable": false
-    },
-    {
-      "path": "host-app/recipes/builtin-vscode.json",
-      "kind": "host-app-core-data",
-      "sha256": "$(sha256_file "$prefix/host-app/recipes/builtin-vscode.json")",
-      "executable": false
-    },
-    {
-      "path": "host-app/recipes/safety-profiles.json",
-      "kind": "host-app-core-data",
-      "sha256": "$(sha256_file "$prefix/host-app/recipes/safety-profiles.json")",
-      "executable": false
-    },
-    {
-      "path": "examples/host-app-packs/README.md",
-      "kind": "host-app-example",
-      "sha256": "$(sha256_file "$prefix/examples/host-app-packs/README.md")",
-      "executable": false
-    },
-    {
-      "path": "examples/host-app-packs/cursor/hideout.host-app-pack.json",
-      "kind": "host-app-example",
-      "sha256": "$(sha256_file "$prefix/examples/host-app-packs/cursor/hideout.host-app-pack.json")",
-      "executable": false
-    },
-    {
-      "path": "examples/host-app-packs/zed/hideout.host-app-pack.json",
-      "kind": "host-app-example",
-      "sha256": "$(sha256_file "$prefix/examples/host-app-packs/zed/hideout.host-app-pack.json")",
-      "executable": false
-    },
-    {
-      "path": "runtime/catalog.json",
-      "kind": "runtime-catalog",
-      "sha256": "$(sha256_file "$prefix/runtime/catalog.json")",
-      "executable": false
-    },
-    {
-      "path": "runtime/contract.json",
-      "kind": "runtime-contract",
-      "sha256": "$(sha256_file "$prefix/runtime/contract.json")",
-      "executable": false
-    },
-    {
-      "path": "runtime/developer-standard/README.md",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/README.md")",
-      "executable": false
-    },
-    {
-      "path": "runtime/developer-standard/build-lib.sh",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/build-lib.sh")",
-      "executable": true
-    },
-    {
-      "path": "runtime/developer-standard/build.sh",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/build.sh")",
-      "executable": true
-    },
-    {
-      "path": "runtime/developer-standard/packages.lock",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/packages.lock")",
-      "executable": false
-    },
-    {
-      "path": "runtime/developer-standard/packages.txt",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/packages.txt")",
-      "executable": false
-    },
-    {
-      "path": "runtime/developer-standard/sources.lock.json",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/sources.lock.json")",
-      "executable": false
-    },
-    {
-      "path": "runtime/developer-standard/test-build.sh",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/test-build.sh")",
-      "executable": true
-    },
-    {
-      "path": "runtime/developer-standard/verify-image.sh",
-      "kind": "runtime-build",
-      "sha256": "$(sha256_file "$prefix/runtime/developer-standard/verify-image.sh")",
-      "executable": true
-    }
-  ]
+absolute_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$PWD" "$1" ;;
+  esac
 }
-EOF
 
-mkdir -p "$(dirname "$out")"
-(
-  cd "$stage"
-  tar -czf "$out" hideout
-)
-echo "$out"
+package_kind() {
+  case "$1" in
+    bin/hideout|bin/hideout-shim) echo binary ;;
+    bin/*.manifest.json) echo helper-manifest ;;
+    bin/*-linux-*) echo linux-helper ;;
+    install.sh) echo installer ;;
+    README.md|README.zh-CN.md) echo entrypoint ;;
+    schemas/*) echo schema ;;
+    LICENSE|THIRD_PARTY_NOTICES.md|SECURITY.md|docs/*) echo doc ;;
+    host-app/*) echo host-app-core-data ;;
+    examples/*) echo host-app-example ;;
+    packaging/*) echo packaging ;;
+    runtime/catalog.json) echo runtime-catalog ;;
+    runtime/contract.json) echo runtime-contract ;;
+    runtime/*) echo runtime-build ;;
+    *) echo script ;;
+  esac
+}
+
+write_metadata() {
+  local root="$1"
+  local commit dirty built_at host_os host_arch guest_arch catalog_sha runtime_revision runtime_artifact
+  commit="$(git -C "$source" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+  dirty=false
+  if git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+    [ -n "$(git -C "$source" status --porcelain --untracked-files=normal)" ]; then
+    dirty=true
+  fi
+  built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  host_os="$(go env GOOS)"
+  host_arch="$(go env GOARCH)"
+  guest_arch="$host_arch"
+  catalog_sha="$(sha256_file "$root/hideout/runtime/catalog.json")"
+  runtime_revision="$(jq -er --arg os "$host_os" --arg arch "$host_arch" '
+    .families[] | select(.id == "developer-standard") | .currentRevision
+  ' "$root/hideout/runtime/catalog.json")"
+  runtime_artifact="$(jq -er --arg os "$host_os" --arg arch "$host_arch" '
+    .families[] | select(.id == "developer-standard") as $family |
+    $family.revisions[] | select(.id == $family.currentRevision) |
+    .artifacts[] | select(.hostOS == $os and .hostArch == $arch) | .sha256
+  ' "$root/hideout/runtime/catalog.json")"
+  jq -n \
+    --arg version "$version" --arg channel "$channel" --arg tag "$tag" \
+    --arg repository "https://github.com/vibe-agi/hideout" \
+    --arg commit "$commit" --argjson dirty "$dirty" --arg builtAt "$built_at" \
+    --arg workflow "$workflow" --arg ref "$ref" --arg signingMode "$signing_mode" \
+    --arg hostOS "$host_os" --arg hostArch "$host_arch" --arg guestArch "$guest_arch" \
+    --arg runtimeRevision "$runtime_revision" --arg catalogSHA256 "$catalog_sha" \
+    --arg runtimeArtifactSHA256 "$runtime_artifact" \
+    '{version:$version,channel:$channel,tag:$tag,repository:$repository,
+      commit:$commit,dirty:$dirty,builtAt:$builtAt,workflow:$workflow,ref:$ref,
+      signingMode:$signingMode,hostOS:$hostOS,hostArch:$hostArch,guestArch:$guestArch,
+      runtimeFamily:"developer-standard",runtimeRevision:$runtimeRevision,
+      catalogSHA256:$catalogSHA256,runtimeArtifactSHA256:$runtimeArtifactSHA256}' \
+    >"$root/.package-build.json"
+}
+
+stage_package() {
+  local root="$1" prefix="$1/hideout"
+  if [ -e "$root" ]; then
+    echo "package-local: stage path already exists: $root" >&2
+    exit 1
+  fi
+  mkdir -p "$prefix"
+  HIDEOUT_VERSION="$version" "$source/scripts/install-local.sh" \
+    --prefix "$prefix" --store "$root/.store" --source "$source" --skip-init >/dev/null
+  rm -rf "$root/.store"
+  install -m 0755 "$source/packaging/install-package.sh" "$prefix/install.sh"
+  for file in README.md README.zh-CN.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md; do
+    install -m 0644 "$source/$file" "$prefix/$file"
+  done
+  cp -R "$source/schemas" "$prefix/schemas"
+  cp -R "$source/docs" "$prefix/docs"
+  mkdir -p "$prefix/host-app" "$prefix/examples" "$prefix/packaging" "$prefix/runtime"
+  cp -R "$source/internal/hostcap/recipes" "$prefix/host-app/recipes"
+  cp -R "$source/examples/host-app-packs" "$prefix/examples/host-app-packs"
+  cp -R "$source/packaging/homebrew" "$prefix/packaging/homebrew"
+  install -m 0644 "$source/internal/runtimecatalog/catalog.json" "$prefix/runtime/catalog.json"
+  install -m 0644 "$source/internal/runtimecatalog/contract.json" "$prefix/runtime/contract.json"
+  cp -R "$source/runtime/developer-standard" "$prefix/runtime/developer-standard"
+  write_metadata "$root"
+  printf '%s\n' "$root"
+}
+
+finalize_package() {
+  local root="$1" archive="$2" prefix="$1/hideout" metadata="$1/.package-build.json"
+  if [ ! -d "$prefix" ] || [ ! -f "$metadata" ]; then
+    echo "package-local: invalid staged package: $root" >&2
+    exit 1
+  fi
+  if [ -e "$prefix/package-manifest.json" ]; then
+    echo "package-local: staged package is already finalized" >&2
+    exit 1
+  fi
+
+  local files_ndjson="$root/.files.ndjson"
+  : >"$files_ndjson"
+  while IFS= read -r rel; do
+    local kind executable=false
+    kind="$(package_kind "$rel")"
+    if [ -x "$prefix/$rel" ]; then executable=true; fi
+    jq -nc --arg path "$rel" --arg kind "$kind" \
+      --arg sha256 "$(sha256_file "$prefix/$rel")" --argjson executable "$executable" \
+      '{path:$path,kind:$kind,sha256:$sha256,executable:$executable}' >>"$files_ndjson"
+  done < <(cd "$prefix" && find . -type f ! -name package-manifest.json -print | sed 's#^./##' | LC_ALL=C sort)
+
+  local files_json="$root/.files.json"
+  jq -s '.' "$files_ndjson" >"$files_json"
+  jq -n --slurpfile meta "$metadata" --slurpfile files "$files_json" '
+    ($meta[0]) as $m |
+    {
+      schema:"hideout.package-manifest/v1",
+      builtAt:$m.builtAt,
+      release:{productVersion:$m.version,channel:$m.channel,tag:$m.tag},
+      source:{repository:$m.repository,commit:$m.commit,dirty:$m.dirty},
+      build:{workflow:$m.workflow,ref:$m.ref},
+      target:{hostOS:$m.hostOS,hostArch:$m.hostArch,linuxGuestArch:$m.guestArch},
+      runtime:{family:$m.runtimeFamily,revision:$m.runtimeRevision,
+        catalogFileSHA256:$m.catalogSHA256,artifactSHA256:$m.runtimeArtifactSHA256},
+      signingSummary:{mode:$m.signingMode},
+      layout:{root:"hideout",
+        binaries:([$files[0][] | select(.kind == "binary" or .kind == "linux-helper") | .path] | sort),
+        entrypoints:["install.sh","README.md","README.zh-CN.md"],
+        directories:["schemas","docs","host-app","examples","packaging","runtime"]},
+      files:$files[0],
+      migration:{installStateSchema:"hideout.package-install-state/v1",
+        fromInstalledSchemas:["hideout.package-install-state/v1"],
+        minimumPackageSchema:"hideout.package-manifest/v1",
+        maximumPackageSchema:"hideout.package-manifest/v1"}
+    }' >"$prefix/package-manifest.json"
+
+  go -C "$source" run ./cmd/hideout-schema-validate \
+    "$source/schemas/package-manifest.schema.json" "$prefix/package-manifest.json" >/dev/null
+  "$prefix/bin/hideout" package verify "$prefix" >/dev/null
+  mkdir -p "$(dirname "$archive")"
+  COPYFILE_DISABLE=1 tar -C "$root" -czf "$archive" hideout
+  printf '%s\n' "$archive"
+}
+
+if [ -n "$stage" ] && [ -n "$finalize" ]; then
+  echo "package-local: --stage and --finalize are mutually exclusive" >&2
+  exit 2
+fi
+
+if [ -n "$stage" ]; then
+  stage="$(absolute_path "$stage")"
+  stage_package "$stage"
+  exit 0
+fi
+
+if [ -n "$finalize" ]; then
+  if [ -z "$out" ]; then
+    echo "package-local: --finalize requires --out" >&2
+    exit 2
+  fi
+  finalize="$(cd "$finalize" && pwd -P)"
+  out="$(absolute_path "$out")"
+  if [ "$signing_mode_set" -eq 1 ]; then
+    tmp_meta="$(mktemp "${TMPDIR:-/tmp}/hideout-package-meta.XXXXXX")"
+    jq --arg mode "$signing_mode" '.signingMode=$mode' "$finalize/.package-build.json" >"$tmp_meta"
+    mv "$tmp_meta" "$finalize/.package-build.json"
+  fi
+  finalize_package "$finalize" "$out"
+  exit 0
+fi
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-package.XXXXXX")"
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+if [ -z "$out" ]; then
+  out="$source/dist/hideout-v$version-$(go env GOOS)-$(go env GOARCH).tar.gz"
+else
+  out="$(absolute_path "$out")"
+fi
+stage_package "$tmp/stage" >/dev/null
+finalize_package "$tmp/stage" "$out"

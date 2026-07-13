@@ -18,10 +18,36 @@ func TestBuiltinMatrixValidatesRequiredRows(t *testing.T) {
 		"backend/native",
 		"feature/dns-mediation",
 		"feature/hostfs-write-overlay",
+		"feature/hostfs-discoverable-namespace",
+		"feature/host-capability-projection",
+		"feature/supported-cli-runtime",
+		"feature/community-host-app-recipes",
+		"release/public-alpha-package",
+		"release/developer-id-notarization",
 		"gate/release-candidate",
 	} {
 		if _, ok := FindEntry(matrix, subject); !ok {
 			t.Fatalf("missing subject %s", subject)
+		}
+	}
+}
+
+func TestBuiltinMatrixCarriesPublicAlphaNonClaims(t *testing.T) {
+	matrix := BuiltinMatrix()
+	want := map[string]bool{
+		"public-alpha-maturity": false,
+		"runtime-freshness":     false,
+		"privacy-prerequisites": false,
+		"ui-maturity":           false,
+	}
+	for _, nonClaim := range matrix.NonClaims {
+		if _, ok := want[nonClaim.ID]; ok {
+			want[nonClaim.ID] = true
+		}
+	}
+	for id, found := range want {
+		if !found {
+			t.Fatalf("missing public alpha non-claim %s", id)
 		}
 	}
 }

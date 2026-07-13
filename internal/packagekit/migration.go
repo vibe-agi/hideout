@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 func CheckMigrationCompatibility(manifest Manifest, existing InstallState) (MigrationDecision, error) {
@@ -11,6 +13,8 @@ func CheckMigrationCompatibility(manifest Manifest, existing InstallState) (Migr
 		InstalledStateSchema:    existing.Schema,
 		PreviousPackageSchema:   existing.Package.Schema,
 		NewPackageSchema:        manifest.Schema,
+		InstalledProductVersion: existing.Package.Release.ProductVersion,
+		CandidateProductVersion: manifest.Release.ProductVersion,
 		AllowedInstalledSchemas: slices.Clone(manifest.Migration.FromInstalledSchemas),
 		MinimumPackageSchema:    manifest.Migration.MinimumPackageSchema,
 		MaximumPackageSchema:    manifest.Migration.MaximumPackageSchema,
@@ -18,10 +22,12 @@ func CheckMigrationCompatibility(manifest Manifest, existing InstallState) (Migr
 	}
 	fail := func(reason string) (MigrationDecision, error) {
 		decision.Reason = reason
-		return decision, fmt.Errorf("%s; installedState=%q previousPackage=%q supportedInstalledSchemas=%v supportedPackageRange=%s..%s; hint: %s",
+		return decision, fmt.Errorf("%s; installedState=%q previousPackage=%q installedVersion=%q candidateVersion=%q supportedInstalledSchemas=%v supportedPackageRange=%s..%s; hint: %s",
 			reason,
 			decision.InstalledStateSchema,
 			decision.PreviousPackageSchema,
+			decision.InstalledProductVersion,
+			decision.CandidateProductVersion,
 			decision.AllowedInstalledSchemas,
 			decision.MinimumPackageSchema,
 			decision.MaximumPackageSchema,
@@ -44,6 +50,23 @@ func CheckMigrationCompatibility(manifest Manifest, existing InstallState) (Migr
 	}
 	if existing.Package.Schema < minSchema || existing.Package.Schema > maxSchema {
 		return fail("previous package schema is outside migration range")
+	}
+	installedVersion, err := semver.StrictNewVersion(existing.Package.Release.ProductVersion)
+	if err != nil || installedVersion.Prerelease() == "" {
+		return fail("installed product version is unpublished legacy or invalid")
+	}
+	candidateVersion, err := semver.StrictNewVersion(manifest.Release.ProductVersion)
+	if err != nil || candidateVersion.Prerelease() == "" {
+		return fail("candidate product version is invalid")
+	}
+	if candidateVersion.LessThan(installedVersion) {
+		return fail("unsupported package downgrade")
+	}
+	if candidateVersion.Equal(installedVersion) &&
+		(existing.Package.Release.Tag != manifest.Release.Tag ||
+			existing.Package.Release.Channel != manifest.Release.Channel ||
+			existing.Package.SourceCommit() != manifest.SourceCommit()) {
+		return fail("same-version package identity differs from installed package")
 	}
 	decision.Compatible = true
 	decision.Reason = "compatible"

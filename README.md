@@ -11,13 +11,16 @@ backend boundary (currently a reusable Lima VM), mediates every host access
 through typed, audited, fail-closed gates, and records evidence you can
 inspect. Privacy hardening is one of the benefits, not the definition.
 
-Current status: private alpha; run supervised. Gates and release evidence are
-defined in [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md).
-The alpha support matrix is inspectable with `hideout support matrix` and is
-documented in [docs/support-matrix.md](docs/support-matrix.md). It labels macOS
-arm64 as the first-class alpha host, Linux amd64/aarch64 as supported with
-narrower smoke coverage, and `--backend native` as a development harness rather
-than isolation evidence.
+<!-- hideout-public-release:start -->
+Current package status: no public Hideout product package has been published.
+The public source tree remains a supervised development/dogfood surface;
+candidate documentation does not imply package availability.
+<!-- hideout-public-release:end -->
+
+Gates and release evidence are defined in
+[docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md). The alpha support
+matrix is inspectable with `hideout support matrix` and documented in
+[docs/support-matrix.md](docs/support-matrix.md).
 
 ## What Hideout Protects
 
@@ -125,20 +128,31 @@ For a complete external-alpha walkthrough, use
 [docs/first-run-alpha.md](docs/first-run-alpha.md). The short path is:
 
 ```bash
-export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
 hideout init \
-  --template privacy \
-  --profile default \
+  --template dev \
+  --profile alpha-direct \
   --backend lima \
-  --network tun2socks \
-  --proxy-secret proxy-url \
-  --mediated-resolver 1.1.1.1 \
+  --network direct \
   --runtime developer-standard \
   --no-input
-hideout run -- <cli>
-hideout run --fs see-dir:/absolute/directory -- <cli>
-hideout run --fs read:/absolute/file -- <cli>
-hideout run --fs overlay-dir:/absolute/directory -- <cli>
+hideout run --profile alpha-direct --backend lima -- pwd
+hideout run --profile alpha-direct -- <cli>
+hideout audit show --limit 20
+```
+
+This proves the packaged VM path with the fewest prerequisites; `direct`
+networking does not claim network privacy. Configure the separate privacy path
+only when its proxy and mediated-DNS prerequisites are available:
+
+```bash
+export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
+hideout init --template privacy --profile default --backend lima \
+  --network tun2socks --proxy-secret proxy-url \
+  --mediated-resolver 1.1.1.1 --runtime developer-standard --no-input
+hideout run --profile default -- <cli>
+hideout run --profile default --fs see-dir:/absolute/directory -- <cli>
+hideout run --profile default --fs read:/absolute/file -- <cli>
+hideout run --profile default --fs overlay-dir:/absolute/directory -- <cli>
 hideout hostfs write status
 hideout decision list
 hideout notice list
@@ -157,7 +171,7 @@ Install the pinned test agent as the non-root target, without `sudo` or a
 host-global prefix:
 
 ```bash
-hideout run -- sh -eu -c '
+hideout run --profile alpha-direct -- sh -eu -c '
   rm -rf "$HOME/.npm" "$HOME/.local/lib/node_modules/@openai/codex" "$HOME/.local/bin/codex"
   npm install --global --prefix "$HOME/.local" @openai/codex@0.144.1
   "$HOME/.local/bin/codex" --version
@@ -572,6 +586,26 @@ are parameterized as SecretRef inputs that each user fills locally. See
 [docs/script-extension-architecture.md](docs/script-extension-architecture.md)
 and
 [docs/ecosystem-foundation-design.md](docs/ecosystem-foundation-design.md).
+
+## Reporting Problems
+
+Use the [bug form](https://github.com/vibe-agi/hideout/issues/new/choose) for
+ordinary defects and [private vulnerability reporting](https://github.com/vibe-agi/hideout/security/advisories/new)
+for suspected security issues. Include `hideout version`, the package digest,
+backend/platform, recovery code, and a bounded doctor summary.
+
+When evidence must leave the machine, use the typed export path rather than a
+raw log:
+
+```bash
+hideout doctor --format json --evidence-out doctor-report.json
+hideout audit export --source doctor-report --doctor-report doctor-report.json \
+  --out doctor-export.json --acknowledge-full-fidelity
+```
+
+Control-plane redaction removes Hideout-generated credentials; it does not
+remove all user data. Review the pre-export summary and exported content before
+approving or attaching it.
 
 ## Verification
 

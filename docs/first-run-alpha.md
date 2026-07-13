@@ -42,9 +42,45 @@ If `tun2socks` is missing, install it as an external prerequisite. The alpha
 package verifies Hideout-owned helpers, but does not checksum an external
 `tun2socks` binary.
 
-## Recommended Privacy Profile
+## Direct First Success
 
-Use the privacy template on Lima for the primary path:
+Start with a dedicated Lima profile that has the fewest external prerequisites:
+
+```bash
+hideout init \
+  --template dev \
+  --profile alpha-direct \
+  --backend lima \
+  --network direct \
+  --runtime developer-standard \
+  --no-input
+hideout doctor --profile alpha-direct --backend lima --level deep
+```
+
+Move into a dedicated workspace and run one command as the synthetic non-root
+target:
+
+```bash
+cd /path/to/sanitized/project
+hideout run --profile alpha-direct --backend lima -- pwd
+hideout audit show --limit 20
+```
+
+This is the first compatibility proof: it demonstrates the packaged VM,
+workspace, identity, and retained runtime. Direct networking does not hide the
+network origin and is not a privacy-network claim.
+
+The retained runtime is a separate, approximately 1 GB first-use download; it
+is not embedded in the smaller Hideout host package. Inspect its exact
+revision, digest, size, source, inventory, and SBOM status before first boot:
+
+```bash
+hideout runtime inspect developer-standard
+```
+
+## Privacy Follow-Up
+
+Create a separate privacy profile only when its prerequisites are available:
 
 ```bash
 export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
@@ -65,23 +101,8 @@ are unavailable, `doctor` should report observed facts and next actions. Real
 network privacy proof still requires Gate 3 evidence; local doctor output is not
 a replacement for that gate.
 
-`developer-standard` is an explicit preview selection. It does not change old
-profiles or the built-in image default. Inspect its exact revision, digest,
-size, source, SBOM status, and command contract before first boot:
-
-```bash
-hideout runtime inspect developer-standard
-```
-
-## First Run
-
-Move into a dedicated workspace and run a simple command:
-
-```bash
-cd /path/to/sanitized/project
-hideout run --profile default --backend lima -- pwd
-hideout audit show --limit 20
-```
+Hideout never changes a requested privacy profile to direct networking when a
+proxy, mediated resolver, or other privacy prerequisite is missing.
 
 ## Install The Tested Agent CLI
 
@@ -90,7 +111,7 @@ runs inside the selected guest and requires neither `sudo` nor a host-global npm
 prefix:
 
 ```bash
-hideout run --profile default -- sh -eu -c '
+hideout run --profile alpha-direct -- sh -eu -c '
   rm -rf "$HOME/.npm" "$HOME/.local/lib/node_modules/@openai/codex" "$HOME/.local/bin/codex"
   npm install --global --prefix "$HOME/.local" @openai/codex@0.144.1
   "$HOME/.local/bin/codex" --version
@@ -157,9 +178,9 @@ inside the Lima guest can open the mapped host workspace without learning its
 host path:
 
 ```bash
-hideout doctor --profile default --feature projection --level deep
-hideout run --profile default --backend lima -- code .
-hideout run --profile default --backend lima -- code -g src/main.go:12:3
+hideout doctor --profile alpha-direct --feature projection --level deep
+hideout run --profile alpha-direct --backend lima -- code .
+hideout run --profile alpha-direct --backend lima -- code -g src/main.go:12:3
 ```
 
 The default safe mode uses run-scoped VS Code state, disables extensions and
@@ -177,7 +198,7 @@ Start the local daemon when you want a live local console:
 
 ```bash
 hideout daemon start
-hideout tui --profile default
+hideout tui --profile alpha-direct
 hideout ui --no-open --print-url
 ```
 

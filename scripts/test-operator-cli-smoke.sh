@@ -243,7 +243,7 @@ fi
 require_command go
 require_command limactl
 
-tmp="$(mktemp -d "/tmp/ho-operator-cli.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/ho-operator-cli.XXXXXX")"
 cleanup_store=0
 cleanup_lima=0
 cleanup() {

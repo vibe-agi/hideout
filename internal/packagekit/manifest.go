@@ -1,28 +1,58 @@
 package packagekit
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
-	ArtifactSchema      = "hideout.package-manifest.v1"
-	InstallStateSchema  = "hideout.package-install-state.v1"
+	ArtifactSchema      = "hideout.package-manifest/v1"
+	InstallStateSchema  = "hideout.package-install-state/v1"
 	InstalledManifest   = "share/hideout/package-manifest.json"
 	DefaultPackageRoot  = "hideout"
 	packageMetadataRoot = "share/hideout"
 )
 
 type Manifest struct {
-	Schema    string    `json:"schema"`
-	BuiltAt   string    `json:"builtAt"`
-	Git       GitInfo   `json:"git"`
-	Target    Target    `json:"target"`
-	Layout    Layout    `json:"layout"`
-	Files     []File    `json:"files"`
-	Migration Migration `json:"migration"`
+	Schema         string         `json:"schema"`
+	BuiltAt        string         `json:"builtAt"`
+	Release        ReleaseInfo    `json:"release,omitempty"`
+	Source         SourceInfo     `json:"source,omitempty"`
+	Build          BuildInfo      `json:"build,omitempty"`
+	Target         Target         `json:"target"`
+	Runtime        RuntimeInfo    `json:"runtime,omitempty"`
+	SigningSummary SigningSummary `json:"signingSummary,omitempty"`
+	Layout         Layout         `json:"layout"`
+	Files          []File         `json:"files"`
+	Migration      Migration      `json:"migration"`
 }
 
-type GitInfo struct {
-	Commit string `json:"commit"`
-	Dirty  bool   `json:"dirty"`
+type ReleaseInfo struct {
+	ProductVersion string `json:"productVersion"`
+	Channel        string `json:"channel"`
+	Tag            string `json:"tag"`
+}
+
+type SourceInfo struct {
+	Repository string `json:"repository"`
+	Commit     string `json:"commit"`
+	Dirty      bool   `json:"dirty"`
+}
+
+type BuildInfo struct {
+	Workflow string `json:"workflow"`
+	Ref      string `json:"ref"`
+}
+
+type RuntimeInfo struct {
+	Family            string `json:"family"`
+	Revision          string `json:"revision"`
+	CatalogFileSHA256 string `json:"catalogFileSHA256"`
+	ArtifactSHA256    string `json:"artifactSHA256"`
+}
+
+type SigningSummary struct {
+	Mode string `json:"mode"`
 }
 
 type Target struct {
@@ -65,10 +95,11 @@ type InstallState struct {
 }
 
 type InstalledSource struct {
-	Schema  string  `json:"schema"`
-	BuiltAt string  `json:"builtAt"`
-	Git     GitInfo `json:"git"`
-	Target  Target  `json:"target"`
+	Schema  string      `json:"schema"`
+	BuiltAt string      `json:"builtAt"`
+	Release ReleaseInfo `json:"release,omitempty"`
+	Source  SourceInfo  `json:"source,omitempty"`
+	Target  Target      `json:"target"`
 }
 
 type ObsoleteFile struct {
@@ -84,6 +115,8 @@ type MigrationDecision struct {
 	InstalledStateSchema    string
 	PreviousPackageSchema   string
 	NewPackageSchema        string
+	InstalledProductVersion string
+	CandidateProductVersion string
 	AllowedInstalledSchemas []string
 	MinimumPackageSchema    string
 	MaximumPackageSchema    string
@@ -107,7 +140,8 @@ func NewInstallState(prefix, store string, manifest Manifest, files []File, dirs
 		Package: InstalledSource{
 			Schema:  manifest.Schema,
 			BuiltAt: manifest.BuiltAt,
-			Git:     manifest.Git,
+			Release: manifest.Release,
+			Source:  manifest.Source,
 			Target:  manifest.Target,
 		},
 		Files:       files,
@@ -119,4 +153,20 @@ func NewInstallState(prefix, store string, manifest Manifest, files []File, dirs
 			MaximumPackageSchema: ArtifactSchema,
 		},
 	}
+}
+
+func (m Manifest) SourceCommit() string {
+	return strings.TrimSpace(m.Source.Commit)
+}
+
+func (m Manifest) SourceDirty() bool {
+	return m.Source.Dirty
+}
+
+func (s InstalledSource) SourceCommit() string {
+	return strings.TrimSpace(s.Source.Commit)
+}
+
+func (s InstalledSource) SourceDirty() bool {
+	return s.Source.Dirty
 }

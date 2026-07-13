@@ -116,6 +116,37 @@ func TestExportArtifactSchemaValidatesEnvelope(t *testing.T) {
 	}
 }
 
+func TestSchemaValidatorResolvesSiblingSchemaReferences(t *testing.T) {
+	root := t.TempDir()
+	shared := `{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://example.test/schemas/shared.schema.json",
+  "$defs":{"value":{"type":"string","const":"expected"}}
+}`
+	main := `{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://example.test/schemas/main.schema.json",
+  "type":"object",
+  "required":["value"],
+  "properties":{"value":{"$ref":"shared.schema.json#/$defs/value"}},
+  "additionalProperties":false
+}`
+	sharedPath := filepath.Join(root, "shared.schema.json")
+	mainPath := filepath.Join(root, "main.schema.json")
+	if err := os.WriteFile(sharedPath, []byte(shared), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mainPath, []byte(main), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := validateWithSchema(t, mainPath, map[string]any{"value": "expected"}); got != 0 {
+		t.Fatalf("sibling schema reference validation exit=%d, want 0", got)
+	}
+	if got := validateWithSchema(t, mainPath, map[string]any{"value": "wrong"}); got == 0 {
+		t.Fatal("sibling schema reference accepted invalid value")
+	}
+}
+
 func TestIsolationEvidenceCommandAccepted(t *testing.T) {
 	m := baseManifest()
 	m["command"] = "scripts/test-phase1.sh --isolation-evidence"

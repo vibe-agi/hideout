@@ -77,6 +77,22 @@ func TestRequiredProofIDsRemainFeatureScoped(t *testing.T) {
 	}
 }
 
+func TestPublicReleaseTargetIncludesCandidateAndPublicProofs(t *testing.T) {
+	ids := RequiredProofIDsForTarget(RequiredForPublicRelease)
+	for _, proofID := range []string{
+		Proof033PackageIdentity,
+		Proof033PublicDownload,
+		Proof033DocsPublicTruth,
+	} {
+		if !slices.Contains(ids, proofID) {
+			t.Fatalf("public-release target is missing %s", proofID)
+		}
+	}
+	if slices.Contains(ids, Proof021EvidenceSchema) {
+		t.Fatal("targeted-completion proof leaked into public-release target")
+	}
+}
+
 func TestRuntimeProofRegistryCoversLocalAndRealClaims(t *testing.T) {
 	reqs := RequirementsForFeature(Feature031)
 	if len(reqs) != 8 || len(Required031ProofIDs) != 8 {

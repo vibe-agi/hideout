@@ -3,13 +3,16 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+doc_root="${HIDEOUT_DOC_ROOT:-$ROOT}"
+inventory="$doc_root/releases/current.json"
 
 out=""
+public_receipt=""
 
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/test-doc-truth-smoke.sh [--out <dir>]
+  scripts/test-doc-truth-smoke.sh [--out <dir>] [--public-receipt <path>]
 USAGE
 }
 
@@ -17,6 +20,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --out)
       out="${2:-}"
+      shift 2
+      ;;
+    --public-receipt)
+      public_receipt="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -58,8 +65,32 @@ sha256_file() {
   fi
 }
 
+candidate_release_block_is_neutral() {
+  ! grep -E 'github\.com/vibe-agi/hideout/releases/(tag|download)/v[0-9]' <<<"$1" >/dev/null
+}
+
+validate_public_receipt_binding() {
+  local checked_inventory="$1" checked_receipt="$2"
+  go run ./cmd/hideout-schema-validate schemas/publication-receipt.schema.json \
+    "$checked_receipt" >/dev/null || return 1
+  test "$(sha256_file "$checked_receipt")" = \
+    "$(jq -r '.current.receiptSHA256' "$checked_inventory")" || return 1
+  local version tag url digest
+  version="$(jq -r '.current.version' "$checked_inventory")"
+  tag="$(jq -r '.current.tag' "$checked_inventory")"
+  url="$(jq -r '.current.releaseURL' "$checked_inventory")"
+  digest="$(jq -r '.current.package.artifactSHA256' "$checked_inventory")"
+  jq -e --arg version "$version" --arg tag "$tag" --arg url "$url" --arg digest "$digest" '
+    .schema == "hideout.publication-receipt/v1" and .status == "public-verified" and
+    .immutable == true and .prerelease == true and
+    .version == $version and .tag == $tag and .url == $url and
+    .package.productVersion == $version and .package.artifactSHA256 == $digest and
+    all(.assets[]; .apiSHA256 == .downloadSHA256)
+  ' "$checked_receipt" >/dev/null || return 1
+}
+
 git_commit() {
-  git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown'
+  git rev-parse HEAD 2>/dev/null || printf 'unknown'
 }
 
 git_dirty() {
@@ -415,6 +446,20 @@ validate_command_examples() {
 }
 
 validate_cross_docs() {
+  if ! grep -q 'Control-plane redaction removes Hideout-generated credentials' "$doc_root/README.md" ||
+    ! grep -q 'remove all user data' "$doc_root/README.md"; then
+    echo "doc-truth-smoke: generated README omits the bounded redaction claim" >&2
+    exit 1
+  fi
+  if ! grep -q '不会移除全部用户数据' "$doc_root/README.zh-CN.md"; then
+    echo "doc-truth-smoke: generated localized README omits the bounded redaction claim" >&2
+    exit 1
+  fi
+  if ! grep -q 'Control-plane redaction removes Hideout-generated credentials' SECURITY.md ||
+    ! grep -q 'not all user' SECURITY.md; then
+    echo "doc-truth-smoke: SECURITY.md omits the bounded redaction claim" >&2
+    exit 1
+  fi
   grep -q 'docs/first-run-alpha.md' README.md
   grep -q 'docs/support-matrix.md' README.md
   grep -q 'English README' README.zh-CN.md
@@ -424,6 +469,40 @@ validate_cross_docs() {
   grep -q 'Community Host-App Recipes' docs/README.md
   grep -q '032.host-app-pack.real-gate2.external' docs/claim-boundaries.md
   grep -q 'Docs truth gate' docs/STATUS.md || true
+
+  for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
+    test "$(grep -Fxc '<!-- hideout-public-release:start -->' "$doc_root/$file")" -eq 1
+    test "$(grep -Fxc '<!-- hideout-public-release:end -->' "$doc_root/$file")" -eq 1
+  done
+  jq -e '.schema == "hideout.published-release-inventory/v1"' "$inventory" >/dev/null
+  if jq -e '.current == null' "$inventory" >/dev/null; then
+    for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
+      block="$(sed -n '/<!-- hideout-public-release:start -->/,/<!-- hideout-public-release:end -->/p' "$doc_root/$file")"
+      if ! candidate_release_block_is_neutral "$block"; then
+        echo "doc-truth-smoke: candidate block claims a public product release in $file" >&2
+        exit 1
+      fi
+    done
+  else
+    version="$(jq -r '.current.version' "$inventory")"
+    tag="$(jq -r '.current.tag' "$inventory")"
+    url="$(jq -r '.current.releaseURL' "$inventory")"
+    digest="$(jq -r '.current.package.artifactSHA256' "$inventory")"
+    receipt="$doc_root/releases/receipts/$tag.json"
+    test -f "$receipt"
+    if ! validate_public_receipt_binding "$inventory" "$receipt"; then
+      echo "doc-truth-smoke: checked receipt does not prove immutable anonymous bytes" >&2
+      exit 1
+    fi
+    for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
+      block="$(sed -n '/<!-- hideout-public-release:start -->/,/<!-- hideout-public-release:end -->/p' "$doc_root/$file")"
+      grep -F "$tag" <<<"$block" >/dev/null
+      grep -F "$url" <<<"$block" >/dev/null
+    done
+    grep -F "$digest" "$doc_root/README.md" >/dev/null
+    grep -F "$digest" "$doc_root/README.zh-CN.md" >/dev/null
+    test "$tag" = "v$version"
+  fi
 
   for script in \
     scripts/test-ui-e2e.sh \
@@ -437,6 +516,95 @@ validate_cross_docs() {
     grep -q "$script" scripts/test-gate0.sh
   done
   jq -n '{readme: "passed", localizedReadme: "canonical-declared", gate0ProductHardeningScripts: "passed"}' >"$out/reports/cross-doc-consistency.json"
+}
+
+validate_release_doc_negative_fixtures() {
+  local candidate_status="passed" receipt_status="not-applicable-candidate"
+  local false_public_block='https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1'
+  if candidate_release_block_is_neutral "$false_public_block"; then
+    echo "doc-truth-smoke: candidate-publication negative fixture was accepted" >&2
+    exit 1
+  fi
+  if [ -n "$public_receipt" ]; then
+    local mutated_receipt mutated_inventory mutated_sha
+    mutated_receipt="$out/reports/anonymous-receipt-negative.json"
+    mutated_inventory="$out/reports/anonymous-inventory-negative.json"
+    jq '(.assets[0].downloadSHA256) = ("0" * 64)' "$public_receipt" >"$mutated_receipt"
+    mutated_sha="$(sha256_file "$mutated_receipt")"
+    jq --arg sha "$mutated_sha" '.current.receiptSHA256 = $sha' "$inventory" >"$mutated_inventory"
+    if validate_public_receipt_binding "$mutated_inventory" "$mutated_receipt" >/dev/null 2>&1; then
+      echo "doc-truth-smoke: anonymous-receipt digest mismatch fixture was accepted" >&2
+      exit 1
+    fi
+    receipt_status="passed"
+    rm -f "$mutated_receipt" "$mutated_inventory"
+  fi
+  jq -n --arg candidate "$candidate_status" --arg receipt "$receipt_status" \
+    '{candidatePublicationClaim:$candidate,anonymousReceiptDigestMismatch:$receipt,status:"passed"}' \
+    >"$out/reports/release-doc-negative-fixtures.json"
+}
+
+write_public_release_evidence() {
+  [ -n "$public_receipt" ] || return 0
+  [ -f "$public_receipt" ] || {
+    echo "doc-truth-smoke: --public-receipt must name a receipt" >&2
+    exit 2
+  }
+  jq -e '.current != null' "$inventory" >/dev/null
+  local tag expected_receipt receipt_copy inventory_copy report receipt_sha inventory_sha report_sha
+  tag="$(jq -r '.current.tag' "$inventory")"
+  expected_receipt="$doc_root/releases/receipts/$tag.json"
+  [ "$(cd "$(dirname "$public_receipt")" && pwd -P)/$(basename "$public_receipt")" = \
+    "$(cd "$(dirname "$expected_receipt")" && pwd -P)/$(basename "$expected_receipt")" ] || {
+    echo "doc-truth-smoke: public receipt must be the checked-in receipt for $tag" >&2
+    exit 2
+  }
+  receipt_copy="$out/reports/publication-receipt.json"
+  inventory_copy="$out/reports/published-release-inventory.json"
+  report="$out/reports/public-docs-truth.json"
+  cp "$public_receipt" "$receipt_copy"
+  cp "$inventory" "$inventory_copy"
+  receipt_sha="$(sha256_file "$receipt_copy")"
+  inventory_sha="$(sha256_file "$inventory_copy")"
+  jq -n --arg tag "$tag" --arg receiptSHA256 "$receipt_sha" \
+    --arg inventorySHA256 "$inventory_sha" \
+    '{phase:"post-public",tag:$tag,receiptSHA256:$receiptSHA256,
+      inventorySHA256:$inventorySHA256,docsDerivedFromInventory:true,status:"passed"}' >"$report"
+  report_sha="$(sha256_file "$report")"
+  jq -n \
+    --arg generatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg receiptSHA256 "$receipt_sha" --arg inventorySHA256 "$inventory_sha" \
+    --arg reportSHA256 "$report_sha" \
+    --slurpfile receipt "$receipt_copy" --slurpfile registry "$registry_json" '
+    def claims($id): [$registry[0].requirements[] | select(.proofId == $id) | .claimIds[] |
+      {claimId:.,source:"spec",description:"033 post-public release truth"}];
+    {
+      version:"hideout.product-hardening-evidence/v1",
+      generatedAt:$generatedAt,
+      commit:$receipt[0].sourceCommit,
+      dirty:false,
+      packageIdentity:$receipt[0].package,
+      proofs:[
+        {proofId:"033.release.public-download",featureId:"033-public-alpha-release-channel",
+         mode:"docs",evidenceClass:"release-public-download",status:"passed",
+         commandSummary:"validated immutable anonymous-download publication receipt",
+         coveredClaims:claims("033.release.public-download"),prerequisites:[{name:"public-receipt",status:"available"}],
+         artifacts:[{kind:"manifest",path:"reports/publication-receipt.json",sha256:$receiptSHA256,redactionStatus:"passed"}],
+         redactionStatus:"passed"},
+        {proofId:"033.release.docs-public-truth",featureId:"033-public-alpha-release-channel",
+         mode:"docs",evidenceClass:"release-docs-public-truth",status:"passed",
+         commandSummary:"validated checked-in docs against receipt-derived release inventory",
+         coveredClaims:claims("033.release.docs-public-truth"),prerequisites:[{name:"published-inventory",status:"available"}],
+         artifacts:[
+           {kind:"manifest",path:"reports/published-release-inventory.json",sha256:$inventorySHA256,redactionStatus:"passed"},
+           {kind:"docs-report",path:"reports/public-docs-truth.json",sha256:$reportSHA256,redactionStatus:"passed"}
+         ],redactionStatus:"passed"}
+      ]
+    }' >"$out/public-release-evidence.json"
+  go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.json \
+    "$out/public-release-evidence.json" >/dev/null
+  jq -e '([.proofs[].proofId] | sort) == (["033.release.docs-public-truth","033.release.public-download"] | sort)' \
+    "$out/public-release-evidence.json" >/dev/null
 }
 
 scan_redaction() {
@@ -467,6 +635,7 @@ write_manifest() {
     <(artifact_obj "docs-report" "reports/command-examples.json" "curated command fixture") >"$command_artifacts"
   jq -s '.' \
     <(artifact_obj "docs-report" "reports/cross-doc-consistency.json" "README, localized README, test-plan, Gate 0 consistency") \
+    <(artifact_obj "docs-report" "reports/release-doc-negative-fixtures.json" "candidate and anonymous-receipt documentation failure fixtures") \
     <(artifact_obj "docs-report" "reports/recovery-codes.json" "Go-owned recovery code registry") \
     <(artifact_obj "docs-report" "reports/recovery-code-refs.json" "documentation recovery-code reference validation") >"$cross_artifacts"
 
@@ -574,9 +743,11 @@ validate_host_app_pack_overclaim_fixtures
 validate_hostfs_selector_docs
 validate_command_examples
 validate_cross_docs
+validate_release_doc_negative_fixtures
 validate_recovery_code_references
 scan_redaction
 write_manifest
 validate_manifest
+write_public_release_evidence
 scan_redaction
 echo "doc-truth-smoke: passed evidence=$manifest"

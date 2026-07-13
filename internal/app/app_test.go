@@ -58,6 +58,20 @@ func TestParseInitRuntimeSelectionAndImageConflict(t *testing.T) {
 	}
 }
 
+func TestPackageMigrationFailureRendersStableRecoveryCode(t *testing.T) {
+	a := app{}
+	for _, message := range []string{
+		"unsupported package downgrade",
+		"same-version package identity differs from installed package",
+		"installed product version is unpublished legacy or invalid",
+	} {
+		err := a.withPackageRecoveryCode(fmt.Errorf("%s", message), "/tmp/hideout-prefix")
+		if err == nil || !strings.Contains(err.Error(), recovery.CodePackageMigrationUnsupported) {
+			t.Fatalf("message %q did not render migration recovery code: %v", message, err)
+		}
+	}
+}
+
 func TestRuntimeCatalogCLIHumanAndJSONUseCore(t *testing.T) {
 	revision := runtimecatalog.Revision{
 		ID: "2026.07.0", Status: runtimecatalog.RevisionPreview, ContractID: "developer-standard/v1",
@@ -145,30 +159,11 @@ func TestRuntimeReadinessExpectationUsesPromotedCatalogBuildCommit(t *testing.T)
 	}
 }
 
-func TestReadinessPackageIdentityRequiresVerifiedCleanPackage(t *testing.T) {
+func TestReadinessPackageIdentityRequiresOuterArchiveDigest(t *testing.T) {
 	root := writeTestPackageRoot(t)
 	identity, err := readinessPackageIdentity(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identity.Name != packagekit.DefaultPackageRoot || identity.Version != "test" {
-		t.Fatalf("identity=%+v", identity)
-	}
-	manifestPath := filepath.Join(root, "package-manifest.json")
-	manifest, err := packagekit.LoadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest.Git.Dirty = true
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readinessPackageIdentity(root); err == nil || !strings.Contains(err.Error(), "dirty") {
-		t.Fatalf("dirty package identity accepted: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "outer archive digest") {
+		t.Fatalf("extracted package root supplied release identity: identity=%+v error=%v", identity, err)
 	}
 }
 
@@ -378,6 +373,28 @@ func TestSupportMatrixCommandOutputsJSON(t *testing.T) {
 	}
 	if len(decoded.Entries) == 0 || len(decoded.NonClaims) == 0 {
 		t.Fatalf("matrix missing entries or non-claims: %+v", decoded)
+	}
+}
+
+func TestSupportMatrixHumanOutputRendersStructuredNonClaims(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "matrix"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
+	}
+	text := out.String()
+	for _, want := range []string{
+		"non-claims:\n",
+		"- public-alpha-maturity: The public alpha does not claim GA stability",
+		"  applies-to: release/public-alpha-package\n",
+		"  guidance: run supervised and inspect release notes and evidence for every version\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("human matrix missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "- {public-alpha-maturity") {
+		t.Fatalf("human matrix exposed Go struct formatting:\n%s", text)
 	}
 }
 
@@ -961,6 +978,44 @@ func TestPackageVerifyRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestPackageVerifyReportsUnsupportedPlatformRecovery(t *testing.T) {
+	root := writeTestPackageRoot(t)
+	manifestPath := filepath.Join(root, "package-manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest packagekit.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Target.HostOS = "unsupported-os"
+	manifest.Target.HostArch = "unsupported-arch"
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"package", "verify", root}, &out, &errOut)
+	if code == 0 {
+		t.Fatalf("expected unsupported platform failure stdout=%s", out.String())
+	}
+	want := []string{
+		"code=" + recovery.CodePackagePlatformUnsupported,
+		"next=hideout support matrix --json",
+		"package target unsupported-os/unsupported-arch does not match host",
+	}
+	for _, text := range want {
+		if !strings.Contains(errOut.String(), text) {
+			t.Fatalf("unsupported platform output missing %q: %s", text, errOut.String())
+		}
+	}
+}
+
 func TestPackageVerifyRejectsLayoutFileWithoutChecksum(t *testing.T) {
 	root := writeTestPackageRoot(t)
 	manifestPath := filepath.Join(root, "package-manifest.json")
@@ -1165,12 +1220,13 @@ func TestDoctorPackagingUsesInstalledPackageVerification(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifest, []byte("not-json"), 0o644); err != nil {
+	if err := os.WriteFile(manifest, []byte(`{"schema":"hideout.package-install-state.v0"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	diagnostic := doctorPackagingDiagnosticForExecutable(executable)
 	if diagnostic.Status != doctorpkg.StatusWarn || !strings.Contains(diagnostic.Summary, "installed package verification failed") ||
-		!strings.Contains(strings.Join(diagnostic.ObservedFacts, "\n"), "installedPackageVerification=failed") {
+		!strings.Contains(strings.Join(diagnostic.ObservedFacts, "\n"), "installedPackageVerification=failed") ||
+		diagnostic.RecoveryCode != recovery.CodePackageMigrationUnsupported {
 		t.Fatalf("packaging doctor ignored installed state: %+v", diagnostic)
 	}
 }
@@ -1405,12 +1461,20 @@ func writeTestPackageRoot(t *testing.T) string {
 		"install.sh":                           {kind: "installer", mode: 0o755, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", mode: 0o644, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", mode: 0o644, data: "readme zh\n"},
+		"LICENSE":                              {kind: "doc", mode: 0o644, data: "license\n"},
+		"THIRD_PARTY_NOTICES.md":               {kind: "doc", mode: 0o644, data: "notices\n"},
+		"SECURITY.md":                          {kind: "doc", mode: 0o644, data: "security\n"},
+		"runtime/catalog.json":                 {kind: "runtime-catalog", mode: 0o644, data: "{}\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
 	}
 	manifest := packagekit.Manifest{Schema: packagekit.ArtifactSchema}
 	manifest.BuiltAt = "2026-01-01T00:00:00Z"
-	manifest.Git.Commit = "test"
+	manifest.Release = packagekit.ReleaseInfo{ProductVersion: "0.1.0-alpha.1", Channel: "developer-preview", Tag: "v0.1.0-alpha.1"}
+	manifest.Source = packagekit.SourceInfo{Repository: "https://github.com/vibe-agi/hideout", Commit: "0123456789abcdef0123456789abcdef01234567"}
+	manifest.Build = packagekit.BuildInfo{Workflow: "unit-test", Ref: "refs/heads/test"}
+	manifest.Runtime = packagekit.RuntimeInfo{Family: "developer-standard", Revision: "2026.07.0", CatalogFileSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64)}
+	manifest.SigningSummary = packagekit.SigningSummary{Mode: "developer-preview-unsigned"}
 	manifest.Target.HostOS = runtime.GOOS
 	manifest.Target.HostArch = runtime.GOARCH
 	manifest.Target.LinuxGuestArch = runtime.GOARCH
@@ -1422,7 +1486,7 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/hideout-hostfsd-linux-arm64",
 	}
 	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
-	manifest.Layout.Directories = []string{"schemas", "docs", "packaging"}
+	manifest.Layout.Directories = []string{"schemas", "docs", "packaging", "runtime"}
 	manifest.Migration.InstallStateSchema = packagekit.InstallStateSchema
 	manifest.Migration.FromInstalledSchemas = []string{packagekit.InstallStateSchema}
 	manifest.Migration.MinimumPackageSchema = packagekit.ArtifactSchema

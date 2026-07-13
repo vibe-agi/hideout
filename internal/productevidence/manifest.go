@@ -13,7 +13,9 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 )
 
-const Schema = "hideout.product-hardening-evidence/v1"
+const (
+	Schema = "hideout.product-hardening-evidence/v1"
+)
 
 const (
 	StatusPassed = "passed"
@@ -56,8 +58,12 @@ type Manifest struct {
 }
 
 type PackageIdentity struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name           string `json:"name"`
+	ProductVersion string `json:"productVersion"`
+	SourceCommit   string `json:"sourceCommit"`
+	ArtifactSHA256 string `json:"artifactSHA256"`
+	HostOS         string `json:"hostOS"`
+	HostArch       string `json:"hostArch"`
 }
 
 type ProofEntry struct {
@@ -145,7 +151,11 @@ func (m Manifest) Sanitized() Manifest {
 	if out.PackageIdentity != nil {
 		pkg := *out.PackageIdentity
 		pkg.Name = audit.RedactString(pkg.Name)
-		pkg.Version = audit.RedactString(pkg.Version)
+		pkg.ProductVersion = audit.RedactString(pkg.ProductVersion)
+		pkg.SourceCommit = audit.RedactString(pkg.SourceCommit)
+		pkg.ArtifactSHA256 = audit.RedactString(pkg.ArtifactSHA256)
+		pkg.HostOS = audit.RedactString(pkg.HostOS)
+		pkg.HostArch = audit.RedactString(pkg.HostArch)
 		out.PackageIdentity = &pkg
 	}
 	out.Proofs = make([]ProofEntry, len(m.Proofs))
@@ -219,7 +229,7 @@ func (a ArtifactRef) Sanitized() ArtifactRef {
 
 func (m Manifest) Validate() error {
 	if m.Version != Schema {
-		return fmt.Errorf("product evidence version must be %q", Schema)
+		return fmt.Errorf("unsupported product evidence version %q", m.Version)
 	}
 	if m.GeneratedAt.IsZero() {
 		return errors.New("generatedAt is required")
@@ -228,8 +238,8 @@ func (m Manifest) Validate() error {
 		return errors.New("commit is required")
 	}
 	if m.PackageIdentity != nil {
-		if strings.TrimSpace(m.PackageIdentity.Name) == "" || strings.TrimSpace(m.PackageIdentity.Version) == "" {
-			return errors.New("packageIdentity requires name and version")
+		if err := m.PackageIdentity.Validate(); err != nil {
+			return fmt.Errorf("packageIdentity: %w", err)
 		}
 	}
 	if len(m.Proofs) == 0 {

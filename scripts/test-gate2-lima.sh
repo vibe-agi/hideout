@@ -206,7 +206,7 @@ exit 127
 require_command go
 require_command limactl
 
-tmp="$(mktemp -d "/tmp/hideout-gate2.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate2.XXXXXX")"
 named_guard_pid=""
 visibility_run_pid=""
 projection_run_pid=""
@@ -272,7 +272,13 @@ workspace="$tmp/workspace"
 mkdir -p "$bin" "$store" "$lima_home" "$workspace"
 
 hideout="$bin/hideout"
-go build -o "$hideout" ./cmd/hideout
+if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+  [ -x "$HIDEOUT_RELEASE_BINARY" ] || { echo "gate2: HIDEOUT_RELEASE_BINARY is not executable" >&2; exit 126; }
+  cp "$HIDEOUT_RELEASE_BINARY" "$hideout"
+  chmod 0700 "$hideout"
+else
+  go build -o "$hideout" ./cmd/hideout
+fi
 prepare_linux_shim
 prepare_linux_hostfsd
 

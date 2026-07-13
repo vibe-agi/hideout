@@ -38,13 +38,20 @@ retained_dir="$tmp/retained-gate2"
 mkdir -p "$retained_dir/logs"
 printf 'gate2: passed\n' >"$retained_dir/logs/runtime-lima.out"
 retained_sha="$(gate_sha256_file "$retained_dir/logs/runtime-lima.out")"
-retained_commit="$(git rev-parse --short=12 HEAD)"
+retained_commit="$(git rev-parse HEAD)"
 jq -n --arg commit "$retained_commit" --arg sha "$retained_sha" '{
   version:"hideout.product-hardening-evidence/v1",
   generatedAt:"2026-07-07T00:00:00Z",
   commit:$commit,
   dirty:false,
-  packageIdentity:{name:"hideout",version:$commit},
+  packageIdentity:{
+    name:"hideout",
+    productVersion:"0.1.0-alpha.1",
+    sourceCommit:$commit,
+    artifactSHA256:("b"*64),
+    hostOS:"darwin",
+    hostArch:"arm64"
+  },
   proofs:[{
     proofId:"031.runtime.boundary-regression",
     featureId:"031-supported-cli-runtime",

@@ -91,18 +91,17 @@ func TestEvaluateFailedNotRunAndRedaction(t *testing.T) {
 }
 
 func TestEvaluateStaleByCommitAndPackage(t *testing.T) {
+	oldCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	newCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	commitReq := req("026-test-feature", "026.commit", LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "026.FR-commit")
 	packageReq := req("026-test-feature", "026.package", LayerProductHardening, RequiredForTargetedCompletion, FreshnessSamePackage, ArtifactPolicyNone, "026.FR-package")
 	manifest := evalManifestWithProofs(evalProof(commitReq), evalProof(packageReq))
-	manifest.Commit = "old"
-	manifest.PackageIdentity = &PackageIdentity{Name: "hideout", Version: "old"}
+	manifest.Commit = oldCommit
+	manifest.PackageIdentity = evalPackageIdentity(oldCommit, "a")
 	report, err := EvaluateManifest(manifest, EvaluationOptions{
-		Requirements:   []ProofRequirement{commitReq, packageReq},
-		ExpectedCommit: "new",
-		ExpectedPackage: &PackageIdentity{
-			Name:    "hideout",
-			Version: "new",
-		},
+		Requirements:    []ProofRequirement{commitReq, packageReq},
+		ExpectedCommit:  newCommit,
+		ExpectedPackage: evalPackageIdentity(newCommit, "b"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -120,16 +119,18 @@ func TestEvaluateStaleByCommitAndPackage(t *testing.T) {
 }
 
 func TestEvaluateFreshnessIgnoresProofNotes(t *testing.T) {
+	staleCommit := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	expectedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	requirement := req("026-test-feature", "026.commit-note-bypass", LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommitAndPackage, ArtifactPolicyNone, "026.FR-commit")
 	proof := evalProof(requirement)
 	proof.Notes = []string{"commit=expected", "package=hideout@expected"}
 	manifest := evalManifestWithProofs(proof)
-	manifest.Commit = "stale"
-	manifest.PackageIdentity = &PackageIdentity{Name: "hideout", Version: "stale"}
+	manifest.Commit = staleCommit
+	manifest.PackageIdentity = evalPackageIdentity(staleCommit, "a")
 	report, err := EvaluateManifest(manifest, EvaluationOptions{
 		Requirements:    []ProofRequirement{requirement},
-		ExpectedCommit:  "expected",
-		ExpectedPackage: &PackageIdentity{Name: "hideout", Version: "expected"},
+		ExpectedCommit:  expectedCommit,
+		ExpectedPackage: evalPackageIdentity(expectedCommit, "b"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -352,9 +353,11 @@ func TestEvaluateReleaseRuntimeProofRequiresTrustedPackageAndArtifactDigest(t *t
 		{name: "exact", want: EvalSatisfied},
 		{name: "missing trusted package", mutate: func(_ *Manifest, opts *EvaluationOptions) { opts.ExpectedPackage = nil }, want: EvalStale},
 		{name: "missing proof package", mutate: func(m *Manifest, _ *EvaluationOptions) { m.PackageIdentity = nil }, want: EvalStale},
-		{name: "wrong proof package", mutate: func(m *Manifest, _ *EvaluationOptions) { m.PackageIdentity.Version = "other" }, want: EvalStale},
-		{name: "prefixed proof package commit", mutate: func(m *Manifest, _ *EvaluationOptions) { m.PackageIdentity.Version = "pkg-0123456789ab" }, want: EvalStale},
-		{name: "prefixed trusted package commit", mutate: func(_ *Manifest, opts *EvaluationOptions) { opts.ExpectedPackage.Version = "pkg-0123456789ab" }, want: EvalStale},
+		{name: "wrong proof package", mutate: func(m *Manifest, _ *EvaluationOptions) { m.PackageIdentity.SourceCommit = strings.Repeat("b", 40) }, want: EvalStale},
+		{name: "changed proof archive", mutate: func(m *Manifest, _ *EvaluationOptions) { m.PackageIdentity.ArtifactSHA256 = strings.Repeat("b", 64) }, want: EvalStale},
+		{name: "wrong trusted package", mutate: func(_ *Manifest, opts *EvaluationOptions) {
+			opts.ExpectedPackage.SourceCommit = strings.Repeat("b", 40)
+		}, want: EvalStale},
 		{name: "dirty manifest", mutate: func(m *Manifest, _ *EvaluationOptions) { m.Dirty = true }, want: EvalStale},
 		{name: "noncanonical serialized commit", mutate: func(m *Manifest, _ *EvaluationOptions) { m.Commit = " 0123456789ab " }, want: EvalStale},
 		{name: "stale manifest with forged notes", mutate: func(m *Manifest, _ *EvaluationOptions) {
@@ -424,7 +427,7 @@ func runtimeBindingFixture() RuntimeBinding {
 	}
 }
 
-const runtimePackageCommitFixture = "abcdef012345"
+const runtimePackageCommitFixture = "abcdef012345abcdef012345abcdef012345abcd"
 
 func runtimeExpectationFixture() RuntimeExpectation {
 	binding := runtimeBindingFixture()
@@ -445,7 +448,7 @@ func runtimeProofFixture(requirement ProofRequirement, binding RuntimeBinding) P
 func runtimeManifestWithProofs(_ RuntimeExpectation, proofs ...ProofEntry) Manifest {
 	manifest := evalManifestWithProofs(proofs...)
 	manifest.Commit = runtimePackageCommitFixture
-	manifest.PackageIdentity = &PackageIdentity{Name: "hideout", Version: runtimePackageCommitFixture}
+	manifest.PackageIdentity = evalPackageIdentity(runtimePackageCommitFixture, "a")
 	return manifest
 }
 
@@ -454,8 +457,15 @@ func runtimeEvaluationOptions(requirements []ProofRequirement, expected RuntimeE
 		Requirements:    requirements,
 		Target:          RequiredForReleaseCandidate,
 		ExpectedCommit:  runtimePackageCommitFixture,
-		ExpectedPackage: &PackageIdentity{Name: "hideout", Version: runtimePackageCommitFixture},
+		ExpectedPackage: evalPackageIdentity(runtimePackageCommitFixture, "a"),
 		ExpectedRuntime: &expected,
+	}
+}
+
+func evalPackageIdentity(commit, digestCharacter string) *PackageIdentity {
+	return &PackageIdentity{
+		Name: "hideout", ProductVersion: "0.1.0-alpha.1", SourceCommit: commit,
+		ArtifactSHA256: strings.Repeat(digestCharacter, 64), HostOS: "darwin", HostArch: "arm64",
 	}
 }
 

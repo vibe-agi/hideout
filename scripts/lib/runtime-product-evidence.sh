@@ -13,10 +13,7 @@ runtime_evidence_sha256_file() {
 }
 
 runtime_evidence_git_commit() {
-  # Package manifests and release binaries use the canonical 12-character
-  # candidate identity. Evidence must use the same value or readiness will
-  # correctly classify an otherwise matching proof as stale.
-  git rev-parse --short=12 HEAD
+  git rev-parse HEAD
 }
 
 runtime_evidence_git_dirty() {
@@ -111,16 +108,25 @@ runtime_evidence_add_proof() {
 }
 
 runtime_evidence_write_manifest() {
-  local manifest="$1" proofs="$2" package_commit="${3:-}"
+  local manifest="$1" proofs="$2" package_identity_path="${3:-}"
   local commit dirty package_json="null"
   commit="$(runtime_evidence_git_commit)"
   dirty="$(runtime_evidence_git_dirty)"
-  if [ -n "$package_commit" ]; then
-    if ! printf '%s' "$package_commit" | grep -Eq '^[0-9a-f]{12,40}$'; then
-      echo "runtime-evidence: package commit must be canonical" >&2
+  if [ -n "$package_identity_path" ]; then
+    if [ ! -f "$package_identity_path" ]; then
+      echo "runtime-evidence: package identity file does not exist: $package_identity_path" >&2
       return 2
     fi
-    package_json="$(jq -n --arg version "$package_commit" '{name:"hideout",version:$version}')"
+    package_json="$(jq -ce --arg commit "$commit" '
+      select(.name == "hideout") |
+      select(.sourceCommit == $commit) |
+      select(.productVersion | test("^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$")) |
+      select(.artifactSHA256 | test("^[a-f0-9]{64}$")) |
+      select((.hostOS | length) > 0 and (.hostArch | length) > 0)
+    ' "$package_identity_path")" || {
+      echo "runtime-evidence: package identity is incomplete or does not match source commit" >&2
+      return 2
+    }
   fi
   jq -n \
     --arg generated "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \

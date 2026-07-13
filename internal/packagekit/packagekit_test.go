@@ -80,6 +80,67 @@ func TestUpgradeRejectsIncompatibleMigrationBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsSemanticDowngradeBeforeMutation(t *testing.T) {
+	first := writeTestArtifact(t, map[string]string{"bin/hideout": "version-new\n"})
+	firstManifest := readManifest(t, first)
+	firstManifest.Release = ReleaseInfo{ProductVersion: "0.1.0-alpha.10", Channel: "developer-preview", Tag: "v0.1.0-alpha.10"}
+	writeManifest(t, first, firstManifest)
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := Install(InstallOptions{PackageRoot: first, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(prefix, "bin", "hideout")
+	before, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	older := writeTestArtifact(t, map[string]string{"bin/hideout": "version-old\n"})
+	olderManifest := readManifest(t, older)
+	olderManifest.Release = ReleaseInfo{ProductVersion: "0.1.0-alpha.2", Channel: "developer-preview", Tag: "v0.1.0-alpha.2"}
+	writeManifest(t, older, olderManifest)
+	if _, err := Install(InstallOptions{PackageRoot: older, Prefix: prefix, StoreRoot: store}); err == nil || !strings.Contains(err.Error(), "unsupported package downgrade") {
+		t.Fatalf("expected semantic downgrade failure, got %v", err)
+	}
+	after, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("downgrade mutated binary: before=%q after=%q", before, after)
+	}
+}
+
+func TestInstallRejectsDifferentIdentityAtSameVersionBeforeMutation(t *testing.T) {
+	first := writeTestArtifact(t, map[string]string{"bin/hideout": "version-a\n"})
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := Install(InstallOptions{PackageRoot: first, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(prefix, "bin", "hideout")
+	before, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conflict := writeTestArtifact(t, map[string]string{"bin/hideout": "version-b\n"})
+	manifest := readManifest(t, conflict)
+	manifest.Source.Commit = "fedcba9876543210fedcba9876543210fedcba98"
+	writeManifest(t, conflict, manifest)
+	if _, err := Install(InstallOptions{PackageRoot: conflict, Prefix: prefix, StoreRoot: store}); err == nil || !strings.Contains(err.Error(), "same-version package identity differs") {
+		t.Fatalf("expected same-version identity failure, got %v", err)
+	}
+	after, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("identity mismatch mutated binary: before=%q after=%q", before, after)
+	}
+}
+
 func TestCompatibleUpgradePreservesStoreAndUpdatesFiles(t *testing.T) {
 	first := writeTestArtifact(t, map[string]string{"bin/hideout": "version-a\n"})
 	prefix := filepath.Join(t.TempDir(), "prefix")
@@ -396,6 +457,9 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"install.sh":                           {kind: "installer", executable: true, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", executable: false, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", executable: false, data: "readme zh\n"},
+		"LICENSE":                              {kind: "doc", executable: false, data: "license\n"},
+		"THIRD_PARTY_NOTICES.md":               {kind: "doc", executable: false, data: "notices\n"},
+		"SECURITY.md":                          {kind: "doc", executable: false, data: "security\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", executable: false, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", executable: false, data: "{}\n"},
 		"docs/README.md":                       {kind: "doc", executable: false, data: "docs\n"},
@@ -411,12 +475,19 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 	manifest := Manifest{
 		Schema:  ArtifactSchema,
 		BuiltAt: "2026-07-09T00:00:00Z",
-		Git:     GitInfo{Commit: "test", Dirty: false},
+		Release: ReleaseInfo{ProductVersion: "0.1.0-alpha.1", Channel: "developer-preview", Tag: "v0.1.0-alpha.1"},
+		Source:  SourceInfo{Repository: "https://github.com/vibe-agi/hideout", Commit: "0123456789abcdef0123456789abcdef01234567"},
+		Build:   BuildInfo{Workflow: "unit-test", Ref: "refs/heads/test"},
 		Target: Target{
 			HostOS:         runtime.GOOS,
 			HostArch:       runtime.GOARCH,
 			LinuxGuestArch: runtime.GOARCH,
 		},
+		Runtime: RuntimeInfo{
+			Family: "developer-standard", Revision: "2026.07.0",
+			CatalogFileSHA256: strings.Repeat("a", 64), ArtifactSHA256: strings.Repeat("b", 64),
+		},
+		SigningSummary: SigningSummary{Mode: "developer-preview-unsigned"},
 		Layout: Layout{
 			Root: DefaultPackageRoot,
 			Binaries: []string{

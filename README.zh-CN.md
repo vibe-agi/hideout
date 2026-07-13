@@ -6,7 +6,7 @@
 
 Run untrusted CLIs without handing them your whole machine.
 
-> 说明：当前 private alpha 阶段以 [English README](README.md) 为 canonical
+> 说明：当前公开源码、尚无公开产品包的阶段以 [English README](README.md) 为 canonical
 > 权威入口。本中文 README 是 best-effort 本地化摘要；如果两者冲突，以英文 README、
 > [docs/STATUS.md](docs/STATUS.md) 和
 > [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md) 为准。
@@ -16,7 +16,12 @@ Hideout 把不可信的开发工具和 agent CLI 运行在隔离的 backend 边�
 可审计、fail-closed 的授权流程，并记录可供检查的证据。隐私加固是收益
 之一，不是产品定义本身。
 
-当前状态：private alpha；请在有人监督下运行。gate 与发布证据定义见
+<!-- hideout-public-release:start -->
+当前没有公开的 Hideout 产品安装包。公开源码树仍是需要有人监督的开发和 dogfood
+入口；候选阶段文档不代表安装包已经公开可下载。
+<!-- hideout-public-release:end -->
+
+gate 与发布证据定义见
 [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md)。
 
 ## Hideout 保护什么
@@ -92,21 +97,30 @@ hideout doctor
 ## 快速开始
 
 ```bash
-export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
 hideout init \
-  --template privacy \
-  --profile default \
+  --template dev \
+  --profile alpha-direct \
   --backend lima \
-  --network tun2socks \
-  --proxy-secret proxy-url \
-  --mediated-resolver 1.1.1.1 \
+  --network direct \
   --runtime developer-standard \
   --no-input
-hideout run -- <cli>
-hideout run --fs see-dir:/absolute/directory -- <cli>
-hideout run --fs read:/absolute/file -- <cli>
-hideout explain -- <cli>
+hideout run --profile alpha-direct --backend lima -- pwd
+hideout run --profile alpha-direct -- <cli>
 hideout audit show --limit 20
+```
+
+这条路径只证明打包后的 VM 流程，并不声称隐藏网络身份。具备本地代理和
+mediated DNS 条件后，再显式建立单独的 privacy profile：
+
+```bash
+export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
+hideout init --template privacy --profile default --backend lima \
+  --network tun2socks --proxy-secret proxy-url \
+  --mediated-resolver 1.1.1.1 --runtime developer-standard --no-input
+hideout run --profile default -- <cli>
+hideout run --profile default --fs see-dir:/absolute/directory -- <cli>
+hideout run --profile default --fs read:/absolute/file -- <cli>
+hideout explain --profile default -- <cli>
 ```
 
 安装包包含 macOS arm64 上已保留、digest 固定的 `developer-standard` preview
@@ -117,7 +131,7 @@ inventory 与 SBOM 状态。选择 runtime 必须显式进行，不会改变已�
 以 non-root target 安装固定测试的真实 agent，不使用 `sudo` 或主机全局目录：
 
 ```bash
-hideout run -- sh -eu -c '
+hideout run --profile alpha-direct -- sh -eu -c '
   rm -rf "$HOME/.npm" "$HOME/.local/lib/node_modules/@openai/codex" "$HOME/.local/bin/codex"
   npm install --global --prefix "$HOME/.local" @openai/codex@0.144.1
   "$HOME/.local/bin/codex" --version
@@ -424,6 +438,25 @@ hideout cleanup
 [docs/script-extension-architecture.md](docs/script-extension-architecture.md)
 和
 [docs/ecosystem-foundation-design.md](docs/ecosystem-foundation-design.md)。
+
+## 问题反馈
+
+普通缺陷请使用
+[bug form](https://github.com/vibe-agi/hideout/issues/new/choose)，疑似安全问题请使用
+[private vulnerability reporting](https://github.com/vibe-agi/hideout/security/advisories/new)。
+请提供 `hideout version`、package digest、backend/platform、recovery code 和
+有边界的 doctor 摘要。
+
+诊断证据需要离开本机时，不要直接附 raw log，使用类型化导出路径：
+
+```bash
+hideout doctor --format json --evidence-out doctor-report.json
+hideout audit export --source doctor-report --doctor-report doctor-report.json \
+  --out doctor-export.json --acknowledge-full-fidelity
+```
+
+控制面脱敏会移除 Hideout 生成的凭据，但不会移除全部用户数据。批准或附加
+导出物前，必须检查 pre-export summary 和实际内容。
 
 ## 验证
 

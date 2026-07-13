@@ -32,6 +32,11 @@ test -f schemas/doctor-report.schema.json
 test -f schemas/support-matrix.schema.json
 test -f schemas/release-readiness.schema.json
 test -f schemas/product-hardening-evidence.schema.json
+test -f schemas/public-release.schema.json
+test -f schemas/public-evidence-bundle.schema.json
+test -f schemas/release-package-verification.schema.json
+test -f schemas/publication-receipt.schema.json
+test -f schemas/published-release-inventory.schema.json
 test -f schemas/hostfs-read-grants.schema.json
 test -f schemas/runtime-catalog.schema.json
 test -f schemas/runtime-verification.schema.json
@@ -51,7 +56,8 @@ jq -e '
   any(.requirements[]; .featureId == "025-documentation-truth-gate") and
   ([.requirements[] | select(.featureId == "029-hostfs-discoverable-namespace")] | length == 8) and
   ([.requirements[] | select(.featureId == "031-supported-cli-runtime")] | length == 8) and
-  ([.requirements[] | select(.featureId == "032-community-host-app-recipes")] | length == 4)
+  ([.requirements[] | select(.featureId == "032-community-host-app-recipes")] | length == 4) and
+  ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -62,7 +68,10 @@ go run ./cmd/hideout support recovery-codes --json >"$recovery_registry_tmp"
 jq -e '
   .schema == "hideout.recovery-codes/v1" and
   any(.codes[]; .code == "package.prerequisite.missing") and
-  any(.codes[]; .code == "release.gate-evidence.missing")
+  any(.codes[]; .code == "release.gate-evidence.missing") and
+  any(.codes[]; .code == "release.package.identity-invalid") and
+  any(.codes[]; .code == "release.signing.required") and
+  any(.codes[]; .code == "release.notarization.required")
 ' "$recovery_registry_tmp" >/dev/null
 rm -f "$recovery_registry_tmp"
 
@@ -233,6 +242,26 @@ rm -rf "$doc_truth_tmp"
 # artifact shape, local-fast honesty, release-candidate missing-evidence
 # fail-closed, doctor/version alignment, and docs drift guard.
 scripts/test-release-hardening-smoke.sh
+
+# Public alpha channel (033): strict release/workflow contracts plus a package
+# install in a fresh HOME with no source tree or Go on PATH. This local lane
+# does not sign, notarize, publish, create a Lima guest, or claim public release.
+scripts/test-public-alpha-release.sh --contract-only
+public_alpha_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-public-alpha-gate0.XXXXXX")"
+scripts/package-local.sh \
+  --out "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" >/dev/null
+scripts/test-public-alpha-clean-install.sh \
+  --package "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" \
+  --out "$public_alpha_tmp/clean-install.json" >/dev/null
+jq -e '
+  .schema == "hideout.public-alpha-clean-install/v1" and
+  .install.status == "passed" and
+  .install.sourceCheckoutUsed == false and
+  .install.goOnPATH == false and
+  .install.profileCreated == false and
+  .realLima.status == "not-run"
+' "$public_alpha_tmp/clean-install.json" >/dev/null
+rm -rf "$public_alpha_tmp"
 
 # First-run alpha path (020): package install docs, privacy/Lima default,
 # native-only-as-harness wording, doctor recovery commands, and no stale go-run

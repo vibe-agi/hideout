@@ -56,7 +56,6 @@ hideout
 hideout-shim
 hideout-shim-linux-<arch>
 hideout-hostfsd-linux-<arch>
-tun2socks-<platform>-<arch>
 install.sh
 package-manifest.json
 README.md
@@ -64,6 +63,12 @@ README.zh-CN.md
 schemas
 default profile templates
 ```
+
+The first public-alpha package does not own or checksum `limactl` or
+`tun2socks`. They are explicit host prerequisites: Lima is required for the
+supported VM path, while `tun2socks` is required only for the privacy-network
+path. `hideout package verify` and `doctor` report missing external
+prerequisites without pretending they were packaged.
 
 Optional artifacts:
 
@@ -310,8 +315,8 @@ macOS product distribution needs:
 
 Hideout should not silently install privileged system components.
 
-Source-tree installs use `scripts/install-local.sh` during the private
-pre-release phase. It builds `hideout`, the host command shim, and Linux guest
+Source-tree installs use `scripts/install-local.sh` for development and
+dogfood. It builds `hideout`, the host command shim, and Linux guest
 helpers into one prefix, then runs template-aware `hideout init --no-input`
 through the normal
 Manager-owned Init Task Engine unless `--skip-init` is set. This is not a
@@ -321,17 +326,20 @@ explicit weak-isolation development option. Source-tree repair may use
 `HIDEOUT_SOURCE_ROOT` when `doctor --fix --apply` is run outside the repository.
 Source-tree installs require Go.
 
-Release-like tarball packaging uses `scripts/package-local.sh` during private
-pre-release development. The tarball contains `bin/`, package-root `install.sh`,
-`package-manifest.json`, English and Chinese README entrypoints, `schemas/`,
-`docs/`, and `packaging/` under a single `hideout/` root. The manifest records
-schema version, build time, git commit, dirty state, target platform, Linux
-guest helper architecture, and critical package-relative layout paths. It also
-records SHA-256 checksums for critical package files such as binaries, Linux
-guest helpers, helper manifests, the package installer, README entrypoints, and
-manifest schemas. The package-root installer calls the packaged `hideout`
-binary to validate `package-manifest.json` and recalculate manifest-declared
-SHA-256 checksums before copying binaries. `scripts/test-package-smoke.sh`
+The public-alpha GitHub Release channel uses `scripts/package-local.sh` to stage
+one macOS arm64 package tree, sign every Mach-O, and finalize the same frozen
+tree without rebuilding it. No Hideout product package has been published yet;
+candidate and no-publish workflows therefore must not claim public
+availability. The tarball contains `bin/`, package-root `install.sh`,
+`package-manifest.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `SECURITY.md`,
+English and Chinese README entrypoints, `schemas/`, `docs/`, host-app data,
+packaging metadata, and the retained runtime catalog/build metadata under a
+single `hideout/` root. The manifest records product version, full source
+commit, clean-state observation, build identity, target platform, retained
+runtime identity, signing mode, package-relative layout, and SHA-256 for every
+package-owned file. The package-root installer calls the packaged `hideout`
+binary to validate `package-manifest.json` and recalculate all declared
+checksums before copying binaries. `scripts/test-package-smoke.sh`
 extracts that tarball into a temporary prefix, validates the manifest, proves
 each manifest-declared path exists with the expected file type, recalculates
 declared file checksums, then runs extracted template-aware `hideout init`,
@@ -346,6 +354,13 @@ guest-local DNS stub, or any manifest-declared checksum does not match the
 extracted file.
 Release-like tarball installs must not require Go; they use the packaged
 `hideout` binary for package verification and packaged Linux helpers for Lima.
+
+The release itself is exactly four immutable assets: the versioned package,
+the bounded evidence bundle, the machine-readable release manifest, and
+`SHA256SUMS`. Candidate construction retains a private draft; a separate
+protected promotion validates exact bytes, publishes once, anonymously
+redownloads every asset, and only then emits the receipt that can update
+`releases/current.json` and public documentation.
 
 The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
 private `brew install --HEAD` workflows once the operator has repository access.
@@ -407,8 +422,15 @@ Release candidate should verify:
   manifests, init metadata, idempotent init, doctor, `doctor --fix --dry-run`,
   and safe `doctor --fix --apply` from temporary prefix/store roots;
 - `scripts/package-local.sh` and `scripts/test-package-smoke.sh` verify a
-  release-like tarball layout can be extracted, installed through package-root
+  release package layout can be extracted, installed through package-root
   `install.sh`, and initialized without hidden repository state;
+- `hideout-alpha-candidate.yml` stages, signs, notarizes, and retains one exact
+  private draft; `test-public-alpha-candidate.sh` binds that package to clean
+  install and real Gate 2/Gate 3 evidence; and `hideout-alpha-promote.yml`
+  requires protected approval plus anonymous redownload before a public receipt;
+- the public-alpha package channel is implemented but has not been published,
+  because Developer ID Application and notarization credentials have not yet
+  produced the required exact-candidate evidence;
 - `packaging/homebrew/hideout.rb` defines the draft Homebrew `--HEAD` formula
   and its formula-level `init`/`doctor` smoke;
 - template-aware `hideout init --no-input` applies safe machine initialization tasks;
@@ -419,15 +441,16 @@ Release candidate should verify:
 
 ### Next Product Increment
 
-- decide whether the draft Homebrew formula is the first public install channel
-  or whether it ships after a signed macOS package;
-- package release artifacts with the same helper layout verified by
-  `scripts/test-install-smoke.sh`;
-- add package smoke install for the chosen channel;
+- obtain protected Developer ID Application and notarization credentials;
+- run the exact clean candidate, real Gate 2/Gate 3, signing, notarization,
+  protected promotion, anonymous download, and receipt-bound docs workflow for
+  `v0.1.0-alpha.1`;
+- treat the Homebrew formula as a post-release fast follow, not as the first
+  public package truth source;
 - add richer `doctor --fix --dry-run|--apply` remediation coverage for backend
   prerequisites and helper repair beyond source-tree builds;
-- decide whether `tun2socks` ships as a bundled helper or an explicitly checked
-  external prerequisite.
+- revisit whether a future package owns `tun2socks`; the first alpha keeps it
+  as an explicitly checked external prerequisite.
 
 ### Later
 
@@ -437,4 +460,7 @@ Release candidate should verify:
 
 ## Open Questions
 
-- What is the first official install channel?
+- When should Homebrew become a supported channel after the signed GitHub
+  Release tarball has a verified public receipt?
+- Should a later package own and checksum `tun2socks`, or keep it as an
+  independently managed privacy prerequisite?

@@ -172,7 +172,7 @@ core_after="$({ find internal/hostapppack internal/hostcap internal/cmdgrammar i
 test "$core_before" = "$core_after"
 grep -q '"applied":true' "$evidence_out/logs/contributor.out"
 
-commit="$(git rev-parse --short=12 HEAD)"
+commit="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then dirty=true; else dirty=false; fi
 generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 lifecycle_sha="$(sha256_file "$evidence_out/logs/lifecycle.out")"

@@ -74,7 +74,7 @@ command -v jq >/dev/null 2>&1 || { echo "test-ui-e2e: jq required" >&2; exit 127
 mkdir -p "$out"
 manifest="$out/product-hardening-evidence.json"
 
-commit="$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
 dirty=false
 if [ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]; then
   dirty=true

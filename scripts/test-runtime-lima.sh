@@ -11,7 +11,7 @@ cd "$ROOT"
 
 family="${HIDEOUT_RUNTIME_FAMILY:-developer-standard}"
 evidence_out="${HIDEOUT_RUNTIME_EVIDENCE_OUT:-$ROOT/dist/runtime/evidence/031-runtime-lima}"
-tmp="$(mktemp -d /tmp/h31-runtime.XXXXXX)"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/h31-runtime.XXXXXX")"
 drift_store=""
 drift_lima_home=""
 cleanup() {
@@ -34,7 +34,13 @@ require_command() {
 for command in go jq limactl; do require_command "$command"; done
 
 hideout="$tmp/hideout"
-go build -o "$hideout" ./cmd/hideout
+if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+  [ -x "$HIDEOUT_RELEASE_BINARY" ] || { echo "runtime-lima: HIDEOUT_RELEASE_BINARY is not executable" >&2; exit 126; }
+  cp "$HIDEOUT_RELEASE_BINARY" "$hideout"
+  chmod 0700 "$hideout"
+else
+  go build -o "$hideout" ./cmd/hideout
+fi
 "$hideout" runtime inspect "$family" --json >"$tmp/inspect.json"
 
 host_os="$(go env GOOS)"
@@ -111,7 +117,7 @@ grep -q '^gate2: passed$' "$tmp/gate2.out"
 
 echo "runtime-lima: proving mutable-guest drift without target root"
 drift_store="$tmp/drift-store"
-drift_lima_home="$(mktemp -d /tmp/h31d.XXXXXX)"
+drift_lima_home="$(mktemp -d "${TMPDIR:-/tmp}/h31d.XXXXXX")"
 drift_workspace="$tmp/drift-workspace"
 mkdir -p "$drift_store" "$drift_workspace"
 if ! HIDEOUT_STORE_ROOT="$drift_store" LIMA_HOME="$drift_lima_home" "$hideout" init \
@@ -205,6 +211,7 @@ grep -q '^runtime_drift_unrelated=passed$' "$tmp/drift-unrelated.out"
 echo "runtime_mutable_guest_drift=passed"
 
 mkdir -p "$evidence_out/logs"
+cp "$build_provenance" "$evidence_out/build-provenance.json"
 cp "$tmp/env-image.out" "$evidence_out/logs/env-image.out"
 cp "$tmp/gate2.out" "$evidence_out/logs/gate2.out"
 cp "$tmp/drift-verify.json" "$evidence_out/logs/drift-verify.json"
@@ -241,7 +248,7 @@ proofs="$(runtime_evidence_add_proof "$proofs" "$registry" "031.runtime.boundary
   "real-gate" "runtime-boundary-regression" "complete Gate 2 boundary regression on retained runtime" \
   "$artifact_rel" "$artifact_sha" "$runtime_json")"
 runtime_evidence_write_manifest "$evidence_out/product-hardening-evidence.json" "$proofs" \
-  "${HIDEOUT_RUNTIME_PACKAGE_COMMIT:-}"
+  "${HIDEOUT_RUNTIME_PACKAGE_IDENTITY:-}"
 go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.json \
   "$evidence_out/product-hardening-evidence.json" >/dev/null
 

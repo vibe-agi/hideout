@@ -82,7 +82,7 @@ sha256_file() {
 }
 
 git_commit() {
-  git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown'
+  git rev-parse HEAD 2>/dev/null || printf 'unknown'
 }
 
 git_dirty() {

@@ -984,7 +984,7 @@ main() {
   require_command python3
   require_command curl
 
-  tmp="$(mktemp -d "/tmp/ho-rr.XXXXXX")"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ho-rr.XXXXXX")"
   endpoint_pid=""
   hostfs_root=""
   trap cleanup EXIT

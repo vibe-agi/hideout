@@ -60,7 +60,7 @@ run_real_enforced() {
   command -v jq >/dev/null 2>&1 || { echo "privilege-smoke: jq is required" >&2; exit 2; }
 
   local tmp lima_home store helpers workspace host_file out err audit_path
-  tmp="$(mktemp -d /tmp/hps.XXXXXX)"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/hps.XXXXXX")"
   lima_home="$tmp/lima"
   cleanup_real() {
     local cleanup_tmp="$1"
@@ -130,7 +130,7 @@ run_real_degraded() {
   command -v ssh >/dev/null 2>&1 || { echo "privilege-smoke: ssh is required" >&2; exit 2; }
 
   local tmp lima_home store helpers workspace host_file out err out2 err2 audit_path env_record instance target_user ssh_config
-  tmp="$(mktemp -d /tmp/hpd.XXXXXX)"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/hpd.XXXXXX")"
   lima_home="$tmp/lima"
   cleanup_degraded() {
     local cleanup_tmp="$1"

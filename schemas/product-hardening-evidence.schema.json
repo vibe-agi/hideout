@@ -23,16 +23,19 @@
     "packageIdentity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version"],
+      "required": ["name", "productVersion", "sourceCommit", "artifactSHA256", "hostOS", "hostArch"],
       "properties": {
         "name": {
-          "type": "string",
-          "minLength": 1
+          "const": "hideout"
         },
-        "version": {
+        "productVersion": {
           "type": "string",
-          "minLength": 1
-        }
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
+        },
+        "sourceCommit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "hostOS": {"type": "string", "minLength": 1},
+        "hostArch": {"type": "string", "minLength": 1}
       }
     },
     "proofs": {

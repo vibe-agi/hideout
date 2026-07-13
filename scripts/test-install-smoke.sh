@@ -37,7 +37,7 @@ test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
 test -f "$store/profiles/default/profile.json"
 
-commit="$(git rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
 "$prefix/bin/hideout" version >"$tmp/version.out"
 grep -q '^hideout dev$' "$tmp/version.out"
 grep -q "^commit: $commit$" "$tmp/version.out"

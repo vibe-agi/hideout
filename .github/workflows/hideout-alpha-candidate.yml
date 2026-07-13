@@ -1,0 +1,225 @@
+name: Hideout Public Alpha Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact prerelease version without the v prefix
+        required: true
+        default: 0.1.0-alpha.1
+        type: string
+      source_commit:
+        description: Full source commit; defaults to the triggering commit
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hideout-alpha-candidate-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Build, sign, notarize, and retain a private draft
+    runs-on: macos-15
+    environment: public-alpha-signing
+    timeout-minutes: 120
+    steps:
+      - name: Check out the exact candidate source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.source_commit || github.sha }}
+
+      - name: Install the declared Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate immutable candidate inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]
+          test "$(uname -s)/$(uname -m)" = "Darwin/arm64"
+          source_commit=$(git rev-parse HEAD)
+          test -z "$INPUT_COMMIT" || test "$source_commit" = "$INPUT_COMMIT"
+          test "${#source_commit}" -eq 40
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git merge-base --is-ancestor "$source_commit" origin/master
+          tag="v$INPUT_VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "candidate: tag already has a release; rebuilding the same identity is forbidden" >&2
+            exit 1
+          fi
+          root="$RUNNER_TEMP/hideout-alpha-candidate"
+          rm -rf "$root"
+          mkdir -p "$root/output"
+          {
+            echo "HIDEOUT_ALPHA_ROOT=$root"
+            echo "HIDEOUT_ALPHA_VERSION=$INPUT_VERSION"
+            echo "HIDEOUT_ALPHA_TAG=$tag"
+            echo "HIDEOUT_ALPHA_COMMIT=$source_commit"
+          } >>"$GITHUB_ENV"
+
+      - name: Import protected Developer ID and notarization credentials
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for value in DEVELOPER_ID_P12_BASE64 DEVELOPER_ID_P12_PASSWORD SIGNING_IDENTITY NOTARY_KEY_P8_BASE64 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+            test -n "${!value:-}" || { echo "candidate: protected credential $value is missing" >&2; exit 1; }
+          done
+          keychain="$HIDEOUT_ALPHA_ROOT/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          p12="$HIDEOUT_ALPHA_ROOT/developer-id.p12"
+          notary_key="$HIDEOUT_ALPHA_ROOT/AuthKey.p8"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | /usr/bin/base64 -D >"$p12"
+          printf '%s' "$NOTARY_KEY_P8_BASE64" | /usr/bin/base64 -D >"$notary_key"
+          chmod 600 "$p12" "$notary_key"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$DEVELOPER_ID_P12_PASSWORD" -A -t cert -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security find-identity -v -p codesigning "$keychain" | grep -F "$SIGNING_IDENTITY" >/dev/null
+          {
+            echo "HIDEOUT_SIGNING_KEYCHAIN=$keychain"
+            echo "HIDEOUT_SIGNING_IDENTITY=$SIGNING_IDENTITY"
+            echo "HIDEOUT_NOTARY_KEY=$notary_key"
+            echo "HIDEOUT_NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "HIDEOUT_NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
+          } >>"$GITHUB_ENV"
+
+      - name: Stage once, sign every Mach-O, and finalize once
+        run: |
+          set -euo pipefail
+          stage="$HIDEOUT_ALPHA_ROOT/stage"
+          package="$HIDEOUT_ALPHA_ROOT/output/hideout-v${HIDEOUT_ALPHA_VERSION}-darwin-arm64.tar.gz"
+          scripts/package-local.sh --stage "$stage" \
+            --version "$HIDEOUT_ALPHA_VERSION" --channel alpha \
+            --tag "$HIDEOUT_ALPHA_TAG" --workflow "$GITHUB_WORKFLOW_REF" \
+            --ref "$GITHUB_REF" --signing-mode developer-id-observed >/dev/null
+          signed=0
+          while IFS= read -r -d '' path; do
+            if /usr/bin/file -b "$path" | grep -q 'Mach-O'; then
+              /usr/bin/codesign --force --options runtime --timestamp \
+                --keychain "$HIDEOUT_SIGNING_KEYCHAIN" \
+                --sign "$HIDEOUT_SIGNING_IDENTITY" "$path"
+              signed=$((signed + 1))
+            fi
+          done < <(find "$stage/hideout" -type f -perm -111 -print0)
+          test "$signed" -gt 0
+          scripts/package-local.sh --finalize "$stage" --out "$package" \
+            --signing-mode developer-id-observed >/dev/null
+          "$stage/hideout/bin/hideout" package verify "$stage/hideout" >/dev/null
+          "$stage/hideout/bin/hideout" support release package-identity \
+            --archive "$package" --out "$HIDEOUT_ALPHA_ROOT/output/package-identity.json" >/dev/null
+          jq -e --arg version "$HIDEOUT_ALPHA_VERSION" --arg commit "$HIDEOUT_ALPHA_COMMIT" '
+            .productVersion == $version and .sourceCommit == $commit and
+            .hostOS == "darwin" and .hostArch == "arm64"
+          ' "$HIDEOUT_ALPHA_ROOT/output/package-identity.json" >/dev/null
+
+      - name: Notarize the exact finalized package tree
+        run: |
+          set -euo pipefail
+          submission="$HIDEOUT_ALPHA_ROOT/notary-submission.zip"
+          result="$HIDEOUT_ALPHA_ROOT/notary-result.json"
+          /usr/bin/ditto -c -k --keepParent "$HIDEOUT_ALPHA_ROOT/stage/hideout" "$submission"
+          xcrun notarytool submit "$submission" \
+            --key "$HIDEOUT_NOTARY_KEY" \
+            --key-id "$HIDEOUT_NOTARY_KEY_ID" \
+            --issuer "$HIDEOUT_NOTARY_ISSUER_ID" \
+            --wait --output-format json >"$result"
+          # System policy assessment is meaningful only after the exact signed
+          # bytes have an accepted online notarization record.
+          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release observe-signing \
+            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
+            --out "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" >/dev/null
+          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release observe-notarization \
+            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
+            --submission "$submission" --result "$result" \
+            --out "$HIDEOUT_ALPHA_ROOT/output/notarization-observation.json" >/dev/null
+          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release validate-signing \
+            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
+            --observation "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" >/dev/null
+          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release validate-notarization \
+            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
+            --observation "$HIDEOUT_ALPHA_ROOT/output/notarization-observation.json" >/dev/null
+
+      - name: Run local release contracts and retain bounded candidate metadata
+        run: |
+          set -euo pipefail
+          scripts/test-gate0.sh
+          output="$HIDEOUT_ALPHA_ROOT/output"
+          package="hideout-v${HIDEOUT_ALPHA_VERSION}-darwin-arm64.tar.gz"
+          jq -n \
+            --arg version "$HIDEOUT_ALPHA_VERSION" --arg tag "$HIDEOUT_ALPHA_TAG" \
+            --arg commit "$HIDEOUT_ALPHA_COMMIT" --arg run "$GITHUB_RUN_ID" \
+            --arg packageSHA "$(shasum -a 256 "$output/$package" | awk '{print $1}')" \
+            '{schema:"hideout.public-alpha-candidate/v1",version:$version,tag:$tag,
+              sourceCommit:$commit,sourceDirty:false,workflowRunId:($run|tonumber),
+              publicationStatus:"draft-only",packageSHA256:$packageSHA}' \
+            >"$output/candidate.json"
+          (cd "$output" && for file in "$package" package-identity.json signing-observation.json notarization-observation.json candidate.json; do
+            printf '%s  %s\n' "$(shasum -a 256 "$file" | awk '{print $1}')" "$file"
+          done | LC_ALL=C sort -k2 >candidate-SHA256SUMS)
+
+      - name: Upload the retained candidate workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hideout-alpha-candidate-${{ inputs.version }}
+          path: ${{ env.HIDEOUT_ALPHA_ROOT }}/output
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain the candidate as a private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          output="$HIDEOUT_ALPHA_ROOT/output"
+          notes=$(cat <<EOF
+          Private Hideout public-alpha candidate.
+
+          Source: ${HIDEOUT_ALPHA_COMMIT}
+          Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          This draft is not a public release, current-alpha claim, or substitute for real Gate 2/3 evidence.
+          EOF
+          )
+          gh release create "$HIDEOUT_ALPHA_TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "$HIDEOUT_ALPHA_COMMIT" --draft --prerelease \
+            --title "Hideout ${HIDEOUT_ALPHA_VERSION} private candidate" --notes "$notes"
+          gh release upload "$HIDEOUT_ALPHA_TAG" --repo "$GITHUB_REPOSITORY" "$output"/*
+
+      - name: Remove credential-bearing temporary state
+        if: always()
+        run: |
+          set -euo pipefail
+          . scripts/lib/public-alpha-cleanup.sh
+          public_alpha_cleanup_workflow_state \
+            "${HIDEOUT_ALPHA_ROOT:-$RUNNER_TEMP/hideout-alpha-candidate}" \
+            "${HIDEOUT_SIGNING_KEYCHAIN:-}" \
+            "$RUNNER_TEMP/hideout-alpha-workflow-cleanup.json"
+
+      - name: Retain bounded workflow cleanup receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hideout-alpha-workflow-cleanup-${{ inputs.version }}
+          path: ${{ runner.temp }}/hideout-alpha-workflow-cleanup.json
+          if-no-files-found: error
+          retention-days: 14

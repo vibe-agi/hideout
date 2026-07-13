@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/publication-receipt.schema.json",
+  "title": "Hideout Publication Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "observedAt", "version", "tag", "sourceCommit", "releaseId", "url", "prerelease", "immutable", "package", "evidenceSHA256", "assets", "proofStatus"],
+  "properties": {
+    "schema": {"const": "hideout.publication-receipt/v1"},
+    "status": {"const": "public-verified"},
+    "observedAt": {"type": "string", "format": "date-time"},
+    "version": {"type": "string", "minLength": 1},
+    "tag": {"type": "string", "minLength": 1},
+    "sourceCommit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "releaseId": {"type": "integer", "minimum": 1},
+    "url": {"type": "string", "pattern": "^https://github\\.com/vibe-agi/hideout/releases/tag/v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"},
+    "prerelease": {"const": true},
+    "immutable": {"const": true},
+    "package": {"$ref": "public-evidence-bundle.schema.json#/$defs/package"},
+    "evidenceSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "assets": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "bytes", "apiSHA256", "downloadSHA256"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+          "bytes": {"type": "integer", "minimum": 1},
+          "apiSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "downloadSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "proofStatus": {"const": "satisfied"}
+  }
+}

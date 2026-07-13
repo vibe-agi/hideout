@@ -34,13 +34,29 @@ copy_artifacts() {
   done
 }
 
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    echo "package-smoke: missing shasum or sha256sum" >&2
+    exit 127
+  fi
+}
+
 pkg="$tmp/hideout.tar.gz"
+stage="$tmp/stage"
 store="$tmp/store"
 workspace="$tmp/workspace"
 mkdir -p "$workspace" "$tmp/install"
 
-scripts/package-local.sh --out "$pkg" >"$tmp/package.out"
+scripts/package-local.sh --stage "$stage" >"$tmp/package-stage.out"
+test ! -e "$stage/hideout/package-manifest.json"
+staged_hideout_sha="$(sha256_file "$stage/hideout/bin/hideout")"
+scripts/package-local.sh --finalize "$stage" --out "$pkg" >"$tmp/package.out"
 test -f "$pkg"
+test "$staged_hideout_sha" = "$(sha256_file "$stage/hideout/bin/hideout")"
 grep -q 'For the alpha package path' README.md
 grep -q 'hideout package verify "$HOME/.local"' README.md
 grep -q 'For local source-tree development' README.md
@@ -58,17 +74,6 @@ manifest_relative_path() {
   esac
 }
 
-sha256_file() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{print $1}'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    echo "package-smoke: missing shasum or sha256sum" >&2
-    exit 127
-  fi
-}
-
 for path in \
   "$prefix/bin/hideout" \
   "$prefix/bin/hideout-shim" \
@@ -78,6 +83,9 @@ for path in \
   "$prefix/package-manifest.json" \
   "$prefix/README.md" \
   "$prefix/README.zh-CN.md" \
+  "$prefix/LICENSE" \
+  "$prefix/THIRD_PARTY_NOTICES.md" \
+  "$prefix/SECURITY.md" \
   "$prefix/schemas/package-manifest.schema.json" \
   "$prefix/schemas/release-dogfood.schema.json" \
   "$prefix/schemas/runtime-catalog.schema.json" \
@@ -121,10 +129,16 @@ jq -e \
   --arg host_os "$(go env GOOS)" \
   --arg host_arch "$arch" \
   '
-    .schema == "hideout.package-manifest.v1" and
+    .schema == "hideout.package-manifest/v1" and
     (.builtAt | type == "string" and length > 0) and
-    (.git.commit | type == "string" and length > 0) and
-    (.git.dirty | type == "boolean") and
+    .release.productVersion == "0.1.0-dev.0" and
+    .release.channel == "developer-preview" and
+    .release.tag == "v0.1.0-dev.0" and
+    .source.repository == "https://github.com/vibe-agi/hideout" and
+    (.source.commit | test("^[a-f0-9]{40}$")) and
+    (.source.dirty | type == "boolean") and
+    (.build.workflow | type == "string" and length > 0) and
+    (.build.ref | type == "string" and length > 0) and
     .target.hostOS == $host_os and
     .target.hostArch == $host_arch and
     .target.linuxGuestArch == $host_arch and
@@ -140,15 +154,22 @@ jq -e \
     (.layout.directories | index("examples")) and
     (.layout.directories | index("packaging")) and
     (.layout.directories | index("runtime")) and
-    .migration.installStateSchema == "hideout.package-install-state.v1" and
-    (.migration.fromInstalledSchemas | index("hideout.package-install-state.v1")) and
-    .migration.minimumPackageSchema == "hideout.package-manifest.v1" and
-    .migration.maximumPackageSchema == "hideout.package-manifest.v1" and
+    .runtime.family == "developer-standard" and
+    (.runtime.catalogFileSHA256 | test("^[a-f0-9]{64}$")) and
+    (.runtime.artifactSHA256 | test("^[a-f0-9]{64}$")) and
+    .signingSummary.mode == "developer-preview-unsigned" and
+    .migration.installStateSchema == "hideout.package-install-state/v1" and
+    (.migration.fromInstalledSchemas | index("hideout.package-install-state/v1")) and
+    .migration.minimumPackageSchema == "hideout.package-manifest/v1" and
+    .migration.maximumPackageSchema == "hideout.package-manifest/v1" and
     (.files | type == "array" and length >= 8) and
     any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "install.sh" and .kind == "installer" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "THIRD_PARTY_NOTICES.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "SECURITY.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/runtime-catalog.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and

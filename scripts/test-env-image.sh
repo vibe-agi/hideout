@@ -36,7 +36,7 @@ require_command go
 
 # Lima derives Unix socket paths below LIMA_HOME. Keep the real-backend gate
 # root short even when macOS TMPDIR is deeply nested.
-workdir="$(mktemp -d /tmp/h31.XXXXXX)"
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/h31.XXXXXX")"
 export HIDEOUT_STORE_ROOT="$workdir/store"
 export LIMA_HOME="$workdir/lima"
 workspace="$workdir/workspace"

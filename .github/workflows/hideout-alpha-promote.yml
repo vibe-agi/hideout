@@ -1,0 +1,377 @@
+name: Hideout Public Alpha Promotion
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/release-promotions/public-alpha-*.json
+      - .github/workflows/hideout-alpha-promote.yml
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Repository-relative public-alpha promotion request
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: hideout-public-alpha-promotion
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate exact draft before approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out trusted promotion request
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the declared Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve one immutable request and source commit
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_REQUEST: ${{ inputs.request }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/hideout-alpha-promotion"
+          rm -rf "$root"
+          mkdir -p "$root/validated"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            request="$INPUT_REQUEST"
+            case "$request" in
+              .github/release-promotions/public-alpha-*.json) ;;
+              *) echo "promotion: request must be a public-alpha repository path" >&2; exit 2 ;;
+            esac
+            test -f "$request"
+          else
+            mapfile -t requests < <(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA" -- \
+              '.github/release-promotions/public-alpha-*.json' | LC_ALL=C sort -u)
+            test "${#requests[@]}" -eq 1
+            request="${requests[0]}"
+          fi
+          cp "$request" "$root/validated/promotion-request.json"
+          jq -e '
+            (keys == ["assets","cleanup","releaseId","schema","sourceCommit","tag","version"]) and
+            .schema == "hideout.public-alpha-promotion-request/v1" and
+            (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$")) and
+            .tag == ("v" + .version) and
+            (.sourceCommit | test("^[0-9a-f]{40}$")) and
+            (.releaseId | type == "number" and . > 0) and
+            (.assets | keys == ["evidenceSHA256","packageSHA256","releaseManifestSHA256"]) and
+            all(.assets[]; test("^[0-9a-f]{64}$")) and
+            .cleanup.schema == "hideout.public-alpha-cleanup/v1" and
+            .cleanup.status == "passed" and
+            .cleanup.candidatePathProcessesRetained == 0 and
+            .cleanup.candidateLimaProcessesRetained == 0 and
+            .cleanup.candidateBrowserProcessesRetained == 0 and
+            .cleanup.candidateTemporaryRootsRetained == 0 and
+            .cleanup.candidateSecretBearingStateRetained == 0
+          ' "$root/validated/promotion-request.json" >/dev/null
+          source_commit=$(jq -r '.sourceCommit' "$root/validated/promotion-request.json")
+          git merge-base --is-ancestor "$source_commit" origin/master
+          git checkout --detach "$source_commit"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          {
+            echo "PROMOTION_ROOT=$root"
+            echo "PROMOTION_COMMIT=$source_commit"
+          } >>"$GITHUB_ENV"
+
+      - name: Download and validate the complete private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          request="$PROMOTION_ROOT/validated/promotion-request.json"
+          assets="$PROMOTION_ROOT/validated/assets"
+          mkdir -p "$assets"
+          tag=$(jq -r '.tag' "$request")
+          version=$(jq -r '.version' "$request")
+          release_id=$(jq -r '.releaseId' "$request")
+          package="hideout-v${version}-darwin-arm64.tar.gz"
+          evidence="hideout-v${version}-evidence.tar.gz"
+          manifest="hideout-v${version}-release.json"
+          expected=("$package" "$evidence" "$manifest" SHA256SUMS)
+
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
+          jq -e --arg tag "$tag" --arg commit "$PROMOTION_COMMIT" '
+            .draft == true and .tag_name == $tag and .target_commitish == $commit
+          ' <<<"$release_json" >/dev/null
+          mapfile -t api_names < <(jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)
+          mapfile -t expected_names < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "${expected_names[@]}") <(printf '%s\n' "${api_names[@]}")
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$assets"
+          mapfile -t local_names < <(find "$assets" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "${expected_names[@]}") <(printf '%s\n' "${local_names[@]}")
+
+          test "$(sha256sum "$assets/$package" | awk '{print $1}')" = "$(jq -r '.assets.packageSHA256' "$request")"
+          test "$(sha256sum "$assets/$evidence" | awk '{print $1}')" = "$(jq -r '.assets.evidenceSHA256' "$request")"
+          test "$(sha256sum "$assets/$manifest" | awk '{print $1}')" = "$(jq -r '.assets.releaseManifestSHA256' "$request")"
+          for name in "${expected[@]}"; do
+            api_digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")
+            test "$api_digest" = "sha256:$(sha256sum "$assets/$name" | awk '{print $1}')"
+          done
+
+          go run ./cmd/hideout support release validate \
+            --manifest "$assets/$manifest" --asset-root "$assets" >/dev/null
+          go run ./cmd/hideout support release package-identity \
+            --archive "$assets/$package" --out "$PROMOTION_ROOT/validated/package-identity.json" >/dev/null
+          go run ./cmd/hideout support release validate-evidence \
+            --archive "$assets/$evidence" >/dev/null
+          mkdir -p "$PROMOTION_ROOT/package" "$PROMOTION_ROOT/evidence"
+          tar -xzf "$assets/$package" -C "$PROMOTION_ROOT/package"
+          tar -xzf "$assets/$evidence" -C "$PROMOTION_ROOT/evidence"
+          go run ./cmd/hideout support release validate-signing \
+            --package-root "$PROMOTION_ROOT/package/hideout" \
+            --observation "$PROMOTION_ROOT/evidence/signing/observation.json" >/dev/null
+          go run ./cmd/hideout support release validate-notarization \
+            --package-root "$PROMOTION_ROOT/package/hideout" \
+            --observation "$PROMOTION_ROOT/evidence/notarization/observation.json" >/dev/null
+          jq -e --arg commit "$PROMOTION_COMMIT" '
+            .releaseReady == true and .mode == "release-candidate" and
+            .sourceCommit == $commit and .packageIdentity.sourceCommit == $commit
+          ' "$PROMOTION_ROOT/evidence/release-readiness.json" >/dev/null
+          jq -e --arg commit "$PROMOTION_COMMIT" '
+            .source.commit == $commit and .source.dirty == false and
+            .maturity == "public-supervised-alpha" and .channel == "alpha"
+          ' "$assets/$manifest" >/dev/null
+          package_sha=$(jq -r '.artifacts[] | select(.kind == "package") | .sha256' "$assets/$manifest")
+          runtime_family=$(jq -r '.runtime.family' "$assets/$manifest")
+          runtime_revision=$(jq -r '.runtime.revision' "$assets/$manifest")
+          runtime_sha=$(jq -r '.runtime.artifactSHA256' "$assets/$manifest")
+          signing_name=$(jq -r '.signing.commonName' "$assets/$manifest")
+          signing_team=$(jq -r '.signing.teamId' "$assets/$manifest")
+          non_claims=$(jq -r '.nonClaims | map("`" + . + "`") | join(", ")' "$assets/$manifest")
+          cat >"$PROMOTION_ROOT/validated/release-notes.md" <<EOF
+          Hideout ${version} is a public supervised alpha for macOS arm64 with the Lima backend.
+
+          - Source commit: \`${PROMOTION_COMMIT}\`
+          - Package SHA-256: \`${package_sha}\`
+          - Runtime: \`${runtime_family}\` \`${runtime_revision}\` (\`${runtime_sha}\`)
+          - Signing: \`${signing_name}\` (Team ID \`${signing_team}\`)
+          - Notarization: accepted online; tar.gz does not claim a stapled ticket
+          - License: Apache-2.0 for Hideout; third-party terms remain in \`THIRD_PARTY_NOTICES.md\`
+
+          The retained runtime is downloaded separately on first use and is approximately 1 GB. Start with the direct Lima quickstart, then review the separate privacy-network and safe \`code .\` walkthrough. This first public package has no prior public package migration; N-1 migration proof begins with the second alpha.
+
+          Install, verify, recover, and report issues using the [public distribution guide](https://github.com/${GITHUB_REPOSITORY}/blob/${PROMOTION_COMMIT}/docs/distribution-bootstrap.md), [first-run guide](https://github.com/${GITHUB_REPOSITORY}/blob/${PROMOTION_COMMIT}/docs/first-run-alpha.md), [issue form](https://github.com/${GITHUB_REPOSITORY}/issues/new/choose), and [private security reporting](https://github.com/${GITHUB_REPOSITORY}/security/advisories/new).
+
+          This release does not claim GA stability, automatic updates, Linux packages, workspace DLP, guest-root containment, or marketplace trust. Full non-claim inventory: ${non_claims}.
+          EOF
+          jq -n --arg tag "$tag" --arg version "$version" --arg commit "$PROMOTION_COMMIT" \
+            --argjson releaseId "$release_id" \
+            '{schema:"hideout.public-alpha-validation-context/v1",tag:$tag,
+              version:$version,sourceCommit:$commit,releaseId:$releaseId,status:"passed"}' \
+            >"$PROMOTION_ROOT/validated/context.json"
+          jq -e '
+            .schema == "hideout.public-alpha-validation-context/v1" and
+            .status == "passed" and
+            .sourceCommit == $commit
+          ' --arg commit "$PROMOTION_COMMIT" \
+            "$PROMOTION_ROOT/validated/context.json" >/dev/null
+
+      - name: Retain exact validated promotion input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hideout-public-alpha-validated
+          path: ${{ env.PROMOTION_ROOT }}/validated
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Approve, publish once, and prove anonymous bytes
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: public-alpha
+    timeout-minutes: 45
+    steps:
+      - name: Check out trusted promotion implementation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download exact validated input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: hideout-public-alpha-validated
+          path: ${{ runner.temp }}/hideout-public-alpha/validated
+
+      - name: Read validated source identity
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/hideout-public-alpha"
+          context="$root/validated/context.json"
+          jq -e '.schema == "hideout.public-alpha-validation-context/v1" and .status == "passed"' "$context" >/dev/null
+          {
+            echo "PUBLIC_ALPHA_ROOT=$root"
+            echo "PUBLIC_ALPHA_COMMIT=$(jq -r '.sourceCommit' "$context")"
+            echo "PUBLIC_ALPHA_TAG=$(jq -r '.tag' "$context")"
+            echo "PUBLIC_ALPHA_VERSION=$(jq -r '.version' "$context")"
+            echo "PUBLIC_ALPHA_RELEASE_ID=$(jq -r '.releaseId' "$context")"
+          } >>"$GITHUB_ENV"
+          git checkout --detach "$(jq -r '.sourceCommit' "$context")"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+
+      - name: Install the declared Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Revalidate repository and immutable draft prerequisites
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets="$PUBLIC_ALPHA_ROOT/validated/assets"
+          request="$PUBLIC_ALPHA_ROOT/validated/promotion-request.json"
+          manifest="$assets/hideout-v${PUBLIC_ALPHA_VERSION}-release.json"
+          test "$(git rev-parse HEAD)" = "$PUBLIC_ALPHA_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases" --jq 'select(.enabled == true)' >/dev/null
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/private-vulnerability-reporting" --jq 'select(.enabled == true)' >/dev/null
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$PUBLIC_ALPHA_RELEASE_ID")
+          jq -e --arg tag "$PUBLIC_ALPHA_TAG" --arg commit "$PUBLIC_ALPHA_COMMIT" '
+            .draft == true and .tag_name == $tag and .target_commitish == $commit
+          ' <<<"$release_json" >/dev/null
+          for path in "$assets"/*; do
+            name=$(basename "$path")
+            api_digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")
+            test "$api_digest" = "sha256:$(sha256sum "$path" | awk '{print $1}')"
+          done
+          go run ./cmd/hideout support release validate --manifest "$manifest" --asset-root "$assets" >/dev/null
+          go run ./cmd/hideout support release validate-evidence \
+            --archive "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-evidence.tar.gz" >/dev/null
+          jq -e --arg package "$(jq -r '.assets.packageSHA256' "$request")" '
+            .artifacts[] | select(.kind == "package") | .sha256 == $package
+          ' "$manifest" >/dev/null
+
+      - name: Publish complete immutable prerelease and verify anonymously
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets="$PUBLIC_ALPHA_ROOT/validated/assets"
+          downloads="$PUBLIC_ALPHA_ROOT/anonymous"
+          mkdir -p "$downloads"
+          incident="$PUBLIC_ALPHA_ROOT/publication-incident.json"
+          published=false
+          on_error() {
+            status=pre-publication-failed
+            if [ "$published" = true ]; then status=post-publication-verification-failed; fi
+            jq -n --arg status "$status" --arg tag "$PUBLIC_ALPHA_TAG" \
+              --arg commit "$PUBLIC_ALPHA_COMMIT" --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{schema:"hideout.publication-incident/v1",status:$status,tag:$tag,
+                sourceCommit:$commit,observedAt:$observedAt,receiptEmitted:false,
+                inventoryUpdated:false,versionConsumed:($status == "post-publication-verification-failed")}' \
+              >"$incident"
+          }
+          trap on_error ERR
+
+          notes=$(cat "$PUBLIC_ALPHA_ROOT/validated/release-notes.md")
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$PUBLIC_ALPHA_RELEASE_ID" \
+            -F draft=false -F prerelease=true -f make_latest=false \
+            -f name="Hideout ${PUBLIC_ALPHA_VERSION} supervised alpha" -f body="$notes" >/dev/null
+          published=true
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$PUBLIC_ALPHA_RELEASE_ID")
+          jq -e --arg tag "$PUBLIC_ALPHA_TAG" '.draft == false and .prerelease == true and .immutable == true and .tag_name == $tag' \
+            <<<"$release_json" >/dev/null
+          gh release verify "$PUBLIC_ALPHA_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          : >"$PUBLIC_ALPHA_ROOT/assets.ndjson"
+          while IFS= read -r path; do
+            name=$(basename "$path")
+            url="https://github.com/$GITHUB_REPOSITORY/releases/download/$PUBLIC_ALPHA_TAG/$name"
+            env -u GH_TOKEN -u GITHUB_TOKEN curl --fail --location --retry 3 --retry-all-errors \
+              --connect-timeout 15 --max-time 600 --output "$downloads/$name" "$url"
+            expected=$(sha256sum "$path" | awk '{print $1}')
+            downloaded=$(sha256sum "$downloads/$name" | awk '{print $1}')
+            test "$downloaded" = "$expected"
+            api_digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")
+            test "$api_digest" = "sha256:$expected"
+            jq -n --arg name "$name" --arg api "$expected" --arg download "$downloaded" \
+              --argjson bytes "$(stat -c '%s' "$downloads/$name")" \
+              '{name:$name,bytes:$bytes,apiSHA256:$api,downloadSHA256:$download}' \
+              >>"$PUBLIC_ALPHA_ROOT/assets.ndjson"
+          done < <(find "$assets" -maxdepth 1 -type f -print | LC_ALL=C sort)
+
+          jq -s '.' "$PUBLIC_ALPHA_ROOT/assets.ndjson" >"$PUBLIC_ALPHA_ROOT/assets.json"
+          evidence_sha=$(sha256sum "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-evidence.tar.gz" | awk '{print $1}')
+          jq -n --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg version "$PUBLIC_ALPHA_VERSION" --arg tag "$PUBLIC_ALPHA_TAG" \
+            --arg commit "$PUBLIC_ALPHA_COMMIT" --argjson releaseId "$PUBLIC_ALPHA_RELEASE_ID" \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$PUBLIC_ALPHA_TAG" \
+            --arg evidenceSHA "$evidence_sha" \
+            --slurpfile package "$PUBLIC_ALPHA_ROOT/validated/package-identity.json" \
+            --slurpfile assets "$PUBLIC_ALPHA_ROOT/assets.json" '
+            {schema:"hideout.publication-receipt/v1",status:"public-verified",
+             observedAt:$observedAt,version:$version,tag:$tag,sourceCommit:$commit,
+             releaseId:$releaseId,url:$url,prerelease:true,immutable:true,
+             package:$package[0],evidenceSHA256:$evidenceSHA,assets:$assets[0],
+             proofStatus:"satisfied"}
+          ' >"$PUBLIC_ALPHA_ROOT/publication-receipt.json"
+          go run ./cmd/hideout support release validate-receipt \
+            --receipt "$PUBLIC_ALPHA_ROOT/publication-receipt.json" \
+            --manifest "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-release.json" >/dev/null
+          go run ./cmd/hideout support release inventory-from-receipt \
+            --receipt "$PUBLIC_ALPHA_ROOT/publication-receipt.json" \
+            --manifest "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-release.json" \
+            --out "$PUBLIC_ALPHA_ROOT/current.json" >/dev/null
+          rm -f "$incident"
+          trap - ERR
+
+      - name: Upload public verification receipt or incident
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hideout-public-alpha-publication-result
+          path: |
+            ${{ env.PUBLIC_ALPHA_ROOT }}/publication-receipt.json
+            ${{ env.PUBLIC_ALPHA_ROOT }}/publication-incident.json
+            ${{ env.PUBLIC_ALPHA_ROOT }}/current.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Open a receipt-bound public truth pull request
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="release-truth/${PUBLIC_ALPHA_TAG}"
+          git fetch origin master
+          git checkout -B "$branch" origin/master
+          cp "$PUBLIC_ALPHA_ROOT/current.json" releases/current.json
+          mkdir -p releases/receipts
+          cp "$PUBLIC_ALPHA_ROOT/publication-receipt.json" \
+            "releases/receipts/${PUBLIC_ALPHA_TAG}.json"
+          scripts/render-public-release-docs.sh --inventory releases/current.json
+          scripts/test-doc-truth-smoke.sh
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add releases/current.json "releases/receipts/${PUBLIC_ALPHA_TAG}.json" \
+            README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md
+          git commit -m "docs: publish ${PUBLIC_ALPHA_TAG} verified release truth"
+          gh auth setup-git
+          git push --force-with-lease origin "$branch"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$branch" \
+            --title "docs: publish ${PUBLIC_ALPHA_TAG} verified release truth" \
+            --body "Generated from a validated public-verified receipt. Receipt SHA-256: $(sha256sum "$PUBLIC_ALPHA_ROOT/publication-receipt.json" | awk '{print $1}')."

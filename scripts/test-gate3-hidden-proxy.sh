@@ -175,7 +175,7 @@ require_command jq
 
 validate_operator_proxy_url
 
-tmp="$(mktemp -d "/tmp/hideout-gate3.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate3.XXXXXX")"
 proxy_pid=""
 cleanup() {
   if [ "${HIDEOUT_GATE3_KEEP_TMP:-0}" = "1" ]; then
@@ -217,7 +217,13 @@ prepare_linux_dns_stub() {
 }
 
 hideout="$bin/hideout"
-go build -o "$hideout" ./cmd/hideout
+if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+  [ -x "$HIDEOUT_RELEASE_BINARY" ] || { echo "gate3: HIDEOUT_RELEASE_BINARY is not executable" >&2; exit 126; }
+  cp "$HIDEOUT_RELEASE_BINARY" "$hideout"
+  chmod 0700 "$hideout"
+else
+  go build -o "$hideout" ./cmd/hideout
+fi
 if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
   "$hideout" runtime inspect "$GATE3_RUNTIME_FAMILY" --json >"$tmp/runtime-inspect.json"
   runtime_artifact_sha="$(jq -r '.revision.artifacts[] | select(.hostOS == "darwin" and .hostArch == "arm64") | .sha256' "$tmp/runtime-inspect.json")"
@@ -506,7 +512,7 @@ if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
     "agent registry DNS and HTTPS through mediated privacy network" \
     "$runtime_artifact_rel" "$runtime_artifact_log_sha" "$runtime_json")"
   runtime_evidence_write_manifest "$runtime_evidence_out/product-hardening-evidence.json" \
-    "$runtime_proofs" "${HIDEOUT_RUNTIME_PACKAGE_COMMIT:-}"
+    "$runtime_proofs" "${HIDEOUT_RUNTIME_PACKAGE_IDENTITY:-}"
   go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.json \
     "$runtime_evidence_out/product-hardening-evidence.json" >/dev/null
   echo "runtime_evidence=$runtime_evidence_out/product-hardening-evidence.json"

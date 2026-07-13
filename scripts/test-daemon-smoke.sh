@@ -9,7 +9,7 @@ cd "$ROOT"
 
 command -v jq >/dev/null 2>&1 || { echo "daemon-smoke: jq required" >&2; exit 127; }
 
-tmp="$(mktemp -d "/tmp/hd-smoke.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/hd-smoke.XXXXXX")"
 store="$tmp/store"
 daemon_pid=""
 cleanup() {
