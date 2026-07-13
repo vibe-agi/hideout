@@ -59,7 +59,15 @@
         "adapter-packs",
         "adapter-pack/inspect",
         "adapter-pack/plan",
-        "adapter-pack/apply"
+        "adapter-pack/apply",
+        "app/list",
+        "app/inspect",
+        "app/plan",
+        "app/apply",
+        "runtime/catalog",
+        "runtime/status",
+        "runtime/verify/plan",
+        "runtime/verify/apply"
       ]
     },
     "data": {

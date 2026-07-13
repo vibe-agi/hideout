@@ -34,7 +34,9 @@ require_command() {
 require_command limactl
 require_command go
 
-workdir="$(mktemp -d "${TMPDIR:-/tmp}/hideout-env-image.XXXXXX")"
+# Lima derives Unix socket paths below LIMA_HOME. Keep the real-backend gate
+# root short even when macOS TMPDIR is deeply nested.
+workdir="$(mktemp -d /tmp/h31.XXXXXX)"
 export HIDEOUT_STORE_ROOT="$workdir/store"
 export LIMA_HOME="$workdir/lima"
 workspace="$workdir/workspace"
@@ -45,10 +47,16 @@ go build -o "$bin" ./cmd/hideout
 
 cleanup() {
   status=$?
-  (cd "$workspace" && "$bin" clean --stopped imgtest >/dev/null 2>&1) || true
-  (cd "$workspace" && "$bin" stop imgtest >/dev/null 2>&1) || true
-  (cd "$workspace" && "$bin" clean --stopped imgtest >/dev/null 2>&1) || true
+  trap - EXIT
+  for env_name in imgtest imgbad; do
+    (cd "$workspace" && "$bin" stop "$env_name" >/dev/null 2>&1) || true
+    (cd "$workspace" && "$bin" clean --stopped "$env_name" >/dev/null 2>&1) || true
+  done
   rm -rf "$workdir"
+  if [ -e "$workdir" ]; then
+    echo "env-image: cleanup left temporary root: $workdir" >&2
+    status=1
+  fi
   exit "$status"
 }
 trap cleanup EXIT

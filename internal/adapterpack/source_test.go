@@ -1,12 +1,44 @@
 package adapterpack
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAdapterPackDigestRetains011PathContentEncoding(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "adapter.js"), []byte("payload"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := DigestTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte("adapter.js"))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte("payload"))
+	_, _ = h.Write([]byte{0})
+	want := "sha256:" + hex.EncodeToString(h.Sum(nil))
+	if got != want {
+		t.Fatalf("011 digest compatibility changed: got %s want %s", got, want)
+	}
+	if err := os.Chmod(filepath.Join(root, "adapter.js"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := DigestTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != got {
+		t.Fatalf("011 digest unexpectedly changed on mode-only mutation: %s != %s", after, got)
+	}
+}
 
 func TestLocalSourceLockAndDigestStability(t *testing.T) {
 	src := testPackDir(t, "function decideCommandAdapter(){ return {outcome:'deny', reason:'blocked'} }")

@@ -185,8 +185,16 @@ the default policy profile:
 - A1-A3: target code cannot read host files outside the workspace unless an
   explicit HostFS grant allows the requested operation.
 - A1-A3: HostFS denied, absent, and unsupported operations fail closed and are
-  recorded in audit. The target-visible HostFS response does not reveal whether
-  a denied path exists; audit records the policy reason for the human operator.
+  recorded in audit. Outside every explicit discover domain, and for
+  force-hidden paths, target-visible lookup remains `ENOENT` and does not
+  distinguish denial from absence. Inside an explicit `see*` domain, a visible
+  locked node intentionally reveals its name and coarse kind and returns
+  `EACCES` for content access; a separate content grant or live exact-file
+  approval is required before read succeeds. Every effective discover policy,
+  including manually authored broad rules, receives the categorized
+  credential/browser/key-root exclusions from Core. A separate exact content
+  grant remains usable but cannot make a discover-denied name reappear in a
+  parent listing.
 - A1-A3: `host.open` can open allowed external URLs and workspace files through
   the Host Broker, but it is not generic host command execution.
 - A1-A3: default profile policy denies `host.open` localhost, loopback, private
@@ -272,6 +280,20 @@ denied or unsupported attempt.
 Hideout does not decide which user-owned files are too sensitive for the user to
 share. Host files outside the workspace are hidden by default, but the user is
 the authority that decides which paths become visible through HostFS grants.
+
+HostFS therefore has three target-visible states rather than one global
+denied/absent claim:
+
+- outside-domain or force-hidden paths are reported as absent;
+- explicit discover grants expose names and coarse kinds but keep content
+  locked;
+- operation-specific grants expose only the operation they authorize.
+
+Name discovery is a real disclosure. Hiding a predictable path such as `.ssh`
+does not prove that the target learned nothing: prior knowledge can make the
+absence itself informative. Discover never follows or reveals symlink targets,
+and it does not contain a guest-root target, filter workspace contents, or
+prevent names already shown to a model from leaving its context.
 
 The following classes are sensitive, but still user-controlled:
 
@@ -413,6 +435,116 @@ candidate metadata needed for policy or explanation, such as endpoint class,
 source, process class, and timing. It must not record forwarded bytes, callback
 query strings, broker tokens, proxy secrets, or raw backend handles.
 
+## Host Capability Projection
+
+Host Capability Projection (030) lets a guest command that does not exist in the
+guest (`code .`) be transformed into a typed intent and executed on the host as a
+Core-owned capability. It adds no ambient host authority: every host effect is a
+typed, audited, fail-closed Go provider; untrusted grammars/adapters only propose
+an intent that Go re-validates; host identity (app id → binary, argv template)
+comes only from a Core/package-owned recipe; there is no generic fallback to host
+execution or a shadowed guest binary.
+
+Claim:
+
+- A2-A3: a projected command carries no new host authority. The host absolute
+  path, host username, decision/claim tokens, and raw guest argv never cross to
+  the guest, the grammar/adapter, the intent, the projection event, or exported
+  evidence. Only Core resolves the host path from the session-bound workspace
+  mapping.
+- A2-A3: the default IDE open mode is safe: an isolated editor profile with
+  extensions disabled and Workspace Trust left enabled, so a guest-authored
+  workspace auto-task does not run on open. `trusted-host-ide` requires an
+  explicit, revocable operator grant held in guest-unreachable control-plane
+  state.
+
+Workspace username/path privacy (alias mode): for new privacy and hardened Lima
+profiles using alias mode, Hideout does not synthesize the host username or host
+home path into the target's default workspace path, identity environment,
+generated Git identity/config, or verified guest-visible mount metadata. This
+claim requires real-backend proof across all three channels (identity
+environment, workspace namespace, mount metadata) with a per-channel detector
+self-test and a preserve-mode positive control.
+
+Real macOS arm64 Lima Gate 2 and Gate 3 validated these scoped claims on
+2026-07-11 at commit `644e6b53daaa`; the worktree was dirty, so the receipt is
+real-backend engineering evidence rather than clean release provenance. See
+`docs/host-capability-projection.md` for the bounded proof ids and digests.
+
+Required non-claims:
+
+- Hideout does not inspect or remove usernames, host paths, or other identity
+  data that the operator, project, dependencies, build artifacts, or tools place
+  in workspace content or command output. Alias mode also does not preserve
+  general absolute-path identity between guest and host.
+- Hideout does not protect the host editor from a malicious workspace; Workspace
+  Trust remains the editor's mechanism. Hideout disarms the obvious
+  auto-execution vectors by default and records that a guest-writable workspace
+  was opened in a host application, but a guest that already has host authority
+  through another path is out of scope.
+- The username/path privacy claim MUST NOT be shortened to a universal "Hideout
+  hides your identity"; it removes known synthesized channels, it is not content
+  data-loss prevention or behavioral anonymity.
+
+### Community Host-App Packs (032)
+
+032 expands the package supply-chain and app-selection attack surface around
+the existing provider. The controls below are implemented and covered by 032
+Gate 0 plus external-pack real macOS arm64 Lima Gate 2 evidence. The current
+receipt is dirty private-alpha evidence and does not establish clean release
+provenance or marketplace review.
+
+Threats and required controls:
+
+- **Mutable or hostile source**: local and Git intake may change during review,
+  contain escaping links or special files, or trigger Git/package hooks. Core
+  must copy a bounded regular-file snapshot, isolate exact-commit Git intake,
+  compare the apply digest to the plan, and never read the mutable source at
+  runtime.
+- **Package self-attestation**: a pack may claim a Team ID, bundle ID, signing
+  requirement, safe mode, or successful tests. Those fields may only narrow
+  Core observations. They cannot authenticate an app, turn a self-signed bundle
+  into verified identity, define `safe`, or certify security.
+- **Guest-writable app replacement**: a bundle or helper may live under a
+  writable ancestor, escape its bundle, overlap workspace/HostFS/temp/store
+  state, or change after review. Core must restrict application roots, verify
+  ownership and containment, observe signing or exact unsigned content identity,
+  and repeat the checks immediately before launch.
+- **Safe-floor bypass**: launch flags and settings may have equivalent unsafe
+  effects. Only an identity-compatible, named, versioned Core safety profile may
+  label the combined final effect `safe`. Otherwise an otherwise valid binding
+  uses exact `ask-each-run`; an unsigned app always remains `unverified-app`.
+- **Cross-binding selection**: guest intent or package data may try to select a
+  different app, binding, capability, result, resource kind, raw argv, or host
+  path. The run registration must bind those facts immutably, strict decoding
+  must reject overrides, and Core must derive app and provider identity.
+- **Command capture and fallback**: a pack may collide with reserved or existing
+  commands, then rely on installation order or fallback. Core must require
+  explicit owner replacement for allowed conflicts and deny every invalid,
+  absent, drifted, disabled, revoked, or unowned projection before host execution
+  or a shadowed guest binary.
+- **HostFS authority fixation**: an app decision may outlive or widen a portal.
+  Core must require active same-session content/tree authority and reauthorize
+  immediately before launch. Discover-only `see*` visibility is not open
+  authority; HostFS revoke, expiry, retarget, or session end wins.
+- **Session mutation**: enablement may try to change an already-running guest.
+  Enable applies only to future run compilation. There is no hot shim injection
+  or silent recreate; disable/revoke still wins when an old shim makes a new
+  request.
+
+Required non-claims:
+
+- Community packs add no JavaScript, shell, hook, raw argv, dynamic provider,
+  generic host exec, host result stream, or profile mutation authority.
+- `safe` reduces known launch effects; it does not make the app, its extensions,
+  the workspace, or opened content trustworthy.
+- Explicit unsigned-app trust is operator acceptance of one exact unverified
+  digest, not signing verification.
+- V1 local/exact-commit trust is not marketplace review, publisher identity,
+  namespace ownership, package signing, notarization, or remote revocation.
+- Native, local-only, embedded, static-source, and package-self-test evidence
+  cannot establish the required real Lima external-pack host effect.
+
 ## Evidence Requirements
 
 New authority must produce evidence at three layers:
@@ -493,3 +625,22 @@ Design-ready or later:
 - marketplace trust machinery — signing, revocation/kill-switch, publisher
   identity, and namespace protection are day-1 requirements when a public
   marketplace launches, and are not designed ahead of that launch.
+
+## Supported Runtime Claim Boundary
+
+A selected runtime image is guest supply-chain input, not host authority. Core
+accepts only a package-catalog revision with a credential-free retained HTTPS
+location and exact SHA-256, stores immutable provenance, and observes a bounded
+contract as the non-root target. Runtime selection does not add HostFS,
+network, endpoint, host-application, command-proxy, script, or guest-root
+grants. Runtime artifacts, receipts, logs, and public evidence must contain no
+Hideout-minted credential or preauthenticated agent state.
+
+`preview-ready` is only a current real-Lima observation for the exact running
+environment. It is not a claim that the image is supported, patched, free of
+all vulnerable packages, reproducible, suitable for arbitrary architectures,
+or release-ready. Custom images and legacy environments remain explicitly
+unverified. The packaged catalog currently contains one retained,
+digest-pinned macOS arm64 preview artifact. Catalog presence alone creates no
+readiness, maintenance, patch, SBOM, or release claim; those depend on current
+verification and the separately defined evidence gates.

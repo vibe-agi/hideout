@@ -1,0 +1,127 @@
+package productevidence
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+)
+
+func TestManifestMatchesSchema(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	if err := validateJSON(schema, validManifest().Sanitized()); err != nil {
+		t.Fatalf("valid manifest failed schema validation: %v", err)
+	}
+}
+
+func TestSchemaRejectsUnknownTopLevelField(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	var doc map[string]any
+	data, err := json.Marshal(validManifest().Sanitized())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["extra"] = true
+	if err := validateJSON(schema, doc); err == nil {
+		t.Fatal("schema accepted unknown top-level field")
+	}
+}
+
+func TestSchemaRejectsNotRunWithoutReason(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	m := validManifest().Sanitized()
+	m.Proofs[0].Status = StatusNotRun
+	m.Proofs[0].RedactionStatus = RedactionNotRun
+	m.Proofs[0].NotRunReason = ""
+	m.Proofs[0].Prerequisites = nil
+	if err := validateJSON(schema, m); err == nil {
+		t.Fatal("schema accepted not-run proof without reason or prerequisite")
+	}
+}
+
+func TestSchemaRejectsStaleAsProofStatus(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	m := validManifest().Sanitized()
+	m.Proofs[0].Status = EvalStale
+	if err := validateJSON(schema, m); err == nil {
+		t.Fatal("schema accepted stale as proof status")
+	}
+	if err := m.Validate(); err == nil {
+		t.Fatal("manifest validation accepted stale as proof status")
+	}
+}
+
+func TestFirstRunEvidenceMatchesSchema(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	m := NewManifest("abc123", false)
+	m.Proofs = FirstRunLocalFastProofs()
+	if err := validateJSON(schema, m.Sanitized()); err != nil {
+		t.Fatalf("first-run manifest failed schema validation: %v", err)
+	}
+}
+
+func TestHostFSDecisionEvidenceMatchesSchema(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	m := NewManifest("abc123", false)
+	m.Proofs = HostFSDecisionLocalFastProofs()
+	if err := validateJSON(schema, m.Sanitized()); err != nil {
+		t.Fatalf("hostfs decision manifest failed schema validation: %v", err)
+	}
+}
+
+func TestDoctorPackageRecoveryEvidenceMatchesSchema(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	m := NewManifest("abc123", false)
+	m.Proofs = DoctorPackageRecoveryLocalFastProofs()
+	if err := validateJSON(schema, m.Sanitized()); err != nil {
+		t.Fatalf("doctor package recovery manifest failed schema validation: %v", err)
+	}
+}
+
+func TestDocsTruthEvidenceMatchesSchema(t *testing.T) {
+	schema := compileProductEvidenceSchema(t)
+	m := NewManifest("abc123", false)
+	m.Proofs = DocsTruthProofs()
+	if err := validateJSON(schema, m.Sanitized()); err != nil {
+		t.Fatalf("docs truth manifest failed schema validation: %v", err)
+	}
+}
+
+func compileProductEvidenceSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "product-hardening-evidence.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("schema.json", doc); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+func validateJSON(schema *jsonschema.Schema, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	return schema.Validate(doc)
+}

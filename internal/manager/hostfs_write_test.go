@@ -107,7 +107,7 @@ func TestHostFSWriteTimeoutDefaultsDenyAndEmitsEvent(t *testing.T) {
 	if ref.decision.State != overlay.StateExpired || ref.operation.Status != overlay.StateExpired {
 		t.Fatalf("decision/operation not expired: %+v %+v", ref.decision, ref.operation)
 	}
-	if len(recorder.events) != 1 || recorder.events[0].kind != "hostfs-write" || recorder.events[0].details["reason"] != "approval-timeout" {
+	if len(recorder.events) != 1 || recorder.events[0].kind != "hostfs-write" || recorder.events[0].details["reason"] != "approval-timeout" || recorder.events[0].details["profile"] != "default" {
 		t.Fatalf("timeout event mismatch: %+v", recorder.events)
 	}
 	auditBody := readHostFSWriteAudit(t, core.Store.Root, "ses_20260708T000000Z_00112233445566778899")
@@ -119,6 +119,25 @@ func TestHostFSWriteTimeoutDefaultsDenyAndEmitsEvent(t *testing.T) {
 	}
 	if _, err := os.Stat(ref.storeObjectPathForTest(ref.operation)); !os.IsNotExist(err) {
 		t.Fatalf("timeout should remove content object, err=%v", err)
+	}
+}
+
+func TestHostFSWriteStatusCarriesAndFiltersProfile(t *testing.T) {
+	core := Core{Store: profile.Store{Root: t.TempDir()}}
+	_, decision := stageHostFSWriteFixture(t, core)
+	status, err := core.HostFSWriteStatus(HostFSWriteStatusRequest{Profile: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Pending) != 1 || status.Pending[0].DecisionID != decision.DecisionID || status.Pending[0].Profile != "default" {
+		t.Fatalf("profile status mismatch: %+v", status.Pending)
+	}
+	other, err := core.HostFSWriteStatus(HostFSWriteStatusRequest{Profile: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other.Pending) != 0 {
+		t.Fatalf("other profile saw HostFS write: %+v", other.Pending)
 	}
 }
 

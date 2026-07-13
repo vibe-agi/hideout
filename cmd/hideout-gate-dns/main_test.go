@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -50,6 +51,33 @@ func TestWriteCountFileExposesQueryCount(t *testing.T) {
 	}
 	if snapshot.Count != 1 || len(snapshot.Names) != 1 || snapshot.Names[0] != "known-bad.example" {
 		t.Fatalf("snapshot=%+v, want one known-bad.example query", snapshot)
+	}
+}
+
+func TestDirectDNSQueryUsesProtocolResponse(t *testing.T) {
+	server, err := dnsserver.Listen("127.0.0.1:0", net.ParseIP("192.0.2.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = server.Serve(ctx) }()
+	hostPort, err := server.HostPort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := directDNSQuery(hostPort, time.Second); err != nil {
+		t.Fatalf("directDNSQuery: %v", err)
+	}
+	waitForDNSCount(t, server, 1)
+}
+
+func TestDirectDNSQueryRejectsHostnamesAndInvalidTimeouts(t *testing.T) {
+	if err := directDNSQuery("resolver.example", time.Second); !errors.Is(err, errInvalidQueryTarget) {
+		t.Fatalf("hostname error=%v, want invalid target", err)
+	}
+	if err := directDNSQuery("127.0.0.1", 0); !errors.Is(err, errInvalidQueryTarget) {
+		t.Fatalf("timeout error=%v, want invalid target", err)
 	}
 }
 

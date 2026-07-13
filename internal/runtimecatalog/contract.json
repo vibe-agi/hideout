@@ -1,0 +1,124 @@
+{
+  "schema": "hideout.runtime-contract/v1",
+  "id": "developer-standard/v1",
+  "observations": [
+    {
+      "id": "boundary.getent",
+      "class": "boundary",
+      "command": "getent",
+      "description": "Required resolver bootstrap command"
+    },
+    {
+      "id": "baseline.git",
+      "class": "baseline",
+      "command": "git",
+      "versionArgs": ["--version"],
+      "outputPattern": "^git version 2\\.47\\.3$",
+      "description": "Git 2.47.3"
+    },
+    {
+      "id": "baseline.curl",
+      "class": "baseline",
+      "command": "curl",
+      "versionArgs": ["--version"],
+      "outputPattern": "^(?s:curl 8\\.14\\.1 .+)$",
+      "description": "curl 8.14.1"
+    },
+    {
+      "id": "baseline.jq",
+      "class": "baseline",
+      "command": "jq",
+      "versionArgs": ["--version"],
+      "outputPattern": "^jq-1\\.7$",
+      "description": "jq runtime 1.7 from Debian package 1.7.1"
+    },
+    {
+      "id": "baseline.tar",
+      "class": "baseline",
+      "command": "tar",
+      "versionArgs": ["--version"],
+      "outputPattern": "^(?s:tar \\(GNU tar\\) 1\\.35.+)$",
+      "description": "GNU tar 1.35"
+    },
+    {
+      "id": "baseline.unzip",
+      "class": "baseline",
+      "command": "unzip",
+      "versionArgs": ["-v"],
+      "outputPattern": "^(?s:UnZip 6\\.00 .+)$",
+      "description": "UnZip 6.00"
+    },
+    {
+      "id": "baseline.find",
+      "class": "baseline",
+      "command": "find",
+      "versionArgs": ["--version"],
+      "outputPattern": "^(?s:find \\(GNU findutils\\) 4\\.10\\.0.+)$",
+      "description": "GNU findutils 4.10.0"
+    },
+    {
+      "id": "baseline.grep",
+      "class": "baseline",
+      "command": "grep",
+      "versionArgs": ["--version"],
+      "outputPattern": "^(?s:grep \\(GNU grep\\) 3\\.11.+)$",
+      "description": "GNU grep 3.11"
+    },
+    {
+      "id": "baseline.node",
+      "class": "baseline",
+      "command": "node",
+      "versionArgs": ["--version"],
+      "outputPattern": "^v22\\.23\\.1$",
+      "description": "Node.js 22.23.1"
+    },
+    {
+      "id": "baseline.npm",
+      "class": "baseline",
+      "command": "npm",
+      "versionArgs": ["--version"],
+      "outputPattern": "^10\\.9\\.8$",
+      "description": "npm 10.9.8"
+    },
+    {
+      "id": "baseline.python",
+      "class": "baseline",
+      "command": "python3",
+      "versionArgs": ["--version"],
+      "outputPattern": "^Python 3\\.13\\.5$",
+      "description": "Python 3.13.5"
+    },
+    {
+      "id": "baseline.pip",
+      "class": "baseline",
+      "command": "pip3",
+      "versionArgs": ["--version"],
+      "outputPattern": "^pip 25\\.1\\.1 .+$",
+      "description": "pip 25.1.1"
+    },
+    {
+      "id": "baseline.go",
+      "class": "baseline",
+      "command": "go",
+      "versionArgs": ["version"],
+      "outputPattern": "^go version go1\\.26\\.5 linux/arm64$",
+      "description": "Go 1.26.5"
+    },
+    {
+      "id": "baseline.cc",
+      "class": "baseline",
+      "command": "cc",
+      "versionArgs": ["--version"],
+      "outputPattern": "^(?s:cc \\(Debian 14\\.2\\.0-19\\) 14\\.2\\.0.+)$",
+      "description": "GCC 14.2.0"
+    },
+    {
+      "id": "baseline.make",
+      "class": "baseline",
+      "command": "make",
+      "versionArgs": ["--version"],
+      "outputPattern": "^(?s:GNU Make 4\\.4\\.1.+)$",
+      "description": "GNU Make 4.4.1"
+    }
+  ]
+}

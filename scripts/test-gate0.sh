@@ -31,6 +31,41 @@ test -f schemas/onboarding-evidence.schema.json
 test -f schemas/doctor-report.schema.json
 test -f schemas/support-matrix.schema.json
 test -f schemas/release-readiness.schema.json
+test -f schemas/product-hardening-evidence.schema.json
+test -f schemas/hostfs-read-grants.schema.json
+test -f schemas/runtime-catalog.schema.json
+test -f schemas/runtime-verification.schema.json
+test -f schemas/host-app-pack.schema.json
+test -f schemas/host-app-pack-registry.schema.json
+test -f schemas/host-app-enablement.schema.json
+test -f schemas/host-app-inspection.schema.json
+scripts/test-runtime-smoke.sh
+
+# Test/evidence spine (026): one Go-owned proof registry feeds shell gates,
+# docs truth, and release supporting evidence.
+proof_registry_tmp="$(mktemp "${TMPDIR:-/tmp}/hideout-proof-registry.XXXXXX")"
+go run ./cmd/hideout support proof-registry --json >"$proof_registry_tmp"
+jq -e '
+  .schema == "hideout.proof-registry/v1" and
+  any(.requirements[]; .featureId == "021-ui-e2e-proof") and
+  any(.requirements[]; .featureId == "025-documentation-truth-gate") and
+  ([.requirements[] | select(.featureId == "029-hostfs-discoverable-namespace")] | length == 8) and
+  ([.requirements[] | select(.featureId == "031-supported-cli-runtime")] | length == 8) and
+  ([.requirements[] | select(.featureId == "032-community-host-app-recipes")] | length == 4)
+' "$proof_registry_tmp" >/dev/null
+rm -f "$proof_registry_tmp"
+
+# Recovery codes (028): one Go-owned recovery registry feeds doctor/package/
+# init/readiness surfaces and documentation truth.
+recovery_registry_tmp="$(mktemp "${TMPDIR:-/tmp}/hideout-recovery-registry.XXXXXX")"
+go run ./cmd/hideout support recovery-codes --json >"$recovery_registry_tmp"
+jq -e '
+  .schema == "hideout.recovery-codes/v1" and
+  any(.codes[]; .code == "package.prerequisite.missing") and
+  any(.codes[]; .code == "release.gate-evidence.missing")
+' "$recovery_registry_tmp" >/dev/null
+rm -f "$recovery_registry_tmp"
+
 test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
@@ -102,6 +137,8 @@ grep -qx "go: $(jq -r '.releaseArtifact.hideoutVersion.go' "$release_tmp/evidenc
 grep -qx "platform: $(jq -r '.releaseArtifact.hideoutVersion.platform' "$release_tmp/evidence/manifest.json")" "$release_tmp/artifact-version.out"
 rm -rf "$release_artifact_extract"
 grep -q 'phase1-plan: Gate 2 Lima E2E' "$release_tmp/evidence/test-release-dogfood.log"
+grep -q 'phase1-plan: Gate 2 exact runtime family developer-standard' "$release_tmp/evidence/test-release-dogfood.log"
+grep -q 'phase1-plan: Gate 3 exact runtime family developer-standard' "$release_tmp/evidence/test-release-dogfood.log"
 if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; then
   echo "gate0: release dogfood evidence leaked operator proxy URL" >&2
   exit 1
@@ -135,6 +172,11 @@ scripts/test-decision-center-smoke.sh
 scripts/test-command-adapter-smoke.sh
 scripts/test-adapter-pack-smoke.sh
 
+# Community host-app recipes (032): strict package/registry/enablement/
+# inspection schemas, inert built-in recipe and Core safety-profile data, and
+# artifact-backed proof ownership. Setup smoke grants no runtime authority.
+scripts/test-host-app-pack-smoke.sh
+
 # Guest privilege separation and risk audit (Lima proof added by 009 polish):
 # status schema/classifier and no guest-root containment overclaim.
 scripts/test-privilege-separation-smoke.sh
@@ -143,17 +185,71 @@ scripts/test-privilege-separation-smoke.sh
 # 010 implementation and real Gate 2 HostFS smoke.
 scripts/test-hostfs-write-overlay-smoke.sh
 
+# HostFS discoverable namespace (029): local policy, typed-error, decision, and
+# injected-redaction proof. The local lane is intentionally unable to emit the
+# two real Gate 2 proof IDs.
+hostfs_visibility_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-hostfs-visibility-gate0.XXXXXX")"
+scripts/test-hostfs-visibility-e2e.sh --local-fast --out "$hostfs_visibility_tmp"
+jq -e '
+  all(.proofs[];
+    .proofId != "029.hostfs-visibility.real-gate2.namespace" and
+    .proofId != "029.hostfs-visibility.real-gate2.live-grant"
+  )
+' "$hostfs_visibility_tmp/product-hardening-evidence.json" >/dev/null
+rm -rf "$hostfs_visibility_tmp"
+
+# HostFS/decision E2E proof (023): local-fast product-hardening evidence for
+# staged overlay lifecycle, decision outcomes, model visibility, and redaction.
+# Real Gate 2 HostFS data-plane proof remains explicit and prerequisite-gated.
+hostfs_decision_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-hostfs-decision-gate0.XXXXXX")"
+scripts/test-hostfs-decision-e2e.sh --local-fast --out "$hostfs_decision_tmp"
+rm -rf "$hostfs_decision_tmp"
+
 # Profile templates and first-run onboarding (014): built-in templates,
 # hardened privilege honesty, no default HostFS/adapter authority, evidence
 # schema, and docs commands.
 scripts/test-onboarding-smoke.sh
 
-# Doctor diagnostics and recovery (015): local/light report, JSON schema,
-# explicit doctor evidence export, required failure, warning exit semantics, and
-# safe recovery dry-run.
+# Doctor diagnostics, recovery, and stable error hints (015/028): local/light
+# report, JSON schema, optional recovery code fields, explicit doctor evidence
+# export, required failure, warning exit semantics, and safe recovery dry-run.
 scripts/test-doctor-smoke.sh
+
+# Doctor/package recovery E2E (024): existing package repair and doctor safe-fix
+# paths with product-hardening evidence. This remains local recovery evidence,
+# not release readiness or real backend proof.
+recovery_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-recovery-gate0.XXXXXX")"
+scripts/test-doctor-package-recovery-e2e.sh --local-fast --out "$recovery_tmp"
+rm -rf "$recovery_tmp"
+
+# Documentation truth gate (025): claim-boundary registry, known-overclaim scan,
+# curated command examples, localized README canonicality, and Gate 0/docs
+# consistency. This is local docs correctness evidence, not release readiness.
+doc_truth_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-doc-truth-gate0.XXXXXX")"
+scripts/test-doc-truth-smoke.sh --out "$doc_truth_tmp"
+rm -rf "$doc_truth_tmp"
 
 # Release hardening and compatibility matrix (016): support matrix, readiness
 # artifact shape, local-fast honesty, release-candidate missing-evidence
 # fail-closed, doctor/version alignment, and docs drift guard.
 scripts/test-release-hardening-smoke.sh
+
+# First-run alpha path (020): package install docs, privacy/Lima default,
+# native-only-as-harness wording, doctor recovery commands, and no stale go-run
+# examples in the user-facing path.
+scripts/test-first-run-docs-smoke.sh
+
+# Alpha first-run E2E proof (022): package install with --skip-init through one
+# installed-binary local-fast command, evidence schema validation, and
+# audit/Boundary capture. This is a weak/native package mechanics proof, not
+# real Lima/privacy evidence.
+first_run_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-first-run-gate0.XXXXXX")"
+scripts/test-first-run-e2e.sh --local-fast --out "$first_run_tmp"
+rm -rf "$first_run_tmp"
+
+# UI E2E product-hardening evidence (021): schema and not-run semantics only in
+# Gate 0. Targeted browser/PTY completion requires --require-executed on a host
+# with those prerequisites.
+ui_e2e_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ui-e2e-gate0.XXXXXX")"
+scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"
+rm -rf "$ui_e2e_tmp"

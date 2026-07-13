@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/product-hardening-evidence.schema.json",
+  "title": "Hideout Product Hardening Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "generatedAt", "commit", "dirty", "proofs"],
+  "properties": {
+    "version": {
+      "const": "hideout.product-hardening-evidence/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "commit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dirty": {
+      "type": "boolean"
+    },
+    "packageIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "proofs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "proofId",
+          "featureId",
+          "mode",
+          "evidenceClass",
+          "status",
+          "commandSummary",
+          "coveredClaims",
+          "prerequisites",
+          "artifacts",
+          "redactionStatus"
+        ],
+        "properties": {
+          "proofId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "featureId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mode": {
+            "enum": ["browser-e2e", "pty-e2e", "local-fast", "real-gate", "schema", "docs", "unit"]
+          },
+          "evidenceClass": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["passed", "failed", "not-run"]
+          },
+          "commandSummary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "coveredClaims": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["claimId", "source", "description"],
+              "properties": {
+                "claimId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "enum": ["spec", "docs", "status", "test-plan", "quickstart"]
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "scope": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "status"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "enum": ["available", "missing", "skipped"]
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "path", "redactionStatus"],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "screenshot",
+                    "terminal-capture",
+                    "log",
+                    "event-summary",
+                    "request-summary",
+                    "manifest",
+                    "schema",
+                    "docs-report"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "redactionStatus": {
+                  "enum": ["passed", "failed", "not-run"]
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "redactionStatus": {
+            "enum": ["passed", "failed", "not-run"]
+          },
+          "notRunReason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["os", "arch"],
+            "properties": {
+              "os": {
+                "type": "string",
+                "minLength": 1
+              },
+              "arch": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "runtime": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "schema",
+              "family",
+              "revision",
+              "artifactSHA256",
+              "environmentId",
+              "hostOS",
+              "hostArch",
+              "guestArch",
+              "buildCommit",
+              "buildDirty"
+            ],
+            "properties": {
+              "schema": {
+                "const": "hideout.runtime-evidence-binding/v1"
+              },
+              "family": {"type": "string", "minLength": 1},
+              "revision": {"type": "string", "minLength": 1},
+              "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "environmentId": {"type": "string", "minLength": 1},
+              "hostOS": {"type": "string", "minLength": 1},
+              "hostArch": {"type": "string", "minLength": 1},
+              "guestArch": {"type": "string", "minLength": 1},
+              "buildCommit": {"type": "string", "minLength": 1},
+              "buildDirty": {"type": "boolean"}
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "not-run"
+                }
+              },
+              "required": ["status"]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": ["notRunReason"]
+                },
+                {
+                  "properties": {
+                    "prerequisites": {
+                      "contains": {
+                        "type": "object",
+                        "required": ["name", "status", "reason"],
+                        "properties": {
+                          "status": {
+                            "enum": ["missing", "skipped"]
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "passed"
+                }
+              },
+              "required": ["status"]
+            },
+            "then": {
+              "properties": {
+                "redactionStatus": {
+                  "const": "passed"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

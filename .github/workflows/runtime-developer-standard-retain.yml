@@ -1,0 +1,74 @@
+name: Runtime Developer Standard Retention
+
+on:
+  workflow_run:
+    workflows:
+      - Runtime Developer Standard Candidate
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  retain:
+    name: Validate and retain a private draft candidate
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'runtime-candidate/031-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Download, validate, and retain the exact candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/runtime-candidate"
+          mkdir -p "$root"
+          artifact_name=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '[.artifacts[] | select(.expired == false and (.name | startswith("candidate-developer-standard-")))] | if length == 1 then .[0].name else error("expected exactly one runtime candidate artifact") end')
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" --dir "$root"
+
+          (cd "$root" && sha256sum --check SHA256SUMS)
+          jq -e --arg commit "$HEAD_SHA" '
+            .schema == "hideout.runtime-build-provenance/v1" and
+            .source.commit == $commit and
+            .source.dirty == false and
+            .builder.attestation == "workflow-declared" and
+            .promoted == false
+          ' "$root/build-provenance.json" >/dev/null
+          jq -e '
+            .schema == "hideout.runtime-image-verification/v1" and
+            .offline.qemuCheck == "passed" and
+            .offline.requiredTools.status == "passed" and
+            .offline.requiredPaths == "passed" and
+            .offline.privateKeyMaterial == "absent" and
+            .offline.agentCredentialState == "absent" and
+            .offline.controlPlaneMaterial == "absent"
+          ' "$root/verification-report.json" >/dev/null
+
+          revision=$(jq -r '.revision' "$root/build-provenance.json")
+          image_file=$(jq -r '.output.file' "$root/build-provenance.json")
+          image_sha=$(jq -r '.output.sha256' "$root/build-provenance.json")
+          [[ "$revision" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+          [[ "$image_file" =~ ^developer-standard-[A-Za-z0-9._-]+-linux-aarch64\.qcow2$ ]]
+          [[ "$image_sha" =~ ^[0-9a-f]{64}$ ]]
+          test -f "$root/$image_file"
+          test "$(sha256sum "$root/$image_file" | awk '{print $1}')" = "$image_sha"
+
+          short_sha=${HEAD_SHA:0:12}
+          tag="runtime-developer-standard-${revision}-candidate-${short_sha}"
+          title="Developer Standard Runtime ${revision} candidate ${short_sha}"
+          notes="Private candidate retained from Actions run ${RUN_ID}. Source ${HEAD_SHA}; image SHA-256 ${image_sha}. This draft is not a catalog input, preview claim, or public release."
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$HEAD_SHA" --draft --title "$title" --notes "$notes"
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            "$root"/* --clobber

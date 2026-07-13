@@ -26,9 +26,44 @@ if emit_gate_result "gate4-host-escape" "lima" "not-run" 2>/dev/null; then
   echo "isolation-evidence-smoke: not-run must require a reason" >&2
   exit 1
 fi
+if HIDEOUT_RUNTIME_EVIDENCE_REQUIRED=1 emit_gate_result "gate3-hidden-proxy" "lima" "passed" 2>/dev/null; then
+  echo "isolation-evidence-smoke: incomplete runtime evidence must fail closed" >&2
+  exit 1
+fi
+
+# Runtime marker identity comes from explicit build provenance, not a caller's
+# current checkout or relabeling environment variables.
+receipt="$tmp/runtime-verification.json"
+provenance="$tmp/build-provenance.json"
+jq -n '{provenance:{family:"developer-standard",revision:"2026.07.0",artifactSHA256:("a"*64),hostOS:"darwin",hostArch:"arm64",guestArch:"aarch64"},environmentId:"env_20260711t000000z0123456789abcdef0123"}' >"$receipt"
+jq -n '{schema:"hideout.runtime-build-provenance/v1",source:{commit:("1"*40),dirty:true},output:{sha256:("a"*64)}}' >"$provenance"
+marker_out="$(
+  HIDEOUT_RUNTIME_BUILD_PROVENANCE="$provenance" \
+    HIDEOUT_RUNTIME_BUILD_COMMIT=ffffffffffff \
+    HIDEOUT_RUNTIME_BUILD_DIRTY=false \
+    runtime_evidence_markers "$receipt"
+)"
+printf '%s\n' "$marker_out" | grep -qx "runtime_build_commit=$(printf '1%.0s' {1..40})"
+printf '%s\n' "$marker_out" | grep -qx 'runtime_build_dirty=true'
+jq '.output.sha256=("b"*64)' "$provenance" >"$tmp/build-provenance-mismatch.json"
+if HIDEOUT_RUNTIME_BUILD_PROVENANCE="$tmp/build-provenance-mismatch.json" runtime_evidence_markers "$receipt" >/dev/null 2>&1; then
+  echo "isolation-evidence-smoke: mismatched build provenance was accepted" >&2
+  exit 1
+fi
 
 # Positive: emit a passed gate and an explicit not-run gate.
 emit_gate_result "gate2-lima" "lima" "passed" "" "$tmp/audit.jsonl" "boundary-ref" "auto-env-1"
+HIDEOUT_RUNTIME_EVIDENCE_REQUIRED=1 \
+  HIDEOUT_RUNTIME_EVIDENCE_FAMILY=developer-standard \
+  HIDEOUT_RUNTIME_EVIDENCE_REVISION=2026.07.0 \
+  HIDEOUT_RUNTIME_EVIDENCE_ARTIFACT_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  HIDEOUT_RUNTIME_EVIDENCE_ENVIRONMENT_ID=env_20260711t000000z0123456789abcdef0123 \
+  HIDEOUT_RUNTIME_EVIDENCE_HOST_OS=darwin \
+  HIDEOUT_RUNTIME_EVIDENCE_HOST_ARCH=arm64 \
+  HIDEOUT_RUNTIME_EVIDENCE_GUEST_ARCH=aarch64 \
+  HIDEOUT_RUNTIME_EVIDENCE_BUILD_COMMIT=0123456789ab \
+  HIDEOUT_RUNTIME_EVIDENCE_BUILD_DIRTY=false \
+  emit_gate_result "gate3-hidden-proxy" "lima" "passed" "" "$tmp/audit.jsonl" "boundary-ref" "auto-env-2"
 emit_gate_result "env-image" "lima" "not-run" "no image URL declared"
 
 test -f "$tmp/gates/gate2-lima.json"
@@ -43,6 +78,8 @@ done
 # Reconcile must not overwrite the already-recorded passed gate.
 jq -e '.result == "passed"' "$tmp/gates/gate2-lima.json" >/dev/null \
   || { echo "isolation-evidence-smoke: reconcile clobbered a recorded result" >&2; exit 1; }
+jq -e '.runtime.schema == "hideout.runtime-evidence-binding/v1" and .runtime.buildDirty == false' "$tmp/gates/gate3-hidden-proxy.json" >/dev/null \
+  || { echo "isolation-evidence-smoke: typed runtime binding missing" >&2; exit 1; }
 
 # Aggregate exactly as write_manifest does, then validate the full manifest.
 isolation_gates=$(jq -s '.' "$tmp"/gates/*.json)

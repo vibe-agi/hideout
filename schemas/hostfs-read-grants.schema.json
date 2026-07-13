@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/hostfs-read-grants.schema.json",
+  "title": "Hideout HostFS session read grants",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "sessionId", "generation", "updatedAt", "grants"],
+  "properties": {
+    "version": {
+      "const": "hideout.hostfs-read-grants/v1"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9_]+$"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "grants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/grant"
+      }
+    }
+  },
+  "$defs": {
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId",
+        "revision",
+        "operation",
+        "requestedPath",
+        "canonicalPath",
+        "visibilityRuleId",
+        "visibilitySource",
+        "issuedAt",
+        "expiresAt"
+      ],
+      "properties": {
+        "decisionId": {
+          "type": "string",
+          "pattern": "^dec_hfr_[a-f0-9]+$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "operation": {
+          "const": "read"
+        },
+        "requestedPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "canonicalPath": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "visibilityRuleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "visibilitySource": {
+          "enum": ["profile", "environment", "run"]
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^/",
+      "not": {
+        "anyOf": [
+          {"pattern": "^//"},
+          {"pattern": "\\\\"}
+        ]
+      }
+    }
+  }
+}

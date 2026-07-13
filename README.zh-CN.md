@@ -2,10 +2,19 @@
 
 [English](README.md)
 
+**让工具干活，别把整台电脑交出去。**
+
+Run untrusted CLIs without handing them your whole machine.
+
+> 说明：当前 private alpha 阶段以 [English README](README.md) 为 canonical
+> 权威入口。本中文 README 是 best-effort 本地化摘要；如果两者冲突，以英文 README、
+> [docs/STATUS.md](docs/STATUS.md) 和
+> [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md) 为准。
+
 Hideout 把不可信的开发工具和 agent CLI 运行在隔离的 backend 边界内
-（当前实现是可复用的 Lima 虚拟机），所有主机访问都经过类型化、可审计、
-fail-closed 的门进行中介，并记录可供检查的证据。隐私加固是收益之一，
-不是产品定义本身。
+（当前实现是可复用的 Lima 虚拟机），所有主机访问都必须经过类型化、
+可审计、fail-closed 的授权流程，并记录可供检查的证据。隐私加固是收益
+之一，不是产品定义本身。
 
 当前状态：private alpha；请在有人监督下运行。gate 与发布证据定义见
 [docs/privacy-run-test-plan.md](docs/privacy-run-test-plan.md)。
@@ -38,6 +47,8 @@ Hideout 用显式能力替代主机上的 ambient authority：
 - Lima（`limactl`）；
 - Google Chrome 或其他支持的 Chromium 兼容浏览器，用于真实浏览器
   host-open 检查；
+- 可选：安装在受支持 macOS Applications 目录、签名有效的 Visual Studio
+  Code，用于 guest 内的 `code .` 投射工作流；
 - 可选的本地代理，用于 `tun2socks` 模式。
 
 tarball 路径不需要 Go。它已经包含主机二进制、Linux guest helpers、
@@ -57,15 +68,17 @@ hideout version
 hideout doctor
 ```
 
-如果使用 release-like tarball，先解压，然后从包根目录运行包内 installer：
-包内 installer 走同一条默认 init 路径，并且不需要 Go：
+如果使用 release-like tarball，先解压，然后从包根目录运行包内 installer。
+推荐的 first-run 文档路径使用 `--skip-init`，让安装和 profile 创建分离；
+包内 installer 不需要 Go：
 
 ```bash
 tar -xzf hideout-<platform>.tar.gz
 cd hideout
-./install.sh
+./install.sh --skip-init
 export PATH="$HOME/.local/bin:$PATH"
 hideout version
+hideout package verify "$HOME/.local"
 hideout doctor
 ```
 
@@ -79,12 +92,81 @@ hideout doctor
 ## 快速开始
 
 ```bash
-hideout init --no-input --backend lima --network direct
+export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
+hideout init \
+  --template privacy \
+  --profile default \
+  --backend lima \
+  --network tun2socks \
+  --proxy-secret proxy-url \
+  --mediated-resolver 1.1.1.1 \
+  --runtime developer-standard \
+  --no-input
 hideout run -- <cli>
+hideout run --fs see-dir:/absolute/directory -- <cli>
 hideout run --fs read:/absolute/file -- <cli>
 hideout explain -- <cli>
 hideout audit show --limit 20
 ```
+
+安装包包含 macOS arm64 上已保留、digest 固定的 `developer-standard` preview
+runtime。用 `hideout runtime inspect developer-standard` 检查精确镜像、来源、大小、
+inventory 与 SBOM 状态。选择 runtime 必须显式进行，不会改变已有 profile；自定义
+镜像和现有 template 路径仍可使用，但不会继承 runtime readiness。
+
+以 non-root target 安装固定测试的真实 agent，不使用 `sudo` 或主机全局目录：
+
+```bash
+hideout run -- sh -eu -c '
+  rm -rf "$HOME/.npm" "$HOME/.local/lib/node_modules/@openai/codex" "$HOME/.local/bin/codex"
+  npm install --global --prefix "$HOME/.local" @openai/codex@0.144.1
+  "$HOME/.local/bin/codex" --version
+'
+```
+
+这条路径只验证安装和执行；交互登录及持久 agent 认证不属于 supported-runtime
+preview 的范围。
+
+## 关在 VM 里，也能用本机工具
+
+隔离不应该把本地开发变成远程开发。Hideout 会把少量、经过审核的本机能力
+接到 guest 熟悉的命令上；VM 里不需要真的安装这些命令：
+
+```bash
+cd /path/to/sanitized/project
+hideout run --profile default -- code .
+hideout run --profile default -- code src/main.go
+hideout run --profile default -- code -g src/main.go:12:3
+```
+
+guest 传出的是 workspace 内的结构化引用，不是主机绝对路径。Hideout Core
+负责映射当前 workspace、重新检查符号链接边界、验证已登记的 VS Code app
+bundle 和签名，然后在主机上打开。失败时直接拒绝，不会退回任意主机命令。
+
+`code` 默认使用安全模式：每次 run 独立的编辑器配置目录、禁用扩展、关闭
+自动任务，同时保留 Workspace Trust。若要使用操作者平时的完整 IDE 配置，
+必须通过一个对当前 run 生效、可查看、可撤销的授权。`open`/`xdg-open` 仍是
+另一组受控的主机打开能力；这个功能不提供 adb、AppleScript 或任意主机执行。
+
+这条路径以及 privacy/hardened profile 的 `/workspace` 别名已经在真实
+macOS arm64 Lima 上验证。当前证据来自 private alpha 的 dirty 工作树，
+不是正式发布凭据；边界和证据见
+[Host Capability Projection](docs/host-capability-projection.md)。
+
+### 社区 Host-App Recipe
+
+社区 host-app recipe 的 v1 生命周期已经实现，接受本地目录或固定到精确
+commit 的 Git 来源。只读的 inspect/validate/test 与显式的 add、enable、
+update、disable、revoke、remove 分开；enable 只对一个 profile 的未来 run
+生效，不会改变旧 session。
+
+社区 pack 只能把声明式 open-resource 命令绑定到现有 Core provider。它不能
+自带 JavaScript 权限、新的 host effect、任意主机执行、raw argv、HostFS 权限或
+marketplace 签名背书。`safe` 只能来自兼容的 Core-owned safety profile；被明确
+接受的未签名 app 仍是 unverified，并使用 `ask-each-run`。HostFS 资源必须已经
+具有同一 session 的内容权限；see-only 可见性不能打开内容。当前凭据来自
+dirty private-alpha 工作树，不是干净的发布凭据。操作和贡献流程见
+[Community Host-App Recipes](docs/host-app-recipes.md)。
 
 ## 第一次运行
 
@@ -96,8 +178,9 @@ cd /path/to/sanitized/project
 hideout run --profile smoke --backend lima --network direct -- pwd
 ```
 
-`hideout init` 和 `hideout doctor --fix` 会打印可直接复制的下一步命令，
-包括 `doctor` 检查、smoke run，以及已配置的通用 CLI 工具。
+`hideout init` 和 `hideout doctor --fix --dry-run` 会打印可直接复制的下一步
+命令，包括 `doctor` 检查、smoke run，以及已配置的通用 CLI 工具。安全的
+doctor 修复需要显式模式：`--dry-run` 只预览，`--apply` 才应用类型化修复。
 
 第一次运行只应该验证 backend、workspace mount 和隔离身份。这里使用
 独立的 `smoke` profile，这样已有 `default` profile 上的策略不会在
@@ -203,11 +286,28 @@ workspace 会被直接挂载。其他主机文件应该通过 HostFS grant 访�
 Run-scoped grant：
 
 ```bash
+hideout run --backend lima --fs see:/absolute/path -- <command>
+hideout run --backend lima --fs see-dir:/absolute/directory -- <command>
+hideout run --backend lima --fs see-tree:/absolute/directory -- <command>
 hideout run --backend lima --fs read:/absolute/file -- <command>
 hideout run --backend lima --fs dir:/absolute/dir -- <command>
 hideout run --backend lima --fs tree:/absolute/dir -- <command>
 hideout run --backend lima --fs 'read:/absolute/dir/*.txt' -- <command>
 ```
+
+`see`、`see-dir` 和 `see-tree` 只披露名称和粗粒度节点类型，不授予文件
+内容、完整元数据、执行或写入权限。读取可见但锁定的文件会立即返回
+`EACCES`；请求符合条件时，会创建一个本地 `hostfs.read` 决策。操作者可
+在另一个终端审核，原进程随后重试同一次读取：
+
+```bash
+hideout decision list --kind hostfs.read
+hideout decision claim <decision-id>
+hideout decision approve --claim-token <claim-token> <decision-id>
+```
+
+名称本身就是用户数据，可能进入 CLI 或模型上下文。V1 的 `see*` selector
+拒绝 glob；已有的 glob 内容过滤继续使用 `read:` selector。
 
 HostFS glob selector 要加引号，避免先被宿主 shell 展开。`*` 不会隐式包含
 `.env` 这类 dotfile；需要显式使用 dotfile selector 授权。字面量 glob 字符
@@ -217,10 +317,19 @@ HostFS glob selector 要加引号，避免先被宿主 shell 展开。`*` 不会
 
 ```bash
 hideout profile fs default list
+hideout profile fs default add \
+  --fs see-dir:/absolute/directory --reason "navigate names"
 hideout profile fs default add --fs read:/absolute/file --reason "tool input"
 hideout profile fs default deny --no-fs tree:/absolute/dir --reason "too broad"
 hideout profile fs default remove <rule-id>
 ```
+
+旧 `list:` 规则必须一次性显式迁移，并先展示披露范围；Hideout 不会静默
+把它别名成更宽的 `see-dir`/`see-tree`。使用 `hideout profile fs default
+migrate-list --map <rule-id>=see-dir --reason "已审阅名称披露"`，并为每条旧
+规则重复传入 `--map`。onboarding 默认
+`--hostfs-visibility none`；`landmarks` 只增加显式的一层目录，
+`home-tree` 还必须传 `--acknowledge-name-disclosure`。
 
 Hideout store 是保留的 control-plane 状态，不能通过 HostFS grant 暴露。
 

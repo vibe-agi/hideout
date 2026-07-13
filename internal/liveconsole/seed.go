@@ -24,6 +24,10 @@ func BuildSeed(input SeedInput) Seed {
 		AuditTail:       scopeAudit(input.AuditTail, input.ProfileScope),
 		DeniedAuditTail: scopeAudit(input.DeniedAuditTail, input.ProfileScope),
 		Background:      append([]BackgroundRow(nil), input.Background...),
+		HostFSWrites:    filterHostFSWrites(input.HostFSWrites, input.ProfileScope),
+		Decisions:       filterDecisionRows(input.Decisions, input.ProfileScope),
+		Notices:         filterNoticeRows(input.Notices, input.ProfileScope),
+		StatusRows:      append([]StatusRow(nil), input.StatusRows...),
 		StreamHealth:    StreamHealth{State: health},
 		ProfileScope:    input.ProfileScope,
 	}
@@ -36,6 +40,10 @@ func NewState(seed Seed) State {
 		AuditTail:       append([]audit.Event(nil), seed.AuditTail...),
 		DeniedAuditTail: append([]audit.Event(nil), seed.DeniedAuditTail...),
 		Background:      append([]BackgroundRow(nil), seed.Background...),
+		HostFSWrites:    append([]HostFSWriteRow(nil), seed.HostFSWrites...),
+		Decisions:       append([]DecisionRow(nil), seed.Decisions...),
+		Notices:         append([]NoticeRow(nil), seed.Notices...),
+		StatusRows:      append([]StatusRow(nil), seed.StatusRows...),
 		StreamHealth:    seed.StreamHealth,
 		ProfileScope:    seed.ProfileScope,
 		Seen:            map[string]map[string]bool{},
@@ -98,6 +106,36 @@ func filterNetwork(values []manager.ProfileNetworkSummary, profileName string) [
 	out := make([]manager.ProfileNetworkSummary, 0, len(values))
 	for _, value := range values {
 		if value.Profile == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func filterHostFSWrites(values []HostFSWriteRow, profileName string) []HostFSWriteRow {
+	out := make([]HostFSWriteRow, 0, len(values))
+	for _, value := range values {
+		if profileName == "" || value.Profile == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func filterDecisionRows(values []DecisionRow, profileName string) []DecisionRow {
+	out := make([]DecisionRow, 0, len(values))
+	for _, value := range values {
+		if profileName == "" || value.Profile == profileName {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func filterNoticeRows(values []NoticeRow, profileName string) []NoticeRow {
+	out := make([]NoticeRow, 0, len(values))
+	for _, value := range values {
+		if profileName == "" || value.Profile == profileName {
 			out = append(out, value)
 		}
 	}

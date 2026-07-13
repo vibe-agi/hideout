@@ -1,0 +1,229 @@
+name: Runtime Developer Standard Promotion
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/runtime-promotions/developer-standard-*.json"
+      - ".github/workflows/runtime-developer-standard-promote.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runtime-developer-standard-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Validate and publish an immutable preview runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the trusted promotion request
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Validate, publish, and anonymously re-download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t requests < <(find .github/runtime-promotions -maxdepth 1 -type f \
+            -name 'developer-standard-*.json' | LC_ALL=C sort)
+          test "${#requests[@]}" -eq 1
+          request=${requests[0]}
+
+          jq -e '
+            .schema == "hideout.runtime-promotion-request/v1" and
+            (.revision | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+            (.sourceCommit | test("^[0-9a-f]{40}$")) and
+            (.image.file | test("^developer-standard-[A-Za-z0-9._-]+-linux-aarch64\\.qcow2$")) and
+            (.image.sha256 | test("^[0-9a-f]{64}$")) and
+            (.image.bytes > 0 and .image.bytes <= 4294967296) and
+            (.candidateRun | type == "number") and
+            (.retentionRun | type == "number")
+          ' "$request" >/dev/null
+
+          revision=$(jq -r '.revision' "$request")
+          source_commit=$(jq -r '.sourceCommit' "$request")
+          candidate_tag=$(jq -r '.candidateTag' "$request")
+          release_tag=$(jq -r '.releaseTag' "$request")
+          image_file=$(jq -r '.image.file' "$request")
+          image_sha=$(jq -r '.image.sha256' "$request")
+          image_bytes=$(jq -r '.image.bytes' "$request")
+          candidate_run=$(jq -r '.candidateRun' "$request")
+          retention_run=$(jq -r '.retentionRun' "$request")
+          short_sha=${source_commit:0:12}
+
+          test "$candidate_tag" = "runtime-developer-standard-${revision}-candidate-${short_sha}"
+          test "$release_tag" = "runtime-developer-standard-${revision}"
+
+          release_by_tag() {
+            local tag=$1
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+              jq -s --arg tag "$tag" '
+                [.[].[] | select(.tag_name == $tag)] |
+                if length == 1 then .[0]
+                else error("expected exactly one release with requested tag")
+                end
+              '
+          }
+          candidate_json=$(release_by_tag "$candidate_tag")
+          jq -e --arg commit "$source_commit" '
+            .draft == true and
+            .prerelease == false and
+            .target_commitish == $commit
+          ' <<<"$candidate_json" >/dev/null
+
+          root="$RUNNER_TEMP/runtime-promotion"
+          candidate="$root/candidate"
+          redownload="$root/redownload"
+          mkdir -p "$candidate" "$redownload"
+          gh release download "$candidate_tag" --repo "$GITHUB_REPOSITORY" \
+            --dir "$candidate"
+
+          expected_assets=(
+            README-NOT-PROMOTED.txt
+            SHA256SUMS
+            build-provenance.json
+            component-manifest.json
+            "$image_file"
+            package-inventory.txt
+            sbom-status.json
+            verification-report.json
+          )
+          mapfile -t actual_assets < <(find "$candidate" -maxdepth 1 -type f \
+            -exec basename {} \; | LC_ALL=C sort)
+          mapfile -t expected_sorted < <(printf '%s\n' "${expected_assets[@]}" | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "${expected_sorted[@]}") \
+            <(printf '%s\n' "${actual_assets[@]}")
+
+          (cd "$candidate" && sha256sum --check SHA256SUMS)
+          test "$(sha256sum "$candidate/$image_file" | awk '{print $1}')" = "$image_sha"
+          test "$(stat -c '%s' "$candidate/$image_file")" = "$image_bytes"
+          jq -e --arg commit "$source_commit" --arg revision "$revision" \
+            --arg file "$image_file" --arg sha "$image_sha" \
+            --argjson bytes "$image_bytes" '
+            .schema == "hideout.runtime-build-provenance/v1" and
+            .revision == $revision and
+            .source.commit == $commit and
+            .source.dirty == false and
+            .builder.attestation == "workflow-declared" and
+            .output.file == $file and
+            .output.sha256 == $sha and
+            .output.bytes == $bytes and
+            .promoted == false
+          ' "$candidate/build-provenance.json" >/dev/null
+          jq -e '
+            .schema == "hideout.runtime-image-verification/v1" and
+            .offline.qemuCheck == "passed" and
+            .offline.requiredTools.status == "passed" and
+            .offline.requiredPaths == "passed" and
+            .offline.privateKeyMaterial == "absent" and
+            .offline.agentCredentialState == "absent" and
+            .offline.controlPlaneMaterial == "absent"
+          ' "$candidate/verification-report.json" >/dev/null
+
+          title="Developer Standard Runtime ${revision} preview"
+          notes=$(cat <<EOF
+          Digest-pinned preview runtime for Hideout on macOS arm64 with a Linux aarch64 guest.
+
+          Source: ${source_commit}
+          Image SHA-256: ${image_sha}
+          Candidate build: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${candidate_run}
+          Trusted retention: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${retention_run}
+
+          This is a preview runtime artifact, not a supported-runtime, patch-SLA, SBOM-complete, or Hideout release claim.
+          EOF
+          )
+
+          release_count=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+            jq -s --arg tag "$release_tag" '[.[].[] | select(.tag_name == $tag)] | length')
+          test "$release_count" -le 1
+          if [[ "$release_count" == 1 ]]; then
+            release_json=$(release_by_tag "$release_tag")
+            jq -e --arg commit "$source_commit" '.draft == true and .target_commitish == $commit' \
+              <<<"$release_json" >/dev/null
+          else
+            gh release create "$release_tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$source_commit" --draft --prerelease \
+              --title "$title" --notes "$notes"
+          fi
+
+          gh release upload "$release_tag" --repo "$GITHUB_REPOSITORY" \
+            "$candidate/SHA256SUMS" \
+            "$candidate/build-provenance.json" \
+            "$candidate/component-manifest.json" \
+            "$candidate/$image_file" \
+            "$candidate/package-inventory.txt" \
+            "$candidate/sbom-status.json" \
+            "$candidate/verification-report.json" \
+            --clobber
+
+          release_id=$(release_by_tag "$release_tag" | jq -r '.id')
+          published=false
+          rollback() {
+            if [[ "$published" == true ]]; then
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                -F draft=true >/dev/null || true
+            fi
+          }
+          trap rollback ERR
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false -F prerelease=true -f name="$title" -f body="$notes" >/dev/null
+          published=true
+
+          public_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$release_tag/$image_file"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output "$redownload/$image_file" "$public_url"
+          test "$(sha256sum "$redownload/$image_file" | awk '{print $1}')" = "$image_sha"
+          test "$(stat -c '%s' "$redownload/$image_file")" = "$image_bytes"
+
+          promoted_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n \
+            --arg promotedAt "$promoted_at" \
+            --arg releaseTag "$release_tag" \
+            --arg releaseURL "https://github.com/$GITHUB_REPOSITORY/releases/tag/$release_tag" \
+            --arg assetURL "$public_url" \
+            --arg revision "$revision" \
+            --arg sourceCommit "$source_commit" \
+            --arg candidateTag "$candidate_tag" \
+            --arg imageFile "$image_file" \
+            --arg imageSHA256 "$image_sha" \
+            --argjson imageBytes "$image_bytes" \
+            --argjson candidateRun "$candidate_run" \
+            --argjson retentionRun "$retention_run" \
+            '{
+              schema: "hideout.runtime-promotion/v1",
+              promotedAt: $promotedAt,
+              release: {tag: $releaseTag, url: $releaseURL, prerelease: true},
+              source: {commit: $sourceCommit, dirty: false},
+              candidate: {tag: $candidateTag, buildRun: $candidateRun, retentionRun: $retentionRun},
+              image: {
+                revision: $revision,
+                file: $imageFile,
+                url: $assetURL,
+                sha256: $imageSHA256,
+                bytes: $imageBytes
+              },
+              verification: {
+                candidateAssets: "passed",
+                offlineImage: "passed",
+                anonymousHTTPSRedownload: "passed",
+                redownloadSHA256: $imageSHA256
+              },
+              claims: {preview: true, supported: false, releaseReady: false}
+            }' > "$root/promotion.json"
+          gh release upload "$release_tag" --repo "$GITHUB_REPOSITORY" \
+            "$root/promotion.json" --clobber
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output "$redownload/promotion.json" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$release_tag/promotion.json"
+          cmp "$root/promotion.json" "$redownload/promotion.json"
+
+          published=false
+          trap - ERR

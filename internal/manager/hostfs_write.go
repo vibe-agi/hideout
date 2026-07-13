@@ -48,6 +48,7 @@ type HostFSWriteDiscardRequest struct {
 
 type HostFSWriteStatusRequest struct {
 	Session string `json:"session,omitempty"`
+	Profile string `json:"profile,omitempty"`
 	State   string `json:"state,omitempty"`
 }
 
@@ -134,7 +135,7 @@ func (c Core) ClaimHostFSWrite(req HostFSWriteClaimRequest) (HostFSWriteClaim, e
 		return HostFSWriteClaim{}, err
 	}
 	c.emitHostFSWriteAudit(ref, overlay.ActionClaim, "allow", overlay.ClaimDetails(ref.decision, surface))
-	c.emitHostFSWrite(ref.decision, "claimed", "")
+	c.emitHostFSWrite(ref, "claimed", "")
 	return HostFSWriteClaim{
 		DecisionID:     decisionID,
 		State:          overlay.StateClaimed,
@@ -183,7 +184,7 @@ func (c Core) DiscardHostFSWrite(req HostFSWriteDiscardRequest) (HostFSWriteResu
 	if cleanupErr := ref.store.CleanupArtifacts(ref.operation); cleanupErr == nil {
 		c.emitHostFSWriteAudit(ref, overlay.ActionCleanup, "allow", hostFSWriteCleanupDetails(ref, "discard"))
 	}
-	c.emitHostFSWrite(ref.decision, "discarded", reason)
+	c.emitHostFSWrite(ref, "discarded", reason)
 	return result, nil
 }
 
@@ -219,7 +220,7 @@ func (c Core) ApplyHostFSWrite(req HostFSWriteApplyRequest) (HostFSWriteResult, 
 	if ref.operation.ContentObject != "" {
 		c.emitHostFSWriteAudit(ref, overlay.ActionCleanup, "allow", hostFSWriteCleanupDetails(ref, result.Status))
 	}
-	c.emitHostFSWrite(ref.decision, result.Status, reason)
+	c.emitHostFSWrite(ref, result.Status, reason)
 	if errors.Is(applyErr, overlay.ErrConflict) {
 		return result, nil
 	}
@@ -235,10 +236,14 @@ func (c Core) HostFSWriteStatus(req HostFSWriteStatusRequest) (HostFSWriteStatus
 		return HostFSWriteStatus{}, err
 	}
 	sessionFilter := strings.TrimSpace(req.Session)
+	profileFilter := strings.TrimSpace(req.Profile)
 	stateFilter := strings.TrimSpace(req.State)
 	out := HostFSWriteStatus{Version: HostFSWriteStatusVersion}
 	for _, ref := range refs {
 		if sessionFilter != "" && ref.sessionID != sessionFilter {
+			continue
+		}
+		if profileFilter != "" && ref.operation.Profile != profileFilter {
 			continue
 		}
 		if stateFilter != "" && ref.decision.State != stateFilter {
@@ -250,6 +255,7 @@ func (c Core) HostFSWriteStatus(req HostFSWriteStatusRequest) (HostFSWriteStatus
 		out.Pending = append(out.Pending, overlay.StatusEntry{
 			DecisionID:      ref.decision.DecisionID,
 			OperationID:     ref.operation.ID,
+			Profile:         ref.operation.Profile,
 			State:           ref.decision.State,
 			Operation:       ref.decision.Operation,
 			Path:            ref.decision.Path,
@@ -302,7 +308,7 @@ func (c Core) expireHostFSWriteRef(ref hostFSWriteRef) error {
 	if cleanupErr := ref.store.CleanupArtifacts(ref.operation); cleanupErr == nil {
 		c.emitHostFSWriteAudit(ref, overlay.ActionCleanup, "allow", hostFSWriteCleanupDetails(ref, "approval-timeout"))
 	}
-	c.emitHostFSWrite(ref.decision, "expired", "approval-timeout")
+	c.emitHostFSWrite(ref, "expired", "approval-timeout")
 	return nil
 }
 
@@ -420,13 +426,17 @@ func publicHostFSWriteDecision(decision overlay.Decision) overlay.Decision {
 	return decision
 }
 
-func (c Core) emitHostFSWrite(decision overlay.Decision, status, reason string) {
+func (c Core) emitHostFSWrite(ref hostFSWriteRef, status, reason string) {
+	decision := ref.decision
 	if status == "" {
 		status = decision.State
 	}
 	c.emitOperation("hostfs-write", status, map[string]any{
 		"operationId":     decision.OperationID,
 		"decisionId":      decision.DecisionID,
+		"profile":         ref.operation.Profile,
+		"session":         ref.sessionID,
+		"backend":         ref.operation.Backend,
 		"status":          status,
 		"operation":       decision.Operation,
 		"path":            decision.Path,

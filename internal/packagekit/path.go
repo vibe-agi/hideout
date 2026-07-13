@@ -2,6 +2,8 @@ package packagekit
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,31 @@ func JoinRelative(root, rel string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(root, filepath.FromSlash(clean)), nil
+}
+
+// rootedPackagePath validates every ancestor immediately before a destructive
+// operation. os.Root then keeps the operation confined even if the tree is
+// renamed or raced after validation.
+func rootedPackagePath(root *os.Root, rel string) (string, error) {
+	clean, err := CleanRelative(rel)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(clean, "/")
+	for i := 1; i < len(parts); i++ {
+		ancestor := filepath.FromSlash(path.Join(parts[:i]...))
+		info, err := root.Lstat(ancestor)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("package path ancestor %q is a symbolic link", path.Join(parts[:i]...))
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("package path ancestor %q is not a directory", path.Join(parts[:i]...))
+		}
+	}
+	return filepath.FromSlash(clean), nil
 }
 
 func CleanRelative(rel string) (string, error) {

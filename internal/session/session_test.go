@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+func TestNewCreatesPrivateHostFSReadStateLayout(t *testing.T) {
+	layout, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if layout.HostFSReadDir != filepath.Join(layout.Dir, "hostfs-read") ||
+		layout.HostFSReadOwnerLock != filepath.Join(layout.HostFSReadDir, "owner.lock") ||
+		layout.HostFSReadProviderLock != filepath.Join(layout.HostFSReadDir, "provider.lock") ||
+		layout.HostFSReadStatePath != filepath.Join(layout.HostFSReadDir, "state.json") ||
+		layout.HostFSReadGrantsPath != filepath.Join(layout.HostFSReadDir, "grants.json") {
+		t.Fatalf("unexpected HostFS read layout: %+v", layout)
+	}
+	info, err := os.Stat(layout.HostFSReadDir)
+	if err != nil {
+		t.Fatalf("stat HostFS read dir: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("HostFS read dir mode=%#o want 0700", info.Mode().Perm())
+	}
+}
+
 func TestCleanupEphemeralRemovesSensitiveSessionStateAndKeepsAudit(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "ses_test"
@@ -19,6 +40,8 @@ func TestCleanupEphemeralRemovesSensitiveSessionStateAndKeepsAudit(t *testing.T)
 	mustWrite(t, filepath.Join(dir, "network-plan.json"), "{}")
 	mustWrite(t, filepath.Join(dir, "network", "bootstrap.sh"), "#!/bin/sh")
 	mustWrite(t, filepath.Join(dir, "network", "proxy.url"), "socks5://user:pass@127.0.0.1:1080")
+	mustWrite(t, filepath.Join(dir, "hostfs-read", "grants.json"), "{}")
+	mustWrite(t, filepath.Join(dir, "hostfs-read", "state.json"), "{}")
 	mustWrite(t, filepath.Join(dir, "hostfs-overlay", "objects", "hfwobj_test"), "payload")
 	mustWrite(t, filepath.Join(dir, "audit.jsonl"), "{}\n")
 
@@ -38,6 +61,7 @@ func TestCleanupEphemeralRemovesSensitiveSessionStateAndKeepsAudit(t *testing.T)
 		filepath.Join(dir, "broker-endpoint.json"),
 		filepath.Join(dir, "network-plan.json"),
 		filepath.Join(dir, "network"),
+		filepath.Join(dir, "hostfs-read"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be removed; err=%v", path, err)

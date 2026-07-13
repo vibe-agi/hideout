@@ -61,6 +61,7 @@ type InstallState struct {
 	Files         []File          `json:"files"`
 	Directories   []string        `json:"directories"`
 	Migration     Migration       `json:"migration"`
+	ObsoleteFiles []ObsoleteFile  `json:"obsoleteFiles,omitempty"`
 }
 
 type InstalledSource struct {
@@ -68,6 +69,33 @@ type InstalledSource struct {
 	BuiltAt string  `json:"builtAt"`
 	Git     GitInfo `json:"git"`
 	Target  Target  `json:"target"`
+}
+
+type ObsoleteFile struct {
+	Path       string `json:"path"`
+	Kind       string `json:"kind"`
+	SHA256     string `json:"sha256"`
+	Executable bool   `json:"executable"`
+	Reason     string `json:"reason"`
+}
+
+type MigrationDecision struct {
+	Compatible              bool
+	InstalledStateSchema    string
+	PreviousPackageSchema   string
+	NewPackageSchema        string
+	AllowedInstalledSchemas []string
+	MinimumPackageSchema    string
+	MaximumPackageSchema    string
+	Reason                  string
+	Guidance                string
+}
+
+type ExternalPrerequisiteStatus struct {
+	Name         string
+	Status       string
+	PackageOwned bool
+	Hint         string
 }
 
 func NewInstallState(prefix, store string, manifest Manifest, files []File, dirs []string, now time.Time) InstallState {
@@ -85,7 +113,10 @@ func NewInstallState(prefix, store string, manifest Manifest, files []File, dirs
 		Files:       files,
 		Directories: dirs,
 		Migration: Migration{
-			InstallStateSchema: InstallStateSchema,
+			InstallStateSchema:   InstallStateSchema,
+			FromInstalledSchemas: []string{InstallStateSchema},
+			MinimumPackageSchema: ArtifactSchema,
+			MaximumPackageSchema: ArtifactSchema,
 		},
 	}
 }

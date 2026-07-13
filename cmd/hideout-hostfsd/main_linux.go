@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -61,7 +62,14 @@ func run(args []string) error {
 }
 
 func fsMount(mountPoint string, root *hostFSNode, debug bool) (*fuse.Server, error) {
-	opts := &fs.Options{
+	return fs.Mount(mountPoint, root, hostFSMountOptions(debug))
+}
+
+func hostFSMountOptions(debug bool) *fs.Options {
+	entryTimeout := time.Second
+	attrTimeout := time.Second
+	negativeTimeout := time.Duration(0)
+	return &fs.Options{
 		MountOptions: fuse.MountOptions{
 			FsName:        "hideout-hostfs",
 			Name:          "hideout-hostfs",
@@ -71,8 +79,10 @@ func fsMount(mountPoint string, root *hostFSNode, debug bool) (*fuse.Server, err
 			AllowOther:    true,
 		},
 		NullPermissions: true,
+		EntryTimeout:    &entryTimeout,
+		AttrTimeout:     &attrTimeout,
+		NegativeTimeout: &negativeTimeout,
 	}
-	return fs.Mount(mountPoint, root, opts)
 }
 
 type brokerClient struct {
@@ -174,15 +184,21 @@ func (c *brokerClient) call(action string, args map[string]any) broker.Response 
 }
 
 func responseErrno(resp broker.Response) syscall.Errno {
-	switch resp.Stderr {
-	case "hostfs path not found":
+	if err := broker.ValidateErrorRecord(resp.Error); err != nil {
+		return syscall.EIO
+	}
+	switch resp.Error.Errno {
+	case broker.ErrnoENOENT:
 		return syscall.ENOENT
-	case "hostfs operation unsupported":
+	case broker.ErrnoEACCES:
+		return syscall.EACCES
+	case broker.ErrnoEOVERFLOW:
+		return syscall.EOVERFLOW
+	case broker.ErrnoEROFS:
 		return syscall.EROFS
+	case broker.ErrnoEIO:
+		return syscall.EIO
 	default:
-		if resp.Status == "broker-unavailable" {
-			return syscall.EIO
-		}
 		return syscall.EIO
 	}
 }
@@ -379,16 +395,26 @@ func fixedRootKind(name string) string {
 }
 
 func stableMode(kind string) uint32 {
-	if kind == "dir" {
+	switch kind {
+	case "dir":
 		return syscall.S_IFDIR
+	case "symlink":
+		return syscall.S_IFLNK
+	default:
+		return syscall.S_IFREG
 	}
-	return syscall.S_IFREG
 }
 
 func fillAttr(attr *fuse.Attr, info nodeInfo) {
 	mode := uint32(0o666)
-	if info.Kind == "dir" {
+	switch info.Kind {
+	case "dir":
 		mode = 0o777
+	case "symlink":
+		mode = 0o777
+	}
+	if ordinary, ok := permissionBits(info.Mode); ok {
+		mode = ordinary
 	}
 	attr.Mode = stableMode(info.Kind) | mode
 	attr.Size = info.Size
@@ -399,6 +425,65 @@ func fillAttr(attr *fuse.Attr, info nodeInfo) {
 	if !info.ModTime.IsZero() {
 		attr.SetTimes(nil, &info.ModTime, nil)
 	}
+}
+
+func permissionBits(value string) (uint32, bool) {
+	value = strings.TrimSpace(value)
+	if len(value) == 4 {
+		parsed, err := strconv.ParseUint(value, 8, 32)
+		if err == nil {
+			return uint32(parsed) & 0o7777, true
+		}
+	}
+	if len(value) < 9 {
+		return 0, false
+	}
+	perm := value[len(value)-9:]
+	var mode uint32
+	for i, ch := range perm {
+		shift := uint(8 - i)
+		switch ch {
+		case 'r':
+			if i%3 != 0 {
+				return 0, false
+			}
+			mode |= 1 << shift
+		case 'w':
+			if i%3 != 1 {
+				return 0, false
+			}
+			mode |= 1 << shift
+		case 'x':
+			if i%3 != 2 {
+				return 0, false
+			}
+			mode |= 1 << shift
+		case 's', 'S':
+			if i != 2 && i != 5 {
+				return 0, false
+			}
+			if ch == 's' {
+				mode |= 1 << shift
+			}
+			if i == 2 {
+				mode |= 0o4000
+			} else {
+				mode |= 0o2000
+			}
+		case 't', 'T':
+			if i != 8 {
+				return 0, false
+			}
+			if ch == 't' {
+				mode |= 1
+			}
+			mode |= 0o1000
+		case '-':
+		default:
+			return 0, false
+		}
+	}
+	return mode, true
 }
 
 func parseNodeInfo(data map[string]any) (nodeInfo, syscall.Errno) {

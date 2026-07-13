@@ -12,6 +12,8 @@ const (
 	ActionDecisionApply   = "decision.apply"
 	ActionDecisionDeny    = "decision.deny"
 	ActionDecisionTimeout = "decision.timeout"
+	ActionDecisionReopen  = "decision.reopen"
+	ActionDecisionRevoke  = "decision.revoke"
 	ActionDecisionStale   = "decision.stale-claim"
 	ActionNoticeCreate    = "notice.create"
 	ActionNoticeAck       = "notice.ack"

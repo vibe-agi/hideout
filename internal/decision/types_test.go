@@ -83,3 +83,27 @@ func TestDecisionValidationRejectsMalformedKindsAndTransitions(t *testing.T) {
 		t.Fatalf("expected claim metadata outside claimed state rejection")
 	}
 }
+
+func TestHostFSReadDecisionUsesClosedKindAndReopenAction(t *testing.T) {
+	now := time.Now().UTC()
+	d := Decision{
+		ID:             "dec_hfr_0123",
+		Kind:           KindHostFSRead,
+		State:          StateDenied,
+		DefaultOutcome: DefaultOutcomeDeny,
+		TimeoutAt:      now.Add(-time.Minute),
+		Preview:        Preview{Summary: "one exact file read"},
+		AllowedActions: []string{ActionReopen},
+		AuditRef:       "audit:hostfs-read:dec_hfr_0123",
+	}
+	d.Normalize(now)
+	if err := ValidateDecision(d); err != nil {
+		t.Fatalf("ValidateDecision: %v", err)
+	}
+	if !KnownDecisionKind(KindHostFSRead) || !ActionAllowed(d, ActionReopen) {
+		t.Fatalf("hostfs.read/reopen did not remain in the closed vocabulary: %+v", d)
+	}
+	if ActionAllowed(d, "retry-from-target") {
+		t.Fatal("target retry must not become a decision action")
+	}
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "hideout.host-app-enablement/v1",
+  "profile": "privacy",
+  "packId": "community.cursor",
+  "revisionId": "rev_aaaaaaaaaaaaaaaa",
+  "bindingIds": ["cursor-command"],
+  "sourceDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "basePermissionFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "permissionFingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "access": "ask-each-run",
+  "observedIdentityDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "conflictReplacements": {},
+  "enabledAt": "2026-07-11T00:00:00Z",
+  "state": "enabled",
+  "reason": "enabled"
+}

@@ -70,6 +70,27 @@
         "type": "string"
       }
     },
+    "hostfsVisibility": {
+      "enum": ["none", "landmarks", "home-tree"]
+    },
+    "hostfsVisibilityRoots": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "hostfsVisibilityRuleIds": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "nameDisclosureAcknowledged": {
+      "type": "boolean"
+    },
+    "runtimeSelection": {
+      "$ref": "#/$defs/runtimeProvenance"
+    },
+    "imageRef": {
+      "type": "string",
+      "minLength": 1
+    },
     "tasks": {
       "type": "array",
       "items": {
@@ -85,6 +106,40 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "runtimeProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "revision",
+        "catalogRelease",
+        "contractId",
+        "contractDigest",
+        "artifactLocation",
+        "artifactSHA256",
+        "downloadBytes",
+        "virtualBytes",
+        "hostOS",
+        "hostArch",
+        "guestArch",
+        "maturity"
+      ],
+      "properties": {
+        "family": {"type": "string", "minLength": 1, "maxLength": 64},
+        "revision": {"type": "string", "minLength": 1, "maxLength": 64},
+        "catalogRelease": {"type": "string", "minLength": 1, "maxLength": 64},
+        "contractId": {"type": "string", "minLength": 1, "maxLength": 64},
+        "contractDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "artifactLocation": {"type": "string", "pattern": "^https://[^@\\s?#]+\\.qcow2$"},
+        "artifactSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "downloadBytes": {"type": "integer", "minimum": 1, "maximum": 4294967296},
+        "virtualBytes": {"type": "integer", "minimum": 1, "maximum": 17179869184},
+        "hostOS": {"enum": ["darwin", "linux"]},
+        "hostArch": {"enum": ["arm64", "amd64"]},
+        "guestArch": {"enum": ["aarch64", "x86_64"]},
+        "maturity": {"const": "preview"}
+      }
+    },
     "nextStep": {
       "type": "object",
       "required": ["id", "label", "command", "message"],
@@ -130,6 +185,7 @@
             "store.create",
             "schema.metadata.write",
             "profile.create",
+            "profile.environment.select",
             "identity.materialize",
             "network.mode.select",
             "backend.probe",

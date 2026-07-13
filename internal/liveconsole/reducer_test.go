@@ -189,6 +189,104 @@ func TestReducerUpdatesDecisionAndNoticePanels(t *testing.T) {
 	}
 }
 
+func TestReducerShowsHostFSDecisionRowsFor023(t *testing.T) {
+	state := NewState(BuildSeed(SeedInput{StreamHealth: HealthLive}))
+	hostfs := Event{
+		Version: EventVersion,
+		Kind:    KindHostFSWrite,
+		Seq:     1,
+		Payload: EventPayload{
+			DecisionID:      "hfwdec_023",
+			OperationID:     "hfwop_023",
+			Status:          "pending",
+			Operation:       "replace",
+			Path:            "/Users/alice/project.txt",
+			DestinationPath: "/Users/alice/project.txt",
+			Reason:          "operator approval required",
+		},
+	}
+	decision := Event{
+		Version: EventVersion,
+		Kind:    KindDecision,
+		Seq:     2,
+		Entity:  EntityRef{Kind: KindDecision, ID: "hfwdec_023", Profile: "default", Session: "ses_023"},
+		Payload: EventPayload{
+			DecisionID:     "hfwdec_023",
+			RecordKind:     "hostfs.write",
+			Status:         "pending",
+			DefaultOutcome: "discard",
+			Profile:        "default",
+			Session:        "ses_023",
+			Backend:        "lima",
+		},
+	}
+	if result := Apply(&state, hostfs); result.Status != ResultApplied {
+		t.Fatalf("hostfs event should apply: %+v", result)
+	}
+	if result := Apply(&state, decision); result.Status != ResultApplied {
+		t.Fatalf("decision event should apply: %+v", result)
+	}
+	if len(state.HostFSWrites) != 1 || state.HostFSWrites[0].DecisionID != "hfwdec_023" || state.HostFSWrites[0].Status != "pending" {
+		t.Fatalf("hostfs row mismatch: %+v", state.HostFSWrites)
+	}
+	if len(state.Decisions) != 1 || state.Decisions[0].ID != "hfwdec_023" || state.Decisions[0].Status != "pending" || state.Decisions[0].Kind != "hostfs.write" {
+		t.Fatalf("decision row mismatch: %+v", state.Decisions)
+	}
+
+	hostfs.Payload.Status = "applied"
+	hostfs.Seq = 3
+	decision.Payload.Status = "applied"
+	decision.Payload.Reason = "operator-approved"
+	decision.Seq = 4
+	if result := Apply(&state, hostfs); result.Status != ResultApplied {
+		t.Fatalf("hostfs update should apply: %+v", result)
+	}
+	if result := Apply(&state, decision); result.Status != ResultApplied {
+		t.Fatalf("decision update should apply: %+v", result)
+	}
+	if state.HostFSWrites[0].Status != "applied" || state.Decisions[0].Status != "applied" || state.Decisions[0].Reason != "operator-approved" {
+		t.Fatalf("resolved rows mismatch: hostfs=%+v decisions=%+v", state.HostFSWrites, state.Decisions)
+	}
+}
+
+func TestReducerActionRequiredSummaryAndHostFSRedaction(t *testing.T) {
+	state := NewState(BuildSeed(SeedInput{StreamHealth: HealthLive}))
+	ev := Event{
+		Version: EventVersion,
+		Kind:    KindHostFSWrite,
+		Seq:     1,
+		Payload: EventPayload{
+			DecisionID:      "hfwdec_1",
+			OperationID:     "hfwop_1",
+			Status:          "pending",
+			Operation:       "replace",
+			Path:            "/hostfs-overlay/objects/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			DestinationPath: "/Users/alice/project.txt",
+			Reason:          "HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:1 keep-me",
+		},
+	}
+	if result := Apply(&state, ev); result.Status != ResultApplied {
+		t.Fatalf("hostfs write event should apply: %+v", result)
+	}
+	summary := ActionRequired(state)
+	if summary.Total != 1 || summary.HostFSWrites != 1 || summary.Decisions != 0 || summary.Notices != 0 {
+		t.Fatalf("action summary mismatch: %+v", summary)
+	}
+	data, err := json.Marshal(state.HostFSWrites)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, forbidden := range []string{"0123456789abcdef0123456789abcdef", "socks5://127.0.0.1:1", "HIDEOUT_SECRET_DEFAULT_PROXY"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("hostfs write row leaked control-plane value %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "keep-me") || !strings.Contains(text, "/Users/alice/project.txt") {
+		t.Fatalf("hostfs write row should preserve local user data: %s", text)
+	}
+}
+
 func TestReducerCredentialTerminal(t *testing.T) {
 	state := NewState(BuildSeed(SeedInput{StreamHealth: HealthLive}))
 	ev := Event{

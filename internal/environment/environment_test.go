@@ -51,6 +51,97 @@ func TestStoreCreateLoadByNameAndResolve(t *testing.T) {
 	}
 }
 
+func TestStorePinsRuntimeProvenanceWithoutInferringIt(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	provenance := testRuntimeProvenance()
+	rec, err := store.Create(Spec{
+		Name:           "runtime-pinned",
+		ImageRef:       provenance.ImageRef(),
+		Runtime:        &provenance,
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	loaded, err := store.Load(rec.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Runtime == nil || *loaded.Runtime != provenance {
+		t.Fatalf("runtime provenance=%+v want %+v", loaded.Runtime, provenance)
+	}
+
+	custom, err := store.Create(Spec{
+		Name:           "custom-unverified",
+		ImageRef:       provenance.ImageRef(),
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+	})
+	if err != nil {
+		t.Fatalf("Create custom: %v", err)
+	}
+	if custom.Runtime != nil {
+		t.Fatalf("matching image ref must not infer runtime provenance: %+v", custom.Runtime)
+	}
+}
+
+func TestStoreRejectsRuntimeProvenanceThatDoesNotMatchImage(t *testing.T) {
+	provenance := testRuntimeProvenance()
+	_, err := (Store{Root: t.TempDir()}).Create(Spec{
+		Name:           "runtime-mismatch",
+		ImageRef:       BuiltinBaseImage,
+		Runtime:        &provenance,
+		Profile:        "default",
+		Backend:        "lima",
+		Workspace:      t.TempDir(),
+		GuestWorkspace: "/workspace",
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime provenance") {
+		t.Fatalf("expected runtime provenance mismatch, got %v", err)
+	}
+}
+
+func TestRuntimeProvenanceRequiresPackageInventoryDigest(t *testing.T) {
+	for name, digest := range map[string]string{
+		"missing":    "",
+		"no prefix":  strings.Repeat("c", 64),
+		"uppercase":  "sha256:" + strings.Repeat("C", 64),
+		"wrong size": "sha256:" + strings.Repeat("c", 63),
+	} {
+		t.Run(name, func(t *testing.T) {
+			provenance := testRuntimeProvenance()
+			provenance.PackageInventoryDigest = digest
+			if err := provenance.Validate(); err == nil || !strings.Contains(err.Error(), "packageInventoryDigest") {
+				t.Fatalf("package inventory digest error=%v", err)
+			}
+		})
+	}
+}
+
+func testRuntimeProvenance() RuntimeProvenance {
+	return RuntimeProvenance{
+		Family:                 "developer-standard",
+		Revision:               "2026.07.0",
+		CatalogRelease:         "2026.07.0",
+		ContractID:             "developer-standard/v1",
+		ContractDigest:         "sha256:" + strings.Repeat("b", 64),
+		ArtifactLocation:       "https://github.com/vibe-agi/hideout/releases/download/runtime-2026.07.0/developer-standard.qcow2",
+		ArtifactSHA256:         strings.Repeat("a", 64),
+		PackageInventoryDigest: "sha256:" + strings.Repeat("c", 64),
+		DownloadBytes:          512 << 20,
+		VirtualBytes:           12 << 30,
+		HostOS:                 "darwin",
+		HostArch:               "arm64",
+		GuestArch:              "aarch64",
+		Maturity:               "preview",
+	}
+}
+
 func TestClearRuntimePreservesMountRootsAndRemovesContents(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	rec, err := store.Create(Spec{

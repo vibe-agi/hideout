@@ -34,7 +34,7 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 	if err != nil {
 		return UninstallResult{}, fmt.Errorf("load installed package manifest: %w", err)
 	}
-	if err := VerifyInstalled(prefix, state); err != nil {
+	if err := verifyInstalledActive(prefix, state); err != nil {
 		return UninstallResult{}, err
 	}
 	store := opts.Store
@@ -48,6 +48,9 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 	}
 	files := make([]string, 0, len(state.Files)+1)
 	for _, file := range state.Files {
+		files = append(files, file.Path)
+	}
+	for _, file := range state.ObsoleteFiles {
 		files = append(files, file.Path)
 	}
 	files = append(files, InstalledManifest)
@@ -70,12 +73,20 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 	if opts.DryRun {
 		return result, nil
 	}
+	root, err := os.OpenRoot(prefix)
+	if err != nil {
+		return result, fmt.Errorf("open install prefix: %w", err)
+	}
+	defer root.Close()
 	for _, rel := range files {
-		joined, err := JoinRelative(prefix, rel)
+		joined, err := rootedPackagePath(root, rel)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return result, err
 		}
-		if err := os.Remove(joined); err != nil && !os.IsNotExist(err) {
+		if err := root.Remove(joined); err != nil && !os.IsNotExist(err) {
 			return result, fmt.Errorf("remove package file %s: %w", rel, err)
 		}
 	}
@@ -83,33 +94,39 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 		if rel == "" || rel == "." || rel == "bin" {
 			continue
 		}
-		joined, err := JoinRelative(prefix, rel)
+		joined, err := rootedPackagePath(root, rel)
 		if err != nil {
-			return result, err
+			continue
 		}
-		_ = os.Remove(joined)
+		_ = root.Remove(joined)
 	}
-	_ = os.Remove(filepath.Join(prefix, filepath.FromSlash(packageMetadataRoot)))
+	if joined, err := rootedPackagePath(root, packageMetadataRoot); err == nil {
+		_ = root.Remove(joined)
+	}
 	if opts.Purge && store != "" {
 		if err := os.RemoveAll(store); err != nil {
 			return result, fmt.Errorf("purge durable store: %w", err)
 		}
 		writePurgeAudit(store, AuditEvent{
-			Operation: "uninstall",
-			Status:    "passed",
-			Prefix:    prefix,
-			StoreRoot: store,
-			Files:     len(files),
-			Purge:     opts.Purge,
+			Operation:     "uninstall",
+			Status:        "passed",
+			Prefix:        prefix,
+			StoreRoot:     store,
+			Files:         len(files),
+			StaleFiles:    len(state.ObsoleteFiles),
+			DurableAction: result.DurableAction,
+			Purge:         opts.Purge,
 		})
 	} else {
 		writeAudit(store, AuditEvent{
-			Operation: "uninstall",
-			Status:    "passed",
-			Prefix:    prefix,
-			StoreRoot: store,
-			Files:     len(files),
-			Purge:     opts.Purge,
+			Operation:     "uninstall",
+			Status:        "passed",
+			Prefix:        prefix,
+			StoreRoot:     store,
+			Files:         len(files),
+			StaleFiles:    len(state.ObsoleteFiles),
+			DurableAction: result.DurableAction,
+			Purge:         opts.Purge,
 		})
 	}
 	return result, nil

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/open-resource-intent.schema.json",
+  "title": "Community Host-App Unbound OpenResourceIntent",
+  "$comment": "hideout.open-resource-intent/v2",
+  "description": "Authority-free resource/location/window proposal produced by an untrusted declarative grammar. Core derives workspace versus hostfs-portal from the live session, then revalidates existing authority at launch. Application, binding, capability, access, result, resource class, portal reference, executable, lower host path, and raw argv cannot be represented here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "resources"
+  ],
+  "properties": {
+    "resources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "guestPath"
+        ],
+        "properties": {
+          "guestPath": {
+            "type": "string",
+            "description": "Absolute guest path. Core resolves it through the immutable session workspace or an active same-session HostFS portal with existing content/tree authority; discover-only visibility is insufficient and the lower host path is never returned.",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^/"
+          }
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "line",
+        "column"
+      ],
+      "properties": {
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      }
+    },
+    "windowMode": {
+      "type": "string",
+      "enum": [
+        "reuse",
+        "new"
+      ]
+    }
+  }
+}
