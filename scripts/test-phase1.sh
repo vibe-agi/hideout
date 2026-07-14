@@ -103,9 +103,15 @@ run_isolation_gate() {
 }
 
 print_plan() {
-  echo "phase1-plan: Gate 0 static contract"
+  if [ -n "$retained_gate0_candidate" ]; then
+    echo "phase1-plan: Gate 0 exact signed-candidate workflow result"
+  else
+    echo "phase1-plan: Gate 0 static contract"
+  fi
   echo "phase1-plan: Gate 1 native smoke"
-  if [ "$include_lima" -eq 1 ]; then
+  if [ -n "$retained_gate2_output" ]; then
+    echo "phase1-plan: Gate 2 exact retained runtime result"
+  elif [ "$include_lima" -eq 1 ]; then
     echo "phase1-plan: Gate 2 Lima E2E"
     if [ "$runtime_gate_mode" -eq 1 ]; then
       echo "phase1-plan: Gate 2 exact runtime family $runtime_gate_family"
@@ -156,6 +162,9 @@ include_operator_cli=0
 require_operator_proxy=0
 runtime_gate_mode=0
 runtime_gate_family="${HIDEOUT_RELEASE_RUNTIME_FAMILY:-developer-standard}"
+retained_gate2_output="${HIDEOUT_PHASE1_RETAINED_GATE2_OUTPUT:-}"
+retained_gate0_candidate="${HIDEOUT_PHASE1_RETAINED_GATE0_CANDIDATE:-}"
+retained_gate0_package_sha="${HIDEOUT_PHASE1_RETAINED_GATE0_PACKAGE_SHA256:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -235,6 +244,24 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+if [ -n "$retained_gate2_output" ]; then
+  if [ "$include_lima" -ne 1 ] || [ -z "${HIDEOUT_RELEASE_EVIDENCE_DIR:-}" ]; then
+    echo "phase1: retained Gate 2 requires a selected Lima gate and HIDEOUT_RELEASE_EVIDENCE_DIR" >&2
+    exit 2
+  fi
+  include_lima=0
+fi
+if [ -n "$retained_gate0_candidate" ] || [ -n "$retained_gate0_package_sha" ]; then
+  if [ -z "$retained_gate0_candidate" ] || [ -z "$retained_gate0_package_sha" ] ||
+    [ -z "${HIDEOUT_RELEASE_EVIDENCE_DIR:-}" ]; then
+    echo "phase1: retained Gate 0 requires its candidate receipt, package digest, and HIDEOUT_RELEASE_EVIDENCE_DIR" >&2
+    exit 2
+  fi
+  . scripts/lib/gate-result.sh
+  validate_retained_gate0_candidate "$retained_gate0_candidate" \
+    "$(git rev-parse HEAD)" "$retained_gate0_package_sha"
+fi
+
 echo "phase1: mode=$mode lima=$include_lima lima_real_run=$include_lima_real_run proxy=$include_proxy real_browser=$real_browser probes=$include_probes dogfood_cli=$include_dogfood_cli operator_cli=$include_operator_cli operator_proxy=$require_operator_proxy runtime=$runtime_gate_mode runtime_family=$runtime_gate_family"
 
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-}" = "1" ]; then
@@ -262,7 +289,17 @@ if [ "$real_browser" -eq 1 ]; then
   run_gate "Gate 4 real browser launcher preflight" env HIDEOUT_GATE4_REAL_BROWSER=1 scripts/test-gate4-host-escape.sh --preflight-only
 fi
 
-run_gate "Gate 0 static contract" scripts/test-gate0.sh
+if [ -n "$retained_gate2_output" ]; then
+  . scripts/lib/gate-result.sh
+  echo "phase1: Gate 2 Lima E2E (reuse exact retained result)"
+  emit_retained_gate2_result "$retained_gate2_output" "$retained_gate2_output"
+fi
+
+if [ -n "$retained_gate0_candidate" ]; then
+  echo "phase1: Gate 0 static contract (reuse exact signed-candidate workflow result)"
+else
+  run_gate "Gate 0 static contract" scripts/test-gate0.sh
+fi
 run_gate "Gate 1 native smoke" scripts/test-gate1-native.sh
 
 if [ "$include_lima" -eq 1 ]; then

@@ -5,6 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
 . "$ROOT/scripts/lib/verified-runtime-cache.sh"
+. "$ROOT/scripts/lib/gate-result.sh"
 mode="${1:---contract-only}"
 
 case "$mode" in
@@ -49,6 +50,8 @@ bash -n \
   scripts/test-public-alpha-clean-install.sh \
   scripts/test-public-alpha-candidate.sh \
   scripts/test-public-alpha-release.sh \
+  scripts/test-phase1.sh \
+  scripts/lib/gate-result.sh \
   scripts/lib/lima-temp.sh \
   scripts/lib/public-alpha-cleanup.sh \
   scripts/lib/verified-runtime-cache.sh \
@@ -89,6 +92,69 @@ bash -n \
   printf 'wrong-runtime' >"$source/data"
   if hideout_seed_verified_runtime_cache "$catalog" "$shared" "$target" 1 >/dev/null 2>&1; then
     echo "public-alpha-release: wrong runtime cache digest was accepted" >&2
+    exit 1
+  fi
+)
+
+(
+  retained_fixture="$(mktemp -d "${TMPDIR:-/tmp}/hideout-retained-gate2-contract.XXXXXX")"
+  trap 'rm -rf "$retained_fixture"' EXIT
+  output="$retained_fixture/gate2.out"
+  provenance="$retained_fixture/build-provenance.json"
+  evidence="$retained_fixture/evidence"
+  artifact="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  commit="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  printf '%s\n' \
+    'runtime_contract=passed' \
+    'runtime_family=developer-standard' \
+    'runtime_revision=fixture' \
+    "runtime_artifact_sha256=$artifact" \
+    'runtime_environment_id=env_fixture' \
+    'runtime_host_os=darwin' \
+    'runtime_host_arch=arm64' \
+    'runtime_guest_arch=aarch64' \
+    "runtime_build_commit=$commit" \
+    'runtime_build_dirty=false' \
+    'gate2: passed' >"$output"
+  jq -n --arg commit "$commit" --arg artifact "$artifact" '
+    {schema:"hideout.runtime-build-provenance/v1",source:{commit:$commit,dirty:false},
+     output:{sha256:$artifact}}
+  ' >"$provenance"
+
+  HIDEOUT_RELEASE_EVIDENCE_DIR="$evidence" \
+    HIDEOUT_RUNTIME_BUILD_PROVENANCE="$provenance" \
+    emit_retained_gate2_result "$output" "$output"
+  jq -e --arg artifact "$artifact" --arg commit "$commit" '
+    .id == "gate2-lima" and .backend == "lima" and .result == "passed" and
+    .runtime.artifactSHA256 == $artifact and .runtime.buildCommit == $commit and
+    .runtime.buildDirty == false
+  ' "$evidence/gates/gate2-lima.json" >/dev/null
+
+  printf '%s\n' 'runtime_contract=passed' 'gate2: failed' >"$retained_fixture/failed.out"
+  if HIDEOUT_RELEASE_EVIDENCE_DIR="$evidence" \
+    HIDEOUT_RUNTIME_BUILD_PROVENANCE="$provenance" \
+    emit_retained_gate2_result "$retained_fixture/failed.out" >/dev/null 2>&1; then
+    echo "public-alpha-release: failed Gate 2 output was reused" >&2
+    exit 1
+  fi
+  jq --arg wrong "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" \
+    '.output.sha256 = $wrong' "$provenance" >"$retained_fixture/wrong-provenance.json"
+  if HIDEOUT_RELEASE_EVIDENCE_DIR="$evidence" \
+    HIDEOUT_RUNTIME_BUILD_PROVENANCE="$retained_fixture/wrong-provenance.json" \
+    emit_retained_gate2_result "$output" >/dev/null 2>&1; then
+    echo "public-alpha-release: mismatched runtime provenance was reused" >&2
+    exit 1
+  fi
+
+  jq -n --arg commit "$commit" --arg packageSHA "$artifact" '
+    {schema:"hideout.public-alpha-candidate/v1",version:"0.1.0-alpha.1",
+     tag:"v0.1.0-alpha.1",sourceCommit:$commit,sourceDirty:false,
+     workflowRunId:123,publicationStatus:"draft-only",packageSHA256:$packageSHA}
+  ' >"$retained_fixture/candidate.json"
+  validate_retained_gate0_candidate "$retained_fixture/candidate.json" "$commit" "$artifact"
+  if validate_retained_gate0_candidate "$retained_fixture/candidate.json" "$commit" \
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" >/dev/null 2>&1; then
+    echo "public-alpha-release: Gate 0 receipt was reused for another package" >&2
     exit 1
   fi
 )
@@ -151,6 +217,14 @@ for consumer in test-hostfs-visibility-e2e.sh test-host-capability-projection-e2
 done
 grep -F -- '--gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'HIDEOUT_PHASE1_RETAINED_GATE2_OUTPUT="$out/runtime-gate2/logs/gate2.out"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'HIDEOUT_PHASE1_RETAINED_GATE0_CANDIDATE="$candidate_observation"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'validate_retained_gate0_candidate "$retained_gate0_candidate"' \
+  scripts/test-phase1.sh >/dev/null
+grep -F 'emit_retained_gate2_result "$retained_gate2_output"' \
+  scripts/test-phase1.sh >/dev/null
 grep -F 'HIDEOUT_RELEASE_BINARY is not executable' \
   scripts/test-env-image.sh >/dev/null
 for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh \
@@ -163,6 +237,8 @@ if [ "$(grep -c 'support release redact-public-evidence' scripts/test-public-alp
   exit 1
 fi
 grep -q 'readiness_raw=' scripts/test-public-alpha-candidate.sh
+grep -F 'cp "$candidate_observation" "$evidence_root/workflow/candidate.json"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'public_alpha_cleanup_workflow_state' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'Retain bounded workflow cleanup receipt' \

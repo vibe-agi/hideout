@@ -206,6 +206,99 @@ emit_gate_result() {
     } + if $runtime == null then {} else {runtime: $runtime} end' >"$gates_dir/$id.json"
 }
 
+# emit_retained_gate2_result <gate2-output> [audit-path]
+#
+# Reuses one complete Gate 2 result inside the same release-candidate run. The
+# output remains evidence only when it carries the full runtime identity and
+# the exact runtime build provenance still agrees with it. This avoids a
+# second VM regression without allowing a local fast path to satisfy Gate 2.
+emit_retained_gate2_result() {
+  local output="${1:-}"
+  local audit_path="${2:-$output}"
+  if [ -z "$output" ] || [ ! -f "$output" ]; then
+    echo "emit_retained_gate2_result: existing Gate 2 output is required" >&2
+    return 2
+  fi
+  if ! grep -qx 'gate2: passed' "$output" ||
+    ! grep -qx 'runtime_contract=passed' "$output"; then
+    echo "emit_retained_gate2_result: retained output is not a complete passed runtime Gate 2" >&2
+    return 2
+  fi
+
+  local family revision artifact environment host_os host_arch guest_arch commit dirty
+  family="$(gate_output_value 'runtime_family=' "$output")"
+  revision="$(gate_output_value 'runtime_revision=' "$output")"
+  artifact="$(gate_output_value 'runtime_artifact_sha256=' "$output")"
+  environment="$(gate_output_value 'runtime_environment_id=' "$output")"
+  host_os="$(gate_output_value 'runtime_host_os=' "$output")"
+  host_arch="$(gate_output_value 'runtime_host_arch=' "$output")"
+  guest_arch="$(gate_output_value 'runtime_guest_arch=' "$output")"
+  commit="$(gate_output_value 'runtime_build_commit=' "$output")"
+  dirty="$(gate_output_value 'runtime_build_dirty=' "$output")"
+  if [ -z "$family" ] || [ -z "$revision" ] || [ -z "$environment" ] ||
+    [ -z "$host_os" ] || [ -z "$host_arch" ] || [ -z "$guest_arch" ] ||
+    ! printf '%s' "$artifact" | grep -Eq '^[0-9a-f]{64}$' ||
+    ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{12,40}$' ||
+    [ "$dirty" != "false" ]; then
+    echo "emit_retained_gate2_result: retained runtime identity is incomplete or dirty" >&2
+    return 2
+  fi
+
+  local build_provenance="${HIDEOUT_RUNTIME_BUILD_PROVENANCE:-}"
+  if [ -z "$build_provenance" ] || [ ! -f "$build_provenance" ]; then
+    echo "emit_retained_gate2_result: exact runtime build provenance is required" >&2
+    return 2
+  fi
+  if ! jq -e --arg artifact "$artifact" --arg commit "$commit" '
+    .schema == "hideout.runtime-build-provenance/v1" and
+    .source.commit == $commit and .source.dirty == false and
+    .output.sha256 == $artifact
+  ' "$build_provenance" >/dev/null; then
+    echo "emit_retained_gate2_result: retained runtime identity does not match build provenance" >&2
+    return 2
+  fi
+
+  HIDEOUT_RUNTIME_EVIDENCE_REQUIRED=1 \
+    HIDEOUT_RUNTIME_EVIDENCE_FAMILY="$family" \
+    HIDEOUT_RUNTIME_EVIDENCE_REVISION="$revision" \
+    HIDEOUT_RUNTIME_EVIDENCE_ARTIFACT_SHA256="$artifact" \
+    HIDEOUT_RUNTIME_EVIDENCE_ENVIRONMENT_ID="$environment" \
+    HIDEOUT_RUNTIME_EVIDENCE_HOST_OS="$host_os" \
+    HIDEOUT_RUNTIME_EVIDENCE_HOST_ARCH="$host_arch" \
+    HIDEOUT_RUNTIME_EVIDENCE_GUEST_ARCH="$guest_arch" \
+    HIDEOUT_RUNTIME_EVIDENCE_BUILD_COMMIT="$commit" \
+    HIDEOUT_RUNTIME_EVIDENCE_BUILD_DIRTY="$dirty" \
+    emit_gate_result "gate2-lima" "lima" "passed" "" "$audit_path" \
+      "boundary-summary:present" "$environment"
+}
+
+# validate_retained_gate0_candidate <candidate-json> <commit> <package-sha>
+#
+# The signed-candidate workflow writes this receipt only after Gate 0 passes.
+# A later real-gate lane may reuse that result only for the exact source commit
+# and package archive produced by the same workflow.
+validate_retained_gate0_candidate() {
+  local candidate="${1:-}"
+  local commit="${2:-}"
+  local package_sha="${3:-}"
+  if [ -z "$candidate" ] || [ ! -f "$candidate" ] ||
+    ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' ||
+    ! printf '%s' "$package_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+    echo "validate_retained_gate0_candidate: candidate, full commit, and package digest are required" >&2
+    return 2
+  fi
+  if ! jq -e --arg commit "$commit" --arg packageSHA "$package_sha" '
+    .schema == "hideout.public-alpha-candidate/v1" and
+    .sourceCommit == $commit and .sourceDirty == false and
+    .packageSHA256 == $packageSHA and
+    (.workflowRunId | type == "number" and . > 0 and floor == .) and
+    .publicationStatus == "draft-only"
+  ' "$candidate" >/dev/null; then
+    echo "validate_retained_gate0_candidate: candidate does not bind a successful exact workflow package" >&2
+    return 2
+  fi
+}
+
 # reconcile_isolation_gates <id>... — for each expected gate id that has no
 # result file yet, emit a not-run result so every expected isolation gate is
 # accounted for in the manifest (never silently absent). No-op when the evidence

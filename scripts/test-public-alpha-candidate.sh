@@ -9,6 +9,7 @@ tag=""
 package=""
 signing=""
 notarization=""
+candidate_observation=""
 out=""
 upload=0
 declare -a product_evidence=()
@@ -18,6 +19,7 @@ usage() {
 Usage: scripts/test-public-alpha-candidate.sh \
   --tag <vSemVer> --package <tar.gz> \
   --signing-observation <json> --notarization-observation <json> \
+  --candidate-observation <candidate.json> \
   --product-evidence <json> [--product-evidence <json> ...] \
   --out <dir> [--upload-draft]
 
@@ -34,6 +36,7 @@ while [ "$#" -gt 0 ]; do
     --package) package="${2:-}"; shift 2 ;;
     --signing-observation) signing="${2:-}"; shift 2 ;;
     --notarization-observation) notarization="${2:-}"; shift 2 ;;
+    --candidate-observation) candidate_observation="${2:-}"; shift 2 ;;
     --product-evidence) product_evidence+=("${2:-}"); shift 2 ;;
     --out) out="${2:-}"; shift 2 ;;
     --upload-draft) upload=1; shift ;;
@@ -42,7 +45,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$tag" ] && [ -f "$package" ] && [ -f "$signing" ] && [ -f "$notarization" ] && [ -n "$out" ] || {
+[ -n "$tag" ] && [ -f "$package" ] && [ -f "$signing" ] && [ -f "$notarization" ] &&
+  [ -f "$candidate_observation" ] && [ -n "$out" ] || {
   usage >&2
   exit 2
 }
@@ -112,6 +116,15 @@ tar -xzf "$package" -C "$work/package"
 "$hideout" package verify "$work/package/hideout" >/dev/null
 "$hideout" support release package-identity --archive "$package" \
   --out "$out/package-identity.json" >/dev/null
+package_sha="$(jq -r '.artifactSHA256' "$out/package-identity.json")"
+. "$ROOT/scripts/lib/gate-result.sh"
+validate_retained_gate0_candidate "$candidate_observation" "$source_commit" "$package_sha"
+jq -e --arg tag "$tag" --arg version "$version" '
+  .tag == $tag and .version == $version
+' "$candidate_observation" >/dev/null || {
+  echo "public-alpha-candidate: workflow candidate tag or version mismatch" >&2
+  exit 2
+}
 "$hideout" support release observe-package-verification \
   --package-root "$work/package/hideout" --package-identity "$out/package-identity.json" \
   --out "$out/package-verify.json" >/dev/null
@@ -171,7 +184,10 @@ product_evidence+=("$out/host-app-pack-gate2/product-hardening-evidence.json")
 unset HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK
 
 export HIDEOUT_RUNTIME_EVIDENCE_OUT="$out/runtime-gate3"
-scripts/test-phase1.sh --release-candidate >"$out/phase1.out" 2>"$out/phase1.err"
+HIDEOUT_PHASE1_RETAINED_GATE0_CANDIDATE="$candidate_observation" \
+  HIDEOUT_PHASE1_RETAINED_GATE0_PACKAGE_SHA256="$package_sha" \
+  HIDEOUT_PHASE1_RETAINED_GATE2_OUTPUT="$out/runtime-gate2/logs/gate2.out" \
+  scripts/test-phase1.sh --release-candidate >"$out/phase1.out" 2>"$out/phase1.err"
 product_evidence+=("$out/runtime-gate3/product-hardening-evidence.json")
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   echo "public-alpha-candidate: release gates changed the candidate checkout" >&2
@@ -285,7 +301,8 @@ jq -e '.releaseReady == true and .mode == "release-candidate"' "$readiness_raw" 
 
 evidence_root="$work/evidence"
 mkdir -p "$evidence_root/proofs" "$evidence_root/package" "$evidence_root/signing" \
-  "$evidence_root/notarization" "$evidence_root/runtime" "$evidence_root/gates"
+  "$evidence_root/notarization" "$evidence_root/runtime" "$evidence_root/gates" \
+  "$evidence_root/workflow"
 cp "$out/package-identity.json" "$evidence_root/candidate-identity.json"
 cp "$out/release-readiness.json" "$evidence_root/release-readiness.json"
 cp "$work/package/hideout/package-manifest.json" "$evidence_root/package/package-manifest.json"
@@ -295,6 +312,7 @@ cp "$notarization" "$evidence_root/notarization/observation.json"
 cp "$proof_dir/artifacts/gate2.json" "$evidence_root/gates/gate2.json"
 cp "$proof_dir/artifacts/gate3.json" "$evidence_root/gates/gate3.json"
 cp "$runtime_build_provenance" "$evidence_root/runtime/build-provenance.json"
+cp "$candidate_observation" "$evidence_root/workflow/candidate.json"
 cp "$out/proof-registry.json" "$evidence_root/proof-registry.json"
 
 copy_evidence_manifest() {
@@ -329,7 +347,6 @@ evidence_archive="$out/$evidence_name"
   --package-identity "$out/package-identity.json" --out "$evidence_archive" >/dev/null
 "$hideout" support release validate-evidence --archive "$evidence_archive" >/dev/null
 
-package_sha="$(jq -r '.artifactSHA256' "$out/package-identity.json")"
 package_bytes="$(wc -c <"$package" | tr -d '[:space:]')"
 evidence_sha="$(shasum -a 256 "$evidence_archive" | awk '{print $1}')"
 evidence_bytes="$(wc -c <"$evidence_archive" | tr -d '[:space:]')"

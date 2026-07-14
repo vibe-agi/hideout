@@ -139,6 +139,7 @@ HIDEOUT_SECRET_DEFAULT_PROXY=<operator-secret-ref> \
 scripts/test-public-alpha-candidate.sh \
   --tag v0.1.0-alpha.1 \
   --package candidate-assets/hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz \
+  --candidate-observation candidate-assets/candidate.json \
   --signing-observation candidate-assets/signing-observation.json \
   --notarization-observation candidate-assets/notarization-observation.json \
   --out .hideout-release-evidence/033-public-alpha/v0.1.0-alpha.1
