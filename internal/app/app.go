@@ -262,6 +262,7 @@ func (a app) supportUsage() {
 	fmt.Fprintln(a.stdout, "  hideout support release observe-package-verification --package-root <dir> --package-identity <path> --out <path>")
 	fmt.Fprintln(a.stdout, "  hideout support release observe-signing --package-root <dir> --out <path>")
 	fmt.Fprintln(a.stdout, "  hideout support release observe-notarization --package-root <dir> --submission <zip> --result <json> --out <path>")
+	fmt.Fprintln(a.stdout, "  hideout support release redact-public-evidence --input <path> --out <path>")
 	fmt.Fprintln(a.stdout, "  hideout support release build-evidence --root <dir> --package-identity <path> --out <tar.gz>")
 	fmt.Fprintln(a.stdout, "  hideout support release validate-evidence --archive <tar.gz>")
 	fmt.Fprintln(a.stdout, "  hideout support release validate-receipt --receipt <path> --manifest <path>")
@@ -328,6 +329,8 @@ func (a app) supportRelease(args []string) error {
 		return a.supportReleaseObserveSigning(args[1:])
 	case "observe-notarization":
 		return a.supportReleaseObserveNotarization(args[1:])
+	case "redact-public-evidence":
+		return a.supportReleaseRedactPublicEvidence(args[1:])
 	case "build-evidence":
 		return a.supportReleaseBuildEvidence(args[1:])
 	case "validate-evidence":
@@ -339,6 +342,65 @@ func (a app) supportRelease(args []string) error {
 	default:
 		return fmt.Errorf("unknown support release command %q", args[0])
 	}
+}
+
+func (a app) supportReleaseRedactPublicEvidence(args []string) error {
+	fs := flag.NewFlagSet("support release redact-public-evidence", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	input := fs.String("input", "", "candidate-local evidence file")
+	out := fs.String("out", "", "redacted public evidence file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *input == "" || *out == "" {
+		return errors.New("usage: hideout support release redact-public-evidence --input <path> --out <path>")
+	}
+	file, err := os.Open(filepath.Clean(*input))
+	if err != nil {
+		return err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, releasechannel.MaxEvidenceBundleBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if int64(len(data)) > releasechannel.MaxEvidenceBundleBytes {
+		return fmt.Errorf("public evidence input exceeds %d-byte limit", releasechannel.MaxEvidenceBundleBytes)
+	}
+	redacted, review, err := exportboundary.RedactPublicEvidence(data)
+	if err != nil {
+		return err
+	}
+	cleanOut := filepath.Clean(*out)
+	if err := os.MkdirAll(filepath.Dir(cleanOut), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(cleanOut), ".public-evidence-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(redacted); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, cleanOut); err != nil {
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(map[string]any{
+		"status": "passed", "decision": review.Decision, "redactionStages": review.Stages,
+	})
 }
 
 func (a app) supportReleasePackageIdentity(args []string) error {

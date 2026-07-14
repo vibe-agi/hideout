@@ -547,6 +547,30 @@ func TestSupportReadinessReleaseCandidateMissingEvidenceFails(t *testing.T) {
 	}
 }
 
+func TestSupportReleaseRedactPublicEvidence(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "candidate.log")
+	outPath := filepath.Join(root, "public", "evidence.log")
+	if err := os.WriteFile(input, []byte("workspace=/tmp/hideout-candidate/workspace token=cap_0123456789abcdef0123456789abcdef\ngate2: passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := Main([]string{"support", "release", "redact-public-evidence", "--input", input, "--out", outPath}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("redact public evidence failed: code=%d stderr=%s", code, errOut.String())
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "workspace=<redacted:local-path> token=REDACTED\ngate2: passed\n" {
+		t.Fatalf("redacted evidence=%q", got)
+	}
+	if !strings.Contains(out.String(), `"status":"passed"`) || !strings.Contains(out.String(), `"name":"user-data.local-path"`) {
+		t.Fatalf("unexpected review output: %s", out.String())
+	}
+}
+
 func TestHostFSWriteCLIClaimAndDiscard(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

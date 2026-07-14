@@ -187,7 +187,10 @@ gate3="$out/phase1/gates/gate3-hidden-proxy.json"
 }
 jq -e '.result == "passed" and .backend == "lima"' "$gate2" "$gate3" >/dev/null
 
-scripts/test-doc-truth-smoke.sh >"$out/docs-candidate.out"
+docs_candidate_raw="$work/docs-candidate.raw"
+scripts/test-doc-truth-smoke.sh >"$docs_candidate_raw"
+"$hideout" support release redact-public-evidence \
+  --input "$docs_candidate_raw" --out "$out/docs-candidate.out" >/dev/null
 if grep -En 'public package is available|current public alpha' README.md README.zh-CN.md docs/STATUS.md >/dev/null 2>&1; then
   echo "public-alpha-candidate: candidate docs claim publication before a receipt" >&2
   exit 1
@@ -263,8 +266,9 @@ go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.j
   "$proof_dir/manifest.json" >/dev/null
 product_evidence+=("$proof_dir/manifest.json")
 
+readiness_raw="$work/release-readiness.raw.json"
 readiness_args=(
-  support readiness --mode release-candidate --out "$out/release-readiness.json"
+  support readiness --mode release-candidate --out "$readiness_raw"
   --gate2-evidence "$gate2" --gate3-evidence "$gate3"
   --runtime-family developer-standard --package-artifact "$package"
   --signing-observation "$signing" --notarization-observation "$notarization"
@@ -275,7 +279,9 @@ for manifest in "${product_evidence[@]}"; do
   readiness_args+=(--product-evidence "$manifest")
 done
 "$hideout" "${readiness_args[@]}"
-jq -e '.releaseReady == true and .mode == "release-candidate"' "$out/release-readiness.json" >/dev/null
+jq -e '.releaseReady == true and .mode == "release-candidate"' "$readiness_raw" >/dev/null
+"$hideout" support release redact-public-evidence \
+  --input "$readiness_raw" --out "$out/release-readiness.json" >/dev/null
 
 evidence_root="$work/evidence"
 mkdir -p "$evidence_root/proofs" "$evidence_root/package" "$evidence_root/signing" \

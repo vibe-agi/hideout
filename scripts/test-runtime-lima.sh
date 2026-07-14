@@ -216,14 +216,17 @@ cp "$build_provenance" "$evidence_out/build-provenance.json"
 cp "$tmp/env-image.out" "$evidence_out/logs/env-image.out"
 cp "$tmp/gate2.out" "$evidence_out/logs/gate2.out"
 cp "$tmp/drift-verify.json" "$evidence_out/logs/drift-verify.json"
+runtime_lima_raw="$tmp/runtime-lima.raw"
 {
-  cat "$tmp/env-image.out"
-  cat "$tmp/gate2.out"
+	cat "$tmp/env-image.out"
+	cat "$tmp/gate2.out"
   echo "runtime_durable_prefix=passed"
   echo "runtime_mutable_guest_drift=passed"
-  echo "runtime_download_bytes=$download_bytes"
-  echo "runtime_virtual_bytes=$virtual_bytes"
-} >"$evidence_out/logs/runtime-lima.out"
+	echo "runtime_download_bytes=$download_bytes"
+	echo "runtime_virtual_bytes=$virtual_bytes"
+} >"$runtime_lima_raw"
+"$hideout" support release redact-public-evidence \
+  --input "$runtime_lima_raw" --out "$evidence_out/logs/runtime-lima.out" >/dev/null
 
 if grep -E 'HIDEOUT_SECRET_[A-Z0-9_]+[=:]|\b(cap|ui|claim)_[0-9a-f]{16,}\b|hostfs-overlay/objects/' \
     "$evidence_out/logs/runtime-lima.out" >/dev/null 2>&1; then

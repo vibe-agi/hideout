@@ -112,6 +112,12 @@ for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh \
   scripts/test-runtime-lima.sh scripts/test-env-image.sh scripts/test-dogfood-cli-smoke.sh; do
   grep -F 'hideout_mktemp_lima_home' "$gate" >/dev/null
 done
+grep -q 'docs_candidate_raw=' scripts/test-public-alpha-candidate.sh
+if [ "$(grep -c 'support release redact-public-evidence' scripts/test-public-alpha-candidate.sh)" -ne 2 ]; then
+  echo "public-alpha-release: candidate docs and readiness evidence must pass the Go-owned public redaction boundary" >&2
+  exit 1
+fi
+grep -q 'readiness_raw=' scripts/test-public-alpha-candidate.sh
 grep -F 'public_alpha_cleanup_workflow_state' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'Retain bounded workflow cleanup receipt' \

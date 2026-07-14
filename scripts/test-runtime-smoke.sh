@@ -55,6 +55,7 @@ test -x scripts/test-runtime-agent-install.sh
 grep -q 'HIDEOUT_GATE2_RUNTIME_MODE=1' scripts/test-runtime-lima.sh
 grep -q 'prepare_guest_node is forbidden in runtime acceptance mode' scripts/test-gate2-lima.sh
 grep -q 'runtime_mutable_guest_drift=passed' scripts/test-runtime-lima.sh
+grep -q 'support release redact-public-evidence' scripts/test-runtime-lima.sh
 grep -q 'runtime_hideout_system_bootstrap=required-and-run' scripts/test-gate2-lima.sh
 grep -q 'runtime_package_tool_provisioning=not-run' scripts/test-gate2-lima.sh
 grep -q 'runtime_package_tool_provisioning_check=passed' scripts/test-gate2-lima.sh

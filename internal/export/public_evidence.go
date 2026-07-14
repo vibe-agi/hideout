@@ -17,12 +17,35 @@ var publicEvidenceLocalPathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?mi)(^|[[:space:]"'=:(])[a-z]:\\Users\\[^\\[:space:]"']+\\[^[:space:]"']*`),
 }
 
+var publicEvidenceEscapedLocalPathPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?mi)(^|[[:space:]"'=:(])[a-z]:\\\\Users\\\\[^\\[:space:]"']+\\\\[^[:space:]"']*`),
+}
+
 // PublicEvidenceReview is recomputed from the exact public bytes. It makes the
 // existing export decision and deterministic redaction stages independently
 // verifiable instead of trusting a producer-owned "passed" flag.
 type PublicEvidenceReview struct {
 	Decision ExportDecision
 	Stages   []RedactionStage
+}
+
+// RedactPublicEvidence applies the two deterministic stages required before
+// release evidence can leave the machine. ReviewPublicEvidence independently
+// verifies the resulting bytes so producers cannot self-declare success.
+func RedactPublicEvidence(data []byte) ([]byte, PublicEvidenceReview, error) {
+	text := audit.RedactString(string(data))
+	for _, pattern := range publicEvidenceEscapedLocalPathPatterns {
+		text = pattern.ReplaceAllString(text, `${1}<redacted:local-path>`)
+	}
+	for _, pattern := range publicEvidenceLocalPathPatterns {
+		text = pattern.ReplaceAllString(text, `${1}<redacted:local-path>`)
+	}
+	redacted := []byte(text)
+	review, err := ReviewPublicEvidence(redacted)
+	if err != nil {
+		return nil, PublicEvidenceReview{}, err
+	}
+	return redacted, review, nil
 }
 
 func ReviewPublicEvidence(data []byte) (PublicEvidenceReview, error) {
