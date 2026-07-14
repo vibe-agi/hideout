@@ -94,10 +94,15 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$p12" -k "$keychain" -P "$DEVELOPER_ID_P12_PASSWORD" -A -t cert -f pkcs12
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
-          security find-identity -v -p codesigning "$keychain" | grep -F "$SIGNING_IDENTITY" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          identity_hash=$(
+            security find-identity -v -p codesigning "$keychain" |
+              awk -v expected="\"$SIGNING_IDENTITY\"" 'index($0, expected) { print $2; exit }'
+          )
+          [[ "$identity_hash" =~ ^[0-9A-Fa-f]{40}$ ]]
           {
             echo "HIDEOUT_SIGNING_KEYCHAIN=$keychain"
-            echo "HIDEOUT_SIGNING_IDENTITY=$SIGNING_IDENTITY"
+            echo "HIDEOUT_SIGNING_IDENTITY=$identity_hash"
             echo "HIDEOUT_NOTARY_KEY=$notary_key"
             echo "HIDEOUT_NOTARY_KEY_ID=$NOTARY_KEY_ID"
             echo "HIDEOUT_NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
@@ -115,6 +120,7 @@ jobs:
           signed=0
           while IFS= read -r -d '' path; do
             if /usr/bin/file -b "$path" | grep -q 'Mach-O'; then
+              echo "candidate: signing ${path#"$stage/hideout/"}"
               /usr/bin/codesign --force --options runtime --timestamp \
                 --keychain "$HIDEOUT_SIGNING_KEYCHAIN" \
                 --sign "$HIDEOUT_SIGNING_IDENTITY" "$path"

@@ -138,6 +138,37 @@ func TestPublicTruthWorkflowSkipsCandidateNeutralRepositoryState(t *testing.T) {
 	}
 }
 
+func TestCandidateWorkflowSelectsImportedSigningIdentityByHash(t *testing.T) {
+	workflow := readWorkflowContract(t, "hideout-alpha-candidate.yml")
+	job, ok := workflow.Jobs["candidate"]
+	if !ok {
+		t.Fatal("candidate workflow must define the candidate job")
+	}
+
+	var importStep, signingStep string
+	for _, step := range job.Steps {
+		switch step.Name {
+		case "Import protected Developer ID and notarization credentials":
+			importStep = step.Run
+		case "Stage once, sign every Mach-O, and finalize once":
+			signingStep = step.Run
+		}
+	}
+	for _, required := range []string{
+		`security list-keychains -d user -s "$keychain"`,
+		`identity_hash=$(`,
+		`security find-identity -v -p codesigning "$keychain"`,
+		`echo "HIDEOUT_SIGNING_IDENTITY=$identity_hash"`,
+	} {
+		if !strings.Contains(importStep, required) {
+			t.Errorf("candidate credential import must contain %q", required)
+		}
+	}
+	if !strings.Contains(signingStep, `--sign "$HIDEOUT_SIGNING_IDENTITY"`) {
+		t.Fatal("candidate signing must use the validated identity hash")
+	}
+}
+
 type workflowContract struct {
 	On struct {
 		Push struct {
