@@ -245,7 +245,9 @@ scripts/test-release-hardening-smoke.sh
 
 # Public alpha channel (033): strict release/workflow contracts plus a package
 # install in a fresh HOME with no source tree or Go on PATH. This local lane
-# does not sign, notarize, publish, create a Lima guest, or claim public release.
+# withholds Lima and requires doctor to report that missing prerequisite
+# honestly. It does not sign, notarize, publish, create a Lima guest, or claim
+# public release.
 scripts/test-public-alpha-release.sh --contract-only
 public_alpha_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-public-alpha-gate0.XXXXXX")"
 scripts/package-local.sh \
@@ -259,6 +261,8 @@ jq -e '
   .install.sourceCheckoutUsed == false and
   .install.goOnPATH == false and
   .install.profileCreated == false and
+  .install.doctorLight == "prerequisite-missing" and
+  .prerequisites.lima.status == "missing" and
   .realLima.status == "not-run"
 ' "$public_alpha_tmp/clean-install.json" >/dev/null
 rm -rf "$public_alpha_tmp"

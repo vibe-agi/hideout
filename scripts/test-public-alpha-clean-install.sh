@@ -59,8 +59,16 @@ package_root="$tmp/hideout"
 [ -x "$package_root/install.sh" ] || { echo "public-alpha-clean-install: package installer missing" >&2; exit 1; }
 cd "$tmp"
 
-if command -v limactl >/dev/null 2>&1; then
+lima_status="missing"
+lima_version=""
+if [ "$real_lima" -eq 1 ]; then
+  command -v limactl >/dev/null 2>&1 || {
+    echo "public-alpha-clean-install: --real-lima requires limactl" >&2
+    exit 127
+  }
   ln -s "$(command -v limactl)" "$tool_bin/limactl"
+  lima_status="available"
+  lima_version="$("$tool_bin/limactl" --version | head -n 1)"
 fi
 clean_path="$tool_bin:/usr/bin:/bin:/usr/sbin:/sbin"
 if PATH="$clean_path" command -v go >/dev/null 2>&1; then
@@ -75,11 +83,30 @@ hideout="$prefix/bin/hideout"
 HOME="$home" PATH="$clean_path" "$hideout" version --json >"$tmp/version.json"
 HOME="$home" PATH="$clean_path" "$hideout" package verify "$prefix" >"$tmp/verify.out"
 doctor_rc=0
+doctor_status="passed"
 HOME="$home" PATH="$clean_path" HIDEOUT_STORE_ROOT="$store" \
   "$hideout" doctor --level light --format json --workspace "$workspace" \
   >"$tmp/doctor.json" \
   2>"$tmp/doctor.err" || doctor_rc=$?
-if [ "$doctor_rc" -ne 0 ]; then
+if [ "$real_lima" -eq 0 ]; then
+  if [ "$doctor_rc" -eq 0 ]; then
+    echo "public-alpha-clean-install: doctor hid the missing Lima prerequisite" >&2
+    exit 1
+  fi
+  if ! jq -e '
+    [.findings[] | select(.status == "error")] as $errors |
+    ($errors | length) == 1 and
+    $errors[0].checkId == "backend" and
+    ($errors[0].summary | contains("limactl is required for lima backend"))
+  ' "$tmp/doctor.json" >/dev/null; then
+    echo "public-alpha-clean-install: doctor reported errors beyond the expected missing Lima prerequisite" >&2
+    jq -r '.findings[] | select(.status == "error") | "  \(.checkId): \(.summary)"' \
+      "$tmp/doctor.json" >&2 || true
+    cat "$tmp/doctor.err" >&2
+    exit "$doctor_rc"
+  fi
+  doctor_status="prerequisite-missing"
+elif [ "$doctor_rc" -ne 0 ]; then
   echo "public-alpha-clean-install: packaged doctor failed (exit $doctor_rc)" >&2
   jq -r '.findings[] | select(.status == "error") | "  \(.checkId): \(.summary)"' \
     "$tmp/doctor.json" >&2 || true
@@ -110,7 +137,6 @@ run_status="not-run"
 run_reason="local contract lane does not claim a real Lima run"
 environment_id=""
 if [ "$real_lima" -eq 1 ]; then
-  [ -x "$tool_bin/limactl" ] || { echo "public-alpha-clean-install: --real-lima requires limactl" >&2; exit 127; }
   profile="alpha-direct"
   HOME="$home" PATH="$clean_path" HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" init --profile "$profile" --template dev --backend lima \
@@ -136,12 +162,16 @@ jq -n \
   --arg packageSHA256 "$package_sha" \
   --arg version "$(jq -r '.productVersion' "$tmp/version.json")" \
   --arg commit "$(jq -r '.sourceCommit' "$tmp/version.json")" \
+  --arg doctorStatus "$doctor_status" \
+  --arg limaStatus "$lima_status" --arg limaVersion "$lima_version" \
   --arg runStatus "$run_status" --arg runReason "$run_reason" \
   --arg environmentId "$environment_id" \
   '{schema:"hideout.public-alpha-clean-install/v1",observedAt:$observedAt,
     package:{sha256:$packageSHA256,productVersion:$version,sourceCommit:$commit},
     install:{status:"passed",sourceCheckoutUsed:false,goOnPATH:false,profileCreated:false,
-      version:"passed",packageVerify:"passed",doctorLight:"passed"},
+      version:"passed",packageVerify:"passed",doctorLight:$doctorStatus},
+    prerequisites:{lima:({status:$limaStatus} +
+      (if $limaVersion == "" then {} else {version:$limaVersion} end))},
     realLima:({status:$runStatus} +
       (if $runReason == "" then {environmentId:$environmentId,network:"direct",targetUID:"non-root"}
        else {reason:$runReason} end))}' >"$report"
