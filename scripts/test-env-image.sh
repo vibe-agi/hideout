@@ -32,7 +32,6 @@ require_command() {
   fi
 }
 require_command limactl
-require_command go
 
 # Lima derives Unix socket paths below LIMA_HOME. Keep the real-backend gate
 # root short even when macOS TMPDIR is deeply nested.
@@ -43,7 +42,17 @@ workspace="$workdir/workspace"
 mkdir -p "$HIDEOUT_STORE_ROOT" "$LIMA_HOME" "$workspace"
 
 bin="$workdir/hideout"
-go build -o "$bin" ./cmd/hideout
+if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+  [ -x "$HIDEOUT_RELEASE_BINARY" ] || {
+    echo "env-image: HIDEOUT_RELEASE_BINARY is not executable" >&2
+    exit 126
+  }
+  cp "$HIDEOUT_RELEASE_BINARY" "$bin"
+  chmod 0700 "$bin"
+else
+  require_command go
+  go build -o "$bin" ./cmd/hideout
+fi
 
 cleanup() {
   status=$?

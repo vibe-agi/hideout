@@ -92,6 +92,12 @@ grep -F '.schema == "hideout.public-alpha-validation-context/v1" and' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'public_alpha_cleanup_root "$work" "$out/cleanup-report.json"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'export HIDEOUT_LIMA_SHORT_TMPDIR="$work"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'HIDEOUT_RELEASE_BINARY is not executable' \
+  scripts/test-env-image.sh >/dev/null
 grep -F 'public_alpha_cleanup_workflow_state' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'Retain bounded workflow cleanup receipt' \

@@ -38,6 +38,12 @@ The candidate job uses a staged package-tree/finalize contract:
    artifact; and
 10. retains them in a private draft release with an exact asset allowlist.
 
+Real Lima validation MUST run below a short, candidate-owned temporary root so
+macOS Unix socket limits cannot turn a valid package into a false failure. The
+same root remains inside the candidate cleanup domain. Tests that accept
+`HIDEOUT_RELEASE_BINARY` MUST exercise that packaged binary rather than rebuild
+an equivalent command from the source checkout.
+
 Before the first publication, a failed or superseded candidate MAY replace the
 same tag only through an explicit `replace_private_draft` workflow input. The
 workflow MUST re-observe that the existing release is still a draft prerelease

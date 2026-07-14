@@ -76,10 +76,14 @@ fi
 
 out="$(mkdir -p "$out" && cd "$out" && pwd -P)"
 candidate_parent_tmp="${TMPDIR:-/tmp}"
-work="$(mktemp -d "$candidate_parent_tmp/hideout-public-alpha-candidate.XXXXXX")"
-candidate_tmp="$work/tmp"
+candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"
+# Real Lima lanes append instance names and socket suffixes below TMPDIR. Keep
+# the candidate-owned resource domain short enough for macOS UNIX_PATH_MAX.
+work="$(mktemp -d "$candidate_short_tmp/hpa.XXXXXX")"
+candidate_tmp="$work/t"
 mkdir -p "$candidate_tmp"
 export TMPDIR="$candidate_tmp"
+export HIDEOUT_LIMA_SHORT_TMPDIR="$work"
 cleanup_complete=0
 
 perform_cleanup() {
