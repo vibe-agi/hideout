@@ -43,7 +43,19 @@ test "$(gate_output_value 'Hideout environment name: ' "$optional_output")" = "w
 # digest, never an unbound caller-supplied log path.
 retained_dir="$tmp/retained-gate2"
 mkdir -p "$retained_dir/logs"
-printf 'gate2: passed\n' >"$retained_dir/logs/runtime-lima.out"
+cat >"$retained_dir/logs/runtime-lima.out" <<'EOF'
+projection_code_open=passed
+projection_hostfs_authorized=passed
+projection_trusted_grant=passed
+host_app_external_old_session_immutable=passed
+host_app_external_workspace=passed
+host_app_external_hostfs=passed
+host_app_external_unsafe_identity_denied=passed
+host_app_external_disable_no_fallback=passed
+host_app_external_revoke_no_fallback=passed
+host_app_external_gate2=passed
+gate2: passed
+EOF
 retained_sha="$(gate_sha256_file "$retained_dir/logs/runtime-lima.out")"
 retained_commit="$(git rev-parse HEAD)"
 jq -n --arg commit "$retained_commit" --arg sha "$retained_sha" '{
@@ -82,6 +94,30 @@ jq -n --arg commit "$retained_commit" --arg sha "$retained_sha" '{
 resolved_retained_log="$(resolve_retained_gate2_log "$retained_dir/product-hardening-evidence.json" "$retained_commit")"
 expected_retained_log="$(cd "$retained_dir/logs" && pwd -P)/runtime-lima.out"
 test "$resolved_retained_log" = "$expected_retained_log"
+retained_host_app="$tmp/retained-host-app"
+scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real \
+  --gate2-evidence "$retained_dir/product-hardening-evidence.json" \
+  --out "$retained_host_app" >/dev/null
+jq -e '
+  (.dirty | type) == "boolean" and
+  any(.proofs[];
+    .proofId == "032.host-app-pack.real-gate2.external" and
+    .mode == "real-gate" and .status == "passed" and
+    .evidenceClass == "host-app-pack-external-real-gate2")
+' "$retained_host_app/product-hardening-evidence.json" >/dev/null
+grep -v '^host_app_external_gate2=passed$' "$retained_dir/logs/runtime-lima.out" \
+  >"$retained_dir/logs/missing-external-marker.out"
+missing_external_sha="$(gate_sha256_file "$retained_dir/logs/missing-external-marker.out")"
+jq --arg sha "$missing_external_sha" '
+  .proofs[0].artifacts[0].path = "logs/missing-external-marker.out" |
+  .proofs[0].artifacts[0].sha256 = $sha
+' "$retained_dir/product-hardening-evidence.json" >"$retained_dir/missing-external-marker.json"
+if scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real \
+  --gate2-evidence "$retained_dir/missing-external-marker.json" \
+  --out "$tmp/missing-external-host-app" >/dev/null 2>&1; then
+  echo "isolation-evidence-smoke: retained Host App proof accepted a missing marker" >&2
+  exit 1
+fi
 printf 'outside\n' >"$tmp/outside-gate2.out"
 outside_sha="$(gate_sha256_file "$tmp/outside-gate2.out")"
 ln -s "$tmp/outside-gate2.out" "$retained_dir/logs/escape.out"

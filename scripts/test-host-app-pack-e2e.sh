@@ -7,14 +7,16 @@ cd "$ROOT"
 mode="local-fast"
 require_real=0
 out=""
+gate2_evidence=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --local-fast) mode="local-fast"; shift ;;
     --real-gate2) mode="real-gate2"; shift ;;
     --require-real) require_real=1; shift ;;
+    --gate2-evidence) gate2_evidence="${2:-}"; shift 2 ;;
     --out) out="${2:-}"; shift 2 ;;
     -h|--help)
-      echo "usage: scripts/test-host-app-pack-e2e.sh [--local-fast|--real-gate2] [--require-real] [--out <dir>]"
+      echo "usage: scripts/test-host-app-pack-e2e.sh [--local-fast|--real-gate2] [--require-real] [--gate2-evidence <manifest>] [--out <dir>]"
       exit 0
       ;;
     *) echo "host-app-pack-e2e: unknown argument: $1" >&2; exit 2 ;;
@@ -132,7 +134,13 @@ if [ "$mode" = "local-fast" ]; then
 fi
 
 reason=""
-if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+retained_gate2_log=""
+if [ -n "$gate2_evidence" ]; then
+  . scripts/lib/retained-gate2-evidence.sh
+  if ! retained_gate2_log="$(resolve_retained_gate2_log "$gate2_evidence" "$(git_commit)")"; then
+    reason="retained Gate 2 evidence is invalid: $gate2_evidence"
+  fi
+elif [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
   reason="real Gate 2 requires a macOS arm64 host"
 elif ! command -v limactl >/dev/null 2>&1; then
   reason="limactl is unavailable"
@@ -152,13 +160,18 @@ fi
 
 raw_real_log="$(mktemp "${TMPDIR:-/tmp}/hideout-host-app-pack-gate2.raw.XXXXXX")"
 raw_real_err="$(mktemp "${TMPDIR:-/tmp}/hideout-host-app-pack-gate2.err.XXXXXX")"
-if ! HIDEOUT_GATE2_REQUIRE_PROJECTION=1 \
-  HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external" \
-  scripts/test-gate2-lima.sh >"$raw_real_log" 2>"$raw_real_err"; then
-  echo "host-app-pack-e2e: real Gate 2 failed; showing bounded diagnostic tails" >&2
-  tail -n 160 "$raw_real_log" >&2
-  tail -n 160 "$raw_real_err" >&2
-  exit 1
+if [ -n "$retained_gate2_log" ]; then
+  cp "$retained_gate2_log" "$raw_real_log"
+  : >"$raw_real_err"
+else
+  if ! HIDEOUT_GATE2_REQUIRE_PROJECTION=1 \
+    HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external" \
+    scripts/test-gate2-lima.sh >"$raw_real_log" 2>"$raw_real_err"; then
+    echo "host-app-pack-e2e: real Gate 2 failed; showing bounded diagnostic tails" >&2
+    tail -n 160 "$raw_real_log" >&2
+    tail -n 160 "$raw_real_err" >&2
+    exit 1
+  fi
 fi
 required_markers=(
   projection_code_open \

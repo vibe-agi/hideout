@@ -97,6 +97,15 @@ grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'export HIDEOUT_LIMA_SHORT_TMPDIR="$work"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+for consumer in test-hostfs-visibility-e2e.sh test-host-capability-projection-e2e.sh \
+  test-host-app-pack-e2e.sh; do
+  grep -F "$consumer --real-gate2 --require-real" \
+    scripts/test-public-alpha-candidate.sh >/dev/null
+done
+grep -F -- '--gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'HIDEOUT_RELEASE_BINARY is not executable' \
   scripts/test-env-image.sh >/dev/null
 for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh \

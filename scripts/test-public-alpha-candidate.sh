@@ -138,6 +138,8 @@ export HIDEOUT_LINUX_DNS_STUB_PATH="$work/package/hideout/bin/hideout-dns-stub-l
 export HIDEOUT_RUNTIME_PACKAGE_IDENTITY="$out/package-identity.json"
 export HIDEOUT_RELEASE_EVIDENCE_DIR="$out/phase1"
 export HIDEOUT_RUNTIME_EVIDENCE_OUT="$out/runtime-gate2"
+export HIDEOUT_GATE2_REQUIRE_PROJECTION=1
+export HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external"
 mkdir -p "$HIDEOUT_RELEASE_EVIDENCE_DIR"
 
 scripts/test-runtime-lima.sh >"$out/runtime-gate2.out" 2>"$out/runtime-gate2.err"
@@ -145,10 +147,37 @@ product_evidence+=("$out/runtime-gate2/product-hardening-evidence.json")
 runtime_build_provenance="$out/runtime-gate2/build-provenance.json"
 [ -f "$runtime_build_provenance" ] || { echo "public-alpha-candidate: runtime build provenance missing" >&2; exit 1; }
 export HIDEOUT_RUNTIME_BUILD_PROVENANCE="$runtime_build_provenance"
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  echo "public-alpha-candidate: real runtime gate changed the candidate checkout" >&2
+  git status --short >&2
+  exit 1
+fi
+
+# Reuse the one retained real Gate 2 run for every feature-level proof. Each
+# consumer independently verifies the same-commit envelope, artifact digest,
+# and its own required markers; no local or hand-written evidence is promoted.
+scripts/test-hostfs-visibility-e2e.sh --real-gate2 --require-real \
+  --gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
+  --out "$out/hostfs-visibility-gate2"
+product_evidence+=("$out/hostfs-visibility-gate2/product-hardening-evidence.json")
+scripts/test-host-capability-projection-e2e.sh --real-gate2 --require-real \
+  --gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
+  --out "$out/projection-gate2"
+product_evidence+=("$out/projection-gate2/product-hardening-evidence.json")
+scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real \
+  --gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
+  --out "$out/host-app-pack-gate2"
+product_evidence+=("$out/host-app-pack-gate2/product-hardening-evidence.json")
+unset HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK
 
 export HIDEOUT_RUNTIME_EVIDENCE_OUT="$out/runtime-gate3"
 scripts/test-phase1.sh --release-candidate >"$out/phase1.out" 2>"$out/phase1.err"
 product_evidence+=("$out/runtime-gate3/product-hardening-evidence.json")
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  echo "public-alpha-candidate: release gates changed the candidate checkout" >&2
+  git status --short >&2
+  exit 1
+fi
 
 gate2="$out/phase1/gates/gate2-lima.json"
 gate3="$out/phase1/gates/gate3-hidden-proxy.json"
