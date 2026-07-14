@@ -76,16 +76,19 @@ external prerequisite; an unsigned build is developer-preview only.
 
 **Decision**: Sign every host Mach-O with Developer ID Application, secure
 timestamp, and hardened runtime; detect Mach-O by file content rather than a
-manifest label. Core independently runs strict signature and system-policy
-checks and records the first signing authority, Team ID, code identity, and
-timestamp state. Package-declared identity is never authoritative.
+manifest label. Core independently runs strict signature checks and, after an
+accepted submission, the `codesign --check-notarization -R=notarized` check
+Apple specifies for non-app code. It records the first signing authority, Team
+ID, code identity, timestamp state, and online-ticket result. Package-declared
+identity is never authoritative.
 
 **Rationale**: Apple's notarization guidance requires a valid Developer ID,
 secure timestamp, and hardened runtime for custom workflows. See
 [Resolving common notarization issues](https://developer.apple.com/documentation/security/resolving-common-notarization-issues).
-`internal/hostcap/appidentity_darwin.go:78-123` already establishes the pattern
-of bounded `codesign` plus `spctl` observation but needs a release-focused
-observer that handles command-line binaries and preserves the leaf authority.
+`internal/hostcap/appidentity_darwin.go:78-123` establishes the app-bundle
+identity pattern, but `spctl --type execute` is not the authoritative ticket
+probe for raw command-line binaries. The release observer therefore uses the
+non-app `codesign` notarization requirement and preserves the leaf authority.
 
 **Alternatives considered**:
 

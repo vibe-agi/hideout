@@ -54,13 +54,13 @@ func ObserveDarwinSigning(ctx context.Context, root string, paths []string, now 
 		} else if observation.TeamID != team || observation.CommonName != authority {
 			return SigningObservation{}, errors.New("package Mach-O signing identities differ")
 		}
-		spctl := exec.CommandContext(ctx, "/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", path)
-		_, spctlErr := spctl.CombinedOutput()
+		notarized := exec.CommandContext(ctx, "/usr/bin/codesign", "--verify", "--strict", "--verbose=4", "--check-notarization", "-R=notarized", path)
+		_, notarizedErr := notarized.CombinedOutput()
 		flags := fields["flags"]
 		observation.Binaries = append(observation.Binaries, BinarySignature{
 			Path: rel, Identifier: fields["Identifier"], CDHash: fields["CDHash"],
 			SecureTimestamp: fields["Timestamp"] != "", HardenedRuntime: strings.Contains(flags, "runtime"),
-			StrictVerified: true, SystemPolicyValid: spctlErr == nil,
+			StrictVerified: true, OnlineNotarizationValid: notarizedErr == nil,
 		})
 	}
 	if err := observation.Validate(true); err != nil {

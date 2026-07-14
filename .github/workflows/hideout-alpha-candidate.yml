@@ -149,21 +149,50 @@ jobs:
             --key-id "$HIDEOUT_NOTARY_KEY_ID" \
             --issuer "$HIDEOUT_NOTARY_ISSUER_ID" \
             --wait --output-format json >"$result"
-          # System policy assessment is meaningful only after the exact signed
-          # bytes have an accepted online notarization record.
-          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release observe-signing \
-            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
-            --out "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" >/dev/null
+          notary_status=$(jq -r '.status // "" | ascii_downcase' "$result")
+          notary_id=$(jq -r '.id // ""' "$result")
+          if [ "$notary_status" != "accepted" ]; then
+            echo "candidate: Apple notarization was not accepted" >&2
+            jq -c '{id,status,message}' "$result" >&2
+            notary_log="$HIDEOUT_ALPHA_ROOT/notary-log.json"
+            if [ -n "$notary_id" ] && xcrun notarytool log "$notary_id" "$notary_log" \
+              --key "$HIDEOUT_NOTARY_KEY" \
+              --key-id "$HIDEOUT_NOTARY_KEY_ID" \
+              --issuer "$HIDEOUT_NOTARY_ISSUER_ID" >/dev/null 2>&1; then
+              jq -c '{statusSummary,issues:[.issues[]? | {severity,code,path,message,docUrl}]}' \
+                "$notary_log" >&2
+            fi
+            exit 1
+          fi
+          echo "candidate: Apple notarization accepted for submission $notary_id"
           "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release observe-notarization \
             --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
             --submission "$submission" --result "$result" \
             --out "$HIDEOUT_ALPHA_ROOT/output/notarization-observation.json" >/dev/null
-          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release validate-signing \
-            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
-            --observation "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" >/dev/null
           "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release validate-notarization \
             --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
             --observation "$HIDEOUT_ALPHA_ROOT/output/notarization-observation.json" >/dev/null
+          signing_error="$HIDEOUT_ALPHA_ROOT/signing-observation-error.log"
+          signing_observed=false
+          for attempt in {1..12}; do
+            if "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release observe-signing \
+              --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
+              --out "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" \
+              >/dev/null 2>"$signing_error"; then
+              signing_observed=true
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 10
+            fi
+          done
+          if [ "$signing_observed" != true ]; then
+            cat "$signing_error" >&2
+            exit 1
+          fi
+          "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" support release validate-signing \
+            --package-root "$HIDEOUT_ALPHA_ROOT/stage/hideout" \
+            --observation "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" >/dev/null
 
       - name: Run local release contracts and retain bounded candidate metadata
         run: |

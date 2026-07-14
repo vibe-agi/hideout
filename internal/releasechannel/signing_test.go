@@ -10,7 +10,7 @@ func TestSigningAndNotarizationObservations(t *testing.T) {
 		Schema: SigningObservationSchema, Status: "developer-id-verified", TeamID: "TEAM",
 		CommonName: "Developer ID Application: Test (TEAM)", ObservedAt: time.Now(), HostOS: "darwin",
 		PackageManifestSHA256: testDigest,
-		Binaries:              []BinarySignature{{Path: "bin/hideout", Identifier: "hideout", CDHash: "ABC", SecureTimestamp: true, HardenedRuntime: true, StrictVerified: true, SystemPolicyValid: true}},
+		Binaries:              []BinarySignature{{Path: "bin/hideout", Identifier: "hideout", CDHash: "ABC", SecureTimestamp: true, HardenedRuntime: true, StrictVerified: true, OnlineNotarizationValid: true}},
 	}
 	if err := signing.Validate(true); err != nil {
 		t.Fatal(err)
@@ -22,6 +22,7 @@ func TestSigningAndNotarizationObservations(t *testing.T) {
 	for _, mutate := range []func(*SigningObservation){
 		func(o *SigningObservation) { o.Status = "developer-preview-unsigned" },
 		func(o *SigningObservation) { o.Binaries[0].HardenedRuntime = false },
+		func(o *SigningObservation) { o.Binaries[0].OnlineNotarizationValid = false },
 		func(o *SigningObservation) { o.CommonName = "Apple Development: Test" },
 	} {
 		copy := signing

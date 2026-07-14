@@ -29,13 +29,13 @@ type SigningObservation struct {
 }
 
 type BinarySignature struct {
-	Path              string `json:"path"`
-	Identifier        string `json:"identifier"`
-	CDHash            string `json:"cdHash"`
-	SecureTimestamp   bool   `json:"secureTimestamp"`
-	HardenedRuntime   bool   `json:"hardenedRuntime"`
-	StrictVerified    bool   `json:"strictVerified"`
-	SystemPolicyValid bool   `json:"systemPolicyValid"`
+	Path                    string `json:"path"`
+	Identifier              string `json:"identifier"`
+	CDHash                  string `json:"cdHash"`
+	SecureTimestamp         bool   `json:"secureTimestamp"`
+	HardenedRuntime         bool   `json:"hardenedRuntime"`
+	StrictVerified          bool   `json:"strictVerified"`
+	OnlineNotarizationValid bool   `json:"onlineNotarizationValid"`
 }
 
 type NotarizationObservation struct {
@@ -70,8 +70,23 @@ func (o SigningObservation) Validate(public bool) error {
 		if err := ValidateRelativePath(binary.Path); err != nil {
 			return err
 		}
-		if seen[binary.Path] || binary.Identifier == "" || binary.CDHash == "" || !binary.SecureTimestamp || !binary.HardenedRuntime || !binary.StrictVerified || !binary.SystemPolicyValid {
-			return fmt.Errorf("binary signing observation for %q is incomplete", binary.Path)
+		if seen[binary.Path] {
+			return fmt.Errorf("binary signing observation for %q is duplicated", binary.Path)
+		}
+		if binary.Identifier == "" || binary.CDHash == "" {
+			return fmt.Errorf("binary signing observation for %q lacks code identity", binary.Path)
+		}
+		if !binary.SecureTimestamp {
+			return fmt.Errorf("binary signing observation for %q lacks a secure timestamp", binary.Path)
+		}
+		if !binary.HardenedRuntime {
+			return fmt.Errorf("binary signing observation for %q lacks hardened runtime", binary.Path)
+		}
+		if !binary.StrictVerified {
+			return fmt.Errorf("binary signing observation for %q failed strict verification", binary.Path)
+		}
+		if !binary.OnlineNotarizationValid {
+			return fmt.Errorf("binary signing observation for %q failed the online notarization check", binary.Path)
 		}
 		seen[binary.Path] = true
 	}

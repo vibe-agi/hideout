@@ -25,8 +25,8 @@ Schema 2020-12; Markdown
 
 **Primary Dependencies**: Existing `packagekit`, `productevidence`,
 `releasecompat`, `runtimecatalog`, `recovery`, and schema validator packages;
-macOS `codesign`, `spctl`, and `notarytool`; `gh`, `jq`, SHA-256 tools, and
-`limactl`
+macOS `codesign` (including online notarization-ticket checks) and `notarytool`;
+`gh`, `jq`, SHA-256 tools, and `limactl`
 
 **Storage**: Strict JSON manifests and receipts, `tar.gz` package/evidence
 assets, package install state below the install prefix, durable operator state

@@ -102,10 +102,16 @@ if rg -n -- '--gate3-proxy-secret|--source-commit' \
   exit 1
 fi
 notary_line="$(grep -n 'xcrun notarytool submit' .github/workflows/hideout-alpha-candidate.yml | cut -d: -f1)"
+notary_observation_line="$(grep -n 'support release observe-notarization' .github/workflows/hideout-alpha-candidate.yml | cut -d: -f1)"
 signing_observation_line="$(grep -n 'support release observe-signing' .github/workflows/hideout-alpha-candidate.yml | cut -d: -f1)"
-if [ -z "$notary_line" ] || [ -z "$signing_observation_line" ] ||
-  [ "$signing_observation_line" -le "$notary_line" ]; then
-  echo "public-alpha-release: system-policy signing observation must follow notarization submission" >&2
+if [ -z "$notary_line" ] || [ -z "$notary_observation_line" ] ||
+  [ -z "$signing_observation_line" ] || [ "$notary_observation_line" -le "$notary_line" ] ||
+  [ "$signing_observation_line" -le "$notary_observation_line" ]; then
+  echo "public-alpha-release: accepted notarization must precede online-ticket signing observation" >&2
+  exit 1
+fi
+if ! grep -q -- '--check-notarization' internal/releasechannel/signing_darwin.go; then
+  echo "public-alpha-release: command-line Mach-O observation must check the online notarization ticket" >&2
   exit 1
 fi
 if grep -REn 'mktemp (-d )?"?/tmp/' scripts >/dev/null; then
@@ -216,7 +222,7 @@ jq -n --arg observedAt "$observed_at" --arg manifestSHA "$package_manifest_sha" 
    teamId:"FIXTURETEAM",commonName:"Developer ID Application: no-publish fixture",
    observedAt:$observedAt,hostOS:"darwin",packageManifestSHA256:$manifestSHA,
    binaries:[{path:"bin/hideout",identifier:"fixture.hideout",cdHash:"fixture",
-     secureTimestamp:true,hardenedRuntime:true,strictVerified:true,systemPolicyValid:true}]}
+     secureTimestamp:true,hardenedRuntime:true,strictVerified:true,onlineNotarizationValid:true}]}
 ' >"$evidence/signing/observation.json"
 jq -n --arg observedAt "$observed_at" --arg manifestSHA "$package_manifest_sha" '
   {schema:"hideout.release-notarization-observation/v1",status:"accepted",

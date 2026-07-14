@@ -27,9 +27,11 @@ The candidate job uses a staged package-tree/finalize contract:
    hardened runtime;
 4. finalizes and verifies the canonical package manifest over the signed tree,
    creates the final `tar.gz` exactly once, and never mutates signed binaries;
-5. independently observes signing identity against the finalized tree;
-6. creates and submits one private ZIP envelope of that same finalized tree,
+5. creates and submits one private ZIP envelope of that same finalized tree,
    waits for accepted notarization, and writes a sanitized observation;
+6. independently observes signing identity and each command-line binary's
+   online notarization ticket against the finalized tree using the platform's
+   non-app code check;
 7. computes and records the final archive SHA-256 without rebuilding it;
 8. runs local/package/Gate 0 checks against those bytes;
 9. uploads the candidate package plus bounded build observations as a workflow

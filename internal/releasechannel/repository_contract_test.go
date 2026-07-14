@@ -169,6 +169,40 @@ func TestCandidateWorkflowSelectsImportedSigningIdentityByHash(t *testing.T) {
 	}
 }
 
+func TestCandidateWorkflowRequiresAcceptedNotarizationBeforeTicketObservation(t *testing.T) {
+	workflow := readWorkflowContract(t, "hideout-alpha-candidate.yml")
+	job, ok := workflow.Jobs["candidate"]
+	if !ok {
+		t.Fatal("candidate workflow must define the candidate job")
+	}
+
+	var notarizeStep string
+	for _, step := range job.Steps {
+		if step.Name == "Notarize the exact finalized package tree" {
+			notarizeStep = step.Run
+			break
+		}
+	}
+	for _, required := range []string{
+		`notary_status=$(jq`,
+		`if [ "$notary_status" != "accepted" ]`,
+		`xcrun notarytool log`,
+		`for attempt in {1..12}`,
+		`support release observe-notarization`,
+		`support release observe-signing`,
+	} {
+		if !strings.Contains(notarizeStep, required) {
+			t.Errorf("candidate notarization must contain %q", required)
+		}
+	}
+	accepted := strings.Index(notarizeStep, `if [ "$notary_status" != "accepted" ]`)
+	notaryObservation := strings.Index(notarizeStep, "support release observe-notarization")
+	signingObservation := strings.Index(notarizeStep, "support release observe-signing")
+	if accepted < 0 || notaryObservation <= accepted || signingObservation <= notaryObservation {
+		t.Fatal("accepted result, notarization observation, and online-ticket signing observation are out of order")
+	}
+}
+
 type workflowContract struct {
 	On struct {
 		Push struct {
