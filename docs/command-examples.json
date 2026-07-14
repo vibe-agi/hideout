@@ -76,8 +76,8 @@
     {
       "id": "projection-doctor",
       "classification": "execute-temp-store",
-      "command": ["doctor", "--feature", "projection", "--format", "json"],
-      "reason": "exercises the host-path-free projection inspection model against an isolated store"
+      "command": ["doctor", "--backend", "native", "--feature", "projection", "--format", "json"],
+      "reason": "exercises host-only projection inspection against an isolated store without requiring Lima; native remains a weak diagnostic harness"
     },
     {
       "id": "projection-code-open",

@@ -421,12 +421,21 @@ validate_command_examples() {
     case "$classification" in
       execute-temp-store)
         store="$(mktemp -d "${TMPDIR:-/tmp}/hideout-doc-command.XXXXXX")"
-        HIDEOUT_STORE_ROOT="$store" go run ./cmd/hideout "${argv[@]}" >"$out/logs/command-$id.out" 2>"$out/logs/command-$id.err"
+        if ! HIDEOUT_STORE_ROOT="$store" go run ./cmd/hideout "${argv[@]}" >"$out/logs/command-$id.out" 2>"$out/logs/command-$id.err"; then
+          echo "doc-truth-smoke: executable command example failed: $id" >&2
+          cat "$out/logs/command-$id.err" >&2
+          rm -rf "$store"
+          exit 1
+        fi
         rm -rf "$store"
         jq -n --arg id "$id" --arg availability "$availability" --arg classification "$classification" --arg status passed '{id: $id, availability: $availability, classification: $classification, status: $status}' >>"$out/reports/command-checks.jsonl"
         ;;
       parse-only)
-        go run ./cmd/hideout "${argv[@]}" >"$out/logs/command-$id.out" 2>"$out/logs/command-$id.err"
+        if ! go run ./cmd/hideout "${argv[@]}" >"$out/logs/command-$id.out" 2>"$out/logs/command-$id.err"; then
+          echo "doc-truth-smoke: parse-only command example failed: $id" >&2
+          cat "$out/logs/command-$id.err" >&2
+          exit 1
+        fi
         jq -n --arg id "$id" --arg availability "$availability" --arg classification "$classification" --arg status passed '{id: $id, availability: $availability, classification: $classification, status: $status}' >>"$out/reports/command-checks.jsonl"
         ;;
       real-gate|intentionally-not-executed)
