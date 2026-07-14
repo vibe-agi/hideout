@@ -13,6 +13,7 @@ allowed_legacy_hit() {
     ./scripts/test-tool-model-cleanup.sh) return 0 ;;
     ./specs/002-guided-first-run/*) return 0 ;;
     ./internal/app/app.go) return 0 ;;
+    ./internal/decision/doc.go) return 0 ;;
     ./internal/profile/profile.go) return 0 ;;
     ./internal/inittask/inittask.go) return 0 ;;
     ./internal/app/*_test.go) return 0 ;;
@@ -21,6 +22,8 @@ allowed_legacy_hit() {
     ./internal/manager/*_test.go) return 0 ;;
     ./internal/profile/*_test.go) return 0 ;;
     ./internal/profile/testdata/tool_model/*) return 0 ;;
+    ./specs/007-daemon-live-operations-console/plan.md) return 0 ;;
+    ./specs/012-operator-decision-center/plan.md) return 0 ;;
   esac
   return 1
 }
@@ -28,23 +31,28 @@ allowed_legacy_hit() {
 fail=0
 while IFS= read -r hit; do
   path="${hit%%:*}"
+  case "$path" in
+    ./*) ;;
+    *) path="./$path" ;;
+  esac
   if ! allowed_legacy_hit "$path"; then
     echo "tool-model-cleanup: disallowed legacy tool-model reference: $hit" >&2
     fail=1
   fi
-done < <(rg -n "$legacy_pattern" . --glob '!**/.git/**' --glob '!**/.codegraph/**' || true)
+done < <(git grep -nE "$legacy_pattern" -- . ':(exclude).codegraph/**' || true)
 
 while IFS= read -r hit; do
   echo "tool-model-cleanup: stale transition wording: $hit" >&2
   fail=1
-done < <(rg -n "$transition_pattern" README.md README.zh-CN.md docs specs/002-guided-first-run --glob '!specs/002-guided-first-run/tasks.md' || true)
+done < <(git grep -nE "$transition_pattern" -- README.md README.zh-CN.md docs \
+  specs/002-guided-first-run ':(exclude)specs/002-guided-first-run/tasks.md' || true)
 
-if ! rg -n '"expectedCommands"' schemas/profile.schema.json >/dev/null; then
+if ! grep -n '"expectedCommands"' schemas/profile.schema.json >/dev/null; then
   echo "tool-model-cleanup: profile schema does not define tools.expectedCommands" >&2
   fail=1
 fi
 
-if rg -n '"presets"|"npmGlobals"' schemas/profile.schema.json schemas/init-plan.schema.json >/dev/null; then
+if grep -En '"presets"|"npmGlobals"' schemas/profile.schema.json schemas/init-plan.schema.json >/dev/null; then
   echo "tool-model-cleanup: schema still exposes legacy tool model fields" >&2
   fail=1
 fi

@@ -155,7 +155,7 @@ gate3="$out/phase1/gates/gate3-hidden-proxy.json"
 jq -e '.result == "passed" and .backend == "lima"' "$gate2" "$gate3" >/dev/null
 
 scripts/test-doc-truth-smoke.sh >"$out/docs-candidate.out"
-if rg -n 'public package is available|current public alpha' README.md README.zh-CN.md docs/STATUS.md >/dev/null 2>&1; then
+if grep -En 'public package is available|current public alpha' README.md README.zh-CN.md docs/STATUS.md >/dev/null 2>&1; then
   echo "public-alpha-candidate: candidate docs claim publication before a receipt" >&2
   exit 1
 fi

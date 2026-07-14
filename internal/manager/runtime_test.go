@@ -465,6 +465,7 @@ func verifyRuntimeReady(t *testing.T, core *Core, record environment.Record) {
 
 func runtimeVerifyCoreFixture(t *testing.T) (Core, environment.Record) {
 	t.Helper()
+	setFakeLinuxShim(t)
 	store := profile.Store{Root: t.TempDir()}
 	catalog, provenance := runtimeRunCatalogFixture()
 	p := profile.Default("runtime")

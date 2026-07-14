@@ -130,6 +130,15 @@ func seedStoreHelper(t *testing.T, storeRoot, command string) {
 	}
 }
 
+func setFakeLinuxShim(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "hideout-shim-linux")
+	if err := os.WriteFile(path, []byte("fake linux shim"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", path)
+}
+
 func TestCorePlanRunOwnsProfileBackendAndWorkspace(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()

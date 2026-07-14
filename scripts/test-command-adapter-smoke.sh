@@ -41,7 +41,7 @@ if [ "$run_rc" -eq 0 ]; then
   echo "command-adapter-smoke: root-sensitive command unexpectedly succeeded" >&2
   exit 1
 fi
-if ! rg -q "root-sensitive package-manager command captured as target intent" "$tmp_home/run.err"; then
+if ! grep -q "root-sensitive package-manager command captured as target intent" "$tmp_home/run.err"; then
   echo "command-adapter-smoke: root-sensitive stderr evidence missing" >&2
   cat "$tmp_home/run.err" >&2
   exit 1
@@ -68,8 +68,8 @@ jq -e '
   (.details.nonClaim | test("does not claim guest-root containment"))
 ' "$audit_path" >/dev/null
 
-if rg -n "008 (blocks|enforces|provides) root|008 provides root containment|008 enforces root containment|command adapter.*root containment" \
-  specs/008-command-capability-adapters docs | rg -v "not claim|0 automated|no claim|never claims|must not" >/dev/null; then
+if grep -REn "008 (blocks|enforces|provides) root|008 provides root containment|008 enforces root containment|command adapter.*root containment" \
+  specs/008-command-capability-adapters docs | grep -Ev "not claim|0 automated|no claim|never claims|must not" >/dev/null; then
   echo "command-adapter-smoke: 008 docs must not claim root containment" >&2
   exit 1
 fi

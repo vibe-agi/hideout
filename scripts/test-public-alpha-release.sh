@@ -96,7 +96,7 @@ grep -F 'HIDEOUT_SECRET_DEFAULT_PROXY=<operator-secret-ref>' \
   specs/033-public-alpha-release-channel/quickstart.md >/dev/null
 grep -F 'scripts/test-public-alpha-release.sh --no-publish' \
   specs/033-public-alpha-release-channel/quickstart.md >/dev/null
-if rg -n -- '--gate3-proxy-secret|--source-commit' \
+if grep -En -- '--gate3-proxy-secret|--source-commit' \
     specs/033-public-alpha-release-channel/quickstart.md >/dev/null; then
   echo "public-alpha-release: quickstart uses a nonexistent release-script option" >&2
   exit 1

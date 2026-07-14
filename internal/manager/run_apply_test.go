@@ -30,6 +30,7 @@ func TestApplyRunBindsRuntimeReceiptAuditAndBoundaryOutcome(t *testing.T) {
 		{name: "boundary failure blocks target", boundaryPass: false, baselinePass: true, wantTargetRun: false, wantStatus: runtimeverify.StatusPreviewFailed, wantRecovery: "runtime.boundary.missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			setFakeLinuxShim(t)
 			store := profile.Store{Root: t.TempDir()}
 			workspace := t.TempDir()
 			catalog, provenance := runtimeRunCatalogFixture()
@@ -130,6 +131,7 @@ func TestApplyRunBindsRuntimeReceiptAuditAndBoundaryOutcome(t *testing.T) {
 }
 
 func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T) {
+	setFakeLinuxShim(t)
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
 	catalog, provenance := runtimeRunCatalogFixture()

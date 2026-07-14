@@ -166,7 +166,7 @@ run_docs_boundary_scan() {
     pattern="$1"
     file="$2"
     description="$3"
-    if ! rg -q "$pattern" "$file"; then
+    if ! grep -Eq "$pattern" "$file"; then
       echo "missing: $description ($file / $pattern)" >>"$report"
       return 1
     fi
@@ -176,7 +176,7 @@ run_docs_boundary_scan() {
     pattern="$1"
     file="$2"
     description="$3"
-    if rg -q "$pattern" "$file"; then
+    if grep -Eq "$pattern" "$file"; then
       echo "forbidden: $description ($file / $pattern)" >>"$report"
       return 1
     fi

@@ -18,7 +18,7 @@ run_local() {
     ./internal/audit
   jq empty schemas/guest-privilege-status.schema.json >/dev/null
 
-  if rg -n 'prevents guest[- ]root|guest[- ]root containment is enforced|blocks guest[- ]root' \
+  if grep -REn 'prevents guest[- ]root|guest[- ]root containment is enforced|blocks guest[- ]root' \
     README.md docs specs/009-guest-privilege-separation-risk-audit \
     | grep -Evi 'must not|does not|not claim|no claim|0 docs|non-claim|non-claims|out of scope|do not claim' \
     >/tmp/hideout-privilege-overclaim.$$; then
@@ -68,7 +68,7 @@ run_real_enforced() {
     while IFS= read -r instance; do
       [ -n "$instance" ] || continue
       LIMA_HOME="$cleanup_lima_home" limactl delete -f "$instance" >/dev/null 2>&1 || true
-    done < <(LIMA_HOME="$cleanup_lima_home" limactl list --quiet 2>/dev/null | rg '^hideout-privilege-smoke' || true)
+    done < <(LIMA_HOME="$cleanup_lima_home" limactl list --quiet 2>/dev/null | grep -E '^hideout-privilege-smoke' || true)
     remove_tmp "$cleanup_tmp"
   }
   trap "cleanup_real '$tmp' '$lima_home'" EXIT
@@ -117,7 +117,7 @@ run_real_enforced() {
     .details.setupIdentityKind == "root-control-ssh" and
     .details.separateFromTarget == true
   ' "$audit_path" >/dev/null
-  if rg -n 'setupPrivateKey|setupToken|setupCredential=|rootControlSSHConfig|OPENSSH PRIVATE KEY' "$audit_path" "$out" "$err" >/dev/null; then
+  if grep -En 'setupPrivateKey|setupToken|setupCredential=|rootControlSSHConfig|OPENSSH PRIVATE KEY' "$audit_path" "$out" "$err" >/dev/null; then
     echo "privilege-smoke: setup credential material leaked" >&2
     exit 1
   fi
@@ -138,7 +138,7 @@ run_real_degraded() {
     while IFS= read -r instance; do
       [ -n "$instance" ] || continue
       LIMA_HOME="$cleanup_lima_home" limactl delete -f "$instance" >/dev/null 2>&1 || true
-    done < <(LIMA_HOME="$cleanup_lima_home" limactl list --quiet 2>/dev/null | rg '^hideout-privilege-smoke' || true)
+    done < <(LIMA_HOME="$cleanup_lima_home" limactl list --quiet 2>/dev/null | grep -E '^hideout-privilege-smoke' || true)
     remove_tmp "$cleanup_tmp"
   }
   trap "cleanup_degraded '$tmp' '$lima_home'" EXIT
@@ -224,16 +224,16 @@ ROOTSH
     cat "$out2" "$err2" >&2
     exit 1
   fi
-  if ! rg -q 'does not claim guest-root containment|base image|recreate' "$out2" "$err2"; then
+  if ! grep -Eq 'does not claim guest-root containment|base image|recreate' "$out2" "$err2"; then
     echo "privilege-smoke: degraded output missing warning/non-claim" >&2
     cat "$out2" "$err2" >&2
     exit 1
   fi
-  if rg -n 'prevents guest[- ]root|guest[- ]root containment is enforced|blocks guest[- ]root' "$audit_path" "$out2" "$err2" >/dev/null; then
+  if grep -En 'prevents guest[- ]root|guest[- ]root containment is enforced|blocks guest[- ]root' "$audit_path" "$out2" "$err2" >/dev/null; then
     echo "privilege-smoke: degraded run overclaimed guest-root containment" >&2
     exit 1
   fi
-  if rg -n 'setupPrivateKey|setupToken|setupCredential=|rootControlSSHConfig|OPENSSH PRIVATE KEY' "$audit_path" "$out2" "$err2" >/dev/null; then
+  if grep -En 'setupPrivateKey|setupToken|setupCredential=|rootControlSSHConfig|OPENSSH PRIVATE KEY' "$audit_path" "$out2" "$err2" >/dev/null; then
     echo "privilege-smoke: setup credential material leaked" >&2
     exit 1
   fi

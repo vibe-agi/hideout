@@ -940,7 +940,7 @@ printf 'hostfs_visibility_18=passed\n'
 operator_audit="$store/operator-center/audit.jsonl"
 test -f "$operator_audit"
 jq -e 'select(.details.kind == "hostfs.read")' "$operator_audit" >/dev/null
-if rg -n 'approved-live-content-029|symlink-target-[ab]-029|claim_[0-9a-f]{16,}|cap_[A-Za-z0-9]{12,}|hostfs-read/(grants|state|owner|provider)' \
+if grep -En 'approved-live-content-029|symlink-target-[ab]-029|claim_[0-9a-f]{16,}|cap_[A-Za-z0-9]{12,}|hostfs-read/(grants|state|owner|provider)' \
   "$operator_audit" \
   "$tmp/hostfs-live-approve-after.json" \
   "$tmp/hostfs-live-deny-result.json" \
@@ -1049,7 +1049,7 @@ latest_audit="$(find "$store/sessions" -name audit.jsonl -print | sort | tail -n
 test -n "$latest_audit"
 jq -e 'select(.action == "host.fs.overlay.apply" and .details.decisionId == "'"$decision_id"'")' "$latest_audit" >/dev/null
 jq -e 'select(.action == "host.fs.overlay.apply" and .details.decisionId == "'"$dir_decision_id"'")' "$latest_audit" >/dev/null
-if rg -n 'claim_[0-9a-f]|hostfs-overlay/objects|hfwobj_' "$latest_audit" "$tmp/hostfs-write-status.json" "$tmp/hostfs-write-apply.json" "$tmp/hostfs-write-dir-apply.json" >/dev/null; then
+if grep -En 'claim_[0-9a-f]|hostfs-overlay/objects|hfwobj_' "$latest_audit" "$tmp/hostfs-write-status.json" "$tmp/hostfs-write-apply.json" "$tmp/hostfs-write-dir-apply.json" >/dev/null; then
   echo "gate2: HostFS write evidence leaked claim token or overlay object path" >&2
   exit 1
 fi

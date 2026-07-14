@@ -1812,8 +1812,12 @@ func TestInitHardenedDegradedGuidanceAndFallback(t *testing.T) {
 }
 
 func TestInitInteractiveCancelAndConfirm(t *testing.T) {
+	goModCache := goEnvValue(t, "GOMODCACHE")
+	goBuildCache := goEnvValue(t, "GOCACHE")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("GOMODCACHE", goModCache)
+	t.Setenv("GOCACHE", goBuildCache)
 	var out, errOut bytes.Buffer
 	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("proxy-url\n1.1.1.1\nn\n")}
 	err := a.run([]string{"init"})

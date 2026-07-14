@@ -404,8 +404,8 @@ run_projection_hostfs_resource() {
 	grep -q '"resourceClass":"hostfs-portal"' <<<"$authorized_event"
 	grep -q "\"relativeTarget\":\"$basename_target\"" <<<"$authorized_event"
 	grep -q '"outcome":"launched"' <<<"$authorized_event"
-	if rg -n -F -- "$hostfs_file" <<<"$authorized_event" >/dev/null || \
-	  rg -n '/hideout/hostfs|cap_[A-Za-z0-9]{12,}|claim_[A-Za-z0-9]{12,}|hostfs-read/(grants|state|owner|provider)' <<<"$authorized_event" >/dev/null; then
+	if grep -nF -- "$hostfs_file" <<<"$authorized_event" >/dev/null || \
+	  grep -nE '/hideout/hostfs|cap_[A-Za-z0-9]{12,}|claim_[A-Za-z0-9]{12,}|hostfs-read/(grants|state|owner|provider)' <<<"$authorized_event" >/dev/null; then
 	  echo "gate2: HostFS projection audit leaked a lower path or authority token" >&2
 	  printf '%s\n' "$authorized_event" >&2
     return 1
@@ -698,8 +698,8 @@ if command -v hcode >/dev/null 2>&1; then exit 92; fi
 	[ -n "$external_event" ]
 	grep -q '"resourceClass":"hostfs-portal"' <<<"$external_event"
 	grep -q '"outcome":"launched"' <<<"$external_event"
-	if rg -n -F -- "$hostfs_file" <<<"$external_event" >/dev/null ||
-	  rg -n '/hideout/hostfs|cap_[A-Za-z0-9]{12,}|claim_[A-Za-z0-9]{12,}' <<<"$external_event" >/dev/null; then
+	if grep -nF -- "$hostfs_file" <<<"$external_event" >/dev/null ||
+	  grep -nE '/hideout/hostfs|cap_[A-Za-z0-9]{12,}|claim_[A-Za-z0-9]{12,}' <<<"$external_event" >/dev/null; then
     echo "gate2: external HostFS evidence leaked lower path or authority" >&2
     return 1
   fi
