@@ -69,7 +69,7 @@ done
 # rehearsal tied to their executable branches as well as to the typed models.
 grep -F 'candidate: tag already has a release; rebuilding the same identity is forbidden' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
-grep -F 'npm install --global --ignore-scripts markdownlint-cli2@0.22.1' \
+grep -F 'markdownlint-cli2@0.22.1 markdownlint@0.40.0' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'environment: public-alpha' .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F '.draft == true and .tag_name == $tag and .target_commitish == $commit' \
