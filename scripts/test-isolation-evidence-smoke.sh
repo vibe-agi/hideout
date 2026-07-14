@@ -32,6 +32,13 @@ if HIDEOUT_RUNTIME_EVIDENCE_REQUIRED=1 emit_gate_result "gate3-hidden-proxy" "li
   exit 1
 fi
 
+# Optional gate fields must not make a successful gate fail under pipefail.
+optional_output="$tmp/optional-gate.out"
+printf 'gate4: passed\n' >"$optional_output"
+test -z "$(gate_output_value 'Hideout environment name: ' "$optional_output")"
+printf 'Hideout environment name: workspace-alpha\n' >>"$optional_output"
+test "$(gate_output_value 'Hideout environment name: ' "$optional_output")" = "workspace-alpha"
+
 # A retained Gate 2 consumer trusts the same-commit evidence envelope and its
 # digest, never an unbound caller-supplied log path.
 retained_dir="$tmp/retained-gate2"

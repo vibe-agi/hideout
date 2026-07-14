@@ -29,6 +29,21 @@ gate_sha256_file() {
   fi
 }
 
+gate_output_value() {
+  local prefix="${1:-}"
+  local path="${2:-}"
+  if [ -z "$prefix" ] || [ -z "$path" ] || [ ! -f "$path" ]; then
+    echo "gate_output_value: prefix and existing output path are required" >&2
+    return 2
+  fi
+  awk -v prefix="$prefix" '
+    index($0, prefix) == 1 {
+      print substr($0, length(prefix) + 1)
+      exit
+    }
+  ' "$path"
+}
+
 runtime_evidence_markers() {
   local receipt="${1:-}"
   if [ -z "$receipt" ] || [ ! -f "$receipt" ]; then

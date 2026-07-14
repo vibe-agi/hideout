@@ -68,7 +68,7 @@ run_isolation_gate() {
   if "$@" >"$out" 2>&1; then status=0; else status=$?; fi
   cat "$out"
   local env_name audit_ref boundary_ref
-  env_name="$(grep -oE 'Hideout environment name: .+' "$out" | head -n1 | sed 's/^Hideout environment name: //')"
+  env_name="$(gate_output_value 'Hideout environment name: ' "$out")"
   audit_ref="$HIDEOUT_RELEASE_EVIDENCE_DIR/test-release-dogfood.log"
   grep -q 'Boundary Summary' "$out" && boundary_ref="boundary-summary:present" || boundary_ref=""
   local runtime_family runtime_revision runtime_sha runtime_environment runtime_host_os runtime_host_arch runtime_guest_arch runtime_commit runtime_dirty runtime_required
