@@ -130,23 +130,6 @@ gate4_browser_count() {
   gate4_browser_pids "$1" | awk 'NF {count++} END {print count+0}'
 }
 
-gate4_path_pids() {
-  local needle="$1"
-  ps -axo pid=,command= |
-    awk -v needle="$needle" '
-      $1 ~ /^[0-9]+$/ &&
-      index($0, needle) > 0 &&
-      index($0, "awk -v needle=") == 0 &&
-      index($0, "ps -axo") == 0 {
-        print $1
-      }
-    '
-}
-
-gate4_path_count() {
-  gate4_path_pids "$1" | awk 'NF {count++} END {print count+0}'
-}
-
 signal_gate4_browsers() {
   local needle="$1"
   local signal="$2"
@@ -155,16 +138,6 @@ signal_gate4_browsers() {
     [ -n "$pid" ] || continue
     /bin/kill "-$signal" "$pid" >/dev/null 2>&1 || true
   done < <(gate4_browser_pids "$needle")
-}
-
-signal_gate4_path_processes() {
-  local needle="$1"
-  local signal="$2"
-  local pid
-  while IFS= read -r pid; do
-    [ -n "$pid" ] || continue
-    /bin/kill "-$signal" "$pid" >/dev/null 2>&1 || true
-  done < <(gate4_path_pids "$needle")
 }
 
 wait_for_gate4_browsers() {
@@ -185,25 +158,6 @@ wait_for_gate4_browsers_gone() {
 
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     count="$(gate4_browser_count "$needle")"
-    if [ "$count" = "0" ]; then
-      quiet=$((quiet + 1))
-      [ "$quiet" -ge 3 ] && return 0
-    else
-      quiet=0
-    fi
-    sleep 1
-  done
-
-  return 1
-}
-
-wait_for_gate4_path_processes_gone() {
-  local needle="$1"
-  local count
-  local quiet=0
-
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    count="$(gate4_path_count "$needle")"
     if [ "$count" = "0" ]; then
       quiet=$((quiet + 1))
       [ "$quiet" -ge 3 ] && return 0
@@ -239,12 +193,8 @@ cleanup_real_gate4_browser() {
   if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" = "1" ]; then
     wait_for_gate4_browsers "$needle"
   fi
+  # Only the dedicated Chromium profile is owned by this gate.
   kill_gate4_browsers "$needle"
-  signal_gate4_path_processes "$needle" TERM
-  if ! wait_for_gate4_path_processes_gone "$needle"; then
-    signal_gate4_path_processes "$needle" KILL
-    wait_for_gate4_path_processes_gone "$needle" || true
-  fi
   return 0
 }
 
