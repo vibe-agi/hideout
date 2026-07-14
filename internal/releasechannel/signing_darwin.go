@@ -56,10 +56,9 @@ func ObserveDarwinSigning(ctx context.Context, root string, paths []string, now 
 		}
 		notarized := exec.CommandContext(ctx, "/usr/bin/codesign", "--verify", "--strict", "--verbose=4", "--check-notarization", "-R=notarized", path)
 		_, notarizedErr := notarized.CombinedOutput()
-		flags := fields["flags"]
 		observation.Binaries = append(observation.Binaries, BinarySignature{
 			Path: rel, Identifier: fields["Identifier"], CDHash: fields["CDHash"],
-			SecureTimestamp: fields["Timestamp"] != "", HardenedRuntime: strings.Contains(flags, "runtime"),
+			SecureTimestamp: fields["Timestamp"] != "", HardenedRuntime: codeDirectoryHasHardenedRuntime(string(output)),
 			StrictVerified: true, OnlineNotarizationValid: notarizedErr == nil,
 		})
 	}

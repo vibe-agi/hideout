@@ -43,3 +43,19 @@ func TestDeveloperPreviewCannotSatisfyPublicSigning(t *testing.T) {
 		t.Fatal("unsigned preview passed public validation")
 	}
 }
+
+func TestCodeDirectoryHardenedRuntimeParsing(t *testing.T) {
+	valid := "CodeDirectory v=20500 size=241 flags=0x10000(runtime) hashes=2+2 location=embedded\n"
+	if !codeDirectoryHasHardenedRuntime(valid) {
+		t.Fatal("runtime flag on CodeDirectory line was not detected")
+	}
+	for _, invalid := range []string{
+		"flags=0x10000(runtime)\n",
+		"CodeDirectory v=20500 size=241 flags=0x0(none) hashes=2+2 location=embedded\n",
+		"CodeDirectory v=20500 size=241 hashes=2+2 location=embedded\n",
+	} {
+		if codeDirectoryHasHardenedRuntime(invalid) {
+			t.Fatalf("invalid CodeDirectory output passed: %q", invalid)
+		}
+	}
+}

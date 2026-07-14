@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ const (
 	SigningObservationSchema      = "hideout.release-signing-observation/v1"
 	NotarizationObservationSchema = "hideout.release-notarization-observation/v1"
 )
+
+var codeDirectoryRuntimeRE = regexp.MustCompile(`(?m)^CodeDirectory [^\r\n]*\bflags=0x[0-9A-Fa-f]+\([^\r\n)]*\bruntime\b[^\r\n)]*\)`)
 
 type SigningObservation struct {
 	Schema                string            `json:"schema"`
@@ -36,6 +39,10 @@ type BinarySignature struct {
 	HardenedRuntime         bool   `json:"hardenedRuntime"`
 	StrictVerified          bool   `json:"strictVerified"`
 	OnlineNotarizationValid bool   `json:"onlineNotarizationValid"`
+}
+
+func codeDirectoryHasHardenedRuntime(output string) bool {
+	return codeDirectoryRuntimeRE.MatchString(output)
 }
 
 type NotarizationObservation struct {
