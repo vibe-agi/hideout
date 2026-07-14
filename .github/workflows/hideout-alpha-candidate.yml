@@ -40,6 +40,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install pinned Gate 0 tooling
+        run: |
+          set -euo pipefail
+          npm install --global --ignore-scripts markdownlint-cli2@0.22.1
+          markdownlint_version=$(markdownlint-cli2 --version 2>&1 | head -n 1)
+          test "$markdownlint_version" = "markdownlint-cli2 v0.22.1 (markdownlint v0.40.0)"
+
       - name: Validate immutable candidate inputs
         env:
           GH_TOKEN: ${{ github.token }}
