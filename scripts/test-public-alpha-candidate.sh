@@ -301,8 +301,7 @@ jq -e '.releaseReady == true and .mode == "release-candidate"' "$readiness_raw" 
 
 evidence_root="$work/evidence"
 mkdir -p "$evidence_root/proofs" "$evidence_root/package" "$evidence_root/signing" \
-  "$evidence_root/notarization" "$evidence_root/runtime" "$evidence_root/gates" \
-  "$evidence_root/workflow"
+  "$evidence_root/notarization" "$evidence_root/runtime" "$evidence_root/gates"
 cp "$out/package-identity.json" "$evidence_root/candidate-identity.json"
 cp "$out/release-readiness.json" "$evidence_root/release-readiness.json"
 cp "$work/package/hideout/package-manifest.json" "$evidence_root/package/package-manifest.json"
@@ -312,7 +311,6 @@ cp "$notarization" "$evidence_root/notarization/observation.json"
 cp "$proof_dir/artifacts/gate2.json" "$evidence_root/gates/gate2.json"
 cp "$proof_dir/artifacts/gate3.json" "$evidence_root/gates/gate3.json"
 cp "$runtime_build_provenance" "$evidence_root/runtime/build-provenance.json"
-cp "$candidate_observation" "$evidence_root/workflow/candidate.json"
 cp "$out/proof-registry.json" "$evidence_root/proof-registry.json"
 
 copy_evidence_manifest() {

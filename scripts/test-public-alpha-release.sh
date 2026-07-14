@@ -237,8 +237,6 @@ if [ "$(grep -c 'support release redact-public-evidence' scripts/test-public-alp
   exit 1
 fi
 grep -q 'readiness_raw=' scripts/test-public-alpha-candidate.sh
-grep -F 'cp "$candidate_observation" "$evidence_root/workflow/candidate.json"' \
-  scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'public_alpha_cleanup_workflow_state' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'Retain bounded workflow cleanup receipt' \
