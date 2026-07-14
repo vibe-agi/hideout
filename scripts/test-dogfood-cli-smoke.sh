@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/lima-temp.sh"
 
 GATE_TIMEOUT="${HIDEOUT_GATE_TIMEOUT:-15m}"
 
@@ -191,14 +192,15 @@ cleanup() {
     HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
   fi
   rm -rf "$tmp"
+  rm -rf "${lima_home:-}"
 }
 trap cleanup EXIT
 
 bin="$tmp/b"
 store="$tmp/s"
-lima_home="$tmp/l"
+lima_home="$(hideout_mktemp_lima_home)"
 workspace="$tmp/w"
-mkdir -p "$bin" "$store" "$lima_home" "$workspace"
+mkdir -p "$bin" "$store" "$workspace"
 
 hideout="$bin/hideout"
 lab_target="$bin/hideout-gate-lab-target"

@@ -48,6 +48,7 @@ bash -n \
   scripts/test-public-alpha-clean-install.sh \
   scripts/test-public-alpha-candidate.sh \
   scripts/test-public-alpha-release.sh \
+  scripts/lib/lima-temp.sh \
   scripts/lib/public-alpha-cleanup.sh \
   scripts/test-doc-truth-smoke.sh
 
@@ -98,6 +99,10 @@ grep -F 'export HIDEOUT_LIMA_SHORT_TMPDIR="$work"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'HIDEOUT_RELEASE_BINARY is not executable' \
   scripts/test-env-image.sh >/dev/null
+for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh \
+  scripts/test-runtime-lima.sh scripts/test-env-image.sh scripts/test-dogfood-cli-smoke.sh; do
+  grep -F 'hideout_mktemp_lima_home' "$gate" >/dev/null
+done
 grep -F 'public_alpha_cleanup_workflow_state' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'Retain bounded workflow cleanup receipt' \

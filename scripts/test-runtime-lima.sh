@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/lima-temp.sh"
 . "$ROOT/scripts/lib/runtime-product-evidence.sh"
 
 family="${HIDEOUT_RUNTIME_FAMILY:-developer-standard}"
@@ -117,7 +118,7 @@ grep -q '^gate2: passed$' "$tmp/gate2.out"
 
 echo "runtime-lima: proving mutable-guest drift without target root"
 drift_store="$tmp/drift-store"
-drift_lima_home="$(mktemp -d "${TMPDIR:-/tmp}/h31d.XXXXXX")"
+drift_lima_home="$(hideout_mktemp_lima_home)"
 drift_workspace="$tmp/drift-workspace"
 mkdir -p "$drift_store" "$drift_workspace"
 if ! HIDEOUT_STORE_ROOT="$drift_store" LIMA_HOME="$drift_lima_home" "$hideout" init \

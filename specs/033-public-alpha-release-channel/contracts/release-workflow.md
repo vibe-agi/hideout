@@ -40,9 +40,11 @@ The candidate job uses a staged package-tree/finalize contract:
 
 Real Lima validation MUST run below a short, candidate-owned temporary root so
 macOS Unix socket limits cannot turn a valid package into a false failure. The
-same root remains inside the candidate cleanup domain. Tests that accept
-`HIDEOUT_RELEASE_BINARY` MUST exercise that packaged binary rather than rebuild
-an equivalent command from the source checkout.
+same root remains inside the candidate cleanup domain, and each Lima lane MUST
+allocate its `LIMA_HOME` directly below that root rather than below an
+arbitrarily deep evidence directory. Tests that accept `HIDEOUT_RELEASE_BINARY`
+MUST exercise that packaged binary rather than rebuild an equivalent command
+from the source checkout.
 
 Before the first publication, a failed or superseded candidate MAY replace the
 same tag only through an explicit `replace_private_draft` workflow input. The

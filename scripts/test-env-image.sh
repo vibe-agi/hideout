@@ -11,6 +11,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/lima-temp.sh"
 
 IMAGE_DECL="${HIDEOUT_ENV_IMAGE_URL:-}"
 if [ -z "$IMAGE_DECL" ]; then
@@ -33,13 +34,14 @@ require_command() {
 }
 require_command limactl
 
-# Lima derives Unix socket paths below LIMA_HOME. Keep the real-backend gate
-# root short even when macOS TMPDIR is deeply nested.
+# Evidence can remain under TMPDIR, but Lima derives Unix socket paths below
+# LIMA_HOME, so allocate that state from the dedicated short-root helper.
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/h31.XXXXXX")"
 export HIDEOUT_STORE_ROOT="$workdir/store"
-export LIMA_HOME="$workdir/lima"
+LIMA_HOME="$(hideout_mktemp_lima_home)"
+export LIMA_HOME
 workspace="$workdir/workspace"
-mkdir -p "$HIDEOUT_STORE_ROOT" "$LIMA_HOME" "$workspace"
+mkdir -p "$HIDEOUT_STORE_ROOT" "$workspace"
 
 bin="$workdir/hideout"
 if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
@@ -61,9 +63,10 @@ cleanup() {
     (cd "$workspace" && "$bin" stop "$env_name" >/dev/null 2>&1) || true
     (cd "$workspace" && "$bin" clean --stopped "$env_name" >/dev/null 2>&1) || true
   done
+  rm -rf "$LIMA_HOME"
   rm -rf "$workdir"
-  if [ -e "$workdir" ]; then
-    echo "env-image: cleanup left temporary root: $workdir" >&2
+  if [ -e "$workdir" ] || [ -e "$LIMA_HOME" ]; then
+    echo "env-image: cleanup left temporary state" >&2
     status=1
   fi
   exit "$status"
