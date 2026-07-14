@@ -12,6 +12,11 @@ on:
         description: Full source commit; defaults to the triggering commit
         required: false
         type: string
+      replace_private_draft:
+        description: Replace the same tag only when it is still an unpublished private draft
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -55,6 +60,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_COMMIT: ${{ inputs.source_commit }}
+          INPUT_REPLACE_DRAFT: ${{ inputs.replace_private_draft }}
         run: |
           set -euo pipefail
           [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]
@@ -65,9 +71,25 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=normal)"
           git merge-base --is-ancestor "$source_commit" origin/master
           tag="v$INPUT_VERSION"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "candidate: tag already has a release; rebuilding the same identity is forbidden" >&2
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "candidate: published tag already exists; replacement is forbidden" >&2
             exit 1
+          fi
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -s --arg tag "$tag" '[.[][] | select(.tag_name == $tag)]')
+          test "$(jq 'length' <<<"$releases")" -le 1
+          replace_draft_id=""
+          if test "$(jq 'length' <<<"$releases")" -eq 1; then
+            jq -e '.[0].draft == true and .[0].prerelease == true and .[0].published_at == null' \
+              <<<"$releases" >/dev/null || {
+                echo "candidate: existing release is not a replaceable private draft" >&2
+                exit 1
+              }
+            test "$INPUT_REPLACE_DRAFT" = "true" || {
+              echo "candidate: private draft exists; retry requires replace_private_draft=true" >&2
+              exit 1
+            }
+            replace_draft_id=$(jq -r '.[0].id' <<<"$releases")
           fi
           root="$RUNNER_TEMP/hideout-alpha-candidate"
           rm -rf "$root"
@@ -77,6 +99,7 @@ jobs:
             echo "HIDEOUT_ALPHA_VERSION=$INPUT_VERSION"
             echo "HIDEOUT_ALPHA_TAG=$tag"
             echo "HIDEOUT_ALPHA_COMMIT=$source_commit"
+            echo "HIDEOUT_ALPHA_REPLACE_DRAFT_ID=$replace_draft_id"
           } >>"$GITHUB_ENV"
 
       - name: Import protected Developer ID and notarization credentials
@@ -245,9 +268,24 @@ jobs:
           This draft is not a public release, current-alpha claim, or substitute for real Gate 2/3 evidence.
           EOF
           )
-          gh release create "$HIDEOUT_ALPHA_TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "$HIDEOUT_ALPHA_COMMIT" --draft --prerelease \
-            --title "Hideout ${HIDEOUT_ALPHA_VERSION} private candidate" --notes "$notes"
+          if test -n "$HIDEOUT_ALPHA_REPLACE_DRAFT_ID"; then
+            current=$(gh api "repos/$GITHUB_REPOSITORY/releases/$HIDEOUT_ALPHA_REPLACE_DRAFT_ID")
+            jq -e --arg tag "$HIDEOUT_ALPHA_TAG" \
+              '.draft == true and .prerelease == true and .published_at == null and .tag_name == $tag' \
+              <<<"$current" >/dev/null
+            gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/releases/$HIDEOUT_ALPHA_REPLACE_DRAFT_ID" \
+              -f tag_name="$HIDEOUT_ALPHA_TAG" -f target_commitish="$HIDEOUT_ALPHA_COMMIT" \
+              -f name="Hideout ${HIDEOUT_ALPHA_VERSION} private candidate" -f body="$notes" \
+              -F draft=true -F prerelease=true >/dev/null
+            while IFS= read -r asset_id; do
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            done < <(jq -r '.assets[].id' <<<"$current")
+          else
+            gh release create "$HIDEOUT_ALPHA_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$HIDEOUT_ALPHA_COMMIT" --draft --prerelease \
+              --title "Hideout ${HIDEOUT_ALPHA_VERSION} private candidate" --notes "$notes"
+          fi
           gh release upload "$HIDEOUT_ALPHA_TAG" --repo "$GITHUB_REPOSITORY" "$output"/*
 
       - name: Remove credential-bearing temporary state

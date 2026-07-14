@@ -46,7 +46,7 @@ short_lima_home=""
 if [ "$real_lima" -eq 1 ]; then
   # Lima appends the instance name and ssh.sock suffix to LIMA_HOME. Keep the
   # real-gate root short enough for macOS UNIX_PATH_MAX regardless of TMPDIR.
-  short_lima_home="$(mktemp -d /tmp/hla.XXXXXX)"
+  short_lima_home="$(mktemp -d "${HIDEOUT_LIMA_SHORT_TMPDIR:-/tmp}/hla.XXXXXX")"
   lima_home="$short_lima_home"
 fi
 tool_bin="$tmp/tools"

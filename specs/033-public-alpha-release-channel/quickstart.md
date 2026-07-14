@@ -199,6 +199,11 @@ SC-005..008, SC-010, SC-012..013, SC-018
 Trigger promotion only after the draft and real evidence pass. After manual
 approval, verify:
 
+If a pre-publication candidate must be rebuilt, rerun the candidate workflow
+with `replace_private_draft=true`. That input is valid only while the same tag
+is an unpublished draft; an existing Git tag or published release remains
+immutable and fails closed.
+
 ```bash
 curl --fail --location --retry 3 \
   -o package.tar.gz \

@@ -38,6 +38,14 @@ The candidate job uses a staged package-tree/finalize contract:
    artifact; and
 10. retains them in a private draft release with an exact asset allowlist.
 
+Before the first publication, a failed or superseded candidate MAY replace the
+same tag only through an explicit `replace_private_draft` workflow input. The
+workflow MUST re-observe that the existing release is still a draft prerelease
+with no publication timestamp, MUST reject any existing Git tag or published
+release, and MUST leave the old draft untouched until the replacement
+candidate has passed signing, notarization, and Gate 0. This retry path does not
+permit rebuilding or mutating a published identity.
+
 Developer-preview mode follows the same shape without signing credentials, but
 uses a distinct version/tag/channel and cannot satisfy public-alpha signing or
 promotion requirements.

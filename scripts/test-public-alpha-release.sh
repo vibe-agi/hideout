@@ -67,7 +67,13 @@ done
 
 # These guards are workflow authority, not documentation. Keep the no-publish
 # rehearsal tied to their executable branches as well as to the typed models.
-grep -F 'candidate: tag already has a release; rebuilding the same identity is forbidden' \
+grep -F 'candidate: published tag already exists; replacement is forbidden' \
+  .github/workflows/hideout-alpha-candidate.yml >/dev/null
+grep -F 'private draft exists; retry requires replace_private_draft=true' \
+  .github/workflows/hideout-alpha-candidate.yml >/dev/null
+grep -F '.draft == true and .prerelease == true and .published_at == null and .tag_name == $tag' \
+  .github/workflows/hideout-alpha-candidate.yml >/dev/null
+grep -F 'HIDEOUT_ALPHA_REPLACE_DRAFT_ID' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
 grep -F 'markdownlint-cli2@0.22.1 markdownlint@0.40.0' \
   .github/workflows/hideout-alpha-candidate.yml >/dev/null
