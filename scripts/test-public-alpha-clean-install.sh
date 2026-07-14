@@ -2,10 +2,13 @@
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+. "$ROOT/scripts/lib/verified-runtime-cache.sh"
 invocation_dir="$PWD"
+operator_home="${HOME:-}"
 package=""
 report=""
 real_lima=0
+runtime_cache_status="not-applicable"
 
 usage() {
   cat <<'USAGE'
@@ -69,6 +72,15 @@ package_root="$tmp/hideout"
 [ -x "$package_root/install.sh" ] || { echo "public-alpha-clean-install: package installer missing" >&2; exit 1; }
 cd "$tmp"
 
+seed_verified_runtime_cache() {
+  local shared_cache target_cache require_cache
+  shared_cache="${HIDEOUT_LIMA_SHARED_CACHE:-$operator_home/Library/Caches/lima}"
+  target_cache="$home/Library/Caches/lima"
+  require_cache="${HIDEOUT_REQUIRE_RUNTIME_CACHE:-0}"
+  runtime_cache_status="$(hideout_seed_verified_runtime_cache \
+    "$package_root/runtime/catalog.json" "$shared_cache" "$target_cache" "$require_cache")"
+}
+
 lima_status="missing"
 lima_version=""
 if [ "$real_lima" -eq 1 ]; then
@@ -79,6 +91,7 @@ if [ "$real_lima" -eq 1 ]; then
   ln -s "$(command -v limactl)" "$tool_bin/limactl"
   lima_status="available"
   lima_version="$("$tool_bin/limactl" --version | head -n 1)"
+  seed_verified_runtime_cache
 fi
 clean_path="$tool_bin:/usr/bin:/bin:/usr/sbin:/sbin"
 if PATH="$clean_path" command -v go >/dev/null 2>&1; then
@@ -174,6 +187,7 @@ jq -n \
   --arg commit "$(jq -r '.sourceCommit' "$tmp/version.json")" \
   --arg doctorStatus "$doctor_status" \
   --arg limaStatus "$lima_status" --arg limaVersion "$lima_version" \
+  --arg runtimeCacheStatus "$runtime_cache_status" \
   --arg runStatus "$run_status" --arg runReason "$run_reason" \
   --arg environmentId "$environment_id" \
   '{schema:"hideout.public-alpha-clean-install/v1",observedAt:$observedAt,
@@ -182,8 +196,8 @@ jq -n \
       version:"passed",packageVerify:"passed",doctorLight:$doctorStatus},
     prerequisites:{lima:({status:$limaStatus} +
       (if $limaVersion == "" then {} else {version:$limaVersion} end))},
-    realLima:({status:$runStatus} +
+    realLima:({status:$runStatus,runtimeCacheStatus:$runtimeCacheStatus} +
       (if $runReason == "" then {environmentId:$environmentId,network:"direct",targetUID:"non-root"}
        else {reason:$runReason} end))}' >"$report"
 
-echo "public-alpha-clean-install: passed ($run_status Lima)"
+echo "public-alpha-clean-install: passed ($run_status Lima, runtime cache $runtime_cache_status)"

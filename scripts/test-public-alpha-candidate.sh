@@ -127,7 +127,7 @@ jq -e --arg version "$version" --arg commit "$source_commit" '
 cp "$signing" "$out/signing-observation.json"
 cp "$notarization" "$out/notarization-observation.json"
 
-scripts/test-public-alpha-clean-install.sh --package "$package" --real-lima \
+HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install.sh --package "$package" --real-lima \
   --out "$out/clean-install.json"
 
 arch="$(jq -r '.hostArch' "$out/package-identity.json")"

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
+. "$ROOT/scripts/lib/verified-runtime-cache.sh"
 mode="${1:---contract-only}"
 
 case "$mode" in
@@ -50,7 +51,47 @@ bash -n \
   scripts/test-public-alpha-release.sh \
   scripts/lib/lima-temp.sh \
   scripts/lib/public-alpha-cleanup.sh \
+  scripts/lib/verified-runtime-cache.sh \
   scripts/test-doc-truth-smoke.sh
+
+(
+  cache_fixture="$(mktemp -d "${TMPDIR:-/tmp}/hideout-runtime-cache-contract.XXXXXX")"
+  trap 'rm -rf "$cache_fixture"' EXIT
+  catalog="$cache_fixture/catalog.json"
+  shared="$cache_fixture/shared"
+  target="$cache_fixture/target"
+  url="https://example.invalid/runtime.qcow2"
+  payload="runtime-cache-contract-fixture"
+  digest="$(printf '%s' "$payload" | shasum -a 256 | awk '{print $1}')"
+  key="$(printf '%s' "$url" | shasum -a 256 | awk '{print $1}')"
+  source="$shared/download/by-url-sha256/$key"
+  mkdir -p "$source"
+  printf '%s' "$payload" >"$source/data"
+  printf '%s\n' "$url" >"$source/url"
+  jq -n --arg url "$url" --arg digest "$digest" '
+    {families:[{id:"developer-standard",currentRevision:"fixture",
+      revisions:[{id:"fixture",artifacts:[{hostOS:"darwin",hostArch:"arm64",
+        location:$url,sha256:$digest}]}]}]}
+  ' >"$catalog"
+
+  status="$(hideout_seed_verified_runtime_cache "$catalog" "$shared" "$target" 1)"
+  [ "$status" = "verified-clone" ]
+  cmp "$source/data" "$target/download/by-url-sha256/$key/data"
+  printf 'changed-target' >"$target/download/by-url-sha256/$key/data"
+  [ "$(cat "$source/data")" = "$payload" ]
+
+  rm -rf "$target" "$source"
+  if hideout_seed_verified_runtime_cache "$catalog" "$shared" "$target" 1 >/dev/null 2>&1; then
+    echo "public-alpha-release: required missing runtime cache was accepted" >&2
+    exit 1
+  fi
+  mkdir -p "$source"
+  printf 'wrong-runtime' >"$source/data"
+  if hideout_seed_verified_runtime_cache "$catalog" "$shared" "$target" 1 >/dev/null 2>&1; then
+    echo "public-alpha-release: wrong runtime cache digest was accepted" >&2
+    exit 1
+  fi
+)
 
 for workflow in \
   .github/workflows/hideout-alpha-candidate.yml \
@@ -99,6 +140,10 @@ grep -F 'export HIDEOUT_LIMA_SHORT_TMPDIR="$work"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install.sh' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'hideout_seed_verified_runtime_cache' \
+  scripts/test-public-alpha-clean-install.sh >/dev/null
 for consumer in test-hostfs-visibility-e2e.sh test-host-capability-projection-e2e.sh \
   test-host-app-pack-e2e.sh; do
   grep -F "$consumer --real-gate2 --require-real" \
