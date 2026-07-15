@@ -12,6 +12,7 @@ license text and copyright notices.
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | Apache-2.0 |
 | `golang.org/x/crypto` | `v0.53.0` | BSD-3-Clause |
 | `golang.org/x/sys` | `v0.46.0` | BSD-3-Clause |
+| `golang.org/x/term` | `v0.44.0` | BSD-3-Clause |
 | `gopkg.in/yaml.v3` | `v3.0.1` | MIT and Apache-2.0 |
 
 The complete, machine-resolved dependency graph is recorded by `go.mod` and

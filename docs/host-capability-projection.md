@@ -28,7 +28,7 @@ guest: code .
   -> UnboundOpenResourceIntent      ({resources[], location, windowMode})
   -> Go re-decodes + binds app/kind (current session binding + resource mapping)
   -> host.app.open-resource provider (Core capability)
-  -> observed application identity   (Core roots/signing/ownership/revalidation)
+  -> observed application identity   (on first use; Core signing/ownership)
   -> generic argv renderer           (internal/hostcap/appopen)
   -> host application (code)         (Core execs the real CLI)
 ```
@@ -67,7 +67,12 @@ guest: code .
 ## Community Recipe Extension (032)
 
 The 032 target replaces guest-selectable app identity with an immutable binding
-compiled at run start:
+compiled at run start. Default-safe bindings lock package, command, grammar,
+permission, expected app family, and Core safety-profile identity without
+touching the host application. Core observes and caches the exact application
+identity only when that command is first invoked, then revalidates it at every
+launch boundary. `ask-each-run` bindings remain eagerly observed because the
+operator decision is bound to the exact observed identity:
 
 ```text
 command -> exact pack revision -> binding -> declarative grammar
@@ -85,13 +90,13 @@ remove deletes only owned snapshots after disabling bindings and retaining
 audit. Enablement never hot-injects an old session; its effect starts with a new
 run.
 
-`safe` is available only when Core independently observes a compatible signed
-app and selects a named, versioned, Core-owned safety profile that checks argv,
-settings, and state together. A pack can request that profile but cannot define
-or attest it. An unsigned app stays visibly `unverified-app`, is bound to an
-exact Core-computed bundle-tree digest, and uses `ask-each-run`. Package signing
-requirements, package tests, or a self-signed bundle do not manufacture a
-verified identity.
+`safe` is available only when command-time Core observation finds a compatible
+signed app and selects the exact named, versioned, Core-owned safety profile
+locked into the run binding. That profile checks argv, settings, and state
+together. A pack can request the profile but cannot define or attest it. An
+unsigned app stays visibly `unverified-app`, is bound to an exact Core-computed
+bundle-tree digest, and uses `ask-each-run`. Package signing requirements,
+package tests, or a self-signed bundle do not manufacture a verified identity.
 
 Workspace resources come from the current session mapping. A HostFS resource
 must already have active same-session content authority; discover-only
@@ -119,6 +124,10 @@ lifecycle and its explicit CLI boundary.
    acts. Raw argv never reaches the host.
 4. **Typed result channel.** Each capability declares a result policy;
    `host.app.open-resource` is `none`.
+5. **Validate only the selected host effect.** Starting a run or executing an
+   unrelated guest command does not inspect optional host applications. A
+   valid projected command resolves its selected app on first use and every
+   actual launch still performs final identity and resource revalidation.
 
 ## Safe and trusted IDE modes
 

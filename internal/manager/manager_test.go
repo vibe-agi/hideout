@@ -797,6 +797,9 @@ func TestCoreBeginOpenCloseRunSessionOwnsAuditEnvAndCleanup(t *testing.T) {
 	if got, want := runSession.Env.Synthetic["HOME"], filepath.Join(runSession.IdentityDir, "home"); got != want {
 		t.Fatalf("synthetic HOME=%q want %q", got, want)
 	}
+	if got, want := runSession.Env.Synthetic["GIT_CONFIG_VALUE_0"], plan.GuestWorkspace; got != want {
+		t.Fatalf("Git safe directory=%q want %q", got, want)
+	}
 	runSession, err = core.OpenRunSessionAudit(runSession, RunAuditOptions{})
 	if err != nil {
 		t.Fatalf("OpenRunSessionAudit: %v", err)

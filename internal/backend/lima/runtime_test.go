@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ func TestRuntimeObservationRunsBeforeSetupAsTargetDirectArgv(t *testing.T) {
 		ID: "developer-standard/v1", Digest: "sha256:" + strings.Repeat("a", 64),
 		Observations: []backend.RuntimeObservation{{
 			ID: "boundary.sh", Class: backend.RuntimeObservationBoundary, Command: "sh",
-			VersionArgs: []string{"--version"}, OutputPattern: "^call7$",
+			VersionArgs: []string{"--version"}, OutputPattern: "^runtime-version$",
 		}},
 	}
 	session.RuntimeResultSink = func(got backend.RuntimeObservationReport) error { report = got; return nil }
@@ -31,25 +32,24 @@ func TestRuntimeObservationRunsBeforeSetupAsTargetDirectArgv(t *testing.T) {
 	if len(report.Results) != 1 || !report.Results[0].Present || !report.Results[0].Matched {
 		t.Fatalf("runtime report=%+v", report)
 	}
-	if len(runner.calls) != 11 {
+	if len(runner.calls) != 10 {
 		t.Fatalf("runtime/setup/target calls=%+v", runner.calls)
 	}
-	check := strings.Join(runner.calls[5].args, " ")
-	version := strings.Join(runner.calls[6].args, " ")
-	if !strings.Contains(check, `command -v "$1"`) || !strings.HasSuffix(version, " sh --version") {
-		t.Fatalf("runtime probes are not fixed check + direct argv: check=%s version=%s", check, version)
+	batch := strings.Join(runner.calls[5].args, " ")
+	if strings.Count(batch, runtimeBatchRecordPrefix) < 1 || !strings.Contains(batch, "command -v 'sh'") || !strings.Contains(batch, "'sh' '--version'") {
+		t.Fatalf("runtime observations were not emitted as one fixed batch: %s", batch)
 	}
-	if strings.Contains(check+version, "/Users/alice") || !strings.Contains(check+version, "PATH=/hideout/session/shims:/hideout/profile/home/.local/bin") {
-		t.Fatalf("runtime probe did not use target guest env: %s %s", check, version)
+	if strings.Contains(batch, "/Users/alice") || !strings.Contains(batch, "PATH=/hideout/session/shims:/hideout/profile/home/.local/bin") {
+		t.Fatalf("runtime batch did not use target guest env: %s", batch)
 	}
-	if got := strings.Join(runner.calls[7].args, " "); !strings.HasSuffix(got, " /hideout/session/network/probe.sh") {
+	if got := strings.Join(runner.calls[6].args, " "); !strings.HasSuffix(got, " /hideout/session/network/probe.sh") {
 		t.Fatalf("network setup did not follow runtime observations: %s", got)
 	}
 }
 
 func TestRuntimeBoundaryFailureStopsBeforeSetupAndTarget(t *testing.T) {
 	runner := newRuntimeRecordingRunner(false)
-	runner.failCall = 6
+	runner.batchPresent = false
 	b := Backend{Runner: runner, Stdin: bytes.NewReader(nil), Stdout: io.Discard, Stderr: io.Discard}
 	session := runtimeTestSession()
 	session.RuntimeContract = &backend.RuntimeContract{
@@ -70,7 +70,7 @@ func TestRuntimeBoundaryFailureStopsBeforeSetupAndTarget(t *testing.T) {
 
 func TestRuntimeBaselineFailureDoesNotBlockDifferentPresentCommand(t *testing.T) {
 	runner := newRuntimeRecordingRunner(false)
-	runner.failCall = 6
+	runner.batchPresent = false
 	b := Backend{Runner: runner, Stdin: bytes.NewReader(nil), Stdout: io.Discard, Stderr: io.Discard}
 	session := runtimeTestSession()
 	session.RuntimeContract = &backend.RuntimeContract{
@@ -112,6 +112,27 @@ func TestRuntimeObservationRejectsUnsafeContractAndBoundsOutput(t *testing.T) {
 	}
 	if len(report.Results) != 1 || report.Results[0].Reason != "output-limit-exceeded" || len(report.Results[0].Output) != runtimeProcessOutputLimit {
 		t.Fatalf("output limit report=%+v", report)
+	}
+}
+
+func TestRuntimeObservationBatchParsesMultipleFramedResults(t *testing.T) {
+	observations := []backend.RuntimeObservation{
+		{ID: "baseline.git", Class: backend.RuntimeObservationBaseline, Command: "git", VersionArgs: []string{"--version"}, OutputPattern: `^git version `},
+		{ID: "baseline.make", Class: backend.RuntimeObservationBaseline, Command: "make"},
+	}
+	data := []byte(fmt.Sprintf(
+		"%s 0 1 0 0 18\ngit version 2.50.1\n%s 1 0 0 0 0\n\n%s 2\n",
+		runtimeBatchRecordPrefix, runtimeBatchRecordPrefix, runtimeBatchEndPrefix,
+	))
+	results, err := parseRuntimeObservationBatch(data, observations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || !results[0].Present || !results[0].Matched || results[1].Present || results[1].Reason != "command-missing" {
+		t.Fatalf("framed results=%+v", results)
+	}
+	if _, err := parseRuntimeObservationBatch(append(data, 'x'), observations); err == nil {
+		t.Fatal("runtime batch parser accepted trailing data")
 	}
 }
 
@@ -248,16 +269,28 @@ type runtimeRecordingRunner struct {
 	*recordingRunner
 	inventoryOutput string
 	inventoryErr    error
+	batchPresent    bool
+	batchOutput     string
 }
 
 func newRuntimeRecordingRunner(emitOutput bool) *runtimeRecordingRunner {
 	return &runtimeRecordingRunner{
 		recordingRunner: &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", emitOutput: emitOutput},
 		inventoryOutput: strings.Repeat("f", 64) + "  /etc/hideout/package-inventory.txt\n",
+		batchPresent:    true,
+		batchOutput:     "runtime-version\n",
 	}
 }
 
 func (r *runtimeRecordingRunner) Run(ctx context.Context, name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if strings.Contains(strings.Join(args, " "), runtimeBatchRecordPrefix) {
+		r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
+		if r.failCall > 0 && len(r.calls) == r.failCall {
+			return errors.New("runtime observation transport failed")
+		}
+		writeRuntimeBatchFixture(stdout, r.batchPresent, 0, false, r.batchOutput)
+		return nil
+	}
 	if isDirectPackageInventoryArgv(args) {
 		r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
 		if r.failCall > 0 && len(r.calls) == r.failCall {
@@ -291,10 +324,26 @@ func (r *runtimeLargeOutputRunner) LookPath(string) (string, error) { return "/u
 
 func (r *runtimeLargeOutputRunner) Run(_ context.Context, _ string, _ []string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
 	r.calls++
-	if r.calls == 2 {
-		_, _ = io.WriteString(stdout, strings.Repeat("x", runtimeProcessOutputLimit+100))
-	}
+	writeRuntimeBatchFixture(stdout, true, 0, true, strings.Repeat("x", runtimeProcessOutputLimit))
 	return nil
+}
+
+func writeRuntimeBatchFixture(w io.Writer, present bool, status int, truncated bool, output string) {
+	presentValue := 0
+	if present {
+		presentValue = 1
+	} else {
+		status = 0
+		truncated = false
+		output = ""
+	}
+	truncatedValue := 0
+	if truncated {
+		truncatedValue = 1
+	}
+	_, _ = fmt.Fprintf(w, "%s 0 %d %d %d %d\n", runtimeBatchRecordPrefix, presentValue, status, truncatedValue, len(output))
+	_, _ = io.WriteString(w, output)
+	_, _ = fmt.Fprintf(w, "\n%s 1\n", runtimeBatchEndPrefix)
 }
 
 type runtimeCanceledRunner struct{}

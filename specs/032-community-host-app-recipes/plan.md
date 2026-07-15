@@ -35,7 +35,7 @@ provider for workspace and already-authorized HostFS resources.
 
 **Project Type**: Go CLI plus local Manager control plane and brokered guest-to-host capability provider
 
-**Performance Goals**: Local pack inspect/plan completes within 500 ms excluding git acquisition and host signature checks; runtime binding compilation for up to 64 commands completes within 100 ms; launch validation adds no unbounded wait and preserves existing dedup behavior
+**Performance Goals**: Local pack inspect/plan completes within 500 ms excluding git acquisition and host signature checks; runtime binding compilation for up to 64 commands completes within 100 ms and performs zero optional host-app signature checks for default-safe bindings; first command use performs bounded identity resolution, and launch validation adds no unbounded wait while preserving existing dedup behavior
 
 **Constraints**: No generic host exec, no package hooks, no JavaScript grammar in v1, no guest-selected app identity, no package-defined safe state, no mutable source reads at runtime, no host path in public/guest data, no fallback, no new helper binary, and no authority for an already-running session
 

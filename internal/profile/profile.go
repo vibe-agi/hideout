@@ -272,7 +272,7 @@ func Default(name string) Profile {
 			User:     "developer",
 			Hostname: "devbox",
 			Timezone: "UTC",
-			Locale:   "en_US.UTF-8",
+			Locale:   "C.UTF-8",
 		},
 		Workspace: Workspace{
 			Mode:     "read-write",
@@ -985,6 +985,9 @@ func isHideoutReservedEnvName(name string) bool {
 }
 
 func isSyntheticIdentityEnvName(name string) bool {
+	if strings.HasPrefix(name, "GIT_CONFIG_") {
+		return true
+	}
 	switch name {
 	case "HOME", "USER", "LOGNAME", "HOSTNAME", "TMPDIR",
 		"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",

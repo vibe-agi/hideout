@@ -63,10 +63,11 @@ func (c Core) BeginRunSession(plan RunPlan, runEnv RunEnvironment, opts RunSessi
 	out.ProfileDir = c.Store.ProfileDir(plan.ProfileName)
 	out.IdentityDir = RunIdentityDir(layout, out.ProfileDir, plan.Ephemeral)
 	out.Env = envpolicy.Build(envpolicy.Spec{
-		Profile:    plan.RuntimeProfile,
-		ProfileDir: out.IdentityDir,
-		SessionDir: out.RuntimeSessionDir,
-		ShimDir:    out.RuntimeShimDir,
+		Profile:          plan.RuntimeProfile,
+		ProfileDir:       out.IdentityDir,
+		SessionDir:       out.RuntimeSessionDir,
+		ShimDir:          out.RuntimeShimDir,
+		GitSafeDirectory: plan.GuestWorkspace,
 	})
 	return out, nil
 }

@@ -295,7 +295,8 @@
         },
         "hideoutLimaInstances": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Hideout Lima instances absent from the gate's startup snapshot but still present after cleanup."
         }
       }
     },

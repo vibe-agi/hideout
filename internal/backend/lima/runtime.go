@@ -1,6 +1,7 @@
 package lima
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,8 @@ const (
 	runtimeObservationTimeout   = 20 * time.Second
 	runtimeProcessOutputLimit   = 4 << 10
 	runtimePackageInventoryPath = "/etc/hideout/package-inventory.txt"
+	runtimeBatchRecordPrefix    = "HIDEOUT_RUNTIME_V1"
+	runtimeBatchEndPrefix       = "HIDEOUT_RUNTIME_END"
 )
 
 func (b Backend) observeRuntime(ctx context.Context, session *backend.Session, runner CommandRunner, hostEnv, env []string, instance backend.RuntimeInstanceObservation) error {
@@ -35,40 +39,12 @@ func (b Backend) observeRuntime(ctx context.Context, session *backend.Session, r
 	if session.PrivilegeStatus != nil {
 		report.PrivilegeStatus = string(session.PrivilegeStatus.Status)
 	}
-	for _, observation := range contract.Observations {
-		result := backend.RuntimeObservationResult{ID: observation.ID, Class: observation.Class, Command: observation.Command}
-		if err := runner.Run(probeCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, CommandCheck(observation.Command)), hostEnv, nil, io.Discard, io.Discard); err != nil {
-			if probeCtx.Err() != nil {
-				return probeCtx.Err()
-			}
-			result.Reason = "command-missing"
-			report.Results = append(report.Results, result)
-			appendRuntimeFailure(&report, observation)
-			continue
-		}
-		result.Present = true
-		result.Matched = true
-		result.Reason = "ok"
-		if len(observation.VersionArgs) > 0 {
-			capture := &boundedRuntimeCapture{limit: runtimeProcessOutputLimit}
-			command := append([]string{observation.Command}, observation.VersionArgs...)
-			err := runner.Run(probeCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, command), hostEnv, nil, capture, capture)
-			if probeCtx.Err() != nil {
-				return probeCtx.Err()
-			}
-			result.Output = capture.String()
-			switch {
-			case err != nil:
-				result.Matched = false
-				result.Reason = "version-command-failed"
-			case capture.truncated:
-				result.Matched = false
-				result.Reason = "output-limit-exceeded"
-			case observation.OutputPattern != "" && !regexp.MustCompile(observation.OutputPattern).MatchString(strings.TrimSpace(result.Output)):
-				result.Matched = false
-				result.Reason = "version-mismatch"
-			}
-		}
+	results, err := b.observeRuntimeBatch(probeCtx, session, runner, hostEnv, env, contract)
+	if err != nil {
+		return err
+	}
+	for i, result := range results {
+		observation := contract.Observations[i]
 		report.Results = append(report.Results, result)
 		if !result.Present || !result.Matched {
 			appendRuntimeFailure(&report, observation)
@@ -86,6 +62,139 @@ func (b Backend) observeRuntime(ctx context.Context, session *backend.Session, r
 		return backend.RuntimeBoundaryError{FailedIDs: append([]string(nil), report.BoundaryFailed...)}
 	}
 	return nil
+}
+
+func (b Backend) observeRuntimeBatch(ctx context.Context, session *backend.Session, runner CommandRunner, hostEnv, env []string, contract *backend.RuntimeContract) ([]backend.RuntimeObservationResult, error) {
+	if session == nil || contract == nil {
+		return nil, errors.New("runtime batch observation requires a session and contract")
+	}
+	script := runtimeObservationBatchScript(contract.Observations)
+	limit := len(contract.Observations)*(runtimeProcessOutputLimit+256) + 256
+	stdout := &boundedRuntimeCapture{limit: limit}
+	stderr := &boundedRuntimeCapture{limit: runtimeProcessOutputLimit}
+	err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{"sh", "-c", script}), hostEnv, nil, stdout, stderr)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtime observation batch failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if stdout.truncated || stderr.truncated {
+		return nil, errors.New("runtime observation batch exceeded its bounded output")
+	}
+	return parseRuntimeObservationBatch(stdout.buf.Bytes(), contract.Observations)
+}
+
+func runtimeObservationBatchScript(observations []backend.RuntimeObservation) string {
+	var script strings.Builder
+	script.WriteString("set +e\numask 077\n")
+	script.WriteString("runtime_tmp=$(mktemp -d /hideout/session/tmp/runtime-observe.XXXXXX) || exit 97\n")
+	script.WriteString("trap 'rm -rf \"$runtime_tmp\"' EXIT HUP INT TERM\n")
+	for i, observation := range observations {
+		command := shellQuote(observation.Command)
+		fmt.Fprintf(&script, "if command -v %s >/dev/null 2>&1; then present=1; else present=0; fi\n", command)
+		if len(observation.VersionArgs) == 0 {
+			fmt.Fprintf(&script, "printf '%s %d %%s 0 0 0\\n\\n' \"$present\"\n", runtimeBatchRecordPrefix, i)
+			continue
+		}
+		argv := []string{command}
+		for _, arg := range observation.VersionArgs {
+			argv = append(argv, shellQuote(arg))
+		}
+		fmt.Fprintf(&script, "out=$runtime_tmp/out.%d; status_file=$runtime_tmp/status.%d\n", i, i)
+		script.WriteString("if [ \"$present\" -eq 1 ]; then\n")
+		fmt.Fprintf(&script, "  ( %s; printf '%%s\\n' \"$?\" >\"$status_file\" ) 2>&1 | head -c %d >\"$out\"\n", strings.Join(argv, " "), runtimeProcessOutputLimit+1)
+		script.WriteString("  if [ -s \"$status_file\" ]; then read -r status <\"$status_file\"; else status=1; fi\n")
+		script.WriteString("else\n  : >\"$out\"; status=0\nfi\n")
+		script.WriteString("set -- $(wc -c <\"$out\"); size=$1; emit=$size; truncated=0\n")
+		fmt.Fprintf(&script, "if [ \"$emit\" -gt %d ]; then emit=%d; truncated=1; fi\n", runtimeProcessOutputLimit, runtimeProcessOutputLimit)
+		fmt.Fprintf(&script, "printf '%s %d %%s %%s %%s %%s\\n' \"$present\" \"$status\" \"$truncated\" \"$emit\"\n", runtimeBatchRecordPrefix, i)
+		script.WriteString("head -c \"$emit\" \"$out\"\nprintf '\\n'\n")
+	}
+	fmt.Fprintf(&script, "printf '%s %d\\n'\n", runtimeBatchEndPrefix, len(observations))
+	return script.String()
+}
+
+func parseRuntimeObservationBatch(data []byte, observations []backend.RuntimeObservation) ([]backend.RuntimeObservationResult, error) {
+	reader := bufio.NewReader(bytes.NewReader(data))
+	results := make([]backend.RuntimeObservationResult, 0, len(observations))
+	for i, observation := range observations {
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("runtime observation %d header: %w", i, err)
+		}
+		fields := strings.Fields(strings.TrimSuffix(header, "\n"))
+		if len(fields) != 6 || fields[0] != runtimeBatchRecordPrefix || fields[1] != strconv.Itoa(i) {
+			return nil, fmt.Errorf("runtime observation %d has invalid frame header", i)
+		}
+		present, ok := parseRuntimeBatchBool(fields[2])
+		if !ok {
+			return nil, fmt.Errorf("runtime observation %d has invalid presence", i)
+		}
+		status, err := strconv.Atoi(fields[3])
+		if err != nil || status < 0 || status > 255 {
+			return nil, fmt.Errorf("runtime observation %d has invalid status", i)
+		}
+		truncated, ok := parseRuntimeBatchBool(fields[4])
+		if !ok {
+			return nil, fmt.Errorf("runtime observation %d has invalid truncation", i)
+		}
+		length, err := strconv.Atoi(fields[5])
+		if err != nil || length < 0 || length > runtimeProcessOutputLimit {
+			return nil, fmt.Errorf("runtime observation %d has invalid output length", i)
+		}
+		output := make([]byte, length)
+		if _, err := io.ReadFull(reader, output); err != nil {
+			return nil, fmt.Errorf("runtime observation %d output: %w", i, err)
+		}
+		separator, err := reader.ReadByte()
+		if err != nil || separator != '\n' {
+			return nil, fmt.Errorf("runtime observation %d has invalid frame terminator", i)
+		}
+		if !present && (status != 0 || truncated || length != 0) {
+			return nil, fmt.Errorf("runtime observation %d missing-command frame is inconsistent", i)
+		}
+		if len(observation.VersionArgs) == 0 && (status != 0 || truncated || length != 0) {
+			return nil, fmt.Errorf("runtime observation %d presence-only frame has output", i)
+		}
+		result := backend.RuntimeObservationResult{
+			ID: observation.ID, Class: observation.Class, Command: observation.Command,
+			Present: present, Output: string(output), Matched: present, Reason: "ok",
+		}
+		switch {
+		case !present:
+			result.Reason = "command-missing"
+		case truncated:
+			result.Matched = false
+			result.Reason = "output-limit-exceeded"
+		case status != 0:
+			result.Matched = false
+			result.Reason = "version-command-failed"
+		case observation.OutputPattern != "" && !regexp.MustCompile(observation.OutputPattern).MatchString(strings.TrimSpace(result.Output)):
+			result.Matched = false
+			result.Reason = "version-mismatch"
+		}
+		results = append(results, result)
+	}
+	end, err := reader.ReadString('\n')
+	if err != nil || strings.TrimSuffix(end, "\n") != runtimeBatchEndPrefix+" "+strconv.Itoa(len(observations)) {
+		return nil, errors.New("runtime observation batch has invalid end frame")
+	}
+	if trailing, _ := io.ReadAll(reader); len(trailing) != 0 {
+		return nil, errors.New("runtime observation batch has trailing data")
+	}
+	return results, nil
+}
+
+func parseRuntimeBatchBool(value string) (bool, bool) {
+	switch value {
+	case "0":
+		return false, true
+	case "1":
+		return true, true
+	default:
+		return false, false
+	}
 }
 
 type runtimeLimaInstance struct {

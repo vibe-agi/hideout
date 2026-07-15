@@ -738,6 +738,43 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	}
 }
 
+func TestTerminalBridgeCommandPreservesStructuredArgv(t *testing.T) {
+	got := terminalBridgeCommand([]string{"tool", "a'b; touch /tmp/should-not-run", "line 2"}, 132, 43)
+	want := []string{
+		"script",
+		"-qefc",
+		"stty rows 43 cols 132 2>/dev/null || true; exec 'tool' 'a'\"'\"'b; touch /tmp/should-not-run' 'line 2'",
+		"/dev/null",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("terminal bridge argv=%q want %q", got, want)
+	}
+}
+
+func TestTerminalBridgeAvailabilityUsesGuestProbe(t *testing.T) {
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", terminalBridge: true}
+	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session := &backend.Session{InstanceName: "hideout-test", GuestWork: "/workspace"}
+	if !b.terminalBridgeAvailable(context.Background(), runner, []string{"PATH=/usr/bin"}, session, []string{"PATH=/usr/bin"}) {
+		t.Fatal("expected script(1) guest probe to enable terminal bridge")
+	}
+	if len(runner.calls) != 1 || !strings.Contains(strings.Join(runner.calls[0].args, " "), "command -v script") {
+		t.Fatalf("unexpected terminal bridge probe calls: %+v", runner.calls)
+	}
+
+	runner = &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
+	if b.terminalBridgeAvailable(context.Background(), runner, []string{"PATH=/usr/bin"}, session, []string{"PATH=/usr/bin"}) {
+		t.Fatal("missing script(1) must retain the legacy terminal path")
+	}
+}
+
+func TestNonTerminalWriterHidesFileDescriptorFromLimactl(t *testing.T) {
+	w := nonTerminalWriter{Writer: os.Stdout}
+	if _, ok := any(w).(interface{ Fd() uintptr }); ok {
+		t.Fatal("terminal transport writer must not expose an fd to the child process")
+	}
+}
+
 func TestRunUsesSetupIdentityForPrivilegedNetworkBootstrap(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
@@ -1418,11 +1455,12 @@ func (fakeRunner) Run(context.Context, string, []string, []string, io.Reader, io
 }
 
 type recordingRunner struct {
-	lookPath   string
-	calls      []recordedCall
-	failCall   int
-	listOutput string
-	emitOutput bool
+	lookPath       string
+	calls          []recordedCall
+	failCall       int
+	listOutput     string
+	emitOutput     bool
+	terminalBridge bool
 }
 
 type recordedCall struct {
@@ -1454,6 +1492,10 @@ func (r *recordingRunner) Run(_ context.Context, name string, args []string, env
 		return nil
 	}
 	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "command -v script") && r.terminalBridge {
+		_, _ = io.WriteString(stdout, "available")
+		return nil
+	}
 	if strings.HasSuffix(joined, " cat /proc/sys/kernel/random/boot_id") {
 		_, _ = io.WriteString(stdout, "01234567-89ab-cdef-0123-456789abcdef\n")
 		return nil

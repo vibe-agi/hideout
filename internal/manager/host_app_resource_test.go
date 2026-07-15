@@ -313,8 +313,10 @@ func TestStartRunDataPlaneBindsCompleteForbiddenRootsIntoInitialAndFinalIdentity
 		packSource,
 	}
 	var identityRootChecks [][]string
+	var identityRefs []string
 	var missingChecks [][]string
 	core.HostAppIdentityResolver = func(expectation hostcap.ApplicationExpectation, forbidden []string) (hostcap.ObservedApplicationIdentity, error) {
+		identityRefs = append(identityRefs, expectation.QualifiedAppRef)
 		identityRootChecks = append(identityRootChecks, append([]string(nil), forbidden...))
 		required := append(append([]string(nil), baseRequired...), activeRoots...)
 		if missing := missingCanonicalManagerTestPaths(forbidden, required); len(missing) > 0 {
@@ -332,21 +334,30 @@ func TestStartRunDataPlaneBindsCompleteForbiddenRootsIntoInitialAndFinalIdentity
 		t.Fatalf("StartRunDataPlane: %v", err)
 	}
 	defer func() { _ = core.CloseRunDataPlane(dataPlane) }()
-	if len(identityRootChecks) == 0 || len(missingChecks) != 0 {
-		t.Fatalf("initial identity checks did not receive the complete production root set: checks=%d missing=%v", len(identityRootChecks), missingChecks)
-	}
-	if containsCanonicalManagerTestPath(identityRootChecks[0], readOnlyRoot) {
-		t.Fatalf("read-only HostFS content was incorrectly treated as guest-writable: %v", identityRootChecks[0])
-	}
-
 	binding, ok := dataPlane.Broker.HostApp.Bindings.ResolveCommand("code")
 	if !ok {
 		t.Fatal("built-in projection binding is missing")
 	}
+	for _, ref := range identityRefs {
+		if ref == binding.QualifiedAppRef {
+			t.Fatalf("unrelated run eagerly inspected the optional built-in host app: refs=%v", identityRefs)
+		}
+	}
+	checksBeforeCode := len(identityRootChecks)
+	resolved, err := dataPlane.Broker.HostApp.ResolveIdentity(binding)
+	if err != nil {
+		t.Fatalf("on-demand production identity resolution: %v", err)
+	}
+	if len(identityRootChecks) != checksBeforeCode+1 || identityRefs[len(identityRefs)-1] != binding.QualifiedAppRef || len(missingChecks) != 0 {
+		t.Fatalf("on-demand identity check did not receive the complete production root set: checks=%d missing=%v", len(identityRootChecks), missingChecks)
+	}
+	if containsCanonicalManagerTestPath(identityRootChecks[len(identityRootChecks)-1], readOnlyRoot) {
+		t.Fatalf("read-only HostFS content was incorrectly treated as guest-writable: %v", identityRootChecks[len(identityRootChecks)-1])
+	}
 	checksBeforeFinal := len(identityRootChecks)
 	activeRoots = append(activeRoots, finalActiveRoot)
-	current, err := dataPlane.Broker.HostApp.RevalidateIdentity(binding.Application, binding.ObservedIdentity)
-	if err != nil || current.IdentityDigest() != binding.ObservedIdentity.IdentityDigest() {
+	current, err := dataPlane.Broker.HostApp.RevalidateIdentity(resolved.Application, resolved.ObservedIdentity)
+	if err != nil || current.IdentityDigest() != resolved.ObservedIdentity.IdentityDigest() {
 		t.Fatalf("production final identity revalidation: identity=%+v err=%v", current, err)
 	}
 	if len(identityRootChecks) <= checksBeforeFinal || len(missingChecks) != 0 || !containsCanonicalManagerTestPath(identityRootChecks[len(identityRootChecks)-1], finalActiveRoot) {

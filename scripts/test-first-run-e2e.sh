@@ -259,16 +259,16 @@ build_package() {
 
 assert_docs_order() {
 	local doc="docs/first-run-alpha.md"
-	grep -q './install.sh --skip-init' "$doc"
+	grep -q 'brew install vibe-agi/tap/hideout' "$doc"
 	grep -q 'hideout init \\' "$doc"
 	local install_line init_line
-	install_line="$(grep -n -m1 './install.sh --skip-init' "$doc" | cut -d: -f1)"
+	install_line="$(grep -n -m1 'brew install vibe-agi/tap/hideout' "$doc" | cut -d: -f1)"
 	init_line="$(grep -n -m1 'hideout init \\' "$doc" | cut -d: -f1)"
 	if [ -z "$install_line" ] || [ -z "$init_line" ] || [ "$install_line" -ge "$init_line" ]; then
 		echo "first-run-e2e: docs install/init order is invalid" >&2
 		exit 1
 	fi
-	printf 'docs-order: install --skip-init precedes explicit init\n' >"$reports/docs-order.txt"
+	printf 'docs-order: Homebrew install precedes explicit init\n' >"$reports/docs-order.txt"
 }
 
 install_skip_init() {

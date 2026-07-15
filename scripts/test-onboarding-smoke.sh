@@ -113,7 +113,7 @@ jq -e '.metadata.templateId == "debug" and .metadata.templatePosture == "debug-l
 jq -e '.effectivePosture == "dev" and any(.nonClaims[]; contains("does not claim"))' "$store/profiles/alpha-dev/onboarding-evidence.json" >/dev/null
 jq -e '.effectivePosture == "debug-local" and any(.nonClaims[]; contains("does not claim"))' "$store/profiles/alpha-debug/onboarding-evidence.json" >/dev/null
 
-grep -q -- '--template privacy' README.md
 grep -q -- '--template dev' README.md
+grep -q -- '--template privacy' docs/first-run-alpha.md
 
 echo "onboarding-smoke: passed"

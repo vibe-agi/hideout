@@ -19,11 +19,12 @@ type Result struct {
 }
 
 type Spec struct {
-	Profile    profile.Profile
-	ProfileDir string
-	SessionDir string
-	ShimDir    string
-	HostEnv    []string
+	Profile          profile.Profile
+	ProfileDir       string
+	SessionDir       string
+	ShimDir          string
+	GitSafeDirectory string
+	HostEnv          []string
 }
 
 func Build(spec Spec) Result {
@@ -77,6 +78,16 @@ func Build(spec Spec) Result {
 	if spec.ShimDir != "" {
 		synthetic["PATH"] = spec.ShimDir + ":" + defaultToolPath
 	}
+	if spec.GitSafeDirectory != "" {
+		// The mounted workspace is already explicit operator-granted authority.
+		// Trust only that Git root and repositories below it; never disable the
+		// ownership check globally with safe.directory=*.
+		synthetic["GIT_CONFIG_COUNT"] = "2"
+		synthetic["GIT_CONFIG_KEY_0"] = "safe.directory"
+		synthetic["GIT_CONFIG_VALUE_0"] = spec.GitSafeDirectory
+		synthetic["GIT_CONFIG_KEY_1"] = "safe.directory"
+		synthetic["GIT_CONFIG_VALUE_1"] = strings.TrimRight(spec.GitSafeDirectory, "/") + "/*"
+	}
 	for k, v := range spec.Profile.Env.Public {
 		if !isHardBlockedEnv(k) && !matchesAny(k, spec.Profile.Env.Deny) {
 			out[k] = v
@@ -120,7 +131,7 @@ func observedDeniedName(name string) string {
 }
 
 func isHardBlockedEnv(name string) bool {
-	return isBlockedProxyEnv(name) || strings.HasPrefix(name, "HIDEOUT_")
+	return isBlockedProxyEnv(name) || strings.HasPrefix(name, "HIDEOUT_") || strings.HasPrefix(name, "GIT_CONFIG_")
 }
 
 func isBlockedProxyEnv(name string) bool {

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/portbridge"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -281,8 +283,72 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 			Hint:      "install the command in the guest base environment or run in-boundary setup before retrying; no host fallback was attempted",
 		}
 	}
+	if b.canBridgeTerminal() && b.terminalBridgeAvailable(ctx, runner, hostEnv, session, env) {
+		return b.runWithTerminalBridge(ctx, runner, hostEnv, session, env, command)
+	}
 	args := ShellArgs(session.InstanceName, session.GuestWork, env, command)
 	return runner.Run(ctx, b.limactl(), args, hostEnv, b.stdin(), b.stdout(), b.stderr())
+}
+
+func (b Backend) terminalBridgeAvailable(ctx context.Context, runner CommandRunner, hostEnv []string, session *backend.Session, env []string) bool {
+	var out bytes.Buffer
+	args := ShellArgs(session.InstanceName, session.GuestWork, env, []string{
+		"sh", "-c", "command -v script >/dev/null 2>&1 && printf available || true",
+	})
+	if err := runner.Run(ctx, b.limactl(), args, hostEnv, nil, &out, b.controlStderr()); err != nil {
+		return false
+	}
+	return strings.TrimSpace(out.String()) == "available"
+}
+
+func (b Backend) runWithTerminalBridge(ctx context.Context, runner CommandRunner, hostEnv []string, session *backend.Session, env, command []string) (retErr error) {
+	stdin, _ := b.stdin().(*os.File)
+	stdout, _ := b.stdout().(*os.File)
+	if stdin == nil || stdout == nil {
+		return errors.New("terminal bridge requires file-backed stdin and stdout")
+	}
+	width, height, err := term.GetSize(int(stdout.Fd()))
+	if err != nil || width <= 0 || height <= 0 {
+		width, height = 80, 24
+	}
+	state, err := term.MakeRaw(int(stdin.Fd()))
+	if err != nil {
+		args := ShellArgs(session.InstanceName, session.GuestWork, env, command)
+		return runner.Run(ctx, b.limactl(), args, hostEnv, b.stdin(), b.stdout(), b.stderr())
+	}
+	defer func() {
+		retErr = errors.Join(retErr, term.Restore(int(stdin.Fd()), state))
+	}()
+
+	args := ShellArgs(session.InstanceName, session.GuestWork, env, terminalBridgeCommand(command, width, height))
+	return runner.Run(
+		ctx,
+		b.limactl(),
+		args,
+		hostEnv,
+		stdin,
+		nonTerminalWriter{Writer: b.stdout()},
+		nonTerminalWriter{Writer: b.stderr()},
+	)
+}
+
+func (b Backend) canBridgeTerminal() bool {
+	stdin, stdinOK := b.stdin().(*os.File)
+	stdout, stdoutOK := b.stdout().(*os.File)
+	return stdinOK && stdoutOK && term.IsTerminal(int(stdin.Fd())) && term.IsTerminal(int(stdout.Fd()))
+}
+
+type nonTerminalWriter struct {
+	io.Writer
+}
+
+func terminalBridgeCommand(command []string, width, height int) []string {
+	quoted := make([]string, 0, len(command))
+	for _, arg := range command {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	script := "stty rows " + strconv.Itoa(height) + " cols " + strconv.Itoa(width) + " 2>/dev/null || true; exec " + strings.Join(quoted, " ")
+	return []string{"script", "-qefc", script, "/dev/null"}
 }
 
 func (b Backend) VerifyRuntime(ctx context.Context, session *backend.Session, env []string) error {

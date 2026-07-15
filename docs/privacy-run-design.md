@@ -2522,8 +2522,8 @@ XDG_CACHE_HOME=<guest-cache>
 XDG_DATA_HOME=<guest-data>
 GIT_CONFIG_GLOBAL=<guest-home>/.gitconfig
 TZ=UTC
-LANG=en_US.UTF-8
-LC_ALL=en_US.UTF-8
+LANG=C.UTF-8
+LC_ALL=C.UTF-8
 PATH=<shim-dir>:<guest-tool-paths>
 ```
 
@@ -3614,7 +3614,7 @@ Representative profile:
     "user": "developer",
     "hostname": "devbox",
     "timezone": "UTC",
-    "locale": "en_US.UTF-8"
+    "locale": "C.UTF-8"
   },
   "workspace": {
     "mode": "read-write",

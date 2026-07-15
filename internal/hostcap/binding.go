@@ -37,27 +37,35 @@ type BindingGrammar struct {
 // OpenResourceBinding is the immutable Core interpretation of one enabled
 // package binding. Guest input can select only a registered command. Every
 // authority-bearing field below is derived from the enabled revision and Core
-// catalogs before a run starts.
+// catalogs before a run starts. Safe bindings may attach the path-bearing
+// observed application identity on first command use; that observation cannot
+// change the binding's static authority digest.
 type OpenResourceBinding struct {
-	PackID                 string
-	RevisionID             string
-	BindingID              string
-	QualifiedAppRef        string
-	Commands               []string
-	CapabilityID           string
-	ResourceKinds          []ResourceKind
-	ResultPolicy           ResultPolicy
-	Access                 string
-	Grammar                BindingGrammar
-	Application            ApplicationExpectation
-	Launch                 appopen.LaunchSpec
-	SafetyProfileID        string
-	SafetyProfileVersion   string
-	SourceDigest           string
-	PermissionFingerprint  string
-	ObservedIdentityDigest string
-	ObservedIdentity       ObservedApplicationIdentity
-	BindingDigest          string
+	PackID                string
+	RevisionID            string
+	BindingID             string
+	QualifiedAppRef       string
+	Commands              []string
+	CapabilityID          string
+	ResourceKinds         []ResourceKind
+	ResultPolicy          ResultPolicy
+	Access                string
+	Grammar               BindingGrammar
+	Application           ApplicationExpectation
+	Launch                appopen.LaunchSpec
+	SafetyProfileID       string
+	SafetyProfileVersion  string
+	SourceDigest          string
+	PermissionFingerprint string
+	// IdentityDeferred keeps application observation out of unrelated run
+	// startup. ExpectedIdentitySetDigest binds community enablement to the
+	// identity set approved by the operator; built-in bindings instead rely on
+	// Core-owned application expectations and safety profiles.
+	IdentityDeferred          bool
+	ExpectedIdentitySetDigest string
+	ObservedIdentityDigest    string
+	ObservedIdentity          ObservedApplicationIdentity
+	BindingDigest             string
 }
 
 // BindingCatalog is an immutable command-to-binding map. It has no fallback:
@@ -168,11 +176,25 @@ func ValidateOpenResourceBinding(binding OpenResourceBinding) error {
 	if !bindingDigest.MatchString(binding.SourceDigest) || !bindingDigest.MatchString(binding.PermissionFingerprint) {
 		return errors.New("hostcap: binding must carry exact source and permission digests")
 	}
-	if !bindingDigest.MatchString(binding.ObservedIdentityDigest) || binding.ObservedIdentity.IdentityDigest() != binding.ObservedIdentityDigest || binding.ObservedIdentity.QualifiedAppRef != binding.QualifiedAppRef {
-		return errors.New("hostcap: compiled-run binding must carry the exact Core-observed app identity")
-	}
-	if binding.ObservedIdentity.ExecutableRelativePath != filepath.ToSlash(binding.Application.ExecutableRelativePath) || binding.ObservedIdentity.ExecutableCodeIdentity == "" {
-		return errors.New("hostcap: compiled-run binding executable identity does not match the reviewed application executable")
+	if binding.IdentityDeferred {
+		if binding.ExpectedIdentitySetDigest != "" && !bindingDigest.MatchString(binding.ExpectedIdentitySetDigest) {
+			return errors.New("hostcap: deferred binding expected identity-set digest is invalid")
+		}
+		if (binding.ObservedIdentityDigest == "") != (binding.ObservedIdentity.IdentityDigest() == "") {
+			return errors.New("hostcap: deferred binding carries a partial observed identity")
+		}
+		if binding.ObservedIdentityDigest != "" {
+			if err := validateBindingObservedIdentity(binding); err != nil {
+				return err
+			}
+		}
+	} else {
+		if binding.ExpectedIdentitySetDigest != "" {
+			return errors.New("hostcap: eager binding cannot carry a deferred identity-set digest")
+		}
+		if err := validateBindingObservedIdentity(binding); err != nil {
+			return err
+		}
 	}
 	wantDigest, err := ComputeBindingDigest(binding)
 	if err != nil || binding.BindingDigest != wantDigest {
@@ -181,12 +203,25 @@ func ValidateOpenResourceBinding(binding OpenResourceBinding) error {
 	return nil
 }
 
+func validateBindingObservedIdentity(binding OpenResourceBinding) error {
+	if !bindingDigest.MatchString(binding.ObservedIdentityDigest) || binding.ObservedIdentity.IdentityDigest() != binding.ObservedIdentityDigest || binding.ObservedIdentity.QualifiedAppRef != binding.QualifiedAppRef {
+		return errors.New("hostcap: compiled-run binding must carry the exact Core-observed app identity")
+	}
+	if binding.ObservedIdentity.ExecutableRelativePath != filepath.ToSlash(binding.Application.ExecutableRelativePath) || binding.ObservedIdentity.ExecutableCodeIdentity == "" {
+		return errors.New("hostcap: compiled-run binding executable identity does not match the reviewed application executable")
+	}
+	return nil
+}
+
 func validBindingCommand(command string) bool {
 	return len(command) <= 64 && bindingCommand.MatchString(command) && filepath.Base(command) == command
 }
 
-// ComputeBindingDigest hashes only path-free immutable authority and observed
-// identity facts. Host paths and executable locations never enter guest data.
+// ComputeBindingDigest hashes only path-free immutable authority. Eager
+// bindings include their observed identity digest. Deferred bindings include
+// the approved identity-set digest, when one exists, and attach the current
+// observed identity only inside Core on first use. Host paths and executable
+// locations never enter guest data.
 func ComputeBindingDigest(binding OpenResourceBinding) (string, error) {
 	canonical := struct {
 		PackID, RevisionID, BindingID, QualifiedAppRef string
@@ -200,6 +235,8 @@ func ComputeBindingDigest(binding OpenResourceBinding) (string, error) {
 		Launch                                         appopen.LaunchSpec
 		SafetyProfileID, SafetyProfileVersion          string
 		SourceDigest, PermissionFingerprint            string
+		IdentityDeferred                               bool
+		ExpectedIdentitySetDigest                      string
 		ObservedIdentityDigest                         string
 	}{
 		binding.PackID, binding.RevisionID, binding.BindingID, binding.QualifiedAppRef,
@@ -207,7 +244,14 @@ func ComputeBindingDigest(binding OpenResourceBinding) (string, error) {
 		append([]ResourceKind(nil), binding.ResourceKinds...), binding.ResultPolicy, binding.Access,
 		binding.Grammar, binding.Application, binding.Launch,
 		binding.SafetyProfileID, binding.SafetyProfileVersion,
-		binding.SourceDigest, binding.PermissionFingerprint, binding.ObservedIdentityDigest,
+		binding.SourceDigest, binding.PermissionFingerprint,
+		binding.IdentityDeferred, binding.ExpectedIdentitySetDigest, binding.ObservedIdentityDigest,
+	}
+	if binding.IdentityDeferred {
+		// The guest-visible binding is stable before any host application is
+		// touched. The observed identity is attached inside Core on first use and
+		// checked separately against ExpectedIdentitySetDigest when present.
+		canonical.ObservedIdentityDigest = ""
 	}
 	sort.Strings(canonical.Commands)
 	sort.Slice(canonical.ResourceKinds, func(i, j int) bool { return canonical.ResourceKinds[i] < canonical.ResourceKinds[j] })

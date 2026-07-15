@@ -257,16 +257,31 @@ func (c Core) hostAppRunLiveForbiddenRoots(runSession RunSession, policy hostfs.
 func (c Core) hostAppRunIdentityRevalidator(runSession RunSession, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.IdentityRevalidator {
 	initialRoots = append([]string(nil), initialRoots...)
 	return func(expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
-		liveRoots, err := c.hostAppRunLiveForbiddenRoots(runSession, policy)
-		if err != nil {
-			return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "launch-time application overlap boundary is unavailable"}
-		}
-		roots, err := canonicalHostAppRunForbiddenRoots(append(append([]string(nil), initialRoots...), liveRoots...))
+		roots, err := c.hostAppRunIdentityRoots(runSession, policy, initialRoots)
 		if err != nil {
 			return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "launch-time application overlap boundary is invalid"}
 		}
 		return c.hostAppRevalidator(roots)(expectation, previous)
 	}
+}
+
+func (c Core) hostAppRunBindingIdentityResolver(runSession RunSession, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.BindingIdentityResolver {
+	initialRoots = append([]string(nil), initialRoots...)
+	return func(binding hostcap.OpenResourceBinding) (hostcap.OpenResourceBinding, error) {
+		roots, err := c.hostAppRunIdentityRoots(runSession, policy, initialRoots)
+		if err != nil {
+			return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "on-demand application overlap boundary is unavailable"}
+		}
+		return c.resolveDeferredHostAppBinding(runSession.Plan.ProfileName, binding, roots)
+	}
+}
+
+func (c Core) hostAppRunIdentityRoots(runSession RunSession, policy hostfs.EffectivePolicy, initialRoots []string) ([]string, error) {
+	liveRoots, err := c.hostAppRunLiveForbiddenRoots(runSession, policy)
+	if err != nil {
+		return nil, err
+	}
+	return canonicalHostAppRunForbiddenRoots(append(append([]string(nil), initialRoots...), liveRoots...))
 }
 
 func canonicalHostAppRunForbiddenRoots(roots []string) ([]string, error) {

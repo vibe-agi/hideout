@@ -122,6 +122,34 @@ func TestBuildSyntheticPATHPrefixesShimDir(t *testing.T) {
 	}
 }
 
+func TestBuildPinsGitSafeDirectoryToMountedWorkspace(t *testing.T) {
+	p := profile.Default("test")
+	p.Env.Public["GIT_CONFIG_COUNT"] = "99"
+	p.Env.Public["GIT_CONFIG_VALUE_0"] = "*"
+	p.Env.Public["GIT_CONFIG_PARAMETERS"] = "'safe.directory=*'"
+	result := Build(Spec{
+		Profile:          p,
+		ProfileDir:       "/tmp/hideout/profile",
+		SessionDir:       "/tmp/hideout/session",
+		GitSafeDirectory: "/workspace",
+	})
+	env := strings.Join(result.Env, "\n")
+	for _, want := range []string{
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=safe.directory",
+		"GIT_CONFIG_VALUE_0=/workspace",
+		"GIT_CONFIG_KEY_1=safe.directory",
+		"GIT_CONFIG_VALUE_1=/workspace/*",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("workspace Git trust missing %q from %s", want, env)
+		}
+	}
+	if strings.Contains(env, "GIT_CONFIG_COUNT=99") || strings.Contains(env, "GIT_CONFIG_VALUE_0=*") || strings.Contains(env, "GIT_CONFIG_PARAMETERS") {
+		t.Fatalf("profile overrode Core-owned Git trust: %s", env)
+	}
+}
+
 func TestBuildHardBlocksProxyEnvEvenWhenProfileAllowsIt(t *testing.T) {
 	p := profile.Default("test")
 	p.Env.Deny = []string{}

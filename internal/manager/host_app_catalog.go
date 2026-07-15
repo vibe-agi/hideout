@@ -29,9 +29,10 @@ type hostAppCatalogSource struct {
 	builtIn    bool
 }
 
-// CompileHostAppCatalog resolves package data into path-bearing identities and
-// then emits only immutable, path-free command bindings. Existing runs keep
-// their in-memory catalog; profile changes affect future runs only.
+// CompileHostAppCatalog emits immutable, path-free command bindings. Safe
+// bindings defer host application observation until their command is actually
+// invoked; ask-each-run bindings retain eager observation because the operator
+// decision must be bound to the exact observed identity.
 func (c Core) CompileHostAppCatalog(profileName, runID string, forbiddenRoots []string) (hostcap.BindingCatalog, []cmdproxy.Registration, error) {
 	profileName, err := normalizeManagerProfileName(profileName)
 	if err != nil {
@@ -57,22 +58,23 @@ func (c Core) CompileHostAppCatalog(profileName, runID string, forbiddenRoots []
 		if err != nil {
 			return hostcap.BindingCatalog{}, nil, err
 		}
-		identities, safetyID, safetyVersion, err := c.resolveManifestIdentities(source.manifest, source.revision.RevisionID, selected, source.enablement.Access, forbiddenRoots)
+		identityDeferred := source.enablement.Access == hostapppack.AccessSafe
+		identities := map[string]hostcap.ObservedApplicationIdentity{}
+		safetyID, safetyVersion := "", ""
+		if identityDeferred {
+			safetyID, safetyVersion, err = manifestSafetyProfile(source.manifest, selected)
+		} else {
+			identities, safetyID, safetyVersion, err = c.resolveManifestIdentities(source.manifest, source.revision.RevisionID, selected, source.enablement.Access, forbiddenRoots)
+		}
 		if err != nil {
-			// The built-in recipe is an optional projection, never a prerequisite
-			// for starting an otherwise valid run. If the locally installed app is
-			// absent, untrusted, too large for the bounded unverified digest, or
-			// otherwise cannot be classified safely, omit it from this run. External
-			// profile enablements remain fail-closed and still abort compilation.
-			if source.builtIn {
+			// An eager built-in ask-each-run recipe remains optional. A missing or
+			// unclassifiable local app must not break unrelated guest commands.
+			if source.builtIn && !identityDeferred {
 				continue
 			}
 			return hostcap.BindingCatalog{}, nil, err
 		}
 		if !source.builtIn {
-			if err := validateUnverifiedAppTrust(source.enablement, identities); err != nil {
-				return hostcap.BindingCatalog{}, nil, err
-			}
 			permissionContext := hostAppEffectivePermissionContext(
 				source.enablement.Access, safetyID, safetyVersion,
 				source.enablement.BindingIDs, source.enablement.ConflictReplacements,
@@ -80,8 +82,13 @@ func (c Core) CompileHostAppCatalog(profileName, runID string, forbiddenRoots []
 			if err := hostapppack.ValidateEnablement(source.enablement, source.revision, source.manifest, permissionContext); err != nil {
 				return hostcap.BindingCatalog{}, nil, fmt.Errorf("host-app pack %q enablement drifted: %w", source.manifest.ID, err)
 			}
-			if observed := combinedIdentityDigest(identities); observed != source.enablement.ObservedIdentityDigest {
-				return hostcap.BindingCatalog{}, nil, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: fmt.Sprintf("host application identity changed for pack %q", source.manifest.ID)}
+			if !identityDeferred {
+				if err := validateUnverifiedAppTrust(source.enablement, identities); err != nil {
+					return hostcap.BindingCatalog{}, nil, err
+				}
+				if observed := combinedIdentityDigest(identities); observed != source.enablement.ObservedIdentityDigest {
+					return hostcap.BindingCatalog{}, nil, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: fmt.Sprintf("host application identity changed for pack %q", source.manifest.ID)}
+				}
 			}
 		}
 		apps := map[string]hostapppack.AppSpec{}
@@ -112,7 +119,11 @@ func (c Core) CompileHostAppCatalog(profileName, runID string, forbiddenRoots []
 				Grammar:     hostcap.BindingGrammar{Kind: spec.Grammar.Kind, ResourceCount: spec.Grammar.ResourceCount, GotoFlags: append([]string(nil), spec.Grammar.GotoFlags...), NewWindowFlags: append([]string(nil), spec.Grammar.NewWindowFlags...), ReuseWindowFlags: append([]string(nil), spec.Grammar.ReuseWindowFlags...), UnknownFlags: spec.Grammar.UnknownFlags},
 				Application: expectation, Launch: hostAppLaunch(app.Launch), SafetyProfileID: safetyID, SafetyProfileVersion: safetyVersion,
 				SourceDigest: source.revision.SourceDigest, PermissionFingerprint: source.enablement.PermissionFingerprint,
+				IdentityDeferred:       identityDeferred,
 				ObservedIdentityDigest: identity.IdentityDigest(), ObservedIdentity: identity,
+			}
+			if identityDeferred && !source.builtIn {
+				binding.ExpectedIdentitySetDigest = source.enablement.ObservedIdentityDigest
 			}
 			binding, err = hostcap.FinalizeBindingDigest(binding)
 			if err != nil {
@@ -137,6 +148,82 @@ func (c Core) CompileHostAppCatalog(profileName, runID string, forbiddenRoots []
 	sort.Slice(registrations, func(i, j int) bool { return registrations[i].Name < registrations[j].Name })
 	_ = runID // run identity is bound by ProjectionConfig and safe-state paths.
 	return catalog, registrations, nil
+}
+
+func manifestSafetyProfile(manifest hostapppack.Manifest, bindings []hostapppack.BindingSpec) (string, string, error) {
+	apps := make(map[string]hostapppack.AppSpec, len(manifest.Apps))
+	for _, app := range manifest.Apps {
+		apps[app.ID] = app
+	}
+	safetyID, safetyVersion := "", ""
+	for _, binding := range bindings {
+		app, ok := apps[binding.AppID]
+		if !ok || app.RequestedSafetyProfile == "" {
+			return "", "", errors.New("safe host-app binding has no requested Core safety profile")
+		}
+		profile, err := hostcap.CoreSafetyProfile(app.RequestedSafetyProfile)
+		if err != nil {
+			return "", "", err
+		}
+		if safetyID != "" && (safetyID != profile.ID || safetyVersion != profile.Version) {
+			return "", "", errors.New("selected bindings require different Core safety profiles")
+		}
+		safetyID, safetyVersion = profile.ID, profile.Version
+	}
+	return safetyID, safetyVersion, nil
+}
+
+func (c Core) resolveDeferredHostAppBinding(profileName string, binding hostcap.OpenResourceBinding, forbiddenRoots []string) (hostcap.OpenResourceBinding, error) {
+	if !binding.IdentityDeferred {
+		return binding, nil
+	}
+	sources, err := c.hostAppCatalogSources(profileName)
+	if err != nil {
+		return binding, err
+	}
+	var source *hostAppCatalogSource
+	for i := range sources {
+		if sources[i].manifest.ID == binding.PackID && sources[i].revision.RevisionID == binding.RevisionID {
+			source = &sources[i]
+			break
+		}
+	}
+	if source == nil {
+		return binding, &hostcap.Error{Code: hostcap.CodeCommandUnbound, Reason: "host-app binding source is no longer enabled"}
+	}
+	selected, err := selectHostAppBindings(source.manifest, source.enablement.BindingIDs)
+	if err != nil {
+		return binding, err
+	}
+	identities, safetyID, safetyVersion, err := c.resolveManifestIdentities(source.manifest, source.revision.RevisionID, selected, binding.Access, forbiddenRoots)
+	if err != nil {
+		return binding, err
+	}
+	if safetyID != binding.SafetyProfileID || safetyVersion != binding.SafetyProfileVersion {
+		return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "Core safety profile changed before command execution"}
+	}
+	if !source.builtIn {
+		if err := validateUnverifiedAppTrust(source.enablement, identities); err != nil {
+			return binding, err
+		}
+		if observed := combinedIdentityDigest(identities); observed != binding.ExpectedIdentitySetDigest || observed != source.enablement.ObservedIdentityDigest {
+			return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "host application identity changed after enablement"}
+		}
+	}
+	for appID, identity := range identities {
+		qualified := source.manifest.ID + "/" + source.revision.RevisionID + "/" + appID
+		if qualified != binding.QualifiedAppRef {
+			continue
+		}
+		identity.QualifiedAppRef = qualified
+		binding.ObservedIdentity = identity
+		binding.ObservedIdentityDigest = identity.IdentityDigest()
+		if err := hostcap.ValidateOpenResourceBinding(binding); err != nil {
+			return binding, err
+		}
+		return binding, nil
+	}
+	return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "host application identity is absent from the enabled binding"}
 }
 
 func (c Core) hostAppCatalogSources(profileName string) ([]hostAppCatalogSource, error) {

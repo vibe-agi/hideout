@@ -154,6 +154,7 @@ git_dirty="$(git_dirty_json)"
 cleanup_gate4_browser_processes=0
 cleanup_gate4_temp_dirs=0
 cleanup_hideout_lima_instances=0
+initial_hideout_lima_instances=""
 
 count_gate4_browser_processes() {
   ps -axo pid=,command= |
@@ -176,14 +177,25 @@ count_gate4_temp_dirs() {
     awk 'NF {count++} END {print count+0}'
 }
 
-count_hideout_lima_instances() {
+list_hideout_lima_instances() {
   if ! command -v limactl >/dev/null 2>&1; then
-    printf '0\n'
     return
   fi
   limactl list --format '{{.Name}}' 2>/dev/null |
-    awk '$1 ~ /^hideout-/ {count++} END {print count+0}'
+    awk '$1 ~ /^hideout-/ {print $1}' |
+    sort -u
 }
+
+count_new_hideout_lima_instances() {
+  comm -13 \
+    <(printf '%s\n' "$initial_hideout_lima_instances" | sed '/^$/d' | sort -u) \
+    <(list_hideout_lima_instances) |
+    awk 'NF {count++} END {print count+0}'
+}
+
+# Cleanup evidence measures resources leaked by this gate, not unrelated
+# operator-owned Hideout environments that were already running on the host.
+initial_hideout_lima_instances="$(list_hideout_lima_instances)"
 
 gate4_browser_pids() {
   ps -axo pid=,command= |
@@ -240,7 +252,7 @@ post_run_cleanup() {
 collect_cleanup_evidence() {
   cleanup_gate4_browser_processes="$(count_gate4_browser_processes)"
   cleanup_gate4_temp_dirs="$(count_gate4_temp_dirs)"
-  cleanup_hideout_lima_instances="$(count_hideout_lima_instances)"
+  cleanup_hideout_lima_instances="$(count_new_hideout_lima_instances)"
 }
 
 cleanup_evidence_passed() {

@@ -3033,10 +3033,11 @@ func (a app) doctor(args []string) error {
 	checkMountPlan(backendName, runtimeProfile, layout, workspace, guestWorkspace, identityDir, report)
 	checkLimaGeneratedConfig(backendName, runtimeProfile, layout, workspace, guestWorkspace, identityDir, report)
 	env := envpolicy.Build(envpolicy.Spec{
-		Profile:    runtimeProfile,
-		ProfileDir: identityDir,
-		SessionDir: layout.Dir,
-		ShimDir:    layout.ShimDir,
+		Profile:          runtimeProfile,
+		ProfileDir:       identityDir,
+		SessionDir:       layout.Dir,
+		ShimDir:          layout.ShimDir,
+		GitSafeDirectory: guestWorkspace,
 	})
 	checkEnv(env, report)
 	checkPolicy(runtimeProfile, profileDir, report)

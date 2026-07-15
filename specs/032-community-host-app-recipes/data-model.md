@@ -214,7 +214,13 @@ No transition mutates a running session's binding set.
 
 ## Immutable Run Binding
 
-Compiled at run start from built-in and enabled exact revisions.
+Compiled at run start from built-in and enabled exact revisions. A default-safe
+binding is path-free and may be identity-deferred: its package, command,
+grammar, permissions, expected app family, and exact Core safety-profile
+version are immutable at run start, while the path-bearing observed app
+identity is attached inside Core on first command use and revalidated at every
+launch. An ask-each-run binding observes eagerly because its decision identity
+includes the exact observed application.
 
 | Field | Type | Rules |
 |-------|------|-------|
@@ -228,6 +234,8 @@ Compiled at run start from built-in and enabled exact revisions.
 | `resourceKinds` | array | Accepted kinds |
 | `access` | enum | Safe or ask-each-run |
 | `safetyProfile` | string | Exact id/version when safe |
+| `identityDeferred` | boolean | Safe only; no host app observation during unrelated run startup |
+| `expectedIdentitySetDigest` | string | Exact enabled community identity set when deferred |
 | `profile` / `sessionId` / `environmentId` | string | Current run identity |
 
 The shim carries command/action/binding identity; broker verifies all values

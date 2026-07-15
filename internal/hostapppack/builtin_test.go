@@ -151,6 +151,7 @@ func genericBindingShape(t *testing.T, binding hostcap.OpenResourceBinding, regi
 	binding.Application.QualifiedAppRef = binding.QualifiedAppRef
 	binding.SourceDigest = "sha256:source"
 	binding.PermissionFingerprint = "sha256:permission"
+	binding.ExpectedIdentitySetDigest = "sha256:identity-set"
 	binding.ObservedIdentityDigest = "sha256:identity"
 	binding.BindingDigest = "sha256:binding"
 	binding.ObservedIdentity.QualifiedAppRef = binding.QualifiedAppRef

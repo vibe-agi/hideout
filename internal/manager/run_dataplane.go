@@ -149,6 +149,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Bindings:           hostAppBindings,
 		RunID:              runSession.Layout.ID,
 		GrantScopeBase:     projectionGrantScopeBase(runSession),
+		ResolveIdentity:    c.hostAppRunBindingIdentityResolver(runSession, hostFSPolicy, hostAppForbiddenRoots),
 		RevalidateIdentity: c.hostAppRunIdentityRevalidator(runSession, hostFSPolicy, hostAppForbiddenRoots),
 		ValidateLifecycle:  hostAppLifecycle,
 	}

@@ -602,7 +602,7 @@ func TestCompileHostAppCatalogRejectsObservedIdentityDrift(t *testing.T) {
 	}
 }
 
-func TestCompileHostAppCatalogOmitsUnclassifiableOptionalBuiltinWithoutBreakingRun(t *testing.T) {
+func TestCompileHostAppCatalogDefersOptionalBuiltinIdentityUntilCommandUse(t *testing.T) {
 	for name, identityErr := range map[string]error{
 		"typed drift":       &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "unverified bundle exceeds bounded digest"},
 		"trust unavailable": errors.New("host trust assessment timed out"),
@@ -613,17 +613,46 @@ func TestCompileHostAppCatalogOmitsUnclassifiableOptionalBuiltinWithoutBreakingR
 				t.Fatal(err)
 			}
 			core := Core{Store: store, HostAppPlatform: hostcap.PlatformDarwin}
+			identityChecks := 0
 			core.HostAppIdentityResolver = func(hostcap.ApplicationExpectation, []string) (hostcap.ObservedApplicationIdentity, error) {
+				identityChecks++
 				return hostcap.ObservedApplicationIdentity{}, identityErr
 			}
-			catalog, registrations, err := core.CompileHostAppCatalog("privacy", "run_without_optional_projection", nil)
+			catalog, registrations, err := core.CompileHostAppCatalog("privacy", "run_with_deferred_optional_projection", nil)
 			if err != nil {
 				t.Fatalf("optional built-in projection broke unrelated run: %v", err)
 			}
-			if len(catalog.Bindings()) != 0 || len(registrations) != 0 {
-				t.Fatalf("unclassifiable built-in retained authority: bindings=%+v registrations=%+v", catalog.Bindings(), registrations)
+			binding, ok := catalog.ResolveCommand("code")
+			if !ok || !binding.IdentityDeferred || len(registrations) != 1 || identityChecks != 0 {
+				t.Fatalf("optional built-in was not compiled lazily: binding=%+v registrations=%+v checks=%d", binding, registrations, identityChecks)
+			}
+			if _, err := core.resolveDeferredHostAppBinding("privacy", binding, nil); err == nil || identityChecks != 1 {
+				t.Fatalf("command-time identity failure was not isolated to command use: err=%v checks=%d", err, identityChecks)
 			}
 		})
+	}
+}
+
+func TestCompileHostAppCatalogKeepsUnclassifiableEagerBuiltinOptional(t *testing.T) {
+	store := profile.Store{Root: filepath.Join(t.TempDir(), "store")}
+	if _, err := store.LoadOrInit("privacy"); err != nil {
+		t.Fatal(err)
+	}
+	core := Core{Store: store, HostAppPlatform: hostcap.PlatformDarwin}
+	if err := core.SetProjectionIdeMode("privacy", ProjectionIdeModeTrusted); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	core.HostAppIdentityResolver = func(hostcap.ApplicationExpectation, []string) (hostcap.ObservedApplicationIdentity, error) {
+		checks++
+		return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppAbsent, Reason: "optional editor is absent"}
+	}
+	catalog, registrations, err := core.CompileHostAppCatalog("privacy", "run_without_optional_trusted_projection", nil)
+	if err != nil {
+		t.Fatalf("optional eager built-in broke unrelated run: %v", err)
+	}
+	if len(catalog.Bindings()) != 0 || len(registrations) != 0 || checks != 1 {
+		t.Fatalf("unclassifiable eager built-in retained authority: bindings=%+v registrations=%+v checks=%d", catalog.Bindings(), registrations, checks)
 	}
 }
 

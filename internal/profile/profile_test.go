@@ -663,7 +663,7 @@ func TestValidateRejectsHideoutRuntimeEnvExposureConfig(t *testing.T) {
 }
 
 func TestValidateRejectsSyntheticIdentityEnvExposureConfig(t *testing.T) {
-	for _, name := range []string{"HOME", "USER", "LOGNAME", "HOSTNAME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GIT_CONFIG_GLOBAL", "TZ", "LANG", "LC_ALL", "PATH"} {
+	for _, name := range []string{"HOME", "USER", "LOGNAME", "HOSTNAME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "TZ", "LANG", "LC_ALL", "PATH"} {
 		t.Run("public/"+name, func(t *testing.T) {
 			p := Default("test")
 			p.Env.Public[name] = "host-value"

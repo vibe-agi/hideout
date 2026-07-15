@@ -57,9 +57,9 @@ staged_hideout_sha="$(sha256_file "$stage/hideout/bin/hideout")"
 scripts/package-local.sh --finalize "$stage" --out "$pkg" >"$tmp/package.out"
 test -f "$pkg"
 test "$staged_hideout_sha" = "$(sha256_file "$stage/hideout/bin/hideout")"
-grep -q 'For the alpha package path' README.md
-grep -q 'hideout package verify "$HOME/.local"' README.md
-grep -q 'For local source-tree development' README.md
+grep -Fq 'brew install vibe-agi/tap/hideout' README.md
+grep -Fq '[Distribution And Bootstrap](docs/distribution-bootstrap.md)' README.md
+grep -Fq '## Build From Source' README.md
 grep -q 'Alpha package lifecycle' docs/STATUS.md
 
 tar -xzf "$pkg" -C "$tmp/install"
