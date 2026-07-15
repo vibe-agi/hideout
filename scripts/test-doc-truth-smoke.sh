@@ -461,8 +461,9 @@ validate_cross_docs() {
   fi
   grep -q 'docs/first-run-alpha.md' README.md
   grep -q 'docs/support-matrix.md' README.md
-  grep -q 'raw.githubusercontent.com/vibe-agi/hideout/master/install.sh' README.md
-  grep -q 'raw.githubusercontent.com/vibe-agi/hideout/master/install.sh' README.zh-CN.md
+  grep -q 'brew install vibe-agi/tap/hideout' README.md
+  grep -q 'brew install vibe-agi/tap/hideout' README.zh-CN.md
+  grep -q 'raw.githubusercontent.com/vibe-agi/hideout/master/install.sh' docs/distribution-bootstrap.md
   if grep -q 'releases/tag/.*/download/' README.md README.zh-CN.md docs/first-run-alpha.md docs/distribution-bootstrap.md; then
     echo "doc-truth-smoke: documentation contains an invalid GitHub release download path" >&2
     exit 1
