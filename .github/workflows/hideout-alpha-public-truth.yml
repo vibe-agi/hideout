@@ -1,10 +1,12 @@
 name: Hideout Public Alpha Docs Truth
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
     paths:
+      - .github/workflows/hideout-alpha-public-truth.yml
       - releases/current.json
       - releases/receipts/**
       - README.md
