@@ -17,8 +17,21 @@ Hideout 把不可信的开发工具和 agent CLI 运行在隔离的 backend 边�
 之一，不是产品定义本身。
 
 <!-- hideout-public-release:start -->
-当前没有公开的 Hideout 产品安装包。公开源码树仍是需要有人监督的开发和 dogfood
-入口；候选阶段文档不代表安装包已经公开可下载。
+当前公开包是 [Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1)：面向 macOS arm64、使用 Lima
+后端、需要有人监督的公开 alpha。它是 prerelease，不承诺 GA 稳定性、自动更新、
+Linux 安装包、workspace DLP、guest-root containment 或 marketplace trust。
+
+```bash
+curl -fLO "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1/download/hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz"
+curl -fLO "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1/download/SHA256SUMS"
+grep '  hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz$' SHA256SUMS | shasum -a 256 -c -
+tar -xzf "hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz"
+cd hideout
+./install.sh --skip-init
+```
+
+安装包 SHA-256：`9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`。同一 release page 还包含有界 evidence
+bundle 和机器可读的 release manifest。
 <!-- hideout-public-release:end -->
 
 gate 与发布证据定义见

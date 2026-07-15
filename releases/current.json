@@ -1,5 +1,34 @@
 {
   "schema": "hideout.published-release-inventory/v1",
-  "generatedAt": "2026-07-13T00:00:00Z",
-  "current": null
+  "generatedAt": "2026-07-15T04:12:18Z",
+  "current": {
+    "version": "0.1.0-alpha.1",
+    "tag": "v0.1.0-alpha.1",
+    "maturity": "public-supervised-alpha",
+    "platform": "darwin/arm64",
+    "backend": "lima",
+    "package": {
+      "name": "hideout",
+      "productVersion": "0.1.0-alpha.1",
+      "sourceCommit": "fc56288138d320d93032e528788b6ac3f3f81634",
+      "artifactSHA256": "9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4",
+      "hostOS": "darwin",
+      "hostArch": "arm64"
+    },
+    "releaseURL": "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1",
+    "receiptSHA256": "460dee78d079ae420d2c9560033467ce889a8c4d99d2937defefaad9517dff0b",
+    "supportMatrix": "2026-07-alpha",
+    "nonClaims": [
+      "guest-root-containment",
+      "workspace-write-blocking",
+      "native-isolation",
+      "marketplace-trust",
+      "browser-security",
+      "unsupported-platforms",
+      "public-alpha-maturity",
+      "runtime-freshness",
+      "privacy-prerequisites",
+      "ui-maturity"
+    ]
+  }
 }
