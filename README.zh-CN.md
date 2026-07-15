@@ -6,51 +6,22 @@
 
 **让工具干活，别把整台电脑交出去。**
 
-Hideout 把 agent 和不完全可信的 CLI 放进本地虚拟机。项目目录照常可写，
-`code .` 这类本机体验仍可通过明确授权使用；所有触及主机的动作都有记录、
-可检查、可拒绝。
+Hideout 把 AI coding agent 和陌生 CLI 放进本地虚拟机。它们可以正常修改你选中的
+项目，但不会顺手拿到整台 Mac。需要打开 VS Code、浏览器或其他主机资源时，
+Hideout 只处理这一次具体请求，并记录发生了什么。
 
-```console
-hideout run -- codex
+```bash
+# 在 VM 中处理选中的项目。
+hideout run -- git status --short
+
+# 通过受控桥接，在主机 VS Code 中打开同一个项目。
 hideout run -- code .
+
+# 查看哪些动作跨过了 VM 边界。
 hideout audit show --limit 5
 ```
 
-第一条命令假设 CLI 已安装在 guest 中；`code .` 需要受支持的本机编辑器和已批准
-的 host-app capability。
-
-## 命令实际运行在哪里
-
-```text
-macOS host                                      Lima VM
-+----------------------------------+            +---------------------------+
-| Terminal                         | start      | target CLI runs here      |
-| hideout + Core                   +----------->| codex / git / npm         |
-| policy / approval / audit        |            |                           |
-|                                  | RW mount   | /workspace                |
-| project checkout                 +===========>|                           |
-|                                  | approved   | code . / open ...         |
-| VS Code / browser <--------------+------------+ typed host request        |
-+----------------------------------+            +---------------------------+
-```
-
-`hideout` 本身以及 policy、approval、audit 逻辑运行在主机上；
-`hideout run --` 后面的目标命令运行在 VM 中。选中的项目 checkout 会映射为
-`/workspace`。`code .` 这样的投射命令只会把结构化资源请求交回 Hideout Core，
-真正的 VS Code 运行在主机上，guest 不会因此获得通用主机 shell。workspace
-之外的主机文件仍需要显式 HostFS capability。
-
-<!-- hideout-public-release:start -->
-当前版本：[Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1)，支持 macOS arm64。这是需要有人监督的
-公开 alpha，不是 GA 或 Linux 安装包承诺。
-
-安装包 SHA-256：`9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`。Release 页面同时提供 checksum、机器可读
-release manifest 和有界验证证据。
-<!-- hideout-public-release:end -->
-
-> [English README](README.md)、[docs/STATUS.md](docs/STATUS.md) 和
-> [docs/support-matrix.md](docs/support-matrix.md) 是当前能力与边界的 canonical
-> 说明；本页是产品入口的中文版本。
+`code .` 需要受支持的本机编辑器和已批准的 host-app permission。
 
 ## 安装
 
@@ -76,30 +47,69 @@ sh /tmp/hideout-install.sh
 手动下载、校验、修复和卸载见
 [Distribution And Bootstrap](docs/distribution-bootstrap.md)。
 
-## 第一次运行
+## 试一下
 
-请使用独立的项目 checkout。首次使用时会另行下载约 1 GB 的 developer runtime。
+请使用独立的项目 checkout。首次使用会另行下载 developer runtime，大小约 1 GB。
 
 ```bash
 cd /path/to/project
+
+# 目标程序看到的是 Linux，并以非 root 用户运行。
+hideout run -- sh -lc 'uname -s; id -u'
+
+# 项目仍然是普通、可写的 Git checkout。
 hideout run -- git status --short
-hideout audit show --limit 5
 ```
 
 完整的 15 分钟流程还包括安装测试过的 agent CLI、用本机编辑器打开 workspace、
 隐私网络和故障恢复，见 [First-Run Alpha Path](docs/first-run-alpha.md)。
 
+## 命令实际运行在哪里
+
+```text
+macOS host                                      Lima VM
++----------------------------------+            +---------------------------+
+| Terminal                         | start      | target CLI runs here      |
+| hideout + Core                   +----------->| agent / git / npm         |
+| policy / approval / audit        |            |                           |
+|                                  | RW mount   | mounted workspace         |
+| selected project checkout        +===========>|                           |
+|                                  | approved   | code . / open ...         |
+| VS Code / browser <--------------+------------+ typed host request        |
++----------------------------------+            +---------------------------+
+```
+
+`hideout` 本身以及 policy、approval、audit 逻辑运行在主机上；
+`hideout run --` 后面的目标命令运行在 VM 中。选中的项目会挂载到 profile 决定的
+guest 路径。`code .` 这样的投射命令只会把结构化资源请求交回 Hideout Core，
+真正的 VS Code 运行在主机上，guest 不会因此获得通用主机 shell。其他主机文件
+仍需要显式 HostFS permission。
+
 ## 为什么是 Hideout
 
-- **真正的本地 VM 边界。** 目标程序运行在独立 guest kernel 中，不直接进入主机
+- **保留真正的 VM 边界。** 目标程序运行在独立 guest kernel 中，不直接进入主机
   进程空间。
-- **隔离不等于远程机器。** workspace 仍可写；通过类型化能力，可以把映射资源
-  交给受支持的本机应用。
-- **主机权限逐项给。** 主机文件、应用、网络、审批和导出都有 typed plan、decision
-  与 audit evidence。
+- **保留本地开发体验。** 项目仍然可写；受控桥接可以把映射资源交给受支持的
+  本机应用。
+- **主机访问看得见。** 主机文件、应用、网络、审批和导出受明确规则约束，并留下
+  audit evidence。
 
-Hideout 不会把 guest 参数直接交给主机 shell。社区 adapter 和 host-app recipe
-只能选择 Core 已审核的能力，不能获得通用的主机命令执行权限。
+社区 adapter 和 host-app recipe 可以选择 Core 已审核的能力，但不能把任意 guest
+参数交给主机 shell，也不能增加通用主机执行能力。
+
+## 当前版本
+
+<!-- hideout-public-release:start -->
+当前版本：[Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1)，支持 macOS arm64。这是需要有人监督的
+公开 alpha，不是 GA 或 Linux 安装包承诺。
+
+安装包 SHA-256：`9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`。Release 页面同时提供 checksum、机器可读
+release manifest 和有界验证证据。
+<!-- hideout-public-release:end -->
+
+> [English README](README.md)、[docs/STATUS.md](docs/STATUS.md) 和
+> [docs/support-matrix.md](docs/support-matrix.md) 是当前能力与边界的 canonical
+> 说明；本页是产品入口的中文版本。
 
 ## 当前边界
 

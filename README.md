@@ -6,48 +6,23 @@
 
 **Let tools do the work without handing them your whole machine.**
 
-Hideout runs agentic and untrusted CLIs in a local VM. Your project stays
-writable, host experiences such as `code .` still work through explicit
-capabilities, and every host-facing action remains visible and auditable.
+Hideout runs AI coding agents and unfamiliar CLI tools inside a local VM. They
+can work normally on the project you choose without inheriting access to the
+rest of your Mac. When a tool needs VS Code, a browser, or another host
+resource, Hideout handles that specific request and records what happened.
 
-```console
-hideout run -- codex
+```bash
+# Work on the selected project inside the VM.
+hideout run -- git status --short
+
+# Open that project in host VS Code through a controlled bridge.
 hideout run -- code .
+
+# See what crossed the VM boundary.
 hideout audit show --limit 5
 ```
 
-The first command assumes the CLI is installed in the guest. `code .` requires
-a supported host editor and an approved host-app capability.
-
-## Where Commands Run
-
-```text
-macOS host                                      Lima VM
-+----------------------------------+            +---------------------------+
-| Terminal                         | start      | target CLI runs here      |
-| hideout + Core                   +----------->| codex / git / npm         |
-| policy / approval / audit        |            |                           |
-|                                  | RW mount   | /workspace                |
-| project checkout                 +===========>|                           |
-|                                  | approved   | code . / open ...         |
-| VS Code / browser <--------------+------------+ typed host request        |
-+----------------------------------+            +---------------------------+
-```
-
-`hideout` and its policy, approval, and audit logic run on the host. The target
-after `hideout run --` runs inside the VM. The selected project checkout is
-mounted at `/workspace`. A projected command such as `code .` sends a typed
-resource request back through Hideout Core; VS Code runs on the host, without
-giving the guest a generic host shell. Other host files require explicit HostFS
-capabilities.
-
-<!-- hideout-public-release:start -->
-Current release: [Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1) for macOS arm64. This is a
-public supervised alpha, not a GA or Linux-package claim.
-
-Package SHA-256: `9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`. The release page includes checksums,
-the machine-readable release manifest, and bounded verification evidence.
-<!-- hideout-public-release:end -->
+`code .` requires a supported host editor and an approved host-app permission.
 
 ## Install
 
@@ -74,33 +49,69 @@ sh /tmp/hideout-install.sh
 Manual download, verification, repair, and uninstall instructions are in
 [Distribution And Bootstrap](docs/distribution-bootstrap.md).
 
-## First Run
+## Try It
 
-Use a dedicated project checkout. The retained developer runtime is a separate,
-approximately 1 GB download on first use.
+Use a dedicated project checkout. First use downloads the retained developer
+runtime separately; expect approximately 1 GB.
 
 ```bash
 cd /path/to/project
+
+# The target sees Linux and runs as a non-root user.
+hideout run -- sh -lc 'uname -s; id -u'
+
+# The project remains an ordinary writable Git checkout.
 hideout run -- git status --short
-hideout audit show --limit 5
 ```
 
 The complete 15-minute path includes installing a tested agent CLI, opening the
 workspace in a host editor, privacy networking, and recovery:
 [First-Run Alpha Path](docs/first-run-alpha.md).
 
+## Where Commands Run
+
+```text
+macOS host                                      Lima VM
++----------------------------------+            +---------------------------+
+| Terminal                         | start      | target CLI runs here      |
+| hideout + Core                   +----------->| agent / git / npm         |
+| policy / approval / audit        |            |                           |
+|                                  | RW mount   | mounted workspace         |
+| selected project checkout        +===========>|                           |
+|                                  | approved   | code . / open ...         |
+| VS Code / browser <--------------+------------+ typed host request        |
++----------------------------------+            +---------------------------+
+```
+
+`hideout` and its policy, approval, and audit logic run on the host. The target
+after `hideout run --` runs inside the VM. The selected project is mounted into
+the guest at a profile-controlled path. A projected command such as `code .`
+sends a structured resource request back through Hideout Core; VS Code runs on
+the host, without giving the guest a generic host shell. Other host files
+require explicit HostFS permission.
+
 ## Why Hideout
 
-- **A real local VM boundary.** The target runs under a separate guest kernel,
+- **Keep a real VM boundary.** The target runs under a separate guest kernel,
   not directly in your host process namespace.
-- **Local work still feels local.** The workspace is writable, while typed host
-  capabilities can open mapped resources in supported host applications.
-- **Authority is explicit.** Host files, host apps, network mediation,
-  approvals, and export paths use typed plans, decisions, and audit evidence.
+- **Keep local development convenient.** The project stays writable, while
+  controlled bridges can open mapped resources in supported host applications.
+- **Keep host access visible.** Host files, apps, network mediation, approvals,
+  and exports are governed by explicit rules and leave audit evidence.
 
-Hideout does not pass arbitrary guest arguments to a host shell. Community
-adapters and host-app recipes select reviewed Core capabilities; they do not
-gain generic host execution.
+Community adapters and host-app recipes can select reviewed Core capabilities;
+they cannot pass arbitrary guest arguments to a host shell or add generic host
+execution.
+
+## Current Release
+
+<!-- hideout-public-release:start -->
+Current release: [Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1) for macOS arm64. This is a
+public supervised alpha, not a GA or Linux-package claim.
+
+Package SHA-256: `9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`. The release page includes checksums,
+the machine-readable release manifest, and bounded verification evidence.
+<!-- hideout-public-release:end -->
 
 ## Current Boundaries
 
