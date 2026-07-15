@@ -355,7 +355,7 @@ jobs:
       - name: Open a receipt-bound public truth pull request
         if: success()
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
           branch="release-truth/${PUBLIC_ALPHA_TAG}"
