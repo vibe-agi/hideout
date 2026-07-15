@@ -31,7 +31,11 @@ const (
 	GuestBootstrapPath    = GuestSessionDir + "/bootstrap/bootstrap.sh"
 	GuestNetworkBootstrap = GuestSessionDir + "/network/bootstrap.sh"
 	cleanupTimeout        = 30 * time.Second
+	startupNoticeDelay    = time.Second
+	startupNoticeInterval = 30 * time.Second
 )
+
+var errRuntimeNotReady = errors.New("lima instance did not become ready; skipped guest cleanup")
 
 type CommandRunner interface {
 	Run(ctx context.Context, name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error
@@ -61,6 +65,7 @@ type Backend struct {
 	Stderr        io.Writer
 	ControlStdout io.Writer
 	ControlStderr io.Writer
+	Progress      io.Writer
 	Stdin         io.Reader
 }
 
@@ -321,9 +326,13 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 			startArgs = []string{"start", "--tty=false", session.InstanceName}
 		}
 	}
-	if err := runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
+	session.RunAttempted = true
+	if err := runWithStartupProgress(b.Progress, session.InstanceName, func() error {
+		return runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr())
+	}); err != nil {
 		return nil, nil, err
 	}
+	session.RuntimeReady = true
 	var (
 		instance backend.RuntimeInstanceObservation
 		err      error
@@ -386,14 +395,18 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	runner := b.runner()
 	hostEnv := HostCommandEnv(os.Environ())
 	var errs []error
-	if session.HostFSEnabled {
+	runtimeUnavailable := session.RunAttempted && !session.RuntimeReady
+	if runtimeUnavailable {
+		errs = append(errs, errRuntimeNotReady)
+	}
+	if !runtimeUnavailable && session.HostFSEnabled {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
 		} else if err := b.runSetupCleanup(cleanupCtx, session, setupCategoryHostFS, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}); err != nil {
 			errs = append(errs, fmt.Errorf("hostfs cleanup: %w", err))
 		}
 	}
-	if session.NetworkCleanupGuestPath != "" {
+	if !runtimeUnavailable && session.NetworkCleanupGuestPath != "" {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
 		} else if session.NetworkPrivilegedSetup {
@@ -411,6 +424,49 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 		errs = append(errs, fmt.Errorf("delete lima instance %s: %w", session.InstanceName, err))
 	}
 	return errors.Join(errs...)
+}
+
+func runWithStartupProgress(progress io.Writer, instance string, run func() error) error {
+	return runWithStartupProgressTimings(progress, instance, startupNoticeDelay, startupNoticeInterval, run)
+}
+
+func runWithStartupProgressTimings(progress io.Writer, instance string, delay, interval time.Duration, run func() error) error {
+	if progress == nil || progress == io.Discard {
+		return run()
+	}
+	started := time.Now()
+	result := make(chan error, 1)
+	go func() {
+		result <- run()
+	}()
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err
+	case <-timer.C:
+		fmt.Fprintf(progress, "hideout: starting Lima environment %q; first start may download the configured image (use --verbose for backend details)\n", instance)
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			if err == nil {
+				fmt.Fprintf(progress, "hideout: Lima environment ready (%s)\n", startupElapsed(time.Since(started)))
+			}
+			return err
+		case <-ticker.C:
+			fmt.Fprintf(progress, "hideout: still starting Lima environment %q (%s elapsed)\n", instance, startupElapsed(time.Since(started)))
+		}
+	}
+}
+
+func startupElapsed(elapsed time.Duration) time.Duration {
+	if elapsed < time.Second {
+		return time.Second
+	}
+	return elapsed.Round(time.Second)
 }
 
 func (b Backend) StopInstance(ctx context.Context, instanceName string) error {

@@ -78,8 +78,11 @@ workspace, identity, and retained runtime. Direct networking does not hide the
 network origin and is not a privacy-network claim.
 
 The retained runtime is a separate, approximately 1 GB first-use download; it
-is not embedded in the smaller Hideout host package. Inspect its exact
-revision, digest, size, source, inventory, and SBOM status before first boot:
+is not embedded in the smaller Hideout host package. If Lima startup takes
+longer than one second, Hideout prints a concise status line and periodic
+heartbeat; use `--verbose` only when raw backend details are useful. Inspect its
+exact revision, digest, size, source, inventory, and SBOM status before first
+boot:
 
 ```bash
 hideout runtime inspect developer-standard

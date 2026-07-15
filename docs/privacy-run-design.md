@@ -1493,8 +1493,10 @@ run again: hideout run --env work -- <command>
 ```
 
 Default `hideout run` output should stay close to native command execution:
-target stdout/stderr pass through, while Hideout control-plane progress,
-environment hints, and Boundary Summary are shown through `--verbose`,
+target stdout/stderr pass through and warm startup remains quiet. When Lima
+startup exceeds one second, Hideout prints a bounded status line and 30-second
+heartbeat so a first-use image download is not mistaken for a hang. Raw backend
+output, environment hints, and Boundary Summary remain behind `--verbose`,
 `explain`, `hideout env list`, TUI, Web UI, audit files, or Manager API.
 
 The product rule is:

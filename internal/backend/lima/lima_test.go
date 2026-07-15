@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
@@ -1029,6 +1030,70 @@ func TestRunCreatesMissingPreservedInstanceFromConfig(t *testing.T) {
 	wantStart := []string{"start", "--tty=false", "--name", session.InstanceName, session.ConfigPath}
 	if !reflect.DeepEqual(runner.calls[1].args, wantStart) {
 		t.Fatalf("missing preserved instance should start from config, got %v want %v", runner.calls[1].args, wantStart)
+	}
+}
+
+func TestStartupProgressIsQuietForFastStartAndVisibleForSlowStart(t *testing.T) {
+	var progress bytes.Buffer
+	if err := runWithStartupProgressTimings(&progress, "hideout-fast", time.Hour, time.Hour, func() error { return nil }); err != nil {
+		t.Fatalf("fast start: %v", err)
+	}
+	if progress.Len() != 0 {
+		t.Fatalf("fast start should stay quiet, got %q", progress.String())
+	}
+
+	progress.Reset()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runWithStartupProgressTimings(&progress, "hideout-slow", time.Millisecond, time.Hour, func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("slow start: %v", err)
+	}
+	for _, want := range []string{
+		`starting Lima environment "hideout-slow"`,
+		"first start may download the configured image",
+		"Lima environment ready",
+	} {
+		if !strings.Contains(progress.String(), want) {
+			t.Fatalf("slow start progress missing %q: %q", want, progress.String())
+		}
+	}
+}
+
+func TestCleanupSkipsGuestCommandsWhenRunStartDidNotComplete(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.EnvironmentID = "env_20260715t120000zabcdef1234567890"
+	spec.InstanceName = InstanceNameForEnvironment(spec.Profile.Name, spec.EnvironmentID)
+	spec.PreserveInstance = true
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", failCall: 2}
+	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := b.Run(context.Background(), session, []string{"true"}, []string{"PATH=/usr/bin:/bin"}); err == nil {
+		t.Fatal("Run should fail while starting the instance")
+	}
+	if !session.RunAttempted || session.RuntimeReady {
+		t.Fatalf("start state attempted=%v ready=%v", session.RunAttempted, session.RuntimeReady)
+	}
+	runner.calls = nil
+	if err := b.Cleanup(context.Background(), session); !errors.Is(err, errRuntimeNotReady) {
+		t.Fatalf("Cleanup error=%v want %v", err, errRuntimeNotReady)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("cleanup must not enter a guest that never became ready: %+v", runner.calls)
 	}
 }
 

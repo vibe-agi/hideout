@@ -2201,15 +2201,18 @@ func (a app) backend(name string, opts runOptions) backend.Backend {
 	case "lima":
 		controlOut := io.Discard
 		controlErr := io.Discard
+		progress := a.stderr
 		if opts.verbose {
 			controlOut = a.stdout
 			controlErr = a.stderr
+			progress = nil
 		}
 		return lima.Backend{
 			Stdout:        a.stdout,
 			Stderr:        a.stderr,
 			ControlStdout: controlOut,
 			ControlStderr: controlErr,
+			Progress:      progress,
 			Stdin:         os.Stdin,
 		}
 	default:

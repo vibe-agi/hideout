@@ -92,6 +92,8 @@ type Session struct {
 	RuntimeInstanceExpected   *RuntimeInstanceExpectation
 	RuntimeResultSink         func(RuntimeObservationReport) error
 	RuntimeCompletionSink     func(error) error
+	RunAttempted              bool
+	RuntimeReady              bool
 }
 
 type PortBridgeEndpoint struct {

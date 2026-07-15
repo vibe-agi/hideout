@@ -3027,6 +3027,9 @@ func TestAppLimaBackendSuppressesControlOutputUnlessVerbose(t *testing.T) {
 	if limaBackend.ControlStdout != io.Discard || limaBackend.ControlStderr != io.Discard {
 		t.Fatalf("default lima control writers should be io.Discard")
 	}
+	if limaBackend.Progress != &errOut {
+		t.Fatal("default Lima startup progress should use the CLI stderr writer")
+	}
 
 	verbose := a.backend("lima", runOptions{verbose: true})
 	verboseLima, ok := verbose.(lima.Backend)
@@ -3037,6 +3040,9 @@ func TestAppLimaBackendSuppressesControlOutputUnlessVerbose(t *testing.T) {
 	_, _ = fmt.Fprint(verboseLima.ControlStderr, "control stderr")
 	if out.String() != "control stdout" || errOut.String() != "control stderr" {
 		t.Fatalf("verbose lima control output should reach CLI writers stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+	if verboseLima.Progress != nil {
+		t.Fatal("verbose Lima runs already expose backend progress and should not add the concise notifier")
 	}
 }
 
