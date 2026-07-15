@@ -2,8 +2,8 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This page is the canonical first 15 minutes for an external alpha operator.
-It assumes a release-like package install and a dedicated project workspace.
+This page is the canonical first 15 minutes for an external alpha user. It
+assumes the public macOS arm64 package and a dedicated project workspace.
 It does not create new security claims; current claims and non-claims remain in
 [STATUS.md](STATUS.md), [threat-model.md](threat-model.md), and
 [support-matrix.md](support-matrix.md).
@@ -18,17 +18,22 @@ It does not create new security claims; current claims and non-claims remain in
 
 ## Install And Verify
 
-Extract the package and install with the packaged binary:
+Install Lima, then run the standalone installer:
 
 ```bash
-tar -xzf hideout-<platform>.tar.gz
-cd hideout
-./install.sh --skip-init
+brew install lima
+curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 hideout version
 hideout package verify "$HOME/.local"
 hideout doctor
 ```
+
+The installer does not use `sudo` or edit shell startup files. It validates the
+published inventory, package SHA-256, package identity, and macOS signature
+before installing and creating the default direct-network Lima profile. See
+[distribution-bootstrap.md](distribution-bootstrap.md) for script inspection,
+manual download, custom prefixes, repair, and uninstall.
 
 If package verification reports obsolete package-owned leftovers, inspect first
 and then explicitly repair:
@@ -47,14 +52,7 @@ package verifies Hideout-owned helpers, but does not checksum an external
 Start with a dedicated Lima profile that has the fewest external prerequisites:
 
 ```bash
-hideout init \
-  --template dev \
-  --profile alpha-direct \
-  --backend lima \
-  --network direct \
-  --runtime developer-standard \
-  --no-input
-hideout doctor --profile alpha-direct --backend lima --level deep
+hideout doctor --profile default --backend lima --level deep
 ```
 
 Move into a dedicated workspace and run one command as the synthetic non-root
@@ -62,7 +60,7 @@ target:
 
 ```bash
 cd /path/to/sanitized/project
-hideout run --profile alpha-direct --backend lima -- pwd
+hideout run --profile default --backend lima -- pwd
 hideout audit show --limit 20
 ```
 
@@ -86,14 +84,14 @@ Create a separate privacy profile only when its prerequisites are available:
 export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
 hideout init \
   --template privacy \
-  --profile default \
+  --profile privacy \
   --backend lima \
   --network tun2socks \
   --proxy-secret proxy-url \
   --mediated-resolver 1.1.1.1 \
   --runtime developer-standard \
   --no-input
-hideout doctor --profile default --backend lima --level deep
+hideout doctor --profile privacy --backend lima --level deep
 ```
 
 This path expects `tun2socks`, a proxy secret, and a mediated resolver. If those
@@ -111,7 +109,7 @@ runs inside the selected guest and requires neither `sudo` nor a host-global npm
 prefix:
 
 ```bash
-hideout run --profile alpha-direct -- sh -eu -c '
+hideout run --profile default -- sh -eu -c '
   rm -rf "$HOME/.npm" "$HOME/.local/lib/node_modules/@openai/codex" "$HOME/.local/bin/codex"
   npm install --global --prefix "$HOME/.local" @openai/codex@0.144.1
   "$HOME/.local/bin/codex" --version
@@ -178,9 +176,9 @@ inside the Lima guest can open the mapped host workspace without learning its
 host path:
 
 ```bash
-hideout doctor --profile alpha-direct --feature projection --level deep
-hideout run --profile alpha-direct --backend lima -- code .
-hideout run --profile alpha-direct --backend lima -- code -g src/main.go:12:3
+hideout doctor --profile default --feature projection --level deep
+hideout run --profile default --backend lima -- code .
+hideout run --profile default --backend lima -- code -g src/main.go:12:3
 ```
 
 The default safe mode uses run-scoped VS Code state, disables extensions and
@@ -198,7 +196,7 @@ Start the local daemon when you want a live local console:
 
 ```bash
 hideout daemon start
-hideout tui --profile alpha-direct
+hideout tui --profile default
 hideout ui --no-open --print-url
 ```
 

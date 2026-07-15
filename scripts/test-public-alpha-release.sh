@@ -48,6 +48,7 @@ done
 
 bash -n \
   scripts/package-local.sh \
+  scripts/test-standalone-install.sh \
   scripts/test-public-alpha-clean-install.sh \
   scripts/test-public-alpha-candidate.sh \
   scripts/test-public-alpha-release.sh \
@@ -57,6 +58,9 @@ bash -n \
   scripts/lib/public-alpha-cleanup.sh \
   scripts/lib/verified-runtime-cache.sh \
   scripts/test-doc-truth-smoke.sh
+sh -n install.sh
+grep -F 'https://github.com/$repository/releases/download/$tag/$package' install.sh >/dev/null
+grep -F '"$package_root/install.sh" --prefix "$prefix" --store "$store" --skip-init' install.sh >/dev/null
 
 (
   cache_fixture="$(mktemp -d "${TMPDIR:-/tmp}/hideout-runtime-cache-contract.XXXXXX")"

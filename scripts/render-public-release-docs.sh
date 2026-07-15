@@ -31,8 +31,6 @@ version="$(jq -r '.current.version' "$inventory")"
 tag="$(jq -r '.current.tag' "$inventory")"
 release_url="$(jq -r '.current.releaseURL' "$inventory")"
 package_sha="$(jq -r '.current.package.artifactSHA256' "$inventory")"
-package="hideout-v${version}-darwin-arm64.tar.gz"
-
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-docs.XXXXXX")"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
@@ -56,40 +54,19 @@ replace_block() {
 }
 
 cat >"$tmp/readme-en" <<EOF
-Current package: [Hideout ${tag}](${release_url}), a public supervised alpha for
-macOS arm64 using the Lima backend. It is a prerelease, not a GA, stable-update,
-Linux-package, workspace-DLP, guest-root-containment, or marketplace-trust
-claim.
+Current release: [Hideout ${tag}](${release_url}) for macOS arm64. This is a
+public supervised alpha, not a GA or Linux-package claim.
 
-\`\`\`bash
-curl -fLO "${release_url}/download/${package}"
-curl -fLO "${release_url}/download/SHA256SUMS"
-grep '  ${package}\$' SHA256SUMS | shasum -a 256 -c -
-tar -xzf "${package}"
-cd hideout
-./install.sh --skip-init
-\`\`\`
-
-Package SHA-256: \`${package_sha}\`. The release page also carries the bounded
-evidence bundle and machine-readable release manifest.
+Package SHA-256: \`${package_sha}\`. The release page includes checksums,
+the machine-readable release manifest, and bounded verification evidence.
 EOF
 
 cat >"$tmp/readme-zh" <<EOF
-当前公开包是 [Hideout ${tag}](${release_url})：面向 macOS arm64、使用 Lima
-后端、需要有人监督的公开 alpha。它是 prerelease，不承诺 GA 稳定性、自动更新、
-Linux 安装包、workspace DLP、guest-root containment 或 marketplace trust。
+当前版本：[Hideout ${tag}](${release_url})，支持 macOS arm64。这是需要有人监督的
+公开 alpha，不是 GA 或 Linux 安装包承诺。
 
-\`\`\`bash
-curl -fLO "${release_url}/download/${package}"
-curl -fLO "${release_url}/download/SHA256SUMS"
-grep '  ${package}\$' SHA256SUMS | shasum -a 256 -c -
-tar -xzf "${package}"
-cd hideout
-./install.sh --skip-init
-\`\`\`
-
-安装包 SHA-256：\`${package_sha}\`。同一 release page 还包含有界 evidence
-bundle 和机器可读的 release manifest。
+安装包 SHA-256：\`${package_sha}\`。Release 页面同时提供 checksum、机器可读
+release manifest 和有界验证证据。
 EOF
 
 cat >"$tmp/status" <<EOF

@@ -7,6 +7,7 @@ cd "$ROOT"
 go test -count=1 ./...
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh
+scripts/test-standalone-install.sh
 markdownlint-cli2 'docs/*.md'
 jq empty schemas/*.json
 test -f schemas/init-plan.schema.json

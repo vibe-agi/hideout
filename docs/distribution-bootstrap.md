@@ -11,6 +11,59 @@ backend prerequisites, schemas, or runtime directories.
 This document follows [architecture-principles.md](architecture-principles.md)
 and [init-task-architecture.md](init-task-architecture.md).
 
+## Public Alpha Install
+
+The primary macOS arm64 path follows the same shape used by established CLI
+installers: one stable bootstrap command, explicit prerequisite handling, no
+`sudo`, no shell-startup mutation, and a separately documented manual path.
+
+```bash
+brew install lima
+curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The standalone installer reads the published identity from
+`releases/current.json`, downloads the exact GitHub Release asset, verifies its
+SHA-256, checks package version and source-commit binding, verifies the macOS
+code signature, and then invokes the package's own typed installer with an
+explicit prefix and store. It does not install Lima, use `sudo`, or modify shell
+startup files. Override `--prefix`, `--store`, or use `--skip-init` when those
+defaults are not appropriate.
+
+Operators who do not run remote scripts directly can inspect the same script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh \
+  -o /tmp/hideout-install.sh
+less /tmp/hideout-install.sh
+sh /tmp/hideout-install.sh
+```
+
+The equivalent manual package path is:
+
+```bash
+version=0.1.0-alpha.1
+package="hideout-v${version}-darwin-arm64.tar.gz"
+base="https://github.com/vibe-agi/hideout/releases/download/v${version}"
+curl -fLO "$base/$package"
+curl -fLO "$base/SHA256SUMS"
+grep "  $package\$" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$package"
+./hideout/install.sh \
+  --prefix "$HOME/.local" \
+  --store "$HOME/.hideout" \
+  --skip-init
+```
+
+After a manual install, run the same initialization used by the standalone
+path:
+
+```bash
+hideout init --template dev --profile default --backend lima \
+  --network direct --runtime developer-standard --no-input
+```
+
 ## Problem
 
 Hideout is more than one binary. A working installation may need:
@@ -30,7 +83,7 @@ Without a bootstrap plan, the product feels like a repo experiment.
 
 ## User Goals
 
-Users should be able to run:
+Source developers should be able to run:
 
 ```bash
 scripts/install-local.sh
@@ -253,6 +306,11 @@ Disallowed fixes:
 - add HostFS grants, passthrough mounts, PortBridge, OpenTarget, or network
   routes without a typed Manager plan.
 
+The user-invoked distribution bootstrap above is not an Init Task or project
+hook. It only installs a release already selected by the operator and then
+delegates initialization to the typed Manager engine. Bundles, projects,
+targets, and policy scripts cannot invoke or supply that bootstrap.
+
 ## Init Task Boundary
 
 The product supports typed initialization tasks. It does not support arbitrary
@@ -328,9 +386,10 @@ Source-tree installs require Go.
 
 The public-alpha GitHub Release channel uses `scripts/package-local.sh` to stage
 one macOS arm64 package tree, sign every Mach-O, and finalize the same frozen
-tree without rebuilding it. No Hideout product package has been published yet;
-candidate and no-publish workflows therefore must not claim public
-availability. The tarball contains `bin/`, package-root `install.sh`,
+tree without rebuilding it. The published release identity is recorded in
+`releases/current.json`; candidate and no-publish workflows still must not claim
+availability before protected promotion and anonymous redownload succeed. The
+tarball contains `bin/`, package-root `install.sh`,
 `package-manifest.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `SECURITY.md`,
 English and Chinese README entrypoints, `schemas/`, `docs/`, host-app data,
 packaging metadata, and the retained runtime catalog/build metadata under a
@@ -428,9 +487,11 @@ Release candidate should verify:
   private draft; `test-public-alpha-candidate.sh` binds that package to clean
   install and real Gate 2/Gate 3 evidence; and `hideout-alpha-promote.yml`
   requires protected approval plus anonymous redownload before a public receipt;
-- the public-alpha package channel is implemented but has not been published,
-  because Developer ID Application and notarization credentials have not yet
-  produced the required exact-candidate evidence;
+- `v0.1.0-alpha.1` has passed that workflow and is the current public supervised
+  alpha named by `releases/current.json`;
+- root `install.sh` provides the stable standalone bootstrap and is covered by
+  a local exact-package install test that does not redownload the retained
+  runtime;
 - `packaging/homebrew/hideout.rb` defines the draft Homebrew `--HEAD` formula
   and its formula-level `init`/`doctor` smoke;
 - template-aware `hideout init --no-input` applies safe machine initialization tasks;
@@ -441,10 +502,6 @@ Release candidate should verify:
 
 ### Next Product Increment
 
-- obtain protected Developer ID Application and notarization credentials;
-- run the exact clean candidate, real Gate 2/Gate 3, signing, notarization,
-  protected promotion, anonymous download, and receipt-bound docs workflow for
-  `v0.1.0-alpha.1`;
 - treat the Homebrew formula as a post-release fast follow, not as the first
   public package truth source;
 - add richer `doctor --fix --dry-run|--apply` remediation coverage for backend

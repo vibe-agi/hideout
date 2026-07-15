@@ -383,9 +383,8 @@ validate_hostfs_selector_docs() {
     echo "doc-truth-smoke: privacy-run-design teaches rejected list: syntax" >&2
     return 1
   fi
-  grep -q 'migrate-list' README.md
-  grep -q 'migrate-list' README.zh-CN.md
   grep -q 'migrate-list' docs/hostfs-overlay-design.md
+  grep -q 'migrate-list' docs/privacy-run-test-plan.md
 }
 
 validate_command_examples() {
@@ -455,15 +454,6 @@ validate_command_examples() {
 }
 
 validate_cross_docs() {
-  if ! grep -q 'Control-plane redaction removes Hideout-generated credentials' "$doc_root/README.md" ||
-    ! grep -q 'remove all user data' "$doc_root/README.md"; then
-    echo "doc-truth-smoke: generated README omits the bounded redaction claim" >&2
-    exit 1
-  fi
-  if ! grep -q '不会移除全部用户数据' "$doc_root/README.zh-CN.md"; then
-    echo "doc-truth-smoke: generated localized README omits the bounded redaction claim" >&2
-    exit 1
-  fi
   if ! grep -q 'Control-plane redaction removes Hideout-generated credentials' SECURITY.md ||
     ! grep -q 'not all user' SECURITY.md; then
     echo "doc-truth-smoke: SECURITY.md omits the bounded redaction claim" >&2
@@ -471,6 +461,15 @@ validate_cross_docs() {
   fi
   grep -q 'docs/first-run-alpha.md' README.md
   grep -q 'docs/support-matrix.md' README.md
+  grep -q 'raw.githubusercontent.com/vibe-agi/hideout/master/install.sh' README.md
+  grep -q 'raw.githubusercontent.com/vibe-agi/hideout/master/install.sh' README.zh-CN.md
+  if grep -q 'releases/tag/.*/download/' README.md README.zh-CN.md docs/first-run-alpha.md docs/distribution-bootstrap.md; then
+    echo "doc-truth-smoke: documentation contains an invalid GitHub release download path" >&2
+    exit 1
+  fi
+  sh -n install.sh
+  grep -F 'https://github.com/$repository/releases/download/$tag/$package' install.sh >/dev/null
+  grep -F '"$package_root/install.sh" --prefix "$prefix" --store "$store" --skip-init' install.sh >/dev/null
   grep -q 'English README' README.zh-CN.md
   grep -q 'canonical' README.zh-CN.md
   grep -q 'Status: Implemented' docs/host-app-recipes.md
