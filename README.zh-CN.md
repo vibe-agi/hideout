@@ -19,6 +19,27 @@ hideout audit show --limit 5
 第一条命令假设 CLI 已安装在 guest 中；`code .` 需要受支持的本机编辑器和已批准
 的 host-app capability。
 
+## 命令实际运行在哪里
+
+```text
+macOS host                                      Lima VM
++----------------------------------+            +---------------------------+
+| Terminal                         | start      | target CLI runs here      |
+| hideout + Core                   +----------->| codex / git / npm         |
+| policy / approval / audit        |            |                           |
+|                                  | RW mount   | /workspace                |
+| project checkout                 +===========>|                           |
+|                                  | approved   | code . / open ...         |
+| VS Code / browser <--------------+------------+ typed host request        |
++----------------------------------+            +---------------------------+
+```
+
+`hideout` 本身以及 policy、approval、audit 逻辑运行在主机上；
+`hideout run --` 后面的目标命令运行在 VM 中。选中的项目 checkout 会映射为
+`/workspace`。`code .` 这样的投射命令只会把结构化资源请求交回 Hideout Core，
+真正的 VS Code 运行在主机上，guest 不会因此获得通用主机 shell。workspace
+之外的主机文件仍需要显式 HostFS capability。
+
 <!-- hideout-public-release:start -->
 当前版本：[Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1)，支持 macOS arm64。这是需要有人监督的
 公开 alpha，不是 GA 或 Linux 安装包承诺。

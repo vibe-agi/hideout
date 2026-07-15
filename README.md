@@ -19,6 +19,28 @@ hideout audit show --limit 5
 The first command assumes the CLI is installed in the guest. `code .` requires
 a supported host editor and an approved host-app capability.
 
+## Where Commands Run
+
+```text
+macOS host                                      Lima VM
++----------------------------------+            +---------------------------+
+| Terminal                         | start      | target CLI runs here      |
+| hideout + Core                   +----------->| codex / git / npm         |
+| policy / approval / audit        |            |                           |
+|                                  | RW mount   | /workspace                |
+| project checkout                 +===========>|                           |
+|                                  | approved   | code . / open ...         |
+| VS Code / browser <--------------+------------+ typed host request        |
++----------------------------------+            +---------------------------+
+```
+
+`hideout` and its policy, approval, and audit logic run on the host. The target
+after `hideout run --` runs inside the VM. The selected project checkout is
+mounted at `/workspace`. A projected command such as `code .` sends a typed
+resource request back through Hideout Core; VS Code runs on the host, without
+giving the guest a generic host shell. Other host files require explicit HostFS
+capabilities.
+
 <!-- hideout-public-release:start -->
 Current release: [Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1) for macOS arm64. This is a
 public supervised alpha, not a GA or Linux-package claim.
