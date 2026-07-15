@@ -31,7 +31,8 @@ while IFS= read -r module; do
   }
 done < <(go list -m -json all | jq -r 'select((.Main | not) and (.Indirect | not)) | .Path')
 test -f releases/current.json
-jq -e '.schema == "hideout.published-release-inventory/v1" and .current == null' releases/current.json >/dev/null
+go run ./cmd/hideout-schema-validate \
+  schemas/published-release-inventory.schema.json releases/current.json >/dev/null
 
 for schema in \
   schemas/package-manifest.schema.json \
@@ -190,6 +191,8 @@ grep -F 'RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'GH_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
+grep -F 'runs-on: macos-15' \
+  .github/workflows/hideout-alpha-public-truth.yml >/dev/null
 test "$(grep -Fc 'GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api' \
   .github/workflows/hideout-alpha-promote.yml)" -eq 2
 grep -F '.draft == true and .tag_name == $tag and .target_commitish == $commit' \

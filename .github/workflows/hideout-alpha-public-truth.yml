@@ -20,7 +20,7 @@ permissions:
 jobs:
   public-truth:
     name: Prove receipt-bound checked-in release truth
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - name: Check out checked-in public truth
