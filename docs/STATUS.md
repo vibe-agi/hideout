@@ -7,9 +7,13 @@ design documents; this file prevents implementation status from drifting across
 many subsystem specs.
 
 <!-- hideout-public-release:start -->
-Current package status: no public Hideout product package has been published.
-Local or dirty release-candidate evidence is development evidence only and does
-not create a public availability claim.
+Current release state: public supervised alpha `v0.1.0-alpha.1` for macOS arm64 with
+the Lima backend. Source-of-truth identity and receipt digest are in
+`releases/current.json`; the public release is https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1.
+
+This status does not add GA, automatic-update, Linux-package, workspace-DLP,
+guest-root-containment, or marketplace-trust claims. Real isolation claims
+remain bound to the release's retained Gate 2 and Gate 3 evidence.
 <!-- hideout-public-release:end -->
 
 MVP scope: a professional individual operator on their own machine; the

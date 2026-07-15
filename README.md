@@ -12,9 +12,22 @@ through typed, audited, fail-closed gates, and records evidence you can
 inspect. Privacy hardening is one of the benefits, not the definition.
 
 <!-- hideout-public-release:start -->
-Current package status: no public Hideout product package has been published.
-The public source tree remains a supervised development/dogfood surface;
-candidate documentation does not imply package availability.
+Current package: [Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1), a public supervised alpha for
+macOS arm64 using the Lima backend. It is a prerelease, not a GA, stable-update,
+Linux-package, workspace-DLP, guest-root-containment, or marketplace-trust
+claim.
+
+```bash
+curl -fLO "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1/download/hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz"
+curl -fLO "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1/download/SHA256SUMS"
+grep '  hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz$' SHA256SUMS | shasum -a 256 -c -
+tar -xzf "hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz"
+cd hideout
+./install.sh --skip-init
+```
+
+Package SHA-256: `9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`. The release page also carries the bounded
+evidence bundle and machine-readable release manifest.
 <!-- hideout-public-release:end -->
 
 Gates and release evidence are defined in
