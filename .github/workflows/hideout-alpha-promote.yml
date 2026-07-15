@@ -25,7 +25,7 @@ concurrency:
 jobs:
   validate:
     name: Validate exact draft before approval
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Check out trusted promotion request
@@ -59,10 +59,11 @@ jobs:
             esac
             test -f "$request"
           else
-            mapfile -t requests < <(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA" -- \
-              '.github/release-promotions/public-alpha-*.json' | LC_ALL=C sort -u)
-            test "${#requests[@]}" -eq 1
-            request="${requests[0]}"
+            requests="$root/requests.txt"
+            git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA" -- \
+              '.github/release-promotions/public-alpha-*.json' | LC_ALL=C sort -u >"$requests"
+            test "$(sed '/^$/d' "$requests" | wc -l | tr -d ' ')" -eq 1
+            request=$(sed -n '1p' "$requests")
           fi
           cp "$request" "$root/validated/promotion-request.json"
           jq -e '
@@ -111,19 +112,18 @@ jobs:
           jq -e --arg tag "$tag" --arg commit "$PROMOTION_COMMIT" '
             .draft == true and .tag_name == $tag and .target_commitish == $commit
           ' <<<"$release_json" >/dev/null
-          mapfile -t api_names < <(jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)
-          mapfile -t expected_names < <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)
-          diff -u <(printf '%s\n' "${expected_names[@]}") <(printf '%s\n' "${api_names[@]}")
+          diff -u <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$assets"
-          mapfile -t local_names < <(find "$assets" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
-          diff -u <(printf '%s\n' "${expected_names[@]}") <(printf '%s\n' "${local_names[@]}")
+          diff -u <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) \
+            <(find "$assets" -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)
 
-          test "$(sha256sum "$assets/$package" | awk '{print $1}')" = "$(jq -r '.assets.packageSHA256' "$request")"
-          test "$(sha256sum "$assets/$evidence" | awk '{print $1}')" = "$(jq -r '.assets.evidenceSHA256' "$request")"
-          test "$(sha256sum "$assets/$manifest" | awk '{print $1}')" = "$(jq -r '.assets.releaseManifestSHA256' "$request")"
+          test "$(shasum -a 256 "$assets/$package" | awk '{print $1}')" = "$(jq -r '.assets.packageSHA256' "$request")"
+          test "$(shasum -a 256 "$assets/$evidence" | awk '{print $1}')" = "$(jq -r '.assets.evidenceSHA256' "$request")"
+          test "$(shasum -a 256 "$assets/$manifest" | awk '{print $1}')" = "$(jq -r '.assets.releaseManifestSHA256' "$request")"
           for name in "${expected[@]}"; do
             api_digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")
-            test "$api_digest" = "sha256:$(sha256sum "$assets/$name" | awk '{print $1}')"
+            test "$api_digest" = "sha256:$(shasum -a 256 "$assets/$name" | awk '{print $1}')"
           done
 
           go run ./cmd/hideout support release validate \
@@ -143,7 +143,7 @@ jobs:
             --observation "$PROMOTION_ROOT/evidence/notarization/observation.json" >/dev/null
           jq -e --arg commit "$PROMOTION_COMMIT" '
             .releaseReady == true and .mode == "release-candidate" and
-            .sourceCommit == $commit and .packageIdentity.sourceCommit == $commit
+            .sourceCommit == $commit and .package.sourceCommit == $commit
           ' "$PROMOTION_ROOT/evidence/release-readiness.json" >/dev/null
           jq -e --arg commit "$PROMOTION_COMMIT" '
             .source.commit == $commit and .source.dirty == false and
@@ -195,7 +195,7 @@ jobs:
   publish:
     name: Approve, publish once, and prove anonymous bytes
     needs: validate
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     environment: public-alpha
     timeout-minutes: 45
     steps:
@@ -254,7 +254,7 @@ jobs:
           for path in "$assets"/*; do
             name=$(basename "$path")
             api_digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")
-            test "$api_digest" = "sha256:$(sha256sum "$path" | awk '{print $1}')"
+            test "$api_digest" = "sha256:$(shasum -a 256 "$path" | awk '{print $1}')"
           done
           go run ./cmd/hideout support release validate --manifest "$manifest" --asset-root "$assets" >/dev/null
           go run ./cmd/hideout support release validate-evidence \
@@ -301,19 +301,19 @@ jobs:
             url="https://github.com/$GITHUB_REPOSITORY/releases/download/$PUBLIC_ALPHA_TAG/$name"
             env -u GH_TOKEN -u GITHUB_TOKEN curl --fail --location --retry 3 --retry-all-errors \
               --connect-timeout 15 --max-time 600 --output "$downloads/$name" "$url"
-            expected=$(sha256sum "$path" | awk '{print $1}')
-            downloaded=$(sha256sum "$downloads/$name" | awk '{print $1}')
+            expected=$(shasum -a 256 "$path" | awk '{print $1}')
+            downloaded=$(shasum -a 256 "$downloads/$name" | awk '{print $1}')
             test "$downloaded" = "$expected"
             api_digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")
             test "$api_digest" = "sha256:$expected"
             jq -n --arg name "$name" --arg api "$expected" --arg download "$downloaded" \
-              --argjson bytes "$(stat -c '%s' "$downloads/$name")" \
+              --argjson bytes "$(stat -f '%z' "$downloads/$name")" \
               '{name:$name,bytes:$bytes,apiSHA256:$api,downloadSHA256:$download}' \
               >>"$PUBLIC_ALPHA_ROOT/assets.ndjson"
           done < <(find "$assets" -maxdepth 1 -type f -print | LC_ALL=C sort)
 
           jq -s '.' "$PUBLIC_ALPHA_ROOT/assets.ndjson" >"$PUBLIC_ALPHA_ROOT/assets.json"
-          evidence_sha=$(sha256sum "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-evidence.tar.gz" | awk '{print $1}')
+          evidence_sha=$(shasum -a 256 "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-evidence.tar.gz" | awk '{print $1}')
           jq -n --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg version "$PUBLIC_ALPHA_VERSION" --arg tag "$PUBLIC_ALPHA_TAG" \
             --arg commit "$PUBLIC_ALPHA_COMMIT" --argjson releaseId "$PUBLIC_ALPHA_RELEASE_ID" \
@@ -373,4 +373,4 @@ jobs:
           git push --force-with-lease origin "$branch"
           gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$branch" \
             --title "docs: publish ${PUBLIC_ALPHA_TAG} verified release truth" \
-            --body "Generated from a validated public-verified receipt. Receipt SHA-256: $(sha256sum "$PUBLIC_ALPHA_ROOT/publication-receipt.json" | awk '{print $1}')."
+            --body "Generated from a validated public-verified receipt. Receipt SHA-256: $(shasum -a 256 "$PUBLIC_ALPHA_ROOT/publication-receipt.json" | awk '{print $1}')."
