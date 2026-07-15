@@ -188,10 +188,8 @@ grep -F 'markdownlint-cli2@0.22.1 markdownlint@0.40.0' \
 grep -F 'environment: public-alpha' .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
-grep -F 'GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api' \
-  .github/workflows/hideout-alpha-promote.yml >/dev/null
-grep -F 'env -u GH_TOKEN -u GITHUB_TOKEN curl' \
-  .github/workflows/hideout-alpha-promote.yml >/dev/null
+test "$(grep -Fc 'GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api' \
+  .github/workflows/hideout-alpha-promote.yml)" -eq 2
 grep -F '.draft == true and .tag_name == $tag and .target_commitish == $commit' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'diff -u <(printf' .github/workflows/hideout-alpha-promote.yml >/dev/null
