@@ -236,6 +236,7 @@ jobs:
       - name: Revalidate repository and immutable draft prerequisites
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
           assets="$PUBLIC_ALPHA_ROOT/validated/assets"
@@ -243,10 +244,14 @@ jobs:
           manifest="$assets/hideout-v${PUBLIC_ALPHA_VERSION}-release.json"
           test "$(git rev-parse HEAD)" = "$PUBLIC_ALPHA_COMMIT"
           test -z "$(git status --porcelain --untracked-files=normal)"
-          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+          test -n "$RELEASE_ADMIN_TOKEN"
+          GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/immutable-releases" --jq 'select(.enabled == true)' >/dev/null
-          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/private-vulnerability-reporting" --jq 'select(.enabled == true)' >/dev/null
+          env -u GH_TOKEN -u GITHUB_TOKEN curl --fail --silent --show-error \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/private-vulnerability-reporting" | \
+            jq -e 'select(.enabled == true)' >/dev/null
           release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$PUBLIC_ALPHA_RELEASE_ID")
           jq -e --arg tag "$PUBLIC_ALPHA_TAG" --arg commit "$PUBLIC_ALPHA_COMMIT" '
             .draft == true and .tag_name == $tag and .target_commitish == $commit
