@@ -238,7 +238,7 @@ candidate/public validation battery.
 - [X] T074 Configure the protected `public-alpha` environment and document required reviewers and release credentials in `.github/release-promotions/README.md`
 - [X] T075 Run `go build ./...`, `go vet ./...`, `gofmt -l internal cmd`, `git diff --check`, `go test ./...`, markdownlint, and `scripts/test-gate0.sh`
 - [X] T076 Run `scripts/test-public-alpha-release.sh --no-publish` and verify zero public release, candidate-created Lima instance, browser, temp directory, and secret-bearing state
-- [ ] T077 On a clean exact candidate commit with Developer ID credentials, run clean-install, real Gate 2/3, signing, notarization, draft retention, protected promotion, anonymous redownload, receipt validation, and post-public docs truth through `.github/workflows/hideout-alpha-candidate.yml`, `.github/workflows/hideout-alpha-promote.yml`, and `.hideout-release-evidence/033-public-alpha/`
+- [X] T077 On a clean exact candidate commit with Developer ID credentials, run clean-install, real Gate 2/3, signing, notarization, draft retention, protected promotion, anonymous redownload, receipt validation, and post-public docs truth through `.github/workflows/hideout-alpha-candidate.yml`, `.github/workflows/hideout-alpha-promote.yml`, and `.hideout-release-evidence/033-public-alpha/`
 
 ---
 
