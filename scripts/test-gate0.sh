@@ -80,9 +80,17 @@ test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
 fi
-grep -q 'head "https://github.com/vibe-agi/hideout.git", branch: "master"' packaging/homebrew/hideout.rb
-grep -q '"init", "--no-input", "--profile", "default"' packaging/homebrew/hideout.rb
-grep -q '"--template", "dev"' packaging/homebrew/hideout.rb
+grep -q 'url "https://github.com/vibe-agi/hideout/releases/download/v0.1.0-alpha.1/' packaging/homebrew/hideout.rb
+grep -q 'sha256 "9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4"' packaging/homebrew/hideout.rb
+grep -q 'depends_on "lima"' packaging/homebrew/hideout.rb
+grep -q 'skip_clean "bin/hideout-dns-stub-linux-arm64"' packaging/homebrew/hideout.rb
+grep -q 'system "/usr/bin/codesign", "--verify", "--strict"' packaging/homebrew/hideout.rb
+grep -q '"--skip-init"' packaging/homebrew/hideout.rb
+grep -q '"package", "verify", prefix' packaging/homebrew/hideout.rb
+if grep -q 'depends_on "go"' packaging/homebrew/hideout.rb; then
+  echo "gate0: Homebrew formula must consume the signed package, not rebuild source" >&2
+  exit 1
+fi
 grep -q 'Initialization Is Planned, Not Scripted' docs/architecture-principles.md
 grep -q 'bundle.installScript' docs/ecosystem-foundation-design.md
 grep -q 'project.initScript' docs/ecosystem-foundation-design.md

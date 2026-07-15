@@ -13,17 +13,40 @@ and [init-task-architecture.md](init-task-architecture.md).
 
 ## Public Alpha Install
 
-The primary macOS arm64 path follows the same shape used by established CLI
-installers: one stable bootstrap command, explicit prerequisite handling, no
-`sudo`, no shell-startup mutation, and a separately documented manual path.
+The primary macOS arm64 path is the official Vibe AGI Homebrew tap. It consumes
+the exact signed and notarized GitHub Release package rather than rebuilding
+source:
 
 ```bash
-brew install lima
+brew install vibe-agi/tap/hideout
+hideout init --template dev --profile default --backend lima \
+  --network direct --runtime developer-standard --no-input
+```
+
+Homebrew verifies the immutable archive checksum and installs Lima as a formula
+dependency. The Hideout formula independently verifies the macOS code signature
+and delegates to the package-owned typed installer with `--skip-init`. Formula
+installation is therefore non-interactive and Cellar-scoped: it does not start
+a VM, download the retained runtime, or write profile state under `~/.hideout`.
+The explicit `hideout init` command is the authority-bearing first-run step.
+Normal Homebrew uninstall preserves Hideout user state.
+
+The canonical published formula lives in
+[`vibe-agi/homebrew-tap`](https://github.com/vibe-agi/homebrew-tap), while
+`packaging/homebrew/hideout.rb` is the release-synchronized source copy shipped
+with this repository and package.
+
+## Standalone Installer
+
+The standalone installer remains an inspectable fallback for operators who do
+not use Homebrew:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The standalone installer reads the published identity from
+It reads the published identity from
 `releases/current.json`, downloads the exact GitHub Release asset, verifies its
 SHA-256, checks package version and source-commit binding, verifies the macOS
 code signature, and then invokes the package's own typed installer with an
@@ -421,9 +444,9 @@ protected promotion validates exact bytes, publishes once, anonymously
 redownloads every asset, and only then emits the receipt that can update
 `releases/current.json` and public documentation.
 
-The draft Homebrew formula lives at `packaging/homebrew/hideout.rb` and supports
-private `brew install --HEAD` workflows once the operator has repository access.
-It builds the same installed artifact layout:
+The official Homebrew formula consumes the immutable public release archive and
+installs the same package-owned artifact layout without requiring Go or source
+checkout state:
 
 ```text
 bin/hideout
@@ -492,8 +515,11 @@ Release candidate should verify:
 - root `install.sh` provides the stable standalone bootstrap and is covered by
   a local exact-package install test that does not redownload the retained
   runtime;
-- `packaging/homebrew/hideout.rb` defines the draft Homebrew `--HEAD` formula
-  and its formula-level `init`/`doctor` smoke;
+- `vibe-agi/homebrew-tap` publishes the supported `hideout` formula; its CI
+  performs strict online audit, install, package verification, test, and
+  uninstall without creating `~/.hideout`;
+- `packaging/homebrew/hideout.rb` records the release-synchronized formula
+  source shipped with the package;
 - template-aware `hideout init --no-input` applies safe machine initialization tasks;
 - `hideout run` applies pending lightweight store/profile/schema metadata
   InitTasks through Manager before starting a session or backend prepare step;
@@ -502,8 +528,8 @@ Release candidate should verify:
 
 ### Next Product Increment
 
-- treat the Homebrew formula as a post-release fast follow, not as the first
-  public package truth source;
+- automate the post-release formula revision and checksum update while keeping
+  the immutable GitHub Release manifest as package identity truth;
 - add richer `doctor --fix --dry-run|--apply` remediation coverage for backend
   prerequisites and helper repair beyond source-tree builds;
 - revisit whether a future package owns `tun2socks`; the first alpha keeps it
@@ -517,7 +543,5 @@ Release candidate should verify:
 
 ## Open Questions
 
-- When should Homebrew become a supported channel after the signed GitHub
-  Release tarball has a verified public receipt?
 - Should a later package own and checksum `tun2socks`, or keep it as an
   independently managed privacy prerequisite?

@@ -1,38 +1,53 @@
+# Release-synchronized source copy. The published formula lives at:
+# https://github.com/vibe-agi/homebrew-tap/blob/main/Formula/hideout.rb
 class Hideout < Formula
-  desc "Local privacy runner for AI agents and developer tools"
+  desc "Run AI agents and untrusted CLIs in a local VM"
   homepage "https://github.com/vibe-agi/hideout"
-  head "https://github.com/vibe-agi/hideout.git", branch: "master"
-  license :cannot_represent
+  url "https://github.com/vibe-agi/hideout/releases/download/v0.1.0-alpha.1/hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz"
+  sha256 "9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4"
+  license "Apache-2.0"
 
-  depends_on "go" => :build
+  depends_on arch: :arm64
+  depends_on "lima"
+  depends_on :macos
+
+  # Homebrew's macOS cleaner recognizes Mach-O and scripts, but these ELF
+  # helpers must retain their execute bits so Hideout can copy them into Lima.
+  skip_clean "bin/hideout-dns-stub-linux-arm64",
+             "bin/hideout-hostfsd-linux-arm64",
+             "bin/hideout-shim-linux-arm64"
 
   def install
-    system "go", "build", "-trimpath", "-o", bin/"hideout", "./cmd/hideout"
-    system "go", "build", "-trimpath", "-o", bin/"hideout-shim", "./cmd/hideout-shim"
+    package_root = buildpath
+    install_store = prefix/".homebrew-install-store"
 
-    linux_arch = Hardware::CPU.arm? ? "arm64" : "amd64"
-    system bin/"hideout", "shim", "build-linux",
-      "--out", bin/"hideout-shim-linux-#{linux_arch}",
-      "--goarch", linux_arch,
-      "--source", buildpath
-    system bin/"hideout", "hostfsd", "build-linux",
-      "--out", bin/"hideout-hostfsd-linux-#{linux_arch}",
-      "--goarch", linux_arch,
-      "--source", buildpath
+    odie "Hideout package manifest is missing" unless (package_root/"package-manifest.json").file?
+    odie "Hideout package installer is missing" unless (package_root/"install.sh").executable?
+
+    system "/usr/bin/codesign", "--verify", "--strict", package_root/"bin/hideout"
+    system package_root/"install.sh",
+           "--prefix", prefix,
+           "--store", install_store,
+           "--skip-init"
+  end
+
+  def caveats
+    <<~EOS
+      Hideout is installed but not initialized. Create the supported default
+      profile with:
+
+        hideout init --template dev --profile default --backend lima \\
+          --network direct --runtime developer-standard --no-input
+
+      First use downloads the retained developer runtime separately; expect
+      approximately 1 GB. Hideout user state remains under ~/.hideout and is
+      preserved by brew upgrade and brew uninstall.
+    EOS
   end
 
   test do
-    store = testpath/".hideout"
-    workspace = testpath/"workspace"
-    workspace.mkpath
-
-    ENV["HIDEOUT_STORE_ROOT"] = store
-    system bin/"hideout", "init", "--no-input", "--profile", "default",
-      "--template", "dev", "--backend", "native", "--network", "direct"
-    system bin/"hideout", "doctor", "--backend", "native", "--workspace", workspace
-
-    assert_path_exists store/"install-state.json"
-    assert_path_exists store/"logs/init-audit.jsonl"
-    assert_path_exists store/"profiles/default/profile.json"
+    assert_match "hideout #{version}", shell_output("#{bin}/hideout version")
+    system bin/"hideout", "package", "verify", prefix
+    refute_path_exists testpath/".hideout"
   end
 end

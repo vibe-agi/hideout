@@ -488,51 +488,53 @@ func TestGeneratedYAMLValidatesWithLimactlWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestGeneratedYAMLDoesNotInheritDefaultHomeMountWhenCreated(t *testing.T) {
+func TestGeneratedYAMLUsesImageOnlyBaseWithoutDefaultHomeMount(t *testing.T) {
 	limactl, err := exec.LookPath("limactl")
 	if err != nil {
 		t.Skip("limactl not installed")
 	}
-	limaRoot, err := os.MkdirTemp("/tmp", "hideout-lima-merge.")
+	resolvedLimactl, err := filepath.EvalSymlinks(limactl)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("resolve limactl: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(limaRoot)
-	})
-	limaHome := filepath.Join(limaRoot, "l")
-	if err := os.MkdirAll(limaHome, 0o700); err != nil {
-		t.Fatal(err)
+	templatePath := filepath.Join(filepath.Dir(filepath.Dir(resolvedLimactl)), "share", "lima", "templates", "_images", "ubuntu-lts.yaml")
+	templateData, err := os.ReadFile(templatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skipf("installed Lima does not expose its image-only template at %s; real Gate 2 owns final mount observation", templatePath)
 	}
+	if err != nil {
+		t.Fatalf("read Lima image-only template: %v", err)
+	}
+	var imageBase limaConfig
+	if err := yaml.Unmarshal(templateData, &imageBase); err != nil {
+		t.Fatalf("decode Lima image-only template: %v", err)
+	}
+	if len(imageBase.Images) == 0 {
+		t.Fatalf("Lima image-only template has no images: %s", templatePath)
+	}
+	if len(imageBase.Mounts) != 0 {
+		t.Fatalf("Lima image-only template unexpectedly grants mounts: %+v", imageBase.Mounts)
+	}
+
 	root := t.TempDir()
 	session, err := (Backend{Runner: fakeRunner{lookPath: limactl}}).Prepare(context.Background(), testRunSpec(root))
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	instance := "hmt"
-	t.Cleanup(func() {
-		cmd := exec.Command(limactl, "delete", "-f", instance)
-		cmd.Env = append(os.Environ(), "LIMA_HOME="+limaHome)
-		_ = cmd.Run()
-	})
-	cmd := exec.Command(limactl, "create", "--tty=false", "--name", instance, session.ConfigPath)
-	cmd.Env = append(os.Environ(), "LIMA_HOME="+limaHome)
-	data, err := cmd.CombinedOutput()
+	data, err := os.ReadFile(session.ConfigPath)
 	if err != nil {
-		t.Fatalf("limactl create: %v\n%s", err, data)
-	}
-	finalConfig := filepath.Join(limaHome, instance, "lima.yaml")
-	data, err = os.ReadFile(finalConfig)
-	if err != nil {
-		t.Fatalf("read final lima config: %v", err)
+		t.Fatalf("read generated config: %v", err)
 	}
 	var cfg limaConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("yaml decode final config: %v\n%s", err, data)
+		t.Fatalf("yaml decode generated config: %v\n%s", err, data)
+	}
+	if !reflect.DeepEqual(cfg.Base, []string{"template:_images/ubuntu-lts"}) {
+		t.Fatalf("generated config must inherit only Lima image metadata: %+v", cfg.Base)
 	}
 	for _, m := range cfg.Mounts {
 		if m.Location == "~" || m.Location == os.Getenv("HOME") {
-			t.Fatalf("final lima config inherited host home mount: %+v\n%s", m, data)
+			t.Fatalf("generated config includes host home mount: %+v\n%s", m, data)
 		}
 	}
 }

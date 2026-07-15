@@ -22,7 +22,7 @@ func CheckRepositoryDocs(root string) []DriftFinding {
 	findings = append(findings,
 		requireText(root, "README.md", "macOS", "README mentions macOS install/support context"),
 		requireText(root, "README.md", "hideout support matrix", "README mentions support matrix command"),
-		requireText(root, "README.md", "--backend native` is a development harness, not isolation", "README preserves native non-claim"),
+		requireText(root, "README.md", "--backend native` is a development harness, not an isolation boundary", "README preserves native non-claim"),
 		requireText(root, "docs/STATUS.md", "Release hardening and compatibility matrix", "STATUS includes 016 status"),
 		requireText(root, "docs/backend-capability-matrix.md", "HostFS overlay | required", "backend matrix marks HostFS overlay current for Lima"),
 		requireText(root, "docs/threat-model.md", "guest root", "threat model preserves guest-root non-claim"),

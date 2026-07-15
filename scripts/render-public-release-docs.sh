@@ -72,7 +72,7 @@ EOF
 cat >"$tmp/status" <<EOF
 Current release state: public supervised alpha \`${tag}\` for macOS arm64 with
 the Lima backend. Source-of-truth identity and receipt digest are in
-\`releases/current.json\`; the public release is ${release_url}.
+\`releases/current.json\`; see the [public release](${release_url}).
 
 This status does not add GA, automatic-update, Linux-package, workspace-DLP,
 guest-root-containment, or marketplace-trust claims. Real isolation claims

@@ -18,25 +18,34 @@ It does not create new security claims; current claims and non-claims remain in
 
 ## Install And Verify
 
-Install Lima, then run the standalone installer:
+Install the signed package and Lima dependency from the official Homebrew tap,
+then create the default profile explicitly:
 
 ```bash
-brew install lima
-curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+brew install vibe-agi/tap/hideout
 hideout version
-hideout package verify "$HOME/.local"
+hideout package verify "$(brew --prefix hideout)"
+hideout init --template dev --profile default --backend lima \
+  --network direct --runtime developer-standard --no-input
 hideout doctor
 ```
 
-The installer does not use `sudo` or edit shell startup files. It validates the
-published inventory, package SHA-256, package identity, and macOS signature
-before installing and creating the default direct-network Lima profile. See
-[distribution-bootstrap.md](distribution-bootstrap.md) for script inspection,
-manual download, custom prefixes, repair, and uninstall.
+The formula validates the archive SHA-256, macOS signature, and package
+manifest before installing into the Homebrew Cellar. Formula installation does
+not start a VM, download the retained runtime, or write profile state under
+`~/.hideout`; the explicit `init` command creates the direct-network Lima
+profile. See [distribution-bootstrap.md](distribution-bootstrap.md) for the
+inspectable standalone installer, manual download, custom prefixes, repair,
+and uninstall.
 
-If package verification reports obsolete package-owned leftovers, inspect first
-and then explicitly repair:
+Homebrew users should repair a damaged keg through Homebrew:
+
+```bash
+brew reinstall vibe-agi/tap/hideout
+```
+
+For a standalone installation under `$HOME/.local`, inspect obsolete
+package-owned leftovers before explicitly repairing them:
 
 ```bash
 hideout package repair --prefix "$HOME/.local" --dry-run

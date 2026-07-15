@@ -95,13 +95,19 @@ func TestReleaseWorkflowPushTriggersMatchReleaseState(t *testing.T) {
 
 	publicTruth := readWorkflowContract(t, "hideout-alpha-public-truth.yml")
 	assertStringList(t, publicTruth.On.Push.Paths, []string{
+		".github/workflows/hideout-alpha-public-truth.yml",
 		"releases/current.json",
 		"releases/receipts/**",
 		"README.md",
 		"README.zh-CN.md",
+		"install.sh",
 		"docs/STATUS.md",
+		"docs/distribution-bootstrap.md",
+		"docs/first-run-alpha.md",
 		"docs/support-matrix.md",
 		"CHANGELOG.md",
+		"scripts/render-public-release-docs.sh",
+		"scripts/test-standalone-install.sh",
 		"scripts/test-doc-truth-smoke.sh",
 	})
 }

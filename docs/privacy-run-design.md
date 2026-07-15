@@ -1238,7 +1238,7 @@ Manager API:     JSON over Unix socket or 127.0.0.1 loopback with token
 Port bridge:     Go TCP bridge; host-to-guest providers are backend-specific
 Audit:           JSONL
 Web UI:          React + TypeScript + Vite, embedded static assets later
-Packaging:       Internal builds first; Homebrew/GitHub releases later
+Packaging:       Signed GitHub Releases plus the official Vibe AGI Homebrew tap
 ```
 
 Why Go:

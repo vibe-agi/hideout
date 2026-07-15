@@ -25,26 +25,18 @@ hideout audit show --limit 5
 
 ## 安装
 
-公开 alpha 支持 Apple Silicon Mac，使用 [Lima](https://lima-vm.io/) 提供虚拟机
-隔离。
+公开 alpha 支持 Apple Silicon Mac。Homebrew 会从 Vibe AGI 官方 tap 安装 Hideout
+及其 [Lima](https://lima-vm.io/) 依赖：
 
 ```bash
-brew install lima
-curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+brew install vibe-agi/tap/hideout
+hideout init --template dev --profile default --backend lima \
+  --network direct --runtime developer-standard --no-input
 ```
 
-安装器不使用 `sudo`，也不会修改 shell 启动文件。安装前会校验公开 release
-inventory、压缩包 SHA-256、包身份和 macOS 代码签名。希望先阅读脚本时：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh \
-  -o /tmp/hideout-install.sh
-less /tmp/hideout-install.sh
-sh /tmp/hideout-install.sh
-```
-
-手动下载、校验、修复和卸载见
+Formula 会校验不可变归档的 checksum、macOS 代码签名和 Hideout 包清单。安装过程
+不会启动 VM 或创建 profile；显式 `init` 命令才会执行初始化。可审阅的 standalone
+installer、手动下载、修复和卸载流程仍见
 [Distribution And Bootstrap](docs/distribution-bootstrap.md)。
 
 ## 试一下
@@ -121,6 +113,8 @@ release manifest 和有界验证证据。
 
 精确支持范围见 [Support Matrix](docs/support-matrix.md)，安全声明边界见
 [Claim Boundaries](docs/claim-boundaries.md)。
+
+同一份由程序维护的契约也可以通过 `hideout support matrix` 查看。
 
 ## 继续了解
 

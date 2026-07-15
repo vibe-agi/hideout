@@ -26,27 +26,19 @@ hideout audit show --limit 5
 
 ## Install
 
-The public alpha supports Apple Silicon Macs and uses
-[Lima](https://lima-vm.io/) for VM isolation.
+The public alpha supports Apple Silicon Macs. Homebrew installs Hideout and its
+[Lima](https://lima-vm.io/) dependency from the official Vibe AGI tap:
 
 ```bash
-brew install lima
-curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+brew install vibe-agi/tap/hideout
+hideout init --template dev --profile default --backend lima \
+  --network direct --runtime developer-standard --no-input
 ```
 
-The installer uses no `sudo` and does not edit shell startup files. It verifies
-the published release inventory, archive SHA-256, package identity, and macOS
-code signature before installing. To inspect it before execution:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/vibe-agi/hideout/master/install.sh \
-  -o /tmp/hideout-install.sh
-less /tmp/hideout-install.sh
-sh /tmp/hideout-install.sh
-```
-
-Manual download, verification, repair, and uninstall instructions are in
+The formula verifies the immutable archive checksum, macOS code signature, and
+Hideout package manifest. Installation does not start a VM or create a profile;
+the explicit `init` command does. The inspectable standalone installer, manual
+download, repair, and uninstall paths remain documented in
 [Distribution And Bootstrap](docs/distribution-bootstrap.md).
 
 ## Try It
@@ -125,6 +117,8 @@ the machine-readable release manifest, and bounded verification evidence.
 See the exact supported and unsupported combinations in the
 [Support Matrix](docs/support-matrix.md) and security wording in
 [Claim Boundaries](docs/claim-boundaries.md).
+
+The same machine-owned contract is available with `hideout support matrix`.
 
 ## Explore
 

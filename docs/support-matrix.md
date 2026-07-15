@@ -22,6 +22,15 @@ Current published package: [v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/
 `9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`; `releases/current.json` is the machine-readable source.
 <!-- hideout-public-release:end -->
 
+Supported macOS installation uses the official Homebrew tap:
+
+```bash
+brew install vibe-agi/tap/hideout
+```
+
+The formula consumes the same published package and does not broaden the
+platform, backend, maturity, or automatic-update claims below.
+
 ## Platform Support
 
 | Subject | Level | Guidance |
