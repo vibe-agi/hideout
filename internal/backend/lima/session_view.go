@@ -396,6 +396,7 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		return err
 	}
 	if b.SetupRunner != nil {
+		session.IsolationRunStarted = true
 		return b.setupRunner().Run(
 			ctx,
 			session.InstanceName,
@@ -416,6 +417,7 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), b.controlStderr()); err != nil {
 		return isolatedCommandPreflightError(b, session, command, env, err)
 	}
+	session.IsolationRunStarted = true
 	var runErr error
 	if b.canBridgeTerminal() {
 		runErr = b.runIsolatedPTYWithClient(ctx, session, client, viewCommand)

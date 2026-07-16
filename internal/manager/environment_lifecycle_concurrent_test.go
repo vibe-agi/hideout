@@ -122,6 +122,89 @@ func TestEnvironmentStopReconcilesStaleOwnerAndExactRuntime(t *testing.T) {
 	}
 }
 
+func TestEnvironmentStopRecoversFailedOwnerOnlyAfterInstanceStops(t *testing.T) {
+	core, store, record := concurrentLifecycleFixture(t)
+	id := "ses_20260716T120000Z_abcdef0123456789"
+	if _, err := store.PrepareSessionRuntime(record.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(store.OwnerRoot(record.ID), id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	data, err := json.Marshal(session.OwnerRecord{
+		Schema: session.ActiveSessionSchema, SessionID: id, EnvironmentID: record.ID,
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("b", 64),
+		State: session.OwnerStateFailed, TerminalMode: session.TerminalNone,
+		StartedAt: now, UpdatedAt: now, CommandClass: "bash", CleanupError: "cleanup proof failed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "owner.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{IDs: []string{record.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := &fakeEnvironmentOperator{}
+	if _, err := core.ApplyEnvironmentStop(t.Context(), plan, EnvironmentApplyOptions{Operator: operator}); err != nil {
+		t.Fatal(err)
+	}
+	if len(operator.stopped) != 1 || operator.stopped[0] != record.InstanceName {
+		t.Fatalf("stop calls=%+v", operator.stopped)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed owner remains after proved stop: %v", err)
+	}
+	if _, err := os.Stat(store.RuntimeSessionDir(record.ID, id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed owner runtime remains after proved stop: %v", err)
+	}
+}
+
+func TestEnvironmentStopRetainsFailedOwnerWhenInstanceStopFails(t *testing.T) {
+	core, store, record := concurrentLifecycleFixture(t)
+	id := "ses_20260716T120000Z_fedcba9876543210"
+	dir := filepath.Join(store.OwnerRoot(record.ID), id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	data, err := json.Marshal(session.OwnerRecord{
+		Schema: session.ActiveSessionSchema, SessionID: id, EnvironmentID: record.ID,
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("c", 64),
+		State: session.OwnerStateFailed, TerminalMode: session.TerminalNone,
+		StartedAt: now, UpdatedAt: now, CommandClass: "bash", CleanupError: "cleanup proof failed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "owner.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{IDs: []string{record.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := &fakeEnvironmentOperator{stopErr: errors.New("stop failed")}
+	if _, err := core.ApplyEnvironmentStop(t.Context(), plan, EnvironmentApplyOptions{Operator: operator}); err == nil {
+		t.Fatal("stop failure should be returned")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("failed owner was removed without stop proof: %v", err)
+	}
+}
+
 func TestEnvironmentStopLinearizesAfterAttachOwner(t *testing.T) {
 	core, store, record := concurrentLifecycleFixture(t)
 	plan, err := core.PlanEnvironmentStop(EnvironmentActionOptions{IDs: []string{record.ID}})

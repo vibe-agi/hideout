@@ -41,11 +41,12 @@ import (
 type fakeEnvironmentOperator struct {
 	stopped []string
 	cleaned []string
+	stopErr error
 }
 
 func (f *fakeEnvironmentOperator) StopInstance(_ context.Context, instance string) error {
 	f.stopped = append(f.stopped, instance)
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeEnvironmentOperator) Cleanup(_ context.Context, session *backend.Session) error {

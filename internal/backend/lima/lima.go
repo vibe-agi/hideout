@@ -578,7 +578,7 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	hostEnv := HostCommandEnv(os.Environ())
 	var errs []error
 	runtimeUnavailable := session.RunAttempted && !session.RuntimeReady
-	if runtimeUnavailable {
+	if runtimeUnavailable && session.IsolationRunStarted {
 		errs = append(errs, errRuntimeNotReady)
 	}
 	if !session.SessionIsolationRequired && !runtimeUnavailable && session.HostFSEnabled {
@@ -599,7 +599,7 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 			errs = append(errs, fmt.Errorf("network cleanup: %w", err))
 		}
 	}
-	if session.SessionIsolationRequired && !runtimeUnavailable && !session.IsolationCleanupProved {
+	if session.SessionIsolationRequired && session.IsolationRunStarted && !runtimeUnavailable && !session.IsolationCleanupProved {
 		if err := b.verifyIsolatedSessionTerminated(cleanupCtx, session); err != nil {
 			errs = append(errs, fmt.Errorf("session-view cleanup proof: %w", err))
 		}

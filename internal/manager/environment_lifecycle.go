@@ -358,15 +358,31 @@ func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, op
 	if err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
-	if err := requireNoEnvironmentOwners(store, rec.ID); err != nil {
+	if err := requireEnvironmentOwnersStaleForStop(store, rec.ID); err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
 	switch {
 	case rec.Status == environment.StatusCreated:
+		if err := recoverStoppedEnvironmentOwners(store, rec.ID); err != nil {
+			return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
+		}
 		return EnvironmentActionTarget{}, environmentActionTargetFromRecord(rec, "never-booted"), nil
 	case rec.Status == "stopped":
+		if err := recoverStoppedEnvironmentOwners(store, rec.ID); err != nil {
+			return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
+		}
 		return EnvironmentActionTarget{}, environmentActionTargetFromRecord(rec, "already-stopped"), nil
 	case rec.Backend != "lima" || strings.TrimSpace(rec.InstanceName) == "":
+		owners, listErr := session.ListOwners(store.OwnerRoot(rec.ID))
+		if listErr != nil {
+			return EnvironmentActionTarget{}, EnvironmentActionTarget{}, listErr
+		}
+		if len(owners) != 0 {
+			return EnvironmentActionTarget{}, EnvironmentActionTarget{}, &EnvironmentOwnerError{
+				Code: recovery.CodeSessionCleanupFailed, EnvironmentID: rec.ID,
+				Err: session.ErrOwnerCleanupFailed,
+			}
+		}
 		return EnvironmentActionTarget{}, environmentActionTargetFromRecord(rec, "no-lima-instance"), nil
 	}
 	if err := operator.StopInstance(ctx, rec.InstanceName); err != nil {
@@ -379,7 +395,49 @@ func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, op
 	if err := invalidateStoppedEnvironmentRuntime(store, rec); err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
+	if err := recoverStoppedEnvironmentOwners(store, rec.ID); err != nil {
+		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
+	}
 	return environmentActionTargetFromRecord(rec, ""), EnvironmentActionTarget{}, nil
+}
+
+func requireEnvironmentOwnersStaleForStop(store environment.Store, environmentID string) error {
+	owners, err := session.ListOwners(store.OwnerRoot(environmentID))
+	if err != nil {
+		return &EnvironmentOwnerError{Code: recovery.CodeSessionOwnerUnprovable, EnvironmentID: environmentID, Err: err}
+	}
+	live := 0
+	for _, owner := range owners {
+		switch owner.Status {
+		case session.OwnerLive:
+			live++
+		case session.OwnerUnprovable:
+			return &EnvironmentOwnerError{
+				Code: recovery.CodeSessionOwnerUnprovable, EnvironmentID: environmentID,
+				Err: fmt.Errorf("session %s: %w", owner.SessionID, session.ErrOwnerUnprovable),
+			}
+		}
+	}
+	if live > 0 {
+		return &EnvironmentOwnerError{
+			Code: recovery.CodeEnvironmentActiveSessions, EnvironmentID: environmentID, ActiveOwners: live,
+		}
+	}
+	return nil
+}
+
+func recoverStoppedEnvironmentOwners(store environment.Store, environmentID string) error {
+	_, err := session.RecoverStaleOwnersWithCleanup(store.OwnerRoot(environmentID), func(item session.OwnerObservation) error {
+		return store.ClearSessionRuntime(environmentID, item.SessionID)
+	})
+	if err == nil {
+		return nil
+	}
+	code := recovery.CodeSessionCleanupFailed
+	if errors.Is(err, session.ErrOwnerUnprovable) {
+		code = recovery.CodeSessionOwnerUnprovable
+	}
+	return &EnvironmentOwnerError{Code: code, EnvironmentID: environmentID, Err: err}
 }
 
 func applyEnvironmentCleanTarget(ctx context.Context, store environment.Store, operator EnvironmentOperator, id string) (EnvironmentActionTarget, error) {

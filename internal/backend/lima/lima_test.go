@@ -1126,8 +1126,8 @@ func TestCleanupSkipsGuestCommandsWhenRunStartDidNotComplete(t *testing.T) {
 		t.Fatalf("start state attempted=%v ready=%v", session.RunAttempted, session.RuntimeReady)
 	}
 	runner.calls = nil
-	if err := b.Cleanup(context.Background(), session); !errors.Is(err, errRuntimeNotReady) {
-		t.Fatalf("Cleanup error=%v want %v", err, errRuntimeNotReady)
+	if err := b.Cleanup(context.Background(), session); err != nil {
+		t.Fatalf("Cleanup after pre-target start failure: %v", err)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("cleanup must not enter a guest that never became ready: %+v", runner.calls)

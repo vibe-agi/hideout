@@ -102,6 +102,7 @@ type Session struct {
 	ExpectedBootID            string
 	RunAttempted              bool
 	RuntimeReady              bool
+	IsolationRunStarted       bool
 	IsolationCleanupProved    bool
 }
 

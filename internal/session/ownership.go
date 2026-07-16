@@ -312,6 +312,21 @@ func ReconcileStaleOwners(root string) ([]string, error) {
 // caller has cleaned the exact session runtime identified by the directory.
 // The directory identity remains authoritative even if a record is corrupt.
 func ReconcileStaleOwnersWithCleanup(root string, cleanup func(OwnerObservation) error) ([]string, error) {
+	return reconcileStaleOwnersWithCleanup(root, cleanup, false)
+}
+
+// RecoverStaleOwnersWithCleanup removes stale failed/cleaning records only
+// after the caller has independently removed the authority they represent.
+// It is intended for explicit recovery operations such as stopping the owning
+// VM, not for ordinary attach-time reconciliation.
+func RecoverStaleOwnersWithCleanup(root string, cleanup func(OwnerObservation) error) ([]string, error) {
+	if cleanup == nil {
+		return nil, errors.New("failed owner recovery requires an authority cleanup proof")
+	}
+	return reconcileStaleOwnersWithCleanup(root, cleanup, true)
+}
+
+func reconcileStaleOwnersWithCleanup(root string, cleanup func(OwnerObservation) error, recoverFailed bool) ([]string, error) {
 	items, err := ListOwners(root)
 	if err != nil {
 		return nil, err
@@ -322,7 +337,7 @@ func ReconcileStaleOwnersWithCleanup(root string, cleanup func(OwnerObservation)
 		case OwnerLive:
 			continue
 		case OwnerStale:
-			if item.Record.State == OwnerStateFailed || item.Record.State == OwnerStateCleaning {
+			if !recoverFailed && (item.Record.State == OwnerStateFailed || item.Record.State == OwnerStateCleaning) {
 				return removed, fmt.Errorf("session %s: %w", item.SessionID, ErrOwnerCleanupFailed)
 			}
 			if cleanup != nil {

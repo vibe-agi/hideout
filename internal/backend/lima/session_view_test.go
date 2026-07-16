@@ -61,6 +61,9 @@ func TestIsolatedNonTerminalRunKeepsStreamsExitAndCancellationSessionLocal(t *te
 	if len(runner.commands) != 2 || !strings.Contains(strings.Join(runner.commands[1], " "), "argument with spaces") {
 		t.Fatalf("isolated commands=%q", runner.commands)
 	}
+	if !session.IsolationRunStarted {
+		t.Fatal("isolated target start was not recorded")
+	}
 
 	cancelRunner := &isolatedRunSetupRunner{waitForCancel: true, targetEntered: make(chan struct{})}
 	b.SetupRunner = cancelRunner
@@ -94,6 +97,9 @@ func TestIsolatedCommandPreflightDistinguishesMissingCommandFromViewFailure(t *t
 	var notFound backend.CommandNotFoundError
 	if !errors.As(err, &notFound) || notFound.Command != "missing-tool" {
 		t.Fatalf("missing command error=%T %v", err, err)
+	}
+	if session.IsolationRunStarted {
+		t.Fatal("failed preflight recorded an isolated target start")
 	}
 
 	brokenView := &isolatedRunSetupRunner{checkErr: fakeExitStatusError(32)}
@@ -508,7 +514,8 @@ func TestIsolatedCleanupProvesSessionProcessTreeGone(t *testing.T) {
 	b := Backend{SetupRunner: runner, ControlStdout: io.Discard, ControlStderr: io.Discard}
 	session := &backend.Session{
 		ID: "ses_20260716T120000Z_0123456789abcdef", InstanceName: "hideout-test",
-		PreserveInstance: true, RuntimeReady: true, RunAttempted: true, SessionIsolationRequired: true,
+		PreserveInstance: true, RuntimeReady: true, RunAttempted: true,
+		SessionIsolationRequired: true, IsolationRunStarted: true,
 	}
 	if err := b.Cleanup(context.Background(), session); err != nil {
 		t.Fatal(err)
@@ -521,6 +528,22 @@ func TestIsolatedCleanupProvesSessionProcessTreeGone(t *testing.T) {
 	}
 	if !strings.Contains(joined, `2>/dev/null <"$env_file"`) || strings.Contains(joined, `<"$env_file" 2>/dev/null`) {
 		t.Fatalf("cleanup proof leaves process-exit races on stderr: %s", joined)
+	}
+}
+
+func TestIsolatedCleanupSkipsGuestProofBeforeTargetStarts(t *testing.T) {
+	runner := &sessionViewSetupRunner{err: errors.New("unexpected cleanup proof")}
+	b := Backend{SetupRunner: runner, ControlStdout: io.Discard, ControlStderr: io.Discard}
+	session := &backend.Session{
+		ID: "ses_20260716T120000Z_0123456789abcdef", InstanceName: "hideout-test",
+		PreserveInstance: true, RuntimeReady: true, RunAttempted: true,
+		SessionIsolationRequired: true,
+	}
+	if err := b.Cleanup(context.Background(), session); err != nil {
+		t.Fatalf("pre-target cleanup: %v", err)
+	}
+	if len(runner.command) != 0 {
+		t.Fatalf("pre-target cleanup issued a guest proof: %q", runner.command)
 	}
 }
 
