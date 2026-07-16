@@ -9,24 +9,6 @@
       "description": "Required resolver bootstrap command"
     },
     {
-      "id": "boundary.mount",
-      "class": "boundary",
-      "command": "mount",
-      "description": "Required private session mount command"
-    },
-    {
-      "id": "boundary.setpriv",
-      "class": "boundary",
-      "command": "setpriv",
-      "description": "Required privilege-drop command after session-view setup"
-    },
-    {
-      "id": "boundary.unshare",
-      "class": "boundary",
-      "command": "unshare",
-      "description": "Required mount/PID namespace and private-proc command"
-    },
-    {
       "id": "baseline.git",
       "class": "baseline",
       "command": "git",

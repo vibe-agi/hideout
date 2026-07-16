@@ -238,6 +238,7 @@ func TestEmbeddedPromotedCatalogResolvesExactReviewedArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resolved.Revision.ID != "2026.07.0" ||
+		resolved.Provenance.ContractDigest != "sha256:08e6570dcdb3ceeda795e0cca105c0ac571a0d4a36f91ed42efe2c8f10a3f301" ||
 		resolved.Artifact.Location != "https://github.com/vibe-agi/hideout/releases/download/runtime-developer-standard-2026.07.0/developer-standard-2026.07.0-linux-aarch64.qcow2" ||
 		resolved.Artifact.SHA256 != "79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134" ||
 		resolved.Artifact.Source.SourceLockSHA256 != "5357ebfb2fe8984a71acbfc558597d4ff721970cdd4ef955d75a3c80b6012420" {
