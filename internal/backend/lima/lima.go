@@ -451,7 +451,7 @@ func (b Backend) runWithTerminalBridge(ctx context.Context, runner CommandRunner
 func (b Backend) canBridgeTerminal() bool {
 	stdin, stdinOK := b.stdin().(*os.File)
 	stdout, stdoutOK := b.stdout().(*os.File)
-	return stdinOK && stdoutOK && term.IsTerminal(int(stdin.Fd())) && term.IsTerminal(int(stdout.Fd()))
+	return stdinOK && stdoutOK && terminalIsTerminal(int(stdin.Fd())) && terminalIsTerminal(int(stdout.Fd()))
 }
 
 type nonTerminalWriter struct {

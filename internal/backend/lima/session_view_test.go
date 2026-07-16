@@ -1,6 +1,7 @@
 package lima
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 func TestInitialTerminalDimensionsPreserveHostSizeAndBoundFallback(t *testing.T) {
@@ -101,7 +103,7 @@ func TestIsolatedCommandPreflightDistinguishesMissingCommandFromViewFailure(t *t
 	}
 }
 
-func TestIsolatedRunReusesOneSSHTransportForPreflightAndTarget(t *testing.T) {
+func TestIsolatedPTYRunNegotiatesBeforeGuardianAndReusesOneSSHTransport(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("LIMA_HOME", "")
@@ -121,6 +123,10 @@ func TestIsolatedRunReusesOneSSHTransportForPreflightAndTarget(t *testing.T) {
 	serverConfig.AddHostKey(hostSigner)
 	var connections atomic.Int32
 	var channels atomic.Int32
+	var ptyNegotiated atomic.Bool
+	var guardianStarted atomic.Bool
+	var targetStarted atomic.Bool
+	var protocolFailed atomic.Bool
 	var serverWG sync.WaitGroup
 	serverWG.Add(1)
 	go func() {
@@ -154,6 +160,14 @@ func TestIsolatedRunReusesOneSSHTransportForPreflightAndTarget(t *testing.T) {
 					go func() {
 						defer channel.Close()
 						for request := range channelRequests {
+							if request.Type == "pty-req" {
+								if guardianStarted.Load() {
+									protocolFailed.Store(true)
+								}
+								ptyNegotiated.Store(true)
+								_ = request.Reply(true, nil)
+								continue
+							}
 							if request.Type != "exec" {
 								_ = request.Reply(false, nil)
 								continue
@@ -165,7 +179,17 @@ func TestIsolatedRunReusesOneSSHTransportForPreflightAndTarget(t *testing.T) {
 							}
 							_ = request.Reply(true, nil)
 							if strings.Contains(payload.Command, "hideout-session-guardian") {
+								if !ptyNegotiated.Load() {
+									protocolFailed.Store(true)
+								}
+								guardianStarted.Store(true)
+								_, _ = io.WriteString(channel, "ready\n")
 								_, _ = io.Copy(io.Discard, channel)
+							} else if strings.Contains(payload.Command, "hideout-session-launcher") {
+								if !guardianStarted.Load() {
+									protocolFailed.Store(true)
+								}
+								targetStarted.Store(true)
 							}
 							_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 							return
@@ -196,7 +220,27 @@ func TestIsolatedRunReusesOneSSHTransportForPreflightAndTarget(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "ssh.config"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b := Backend{Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard, ControlStdout: io.Discard, ControlStderr: io.Discard}
+	stdin, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	oldIsTerminal, oldGetSize := terminalIsTerminal, terminalGetSize
+	oldMakeRaw, oldRestore := terminalMakeRaw, terminalRestore
+	terminalIsTerminal = func(int) bool { return true }
+	terminalGetSize = func(int) (int, int, error) { return 132, 43, nil }
+	terminalMakeRaw = func(int) (*term.State, error) { return &term.State{}, nil }
+	terminalRestore = func(int, *term.State) error { return nil }
+	t.Cleanup(func() {
+		terminalIsTerminal, terminalGetSize = oldIsTerminal, oldGetSize
+		terminalMakeRaw, terminalRestore = oldMakeRaw, oldRestore
+	})
+	b := Backend{Stdin: stdin, Stdout: stdout, Stderr: io.Discard, ControlStdout: io.Discard, ControlStderr: io.Discard}
 	session := &backend.Session{
 		ID: "ses_20260716T120000Z_0123456789abcdef", InstanceName: "hideout-test",
 		ConfigPath: "/unused/lima.yaml", GuestWork: "/workspace", RuntimeReady: true, SessionIsolationRequired: true,
@@ -213,6 +257,9 @@ func TestIsolatedRunReusesOneSSHTransportForPreflightAndTarget(t *testing.T) {
 	if connections.Load() != 1 || channels.Load() != 4 {
 		t.Fatalf("ssh connections=%d channels=%d want one transport with preflight+guardian+target+cleanup-proof channels", connections.Load(), channels.Load())
 	}
+	if protocolFailed.Load() || !ptyNegotiated.Load() || !guardianStarted.Load() || !targetStarted.Load() {
+		t.Fatalf("pty protocol failed=%v negotiated=%v guardian=%v target=%v", protocolFailed.Load(), ptyNegotiated.Load(), guardianStarted.Load(), targetStarted.Load())
+	}
 }
 
 func TestSessionGuardianIsCoreOwnedExactSessionAndFailClosed(t *testing.T) {
@@ -221,7 +268,7 @@ func TestSessionGuardianIsCoreOwnedExactSessionAndFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(command, " ")
-	for _, required := range []string{"trap '' HUP INT TERM", `read -r -t 2 outcome`, "ping)", "done)", sessionGuardianRoot, "/proc/$pid/stat", "/proc/$pid/cmdline", "current_start", "grep -Fqx", "kill -KILL", "hideout-session-guardian"} {
+	for _, required := range []string{"trap '' HUP INT TERM", `printf 'ready\n'`, `read -r -t 2 outcome`, "ping)", "done)", sessionGuardianRoot, "/proc/$pid/stat", "/proc/$pid/cmdline", "current_start", "grep -Fqx", "kill -KILL", "hideout-session-guardian"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("guardian command missing %q: %s", required, joined)
 		}
@@ -238,29 +285,37 @@ func TestSessionGuardianIsCoreOwnedExactSessionAndFailClosed(t *testing.T) {
 }
 
 func TestSessionGuardianHeartbeatSendsPingDoneAndDisconnect(t *testing.T) {
-	finish := make(chan bool, 1)
-	heartbeat := &sessionGuardianHeartbeat{ticker: time.NewTicker(time.Millisecond), finish: finish}
-	defer heartbeat.ticker.Stop()
-	buf := make([]byte, 16)
-	n, err := heartbeat.Read(buf)
-	if err != nil || string(buf[:n]) != "ping\n" {
-		t.Fatalf("heartbeat=%q err=%v", buf[:n], err)
+	reader, writer := io.Pipe()
+	heartbeat := startSessionGuardianHeartbeat(writer)
+	lines := bufio.NewReader(reader)
+	line, err := lines.ReadString('\n')
+	if err != nil || line != "ping\n" {
+		t.Fatalf("first heartbeat=%q err=%v", line, err)
 	}
-	finish <- true
-	n, err = heartbeat.Read(buf)
-	if err != nil || string(buf[:n]) != "done\n" {
-		t.Fatalf("completion=%q err=%v", buf[:n], err)
+	heartbeat.finish <- true
+	line, err = lines.ReadString('\n')
+	if err != nil || line != "done\n" {
+		t.Fatalf("completion=%q err=%v", line, err)
 	}
-	if _, err := heartbeat.Read(buf); !errors.Is(err, io.EOF) {
+	if _, err := lines.ReadByte(); !errors.Is(err, io.EOF) {
 		t.Fatalf("completion did not close stream: %v", err)
 	}
+	if err := <-heartbeat.done; err != nil {
+		t.Fatalf("heartbeat completion: %v", err)
+	}
 
-	disconnect := make(chan bool, 1)
-	heartbeat = &sessionGuardianHeartbeat{ticker: time.NewTicker(time.Hour), finish: disconnect}
-	defer heartbeat.ticker.Stop()
-	disconnect <- false
-	if _, err := heartbeat.Read(buf); !errors.Is(err, io.EOF) {
+	reader, writer = io.Pipe()
+	heartbeat = startSessionGuardianHeartbeat(writer)
+	lines = bufio.NewReader(reader)
+	if line, err = lines.ReadString('\n'); err != nil || line != "ping\n" {
+		t.Fatalf("disconnect first heartbeat=%q err=%v", line, err)
+	}
+	heartbeat.finish <- false
+	if _, err := lines.ReadByte(); !errors.Is(err, io.EOF) {
 		t.Fatalf("disconnect did not close heartbeat stream: %v", err)
+	}
+	if err := <-heartbeat.done; err != nil {
+		t.Fatalf("heartbeat disconnect: %v", err)
 	}
 }
 

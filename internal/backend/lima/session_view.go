@@ -1,6 +1,7 @@
 package lima
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +32,10 @@ var (
 	sessionViewUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	sessionViewEnvPattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 	sessionViewBootPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+	terminalIsTerminal     = term.IsTerminal
+	terminalGetSize        = term.GetSize
+	terminalMakeRaw        = term.MakeRaw
+	terminalRestore        = term.Restore
 )
 
 type SessionViewSpec struct {
@@ -198,6 +203,7 @@ func SessionGuardianCommand(sessionID string) ([]string, error) {
 trap '' HUP INT TERM
 control=$1
 source=$2
+printf 'ready\n'
 while true; do
   outcome=
   if ! IFS= read -r -t 2 outcome; then
@@ -465,38 +471,43 @@ type sshSessionGuardian struct {
 }
 
 type sessionGuardianHeartbeat struct {
-	ticker  *time.Ticker
-	finish  chan bool
-	pending []byte
-	eof     bool
+	finish chan bool
+	done   <-chan error
 }
 
-func (r *sessionGuardianHeartbeat) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	if len(r.pending) > 0 {
-		n := copy(p, r.pending)
-		r.pending = r.pending[n:]
-		return n, nil
-	}
-	if r.eof {
-		return 0, io.EOF
-	}
-	select {
-	case normal := <-r.finish:
-		r.ticker.Stop()
-		r.eof = true
-		if !normal {
-			return 0, io.EOF
+func startSessionGuardianHeartbeat(stdin io.WriteCloser) *sessionGuardianHeartbeat {
+	finish := make(chan bool, 1)
+	done := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(sessionGuardianBeat)
+		defer ticker.Stop()
+		defer stdin.Close()
+		write := func(message string) error {
+			_, err := io.WriteString(stdin, message)
+			return err
 		}
-		r.pending = []byte("done\n")
-	case <-r.ticker.C:
-		r.pending = []byte("ping\n")
-	}
-	n := copy(p, r.pending)
-	r.pending = r.pending[n:]
-	return n, nil
+		if err := write("ping\n"); err != nil {
+			done <- err
+			return
+		}
+		for {
+			select {
+			case normal := <-finish:
+				if normal {
+					done <- write("done\n")
+					return
+				}
+				done <- nil
+				return
+			case <-ticker.C:
+				if err := write("ping\n"); err != nil {
+					done <- err
+					return
+				}
+			}
+		}
+	}()
+	return &sessionGuardianHeartbeat{finish: finish, done: done}
 }
 
 func startSSHSessionGuardian(client *ssh.Client, sessionID string, stderr io.Writer) (*sshSessionGuardian, error) {
@@ -508,17 +519,51 @@ func startSSHSessionGuardian(client *ssh.Client, sessionID string, stderr io.Wri
 	if err != nil {
 		return nil, fmt.Errorf("open isolated session guardian: %w", err)
 	}
-	heartbeat := &sessionGuardianHeartbeat{ticker: time.NewTicker(sessionGuardianBeat), finish: make(chan bool, 1)}
-	remote.Stdin = heartbeat
-	remote.Stdout = io.Discard
+	stdin, err := remote.StdinPipe()
+	if err != nil {
+		_ = remote.Close()
+		return nil, fmt.Errorf("open isolated session guardian heartbeat: %w", err)
+	}
+	stdout, err := remote.StdoutPipe()
+	if err != nil {
+		_ = remote.Close()
+		return nil, fmt.Errorf("open isolated session guardian readiness: %w", err)
+	}
 	remote.Stderr = stderr
 	if err := remote.Start(setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, command)); err != nil {
-		heartbeat.ticker.Stop()
 		_ = remote.Close()
 		return nil, fmt.Errorf("start isolated session guardian: %w", err)
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- remote.Wait() }()
+	heartbeat := startSessionGuardianHeartbeat(stdin)
+	ready := make(chan error, 1)
+	go func() {
+		line, readErr := bufio.NewReader(stdout).ReadString('\n')
+		if readErr == nil && line != "ready\n" {
+			readErr = fmt.Errorf("unexpected readiness response %q", strings.TrimSpace(line))
+		}
+		ready <- readErr
+	}()
+	select {
+	case readyErr := <-ready:
+		if readyErr != nil {
+			heartbeat.finish <- false
+			_ = remote.Close()
+			return nil, fmt.Errorf("read isolated session guardian readiness: %w", readyErr)
+		}
+	case waitErr := <-wait:
+		heartbeat.finish <- false
+		if waitErr == nil {
+			waitErr = errors.New("session guardian exited before readiness")
+		}
+		_ = remote.Close()
+		return nil, fmt.Errorf("start isolated session guardian: %w", waitErr)
+	case <-time.After(sessionGuardianWait):
+		heartbeat.finish <- false
+		_ = remote.Close()
+		return nil, errors.New("isolated session guardian readiness timed out")
+	}
 	return &sshSessionGuardian{session: remote, heartbeat: heartbeat, wait: wait}, nil
 }
 
@@ -537,7 +582,12 @@ func (g *sshSessionGuardian) finish(normal bool) error {
 	select {
 	case waitErr := <-g.wait:
 		_ = g.session.Close()
-		return waitErr
+		select {
+		case heartbeatErr := <-g.heartbeat.done:
+			return errors.Join(waitErr, heartbeatErr)
+		case <-time.After(sessionGuardianWait):
+			return errors.Join(waitErr, errors.New("isolated session guardian heartbeat did not terminate"))
+		}
 	case <-time.After(sessionGuardianWait):
 		_ = g.session.Close()
 		return errors.New("isolated session guardian did not terminate")
@@ -553,12 +603,28 @@ func waitGuardedSSHSession(ctx context.Context, client *ssh.Client, target *ssh.
 	case guardianErr := <-guardian.wait:
 		guardian.finishOnce.Do(func() { guardian.heartbeat.finish <- false })
 		_ = target.Signal(ssh.SIGKILL)
-		_ = client.Close()
-		<-targetWait
+		select {
+		case <-targetWait:
+		case <-time.After(sessionGuardianWait):
+			_ = client.Close()
+			<-targetWait
+		}
 		if guardianErr == nil {
 			guardianErr = errors.New("session guardian exited before target")
 		}
 		return fmt.Errorf("isolated session guardian failed: %w", guardianErr)
+	case heartbeatErr := <-guardian.heartbeat.done:
+		_ = target.Signal(ssh.SIGKILL)
+		select {
+		case <-targetWait:
+		case <-time.After(sessionGuardianWait):
+			_ = client.Close()
+			<-targetWait
+		}
+		if heartbeatErr == nil {
+			heartbeatErr = errors.New("heartbeat ended before target")
+		}
+		return fmt.Errorf("isolated session guardian heartbeat failed: %w", heartbeatErr)
 	case <-ctx.Done():
 		_ = target.Signal(ssh.SIGTERM)
 		guardianErr := guardian.finish(false)
@@ -596,24 +662,27 @@ func (b Backend) runIsolatedPTYWithClient(ctx context.Context, prepared *backend
 	if stdin == nil || stdout == nil {
 		return errors.New("isolated terminal requires file-backed stdin and stdout")
 	}
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("open isolated terminal ssh session: %w", err)
+	}
+	defer session.Close()
+	width, height := initialTerminalDimensions(int(stdout.Fd()), terminalGetSize)
+	// Negotiate the inert PTY channel before starting the guardian. OpenSSH can
+	// serialize PTY allocation behind another live session channel; the target
+	// process is still not started until the guardian is ready below.
+	if err := session.RequestPty("xterm-256color", height, width, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
+		return fmt.Errorf("request isolated terminal: %w", err)
+	}
 	guardian, err := startSSHSessionGuardian(client, prepared.ID, b.controlStderr())
 	if err != nil {
 		return err
 	}
-	session, err := client.NewSession()
-	if err != nil {
-		return errors.Join(fmt.Errorf("open isolated terminal ssh session: %w", err), guardian.finish(true))
-	}
-	defer session.Close()
-	width, height := initialTerminalDimensions(int(stdout.Fd()), term.GetSize)
-	if err := session.RequestPty("xterm-256color", height, width, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
-		return errors.Join(fmt.Errorf("request isolated terminal: %w", err), guardian.finish(true))
-	}
-	state, err := term.MakeRaw(int(stdin.Fd()))
+	state, err := terminalMakeRaw(int(stdin.Fd()))
 	if err != nil {
 		return errors.Join(err, guardian.finish(true))
 	}
-	defer func() { retErr = errors.Join(retErr, term.Restore(int(stdin.Fd()), state)) }()
+	defer func() { retErr = errors.Join(retErr, terminalRestore(int(stdin.Fd()), state)) }()
 	session.Stdin = stdin
 	session.Stdout = nonTerminalWriter{Writer: b.stdout()}
 	session.Stderr = nonTerminalWriter{Writer: b.stderr()}
