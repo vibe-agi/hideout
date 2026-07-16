@@ -2516,6 +2516,7 @@ XDG_CONFIG_HOME=<guest-config>
 XDG_CACHE_HOME=<guest-cache>
 XDG_DATA_HOME=<guest-data>
 GIT_CONFIG_GLOBAL=<guest-home>/.gitconfig
+GIT_OPTIONAL_LOCKS=0
 TZ=UTC
 LANG=C.UTF-8
 LC_ALL=C.UTF-8
@@ -2524,14 +2525,21 @@ PATH=<shim-dir>:<guest-tool-paths>
 
 Synthetic identity env names are reserved. A profile must not set or inherit
 `HOME`, `USER`, `LOGNAME`, `HOSTNAME`, `TMPDIR`, `XDG_CONFIG_HOME`,
-`XDG_CACHE_HOME`, `XDG_DATA_HOME`, `GIT_CONFIG_GLOBAL`, `TZ`, `LANG`, `LC_ALL`,
-or `PATH` through `env.public` or `env.inherit`. The `HIDEOUT_*` namespace is
+`XDG_CACHE_HOME`, `XDG_DATA_HOME`, `GIT_CONFIG_GLOBAL`, `GIT_OPTIONAL_LOCKS`,
+`TZ`, `LANG`, `LC_ALL`, or `PATH` through `env.public` or `env.inherit`. The
+`HIDEOUT_*` namespace is
 also reserved for Hideout runtime and control-plane env such as broker endpoint,
 session ID, capability token, shim state, and host-only secret backing values.
 Use the profile `identity`, `git`, workspace, backend, network, and
 secret ref fields instead. This keeps identity, git global config, command
 resolution, broker authority, and secret plumbing controlled by Hideout instead
 of host or profile env.
+
+`GIT_OPTIONAL_LOCKS=0` prevents guest read-only Git operations such as
+`git status` from refreshing the shared host index as an optional side effect.
+Git still performs the requested operation and still takes every lock required
+for mutations such as `git add` or `git commit`. This avoids host/guest index
+stat churn without writing a repository-local compatibility setting.
 
 Default user denied patterns:
 

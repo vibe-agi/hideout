@@ -991,7 +991,7 @@ func isSyntheticIdentityEnvName(name string) bool {
 	switch name {
 	case "HOME", "USER", "LOGNAME", "HOSTNAME", "TMPDIR",
 		"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
-		"GIT_CONFIG_GLOBAL",
+		"GIT_CONFIG_GLOBAL", "GIT_OPTIONAL_LOCKS",
 		"TZ", "LANG", "LC_ALL", "PATH":
 		return true
 	default:
