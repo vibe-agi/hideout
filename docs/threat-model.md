@@ -126,6 +126,14 @@ The workspace is intentionally shared unless a later workspace-filtering
 feature is enabled. Project-local secrets inside the workspace are not protected
 by the Phase 1 default workspace model.
 
+Concurrent runs for the same pinned workspace share one guest kernel and the
+writable workspace. For ordinary non-root target processes, each run has a
+separate mount namespace, PID namespace, private `/proc`, runtime child,
+broker/data plane, and HostFS authority. This prevents one ordinary target
+from reading or signaling sibling control state, but does not filter effects
+through the shared workspace and does not contain guest root. Releasing the
+last session owner does not automatically stop the VM.
+
 When the shared default environment ships, sessions from different workspaces
 share one guest kernel: cross-workspace isolation inside that environment is
 session mount-namespace level, which is weaker than the VM boundary between

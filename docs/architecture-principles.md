@@ -169,17 +169,16 @@ Per-run authority includes:
 
 Every `hideout run` refreshes these even when it resumes a warm environment.
 
-Environments are named, user-selected runtime boxes. A shared `default`
-environment gives zero-configuration runs from any directory; a named
-environment created explicitly gives isolation and a statically mounted
-workspace. Inside a shared environment each session sees only its own
-workspace plus HostFS grants: the session mount namespace scopes that view
-for ordinary target processes, but it is not a wall against guest root — a
-guest-root target in a shared environment may reach other attached
-workspaces. Operators who need the VM-level wall between projects create a
-dedicated environment. Changing an environment's pinned
-configuration (base image digest, backend, profile binding) is drift: the
-product fails closed and offers recreation, never a silent switch.
+Environments are named, user-selected runtime boxes. The implicit environment
+is currently pinned to one profile and one workspace. Multiple runs may own
+that same warm environment concurrently; each run gets a separate runtime
+child, broker/data plane, mount namespace, PID namespace, and private `/proc`.
+The mounted workspace is intentionally shared and writable. Sharing one
+default VM across different workspaces remains a later design, not current
+behavior. Session namespaces are an ordinary-target boundary, not a wall
+against guest root. Changing an environment's pinned configuration (base
+image digest, backend, profile binding, or workspace) is drift: the product
+fails closed and offers recreation, never a silent switch.
 
 ### 6. Policy Is Composed, Deny Wins
 

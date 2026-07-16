@@ -1368,22 +1368,17 @@ Environment = the reusable guest machine Hideout uses for a run or a named
 project boundary.
 ```
 
-The design-ready direction gives this concept two user-facing forms. A shared
-`default` environment gives zero-configuration runs from any directory; a
-named environment created explicitly gives isolation and a statically mounted
-workspace. Inside a shared environment each session sees only its own
-workspace plus HostFS grants: the session mount namespace scopes that view
-for ordinary target processes, but it is not a wall against guest root — a
-guest-root target in a shared environment may reach other attached
-workspaces (see threat-model.md). Operators who need the VM-level wall
-between projects create a dedicated environment. Changing an environment's pinned
-configuration (base image digest, backend, profile binding) is drift: the
-product fails closed and offers recreation, never a silent switch. The
-detailed design for named and shared environments is a separate spec; this
-section defines the resume and per-run authority model those environments
-share. Until that spec lands, the implemented behavior is the per-workspace
-most-recently-used selection below; the shared `default` environment refines
-selection, not the authority model.
+The implemented model has one deterministic implicit environment per profile
+and workspace, plus explicitly named environments. Its workspace mount stays
+static for the environment lifetime. Concurrent runs that resolve to that
+same environment share the workspace and guest kernel but own distinct
+runtime children, broker/data planes, mount namespaces, PID namespaces, and
+private `/proc` views. This protects ordinary target processes from sibling
+session authority; it is not guest-root containment. A future cross-workspace
+shared `default` environment remains design-ready only. Changing an
+environment's pinned configuration (base image digest, backend, profile
+binding, or workspace) is drift: the product fails closed and offers
+recreation, never a silent switch.
 
 The implementation still separates reusable environment state from per-run
 authority. A reusable environment may keep:
@@ -4240,10 +4235,13 @@ runner. Their domain model, API shape, and schema still need to remain stable.
 model ships, it defaults to the most recent environment for the current
 profile/workspace pair. The user should not need to choose a session for normal
 work.
-Reusable environments are single-writer runtime surfaces. Manager must hold an
-environment-scoped lock from runtime preparation through backend cleanup and
-environment finish so concurrent runs cannot clear or rewrite the same runtime
-directories.
+Reusable environments permit concurrent runs only when they resolve to the
+same pinned profile, backend, runtime, identity, network configuration, and
+workspace. Manager serializes environment transitions and shared-service
+mutation, while every run holds an OS-backed owner lease and uses a distinct
+runtime child. A finishing run may clean only its own authority and must not
+remove a sibling runtime or shared service. The last session leaves the warm
+environment ready; stop remains an explicit operator action.
 
 CLI interruption is part of the run lifecycle. `SIGINT` and `SIGTERM` must cancel
 the active run context and let Manager perform ordered teardown: command stop,

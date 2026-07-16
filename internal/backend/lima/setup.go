@@ -6,10 +6,29 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/privilege"
+	"golang.org/x/crypto/ssh"
 )
+
+const setupCancelWait = 2 * time.Second
+
+const (
+	setupSSHConnectAttempts = 3
+	setupSSHConnectBackoff  = 50 * time.Millisecond
+)
+
+type sshCommandSession interface {
+	Start(string) error
+	Wait() error
+	Signal(ssh.Signal) error
+}
+
+type sshConnectionCloser interface {
+	Close() error
+}
 
 const (
 	setupCategoryNetwork = "network"
@@ -46,7 +65,9 @@ func (r rootSSHSetupRunner) Run(ctx context.Context, instanceName, workdir strin
 	if len(command) == 0 {
 		return errors.New("lima setup identity requires command")
 	}
-	client, err := r.backend.newSSHClientForUser(ctx, instanceName, "root")
+	client, err := retrySetupSSHConnect(ctx, func() (*ssh.Client, error) {
+		return r.backend.newSSHClientForUser(ctx, instanceName, "root")
+	})
 	if err != nil {
 		return err
 	}
@@ -59,7 +80,49 @@ func (r rootSSHSetupRunner) Run(ctx context.Context, instanceName, workdir strin
 	session.Stdin = stdin
 	session.Stdout = stdout
 	session.Stderr = stderr
-	return session.Run(setupShellCommand(workdir, env, command))
+	return runCancelableSSHCommand(ctx, session, client, setupShellCommand(workdir, env, command))
+}
+
+func retrySetupSSHConnect(ctx context.Context, connect func() (*ssh.Client, error)) (*ssh.Client, error) {
+	var lastErr error
+	for attempt := 0; attempt < setupSSHConnectAttempts; attempt++ {
+		client, err := connect()
+		if err == nil {
+			return client, nil
+		}
+		lastErr = err
+		if !errors.Is(err, io.EOF) || attempt+1 == setupSSHConnectAttempts {
+			break
+		}
+		timer := time.NewTimer(setupSSHConnectBackoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errors.Join(ctx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
+	return nil, lastErr
+}
+
+func runCancelableSSHCommand(ctx context.Context, session sshCommandSession, connection sshConnectionCloser, command string) error {
+	if err := session.Start(command); err != nil {
+		return err
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- session.Wait() }()
+	select {
+	case err := <-wait:
+		return err
+	case <-ctx.Done():
+		_ = session.Signal(ssh.SIGTERM)
+		_ = connection.Close()
+		select {
+		case <-wait:
+		case <-time.After(setupCancelWait):
+		}
+		return ctx.Err()
+	}
 }
 
 func setupShellCommand(workdir string, env []string, command []string) string {
@@ -93,18 +156,22 @@ func (b Backend) setupIdentity(ctx context.Context, session *backend.Session) pr
 			Proof:              "no privileged setup requested",
 		}
 	}
-	setup := privilege.SetupIdentity{
+	setup := rootControlSSHSetupIdentity()
+	if err := b.setupRunner().Check(ctx, session.InstanceName); err != nil {
+		setup.Available = false
+		setup.Proof = boundedCheckError(err, "")
+	}
+	return setup
+}
+
+func rootControlSSHSetupIdentity() privilege.SetupIdentity {
+	return privilege.SetupIdentity{
 		Kind:               privilege.SetupRootControlSSH,
 		Available:          true,
 		SeparateFromTarget: true,
 		CredentialLocation: privilege.CredentialLocationClass("lima-ssh-config"),
 		Proof:              "root ssh control path accepted a fixed setup command",
 	}
-	if err := b.setupRunner().Check(ctx, session.InstanceName); err != nil {
-		setup.Available = false
-		setup.Proof = boundedCheckError(err, "")
-	}
-	return setup
 }
 
 func (b Backend) runSetupCommand(ctx context.Context, session *backend.Session, category string, workdir string, env []string, command []string, stdin io.Reader) error {

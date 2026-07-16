@@ -294,6 +294,7 @@ mkdir -p \
   "$clean_root/var/spool" \
   "$clean_root/var/tmp"
 for path in \
+  /usr/bin/bash \
   /bin/sh \
   /usr/bin/cc \
   /usr/bin/curl \
@@ -305,10 +306,13 @@ for path in \
   /usr/sbin/iptables \
   /usr/bin/jq \
   /usr/bin/make \
+  /usr/bin/mount \
   /usr/bin/pip3 \
   /usr/bin/python3 \
+  /usr/bin/setpriv \
   /usr/bin/sha256sum \
   /usr/bin/tar \
+  /usr/bin/unshare \
   /usr/bin/unzip \
   /usr/local/bin/go \
   /usr/local/bin/node \

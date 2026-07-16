@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,10 +21,12 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
@@ -44,6 +47,19 @@ import (
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
 )
+
+type appSessionSetupRunner struct {
+	checkErr error
+}
+
+func (r appSessionSetupRunner) Check(context.Context, string) error { return r.checkErr }
+
+func (r appSessionSetupRunner) Run(_ context.Context, _ string, _ string, _ []string, command []string, _ io.Reader, stdout, _ io.Writer) error {
+	if strings.Contains(strings.Join(command, " "), "/proc/sys/kernel/random/boot_id") && stdout != nil {
+		_, _ = io.WriteString(stdout, "01234567-89ab-cdef-0123-456789abcdef\n")
+	}
+	return nil
+}
 
 func TestParseInitRuntimeSelectionAndImageConflict(t *testing.T) {
 	opts, err := parseInitCommandOptions([]string{"--runtime", "developer-standard", "--backend", "lima", "--no-input"})
@@ -1327,6 +1343,120 @@ func TestDoctorFeatureSelectorIsFocused(t *testing.T) {
 	if !foundDNS {
 		t.Fatalf("single feature output missing dns finding: %s", out.String())
 	}
+}
+
+func TestDoctorSessionsReportsNamespacePrerequisiteFailure(t *testing.T) {
+	store, p, env := sessionDoctorFixture(t, "lima")
+	owner := acquireSessionDoctorOwner(t, store, env)
+	defer owner.Close()
+	probeCalls := 0
+	finding := sessionDoctorFinding(t, app{sessionIsolationProbe: func(_ context.Context, instanceName string) error {
+		probeCalls++
+		if instanceName != env.InstanceName {
+			t.Fatalf("instance=%q want %q", instanceName, env.InstanceName)
+		}
+		return errors.New("unshare unavailable")
+	}}, store, p, "lima")
+	if probeCalls != 1 || finding.Status != doctorpkg.StatusError || finding.Code != recovery.CodeSessionIsolationUnsupported {
+		t.Fatalf("namespace finding=%+v probeCalls=%d", finding, probeCalls)
+	}
+	if !strings.Contains(fmt.Sprint(finding.Details["observedFacts"]), "namespaceProbe=failed") ||
+		!strings.Contains(strings.Join(finding.NextActions, "\n"), "hideout runtime verify --env <name>") {
+		t.Fatalf("namespace finding lacks copyable recovery: %+v", finding)
+	}
+}
+
+func TestDoctorSessionsReportsFailedOwnerAndServiceConflict(t *testing.T) {
+	t.Run("failed owner", func(t *testing.T) {
+		store, p, env := sessionDoctorFixture(t, "native")
+		owner := acquireSessionDoctorOwner(t, store, env)
+		if err := owner.Update(session.OwnerStateFailed, "cleanup could not be proved"); err != nil {
+			t.Fatal(err)
+		}
+		if err := owner.Release(); err != nil {
+			t.Fatal(err)
+		}
+		finding := sessionDoctorFinding(t, app{}, store, p, "native")
+		if finding.Status != doctorpkg.StatusWarn || finding.Code != recovery.CodeSessionCleanupFailed ||
+			!strings.Contains(finding.Summary, "staleEnvironments=1") {
+			t.Fatalf("failed-owner finding=%+v", finding)
+		}
+		if !strings.Contains(strings.Join(finding.NextActions, "\n"), "hideout doctor --level deep") {
+			t.Fatalf("failed-owner recovery is not copyable: %+v", finding)
+		}
+	})
+
+	t.Run("environment service", func(t *testing.T) {
+		store, p, env := sessionDoctorFixture(t, "native")
+		now := time.Now().UTC()
+		statePath := filepath.Join(store.Root, "environments", env.ID, "runtime", "services", "network", "state.json")
+		if err := netpolicy.WriteServiceState(statePath, netpolicy.ServiceState{
+			Schema: netpolicy.EnvironmentServiceSchema, EnvironmentID: env.ID, Kind: "network",
+			Status: netpolicy.ServiceFailed, ConfigurationFingerprint: strings.Repeat("a", 64),
+			Mode: netpolicy.ModeTun2Socks, StartedAt: now, UpdatedAt: now, LastError: "service setup failed",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		finding := sessionDoctorFinding(t, app{}, store, p, "native")
+		if finding.Status != doctorpkg.StatusWarn || finding.Code != recovery.CodeSessionServiceConflict ||
+			!strings.Contains(finding.Summary, "failedServices=1") {
+			t.Fatalf("service finding=%+v", finding)
+		}
+		if !strings.Contains(strings.Join(finding.NextActions, "\n"), "hideout env list") {
+			t.Fatalf("service recovery is not copyable: %+v", finding)
+		}
+	})
+}
+
+func sessionDoctorFixture(t *testing.T, backendName string) (profile.Store, profile.Profile, environment.Record) {
+	t.Helper()
+	store := profile.Store{Root: t.TempDir()}
+	p := profile.Default("doctor-sessions")
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	envStore := environment.Store{Root: store.Root}
+	env, err := envStore.Create(environment.Spec{
+		Name: "doctor-sessions", ImageRef: environment.BuiltinBaseImage, Profile: p.Name, Backend: backendName,
+		Workspace: t.TempDir(), GuestWorkspace: "/workspace", InstanceName: "hideout-doctor-sessions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Status = "running"
+	if err := envStore.Save(env); err != nil {
+		t.Fatal(err)
+	}
+	return store, p, env
+}
+
+func acquireSessionDoctorOwner(t *testing.T, store profile.Store, env environment.Record) *session.Owner {
+	t.Helper()
+	now := time.Now().UTC()
+	owner, err := session.AcquireOwner((environment.Store{Root: store.Root}).OwnerRoot(env.ID), session.OwnerRecord{
+		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef",
+		EnvironmentID: env.ID, Profile: env.Profile, Backend: env.Backend, WorkspaceID: strings.Repeat("a", 64),
+		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
+		StartedAt: now, UpdatedAt: now, CommandClass: "shell",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner
+}
+
+func sessionDoctorFinding(t *testing.T, a app, store profile.Store, p profile.Profile, backendName string) doctorpkg.Finding {
+	t.Helper()
+	req := doctorpkg.Request{Profile: p.Name, Backend: backendName, Level: doctorpkg.LevelDeep, Features: []string{"sessions"}}
+	builder := doctorpkg.NewBuilder(req)
+	a.addDoctorFeatureDiagnostics(req, store, p, backendName, t.TempDir(), "", builder)
+	for _, finding := range builder.Report().Findings {
+		if finding.CheckID == "feature-sessions" {
+			return finding
+		}
+	}
+	t.Fatal("sessions doctor finding missing")
+	return doctorpkg.Finding{}
 }
 
 func TestDoctorProjectionFeatureReportsRegistryBindingAndMode(t *testing.T) {
@@ -5357,6 +5487,32 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	}
 }
 
+func TestTUIRendersConcurrentOwnerState(t *testing.T) {
+	var out bytes.Buffer
+	writeTUIDashboard(&out, manager.Overview{
+		StorageRoot: "/operator/store",
+		Environments: []manager.EnvironmentSummary{{
+			ID: "env_0123456789abcdef", Name: "default", Profile: "default", Backend: "lima", Status: "running",
+			ActiveSessions: 2, OwnerHealth: "live",
+		}},
+		Sessions: []manager.SessionSummary{{
+			ID: "ses_20260716T120000Z_0123456789abcdef", Profile: "default", EnvironmentID: "env_0123456789abcdef",
+			State: session.OwnerStateRunning, OwnerStatus: session.OwnerLive, TerminalMode: session.TerminalPTY, CommandClass: "bash",
+		}},
+	}, nil, nil, nil, "")
+	text := out.String()
+	for _, want := range []string{"active=2 owner=live", "state=running owner=live terminal=pty command=bash"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("TUI owner output missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"owner.lock", `pid=`, "cap_", "HIDEOUT_SECRET_"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("TUI owner output leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
 func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -5786,15 +5942,18 @@ exit 0
 
 	for i := 0; i < 2; i++ {
 		var out, errOut bytes.Buffer
-		code := Main([]string{
+		a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader(""), backendFactory: func(_ string, _ runOptions) backend.Backend {
+			return lima.Backend{Stdout: &out, Stderr: &errOut, ControlStdout: io.Discard, ControlStderr: io.Discard, SetupRunner: appSessionSetupRunner{}}
+		}}
+		err := a.run([]string{
 			"run",
 			"--backend", "lima",
 			"--workspace", workspace,
 			"--",
 			"sh", "-c", "true",
-		}, &out, &errOut)
-		if code != 0 {
-			t.Fatalf("run %d exit=%d stdout=%s stderr=%s", i+1, code, out.String(), errOut.String())
+		})
+		if err != nil {
+			t.Fatalf("run %d error=%v stdout=%s stderr=%s", i+1, err, out.String(), errOut.String())
 		}
 	}
 
@@ -5829,10 +5988,15 @@ exit 0
 	if records[0].Status != "ready" || records[0].LastCommand != "sh -c true" || records[0].LastSessionID == "" {
 		t.Fatalf("environment metadata not updated: %+v", records[0])
 	}
-	if entries, err := os.ReadDir(envStore.ShimDir(records[0].ID)); err != nil {
-		t.Fatalf("read environment shim dir: %v", err)
+	if entries, err := os.ReadDir(envStore.RuntimeSessionsDir(records[0].ID)); err != nil {
+		t.Fatalf("read environment session runtime root: %v", err)
 	} else if len(entries) != 0 {
-		t.Fatalf("environment runtime shims should be cleared after run, got %v", entries)
+		t.Fatalf("finished session runtime children should be cleared, got %v", entries)
+	}
+	if entries, err := os.ReadDir(envStore.OwnerRoot(records[0].ID)); err != nil {
+		t.Fatalf("read environment owner root: %v", err)
+	} else if len(entries) != 0 {
+		t.Fatalf("finished session owners should be cleared, got %v", entries)
 	}
 
 	var out, errOut bytes.Buffer
@@ -5891,6 +6055,178 @@ exit 0
 	if len(records) != 0 {
 		t.Fatalf("clean should remove environment records, got %+v", records)
 	}
+}
+
+func TestRunCLIAllowsOverlappingCommandsInOneWorkspaceEnvironment(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	linuxShim := filepath.Join(t.TempDir(), "hideout-shim-linux")
+	if err := os.WriteFile(linuxShim, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
+
+	profileStore := profile.Store{Root: filepath.Join(home, ".hideout")}
+	core := manager.New(profileStore)
+	plan, err := core.PlanRun(manager.RunPlanOptions{
+		ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"hold"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.EnsureRunInitialized(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.SelectRunEnvironment(plan, manager.RunEnvironmentOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := newAppConcurrentBackend()
+	type outcome struct {
+		stdout string
+		stderr string
+		err    error
+	}
+	outcomes := make(chan outcome, 2)
+	for range 2 {
+		go func() {
+			var stdout, stderr bytes.Buffer
+			a := app{
+				stdout: &stdout, stderr: &stderr, stdin: strings.NewReader(""),
+				backendFactory: func(_ string, _ runOptions) backend.Backend { return fake },
+			}
+			err := a.run([]string{"run", "--backend", "lima", "--workspace", workspace, "--", "hold"})
+			outcomes <- outcome{stdout: stdout.String(), stderr: stderr.String(), err: err}
+		}()
+	}
+	ids := []string{receiveAppSessionStart(t, fake.started), receiveAppSessionStart(t, fake.started)}
+	if ids[0] == ids[1] {
+		t.Fatalf("CLI runs shared a session ID: %q", ids[0])
+	}
+	for _, id := range ids {
+		marker, err := os.ReadFile(filepath.Join(workspace, ".hideout-concurrent-"+id))
+		if err != nil || string(marker) != id {
+			t.Fatalf("shared-workspace marker %s=%q err=%v", id, marker, err)
+		}
+	}
+	if full, warm := fake.activationCounts(); full != 1 || warm != 1 {
+		t.Fatalf("CLI activation counts full=%d warm=%d", full, warm)
+	}
+
+	fake.release(ids[0])
+	first := <-outcomes
+	if first.err != nil {
+		t.Fatalf("first CLI run failed: %v stdout=%s stderr=%s", first.err, first.stdout, first.stderr)
+	}
+	active, err := core.ActiveSessionSummaries()
+	if err != nil || len(active) != 1 || active[0].ID != ids[1] {
+		t.Fatalf("sibling CLI run did not survive: active=%+v err=%v", active, err)
+	}
+	fake.release(ids[1])
+	second := <-outcomes
+	if second.err != nil {
+		t.Fatalf("second CLI run failed: %v stdout=%s stderr=%s", second.err, second.stdout, second.stderr)
+	}
+	records, err := (environment.Store{Root: profileStore.Root}).List()
+	if err != nil || len(records) != 1 || records[0].Status != "ready" {
+		t.Fatalf("final CLI environment=%+v err=%v", records, err)
+	}
+}
+
+func receiveAppSessionStart(t *testing.T, started <-chan string) string {
+	t.Helper()
+	select {
+	case id := <-started:
+		return id
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for overlapping CLI run")
+		return ""
+	}
+}
+
+type appConcurrentBackend struct {
+	mu              sync.Mutex
+	fullActivations int
+	warmActivations int
+	activationOwner string
+	releases        map[string]chan struct{}
+	started         chan string
+}
+
+func newAppConcurrentBackend() *appConcurrentBackend {
+	return &appConcurrentBackend{releases: map[string]chan struct{}{}, started: make(chan string, 2)}
+}
+
+func (b *appConcurrentBackend) Name() string                    { return "lima" }
+func (b *appConcurrentBackend) Available(context.Context) error { return nil }
+
+func (b *appConcurrentBackend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Session, error) {
+	b.mu.Lock()
+	b.releases[spec.SessionID] = make(chan struct{})
+	b.mu.Unlock()
+	return &backend.Session{
+		ID: spec.SessionID, EnvironmentID: spec.EnvironmentID, Backend: b.Name(),
+		HostWork: spec.HostWork, GuestWork: spec.GuestWork, SessionDir: spec.SessionDir,
+		RuntimeRoot: spec.RuntimeRoot, InstanceName: spec.InstanceName,
+		PreserveInstance: spec.PreserveInstance, SessionIsolationRequired: spec.SessionIsolationRequired,
+	}, nil
+}
+
+func (b *appConcurrentBackend) Activate(_ context.Context, session *backend.Session, _ []string) error {
+	b.mu.Lock()
+	b.fullActivations++
+	b.activationOwner = session.ID
+	b.mu.Unlock()
+	session.RuntimeReady = true
+	return nil
+}
+
+func (b *appConcurrentBackend) WarmActivationOwner(*backend.Session) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.activationOwner, nil
+}
+
+func (b *appConcurrentBackend) WarmActivate(_ context.Context, session *backend.Session, _ []string) error {
+	b.mu.Lock()
+	b.warmActivations++
+	b.mu.Unlock()
+	session.RuntimeReady = true
+	return nil
+}
+
+func (b *appConcurrentBackend) Run(ctx context.Context, session *backend.Session, _ []string, _ []string) error {
+	if err := os.WriteFile(filepath.Join(session.HostWork, ".hideout-concurrent-"+session.ID), []byte(session.ID), 0o600); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	release := b.releases[session.ID]
+	b.mu.Unlock()
+	b.started <- session.ID
+	select {
+	case <-release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *appConcurrentBackend) Cleanup(context.Context, *backend.Session) error { return nil }
+
+func (b *appConcurrentBackend) release(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if release := b.releases[id]; release != nil {
+		close(release)
+		delete(b.releases, id)
+	}
+}
+
+func (b *appConcurrentBackend) activationCounts() (int, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fullActivations, b.warmActivations
 }
 
 func TestStopAndCleanIdleFilters(t *testing.T) {
@@ -6091,7 +6427,10 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
 
 	var out, errOut bytes.Buffer
-	code := Main([]string{
+	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader(""), backendFactory: func(_ string, _ runOptions) backend.Backend {
+		return lima.Backend{Stdout: &out, Stderr: &errOut, ControlStdout: io.Discard, ControlStderr: io.Discard, SetupRunner: appSessionSetupRunner{checkErr: errors.New("privileged setup identity is unavailable")}}
+	}}
+	runErr := a.run([]string{
 		"run",
 		"--backend", "lima",
 		"--workspace", workspace,
@@ -6100,12 +6439,12 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 		"--mediated-resolver", "1.1.1.1",
 		"--",
 		"sh", "-c", "true",
-	}, &out, &errOut)
-	if code == 0 {
+	})
+	if runErr == nil {
 		t.Fatalf("expected setup identity failure; stdout=%s stderr=%s", out.String(), errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "privileged setup identity is unavailable") {
-		t.Fatalf("stderr should explain setup identity failure, got %s", errOut.String())
+	if !strings.Contains(runErr.Error(), "privileged setup identity is unavailable") {
+		t.Fatalf("error should explain setup identity failure, got %v", runErr)
 	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {

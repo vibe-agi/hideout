@@ -3,8 +3,10 @@ package manager
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -149,6 +151,14 @@ type SessionSummary struct {
 	HasEphemeralState  bool                      `json:"hasEphemeralState"`
 	NetworkMode        string                    `json:"networkMode,omitempty"`
 	GuestPrivilege     *BoundaryPrivilegeSummary `json:"guestPrivilege,omitempty"`
+	EnvironmentID      string                    `json:"environmentId,omitempty"`
+	State              session.OwnerState        `json:"state,omitempty"`
+	OwnerStatus        session.OwnerStatus       `json:"ownerStatus,omitempty"`
+	TerminalMode       session.TerminalMode      `json:"terminalMode,omitempty"`
+	StartedAt          time.Time                 `json:"startedAt,omitempty"`
+	UpdatedAt          time.Time                 `json:"updatedAt,omitempty"`
+	CommandClass       string                    `json:"commandClass,omitempty"`
+	CleanupError       string                    `json:"cleanupError,omitempty"`
 }
 
 type EnvironmentSummary struct {
@@ -169,6 +179,8 @@ type EnvironmentSummary struct {
 	LastStartedAt  time.Time                 `json:"lastStartedAt,omitempty"`
 	LastEndedAt    time.Time                 `json:"lastEndedAt,omitempty"`
 	Runtime        *runtimeverify.StatusView `json:"runtime,omitempty"`
+	ActiveSessions int                       `json:"activeSessions"`
+	OwnerHealth    string                    `json:"ownerHealth,omitempty"`
 }
 
 type BackendSummary struct {
@@ -366,6 +378,10 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 	}
 	profiles, profileErrors := c.profileSummaries()
 	sessions, auditCount := c.sessionSummaries()
+	active, activeErr := c.ActiveSessionSummaries()
+	sessions = mergeActiveSessionSummaries(sessions, active)
+	environments := environmentSummaries(c.Store.Root)
+	environments = annotateEnvironmentOwners(environments, active)
 	registry := c.commandProxy(profiles)
 	capabilities := capabilitySummary(profiles, registry)
 	decisionStatus, _ := c.DecisionStatus()
@@ -376,7 +392,7 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 		StorageRoot:  c.Store.Root,
 		Profiles:     profiles,
 		Sessions:     sessions,
-		Environments: environmentSummaries(c.Store.Root),
+		Environments: environments,
 		Backends:     c.backendSummaries(ctx),
 		Capabilities: capabilities,
 		Network:      networkSummary(profiles),
@@ -404,7 +420,108 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 			Total:          len(notices),
 		},
 		DecisionStatus: decisionStatus,
-	}, errors.Join(profileErrors...)
+	}, errors.Join(append(profileErrors, activeErr)...)
+}
+
+// ActiveSessionSummaries is the single public owner-summary builder. It never
+// exposes lock paths, PIDs, raw workspace paths, or control-plane material.
+func (c Core) ActiveSessionSummaries() ([]session.ActiveSessionSummary, error) {
+	store := environment.Store{Root: c.Store.Root}
+	records, err := store.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]session.ActiveSessionSummary, 0)
+	for _, environmentRecord := range records {
+		if environmentRecord.Status == environment.StatusUnsupportedVersion {
+			continue
+		}
+		observed, err := session.ListOwners(store.OwnerRoot(environmentRecord.ID))
+		if err != nil {
+			return nil, err
+		}
+		for _, owner := range observed {
+			record := owner.Record
+			if record.Schema != session.ActiveSessionSchema {
+				startedAt := environmentRecord.CreatedAt
+				if startedAt.IsZero() {
+					startedAt = time.Unix(0, 0).UTC()
+				}
+				workspaceID := fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Clean(environmentRecord.Workspace))))
+				record = session.OwnerRecord{
+					Schema:        session.ActiveSessionSchema,
+					SessionID:     owner.SessionID,
+					EnvironmentID: environmentRecord.ID,
+					Profile:       environmentRecord.Profile,
+					Backend:       environmentRecord.Backend,
+					WorkspaceID:   workspaceID,
+					State:         session.OwnerStateFailed,
+					TerminalMode:  session.TerminalNone,
+					StartedAt:     startedAt,
+					UpdatedAt:     startedAt,
+					CleanupError:  "session ownership metadata is unprovable; run hideout doctor --feature sessions",
+				}
+			}
+			out = append(out, record.Summary(owner.Status))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func mergeActiveSessionSummaries(existing []SessionSummary, active []session.ActiveSessionSummary) []SessionSummary {
+	byID := make(map[string]int, len(existing))
+	for i := range existing {
+		byID[existing[i].ID] = i
+	}
+	for _, item := range active {
+		index, ok := byID[item.ID]
+		if !ok {
+			existing = append(existing, SessionSummary{ID: item.ID})
+			index = len(existing) - 1
+			byID[item.ID] = index
+		}
+		summary := &existing[index]
+		summary.Profile = item.Profile
+		summary.EnvironmentID = item.EnvironmentID
+		summary.State = item.State
+		summary.OwnerStatus = item.OwnerStatus
+		summary.TerminalMode = item.TerminalMode
+		summary.StartedAt = item.StartedAt
+		summary.UpdatedAt = item.UpdatedAt
+		summary.CommandClass = item.CommandClass
+		summary.CleanupError = item.CleanupError
+		// Raw implementation paths are not part of an active owner view.
+		summary.Path = ""
+	}
+	sort.Slice(existing, func(i, j int) bool { return existing[i].ID < existing[j].ID })
+	return existing
+}
+
+func annotateEnvironmentOwners(environments []EnvironmentSummary, active []session.ActiveSessionSummary) []EnvironmentSummary {
+	for i := range environments {
+		health := ""
+		for _, owner := range active {
+			if owner.EnvironmentID != environments[i].ID {
+				continue
+			}
+			switch owner.OwnerStatus {
+			case session.OwnerLive:
+				environments[i].ActiveSessions++
+				if health == "" {
+					health = "live"
+				}
+			case session.OwnerUnprovable:
+				health = "unprovable"
+			case session.OwnerStale:
+				if health == "" {
+					health = "stale"
+				}
+			}
+		}
+		environments[i].OwnerHealth = health
+	}
+	return environments
 }
 
 func adapterPackSummaries(c Core) []AdapterPackSummary {

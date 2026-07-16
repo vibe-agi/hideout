@@ -3,6 +3,8 @@ package productevidence
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,6 +311,107 @@ func TestEvaluateRuntimeProofsAllowIndependentValidEnvironmentIdentities(t *test
 	}
 	if !report.Satisfied() {
 		t.Fatalf("independent real-gate environment identities were rejected: %+v", report.Results)
+	}
+}
+
+func TestEvaluate034RejectsFalseRealGateEvidence(t *testing.T) {
+	requirements := RequirementsForFeature(Feature034)
+	var realRequirements []ProofRequirement
+	for _, requirement := range requirements {
+		if requirement.RequiredFor == RequiredForReleaseCandidate {
+			realRequirements = append(realRequirements, requirement)
+		}
+	}
+	if len(realRequirements) != 2 {
+		t.Fatalf("034 real requirements=%d want 2", len(realRequirements))
+	}
+	expected := runtimeExpectationFixture()
+
+	newFixture := func(t *testing.T) (Manifest, EvaluationOptions) {
+		t.Helper()
+		root := t.TempDir()
+		proofs := make([]ProofEntry, 0, len(realRequirements))
+		for i, requirement := range realRequirements {
+			var data []byte
+			var marshalErr error
+			switch requirement.ArtifactValidator {
+			case ArtifactValidatorConcurrentIsolationV1:
+				data, marshalErr = json.Marshal(concurrentIsolationFixture())
+			case ArtifactValidatorConcurrentPerformanceV1:
+				data, marshalErr = json.Marshal(concurrentPerformanceFixture(expected))
+			default:
+				t.Fatalf("unexpected 034 validator %q", requirement.ArtifactValidator)
+			}
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			name := fmt.Sprintf("proof-%d.json", i)
+			if err := os.WriteFile(filepath.Join(root, name), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256(data)
+			proof := runtimeProofFixture(requirement, runtimeBindingFixture())
+			proof.EvidenceClass = requirement.RequiredEvidenceClass
+			proof.Artifacts = []ArtifactRef{{
+				Kind: "manifest", Path: name, SHA256: hex.EncodeToString(sum[:]),
+				RedactionStatus: RedactionPassed,
+			}}
+			proofs = append(proofs, proof)
+		}
+		manifest := runtimeManifestWithProofs(expected, proofs...)
+		opts := runtimeEvaluationOptions(realRequirements, expected)
+		opts.ArtifactRoot = root
+		return manifest, opts
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Manifest, *EvaluationOptions)
+		proof  string
+		want   string
+	}{
+		{name: "exact", proof: Proof034RealIsolation, want: EvalSatisfied},
+		{name: "missing performance", mutate: func(m *Manifest, _ *EvaluationOptions) {
+			m.Proofs = m.Proofs[:1]
+		}, proof: Proof034RealPerformance, want: EvalMissing},
+		{name: "not run", mutate: func(m *Manifest, _ *EvaluationOptions) {
+			m.Proofs[0].Status = StatusNotRun
+			m.Proofs[0].RedactionStatus = RedactionNotRun
+			m.Proofs[0].NotRunReason = "fixture"
+		}, proof: Proof034RealIsolation, want: EvalNotRun},
+		{name: "synthetic local", mutate: func(m *Manifest, _ *EvaluationOptions) {
+			m.Proofs[0].Mode = "local-fast"
+		}, proof: Proof034RealIsolation, want: EvalRuntimeMismatch},
+		{name: "stale dirty candidate", mutate: func(m *Manifest, _ *EvaluationOptions) {
+			m.Dirty = true
+		}, proof: Proof034RealIsolation, want: EvalStale},
+		{name: "wrong runtime", mutate: func(m *Manifest, _ *EvaluationOptions) {
+			m.Proofs[0].Runtime.ArtifactSHA256 = strings.Repeat("b", 64)
+		}, proof: Proof034RealIsolation, want: EvalRuntimeMismatch},
+		{name: "artifact digest mismatch", mutate: func(m *Manifest, _ *EvaluationOptions) {
+			m.Proofs[1].Artifacts[0].SHA256 = strings.Repeat("f", 64)
+		}, proof: Proof034RealPerformance, want: EvalArtifactDigestMismatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest, opts := newFixture(t)
+			if tc.mutate != nil {
+				tc.mutate(&manifest, &opts)
+			}
+			report, err := EvaluateManifest(manifest, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, result := range report.Results {
+				if result.ProofID == tc.proof {
+					if result.Status != tc.want {
+						t.Fatalf("%s status=%s want %s: %+v", tc.proof, result.Status, tc.want, result)
+					}
+					return
+				}
+			}
+			t.Fatalf("missing evaluation result for %s", tc.proof)
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,8 @@ import (
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/recovery"
+	runsession "github.com/vibe-agi/hideout/internal/session"
 )
 
 const (
@@ -47,6 +50,7 @@ type ApplyRunOptions struct {
 	Network                    RunNetworkOptions
 	Opener                     broker.Opener
 	OpenerForSession           func(RunSession) broker.Opener
+	TerminalMode               runsession.TerminalMode
 }
 
 type RunResult struct {
@@ -94,17 +98,39 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	if err != nil {
 		return result, err
 	}
+	environmentStore := environment.Store{Root: c.Store.Root}
+	var transitionLock *environment.Lock
 	if runEnv.Active {
-		envLock, err := (environment.Store{Root: c.Store.Root}).Lock(runEnv.Record.ID)
+		transitionLock, err = environmentStore.LockContext(ctx, runEnv.Record.ID)
 		if err != nil {
 			return result, err
 		}
 		defer func() {
-			if unlockErr := envLock.Unlock(); unlockErr != nil && retErr == nil {
+			if transitionLock == nil {
+				return
+			}
+			if unlockErr := transitionLock.Unlock(); unlockErr != nil && retErr == nil {
 				result.Error = unlockErr.Error()
 				retErr = unlockErr
 			}
+			transitionLock = nil
 		}()
+		// Selection precedes the cross-process transition lock. Re-read the
+		// record while holding that lock so a concurrent clean cannot turn a
+		// stale in-memory selection into a resurrected environment.
+		current, loadErr := environmentStore.Load(runEnv.Record.ID)
+		if loadErr != nil {
+			return result, fmt.Errorf("reload selected environment after transition lock: %w", loadErr)
+		}
+		if validateErr := ValidateEnvironmentRecord(current, RunEnvironmentSpec(
+			plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace,
+		)); validateErr != nil {
+			return result, validateErr
+		}
+		runEnv.Record = current
+		if err := requireAttachableEnvironmentOwners(environmentStore, current.ID); err != nil {
+			return result, err
+		}
 	}
 	runSession, err := c.BeginRunSession(plan, runEnv, RunSessionOptions{})
 	if err != nil {
@@ -113,6 +139,48 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	result.SessionID = runSession.Layout.ID
 	result.AuditPath = runSession.AuditPath
 	runEnv = runSession.Environment
+	var (
+		owner                     *runsession.Owner
+		lifecycleCleanupErr       error
+		environmentServiceCleanup func(context.Context) error
+	)
+	if runEnv.Active {
+		terminalMode := opts.TerminalMode
+		if terminalMode == "" {
+			terminalMode = runsession.TerminalNone
+		}
+		workspaceID := fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Clean(runEnv.Record.Workspace))))
+		now := time.Now().UTC()
+		owner, err = runsession.AcquireOwner(environmentStore.OwnerRoot(runEnv.Record.ID), runsession.OwnerRecord{
+			Schema:        runsession.ActiveSessionSchema,
+			SessionID:     runSession.Layout.ID,
+			EnvironmentID: runEnv.Record.ID,
+			Profile:       plan.ProfileName,
+			Backend:       plan.Backend,
+			WorkspaceID:   workspaceID,
+			State:         runsession.OwnerStatePreparing,
+			TerminalMode:  terminalMode,
+			StartedAt:     now,
+			UpdatedAt:     now,
+			CommandClass:  ownerCommandClass(plan.Command[0]),
+		})
+		if err != nil {
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, err
+		}
+		// Registered before the narrower cleanup defers below so this runs last:
+		// all session authority is gone before the owner and runtime child.
+		defer func() {
+			finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, environmentServiceCleanup)
+			if finishErr != nil {
+				result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
+				if retErr == nil {
+					result.Error = finishErr.Error()
+					retErr = finishErr
+				}
+			}
+		}()
+	}
 	defer func() {
 		_, closeErr := c.CloseRunSession(runSession)
 		summary := SummarizeRunBoundary(result.AuditPath)
@@ -121,6 +189,8 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			result.Error = closeErr.Error()
 			retErr = closeErr
 		}
+		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, closeErr)
+		result.CleanupError = appendCleanupError(result.CleanupError, closeErr)
 	}()
 	if plan.Ephemeral {
 		if err := profile.MaterializeIdentityState(runSession.IdentityDir, plan.RuntimeProfile); err != nil {
@@ -146,6 +216,18 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	runNetwork, netErr := c.PrepareRunNetwork(runSession, opts.Network)
+	defer func() {
+		if !runNetwork.EnvironmentServiceStart {
+			return
+		}
+		rollbackErr := c.discardUnstartedEnvironmentNetworkService(runSession.Environment.Record.ID)
+		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, rollbackErr)
+		result.CleanupError = appendCleanupError(result.CleanupError, rollbackErr)
+		if rollbackErr != nil && retErr == nil {
+			result.Error = rollbackErr.Error()
+			retErr = rollbackErr
+		}
+	}()
 	if netErr != nil {
 		return result, netErr
 	}
@@ -167,9 +249,13 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	defer func() {
-		if closeErr := c.CloseRunDataPlane(dataPlane); closeErr != nil && retErr == nil {
-			result.Error = closeErr.Error()
-			retErr = closeErr
+		if closeErr := c.CloseRunDataPlane(dataPlane); closeErr != nil {
+			lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, closeErr)
+			result.CleanupError = appendCleanupError(result.CleanupError, closeErr)
+			if retErr == nil {
+				result.Error = closeErr.Error()
+				retErr = closeErr
+			}
 		}
 	}()
 	runSpec := c.runSpec(runSession, runEnv, dataPlane, runNetwork)
@@ -184,6 +270,12 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	result.EnvironmentName = runEnv.Record.Name
 	result.InstanceName = session.InstanceName
 	result.PreserveInstance = session.PreserveInstance
+	if runNetwork.EnvironmentService {
+		controller, _ := opts.Backend.(backend.EnvironmentNetworkServiceController)
+		environmentServiceCleanup = func(cleanupCtx context.Context) error {
+			return stopRunNetworkService(cleanupCtx, runNetwork, controller, session, dataPlane.Env)
+		}
+	}
 	defer func() {
 		cleanupErr := opts.Backend.Cleanup(ctx, session)
 		decision := "allow"
@@ -193,11 +285,15 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			"instance":         session.InstanceName,
 			"preserveInstance": session.PreserveInstance,
 		}
-		runEnv, cleanupErr = c.FinishRunEnvironment(runEnv, cleanupErr)
+		if runEnv.Active {
+			lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, cleanupErr)
+		} else {
+			runEnv, cleanupErr = c.FinishRunEnvironment(runEnv, cleanupErr)
+		}
 		if cleanupErr != nil {
 			decision = "error"
 			details["error"] = cleanupErr.Error()
-			result.CleanupError = cleanupErr.Error()
+			result.CleanupError = appendCleanupError(result.CleanupError, cleanupErr)
 			if retErr == nil {
 				result.Error = cleanupErr.Error()
 				retErr = cleanupErr
@@ -213,11 +309,49 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		})
 	}()
 	if runEnv.Active {
+		liveOwners, ownerErr := liveOwnerIDs(environmentStore.OwnerRoot(runEnv.Record.ID))
+		if ownerErr != nil {
+			return result, ownerErr
+		}
+		activated := false
+		if len(liveOwners) > 1 {
+			warm, warmOK := opts.Backend.(backend.WarmActivator)
+			provider, providerOK := opts.Backend.(backend.WarmActivationReceiptProvider)
+			if warmOK && providerOK {
+				receiptOwner, receiptErr := provider.WarmActivationOwner(session)
+				if receiptErr == nil && receiptOwner != session.ID && liveOwners[receiptOwner] {
+					session.ActivationOwnerID = receiptOwner
+					if err := warm.WarmActivate(ctx, session, dataPlane.Env); err != nil {
+						return result, err
+					}
+					activated = true
+				}
+			}
+		}
+		if !activated {
+			if activator, ok := opts.Backend.(backend.Activator); ok {
+				if err := activator.Activate(ctx, session, dataPlane.Env); err != nil {
+					return result, err
+				}
+			}
+		}
+		controller, _ := opts.Backend.(backend.EnvironmentNetworkServiceController)
+		if err := c.StartRunNetworkService(ctx, runSession, &runNetwork, controller, session, dataPlane.Env); err != nil {
+			return result, err
+		}
 		var startErr error
 		runEnv, startErr = c.StartRunEnvironment(runEnv, runSession.Layout.ID, plan.Command)
 		if startErr != nil {
 			return result, startErr
 		}
+		if err := owner.Update(runsession.OwnerStateRunning, ""); err != nil {
+			return result, err
+		}
+		if err := transitionLock.Unlock(); err != nil {
+			transitionLock = nil
+			return result, err
+		}
+		transitionLock = nil
 	}
 	previewCtx, cancelPreview := context.WithCancel(ctx)
 	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
@@ -253,6 +387,69 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, previewAuditErr
 	}
 	return result, nil
+}
+
+func ownerCommandClass(command string) string {
+	command = filepath.Base(strings.TrimSpace(command))
+	if command == "." || command == "" || len(command) > 128 {
+		return "command"
+	}
+	for _, r := range command {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || strings.ContainsRune("._+-", r) {
+			continue
+		}
+		return "command"
+	}
+	return command
+}
+
+func appendCleanupError(current string, err error) string {
+	if err == nil {
+		return current
+	}
+	if strings.TrimSpace(current) == "" {
+		return err.Error()
+	}
+	return current + "; " + err.Error()
+}
+
+func liveOwnerIDs(root string) (map[string]bool, error) {
+	owners, err := runsession.ListOwners(root)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(owners))
+	for _, owner := range owners {
+		switch owner.Status {
+		case runsession.OwnerLive:
+			live[owner.SessionID] = true
+		case runsession.OwnerUnprovable:
+			return nil, fmt.Errorf("session %s: %w", owner.SessionID, runsession.ErrOwnerUnprovable)
+		}
+	}
+	return live, nil
+}
+
+func requireAttachableEnvironmentOwners(store environment.Store, environmentID string) error {
+	owners, err := runsession.ListOwners(store.OwnerRoot(environmentID))
+	if err != nil {
+		return &EnvironmentOwnerError{Code: recovery.CodeSessionOwnerUnprovable, EnvironmentID: environmentID, Err: err}
+	}
+	for _, owner := range owners {
+		if owner.Status == runsession.OwnerUnprovable {
+			return &EnvironmentOwnerError{
+				Code: recovery.CodeSessionOwnerUnprovable, EnvironmentID: environmentID,
+				Err: fmt.Errorf("session %s: %w", owner.SessionID, runsession.ErrOwnerUnprovable),
+			}
+		}
+		if owner.Status == runsession.OwnerStale || owner.Record.State == runsession.OwnerStateCleaning || owner.Record.State == runsession.OwnerStateFailed {
+			return &EnvironmentOwnerError{
+				Code: recovery.CodeSessionCleanupFailed, EnvironmentID: environmentID,
+				Err: fmt.Errorf("session %s requires explicit recovery before a new attach: %w", owner.SessionID, runsession.ErrOwnerCleanupFailed),
+			}
+		}
+	}
+	return nil
 }
 
 func startRunPreviews(ctx context.Context, runSession RunSession, dataPlane RunDataPlane, opener broker.Opener) <-chan []audit.Event {
@@ -414,6 +611,18 @@ func waitForPreviewHTTPReady(ctx context.Context, target string) error {
 }
 
 func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane RunDataPlane, runNetwork RunNetwork) backend.RunSpec {
+	networkBootstrapPath := runNetwork.Plan.BootstrapPath
+	networkBootstrapGuestPath := runNetwork.Plan.GuestBootstrapPath
+	networkCleanupPath := runNetwork.Plan.CleanupPath
+	networkCleanupGuestPath := runNetwork.Plan.GuestCleanupPath
+	if runNetwork.EnvironmentService {
+		// The environment service controller owns VM-global setup. The target
+		// namespace must never start or stop it as session-local authority.
+		networkBootstrapPath = ""
+		networkBootstrapGuestPath = ""
+		networkCleanupPath = ""
+		networkCleanupGuestPath = ""
+	}
 	return backend.RunSpec{
 		SessionID:                 runSession.Layout.ID,
 		EnvironmentID:             runEnv.Record.ID,
@@ -429,11 +638,14 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 		IdentityMode:              IdentityMode(runSession.Plan),
 		IdentityRoot:              runSession.IdentityDir,
 		SessionDir:                runSession.RuntimeSessionDir,
+		RuntimeRoot:               runEnv.RuntimeDir,
+		SessionIsolationRequired:  runEnv.Active && runSession.Plan.Backend == "lima",
+		TargetUser:                runSession.Plan.RuntimeProfile.Identity.User,
 		Broker:                    dataPlane.BrokerGuestEndpoint,
-		NetworkBootstrapPath:      runNetwork.Plan.BootstrapPath,
-		NetworkBootstrapGuestPath: runNetwork.Plan.GuestBootstrapPath,
-		NetworkCleanupPath:        runNetwork.Plan.CleanupPath,
-		NetworkCleanupGuestPath:   runNetwork.Plan.GuestCleanupPath,
+		NetworkBootstrapPath:      networkBootstrapPath,
+		NetworkBootstrapGuestPath: networkBootstrapGuestPath,
+		NetworkCleanupPath:        networkCleanupPath,
+		NetworkCleanupGuestPath:   networkCleanupGuestPath,
 		HostFSEnabled:             dataPlane.HostFSEnabled,
 		HostFSGrafts:              append([]string(nil), dataPlane.HostFSGrafts...),
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), dataPlane.PortBridges...),

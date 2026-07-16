@@ -59,9 +59,11 @@ import (
 )
 
 type app struct {
-	stdout io.Writer
-	stderr io.Writer
-	stdin  io.Reader
+	stdout                io.Writer
+	stderr                io.Writer
+	stdin                 io.Reader
+	backendFactory        func(string, runOptions) backend.Backend
+	sessionIsolationProbe func(context.Context, string) error
 }
 
 var (
@@ -2197,6 +2199,9 @@ func appendBrokerEnv(env []string, endpoint broker.Endpoint, sessionID, token, s
 }
 
 func (a app) backend(name string, opts runOptions) backend.Backend {
+	if a.backendFactory != nil {
+		return a.backendFactory(name, opts)
+	}
 	switch name {
 	case "lima":
 		controlOut := io.Discard
@@ -3298,6 +3303,65 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 				fmt.Sprintf("runtimeEnvironments=%d", len(statuses)), facts, nil,
 				[]string{"real Gate 2 and Gate 3 on the exact promoted digest are required for preview claims"},
 				[]string{"hideout runtime verify --env <name>", "hideout runtime inspect developer-standard"}, recoveryCode)
+		case "sessions":
+			if overviewErr != nil {
+				addDoctorFeatureFindingWithRecovery(builder, "feature-sessions", "sessions", doctorpkg.StatusWarn,
+					"active-session ownership status is unavailable",
+					nil, []string{"manager owner inventory could not be read"},
+					nil, []string{"hideout env list", "hideout doctor --feature sessions"}, recovery.CodeSessionOwnerUnprovable)
+				continue
+			}
+			active, stale, unprovable, serviceFailed := 0, 0, 0, 0
+			facts := make([]string, 0, len(overview.Environments))
+			for _, environmentSummary := range overview.Environments {
+				if environmentSummary.Profile != p.Name {
+					continue
+				}
+				active += environmentSummary.ActiveSessions
+				switch environmentSummary.OwnerHealth {
+				case "stale":
+					stale++
+				case "unprovable":
+					unprovable++
+				}
+				statePath := filepath.Join(store.Root, "environments", environmentSummary.ID, "runtime", "services", "network", "state.json")
+				if state, err := netpolicy.LoadServiceState(statePath); err == nil && state.Status == netpolicy.ServiceFailed {
+					serviceFailed++
+				}
+				facts = append(facts, fmt.Sprintf("environment=%s active=%d ownerHealth=%s", environmentSummary.Name, environmentSummary.ActiveSessions, explainValue(environmentSummary.OwnerHealth, "none")))
+			}
+			status := doctorpkg.StatusPass
+			recoveryCode := ""
+			summary := fmt.Sprintf("activeSessions=%d staleEnvironments=%d unprovableEnvironments=%d failedServices=%d", active, stale, unprovable, serviceFailed)
+			switch {
+			case unprovable > 0:
+				status, recoveryCode = doctorpkg.StatusError, recovery.CodeSessionOwnerUnprovable
+			case serviceFailed > 0:
+				status, recoveryCode = doctorpkg.StatusWarn, recovery.CodeSessionServiceConflict
+			case stale > 0:
+				status, recoveryCode = doctorpkg.StatusWarn, recovery.CodeSessionCleanupFailed
+			}
+			if active > 0 && backendName == "lima" {
+				for _, environmentSummary := range overview.Environments {
+					if environmentSummary.Profile != p.Name || environmentSummary.ActiveSessions == 0 || environmentSummary.Backend != "lima" {
+						continue
+					}
+					probeSessionIsolation := a.sessionIsolationProbe
+					if probeSessionIsolation == nil {
+						probe := lima.Backend{Stdout: io.Discard, Stderr: io.Discard, ControlStdout: io.Discard, ControlStderr: io.Discard}
+						probeSessionIsolation = probe.ProbeSessionIsolation
+					}
+					if err := probeSessionIsolation(context.Background(), environmentSummary.InstanceName); err != nil {
+						status, recoveryCode = doctorpkg.StatusError, recovery.CodeSessionIsolationUnsupported
+						facts = append(facts, "namespaceProbe=failed")
+						break
+					}
+					facts = append(facts, "namespaceProbe=passed")
+				}
+			}
+			addDoctorFeatureFindingWithRecovery(builder, "feature-sessions", "sessions", status, summary,
+				facts, nil, []string{"ordinary-target isolation requires real 034 Gate 2; guest-root containment remains a non-claim"},
+				[]string{"hideout env list", "scripts/test-concurrent-sessions-e2e.sh"}, recoveryCode)
 		case "lima":
 			status, msg := doctorLimaFeatureStatus(overview, overviewErr, backendName)
 			addDoctorFeatureFinding(builder, "feature-lima", "lima", status, msg,
@@ -6553,10 +6617,10 @@ func (a app) envList(args []string) error {
 		fmt.Fprintln(a.stdout, "environments: none")
 		return nil
 	}
-	fmt.Fprintln(a.stdout, "NAME\tKIND\tIMAGE\tBACKEND\tSTATUS\tDISK\tLAST_STARTED\tWORKSPACE\tID")
+	fmt.Fprintln(a.stdout, "NAME\tKIND\tIMAGE\tBACKEND\tSTATUS\tACTIVE\tOWNER_HEALTH\tDISK\tLAST_STARTED\tWORKSPACE\tID")
 	for _, env := range environments {
 		if env.Status == "unsupported-version" {
-			fmt.Fprintf(a.stdout, "-\tunsupported-version\t-\t-\t%s\t%s\t-\t-\t%s\n",
+			fmt.Fprintf(a.stdout, "-\tunsupported-version\t-\t-\t%s\t0\t-\t%s\t-\t-\t%s\n",
 				env.Status, environmentDiskUsage(store.Root, env.ID), env.ID)
 			continue
 		}
@@ -6564,12 +6628,14 @@ func (a app) envList(args []string) error {
 		if env.AutoNamed {
 			kind = "auto"
 		}
-		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
 			env.Name,
 			kind,
 			abbreviateImageRef(env.ImageRef),
 			env.Backend,
 			explainValue(env.Status, "ready"),
+			env.ActiveSessions,
+			explainValue(env.OwnerHealth, "-"),
 			environmentDiskUsage(store.Root, env.ID),
 			formatEnvironmentTime(env.LastStartedAt),
 			env.Workspace,
@@ -7595,10 +7661,12 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 			fmt.Fprintf(w, "  - %s  status=%s (clean and recreate)\n", dash(env.ID), env.Status)
 			continue
 		}
-		fmt.Fprintf(w, "  - %s (%s)  status=%s  image=%s  backend=%s  profile=%s  workspace=%s  last=%s\n",
+		fmt.Fprintf(w, "  - %s (%s)  status=%s  active=%d owner=%s  image=%s  backend=%s  profile=%s  workspace=%s  last=%s\n",
 			dash(env.Name),
 			kind,
 			dash(env.Status),
+			env.ActiveSessions,
+			dash(env.OwnerHealth),
 			dash(abbreviateImageRef(env.ImageRef)),
 			dash(env.Backend),
 			dash(env.Profile),
@@ -7619,7 +7687,7 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 		fmt.Fprintf(w, "  showing newest %d of %d\n", len(sessions), len(overview.Sessions))
 	}
 	for _, s := range sessions {
-		fmt.Fprintf(w, "  - %s  profile=%s  audit=%t  network=%s  privilege=%s  runtime=%t\n", dash(s.ID), dash(s.Profile), s.HasAudit, dash(s.NetworkMode), privilegeForTUI(s.GuestPrivilege), s.HasEphemeralState)
+		fmt.Fprintf(w, "  - %s  profile=%s environment=%s state=%s owner=%s terminal=%s command=%s audit=%t network=%s privilege=%s runtime=%t\n", dash(s.ID), dash(s.Profile), dash(s.EnvironmentID), dash(string(s.State)), dash(string(s.OwnerStatus)), dash(string(s.TerminalMode)), dash(s.CommandClass), s.HasAudit, dash(s.NetworkMode), privilegeForTUI(s.GuestPrivilege), s.HasEphemeralState)
 		next := sessionNextCommandsForTUI(s)
 		if len(next) > 0 {
 			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))

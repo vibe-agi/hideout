@@ -1418,7 +1418,7 @@ four 032 registry IDs in `docs/claim-boundaries.md` and rejects known community
 pack overclaims. Docs truth is documentation evidence, not lifecycle or host
 effect evidence.
 
-### Real macOS Arm64 Lima Gate 2
+### Community Host-App Real macOS Arm64 Lima Gate 2
 
 The 032-owned wrapper is
 `scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real --out <dir>`.
@@ -1454,3 +1454,86 @@ recipes, static source checks, package self-tests, and `not-run` records are
 false-green fixtures and cannot satisfy it. The current retained real manifest
 has SHA-256 `a570514909514cd79d39493d58ec69e923bca39aa5f4ec31305181b68b536f83`
 at commit `644e6b53daaa` with `dirty=true`.
+
+## Gate 034: Concurrent Run Sessions
+
+Status: **Implemented; real proof remains commit- and runtime-bound.** Gate 0
+proves local ownership mechanics only. It cannot establish Linux namespace,
+ordinary-target isolation, or performance claims.
+
+### Gate 0
+
+`scripts/test-concurrent-sessions-smoke.sh` runs from `scripts/test-gate0.sh`.
+It validates strict owner, activation, and environment-service schemas; owner
+flock reconciliation; transition-lock races; per-session runtime and HostFS
+state; Manager/CLI status parity; explicit-stop refusal; and a native mechanics
+fixture with two overlapping commands. The native fixture must retain a warm
+environment after the final owner exits and must never be described as
+isolation evidence.
+
+`scripts/test-doc-truth-smoke.sh` requires all five registered 034 proof IDs in
+`docs/claim-boundaries.md`. Its negative fixtures reject cross-workspace shared
+VM support, automatic final-session stop, complete dynamic resize, guest-root
+containment, and native/local substitution for the real Lima gate.
+
+### Concurrent Session Real macOS Arm64 Lima Gate 2
+
+Run:
+
+```sh
+scripts/test-concurrent-sessions-e2e.sh \
+  --real-gate2 \
+  --require-real \
+  --baseline-commit 2f0cddebc5b0215989b04e1f94955e84f1926929 \
+  --samples 30 \
+  --out .hideout-release-evidence/034-concurrent-sessions
+```
+
+The isolation lane must prove three overlapping same-workspace owners share one existing
+Lima instance while ordinary targets receive distinct session IDs, private
+`/proc`, private runtime children, independent streams, and session-local
+HostFS authority, with one full activation plus two warm attaches. It must also
+prove a live owner blocks explicit stop, killing
+one host owner leaves a sibling and the environment service alive, the last
+exit does not stop the VM, explicit idle stop succeeds, and guest root can see
+both ordinary targets as a positive control for the documented non-claim.
+The retained `result.json` is not accepted because it merely exists or says
+`passed`: the Go evidence evaluator requires the exact schema/platform/clean
+commit identity, all 16 named checks set to true, no extra or missing check,
+and `guestRootContainment=not-claimed`.
+
+The performance lane builds the exact pre-034 commit in a detached worktree and
+the candidate separately. Both use the same host, runtime artifact digest,
+static workspace fixture, sample count, and warm-up count. With one candidate
+owner live, at least 30 measured second-owner starts record host invocation to
+the target's first `READY` line. Both binaries separately run a timed Git status
+plus package-metadata scan inside the same fixture. Evidence records exact
+commits, dirty state, host, runtime binding, environment/instance identities,
+raw samples, median, and nearest-rank p95. Acceptance requires candidate ready
+p95 at most 2.0 seconds and candidate filesystem p95 at most 1.25 times the
+baseline p95. The semantic evaluator independently requires at least 30
+samples, a different clean canonical baseline commit, the exact runtime
+binding, the unchanged fixture digest, and recomputes every reported median,
+p95, and ratio from the retained arrays. A self-comparison or edited summary
+therefore cannot satisfy the performance proof.
+
+### Evidence Refusal
+
+The wrapper emits `hideout.product-hardening-evidence/v1` under the ignored
+evidence root. `034.concurrent-sessions.real-gate2.isolation` and
+`034.concurrent-sessions.real-gate2.performance` require `mode=real-gate`,
+their exact registered evidence classes, retained artifact digests, the exact
+candidate commit, a clean verified package candidate at release evaluation,
+and the exact promoted runtime binding. A supporting
+`034.concurrent-sessions.real-gate2.not-run` record is valid diagnostic evidence
+but can never satisfy release readiness.
+
+Evaluator and readiness tests must reject each of these independently:
+
+- a missing isolation or performance proof;
+- `status=not-run`, native, local-fast, or synthetic evidence in a real slot;
+- dirty or stale source/package identity;
+- wrong runtime family, revision, artifact digest, architecture, build commit,
+  or environment identity;
+- a missing retained artifact, digest mismatch, or path escape; and
+- documentation that promotes any 034 non-claim to a supported behavior.

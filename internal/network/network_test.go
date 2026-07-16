@@ -1,12 +1,14 @@
 package network
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/profile"
 )
@@ -535,6 +537,103 @@ func TestTun2SocksVerifiedPlan(t *testing.T) {
 	}
 	assertShellSyntaxNetworkTest(t, plan.BootstrapPath)
 	assertShellSyntaxNetworkTest(t, plan.CleanupPath)
+}
+
+func TestServiceFingerprintIsCanonicalAndSecretSensitive(t *testing.T) {
+	makePlan := func(secret string, bypass []string) Plan {
+		t.Helper()
+		p := profile.Default("test")
+		p.Network.Mode = ModeTun2Socks
+		p.Network.ProxySecretRef = "default-proxy"
+		p.Network.MediatedResolver = "1.1.1.1"
+		plan, err := Prepare(Spec{
+			Profile:          p,
+			SessionDir:       t.TempDir(),
+			LocalBypassHosts: bypass,
+			RuntimeVerify:    true,
+			DryRun:           true,
+			Resolver: EnvSecretResolver{Env: []string{
+				SecretEnvName("default-proxy") + "=" + secret,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return plan
+	}
+	a := makePlan("socks5://user:one@127.0.0.1:1080", []string{"localhost", "127.0.0.1"})
+	b := makePlan("socks5://user:one@127.0.0.1:1080", []string{"127.0.0.1", "localhost"})
+	c := makePlan("socks5://user:two@127.0.0.1:1080", []string{"localhost", "127.0.0.1"})
+	if a.ConfigurationFingerprint == "" || a.ConfigurationFingerprint != b.ConfigurationFingerprint {
+		t.Fatalf("canonical fingerprints differ: %q %q", a.ConfigurationFingerprint, b.ConfigurationFingerprint)
+	}
+	if a.ConfigurationFingerprint == c.ConfigurationFingerprint {
+		t.Fatal("resolved-secret rotation did not change service fingerprint")
+	}
+	for _, value := range []string{a.ConfigurationFingerprint, b.ConfigurationFingerprint, c.ConfigurationFingerprint} {
+		if len(value) != 64 {
+			t.Fatalf("fingerprint length=%d", len(value))
+		}
+	}
+}
+
+func TestEnvironmentServiceStateRoundTripContainsNoSecrets(t *testing.T) {
+	p := profile.Default("test")
+	p.Network.Mode = ModeTun2Socks
+	p.Network.ProxySecretRef = "default-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	secret := "socks5://user:password@127.0.0.1:1080"
+	plan, err := Prepare(Spec{
+		Profile:       p,
+		SessionDir:    t.TempDir(),
+		RuntimeVerify: true,
+		DryRun:        true,
+		Resolver: EnvSecretResolver{Env: []string{
+			SecretEnvName("default-proxy") + "=" + secret,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	state, err := BuildServiceState("env_20260716t120000z0123456789abcdef", plan, ServiceReady, "01234567-89ab-cdef-0123-456789abcdef", started, errors.New("cap_0123456789abcdef HIDEOUT_SECRET_PROXY=hidden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := WriteServiceState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{secret, "password", "default-proxy", "HIDEOUT_SECRET_PROXY", "cap_0123456789abcdef"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("service state leaked %q: %s", forbidden, data)
+		}
+	}
+	loaded, err := LoadServiceState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ConfigurationFingerprint != plan.ConfigurationFingerprint || loaded.Status != ServiceReady {
+		t.Fatalf("loaded state=%+v", loaded)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["proxySecretRef"]; ok {
+		t.Fatal("service state serialized proxySecretRef")
+	}
+}
+
+func TestReadyEnvironmentServiceRequiresGuestBootIdentity(t *testing.T) {
+	plan := Plan{Mode: ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("a", 64)}
+	if _, err := BuildServiceState("env_20260716t120000z0123456789abcdef", plan, ServiceReady, "", time.Now().UTC(), nil); err == nil || !strings.Contains(err.Error(), "boot identity") {
+		t.Fatalf("ready state accepted no boot identity: %v", err)
+	}
 }
 
 func assertShellSyntaxNetworkTest(t *testing.T, path string) {

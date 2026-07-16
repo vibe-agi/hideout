@@ -867,8 +867,11 @@ func TestCoreBeginRunSessionExplainSkipsEnvironmentRuntimePrepare(t *testing.T) 
 			t.Fatalf("CloseRunSession: %v", err)
 		}
 	}()
-	if !runSession.Environment.Active || runSession.RuntimeSessionDir != runEnv.RuntimeDir || runSession.RuntimeShimDir != runEnv.ShimDir {
-		t.Fatalf("lima explain session should use selected environment dirs: session=%+v env=%+v", runSession, runEnv)
+	envStore := environment.Store{Root: store.Root}
+	if !runSession.Environment.Active ||
+		runSession.RuntimeSessionDir != envStore.RuntimeSessionDir(runEnv.Record.ID, runSession.Layout.ID) ||
+		runSession.RuntimeShimDir != envStore.SessionShimDir(runEnv.Record.ID, runSession.Layout.ID) {
+		t.Fatalf("lima explain session should derive a unique environment child: session=%+v env=%+v", runSession, runEnv)
 	}
 	if _, err := os.Stat(runEnv.RuntimeDir); !os.IsNotExist(err) {
 		t.Fatalf("explain should not prepare environment runtime dir, stat err=%v", err)
@@ -2414,7 +2417,7 @@ func TestCoreRunEnvironmentLifecycleUpdatesStatusAndClearsRuntime(t *testing.T) 
 	}
 }
 
-func TestCoreApplyRunRejectsLockedEnvironment(t *testing.T) {
+func TestCoreApplyRunWaitsForLockedEnvironmentUntilContextCancellation(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
 	core := New(store)
@@ -2438,13 +2441,15 @@ func TestCoreApplyRunRejectsLockedEnvironment(t *testing.T) {
 	defer lock.Unlock()
 
 	fake := &applyRunFakeBackend{}
-	_, err = core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = core.ApplyRun(ctx, plan, ApplyRunOptions{
 		Backend:     fake,
 		Environment: RunEnvironmentOptions{Create: true},
 		Opener:      broker.NoopOpener{},
 	})
-	if err == nil || !strings.Contains(err.Error(), "already in use") {
-		t.Fatalf("locked environment should fail closed, got %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("locked environment should observe caller cancellation, got %v", err)
 	}
 	for _, call := range fake.calls {
 		if call == "prepare" || call == "run" || call == "cleanup" {

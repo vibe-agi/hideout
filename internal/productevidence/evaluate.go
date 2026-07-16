@@ -23,6 +23,7 @@ const (
 	EvalRedactionFailed        = "redaction-failed"
 	EvalArtifactMissing        = "artifact-missing"
 	EvalArtifactDigestMismatch = "artifact-digest-mismatch"
+	EvalArtifactInvalid        = "artifact-invalid"
 	EvalRuntimeMismatch        = "runtime-mismatch"
 	EvalProofShapeMismatch     = "proof-shape-mismatch"
 	EvalNotRequired            = "not-required"
@@ -240,7 +241,7 @@ func evaluateRequirement(req ProofRequirement, proof ProofEntry, identity proofF
 	if root := strings.TrimSpace(opts.ArtifactRoots[req.ProofID]); root != "" {
 		artifactRoot = root
 	}
-	if status, summary := evaluateArtifacts(req, proof, artifactRoot, releaseCandidate); status != EvalSatisfied {
+	if status, summary := evaluateArtifacts(req, proof, artifactRoot, releaseCandidate, opts.ExpectedCommit, opts.ExpectedRuntime); status != EvalSatisfied {
 		result.Status = status
 		result.Summary = summary
 		return result
@@ -338,7 +339,7 @@ func staleSummary(req ProofRequirement) string {
 	return "proof is stale for freshnessPolicy=" + req.FreshnessPolicy
 }
 
-func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, releaseCandidate bool) (string, string) {
+func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, releaseCandidate bool, expectedCommit string, expectedRuntime *RuntimeExpectation) (string, string) {
 	switch req.ArtifactPolicy {
 	case ArtifactPolicyNone:
 		return EvalSatisfied, ""
@@ -357,6 +358,7 @@ func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, rele
 		return EvalArtifactMissing, fmt.Sprintf("artifact root: %v", err)
 	}
 	defer artifactRoot.Close()
+	artifactData := make(map[string][]byte, len(proof.Artifacts))
 	for _, artifact := range proof.Artifacts {
 		path, err := rootedArtifactPath(artifactRoot, artifact.Path)
 		if err != nil {
@@ -370,7 +372,7 @@ func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, rele
 			return EvalRedactionFailed, fmt.Sprintf("artifact %s redactionStatus=%s", artifact.Path, artifact.RedactionStatus)
 		}
 		verifyDigest := req.ArtifactPolicy == ArtifactPolicyExistsAndDigestIfSupplied && artifact.SHA256 != ""
-		if releaseCandidate || verifyDigest {
+		if releaseCandidate || verifyDigest || req.ArtifactValidator != ArtifactValidatorNone {
 			data, err := readBoundedArtifact(artifactRoot, path)
 			if err != nil {
 				return EvalArtifactMissing, fmt.Sprintf("artifact %s: %v", artifact.Path, err)
@@ -381,12 +383,15 @@ func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, rele
 			if verifyDigest {
 				sum := sha256.Sum256(data)
 				digest := hex.EncodeToString(sum[:])
-				if digest == artifact.SHA256 {
-					continue
+				if digest != artifact.SHA256 {
+					return EvalArtifactDigestMismatch, fmt.Sprintf("artifact %s digest mismatch", artifact.Path)
 				}
-				return EvalArtifactDigestMismatch, fmt.Sprintf("artifact %s digest mismatch", artifact.Path)
 			}
+			artifactData[artifact.Path] = data
 		}
+	}
+	if err := validateRegisteredArtifact(req.ArtifactValidator, proof.Artifacts, artifactData, strings.TrimSpace(expectedCommit), expectedRuntime); err != nil {
+		return EvalArtifactInvalid, err.Error()
 	}
 	return EvalSatisfied, ""
 }

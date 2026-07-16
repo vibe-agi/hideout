@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/active-session-summary.schema.json",
+  "title": "Hideout active session summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "environmentId", "profile", "backend", "state", "ownerStatus", "terminalMode", "startedAt"],
+  "properties": {
+    "schema": {"const": "hideout.active-session/v1"},
+    "id": {"type": "string", "pattern": "^ses_[A-Za-z0-9_]+$"},
+    "environmentId": {"type": "string", "pattern": "^env_[A-Za-z0-9_]+$"},
+    "profile": {"type": "string", "minLength": 1, "maxLength": 128},
+    "backend": {"type": "string", "minLength": 1, "maxLength": 32},
+    "workspaceId": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "state": {"enum": ["preparing", "running", "cleaning", "failed"]},
+    "ownerStatus": {"enum": ["live", "stale", "unprovable"]},
+    "terminalMode": {"enum": ["none", "pty"]},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "updatedAt": {"type": "string", "format": "date-time"},
+    "commandClass": {"type": "string", "pattern": "^[A-Za-z0-9._+-]{1,128}$"},
+    "cleanupError": {"type": "string", "maxLength": 512}
+  }
+}

@@ -39,6 +39,11 @@ func TestRegistryContainsV1CodesOnce(t *testing.T) {
 		CodeRuntimeDNSFailed,
 		CodeRuntimeRegistryFailed,
 		CodeRuntimePrefixUnwritable,
+		CodeSessionOwnerUnprovable,
+		CodeSessionIsolationUnsupported,
+		CodeSessionServiceConflict,
+		CodeSessionCleanupFailed,
+		CodeEnvironmentActiveSessions,
 	}
 	seen := map[string]int{}
 	for _, entry := range All() {

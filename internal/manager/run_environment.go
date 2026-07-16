@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,10 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
+	"github.com/vibe-agi/hideout/internal/session"
 )
 
 const limaBackendConfigVersion = "lima-config/v3/no-default-port-forwards"
@@ -229,6 +232,96 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 	}
 	runEnv.Record = rec
 	return runEnv, cleanupErr
+}
+
+func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, serviceCleanup func(context.Context) error) (retErr error) {
+	if !runEnv.Active || owner == nil {
+		return cleanupErr
+	}
+	store := environment.Store{Root: c.Store.Root}
+	lock := *held
+	if lock == nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var err error
+		lock, err = store.LockContext(cleanupCtx, runEnv.Record.ID)
+		if err != nil {
+			failure := errors.Join(cleanupErr, err)
+			updateErr := owner.Update(session.OwnerStateFailed, failure.Error())
+			// Release liveness but retain failed metadata; deleting it would turn an
+			// unproved cleanup into a false-success status.
+			return errors.Join(err, updateErr, owner.Release())
+		}
+	}
+	defer func() {
+		retErr = errors.Join(retErr, lock.Unlock())
+		if *held == lock {
+			*held = nil
+		}
+	}()
+
+	priorCleanupErr := cleanupErr
+	var finalErr error
+	finalErr = errors.Join(finalErr, owner.Update(session.OwnerStateCleaning, ""))
+	if runEnv.Record.Runtime != nil {
+		finalErr = errors.Join(finalErr, (runtimeverify.Store{Root: c.Store.Root}).Remove(runEnv.Record.ID))
+	}
+	finalErr = errors.Join(finalErr, store.ClearSessionRuntime(runEnv.Record.ID, sessionID))
+	_, reconcileErr := session.ReconcileStaleOwnersWithCleanup(store.OwnerRoot(runEnv.Record.ID), func(item session.OwnerObservation) error {
+		return store.ClearSessionRuntime(runEnv.Record.ID, item.SessionID)
+	})
+	finalErr = errors.Join(finalErr, reconcileErr)
+	observed, observeErr := session.ListOwners(store.OwnerRoot(runEnv.Record.ID))
+	finalErr = errors.Join(finalErr, observeErr)
+	siblingLive := 0
+	ownersProvedIdle := reconcileErr == nil && observeErr == nil
+	for _, item := range observed {
+		switch item.Status {
+		case session.OwnerLive:
+			if item.SessionID != sessionID {
+				siblingLive++
+			}
+		case session.OwnerUnprovable:
+			ownersProvedIdle = false
+			finalErr = errors.Join(finalErr, fmt.Errorf("session %s ownership is unprovable: %w", item.SessionID, session.ErrOwnerUnprovable))
+		}
+	}
+	// Shared environment authority may be removed only when the complete owner
+	// set is proved and empty. A corrupt or failed sibling record is not proof
+	// that no sibling still depends on the service or activation receipt.
+	if ownersProvedIdle && siblingLive == 0 && serviceCleanup != nil {
+		serviceCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		finalErr = errors.Join(finalErr, serviceCleanup(serviceCtx))
+		cancel()
+	}
+	if ownersProvedIdle && siblingLive == 0 {
+		finalErr = errors.Join(finalErr, backend.RemoveActivationReceipt(runEnv.RuntimeDir))
+	}
+	combinedErr := errors.Join(priorCleanupErr, finalErr)
+	if combinedErr != nil {
+		finalErr = errors.Join(finalErr, owner.Update(session.OwnerStateFailed, combinedErr.Error()), owner.Release())
+	} else {
+		finalErr = errors.Join(finalErr, owner.Close())
+	}
+	rec, loadErr := store.Load(runEnv.Record.ID)
+	if loadErr != nil {
+		return errors.Join(finalErr, loadErr)
+	}
+	rec.LastEndedAt = time.Now().UTC()
+	if siblingLive > 0 {
+		rec.Status = "running"
+	} else if errors.Join(priorCleanupErr, finalErr) != nil {
+		rec.Status = "error"
+	} else {
+		rec.Status = "ready"
+	}
+	if err := store.Save(rec); err != nil {
+		finalErr = errors.Join(finalErr, err)
+	}
+	// The caller already recorded priorCleanupErr at the authority boundary
+	// where it occurred. Return only errors introduced by owner/environment
+	// finalization so RunResult does not report the same cleanup failure twice.
+	return finalErr
 }
 
 func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {

@@ -1,15 +1,24 @@
 package network
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
@@ -22,9 +31,13 @@ const (
 	// guest resolver is pointed here and connected-subnet resolvers are blocked.
 	dnsStubAddr = "127.0.0.1:53"
 	dnsStubIP   = "127.0.0.1"
+
+	EnvironmentServiceSchema = "hideout.environment-service/v1"
 )
 
 var ErrRoutingUnverified = errors.New("tun2socks routing is not verified")
+
+var serviceBootIDPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
 type SecretResolver interface {
 	Resolve(ref string) (string, error)
@@ -48,25 +61,50 @@ type Spec struct {
 }
 
 type Plan struct {
-	Mode                 string   `json:"mode"`
-	Engine               string   `json:"engine,omitempty"`
-	DNSPolicy            string   `json:"dnsPolicy,omitempty"`
-	LocalBypassHosts     []string `json:"localBypassHosts,omitempty"`
-	ProxySecretRef       string   `json:"proxySecretRef,omitempty"`
-	ProxySecretPath      string   `json:"-"`
-	GuestProxySecretPath string   `json:"guestProxySecretPath,omitempty"`
-	MediatedResolver     string   `json:"mediatedResolver,omitempty"`
-	Verified             bool     `json:"verified"`
-	RuntimeVerify        bool     `json:"runtimeVerify"`
-	FailClosed           bool     `json:"failClosed"`
-	Reason               string   `json:"reason,omitempty"`
-	ManifestPath         string   `json:"-"`
-	GuestManifestPath    string   `json:"guestManifestPath"`
-	BootstrapPath        string   `json:"-"`
-	GuestBootstrapPath   string   `json:"guestBootstrapPath"`
-	CleanupPath          string   `json:"-"`
-	GuestCleanupPath     string   `json:"guestCleanupPath"`
+	Mode                     string   `json:"mode"`
+	Engine                   string   `json:"engine,omitempty"`
+	DNSPolicy                string   `json:"dnsPolicy,omitempty"`
+	LocalBypassHosts         []string `json:"localBypassHosts,omitempty"`
+	ProxySecretRef           string   `json:"proxySecretRef,omitempty"`
+	ProxySecretPath          string   `json:"-"`
+	GuestProxySecretPath     string   `json:"guestProxySecretPath,omitempty"`
+	MediatedResolver         string   `json:"mediatedResolver,omitempty"`
+	Verified                 bool     `json:"verified"`
+	RuntimeVerify            bool     `json:"runtimeVerify"`
+	FailClosed               bool     `json:"failClosed"`
+	Reason                   string   `json:"reason,omitempty"`
+	ManifestPath             string   `json:"-"`
+	GuestManifestPath        string   `json:"guestManifestPath"`
+	BootstrapPath            string   `json:"-"`
+	GuestBootstrapPath       string   `json:"guestBootstrapPath"`
+	CleanupPath              string   `json:"-"`
+	GuestCleanupPath         string   `json:"guestCleanupPath"`
+	ConfigurationFingerprint string   `json:"-"`
 }
+
+type ServiceStatus string
+
+const (
+	ServiceStarting ServiceStatus = "starting"
+	ServiceReady    ServiceStatus = "ready"
+	ServiceCleaning ServiceStatus = "cleaning"
+	ServiceFailed   ServiceStatus = "failed"
+)
+
+type ServiceState struct {
+	Schema                   string        `json:"schema"`
+	EnvironmentID            string        `json:"environmentId"`
+	Kind                     string        `json:"kind"`
+	Status                   ServiceStatus `json:"status"`
+	ConfigurationFingerprint string        `json:"configurationFingerprint"`
+	Mode                     string        `json:"mode"`
+	BootID                   string        `json:"bootId,omitempty"`
+	StartedAt                time.Time     `json:"startedAt"`
+	UpdatedAt                time.Time     `json:"updatedAt,omitempty"`
+	LastError                string        `json:"lastError,omitempty"`
+}
+
+var environmentIDPattern = regexp.MustCompile(`^env_[a-z0-9]+$`)
 
 func Prepare(spec Spec) (Plan, error) {
 	if spec.SessionDir == "" {
@@ -97,6 +135,7 @@ func Prepare(spec Spec) (Plan, error) {
 	case ModeDirect:
 		plan.DNSPolicy = "guest default resolver over direct route"
 		plan.Reason = "direct network mode; host network identity may be visible"
+		plan.ConfigurationFingerprint = networkFingerprint(plan, "", "")
 		return plan, maybeWriteArtifacts(plan, spec.DryRun)
 	case ModeTun2Socks:
 		localBypassHosts, err := normalizeLocalBypassHosts(spec.LocalBypassHosts)
@@ -158,6 +197,7 @@ func Prepare(spec Spec) (Plan, error) {
 		plan.Engine = ModeTun2Socks
 		plan.DNSPolicy = "guest DNS is redirected to the declared mediated resolver over the TUN privacy path; connected-subnet resolvers are blocked so no query bypasses the TUN; a connected-subnet-only environment is refused"
 		plan.ProxySecretRef = ref
+		plan.ConfigurationFingerprint = networkFingerprint(plan, ref, secret)
 		plan.Verified = spec.Verified
 		plan.RuntimeVerify = spec.RuntimeVerify
 		if !plan.Verified {
@@ -187,6 +227,184 @@ func Prepare(spec Spec) (Plan, error) {
 	default:
 		return plan, fmt.Errorf("unsupported network mode %q", plan.Mode)
 	}
+}
+
+func networkFingerprint(plan Plan, secretRef, secret string) string {
+	bypass := slices.Clone(plan.LocalBypassHosts)
+	slices.Sort(bypass)
+	secretDigest := ""
+	if secret != "" {
+		digest := sha256.Sum256([]byte(secret))
+		secretDigest = fmt.Sprintf("%x", digest[:])
+	}
+	canonical := struct {
+		Version           string   `json:"version"`
+		Mode              string   `json:"mode"`
+		Engine            string   `json:"engine,omitempty"`
+		DNSPolicy         string   `json:"dnsPolicy,omitempty"`
+		MediatedResolver  string   `json:"mediatedResolver,omitempty"`
+		LocalBypassHosts  []string `json:"localBypassHosts,omitempty"`
+		ProxySecretRef    string   `json:"proxySecretRef,omitempty"`
+		ProxySecretSHA256 string   `json:"proxySecretSHA256,omitempty"`
+	}{
+		Version:           "hideout.network-service-fingerprint/v1",
+		Mode:              plan.Mode,
+		Engine:            plan.Engine,
+		DNSPolicy:         plan.DNSPolicy,
+		MediatedResolver:  plan.MediatedResolver,
+		LocalBypassHosts:  bypass,
+		ProxySecretRef:    secretRef,
+		ProxySecretSHA256: secretDigest,
+	}
+	data, _ := json.Marshal(canonical)
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func BuildServiceState(environmentID string, plan Plan, status ServiceStatus, bootID string, startedAt time.Time, stateErr error) (ServiceState, error) {
+	now := time.Now().UTC()
+	if startedAt.IsZero() {
+		startedAt = now
+	}
+	if now.Before(startedAt) {
+		now = startedAt
+	}
+	state := ServiceState{
+		Schema:                   EnvironmentServiceSchema,
+		EnvironmentID:            environmentID,
+		Kind:                     "network",
+		Status:                   status,
+		ConfigurationFingerprint: plan.ConfigurationFingerprint,
+		Mode:                     plan.Mode,
+		BootID:                   bootID,
+		StartedAt:                startedAt.UTC(),
+		UpdatedAt:                now,
+	}
+	if stateErr != nil {
+		state.LastError = sanitizeServiceError(stateErr.Error())
+	}
+	if err := state.Validate(); err != nil {
+		return ServiceState{}, err
+	}
+	return state, nil
+}
+
+func (s ServiceState) Validate() error {
+	if s.Schema != EnvironmentServiceSchema {
+		return fmt.Errorf("unsupported environment-service schema %q", s.Schema)
+	}
+	if !environmentIDPattern.MatchString(s.EnvironmentID) {
+		return fmt.Errorf("invalid environment id %q", s.EnvironmentID)
+	}
+	if s.Kind != "network" {
+		return fmt.Errorf("unsupported environment service kind %q", s.Kind)
+	}
+	switch s.Status {
+	case ServiceStarting, ServiceReady, ServiceCleaning, ServiceFailed:
+	default:
+		return fmt.Errorf("invalid environment service status %q", s.Status)
+	}
+	if len(s.ConfigurationFingerprint) != 64 || !lowerHex(s.ConfigurationFingerprint) {
+		return errors.New("environment service configuration fingerprint is invalid")
+	}
+	if s.Mode != ModeDirect && s.Mode != ModeTun2Socks {
+		return fmt.Errorf("unsupported environment service mode %q", s.Mode)
+	}
+	if s.BootID != "" && !serviceBootIDPattern.MatchString(s.BootID) {
+		return errors.New("environment service boot identity is invalid")
+	}
+	if (s.Status == ServiceReady || s.Status == ServiceCleaning) && s.BootID == "" {
+		return errors.New("ready or cleaning environment service must be bound to a guest boot identity")
+	}
+	if s.StartedAt.IsZero() || s.UpdatedAt.IsZero() || s.UpdatedAt.Before(s.StartedAt) {
+		return errors.New("environment service timestamps are invalid")
+	}
+	if len(s.LastError) > 512 || sanitizeServiceError(s.LastError) != s.LastError {
+		return errors.New("environment service error is not safely bounded")
+	}
+	return nil
+}
+
+func WriteServiceState(path string, state ServiceState) error {
+	if err := state.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func LoadServiceState(path string) (ServiceState, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return ServiceState{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return ServiceState{}, errors.New("environment service state is not a regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ServiceState{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var state ServiceState
+	if err := decoder.Decode(&state); err != nil {
+		return ServiceState{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return ServiceState{}, errors.New("environment service state contains trailing data")
+		}
+		return ServiceState{}, err
+	}
+	if err := state.Validate(); err != nil {
+		return ServiceState{}, err
+	}
+	return state, nil
+}
+
+func lowerHex(value string) bool {
+	for _, r := range value {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func sanitizeServiceError(value string) string {
+	value = audit.RedactString(value)
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) && r != '\u001b' {
+			return r
+		}
+		return -1
+	}, value)
+	if len(value) <= 512 {
+		return value
+	}
+	value = value[:512]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func normalizeLocalBypassHosts(hosts []string) ([]string, error) {
@@ -350,12 +568,12 @@ func BootstrapScript(plan Plan) string {
 	switch plan.Mode {
 	case ModeDirect, "":
 		b.WriteString("write_status 'direct network mode'\n")
-		return b.String()
+		return rewriteNetworkGuestPaths(b.String(), plan)
 	case ModeTun2Socks:
 		if plan.FailClosed {
 			fmt.Fprintf(&b, "echo %s >&2\n", shellQuote("hideout: "+plan.Reason))
 			b.WriteString("exit 125\n")
-			return b.String()
+			return rewriteNetworkGuestPaths(b.String(), plan)
 		}
 		b.WriteString("[ \"$(id -u)\" -eq 0 ] || { echo 'hideout: tun2socks setup requires the Hideout setup identity' >&2; exit 127; }\n")
 		proxyPath := plan.GuestProxySecretPath
@@ -428,11 +646,11 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("kill -0 \"$(cat /hideout/session/network/tun2socks.pid)\" 2>/dev/null || { echo 'hideout: tun2socks stopped during route verification' >&2; exit 127; }\n")
 		writeDNSMediationVerify(&b, plan.MediatedResolver)
 		b.WriteString("write_status 'tun2socks route verified'\n")
-		return b.String()
+		return rewriteNetworkGuestPaths(b.String(), plan)
 	default:
 		fmt.Fprintf(&b, "echo %s >&2\n", shellQuote("hideout: unsupported network mode "+plan.Mode))
 		b.WriteString("exit 125\n")
-		return b.String()
+		return rewriteNetworkGuestPaths(b.String(), plan)
 	}
 }
 
@@ -480,7 +698,19 @@ func CleanupScript(plan Plan) string {
 	default:
 		b.WriteString("write_status 'network cleanup complete'\n")
 	}
-	return b.String()
+	return rewriteNetworkGuestPaths(b.String(), plan)
+}
+
+func rewriteNetworkGuestPaths(script string, plan Plan) string {
+	guestNetworkDir := filepath.ToSlash(filepath.Dir(plan.GuestBootstrapPath))
+	if guestNetworkDir == "." || guestNetworkDir == "" {
+		guestNetworkDir = "/hideout/session/network"
+	}
+	script = strings.ReplaceAll(script, "/hideout/session/network", guestNetworkDir)
+	if strings.HasPrefix(guestNetworkDir, "/hideout/runtime/services/") {
+		script = strings.ReplaceAll(script, "/hideout/session/shims/hideout-dns-stub", guestNetworkDir+"/hideout-dns-stub")
+	}
+	return script
 }
 
 func networkStatusHelpers() string {

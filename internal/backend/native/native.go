@@ -42,6 +42,9 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		IdentityMode:              spec.IdentityMode,
 		IdentityRoot:              spec.IdentityRoot,
 		SessionDir:                spec.SessionDir,
+		RuntimeRoot:               spec.RuntimeRoot,
+		SessionIsolationRequired:  false,
+		TargetUser:                spec.TargetUser,
 		Broker:                    spec.Broker,
 		NetworkBootstrapPath:      spec.NetworkBootstrapPath,
 		NetworkBootstrapGuestPath: spec.NetworkBootstrapGuestPath,
@@ -53,6 +56,14 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
 		PrivilegedSetupEventSink:  spec.PrivilegedSetupEventSink,
 	}, nil
+}
+
+func (b Backend) Activate(context.Context, *backend.Session, []string) error {
+	return nil
+}
+
+func (b Backend) WarmActivate(context.Context, *backend.Session, []string) error {
+	return nil
 }
 
 func (b Backend) Run(ctx context.Context, session *backend.Session, command []string, env []string) error {

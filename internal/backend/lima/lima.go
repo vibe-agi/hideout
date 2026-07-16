@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -30,6 +31,7 @@ import (
 const (
 	GuestProfileDir       = "/hideout/profile"
 	GuestSessionDir       = "/hideout/session"
+	GuestRuntimeDir       = "/hideout/runtime"
 	GuestBootstrapPath    = GuestSessionDir + "/bootstrap/bootstrap.sh"
 	GuestNetworkBootstrap = GuestSessionDir + "/network/bootstrap.sh"
 	cleanupTimeout        = 30 * time.Second
@@ -210,6 +212,9 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		ShimDir:                   GuestSessionDir + "/shims",
 		Broker:                    spec.Broker,
 		SessionDir:                spec.SessionDir,
+		RuntimeRoot:               spec.RuntimeRoot,
+		SessionIsolationRequired:  spec.SessionIsolationRequired,
+		TargetUser:                spec.TargetUser,
 		ProfileDir:                spec.ProfileDir,
 		IdentityMode:              identityMode,
 		IdentityRoot:              identityRoot,
@@ -246,13 +251,19 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	if session.ConfigPath == "" || session.InstanceName == "" {
 		return errors.New("lima session is missing config path or instance name")
 	}
-	runner, hostEnv, err := b.startAndObserveRuntime(ctx, session, env)
-	if err != nil {
-		return err
+	if !session.RuntimeReady {
+		if err := b.Activate(ctx, session, env); err != nil {
+			return err
+		}
 	}
 	if session.RuntimeCompletionSink != nil {
 		defer func() { retErr = errors.Join(retErr, session.RuntimeCompletionSink(retErr)) }()
 	}
+	if session.SessionIsolationRequired {
+		return b.runIsolatedSession(ctx, session, env, command)
+	}
+	runner := b.runner()
+	hostEnv := HostCommandEnv(os.Environ())
 	setupEnv := SetupEnv(env)
 	setupWorkdir := GuestSessionDir + "/tmp"
 	if session.NetworkBootstrapGuestPath != "" {
@@ -288,6 +299,111 @@ func (b Backend) Run(ctx context.Context, session *backend.Session, command []st
 	}
 	args := ShellArgs(session.InstanceName, session.GuestWork, env, command)
 	return runner.Run(ctx, b.limactl(), args, hostEnv, b.stdin(), b.stdout(), b.stderr())
+}
+
+func (b Backend) Activate(ctx context.Context, session *backend.Session, env []string) error {
+	_, _, err := b.startAndObserveRuntime(ctx, session, env)
+	if err != nil {
+		return err
+	}
+	if session.SessionIsolationRequired {
+		bootID, err := b.sessionViewActivationProbe(ctx, session)
+		if err != nil {
+			session.RuntimeReady = false
+			return err
+		}
+		receipt, err := backend.BuildActivationReceipt(session, bootID, time.Now().UTC())
+		if err != nil {
+			session.RuntimeReady = false
+			return fmt.Errorf("build Lima activation receipt: %w", err)
+		}
+		if err := backend.WriteActivationReceipt(session.RuntimeRoot, receipt); err != nil {
+			session.RuntimeReady = false
+			return fmt.Errorf("write Lima activation receipt: %w", err)
+		}
+		session.ExpectedBootID = receipt.BootID
+	}
+	return nil
+}
+
+func (b Backend) WarmActivationOwner(session *backend.Session) (string, error) {
+	if session == nil || !session.SessionIsolationRequired {
+		return "", errors.New("warm Lima activation requires an isolated prepared session")
+	}
+	receipt, err := backend.LoadActivationReceipt(session.RuntimeRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := receipt.MatchesSession(session); err != nil {
+		return "", err
+	}
+	return receipt.OwnerSessionID, nil
+}
+
+func (b Backend) WarmActivate(ctx context.Context, session *backend.Session, env []string) error {
+	if session == nil || session.InstanceName == "" || session.ActivationOwnerID == "" {
+		return errors.New("warm Lima activation requires a prepared instance")
+	}
+	receipt, err := backend.LoadActivationReceipt(session.RuntimeRoot)
+	if err != nil {
+		return fmt.Errorf("warm Lima activation receipt: %w", err)
+	}
+	if err := receipt.MatchesSession(session); err != nil {
+		return fmt.Errorf("warm Lima activation receipt drift: %w", err)
+	}
+	if receipt.OwnerSessionID != session.ActivationOwnerID || receipt.OwnerSessionID == session.ID {
+		return errors.New("warm Lima activation receipt owner is not the proved sibling owner")
+	}
+	runner := b.runner()
+	hostEnv := HostCommandEnv(os.Environ())
+	exists, err := b.instanceExists(ctx, runner, hostEnv, session.InstanceName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("warm Lima activation refused because the instance is absent")
+	}
+	session.ExpectedBootID = receipt.BootID
+	session.Env = append([]string(nil), env...)
+	session.RunAttempted = true
+	session.RuntimeReady = true
+	return nil
+}
+
+func (b Backend) StartEnvironmentNetwork(ctx context.Context, session *backend.Session, workdir, bootstrapPath string, env []string) error {
+	if session == nil || strings.TrimSpace(bootstrapPath) == "" {
+		return errors.New("environment network bootstrap is required")
+	}
+	return b.runSetupCommand(ctx, session, setupCategoryNetwork, workdir, SetupEnv(env), []string{bootstrapPath}, nil)
+}
+
+func (b Backend) VerifyEnvironmentNetwork(ctx context.Context, session *backend.Session, workdir string, env []string) error {
+	if session == nil || !sessionViewBootPattern.MatchString(session.ExpectedBootID) || path.Clean(workdir) != workdir || !path.IsAbs(workdir) {
+		return errors.New("environment network verification requires a current boot identity and absolute service directory")
+	}
+	script := `set -eu
+expected_boot=$1
+service_dir=$2
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
+ip link show dev hideout0 >/dev/null 2>&1
+ip route show default | grep -Eq '(^|[[:space:]])dev hideout0([[:space:]]|$)'
+test -r "$service_dir/tun2socks.pid"
+kill -0 "$(cat "$service_dir/tun2socks.pid")" 2>/dev/null
+test -r "$service_dir/dns-stub.pid"
+kill -0 "$(cat "$service_dir/dns-stub.pid")" 2>/dev/null
+grep -q '^nameserver 127\.0\.0\.1\([[:space:]]\|$\)' /etc/resolv.conf
+`
+	return b.runSetupCommand(
+		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),
+		[]string{"sh", "-c", script, "hideout-network-verify", session.ExpectedBootID, workdir}, nil,
+	)
+}
+
+func (b Backend) StopEnvironmentNetwork(ctx context.Context, session *backend.Session, workdir, cleanupPath string, env []string) error {
+	if session == nil || strings.TrimSpace(cleanupPath) == "" {
+		return errors.New("environment network cleanup is required")
+	}
+	return b.runSetupCleanup(ctx, session, setupCategoryNetwork, workdir, cleanupGuestEnv(env), []string{cleanupPath})
 }
 
 func (b Backend) terminalBridgeAvailable(ctx context.Context, runner CommandRunner, hostEnv []string, session *backend.Session, env []string) bool {
@@ -465,14 +581,14 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	if runtimeUnavailable {
 		errs = append(errs, errRuntimeNotReady)
 	}
-	if !runtimeUnavailable && session.HostFSEnabled {
+	if !session.SessionIsolationRequired && !runtimeUnavailable && session.HostFSEnabled {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
 		} else if err := b.runSetupCleanup(cleanupCtx, session, setupCategoryHostFS, session.GuestWork, cleanupGuestEnv(session.Env), []string{"sh", "-c", HostFSCleanupScript()}); err != nil {
 			errs = append(errs, fmt.Errorf("hostfs cleanup: %w", err))
 		}
 	}
-	if !runtimeUnavailable && session.NetworkCleanupGuestPath != "" {
+	if !session.SessionIsolationRequired && !runtimeUnavailable && session.NetworkCleanupGuestPath != "" {
 		if session.GuestWork == "" {
 			errs = append(errs, errors.New("lima session is missing guest workdir"))
 		} else if session.NetworkPrivilegedSetup {
@@ -481,6 +597,11 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 			}
 		} else if err := runner.Run(cleanupCtx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, cleanupGuestEnv(session.Env), []string{session.NetworkCleanupGuestPath}), hostEnv, nil, b.controlStdout(), b.controlStderr()); err != nil {
 			errs = append(errs, fmt.Errorf("network cleanup: %w", err))
+		}
+	}
+	if session.SessionIsolationRequired && !runtimeUnavailable && !session.IsolationCleanupProved {
+		if err := b.verifyIsolatedSessionTerminated(cleanupCtx, session); err != nil {
+			errs = append(errs, fmt.Errorf("session-view cleanup proof: %w", err))
 		}
 	}
 	if session.PreserveInstance {
@@ -674,7 +795,7 @@ func ConfigForRunSpec(spec backend.RunSpec) (limaConfig, error) {
 		},
 		Mounts: append([]mount{
 			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
-		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.EnvironmentID != "")...)...),
+		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.RuntimeRoot, spec.EnvironmentID != "")...)...),
 		PortForwards: []portForward{
 			{
 				GuestIP:           "0.0.0.0",
@@ -770,8 +891,15 @@ func identityStateMounts(identityRoot string) []mount {
 	return mounts
 }
 
-func sessionStateMounts(sessionDir string, reusableEnvironment bool) []mount {
+func sessionStateMounts(sessionDir, runtimeRoot string, reusableEnvironment bool) []mount {
 	if reusableEnvironment {
+		if runtimeRoot != "" {
+			return []mount{{
+				Location:   runtimeRoot,
+				MountPoint: GuestRuntimeDir,
+				Writable:   true,
+			}}
+		}
 		return []mount{{
 			Location:   sessionDir,
 			MountPoint: GuestSessionDir,
@@ -922,7 +1050,7 @@ func ShellArgs(instance, workdir string, env []string, command []string) []strin
 }
 
 func CommandCheck(command string) []string {
-	return []string{"sh", "-c", "command -v \"$1\" >/dev/null 2>&1", "hideout-command-check", command}
+	return []string{"sh", "-c", "command -v \"$1\" >/dev/null 2>&1 || exit 127", "hideout-command-check", command}
 }
 
 func uniqueStrings(values []string) []string {

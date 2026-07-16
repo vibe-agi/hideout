@@ -712,7 +712,7 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 	}
 	wantCheck := []string{
 		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
-		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "SERVICE_TOKEN=secret", "HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1", "sh", "-c", "command -v \"$1\" >/dev/null 2>&1", "hideout-command-check", "sh",
+		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "SERVICE_TOKEN=secret", "HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1", "sh", "-c", "command -v \"$1\" >/dev/null 2>&1 || exit 127", "hideout-command-check", "sh",
 	}
 	if !reflect.DeepEqual(runner.calls[3].args, wantCheck) {
 		t.Fatalf("command check args=%v want %v", runner.calls[3].args, wantCheck)

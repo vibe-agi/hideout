@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -217,6 +218,114 @@ func TestStoreLockIsExclusiveAndReleasable(t *testing.T) {
 	}
 	if err := lock.Unlock(); err != nil {
 		t.Fatalf("second Unlock: %v", err)
+	}
+}
+
+func TestTransitionLockWaitsContextuallyAndReleases(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	rec, err := store.Create(testSpecNamed("transition-lock", t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.LockContext(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Millisecond)
+	defer cancel()
+	if _, err := store.LockContext(ctx, rec.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("contended transition error=%v", err)
+	}
+	if err := first.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.LockContext(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTransitionLockDoesNotRecreateRemovedEnvironment(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	id := "env_20260716t120000z0123456789abcdef"
+	if _, err := store.LockContext(context.Background(), id); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing environment lock error=%v", err)
+	}
+	if _, err := os.Stat(store.dir(id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("transition lock recreated removed environment: %v", err)
+	}
+}
+
+func TestSessionRuntimeChildrenAreIndependent(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	rec, err := store.Create(testSpecNamed("session-runtime", t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := "ses_20260716T120000Z_0123456789abcdef"
+	b := "ses_20260716T120001Z_fedcba9876543210"
+	dirA, err := store.PrepareSessionRuntime(rec.ID, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirB, err := store.PrepareSessionRuntime(rec.ID, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{dirA, dirB, store.RuntimeNetworkServiceDir(rec.ID), store.OwnerRoot(rec.ID)} {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("runtime directory %s: %v", dir, err)
+		}
+	}
+	marker := filepath.Join(dirB, "tmp", "sibling")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearSessionRuntime(rec.ID, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dirA); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session A remains: %v", err)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep" {
+		t.Fatalf("sibling changed: %q err=%v", data, err)
+	}
+	if _, err := store.PrepareSessionRuntime(rec.ID, "../../escape"); err == nil {
+		t.Fatal("unsafe session id accepted")
+	}
+}
+
+func TestClearRuntimeServicesPreservesSessionChildren(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	rec, err := store.Create(testSpecNamed("service-runtime", t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "ses_20260716T120000Z_0123456789abcdef"
+	sessionDir, err := store.PrepareSessionRuntime(rec.ID, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceMarker := filepath.Join(store.RuntimeNetworkServiceDir(rec.ID), "state.json")
+	if err := os.WriteFile(serviceMarker, []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionMarker := filepath.Join(sessionDir, "tmp", "keep")
+	if err := os.WriteFile(sessionMarker, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearRuntimeServices(rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(serviceMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale service marker remains: %v", err)
+	}
+	if data, err := os.ReadFile(sessionMarker); err != nil || string(data) != "keep\n" {
+		t.Fatalf("session child changed: %q err=%v", data, err)
 	}
 }
 

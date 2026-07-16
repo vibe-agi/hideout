@@ -28,6 +28,9 @@ type RunSpec struct {
 	IdentityMode              string
 	IdentityRoot              string
 	SessionDir                string
+	RuntimeRoot               string
+	SessionIsolationRequired  bool
+	TargetUser                string
 	Broker                    broker.Endpoint
 	NetworkBootstrapPath      string
 	NetworkBootstrapGuestPath string
@@ -70,6 +73,9 @@ type Session struct {
 	IdentityMode              string
 	IdentityRoot              string
 	SessionDir                string
+	RuntimeRoot               string
+	SessionIsolationRequired  bool
+	TargetUser                string
 	ConfigPath                string
 	BootstrapPath             string
 	ToolManifestPath          string
@@ -92,8 +98,11 @@ type Session struct {
 	RuntimeInstanceExpected   *RuntimeInstanceExpectation
 	RuntimeResultSink         func(RuntimeObservationReport) error
 	RuntimeCompletionSink     func(error) error
+	ActivationOwnerID         string
+	ExpectedBootID            string
 	RunAttempted              bool
 	RuntimeReady              bool
+	IsolationCleanupProved    bool
 }
 
 type PortBridgeEndpoint struct {
@@ -117,6 +126,25 @@ type Backend interface {
 	Prepare(ctx context.Context, spec RunSpec) (*Session, error)
 	Run(ctx context.Context, session *Session, command []string, env []string) error
 	Cleanup(ctx context.Context, session *Session) error
+}
+
+// Activator separates bounded environment startup/verification from target
+// lifetime. Manager invokes it under the environment transition lock when a
+// backend supports reusable concurrent sessions.
+type Activator interface {
+	Activate(ctx context.Context, session *Session, env []string) error
+}
+
+// WarmActivator authenticates attachment to an already-running environment.
+// Manager may use it only while another owner lock is proved live.
+type WarmActivator interface {
+	WarmActivate(ctx context.Context, session *Session, env []string) error
+}
+
+type EnvironmentNetworkServiceController interface {
+	StartEnvironmentNetwork(ctx context.Context, session *Session, workdir, bootstrapPath string, env []string) error
+	VerifyEnvironmentNetwork(ctx context.Context, session *Session, workdir string, env []string) error
+	StopEnvironmentNetwork(ctx context.Context, session *Session, workdir, cleanupPath string, env []string) error
 }
 
 type CommandNotFoundError struct {

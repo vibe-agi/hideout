@@ -204,6 +204,20 @@
       "classification": "intentionally-not-executed",
       "command": ["support", "readiness", "--mode", "release-candidate", "--runtime-family", "developer-standard", "--gate2-evidence", "<gate2.json>", "--gate3-evidence", "<gate3.json>", "--product-evidence", "<runtime-product.json>"],
       "reason": "requires retained exact-image Gate 2, Gate 3, clean candidate, and typed 031 product evidence"
+    },
+    {
+      "id": "concurrent-same-workspace-run",
+      "availability": "current",
+      "classification": "real-gate",
+      "command": ["run", "--profile", "default", "--backend", "lima", "--", "git", "status", "--short"],
+      "reason": "may overlap another run only when both resolve to the same pinned profile, workspace, environment, and static mount; real isolation requires the 034 Lima gate"
+    },
+    {
+      "id": "concurrent-explicit-stop",
+      "availability": "current",
+      "classification": "intentionally-not-executed",
+      "command": ["stop", "<environment-name>"],
+      "reason": "must be refused while any owner is live and is safe to execute only after the operator identifies the intended idle environment"
     }
   ]
 }

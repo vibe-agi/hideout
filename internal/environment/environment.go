@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -534,12 +535,46 @@ func (s Store) Remove(id string) error {
 }
 
 func (s Store) Lock(id string) (*Lock, error) {
+	return s.tryLock(id)
+}
+
+// LockContext waits only for an environment lifecycle transition. It is not a
+// target-lifetime lock and always observes caller cancellation.
+func (s Store) LockContext(ctx context.Context, id string) (*Lock, error) {
+	if ctx == nil {
+		return nil, errors.New("environment transition context is required")
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		lock, err := s.tryLock(id)
+		if err == nil {
+			return lock, nil
+		}
+		if !errors.Is(err, ErrTransitionBusy) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("environment %s transition: %w", id, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+var ErrTransitionBusy = errors.New("environment transition is busy")
+
+func (s Store) tryLock(id string) (*Lock, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("invalid environment id %q", id)
 	}
 	dir := s.dir(id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	info, err := os.Lstat(dir)
+	if err != nil {
 		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("environment transition path is not a real directory")
 	}
 	file, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -548,7 +583,7 @@ func (s Store) Lock(id string) (*Lock, error) {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, fmt.Errorf("environment %s is already in use", id)
+			return nil, fmt.Errorf("environment %s is already in use: %w", id, ErrTransitionBusy)
 		}
 		return nil, err
 	}
@@ -568,8 +603,131 @@ func (s Store) RuntimeDir(id string) string {
 	return filepath.Join(s.dir(id), "runtime")
 }
 
+func (s Store) RuntimeServicesDir(id string) string {
+	return filepath.Join(s.RuntimeDir(id), "services")
+}
+
+func (s Store) RuntimeNetworkServiceDir(id string) string {
+	return filepath.Join(s.RuntimeServicesDir(id), "network")
+}
+
+func (s Store) RuntimeSessionsDir(id string) string {
+	return filepath.Join(s.RuntimeDir(id), "sessions")
+}
+
+func (s Store) RuntimeSessionDir(id, sessionID string) string {
+	return filepath.Join(s.RuntimeSessionsDir(id), sessionID)
+}
+
+func (s Store) OwnerRoot(id string) string {
+	return filepath.Join(s.dir(id), "owners")
+}
+
 func (s Store) ShimDir(id string) string {
 	return filepath.Join(s.RuntimeDir(id), "shims")
+}
+
+func (s Store) SessionShimDir(id, sessionID string) string {
+	return filepath.Join(s.RuntimeSessionDir(id, sessionID), "shims")
+}
+
+func (s Store) PrepareRuntimeRoot(id string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("invalid environment id %q", id)
+	}
+	for _, path := range []string{
+		s.RuntimeNetworkServiceDir(id),
+		s.RuntimeSessionsDir(id),
+		s.OwnerRoot(id),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Store) PrepareSessionRuntime(id, sessionID string) (string, error) {
+	if !ValidID(id) {
+		return "", fmt.Errorf("invalid environment id %q", id)
+	}
+	if !validSessionID(sessionID) {
+		return "", fmt.Errorf("invalid session id %q", sessionID)
+	}
+	if err := s.PrepareRuntimeRoot(id); err != nil {
+		return "", err
+	}
+	dir := s.RuntimeSessionDir(id, sessionID)
+	if info, err := os.Lstat(dir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("session runtime path is not a real directory")
+		}
+		return "", fmt.Errorf("session runtime %s already exists", sessionID)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return "", err
+	}
+	for _, name := range []string{"bootstrap", "network", "shims", "tmp"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			_ = removeSessionRuntimeDir(dir)
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+func (s Store) ClearSessionRuntime(id, sessionID string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("invalid environment id %q", id)
+	}
+	if !validSessionID(sessionID) {
+		return fmt.Errorf("invalid session id %q", sessionID)
+	}
+	dir := s.RuntimeSessionDir(id, sessionID)
+	parent := s.RuntimeSessionsDir(id)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("runtime sessions root is not a real directory")
+	}
+	return removeSessionRuntimeDir(dir)
+}
+
+// ClearRuntimeServices invalidates environment-scoped runtime observations
+// after the guest stops. A subsequent attach must establish them again for
+// the new boot rather than trusting host files left by the prior instance.
+func (s Store) ClearRuntimeServices(id string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("invalid environment id %q", id)
+	}
+	root := s.RuntimeServicesDir(id)
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("runtime services root is not a real directory")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return os.Mkdir(filepath.Join(root, "network"), 0o700)
 }
 
 func (s Store) PrepareRuntime(id string) error {
@@ -682,6 +840,42 @@ func clearDir(dir string) error {
 		}
 	}
 	return nil
+}
+
+func removeSessionRuntimeDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("session runtime path is not a real directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return os.Remove(dir)
+}
+
+func validSessionID(id string) bool {
+	if strings.TrimSpace(id) != id || !strings.HasPrefix(id, "ses_") || len(id) <= len("ses_") || strings.ContainsAny(id, `/\`) {
+		return false
+	}
+	for _, r := range strings.TrimPrefix(id, "ses_") {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func sortTime(rec Record) time.Time {

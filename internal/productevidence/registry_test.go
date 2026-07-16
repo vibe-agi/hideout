@@ -216,3 +216,37 @@ func TestProofRegistryCovers030WithoutLettingNotRunSatisfyRelease(t *testing.T) 
 		t.Fatal("030 not-run evidence must never satisfy release readiness")
 	}
 }
+
+func TestProofRegistryCovers034WithExactRuntimeAndSupportingNotRun(t *testing.T) {
+	want := []string{
+		Proof034Gate0Mechanics,
+		Proof034RealIsolation,
+		Proof034RealPerformance,
+		Proof034RealGate2NotRun,
+		Proof034DocsClaimBoundary,
+	}
+	reqs := RequirementsForFeature(Feature034)
+	if len(reqs) != len(want) || len(Required034ProofIDs) != len(want) {
+		t.Fatalf("034 requirements=%d requiredIDs=%d want %d", len(reqs), len(Required034ProofIDs), len(want))
+	}
+	seen := map[string]ProofRequirement{}
+	for _, req := range reqs {
+		seen[req.ProofID] = req
+	}
+	for _, proofID := range want {
+		if _, ok := seen[proofID]; !ok {
+			t.Fatalf("034 proof %s is not registered", proofID)
+		}
+	}
+	for _, proofID := range []string{Proof034RealIsolation, Proof034RealPerformance} {
+		req := seen[proofID]
+		if req.Layer != LayerRealGate || req.RequiredFor != RequiredForReleaseCandidate ||
+			req.RuntimePolicy != RuntimePolicyExactReal || req.ArtifactPolicy == ArtifactPolicyNone || req.RequiredEvidenceClass == "" {
+			t.Fatalf("034 real proof %s has weak scope: %+v", proofID, req)
+		}
+	}
+	if seen[Proof034RealGate2NotRun].RequiredFor != RequiredForSupportingOnly ||
+		seen[Proof034RealGate2NotRun].RuntimePolicy != RuntimePolicyNone {
+		t.Fatalf("034 not-run proof could satisfy a real claim: %+v", seen[Proof034RealGate2NotRun])
+	}
+}

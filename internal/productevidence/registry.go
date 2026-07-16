@@ -47,6 +47,10 @@ const (
 
 	RuntimePolicyNone      = "none"
 	RuntimePolicyExactReal = "exact-real"
+
+	ArtifactValidatorNone                    = ""
+	ArtifactValidatorConcurrentIsolationV1   = "concurrent-sessions-isolation/v1"
+	ArtifactValidatorConcurrentPerformanceV1 = "concurrent-sessions-performance/v1"
 )
 
 var validRequirementLayers = []string{
@@ -80,6 +84,12 @@ var validArtifactPolicies = []string{
 
 var validRuntimePolicies = []string{RuntimePolicyNone, RuntimePolicyExactReal}
 
+var validArtifactValidators = []string{
+	ArtifactValidatorNone,
+	ArtifactValidatorConcurrentIsolationV1,
+	ArtifactValidatorConcurrentPerformanceV1,
+}
+
 type ProofRequirement struct {
 	FeatureID             string   `json:"featureId"`
 	ProofID               string   `json:"proofId"`
@@ -89,6 +99,7 @@ type ProofRequirement struct {
 	ClaimIDs              []string `json:"claimIds"`
 	ArtifactPolicy        string   `json:"artifactPolicy"`
 	RuntimePolicy         string   `json:"runtimePolicy"`
+	ArtifactValidator     string   `json:"artifactValidator,omitempty"`
 	RequiredMode          string   `json:"requiredMode,omitempty"`
 	RequiredEvidenceClass string   `json:"requiredEvidenceClass,omitempty"`
 }
@@ -172,6 +183,14 @@ func ProductHardeningRequirements() []ProofRequirement {
 		req(Feature033, Proof033DocsCandidateTruth, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-027", "033.FR-039", "033.SC-018"),
 		req(Feature033, Proof033PublicDownload, LayerReleaseCandidate, RequiredForPublicRelease, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-020", "033.SC-001", "033.SC-008"),
 		req(Feature033, Proof033DocsPublicTruth, LayerReleaseCandidate, RequiredForPublicRelease, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-027", "033.FR-039", "033.SC-011", "033.SC-018"),
+
+		req(Feature034, Proof034Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"034.FR-001", "034.FR-002", "034.FR-003", "034.FR-004", "034.FR-005", "034.FR-006", "034.FR-010", "034.FR-011", "034.FR-012", "034.FR-014", "034.FR-015", "034.FR-016", "034.FR-017", "034.SC-004", "034.SC-009", "034.SC-010"),
+		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealIsolation, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-real-gate2", ArtifactValidatorConcurrentIsolationV1,
+			"034.FR-007", "034.FR-008", "034.FR-009", "034.FR-013", "034.SC-001", "034.SC-002", "034.SC-003", "034.SC-005", "034.SC-006", "034.SC-007", "034.SC-008"),
+		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-performance-real-gate2", ArtifactValidatorConcurrentPerformanceV1, "034.SC-012"),
+		req(Feature034, Proof034RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "034.SC-001", "034.SC-012"),
+		req(Feature034, Proof034DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "034.FR-018", "034.SC-011"),
 	}
 	sortRequirements(rows)
 	return rows
@@ -203,6 +222,18 @@ func evidenceClassReq(featureID, proofID, layer, requiredFor, freshness, artifac
 func runtimeReq(featureID, proofID, layer, requiredFor, freshness, artifact string, claimIDs ...string) ProofRequirement {
 	r := req(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
 	r.RuntimePolicy = RuntimePolicyExactReal
+	return r
+}
+
+func runtimeEvidenceClassReq(featureID, proofID, layer, requiredFor, freshness, artifact, evidenceClass string, claimIDs ...string) ProofRequirement {
+	r := runtimeReq(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
+	r.RequiredEvidenceClass = evidenceClass
+	return r
+}
+
+func runtimeEvidenceClassValidatorReq(featureID, proofID, layer, requiredFor, freshness, artifact, evidenceClass, validator string, claimIDs ...string) ProofRequirement {
+	r := runtimeEvidenceClassReq(featureID, proofID, layer, requiredFor, freshness, artifact, evidenceClass, claimIDs...)
+	r.ArtifactValidator = validator
 	return r
 }
 
@@ -270,6 +301,12 @@ func (r ProofRequirement) Validate() error {
 	}
 	if !slices.Contains(validRuntimePolicies, r.RuntimePolicy) {
 		return fmt.Errorf("unsupported runtimePolicy %q", r.RuntimePolicy)
+	}
+	if !slices.Contains(validArtifactValidators, r.ArtifactValidator) {
+		return fmt.Errorf("unsupported artifactValidator %q", r.ArtifactValidator)
+	}
+	if r.ArtifactValidator != ArtifactValidatorNone && r.ArtifactPolicy == ArtifactPolicyNone {
+		return errors.New("artifactValidator requires an artifact policy")
 	}
 	if r.RequiredMode != "" && !slices.Contains(validModes, r.RequiredMode) {
 		return fmt.Errorf("unsupported requiredMode %q", r.RequiredMode)

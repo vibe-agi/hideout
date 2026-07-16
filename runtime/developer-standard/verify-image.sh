@@ -30,6 +30,7 @@ image_bytes="$(wc -c < "$image" | tr -d ' ')"
 [ "$image_bytes" -le 4294967296 ] || runtime_die "candidate compressed size exceeds 4 GiB"
 
 required_paths=(
+  /usr/bin/bash
   /bin/sh
   /usr/bin/cc
   /usr/bin/curl
@@ -41,18 +42,21 @@ required_paths=(
   /usr/sbin/iptables
   /usr/bin/jq
   /usr/bin/make
+  /usr/bin/mount
   /usr/bin/pip3
   /usr/bin/python3
+  /usr/bin/setpriv
   /usr/bin/sha256sum
   /usr/bin/tar
+  /usr/bin/unshare
   /usr/bin/unzip
   /usr/local/bin/go
   /usr/local/bin/node
   /usr/local/bin/npm
 )
 required_components=(
-  dash gcc curl findutils libc-bin git gcc grep iptables jq make python3-pip
-  python3 coreutils tar unzip go node npm
+  bash dash gcc curl findutils libc-bin git gcc grep iptables jq make util-linux python3-pip
+  python3 util-linux coreutils tar util-linux unzip go node npm
 )
 [ "${#required_paths[@]}" -eq "${#required_components[@]}" ] || runtime_die "internal required-tool contract is inconsistent"
 

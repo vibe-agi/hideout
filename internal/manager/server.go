@@ -825,7 +825,7 @@ const renderers = {
     const envHTML = environments.length ? panelLimitNotice("environments", visibleEnvironments.length, environments.length) + '<div class="items">' + visibleEnvironments.map(function(e) {
       const tone = e.status === "running" ? "warn" : e.status === "stopped" ? "info" : "ok";
       const title = e.name ? (e.name + (e.autoNamed ? " (auto)" : "")) : e.id;
-      return item(title, e.status || "environment", [["image", e.imageRef], ["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["id", e.id], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
+      return item(title, e.status || "environment", [["image", e.imageRef], ["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["activeSessions", e.activeSessions || 0], ["ownerHealth", e.ownerHealth], ["id", e.id], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
     }).join("") + "</div>" : empty("No reusable environments");
     return '<form id="environmentForm" class="item">' +
       '<div class="form-grid">' +
@@ -842,7 +842,7 @@ const renderers = {
     if (!sessions.length) return empty("No sessions");
     const visibleSessions = visibleSessionsForPanel(sessions);
     return panelLimitNotice("sessions", visibleSessions.length, sessions.length) + '<div class="items">' + visibleSessions.map(function(s) {
-      return item(s.id, s.profile || "session", [["backend", s.backend], ["networkMode", s.networkMode], ["guestPrivilege", guestPrivilegeLabel(s.guestPrivilege)], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.hasProxySecretFile ? "warn" : "ok");
+      return item(s.id, s.profile || "session", [["backend", s.backend], ["environmentId", s.environmentId], ["state", s.state], ["ownerStatus", s.ownerStatus], ["terminalMode", s.terminalMode], ["commandClass", s.commandClass], ["networkMode", s.networkMode], ["guestPrivilege", guestPrivilegeLabel(s.guestPrivilege)], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.ownerStatus === "unprovable" || s.cleanupError ? "error" : s.ownerStatus === "live" ? "warn" : s.hasProxySecretFile ? "warn" : "ok");
     }).join("") + "</div>";
   },
   capabilities: function() {

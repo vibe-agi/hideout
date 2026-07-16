@@ -38,6 +38,11 @@ const (
 	CodeRuntimeDNSFailed            = "runtime.dns.failed"
 	CodeRuntimeRegistryFailed       = "runtime.registry.failed"
 	CodeRuntimePrefixUnwritable     = "runtime.prefix.unwritable"
+	CodeSessionOwnerUnprovable      = "session.owner.unprovable"
+	CodeSessionIsolationUnsupported = "session.isolation.unsupported"
+	CodeSessionServiceConflict      = "session.service.conflict"
+	CodeSessionCleanupFailed        = "session.cleanup.failed"
+	CodeEnvironmentActiveSessions   = "environment.active-sessions"
 
 	// Community host-app recipe lifecycle (032).
 	CodeHostAppSourceInvalid            = "host-app.source.invalid"
@@ -149,6 +154,7 @@ func containsControlPlaneMaterial(value string) bool {
 }
 
 var registry = []Code{
+	{Code: CodeEnvironmentActiveSessions, Subsystem: "environment", Severity: "warning", Reason: "the environment still has active run-session owners", Hint: "exit the active sessions and retry the explicit stop", NextActions: []string{"hideout env list"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
 	{Code: CodeDecisionClaimExpired, Subsystem: "decision", Severity: "warning", Reason: "decision claim expired or is no longer usable", Hint: "claim the decision again before applying it", NextActions: []string{"hideout decision claim <id>"}, DocsRefs: []string{"docs/first-run-alpha.md"}},
 	{Code: CodeHostFSReservedRootDenied, Subsystem: "hostfs", Severity: "error", Reason: "HostFS request targets a reserved Hideout or credential root", Hint: "choose a workspace path outside reserved roots", NextActions: []string{"hideout doctor --feature hostfs"}, DocsRefs: []string{"docs/hostfs-overlay-design.md"}},
 	{Code: CodeHostAppSourceInvalid, Subsystem: "host-app", Severity: "error", Reason: "the host-app recipe source is malformed, unavailable, or not exactly locked", Hint: "validate a bounded local snapshot or a git source pinned to an exact commit", NextActions: []string{"hideout app validate <source>"}, DocsRefs: []string{"docs/host-app-recipes.md"}},
@@ -189,6 +195,10 @@ var registry = []Code{
 	{Code: CodeRuntimePrefixUnwritable, Subsystem: "runtime", Severity: "error", Reason: "the documented target-user install prefix is not writable", Hint: "restore target ownership of the durable user prefix and retry without sudo", NextActions: []string{"hideout runtime verify --env <name>"}, DocsRefs: []string{"docs/first-run-alpha.md"}},
 	{Code: CodeRuntimeRegistryFailed, Subsystem: "runtime", Severity: "error", Reason: "the public package registry rejected or failed the pinned agent package request", Hint: "inspect the registry response and retry the exact pinned package; do not substitute an unreviewed package", NextActions: []string{"hideout runtime verify --env <name>"}, DocsRefs: []string{"docs/first-run-alpha.md"}},
 	{Code: CodeRuntimeSelectionUnsupported, Subsystem: "runtime", Severity: "error", Reason: "the requested runtime family, revision, host, or architecture is unsupported", Hint: "list the package-owned runtime catalog and choose an explicitly supported tuple", NextActions: []string{"hideout runtime list"}, DocsRefs: []string{"docs/first-run-alpha.md", "docs/support-matrix.md"}},
+	{Code: CodeSessionCleanupFailed, Subsystem: "session", Severity: "error", Reason: "a run session could not prove complete cleanup of its own authority", Hint: "inspect session status and run doctor before stopping or reusing the environment", NextActions: []string{"hideout doctor --level deep"}, DocsRefs: []string{"docs/privacy-run-design.md", "docs/threat-model.md"}},
+	{Code: CodeSessionIsolationUnsupported, Subsystem: "session", Severity: "error", Reason: "the guest lacks a required concurrent-session isolation primitive", Hint: "recreate the environment from a supported runtime and retry; Hideout will not use the globally visible fallback", NextActions: []string{"hideout runtime verify --env <name>", "hideout env recreate <name>"}, DocsRefs: []string{"docs/support-matrix.md", "docs/threat-model.md"}},
+	{Code: CodeSessionOwnerUnprovable, Subsystem: "session", Severity: "error", Reason: "run-session ownership could not be proven from its operating-system lease", Hint: "inspect deep doctor output and reconcile stale state before lifecycle mutation", NextActions: []string{"hideout doctor --level deep"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
+	{Code: CodeSessionServiceConflict, Subsystem: "session", Severity: "error", Reason: "the requested environment service configuration differs from the active service", Hint: "finish active sessions or use an environment with matching profile and network configuration", NextActions: []string{"hideout env list", "hideout doctor --feature dns"}, DocsRefs: []string{"docs/privacy-run-design.md", "docs/threat-model.md"}},
 	{Code: CodeProjectionCommandUnbound, Subsystem: "projection", Severity: "error", Reason: "the projected command name is not bound to a host capability", Hint: "run the command inside the guest only if a projection binding exists", NextActions: []string{"hideout doctor --feature projection"}, DocsRefs: []string{"docs/host-capability-projection.md"}},
 	{Code: CodeProjectionProviderUnavailable, Subsystem: "projection", Severity: "error", Reason: "the host capability provider is unavailable and the request fails closed", Hint: "the projected command does not fall back to host execution; retry after the provider is available", NextActions: []string{"hideout doctor --feature projection"}, DocsRefs: []string{"docs/host-capability-projection.md"}},
 	{Code: CodeProjectionPathNoHostMapping, Subsystem: "projection", Severity: "warning", Reason: "the requested path does not map into the mounted workspace", Hint: "project only workspace-mapped paths; guest-only or out-of-workspace paths are refused", NextActions: []string{"hideout doctor --feature projection"}, DocsRefs: []string{"docs/host-capability-projection.md"}},

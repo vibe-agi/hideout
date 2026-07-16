@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/environment-service-state.schema.json",
+  "title": "Hideout environment service state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "environmentId", "kind", "status", "configurationFingerprint", "mode", "startedAt"],
+  "properties": {
+    "schema": {"const": "hideout.environment-service/v1"},
+    "environmentId": {"type": "string", "pattern": "^env_[A-Za-z0-9_]+$"},
+    "kind": {"const": "network"},
+    "status": {"enum": ["starting", "ready", "cleaning", "failed"]},
+    "configurationFingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "mode": {"enum": ["direct", "tun2socks"]},
+    "bootId": {"type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "updatedAt": {"type": "string", "format": "date-time"},
+    "lastError": {"type": "string", "maxLength": 512}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["ready", "cleaning"]}}},
+      "then": {"required": ["bootId"]}
+    }
+  ]
+}

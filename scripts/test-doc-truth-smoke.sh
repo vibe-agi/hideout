@@ -146,7 +146,8 @@ done < <(jq -r '
     or .featureId == "024-doctor-package-recovery-e2e"
     or .featureId == "029-hostfs-discoverable-namespace"
     or .featureId == "031-supported-cli-runtime"
-    or .featureId == "032-community-host-app-recipes")
+    or .featureId == "032-community-host-app-recipes"
+    or .featureId == "034-concurrent-run-sessions")
   | .proofId
 ' "$registry_json")
 
@@ -180,7 +181,7 @@ scan_files() {
   {
     printf '%s\n' README.md README.zh-CN.md
     find docs -maxdepth 1 -type f -name '*.md' | sort
-    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes \
+    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions \
       -type f -name '*.md' | sort
   } | grep -v '^\.' | sort -u
 }
@@ -258,6 +259,18 @@ host_app_pack_overclaim_category() {
   printf ''
 }
 
+concurrent_sessions_overclaim_category() {
+  local lower="$1"
+  case "$lower" in
+    *cross-workspace*"shared vm"*supported*|*cross-workspace*"shared environment"*supported*) printf 'concurrent-cross-workspace'; return ;;
+    *last*session*"auto-stop"*supported*|*last*session*automatically*stops*) printf 'concurrent-auto-stop'; return ;;
+    *dynamic*resize*fully*supported*|*sigwinch*fully*supported*) printf 'concurrent-dynamic-resize'; return ;;
+    *guest-root*session*containment*provided*|*guest-root*session*containment*supported*|*guest\ root*cannot*inspect*sibling*) printf 'concurrent-guest-root-containment'; return ;;
+    *native*proves*session*isolation*|*local*smoke*proves*session*isolation*) printf 'concurrent-false-real-gate'; return ;;
+  esac
+  printf ''
+}
+
 scan_overclaims() {
   : >"$out/reports/overclaim-findings.tsv"
   while IFS= read -r file; do
@@ -308,6 +321,10 @@ scan_overclaims() {
       host_app_category="$(host_app_pack_overclaim_category "$lower")"
       if [ -n "$host_app_category" ]; then
         case "$lower" in *not*|*never*|*must\ not*|*does\ not*|*cannot*|*reject*|*forbid*|*insufficient*|*claim\ pending*|*given*docs*claim*) ;; *) record_overclaim "$host_app_category" "$file" "$line_no" "$line" ;; esac
+      fi
+      concurrent_category="$(concurrent_sessions_overclaim_category "$lower")"
+      if [ -n "$concurrent_category" ]; then
+        case "$lower" in *not*|*never*|*must\ not*|*does\ not*|*cannot*|*reject*|*non-claim*|*given*docs*claim*) ;; *) record_overclaim "$concurrent_category" "$file" "$line_no" "$line" ;; esac
       fi
       if [ "$hostfs_negative_context" -gt 0 ]; then
         hostfs_negative_context=$((hostfs_negative_context - 1))
@@ -376,6 +393,31 @@ validate_hostfs_visibility_overclaim_fixtures() {
     jq -n --arg text "$line" --arg category "$category" '{text: $text, category: $category, rejected: true}' >>"$out/reports/hostfs-visibility-overclaim-fixtures.jsonl"
   done
   jq -s '{fixtures: ., status: "passed"}' "$out/reports/hostfs-visibility-overclaim-fixtures.jsonl" >"$out/reports/hostfs-visibility-overclaim-fixtures.json"
+}
+
+validate_concurrent_sessions_overclaim_fixtures() {
+  local fixtures=(
+    "Cross-workspace shared VM is supported"
+    "The last session automatically stops the VM"
+    "Dynamic resize is fully supported"
+    "Guest-root session containment is provided"
+    "Native proves session isolation"
+  )
+  local line category
+  : >"$out/reports/concurrent-sessions-overclaim-fixtures.jsonl"
+  for line in "${fixtures[@]}"; do
+    category="$(concurrent_sessions_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')")"
+    if [ -z "$category" ]; then
+      echo "doc-truth-smoke: 034 overclaim fixture was not rejected: $line" >&2
+      exit 1
+    fi
+    jq -n --arg text "$line" --arg category "$category" \
+      '{text: $text, category: $category, rejected: true}' \
+      >>"$out/reports/concurrent-sessions-overclaim-fixtures.jsonl"
+  done
+  jq -s '{fixtures: ., status: "passed"}' \
+    "$out/reports/concurrent-sessions-overclaim-fixtures.jsonl" \
+    >"$out/reports/concurrent-sessions-overclaim-fixtures.json"
 }
 
 validate_hostfs_selector_docs() {
@@ -477,6 +519,7 @@ validate_cross_docs() {
   grep -q 'a570514909514cd79d39493d58ec69e923bca39aa5f4ec31305181b68b536f83' docs/claim-boundaries.md
   grep -q 'Community Host-App Recipes' docs/README.md
   grep -q '032.host-app-pack.real-gate2.external' docs/claim-boundaries.md
+  grep -q '034.concurrent-sessions.docs.claim-boundary' docs/claim-boundaries.md
   grep -q 'Docs truth gate' docs/STATUS.md || true
 
   for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
@@ -519,7 +562,8 @@ validate_cross_docs() {
     scripts/test-hostfs-decision-e2e.sh \
     scripts/test-hostfs-visibility-e2e.sh \
     scripts/test-doctor-package-recovery-e2e.sh \
-    scripts/test-host-app-pack-smoke.sh
+    scripts/test-host-app-pack-smoke.sh \
+    scripts/test-concurrent-sessions-smoke.sh
   do
     grep -q "$script" docs/privacy-run-test-plan.md
     grep -q "$script" scripts/test-gate0.sh
@@ -638,7 +682,8 @@ write_manifest() {
   jq -s '.' \
     <(artifact_obj "docs-report" "reports/overclaim-scan.json" "known overclaim scan report") \
     <(artifact_obj "docs-report" "reports/hostfs-visibility-overclaim-fixtures.json" "029 known-overclaim rejection fixtures") \
-    <(artifact_obj "docs-report" "reports/host-app-pack-overclaim-fixtures.json" "032 known-overclaim rejection fixtures") >"$overclaim_artifacts"
+    <(artifact_obj "docs-report" "reports/host-app-pack-overclaim-fixtures.json" "032 known-overclaim rejection fixtures") \
+    <(artifact_obj "docs-report" "reports/concurrent-sessions-overclaim-fixtures.json" "034 known-overclaim rejection fixtures") >"$overclaim_artifacts"
   jq -s '.' \
     <(artifact_obj "docs-report" "reports/command-checks.json" "curated command checks") \
     <(artifact_obj "docs-report" "reports/command-examples.json" "curated command fixture") >"$command_artifacts"
@@ -721,6 +766,21 @@ write_manifest() {
           prerequisites: [{name: "claim-boundaries", status: "available"}, {name: "overclaim-fixtures", status: "available"}],
           artifacts: ($claimArtifacts[0] + $overclaimArtifacts[0]),
           redactionStatus: "passed"
+        },
+        {
+          proofId: "034.concurrent-sessions.docs.claim-boundary",
+          featureId: "034-concurrent-run-sessions",
+          mode: "docs",
+          evidenceClass: "documentation-truth-gate",
+          status: "passed",
+          commandSummary: "validate scoped concurrent-session claims and reject known 034 overclaims",
+          coveredClaims: [
+            {claimId: "034.FR-018", source: "spec", description: "Concurrent-session documentation preserves real-gate and non-claim boundaries", scope: "docs"},
+            {claimId: "034.SC-011", source: "spec", description: "Known concurrent-session overclaims are rejected", scope: "docs"}
+          ],
+          prerequisites: [{name: "claim-boundaries", status: "available"}, {name: "overclaim-fixtures", status: "available"}],
+          artifacts: ($claimArtifacts[0] + $overclaimArtifacts[0]),
+          redactionStatus: "passed"
         }
       ]
     }' >"$manifest"
@@ -735,10 +795,11 @@ validate_manifest() {
       "025.docs.command-examples",
       "025.docs.cross-doc-consistency",
       "025.docs.overclaim-scan",
-      "029.hostfs-visibility.docs.claim-boundary"
+      "029.hostfs-visibility.docs.claim-boundary",
+      "034.concurrent-sessions.docs.claim-boundary"
     ] | sort) and
     all(.proofs[];
-      (.featureId == "025-documentation-truth-gate" or .featureId == "029-hostfs-discoverable-namespace") and
+      (.featureId == "025-documentation-truth-gate" or .featureId == "029-hostfs-discoverable-namespace" or .featureId == "034-concurrent-run-sessions") and
       .status == "passed" and .redactionStatus == "passed"
     )
   ' "$manifest" >"$out/logs/evidence-content.out"
@@ -749,6 +810,7 @@ validate_claim_boundaries
 scan_overclaims
 validate_hostfs_visibility_overclaim_fixtures
 validate_host_app_pack_overclaim_fixtures
+validate_concurrent_sessions_overclaim_fixtures
 validate_hostfs_selector_docs
 validate_command_examples
 validate_cross_docs

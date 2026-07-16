@@ -17,7 +17,9 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/recovery"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
+	"github.com/vibe-agi/hideout/internal/session"
 )
 
 const (
@@ -76,6 +78,48 @@ type EnvironmentOperator interface {
 
 type EnvironmentApplyOptions struct {
 	Operator EnvironmentOperator
+}
+
+// EnvironmentOwnerError is returned when an explicit lifecycle action cannot
+// prove that it is safe to stop or remove an environment. It intentionally
+// carries no owner path, PID, lock name, or other control-plane material.
+type EnvironmentOwnerError struct {
+	Code          string
+	EnvironmentID string
+	ActiveOwners  int
+	Err           error
+}
+
+func (e *EnvironmentOwnerError) Error() string {
+	if e == nil {
+		return "environment ownership check failed"
+	}
+	message := fmt.Sprintf("environment %s ownership check failed", e.EnvironmentID)
+	if e.ActiveOwners > 0 {
+		message = fmt.Sprintf("environment %s has %d active session(s)", e.EnvironmentID, e.ActiveOwners)
+	}
+	if e.Code != "" {
+		message = "code=" + e.Code + ": " + message
+	}
+	if e.Err != nil {
+		message += ": " + e.Err.Error()
+	}
+	return message
+}
+
+func (e *EnvironmentOwnerError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func EnvironmentRecoveryCode(err error) string {
+	var ownerErr *EnvironmentOwnerError
+	if errors.As(err, &ownerErr) {
+		return ownerErr.Code
+	}
+	return ""
 }
 
 func (c Core) PlanEnvironmentStop(opts EnvironmentActionOptions) (EnvironmentActionPlan, error) {
@@ -305,13 +349,16 @@ func environmentActionTargetFromRecord(rec environment.Record, reason string) En
 }
 
 func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, operator EnvironmentOperator, id string) (EnvironmentActionTarget, EnvironmentActionTarget, error) {
-	lock, err := store.Lock(id)
+	lock, err := store.LockContext(ctx, id)
 	if err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
 	defer lock.Unlock()
 	rec, err := store.Load(id)
 	if err != nil {
+		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
+	}
+	if err := requireNoEnvironmentOwners(store, rec.ID); err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
 	switch {
@@ -329,17 +376,23 @@ func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, op
 	if err := store.Save(rec); err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
+	if err := invalidateStoppedEnvironmentRuntime(store, rec); err != nil {
+		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
+	}
 	return environmentActionTargetFromRecord(rec, ""), EnvironmentActionTarget{}, nil
 }
 
 func applyEnvironmentCleanTarget(ctx context.Context, store environment.Store, operator EnvironmentOperator, id string) (EnvironmentActionTarget, error) {
-	lock, err := store.Lock(id)
+	lock, err := store.LockContext(ctx, id)
 	if err != nil {
 		return EnvironmentActionTarget{}, err
 	}
 	defer lock.Unlock()
 	rec, err := store.Load(id)
 	if err != nil {
+		return EnvironmentActionTarget{}, err
+	}
+	if err := requireNoEnvironmentOwners(store, rec.ID); err != nil {
 		return EnvironmentActionTarget{}, err
 	}
 	target := environmentActionTargetFromRecord(rec, "")
@@ -352,6 +405,41 @@ func applyEnvironmentCleanTarget(ctx context.Context, store environment.Store, o
 		return EnvironmentActionTarget{}, err
 	}
 	return target, nil
+}
+
+func requireNoEnvironmentOwners(store environment.Store, environmentID string) error {
+	_, err := session.ReconcileStaleOwnersWithCleanup(store.OwnerRoot(environmentID), func(item session.OwnerObservation) error {
+		return store.ClearSessionRuntime(environmentID, item.SessionID)
+	})
+	if err != nil {
+		code := recovery.CodeSessionCleanupFailed
+		if errors.Is(err, session.ErrOwnerUnprovable) {
+			code = recovery.CodeSessionOwnerUnprovable
+		}
+		return &EnvironmentOwnerError{Code: code, EnvironmentID: environmentID, Err: err}
+	}
+	owners, err := session.ListOwners(store.OwnerRoot(environmentID))
+	if err != nil {
+		return &EnvironmentOwnerError{Code: recovery.CodeSessionOwnerUnprovable, EnvironmentID: environmentID, Err: err}
+	}
+	live := 0
+	for _, owner := range owners {
+		switch owner.Status {
+		case session.OwnerLive:
+			live++
+		case session.OwnerUnprovable:
+			return &EnvironmentOwnerError{
+				Code: recovery.CodeSessionOwnerUnprovable, EnvironmentID: environmentID,
+				Err: fmt.Errorf("session %s: %w", owner.SessionID, session.ErrOwnerUnprovable),
+			}
+		}
+	}
+	if live > 0 {
+		return &EnvironmentOwnerError{
+			Code: recovery.CodeEnvironmentActiveSessions, EnvironmentID: environmentID, ActiveOwners: live,
+		}
+	}
+	return nil
 }
 
 func environmentOperatorOrDefault(operator EnvironmentOperator) EnvironmentOperator {
@@ -676,15 +764,32 @@ func (c Core) RemoveEnvironment(ctx context.Context, name string, force bool, op
 	if err != nil {
 		return environment.Record{}, err
 	}
-	rec, err := store.LoadByName(name)
+	selected, err := store.LoadByName(name)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	lock, err := store.LockContext(ctx, selected.ID)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	defer lock.Unlock()
+	rec, err := store.Load(selected.ID)
 	if err != nil {
 		return environment.Record{}, err
 	}
 	operator := environmentOperatorOrDefault(opts.Operator)
-	if rec, err = stopIfRunning(ctx, store, operator, rec, force, "remove"); err != nil {
+	if err := requireNoEnvironmentOwners(store, rec.ID); err != nil {
 		return environment.Record{}, err
 	}
-	if _, err := applyEnvironmentCleanTarget(ctx, store, operator, rec.ID); err != nil {
+	if rec, err = stopIfRunningLocked(ctx, store, operator, rec, force, "remove"); err != nil {
+		return environment.Record{}, err
+	}
+	if rec.Backend == "lima" && strings.TrimSpace(rec.InstanceName) != "" {
+		if err := operator.Cleanup(ctx, &backend.Session{InstanceName: rec.InstanceName}); err != nil {
+			return environment.Record{}, err
+		}
+	}
+	if err := store.Remove(rec.ID); err != nil {
 		return environment.Record{}, err
 	}
 	c.emitEnvironmentAudit("env.remove", "allow", map[string]any{
@@ -707,12 +812,24 @@ func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, 
 	if err != nil {
 		return environment.Record{}, err
 	}
-	rec, err := store.LoadByName(name)
+	selected, err := store.LoadByName(name)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	lock, err := store.LockContext(ctx, selected.ID)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	defer lock.Unlock()
+	rec, err := store.Load(selected.ID)
 	if err != nil {
 		return environment.Record{}, err
 	}
 	operator := environmentOperatorOrDefault(opts.Operator)
-	if rec, err = stopIfRunning(ctx, store, operator, rec, force, "recreate"); err != nil {
+	if err := requireNoEnvironmentOwners(store, rec.ID); err != nil {
+		return environment.Record{}, err
+	}
+	if rec, err = stopIfRunningLocked(ctx, store, operator, rec, force, "recreate"); err != nil {
 		return environment.Record{}, err
 	}
 	if rec.Backend == "lima" && strings.TrimSpace(rec.InstanceName) != "" {
@@ -749,10 +866,11 @@ func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, 
 	return rec, nil
 }
 
-// stopIfRunning enforces the destructive-command guard: refuse a running
+// stopIfRunningLocked enforces the destructive-command guard while the caller
+// owns the environment transition lock: refuse a running
 // guest with a copyable stop hint, or stop it first under the explicit force
 // flag.
-func stopIfRunning(ctx context.Context, store environment.Store, operator EnvironmentOperator, rec environment.Record, force bool, verb string) (environment.Record, error) {
+func stopIfRunningLocked(ctx context.Context, store environment.Store, operator EnvironmentOperator, rec environment.Record, force bool, verb string) (environment.Record, error) {
 	if rec.Status != "running" {
 		return rec, nil
 	}
@@ -768,7 +886,17 @@ func stopIfRunning(ctx context.Context, store environment.Store, operator Enviro
 	if err := store.Save(rec); err != nil {
 		return rec, err
 	}
+	if err := invalidateStoppedEnvironmentRuntime(store, rec); err != nil {
+		return rec, err
+	}
 	return rec, nil
+}
+
+func invalidateStoppedEnvironmentRuntime(store environment.Store, rec environment.Record) error {
+	return errors.Join(
+		store.ClearRuntimeServices(rec.ID),
+		backend.RemoveActivationReceipt(store.RuntimeDir(rec.ID)),
+	)
 }
 
 // emitEnvironmentAudit appends an environment lifecycle event to the

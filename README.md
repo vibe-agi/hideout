@@ -56,6 +56,18 @@ hideout run -- sh -lc 'uname -s; id -u'
 hideout run -- git status --short
 ```
 
+Keep a shell open in one terminal and run an agent or another command from the
+same project in a second terminal. Both runs reuse the same warm VM and mounted
+workspace, while each receives separate session authority:
+
+```bash
+# Terminal 1
+hideout run -- bash
+
+# Terminal 2, in the same project
+hideout run -- git status --short
+```
+
 The complete 15-minute path includes installing a tested agent CLI, opening the
 workspace in a host editor, privacy networking, and recovery:
 [First-Run Alpha Path](docs/first-run-alpha.md).
@@ -113,6 +125,11 @@ the machine-readable release manifest, and bounded verification evidence.
   separate proxy and DNS prerequisites.
 - Hideout does not claim protection after a target obtains guest root.
 - `--backend native` is a development harness, not an isolation boundary.
+- Concurrent reuse currently applies only to the same pinned workspace. It
+  does not share one default VM across unrelated project directories.
+- The last session does not automatically stop the VM; use `hideout stop`.
+- Initial terminal dimensions are preserved, but complete dynamic resize is
+  not yet a product claim.
 
 See the exact supported and unsupported combinations in the
 [Support Matrix](docs/support-matrix.md) and security wording in

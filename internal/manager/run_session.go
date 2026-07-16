@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/envpolicy"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
@@ -51,10 +52,11 @@ func (c Core) BeginRunSession(plan RunPlan, runEnv RunEnvironment, opts RunSessi
 		AuditPath:         "off",
 	}
 	if runEnv.Active {
-		out.RuntimeSessionDir = runEnv.RuntimeDir
-		out.RuntimeShimDir = runEnv.ShimDir
+		store := environment.Store{Root: c.Store.Root}
+		out.RuntimeSessionDir = store.RuntimeSessionDir(runEnv.Record.ID, layout.ID)
+		out.RuntimeShimDir = store.SessionShimDir(runEnv.Record.ID, layout.ID)
 		if !opts.ExplainOnly {
-			if err := c.PrepareRunEnvironment(runEnv); err != nil {
+			if _, err := store.PrepareSessionRuntime(runEnv.Record.ID, layout.ID); err != nil {
 				_, cleanupErr := session.CleanupEphemeral(c.Store.Root, layout.ID, false)
 				return RunSession{}, errors.Join(err, cleanupErr)
 			}

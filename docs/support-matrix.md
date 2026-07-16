@@ -61,6 +61,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `feature/host-capability-projection` | gate-required | Gate 2 Lima |
 | `feature/supported-cli-runtime` | gate-required | Gate 2 and Gate 3 |
 | `feature/community-host-app-recipes` | gate-required | External-pack Gate 2 |
+| `feature/concurrent-run-sessions` | gate-required | 034 real Lima Gate 2 |
 | `release/public-alpha-package` | gate-required | Gate 0, Gate 2, Gate 3, anonymous receipt |
 | `release/developer-id-notarization` | gate-required | Developer ID and accepted notarization |
 | `gate/release-candidate` | gate-required | Gate 2 and Gate 3 real evidence |
@@ -87,6 +88,9 @@ platform, backend, maturity, or automatic-update claims below.
 - `runtime-freshness`: The retained runtime has no automatic refresh or patch-response SLA.
 - `privacy-prerequisites`: Privacy networking depends on an operator-provided proxy, mediated resolver, and real Gate 3 evidence.
 - `ui-maturity`: The local TUI and WebUI are supervised alpha surfaces, not a polished remote operations service.
+- `cross-workspace-shared-vm`: Concurrent runs currently require the same pinned workspace; one default VM across workspaces is not implemented.
+- `automatic-final-session-stop`: The last session leaves the environment warm; stop remains explicit.
+- `dynamic-terminal-resize`: Initial PTY dimensions are preserved; complete SIGWINCH propagation is not claimed.
 
 ## Release Readiness
 

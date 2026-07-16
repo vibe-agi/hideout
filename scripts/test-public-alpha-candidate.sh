@@ -183,6 +183,11 @@ scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real \
 product_evidence+=("$out/host-app-pack-gate2/product-hardening-evidence.json")
 unset HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK
 
+scripts/test-concurrent-sessions-e2e.sh --real-gate2 --require-real \
+  --baseline-commit 2f0cddebc5b0215989b04e1f94955e84f1926929 \
+  --out "$out/concurrent-sessions-gate2"
+product_evidence+=("$out/concurrent-sessions-gate2/product-hardening-evidence.json")
+
 export HIDEOUT_RUNTIME_EVIDENCE_OUT="$out/runtime-gate3"
 HIDEOUT_PHASE1_RETAINED_GATE0_CANDIDATE="$candidate_observation" \
   HIDEOUT_PHASE1_RETAINED_GATE0_PACKAGE_SHA256="$package_sha" \

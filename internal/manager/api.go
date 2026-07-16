@@ -16,6 +16,7 @@ import (
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -1462,6 +1463,19 @@ func (api API) serveProfileEnvApply(w http.ResponseWriter, r *http.Request) {
 
 func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
 	sessions := nonNilSlice(overview.Sessions)
+	if rawProfile := strings.TrimSpace(r.URL.Query().Get("profile")); rawProfile != "" {
+		if err := profile.ValidateName(rawProfile); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid profile name")
+			return
+		}
+		filtered := make([]SessionSummary, 0, len(sessions))
+		for _, summary := range sessions {
+			if summary.Profile == rawProfile {
+				filtered = append(filtered, summary)
+			}
+		}
+		sessions = nonNilSlice(filtered)
+	}
 	if rawSession := r.URL.Query().Get("session"); rawSession != "" {
 		if !session.ValidID(rawSession) {
 			writeAPIError(w, http.StatusBadRequest, "invalid session id")

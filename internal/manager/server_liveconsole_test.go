@@ -337,6 +337,25 @@ guestPrivilegeLabel({
 	}
 }
 
+func TestWebUIRendersConcurrentOwnerFieldsWithoutPolling(t *testing.T) {
+	html := renderUIHTML(time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC))
+	for _, marker := range []string{
+		`["activeSessions", e.activeSessions || 0]`,
+		`["ownerHealth", e.ownerHealth]`,
+		`["ownerStatus", s.ownerStatus]`,
+		`["terminalMode", s.terminalMode]`,
+		`s.ownerStatus === "unprovable"`,
+	} {
+		if !strings.Contains(html, marker) {
+			t.Fatalf("WebUI owner rendering missing %q", marker)
+		}
+	}
+	onMessage := between(t, html, "es.onmessage = function(message)", "es.onerror = function()")
+	if strings.Contains(onMessage, "setInterval") || strings.Contains(onMessage, `api("overview"`) {
+		t.Fatalf("owner event rendering introduced polling: %s", onMessage)
+	}
+}
+
 func TestWebUILiveConsoleProofArtifact(t *testing.T) {
 	html := renderUIHTML(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))
 	onMessage := between(t, html, "es.onmessage = function(message)", "es.onerror = function()")

@@ -45,6 +45,9 @@ test -f schemas/host-app-pack.schema.json
 test -f schemas/host-app-pack-registry.schema.json
 test -f schemas/host-app-enablement.schema.json
 test -f schemas/host-app-inspection.schema.json
+test -f schemas/active-session-summary.schema.json
+test -f schemas/environment-activation-receipt.schema.json
+test -f schemas/environment-service-state.schema.json
 scripts/test-runtime-smoke.sh
 
 # Test/evidence spine (026): one Go-owned proof registry feeds shell gates,
@@ -295,3 +298,8 @@ rm -rf "$first_run_tmp"
 ui_e2e_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ui-e2e-gate0.XXXXXX")"
 scripts/test-ui-e2e.sh --all --out "$ui_e2e_tmp"
 rm -rf "$ui_e2e_tmp"
+
+# Concurrent run sessions (034): schemas, ownership/transition models, shared
+# service identity, namespace command construction, and Manager wiring. Real
+# process/mount isolation remains a separate explicit macOS/Lima Gate 2.
+scripts/test-concurrent-sessions-smoke.sh

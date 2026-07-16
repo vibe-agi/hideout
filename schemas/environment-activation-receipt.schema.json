@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/environment-activation-receipt.schema.json",
+  "title": "Hideout Environment Activation Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "environmentId",
+    "instanceName",
+    "configSha256",
+    "runtimeIdentitySha256",
+    "bootId",
+    "namespaceProbe",
+    "ownerSessionId",
+    "observedAt"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.environment-activation/v1" },
+    "environmentId": { "type": "string", "pattern": "^env_[a-z0-9]+$" },
+    "instanceName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "configSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "runtimeIdentitySha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "bootId": { "type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" },
+    "namespaceProbe": { "const": true },
+    "ownerSessionId": { "type": "string", "pattern": "^ses_[A-Za-z0-9_]+$" },
+    "observedAt": { "type": "string", "format": "date-time" }
+  }
+}

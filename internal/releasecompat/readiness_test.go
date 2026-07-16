@@ -338,6 +338,58 @@ func TestReleaseCandidateRuntimeEvidenceRequiresExactCleanCrossGateBinding(t *te
 	}
 }
 
+func TestReleaseCandidateRejectsMissing034PerformanceProof(t *testing.T) {
+	dir := t.TempDir()
+	binding := runtimeBindingFixture()
+	gate2Binding := binding
+	gate3Binding := binding
+	gate3Binding.EnvironmentID = "env_20260711t000000z1111111111111111111"
+	gate2 := filepath.Join(dir, "gate2.json")
+	gate3 := filepath.Join(dir, "gate3.json")
+	product := filepath.Join(dir, "runtime-product.json")
+	writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", gate2Binding)
+	writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", gate3Binding)
+	writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
+
+	manifest, err := productevidence.ReadFile(product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, proof := range manifest.Proofs {
+		if proof.ProofID == productevidence.Proof034RealPerformance {
+			manifest.Proofs = append(manifest.Proofs[:i], manifest.Proofs[i+1:]...)
+			break
+		}
+	}
+	if err := productevidence.WriteFile(product, manifest); err != nil {
+		t.Fatal(err)
+	}
+	expected := runtimeExpectationFixture()
+	trustedPackage := packageIdentityFixture()
+	ready, err := BuildReadiness(ReadinessOptions{
+		Mode: "release-candidate", Commit: "caller-controlled", LocalPassed: true,
+		Gate2Evidence: gate2, Gate3Evidence: gate3, ProductEvidence: []string{product},
+		Runtime: &expected, Package: &trustedPackage,
+		SigningObservationSHA256:      strings.Repeat("d", 64),
+		NotarizationObservationSHA256: strings.Repeat("e", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.ReleaseReady {
+		t.Fatal("release candidate passed without the 034 performance proof")
+	}
+	for _, command := range ready.Commands {
+		if command.Name == "product-hardening-evidence" {
+			if command.Status != "failed" || !strings.Contains(command.Summary, productevidence.Proof034RealPerformance) {
+				t.Fatalf("missing 034 proof was not surfaced: %+v", command)
+			}
+			return
+		}
+	}
+	t.Fatal("readiness omitted product-hardening-evidence result")
+}
+
 func TestRuntimeReadinessRejectsAbsentStaleNativeAndFailedEvidence(t *testing.T) {
 	expected := runtimeExpectationFixture()
 	packageIdentity := packageIdentityFixture()
@@ -866,6 +918,9 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 			t.Fatal(err)
 		}
 		artifactData := []byte("runtime proof\n")
+		if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
+			artifactData = semantic034Artifact(t, req.ArtifactValidator, commit, binding)
+		}
 		if err := os.WriteFile(artifact, artifactData, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -895,6 +950,54 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 	if err := productevidence.WriteFile(path, manifest); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func semantic034Artifact(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding) []byte {
+	t.Helper()
+	var value any
+	switch validator {
+	case productevidence.ArtifactValidatorConcurrentIsolationV1:
+		checks := map[string]bool{}
+		for _, name := range []string{
+			"threeSameWorkspaceOwners", "distinctSessionIds", "distinctPidNamespaces", "distinctMountNamespaces",
+			"nonRootTargets", "privateProc", "siblingPidHidden", "siblingRuntimeHidden",
+			"guestRootPositiveControl", "hostfsOverlaySessionLocal", "forcedInterruptionTargetGone",
+			"siblingSurvivedInterruption", "ownerReconciled", "stopRefusedWithLiveOwners",
+			"lastSessionPreservedVm", "explicitStopStoppedVm",
+		} {
+			checks[name] = true
+		}
+		value = map[string]any{
+			"schema": "hideout.concurrent-sessions-gate2/v1", "status": "passed",
+			"generatedAt": "2026-07-16T12:00:00Z", "commit": commit, "dirty": false,
+			"backend": "lima", "host": "macos-arm64", "metrics": map[string]any{"ownerReconcileMs": 125}, "checks": checks,
+			"nonClaims": map[string]any{"guestRootContainment": "not-claimed"},
+		}
+	case productevidence.ArtifactValidatorConcurrentPerformanceV1:
+		warm := make([]float64, 30)
+		candidate := make([]float64, 30)
+		baseline := make([]float64, 30)
+		for i := range warm {
+			warm[i], candidate[i], baseline[i] = 100, 10, 8
+		}
+		value = map[string]any{
+			"schema": "hideout.concurrent-sessions-performance/v1", "status": "passed", "generatedAt": "2026-07-16T12:00:00Z",
+			"candidate":        map[string]any{"commit": commit, "dirty": false, "environmentId": binding.EnvironmentID, "instance": "candidate"},
+			"baseline":         map[string]any{"commit": strings.Repeat("b", 40), "dirty": false, "environmentId": "env_baseline", "instance": "baseline"},
+			"host":             map[string]any{"os": "darwin", "arch": "arm64"},
+			"runtime":          map[string]any{"family": binding.Family, "revision": binding.Revision, "artifactSHA256": binding.ArtifactSHA256, "buildCommit": binding.BuildCommit, "buildDirty": false},
+			"methodology":      map[string]any{"samples": 30, "warmups": 3, "readyThresholdMs": 2000, "fixtureRatioThreshold": 1.25, "fixtureSHA256": strings.Repeat("c", 64)},
+			"warmAttach":       map[string]any{"samplesMs": warm, "medianMs": 100, "p95Ms": 100},
+			"workspaceFixture": map[string]any{"candidateSamplesMs": candidate, "baselineSamplesMs": baseline, "candidateMedianMs": 10, "candidateP95Ms": 10, "baselineMedianMs": 8, "baselineP95Ms": 8, "p95Ratio": 1.25},
+		}
+	default:
+		t.Fatalf("unknown semantic validator %q", validator)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func coveredClaimsForRequirement(req productevidence.ProofRequirement) []productevidence.CoveredClaim {
