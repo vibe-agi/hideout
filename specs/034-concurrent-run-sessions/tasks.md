@@ -1,172 +1,217 @@
-# Tasks: Concurrent Run Sessions
+# Tasks: Daemon-Owned Concurrent Run Sessions
 
 <!-- markdownlint-disable MD013 MD060 -->
 
 **Input**: Design documents from `specs/034-concurrent-run-sessions/`
 
-**Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
+**Tests**: Required. This feature crosses authentication, lifecycle, terminal,
+backend, process, HostFS, network, audit, and evidence boundaries. Story tests
+precede implementation, and real PTY/Lima evidence is mandatory.
 
-**Tests**: This feature changes backend, lifecycle, filesystem, HostFS,
-network, terminal, and evidence boundaries. Tests are mandatory and precede
-the corresponding implementation.
+**Organization**: Tasks are grouped by user story. The old 034 implementation
+is a baseline, not completion evidence for the daemon-owned contract.
 
-**Organization**: Tasks are grouped by user story. The formal MVP is
-same-workspace concurrency; cross-workspace reuse, daemon-owned auto-stop, and
-complete dynamic terminal fidelity are not tasks in this file.
+**Implementation note**: The final implementation consolidates the planned
+`terminal_client.go` into `internal/app/run_client.go`, the planned Lima
+`supervisor.go` into `internal/backend/lima/session_stream.go`, and renewal,
+ownership, and end-to-end fixtures into the corresponding session client,
+lifecycle, Manager, and real Gate 2 test files. Task completion follows the
+delivered behavior and tests rather than requiring placeholder filenames.
 
-## Phase 1: Setup (Shared Infrastructure)
+## Phase 1: Setup
 
-**Purpose**: Establish strict public/state contracts and gate entry points.
+**Purpose**: Add the protocol/helper structure and strict schemas without
+changing executable run ownership.
 
-- [X] T001 [P] Add strict active-session and environment-service schemas in `schemas/active-session-summary.schema.json` and `schemas/environment-service-state.schema.json`
-- [X] T002 [P] Add 034 schema validation fixtures and registration tests in `internal/session/ownership_schema_test.go`, `internal/network/service_schema_test.go`, and `scripts/test-concurrent-sessions-smoke.sh`
-- [X] T003 [P] Add the 034 Gate 0 and real Gate 2 script skeletons with explicit not-run evidence in `scripts/test-concurrent-sessions-smoke.sh`, `scripts/test-concurrent-sessions-e2e.sh`, and `scripts/lib/gate2-concurrent-sessions.sh`
-- [X] T004 Register 034 smoke in `scripts/test-gate0.sh` without running the real Lima lane from Gate 0
-- [X] T005 [P] Add stable 034 recovery-code declarations and registry coverage tests in `internal/recovery/registry.go` and `internal/recovery/registry_test.go`
-
----
-
-## Phase 2: Foundational (Blocking Prerequisites)
-
-**Purpose**: Build the owner, lock, runtime-layout, and shared-service primitives
-used by every story.
-
-**CRITICAL**: No story implementation begins until these fail-closed models are
-tested and complete.
-
-- [X] T006 [P] Write failing live/stale/unprovable/process-death/concurrent-probe owner tests in `internal/session/ownership_test.go` (FR-010, FR-017; SC-007)
-- [X] T007 Implement strict session owner records, OS-backed lease acquisition/probe/update/close, bounded errors, and redacted summaries in `internal/session/ownership.go`
-- [X] T008 [P] Write failing context-cancelled transition-lock and per-session runtime-child tests in `internal/environment/environment_test.go` (FR-003, FR-004)
-- [X] T009 Implement cancellable environment transition locking plus `runtime/services` and `runtime/sessions/<id>` lifecycle helpers in `internal/environment/environment.go`
-- [X] T010 [P] Write failing canonical network fingerprint, secret-drift, status-state, and no-secret-serialization tests in `internal/network/network_test.go` (FR-014, SC-010)
-- [X] T011 Implement a secret-free environment network-service fingerprint and strict state builder in `internal/network/network.go`
-- [X] T012 [P] Write failing Lima namespace-command validation tests for session IDs, target users, workdirs, env, argv, required primitives, and generic-root-command rejection in `internal/backend/lima/session_view_test.go` (FR-007, FR-017)
-- [X] T013 Add backend activation/session-view fields and lifecycle seams without changing native behavior in `internal/backend/backend.go`, `internal/backend/native/native.go`, and their tests
-- [X] T014 Implement the fixed root-control SSH namespace command builder, initial PTY/non-PTY stream setup, and runtime primitive probe in `internal/backend/lima/session_view.go` and `internal/backend/lima/ssh_bridge.go`
-- [X] T015 Add strict schema model tests and one shared authoritative session-summary builder in `internal/manager/manager_test.go` and `internal/manager/manager.go`
-
-**Checkpoint**: OS liveness, runtime child layout, network identity, namespace
-command construction, and summary contracts exist independently of run wiring.
+- [X] T001 Add the `internal/sessionwire/` package skeleton and closed frame/payload type catalog in `internal/sessionwire/frame.go` and `internal/sessionwire/control.go`
+- [X] T002 [P] Add Linux/unsupported command skeletons for the fixed guest helper in `cmd/hideout-session-supervisor/main_linux.go` and `cmd/hideout-session-supervisor/main_other.go`
+- [X] T003 [P] Extend helper path/build/manifest fixtures for `hideout-session-supervisor` in `internal/helperbin/helperbin.go` and `internal/helperbin/helperbin_test.go`
+- [X] T004 [P] Add daemon session inventory fields to `schemas/daemon-status.schema.json` and active-session summary constraints to `schemas/active-session-summary.schema.json`
+- [X] T005 Add a non-HTTP daemon transport inventory for the private session socket in `internal/daemon/session_transport.go`, `internal/daemon/session_transport_test.go`, and `docs/manager-control-plane.md`; do not add it to the HTTP route catalog
 
 ---
 
-## Phase 3: User Story 1 - Run Multiple Commands In One Workspace (Priority: P1) MVP
+## Phase 2: Foundational
 
-**Goal**: Multiple commands use one existing pinned environment and direct
-workspace concurrently without the environment-busy failure.
+**Purpose**: Implement shared protocol, auth, request, and helper distribution
+primitives required by every story.
 
-**Independent Test**: Start three overlapping runs through Manager Core with
-one static workspace/environment, prove one backend instance, distinct session
-runtime children, shared file effects, exact exits, and sibling survival when
-one ends.
+**Critical**: No user-story implementation starts before this phase is green.
 
-### Tests for User Story 1
+- [X] T006 [P] Add malformed, oversized, wrong-direction, duplicate-terminal, unknown-mandatory, high-bit-extension, and arbitrary-binary frame tests in `internal/sessionwire/frame_test.go` and `internal/sessionwire/stream_test.go`
+- [X] T007 Implement bounded length-prefixed framing, strict JSON controls, serialized writes, and direction validation in `internal/sessionwire/frame.go`, `internal/sessionwire/control.go`, and `internal/sessionwire/stream.go`
+- [X] T008 [P] Add rotating-current/prior-grace/atomic-file/auth-callback tests in `internal/daemon/credential_test.go` and `internal/manager/api_test.go`
+- [X] T009 Add callback-based Manager authentication while preserving static API fixtures in `internal/manager/api.go`, then implement atomic credential rotation in `internal/daemon/credential.go` and `internal/daemon/token.go`
+- [X] T010 [P] Add strict full-option run request validation and CLI/API parity tests in `internal/manager/run_service_test.go` and `internal/manager/api_test.go`
+- [X] T011 Define the canonical structured run request, terminal descriptor, confirmation binding, and stream-neutral run dependencies in `internal/manager/run_service.go` and extend `internal/manager/api.go`
+- [X] T012 Materialize and verify the supervisor helper with no workspace/profile fallback in `internal/manager/run_dataplane.go`, `internal/helperbin/helperbin.go`, and their tests
+- [X] T013 Add supervisor helper build/install/package/checksum entries in `scripts/install-local.sh`, `scripts/package-local.sh`, `scripts/test-install-smoke.sh`, and `packaging/homebrew/hideout.rb`
+- [X] T014 Run `go mod tidy` after introducing the proven PTY dependency and verify no unrelated module churn in `go.mod` and `go.sum`
 
-- [X] T016 [P] [US1] Write failing tests that reusable sessions use unique runtime/shim children and never clear siblings in `internal/manager/run_session_test.go` (FR-004; SC-002)
-- [X] T017 [P] [US1] Write a blocking fake-backend integration test for three overlapping `ApplyRun` calls, one startup, exact exits, and no busy error in `internal/manager/manager_test.go` (FR-001, FR-003; SC-001, SC-009)
-- [X] T018 [P] [US1] Write stopped-environment simultaneous-start and attach-versus-finish race tests in `internal/manager/run_environment_test.go` and `internal/manager/environment_lifecycle_test.go` (FR-003; SC-006)
-- [X] T019 [P] [US1] Write shared direct/tun2socks service first-owner, matching-reuse, mismatch-deny, last-owner-cleanup, and crash-reconcile tests in `internal/manager/run_network_test.go` (FR-014; SC-004)
-- [X] T020 [P] [US1] Write Lima activation tests proving full first-owner verification, live-receipt warm attach, authenticated SSH proof, and zero unsafe running-instance fallback in `internal/backend/lima/lima_test.go` (FR-017; SC-012)
-
-### Implementation for User Story 1
-
-- [X] T021 [US1] Replace environment-global session-dir reuse with `runtime/sessions/<session-id>` materialization while preserving environment identity and the static runtime-root/workspace mounts in `internal/manager/run_session.go`, `internal/manager/run_apply.go`, and `internal/backend/lima/lima.go` (FR-002, FR-005; SC-008)
-- [X] T022 [US1] Refactor backend startup into bounded activation followed by target execution so Manager can release the transition lock before target lifetime in `internal/backend/backend.go`, `internal/backend/lima/lima.go`, and `internal/backend/native/native.go`
-- [X] T023 [US1] Acquire the owner under the transition lock, wait contextually for startup races, release before target, and reacquire for finish in `internal/manager/run_apply.go`
-- [X] T024 [US1] Make environment status and runtime cleanup owner-aware so one exit preserves siblings and only its runtime child is removed in `internal/manager/run_environment.go` and `internal/environment/environment.go`
-- [X] T025 [US1] Materialize, fingerprint, activate, reuse, and last-owner-clean the existing environment network service without a mutable refcount in `internal/manager/run_network.go`, `internal/manager/run_apply.go`, and `internal/backend/lima/lima.go`
-- [X] T026 [US1] Implement the Lima mount/PID/private-proc target path with per-session `/hideout/session`, profile-user drop, command check, exact argv, and context cancellation in `internal/backend/lima/session_view.go`
-- [X] T027 [US1] Implement live activation receipts and the proved-owner warm-attach fast path while retaining full checks with zero owners in `internal/backend/lima/runtime.go`, `internal/backend/lima/lima.go`, and `internal/manager/run_apply.go`
-- [X] T028 [US1] Preserve independent non-TTY stdout/stderr/exit status and initial PTY dimensions/terminal restoration on the namespace path in `internal/backend/lima/session_view.go` and `internal/backend/lima/session_view_test.go`
-- [X] T029 [US1] Add CLI-level overlapping-run and shared-workspace tests using the existing run application path in `internal/app/app_test.go`
-- [X] T030 [US1] Complete the local 034 smoke for overlapping direct-mode sessions and no auto-stop in `scripts/test-concurrent-sessions-smoke.sh`
-- [X] T031 [US1] Run the US1 package/smoke suite and fix all race, cleanup, and timing failures before starting US2
-
-**Checkpoint**: Same-workspace concurrent direct and matching-network sessions
-are usable as an independent MVP; no cross-workspace claim exists.
+**Checkpoint**: Wire, credentials, canonical request shape, and verified guest
+helper distribution are independently green.
 
 ---
 
-## Phase 4: User Story 2 - Keep Session Authority Separate (Priority: P1)
+## Phase 3: User Story 1 - Run Through One Resident Control Plane (Priority: P1)
 
-**Goal**: Concurrent targets share workspace files but cannot consume sibling
-process/control, broker, HostFS, staged-write, network-secret, or terminal
-authority.
+**Goal**: Every executable run auto-connects to one daemon owner with no
+embedded fallback while preserving Manager planning/confirmation and exact
+non-interactive behavior.
 
-**Independent Test**: Give authority only to A, adversarially probe from B, end
-A, and prove zero sibling material plus continued B functionality on real Lima.
+**Independent Test**: Start with no daemon, run two concurrent non-interactive
+commands, and prove one daemon owns both while stdout/stderr/exit and
+confirmation remain correct.
 
-### Tests for User Story 2
+### Tests For User Story 1
 
-- [X] T032 [P] [US2] Write failing namespace-view tests for private `/proc`, mount identities, sibling runtime paths, descriptors, env, and process command lines in `internal/backend/lima/session_view_test.go` (FR-007, FR-008; SC-003)
-- [X] T033 [P] [US2] Write failing concurrent HostFS read/discover/staged-write isolation and sibling-cleanup tests in `internal/manager/hostfs_concurrent_test.go` (FR-006, FR-013; SC-004, SC-005)
-- [X] T034 [P] [US2] Write failing broker token, endpoint, proxy secret, machine ID, claim-token, raw lock/path, and sibling-audit redaction tests in `internal/manager/run_concurrency_redaction_test.go` (FR-008; SC-010)
-- [X] T035 [P] [US2] Write an explicit guest-root non-claim fixture that distinguishes ordinary-target proof from root reachability in `internal/backend/lima/session_view_test.go` and `scripts/lib/gate2-concurrent-sessions.sh` (FR-009)
-- [X] T036 [P] [US2] Write sibling interruption tests proving one cancel/host disconnect cannot signal, unmount, close a bridge, or consume the other stream in `internal/manager/manager_test.go` and `internal/backend/lima/session_view_test.go` (FR-013, FR-015; SC-004, SC-009)
+- [X] T015 [P] [US1] Add concurrent daemon auto-start, stale socket, readiness timeout, auth refusal, and no-embedded-fallback tests in `internal/daemon/autostart_test.go` and `internal/app/app_test.go`
+- [X] T016 [P] [US1] Add one-connection/one-run handshake, strict request, and disconnect-before-start tests in `internal/daemon/session_server_test.go` and `internal/daemon/session_client_test.go`
+- [X] T017 [P] [US1] Add byte-exact stdout/stderr, zero/nonzero/signal exit, cleanup-error override, Manager HTTP parity, and HTTP stale-credential cancellation tests in `internal/daemon/session_e2e_test.go` and `internal/manager/run_service_test.go`
+- [X] T018 [P] [US1] Add review/digest/accept/stale-plan/non-interactive-default-deny tests in `internal/manager/run_service_test.go` and `internal/daemon/session_server_test.go`
 
-### Implementation for User Story 2
+### Implementation For User Story 1
 
-- [X] T037 [US2] Start HostFS only inside the owning mount namespace and rely on namespace/process teardown rather than global `/hideout/hostfs` cleanup in `internal/backend/lima/session_view.go` and `internal/backend/lima/lima.go`
-- [X] T038 [US2] Ensure every broker, shim, HostFS grant/stage, endpoint, preview, and decision remains keyed to the owning session runtime/data plane in `internal/manager/run_dataplane.go` and `internal/manager/run_apply.go`
-- [X] T039 [US2] Make ordered cleanup aggregate per-session failures without removing sibling authority or falsely reporting environment readiness in `internal/manager/run_apply.go`, `internal/manager/run_session.go`, and `internal/backend/lima/session_view.go`
-- [X] T040 [US2] Apply deterministic redaction and bounded untrusted fields to owner/service/session audit and status in `internal/manager/manager.go`, `internal/audit/redaction.go`, and `internal/manager/run_apply.go`
-- [X] T041 [US2] Complete real Gate 2 cases for ordinary-target invisibility, HostFS/staged-write separation, direct-network non-interference, sibling interruption, and guest-root non-claim in `scripts/lib/gate2-concurrent-sessions.sh`; shared `tun2socks` lifecycle remains a Gate 0/backend-integration claim
-- [X] T042 [US2] Run the US2 adversarial package tests plus race detector and fix every false-positive, false-negative, or test-only producer before US3
+- [X] T019 [US1] Implement race-safe detached daemon auto-start and bounded readiness in `internal/daemon/autostart.go`, with the main executable entering an internal serving role through `internal/app/app.go`
+- [X] T020 [US1] Bind a second 0600 Unix listener and ordered close/remove behavior in `internal/daemon/session_transport.go`, `internal/daemon/transport.go`, and `internal/daemon/daemon.go`
+- [X] T021 [US1] Implement authenticated one-connection/one-run server state and bounded stream pumps in `internal/daemon/session_server.go` and `internal/daemon/sessions.go`
+- [X] T022 [US1] Implement the host-local session client handshake, request, stream, completion, and typed remote exit mapping in `internal/daemon/session_client.go`
+- [X] T023 [US1] Move plan/apply/confirmation orchestration into the canonical Manager service and delegate HTTP run apply to it in `internal/manager/run_service.go`, `internal/manager/api.go`, and `internal/manager/run_apply.go`
+- [X] T024 [US1] Convert executable `hideout run` into a daemon client while keeping `explain` non-executable and preserving every existing run flag in `internal/app/app.go`
+- [X] T025 [US1] Return exact target exit codes from `app.Main` and keep control-plane failures distinct in `internal/app/app.go` and `internal/app/app_test.go`
+- [X] T026 [US1] Update explicit daemon start/status/stop behavior for background serving and one-store ownership in `internal/app/app.go`, `internal/daemon/client.go`, and `internal/daemon/daemon.go`
 
-**Checkpoint**: Ordinary-target session authority separation has real Lima
-evidence; guest-root remains visibly outside the claim.
-
----
-
-## Phase 5: User Story 3 - Observe And Control Active Ownership (Priority: P2)
-
-**Goal**: Operators see authoritative active owners, stop refuses live work,
-stale metadata reconciles, and explicit stop succeeds after all owners exit.
-
-**Independent Test**: Observe two owners through CLI/Manager, fail stop, kill
-one host process, reconcile within one second, close the last owner, and stop
-successfully without automatic stop.
-
-### Tests for User Story 3
-
-- [X] T043 [P] [US3] Write failing CLI/Manager/API parity tests for active owner count, identity, state, terminal mode, and no raw path/PID in `internal/manager/api_test.go` and `internal/app/app_test.go` (FR-016)
-- [X] T044 [P] [US3] Write failing plan/apply tests for live-owner stop refusal, unprovable-owner refusal, stale reconciliation, attach-versus-stop race, and later success in `internal/manager/environment_lifecycle_test.go` (FR-011, FR-017; SC-006, SC-007)
-- [X] T045 [P] [US3] Write doctor tests for missing namespace primitives, stale/failed owners, service conflict, and copyable recovery in `internal/doctor/doctor_test.go` (FR-016, FR-017)
-
-### Implementation for User Story 3
-
-- [X] T046 [US3] Extend authoritative session/environment summaries with owner state and derived active count while removing raw implementation paths from the active view in `internal/manager/manager.go`
-- [X] T047 [US3] Serve the same owner model through overview and `/api/v1/run/status`, including profile/session filters and schemas, in `internal/manager/api.go` and `schemas/manager-api.schema.json`
-- [X] T048 [US3] Refuse explicit stop/clean against live or unprovable owners under the transition lock and reconcile stale unlocked records in `internal/manager/environment_lifecycle.go`
-- [X] T049 [US3] Render active owners and stable recovery through existing CLI/TUI/WebUI event-driven surfaces without adding polling in `internal/app/app.go` and `internal/manager/server.go`
-- [X] T050 [US3] Add namespace-prerequisite, owner-health, and environment-service doctor findings using central recovery codes in `internal/doctor/doctor.go` and `internal/app/app.go`
-- [X] T051 [US3] Complete smoke/API tests for explicit-stop success after final exit and positive proof that 034 never auto-stops in `scripts/test-concurrent-sessions-smoke.sh` (FR-012)
-
-**Checkpoint**: Ownership is observable and lifecycle-safe through every
-existing operator surface, while stop remains explicit.
+**Checkpoint**: Non-interactive executable runs are daemon-only, parity-locked,
+and independently usable before PTY work.
 
 ---
 
-## Phase 6: Polish And Cross-Cutting Concerns
+## Phase 4: User Story 2 - Use Interactive Tools Like Local Commands (Priority: P1)
 
-**Purpose**: Bind claims to real evidence, update product truth, and verify the
-complete repository.
+**Goal**: A real PTY is owned inside the guest supervisor with correct initial
+size, dynamic resize, signals/input/EOF, terminal restoration, and warm p95 at
+or below two seconds.
 
-- [X] T052 [P] Register 034 Gate 0, real-isolation, performance, and docs proof IDs/claims in `internal/productevidence/registry.go`, `internal/productevidence/registry_test.go`, and `docs/claim-boundaries.md`
-- [X] T053 [P] Update concurrent-environment design and remove the obsolete single-writer claim in `docs/architecture-principles.md` and `docs/privacy-run-design.md`
-- [X] T054 [P] Update A1/A2 session isolation, guest-root non-claim, shared-network scope, and stop behavior in `docs/threat-model.md` and `docs/support-matrix.md`
-- [X] T055 [P] Add the exact 034 Gate 0/Gate 2 procedures, performance methodology, docs-truth rejection, and false-green refusal cases to `docs/privacy-run-test-plan.md` (SC-011)
-- [X] T056 [P] Update operator status, README concurrency example, command inventory, and explicit cross-workspace/auto-stop/resize/root non-claims in `docs/STATUS.md`, `README.md`, and `docs/command-examples.json` (FR-018, SC-011)
-- [X] T057 Add `unshare`, `mount`, `setpriv`, and private-proc observations to the supported runtime contract and retained-image verification in `internal/runtimecatalog/contract.json`, `internal/runtimecatalog/catalog.json`, and `runtime/developer-standard/verify-image.sh`; do not rewrite the published revision's historical `packages.txt` build input
-- [X] T058 Run `scripts/test-concurrent-sessions-e2e.sh` on real macOS arm64 Lima, compare a separately built pre-034 commit and the candidate on the same ready-marker/static-workspace fixture for at least 30 measured samples, require all authority/performance assertions, and emit exact-commit/digest/dirty-aware evidence under the ignored evidence root
-- [X] T059 Evaluate the 034 evidence through the product proof registry and release-readiness path; reject missing, stale, synthetic, or wrong-runtime artifacts in `internal/productevidence/` and `internal/releasecompat/`
-- [X] T060 Run all 12 `quickstart.md` scenarios and an adversarial fresh-eyes audit for owner fixation, sibling cleanup, false-green namespace tests, and documentation overclaim; append any gap as a task before completion
-- [X] T061 Run `go build ./...`, `go vet ./...`, `gofmt -l internal cmd`, `git diff --check`, `go test -race` for changed concurrency packages, `go test ./...`, schema/markdown/docs truth, Gate 0, 034 smoke, and the retained real Gate 2 verification
-- [X] T062 Make stale-owner reconciliation fixation-resistant and two-phase: bind directory identity, reject non-directory owner entries, clean only the exact runtime child before removing proof, retain failed evidence, and block attach on unresolved owners in `internal/session/ownership.go`, `internal/manager/run_apply.go`, and adversarial tests
-- [X] T063 Bind reusable environment-network state to the observed guest boot, verify live route/link/helper/resolver health before reuse, invalidate runtime service state on stop, and scrub partially prepared secret material on every early failure in `internal/network/`, `internal/backend/lima/`, and `internal/manager/run_network.go`
-- [X] T064 Make session teardown kill descendants and prove it: combine kill-child namespace semantics with an exact-session, Core-owned SSH transport guardian; verify the session disappears from guest `/proc` before owner removal, strengthen the three-owner real Gate 2 namespace/forced-interruption lane, and preserve sibling runtime in `internal/backend/lima/` and `scripts/lib/gate2-concurrent-sessions.sh`
-- [X] T065 Reject evidence-shaped theater by adding strict semantic validators for the exact 16 isolation assertions and recomputed performance samples, require distinct clean candidate/baseline commits and stable fixture digest, and bind 034 into the package-candidate path in `internal/productevidence/`, `internal/releasecompat/`, and release scripts
-- [X] T066 Add an executable 12-scenario quickstart mapping and align docs with the actual proof partition: Gate 0 owns network/terminal integration, while real Gate 2 owns ordinary-target namespace, cleanup, sibling survival, and performance claims in `scripts/test-concurrent-sessions-quickstart.sh`, `quickstart.md`, and product docs
+**Independent Test**: Run a real PTY fixture and full-screen application,
+resize it, interrupt it, and verify dimensions, single delivery, exact exit,
+terminal restoration, and latency.
+
+### Tests For User Story 2
+
+- [X] T027 [P] [US2] Add strict supervisor start, PTY/non-PTY, resize, signal, EOF, process-group, transport-loss, and reaping tests in `cmd/hideout-session-supervisor/main_linux_test.go`
+- [X] T028 [P] [US2] Add non-PTY SSH launch, no `RequestPty`, supervisor protocol, cleanup proof, and command-not-found tests in `internal/backend/lima/supervisor_test.go` and `internal/backend/lima/session_view_test.go`
+- [X] T029 [P] [US2] Add terminal auto/always/never, raw-mode restore, SIGWINCH, Ctrl-C de-duplication, daemon loss, and non-file fallback tests in `internal/app/terminal_client_test.go`
+- [X] T030 [P] [US2] Add a real local PTY harness that fails the old pipe timing shortcut in `scripts/test-daemon-session-pty.sh`
+
+### Implementation For User Story 2
+
+- [X] T031 [US2] Implement the fixed Linux supervisor with PTY allocation, initial/dynamic size, non-root target exec, process-group signals, pipe mode, and typed completion in `cmd/hideout-session-supervisor/main_linux.go`
+- [X] T032 [US2] Replace the isolated SSH `RequestPty`/guardian target path with one non-PTY supervisor bridge in `internal/backend/lima/supervisor.go` and `internal/backend/lima/session_view.go`
+- [X] T033 [US2] Add backend stream/control abstractions without embedding terminal file descriptors in Manager in `internal/backend/backend.go`, `internal/backend/lima/lima.go`, and `internal/backend/native/native.go`
+- [X] T034 [US2] Implement client terminal mode resolution, raw state, stdin/EOF, SIGWINCH resize, non-duplicate signal handling, and guaranteed restore in `internal/app/terminal_client.go`
+- [X] T035 [US2] Wire daemon client/server terminal and supervisor frame pumps with bounded backpressure in `internal/daemon/session_client.go`, `internal/daemon/session_server.go`, and `internal/backend/lima/supervisor.go`
+- [X] T036 [US2] Preserve validated TERM only, reject ambient terminal identity forwarding, and document the 037 theme/OSC boundary in `internal/sessionwire/control.go` and `docs/claim-boundaries.md`
+
+**Checkpoint**: Bash and a full-screen fixture are usable through the complete
+C/S path; non-PTY automation remains exact.
+
+---
+
+## Phase 5: User Story 3 - Run Multiple Sessions In One Workspace (Priority: P1)
+
+**Goal**: Multiple daemon workers reuse one existing workspace-pinned
+environment while retaining distinct runtime/process/terminal state.
+
+**Independent Test**: Run a shell, agent-like fixture, and one-shot command in
+one environment, exchange a workspace file, and close one without affecting
+the others.
+
+### Tests For User Story 3
+
+- [X] T037 [P] [US3] Add daemon worker-registry capacity, distinct connection/session identity, concurrent startup, and sibling survival tests in `internal/daemon/sessions_test.go`
+- [X] T038 [P] [US3] Extend Manager same-workspace concurrent activation/transition/finish race tests for one daemon Core in `internal/manager/concurrent_run_test.go` and `internal/manager/environment_lifecycle_concurrent_test.go`
+- [X] T039 [P] [US3] Add a three-client workspace collaboration and independent terminal stream smoke in `scripts/test-concurrent-sessions-e2e.sh`
+
+### Implementation For User Story 3
+
+- [X] T040 [US3] Make the daemon worker registry the only live run scheduler and enforce bounded session capacity in `internal/daemon/sessions.go` and `internal/daemon/daemon.go`
+- [X] T041 [US3] Route all worker attach/start/finish operations through one daemon Core while retaining short environment transition locks in `internal/manager/run_service.go`, `internal/manager/run_apply.go`, and `internal/manager/run_environment.go`
+- [X] T042 [US3] Preserve unique runtime children and owner locks without CLI-process ownership assumptions in `internal/manager/run_session.go`, `internal/environment/environment.go`, and `internal/session/ownership.go`
+- [X] T043 [US3] Preserve shared direct workspace transport and compatible environment network service lifetime across siblings in `internal/backend/lima/lima.go` and `internal/manager/run_network.go`
+
+**Checkpoint**: Three simultaneous sessions use one environment and shared
+workspace without stream or lifecycle interference.
+
+---
+
+## Phase 6: User Story 4 - Keep Session Authority Separate (Priority: P1)
+
+**Goal**: Daemon residency and VM reuse do not turn per-run authority into
+daemon-global, sibling-visible, or guest-ambient state.
+
+**Independent Test**: Give authority only to session A, probe from session B,
+and prove zero sibling credentials/control state and no staged host mutation.
+
+### Tests For User Story 4
+
+- [X] T044 [P] [US4] Add cross-session broker/token/HostFS/read-decision/staged-write/host-app/network isolation tests in `internal/manager/run_concurrency_redaction_test.go`, `internal/manager/hostfs_concurrent_test.go`, and `internal/manager/run_dataplane_host_app_test.go`
+- [X] T045 [P] [US4] Add ordinary-target sibling mount/PID/proc/descriptor/control-path probes and guest-root non-claim fixtures in `internal/backend/lima/session_view_test.go` and `scripts/lib/gate2-concurrent-sessions.sh`
+- [X] T046 [P] [US4] Inject real token/proxy/setup/path fixtures and assert absence from frames/status/events/audit/evidence in `internal/daemon/session_server_test.go`, `internal/daemon/daemon_test.go`, and `internal/manager/run_concurrency_redaction_test.go`
+
+### Implementation For User Story 4
+
+- [X] T047 [US4] Keep every broker, HostFS provider, staged-write store, endpoint lease, host-app grant, audit writer, and runtime child inside one worker lifecycle in `internal/manager/run_dataplane.go` and `internal/daemon/session_server.go`
+- [X] T048 [US4] Validate fixed session source, boot identity, target user, namespace view, and sibling-invisible `/proc` before authority in `internal/backend/lima/session_view.go` and `cmd/hideout-session-supervisor/main_linux.go`
+- [X] T049 [US4] Ensure public session/status/event models expose no raw control paths or reusable credentials in `internal/daemon/status.go`, `internal/manager/manager.go`, and the strict schemas
+- [X] T050 [US4] Update threat and claim boundaries for ordinary-target isolation, shared workspace, and guest-root non-containment in `docs/threat-model.md` and `docs/claim-boundaries.md`
+
+**Checkpoint**: Sibling authority probes are zero and the only shared mutation
+surface is the selected workspace.
+
+---
+
+## Phase 7: User Story 5 - Recover Ownership Truthfully (Priority: P2)
+
+**Goal**: Status, stop refusal, client/daemon loss, credential renewal, and
+restart recovery derive from one truthful owner model.
+
+**Independent Test**: Observe two sessions, refuse stop, kill a client, rotate
+credentials, kill the daemon, restart, and verify bounded cleanup plus
+fail-closed orphan reporting.
+
+### Tests For User Story 5
+
+- [X] T051 [P] [US5] Add current/prior/stale session renewal and multi-rotation clock tests in `internal/daemon/session_renewal_test.go`
+- [X] T052 [P] [US5] Add stop-vs-register, client EOF, daemon ordered stop, daemon crash socket loss, and bounded worker drain tests in `internal/daemon/session_lifecycle_test.go`
+- [X] T053 [P] [US5] Add restart stale/unproved-owner, no-adopt/no-delete, explicit recovery, and exact-session cleanup tests in `internal/daemon/ownership_test.go` and `internal/session/ownership_test.go`
+- [X] T054 [P] [US5] Add CLI/Manager/daemon-event/doctor status parity and redaction tests in `internal/daemon/status_test.go`, `internal/manager/api_test.go`, and `internal/app/app_test.go`
+
+### Implementation For User Story 5
+
+- [X] T055 [US5] Add session lease deadlines and renewal frames tied to rotating operator credentials in `internal/daemon/session_server.go`, `internal/daemon/session_client.go`, and `internal/daemon/credential.go`
+- [X] T056 [US5] Cancel and drain workers in strict order on client loss and daemon stop, with supervisor transport closure and bounded waits, in `internal/daemon/sessions.go` and `internal/daemon/daemon.go`
+- [X] T057 [US5] Reconcile durable owner records on daemon start without automatic adoption/deletion in `internal/daemon/ownership.go`, `internal/session/ownership.go`, and `internal/manager/run_environment.go`
+- [X] T058 [US5] Serialize active-session registration against environment stop and keep final-session auto-stop forbidden in `internal/manager/environment_lifecycle.go`, `internal/manager/run_service.go`, and `internal/daemon/background.go`
+- [X] T059 [US5] Publish redacted active worker/session/recovery state through daemon status/events, Manager overview/run status, and doctor in `internal/daemon/status.go`, `internal/daemon/events.go`, `internal/manager/manager.go`, and `internal/app/app.go`
+
+**Checkpoint**: Loss and rotation are bounded, stop is truthful, and restart
+never turns ambiguous metadata into authority or deletion proof.
+
+---
+
+## Phase 8: Polish And Cross-Cutting Verification
+
+**Purpose**: Product documentation, packaging, real evidence, and adversarial
+review after all stories are independently green.
+
+- [X] T060 [P] Update architecture and lifecycle documentation for the thin client/daemon/supervisor split in `docs/architecture-principles.md`, `docs/privacy-run-design.md`, and `docs/manager-control-plane.md`
+- [X] T061 [P] Update README/status/support matrix with only proved 034 behavior and explicit 035/036/037 boundaries in `README.md`, `README.zh-CN.md`, `docs/STATUS.md`, and `docs/support-matrix.md`
+- [X] T062 [P] Update terminal/concurrency/crash test contracts and evidence mapping in `docs/privacy-run-test-plan.md` and `specs/034-concurrent-run-sessions/quickstart.md`
+- [X] T063 Add daemon session, helper package, and local real-PTY smoke to `scripts/test-daemon-session-smoke.sh`, `scripts/test-gate0.sh`, and release package fixtures
+- [X] T064 Extend real macOS arm64 Lima Gate 2 to prove 20-sample p95, resize, two PTYs, non-PTY separation, sibling authority, client kill, daemon kill, and terminal restoration in `scripts/lib/gate2-concurrent-sessions.sh`
+- [X] T065 Register stable 034 evidence IDs and docs-truth claim mappings in `internal/productevidence/registry.go`, `internal/productevidence/registry_test.go`, and `scripts/test-doc-truth-smoke.sh`
+- [X] T066 Run `go build ./...`, `go vet ./...`, `gofmt -l internal cmd`, `git diff --check`, `go test -race` on session/daemon/manager/backend packages, `go test ./...`, markdownlint, package smoke, Gate 0, and local PTY smoke; record exact exits in the 034 evidence output
+- [X] T067 Run the real macOS arm64 Lima/PTY lane, validate evidence digests and dirty provenance, then perform an adversarial code/doc review for embedded fallbacks, output loss, secret exposure, fixation tests, and overclaims before marking `spec.md` Implemented
 
 ---
 
@@ -174,86 +219,98 @@ complete repository.
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: Starts immediately.
-- **Foundational (Phase 2)**: Depends on Setup and blocks all stories.
-- **US1 (Phase 3)**: Depends on Foundational and is the independently usable
-  MVP.
-- **US2 (Phase 4)**: Depends on the US1 namespace/runtime path but has an
-  independent adversarial acceptance test.
-- **US3 (Phase 5)**: Depends on the owner model and can proceed after US1;
-  final UI/status integration also consumes US2 cleanup states.
-- **Polish (Phase 6)**: Depends on all selected stories.
+- Setup (Phase 1) has no dependencies.
+- Foundational (Phase 2) depends on Setup and blocks every story.
+- US1 depends on Foundational and establishes the mandatory daemon path.
+- US2 depends on US1 session transport; its helper tests can begin after
+  Foundational.
+- US3 depends on US1; it can proceed in parallel with late US2 work except for
+  real PTY integration.
+- US4 depends on US1 and the session-view portion of US2; model tests can run in
+  parallel with US3.
+- US5 depends on US1 worker ownership and integrates all completed stories.
+- Polish/evidence depends on all stories.
 
-### User Story Dependencies
+### User Story Dependency Graph
 
-- **US1**: No story dependency after Foundation.
-- **US2**: Uses US1's running session namespace; does not depend on US3 UI.
-- **US3**: Uses foundational owner leases and US1 lifecycle; its stop tests do
-  not require HostFS authority.
+```text
+Setup -> Foundational -> US1 -> US2 -> US4 -> US5 -> Polish
+                         |      |
+                         +----> US3 -----------+
+```
 
 ### Parallel Opportunities
 
-- T001-T003 and T005 touch separate setup files.
-- T006, T008, T010, and T012 are independent failing-test tasks.
-- US1 test tasks T016-T020 can be written in parallel.
-- US2 test tasks T032-T036 can be written in parallel.
-- US3 test tasks T043-T045 can be written in parallel.
-- Documentation tasks T052-T056 can proceed in parallel after behavior and
-  evidence wording are stable.
+- Setup tasks T002-T004 touch independent helper/schema files.
+- Foundational protocol, credential, and run-request tests T006/T008/T010 can
+  proceed independently.
+- Each story's `[P]` tests can be written concurrently before implementation.
+- US3 Manager race tests and US4 authority fixture work can overlap after US1.
+- Documentation tasks T060-T062 can proceed in parallel after behavior freezes.
 
 ## Parallel Examples
 
 ### User Story 1
 
 ```text
-Task T016: unique runtime-child tests
-Task T017: overlapping ApplyRun integration test
-Task T018: startup/finish race tests
-Task T019: shared network-service tests
-Task T020: Lima activation/fast-path tests
+T015 auto-start/no-fallback tests
+T016 session handshake tests
+T017 stream/exit parity tests
+T018 confirmation binding tests
 ```
 
 ### User Story 2
 
 ```text
-Task T032: process/mount visibility tests
-Task T033: HostFS/staged-write isolation tests
-Task T034: control-plane redaction tests
-Task T035: guest-root non-claim fixture
-Task T036: interruption and stream isolation tests
+T027 guest supervisor tests
+T028 Lima non-PTY bridge tests
+T029 host terminal client tests
+T030 real PTY harness
 ```
 
 ### User Story 3
 
 ```text
-Task T043: CLI/Manager/API summary parity
-Task T044: stop and owner-race contract tests
-Task T045: doctor/recovery tests
+T037 daemon registry races
+T038 Manager environment races
+T039 three-client E2E
+```
+
+### User Story 4
+
+```text
+T044 provider isolation tests
+T045 guest sibling probes
+T046 redaction injection tests
+```
+
+### User Story 5
+
+```text
+T051 credential renewal tests
+T052 lifecycle loss/race tests
+T053 restart ownership tests
+T054 status parity tests
 ```
 
 ## Implementation Strategy
 
-### MVP First
+### MVP
 
-1. Complete Setup and Foundation.
-2. Complete US1 with direct network and matching privacy-network service.
-3. Run the independent three-session test and warm-attach performance gate.
-4. Do not describe session authority isolation as complete until US2 real Gate
-   2 passes.
+Phases 1-3 deliver the first independently usable increment: every
+non-interactive executable run uses one auto-started daemon with exact streams,
+exit status, confirmation binding, and no embedded fallback.
 
-### Incremental Completion
+### Product Completion
 
-1. US1 removes the daily busy failure without changing workspace identity.
-2. US2 proves per-run authority and cleanup boundaries.
-3. US3 makes ownership and stop behavior understandable.
-4. Polish binds the claim to exact real evidence and updates product truth.
+1. Add guest-owned PTY/resize and meet the real-terminal latency gate (US2).
+2. Prove multiple same-workspace workers and sibling survival (US3).
+3. Prove per-run authority separation (US4).
+4. Add rotation, crash recovery, stop refusal, and status truth (US5).
+5. Run packaging, Gate 0, real PTY/Lima, docs truth, and adversarial review.
 
-## Notes
+### Completion Rule
 
-- Tests for authority-changing behavior must fail against the pre-034 code.
-- A test that only inspects generated shell text cannot prove a namespace;
-  real Gate 2 must inspect target-visible process and mount state.
-- Do not add dynamic workspace mounts, daemon adoption, last-session auto-stop,
-  SIGWINCH forwarding, or guest-root containment to this task list.
-- If namespace primitives are absent, fail closed with recovery; never silently
-  use the old global target path.
+Task checkboxes become `[X]` only after the named assertion or implementation
+exists and its targeted test passes. `go test ./...` alone does not prove PTY,
+Lima, latency, crash, redaction, or user-visible claims.

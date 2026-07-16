@@ -191,6 +191,7 @@
             "backend.probe",
             "helper.install.linux-shim",
             "helper.install.linux-hostfsd",
+            "helper.install.linux-session-supervisor",
             "doctor.check.light"
           ]
         },

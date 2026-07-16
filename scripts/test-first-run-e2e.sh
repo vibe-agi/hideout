@@ -3,12 +3,28 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
 mode="local-fast"
 require_real=0
 fixture=""
 out=""
 package_path=""
+cleanup_daemon_binary=""
+cleanup_daemon_store=""
+cleanup_daemon_store_owned=0
+
+cleanup_test_daemon() {
+  if [ -n "$cleanup_daemon_binary" ] && [ -n "$cleanup_daemon_store" ]; then
+    env HIDEOUT_STORE_ROOT="$cleanup_daemon_store" \
+      "$cleanup_daemon_binary" daemon stop >/dev/null 2>&1 || true
+  fi
+  if [ "$cleanup_daemon_store_owned" -eq 1 ] && [ -n "$cleanup_daemon_store" ]; then
+    rm -rf "$cleanup_daemon_store"
+  fi
+}
+
+trap cleanup_test_daemon EXIT
 
 usage() {
   cat <<'USAGE'
@@ -289,7 +305,9 @@ local_fast() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-first-run-local.XXXXXX")"
   package_root="$(build_package "$tmp")"
   prefix="$tmp/install"
-  store="$tmp/store"
+  # The installed run auto-starts hideoutd. Its store-rooted Unix socket needs
+  # the shared short-root test helper when macOS exports a long TMPDIR.
+  store="$(hideout_mktemp_daemon_store)"
 	workspace="$tmp/workspace"
 	mkdir -p "$workspace"
 	workspace="$(cd "$workspace" && pwd -P)"
@@ -326,6 +344,11 @@ local_fast() {
 
   run_logged audit env HIDEOUT_STORE_ROOT="$store" "$hideout" audit show --limit 20
   test -s "$logs/audit.out"
+  run_logged daemon-stop env HIDEOUT_STORE_ROOT="$store" "$hideout" daemon stop
+  rm -rf "$store"
+  cleanup_daemon_binary=""
+  cleanup_daemon_store=""
+  cleanup_daemon_store_owned=0
   if grep -R 'go run ./cmd/hideout' "$logs" >/dev/null 2>&1; then
     echo "first-run-e2e: source-tree go run appeared after package install" >&2
     exit 1
@@ -451,6 +474,9 @@ fixture_duplicate_profile() {
   store="$tmp/store"
   install_skip_init "$package_root" "$prefix" "$store"
   hideout="$prefix/bin/hideout"
+  cleanup_daemon_binary="$hideout"
+  cleanup_daemon_store="$store"
+  cleanup_daemon_store_owned=1
   HIDEOUT_STORE_ROOT="$store" "$hideout" init --template dev --profile default --backend native --network direct --no-input >"$logs/duplicate-profile-first.out" 2>"$logs/duplicate-profile-first.err"
   if HIDEOUT_STORE_ROOT="$store" "$hideout" init --template dev --profile default --backend native --network direct --no-input >"$logs/duplicate-profile.out" 2>"$logs/duplicate-profile.err"; then
     echo "first-run-e2e: duplicate-profile fixture unexpectedly passed" >&2

@@ -14,7 +14,11 @@ import (
 	"time"
 )
 
-const ManifestVersion = "hideout.helper-manifest/v1"
+const (
+	ManifestVersion                       = "hideout.helper-manifest/v1"
+	LinuxSessionSupervisorCommand         = "hideout-session-supervisor"
+	LinuxSessionSupervisorPathEnvironment = "HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH"
+)
 
 type BuildOptions struct {
 	Out     string
@@ -46,6 +50,13 @@ func DefaultLinuxHostFSDPath(storeRoot, goarch string) string {
 		goarch = "unknown"
 	}
 	return filepath.Join(storeRoot, "bin", "hideout-hostfsd-linux-"+goarch)
+}
+
+func DefaultLinuxSessionSupervisorPath(storeRoot, goarch string) string {
+	if goarch == "" {
+		goarch = "unknown"
+	}
+	return filepath.Join(storeRoot, "bin", LinuxSessionSupervisorCommand+"-linux-"+goarch)
 }
 
 func ResolveShimPath() string {
@@ -183,6 +194,52 @@ func ResolveLinuxHostFSDPath(storeRoot, goarch string) string {
 		}
 	}
 	return ""
+}
+
+// ResolveLinuxSessionSupervisorPath locates only an architecture-specific,
+// manifest-verified Linux guest helper. It never falls back to a host binary.
+func ResolveLinuxSessionSupervisorPath(storeRoot, goarch string) string {
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	if !SupportedLinuxGuestArch(goarch) {
+		return ""
+	}
+	if path := os.Getenv(LinuxSessionSupervisorPathEnvironment); path != "" {
+		if StoreHelperCurrent(path, LinuxSessionSupervisorCommand, goarch) {
+			return path
+		}
+		return ""
+	}
+	name := LinuxSessionSupervisorCommand + "-linux-" + goarch
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), name)
+		if StoreHelperCurrent(candidate, LinuxSessionSupervisorCommand, goarch) {
+			return candidate
+		}
+	}
+	if storeRoot != "" {
+		candidate := DefaultLinuxSessionSupervisorPath(storeRoot, goarch)
+		if StoreHelperCurrent(candidate, LinuxSessionSupervisorCommand, goarch) {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath(name); err == nil && StoreHelperCurrent(path, LinuxSessionSupervisorCommand, goarch) {
+		return path
+	}
+	return ""
+}
+
+func BuildLinuxSessionSupervisor(opts BuildOptions) error {
+	if !SupportedLinuxGuestArch(opts.GOARCH) {
+		return fmt.Errorf("unsupported Linux guest supervisor architecture %q", opts.GOARCH)
+	}
+	opts.Command = LinuxSessionSupervisorCommand
+	return BuildLinuxCommand(opts)
+}
+
+func SupportedLinuxGuestArch(goarch string) bool {
+	return goarch == "arm64" || goarch == "amd64"
 }
 
 func BuildLinuxCommand(opts BuildOptions) error {
@@ -341,6 +398,9 @@ func sourceRoot(dir string) bool {
 		return false
 	}
 	if _, err := os.Stat(filepath.Join(dir, "cmd", "hideout-hostfsd")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cmd", LinuxSessionSupervisorCommand)); err != nil {
 		return false
 	}
 	return true

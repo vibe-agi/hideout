@@ -963,7 +963,10 @@ func semantic034Artifact(t *testing.T, validator, commit string, binding product
 			"nonRootTargets", "privateProc", "siblingPidHidden", "siblingRuntimeHidden",
 			"guestRootPositiveControl", "hostfsOverlaySessionLocal", "forcedInterruptionTargetGone",
 			"siblingSurvivedInterruption", "ownerReconciled", "stopRefusedWithLiveOwners",
-			"lastSessionPreservedVm", "explicitStopStoppedVm",
+			"lastSessionPreservedVm", "explicitStopStoppedVm", "realPTYInitialSize", "realPTYResize",
+			"fullscreenFixture", "interruptExitExact", "daemonCrashClientsUnblocked",
+			"daemonCrashTerminalRestored", "daemonCrashTargetsReaped", "restartStaleOwnerFailedClosed",
+			"explicitRecovery", "postRecoveryRun",
 		} {
 			checks[name] = true
 		}
@@ -971,6 +974,7 @@ func semantic034Artifact(t *testing.T, validator, commit string, binding product
 			"schema": "hideout.concurrent-sessions-gate2/v1", "status": "passed",
 			"generatedAt": "2026-07-16T12:00:00Z", "commit": commit, "dirty": false,
 			"backend": "lima", "host": "macos-arm64", "metrics": map[string]any{"ownerReconcileMs": 125}, "checks": checks,
+			"artifacts": map[string]any{"sessionPTYEvidenceSHA256": strings.Repeat("d", 64)},
 			"nonClaims": map[string]any{"guestRootContainment": "not-claimed"},
 		}
 	case productevidence.ArtifactValidatorConcurrentPerformanceV1:

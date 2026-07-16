@@ -126,9 +126,11 @@ func TestPlanMachineLimaHelpersRequireStoreManifest(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", "")
 	t.Setenv("HIDEOUT_LINUX_HOSTFSD_PATH", "")
+	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, "")
 	shim := helperbin.DefaultLinuxShimPath(store.Root, runtime.GOARCH)
 	hostfsd := helperbin.DefaultLinuxHostFSDPath(store.Root, runtime.GOARCH)
-	for _, path := range []string{shim, hostfsd} {
+	supervisor := helperbin.DefaultLinuxSessionSupervisorPath(store.Root, runtime.GOARCH)
+	for _, path := range []string{shim, hostfsd, supervisor} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -154,6 +156,9 @@ func TestPlanMachineLimaHelpersRequireStoreManifest(t *testing.T) {
 	if err := helperbin.WriteStoreHelperManifest(hostfsd, "hideout-hostfsd", runtime.GOARCH); err != nil {
 		t.Fatal(err)
 	}
+	if err := helperbin.WriteStoreHelperManifest(supervisor, helperbin.LinuxSessionSupervisorCommand, runtime.GOARCH); err != nil {
+		t.Fatal(err)
+	}
 	plan, err = PlanMachine(store, Options{ProfileName: "default", Backend: "lima", Network: "direct"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +175,7 @@ func TestPlanMachineAutoBackendMatchesRunDefaultLima(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", "")
 	t.Setenv("HIDEOUT_LINUX_HOSTFSD_PATH", "")
+	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, "")
 	plan, err := PlanMachine(store, Options{ProfileName: "default", Backend: "auto", Network: "direct"})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +197,7 @@ func TestPlanMachineNativeBackendDoesNotPlanLimaHelpers(t *testing.T) {
 	}
 	for _, task := range plan.Tasks {
 		switch task.Kind {
-		case "helper.install.linux-shim", "helper.install.linux-hostfsd":
+		case "helper.install.linux-shim", "helper.install.linux-hostfsd", "helper.install.linux-session-supervisor":
 			t.Fatalf("native init must not plan Lima helper task: %+v", task)
 		}
 	}
@@ -551,12 +557,12 @@ func helperTasks(t *testing.T, plan Plan) []Task {
 	var tasks []Task
 	for _, task := range plan.Tasks {
 		switch task.Kind {
-		case "helper.install.linux-shim", "helper.install.linux-hostfsd":
+		case "helper.install.linux-shim", "helper.install.linux-hostfsd", "helper.install.linux-session-supervisor":
 			tasks = append(tasks, task)
 		}
 	}
-	if len(tasks) != 2 {
-		t.Fatalf("expected two helper tasks, got %d in %+v", len(tasks), plan.Tasks)
+	if len(tasks) != 3 {
+		t.Fatalf("expected three helper tasks, got %d in %+v", len(tasks), plan.Tasks)
 	}
 	return tasks
 }
@@ -607,6 +613,7 @@ func fakeSourceRoot(t *testing.T) string {
 		"go.mod",
 		filepath.Join("cmd", "hideout-shim", "main.go"),
 		filepath.Join("cmd", "hideout-hostfsd", "main.go"),
+		filepath.Join("cmd", "hideout-session-supervisor", "main_linux.go"),
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {

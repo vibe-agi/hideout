@@ -22,7 +22,8 @@ for path in \
   "$prefix/bin/hideout" \
   "$prefix/bin/hideout-shim" \
   "$prefix/bin/hideout-shim-linux-$arch" \
-  "$prefix/bin/hideout-hostfsd-linux-$arch"
+  "$prefix/bin/hideout-hostfsd-linux-$arch" \
+  "$prefix/bin/hideout-session-supervisor-linux-$arch"
 do
   if [ ! -x "$path" ]; then
     echo "install-smoke: expected executable is missing: $path" >&2
@@ -33,6 +34,7 @@ done
 
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
 test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
 test -f "$store/profiles/default/profile.json"
@@ -85,5 +87,56 @@ if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_store" >/dev/null 2>&1; t
   echo "install-smoke: proxy install persisted raw proxy URL" >&2
   exit 1
 fi
+
+package_stage="$tmp/package-stage"
+package_archive="$tmp/hideout-test.tar.gz"
+scripts/package-local.sh --stage "$package_stage" --version 0.1.0-test.0 >/dev/null
+
+missing_stage="$tmp/package-stage-missing-supervisor"
+cp -R "$package_stage" "$missing_stage"
+rm "$missing_stage/hideout/bin/hideout-session-supervisor-linux-$arch"
+if scripts/package-local.sh --finalize "$missing_stage" --out "$tmp/missing-supervisor.tar.gz" >"$tmp/missing-stage.out" 2>"$tmp/missing-stage.err"; then
+  echo "install-smoke: package finalization accepted a missing session supervisor" >&2
+  exit 1
+fi
+grep -q 'required Linux session supervisor is missing' "$tmp/missing-stage.err"
+
+corrupt_stage="$tmp/package-stage-corrupt-supervisor"
+cp -R "$package_stage" "$corrupt_stage"
+printf '\ncorrupt-for-smoke\n' >>"$corrupt_stage/hideout/bin/hideout-session-supervisor-linux-$arch"
+if scripts/package-local.sh --finalize "$corrupt_stage" --out "$tmp/corrupt-supervisor.tar.gz" >"$tmp/corrupt-stage.out" 2>"$tmp/corrupt-stage.err"; then
+  echo "install-smoke: package finalization accepted a corrupt session supervisor" >&2
+  exit 1
+fi
+grep -q 'Linux session supervisor checksum mismatch' "$tmp/corrupt-stage.err"
+
+scripts/package-local.sh --finalize "$package_stage" --out "$package_archive" >/dev/null
+jq -e --arg arch "$arch" '
+  (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $arch)) and
+  any(.files[];
+    .path == "bin/hideout-session-supervisor-linux-" + $arch and
+    .kind == "linux-helper" and .executable == true) and
+  any(.files[];
+    .path == "bin/hideout-session-supervisor-linux-" + $arch + ".manifest.json" and
+    .kind == "helper-manifest")
+' "$package_stage/hideout/package-manifest.json" >/dev/null
+
+missing_helper="$tmp/package-missing-supervisor"
+cp -R "$package_stage/hideout" "$missing_helper"
+rm "$missing_helper/bin/hideout-session-supervisor-linux-$arch"
+if "$prefix/bin/hideout" package verify "$missing_helper" >"$tmp/missing-helper.out" 2>"$tmp/missing-helper.err"; then
+  echo "install-smoke: package verification accepted a missing session supervisor" >&2
+  exit 1
+fi
+grep -q 'hideout-session-supervisor-linux-' "$tmp/missing-helper.err"
+
+corrupt_helper="$tmp/package-corrupt-supervisor"
+cp -R "$package_stage/hideout" "$corrupt_helper"
+printf '\ncorrupt-for-smoke\n' >>"$corrupt_helper/bin/hideout-session-supervisor-linux-$arch"
+if "$prefix/bin/hideout" package verify "$corrupt_helper" >"$tmp/corrupt-helper.out" 2>"$tmp/corrupt-helper.err"; then
+  echo "install-smoke: package verification accepted a corrupt session supervisor" >&2
+  exit 1
+fi
+grep -q 'package checksum mismatch for bin/hideout-session-supervisor-linux-' "$tmp/corrupt-helper.err"
 
 echo "install-smoke: passed"

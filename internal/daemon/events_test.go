@@ -417,7 +417,8 @@ func TestEventsMidStreamCredentialInvalidation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.Stop(context.Background()) })
 
-	events := readEventStream(t, d, d.Token(), 3*time.Second)
+	staleToken := d.Token()
+	events := readEventStream(t, d, staleToken, 3*time.Second)
 	sawTerminal := false
 	for _, ev := range events {
 		assertValidDaemonEvent(t, ev)
@@ -429,7 +430,7 @@ func TestEventsMidStreamCredentialInvalidation(t *testing.T) {
 		t.Fatalf("stream should terminate on credential expiry, got: %+v", events)
 	}
 	// The now-expired token is refused on resubscribe (and is auditable via T009).
-	if code, _ := daemonDo(t, d, http.MethodGet, eventsPath, d.Token()); code != http.StatusUnauthorized {
+	if code, _ := daemonDo(t, d, http.MethodGet, eventsPath, staleToken); code != http.StatusUnauthorized {
 		t.Fatalf("resubscribe with expired token: want 401, got %d", code)
 	}
 }

@@ -232,7 +232,8 @@ hideout init
   -> schema.metadata.write
   -> select recommended backend
   -> backend.probe
-  -> helper.locate or helper.install.linux-shim/helper.install.linux-hostfsd
+  -> helper.locate or helper.install.linux-shim/helper.install.linux-hostfsd/
+     helper.install.linux-session-supervisor
   -> network.mode.select
   -> doctor.check.light
   -> print next command
@@ -267,6 +268,10 @@ Safe fixes:
   - `helper.install.linux-hostfsd` builds `hideout-hostfsd-linux-<arch>` into
     the store bin directory when the Lima backend is selected and no packaged
     helper is already discoverable;
+  - `helper.install.linux-session-supervisor` builds
+    `hideout-session-supervisor-linux-<arch>` into the store bin directory when
+    the Lima backend is selected and no packaged helper is already
+    discoverable;
 - write helper manifests next to store-built helper binaries. A store helper is
   current only when the sibling manifest has schema
   `hideout.helper-manifest/v1`, the expected command, `linux/<arch>`, artifact

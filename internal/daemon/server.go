@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,14 +24,7 @@ func (d *Daemon) authorizeStream(r *http.Request) error {
 }
 
 func (d *Daemon) validQueryToken(tok string) bool {
-	if subtle.ConstantTimeCompare([]byte(tok), []byte(d.token)) != 1 {
-		return false
-	}
-	now := time.Now().UTC()
-	if d.api.Now != nil {
-		now = d.api.Now().UTC()
-	}
-	return d.api.ExpiresAt.IsZero() || now.Before(d.api.ExpiresAt)
+	return d.credentials != nil && d.credentials.Validate(tok)
 }
 
 const (

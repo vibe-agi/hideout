@@ -13,6 +13,8 @@
 // operator UID, the operator token is the sole defense. Every request is
 // token-authenticated (reusing manager.API.authorize); unauthenticated refusals
 // are recorded in a persistent, session-unbound daemon-local audit log without
-// ever storing client-supplied token material. Daemon absence changes nothing —
-// existing surfaces keep using embedded Manager Core.
+// ever storing client-supplied token material. Normal executable runs start or
+// reuse this daemon role and never fall back to an embedded backend owner;
+// non-executable planning and UI observation retain only their documented local
+// behavior.
 package daemon

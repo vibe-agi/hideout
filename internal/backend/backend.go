@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +128,45 @@ type Backend interface {
 	Prepare(ctx context.Context, spec RunSpec) (*Session, error)
 	Run(ctx context.Context, session *Session, command []string, env []string) error
 	Cleanup(ctx context.Context, session *Session) error
+}
+
+type RunControlKind string
+
+const (
+	RunControlResize RunControlKind = "resize"
+	RunControlSignal RunControlKind = "signal"
+)
+
+// RunControl is a transport-neutral target control. Only the fields belonging
+// to Kind are meaningful; terminal file descriptors remain in the client.
+type RunControl struct {
+	Kind    RunControlKind
+	Rows    uint16
+	Columns uint16
+	Signal  string
+}
+
+// RunStreams binds one daemon-owned worker to one client connection. Terminal
+// output is used only in PTY mode; stdout and stderr remain separate in pipe
+// mode. Closing Stdin represents EOF and context cancellation represents loss.
+type RunStreams struct {
+	Terminal bool
+	Rows     uint16
+	Columns  uint16
+	Term     string
+	Stdin    io.Reader
+	Stdout   io.Writer
+	Stderr   io.Writer
+	PTY      io.Writer
+	Controls <-chan RunControl
+	Ready    func(*Session) error
+}
+
+// StreamRunner is required for the daemon session transport. A backend that
+// does not implement it may still serve legacy bounded HTTP/test adapters, but
+// Manager must never substitute Backend.Run for a requested stream session.
+type StreamRunner interface {
+	RunWithStreams(ctx context.Context, session *Session, command []string, env []string, streams RunStreams) error
 }
 
 // Activator separates bounded environment startup/verification from target

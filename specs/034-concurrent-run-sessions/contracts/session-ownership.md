@@ -1,65 +1,64 @@
-# Contract: Session Ownership And Lifecycle
+# Contract: Daemon Session Ownership And Recovery
 
 <!-- markdownlint-disable MD013 MD060 -->
 
-## Authority
+## Live Ownership
 
-The environment transition lock serializes lifecycle mutation. A separate
-per-session flock proves each live host owner. Neither lock contains broker,
-HostFS, network, endpoint, or host-app authority.
+- One daemon instance owns all executable runs for one store.
+- One authenticated client connection owns at most one daemon worker.
+- One worker owns one durable owner lock/record and one guest supervisor.
+- One supervisor owns one target process tree and optional PTY.
+- The connection, worker, owner, and supervisor session IDs must match.
 
-## Attach
+Persisted JSON is evidence, not liveness. Live daemon registry plus kernel lock
+is current truth; mismatch or inability to prove either fails closed.
 
-Manager MUST, under the transition lock:
+## Concurrency
 
-1. reconcile unlocked stale owner records;
-2. reject any unprovable owner state;
-3. validate the pinned environment and shared-service fingerprint;
-4. create and exclusively lock the new owner record;
-5. start or validate the running backend and required service;
-6. persist `preparing`, then release the transition lock.
+- Environment transition operations serialize through the daemon and existing
+  transition lock.
+- Target lifetime does not hold that lock.
+- Same existing environment plus same pinned workspace may have up to the
+  configured bounded session count.
+- Every sibling has a distinct runtime child, broker token, HostFS provider,
+  staged-write state, host-capability grants, audit, supervisor, terminal, and
+  process view.
+- Direct workspace changes are intentionally shared.
 
-Parallel starts wait with context cancellation rather than returning the old
-`environment ... is already in use` target-lifetime error.
+## Client Loss
 
-## Run
+1. Mark only the owning worker cancelling.
+2. Stop accepting input/renewal.
+3. Cancel backend/supervisor transport.
+4. Supervisor kills and reaps target descendants.
+5. Close per-run providers and bridges.
+6. Prove session-view absence.
+7. Remove session runtime/credential state.
+8. Record completion/failure and release owner.
 
-The owner lock remains open from registration through target and ordered
-cleanup. After the session view is active, Manager records `running`. A host
-crash releases the flock automatically; the JSON becomes stale evidence, not
-live evidence.
+Sibling workers and environment-shared services remain live.
 
-## Finish
+## Daemon Stop Or Crash
 
-The finishing process reacquires the transition lock and records `cleaning`.
-It removes only its runtime child and authority. The environment remains
-`running` if any sibling owner is live. With no sibling, it becomes `ready` or
-`error` based on actual cleanup.
+- Ordered daemon stop refuses new sessions, cancels all workers, waits within a
+  bound, closes event/session/API listeners, records audit, and releases lock.
+- Unclean process death closes Unix and SSH transports. Guest supervisors must
+  terminate their targets on transport/heartbeat loss.
+- A new daemon invalidates prior operator credentials.
+- Restart inventories stale/unproved owner records and live environments. It
+  does not silently re-adopt sessions and does not destroy ambiguous resources.
 
-## Stop
+## Environment Stop
 
-Explicit stop takes the transition lock and probes every owner:
-
-- one or more `live` owners: deny with active count and copyable retry advice;
-- any `unprovable` owner: deny and direct the operator to doctor/repair;
-- stale unlocked records only: reconcile, audit, then continue;
-- no active or unprovable owners: use the existing non-destructive stop.
-
-Stop never signals a session in 034. Releasing the last owner never invokes
-stop automatically.
-
-## Race Requirements
-
-- Attach and stop cannot both commit.
-- Two starts of a stopped environment converge on one backend start.
-- A finishing owner cannot clean the shared service after a sibling has
-  registered.
-- Stale metadata cannot increase active count.
-- Lock acquisition respects caller cancellation and has no unbounded wait.
+- Stop and new registration share transition serialization.
+- Any live worker, live owner lock, or unproved owner state denies stop.
+- A final normal session exit leaves the environment warm/ready in 034.
+- Automatic last-session stop, clean, delete, compact, or recreate is forbidden
+  in this feature.
 
 ## Evidence
 
-Audit records bounded owner state transitions and environment/service outcome.
-It does not record lock paths, PIDs, tokens, raw command argv, or proxy
-material. Manager API, CLI, TUI/WebUI event payloads, and doctor consume the
-same summary builder.
+Public/session status may include session ID, environment ID, profile, backend,
+workspace hash, lifecycle state, terminal mode, command class, timestamps, and
+redacted cleanup error. It excludes tokens, raw workspace/control paths,
+process IDs, file descriptors, proxy values, and setup credentials.

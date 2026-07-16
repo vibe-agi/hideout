@@ -16,6 +16,7 @@ func TestFindSourceRootWalksUpFromPackageDirectory(t *testing.T) {
 		filepath.Join(root, "go.mod"),
 		filepath.Join(root, "cmd", "hideout-shim"),
 		filepath.Join(root, "cmd", "hideout-hostfsd"),
+		filepath.Join(root, "cmd", LinuxSessionSupervisorCommand),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("source root %q missing %s: %v", root, path, err)
@@ -30,6 +31,9 @@ func TestDefaultLinuxHelperPathsUseStoreBin(t *testing.T) {
 	}
 	if got, want := DefaultLinuxHostFSDPath(root, "arm64"), filepath.Join(root, "bin", "hideout-hostfsd-linux-arm64"); got != want {
 		t.Fatalf("DefaultLinuxHostFSDPath=%q want %q", got, want)
+	}
+	if got, want := DefaultLinuxSessionSupervisorPath(root, "arm64"), filepath.Join(root, "bin", "hideout-session-supervisor-linux-arm64"); got != want {
+		t.Fatalf("DefaultLinuxSessionSupervisorPath=%q want %q", got, want)
 	}
 }
 
@@ -103,6 +107,57 @@ func TestResolveLinuxStoreHelpersRequireCurrentManifest(t *testing.T) {
 	}
 	if got := ResolveLinuxHostFSDPath(root, "unitarch"); got != hostfsd {
 		t.Fatalf("ResolveLinuxHostFSDPath=%q want %q", got, hostfsd)
+	}
+}
+
+func TestResolveLinuxSessionSupervisorRequiresMatchingManifest(t *testing.T) {
+	root := t.TempDir()
+	path := DefaultLinuxSessionSupervisorPath(root, "arm64")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("supervisor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv(LinuxSessionSupervisorPathEnvironment, path)
+	if got := ResolveLinuxSessionSupervisorPath(root, "arm64"); got != "" {
+		t.Fatalf("resolver accepted helper without manifest: %q", got)
+	}
+	if err := WriteStoreHelperManifest(path, LinuxSessionSupervisorCommand, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLinuxSessionSupervisorPath(root, "arm64"); got != path {
+		t.Fatalf("ResolveLinuxSessionSupervisorPath=%q want %q", got, path)
+	}
+	if err := os.WriteFile(path, []byte("corrupt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLinuxSessionSupervisorPath(root, "arm64"); got != "" {
+		t.Fatalf("resolver accepted checksum mismatch: %q", got)
+	}
+}
+
+func TestResolveLinuxSessionSupervisorRejectsUnsupportedArchitectureAndHostFallback(t *testing.T) {
+	root := t.TempDir()
+	hostBinary := filepath.Join(root, LinuxSessionSupervisorCommand)
+	if err := os.WriteFile(hostBinary, []byte("host-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	t.Setenv(LinuxSessionSupervisorPathEnvironment, "")
+	if got := ResolveLinuxSessionSupervisorPath("", "386"); got != "" {
+		t.Fatalf("unsupported architecture resolved helper %q", got)
+	}
+	if got := ResolveLinuxSessionSupervisorPath("", "arm64"); got != "" {
+		t.Fatalf("resolver fell back to unsuffixed host binary %q", got)
+	}
+}
+
+func TestBuildLinuxSessionSupervisorRejectsUnsupportedArchitecture(t *testing.T) {
+	err := BuildLinuxSessionSupervisor(BuildOptions{Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: "."})
+	if err == nil {
+		t.Fatal("BuildLinuxSessionSupervisor accepted unsupported architecture")
 	}
 }
 

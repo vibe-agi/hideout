@@ -1,4 +1,4 @@
-# Implementation Plan: Concurrent Run Sessions
+# Implementation Plan: Daemon-Owned Concurrent Run Sessions
 
 <!-- markdownlint-disable MD013 MD060 -->
 
@@ -8,95 +8,85 @@
 
 ## Summary
 
-Allow multiple `hideout run` processes to use one existing, workspace-pinned
-reusable environment without sharing per-run authority. The existing static
-workspace virtiofs mount remains unchanged. The environment runtime mount
-becomes a transport root with environment-level `services/` and unique
-`sessions/<session-id>/` children. Manager holds the environment transition
-lock only while attaching, starting shared services, reconciling ownership, or
-finishing. Each run holds a separate OS-backed owner lease for its lifetime.
+Replace executable embedded runs with one resident per-store control plane.
+`hideout run` becomes a thin local client that parses intent, captures terminal
+facts, renders confirmation, and streams interaction. The `hideoutd` process
+role owns Manager Core, environment transitions, session workers, backend/SSH,
+per-run providers, cleanup, credential rotation, status, and recovery.
 
-For Lima, the existing root-control SSH identity starts each ordinary target
-inside a mount and PID namespace, binds only that session child to
-`/hideout/session`, mounts its HostFS view privately, then drops to the existing
-non-root profile user. A second Core-owned channel on the same authenticated
-SSH transport acts only as a connection-liveness guardian: the host sends a
-fixed heartbeat and normal completion sends `done`; heartbeat timeout or
-transport EOF validates the root-owned namespace parent PID, process start time,
-and exact session source argument before killing that parent. It carries no
-broker, HostFS, network, or daemon authority.
-This is an A1/A2 process/control-view boundary, not a guest-root wall.
-Environment-level privacy networking is shared only for an identical
-secret-free configuration fingerprint and is cleaned only by the last proved
-owner. Cross-workspace reuse, daemon adoption/automatic stop, and complete
-dynamic terminal resize remain outside 034.
+Add a dedicated private Unix session socket and a bounded framed protocol. For
+Lima, the daemon uses non-PTY root-control SSH to start a fixed packaged Linux
+supervisor inside the existing per-session mount/PID view. The supervisor owns
+the guest PTY, target process group, resize, signals, and reaping. This removes
+the measured OpenSSH PTY-request delay while preserving unique broker, HostFS,
+network, host-capability, terminal, process, and audit authority per run.
+
+The delivery cut line is same-workspace concurrency with dynamic resize and
+truthful non-interactive streams. Cross-workspace VM sharing, last-session
+auto-stop, detach, browser terminals, guest-root containment, and exhaustive
+theme/OSC compatibility remain outside 034.
 
 ## Technical Context
 
-**Language/Version**: Go 1.25; POSIX shell generated only by trusted Go backend code; JSON/JSON Schema for ownership and status contracts
+**Language/Version**: Go 1.25; strict JSON control payloads; a compact binary frame envelope; trusted POSIX shell generated only by the Lima backend
 
-**Primary Dependencies**: Existing Manager/backend/Lima/session/network/HostFS packages, `golang.org/x/sys/unix` flock, `golang.org/x/crypto/ssh`, Linux `unshare`, `mount`, `setpriv`, and private `/proc` from the supported guest runtime
+**Primary Dependencies**: Existing Manager, daemon, backend/Lima, session, environment, network, HostFS, broker, host-capability, helperbin, `golang.org/x/crypto/ssh`, `golang.org/x/term`, `golang.org/x/sys`, and `github.com/creack/pty` for the fixed Linux supervisor PTY; dependency metadata is resolved through `go mod tidy`
 
-**Storage**: Existing environment and session stores plus additive strict session-owner records and environment-service state under private environment directories; no database and no daemon-owned authority
+**Storage**: Existing private store, daemon runtime, environment records, owner records, per-session runtime children, audit files, and helper manifests; rotating daemon token is atomically persisted, while live workers and per-run credentials are memory/session scoped
 
-**Testing**: Go unit, race, contract, Manager/CLI parity, cleanup-failure, terminal-stream, JSON Schema, docs truth, Gate 0 smoke, and real macOS arm64 Lima Gate 2 concurrency/isolation/performance evidence
+**Testing**: Go unit/race/contract tests, protocol fuzz-style malformed fixtures, Manager/CLI parity, auto-start races, credential rotation, helper cross-build/tests, package verification, Gate 0 smoke, real PTY tests, and real macOS arm64 Lima Gate 2 evidence
 
-**Target Platform**: Product claim requires macOS arm64 with Lima and the supported Linux guest runtime; native is a weak mechanics harness only
+**Target Platform**: Product claim is macOS arm64 with Lima and the supported Linux guest runtime; native remains a weak mechanics harness and cannot supply isolation evidence
 
-**Project Type**: Go CLI plus local Manager control plane, reusable VM backend, and brokered per-run data plane
+**Project Type**: Go CLI/client plus a local single-user daemon role, canonical Manager Core, VM backend, and a fixed Linux guest helper
 
-**Performance Goals**: A second run joining an already-active environment reaches target execution in 2.0 seconds p95; Git/package metadata fixtures remain within 1.25x of the pre-feature static-workspace baseline
+**Performance Goals**: Warm real-terminal invocation to first target byte is at most 2.0 seconds p95 across at least 20 samples; no command-specific fast path; protocol framing adds no silent output loss or unbounded buffering
 
-**Constraints**: Preserve the static workspace mount and environment identity; no dynamic cross-workspace mount, no daemon requirement, no automatic stop, no generic guest-root claim, no broad store mount, no hidden helper download, no ambient host fallback, and no per-session UID change that would break workspace ownership
+**Constraints**: No embedded executable fallback, no browser terminal authority, no generic host/guest/root action, no client-visible backend or per-run credentials, no SSH `RequestPty` for the new path, no workspace transport change, no automatic VM stop, no detach, and no guest-root containment claim
 
-**Scale/Scope**: One operator, one pinned workspace per environment, up to 16 concurrent sessions, one compatible environment network service, and bounded retained owner metadata
+**Scale/Scope**: One operator and store, one daemon, one pinned workspace per environment, up to 16 concurrent active sessions, multi-hour sessions with token renewal, bounded 64 KiB data frames, and bounded per-connection queues
 
 ## Constitution Check
 
 *GATE: Passed before research and re-checked after Phase 1 design.*
 
-- **Privacy Boundary - PASS**: The feature changes lifecycle locking, runtime
-  state projection, process visibility, HostFS mount scope, and shared network
-  service lifetime. Unsupported namespace primitives, ambiguous owner state,
-  incompatible service fingerprints, and cleanup errors fail before a target
-  gains authority or before stop mutates the VM.
-- **Typed Authority - PASS**: Existing Manager run and environment stop
-  plan/apply operations remain the only product paths. Go owns owner leases,
-  namespace command construction, shared-service validation, HostFS setup, and
-  cleanup. No JavaScript or community artifact participates.
-- **Workspace And Policy - PASS**: The existing workspace mapping remains the
-  intentional shared read/write surface. Each namespace receives only its own
-  `/hideout/session` and HostFS mount; existing deny, reserved-root, read,
-  discover, decision, and staged-write policy remains authoritative.
-- **Generality And Provider Scope - PASS**: Concurrent sessions are generic.
-  Shells, Git, package tools, Claude, and Codex are fixtures, not command
-  semantics. Lima owns the namespace provider; native makes no isolation claim.
-- **Evidence And Redaction - PASS**: One owner registry feeds session status,
-  environment summaries, stop refusal, audit, doctor, CLI, and Manager API.
-  Public summaries expose IDs and states, never lock paths, tokens, proxy
-  material, machine identity, or sibling runtime paths.
-- **Backend And Distribution - PASS**: No new helper binary is required. Lima
-  probes the fixed runtime primitives before activation and fails with typed
-  recovery if absent. Runtime/package docs record the prerequisite; target code
-  never receives root-control SSH.
-- **Gates - PASS**: Gate 0 covers state machines, lock races, strict schemas,
-  redaction, API parity, shared environment-network lifecycle/runtime-health,
-  terminal-stream behavior, docs, and failure fixtures. Real Gate 2 covers
-  namespaces, process/mount invisibility, HostFS isolation, forced
-  interruption/teardown, sibling survival, and performance. The direct-network
-  check in Gate 2 proves session non-interference; it does not stand in for a
-  real shared `tun2socks` lifecycle claim.
-- **Status And Docs - PASS**: Implementation updates `docs/STATUS.md`,
-  `docs/architecture-principles.md`, `docs/privacy-run-design.md`,
-  `docs/threat-model.md`, `docs/privacy-run-test-plan.md`,
-  `docs/claim-boundaries.md`, support matrix, README concurrency wording, and
-  command examples only after the relevant proof passes.
+- **Privacy Boundary - PASS**: Daemon connection, authentication, plan drift,
+  confirmation, protocol mismatch, supervisor failure, lease expiry, ownership
+  ambiguity, isolation failure, active-session stop, and cleanup failure all
+  fail closed. There is no ambient or embedded backend fallback.
+- **Typed Authority - PASS**: Manager and existing Go providers remain the only
+  authority. The client carries typed intent and terminal data. The fixed guest
+  helper can start only the daemon-built session contract and cannot express a
+  generic privileged command.
+- **Workspace And Policy - PASS**: The direct workspace mount remains the sole
+  intentional shared write surface. Broker, HostFS, decisions, staged writes,
+  network runtime, host applications, credentials, process view, and terminal
+  stay session scoped.
+- **Generality And Provider Scope - PASS**: PTY selection is based on terminal
+  capability or an explicit mode, never a shell/agent command list. Bash,
+  Claude, Codex, Git, and full-screen programs are fixtures only.
+- **Evidence And Redaction - PASS**: One daemon worker/owner model feeds status,
+  Manager, CLI, events, doctor, and audit. Protocol diagnostics, status, and
+  evidence exclude operator tokens, per-run credentials, raw authority paths,
+  proxy secrets, and target-controlled terminal content unless the existing
+  local evidence contract explicitly includes it.
+- **Lifecycle - PASS**: The daemon is Core's resident lifecycle owner; the
+  supervisor owns guest PTY/process lifetime. Client loss cancels rather than
+  detaches, daemon loss terminates guest work through transport ownership, and
+  restart does not silently adopt or destroy ambiguous state.
+- **Distribution - PASS**: The Linux supervisor uses the existing verified
+  helper build/manifest/package/install model. Missing, stale, wrong-arch, or
+  digest-mismatched helpers fail before target authority. Dependency metadata
+  is changed only through Go tooling and `go mod tidy`.
+- **Gates - PASS**: Gate 0 proves model, protocol, auth, race, parity, packaging,
+  redaction, and failure behavior. Real PTY and real Lima lanes prove latency,
+  resize, terminal restoration, namespaces, crash behavior, and sibling
+  survival. Pipe timing cannot substitute for terminal evidence.
 
-Post-design re-check: all eight items remain PASS. The design removes the
-single-writer implementation without weakening the static workspace boundary,
-uses existing Go-owned setup authority, and keeps automatic lifecycle
-ownership and cross-workspace transport out of scope. No constitution waiver
-is required.
+Post-design re-check: all items remain PASS. 034 intentionally supersedes the
+early explicit-opt-in daemon and daemon-less run constraints, but preserves the
+deeper constitutional rule that the daemon is a runtime for typed Manager/Core
+authority rather than a new authority language. No waiver is required.
 
 ## Project Structure
 
@@ -110,8 +100,9 @@ specs/034-concurrent-run-sessions/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   ├── environment-service.md
-│   ├── guest-session-view.md
+│   ├── client-daemon-session.md
+│   ├── guest-supervisor.md
+│   ├── run-service.md
 │   └── session-ownership.md
 ├── checklists/
 │   └── requirements.md
@@ -121,40 +112,58 @@ specs/034-concurrent-run-sessions/
 ### Source Code (repository root)
 
 ```text
+cmd/
+└── hideout-session-supervisor/
+    ├── main_linux.go              # fixed guest PTY/process supervisor
+    └── main_other.go              # unsupported-platform refusal
+
 internal/
-├── session/
-│   ├── ownership.go             # OS-backed lease and strict summary model
-│   └── session.go               # existing durable/ephemeral session layout
-├── environment/
-│   └── environment.go           # transition lock and runtime child layout
+├── sessionwire/
+│   ├── frame.go                   # bounded binary envelope and frame catalog
+│   ├── control.go                 # strict control payloads and validation
+│   └── stream.go                  # serialized writer and bounded reader
+├── daemon/
+│   ├── credential.go              # token rotation and validation
+│   ├── autostart.go               # race-safe detached daemon readiness
+│   ├── session_transport.go       # private session listener
+│   ├── session_server.go          # authenticated one-connection/one-run worker
+│   ├── session_client.go          # thin-client dial and renewal support
+│   ├── sessions.go                # live worker registry and shutdown
+│   ├── daemon.go                  # composition and ordered lifecycle
+│   ├── server.go                  # existing Manager/status/events HTTP surface
+│   └── status.go                  # redacted session inventory
 ├── manager/
-│   ├── run_apply.go             # attach/run/finish lock choreography
-│   ├── run_environment.go       # owner-aware lifecycle state
-│   ├── run_session.go           # unique environment runtime child per run
-│   ├── run_network.go           # shared-service fingerprint/materialization
-│   ├── environment_lifecycle.go # active-owner stop refusal
-│   ├── manager.go               # authoritative summaries
-│   └── api.go                   # existing run/status and overview surfaces
+│   ├── run_service.go             # canonical structured plan/apply entry point
+│   ├── run_apply.go               # existing run lifecycle implementation
+│   ├── run_session.go             # unique runtime and audit ownership
+│   ├── run_dataplane.go           # session-scoped providers/helpers
+│   ├── run_environment.go         # transition and owner state
+│   ├── environment_lifecycle.go   # stop refusal
+│   ├── api.go                     # HTTP delegates to canonical run service
+│   └── manager.go                 # authoritative summaries
 ├── backend/
-│   ├── backend.go               # activation/session-view contract
+│   ├── backend.go                 # stream/session contract
 │   └── lima/
-│       ├── lima.go              # runtime activation and existing run path
-│       ├── session_view.go      # root-SSH namespace runner
-│       ├── ssh_bridge.go        # bounded direct SSH stream/PTY reuse
-│       └── setup.go             # existing separate setup identity
-├── network/
-│   └── network.go               # secret-free service fingerprint
+│       ├── supervisor.go          # non-PTY SSH supervisor bridge
+│       ├── session_view.go        # fixed namespace launcher/cleanup proof
+│       ├── ssh_bridge.go          # authenticated SSH transport
+│       └── lima.go                # activation and helper materialization
+├── session/
+│   └── ownership.go              # durable liveness/crash evidence
+├── helperbin/
+│   └── helperbin.go              # supervisor resolve/build/manifest support
 ├── recovery/
-│   └── registry.go              # stable owner/isolation/service errors
-└── doctor/
-    └── doctor.go                # runtime primitive and stale-owner checks
+│   └── registry.go               # stable daemon/session/helper recovery codes
+└── app/
+    ├── app.go                     # thin CLI parsing/render/raw terminal loop
+    └── terminal_client.go         # terminal mode/resize/signal/restoration
 
 schemas/
 ├── active-session-summary.schema.json
-└── environment-service-state.schema.json
+└── daemon-status.schema.json
 
 scripts/
-├── test-concurrent-sessions-smoke.sh
+├── test-daemon-session-smoke.sh
 ├── test-concurrent-sessions-e2e.sh
 ├── test-gate0.sh
 └── lib/gate2-concurrent-sessions.sh
@@ -169,16 +178,21 @@ docs/
 └── STATUS.md
 ```
 
-**Structure Decision**: Extend the existing session and environment ownership
-boundaries rather than create a parallel scheduler or daemon. Add one Lima
-backend file for the namespace runner because it is a backend primitive, while
-Manager retains lifecycle and service-policy authority. No new executable or
-third-party runtime dependency is introduced.
+**Structure Decision**: Add one protocol package, one daemon session service,
+and one fixed Linux helper. Keep Manager as the authority/lifecycle domain and
+Lima as the backend provider. `internal/app` remains presentation and process
+composition only. Do not add an alternate scheduler, generic remote shell, or
+second host binary contract.
 
 ## Complexity Tracking
 
-No constitution violations require justification. The additional session
-ownership record is necessary because the old environment-wide lock cannot
-both prove each live owner and permit concurrency. The Lima namespace runner
-is a backend implementation of the existing per-run isolation contract, not a
-new product authority.
+| Addition | Why Required | Simpler Alternative Rejected Because |
+|----------|--------------|---------------------------------------|
+| Dedicated session Unix socket | Terminal ownership needs one full-duplex, backpressured connection whose loss cancels one run | SSE/HTTP polling cannot preserve binary terminal and ownership semantics |
+| Fixed Linux supervisor helper | Guest-side PTY allocation removes the measured SSH PTY delay and owns resize/process-group cleanup | SSH `RequestPty` is the measured bottleneck; shell `script` lacks the typed control contract |
+| Rotating credential manager | Multi-hour daemon/API/session use must survive expiry while stale tokens lose access | A longer static TTL does not implement rotation or revocation |
+| Canonical Manager run service | Thin CLI and Manager API must retain every existing run option without duplicate orchestration | Copying CLI logic into daemon would drift and put lifecycle policy in the presentation package |
+
+None of these additions creates a new authority action. Each removes an
+existing ownership ambiguity or implements a required lifecycle/terminal
+contract.

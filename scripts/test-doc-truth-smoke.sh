@@ -264,7 +264,7 @@ concurrent_sessions_overclaim_category() {
   case "$lower" in
     *cross-workspace*"shared vm"*supported*|*cross-workspace*"shared environment"*supported*) printf 'concurrent-cross-workspace'; return ;;
     *last*session*"auto-stop"*supported*|*last*session*automatically*stops*) printf 'concurrent-auto-stop'; return ;;
-    *dynamic*resize*fully*supported*|*sigwinch*fully*supported*) printf 'concurrent-dynamic-resize'; return ;;
+		*all*terminal*emulator*fully*supported*|*all*terminal*theme*fully*supported*|*osc*fully*supported*) printf 'concurrent-terminal-emulator-hardening'; return ;;
     *guest-root*session*containment*provided*|*guest-root*session*containment*supported*|*guest\ root*cannot*inspect*sibling*) printf 'concurrent-guest-root-containment'; return ;;
     *native*proves*session*isolation*|*local*smoke*proves*session*isolation*) printf 'concurrent-false-real-gate'; return ;;
   esac
@@ -399,7 +399,7 @@ validate_concurrent_sessions_overclaim_fixtures() {
   local fixtures=(
     "Cross-workspace shared VM is supported"
     "The last session automatically stops the VM"
-    "Dynamic resize is fully supported"
+		"All terminal emulator, theme, and OSC behavior is fully supported"
     "Guest-root session containment is provided"
     "Native proves session isolation"
   )

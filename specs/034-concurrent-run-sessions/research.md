@@ -1,299 +1,293 @@
-# Research: Concurrent Run Sessions
+# Research: Daemon-Owned Concurrent Run Sessions
 
 <!-- markdownlint-disable MD013 MD060 -->
 
-## Decision 1: Formal 034 Is Same-Workspace Concurrency Only
+## Decision 1: Replace The Old 034 Execution Path In Place
 
-**Decision**: Deliver concurrent sessions only when run planning resolves the
-same existing environment and its already-pinned workspace. Preserve the
-current static Lima virtiofs workspace declaration.
+**Decision**: Keep feature number 034 and replace its executable run path. The
+existing same-workspace environment, owner-record, runtime-child, namespace,
+and shared-network work remains the baseline. Normal `hideout run` no longer
+constructs Manager Core or a backend in the invoking process.
 
-**Rationale**: The current failure is caused by an environment-wide lock held
-for the complete run (`internal/manager/run_apply.go:97-108`) and by replacing
-unique session runtime paths with one cleared environment path
-(`internal/manager/run_session.go:53-62`; `internal/environment/environment.go:567-610`).
-Neither requires dynamic workspace attachment. Keeping the mount unchanged
-isolates the daily usability fix from the unproved cross-workspace transport.
-
-**Alternatives considered**:
-
-- Ship the full shared-default environment: rejected because dynamic
-  workspace attachment and weaker cross-workspace isolation are a separate
-  product/security gate.
-- Create another VM for each concurrent command: rejected because it preserves
-  the visible latency and resource problem rather than fixing reuse.
-
-## Decision 2: Split Transition Serialization From Session Ownership
-
-**Decision**: Keep one environment transition flock, but hold it only while
-starting/reconciling the VM, registering an owner, activating a shared service,
-finishing, or stopping. Each run separately holds an exclusive flock on its
-own owner file for the complete host-process lifetime.
-
-**Rationale**: A PID or mutable JSON record cannot prove liveness. Existing
-HostFS read grants already use an open flock as an OS-owned proof
-(`internal/hostfs/readgrant/owner.go:18-58`). A per-session adaptation releases
-automatically on process death and allows stop to distinguish live, stale, and
-unprovable state. The transition lock still serializes attach versus stop and
-concurrent startup, but no longer reserves the VM for the target lifetime.
+**Rationale**: The old 034 proved concurrent session mechanics, but every CLI
+process still owned a complete Manager/backend lifecycle. That leaves
+cross-process ownership awkward, makes a final-session stop race-prone, and
+forces every interactive run through a slow SSH PTY allocation. There is no
+external compatibility population requiring two executable paths.
 
 **Alternatives considered**:
 
-- In-memory Manager registry: rejected because independent CLI processes do
-  not share memory.
-- Require `hideoutd`: deferred to 036; 034 must work in the current daemon-less
-  product path.
-- Persist PIDs: rejected because reuse and namespace ambiguity make a PID
-  weaker than an open OS lock.
+- Add a second feature number while retaining old 034: rejected because it
+  would leave two contradictory ownership contracts.
+- Keep embedded execution as a fallback: rejected because daemon failure would
+  silently change authority and cleanup ownership.
 
-## Decision 3: Use The Existing Environment Mount As A Transport Root
+## Decision 2: `hideoutd` Is A Resident Role Of The Product Binary
 
-**Decision**: Retain one static host runtime mount, but organize it as:
+**Decision**: One operator-private daemon is mandatory for executable runs.
+`hideout run` connects to it or races safely to auto-start it. The installed
+`hideout` executable enters an internal daemon-serving role; 034 does not add a
+second host distributable merely to obtain a different process name. Explicit
+daemon start/status/stop remain operator controls.
 
-```text
-runtime/
-├── services/
-│   └── network/
-└── sessions/
-    └── <session-id>/
-        ├── bootstrap/
-        ├── network/
-        ├── shims/
-        └── tmp/
-```
-
-The host-side durable session/audit layout remains under `sessions/<id>` in
-the Hideout store. Only transient guest-consumed files are duplicated beneath
-the environment runtime root.
-
-**Rationale**: Lima config is immutable after VM start and currently mounts
-the environment runtime directory at `/hideout/session`
-(`internal/backend/lima/lima.go:677,773-781`). Switching back to a unique host
-session directory without a guest projection would therefore leave the second
-run invisible. Child directories preserve the static mount and avoid mounting
-the wider Hideout store.
+**Rationale**: One composition root avoids package duplication while preserving
+the C/S architecture. The daemon already mounts the canonical Manager API and
+holds the per-store lock. Auto-start removes daemon administration from normal
+use, while the lock and readiness probe ensure concurrent clients converge on
+one process.
 
 **Alternatives considered**:
 
-- Mount the whole store into the VM: rejected as a control-plane disclosure.
-- Copy shims through an ad hoc guest installer: rejected because the existing
-  verified static mount already supplies them.
-- Clear and reuse the root: rejected because that is the current collision.
+- Require `hideout daemon start` before every run: rejected as product friction.
+- Start an in-process daemon goroutine in the client: rejected because it dies
+  with the client and does not establish one cross-terminal owner.
+- Ship a separate `hideoutd` binary: deferred until packaging or service-manager
+  integration proves a concrete need.
 
-## Decision 4: Lima Uses Mount And PID Namespaces, Then Drops Privilege
+## Decision 3: Use A Dedicated Private Session Socket
 
-**Decision**: The Go-owned Lima backend opens its existing root-control SSH
-channel, executes a fixed namespace wrapper using `unshare --mount --pid
---fork --kill-child=KILL --mount-proc`, makes mount propagation private,
-bind-mounts only
-`/hideout/runtime/sessions/<id>` onto `/hideout/session`, starts the session's
-HostFS mount there, and finally runs the requested argv as the existing profile
-user with a clean environment. The same authenticated transport opens one
-additional Core-owned guardian channel. The host emits a fixed heartbeat during
-the target lifetime and sends `done` on normal completion. Heartbeat timeout or
-transport EOF reads the root-owned guest-ephemeral launcher record and validates
-its PID, Linux process start time, and exact session source argv before killing
-the namespace parent. `unshare --kill-child=KILL` then terminates the namespace descendants.
-The target cannot modify this identity record. The guardian ignores disconnect
-signals long enough to process EOF and carries no target input, broker token,
-HostFS authority, network secret, or generic command. The workspace mount is
-unchanged and remains shared.
+**Decision**: Keep the existing authenticated HTTP Manager socket for bounded
+request/response and SSE surfaces. Add a second 0600 Unix socket under the same
+validated store-rooted daemon runtime directory for full-duplex run sessions.
+The guest cannot reach either socket. Browser loopback transport never mounts
+the session protocol.
 
-**Rationale**: A 2026-07-16 probe against the supported
-`developer-standard-2026.07.0` Lima VM observed `unshare`, `mount`, `setpriv`,
-`flock`, and `nsenter`, and proved root-control SSH can create mount and PID
-namespaces. A bind probe showed the session child inside while the parent mount
-remained unchanged outside. This reuses the 009 separation between Go-owned
-setup identity and non-root target (`internal/backend/lima/setup.go:19-58`). A
-private `/proc` prevents ordinary targets from enumerating sibling process
-state.
-
-Preflight, guardian, target, and the final exact-session cleanup proof use four
-channels on one authenticated SSH transport. Reopening root SSH for identity
-check and cleanup after every short command was rejected after the real
-performance Gate reproduced Lima handshake exhaustion. The owning transport
-already proves the root-control identity; only transient handshake EOF remains
-eligible for a three-attempt bounded retry on paths that genuinely need a new
-setup connection.
-
-Guest fixture timing uses Python's monotonic nanosecond clock. A real Gate run
-proved that guest wall time can move backwards during Lima time synchronization;
-`date +%s%N` is therefore forbidden as performance evidence even when the
-target command itself succeeds.
-
-The real Gate initially exposed that `unshare --kill-child` alone does not bind
-the namespace parent to abrupt non-PTY SSH transport loss: a host `SIGKILL`
-released its owner flock but could leave the guest target alive. A first
-EOF-only guardian also failed because a residual sshd session could keep the
-remote stdin open after transport loss. The fixed heartbeat makes host-process
-loss explicit without trusting implementation-specific sshd EOF behavior. The
-Gate proves the target disappears, its sibling survives, and host owner
-liveness reconciles within one second.
-
-The primitive probe initially produced a false negative when the OpenSSH CLI reused a
-developer-user ControlMaster. Re-running with ControlMaster disabled reached
-UID 0 and succeeded. Production Go SSH does not use that OpenSSH control
-socket (`internal/backend/lima/ssh_bridge.go:88-119`). The gate must exercise
-the production path, not the misleading CLI shortcut.
+**Rationale**: Terminal data needs full duplex, backpressure, half-close, and
+long-lived ownership. HTTP handler hijacking would couple terminal correctness
+to `net/http`, while SSE cannot carry input or reliable binary output. A
+separate socket keeps the authority surface narrow and lets the daemon tie one
+connection to one run.
 
 **Alternatives considered**:
 
-- Per-session UID: rejected for 034 because the same writable workspace is
-  intentionally shared and changing file ownership would break current
-  developer semantics. It also does not replace mount/PID isolation.
-- Mount namespace alone: rejected because the shared `/proc` still exposes
-  same-UID sibling process state.
-- New guest supervisor binary: rejected for v1 because trusted Go can build a
-  fixed quoted wrapper and exact-session guardian over the existing
-  authenticated root SSH transport. A helper may be reconsidered only if
-  signal/resize work in 037 needs it.
+- SSE plus POST input: rejected because it introduces polling/races and cannot
+  make connection loss a single ownership fact.
+- WebSocket over loopback: rejected because browser reachability and origin
+  policy are unnecessary exposure for a local terminal.
+- Reuse the Manager socket with HTTP Upgrade: viable, but rejected for v1
+  because a dedicated listener is simpler to bound, test, and shut down.
 
-## Decision 5: Guest-Root Remains A Non-Claim
+## Decision 4: One Bounded Binary Frame Contract
 
-**Decision**: Claim sibling invisibility only for ordinary non-root target
-processes. Do not add a user namespace or claim containment after guest-root
-escape. Keep dedicated environments as the VM-wall recommendation.
+**Decision**: Add `internal/sessionwire` with a versioned, length-prefixed frame
+format used on both client-to-daemon and daemon-to-guest-supervisor links. A
+frame has a fixed type byte, bounded payload length, and opaque payload bytes.
+Structured control payloads use strict JSON; terminal/stdout/stderr payloads
+remain raw bytes. Writers serialize frames, readers reject unknown mandatory
+types and oversized payloads, and queues are bounded.
 
-**Rationale**: Root in the shared guest can inspect or join namespaces and
-reach the shared workspace substrate. Existing architecture and threat-model
-text already reserve this non-claim (`docs/architecture-principles.md:172-181`;
-`docs/threat-model.md:125-134`). 034 improves ordinary process/control
-isolation without relabeling it as a VM boundary.
-
-**Alternatives considered**:
-
-- Claim root containment from namespace spelling: rejected as an overclaim.
-- Hide the limitation from product docs: rejected because it changes the
-  operator's isolation choice.
-
-## Decision 6: Environment Networking Is A Fingerprinted Shared Service
-
-**Decision**: Direct networking needs no service. For `tun2socks`, the first
-proved owner materializes and starts one environment-level service while the
-transition lock is held. Later sessions independently resolve configuration,
-compare a secret-free fingerprint, and reuse it only on exact match. The last
-proved owner performs cleanup. Raw proxy material never enters the fingerprint
-or public status.
-
-**Rationale**: Network mode, resolver, and proxy reference are profile-bound,
-while the existing bootstrap changes VM-global routes, `/etc/resolv.conf`,
-iptables, and `hideout0` (`internal/network/network.go:345-438,530-621`).
-Starting one copy per PID namespace would kill or overwrite a sibling's
-network. A hash over canonical non-secret fields plus the resolved secret hash
-detects backing-secret drift without publishing the secret.
+**Rationale**: Length framing prevents target-controlled terminal bytes from
+becoming control messages. Reusing one codec avoids two subtly different
+resize, signal, EOF, completion, and error contracts. Kernel/socket
+backpressure is preferable to dropping output; a blocked client can be
+cancelled within a fixed bound.
 
 **Alternatives considered**:
 
-- Per-session network namespace: deferred; it requires veth/routing ownership
-  and is unnecessary for same-profile sessions.
-- Blindly reuse by profile name: rejected because a secret backing value can
-  change while the reference name stays constant.
-- Persist a mutable integer refcount: rejected because active owner flocks are
-  the authoritative count and recover correctly after host-process death.
+- JSON lines for all data: rejected because arbitrary output needs escaping and
+  inflates hot-path traffic.
+- Terminal escape sentinels: rejected because the target controls those bytes.
+- gRPC: rejected as unnecessary dependency and surface area for a private
+  single-process protocol.
 
-## Decision 7: Warm Attach May Reuse A Live Runtime Observation
+## Decision 5: Rotate Operator Credentials And Renew Session Leases
 
-**Decision**: The first owner performs the existing Lima start, instance
-identity, privilege, and runtime checks. A later owner attaching while that
-proved owner and matching activation receipt remain live may skip repeated
-`limactl start` and full runtime observation, but must establish authenticated
-root SSH and validate the session-isolation primitives before activation.
+**Decision**: Replace the daemon's one-shot static expiry with a credential
+manager that atomically rotates the token file, accepts the immediately prior
+token only for a short bounded grace period, and validates Manager, SSE, and
+session requests through one callback. A connected run receives no backend or
+capability credential. Its client periodically re-reads the operator token and
+sends a renewal proof; failure to renew before the session lease deadline
+cancels only that run.
 
-The performance gate measures host invocation to the first line emitted by a
-dedicated no-op target fixture. It builds and records the pre-034 base commit
-in a separate worktree, uses the same host/runtime/workspace fixture, runs at
-least 30 samples after warm-up, and reports median and p95 rather than timing
-shell setup or parsing prose.
-
-**Rationale**: Current warm runs repeat `limactl list`, start, instance
-inspection, privilege probing, and the runtime observation batch
-(`internal/backend/lima/lima.go:368-434`). That dominates the observed multi-
-second latency and makes the 2-second concurrent-attach goal impossible. A
-live owner ties the receipt to the currently running instance; when no owner
-remains, the next run returns to full verification.
+**Rationale**: The existing 15-minute static token eventually makes every API
+unusable until daemon restart. Rotation plus lease renewal supports multi-hour
+runs while invalidating copied stale tokens. The operator token remains on the
+host client/daemon link and is never forwarded to the guest.
 
 **Alternatives considered**:
 
-- Skip all checks whenever Lima says Running: rejected because external
-  mutation or stale records could become authority.
-- Keep all probes on every attach: rejected because it defeats the primary
-  product workflow and adds no independent fact while the same instance is
-  already proved live.
+- Give tokens a multi-day TTL: rejected because it postpones rather than solves
+  rotation and stale-client access.
+- Issue a reusable per-run secret to the client: rejected because connection
+  ownership plus renewed operator authentication is sufficient.
+- Let established sessions run forever after initial auth: rejected because
+  credential revocation would have no effect.
 
-## Decision 8: Unsupported Existing Guests Fail Without Record Migration
+## Decision 6: Manager Owns One Canonical Run Service
 
-**Decision**: Preserve existing environment identity and records. If the
-running guest cannot prove the required namespace primitives, deny the run
-with typed runtime/recreate guidance. Do not silently use the old globally
-visible target path, even for a single session.
+**Decision**: Introduce one structured run request and one Manager run-service
+entry point that performs plan, drift revalidation, confirmation binding, data
+plane construction, backend execution, audit, and cleanup. The daemon session
+worker invokes it. Existing Manager HTTP run apply delegates to the same
+service for non-interactive use. The CLI parses flags and renders confirmation,
+but does not load profiles or execute a backend for normal runs.
 
-**Rationale**: The system has no published compatibility population to justify
-retaining a second authority path, while the constitution requires unsupported
-backend behavior to fail closed. Keeping the record makes the state visible
-and recoverable without pretending it is safe to execute.
+The HTTP adapter is intentionally not a renewable terminal transport. It
+revalidates the credential accepted on that request against the rotating daemon
+credential for the run lifetime and cancels when that unrenewed credential
+leaves grace. Multi-hour or interactive clients MUST use the session socket and
+renew frames. This keeps the route parity-locked without creating an
+indefinitely authorized, non-renewable execution path.
 
-**Alternatives considered**:
-
-- Run one legacy session but reject a second: rejected because product behavior
-  would depend on arrival order and preserve the control-view weakness.
-- Rewrite or delete the environment record: rejected because the operator must
-  retain inspect/stop/recreate control over existing state.
-
-## Decision 9: Cleanup And Status Derive From The Owner Registry
-
-**Decision**: A finishing run reacquires the transition lock, cleans only its
-namespace/data-plane/runtime child, then closes its owner. The environment
-stays `running` while any other owner is live and becomes `ready` or `error`
-only when the last owner finishes. Explicit stop acquires the same transition
-lock and refuses if any owner lock is live. Stale unlocked records are never
-counted as active.
-
-**Rationale**: Current finish clears the entire environment runtime and sets
-the record ready after every run (`internal/manager/run_environment.go:204-231`).
-That is invalid with siblings. One registry also prevents CLI, Manager,
-doctor, and stop from inventing separate liveness interpretations.
+**Rationale**: The current CLI supports more run options than `RunAPIRequest`,
+including run-scoped HostFS, public environment variables, audit selection, and
+preview endpoints. Moving those options into one strict request avoids losing
+features in the thin-client path and makes CLI/API parity structural.
 
 **Alternatives considered**:
 
-- Trust `record.Status == running`: rejected because a crashed host process
-  can leave it stale.
-- Let stop terminate all owners: deferred; 034 preserves explicit
-  non-destructive stop and fails closed while work is live.
+- Duplicate current `runCommand` orchestration in `internal/daemon`: rejected
+  because confirmation and option behavior would drift.
+- Have the daemon call back into `internal/app`: rejected because `app` is a
+  presentation/composition package, not a lifecycle authority layer.
+- Send a shell command string: rejected because argv and typed options must stay
+  structured.
 
-## Decision 10: Preserve Initial PTY Semantics; Defer Dynamic Resize
+## Decision 7: A Fixed Linux Supervisor Owns The Guest PTY
 
-**Decision**: Direct Go SSH allocates a PTY only when host stdin/stdout are
-terminals, applies the initial width/height, streams one SSH session per run,
-and restores the host terminal. Non-interactive runs preserve independent
-stdout/stderr and exact exit status. SIGWINCH forwarding, full OSC/CSI
-fidelity, and theme changes remain 037.
+**Decision**: Add the package-owned Linux helper
+`hideout-session-supervisor`. The daemon opens authenticated root-control SSH
+without requesting an SSH PTY and starts only a Go-built fixed session-view
+launcher. The launcher creates the existing private mount/PID view and runs the
+fixed helper. The helper validates a strict start payload, starts the target as
+the configured non-root user, allocates a guest PTY when requested, applies
+window size, forwards signals, reaps descendants, and emits a typed completion.
+For non-interactive mode it preserves separate stdout and stderr pipes.
 
-**Rationale**: 034 must prevent streams and signals crossing sessions, but it
-does not need to absorb the full terminal product slice. The existing terminal
-bridge already establishes raw mode and initial dimensions
-(`internal/backend/lima/lima.go:303-359`); the namespace path must retain those
-minimum semantics.
+The helper uses `github.com/creack/pty`, a narrow established Go PTY library,
+for allocation and window-size changes. It does not introduce a terminal
+emulator or parser.
 
-**Alternatives considered**:
+The helper is built, checksummed, packaged, verified, and materialized through
+the same helper pipeline as `hideout-shim`, `hideout-hostfsd`, and the DNS stub.
+Go module changes are resolved with `go mod tidy`; module files are not edited
+by hand.
 
-- Make full terminal fidelity a 034 gate: rejected as orthogonal scope that
-  repeats the earlier oversized-batch failure mode.
-- Run all SSH commands with PTY: rejected because it merges stdout/stderr and
-  changes non-interactive exit behavior.
-
-## Decision 11: No Automatic Stop Or Daemon Adoption In 034
-
-**Decision**: Releasing the last owner leaves the environment warm and ready.
-The operator's existing explicit stop remains the only stop path in 034.
-
-**Rationale**: 003 rejected implicit auto-stop because lifecycle actions must
-not destroy active work (`specs/003-unified-named-environments/research.md:128-141`).
-A future lease-driven last-owner stop can reconcile that concern, but it needs
-one lifecycle owner across CLI exits and daemon restarts. That is 036, not a
-hidden prerequisite for concurrency.
+**Rationale**: Real measurements showed the target itself takes roughly 0.3
+seconds, while OpenSSH accepts `pty-req` roughly 3.9 seconds after the request.
+A non-PTY SSH exec starts promptly. Allocating the PTY inside the guest removes
+that serialization point and gives Hideout direct control over resize and
+process-group signaling. A fixed helper is easier to validate than adding more
+dynamic privileged shell behavior.
 
 **Alternatives considered**:
 
-- Auto-start/adopt `hideoutd`: deferred to 036.
-- Stop from whichever CLI observes count zero: rejected due to cross-process
-  exit/start races.
+- Keep SSH `RequestPty`: rejected by the measured latency and lack of robust
+  dynamic resize ownership.
+- Use the guest `script` utility: rejected because it does not provide a clean
+  structured resize/signal/stdout-stderr protocol.
+- Let the client select a helper or privileged argv: rejected as generic guest
+  root authority.
+
+## Decision 8: Terminal Mode Is Capability-Based, Not Command-Based
+
+**Decision**: `auto` allocates a PTY only when the client's input and output are
+terminals. Explicit `always` and `never` overrides are supported. The client
+sends only terminal mode, rows, columns, and a validated bounded `TERM`; it does
+not forward host username, paths, theme, shell environment, or arbitrary
+terminal variables. SIGWINCH sends resize frames. In raw PTY mode Ctrl-C is an
+input byte and is not also synthesized as a signal. Non-PTY host signals use
+typed signal/cancel frames.
+
+**Rationale**: Bash, Claude, Codex, and full-screen tools need PTY behavior;
+scripts need exact stdout/stderr and exit status. A command-name list would be
+incomplete and would add hidden product semantics. Theme switching and broad
+OSC/CSI compatibility remain 037, but ordinary terminal response bytes pass
+through unchanged.
+
+**Alternatives considered**:
+
+- Always allocate a PTY: rejected because it merges stdout/stderr and changes
+  automation behavior.
+- Detect known interactive commands: rejected because unknown/community tools
+  would be wrong by default.
+- Forward the complete host environment: rejected as unnecessary identity and
+  control-plane disclosure.
+
+## Decision 9: The Daemon Is The Only Live Session Registry
+
+**Decision**: The daemon keeps the live worker registry and serializes
+environment attach/stop transitions. Existing per-session owner flocks and
+redacted records remain durable evidence and crash detection, but no independent
+CLI process holds them. The environment transition lock is held only for
+activation, registration, service transition, finish, and stop; never for the
+target lifetime. Same-workspace sessions retain unique runtime children and
+the existing direct virtiofs workspace.
+
+**Rationale**: In-memory ownership is now valid because every executable run
+uses one daemon. Kernel owner locks still prove process death and support
+restart diagnosis. This preserves the useful old 034 concurrency model while
+removing competing process owners.
+
+**Alternatives considered**:
+
+- Delete owner records and rely only on daemon memory: rejected because daemon
+  crash would erase the evidence needed to fail closed.
+- Hold the environment lock for the run lifetime: rejected because it recreates
+  the one-session limitation.
+
+## Decision 10: Connection And Daemon Loss Terminate, Never Detach
+
+**Decision**: Each accepted client connection owns one cancellable worker. EOF,
+lease expiry, protocol failure, or bounded write failure cancels that worker.
+The daemon closes the supervisor transport; supervisor EOF kills and reaps the
+target process group; the existing exact-session cleanup proof runs when the
+daemon is alive. Daemon shutdown cancels all workers and waits within a bound.
+After an unclean daemon death, restart reports stale/unproved owner records and
+does not silently re-adopt or destroy them.
+
+**Rationale**: 034 has no detach feature, so continuing without a controlling
+client would create hidden work and authority. Binding guest liveness to the
+daemon's SSH transport also makes daemon death observable without a separate
+SSH PTY guardian channel.
+
+**Alternatives considered**:
+
+- Leave targets running after client loss: rejected as implicit detach.
+- Let restart adopt sessions based on metadata: rejected because metadata is
+  not liveness or credential proof.
+- Delete ambiguous state automatically: rejected because cleanup may not have
+  completed.
+
+## Decision 11: Same-Workspace Concurrency Is The 034 Cut Line
+
+**Decision**: 034 supports multiple concurrent sessions only when selection
+resolves the same existing environment and pinned workspace. It retains the
+current environment after the final session. Cross-workspace shared default is
+035, lease-driven final-session stop is 036, and exhaustive terminal/theme/
+OSC compatibility is 037.
+
+**Rationale**: The daily user problem is opening a shell and an agent in one
+repository. Dynamic cross-workspace transport and automatic lifecycle policy
+have different risk profiles. Keeping them out prevents another oversized
+multi-feature implementation.
+
+**Alternatives considered**:
+
+- Share one VM across arbitrary workspaces now: rejected because transport and
+  weaker isolation need their own evidence.
+- Auto-stop after the last worker now: rejected because it changes lifecycle
+  policy independently of session ownership.
+
+## Decision 12: Real Terminal Evidence Measures The Whole Product Path
+
+**Decision**: Gate 0 covers wire codec, malformed frames, auth rotation,
+auto-start races, Manager parity, terminal client restoration, helper behavior,
+session races, crash fixtures, redaction, packaging, and docs. The real macOS
+arm64 Lima lane uses an actual PTY and measures host invocation to first target
+byte for at least 20 warm samples; p95 must be at most 2.0 seconds. It also
+proves resize, two simultaneous interactive sessions, non-interactive stream
+separation, client kill, daemon kill, sibling survival, and guest process/mount
+isolation.
+
+**Rationale**: Pipe-based tests produced a false sub-second conclusion while
+the user's real terminal consistently took about five seconds. Timing an
+internal helper or non-TTY path is not product evidence.
+
+**Alternatives considered**:
+
+- Use only Go unit tests: rejected because PTY allocation, terminal restoration,
+  Lima SSH, and process namespaces are backend facts.
+- Measure only the target command: rejected because users pay client, daemon,
+  activation, isolation, and terminal setup latency.

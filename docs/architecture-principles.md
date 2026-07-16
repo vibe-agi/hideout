@@ -112,18 +112,18 @@ host.fs passthrough mount without policy
 
 ### 4. UI And Daemon Are Not Authority
 
-CLI, TUI, WebUI, and the `hideoutd` daemon are interaction or transport
-surfaces over the same Manager Control Plane. They must not own policy
-semantics, backend authority, or filesystem mutation rules.
+CLI, TUI, WebUI, and the `hideoutd` process role are interaction, transport, or
+lifecycle surfaces over the same Manager Control Plane. None may invent policy
+semantics, generic backend authority, or filesystem mutation rules.
 
 All user-facing surfaces must call the same Manager Control Plane:
 
 ```text
-CLI / TUI / WebUI / hideoutd clients
+CLI / TUI / WebUI clients
         |
-Manager API
+authenticated daemon transports
         |
-Manager Core
+hideoutd process role: Manager API + Manager Core
         |
 Profile / Session / Environment / Backend / Broker / HostFS / Network / Policy / Audit
 ```
@@ -133,12 +133,17 @@ If the WebUI and TUI disagree, the domain model is wrong.
 The steady-state architecture is daemon-first, in the Docker model: `hideoutd`
 hosts the Manager API and owns cross-invocation state — the environment
 registry, session state, typed event streams, daemon-local audit, and background
-execution for existing environment stop/clean operations — and CLI, TUI, and
-WebUI are its clients. The daemon stays in single-operator form: an operator
+execution for existing environment stop/clean operations — and executable
+`run`, CLI, TUI, and WebUI are its clients. A normal executable run has no
+embedded backend fallback. The invoking CLI owns only presentation and its
+local terminal state; the daemon owns Manager/backend/session lifecycle; a
+fixed guest supervisor owns the target PTY and process tree. The daemon stays
+in single-operator form: an operator
 token with full access. Read-only tokens, client role matrices, delegated
 approval channels, per-subscriber redaction tiers, and replay-protection
 protocols are enterprise shapes and are out of scope. Confirmation-required
-daemon operations fail closed until an explicit prompt channel exists.
+runs fail closed unless the initiating client presents and accepts the exact
+canonical Manager review; terminal text is never approval.
 
 The daemon must not become a generic host execution service, a long-lived
 bearer of per-run capability tokens, or a path around Manager plan/apply

@@ -116,7 +116,7 @@ gate2_034_run_performance() {
   local candidate_hideout="$6" candidate_store="$7" candidate_profile="$8"
   local baseline_commit="$9" samples="${10}" warmups="${11}" arch="${12}"
   local candidate_bin baseline_root baseline_bin baseline_store baseline_profile
-  local candidate_anchor_pid candidate_release candidate_marker candidate_env candidate_instance
+  local candidate_anchor_pid candidate_marker candidate_env candidate_instance
   local baseline_env baseline_instance i record output errors
   local ready_values candidate_fixture_values baseline_fixture_values
   local ready_median ready_p95 candidate_median candidate_p95 baseline_median baseline_p95 ratio
@@ -129,7 +129,6 @@ gate2_034_run_performance() {
   baseline_store="$tmp/baseline-store"
   baseline_profile="g34b"
 	control_dir="$workspace/.hideout-gate-control"
-  candidate_release="$control_dir/candidate-anchor-release"
   candidate_marker="$control_dir/candidate-anchor-ready"
   ready_values="$out/logs/performance-ready-ms.txt"
   candidate_fixture_values="$out/logs/performance-candidate-fixture-ms.txt"
@@ -158,7 +157,7 @@ gate2_034_run_performance() {
     "$candidate_hideout" run --profile "$candidate_profile" --backend lima --network direct \
       --workspace "$workspace" --guest-workspace /workspace -- sh -eu -c '
 touch /workspace/.hideout-gate-control/candidate-anchor-ready
-while [ ! -f /workspace/.hideout-gate-control/candidate-anchor-release ]; do sleep 0.05; done
+exec sleep infinity
 ' >"$out/logs/performance-anchor.out" 2>"$out/logs/performance-anchor.err" &
   candidate_anchor_pid=$!
   GATE2_034_CLEANUP_FIRST_PID="$candidate_anchor_pid"
@@ -181,8 +180,8 @@ while [ ! -f /workspace/.hideout-gate-control/candidate-anchor-release ]; do sle
 		return 1
 	}
 
-  touch "$candidate_release"
-  wait "$candidate_anchor_pid"
+  kill "$candidate_anchor_pid" 2>/dev/null || true
+  wait "$candidate_anchor_pid" 2>/dev/null || true
   GATE2_034_CLEANUP_FIRST_PID=""
   candidate_env="$(HIDEOUT_STORE_ROOT="$candidate_store" "$candidate_hideout" env list | awk 'NR == 2 {print $1}')"
   candidate_instance="$(jq -r '.instanceName' "$candidate_store/environments"/*/environment.json | head -n1)"

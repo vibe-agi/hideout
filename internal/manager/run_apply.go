@@ -51,6 +51,7 @@ type ApplyRunOptions struct {
 	Opener                     broker.Opener
 	OpenerForSession           func(RunSession) broker.Opener
 	TerminalMode               runsession.TerminalMode
+	Streams                    *backend.RunStreams
 }
 
 type RunResult struct {
@@ -244,6 +245,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		EndpointCandidates:         opts.EndpointCandidates,
 		EndpointExposures:          opts.EndpointExposures,
 		Opener:                     opener,
+		RequireSessionSupervisor:   opts.Streams != nil,
 	})
 	if err != nil {
 		return result, err
@@ -355,7 +357,17 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	}
 	previewCtx, cancelPreview := context.WithCancel(ctx)
 	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
-	runErr := opts.Backend.Run(ctx, session, plan.Command, dataPlane.Env)
+	var runErr error
+	if opts.Streams != nil {
+		streamRunner, ok := opts.Backend.(backend.StreamRunner)
+		if !ok {
+			runErr = errors.New("backend does not support daemon run streams")
+		} else {
+			runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, *opts.Streams)
+		}
+	} else {
+		runErr = opts.Backend.Run(ctx, session, plan.Command, dataPlane.Env)
+	}
 	runErr = runtimeRunError(runEnv, runErr)
 	cancelPreview()
 	var previewAuditErr error

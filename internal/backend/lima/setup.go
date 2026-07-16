@@ -31,8 +31,9 @@ type sshConnectionCloser interface {
 }
 
 const (
-	setupCategoryNetwork = "network"
-	setupCategoryHostFS  = "hostfs"
+	setupCategoryNetwork     = "network"
+	setupCategoryHostFS      = "hostfs"
+	setupCategorySessionView = "session-view"
 )
 
 // SetupCommandRunner executes Go-owned privileged setup/cleanup commands. It is
@@ -162,6 +163,56 @@ func (b Backend) setupIdentity(ctx context.Context, session *backend.Session) pr
 		setup.Proof = boundedCheckError(err, "")
 	}
 	return setup
+}
+
+func (b Backend) supervisorSetupIdentity(ctx context.Context, session *backend.Session) (privilege.SetupIdentity, []string, error) {
+	if session == nil || !session.PrivilegedSetupRequired {
+		return b.setupIdentity(ctx, session), nil, nil
+	}
+	setup := b.setupIdentity(ctx, session)
+	categories := supervisorSetupCategories(session)
+	if setup.Available {
+		return setup, categories, nil
+	}
+	reason := "privileged setup identity is unavailable"
+	for _, category := range categories {
+		if err := b.emitPrivilegedSetup(session, backend.PrivilegedSetupEvent{
+			Action: privilege.ActionPrivilegedSetup, Category: category, Status: "failed",
+			Setup: setup, Reason: reason,
+		}); err != nil {
+			return setup, categories, err
+		}
+	}
+	return setup, categories, fmt.Errorf("%s setup: %s: %s", categories[0], reason, setup.Proof)
+}
+
+func supervisorSetupCategories(session *backend.Session) []string {
+	if session == nil {
+		return nil
+	}
+	var categories []string
+	if session.NetworkPrivilegedSetup {
+		categories = append(categories, setupCategoryNetwork)
+	}
+	if session.HostFSEnabled {
+		categories = append(categories, setupCategoryHostFS)
+	}
+	if len(categories) == 0 && session.PrivilegedSetupRequired {
+		categories = append(categories, setupCategorySessionView)
+	}
+	return categories
+}
+
+func (b Backend) emitSupervisorSetupStatus(session *backend.Session, setup privilege.SetupIdentity, categories []string, status, reason string) error {
+	for _, category := range categories {
+		if err := b.emitPrivilegedSetup(session, backend.PrivilegedSetupEvent{
+			Action: privilege.ActionPrivilegedSetup, Category: category, Status: status,
+			Setup: setup, Reason: boundedCheckError(errors.New(reason), ""),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func rootControlSSHSetupIdentity() privilege.SetupIdentity {

@@ -12,6 +12,10 @@
     "state": {
       "enum": ["starting", "serving", "stopping", "stopped"]
     },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^daemon_[a-f0-9]{24}$"
+    },
     "startedAt": {
       "type": "string",
       "format": "date-time"
@@ -19,12 +23,30 @@
     "transport": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["socket"],
+      "required": ["socket", "sessionSocket", "sessionProtocol"],
       "properties": {
         "socket": {
           "type": "string",
           "minLength": 1
+        },
+        "sessionSocket": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionProtocol": {
+          "const": "hideout.session/v1"
         }
+      }
+    },
+    "credentialGeneration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sessions": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "active-session-summary.schema.json"
       }
     },
     "background": {

@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
+	"github.com/vibe-agi/hideout/internal/daemon"
 	"github.com/vibe-agi/hideout/internal/decision"
 	doctorpkg "github.com/vibe-agi/hideout/internal/doctor"
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -59,6 +60,19 @@ func (r appSessionSetupRunner) Run(_ context.Context, _ string, _ string, _ []st
 		_, _ = io.WriteString(stdout, "01234567-89ab-cdef-0123-456789abcdef\n")
 	}
 	return nil
+}
+
+func installAppTestSessionSupervisor(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, helperbin.LinuxSessionSupervisorCommand+"-linux-"+runtime.GOARCH)
+	if err := os.WriteFile(path, []byte("test session supervisor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := helperbin.WriteStoreHelperManifest(path, helperbin.LinuxSessionSupervisorCommand, runtime.GOARCH); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, path)
+	return path
 }
 
 func TestParseInitRuntimeSelectionAndImageConflict(t *testing.T) {
@@ -5939,12 +5953,16 @@ exit 0
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
+	installAppTestSessionSupervisor(t, fakeBin)
 
 	for i := 0; i < 2; i++ {
 		var out, errOut bytes.Buffer
-		a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader(""), backendFactory: func(_ string, _ runOptions) backend.Backend {
-			return lima.Backend{Stdout: &out, Stderr: &errOut, ControlStdout: io.Discard, ControlStderr: io.Discard, SetupRunner: appSessionSetupRunner{}}
-		}}
+		a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
+		a.sessionClient = func(ctx context.Context, opts daemon.SessionClientOptions) (daemon.SessionClientResult, error) {
+			return runSessionInProcessWithBackendFactory(ctx, opts, func(manager.PreparedRun) backend.Backend {
+				return lima.Backend{Stdout: &out, Stderr: &errOut, ControlStdout: io.Discard, ControlStderr: io.Discard, SetupRunner: appSessionSetupRunner{}}
+			})
+		}
 		err := a.run([]string{
 			"run",
 			"--backend", "lima",
@@ -6066,6 +6084,7 @@ func TestRunCLIAllowsOverlappingCommandsInOneWorkspaceEnvironment(t *testing.T) 
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
+	installAppTestSessionSupervisor(t, t.TempDir())
 
 	profileStore := profile.Store{Root: filepath.Join(home, ".hideout")}
 	core := manager.New(profileStore)
@@ -6094,7 +6113,9 @@ func TestRunCLIAllowsOverlappingCommandsInOneWorkspaceEnvironment(t *testing.T) 
 			var stdout, stderr bytes.Buffer
 			a := app{
 				stdout: &stdout, stderr: &stderr, stdin: strings.NewReader(""),
-				backendFactory: func(_ string, _ runOptions) backend.Backend { return fake },
+			}
+			a.sessionClient = func(ctx context.Context, opts daemon.SessionClientOptions) (daemon.SessionClientResult, error) {
+				return runSessionInProcessWithBackendFactory(ctx, opts, func(manager.PreparedRun) backend.Backend { return fake })
 			}
 			err := a.run([]string{"run", "--backend", "lima", "--workspace", workspace, "--", "hold"})
 			outcomes <- outcome{stdout: stdout.String(), stderr: stderr.String(), err: err}
@@ -6353,6 +6374,7 @@ exit 0
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
+	installAppTestSessionSupervisor(t, fakeBin)
 
 	var out, errOut bytes.Buffer
 	code := Main([]string{
@@ -6425,11 +6447,15 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://user:pass@proxy.invalid:8443")
 	t.Setenv("HIDEOUT_SECRET_DEFAULT_PROXY", "socks5://127.0.0.1:1080")
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
+	installAppTestSessionSupervisor(t, fakeBin)
 
 	var out, errOut bytes.Buffer
-	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader(""), backendFactory: func(_ string, _ runOptions) backend.Backend {
-		return lima.Backend{Stdout: &out, Stderr: &errOut, ControlStdout: io.Discard, ControlStderr: io.Discard, SetupRunner: appSessionSetupRunner{checkErr: errors.New("privileged setup identity is unavailable")}}
-	}}
+	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
+	a.sessionClient = func(ctx context.Context, opts daemon.SessionClientOptions) (daemon.SessionClientResult, error) {
+		return runSessionInProcessWithBackendFactory(ctx, opts, func(manager.PreparedRun) backend.Backend {
+			return lima.Backend{Stdout: &out, Stderr: &errOut, ControlStdout: io.Discard, ControlStderr: io.Discard, SetupRunner: appSessionSetupRunner{checkErr: errors.New("privileged setup identity is unavailable")}}
+		})
+	}
 	runErr := a.run([]string{
 		"run",
 		"--backend", "lima",

@@ -32,7 +32,7 @@ func (d *Daemon) startLoopbackUI() {
 		manager.ServeUIRoot(w, r, d.api.ExpiresAt)
 	})
 	d.uiServer = &http.Server{Handler: mux}
-	d.uiURL = baseURL + "/#token=" + url.QueryEscape(d.token)
+	d.uiURL = baseURL + "/#token=" + url.QueryEscape(d.Token())
 	go func() { _ = d.uiServer.Serve(ln) }()
 }
 

@@ -19,8 +19,8 @@ go test ./internal/productevidence ./internal/releasecompat \
   -run 'Test(Evaluate034|Concurrent|ReleaseCandidateRejectsMissing034)'
 
 headings="$(grep -Ec '^## [0-9]+\. ' specs/034-concurrent-run-sessions/quickstart.md)"
-[ "$headings" -eq 12 ] || {
-  echo "concurrent quickstart: expected 12 numbered scenarios, found $headings" >&2
+[ "$headings" -eq 15 ] || {
+  echo "concurrent quickstart: expected 15 numbered scenarios, found $headings" >&2
   exit 1
 }
 
@@ -52,6 +52,6 @@ elif [ "$require_real" -eq 1 ]; then
   exit 2
 fi
 
-for scenario in $(seq -w 1 12); do
+for scenario in $(seq -w 1 15); do
   printf 'quickstart_scenario_%s=passed\n' "$scenario"
 done

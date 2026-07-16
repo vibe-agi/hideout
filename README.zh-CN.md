@@ -59,23 +59,26 @@ hideout run -- git status --short
 ## 命令实际运行在哪里
 
 ```text
-macOS host                                      Lima VM
-+----------------------------------+            +---------------------------+
-| Terminal                         | start      | target CLI runs here      |
-| hideout + Core                   +----------->| agent / git / npm         |
-| policy / approval / audit        |            |                           |
-|                                  | RW mount   | mounted workspace         |
-| selected project checkout        +===========>|                           |
-|                                  | approved   | code . / open ...         |
-| VS Code / browser <--------------+------------+ typed host request        |
-+----------------------------------+            +---------------------------+
+macOS 终端              macOS 控制面                       Lima VM
++----------------+      +-----------------------+          +----------------+
+| hideout 客户端 |<====>| hideoutd 进程角色      |<========>| 固定 session    |
+| raw TTY/resize |      | Manager + policy      |  framed  | supervisor     |
+| review/output  |      | backend/session owner |  stream  | PTY + process  |
++----------------+      | approval/audit/HostFS |          | target CLI     |
+                        +-----------+-----------+          +-------+--------+
+                                    |                              |
+本机应用 <--- typed request --------+      项目 checkout ==========+ RW mount
 ```
 
-`hideout` 本身以及 policy、approval、audit 逻辑运行在主机上；
-`hideout run --` 后面的目标命令运行在 VM 中。选中的项目会挂载到 profile 决定的
-guest 路径。`code .` 这样的投射命令只会把结构化资源请求交回 Hideout Core，
-真正的 VS Code 运行在主机上，guest 不会因此获得通用主机 shell。其他主机文件
-仍需要显式 HostFS permission。
+`hideout` 是轻客户端：解析调用、展示 canonical review、管理本地终端状态，并传输
+输入、输出和 resize frame。常驻的 `hideoutd` 进程角色拥有 Manager Core、policy、
+Lima/SSH、每次运行的权限、活动 session、audit 和 cleanup。VM 内的固定打包
+supervisor 拥有目标 PTY 和进程树。这个角色目前由同一个已安装可执行文件在内部
+启动，不需要用户另装或手动启动第二个程序。
+
+选中的项目会挂载到 profile 决定的 guest 路径。`code .` 这样的投射命令只会把
+结构化资源请求交回 Manager Core；真正的 VS Code 运行在主机上，guest 不会因此
+获得通用主机 shell。其他主机文件仍需要显式 HostFS permission。
 
 ## 为什么是 Hideout
 
@@ -110,6 +113,10 @@ release manifest 和有界验证证据。
 - `direct` 网络不会隐藏网络身份；隐私网络需要额外的代理和 DNS 前置条件。
 - 目标一旦获得 guest root，Hideout 不声称仍能保持原隔离保证。
 - `--backend native` 只是开发 harness，不是隔离边界。
+- 并发复用目前只覆盖同一个 pinned workspace，不会把无关项目放进同一个默认 VM。
+- 最后一个 session 退出后 VM 仍保持 warm；当前仍需显式运行 `hideout stop`。
+- 初始终端尺寸和实时 SIGWINCH resize 已支持；完整终端模拟器、主题、OSC/CSI 和
+  detach 行为不在当前声明内。
 
 精确支持范围见 [Support Matrix](docs/support-matrix.md)，安全声明边界见
 [Claim Boundaries](docs/claim-boundaries.md)。

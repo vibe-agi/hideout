@@ -151,6 +151,7 @@ schema.metadata.write
 helper.locate
 helper.install.linux-shim
 helper.install.linux-hostfsd
+helper.install.linux-session-supervisor
 backend.probe
 network.mode.select
 doctor.check.light
@@ -410,7 +411,8 @@ Minimum acceptance:
 - implement safe machine initialization for `store.create`,
   `schema.metadata.write`, `profile.create`, `identity.materialize`,
   `network.mode.select`, `backend.probe`, `helper.install.linux-shim`,
-  `helper.install.linux-hostfsd`, and `doctor.check.light`;
+  `helper.install.linux-hostfsd`, `helper.install.linux-session-supervisor`, and
+  `doctor.check.light`;
 - make `doctor --fix --dry-run` and safe `doctor --fix --apply` use the same task
   engine;
 - keep bundle/project requirements declarative;

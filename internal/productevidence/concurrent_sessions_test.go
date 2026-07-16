@@ -33,6 +33,18 @@ func TestConcurrentIsolationSemanticValidatorRejectsArbitraryOrIncompleteEvidenc
 	if err := validateConcurrentIsolationArtifact(data, runtimePackageCommitFixture); err == nil || !strings.Contains(err.Error(), "within one second") {
 		t.Fatalf("slow owner reconciliation accepted: %v", err)
 	}
+	valid = concurrentIsolationFixture()
+	valid.Artifacts.SessionPTYEvidenceSHA256 = ""
+	data, _ = json.Marshal(valid)
+	if err := validateConcurrentIsolationArtifact(data, runtimePackageCommitFixture); err == nil || !strings.Contains(err.Error(), "PTY evidence digest") {
+		t.Fatalf("missing PTY evidence digest accepted: %v", err)
+	}
+	valid = concurrentIsolationFixture()
+	valid.Checks["daemonCrashTargetsReaped"] = false
+	data, _ = json.Marshal(valid)
+	if err := validateConcurrentIsolationArtifact(data, runtimePackageCommitFixture); err == nil || !strings.Contains(err.Error(), "daemonCrashTargetsReaped") {
+		t.Fatalf("failed daemon-crash check accepted: %v", err)
+	}
 }
 
 func TestConcurrentPerformanceSemanticValidatorRecomputesStatisticsAndIdentity(t *testing.T) {
@@ -103,6 +115,7 @@ func concurrentIsolationFixture() concurrentIsolationEvidence {
 	}
 	evidence.NonClaims.GuestRootContainment = "not-claimed"
 	evidence.Metrics.OwnerReconcileMS = 125
+	evidence.Artifacts.SessionPTYEvidenceSHA256 = strings.Repeat("d", 64)
 	return evidence
 }
 

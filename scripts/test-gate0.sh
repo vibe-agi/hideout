@@ -180,6 +180,12 @@ scripts/test-export-redaction-smoke.sh
 # and ordered stop.
 scripts/test-daemon-smoke.sh
 
+# Daemon-owned normal run path (034): exact bytes/exit, private session socket,
+# real local PTY/resize/Ctrl-C, and two independent same-workspace workers.
+scripts/test-daemon-session-smoke.sh
+scripts/test-daemon-session-pty.sh
+scripts/test-concurrent-sessions-e2e.sh
+
 # Daemon live operations console (no Lima): typed seed/event contracts and
 # payload-driven UI proof. Initially a skeleton smoke, expanded by 007.
 scripts/test-live-console-smoke.sh

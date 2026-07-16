@@ -280,6 +280,7 @@ fi
 HIDEOUT_STORE_ROOT="$tmp/lima-store" "$prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-shim: ok' "$tmp/lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/lima-doctor-fix-dry.out"
+grep -q 'task helper.install.linux-session-supervisor: ok' "$tmp/lima-doctor-fix-dry.out"
 if [ -e "$tmp/lima-store/install-state.json" ]; then
   echo "package-smoke: lima dry-run repair created install state" >&2
   cat "$tmp/lima-doctor-fix-dry.out" >&2
@@ -478,6 +479,7 @@ fi
 HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-shim: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
+grep -q 'task helper.install.linux-session-supervisor: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
 
 skip_installed_prefix="$tmp/package-skip-installed"
 skip_installed_store="$tmp/package-skip-store"

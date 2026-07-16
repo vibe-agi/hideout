@@ -51,7 +51,10 @@ type SessionViewSpec struct {
 	HostFSGrafts         []string
 	ExpectedBootID       string
 	GuardianControl      bool
+	SessionSupervisor    bool
 }
+
+const GuestSessionSupervisorPath = GuestSessionDir + "/shims/hideout-session-supervisor"
 
 func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	if !sessionViewIDPattern.MatchString(spec.SessionID) || strings.ContainsAny(spec.SessionID, `/\`) {
@@ -75,6 +78,9 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 		if strings.ContainsRune(arg, 0) {
 			return nil, errors.New("session view argv contains NUL")
 		}
+	}
+	if spec.SessionSupervisor && (len(spec.Command) != 1 || spec.Command[0] != GuestSessionSupervisorPath) {
+		return nil, errors.New("session supervisor view requires the fixed packaged supervisor command")
 	}
 	if spec.ExpectedBootID != "" && !sessionViewBootPattern.MatchString(spec.ExpectedBootID) {
 		return nil, errors.New("session view expected boot identity is invalid")
@@ -100,13 +106,13 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 		fmt.Fprintf(&script, "export %s\n", shellQuote(assignment))
 	}
 	if spec.NetworkBootstrapPath != "" {
-		fmt.Fprintf(&script, "%s\n", shellJoin([]string{spec.NetworkBootstrapPath}))
+		fmt.Fprintf(&script, "%s%s\n", shellJoin([]string{spec.NetworkBootstrapPath}), supervisorSetupRedirect(spec))
 	}
 	if spec.RunBootstrap {
-		fmt.Fprintf(&script, "%s\n", shellJoin([]string{GuestBootstrapPath}))
+		fmt.Fprintf(&script, "%s%s\n", shellJoin([]string{GuestBootstrapPath}), supervisorSetupRedirect(spec))
 	}
 	if spec.HostFSEnabled {
-		fmt.Fprintf(&script, "sh -c %s\n", shellQuote(HostFSStartScript(spec.HostFSGrafts)))
+		fmt.Fprintf(&script, "sh -c %s%s\n", shellQuote(HostFSStartScript(spec.HostFSGrafts)), supervisorSetupRedirect(spec))
 	}
 	script.WriteString("cleanup_session_view() {\n")
 	script.WriteString(":\n")
@@ -121,6 +127,9 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	fmt.Fprintf(&script, "cd %s\n", shellQuote(spec.GuestWork))
 	script.WriteString("set +e\n")
 	target := []string{"setpriv", "--reuid=" + spec.TargetUser, "--regid=" + spec.TargetUser, "--init-groups", "--", "env", "-i"}
+	if spec.SessionSupervisor {
+		target = []string{"env", "-i"}
+	}
 	target = append(target, spec.Env...)
 	target = append(target, spec.Command...)
 	fmt.Fprintf(&script, "%s\n", shellJoin(target))
@@ -152,6 +161,13 @@ exec "$@"
 `
 	command := []string{"sh", "-c", launcher, "hideout-session-launcher", control, source}
 	return append(command, viewCommand...), nil
+}
+
+func supervisorSetupRedirect(spec SessionViewSpec) string {
+	if spec.SessionSupervisor {
+		return " >&2"
+	}
+	return ""
 }
 
 func sessionGuardianControlPath(sessionID string) string {

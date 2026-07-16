@@ -1251,8 +1251,9 @@ Required checks:
   plus digest) without product-specific Core logic or raw profile edits;
 - `hideout init --template privacy --network tun2socks --proxy-secret <ref> --mediated-resolver <ip>` and Manager `init/apply` persist only the proxy secret ref and resolver IP, not a proxy URL or backing env var name;
 - `hideout doctor --fix --dry-run --backend lima` includes
-  `helper.install.linux-shim` and `helper.install.linux-hostfsd` when the
-  official store helpers are missing and a source-tree repair is available;
+  `helper.install.linux-shim`, `helper.install.linux-hostfsd`, and
+  `helper.install.linux-session-supervisor` when the official store helpers are
+  missing and a source-tree repair is available;
 - one safe repair can be applied through InitTask plan/apply and emits
   `hideout.init-audit/v1` JSONL under `logs/init-audit.jsonl`;
 - `hideout run` and Manager `run/apply` apply pending lightweight
@@ -1473,8 +1474,10 @@ isolation evidence.
 
 `scripts/test-doc-truth-smoke.sh` requires all five registered 034 proof IDs in
 `docs/claim-boundaries.md`. Its negative fixtures reject cross-workspace shared
-VM support, automatic final-session stop, complete dynamic resize, guest-root
-containment, and native/local substitution for the real Lima gate.
+VM support, automatic final-session stop, exhaustive terminal-emulator, theme,
+OSC, or detach coverage, guest-root containment, and native/local substitution
+for the real Lima gate. Dynamic `SIGWINCH` resize is implemented and belongs to
+the positive 034 contract; broader terminal-emulator hardening remains 037.
 
 ### Concurrent Session Real macOS Arm64 Lima Gate 2
 
@@ -1496,11 +1499,16 @@ HostFS authority, with one full activation plus two warm attaches. It must also
 prove a live owner blocks explicit stop, killing
 one host owner leaves a sibling and the environment service alive, the last
 exit does not stop the VM, explicit idle stop succeeds, and guest root can see
-both ordinary targets as a positive control for the documented non-claim.
+both ordinary targets as a positive control for the documented non-claim. A
+real PTY lane must additionally prove initial dimensions, a live `SIGWINCH`
+resize, representative full-screen control bytes, Ctrl-C exit status 130,
+terminal restoration after daemon loss, client unblocking, target reaping,
+restart refusal for unproved owners, explicit recovery, and a successful run
+after recovery.
 The retained `result.json` is not accepted because it merely exists or says
 `passed`: the Go evidence evaluator requires the exact schema/platform/clean
-commit identity, all 16 named checks set to true, no extra or missing check,
-and `guestRootContainment=not-claimed`.
+commit identity, all 26 named checks set to true, no extra or missing check,
+`guestRootContainment=not-claimed`, and the retained `session-pty.json` digest.
 
 The performance lane builds the exact pre-034 commit in a detached worktree and
 the candidate separately. Both use the same host, runtime artifact digest,

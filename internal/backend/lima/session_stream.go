@@ -1,0 +1,507 @@
+package lima
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/privilege"
+	"github.com/vibe-agi/hideout/internal/sessionwire"
+)
+
+const (
+	supervisorHeartbeatInterval = 5 * time.Second
+	supervisorCancelBound       = 5 * time.Second
+	supervisorStderrLimit       = 64 << 10
+	supervisorInputChunk        = 32 << 10
+)
+
+type supervisorTargetError struct {
+	completion sessionwire.Completion
+}
+
+func (e supervisorTargetError) Error() string {
+	if e.completion.Summary != "" {
+		return e.completion.Summary
+	}
+	if e.completion.Signal != "" {
+		return fmt.Sprintf("target terminated by %s", e.completion.Signal)
+	}
+	return fmt.Sprintf("target exited with status %d", e.completion.ExitCode)
+}
+
+func (e supervisorTargetError) ExitCode() int      { return e.completion.ExitCode }
+func (e supervisorTargetError) SignalName() string { return e.completion.Signal }
+
+func (b Backend) RunWithStreams(ctx context.Context, session *backend.Session, command []string, env []string, streams backend.RunStreams) (retErr error) {
+	if ctx == nil {
+		return errors.New("lima daemon session requires a context")
+	}
+	if session == nil || len(command) == 0 {
+		return errors.New("lima daemon session requires a prepared session and command")
+	}
+	if !session.SessionIsolationRequired {
+		return errors.New("lima daemon session requires the isolated session supervisor")
+	}
+	if !session.RuntimeReady {
+		if err := b.Activate(ctx, session, env); err != nil {
+			return err
+		}
+	}
+	if session.RuntimeCompletionSink != nil {
+		defer func() { retErr = errors.Join(retErr, session.RuntimeCompletionSink(retErr)) }()
+	}
+	return b.runIsolatedSupervisor(ctx, session, command, env, streams)
+}
+
+func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Session, command, env []string, streams backend.RunStreams) error {
+	setup, setupCategories, err := b.supervisorSetupIdentity(ctx, session)
+	if err != nil {
+		return err
+	}
+	targetUser := session.TargetUser
+	if targetUser == "" {
+		targetUser = "developer"
+	}
+	checkCommand, err := BuildSessionViewCommand(SessionViewSpec{
+		SessionID: session.ID, TargetUser: targetUser, GuestWork: session.GuestWork,
+		Env: env, Command: CommandCheck(command[0]), ExpectedBootID: session.ExpectedBootID,
+	})
+	if err != nil {
+		return err
+	}
+	viewCommand, err := BuildSessionViewCommand(SessionViewSpec{
+		SessionID: session.ID, TargetUser: targetUser, GuestWork: session.GuestWork,
+		Env: env, Command: []string{GuestSessionSupervisorPath}, RunBootstrap: true,
+		NetworkBootstrapPath: session.NetworkBootstrapGuestPath,
+		NetworkCleanupPath:   session.NetworkCleanupGuestPath,
+		HostFSEnabled:        session.HostFSEnabled,
+		HostFSGrafts:         session.HostFSGrafts,
+		ExpectedBootID:       session.ExpectedBootID,
+		SessionSupervisor:    true,
+	})
+	if err != nil {
+		return err
+	}
+
+	client, err := b.newSSHClientForUser(ctx, session.InstanceName, "root")
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), b.controlStderr()); err != nil {
+		return isolatedCommandPreflightError(b, session, command, env, err)
+	}
+
+	session.IsolationRunStarted = true
+	setupReported := false
+	onReady := func() error {
+		if err := b.emitSupervisorSetupStatus(
+			session, setup, setupCategories, "succeeded",
+			"privileged setup completed inside the fixed guest session supervisor",
+		); err != nil {
+			return err
+		}
+		setupReported = true
+		return nil
+	}
+	runErr := b.runSupervisorProtocol(ctx, session, client, viewCommand, command, env, streams, onReady)
+	if runErr != nil && !setupReported {
+		runErr = errors.Join(runErr, b.emitSupervisorSetupStatus(
+			session, setup, setupCategories, "failed", runErr.Error(),
+		))
+	}
+	proofCtx, cancel := context.WithTimeout(context.Background(), sessionViewProbeTimeout)
+	defer cancel()
+	if err := b.proveIsolatedSessionTerminatedWithClient(proofCtx, session, client); err != nil {
+		return errors.Join(runErr, err)
+	}
+	session.IsolationCleanupProved = true
+	cleanupSetup := rootControlSSHSetupIdentity()
+	cleanupSetup.Proof = "existing authenticated root SSH transport proved the exact supervisor process tree absent"
+	eventErr := b.emitPrivilegedSetup(session, backend.PrivilegedSetupEvent{
+		Action: privilege.ActionPrivilegedCleanup, Category: "session-view", Status: "succeeded",
+		Setup: cleanupSetup, Reason: "supervisor-owned session cleanup proved through the owning authenticated transport",
+	})
+	return errors.Join(runErr, eventErr)
+}
+
+type supervisorFrameResult struct {
+	frame sessionwire.Frame
+	err   error
+}
+
+type supervisorInputResult struct {
+	data []byte
+	err  error
+}
+
+func (b Backend) runSupervisorProtocol(
+	ctx context.Context,
+	prepared *backend.Session,
+	client *ssh.Client,
+	viewCommand, command, env []string,
+	streams backend.RunStreams,
+	onReady func() error,
+) error {
+	sshSession, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("open supervisor ssh session: %w", err)
+	}
+	defer sshSession.Close()
+	stdin, err := sshSession.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("open supervisor stdin: %w", err)
+	}
+	stdout, err := sshSession.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open supervisor stdout: %w", err)
+	}
+	stderr, err := sshSession.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("open supervisor stderr: %w", err)
+	}
+	stderrCapture := &boundedBuffer{limit: supervisorStderrLimit}
+	stderrDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stderrCapture, stderr)
+		close(stderrDone)
+	}()
+
+	commandLine := setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, viewCommand)
+	if err := sshSession.Start(commandLine); err != nil {
+		return fmt.Errorf("start supervisor ssh session: %w", err)
+	}
+	writer := sessionwire.NewWriter(stdin, sessionwire.DaemonToSupervisor)
+	reader := sessionwire.NewReader(stdout, sessionwire.SupervisorToDaemon)
+	start, err := supervisorStartControl(prepared, command, env, streams)
+	if err != nil {
+		return err
+	}
+	if err := writer.WriteControl(sessionwire.TypeSupervisorStart, start); err != nil {
+		return fmt.Errorf("write supervisor start: %w", err)
+	}
+
+	frames := make(chan supervisorFrameResult, 1)
+	go readSupervisorFrames(reader, frames)
+	wait := make(chan error, 1)
+	go func() { wait <- sshSession.Wait() }()
+
+	var completion *sessionwire.Completion
+	var protocolErr error
+	ready := false
+	cancelSent := false
+	var cancelTimer <-chan time.Time
+	ctxDone := ctx.Done()
+	cancelForProtocolError := func(failure error) {
+		if failure == nil {
+			return
+		}
+		if protocolErr == nil {
+			protocolErr = failure
+		}
+		if !cancelSent && completion == nil {
+			_ = writer.Write(sessionwire.TypeCancel, nil)
+			cancelSent = true
+			cancelTimer = time.After(supervisorCancelBound)
+		}
+	}
+	heartbeat := time.NewTicker(supervisorHeartbeatInterval)
+	defer heartbeat.Stop()
+	input := make(chan supervisorInputResult, 1)
+	if streams.Stdin != nil {
+		go readSupervisorInput(streams.Stdin, input)
+	} else {
+		close(input)
+	}
+	controls := streams.Controls
+
+	for {
+		select {
+		case result, ok := <-frames:
+			if !ok {
+				frames = nil
+				continue
+			}
+			if result.err != nil {
+				if completion == nil {
+					cancelForProtocolError(result.err)
+				}
+				frames = nil
+				continue
+			}
+			switch result.frame.Type {
+			case sessionwire.TypeSupervisorReady:
+				if ready {
+					return errors.New("guest supervisor reported ready more than once")
+				}
+				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				reported := control.(*sessionwire.SupervisorReady)
+				if reported.SessionID != prepared.ID || reported.Terminal != start.Terminal {
+					return errors.New("guest supervisor ready identity drift")
+				}
+				if streams.Ready == nil {
+					return errors.New("daemon stream is missing the ready callback")
+				}
+				if onReady != nil {
+					if err := onReady(); err != nil {
+						return err
+					}
+				}
+				if err := streams.Ready(prepared); err != nil {
+					return err
+				}
+				ready = true
+			case sessionwire.TypeTerminal, sessionwire.TypeStdout, sessionwire.TypeStderr:
+				if !ready {
+					return errors.New("guest supervisor emitted target output before ready")
+				}
+				if err := writeSupervisorOutput(result.frame, streams); err != nil {
+					cancelForProtocolError(err)
+				}
+			case sessionwire.TypeSupervisorError:
+				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				reported := control.(*sessionwire.Error)
+				cancelForProtocolError(errors.New(reported.Summary))
+			case sessionwire.TypeCompletion:
+				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				value := control.(*sessionwire.Completion)
+				if value.SessionID != prepared.ID {
+					return errors.New("guest supervisor completion identity drift")
+				}
+				if len(value.Result) != 0 {
+					return errors.New("guest supervisor cannot supply a Manager run result")
+				}
+				completion = value
+				input = nil
+				controls = nil
+			default:
+				return fmt.Errorf("unexpected guest supervisor frame %s", result.frame.Type)
+			}
+
+		case incoming, ok := <-input:
+			if !ok {
+				input = nil
+				if ready && completion == nil {
+					if err := writer.Write(sessionwire.TypeStdinEOF, nil); err != nil {
+						cancelForProtocolError(err)
+					}
+				}
+				continue
+			}
+			if incoming.err != nil {
+				cancelForProtocolError(incoming.err)
+				input = nil
+				continue
+			}
+			if !ready {
+				return errors.New("daemon attempted supervisor stdin before ready")
+			}
+			if err := writer.Write(sessionwire.TypeStdin, incoming.data); err != nil {
+				cancelForProtocolError(err)
+			}
+
+		case control, ok := <-controls:
+			if !ok {
+				controls = nil
+				continue
+			}
+			if !ready {
+				return errors.New("daemon attempted supervisor control before ready")
+			}
+			if err := writeSupervisorControl(writer, control); err != nil {
+				cancelForProtocolError(err)
+			}
+
+		case <-heartbeat.C:
+			if ready && completion == nil {
+				if err := writer.Write(sessionwire.TypeHeartbeat, nil); err != nil {
+					cancelForProtocolError(err)
+				}
+			}
+
+		case <-ctxDone:
+			if !cancelSent && completion == nil {
+				_ = writer.Write(sessionwire.TypeCancel, nil)
+				cancelSent = true
+				cancelTimer = time.After(supervisorCancelBound)
+			}
+			ctxDone = nil
+
+		case <-cancelTimer:
+			_ = client.Close()
+			return errors.Join(ctx.Err(), errors.New("guest supervisor did not stop within the cancellation bound"))
+
+		case waitErr := <-wait:
+			_ = stdin.Close()
+			<-stderrDone
+			if completion == nil {
+				failure := protocolErr
+				if failure == nil {
+					failure = waitErr
+				}
+				if failure == nil {
+					failure = errors.New("guest supervisor exited without completion")
+				}
+				if text := strings.TrimSpace(stderrCapture.String()); text != "" {
+					failure = fmt.Errorf("%w: %s", failure, text)
+				}
+				return failure
+			}
+			if protocolErr != nil {
+				return protocolErr
+			}
+			if cancelSent && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return completionError(*completion)
+		}
+	}
+}
+
+func supervisorStartControl(prepared *backend.Session, command, env []string, streams backend.RunStreams) (*sessionwire.SupervisorStart, error) {
+	terminal := sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalNone}
+	if streams.Terminal {
+		terminal = sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalPTY, Rows: streams.Rows, Columns: streams.Columns, Term: streams.Term}
+		if terminal.Term == "" {
+			terminal.Term = sessionwire.DefaultTERM
+		}
+	}
+	values := make(map[string]string, len(env))
+	for _, assignment := range env {
+		name, value, ok := strings.Cut(assignment, "=")
+		if !ok || name == "" {
+			return nil, errors.New("supervisor environment contains an invalid assignment")
+		}
+		values[name] = value
+	}
+	start := &sessionwire.SupervisorStart{
+		Protocol: sessionwire.SupervisorProtocol, SessionID: prepared.ID,
+		TargetUser: prepared.TargetUser, GuestWork: prepared.GuestWork,
+		Argv: append([]string(nil), command...), Env: values, Terminal: terminal,
+		ExpectedBootID: prepared.ExpectedBootID,
+		SessionSource:  GuestRuntimeDir + "/sessions/" + prepared.ID,
+	}
+	if start.TargetUser == "" {
+		start.TargetUser = "developer"
+	}
+	if err := start.Validate(); err != nil {
+		return nil, err
+	}
+	return start, nil
+}
+
+func readSupervisorFrames(reader *sessionwire.Reader, results chan<- supervisorFrameResult) {
+	defer close(results)
+	for {
+		frame, err := reader.ReadFrame()
+		results <- supervisorFrameResult{frame: frame, err: err}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func readSupervisorInput(reader io.Reader, results chan<- supervisorInputResult) {
+	defer close(results)
+	buffer := make([]byte, supervisorInputChunk)
+	for {
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			results <- supervisorInputResult{data: append([]byte(nil), buffer[:n]...)}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				results <- supervisorInputResult{err: err}
+			}
+			return
+		}
+	}
+}
+
+func writeSupervisorControl(writer *sessionwire.Writer, control backend.RunControl) error {
+	switch control.Kind {
+	case backend.RunControlResize:
+		return writer.WriteControl(sessionwire.TypeResize, &sessionwire.Resize{Rows: control.Rows, Columns: control.Columns})
+	case backend.RunControlSignal:
+		return writer.WriteControl(sessionwire.TypeSignal, &sessionwire.Signal{Name: control.Signal})
+	default:
+		return fmt.Errorf("unsupported daemon run control %q", control.Kind)
+	}
+}
+
+func writeSupervisorOutput(frame sessionwire.Frame, streams backend.RunStreams) error {
+	var writer io.Writer
+	switch frame.Type {
+	case sessionwire.TypeTerminal:
+		if !streams.Terminal {
+			return errors.New("guest supervisor emitted terminal output for a pipe session")
+		}
+		writer = streams.PTY
+	case sessionwire.TypeStdout:
+		if streams.Terminal {
+			return errors.New("guest supervisor emitted stdout for a PTY session")
+		}
+		writer = streams.Stdout
+	case sessionwire.TypeStderr:
+		if streams.Terminal {
+			return errors.New("guest supervisor emitted stderr for a PTY session")
+		}
+		writer = streams.Stderr
+	}
+	if writer == nil {
+		return errors.New("daemon stream output writer is unavailable")
+	}
+	_, err := writer.Write(frame.Payload)
+	return err
+}
+
+func completionError(completion sessionwire.Completion) error {
+	if completion.Kind == sessionwire.CompletionExit && completion.ExitCode == 0 {
+		return nil
+	}
+	return supervisorTargetError{completion: completion}
+}
+
+type boundedBuffer struct {
+	mu    sync.Mutex
+	data  bytes.Buffer
+	limit int
+}
+
+func (b *boundedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	inputLen := len(data)
+	remaining := b.limit - b.data.Len()
+	if remaining > 0 {
+		if len(data) > remaining {
+			data = data[:remaining]
+		}
+		_, _ = b.data.Write(data)
+	}
+	return inputLen, nil
+}
+
+func (b *boundedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
+}

@@ -75,24 +75,29 @@ workspace in a host editor, privacy networking, and recovery:
 ## Where Commands Run
 
 ```text
-macOS host                                      Lima VM
-+----------------------------------+            +---------------------------+
-| Terminal                         | start      | target CLI runs here      |
-| hideout + Core                   +----------->| agent / git / npm         |
-| policy / approval / audit        |            |                           |
-|                                  | RW mount   | mounted workspace         |
-| selected project checkout        +===========>|                           |
-|                                  | approved   | code . / open ...         |
-| VS Code / browser <--------------+------------+ typed host request        |
-+----------------------------------+            +---------------------------+
+macOS terminal          macOS control plane                 Lima VM
++----------------+      +-----------------------+           +----------------+
+| hideout client |<====>| hideoutd process role |<=========>| fixed session  |
+| raw TTY/resize |      | Manager + policy      |  framed   | supervisor     |
+| review/output  |      | backend/session owner |  stream   | PTY + process  |
++----------------+      | approval/audit/HostFS |           | target CLI     |
+                        +-----------+-----------+           +-------+--------+
+                                    |                               |
+host app <--- typed request --------+       project checkout =======+ RW mount
 ```
 
-`hideout` and its policy, approval, and audit logic run on the host. The target
-after `hideout run --` runs inside the VM. The selected project is mounted into
-the guest at a profile-controlled path. A projected command such as `code .`
-sends a structured resource request back through Hideout Core; VS Code runs on
-the host, without giving the guest a generic host shell. Other host files
-require explicit HostFS permission.
+`hideout` is the thin client: it parses the invocation, presents the canonical
+review, owns the local terminal state, and carries input/output/resize frames.
+The resident `hideoutd` process role owns Manager Core, policy, Lima/SSH,
+per-run authority, active sessions, audit, and cleanup. Inside the VM, a fixed
+packaged supervisor owns the target PTY and process tree. The role currently
+uses the same installed executable internally; it is not a second package the
+operator must install or start.
+
+The selected project is mounted into the guest at a profile-controlled path. A
+projected command such as `code .` sends a structured resource request back
+through Manager Core; VS Code runs on the host without giving the guest a
+generic host shell. Other host files require explicit HostFS permission.
 
 ## Why Hideout
 
@@ -128,8 +133,9 @@ the machine-readable release manifest, and bounded verification evidence.
 - Concurrent reuse currently applies only to the same pinned workspace. It
   does not share one default VM across unrelated project directories.
 - The last session does not automatically stop the VM; use `hideout stop`.
-- Initial terminal dimensions are preserved, but complete dynamic resize is
-  not yet a product claim.
+- Initial terminal dimensions and live SIGWINCH resize are supported. Exhaustive
+  terminal-emulator, theme, OSC/CSI, and detach behavior remains outside the
+  current claim.
 
 See the exact supported and unsupported combinations in the
 [Support Matrix](docs/support-matrix.md) and security wording in

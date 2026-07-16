@@ -30,8 +30,8 @@ func TestBuildDoesNotInheritUnlistedEnvAndSetsSyntheticHome(t *testing.T) {
 	if !strings.Contains(env, "GIT_CONFIG_GLOBAL=/tmp/hideout/profile/home/.gitconfig") {
 		t.Fatalf("synthetic GIT_CONFIG_GLOBAL missing: %s", env)
 	}
-	if !strings.Contains(env, "GIT_OPTIONAL_LOCKS=0") {
-		t.Fatalf("shared-workspace Git lock policy missing: %s", env)
+	if strings.Contains(env, "GIT_OPTIONAL_LOCKS=") {
+		t.Fatalf("Git optional-lock policy must retain the tool default: %s", env)
 	}
 	if !strings.Contains(env, "HOSTNAME=devbox") {
 		t.Fatalf("synthetic HOSTNAME missing: %s", env)
@@ -96,11 +96,14 @@ func TestBuildSyntheticIdentityOverridesPublicEnv(t *testing.T) {
 		HostEnv:    []string{"PATH=/host/bin"},
 	})
 	env := strings.Join(result.Env, "\n")
-	if strings.Contains(env, "HOME=/real/home") || strings.Contains(env, "HOSTNAME=real-host") || strings.Contains(env, "GIT_CONFIG_GLOBAL=/real/home/.gitconfig") || strings.Contains(env, "GIT_OPTIONAL_LOCKS=1") || strings.Contains(env, "PATH=/real/bin") || strings.Contains(env, "PATH=/host/bin") {
+	if strings.Contains(env, "HOME=/real/home") || strings.Contains(env, "HOSTNAME=real-host") || strings.Contains(env, "GIT_CONFIG_GLOBAL=/real/home/.gitconfig") || strings.Contains(env, "PATH=/real/bin") || strings.Contains(env, "PATH=/host/bin") {
 		t.Fatalf("public env overrode synthetic identity: %s", env)
 	}
-	if !strings.Contains(env, "HOME=/tmp/hideout/profile/home") || !strings.Contains(env, "HOSTNAME=devbox") || !strings.Contains(env, "GIT_CONFIG_GLOBAL=/tmp/hideout/profile/home/.gitconfig") || !strings.Contains(env, "GIT_OPTIONAL_LOCKS=0") {
+	if !strings.Contains(env, "HOME=/tmp/hideout/profile/home") || !strings.Contains(env, "HOSTNAME=devbox") || !strings.Contains(env, "GIT_CONFIG_GLOBAL=/tmp/hideout/profile/home/.gitconfig") {
 		t.Fatalf("synthetic identity missing: %s", env)
+	}
+	if !strings.Contains(env, "GIT_OPTIONAL_LOCKS=1") {
+		t.Fatalf("explicit Git optional-lock policy missing: %s", env)
 	}
 	if !strings.Contains(env, "PATH="+defaultToolPath) {
 		t.Fatalf("synthetic PATH missing without shim dir: %s", env)

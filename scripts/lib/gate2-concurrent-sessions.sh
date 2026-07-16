@@ -61,10 +61,11 @@ gate2_concurrent_sessions_run() {
   out="$(cd "$out" && pwd -P)"
   local tmp store workspace hostfs_root hostfs_file bin hideout lima_home profile short_tmp
   # Lima's socket path has a 104-byte platform limit. Keep this explicit
-  # override separate from ordinary TMPDIR-backed test artifacts.
+  # override separate from ordinary TMPDIR-backed test artifacts. The daemon
+  # session socket has the same constraint, so its store belongs here too.
   short_tmp="${HIDEOUT_LIMA_SHORT_TMPDIR:-/tmp}"
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-034-gate2.XXXXXX")"
-  store="$tmp/store"
+  store="$(mktemp -d "$short_tmp/h34-store.XXXXXX")"
   workspace="$tmp/workspace"
   hostfs_root="$(mktemp -d "$short_tmp/hideout-034-hostfs.XXXXXX")"
   hostfs_root="$(cd "$hostfs_root" && pwd -P)"
@@ -83,7 +84,9 @@ gate2_concurrent_sessions_run() {
 		[ -x "$hideout" ] || { echo "concurrent-sessions gate2: packaged hideout binary is not executable" >&2; return 2; }
 		: "${HIDEOUT_LINUX_SHIM_PATH:?packaged Linux shim is required}"
 		: "${HIDEOUT_LINUX_HOSTFSD_PATH:?packaged Linux HostFS helper is required}"
-		[ -x "$HIDEOUT_LINUX_SHIM_PATH" ] && [ -x "$HIDEOUT_LINUX_HOSTFSD_PATH" ] || {
+		: "${HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH:?packaged Linux session supervisor is required}"
+		[ -x "$HIDEOUT_LINUX_SHIM_PATH" ] && [ -x "$HIDEOUT_LINUX_HOSTFSD_PATH" ] &&
+			[ -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ] || {
 			echo "concurrent-sessions gate2: packaged Linux helpers are not executable" >&2
 			return 2
 		}
@@ -95,10 +98,13 @@ gate2_concurrent_sessions_run() {
 		)
 		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
 		HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch"
+		HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
 		"$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$root" >/dev/null
 		"$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$root" >/dev/null
+		go -C "$root" run ./internal/helperbin/cmd/build-session-supervisor \
+			--out "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" --goarch "$arch" --source "$root" >/dev/null
 	fi
-	export HIDEOUT_LINUX_SHIM_PATH HIDEOUT_LINUX_HOSTFSD_PATH
+	export HIDEOUT_LINUX_SHIM_PATH HIDEOUT_LINUX_HOSTFSD_PATH HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH
 
 	local first_pid="" second_pid="" third_pid="" instance=""
   GATE2_034_CLEANUP_TMP="$tmp"
@@ -140,7 +146,8 @@ gate2_concurrent_sessions_run() {
         git -C "$GATE2_034_CLEANUP_ROOT" worktree remove --force \
           "$GATE2_034_CLEANUP_BASELINE_WORKTREE" >/dev/null 2>&1 || true
       fi
-      rm -rf "$GATE2_034_CLEANUP_TMP" "$GATE2_034_CLEANUP_LIMA_HOME" "$GATE2_034_CLEANUP_HOSTFS_ROOT"
+      rm -rf "$GATE2_034_CLEANUP_TMP" "$GATE2_034_CLEANUP_STORE" \
+        "$GATE2_034_CLEANUP_LIMA_HOME" "$GATE2_034_CLEANUP_HOSTFS_ROOT"
     fi
   }
   trap gate2_034_cleanup EXIT
@@ -371,10 +378,37 @@ ROOTSH
   LIMA_HOME="$lima_home" limactl list --json | jq -s -e --arg name "$instance" \
     'any(.[]; .name == $name and .status == "Stopped")' >/dev/null
 
-  gate2_034_run_performance "$root" "$out" "$tmp" "$lima_home" "$workspace" \
-    "$hideout" "$store" "$profile" "$baseline_commit" "$samples" "$warmups" "$arch"
+	  gate2_034_run_performance "$root" "$out" "$tmp" "$lima_home" "$workspace" \
+	    "$hideout" "$store" "$profile" "$baseline_commit" "$samples" "$warmups" "$arch"
 
-	: >"$out/logs/gate2.out"
+	local session_pty_evidence session_pty_sha256
+	session_pty_evidence="$out/logs/session-pty.json"
+	(
+		cd "$root"
+		go run ./test/e2e/sessionpty \
+			--hideout "$hideout" \
+			--store "$store" \
+			--lima-home "$lima_home" \
+			--workspace "$workspace" \
+			--profile "$profile" \
+			--out "$session_pty_evidence"
+	)
+	jq -e '
+		.status == "passed" and
+		.initialSize == "24x80" and
+		.resizedSize == "31x97" and
+		.fullscreenFixture == true and
+		.interruptExit == 130 and
+		.daemonCrashClients == 2 and
+		.terminalRestore == true and
+		.targetsReaped == true and
+		.restartFailedClosed == true and
+		.explicitRecovery == true and
+		.postRecoveryRun == true
+	' "$session_pty_evidence" >/dev/null
+	session_pty_sha256="$(gate2_034_sha256 "$session_pty_evidence")"
+
+		: >"$out/logs/gate2.out"
 	cat >>"$out/logs/gate2.out" <<'EOF'
 three_same_workspace_owners=passed
 ordinary_target_private_proc=passed
@@ -385,23 +419,35 @@ last_session_no_auto_stop=passed
 guest_root_containment=non-claim
 warm_attach_performance=passed
 static_workspace_performance=passed
+real_lima_pty_resize=passed
+fullscreen_terminal_fixture=passed
+ctrl_c_exact_exit=passed
+daemon_crash_clients_unblocked=passed
+daemon_crash_terminal_restore=passed
+daemon_crash_targets_reaped=passed
+restart_stale_owner_fail_closed=passed
+explicit_recovery=passed
 EOF
 
 	local commit dirty
 	commit="$(git -C "$root" rev-parse HEAD)"
 	dirty="$(cd "$root" && gate2_034_dirty)"
 	jq -n \
-		--arg commit "$commit" --argjson dirty "$dirty" \
-		--argjson ownerReconcileMs "$owner_release_ms" \
-		--arg generated "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-		'{schema:"hideout.concurrent-sessions-gate2/v1",status:"passed",generatedAt:$generated,
-		  commit:$commit,dirty:$dirty,backend:"lima",host:"macos-arm64",
-		  metrics:{ownerReconcileMs:$ownerReconcileMs},
-		  checks:{threeSameWorkspaceOwners:true,distinctSessionIds:true,distinctPidNamespaces:true,
-		    distinctMountNamespaces:true,nonRootTargets:true,privateProc:true,siblingPidHidden:true,
-		    siblingRuntimeHidden:true,guestRootPositiveControl:true,hostfsOverlaySessionLocal:true,
-		    forcedInterruptionTargetGone:true,siblingSurvivedInterruption:true,ownerReconciled:true,
-		    stopRefusedWithLiveOwners:true,lastSessionPreservedVm:true,explicitStopStoppedVm:true},
+			--arg commit "$commit" --argjson dirty "$dirty" \
+			--argjson ownerReconcileMs "$owner_release_ms" \
+			--arg sessionPTYEvidenceSHA256 "$session_pty_sha256" \
+			--arg generated "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+			'{schema:"hideout.concurrent-sessions-gate2/v1",status:"passed",generatedAt:$generated,
+			  commit:$commit,dirty:$dirty,backend:"lima",host:"macos-arm64",
+			  metrics:{ownerReconcileMs:$ownerReconcileMs},artifacts:{sessionPTYEvidenceSHA256:$sessionPTYEvidenceSHA256},
+			  checks:{threeSameWorkspaceOwners:true,distinctSessionIds:true,distinctPidNamespaces:true,
+			    distinctMountNamespaces:true,nonRootTargets:true,privateProc:true,siblingPidHidden:true,
+			    siblingRuntimeHidden:true,guestRootPositiveControl:true,hostfsOverlaySessionLocal:true,
+			    forcedInterruptionTargetGone:true,siblingSurvivedInterruption:true,ownerReconciled:true,
+			    stopRefusedWithLiveOwners:true,lastSessionPreservedVm:true,explicitStopStoppedVm:true,
+			    realPTYInitialSize:true,realPTYResize:true,fullscreenFixture:true,interruptExitExact:true,
+			    daemonCrashClientsUnblocked:true,daemonCrashTerminalRestored:true,daemonCrashTargetsReaped:true,
+			    restartStaleOwnerFailedClosed:true,explicitRecovery:true,postRecoveryRun:true},
 		  nonClaims:{guestRootContainment:"not-claimed"}}' \
     >"$out/result.json"
   echo "concurrent-sessions Gate 2 passed: $out/result.json"

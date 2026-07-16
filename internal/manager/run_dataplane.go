@@ -42,6 +42,7 @@ type RunDataPlaneOptions struct {
 	OpenTargets                []RunOpenTargetOwner
 	EndpointCandidates         []RunEndpointCandidate
 	EndpointExposures          []RunEndpointExposureRequest
+	RequireSessionSupervisor   bool
 }
 
 type RunDataPlane struct {
@@ -114,6 +115,9 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		return RunDataPlane{}, err
 	}
 	if err := MaterializeCommandProxyShims(runSession.RuntimeShimDir, runSession.Plan.Backend, registry, runNetwork.Plan); err != nil {
+		return RunDataPlane{}, err
+	}
+	if err := MaterializeSessionSupervisor(runSession.RuntimeShimDir, runSession.Plan.Backend, opts.RequireSessionSupervisor); err != nil {
 		return RunDataPlane{}, err
 	}
 	grantBindings, requiredGrantBindings := compileRunProjectionGrants(runSession, hostAppBindings.Bindings())
@@ -655,6 +659,17 @@ func MaterializeHostFSD(dir, backendName string, enabled bool) error {
 	return copyExecutable(source, filepath.Join(dir, "hideout-hostfsd"))
 }
 
+func MaterializeSessionSupervisor(dir, backendName string, required bool) error {
+	if !required || backendName != "lima" {
+		return nil
+	}
+	source := ResolveLinuxSessionSupervisorPath()
+	if source == "" {
+		return errors.New("lima daemon sessions require a manifest-verified linux hideout-session-supervisor")
+	}
+	return copyExecutable(source, filepath.Join(dir, helperbin.LinuxSessionSupervisorCommand))
+}
+
 func ResolveShimPath() string {
 	return helperbin.ResolveShimPath()
 }
@@ -681,6 +696,14 @@ func ResolveLinuxHostFSDPath() string {
 		return ""
 	}
 	return helperbin.ResolveLinuxHostFSDPath(store.Root, runtime.GOARCH)
+}
+
+func ResolveLinuxSessionSupervisorPath() string {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return ""
+	}
+	return helperbin.ResolveLinuxSessionSupervisorPath(store.Root, runtime.GOARCH)
 }
 
 func DefaultLinuxShimPath(goarch string) (string, error) {

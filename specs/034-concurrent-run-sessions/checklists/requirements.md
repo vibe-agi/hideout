@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Concurrent Run Sessions
+# Specification Quality Checklist: Daemon-Owned Concurrent Run Sessions
 
 **Purpose**: Validate specification completeness and quality before planning
 **Created**: 2026-07-16
@@ -31,9 +31,13 @@
 
 ## Notes
 
-- The formal cut is same-workspace concurrency on the existing per-workspace
-  environment and workspace transport.
-- Cross-workspace shared-default reuse, daemon-owned final-session stop, and
-  the complete terminal-resize contract remain separate follow-up features.
-- Real Lima evidence is mandatory for process-view, mount, HostFS cleanup, and
-  performance claims; native tests are not isolation proof.
+- Formal 034 now replaces the executable CLI-owned run path with one
+  daemon-owned run/session model; the previous 034 implementation is baseline,
+  not completion evidence for the new contract.
+- Cross-workspace shared default, automatic final-session stop, detached jobs,
+  browser terminals, guest-root containment, and exhaustive terminal-emulator
+  hardening remain explicitly outside this feature.
+- Real macOS arm64 Lima and real-terminal evidence are mandatory for isolation,
+  crash, terminal, and latency claims.
+- Specification validation completed with 25 sequential FRs, 15 sequential SCs,
+  five independently testable user stories, and no clarification markers.

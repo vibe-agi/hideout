@@ -425,8 +425,9 @@ owns:
 - in-memory audit filtering for event streams (there is no separate indexed
   audit store; see
   [tui-webui-experience.md](tui-webui-experience.md));
-- fail-closed handling for confirmation-required operations; interactive
-  prompt channels are later work;
+- fail-closed handling for confirmation-required operations; executable runs
+  use the initiating CLI as the presentation channel for the exact canonical
+  review, while terminal bytes never count as confirmation;
 - background execution for existing typed environment stop/clean operations;
 - local Manager API serving.
 
@@ -449,12 +450,14 @@ declared base image or from operator-authored setup run inside the boundary.
 
 Daemon transport is security-sensitive:
 
-- Preferred transport is a Unix domain socket under a runtime subdirectory of
+- Authority transports are Unix domain sockets under a runtime subdirectory of
   the effective Hideout store root, with `0700` ancestors. Anchoring the socket
   under the store lets the existing store-reserved HostFS guard and workspace
-  mount safety guard enforce guest unreachability. The socket path must never
-  live under the workspace, HostFS grants, passthrough mounts, or any path
-  visible to the guest.
+  mount safety guard enforce guest unreachability. Manager HTTP and full-duplex
+  run sessions use distinct private listeners; the session listener is `0600`,
+  carries one authenticated run per connection, and is not part of the HTTP
+  route inventory. Socket paths must never live under the workspace, HostFS
+  grants, passthrough mounts, or any path visible to the guest.
 - Host loopback is not a sufficient trust boundary for the daemon API. A
   loopback HTTP listener may be used for a command-scoped browser UI only when
   protected by a short-lived token; it must not be the default long-lived
@@ -472,8 +475,10 @@ After a daemon restart, the daemon fails closed: live resources that cannot be
 proved owned by the current instance are reported and audited as orphaned. The
 daemon does not silently re-adopt or destroy them.
 
-`hideoutd` is implemented as the resident steady-state Manager runtime, while
-embedded CLI/TUI/WebUI paths remain supported when no daemon is running.
+`hideoutd` is implemented as the resident steady-state Manager runtime. Normal
+executable `hideout run` starts or reuses it and has no embedded Manager/backend
+fallback. Non-executable local planning and documented TUI/WebUI observation
+fallbacks do not own a target or backend.
 
 ## CLI, TUI, and WebUI Roles
 
@@ -634,8 +639,9 @@ mutate unrelated stores directly.
   support acknowledgement only.
 - Manager API and WebUI expose typed profile env policy plan/apply for durable
   public/inherit/deny env policy without echoing env values.
-- A resident `hideoutd` is implemented; CLI, TUI, and WebUI still support
-  embedded Manager Core or the local WebUI server process when no daemon runs.
+- A resident `hideoutd` is implemented. Executable CLI runs are daemon-only;
+  non-executable planning and UI observation may retain explicitly documented
+  local behavior without becoming a run owner.
 
 ### Implemented Resident Runtime
 
@@ -648,12 +654,14 @@ mutate unrelated stores directly.
   log; streams end on credential expiry), runs existing typed environment
   stop/clean as background work with queryable status, and fails closed after
   restart for live resources it cannot prove it owns. Its own status/event and
-  background endpoints are a separate surface outside `/api/v1/`.
-  Confirmation prompt channels remain a follow-on (the daemon fails closed for
-  confirmation-required ops rather than prompting). It also serves the WebUI over
-  a tokened loopback UI transport; WebUI and TUI seed once from Manager data and
-  then apply `liveconsole.Event` payloads without steady-state overview/audit
-  polling while the stream is healthy. CLI, TUI, and WebUI are all its clients.
+  background endpoints are a separate surface outside `/api/v1/`. A second
+  private listener owns bounded full-duplex run sessions. The thin CLI presents
+  Manager reviews and owns local raw-terminal restoration; the daemon owns
+  Manager/backend/session workers; a fixed Linux guest supervisor owns each
+  target PTY, process group, signal delivery, and reaping. It also serves the
+  WebUI over a tokened loopback UI transport; WebUI and TUI seed once from
+  Manager data and then apply `liveconsole.Event` payloads without steady-state
+  overview/audit polling while the stream is healthy.
 
 ### Next Product Increment
 
@@ -665,11 +673,13 @@ mutate unrelated stores directly.
 - plan/apply operations for bundle install confirmation and project apply;
 - TUI first-run wizard and interactive doctor;
 - richer WebUI audit/session/profile views beyond the current smoke surface;
-- ensure CLI paths call Manager Core for shared operations.
+- migrate remaining non-run CLI-direct operations to typed Manager services
+  where shared ownership or cross-surface parity requires it.
 
 ### Later
 
-- richer interactive confirmation flows through the daemon prompt channel.
+- richer multi-surface confirmation presentation without granting the daemon
+  an implicit prompt or approval channel.
 
 ## Open Questions
 

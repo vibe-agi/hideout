@@ -111,6 +111,12 @@ echo "install-local: building linux hostfsd for $arch"
   --goarch "$arch" \
   --source "$source" >/dev/null
 
+echo "install-local: building linux session supervisor for $arch"
+go -C "$source" run ./internal/helperbin/cmd/build-session-supervisor \
+  --out "$prefix/bin/hideout-session-supervisor-linux-$arch" \
+  --goarch "$arch" \
+  --source "$source" >/dev/null
+
 echo "install-local: building linux DoH DNS stub for $arch"
 GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
   go build -trimpath -o "$prefix/bin/hideout-dns-stub-linux-$arch" ./cmd/hideout-dns-stub >/dev/null

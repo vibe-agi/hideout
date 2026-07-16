@@ -90,6 +90,38 @@ sha256_file() {
   fi
 }
 
+verify_session_supervisor() {
+  local root="$1" arch="$2"
+  local binary="$root/bin/hideout-session-supervisor-linux-$arch"
+  local manifest="$binary.manifest.json"
+  if [ ! -f "$binary" ] || [ -L "$binary" ] || [ ! -x "$binary" ]; then
+    echo "package-local: required Linux session supervisor is missing or not executable: $binary" >&2
+    return 1
+  fi
+  if [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
+    echo "package-local: required Linux session supervisor manifest is missing: $manifest" >&2
+    return 1
+  fi
+  if ! jq -e --arg arch "$arch" --arg artifact "$(basename "$binary")" '
+    .version == "hideout.helper-manifest/v1" and
+    .command == "hideout-session-supervisor" and
+    .targetOS == "linux" and
+    .targetArch == $arch and
+    .artifact == $artifact and
+    (.sha256 | test("^[a-f0-9]{64}$"))
+  ' "$manifest" >/dev/null; then
+    echo "package-local: Linux session supervisor manifest identity is invalid: $manifest" >&2
+    return 1
+  fi
+  local want got
+  want="$(jq -er '.sha256' "$manifest")"
+  got="$(sha256_file "$binary")"
+  if [ "$want" != "$got" ]; then
+    echo "package-local: Linux session supervisor checksum mismatch: want $want got $got" >&2
+    return 1
+  fi
+}
+
 absolute_path() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
@@ -191,6 +223,10 @@ finalize_package() {
     echo "package-local: staged package is already finalized" >&2
     exit 1
   fi
+
+  local guest_arch
+  guest_arch="$(jq -er '.guestArch' "$metadata")"
+  verify_session_supervisor "$prefix" "$guest_arch"
 
   local files_ndjson="$root/.files.ndjson"
   : >"$files_ndjson"

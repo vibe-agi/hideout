@@ -3,14 +3,19 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
 tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/hideout-adapter-pack-smoke.XXXXXX")"
+store="$(hideout_mktemp_daemon_store)"
+hideout="$tmp_home/hideout"
 cleanup() {
-  rm -rf "$tmp_home"
+  HIDEOUT_STORE_ROOT="$store" "$hideout" daemon stop >/dev/null 2>&1 || true
+  rm -rf "$tmp_home" "$store"
 }
 trap cleanup EXIT
 
 go test -count=1 ./internal/adapterpack ./internal/cmdadapter ./internal/broker ./internal/manager ./internal/app
+go build -o "$hideout" ./cmd/hideout
 go build -o "$tmp_home/hideout-shim" ./cmd/hideout-shim
 
 pack_dir="$tmp_home/pack"
@@ -61,8 +66,8 @@ function decideCommandAdapter(ctx) {
 }
 JS
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout profile init smoke >/dev/null
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout adapter-pack install --path "$pack_dir" >"$tmp_home/install.out"
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" profile init smoke >/dev/null
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" adapter-pack install --path "$pack_dir" >"$tmp_home/install.out"
 revision_id="$(jq -r '.revision.revisionId' "$tmp_home/install.out")"
 source_digest="$(jq -r '.revision.sourceDigest' "$tmp_home/install.out")"
 jq -e '
@@ -72,12 +77,12 @@ jq -e '
   .revision.validationStatus == "passed"
 ' "$tmp_home/install.out" >/dev/null
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout adapter-pack list >"$tmp_home/list.out"
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" adapter-pack list >"$tmp_home/list.out"
 jq -e '.adapterPacks[] | select(.packId == "example.pack" and .state == "installed")' "$tmp_home/list.out" >/dev/null
 
 set +e
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  go run ./cmd/hideout adapter-pack enable --profile smoke --pack example.pack --revision "$revision_id" --adapter tool --id pack-tool \
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
+  "$hideout" adapter-pack enable --profile smoke --pack example.pack --revision "$revision_id" --adapter tool --id pack-tool \
   >"$tmp_home/enable-before-test.out" 2>"$tmp_home/enable-before-test.err"
 enable_before_rc=$?
 set -e
@@ -87,11 +92,11 @@ if [ "$enable_before_rc" -eq 0 ]; then
 fi
 grep -q "tests must pass" "$tmp_home/enable-before-test.err"
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout adapter-pack test --revision "$revision_id" example.pack >"$tmp_home/test.out"
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" adapter-pack test --revision "$revision_id" example.pack >"$tmp_home/test.out"
 jq -e '.test.status == "passed" and .test.passed == 1' "$tmp_home/test.out" >/dev/null
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  go run ./cmd/hideout adapter-pack enable --profile smoke --pack example.pack --revision "$revision_id" --adapter tool --id pack-tool \
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
+  "$hideout" adapter-pack enable --profile smoke --pack example.pack --revision "$revision_id" --adapter tool --id pack-tool \
   >"$tmp_home/enable.out"
 jq -e --arg revision "$revision_id" '
   .applied == true and
@@ -106,11 +111,11 @@ jq -e --arg revision "$revision_id" --arg digest "$source_digest" '
   .commandAdapters.adapters["pack-tool"].packRevisionId == $revision and
   .commandAdapters.adapters["pack-tool"].packAdapterId == "tool" and
   .commandAdapters.adapters["pack-tool"].packLockDigest == $digest
-' "$tmp_home/profiles/smoke/profile.json" >/dev/null
+' "$store/profiles/smoke/profile.json" >/dev/null
 
 set +e
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  go run ./cmd/hideout run --profile smoke --backend native --allow-weak-isolation -- tool-x --unsafe \
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
+  "$hideout" run --profile smoke --backend native --allow-weak-isolation -- tool-x --unsafe \
   >"$tmp_home/run.out" 2>"$tmp_home/run.err"
 run_rc=$?
 set -e
@@ -120,12 +125,12 @@ if [ "$run_rc" -eq 0 ]; then
 fi
 grep -q "adapter pack blocked tool-x" "$tmp_home/run.err"
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout adapter-pack revoke example.pack >"$tmp_home/revoke.out"
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" adapter-pack revoke example.pack >"$tmp_home/revoke.out"
 jq -e '.applied == true and .entry.state == "revoked"' "$tmp_home/revoke.out" >/dev/null
 
 set +e
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  go run ./cmd/hideout doctor --profile smoke --backend native \
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
+  "$hideout" doctor --profile smoke --backend native \
   >"$tmp_home/doctor.out" 2>"$tmp_home/doctor.err"
 doctor_rc=$?
 set -e

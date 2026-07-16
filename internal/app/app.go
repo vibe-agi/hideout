@@ -64,6 +64,9 @@ type app struct {
 	stdin                 io.Reader
 	backendFactory        func(string, runOptions) backend.Backend
 	sessionIsolationProbe func(context.Context, string) error
+	ensureDaemon          func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error)
+	sessionClient         func(context.Context, daemon.SessionClientOptions) (daemon.SessionClientResult, error)
+	daemonExecutable      func() (string, error)
 }
 
 var (
@@ -79,8 +82,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			a.usage()
 			return 0
 		}
-		fmt.Fprintln(stderr, "hideout:", err)
-		return 1
+		if !silentTargetExit(err) {
+			fmt.Fprintln(stderr, "hideout:", err)
+		}
+		return errorExitCode(err)
 	}
 	return 0
 }
@@ -91,6 +96,8 @@ func (a app) run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case daemon.InternalDaemonServeCommand:
+		return a.daemonServe(args[1:])
 	case "init":
 		return a.initCommand(args[1:])
 	case "run":
@@ -1120,6 +1127,7 @@ func (a app) runUsage(commandName string) {
 	fmt.Fprintln(a.stdout, "  --env <name>                  run inside the named environment")
 	fmt.Fprintln(a.stdout, "  --env-var KEY=VALUE           run-scoped public environment variable")
 	fmt.Fprintln(a.stdout, "  --preview <endpoint|id>       expose a guest-loopback endpoint to the host browser")
+	fmt.Fprintln(a.stdout, "  --terminal <mode>             auto (default), always, or never")
 	fmt.Fprintln(a.stdout, "  --verbose                     print Hideout control-plane progress and boundary summary")
 	fmt.Fprintln(a.stdout, "  --explain                     print the run boundary without executing")
 	fmt.Fprintln(a.stdout, "  --rm                          remove the runtime environment after command exit")
@@ -1912,6 +1920,7 @@ type runOptions struct {
 	hostFSRun             hostfs.Config
 	envPublic             map[string]string
 	previewTargets        []string
+	terminalMode          string
 	command               []string
 }
 
@@ -1929,6 +1938,9 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 	opts, err := parseRunOptions(args, explainOnly)
 	if err != nil {
 		return err
+	}
+	if !opts.explainOnly {
+		return a.runViaDaemon(opts)
 	}
 	store, err := profile.DefaultStore()
 	if err != nil {
@@ -1963,52 +1975,21 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 		}
 		runPlan.RuntimeProfile = runtimeProfile
 	}
-	openTargets, endpointCandidates, endpointExposures, err := buildPreviewOpenOptions(runtimeProfile, opts.previewTargets)
+	_, _, _, err = buildPreviewOpenOptions(runtimeProfile, opts.previewTargets)
 	if err != nil {
 		return err
 	}
 	opts.workspace = runPlan.Workspace
 	opts.guestWorkspace = runPlan.GuestWorkspace
 	a.warnShadowedHostFSRules(runtimeProfile.HostFS, runPlan.Workspace)
-	backendName := runPlan.Backend
-	if opts.explainOnly {
-		return core.ExplainRun(runPlan, manager.RunExplainOptions{
-			Environment: manager.RunEnvironmentOptions{
-				EnvName:        opts.envName,
-				RemoveAfterRun: opts.removeEnvironment,
-			},
-		}, func(explanation manager.RunExplanation) error {
-			runSession := explanation.Session
-			explain := explainText(runtimeProfile, opts, runSession.Layout, runSession.Environment, runSession.Env, runSession.ProfileDir, runSession.IdentityDir)
-			fmt.Fprint(a.stdout, explain)
-			return nil
-		})
-	}
-	be := a.backend(backendName, opts)
-	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
-	result, err := core.ApplyRun(runCtx, runPlan, manager.ApplyRunOptions{
-		Backend:                    be,
-		RequestedBackend:           opts.backendName,
-		AllowWeakIsolation:         opts.allowWeakIsolation,
-		Environment:                manager.RunEnvironmentOptions{EnvName: opts.envName, RemoveAfterRun: opts.removeEnvironment, Create: true},
-		AuditPath:                  opts.auditPath,
-		HostFSRun:                  opts.hostFSRun,
-		DisableProfileHostFSGrants: opts.noProfileHostFSGrants,
-		OpenTargets:                openTargets,
-		EndpointCandidates:         endpointCandidates,
-		EndpointExposures:          endpointExposures,
-		OpenerForSession: func(runSession manager.RunSession) broker.Opener {
-			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
-		},
+	return core.ExplainRun(runPlan, manager.RunExplainOptions{
+		Environment: manager.RunEnvironmentOptions{EnvName: opts.envName, RemoveAfterRun: opts.removeEnvironment},
+	}, func(explanation manager.RunExplanation) error {
+		runSession := explanation.Session
+		explain := explainText(runtimeProfile, opts, runSession.Layout, runSession.Environment, runSession.Env, runSession.ProfileDir, runSession.IdentityDir)
+		fmt.Fprint(a.stdout, explain)
+		return nil
 	})
-	if err != nil {
-		return err
-	}
-	if opts.verbose {
-		a.writeRunResultSummary(result)
-	}
-	return nil
 }
 
 func (a app) writeRunResultSummary(result manager.RunResult) {
@@ -2298,6 +2279,7 @@ func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
 	var noFSFlags stringListFlag
 	fs.Var(&noFSFlags, "no-fs", "run-scoped HostFS deny rule such as read:/absolute/path")
 	fs.BoolVar(&opts.noProfileHostFSGrants, "no-profile-fs", false, "ignore profile HostFS grants for this run")
+	fs.StringVar(&opts.terminalMode, "terminal", "auto", "terminal mode: auto, always, or never")
 	var envFlags stringListFlag
 	fs.Var(&envFlags, "env-var", "run-scoped public environment variable KEY=VALUE")
 	var previewFlags stringListFlag
@@ -2357,81 +2339,7 @@ func parseRunEnvFlags(values []string) (map[string]string, error) {
 }
 
 func buildPreviewOpenOptions(p profile.Profile, targets []string) ([]manager.RunOpenTargetOwner, []manager.RunEndpointCandidate, []manager.RunEndpointExposureRequest, error) {
-	if len(targets) == 0 {
-		return nil, nil, nil, nil
-	}
-	owners := []manager.RunOpenTargetOwner{{
-		ID:   manager.OpenTargetPreviewOpen,
-		Kind: manager.OpenTargetPreviewOpen,
-	}}
-	profileCandidates := map[string]profile.EndpointCandidate{}
-	for _, candidate := range p.EndpointExposure.HostToGuest {
-		profileCandidates[strings.TrimSpace(candidate.ID)] = candidate
-	}
-	var runCandidates []manager.RunEndpointCandidate
-	var exposures []manager.RunEndpointExposureRequest
-	for i, raw := range targets {
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			return nil, nil, nil, errors.New("--preview cannot be empty")
-		}
-		candidateID := value
-		if candidate, ok := profileCandidates[value]; ok {
-			owner := strings.TrimSpace(candidate.Owner)
-			if owner != manager.OpenTargetPreviewOpen {
-				return nil, nil, nil, fmt.Errorf("--preview candidate %q belongs to owner %q, not preview.open", value, owner)
-			}
-		} else {
-			targetAddress, err := normalizePreviewEndpoint(value)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("--preview %q: %w", value, err)
-			}
-			candidateID = fmt.Sprintf("manual_preview_%d", i+1)
-			runCandidates = append(runCandidates, manager.RunEndpointCandidate{
-				ID:            candidateID,
-				Source:        manager.EndpointSourceManual,
-				Owner:         manager.OpenTargetPreviewOpen,
-				Proto:         "tcp",
-				TargetAddress: targetAddress,
-			})
-		}
-		exposures = append(exposures, manager.RunEndpointExposureRequest{
-			CandidateID: candidateID,
-			Owner:       manager.OpenTargetPreviewOpen,
-			Kind:        manager.OpenTargetPreviewOpen,
-			ClosePolicy: "session-end",
-		})
-	}
-	return owners, runCandidates, exposures, nil
-}
-
-func normalizePreviewEndpoint(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", errors.New("endpoint is required")
-	}
-	if strings.Contains(value, "://") {
-		u, err := url.Parse(value)
-		if err != nil {
-			return "", err
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return "", fmt.Errorf("preview URL scheme %q is unsupported", u.Scheme)
-		}
-		value = u.Host
-	}
-	host, port, err := net.SplitHostPort(value)
-	if err != nil {
-		return "", fmt.Errorf("must be host:port or http(s) loopback URL: %w", err)
-	}
-	if host == "localhost" {
-		return net.JoinHostPort("127.0.0.1", port), nil
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return "", errors.New("preview endpoint must use localhost or a loopback IP")
-	}
-	return net.JoinHostPort(host, port), nil
+	return manager.BuildPreviewOpenOptions(p, targets)
 }
 
 type hostFSFlagInput struct {
@@ -7244,14 +7152,7 @@ func (a app) daemonStart(args []string) error {
 	if err := os.MkdirAll(store.Root, 0o700); err != nil {
 		return err
 	}
-	d, err := daemon.Start(daemon.Options{
-		Store:      store,
-		TTL:        *ttl,
-		RunBackend: a.runAPIBackend,
-		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
-			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
-		},
-	})
+	d, err := daemon.Start(a.daemonOptions(store, *ttl))
 	if err != nil {
 		if daemon.IsAlreadyRunning(err) {
 			fmt.Fprintf(a.stdout, "hideoutd already running for this store: %s\n", daemon.SocketPath(store.Root))
@@ -7331,6 +7232,27 @@ func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (bac
 		allowWeakIsolation: req.AllowWeakIsolation,
 	}
 	return a.backend(plan.Backend, opts), nil
+}
+
+func (a app) runServiceBackend(req manager.RunServiceRequest, plan manager.RunPlan) (backend.Backend, error) {
+	opts := runOptions{
+		backendName: plan.Backend, allowWeakIsolation: req.AllowWeakIsolation,
+	}
+	return a.backend(plan.Backend, opts), nil
+}
+
+func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Options {
+	return daemon.Options{
+		Store: store, TTL: ttl,
+		RunBackend:        a.runAPIBackend,
+		RunServiceBackend: a.runServiceBackend,
+		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
+			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
+		},
+		RunServiceOpener: func(_ manager.RunServiceRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
+			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
+		},
+	}
 }
 
 type tuiOptions struct {

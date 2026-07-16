@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,10 +20,51 @@ func mintToken(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, tokenName), []byte(tok+"\n"), 0o600); err != nil {
+	if err := writeTokenFile(dir, tok); err != nil {
 		return "", err
 	}
 	return tok, nil
+}
+
+// writeTokenFile atomically replaces the client-visible operator token. The
+// temporary file lives beside the destination so rename cannot cross a
+// filesystem boundary, and its mode is fixed before any token bytes are
+// written.
+func writeTokenFile(dir, token string) error {
+	if token == "" {
+		return errors.New("daemon: refusing to persist an empty operator token")
+	}
+	tmp, err := os.CreateTemp(dir, "."+tokenName+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	keep := true
+	defer func() {
+		if keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(token + "\n"); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, tokenName)); err != nil {
+		return err
+	}
+	keep = false
+	return nil
 }
 
 // readToken reads the current operator token for a store's daemon (client side).

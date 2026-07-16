@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,11 +29,15 @@ func IsAlreadyRunning(err error) bool { return errors.Is(err, errAlreadyRunning)
 
 // Options configures a daemon start.
 type Options struct {
-	Store      profile.Store
-	TTL        time.Duration
-	Now        func() time.Time
-	RunBackend manager.RunBackendFactory
-	RunOpener  manager.RunOpenerFactory
+	Store             profile.Store
+	TTL               time.Duration
+	CredentialGrace   time.Duration
+	Now               func() time.Time
+	RunBackend        manager.RunBackendFactory
+	RunOpener         manager.RunOpenerFactory
+	RunServiceBackend manager.RunServiceBackendFactory
+	RunServiceOpener  manager.RunServiceOpenerFactory
+	SessionCapacity   int
 	// LiveResources lists resources that could survive a restart (running
 	// environments). Defaults to none; the daemon reports any it cannot prove it
 	// owns as orphans. Injectable for tests.
@@ -41,25 +46,31 @@ type Options struct {
 
 // Daemon is the single per-store local control-plane process.
 type Daemon struct {
-	store      profile.Store
-	runtimeDir string
-	socket     string
-	token      string
-	startedAt  time.Time
-	api        manager.API
-	audit      *auditLog
-	bus        *eventBus
-	bg         *bgRegistry
-	own        *ownership
-	orphans    []LiveResource
-	ln         net.Listener
-	server     *http.Server
-	uiServer   *http.Server
-	uiURL      string
-	lockFile   *os.File
-	tailStop   chan struct{}
-	hostFSStop chan struct{}
-	done       chan struct{}
+	store           profile.Store
+	runtimeDir      string
+	socket          string
+	instanceID      string
+	startedAt       time.Time
+	credentials     *credentialManager
+	api             manager.API
+	audit           *auditLog
+	bus             *eventBus
+	bg              *bgRegistry
+	own             *ownership
+	orphans         []LiveResource
+	ln              net.Listener
+	sessionListener *SessionListener
+	sessionServer   *sessionServer
+	sessions        *sessionRegistry
+	server          *http.Server
+	uiServer        *http.Server
+	uiURL           string
+	lockFile        *os.File
+	tailStop        chan struct{}
+	hostFSStop      chan struct{}
+	credentialStop  chan struct{}
+	credentialDone  chan struct{}
+	done            chan struct{}
 
 	mu    sync.Mutex
 	state string
@@ -97,7 +108,14 @@ func Start(opts Options) (*Daemon, error) {
 	if ttl == 0 {
 		ttl = 15 * time.Minute
 	}
-	token, err := mintToken(dir)
+	grace := opts.CredentialGrace
+	if grace == 0 {
+		grace = defaultSessionLease
+		if half := ttl / 2; half < grace {
+			grace = half
+		}
+	}
+	credentials, err := newCredentialManager(dir, ttl, grace, opts.Now)
 	if err != nil {
 		releaseLock(lockFile, filepath.Join(dir, lockName))
 		return nil, err
@@ -113,6 +131,24 @@ func Start(opts Options) (*Daemon, error) {
 		releaseLock(lockFile, filepath.Join(dir, lockName))
 		return nil, err
 	}
+	sessionListener, err := ListenSession(opts.Store.Root)
+	if err != nil {
+		_ = ln.Close()
+		_ = os.Remove(sock)
+		_ = al.close()
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, err
+	}
+	connectionID, err := newConnectionID()
+	if err != nil {
+		_ = sessionListener.Close()
+		_ = ln.Close()
+		_ = os.Remove(sock)
+		_ = al.close()
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, err
+	}
+	instanceID := "daemon_" + strings.TrimPrefix(connectionID, "conn_")
 	bus := newEventBus()
 	al.publish = bus.publishAudit
 	core := manager.New(opts.Store)
@@ -134,35 +170,47 @@ func Start(opts Options) (*Daemon, error) {
 			AuditRef: "audit:background:" + id,
 		})
 	}
+	sessions := newSessionRegistry(opts.SessionCapacity, opts.Now)
 	d := &Daemon{
-		store:      opts.Store,
-		runtimeDir: dir,
-		socket:     sock,
-		token:      token,
-		startedAt:  now,
-		audit:      al,
-		bus:        bus,
-		bg:         newBGRegistry(publishBackground),
-		own:        newOwnership(),
-		ln:         ln,
-		lockFile:   lockFile,
-		hostFSStop: make(chan struct{}),
-		done:       make(chan struct{}),
-		state:      "serving",
+		store:           opts.Store,
+		runtimeDir:      dir,
+		socket:          sock,
+		instanceID:      instanceID,
+		startedAt:       now,
+		credentials:     credentials,
+		audit:           al,
+		bus:             bus,
+		bg:              newBGRegistry(publishBackground),
+		own:             newOwnership(),
+		ln:              ln,
+		sessionListener: sessionListener,
+		sessions:        sessions,
+		lockFile:        lockFile,
+		hostFSStop:      make(chan struct{}),
+		credentialStop:  make(chan struct{}),
+		credentialDone:  make(chan struct{}),
+		done:            make(chan struct{}),
+		state:           "serving",
 		api: manager.API{
-			Core:         core,
-			Token:        token,
-			ExpiresAt:    now.Add(ttl),
-			AllowedHosts: []string{"localhost", "hideoutd"},
-			Now:          opts.Now,
-			RunBackend:   opts.RunBackend,
-			RunOpener:    opts.RunOpener,
+			Core:           core,
+			Token:          credentials.Token(),
+			TokenValidator: credentials.Validate,
+			AllowedHosts:   []string{"localhost", "hideoutd"},
+			Now:            opts.Now,
+			RunBackend:     opts.RunBackend,
+			RunOpener:      opts.RunOpener,
 		},
+	}
+	d.sessionServer = &sessionServer{
+		core: core, credentials: credentials, instanceID: instanceID,
+		registry: sessions, backendFactory: opts.RunServiceBackend,
+		openerFactory: opts.RunServiceOpener, audit: al,
 	}
 	d.server = &http.Server{Handler: d.buildHandler()}
 	d.startAuditTail()
 	d.startHostFSWriteTimeoutWorker()
 	d.startLoopbackUI()
+	d.startCredentialRotation()
 	d.audit.record("daemon.start", "allow", map[string]any{"socket": sock})
 
 	// Restart fail-closed: any live resource the current instance cannot prove it
@@ -180,6 +228,7 @@ func Start(opts Options) (*Daemon, error) {
 	}
 
 	go func() { _ = d.server.Serve(ln) }()
+	go func() { _ = d.sessionServer.serve(sessionListener) }()
 	return d, nil
 }
 
@@ -220,7 +269,12 @@ func (d *Daemon) Orphans() []LiveResource {
 func (d *Daemon) Socket() string { return d.socket }
 
 // Token returns the current operator token.
-func (d *Daemon) Token() string { return d.token }
+func (d *Daemon) Token() string {
+	if d == nil || d.credentials == nil {
+		return ""
+	}
+	return d.credentials.Token()
+}
 
 // RuntimeDir returns the daemon's runtime directory.
 func (d *Daemon) RuntimeDir() string { return d.runtimeDir }
@@ -230,13 +284,28 @@ func (d *Daemon) Status() Status {
 	d.mu.Lock()
 	state := d.state
 	d.mu.Unlock()
-	return Status{
-		Version:    statusVersion,
-		State:      state,
+	status := Status{
+		Version: statusVersion, State: state, InstanceID: d.instanceID,
 		StartedAt:  d.startedAt.Format(time.RFC3339),
-		Transport:  StatusTransport{Socket: d.socket},
+		Transport:  StatusTransport{Socket: d.socket, SessionSocket: d.sessionListener.Socket(), SessionProtocol: SessionProtocolVersion},
 		Background: d.bg.inventory(),
 	}
+	if d.credentials != nil {
+		status.CredentialGeneration = d.credentials.Generation()
+	}
+	for _, snapshot := range d.sessions.snapshots() {
+		if snapshot.SessionID == "" || snapshot.EnvironmentID == "" {
+			continue
+		}
+		status.Sessions = append(status.Sessions, SessionStatus{
+			Schema: "hideout.active-session/v1", ID: snapshot.SessionID,
+			EnvironmentID: snapshot.EnvironmentID, Profile: snapshot.Profile,
+			Backend: snapshot.Backend, WorkspaceID: snapshot.WorkspaceID,
+			State: snapshot.State, OwnerStatus: "live", TerminalMode: snapshot.TerminalMode,
+			StartedAt: snapshot.StartedAt, CommandClass: snapshot.CommandClass,
+		})
+	}
+	return status
 }
 
 // Stop performs an ordered shutdown: drain in-flight requests, record the stop,
@@ -252,6 +321,22 @@ func (d *Daemon) Stop(ctx context.Context) error {
 
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	var stopErr error
+	if d.sessionListener != nil {
+		stopErr = errors.Join(stopErr, d.sessionListener.Close())
+	}
+	if d.sessions != nil {
+		drainTimeout := 5 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			drainTimeout = time.Until(deadline)
+			if drainTimeout <= 0 {
+				drainTimeout = time.Millisecond
+			}
+		}
+		drainCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		stopErr = errors.Join(stopErr, d.sessions.drain(drainCtx))
+		cancel()
 	}
 	if d.bg != nil {
 		// Ordered, fail-closed: in-flight background work finishes or is cancelled
@@ -270,14 +355,24 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.hostFSStop != nil {
 		close(d.hostFSStop)
 	}
+	if d.credentialStop != nil {
+		close(d.credentialStop)
+		if d.credentialDone != nil {
+			select {
+			case <-d.credentialDone:
+			case <-ctx.Done():
+				stopErr = errors.Join(stopErr, ctx.Err())
+			}
+		}
+	}
 	if d.bus != nil {
 		d.bus.closeAll()
 	}
 	if d.uiServer != nil {
-		_ = d.uiServer.Shutdown(ctx)
+		stopErr = errors.Join(stopErr, d.uiServer.Shutdown(ctx))
 	}
 	if d.server != nil {
-		_ = d.server.Shutdown(ctx)
+		stopErr = errors.Join(stopErr, d.server.Shutdown(ctx))
 	}
 	d.audit.record("daemon.stop", "allow", map[string]any{"socket": d.socket})
 	_ = d.audit.close()
@@ -288,7 +383,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.state = "stopped"
 	d.mu.Unlock()
 	close(d.done)
-	return nil
+	return stopErr
 }
 
 // Done returns a channel closed when the daemon has fully stopped (for example
@@ -304,6 +399,35 @@ func (d *Daemon) startHostFSWriteTimeoutWorker() {
 			case <-ticker.C:
 				_, _ = d.api.Core.ExpireHostFSWriteTimeouts(time.Now().UTC())
 			case <-d.hostFSStop:
+				return
+			}
+		}
+	}()
+}
+
+func (d *Daemon) startCredentialRotation() {
+	go func() {
+		defer close(d.credentialDone)
+		for {
+			wait := time.Until(d.credentials.RotateAt())
+			if wait < time.Millisecond {
+				wait = time.Millisecond
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+				if rotated, err := d.credentials.RotateIfDue(); err != nil {
+					d.audit.record("daemon.credential.rotate", "deny", map[string]any{"reason": "credential rotation failed"})
+				} else if rotated {
+					d.audit.record("daemon.credential.rotate", "allow", map[string]any{"generation": d.credentials.Generation()})
+				}
+			case <-d.credentialStop:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				return
 			}
 		}

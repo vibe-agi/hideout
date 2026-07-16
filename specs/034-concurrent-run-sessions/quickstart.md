@@ -1,131 +1,239 @@
-# Quickstart: Concurrent Run Sessions
+# Quickstart: Daemon-Owned Concurrent Run Sessions
 
 <!-- markdownlint-disable MD013 MD060 -->
 
-These scenarios are the operator-facing acceptance path. Real isolation and
-performance results require macOS arm64 with Lima; native runs are mechanics
-fixtures only.
+This guide defines the acceptance/evidence scenarios. It is not a claim that a
+pipe-backed local test proves terminal or Lima behavior.
 
-The executable mapping is `scripts/test-concurrent-sessions-quickstart.sh`.
-Without arguments it runs the local mechanics, backend integration, evaluator,
-and release-readiness checks. Completion uses `--require-real --evidence-dir
-<retained-034-dir>` so scenarios 1-5, 7-9, 11, and 12 are also bound to the
-real isolation/performance artifacts. Scenario 6 is intentionally a
-Gate 0/backend integration claim, and scenario 10 is a terminal-backend claim.
+## Prerequisites
 
-## 1. Prepare One Reusable Environment
+- macOS arm64 with supported Lima and the pinned developer runtime;
+- a clean package or development build containing the Linux session supervisor;
+- a profile and one existing same-workspace reusable environment;
+- a real terminal capable of resize events;
+- Gate output directory outside the source tree.
 
-Use one initialized profile and one workspace. Start a shell so the existing
-environment is running. Record its environment and instance IDs.
+## 1. Prove Auto-Start And One Resident Owner
 
-Expected: the workspace remains the existing static direct mount, the target
-is non-root, and the first session reports `running`.
+Stop the daemon, invoke a normal non-interactive run, and concurrently invoke a
+second run from another process. Inspect daemon and run status.
 
-## 2. Start A Concurrent Command
+Expected:
 
-While the shell remains open, run a second one-shot command and a third shell
-from the same workspace.
+- one daemon lock owner and one Manager runtime become ready;
+- both clients use the same daemon instance;
+- neither client constructs or executes an embedded backend;
+- daemon/auth/start failure returns stable recovery and no target side effect.
 
-Expected: no `environment ... is already in use` error; all three summaries
-name the same environment/instance and distinct session IDs.
+Coverage: FR-001, FR-002, FR-003, FR-004, FR-019; SC-001.
 
-## 3. Share Workspace Effects
+## 2. Prove Confirmation Binding
 
-Create a file in session A, read it in session B, modify it on the host, and
-read the new value in session C.
+Use a fixture whose plan requires confirmation. Capture the review, mutate a
+plan input, attempt stale acceptance, then accept the current review. Repeat
+without an interactive client.
 
-Expected: direct read/write behavior is unchanged and no HostFS decision is
-created for workspace activity.
+Expected:
 
-## 4. Prove Runtime And Process Separation
+- stale acceptance never starts the target;
+- accepted execution matches the reviewed plan digest;
+- missing confirmation defaults to deny;
+- terminal text cannot act as confirmation.
 
-Give session A a recognizable non-secret marker in its session environment
-and keep a distinctive process alive. From B, inspect `/hideout/session`,
-mounts, `/proc`, descriptors, process command lines, and environment.
+Coverage: FR-002, FR-005; SC-001, SC-013.
 
-Expected: B sees only its own runtime child/process tree and cannot recover A's
-marker or control paths. The workspace remains visible by design.
+## 3. Prove Non-Interactive Stream And Exit Fidelity
 
-## 5. Prove HostFS Separation
+Run a target that writes distinct binary fixtures to stdout and stderr, exits
+0, exits a selected nonzero code, and terminates from a signal.
 
-Enable a HostFS read grant and staged write only in A. Probe the same path from
-B, then apply the staged write through A's existing decision flow.
+Expected:
 
-Expected: B cannot read, claim, approve, or apply A's authority. The host lower
-file changes only after A's typed apply.
+- stdout and stderr remain byte-exact and separate;
+- no terminal frame or control data enters either stream;
+- client process status represents the exact target completion;
+- target success plus cleanup failure returns failure, not false success.
 
-## 6. Prove Shared Network Lifetime
+Coverage: FR-010, FR-011, FR-012; SC-002.
 
-Run two sessions with the same privacy profile and verified `tun2socks`
-configuration. End A while B continues network and DNS probes.
+## 4. Prove Real PTY Startup And Initial Terminal State
 
-Expected: one environment service is reported; B remains functional after A
-exits; cleanup occurs only after the last owner. A changed secret/configuration
-for a new session is refused without exposing either value.
+From a real terminal, use the exact product command and a target that emits a
+monotonic first-byte marker plus `test -t`, `stty size`, and TERM observations.
+Warm the environment, collect at least 20 complete invocation samples, and
+calculate p50/p95.
 
-Executable proof: the Gate 0/backend integration tests in
-`internal/manager/run_network_concurrent_test.go` cover boot-bound service
-state, current-runtime health verification, conflict refusal, sibling
-reference counting, and final cleanup. The 034 real Gate 2 lane uses direct
-networking and therefore makes only a network non-interference claim.
+Expected:
 
-## 7. Refuse Stop While Active
+- target owns a guest PTY but the SSH channel did not request one;
+- initial rows/columns match the host before first render;
+- p95 host invocation to first target byte is at most 2.0 seconds;
+- no command-name-specific fast path exists.
 
-With two sessions active, plan and apply environment stop through CLI and
-Manager API.
+Coverage: FR-008, FR-009, FR-011; SC-003, SC-004.
 
-Expected: both surfaces refuse from the same owner model, report the active
-count and stable recovery guidance, and signal no target.
+## 5. Prove Resize And Full-Screen Use
 
-## 8. Reconcile Abrupt Host Exit
+Run a full-screen fixture and one representative agent/terminal application.
+Resize the host repeatedly, enter input, interrupt once, and exit.
 
-Terminate one host-side `hideout run` process without allowing ordinary
-cleanup. Keep the sibling alive and inspect status within one second.
+Expected:
 
-Expected: the killed owner's flock is no longer live, stale JSON is not counted
-as active, the sibling remains usable, and the next transition performs bounded
-session/service reconciliation.
+- only the owning PTY receives each size;
+- redraw remains usable;
+- Ctrl-C arrives once;
+- host terminal state is restored after normal and nonzero exit.
 
-## 9. Preserve Explicit Stop
+Coverage: FR-010, FR-011; SC-003, SC-012.
 
-Exit all sessions without requesting stop, then inspect the environment and
-finally stop it explicitly.
+## 6. Prove Same-Workspace Concurrency
 
-Expected: the VM remains warm/ready after the last exit; explicit stop now
-succeeds. No automatic stop, clean, remove, or recreate occurs.
+Start a shell, an agent-like fixture, and a one-shot command simultaneously in
+the same existing environment and workspace. Write and read a shared workspace
+file from each.
 
-## 10. Exercise Independent Streams
+Expected:
 
-Run two non-interactive commands that interleave unique stdout/stderr markers
-and exit with different codes. Then run two PTY shells with different initial
-dimensions.
+- all three use one environment/backend instance;
+- no environment-busy error occurs;
+- workspace effects are immediate and shared;
+- session IDs, runtime children, providers, supervisors, terminals, and process
+  views are distinct.
 
-Expected: markers, input, signals, exit codes, and initial dimensions remain
-session-specific; the host terminal is restored. Dynamic resize is not claimed.
+Coverage: FR-013, FR-014, FR-018, FR-019; SC-005, SC-006.
 
-Executable proof: `internal/backend/lima/session_view_test.go` and the existing
-terminal bridge tests exercise independent non-TTY streams, PTY allocation,
-initial dimensions, cancellation, and restoration. These are backend
-integration proofs, not claims inferred from the non-PTY real Gate 2 script.
+## 7. Prove Sibling Authority Isolation
 
-## 11. Measure Warm Attach And Workspace Performance
+Give session A HostFS read/staged-write and host-app authority while session B
+has none. Probe B's environment, mounts, `/proc`, descriptors, shims, broker,
+HostFS, decisions, network state, terminal, and control paths.
 
-With one owner live, measure at least 30 second-session starts. Measure host
-invocation to the first line from a dedicated no-op ready-marker target. Build
-the pre-034 commit in a separate worktree and compare Git status plus a package
-metadata fixture on the same host, runtime digest, workspace, and warmed VM.
-Guest fixture duration uses a monotonic clock; VM wall-clock synchronization is
-never accepted as a performance timer.
+Expected:
 
-Expected: marker latency is at most 2.0 seconds p95 and fixture duration is at
-most 1.25x baseline. Measurements record both exact commits, runtime digest,
-host, instance, sample count, warm-up count, median, and p95.
+- B observes zero sibling control/authority state;
+- B cannot read/apply A's staged write;
+- the host lower file remains unchanged before A's typed apply;
+- ordinary-target results are claimed; guest-root results are recorded only as
+  the existing non-claim.
 
-## 12. Validate Evidence And Claims
+Coverage: FR-007, FR-014, FR-015, FR-016, FR-017, FR-018; SC-006, SC-007, SC-009.
 
-Run Gate 0, the 034 real Gate 2 lane, schema validation, docs truth, audit
-export, and support/readiness aggregation.
+## 8. Prove One-Session Cleanup And Sibling Survival
 
-Expected: injected control-plane credentials and sibling paths are absent;
-proof binds exact commit/digests; docs reject cross-workspace reuse, automatic
-last-session stop, full resize, and guest-root containment claims.
+With two active sessions, exit one normally, then repeat by killing one client
+while output is active.
+
+Expected:
+
+- only the owning target/process view/providers/runtime child are removed;
+- cleanup completes within the documented bound;
+- the sibling remains interactive and retains its workspace, HostFS, network,
+  terminal, and host-capability state;
+- no detached target remains.
+
+Coverage: FR-006, FR-021, FR-022; SC-008.
+
+## 9. Prove Stop Serialization
+
+Attempt environment stop while one and then several sessions are live. Exit all
+sessions, prove cleanup, and stop again.
+
+Expected:
+
+- every live or unproved owner refuses stop;
+- a new attach racing stop has one serialized winner;
+- stop succeeds only after proved zero-session state;
+- normal final-session exit alone leaves the environment running.
+
+Coverage: FR-019, FR-020, FR-023; SC-010.
+
+## 10. Prove Daemon Loss
+
+Start two real PTY clients and kill the daemon process without an ordered stop.
+Observe clients, guest processes, owner records, and daemon restart.
+
+Expected:
+
+- both clients unblock and restore terminal state;
+- both guest supervisors terminate and reap their targets;
+- no deliberately headless target remains;
+- restart reports stale/unproved state without adopting or deleting it;
+- recovery is bounded and explicit.
+
+Coverage: FR-008, FR-022, FR-023; SC-011.
+
+## 11. Prove Credential Rotation And Renewal
+
+Use a clock-controlled short token/lease duration. Keep one authorized session
+active through multiple rotations, retain a stale token copy, and try new and
+renewal access with both credentials.
+
+Expected:
+
+- the current client renews continuously without daemon restart;
+- prior token works only inside bounded grace;
+- stale token cannot open or renew after grace;
+- failed renewal cancels only its session;
+- no operator or per-run token appears in guest, status, event, audit, or
+  evidence output.
+
+Coverage: FR-003, FR-004, FR-007, FR-025; SC-013, SC-015.
+
+## 12. Prove Protocol Bounds And Backpressure
+
+Send invalid versions, unknown mandatory frames, wrong-direction frames,
+oversized control/data frames, duplicate start/completion, target bytes that
+look like frames, and a client that stops reading.
+
+Expected:
+
+- each malformed connection fails closed without target authority or daemon
+  failure;
+- terminal bytes remain data;
+- slow-client behavior is bounded and never silently drops output or reports
+  success;
+- sibling sessions remain unaffected.
+
+Coverage: FR-003, FR-006, FR-010, FR-012, FR-021; SC-008, SC-013.
+
+## 13. Prove Helper Distribution And Runtime Refusal
+
+Verify package/install/helper manifests, then test missing, wrong-architecture,
+stale-digest, unsupported-protocol, and unsupported-PTY fixtures.
+
+Expected:
+
+- the exact package-owned helper is materialized;
+- every invalid helper/runtime case fails before target authority;
+- no download, workspace helper, profile helper, or generic privileged command
+  fallback occurs.
+
+Coverage: FR-008, FR-009, FR-024; SC-001, SC-013.
+
+## 14. Prove One Authoritative Status Model
+
+During preparation, running, cleaning, failure, and stale recovery, compare CLI,
+Manager API, daemon events, audit, doctor, TUI/WebUI summary, and schemas.
+
+Expected:
+
+- lifecycle identities/states agree;
+- credentials, PIDs, raw control paths, and injected secret fixtures are absent;
+- status does not infer liveness solely from persisted JSON.
+
+Coverage: FR-007, FR-023, FR-024; SC-013.
+
+## 15. Prove Documentation Truth And Scope
+
+Run docs-truth checks against README, status, threat model, architecture,
+support matrix, test plan, and 034 artifacts.
+
+Expected:
+
+- daemon-owned same-workspace concurrency, dynamic resize, client-loss
+  cancellation, and measured latency are claimed only with matching evidence;
+- cross-workspace shared default, automatic final-session stop, detach/attach,
+  guest-root containment, browser terminals, and complete terminal-emulator
+  hardening remain explicit non-claims.
+
+Coverage: FR-017, FR-020, FR-024; SC-014.

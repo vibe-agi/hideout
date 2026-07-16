@@ -292,19 +292,22 @@ Acceptance criteria at the end of this document are part of Required Phase 1.
 The implementation plan is sequencing guidance only; it cannot weaken or defer a
 Required item.
 
-The blocking first-release path is:
+The current executable path is:
 
 ```text
 hideout run
-  -> embedded manager core
+  -> authenticated per-store daemon session
+  -> canonical Manager Core
   -> selected backend boundary
+  -> fixed guest session supervisor
   -> target command
   -> audit and cleanup
 ```
 
 Everything outside that path is either a contract used by this path or a
-non-blocking observation/control surface. A daemon, HTTP API, Web UI, prompt
-loop, or future backend must not be required to make the first local runner work.
+non-blocking observation/control surface. The private daemon session transport
+is required for executable runs; browser UI, remote service, and generic prompt
+channels are not. The initiating CLI presents any canonical Manager review.
 
 Release discipline:
 
@@ -319,8 +322,8 @@ Release discipline:
 Required Phase 1:
 
 - CLI: `init --no-input`, `run`, `explain`, `doctor`, `doctor --fix --dry-run`, `cleanup`, `audit show`, `profile init`, `profile clone`, `profile path`, and the persistent profile policy editors (`profile fs`, `profile env`, `profile command-proxy`, `profile home import`).
-- Embedded manager core with stable domain APIs. A daemon or web server is not
-  required for the first CLI release.
+- Canonical Manager Core with stable domain APIs, hosted by the resident daemon
+  for executable runs. Non-executable planning may call the same Core locally.
 - Profile schema, defaults, validation, and generated identity store.
 - Persistent profile identity and `--ephemeral` session identity. Ephemeral runs
   fork identity material for one session and must not mutate or reuse the
@@ -925,12 +928,15 @@ oversized output fails closed.
 
 ## Architecture
 
-First implementation path:
+Current implementation path:
 
 ```text
-Go launcher
-  + embedded manager core
+thin Go client
+  + authenticated daemon session transport
+resident daemon process role
+  + canonical manager core
   + Lima backend on macOS
+  + fixed Linux guest supervisor
   + fake home/env
   + workspace passthrough
   + command proxy shims
@@ -949,8 +955,8 @@ internal/profile
 
 internal/manager
   Local control plane for profiles, sessions, backends, secrets, audit, prompts,
-  and Web UI API. The embedded core is Required Phase 1; daemon/socket serving
-  is Design-ready Phase 1.
+  and Web UI API. Manager Core owns canonical behavior; executable runs reach it
+  through the resident daemon session service.
 
 internal/backend
   Backend interface and common session model.
@@ -2516,7 +2522,6 @@ XDG_CONFIG_HOME=<guest-config>
 XDG_CACHE_HOME=<guest-cache>
 XDG_DATA_HOME=<guest-data>
 GIT_CONFIG_GLOBAL=<guest-home>/.gitconfig
-GIT_OPTIONAL_LOCKS=0
 TZ=UTC
 LANG=C.UTF-8
 LC_ALL=C.UTF-8
@@ -2525,7 +2530,7 @@ PATH=<shim-dir>:<guest-tool-paths>
 
 Synthetic identity env names are reserved. A profile must not set or inherit
 `HOME`, `USER`, `LOGNAME`, `HOSTNAME`, `TMPDIR`, `XDG_CONFIG_HOME`,
-`XDG_CACHE_HOME`, `XDG_DATA_HOME`, `GIT_CONFIG_GLOBAL`, `GIT_OPTIONAL_LOCKS`,
+`XDG_CACHE_HOME`, `XDG_DATA_HOME`, `GIT_CONFIG_GLOBAL`,
 `TZ`, `LANG`, `LC_ALL`, or `PATH` through `env.public` or `env.inherit`. The
 `HIDEOUT_*` namespace is
 also reserved for Hideout runtime and control-plane env such as broker endpoint,
@@ -2535,11 +2540,11 @@ secret ref fields instead. This keeps identity, git global config, command
 resolution, broker authority, and secret plumbing controlled by Hideout instead
 of host or profile env.
 
-`GIT_OPTIONAL_LOCKS=0` prevents guest read-only Git operations such as
-`git status` from refreshing the shared host index as an optional side effect.
-Git still performs the requested operation and still takes every lock required
-for mutations such as `git add` or `git commit`. This avoids host/guest index
-stat churn without writing a repository-local compatibility setting.
+Hideout leaves `GIT_OPTIONAL_LOCKS` unset by default. Git therefore retains its
+normal atomic optional-index refresh and lock behavior, which keeps repeated
+status checks fast on the shared workspace. An operator may set the variable
+explicitly for a specialized background workflow; Hideout does not silently
+trade away normal Git performance for that workflow.
 
 Default user denied patterns:
 
@@ -3939,20 +3944,20 @@ after redaction, not a script-writable detail, so it needs no restoration.
 Hideout has a local management plane. It must not start as a cloud service or
 remote control plane.
 
-Required Phase 1:
+Current executable contract:
 
 ```text
-CLI uses embedded manager core for each run.
+CLI uses the authenticated daemon session service for each executable run.
 ```
 
-No Required Phase 1 command may require a resident daemon, HTTP server, browser,
-or Web UI. The embedded manager core is the Phase 1 authority. The
-steady-state architecture direction is daemon-first, in the Docker model:
-`hideoutd` hosts the Manager API and owns cross-invocation state, and CLI,
-TUI, and WebUI are its clients over the same domains. Daemon and Web UI
-transports add no new authority beyond those domains.
+Normal executable runs start or reuse the resident daemon and never fall back to
+an embedded backend owner. HTTP, browser, and Web UI are not required for the
+run transport. `hideoutd` hosts Manager Core and owns cross-invocation backend
+and session lifecycle; CLI, TUI, and WebUI are clients over the same typed
+domains. Daemon and Web UI transports add no new authority beyond those
+domains.
 
-The embedded manager core must expose stable in-process domain APIs for:
+Manager Core must expose stable in-process domain APIs for:
 
 ```text
 profiles
@@ -4013,7 +4018,7 @@ Optional: 127.0.0.1 HTTP server for Web UI
 Never: unauthenticated network listener
 ```
 
-Socket or HTTP APIs are only transports over the embedded manager domains. They
+Socket or HTTP APIs are only transports over Manager domains. They
 must not add new authority, bypass policy validation, or expose fields that the
 in-process overview is not allowed to expose.
 
@@ -4036,8 +4041,8 @@ Daemon invariants:
 - The daemon stays in single-operator form: an operator token with full
   access. Read-only tokens, client role matrices, delegated approval channels,
   per-subscriber redaction tiers, and replay-protection protocols are enterprise
-  shapes and are not built. Confirmation-required operations fail closed until
-  an explicit prompt channel exists. OS peer credentials are useful for
+  shapes and are not built. Confirmation-required runs fail closed unless the
+  initiating client accepts the exact canonical review. OS peer credentials are useful for
   Unix-socket clients but are not enough by themselves for weak native-backend
   targets that share the host UID.
 - Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
@@ -4182,7 +4187,7 @@ sequenceDiagram
     participant UI as Web UI
 
     U->>CLI: hideout ui
-    CLI->>M: Start embedded server or connect to daemon
+    CLI->>M: Connect to daemon or start command-scoped UI server
     M->>M: Create short-lived UI token
     CLI->>Br: Open 127.0.0.1 URL with token
     Br->>UI: Load embedded assets
@@ -4319,11 +4324,12 @@ the `hideout` binary or on `PATH`. It writes the same manifest shape next to the
 store-built daemon.
 
 `hideout doctor --fix --dry-run --backend lima` plans safe helper repair tasks for the
-same store paths: `helper.install.linux-shim` and
-`helper.install.linux-hostfsd`. When running from a Hideout source tree, those
-tasks build the Linux helpers with `go build`; packaged releases should install
-the helpers directly so the tasks are already `ok`. If a default store helper is
-present without a current manifest, the helper task remains pending so
+same store paths: `helper.install.linux-shim`,
+`helper.install.linux-hostfsd`, and
+`helper.install.linux-session-supervisor`. When running from a Hideout source
+tree, those tasks build the Linux helpers with `go build`; packaged releases
+should install the helpers directly so the tasks are already `ok`. If a default
+store helper is present without a current manifest, the helper task remains pending so
 `doctor --fix --apply` can rebuild or repair it.
 Source-tree repair locates the Hideout source root from `HIDEOUT_SOURCE_ROOT`,
 the current `hideout` executable path, or the working directory, in that order.
@@ -4514,7 +4520,7 @@ Phase 0: design freeze
 Phase 1A: local core
 
 - Go module and CLI skeleton;
-- embedded manager core and read-only overview snapshot;
+- canonical Manager Core and read-only overview snapshot;
 - profile loader and validator;
 - identity store and fake home materialization;
 - env policy engine;

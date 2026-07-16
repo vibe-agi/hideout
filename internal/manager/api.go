@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
+	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
@@ -23,16 +25,24 @@ import (
 const APIVersion = "hideout.manager-api/v1"
 
 type API struct {
-	Core           Core
-	Token          string
-	ExpiresAt      time.Time
-	AllowedOrigins []string
-	AllowedHosts   []string
-	Now            func() time.Time
-	RunBackend     RunBackendFactory
-	RunOpener      RunOpenerFactory
-	EnvOperator    EnvironmentOperator
+	Core                      Core
+	Token                     string
+	ExpiresAt                 time.Time
+	TokenValidator            TokenValidator
+	RunCredentialPollInterval time.Duration
+	AllowedOrigins            []string
+	AllowedHosts              []string
+	Now                       func() time.Time
+	RunBackend                RunBackendFactory
+	RunOpener                 RunOpenerFactory
+	EnvOperator               EnvironmentOperator
 }
+
+// TokenValidator validates an operator credential without exposing token
+// lifecycle state to the Manager API. When configured on API it replaces the
+// static Token/ExpiresAt check; callers remain responsible for constant-time
+// validation and expiry or rotation policy.
+type TokenValidator func(string) bool
 
 type APIResponse struct {
 	Version  string   `json:"version"`
@@ -45,17 +55,28 @@ type RunBackendFactory func(RunAPIRequest, RunPlan) (backend.Backend, error)
 type RunOpenerFactory func(RunAPIRequest, RunPlan, RunSession) broker.Opener
 
 type RunAPIRequest struct {
-	ProfileName        string   `json:"profile,omitempty"`
-	Backend            string   `json:"backend,omitempty"`
-	NetworkMode        string   `json:"networkMode,omitempty"`
-	ProxySecretRef     string   `json:"proxySecretRef,omitempty"`
-	Workspace          string   `json:"workspace,omitempty"`
-	GuestWorkspace     string   `json:"guestWorkspace,omitempty"`
-	Ephemeral          bool     `json:"ephemeral,omitempty"`
-	Command            []string `json:"command"`
-	AllowWeakIsolation bool     `json:"allowWeakIsolation,omitempty"`
-	EnvironmentName    string   `json:"environmentName,omitempty"`
-	RemoveEnvironment  bool     `json:"removeEnvironment,omitempty"`
+	ProfileName                string                       `json:"profile,omitempty"`
+	Backend                    string                       `json:"backend,omitempty"`
+	NetworkMode                string                       `json:"networkMode,omitempty"`
+	ProxySecretRef             string                       `json:"proxySecretRef,omitempty"`
+	MediatedResolver           string                       `json:"mediatedResolver,omitempty"`
+	Workspace                  string                       `json:"workspace,omitempty"`
+	GuestWorkspace             string                       `json:"guestWorkspace,omitempty"`
+	AllowUnsafeWorkspace       bool                         `json:"allowUnsafeWorkspace,omitempty"`
+	Ephemeral                  bool                         `json:"ephemeral,omitempty"`
+	Command                    []string                     `json:"command"`
+	PublicEnv                  map[string]string            `json:"publicEnv,omitempty"`
+	AuditPath                  string                       `json:"auditPath,omitempty"`
+	HostFSRun                  hostfs.Config                `json:"hostfs,omitempty"`
+	DisableProfileHostFSGrants bool                         `json:"disableProfileHostFSGrants,omitempty"`
+	OpenTargets                []RunOpenTargetOwner         `json:"openTargets,omitempty"`
+	EndpointCandidates         []RunEndpointCandidate       `json:"endpointCandidates,omitempty"`
+	EndpointExposures          []RunEndpointExposureRequest `json:"endpointExposures,omitempty"`
+	Terminal                   TerminalDescriptor           `json:"terminal,omitempty"`
+	Confirmation               *RunConfirmation             `json:"confirmation,omitempty"`
+	AllowWeakIsolation         bool                         `json:"allowWeakIsolation,omitempty"`
+	EnvironmentName            string                       `json:"environmentName,omitempty"`
+	RemoveEnvironment          bool                         `json:"removeEnvironment,omitempty"`
 }
 
 type RunStatusResponse struct {
@@ -530,7 +551,7 @@ func (api API) serveRunPlan(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanRun(runPlanOptionsFromAPIRequest(req))
+	prepared, err := (RunService{Core: api.Core}).Prepare(runServiceRequestFromAPI(req))
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -538,7 +559,7 @@ func (api API) serveRunPlan(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, APIResponse{
 		Version:  APIVersion,
 		Resource: "run/plan",
-		Data:     plan,
+		Data:     prepared.Review,
 		Errors:   []string{},
 	})
 }
@@ -553,26 +574,22 @@ func (api API) serveRunApply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanRun(runPlanOptionsFromAPIRequest(req))
+	serviceRequest := runServiceRequestFromAPI(req)
+	service := RunService{Core: api.Core}
+	prepared, err := service.Prepare(serviceRequest)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	be, err := api.RunBackend(req, plan)
+	be, err := api.RunBackend(req, prepared.Plan)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, runErr := api.Core.ApplyRun(r.Context(), plan, ApplyRunOptions{
-		Backend:            be,
-		RequestedBackend:   req.Backend,
-		AllowWeakIsolation: req.AllowWeakIsolation,
-		Environment: RunEnvironmentOptions{
-			EnvName:        req.EnvironmentName,
-			RemoveAfterRun: req.RemoveEnvironment,
-			Create:         true,
-		},
-		OpenerForSession: api.runOpenerForSession(req, plan),
+	runCtx, cancelRun := api.bindRunCredentialContext(r)
+	defer cancelRun()
+	result, runErr := service.Apply(runCtx, prepared, serviceRequest, RunServiceDependencies{
+		Backend: be, OpenerForSession: api.runOpenerForSession(req, prepared.Plan),
 	})
 	resp := APIResponse{
 		Version:  APIVersion,
@@ -1736,16 +1753,68 @@ func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
 }
 
 func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {
-	return RunPlanOptions{
-		ProfileName:    req.ProfileName,
-		Backend:        req.Backend,
-		NetworkMode:    req.NetworkMode,
-		ProxySecretRef: req.ProxySecretRef,
-		Workspace:      req.Workspace,
-		GuestWorkspace: req.GuestWorkspace,
-		Ephemeral:      req.Ephemeral,
-		Command:        append([]string(nil), req.Command...),
+	return runPlanOptionsFromServiceRequest(runServiceRequestFromAPI(req))
+}
+
+func runServiceRequestFromAPI(req RunAPIRequest) RunServiceRequest {
+	return RunServiceRequest{
+		Version: RunServiceRequestVersion, ProfileName: req.ProfileName, Backend: req.Backend,
+		NetworkMode: req.NetworkMode, ProxySecretRef: req.ProxySecretRef,
+		MediatedResolver: req.MediatedResolver, Workspace: req.Workspace,
+		GuestWorkspace: req.GuestWorkspace, AllowUnsafeWorkspace: req.AllowUnsafeWorkspace,
+		AllowWeakIsolation: req.AllowWeakIsolation, Ephemeral: req.Ephemeral,
+		EnvironmentName: req.EnvironmentName, RemoveEnvironment: req.RemoveEnvironment,
+		Command: append([]string(nil), req.Command...), PublicEnv: cloneRunStringMap(req.PublicEnv),
+		AuditPath: req.AuditPath, HostFSRun: req.HostFSRun,
+		DisableProfileHostFSGrants: req.DisableProfileHostFSGrants,
+		OpenTargets:                append([]RunOpenTargetOwner(nil), req.OpenTargets...),
+		EndpointCandidates:         append([]RunEndpointCandidate(nil), req.EndpointCandidates...),
+		EndpointExposures:          append([]RunEndpointExposureRequest(nil), req.EndpointExposures...),
+		Terminal:                   req.Terminal, Confirmation: req.Confirmation,
 	}
+}
+
+func (api API) bindRunCredentialContext(r *http.Request) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(r.Context())
+	token := bearerToken(r.Header.Get("Authorization"))
+	if !api.validCredential(token) {
+		token = strings.TrimSpace(r.Header.Get("X-Hideout-UI-Token"))
+	}
+	if token == "" {
+		cancel()
+		return ctx, cancel
+	}
+	interval := api.RunCredentialPollInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !api.validCredential(token) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
+func (api API) validCredential(token string) bool {
+	if api.TokenValidator != nil {
+		return api.TokenValidator(token)
+	}
+	now := time.Now().UTC()
+	if api.Now != nil {
+		now = api.Now().UTC()
+	}
+	return (api.ExpiresAt.IsZero() || now.Before(api.ExpiresAt)) && tokenEqual(token, api.Token)
 }
 
 func commandProxyOptionsFromAPIRequest(req CommandProxyAPIRequest) CommandProxyOptions {
@@ -1881,6 +1950,15 @@ func (api API) serveAuditEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api API) authorize(r *http.Request) error {
+	if api.TokenValidator != nil {
+		if api.TokenValidator(bearerToken(r.Header.Get("Authorization"))) {
+			return nil
+		}
+		if api.TokenValidator(r.Header.Get("X-Hideout-UI-Token")) {
+			return nil
+		}
+		return errors.New("manager API token is required")
+	}
 	if api.Token == "" {
 		return errors.New("manager API token is not configured")
 	}

@@ -39,6 +39,16 @@ var requiredConcurrentIsolationChecks = []string{
 	"stopRefusedWithLiveOwners",
 	"lastSessionPreservedVm",
 	"explicitStopStoppedVm",
+	"realPTYInitialSize",
+	"realPTYResize",
+	"fullscreenFixture",
+	"interruptExitExact",
+	"daemonCrashClientsUnblocked",
+	"daemonCrashTerminalRestored",
+	"daemonCrashTargetsReaped",
+	"restartStaleOwnerFailedClosed",
+	"explicitRecovery",
+	"postRecoveryRun",
 }
 
 type concurrentIsolationEvidence struct {
@@ -52,6 +62,9 @@ type concurrentIsolationEvidence struct {
 	Metrics     struct {
 		OwnerReconcileMS float64 `json:"ownerReconcileMs"`
 	} `json:"metrics"`
+	Artifacts struct {
+		SessionPTYEvidenceSHA256 string `json:"sessionPTYEvidenceSHA256"`
+	} `json:"artifacts"`
 	Checks    map[string]bool `json:"checks"`
 	NonClaims struct {
 		GuestRootContainment string `json:"guestRootContainment"`
@@ -153,6 +166,9 @@ func validateConcurrentIsolationArtifact(data []byte, expectedCommit string) err
 	}
 	if evidence.Metrics.OwnerReconcileMS <= 0 || evidence.Metrics.OwnerReconcileMS > 1000 {
 		return errors.New("concurrent isolation owner liveness did not reconcile within one second")
+	}
+	if len(evidence.Artifacts.SessionPTYEvidenceSHA256) != 64 || !lowerHex(evidence.Artifacts.SessionPTYEvidenceSHA256) {
+		return errors.New("concurrent isolation PTY evidence digest is invalid")
 	}
 	if len(evidence.Checks) != len(requiredConcurrentIsolationChecks) {
 		return errors.New("concurrent isolation evidence check inventory drifted")

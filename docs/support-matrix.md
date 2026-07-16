@@ -47,10 +47,20 @@ platform, backend, maturity, or automatic-update claims below.
 | `backend/lima` | first-class | Required for release isolation evidence. |
 | `backend/native` | degraded | Development harness only; not isolation evidence. |
 
+## Runtime Helper Support
+
+| Subject | Level | Required Gate |
+| --- | --- | --- |
+| `helper/linux-shim` | supported | Gate 0 package smoke |
+| `helper/linux-hostfsd` | supported | Gate 0 package smoke |
+| `helper/linux-dns-stub` | supported | Gate 3 hidden proxy |
+| `helper/linux-session-supervisor` | supported | Gate 0 package smoke and 034 real Lima Gate 2 |
+
 ## Feature And Gate Support
 
 | Subject | Level | Required Gate |
 | --- | --- | --- |
+| `feature/package-install` | supported | Gate 0 |
 | `feature/dns-mediation` | gate-required | Gate 3 hidden proxy |
 | `feature/hostfs-write-overlay` | gate-required | Gate 2 Lima |
 | `feature/guest-privilege-separation` | gate-required | Gate 3 hidden proxy privilege evidence |
@@ -90,7 +100,7 @@ platform, backend, maturity, or automatic-update claims below.
 - `ui-maturity`: The local TUI and WebUI are supervised alpha surfaces, not a polished remote operations service.
 - `cross-workspace-shared-vm`: Concurrent runs currently require the same pinned workspace; one default VM across workspaces is not implemented.
 - `automatic-final-session-stop`: The last session leaves the environment warm; stop remains explicit.
-- `dynamic-terminal-resize`: Initial PTY dimensions are preserved; complete SIGWINCH propagation is not claimed.
+- `terminal-emulator-hardening`: Initial dimensions and dynamic SIGWINCH resize are supported; exhaustive terminal-emulator, theme, OSC/CSI, and detach behavior is not claimed.
 
 ## Release Readiness
 

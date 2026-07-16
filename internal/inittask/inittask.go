@@ -247,6 +247,7 @@ func PlanMachine(store profile.Store, opts Options) (Plan, error) {
 		plan.Tasks = append(plan.Tasks,
 			helperTask(store.Root, "install_lima_linux_shim", "helper.install.linux-shim", "hideout-shim", helperbin.DefaultLinuxShimPath(store.Root, runtime.GOARCH)),
 			helperTask(store.Root, "install_lima_linux_hostfsd", "helper.install.linux-hostfsd", "hideout-hostfsd", helperbin.DefaultLinuxHostFSDPath(store.Root, runtime.GOARCH)),
+			helperTask(store.Root, "install_lima_linux_session_supervisor", "helper.install.linux-session-supervisor", helperbin.LinuxSessionSupervisorCommand, helperbin.DefaultLinuxSessionSupervisorPath(store.Root, runtime.GOARCH)),
 		)
 	}
 	plan.Tasks = append(plan.Tasks, Task{
@@ -825,6 +826,8 @@ func linuxHelperDiscoverable(storeRoot, command string) bool {
 		return helperbin.ResolveLinuxShimPath(storeRoot, runtime.GOARCH) != ""
 	case "hideout-hostfsd":
 		return helperbin.ResolveLinuxHostFSDPath(storeRoot, runtime.GOARCH) != ""
+	case helperbin.LinuxSessionSupervisorCommand:
+		return helperbin.ResolveLinuxSessionSupervisorPath(storeRoot, runtime.GOARCH) != ""
 	default:
 		return false
 	}
@@ -959,6 +962,8 @@ func applyTask(store profile.Store, plan Plan, task Task) error {
 		return buildLinuxHelper(store.Root, "hideout-shim")
 	case "helper.install.linux-hostfsd":
 		return buildLinuxHelper(store.Root, "hideout-hostfsd")
+	case "helper.install.linux-session-supervisor":
+		return buildLinuxHelper(store.Root, helperbin.LinuxSessionSupervisorCommand)
 	default:
 		return fmt.Errorf("unsupported init task %q", task.Kind)
 	}
@@ -1021,8 +1026,11 @@ func buildLinuxHelper(storeRoot, command string) error {
 		return err
 	}
 	out := helperbin.DefaultLinuxShimPath(storeRoot, runtime.GOARCH)
-	if command == "hideout-hostfsd" {
+	switch command {
+	case "hideout-hostfsd":
 		out = helperbin.DefaultLinuxHostFSDPath(storeRoot, runtime.GOARCH)
+	case helperbin.LinuxSessionSupervisorCommand:
+		out = helperbin.DefaultLinuxSessionSupervisorPath(storeRoot, runtime.GOARCH)
 	}
 	return helperbin.BuildLinuxCommand(helperbin.BuildOptions{
 		Out:     out,

@@ -69,6 +69,7 @@ func BuiltinMatrix() Matrix {
 			{Area: "helper", Subject: "helper/linux-shim", Level: LevelSupported, Reason: "packaged Linux guest helper", Guidance: "verify package manifest checksums before install", RequiredGates: []string{"gate0"}, Evidence: []string{"package-smoke"}},
 			{Area: "helper", Subject: "helper/linux-hostfsd", Level: LevelSupported, Reason: "packaged Linux HostFS daemon", Guidance: "verify package manifest checksums before install", RequiredGates: []string{"gate0"}, Evidence: []string{"package-smoke"}},
 			{Area: "helper", Subject: "helper/linux-dns-stub", Level: LevelSupported, Reason: "packaged guest-local DoH stub", Guidance: "required by privacy template DNS mediation", RequiredGates: []string{"gate3-hidden-proxy"}, Evidence: []string{"gate3-hidden-proxy"}},
+			{Area: "helper", Subject: "helper/linux-session-supervisor", Level: LevelSupported, Reason: "fixed packaged guest PTY and process supervisor", Guidance: "verify the package manifest and run the 034 real PTY gate", RequiredGates: []string{"gate0", "gate2-lima"}, Evidence: []string{"package-smoke", "034.concurrent-sessions.real-gate2.isolation"}},
 			{Area: "feature", Subject: "feature/package-install", Level: LevelSupported, Reason: "package install/verify/uninstall lifecycle is implemented", Guidance: "run package smoke on release candidates", RequiredGates: []string{"gate0"}, Evidence: []string{"package-smoke"}},
 			{Area: "feature", Subject: "feature/dns-mediation", Level: LevelGateRequired, Reason: "claim depends on real Lima DNS closure proof", Guidance: "require Gate 3 evidence for release candidates", RequiredGates: []string{"gate3-hidden-proxy"}, Evidence: []string{"real-lima"}},
 			{Area: "feature", Subject: "feature/hostfs-write-overlay", Level: LevelGateRequired, Reason: "host mutation claim depends on HostFS real data-plane proof", Guidance: "require Gate 2 evidence for release candidates", RequiredGates: []string{"gate2-lima"}, Evidence: []string{"real-lima"}},
@@ -80,6 +81,7 @@ func BuiltinMatrix() Matrix {
 			{Area: "feature", Subject: "feature/host-capability-projection", Level: LevelGateRequired, Reason: "host app launch and workspace alias claims require a real signed app and Lima guest", Guidance: "require 030 real Gate 2 evidence for the exact package", RequiredGates: []string{"gate2-lima"}, Evidence: []string{"030.projection.real-gate2.code-open"}},
 			{Area: "feature", Subject: "feature/supported-cli-runtime", Level: LevelGateRequired, Reason: "the retained runtime and in-boundary tool path require exact image and package evidence", Guidance: "require 031 real image, baseline, agent install, privacy, and boundary proofs", RequiredGates: []string{"gate2-lima", "gate3-hidden-proxy"}, Evidence: []string{"031.runtime.real-image", "031.runtime.agent-install"}},
 			{Area: "feature", Subject: "feature/community-host-app-recipes", Level: LevelGateRequired, Reason: "local recipe lifecycle is implemented but an external recipe claim needs a real host app and Lima path", Guidance: "require the 032 external-pack real Gate 2 proof", RequiredGates: []string{"gate2-lima"}, Evidence: []string{"032.host-app-pack.real-gate2.external"}},
+			{Area: "feature", Subject: "feature/concurrent-run-sessions", Level: LevelGateRequired, Reason: "daemon-owned same-workspace concurrency and PTY behavior require real Lima and terminal proof", Guidance: "require the 034 isolation and performance artifacts for release claims", RequiredGates: []string{"gate2-lima"}, Evidence: []string{"034.concurrent-sessions.real-gate2.isolation", "034.concurrent-sessions.real-gate2.performance"}},
 			{Area: "release", Subject: "release/public-alpha-package", Level: LevelGateRequired, Reason: "a public package claim exists only after exact candidate gates and anonymous immutable download", Guidance: "require a public-verified publication receipt and releases/current.json", RequiredGates: []string{"gate0", "gate2-lima", "gate3-hidden-proxy"}, Evidence: []string{"033.release.public-download"}},
 			{Area: "release", Subject: "release/developer-id-notarization", Level: LevelGateRequired, Reason: "public macOS packages require independently observed Developer ID and accepted online notarization", Guidance: "unsigned developer previews cannot satisfy public-alpha readiness", RequiredGates: []string{"release-signing"}, Evidence: []string{"033.release.signing-notarization"}},
 			{Area: "abi", Subject: "abi/command-adapter/v1", Level: LevelSupported, Reason: "strict command adapter outcomes are Go-validated", Guidance: "enable only tested digest-pinned adapter revisions", RequiredGates: []string{"gate0"}, Evidence: []string{"adapter-pack-smoke"}},
@@ -100,6 +102,9 @@ func BuiltinMatrix() Matrix {
 			{ID: "runtime-freshness", Summary: "The retained runtime has no automatic refresh or patch-response SLA.", AppliesTo: []string{"feature/supported-cli-runtime"}, Guidance: "inspect the pinned revision, component inventory, and SBOM status before use"},
 			{ID: "privacy-prerequisites", Summary: "Privacy networking depends on an operator-provided proxy, mediated resolver, and real Gate 3 evidence.", AppliesTo: []string{"feature/dns-mediation"}, Guidance: "do not treat direct mode or local doctor output as a privacy proof"},
 			{ID: "ui-maturity", Summary: "The local TUI and WebUI are supervised alpha operator surfaces, not a polished remote operations service.", AppliesTo: []string{"feature/decision-center"}, Guidance: "retain CLI and audit evidence as the authoritative recovery surfaces"},
+			{ID: "cross-workspace-shared-vm", Summary: "Concurrent runs currently require the same pinned workspace; one default VM across workspaces is not implemented.", AppliesTo: []string{"feature/concurrent-run-sessions"}, Guidance: "use separate existing workspace environments until the 035 transport and isolation contract lands"},
+			{ID: "automatic-final-session-stop", Summary: "The last session leaves its environment warm; stop remains explicit.", AppliesTo: []string{"feature/concurrent-run-sessions"}, Guidance: "run hideout stop explicitly until the 036 lifecycle lease contract lands"},
+			{ID: "terminal-emulator-hardening", Summary: "Dynamic PTY resize is supported, but exhaustive terminal-emulator, theme, OSC/CSI, and detach behavior is not claimed.", AppliesTo: []string{"feature/concurrent-run-sessions"}, Guidance: "treat target terminal output as locally rendered untrusted bytes and use the 037 matrix for broader claims"},
 		},
 	}
 }
@@ -189,6 +194,7 @@ func requiredSubjects() []string {
 		"feature/host-capability-projection",
 		"feature/supported-cli-runtime",
 		"feature/community-host-app-recipes",
+		"feature/concurrent-run-sessions",
 		"release/public-alpha-package",
 		"release/developer-id-notarization",
 		"abi/command-adapter/v1",
@@ -212,6 +218,9 @@ func RequiredNonClaimIDs() []string {
 		"runtime-freshness",
 		"privacy-prerequisites",
 		"ui-maturity",
+		"cross-workspace-shared-vm",
+		"automatic-final-session-stop",
+		"terminal-emulator-hardening",
 	}
 }
 

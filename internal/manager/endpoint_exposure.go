@@ -1,7 +1,10 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -34,6 +37,79 @@ type RunEndpointExposureRequest struct {
 	Owner       string
 	Kind        string
 	ClosePolicy string
+}
+
+// BuildPreviewOpenOptions resolves user-facing --preview values inside Manager.
+// The CLI sends only raw intent; it never reads profile policy or manufactures
+// an authority-bearing endpoint binding itself.
+func BuildPreviewOpenOptions(p profile.Profile, targets []string) ([]RunOpenTargetOwner, []RunEndpointCandidate, []RunEndpointExposureRequest, error) {
+	if len(targets) == 0 {
+		return nil, nil, nil, nil
+	}
+	owners := []RunOpenTargetOwner{{ID: OpenTargetPreviewOpen, Kind: OpenTargetPreviewOpen}}
+	profileCandidates := map[string]profile.EndpointCandidate{}
+	for _, candidate := range p.EndpointExposure.HostToGuest {
+		profileCandidates[strings.TrimSpace(candidate.ID)] = candidate
+	}
+	runCandidates := make([]RunEndpointCandidate, 0, len(targets))
+	exposures := make([]RunEndpointExposureRequest, 0, len(targets))
+	for i, raw := range targets {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return nil, nil, nil, errors.New("--preview cannot be empty")
+		}
+		candidateID := value
+		if candidate, ok := profileCandidates[value]; ok {
+			owner := strings.TrimSpace(candidate.Owner)
+			if owner != OpenTargetPreviewOpen {
+				return nil, nil, nil, fmt.Errorf("--preview candidate %q belongs to owner %q, not preview.open", value, owner)
+			}
+		} else {
+			targetAddress, err := normalizePreviewEndpoint(value)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("--preview %q: %w", value, err)
+			}
+			candidateID = fmt.Sprintf("manual_preview_%d", i+1)
+			runCandidates = append(runCandidates, RunEndpointCandidate{
+				ID: candidateID, Source: EndpointSourceManual, Owner: OpenTargetPreviewOpen,
+				Proto: "tcp", TargetAddress: targetAddress,
+			})
+		}
+		exposures = append(exposures, RunEndpointExposureRequest{
+			CandidateID: candidateID, Owner: OpenTargetPreviewOpen,
+			Kind: OpenTargetPreviewOpen, ClosePolicy: "session-end",
+		})
+	}
+	return owners, runCandidates, exposures, nil
+}
+
+func normalizePreviewEndpoint(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("endpoint is required")
+	}
+	if strings.Contains(value, "://") {
+		u, err := url.Parse(value)
+		if err != nil {
+			return "", err
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return "", fmt.Errorf("preview URL scheme %q is unsupported", u.Scheme)
+		}
+		value = u.Host
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return "", fmt.Errorf("must be host:port or http(s) loopback URL: %w", err)
+	}
+	if host == "localhost" {
+		return net.JoinHostPort("127.0.0.1", port), nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return "", errors.New("preview endpoint must use localhost or a loopback IP")
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 func resolveRunEndpointExposures(runSession RunSession, owners []RunOpenTargetOwner, runCandidates []RunEndpointCandidate, requests []RunEndpointExposureRequest) ([]RunPortBridgeRequest, error) {

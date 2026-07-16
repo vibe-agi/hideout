@@ -3,19 +3,24 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
 tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/hideout-command-adapter-smoke.XXXXXX")"
+store="$(hideout_mktemp_daemon_store)"
+hideout="$tmp_home/hideout"
 cleanup() {
-  rm -rf "$tmp_home"
+  HIDEOUT_STORE_ROOT="$store" "$hideout" daemon stop >/dev/null 2>&1 || true
+  rm -rf "$tmp_home" "$store"
 }
 trap cleanup EXIT
 
 go test -count=1 ./internal/cmdadapter ./internal/cmdproxy ./internal/broker ./internal/manager
 
+go build -o "$hideout" ./cmd/hideout
 go build -o "$tmp_home/hideout-shim" ./cmd/hideout-shim
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout profile init smoke >/dev/null
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout profile command-adapter smoke add-builtin-root-sensitive >"$tmp_home/add.out"
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" profile init smoke >/dev/null
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" profile command-adapter smoke add-builtin-root-sensitive >"$tmp_home/add.out"
 jq -e '
   .version == "hideout.command-adapter-plan/v1" and
   .applied == true and
@@ -25,15 +30,15 @@ jq -e '
   (.plan.allowedProposalCapabilities | index("guest.privilege.plan"))
 ' "$tmp_home/add.out" >/dev/null
 
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" go run ./cmd/hideout profile command-adapter smoke list >"$tmp_home/list.out"
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" profile command-adapter smoke list >"$tmp_home/list.out"
 jq -e '
   .profile == "smoke" and
   (.adapters[] | select(.id == "root-sensitive" and .enabled == true and .builtin == "root-sensitive"))
 ' "$tmp_home/list.out" >/dev/null
 
 set +e
-HIDEOUT_STORE_ROOT="$tmp_home" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  go run ./cmd/hideout run --profile smoke --backend native --allow-weak-isolation -- sudo apt install nodejs \
+HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
+  "$hideout" run --profile smoke --backend native --allow-weak-isolation -- sudo apt install nodejs \
   >"$tmp_home/run.out" 2>"$tmp_home/run.err"
 run_rc=$?
 set -e
@@ -46,7 +51,7 @@ if ! grep -q "root-sensitive package-manager command captured as target intent" 
   cat "$tmp_home/run.err" >&2
   exit 1
 fi
-audit_path="$(find "$tmp_home/sessions" -name audit.jsonl -print | head -n 1)"
+audit_path="$(find "$store/sessions" -name audit.jsonl -print | head -n 1)"
 if [ -z "$audit_path" ]; then
   echo "command-adapter-smoke: audit log missing" >&2
   exit 1

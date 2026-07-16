@@ -144,7 +144,7 @@ if [ "$mode" = "local-fast" ]; then
   jq -s '.' \
     <(proof_json '034.concurrent-sessions.gate0.mechanics' passed local-fast \
       concurrent-sessions-gate0 \
-      'validated owner, activation, service, stop, status, and local concurrency mechanics' \
+      'validated daemon-owned run, owner, activation, service, status, and local concurrency mechanics' \
       "$local_artifact" 'local mechanics only; no real isolation claim') >"$proofs"
 else
   missing=""
@@ -185,7 +185,7 @@ else
         "$isolation_artifact" 'real macOS arm64 Lima evidence' "$runtime") \
       <(proof_json '034.concurrent-sessions.real-gate2.performance' passed real-gate \
         concurrent-sessions-performance-real-gate2 \
-        'validated 30-sample warm attach and static-workspace performance against pre-034 baseline' \
+        'validated warm attach and static-workspace performance against pre-034 baseline' \
         "$performance_artifact" 'same host, workspace fixture, and runtime digest' "$runtime") \
       >"$proofs"
   fi

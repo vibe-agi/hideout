@@ -225,7 +225,8 @@ func TestAPIRunPlanAndStatus(t *testing.T) {
 		t.Fatalf("resource=%q want run/plan", decoded.Resource)
 	}
 	plan, ok := decoded.Data.(map[string]any)
-	if !ok || plan["version"] != RunPlanVersion || plan["profile"] != "api-plan" || plan["backend"] != "native" {
+	if !ok || plan["version"] != RunReviewVersion || plan["planVersion"] != RunPlanVersion ||
+		plan["planDigest"] == "" || plan["profile"] != "api-plan" || plan["backend"] != "native" {
 		t.Fatalf("run plan data mismatch: %+v", decoded.Data)
 	}
 
@@ -1049,7 +1050,7 @@ func TestAPIInitRequestRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-func TestAPIRunRequestRejectsHostAuditPath(t *testing.T) {
+func TestAPIRunRequestPreservesHostAuditPathInReviewDigest(t *testing.T) {
 	api := API{
 		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
 		Token:     "ui_token",
@@ -1065,12 +1066,13 @@ func TestAPIRunRequestRejectsHostAuditPath(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()
 	api.ServeHTTP(resp, req)
-	if resp.Code != http.StatusBadRequest {
+	if resp.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	validateManagerAPIResponse(t, compileManagerAPISchema(t), resp.Body.Bytes())
-	if !strings.Contains(resp.Body.String(), "invalid run request") {
-		t.Fatalf("expected generic invalid request error, got %s", resp.Body.String())
+	if !strings.Contains(resp.Body.String(), `"version":"hideout.run-review/v1"`) ||
+		!strings.Contains(resp.Body.String(), `"planDigest":"`) {
+		t.Fatalf("expected bound run review, got %s", resp.Body.String())
 	}
 }
 
@@ -1403,6 +1405,58 @@ func TestAPIRejectsExpiredToken(t *testing.T) {
 	api.ServeHTTP(resp, req)
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAPIUsesConfiguredTokenValidatorForBearerAndUITokens(t *testing.T) {
+	const (
+		current = "ui_current_validator_token"
+		prior   = "ui_prior_grace_token"
+		static  = "ui_static_token_must_not_bypass_callback"
+		wrong   = "ui_wrong_token_must_not_leak"
+	)
+	api := API{
+		Core: Core{
+			Store: profile.Store{Root: t.TempDir()},
+			Backends: []BackendCheck{
+				{Name: "native", Isolation: "weak"},
+			},
+		},
+		Token:     static,
+		ExpiresAt: time.Unix(100, 0),
+		Now:       func() time.Time { return time.Unix(101, 0) },
+		TokenValidator: func(token string) bool {
+			return token == current || token == prior
+		},
+	}
+
+	tests := []struct {
+		name   string
+		header string
+		token  string
+		want   int
+	}{
+		{name: "bearer current", header: "Authorization", token: "Bearer " + current, want: http.StatusOK},
+		{name: "UI prior", header: "X-Hideout-UI-Token", token: prior, want: http.StatusOK},
+		{name: "static token does not bypass callback", header: "Authorization", token: "Bearer " + static, want: http.StatusUnauthorized},
+		{name: "wrong token", header: "Authorization", token: "Bearer " + wrong, want: http.StatusUnauthorized},
+		{name: "missing token", want: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newAPIRequest(http.MethodGet, "/api/v1/overview")
+			if tt.header != "" {
+				req.Header.Set(tt.header, tt.token)
+			}
+			resp := httptest.NewRecorder()
+			api.ServeHTTP(resp, req)
+			if resp.Code != tt.want {
+				t.Fatalf("status=%d want=%d body=%s", resp.Code, tt.want, resp.Body.String())
+			}
+			if strings.Contains(resp.Body.String(), wrong) || strings.Contains(resp.Body.String(), static) {
+				t.Fatalf("authentication response leaked token material: %s", resp.Body.String())
+			}
+		})
 	}
 }
 

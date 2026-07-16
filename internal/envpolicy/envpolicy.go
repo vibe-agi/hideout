@@ -61,20 +61,19 @@ func Build(spec Spec) Result {
 	}
 
 	synthetic := map[string]string{
-		"HOME":               filepath.Join(spec.ProfileDir, "home"),
-		"USER":               spec.Profile.Identity.User,
-		"LOGNAME":            spec.Profile.Identity.User,
-		"HOSTNAME":           spec.Profile.Identity.Hostname,
-		"TMPDIR":             filepath.Join(spec.SessionDir, "tmp"),
-		"XDG_CONFIG_HOME":    filepath.Join(spec.ProfileDir, "config"),
-		"XDG_CACHE_HOME":     filepath.Join(spec.ProfileDir, "cache"),
-		"XDG_DATA_HOME":      filepath.Join(spec.ProfileDir, "data"),
-		"GIT_CONFIG_GLOBAL":  filepath.Join(spec.ProfileDir, "home", ".gitconfig"),
-		"GIT_OPTIONAL_LOCKS": "0",
-		"TZ":                 spec.Profile.Identity.Timezone,
-		"LANG":               spec.Profile.Identity.Locale,
-		"LC_ALL":             spec.Profile.Identity.Locale,
-		"PATH":               defaultToolPath,
+		"HOME":              filepath.Join(spec.ProfileDir, "home"),
+		"USER":              spec.Profile.Identity.User,
+		"LOGNAME":           spec.Profile.Identity.User,
+		"HOSTNAME":          spec.Profile.Identity.Hostname,
+		"TMPDIR":            filepath.Join(spec.SessionDir, "tmp"),
+		"XDG_CONFIG_HOME":   filepath.Join(spec.ProfileDir, "config"),
+		"XDG_CACHE_HOME":    filepath.Join(spec.ProfileDir, "cache"),
+		"XDG_DATA_HOME":     filepath.Join(spec.ProfileDir, "data"),
+		"GIT_CONFIG_GLOBAL": filepath.Join(spec.ProfileDir, "home", ".gitconfig"),
+		"TZ":                spec.Profile.Identity.Timezone,
+		"LANG":              spec.Profile.Identity.Locale,
+		"LC_ALL":            spec.Profile.Identity.Locale,
+		"PATH":              defaultToolPath,
 	}
 	if spec.ShimDir != "" {
 		synthetic["PATH"] = spec.ShimDir + ":" + defaultToolPath
@@ -132,7 +131,7 @@ func observedDeniedName(name string) string {
 }
 
 func isHardBlockedEnv(name string) bool {
-	return isBlockedProxyEnv(name) || strings.HasPrefix(name, "HIDEOUT_") || strings.HasPrefix(name, "GIT_CONFIG_") || name == "GIT_OPTIONAL_LOCKS"
+	return isBlockedProxyEnv(name) || strings.HasPrefix(name, "HIDEOUT_") || strings.HasPrefix(name, "GIT_CONFIG_")
 }
 
 func isBlockedProxyEnv(name string) bool {
