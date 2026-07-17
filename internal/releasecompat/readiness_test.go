@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/productevidence"
 	"github.com/vibe-agi/hideout/internal/recovery"
 )
@@ -95,10 +96,11 @@ func TestReleaseCandidateRejectsMinimalFabricatedGateJSON(t *testing.T) {
 func TestReadinessReportsSupportingProductHardeningEvidence(t *testing.T) {
 	dir := t.TempDir()
 	evidence := filepath.Join(dir, "product-hardening.json")
-	writeCompleteProductEvidence(t, evidence, "abc123")
+	commit := strings.Repeat("a", 40)
+	writeCompleteProductEvidence(t, evidence, commit)
 	ready, err := BuildReadiness(ReadinessOptions{
 		Mode:            "local-fast",
-		Commit:          "abc123",
+		Commit:          commit,
 		LocalPassed:     true,
 		ProductEvidence: []string{evidence},
 		Now:             time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC),
@@ -126,16 +128,17 @@ func TestReadinessReportsSupportingProductHardeningEvidence(t *testing.T) {
 func TestReadinessTargetedProductHardeningDoesNotRequireLocalDogfoodProofs(t *testing.T) {
 	dir := t.TempDir()
 	evidence := filepath.Join(dir, "targeted-product-hardening.json")
+	commit := strings.Repeat("a", 40)
 	var targeted []productevidence.ProofRequirement
 	for _, req := range productevidence.ProductHardeningRequirements() {
 		if req.RequiredFor == productevidence.RequiredForTargetedCompletion {
 			targeted = append(targeted, req)
 		}
 	}
-	writeProductEvidence(t, evidence, "abc123", targeted)
+	writeProductEvidence(t, evidence, commit, targeted)
 	ready, err := BuildReadiness(ReadinessOptions{
 		Mode:            "local-fast",
-		Commit:          "abc123",
+		Commit:          commit,
 		LocalPassed:     true,
 		ProductEvidence: []string{evidence},
 		Now:             time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC),
@@ -157,10 +160,10 @@ func TestReadinessTargetedProductHardeningDoesNotRequireLocalDogfoodProofs(t *te
 func TestReadinessReportsStaleProductHardeningEvidence(t *testing.T) {
 	dir := t.TempDir()
 	evidence := filepath.Join(dir, "product-hardening.json")
-	writeCompleteProductEvidence(t, evidence, "old")
+	writeCompleteProductEvidence(t, evidence, strings.Repeat("a", 40))
 	ready, err := BuildReadiness(ReadinessOptions{
 		Mode:            "local-fast",
-		Commit:          "new",
+		Commit:          strings.Repeat("b", 40),
 		LocalPassed:     true,
 		ProductEvidence: []string{evidence},
 		Now:             time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC),
@@ -849,7 +852,11 @@ func writeProductEvidence(t *testing.T, path, commit string, reqs []productevide
 			if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(artifactPath, []byte("unit fixture\n"), 0o600); err != nil {
+			artifactData := []byte("unit fixture\n")
+			if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
+				artifactData = semanticProductArtifact(t, req.ArtifactValidator, commit, runtimeBindingFixture())
+			}
+			if err := os.WriteFile(artifactPath, artifactData, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			proof.Artifacts = append(proof.Artifacts, productevidence.ArtifactRef{
@@ -919,7 +926,7 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 		}
 		artifactData := []byte("runtime proof\n")
 		if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
-			artifactData = semantic034Artifact(t, req.ArtifactValidator, commit, binding)
+			artifactData = semanticProductArtifact(t, req.ArtifactValidator, commit, binding)
 		}
 		if err := os.WriteFile(artifact, artifactData, 0o600); err != nil {
 			t.Fatal(err)
@@ -952,7 +959,7 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 	}
 }
 
-func semantic034Artifact(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding) []byte {
+func semanticProductArtifact(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding) []byte {
 	t.Helper()
 	var value any
 	switch validator {
@@ -993,6 +1000,79 @@ func semantic034Artifact(t *testing.T, validator, commit string, binding product
 			"methodology":      map[string]any{"samples": 30, "warmups": 3, "readyThresholdMs": 2000, "fixtureRatioThreshold": 1.25, "fixtureSHA256": strings.Repeat("c", 64)},
 			"warmAttach":       map[string]any{"samplesMs": warm, "medianMs": 100, "p95Ms": 100},
 			"workspaceFixture": map[string]any{"candidateSamplesMs": candidate, "baselineSamplesMs": baseline, "candidateMedianMs": 10, "candidateP95Ms": 10, "baselineMedianMs": 8, "baselineP95Ms": 8, "p95Ratio": 1.25},
+		}
+	case productevidence.ArtifactValidatorLifecycleLocalV1:
+		checks := map[string]bool{}
+		for _, name := range []string{
+			"catalogValidation", "cleanupBeforeRelease", "daemonSingleWriter", "evidenceRedaction",
+			"generationFencing", "providerRegistration", "reconciliationReadiness", "reconciliationRetry",
+			"schemaDriftGuard", "shutdownBounded", "statusSurfaceParity", "stopObservationAuthority",
+		} {
+			checks[name] = true
+		}
+		value = map[string]any{
+			"schema": "hideout.lifecycle-local-evidence/v1", "status": "passed",
+			"generatedAt": "2026-07-17T00:00:00Z", "commit": commit, "dirty": false, "checks": checks,
+		}
+	case productevidence.ArtifactValidatorLifecycleModelV1:
+		invariants := map[string]bool{}
+		for _, name := range lifecycle.RequiredModelInvariants() {
+			invariants[name] = true
+		}
+		value = map[string]any{
+			"schema": "hideout.lifecycle-model-evidence/v1", "status": "passed",
+			"generatedAt": "2026-07-17T00:00:00Z", "commit": commit, "dirty": false,
+			"exhaustiveSequences": 180, "exploredTransitions": 1848, "scenarioCount": 249,
+			"persistedReplaySeeds": 32, "concurrentReplaySeeds": 32,
+			"stepsPerPersistedReplay": 24, "concurrentWaitBoundMs": 2000,
+			"coveredEvents": lifecycle.RequiredModelEvents(), "invariants": invariants,
+			"journalValidAfterEachStep": true, "corruptionRejected": true,
+			"stopsWithLiveClient": 0, "duplicateGenerationStops": 0,
+		}
+	case productevidence.ArtifactValidatorLifecycleRealV1:
+		checks := map[string]bool{}
+		for _, name := range []string{
+			"attachStopRaceSafe", "auditEvidenceRetained", "automaticStopNonDestructive", "bootIdentityObserved",
+			"bridgePinsEnvironment", "exactObservedStop", "explicitStaleRecovery", "finalSessionStops",
+			"guestDiskRetained", "hostHandoffIndependent", "newBootGenerationObserved", "profileCacheRetained",
+			"reconciliationRetry", "restartFreshGraceAtMostOnce", "restartNoInheritedAuthority",
+			"retainedOverlayPreserved", "runBridgeClosed", "siblingSessionPreserved",
+			"slowProbeDoesNotBlockStatus", "stopUnknownBlocksAttach",
+		} {
+			checks[name] = true
+		}
+		value = map[string]any{
+			"schema": "hideout.lifecycle-real-gate2/v1", "status": "passed",
+			"generatedAt": "2026-07-17T00:00:00Z", "commit": commit, "dirty": false,
+			"backend": "lima", "hostOS": "darwin", "hostArch": "arm64",
+			"metrics": map[string]any{
+				"attachStopRaces": 100, "finalStopMs": 16000, "statusReadyMs": 100,
+				"reconciliationRetryMs": 100, "shutdownMs": 100,
+			},
+			"checks":    checks,
+			"nonClaims": map[string]any{"guestRootContainment": "not-claimed", "hostAppTermination": "not-owned"},
+		}
+	case productevidence.ArtifactValidatorLifecyclePerformanceV1:
+		candidate := make([]float64, 30)
+		baseline := make([]float64, 30)
+		for index := range candidate {
+			candidate[index], baseline[index] = 100, 100
+		}
+		value = map[string]any{
+			"schema": "hideout.lifecycle-performance/v1", "status": "passed", "generatedAt": "2026-07-17T00:00:00Z",
+			"candidate": map[string]any{"commit": commit, "dirty": false},
+			"baseline":  map[string]any{"commit": strings.Repeat("b", 40), "dirty": false},
+			"host":      map[string]any{"os": "darwin", "arch": "arm64"},
+			"runtime": map[string]any{
+				"family": binding.Family, "revision": binding.Revision, "artifactSHA256": binding.ArtifactSHA256,
+				"buildCommit": binding.BuildCommit, "buildDirty": false,
+			},
+			"methodology": map[string]any{
+				"command": "hideout run -- git status --short", "samples": 30, "warmups": 3,
+				"fixtureSHA256": strings.Repeat("c", 64), "sampleOrder": "paired-alternating-ab-ba",
+			},
+			"candidateSamplesMs": candidate, "baselineSamplesMs": baseline,
+			"candidateMedianMs": 100, "baselineMedianMs": 100, "observedDeltaMs": 0, "allowedDeltaMs": 10,
 		}
 	default:
 		t.Fatalf("unknown semantic validator %q", validator)

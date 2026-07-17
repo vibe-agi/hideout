@@ -74,6 +74,7 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 	checkCommand, err := BuildSessionViewCommand(SessionViewSpec{
 		SessionID: session.ID, TargetUser: targetUser, GuestWork: session.GuestWork,
 		Env: env, Command: CommandCheck(command[0]), ExpectedBootID: session.ExpectedBootID,
+		RequiredRuntimePaths: sessionRuntimePrerequisites(session, true),
 	})
 	if err != nil {
 		return err
@@ -92,11 +93,12 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 		return err
 	}
 
-	client, err := b.newSSHClientForUser(ctx, session.InstanceName, "root")
+	lease, err := b.acquireSSHClientForUser(ctx, session.InstanceName, "root")
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer lease.Close()
+	client := lease.Client()
 	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), b.controlStderr()); err != nil {
 		return isolatedCommandPreflightError(b, session, command, env, err)
 	}
@@ -114,6 +116,9 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 		return nil
 	}
 	runErr := b.runSupervisorProtocol(ctx, session, client, viewCommand, command, env, streams, onReady)
+	if runErr != nil {
+		runErr = fmt.Errorf("supervisor protocol: %w", runErr)
+	}
 	if runErr != nil && !setupReported {
 		runErr = errors.Join(runErr, b.emitSupervisorSetupStatus(
 			session, setup, setupCategories, "failed", runErr.Error(),
@@ -184,7 +189,7 @@ func (b Backend) runSupervisorProtocol(
 	reader := sessionwire.NewReader(stdout, sessionwire.SupervisorToDaemon)
 	start, err := supervisorStartControl(prepared, command, env, streams)
 	if err != nil {
-		return err
+		return fmt.Errorf("build supervisor start: %w", err)
 	}
 	if err := writer.WriteControl(sessionwire.TypeSupervisorStart, start); err != nil {
 		return fmt.Errorf("write supervisor start: %w", err)
@@ -233,7 +238,7 @@ func (b Backend) runSupervisorProtocol(
 			}
 			if result.err != nil {
 				if completion == nil {
-					cancelForProtocolError(result.err)
+					cancelForProtocolError(fmt.Errorf("read supervisor frame: %w", result.err))
 				}
 				frames = nil
 				continue
@@ -245,7 +250,7 @@ func (b Backend) runSupervisorProtocol(
 				}
 				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
 				if decodeErr != nil {
-					return decodeErr
+					return fmt.Errorf("decode supervisor ready: %w", decodeErr)
 				}
 				reported := control.(*sessionwire.SupervisorReady)
 				if reported.SessionID != prepared.ID || reported.Terminal != start.Terminal {
@@ -256,11 +261,11 @@ func (b Backend) runSupervisorProtocol(
 				}
 				if onReady != nil {
 					if err := onReady(); err != nil {
-						return err
+						return fmt.Errorf("record supervisor setup readiness: %w", err)
 					}
 				}
 				if err := streams.Ready(prepared); err != nil {
-					return err
+					return fmt.Errorf("publish daemon session readiness: %w", err)
 				}
 				ready = true
 			case sessionwire.TypeTerminal, sessionwire.TypeStdout, sessionwire.TypeStderr:
@@ -268,19 +273,19 @@ func (b Backend) runSupervisorProtocol(
 					return errors.New("guest supervisor emitted target output before ready")
 				}
 				if err := writeSupervisorOutput(result.frame, streams); err != nil {
-					cancelForProtocolError(err)
+					cancelForProtocolError(fmt.Errorf("write supervisor output: %w", err))
 				}
 			case sessionwire.TypeSupervisorError:
 				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
 				if decodeErr != nil {
-					return decodeErr
+					return fmt.Errorf("decode supervisor error: %w", decodeErr)
 				}
 				reported := control.(*sessionwire.Error)
-				cancelForProtocolError(errors.New(reported.Summary))
+				cancelForProtocolError(fmt.Errorf("guest supervisor error: %s", reported.Summary))
 			case sessionwire.TypeCompletion:
 				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
 				if decodeErr != nil {
-					return decodeErr
+					return fmt.Errorf("decode supervisor completion: %w", decodeErr)
 				}
 				value := control.(*sessionwire.Completion)
 				if value.SessionID != prepared.ID {
@@ -301,13 +306,13 @@ func (b Backend) runSupervisorProtocol(
 				input = nil
 				if ready && completion == nil {
 					if err := writer.Write(sessionwire.TypeStdinEOF, nil); err != nil {
-						cancelForProtocolError(err)
+						cancelForProtocolError(fmt.Errorf("write supervisor stdin EOF: %w", err))
 					}
 				}
 				continue
 			}
 			if incoming.err != nil {
-				cancelForProtocolError(incoming.err)
+				cancelForProtocolError(fmt.Errorf("read supervisor input: %w", incoming.err))
 				input = nil
 				continue
 			}
@@ -315,7 +320,7 @@ func (b Backend) runSupervisorProtocol(
 				return errors.New("daemon attempted supervisor stdin before ready")
 			}
 			if err := writer.Write(sessionwire.TypeStdin, incoming.data); err != nil {
-				cancelForProtocolError(err)
+				cancelForProtocolError(fmt.Errorf("write supervisor stdin: %w", err))
 			}
 
 		case control, ok := <-controls:
@@ -327,13 +332,13 @@ func (b Backend) runSupervisorProtocol(
 				return errors.New("daemon attempted supervisor control before ready")
 			}
 			if err := writeSupervisorControl(writer, control); err != nil {
-				cancelForProtocolError(err)
+				cancelForProtocolError(fmt.Errorf("write supervisor control: %w", err))
 			}
 
 		case <-heartbeat.C:
 			if ready && completion == nil {
 				if err := writer.Write(sessionwire.TypeHeartbeat, nil); err != nil {
-					cancelForProtocolError(err)
+					cancelForProtocolError(fmt.Errorf("write supervisor heartbeat: %w", err))
 				}
 			}
 
@@ -346,7 +351,8 @@ func (b Backend) runSupervisorProtocol(
 			ctxDone = nil
 
 		case <-cancelTimer:
-			_ = client.Close()
+			_ = sshSession.Signal(ssh.SIGKILL)
+			_ = sshSession.Close()
 			return errors.Join(ctx.Err(), errors.New("guest supervisor did not stop within the cancellation bound"))
 
 		case waitErr := <-wait:
@@ -355,7 +361,9 @@ func (b Backend) runSupervisorProtocol(
 			if completion == nil {
 				failure := protocolErr
 				if failure == nil {
-					failure = waitErr
+					if waitErr != nil {
+						failure = fmt.Errorf("wait for supervisor: %w", waitErr)
+					}
 				}
 				if failure == nil {
 					failure = errors.New("guest supervisor exited without completion")

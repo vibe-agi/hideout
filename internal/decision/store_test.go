@@ -92,6 +92,48 @@ func TestStoreListFilterAndScale(t *testing.T) {
 	}
 }
 
+func TestStoreListsIgnoreUncommittedAtomicFiles(t *testing.T) {
+	root := t.TempDir()
+	store := NewStoreAt(root)
+	now := time.Date(2026, 7, 17, 2, 0, 0, 0, time.UTC)
+	store.SetNow(func() time.Time { return now })
+	if _, err := store.CreateOrUpdateDecision(sampleDecision("dec-committed", now.Add(time.Hour))); err != nil {
+		t.Fatalf("CreateOrUpdateDecision: %v", err)
+	}
+	if _, err := store.CreateOrUpdateNotice(sampleNotice("notice-committed")); err != nil {
+		t.Fatalf("CreateOrUpdateNotice: %v", err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(store.decisionsDir(), ".dec-committed.json.tmp-partial"),
+		filepath.Join(store.decisionsDir(), "unrelated"),
+		filepath.Join(store.noticesDir(), ".notice-committed.json.tmp-partial"),
+		filepath.Join(store.noticesDir(), "unrelated"),
+	} {
+		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+			t.Fatalf("write partial fixture %s: %v", path, err)
+		}
+	}
+
+	decisions, err := store.Decisions(ListFilter{IncludeTerminal: true})
+	if err != nil {
+		t.Fatalf("Decisions: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].ID != "dec-committed" {
+		t.Fatalf("decisions=%+v, want only committed record", decisions)
+	}
+	if _, err := store.TimeoutExpiredDecisions(now); err != nil {
+		t.Fatalf("TimeoutExpiredDecisions: %v", err)
+	}
+	notices, err := store.Notices(ListFilter{})
+	if err != nil {
+		t.Fatalf("Notices: %v", err)
+	}
+	if len(notices) != 1 || notices[0].ID != "notice-committed" {
+		t.Fatalf("notices=%+v, want only committed record", notices)
+	}
+}
+
 func TestStoreClaimDecisionUsesFileLockAcrossStoreInstances(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 7, 8, 4, 0, 0, 0, time.UTC)

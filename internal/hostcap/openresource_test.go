@@ -291,7 +291,7 @@ func TestOpenBoundResourceRejectsAppReplacementAtLauncherGuard(t *testing.T) {
 			return prior, nil
 		},
 	})
-	if CodeOf(err) != CodeAppIdentityDrift || len(launcher.ran) != 0 || checks != 2 {
+	if CodeOf(err) != CodeAppIdentityDrift || len(launcher.ran) != 0 || checks != 1 {
 		t.Fatalf("app replacement race was not stopped at launcher boundary: err=%v launches=%v checks=%d", err, launcher.ran, checks)
 	}
 }

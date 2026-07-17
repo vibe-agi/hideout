@@ -69,7 +69,7 @@ refusals, a plan/apply through it identical to embedded, then a clean stop.
 - [X] T016 [US1] Mount `manager.API.Handler()` over the socket bound to the same `Core` (set the served API's allowed host/origin to the accepted loopback-equivalent), and add the daemon status endpoint outside `/api/v1/…`, in `internal/daemon/server.go` and `internal/daemon/status.go`
 - [X] T017 [US1] Wrap the mounted handler with an auth-refusal recorder that writes 401 refusals to the daemon audit log (T006) without altering the response or reading token material, in `internal/daemon/server.go`
 - [X] T018 [US1] Implement the single-instance lock plus stale-endpoint detection (socket connect probe) so a second start reports the existing instance, in `internal/daemon/daemon.go`
-- [X] T019 [US1] Implement the daemon lifecycle — start, serve, ordered stop (in-flight requests finish or fail closed; socket/lock removed) — and the status inventory, in `internal/daemon/daemon.go`
+- [X] T019 [US1] Implement the daemon lifecycle — start, serve, ordered stop (in-flight requests finish or fail closed; socket removed and stable lock inode released without unlink) — and the status inventory, in `internal/daemon/daemon.go`
 - [X] T020 [US1] Implement the confirmation-required fail-closed behavior (no daemon prompt; require CLI/WebUI-supplied confirmation), in `internal/daemon/server.go`
 - [X] T021 [US1] Wire the `hideout daemon start|status|stop` CLI subcommand dispatch, in `internal/app/app.go`
 

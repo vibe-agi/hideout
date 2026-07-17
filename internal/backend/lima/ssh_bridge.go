@@ -18,7 +18,10 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-const limaSSHConnectTimeout = 15 * time.Second
+const (
+	limaSSHConnectTimeout = 15 * time.Second
+	limaSSHRetryDelay     = 100 * time.Millisecond
+)
 
 type limaSSHConfig struct {
 	HostName                         string
@@ -41,10 +44,11 @@ func (b Backend) startSSHHostToGuestBridge(ctx context.Context, instanceName, gu
 	if err != nil {
 		return nil, err
 	}
-	client, err := b.newSSHClient(ctx, instanceName)
+	lease, err := b.acquireSSHClientForUser(ctx, instanceName, "")
 	if err != nil {
 		return nil, err
 	}
+	client := lease.Client()
 	targetAddress := net.JoinHostPort(targetHost, targetPort)
 	connector := func(_ context.Context, inbound net.Conn) error {
 		outbound, err := client.Dial("tcp", targetAddress)
@@ -55,9 +59,9 @@ func (b Backend) startSSHHostToGuestBridge(ctx context.Context, instanceName, gu
 		copyBidirectional(inbound, outbound)
 		return nil
 	}
-	bridge, err := portbridge.StartWithConnector(ctx, spec, connector, client)
+	bridge, err := portbridge.StartWithConnector(ctx, spec, connector, lease)
 	if err != nil {
-		_ = client.Close()
+		_ = lease.Close()
 		return nil, err
 	}
 	return bridge, nil
@@ -81,11 +85,7 @@ func normalizeGuestLoopbackTarget(address string) (string, string, error) {
 	return targetHost, targetPort, nil
 }
 
-func (b Backend) newSSHClient(ctx context.Context, instanceName string) (*ssh.Client, error) {
-	return b.newSSHClientForUser(ctx, instanceName, "")
-}
-
-func (b Backend) newSSHClientForUser(ctx context.Context, instanceName, user string) (*ssh.Client, error) {
+func (b Backend) acquireSSHClientForUser(ctx context.Context, instanceName, user string) (*sshClientLease, error) {
 	cfg, err := readLimaSSHConfig(instanceName)
 	if err != nil {
 		return nil, err
@@ -93,23 +93,58 @@ func (b Backend) newSSHClientForUser(ctx context.Context, instanceName, user str
 	if strings.TrimSpace(user) != "" {
 		cfg.User = strings.TrimSpace(user)
 	}
-	clientConfig, err := cfg.clientConfig()
-	if err != nil {
-		return nil, err
+	connect := func() (*ssh.Client, error) {
+		clientConfig, configErr := cfg.clientConfig()
+		if configErr != nil {
+			return nil, configErr
+		}
+		address := net.JoinHostPort(cfg.HostName, cfg.Port)
+		return connectLimaSSHWithRetry(ctx, func() (*ssh.Client, error) {
+			raw, err := (&net.Dialer{Timeout: limaSSHConnectTimeout}).DialContext(ctx, "tcp", address)
+			if err != nil {
+				return nil, fmt.Errorf("dial lima ssh: %w", err)
+			}
+			_ = raw.SetDeadline(sshConnectDeadline(ctx))
+			conn, chans, reqs, err := ssh.NewClientConn(raw, address, clientConfig)
+			if err != nil {
+				_ = raw.Close()
+				return nil, fmt.Errorf("start lima ssh client: %w", err)
+			}
+			_ = raw.SetDeadline(time.Time{})
+			return ssh.NewClient(conn, chans, reqs), nil
+		})
 	}
-	address := net.JoinHostPort(cfg.HostName, cfg.Port)
-	raw, err := (&net.Dialer{Timeout: limaSSHConnectTimeout}).DialContext(ctx, "tcp", address)
-	if err != nil {
-		return nil, fmt.Errorf("dial lima ssh: %w", err)
+	if b.SSHClients == nil {
+		client, connectErr := connect()
+		if connectErr != nil {
+			return nil, connectErr
+		}
+		return &sshClientLease{client: client}, nil
 	}
-	_ = raw.SetDeadline(sshConnectDeadline(ctx))
-	conn, chans, reqs, err := ssh.NewClientConn(raw, address, clientConfig)
-	if err != nil {
-		_ = raw.Close()
-		return nil, fmt.Errorf("start lima ssh client: %w", err)
+	return b.SSHClients.acquire(ctx, sshKey(instanceName, cfg), connect)
+}
+
+func connectLimaSSHWithRetry(ctx context.Context, connect func() (*ssh.Client, error)) (*ssh.Client, error) {
+	client, err := connect()
+	if err == nil || !isTransientSSHConnectError(err) || ctx.Err() != nil {
+		return client, err
 	}
-	_ = raw.SetDeadline(time.Time{})
-	return ssh.NewClient(conn, chans, reqs), nil
+	timer := time.NewTimer(limaSSHRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, errors.Join(err, ctx.Err())
+	case <-timer.C:
+	}
+	return connect()
+}
+
+func isTransientSSHConnectError(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
 }
 
 func sshConnectDeadline(ctx context.Context) time.Time {

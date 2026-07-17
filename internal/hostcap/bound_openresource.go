@@ -156,11 +156,6 @@ func OpenBoundResource(ctx context.Context, binding OpenResourceBinding, request
 		release()
 		return OpenResult{}, &Error{Code: CodeAppIdentityDrift, Reason: "launch-time app identity revalidation is unavailable"}
 	}
-	current, err := oc.RevalidateIdentity(binding.Application, identity)
-	if err != nil || current.IdentityDigest() != identity.IdentityDigest() {
-		release()
-		return OpenResult{}, &Error{Code: CodeAppIdentityDrift, Reason: "host application identity changed before launch"}
-	}
 	if mode == appopen.ModeSafe {
 		if err := appopen.PrepareSafetyProfileState(safetyProfile, safetyIdentity, safetyEffect); err != nil {
 			release()

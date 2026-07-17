@@ -51,6 +51,8 @@ func Apply(state *State, ev Event) ApplyResult {
 		upsertDecision(state, ev.Payload)
 	case KindNotice:
 		upsertNotice(state, ev.Payload)
+	case KindLifecycle:
+		upsertLifecycle(state, ev.Payload)
 	case KindTerminal:
 		switch ev.Payload.Reason {
 		case "credential invalidated":
@@ -63,6 +65,32 @@ func Apply(state *State, ev Event) ApplyResult {
 		return ApplyResult{Status: ResultIgnored, Reason: "unknown event kind"}
 	}
 	return ApplyResult{Status: ResultApplied}
+}
+
+func upsertLifecycle(state *State, payload EventPayload) {
+	if payload.Lifecycle == nil {
+		return
+	}
+	row := *payload.Lifecycle
+	if state.ProfileScope != "" && !stateContainsEnvironment(state, row.EnvironmentID) {
+		return
+	}
+	for i := range state.Lifecycle {
+		if state.Lifecycle[i].EnvironmentID == row.EnvironmentID {
+			state.Lifecycle[i] = row
+			return
+		}
+	}
+	state.Lifecycle = append(state.Lifecycle, row)
+}
+
+func stateContainsEnvironment(state *State, environmentID string) bool {
+	for _, environment := range state.Overview.Environments {
+		if environment.ID == environmentID {
+			return true
+		}
+	}
+	return false
 }
 
 func markHealth(state *State, health, reason string) {

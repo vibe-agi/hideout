@@ -37,6 +37,18 @@ const (
 	ResultLease        ResultPolicy = "lease"
 )
 
+// ResidualPolicy declares whether successful invocation leaves an effect after
+// the response. It is separate from LifecyclePolicy: a session-scoped grant
+// may authorize a fire-and-forget handoff without making the launched host
+// application a managed session resource.
+type ResidualPolicy string
+
+const (
+	ResidualNone              ResidualPolicy = "none"
+	ResidualExternalUnmanaged ResidualPolicy = "external-unmanaged"
+	ResidualManaged           ResidualPolicy = "managed"
+)
+
 // DecisionPolicy: low-risk families are default-allowed and audited (like
 // host.open registration); high-risk families require an explicit operator
 // grant through the decision center.
@@ -109,6 +121,7 @@ type CapabilityDescriptor struct {
 	IntentSchema    string
 	ResourceKinds   []ResourceKind
 	ResultPolicy    ResultPolicy
+	ResidualPolicy  ResidualPolicy
 	ProviderRef     string
 	DecisionPolicy  DecisionPolicy
 	LifecyclePolicy LifecyclePolicy
@@ -127,6 +140,14 @@ func validRiskClass(r RiskClass) bool {
 func validResultPolicy(r ResultPolicy) bool {
 	switch r {
 	case ResultNone, ResultBoundedTyped, ResultStream, ResultLease:
+		return true
+	}
+	return false
+}
+
+func validResidualPolicy(r ResidualPolicy) bool {
+	switch r {
+	case ResidualNone, ResidualExternalUnmanaged, ResidualManaged:
 		return true
 	}
 	return false

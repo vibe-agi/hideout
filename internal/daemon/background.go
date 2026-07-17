@@ -21,7 +21,7 @@ func (d *Daemon) backgroundRun(op string, ids []string) (func(context.Context) e
 			if err != nil {
 				return err
 			}
-			_, err = core.ApplyEnvironmentStop(ctx, plan, manager.EnvironmentApplyOptions{})
+			_, err = d.applyEnvironmentStopPlan(ctx, plan)
 			return err
 		}, nil
 	case "environment-clean":
@@ -30,7 +30,7 @@ func (d *Daemon) backgroundRun(op string, ids []string) (func(context.Context) e
 			if err != nil {
 				return err
 			}
-			_, err = core.ApplyEnvironmentClean(ctx, plan, manager.EnvironmentApplyOptions{})
+			_, err = d.applyEnvironmentCleanPlan(ctx, plan)
 			return err
 		}, nil
 	default:

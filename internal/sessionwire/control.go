@@ -380,7 +380,7 @@ func (s *SupervisorStart) Validate() error {
 		if !environmentKeyPattern.MatchString(key) {
 			return fmt.Errorf("invalid supervisor environment key %q", key)
 		}
-		if err := requireOpaque(value, "supervisor environment value", 8192); err != nil {
+		if err := requireEnvironmentValue(value, 8192); err != nil {
 			return err
 		}
 	}
@@ -561,6 +561,13 @@ func requireSHA256(value, name string) error {
 func requireOpaque(value, name string, limit int) error {
 	if value == "" || len(value) > limit || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
 		return fmt.Errorf("%s is required, NUL-free, and bounded", name)
+	}
+	return nil
+}
+
+func requireEnvironmentValue(value string, limit int) error {
+	if len(value) > limit || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+		return fmt.Errorf("supervisor environment value must be NUL-free and bounded")
 	}
 	return nil
 }

@@ -1,5 +1,7 @@
 package daemon
 
+import "github.com/vibe-agi/hideout/internal/lifecycle"
+
 const (
 	statusVersion = "hideout.daemon-status/v1"
 )
@@ -14,6 +16,7 @@ type Status struct {
 	Transport            StatusTransport    `json:"transport"`
 	Sessions             []SessionStatus    `json:"sessions,omitempty"`
 	Background           []BackgroundStatus `json:"background,omitempty"`
+	Lifecycle            []lifecycle.Status `json:"lifecycle,omitempty"`
 }
 
 type StatusTransport struct {

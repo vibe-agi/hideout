@@ -103,7 +103,7 @@ func TestEventCatalogProducerMappingsAreExplicit(t *testing.T) {
 	mappings := EventProducerMappings()
 	for _, producer := range []string{
 		KindEnvironment, KindSession, KindBackground, KindAudit, KindExport,
-		KindCleanup, KindHostFSWrite, KindDecision, KindNotice, KindTerminal,
+		KindCleanup, KindHostFSWrite, KindDecision, KindNotice, KindLifecycle, KindTerminal,
 		"host-app", "run", "operation", "*",
 	} {
 		if mappings[producer] == "" {
@@ -129,6 +129,19 @@ func compileSchema(t *testing.T, path string) *jsonschema.Schema {
 		t.Fatalf("parse schema: %v", err)
 	}
 	compiler := jsonschema.NewCompiler()
+	for _, dependency := range []string{"../../schemas/lifecycle-status.schema.json"} {
+		dependencyData, readErr := os.ReadFile(filepath.Clean(dependency))
+		if readErr != nil {
+			t.Fatalf("read dependency schema: %v", readErr)
+		}
+		dependencyDoc, parseErr := jsonschema.UnmarshalJSON(bytes.NewReader(dependencyData))
+		if parseErr != nil {
+			t.Fatalf("parse dependency schema: %v", parseErr)
+		}
+		if addErr := compiler.AddResource("https://hideout.local/schemas/"+filepath.Base(dependency), dependencyDoc); addErr != nil {
+			t.Fatalf("add dependency schema: %v", addErr)
+		}
+	}
 	if err := compiler.AddResource("schema.json", doc); err != nil {
 		t.Fatalf("add schema: %v", err)
 	}
@@ -173,6 +186,8 @@ func clearPayloadField(payload *EventPayload, field string) {
 		payload.RecordKind = ""
 	case "noticeId":
 		payload.NoticeID = ""
+	case "lifecycle":
+		payload.Lifecycle = nil
 	}
 }
 

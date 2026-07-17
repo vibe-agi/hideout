@@ -16,7 +16,7 @@ func TestStrictControlRoundTrip(t *testing.T) {
 		TargetUser:     "developer",
 		GuestWork:      "/workspace",
 		Argv:           []string{"sh", "-c", "printf '\\0binary'"},
-		Env:            map[string]string{"TERM_PROGRAM": "hideout-test"},
+		Env:            map[string]string{"COLORTERM": "", "TERM_PROGRAM": "hideout-test"},
 		Terminal:       TerminalDescriptor{Mode: TerminalPTY, Rows: 24, Columns: 80, Term: DefaultTERM},
 		ExpectedBootID: "boot-id-test",
 		SessionSource:  "/hideout/runtime/sessions/ses_wire_test",
@@ -35,6 +35,32 @@ func TestStrictControlRoundTrip(t *testing.T) {
 	}
 	if decoded.SessionID != original.SessionID || decoded.Terminal != original.Terminal || decoded.Argv[2] != original.Argv[2] {
 		t.Fatalf("decoded=%+v, want=%+v", decoded, original)
+	}
+	if value, ok := decoded.Env["COLORTERM"]; !ok || value != "" {
+		t.Fatalf("decoded empty environment value=(%q, %t), want present empty value", value, ok)
+	}
+}
+
+func TestSupervisorStartRejectsUnsafeEnvironmentValues(t *testing.T) {
+	t.Parallel()
+
+	start := &SupervisorStart{
+		Protocol:       SupervisorProtocol,
+		SessionID:      "ses_wire_env_test",
+		TargetUser:     "developer",
+		GuestWork:      "/workspace",
+		Argv:           []string{"true"},
+		Env:            map[string]string{"VALUE": "contains\x00nul"},
+		Terminal:       TerminalDescriptor{Mode: TerminalNone},
+		ExpectedBootID: "boot-id-test",
+		SessionSource:  "/hideout/runtime/sessions/ses_wire_env_test",
+	}
+	if err := start.Validate(); err == nil || !strings.Contains(err.Error(), "NUL-free") {
+		t.Fatalf("NUL environment value error=%v", err)
+	}
+	start.Env["VALUE"] = strings.Repeat("x", 8193)
+	if err := start.Validate(); err == nil || !strings.Contains(err.Error(), "bounded") {
+		t.Fatalf("oversized environment value error=%v", err)
 	}
 }
 

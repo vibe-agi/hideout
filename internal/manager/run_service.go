@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	runsession "github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -103,6 +104,7 @@ type RunServiceDependencies struct {
 	Backend          backend.Backend
 	OpenerForSession func(RunSession) broker.Opener
 	Streams          *backend.RunStreams
+	Lifecycle        lifecycle.Registrar
 }
 
 type RunServiceBackendFactory func(RunServiceRequest, RunPlan) (backend.Backend, error)
@@ -210,6 +212,7 @@ func (s RunService) Apply(ctx context.Context, prepared PreparedRun, req RunServ
 		OpenerForSession:           deps.OpenerForSession,
 		TerminalMode:               effective.Terminal.Mode,
 		Streams:                    deps.Streams,
+		Lifecycle:                  deps.Lifecycle,
 	})
 }
 

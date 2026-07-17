@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/lifecycle-status.schema.json",
+  "title": "Hideout lifecycle status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "environmentId", "backendState", "backendObservedAt", "activity", "reconciliation"],
+  "properties": {
+    "schema": { "const": "hideout.lifecycle-status/v1" },
+    "environmentId": { "type": "string" },
+    "startGeneration": { "type": "integer", "minimum": 1 },
+    "backendState": { "enum": ["running", "stopped", "absent", "unknown", "not-applicable"] },
+    "backendObservedAt": { "type": "string", "format": "date-time", "description": "Time of the latest coordinator-held backend observation; status does not imply a newer point-in-time probe." },
+    "activity": { "enum": ["pinned", "idle-grace", "idle-stop-eligible", "blocked-unproved", "stopping", "stopping-unknown", "stopped", "not-applicable"] },
+    "idleDeadline": { "type": "string", "format": "date-time" },
+    "reasonCode": { "type": "string", "maxLength": 128 },
+    "reconciliation": { "type": "string", "maxLength": 32 },
+    "pins": { "$ref": "#/$defs/resources" },
+    "drains": { "$ref": "#/$defs/resources" },
+    "retained": { "$ref": "#/$defs/resources", "description": "Bounded historical classification facts; not an authoritative current retained-data inventory." },
+    "handoffs": { "$ref": "#/$defs/resources", "description": "Bounded historical handoff facts; not a claim that Hideout owns a live host process." },
+    "orphans": { "$ref": "#/$defs/resources" }
+  },
+  "$defs": {
+    "resources": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "id", "state"],
+        "properties": {
+          "kind": { "$ref": "#/$defs/resourceKind" },
+          "id": { "type": "string" },
+          "state": { "type": "string" }
+        }
+      }
+	},
+	"resourceKind": {
+	  "enum": [
+	    "backend.incarnation",
+	    "broker.listener",
+	    "decision.record",
+	    "endpoint.run-bridge",
+	    "guest.supervisor",
+	    "guest.target",
+	    "host.materialization.live-projection",
+	    "host.materialization.snapshot",
+	    "hostapp.handoff",
+	    "hostfs.live-read-grant",
+	    "hostfs.read-provider",
+	    "hostfs.staged-object",
+	    "network.environment-service",
+	    "run.session"
+	  ]
+	}
+  }
+}

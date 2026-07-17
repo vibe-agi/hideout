@@ -410,8 +410,9 @@ results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"hostfs-writ
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"decision",seq:6,payload:{decisionId:"dec_share_123",recordKind:"evidence.share",status:"pending",defaultOutcome:"deny",profile:"default",session:"ses_1",backend:"native"}}));
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"notice",seq:7,payload:{noticeId:"notice_priv_123",recordKind:"privilege.status",status:"degraded",severity:"warning",acknowledged:false,profile:"default",session:"ses_1",backend:"lima"}}));
 results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"notice",seq:8,payload:{noticeId:"notice_priv_123",recordKind:"privilege.status",status:"degraded",severity:"warning",acknowledged:true,profile:"default",session:"ses_1",backend:"lima"}}));
-results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"future-kind",seq:9,payload:{id:"future"}}));
-results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment",seq:10,payload:{id:"env_2",name:"env-two",status:"stopped",profile:"default"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"lifecycle",seq:9,payload:{lifecycle:{schema:"hideout.lifecycle-status/v1",environmentId:"env_1",startGeneration:2,backendState:"running",backendObservedAt:"2026-07-16T05:00:00Z",activity:"idle-grace",reconciliation:"complete",retained:[{kind:"hostfs.staged-object",id:"overlay-one",state:"released"}]}}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"future-kind",seq:10,payload:{id:"future"}}));
+results.push(applyLiveEvent({version:"hideout.daemon-event/v1",kind:"environment",seq:11,payload:{id:"env_2",name:"env-two",status:"stopped",profile:"default"}}));
 JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetchCount, liveStreamState, liveStreamReason, liveLastSeq, statuses});
 `
 	value, err := rt.RunString(script)
@@ -469,6 +470,14 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 				Unacknowledged int `json:"unacknowledged"`
 				Total          int `json:"total"`
 			} `json:"notices"`
+			Lifecycle []struct {
+				EnvironmentID   string `json:"environmentId"`
+				StartGeneration int    `json:"startGeneration"`
+				Activity        string `json:"activity"`
+				Retained        []struct {
+					Kind string `json:"kind"`
+				} `json:"retained"`
+			} `json:"lifecycle"`
 		} `json:"overview"`
 		AuditEvents []struct {
 			Action   string         `json:"action"`
@@ -488,7 +497,7 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 	if proof.FetchCount != 0 {
 		t.Fatalf("live reducer fetched during event apply: %+v", proof)
 	}
-	if len(proof.Results) != 10 || !proof.Results[0] || !proof.Results[1] || !proof.Results[2] || !proof.Results[3] || !proof.Results[4] || !proof.Results[5] || !proof.Results[6] || !proof.Results[7] || proof.Results[8] || !proof.Results[9] {
+	if len(proof.Results) != 11 || !proof.Results[0] || !proof.Results[1] || !proof.Results[2] || !proof.Results[3] || !proof.Results[4] || !proof.Results[5] || !proof.Results[6] || !proof.Results[7] || !proof.Results[8] || proof.Results[9] || !proof.Results[10] {
 		t.Fatalf("unexpected apply results: %+v", proof.Results)
 	}
 	if len(proof.Overview.Environments) != 2 || proof.Overview.Environments[0].ID != "env_2" || proof.Overview.Environments[1].ID != "env_1" {
@@ -520,7 +529,10 @@ JSON.stringify({results, overview, auditEvents, deniedEvents, renderCount, fetch
 	if len(proof.Overview.NoticeRows) != 1 || proof.Overview.NoticeRows[0].ID != "notice_priv_123" || !proof.Overview.NoticeRows[0].Acknowledged || proof.Overview.Notices.Unacknowledged != 0 {
 		t.Fatalf("notice event did not update visible state: %+v summary=%+v", proof.Overview.NoticeRows, proof.Overview.Notices)
 	}
-	if proof.RenderCount < 9 || proof.LiveLastSeq != 10 || proof.LiveStreamState != "live" || proof.LiveStreamReason != "" {
+	if len(proof.Overview.Lifecycle) != 1 || proof.Overview.Lifecycle[0].EnvironmentID != "env_1" || proof.Overview.Lifecycle[0].Activity != "idle-grace" || len(proof.Overview.Lifecycle[0].Retained) != 1 {
+		t.Fatalf("lifecycle event did not update visible state: %+v", proof.Overview.Lifecycle)
+	}
+	if proof.RenderCount < 10 || proof.LiveLastSeq != 11 || proof.LiveStreamState != "live" || proof.LiveStreamReason != "" {
 		t.Fatalf("stream proof mismatch: %+v", proof)
 	}
 }

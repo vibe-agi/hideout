@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 )
 
@@ -28,6 +29,7 @@ func BuildSeed(input SeedInput) Seed {
 		Decisions:       filterDecisionRows(input.Decisions, input.ProfileScope),
 		Notices:         filterNoticeRows(input.Notices, input.ProfileScope),
 		StatusRows:      append([]StatusRow(nil), input.StatusRows...),
+		Lifecycle:       filterLifecycle(input.Lifecycle, overview),
 		StreamHealth:    StreamHealth{State: health},
 		ProfileScope:    input.ProfileScope,
 	}
@@ -44,10 +46,31 @@ func NewState(seed Seed) State {
 		Decisions:       append([]DecisionRow(nil), seed.Decisions...),
 		Notices:         append([]NoticeRow(nil), seed.Notices...),
 		StatusRows:      append([]StatusRow(nil), seed.StatusRows...),
+		Lifecycle:       append([]lifecycle.Status(nil), seed.Lifecycle...),
 		StreamHealth:    seed.StreamHealth,
 		ProfileScope:    seed.ProfileScope,
 		Seen:            map[string]map[string]bool{},
 	}
+}
+
+func filterLifecycle(values []lifecycle.Status, overview manager.Overview) []lifecycle.Status {
+	if len(values) == 0 {
+		return nil
+	}
+	if len(overview.Environments) == 0 {
+		return append([]lifecycle.Status(nil), values...)
+	}
+	visible := make(map[string]bool, len(overview.Environments))
+	for _, environment := range overview.Environments {
+		visible[environment.ID] = true
+	}
+	out := make([]lifecycle.Status, 0, len(values))
+	for _, value := range values {
+		if visible[value.EnvironmentID] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func scopeOverview(in manager.Overview, profileName string) manager.Overview {

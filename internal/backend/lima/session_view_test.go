@@ -325,6 +325,20 @@ func TestSessionGuardianHeartbeatSendsPingDoneAndDisconnect(t *testing.T) {
 	}
 }
 
+func TestNormalizeGuardianHeartbeatCompletionIgnoresOnlyExpectedNormalClose(t *testing.T) {
+	closed := &os.PathError{Op: "close", Path: "|1", Err: os.ErrClosed}
+	if err := normalizeGuardianHeartbeatCompletion(true, closed); err != nil {
+		t.Fatalf("normal closed heartbeat=%v", err)
+	}
+	if err := normalizeGuardianHeartbeatCompletion(false, closed); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("abnormal closed heartbeat=%v", err)
+	}
+	failure := errors.New("heartbeat protocol failed")
+	if err := normalizeGuardianHeartbeatCompletion(true, failure); !errors.Is(err, failure) {
+		t.Fatalf("normal non-close heartbeat=%v", err)
+	}
+}
+
 func TestGuardedSessionViewPublishesImmutableNamespaceParentIdentity(t *testing.T) {
 	spec := SessionViewSpec{
 		SessionID: "ses_20260716T120000Z_0123456789abcdef", TargetUser: "developer",
@@ -358,6 +372,10 @@ func TestBuildSessionViewCommandValidatesAndPreservesStructuredTarget(t *testing
 		NetworkCleanupPath:   "/hideout/session/network/cleanup.sh",
 		HostFSEnabled:        true,
 		HostFSGrafts:         []string{"/Users/example/project"},
+		RequiredRuntimePaths: []string{
+			GuestBootstrapPath,
+			GuestSessionDir + "/network/bootstrap.sh",
+		},
 	}
 	command, err := BuildSessionViewCommand(spec)
 	if err != nil {
@@ -374,6 +392,9 @@ func TestBuildSessionViewCommandValidatesAndPreservesStructuredTarget(t *testing
 	for _, required := range []string{
 		"mount --make-rprivate /",
 		"mount --bind \"$1\" /hideout/session",
+		"session runtime files did not become visible",
+		"'test' '-x' '/hideout/session/bootstrap/bootstrap.sh'",
+		"'test' '-x' '/hideout/session/network/bootstrap.sh'",
 		"hideout-runtime-private /hideout/runtime",
 		"--reuid=developer",
 		"env' '-i'",
@@ -407,6 +428,7 @@ func TestBuildSessionViewCommandRejectsUnsafeInputs(t *testing.T) {
 		{"bad env", func(s *SessionViewSpec) { s.Env = []string{"A-B=value"} }},
 		{"empty argv", func(s *SessionViewSpec) { s.Command = nil }},
 		{"network escape", func(s *SessionViewSpec) { s.NetworkBootstrapPath = "/tmp/operator.sh" }},
+		{"runtime prerequisite escape", func(s *SessionViewSpec) { s.RequiredRuntimePaths = []string{"/tmp/operator.sh"} }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -418,6 +440,25 @@ func TestBuildSessionViewCommandRejectsUnsafeInputs(t *testing.T) {
 				t.Fatal("unsafe session view accepted")
 			}
 		})
+	}
+}
+
+func TestSessionRuntimePrerequisitesDescribeExactSessionFiles(t *testing.T) {
+	session := &backend.Session{
+		NetworkBootstrapGuestPath: GuestSessionDir + "/network/bootstrap.sh",
+		NetworkCleanupGuestPath:   GuestSessionDir + "/network/cleanup.sh",
+		HostFSEnabled:             true,
+	}
+	got := sessionRuntimePrerequisites(session, true)
+	want := []string{
+		GuestBootstrapPath,
+		GuestSessionDir + "/network/bootstrap.sh",
+		GuestSessionDir + "/network/cleanup.sh",
+		GuestSessionDir + "/shims/hideout-hostfsd",
+		GuestSessionSupervisorPath,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime prerequisites=%q want=%q", got, want)
 	}
 }
 

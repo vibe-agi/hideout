@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
@@ -21,10 +22,13 @@ import (
 )
 
 const (
-	sessionViewProbeTimeout = 10 * time.Second
-	sessionGuardianWait     = 2 * time.Second
-	sessionGuardianRoot     = "/run/hideout/session-guardians"
-	sessionGuardianBeat     = 250 * time.Millisecond
+	sessionViewProbeTimeout        = 10 * time.Second
+	sessionGuardianWait            = 2 * time.Second
+	sessionGuardianRoot            = "/run/hideout/session-guardians"
+	sessionGuardianBeat            = 250 * time.Millisecond
+	sessionRuntimeReadyAttempts    = 100
+	sessionRuntimeReadyDelay       = "0.02"
+	maxSessionRuntimePrerequisites = 16
 )
 
 var (
@@ -52,6 +56,7 @@ type SessionViewSpec struct {
 	ExpectedBootID       string
 	GuardianControl      bool
 	SessionSupervisor    bool
+	RequiredRuntimePaths []string
 }
 
 const GuestSessionSupervisorPath = GuestSessionDir + "/shims/hideout-session-supervisor"
@@ -91,6 +96,15 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 			return nil, fmt.Errorf("network script path %q is outside the session view", scriptPath)
 		}
 	}
+	if len(spec.RequiredRuntimePaths) > maxSessionRuntimePrerequisites {
+		return nil, errors.New("session view has too many runtime prerequisites")
+	}
+	for _, requiredPath := range spec.RequiredRuntimePaths {
+		if !path.IsAbs(requiredPath) || path.Clean(requiredPath) != requiredPath ||
+			!strings.HasPrefix(requiredPath, GuestSessionDir+"/") {
+			return nil, fmt.Errorf("runtime prerequisite %q is outside the session view", requiredPath)
+		}
+	}
 
 	var script strings.Builder
 	script.WriteString("set -eu\n")
@@ -100,6 +114,16 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	script.WriteString("mount --make-rprivate /\n")
 	script.WriteString("mount --bind \"$1\" /hideout/session\n")
 	script.WriteString("mount --make-private /hideout/session\n")
+	if len(spec.RequiredRuntimePaths) > 0 {
+		condition := sessionRuntimeReadyCondition(spec.RequiredRuntimePaths)
+		script.WriteString("attempt=0\n")
+		script.WriteString("while :; do\n")
+		fmt.Fprintf(&script, "if %s; then break; fi\n", condition)
+		script.WriteString("attempt=$((attempt + 1))\n")
+		fmt.Fprintf(&script, "[ \"$attempt\" -lt %d ] || { echo 'hideout: session runtime files did not become visible' >&2; exit 127; }\n", sessionRuntimeReadyAttempts)
+		fmt.Fprintf(&script, "sleep %s\n", sessionRuntimeReadyDelay)
+		script.WriteString("done\n")
+	}
 	script.WriteString("mount -t tmpfs -o mode=000,size=4096 hideout-runtime-private /hideout/runtime\n")
 	script.WriteString("shift\n")
 	for _, assignment := range sessionViewSetupEnv(spec.Env) {
@@ -161,6 +185,32 @@ exec "$@"
 `
 	command := []string{"sh", "-c", launcher, "hideout-session-launcher", control, source}
 	return append(command, viewCommand...), nil
+}
+
+func sessionRuntimeReadyCondition(paths []string) string {
+	checks := make([]string, 0, len(paths))
+	for _, requiredPath := range paths {
+		checks = append(checks, shellJoin([]string{"test", "-x", requiredPath}))
+	}
+	return strings.Join(checks, " && ")
+}
+
+func sessionRuntimePrerequisites(session *backend.Session, supervisor bool) []string {
+	paths := []string{GuestBootstrapPath}
+	if session != nil {
+		for _, scriptPath := range []string{session.NetworkBootstrapGuestPath, session.NetworkCleanupGuestPath} {
+			if scriptPath != "" {
+				paths = append(paths, scriptPath)
+			}
+		}
+		if session.HostFSEnabled {
+			paths = append(paths, GuestSessionDir+"/shims/hideout-hostfsd")
+		}
+	}
+	if supervisor {
+		paths = append(paths, GuestSessionSupervisorPath)
+	}
+	return paths
 }
 
 func supervisorSetupRedirect(spec SessionViewSpec) string {
@@ -286,6 +336,16 @@ func (b Backend) verifyIsolatedSessionTerminated(ctx context.Context, session *b
 	)
 }
 
+// ProveSessionAbsent performs the same exact session-identity process scan used
+// by normal isolated-session cleanup. It does not kill or adopt a process and
+// is therefore safe for daemon restart reconciliation.
+func (b Backend) ProveSessionAbsent(ctx context.Context, instanceName, sessionID string) error {
+	return b.verifyIsolatedSessionTerminated(ctx, &backend.Session{
+		ID:           sessionID,
+		InstanceName: instanceName,
+	})
+}
+
 func sessionTerminationProofCommand(session *backend.Session) ([]string, error) {
 	if session == nil || !sessionViewIDPattern.MatchString(session.ID) {
 		return nil, errors.New("isolated cleanup requires a valid session identity")
@@ -367,12 +427,13 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		targetUser = "developer"
 	}
 	checkCommand, err := BuildSessionViewCommand(SessionViewSpec{
-		SessionID:      session.ID,
-		TargetUser:     targetUser,
-		GuestWork:      session.GuestWork,
-		Env:            env,
-		Command:        CommandCheck(command[0]),
-		ExpectedBootID: session.ExpectedBootID,
+		SessionID:            session.ID,
+		TargetUser:           targetUser,
+		GuestWork:            session.GuestWork,
+		Env:                  env,
+		Command:              CommandCheck(command[0]),
+		ExpectedBootID:       session.ExpectedBootID,
+		RequiredRuntimePaths: sessionRuntimePrerequisites(session, false),
 	})
 	if err != nil {
 		return err
@@ -425,11 +486,12 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		)
 	}
 
-	client, err := b.newSSHClientForUser(ctx, session.InstanceName, "root")
+	lease, err := b.acquireSSHClientForUser(ctx, session.InstanceName, "root")
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer lease.Close()
+	client := lease.Client()
 	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), b.controlStderr()); err != nil {
 		return isolatedCommandPreflightError(b, session, command, env, err)
 	}
@@ -478,7 +540,7 @@ func (b Backend) runSSHClientCommand(ctx context.Context, client *ssh.Client, co
 	session.Stdin = stdin
 	session.Stdout = stdout
 	session.Stderr = stderr
-	return runCancelableSSHCommand(ctx, session, client, setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, command))
+	return runCancelableSSHCommand(ctx, session, session, setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, command))
 }
 
 type sshSessionGuardian struct {
@@ -602,7 +664,7 @@ func (g *sshSessionGuardian) finish(normal bool) error {
 		_ = g.session.Close()
 		select {
 		case heartbeatErr := <-g.heartbeat.done:
-			return errors.Join(waitErr, heartbeatErr)
+			return errors.Join(waitErr, normalizeGuardianHeartbeatCompletion(normal, heartbeatErr))
 		case <-time.After(sessionGuardianWait):
 			return errors.Join(waitErr, errors.New("isolated session guardian heartbeat did not terminate"))
 		}
@@ -612,7 +674,20 @@ func (g *sshSessionGuardian) finish(normal bool) error {
 	}
 }
 
-func waitGuardedSSHSession(ctx context.Context, client *ssh.Client, target *ssh.Session, guardian *sshSessionGuardian) error {
+func normalizeGuardianHeartbeatCompletion(normal bool, err error) error {
+	if !normal || err == nil {
+		return err
+	}
+	// The remote guardian is tied to the target lifetime. On an ordinary target
+	// exit it may close its channel before the host writes the final "done".
+	// That transport-close race is completion, not failed target cleanup.
+	if errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) {
+		return nil
+	}
+	return err
+}
+
+func waitGuardedSSHSession(ctx context.Context, target *ssh.Session, guardian *sshSessionGuardian) error {
 	targetWait := make(chan error, 1)
 	go func() { targetWait <- target.Wait() }()
 	select {
@@ -624,7 +699,7 @@ func waitGuardedSSHSession(ctx context.Context, client *ssh.Client, target *ssh.
 		select {
 		case <-targetWait:
 		case <-time.After(sessionGuardianWait):
-			_ = client.Close()
+			_ = target.Close()
 			<-targetWait
 		}
 		if guardianErr == nil {
@@ -636,7 +711,7 @@ func waitGuardedSSHSession(ctx context.Context, client *ssh.Client, target *ssh.
 		select {
 		case <-targetWait:
 		case <-time.After(sessionGuardianWait):
-			_ = client.Close()
+			_ = target.Close()
 			<-targetWait
 		}
 		if heartbeatErr == nil {
@@ -646,7 +721,7 @@ func waitGuardedSSHSession(ctx context.Context, client *ssh.Client, target *ssh.
 	case <-ctx.Done():
 		_ = target.Signal(ssh.SIGTERM)
 		guardianErr := guardian.finish(false)
-		_ = client.Close()
+		_ = target.Close()
 		select {
 		case <-targetWait:
 		case <-time.After(sessionGuardianWait):
@@ -671,7 +746,7 @@ func (b Backend) runGuardedSSHClientCommand(ctx context.Context, prepared *backe
 	if err := target.Start(setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, command)); err != nil {
 		return errors.Join(err, guardian.finish(true))
 	}
-	return waitGuardedSSHSession(ctx, client, target, guardian)
+	return waitGuardedSSHSession(ctx, target, guardian)
 }
 
 func (b Backend) runIsolatedPTYWithClient(ctx context.Context, prepared *backend.Session, client *ssh.Client, command []string) (retErr error) {
@@ -707,7 +782,7 @@ func (b Backend) runIsolatedPTYWithClient(ctx context.Context, prepared *backend
 	if err := session.Start(setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, command)); err != nil {
 		return errors.Join(err, guardian.finish(true))
 	}
-	return waitGuardedSSHSession(ctx, client, session, guardian)
+	return waitGuardedSSHSession(ctx, session, guardian)
 }
 
 func initialTerminalDimensions(fd int, getSize func(int) (int, int, error)) (int, int) {

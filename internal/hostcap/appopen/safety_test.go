@@ -183,6 +183,18 @@ func TestSafeStateIsSeparatedByQualifiedAppAndRun(t *testing.T) {
 	}
 }
 
+func TestQualifiedRunStateRootLeavesDarwinLocalIPCSocketBudget(t *testing.T) {
+	base := "/Users/operator/.hideout/profiles/default/host-app/state"
+	root, err := QualifiedRunStateRoot(base, "builtin.vscode/rev_0123456789abcdef/vscode", "ses_20260716T113520Z_a4aedc3b131e8ca5d51b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const maxDarwinUnixSocketPath = 103
+	if socket := filepath.Join(root, "1.12-main.sock"); len(socket) > maxDarwinUnixSocketPath {
+		t.Fatalf("qualified state leaves no Darwin IPC budget: len(%q)=%d", socket, len(socket))
+	}
+}
+
 func TestPrepareSafetyProfileStateWritesOnlyValidatedCoreSettings(t *testing.T) {
 	profile := testSafetyProfile()
 	identity := testSafetyIdentity()

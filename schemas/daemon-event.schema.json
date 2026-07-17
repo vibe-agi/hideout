@@ -10,7 +10,7 @@
       "const": "hideout.daemon-event/v1"
     },
     "kind": {
-      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "terminal"]
+      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "lifecycle", "terminal"]
     },
     "phase": {
       "enum": ["start", "progress", "complete", "failed"]
@@ -25,7 +25,7 @@
       "required": ["kind"],
       "properties": {
         "kind": {
-          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "stream"]
+          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "lifecycle", "stream"]
         },
         "id": {
           "type": "string"
@@ -175,12 +175,33 @@
         },
         "preview": {
           "type": "object"
+        },
+        "lifecycle": {
+          "$ref": "lifecycle-status.schema.json"
         }
       }
     }
   },
   "allOf": [
     {
+	  "if": {
+	    "properties": {
+	      "kind": {
+	        "const": "lifecycle"
+	      }
+	    },
+	    "required": ["kind"]
+	  },
+	  "then": {
+	    "required": ["entity", "payload"],
+	    "properties": {
+	      "payload": {
+	        "required": ["lifecycle"]
+	      }
+	    }
+	  }
+	},
+	{
       "if": {
         "properties": {
           "kind": {

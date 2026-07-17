@@ -28,7 +28,13 @@ func TestProjectionResolvesSafeApplicationIdentityOnlyOnFirstCommandUse(t *testi
 	}
 
 	identityChecks := 0
-	launcher := &fakeLauncher{}
+	begun := false
+	var completions []bool
+	launcher := &fakeLauncher{beforeGuard: func() {
+		if !begun {
+			t.Fatal("host launcher ran before lifecycle registration")
+		}
+	}}
 	projection := &ProjectionConfig{
 		Platform: PlatformDarwin, SafeUserDataDir: t.TempDir(), Bindings: catalog, Launcher: launcher, RunID: "run_1",
 		ValidateLifecycle: func(OpenResourceBinding) error { return nil },
@@ -41,6 +47,17 @@ func TestProjectionResolvesSafeApplicationIdentityOnlyOnFirstCommandUse(t *testi
 		},
 		RevalidateIdentity: func(_ ApplicationExpectation, previous ObservedApplicationIdentity) (ObservedApplicationIdentity, error) {
 			return previous, nil
+		},
+		BeginHandoff: func(command string) (func(bool) error, error) {
+			if command != "code" {
+				t.Fatalf("handoff command=%q", command)
+			}
+			begun = true
+			return func(launched bool) error {
+				completions = append(completions, launched)
+				begun = false
+				return nil
+			}, nil
 		},
 	}
 	if identityChecks != 0 {
@@ -55,8 +72,8 @@ func TestProjectionResolvesSafeApplicationIdentityOnlyOnFirstCommandUse(t *testi
 			t.Fatal(err)
 		}
 	}
-	if identityChecks != 1 || len(launcher.ran) != 2 {
-		t.Fatalf("identity checks=%d launches=%d, want one lazy resolution and two guarded launches", identityChecks, len(launcher.ran))
+	if identityChecks != 1 || len(launcher.ran) != 2 || len(completions) != 2 || !completions[0] || !completions[1] {
+		t.Fatalf("identity checks=%d launches=%d completions=%v, want one lazy resolution and two guarded launches", identityChecks, len(launcher.ran), completions)
 	}
 }
 

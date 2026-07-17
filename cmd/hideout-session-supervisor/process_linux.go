@@ -260,6 +260,11 @@ func (p *targetProcess) closeInput() error {
 		}
 		closeErr = p.stdin.Close()
 	})
+	// exec.Cmd.Wait closes pipe endpoints after the target exits. A concurrent
+	// daemon EOF is therefore an idempotent close, not a protocol failure.
+	if errors.Is(closeErr, os.ErrClosed) {
+		return nil
+	}
 	return closeErr
 }
 

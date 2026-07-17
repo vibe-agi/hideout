@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 )
@@ -46,6 +47,7 @@ type sessionServer struct {
 	leaseDuration   time.Duration
 	renewalInterval time.Duration
 	writeTimeout    time.Duration
+	lifecycle       lifecycle.Registrar
 }
 
 func (s *sessionServer) serve(listener net.Listener) error {
@@ -202,7 +204,7 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 		openerForSession = opener
 	}
 	result, runErr := service.Apply(runCtx, prepared, req, manager.RunServiceDependencies{
-		Backend: be, OpenerForSession: openerForSession, Streams: streams,
+		Backend: be, OpenerForSession: openerForSession, Streams: streams, Lifecycle: s.lifecycle,
 	})
 	_ = stdinReader.Close()
 	select {

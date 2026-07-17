@@ -5,10 +5,10 @@ import (
 	"syscall"
 )
 
-// acquireLock takes an exclusive, non-blocking advisory lock. The lock is held by
-// the process (released by the kernel on death), so a crashed daemon's lock is
-// reclaimable while a live daemon's is not — the authoritative single-instance
-// signal alongside the socket liveness probe.
+// acquireLock takes an exclusive, non-blocking advisory lock on one stable inode.
+// The file is intentionally retained after unlock: unlinking a flock file allows
+// one process to hold the old inode while another process locks a newly-created
+// inode at the same path.
 func acquireLock(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -27,5 +27,4 @@ func releaseLock(f *os.File, path string) {
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	_ = f.Close()
-	_ = os.Remove(path)
 }

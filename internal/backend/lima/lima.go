@@ -65,6 +65,7 @@ type Backend struct {
 	LimactlPath   string
 	Runner        CommandRunner
 	SetupRunner   SetupCommandRunner
+	SSHClients    *SSHClientPool
 	Stdout        io.Writer
 	Stderr        io.Writer
 	ControlStdout io.Writer
@@ -666,6 +667,11 @@ func (b Backend) StopInstance(ctx context.Context, instanceName string) error {
 	}
 	stopCtx, cancel := context.WithTimeout(ctx, cleanupTimeout)
 	defer cancel()
+	if b.SSHClients != nil {
+		if err := b.SSHClients.InvalidateInstance(instanceName); err != nil {
+			return fmt.Errorf("close Lima SSH transports before stop: %w", err)
+		}
+	}
 	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", instanceName}, HostCommandEnv(os.Environ()), nil, b.controlStdout(), b.controlStderr())
 }
 

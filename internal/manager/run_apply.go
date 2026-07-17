@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/privilege"
@@ -52,6 +53,7 @@ type ApplyRunOptions struct {
 	OpenerForSession           func(RunSession) broker.Opener
 	TerminalMode               runsession.TerminalMode
 	Streams                    *backend.RunStreams
+	Lifecycle                  lifecycle.Registrar
 }
 
 type RunResult struct {
@@ -140,6 +142,54 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	result.SessionID = runSession.Layout.ID
 	result.AuditPath = runSession.AuditPath
 	runEnv = runSession.Environment
+	var lifecycleRegistration lifecycle.Registration
+	var lifecycleSupervisorRef lifecycle.ResourceRef
+	var lifecycleTargetRef lifecycle.ResourceRef
+	var lifecycleNetworkRef lifecycle.ResourceRef
+	if opts.Lifecycle != nil && runEnv.Active && runEnv.Record.Backend == "lima" {
+		observation, observeErr := lifecycleObservationForAttach(
+			ctx, opts.Lifecycle, opts.Backend, runEnv.Record.ID, runEnv.Record.InstanceName,
+		)
+		if observeErr != nil {
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, observeErr
+		}
+		lifecycleRegistration, err = opts.Lifecycle.BeginAttach(ctx, lifecycle.AttachRequest{
+			EnvironmentID: runEnv.Record.ID, InstanceName: runEnv.Record.InstanceName,
+			SessionID: runSession.Layout.ID, Observation: observation,
+		})
+		if err != nil {
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, err
+		}
+		lifecycleSupervisorRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
+			Kind: lifecycle.KindGuestSupervisor, ID: runSession.Layout.ID,
+			OwnerKind: "session", OwnerID: runSession.Layout.ID, State: lifecycle.StatePlanned,
+			Dependencies: []lifecycle.DependencySpec{
+				{Ref: lifecycleRegistration.Root(), StopMode: lifecycle.StopModeDrain},
+				{Ref: lifecycleRegistration.Session(), StopMode: lifecycle.StopModeDrain},
+			},
+			Persistence: lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.CloseCoTerminateWithRoot,
+			PossibleVMDependency: true,
+		})
+		if err != nil {
+			_ = lifecycleRegistration.Finish(context.Background(), nil)
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, err
+		}
+		lifecycleTargetRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
+			Kind: lifecycle.KindGuestTarget, ID: runSession.Layout.ID,
+			OwnerKind: "session", OwnerID: runSession.Layout.ID, State: lifecycle.StatePlanned,
+			Dependencies: []lifecycle.DependencySpec{{Ref: lifecycleSupervisorRef, StopMode: lifecycle.StopModeDrain}},
+			Persistence:  lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.CloseCoTerminateWithRoot,
+			PossibleVMDependency: true,
+		})
+		if err != nil {
+			_ = lifecycleRegistration.Finish(context.Background(), nil)
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, err
+		}
+	}
 	var (
 		owner                     *runsession.Owner
 		lifecycleCleanupErr       error
@@ -166,13 +216,17 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			CommandClass:  ownerCommandClass(plan.Command[0]),
 		})
 		if err != nil {
+			if lifecycleRegistration != nil {
+				_ = lifecycleRegistration.Transition(ctx, lifecycleRegistration.Session(), lifecycle.StateFailed)
+				_ = lifecycleRegistration.Finish(ctx, nil)
+			}
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, err
 		}
 		// Registered before the narrower cleanup defers below so this runs last:
 		// all session authority is gone before the owner and runtime child.
 		defer func() {
-			finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, environmentServiceCleanup)
+			finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, environmentServiceCleanup, lifecycleRegistration)
 			if finishErr != nil {
 				result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
 				if retErr == nil {
@@ -246,6 +300,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		EndpointExposures:          opts.EndpointExposures,
 		Opener:                     opener,
 		RequireSessionSupervisor:   opts.Streams != nil,
+		Lifecycle:                  lifecycleRegistration,
 	})
 	if err != nil {
 		return result, err
@@ -337,9 +392,31 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 				}
 			}
 		}
+		if lifecycleRegistration != nil {
+			if err := lifecycleRegistration.BindBoot(ctx, session.ExpectedBootID); err != nil {
+				return result, err
+			}
+		}
 		controller, _ := opts.Backend.(backend.EnvironmentNetworkServiceController)
+		if lifecycleRegistration != nil && runNetwork.EnvironmentService {
+			lifecycleNetworkRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
+				Kind: lifecycle.KindNetworkService, ID: runEnv.Record.ID,
+				OwnerKind: "manager", OwnerID: runEnv.Record.ID, State: lifecycle.StatePlanned,
+				Dependencies: []lifecycle.DependencySpec{{Ref: lifecycleRegistration.Root(), StopMode: lifecycle.StopModeDrain}},
+				Persistence:  lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.ClosePreStopDrain,
+				PossibleVMDependency: true,
+			})
+			if err != nil {
+				return result, err
+			}
+		}
 		if err := c.StartRunNetworkService(ctx, runSession, &runNetwork, controller, session, dataPlane.Env); err != nil {
 			return result, err
+		}
+		if lifecycleRegistration != nil && lifecycleNetworkRef.Kind != "" {
+			if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleNetworkRef); err != nil {
+				return result, err
+			}
 		}
 		var startErr error
 		runEnv, startErr = c.StartRunEnvironment(runEnv, runSession.Layout.ID, plan.Command)
@@ -348,6 +425,11 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		}
 		if err := owner.Update(runsession.OwnerStateRunning, ""); err != nil {
 			return result, err
+		}
+		if lifecycleRegistration != nil {
+			if err := lifecycleRegistration.Transition(ctx, lifecycleRegistration.Session(), lifecycle.StateActive); err != nil {
+				return result, err
+			}
 		}
 		if err := transitionLock.Unlock(); err != nil {
 			transitionLock = nil
@@ -358,6 +440,16 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	previewCtx, cancelPreview := context.WithCancel(ctx)
 	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
 	var runErr error
+	if lifecycleRegistration != nil {
+		if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleSupervisorRef); err != nil {
+			cancelPreview()
+			return result, err
+		}
+		if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleTargetRef); err != nil {
+			cancelPreview()
+			return result, err
+		}
+	}
 	if opts.Streams != nil {
 		streamRunner, ok := opts.Backend.(backend.StreamRunner)
 		if !ok {
@@ -399,6 +491,19 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, previewAuditErr
 	}
 	return result, nil
+}
+
+func lifecycleObservationForAttach(ctx context.Context, registrar lifecycle.Registrar, runBackend backend.Backend, environmentID, instanceName string) (backend.LifecycleObservation, error) {
+	if cached, ok := registrar.(lifecycle.ActiveAttachObservationProvider); ok {
+		if observation, available := cached.ActiveAttachObservation(ctx, environmentID, instanceName); available {
+			return observation, nil
+		}
+	}
+	observer, ok := runBackend.(backend.LifecycleObserver)
+	if !ok {
+		return backend.LifecycleObservation{}, errors.New("lima backend does not provide lifecycle observation")
+	}
+	return observer.ObserveLifecycle(ctx, instanceName), nil
 }
 
 func ownerCommandClass(command string) string {

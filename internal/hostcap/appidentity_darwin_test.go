@@ -75,6 +75,58 @@ func TestObserveDarwinSigningIdentityRequiresSystemTrustAssessment(t *testing.T)
 	}
 }
 
+func TestDarwinTrustCacheSkipsOnlyUnchangedFreshSystemAssessment(t *testing.T) {
+	type call struct {
+		executable string
+		args       []string
+	}
+	codeIdentity := "00112233445566778899aabbccddeeff00112233"
+	var calls []call
+	runner := func(_ context.Context, executable string, args ...string) ([]byte, error) {
+		calls = append(calls, call{executable: executable, args: append([]string(nil), args...)})
+		switch {
+		case executable == "/usr/bin/codesign" && args[0] == "--verify":
+			return nil, nil
+		case executable == "/usr/bin/codesign" && args[0] == "--display":
+			return []byte("Identifier=com.example.Test\nTeamIdentifier=TEAM123456\nCDHash=" + codeIdentity + "\n"), nil
+		case executable == "/usr/sbin/spctl":
+			return []byte("accepted"), nil
+		default:
+			return nil, errors.New("unexpected command")
+		}
+	}
+	cache := &darwinTrustCache{entries: map[string]time.Time{}}
+	now := time.Unix(1000, 0).UTC()
+
+	first, err := observeDarwinSigningIdentityCached("/Applications/Test.app", runner, time.Second, cache, now)
+	if err != nil || !first.Trusted || len(calls) != 3 {
+		t.Fatalf("first observation facts=%+v calls=%d err=%v", first, len(calls), err)
+	}
+	calls = nil
+	second, err := observeDarwinSigningIdentityCached("/Applications/Test.app", runner, time.Second, cache, now.Add(time.Minute))
+	if err != nil || !second.Trusted || len(calls) != 2 {
+		t.Fatalf("fresh unchanged observation facts=%+v calls=%d err=%v", second, len(calls), err)
+	}
+	for _, got := range calls {
+		if got.executable == "/usr/sbin/spctl" {
+			t.Fatalf("fresh unchanged identity repeated system assessment: %+v", calls)
+		}
+	}
+
+	calls = nil
+	codeIdentity = "ffeeddccbbaa99887766554433221100ffeeddcc"
+	changed, err := observeDarwinSigningIdentityCached("/Applications/Test.app", runner, time.Second, cache, now.Add(2*time.Minute))
+	if err != nil || !changed.Trusted || len(calls) != 3 {
+		t.Fatalf("changed identity facts=%+v calls=%d err=%v", changed, len(calls), err)
+	}
+
+	calls = nil
+	_, err = observeDarwinSigningIdentityCached("/Applications/Test.app", runner, time.Second, cache, now.Add(10*time.Minute))
+	if err != nil || len(calls) != 3 {
+		t.Fatalf("expired identity cache calls=%d err=%v", len(calls), err)
+	}
+}
+
 func TestObserveDarwinSigningIdentityUsesIndependentPerStepBudgets(t *testing.T) {
 	runner := func(ctx context.Context, executable string, args ...string) ([]byte, error) {
 		select {

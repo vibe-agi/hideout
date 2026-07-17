@@ -1,6 +1,10 @@
 package liveconsole
 
-import "time"
+import (
+	"time"
+
+	"github.com/vibe-agi/hideout/internal/lifecycle"
+)
 
 const (
 	EventSourceProduction = "production"
@@ -38,6 +42,7 @@ func PanelEventCoverage() map[string][]string {
 		"hostfs-write": {KindHostFSWrite},
 		"decisions":    {KindDecision},
 		"notices":      {KindNotice},
+		"lifecycle":    {KindLifecycle},
 		"stream":       {KindTerminal},
 	}
 }
@@ -75,6 +80,7 @@ func ReducerEventKinds() []string {
 		KindHostFSWrite,
 		KindDecision,
 		KindNotice,
+		KindLifecycle,
 		KindTerminal,
 	}
 }
@@ -182,8 +188,19 @@ func RepresentativeEvents() []Event {
 		},
 		{
 			Version: EventVersion,
-			Kind:    KindTerminal,
+			Kind:    KindLifecycle,
 			Seq:     11,
+			Entity:  EntityRef{Kind: KindLifecycle, ID: "env_alpha"},
+			Payload: EventPayload{Lifecycle: &lifecycle.Status{
+				Schema: lifecycle.StatusSchema, EnvironmentID: "env_alpha", StartGeneration: 2,
+				BackendState: "running", BackendObservedAt: time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC),
+				Activity: lifecycle.ActivityIdleGrace, Reconciliation: "complete",
+			}},
+		},
+		{
+			Version: EventVersion,
+			Kind:    KindTerminal,
+			Seq:     12,
 			Entity:  EntityRef{Kind: "stream"},
 			Payload: EventPayload{Reason: "stream closed"},
 		},
@@ -291,6 +308,17 @@ var eventCatalog = []EventCatalogEntry{
 		GoReducer:      true,
 		JSReducer:      true,
 		Panels:         []string{"notices"},
+	},
+	{
+		Kind:           KindLifecycle,
+		ProducerKinds:  []string{KindLifecycle},
+		Source:         EventSourceProduction,
+		ProductionSite: "lifecycle.Coordinator.Publish",
+		RequiredFields: []string{"lifecycle"},
+		Redaction:      RedactionControlPlaneStripped,
+		GoReducer:      true,
+		JSReducer:      true,
+		Panels:         []string{"lifecycle"},
 	},
 	{
 		Kind:           KindTerminal,

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/decision"
+	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
@@ -29,15 +31,23 @@ func IsAlreadyRunning(err error) bool { return errors.Is(err, errAlreadyRunning)
 
 // Options configures a daemon start.
 type Options struct {
-	Store             profile.Store
-	TTL               time.Duration
-	CredentialGrace   time.Duration
-	Now               func() time.Time
-	RunBackend        manager.RunBackendFactory
-	RunOpener         manager.RunOpenerFactory
-	RunServiceBackend manager.RunServiceBackendFactory
-	RunServiceOpener  manager.RunServiceOpenerFactory
-	SessionCapacity   int
+	Store              profile.Store
+	TTL                time.Duration
+	CredentialGrace    time.Duration
+	Now                func() time.Time
+	RunBackend         manager.RunBackendFactory
+	RunOpener          manager.RunOpenerFactory
+	RunServiceBackend  manager.RunServiceBackendFactory
+	RunServiceOpener   manager.RunServiceOpenerFactory
+	LifecycleBackend   manager.EnvironmentLifecycleBackendFactory
+	LifecycleIdleGrace time.Duration
+	// LifecycleAutomaticStop is enabled only after the real-backend lifecycle
+	// evidence gate has passed. A backend factory alone must not turn on VM stop.
+	LifecycleAutomaticStop bool
+	// BackendShutdown releases process-scoped backend transports after sessions
+	// and lifecycle work have drained. It must not carry capability authority.
+	BackendShutdown func() error
+	SessionCapacity int
 	// LiveResources lists resources that could survive a restart (running
 	// environments). Defaults to none; the daemon reports any it cannot prove it
 	// owns as orphans. Injectable for tests.
@@ -46,31 +56,38 @@ type Options struct {
 
 // Daemon is the single per-store local control-plane process.
 type Daemon struct {
-	store           profile.Store
-	runtimeDir      string
-	socket          string
-	instanceID      string
-	startedAt       time.Time
-	credentials     *credentialManager
-	api             manager.API
-	audit           *auditLog
-	bus             *eventBus
-	bg              *bgRegistry
-	own             *ownership
-	orphans         []LiveResource
-	ln              net.Listener
-	sessionListener *SessionListener
-	sessionServer   *sessionServer
-	sessions        *sessionRegistry
-	server          *http.Server
-	uiServer        *http.Server
-	uiURL           string
-	lockFile        *os.File
-	tailStop        chan struct{}
-	hostFSStop      chan struct{}
-	credentialStop  chan struct{}
-	credentialDone  chan struct{}
-	done            chan struct{}
+	store            profile.Store
+	runtimeDir       string
+	socket           string
+	instanceID       string
+	startedAt        time.Time
+	credentials      *credentialManager
+	api              manager.API
+	audit            *auditLog
+	bus              *eventBus
+	bg               *bgRegistry
+	own              *ownership
+	orphans          []LiveResource
+	ln               net.Listener
+	sessionListener  *SessionListener
+	sessionServer    *sessionServer
+	sessions         *sessionRegistry
+	lifecycle        *lifecycle.Coordinator
+	lifecycleBackend manager.EnvironmentLifecycleBackendFactory
+	backendShutdown  func() error
+	lifecycleCtx     context.Context
+	lifecycleCancel  context.CancelFunc
+	lifecycleWG      sync.WaitGroup
+	lifecycleSlots   chan struct{}
+	server           *http.Server
+	uiServer         *http.Server
+	uiURL            string
+	lockFile         *os.File
+	tailStop         chan struct{}
+	hostFSStop       chan struct{}
+	credentialStop   chan struct{}
+	credentialDone   chan struct{}
+	done             chan struct{}
 
 	mu    sync.Mutex
 	state string
@@ -99,6 +116,12 @@ func Start(opts Options) (*Daemon, error) {
 	// The lock is held, so no live daemon owns the store; a stale socket file from a
 	// crash can be safely reclaimed.
 	_ = os.Remove(filepath.Join(dir, socketName))
+
+	lifecycleRecords, missingLifecycleRecords, err := lifecycleEnvironmentRecords(opts.Store, opts.LifecycleBackend != nil)
+	if err != nil {
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, err
+	}
 
 	now := time.Now().UTC()
 	if opts.Now != nil {
@@ -153,6 +176,71 @@ func Start(opts Options) (*Daemon, error) {
 	al.publish = bus.publishAudit
 	core := manager.New(opts.Store)
 	core.Observer = bus
+	lifecycleCoordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: lifecycle.JournalStore{Root: opts.Store.Root}, DaemonID: instanceID,
+		Now: opts.Now, IdleGrace: opts.LifecycleIdleGrace, Enabled: opts.LifecycleAutomaticStop,
+		Stop: func(ctx context.Context, request lifecycle.StopRequest) (lifecycle.StopResult, error) {
+			if opts.LifecycleBackend == nil {
+				return lifecycle.StopResult{}, errors.New("daemon lifecycle backend is unavailable")
+			}
+			record, loadErr := (environment.Store{Root: opts.Store.Root}).Load(request.Incarnation.EnvironmentID)
+			if loadErr != nil {
+				return lifecycle.StopResult{}, loadErr
+			}
+			provider, providerErr := opts.LifecycleBackend(record)
+			if providerErr != nil {
+				return lifecycle.StopResult{}, providerErr
+			}
+			return core.StopEnvironmentIncarnation(ctx, request, provider)
+		},
+		Publish: func(event lifecycle.Event) {
+			bus.publishLifecycle(event.Status, "progress")
+			al.record("lifecycle."+event.Kind, lifecycleAuditDecision(event.Kind), map[string]any{
+				"environmentId": event.EnvironmentID, "generation": event.Generation,
+				"reasonCode": event.ReasonCode,
+			})
+		},
+	})
+	if err != nil {
+		_ = sessionListener.Close()
+		_ = ln.Close()
+		_ = os.Remove(sock)
+		_ = al.close()
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, err
+	}
+	for _, record := range lifecycleRecords {
+		if _, err := lifecycleCoordinator.BeginReconciliation(context.Background(), record.ID); err != nil {
+			_ = lifecycleCoordinator.Close()
+			_ = sessionListener.Close()
+			_ = ln.Close()
+			_ = os.Remove(sock)
+			_ = al.close()
+			releaseLock(lockFile, filepath.Join(dir, lockName))
+			return nil, err
+		}
+	}
+	for _, environmentID := range missingLifecycleRecords {
+		if _, err := lifecycleCoordinator.BeginReconciliation(context.Background(), environmentID); err != nil {
+			_ = lifecycleCoordinator.Close()
+			_ = sessionListener.Close()
+			_ = ln.Close()
+			_ = os.Remove(sock)
+			_ = al.close()
+			releaseLock(lockFile, filepath.Join(dir, lockName))
+			return nil, err
+		}
+		if err := lifecycleCoordinator.BlockReconciliation(environmentID, "environment-record-unavailable"); err != nil {
+			_ = lifecycleCoordinator.Close()
+			_ = sessionListener.Close()
+			_ = ln.Close()
+			_ = os.Remove(sock)
+			_ = al.close()
+			releaseLock(lockFile, filepath.Join(dir, lockName))
+			return nil, err
+		}
+	}
+	core.LifecycleResources = lifecycleCoordinator
 	publishBackground := func(id, op, status string) {
 		bus.publishBackground(id, op, status)
 		_, _ = core.CreateNotice(decision.Notice{
@@ -171,26 +259,33 @@ func Start(opts Options) (*Daemon, error) {
 		})
 	}
 	sessions := newSessionRegistry(opts.SessionCapacity, opts.Now)
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	d := &Daemon{
-		store:           opts.Store,
-		runtimeDir:      dir,
-		socket:          sock,
-		instanceID:      instanceID,
-		startedAt:       now,
-		credentials:     credentials,
-		audit:           al,
-		bus:             bus,
-		bg:              newBGRegistry(publishBackground),
-		own:             newOwnership(),
-		ln:              ln,
-		sessionListener: sessionListener,
-		sessions:        sessions,
-		lockFile:        lockFile,
-		hostFSStop:      make(chan struct{}),
-		credentialStop:  make(chan struct{}),
-		credentialDone:  make(chan struct{}),
-		done:            make(chan struct{}),
-		state:           "serving",
+		store:            opts.Store,
+		runtimeDir:       dir,
+		socket:           sock,
+		instanceID:       instanceID,
+		startedAt:        now,
+		credentials:      credentials,
+		audit:            al,
+		bus:              bus,
+		bg:               newBGRegistry(publishBackground),
+		own:              newOwnership(),
+		ln:               ln,
+		sessionListener:  sessionListener,
+		sessions:         sessions,
+		lifecycle:        lifecycleCoordinator,
+		lifecycleBackend: opts.LifecycleBackend,
+		backendShutdown:  opts.BackendShutdown,
+		lifecycleCtx:     lifecycleCtx,
+		lifecycleCancel:  lifecycleCancel,
+		lifecycleSlots:   make(chan struct{}, 4),
+		lockFile:         lockFile,
+		hostFSStop:       make(chan struct{}),
+		credentialStop:   make(chan struct{}),
+		credentialDone:   make(chan struct{}),
+		done:             make(chan struct{}),
+		state:            "serving",
 		api: manager.API{
 			Core:           core,
 			Token:          credentials.Token(),
@@ -199,12 +294,15 @@ func Start(opts Options) (*Daemon, error) {
 			Now:            opts.Now,
 			RunBackend:     opts.RunBackend,
 			RunOpener:      opts.RunOpener,
+			RunLifecycle:   lifecycleCoordinator,
 		},
 	}
+	d.api.EnvironmentStopApply = d.applyEnvironmentStopPlan
+	d.api.EnvironmentCleanApply = d.applyEnvironmentCleanPlan
 	d.sessionServer = &sessionServer{
 		core: core, credentials: credentials, instanceID: instanceID,
 		registry: sessions, backendFactory: opts.RunServiceBackend,
-		openerFactory: opts.RunServiceOpener, audit: al,
+		openerFactory: opts.RunServiceOpener, audit: al, lifecycle: lifecycleCoordinator,
 	}
 	d.server = &http.Server{Handler: d.buildHandler()}
 	d.startAuditTail()
@@ -229,7 +327,18 @@ func Start(opts Options) (*Daemon, error) {
 
 	go func() { _ = d.server.Serve(ln) }()
 	go func() { _ = d.sessionServer.serve(sessionListener) }()
+	d.startLifecycleReconciliation(lifecycleRecords)
 	return d, nil
+}
+
+func lifecycleAuditDecision(kind string) string {
+	switch kind {
+	case "backend-incarnation-superseded", "destructive-mutation-failed",
+		"reconciliation-blocked", "resource-orphaned", "stop-deferred", "stop-unknown":
+		return "deny"
+	default:
+		return "allow"
+	}
 }
 
 func backgroundNoticeSeverity(status string) string {
@@ -305,11 +414,14 @@ func (d *Daemon) Status() Status {
 			StartedAt: snapshot.StartedAt, CommandClass: snapshot.CommandClass,
 		})
 	}
+	if d.lifecycle != nil {
+		status.Lifecycle = d.lifecycle.Snapshot()
+	}
 	return status
 }
 
 // Stop performs an ordered shutdown: drain in-flight requests, record the stop,
-// and remove the socket and lock. It is idempotent.
+// remove the socket, and release the stable lock inode. It is idempotent.
 func (d *Daemon) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	if d.state == "stopping" || d.state == "stopped" {
@@ -323,6 +435,28 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	var stopErr error
+	if d.lifecycleCancel != nil {
+		d.lifecycleCancel()
+		done := make(chan struct{})
+		go func() {
+			d.lifecycleWG.Wait()
+			close(done)
+		}()
+		wait := 3 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(deadline); remaining < wait {
+				wait = remaining
+			}
+		}
+		if wait <= 0 {
+			wait = time.Millisecond
+		}
+		select {
+		case <-done:
+		case <-time.After(wait):
+			stopErr = errors.Join(stopErr, errors.New("lifecycle reconciliation did not terminate during bounded shutdown"))
+		}
+	}
 	if d.sessionListener != nil {
 		stopErr = errors.Join(stopErr, d.sessionListener.Close())
 	}
@@ -348,6 +482,12 @@ func (d *Daemon) Stop(ctx context.Context) error {
 			}
 		}
 		d.bg.drain(drainTimeout)
+	}
+	if d.lifecycle != nil {
+		stopErr = errors.Join(stopErr, d.lifecycle.Close())
+	}
+	if d.backendShutdown != nil {
+		stopErr = errors.Join(stopErr, d.backendShutdown())
 	}
 	if d.tailStop != nil {
 		close(d.tailStop)

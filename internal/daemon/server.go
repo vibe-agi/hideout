@@ -28,11 +28,14 @@ func (d *Daemon) validQueryToken(tok string) bool {
 }
 
 const (
-	apiPrefix      = "/api/v1/"
-	statusPath     = "/daemon/status"
-	stopPath       = "/daemon/stop"
-	eventsPath     = "/daemon/events"
-	backgroundPath = "/daemon/background"
+	apiPrefix              = "/api/v1/"
+	statusPath             = "/daemon/status"
+	stopPath               = "/daemon/stop"
+	eventsPath             = "/daemon/events"
+	backgroundPath         = "/daemon/background"
+	lifecycleStopPath      = "/daemon/lifecycle/stop"
+	lifecycleMutatePath    = "/daemon/lifecycle/mutate"
+	lifecycleReconcilePath = "/daemon/lifecycle/reconcile"
 )
 
 // buildHandler mounts the parity-locked Manager API under /api/v1/ behind an
@@ -56,8 +59,94 @@ func (d *Daemon) mountDaemonEndpoints(mux *http.ServeMux) {
 			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveEvents)))
 		case backgroundPath:
 			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveBackground)))
+		case lifecycleStopPath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveLifecycleStop)))
+		case lifecycleMutatePath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveLifecycleMutation)))
+		case lifecycleReconcilePath:
+			mux.Handle(endpoint.Path, d.authRecorder(http.HandlerFunc(d.serveLifecycleReconcile)))
 		}
 	}
+}
+
+func (d *Daemon) serveLifecycleReconcile(w http.ResponseWriter, r *http.Request) {
+	if err := d.api.Authorize(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var request struct {
+		EnvironmentID string `json:"environmentId"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	started, status, err := d.retryLifecycleReconciliation(r.Context(), request.EnvironmentID)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"started": started, "lifecycle": status})
+}
+
+func (d *Daemon) serveLifecycleMutation(w http.ResponseWriter, r *http.Request) {
+	if err := d.api.Authorize(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var request struct {
+		EnvironmentID string `json:"environmentId"`
+		Operation     string `json:"operation"`
+		Force         bool   `json:"force,omitempty"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	record, err := d.applyEnvironmentMutation(r.Context(), request.EnvironmentID, request.Operation, request.Force)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"record": record})
+}
+
+func (d *Daemon) serveLifecycleStop(w http.ResponseWriter, r *http.Request) {
+	if err := d.api.Authorize(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var request struct {
+		EnvironmentID string `json:"environmentId"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	status, err := d.lifecycle.StopExplicit(r.Context(), request.EnvironmentID)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "lifecycle": status})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lifecycle": status})
 }
 
 // serveBackground is the product entry for submitting existing typed environment

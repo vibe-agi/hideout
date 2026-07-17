@@ -51,6 +51,10 @@ const (
 	ArtifactValidatorNone                    = ""
 	ArtifactValidatorConcurrentIsolationV1   = "concurrent-sessions-isolation/v1"
 	ArtifactValidatorConcurrentPerformanceV1 = "concurrent-sessions-performance/v1"
+	ArtifactValidatorLifecycleLocalV1        = "resource-lifecycle-local/v1"
+	ArtifactValidatorLifecycleModelV1        = "resource-lifecycle-model/v1"
+	ArtifactValidatorLifecycleRealV1         = "resource-lifecycle-real/v1"
+	ArtifactValidatorLifecyclePerformanceV1  = "resource-lifecycle-performance/v1"
 )
 
 var validRequirementLayers = []string{
@@ -88,6 +92,10 @@ var validArtifactValidators = []string{
 	ArtifactValidatorNone,
 	ArtifactValidatorConcurrentIsolationV1,
 	ArtifactValidatorConcurrentPerformanceV1,
+	ArtifactValidatorLifecycleLocalV1,
+	ArtifactValidatorLifecycleModelV1,
+	ArtifactValidatorLifecycleRealV1,
+	ArtifactValidatorLifecyclePerformanceV1,
 }
 
 type ProofRequirement struct {
@@ -191,6 +199,17 @@ func ProductHardeningRequirements() []ProofRequirement {
 		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-performance-real-gate2", ArtifactValidatorConcurrentPerformanceV1, "034.FR-009", "034.SC-004"),
 		req(Feature034, Proof034RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "034.SC-001", "034.SC-012"),
 		req(Feature034, Proof034DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "034.FR-017", "034.FR-024", "034.SC-014"),
+
+		validatorReq(Feature036, Proof036Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, ArtifactValidatorLifecycleLocalV1,
+			"036.FR-001", "036.FR-002", "036.FR-003", "036.FR-004", "036.FR-005", "036.FR-006", "036.FR-007", "036.FR-008", "036.FR-009", "036.FR-010", "036.FR-011", "036.FR-012", "036.FR-013", "036.FR-014", "036.FR-015", "036.FR-016", "036.FR-017", "036.FR-018", "036.FR-019", "036.FR-020", "036.FR-021", "036.FR-022", "036.FR-023", "036.FR-024", "036.FR-025", "036.FR-026", "036.FR-027", "036.FR-028", "036.FR-029", "036.FR-030", "036.FR-031", "036.SC-011", "036.SC-012", "036.SC-013", "036.SC-018", "036.SC-019", "036.SC-020", "036.SC-021"),
+		validatorReq(Feature036, Proof036Gate0Model, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, ArtifactValidatorLifecycleModelV1,
+			"036.FR-005", "036.FR-006", "036.FR-010", "036.FR-011", "036.FR-012", "036.FR-013", "036.FR-015", "036.FR-017", "036.FR-020", "036.FR-023", "036.FR-028", "036.SC-001", "036.SC-009", "036.SC-016"),
+		runtimeEvidenceClassValidatorReq(Feature036, Proof036RealLifecycle, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "resource-lifecycle-real-gate2", ArtifactValidatorLifecycleRealV1,
+			"036.FR-002", "036.FR-005", "036.FR-006", "036.FR-007", "036.FR-008", "036.FR-009", "036.FR-010", "036.FR-011", "036.FR-012", "036.FR-013", "036.FR-014", "036.FR-015", "036.FR-017", "036.FR-018", "036.FR-019", "036.FR-022", "036.FR-023", "036.FR-024", "036.FR-025", "036.FR-026", "036.FR-027", "036.FR-028", "036.FR-029", "036.FR-030", "036.SC-002", "036.SC-003", "036.SC-004", "036.SC-005", "036.SC-006", "036.SC-007", "036.SC-008", "036.SC-009", "036.SC-011", "036.SC-012", "036.SC-014", "036.SC-015", "036.SC-016", "036.SC-017", "036.SC-019", "036.SC-020"),
+		runtimeEvidenceClassValidatorReq(Feature036, Proof036RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "resource-lifecycle-performance-real-gate2", ArtifactValidatorLifecyclePerformanceV1,
+			"036.SC-010"),
+		req(Feature036, Proof036RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "036.SC-002", "036.SC-003"),
+		req(Feature036, Proof036DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "036.FR-003", "036.FR-008", "036.FR-014", "036.FR-019", "036.FR-021", "036.FR-024"),
 	}
 	sortRequirements(rows)
 	return rows
@@ -216,6 +235,12 @@ func req(featureID, proofID, layer, requiredFor, freshness, artifact string, cla
 func evidenceClassReq(featureID, proofID, layer, requiredFor, freshness, artifact, evidenceClass string, claimIDs ...string) ProofRequirement {
 	r := req(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
 	r.RequiredEvidenceClass = evidenceClass
+	return r
+}
+
+func validatorReq(featureID, proofID, layer, requiredFor, freshness, artifact, validator string, claimIDs ...string) ProofRequirement {
+	r := req(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
+	r.ArtifactValidator = validator
 	return r
 }
 

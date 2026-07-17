@@ -66,13 +66,12 @@ func (r rootSSHSetupRunner) Run(ctx context.Context, instanceName, workdir strin
 	if len(command) == 0 {
 		return errors.New("lima setup identity requires command")
 	}
-	client, err := retrySetupSSHConnect(ctx, func() (*ssh.Client, error) {
-		return r.backend.newSSHClientForUser(ctx, instanceName, "root")
-	})
+	lease, err := r.backend.acquireSSHClientForUser(ctx, instanceName, "root")
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer lease.Close()
+	client := lease.Client()
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("open lima setup ssh session: %w", err)
@@ -81,7 +80,7 @@ func (r rootSSHSetupRunner) Run(ctx context.Context, instanceName, workdir strin
 	session.Stdin = stdin
 	session.Stdout = stdout
 	session.Stderr = stderr
-	return runCancelableSSHCommand(ctx, session, client, setupShellCommand(workdir, env, command))
+	return runCancelableSSHCommand(ctx, session, session, setupShellCommand(workdir, env, command))
 }
 
 func retrySetupSSHConnect(ctx context.Context, connect func() (*ssh.Client, error)) (*ssh.Client, error) {

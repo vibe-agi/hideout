@@ -335,6 +335,46 @@ func TestUnprovableSiblingBlocksSharedServiceAndActivationCleanup(t *testing.T) 
 	}
 }
 
+func TestEnvironmentLockFailureStillFinishesLifecycleRegistration(t *testing.T) {
+	core, store, record := concurrentLifecycleFixture(t)
+	sessionID := "ses_20260716T120000Z_0123456789abcdef"
+	if _, err := store.PrepareSessionRuntime(record.ID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	owner, err := session.AcquireOwner(store.OwnerRoot(record.ID), session.OwnerRecord{
+		Schema: session.ActiveSessionSchema, SessionID: sessionID, EnvironmentID: record.ID,
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("a", 64),
+		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
+		StartedAt: now, UpdatedAt: now, CommandClass: "true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := newRecordingLifecycleRegistration()
+	runEnvironment := RunEnvironment{
+		Active: true, Record: record, RuntimeDir: store.RuntimeDir(record.ID), PreserveInstance: true,
+	}
+	// Make transition-lock acquisition fail immediately. The owner keeps its
+	// open lock descriptor, so this exercises the cleanup failure path without
+	// waiting for the normal bounded lock timeout.
+	if err := os.Rename(filepath.Dir(store.RuntimeDir(record.ID)), filepath.Join(t.TempDir(), "removed-environment")); err != nil {
+		t.Fatal(err)
+	}
+	var held *environment.Lock
+	err = core.finishConcurrentRunEnvironment(
+		context.Background(), &held, runEnvironment, owner, sessionID, nil, nil, registration,
+	)
+	if err == nil {
+		t.Fatal("missing environment lock unexpectedly produced successful cleanup")
+	}
+	registration.mu.Lock()
+	defer registration.mu.Unlock()
+	if registration.finishCalls != 1 || registration.finishCleanupErr == nil {
+		t.Fatalf("lifecycle finish calls=%d cleanupErr=%v", registration.finishCalls, registration.finishCleanupErr)
+	}
+}
+
 func TestStopEnvironmentNetworkServiceCleansOnlyServiceDirectory(t *testing.T) {
 	serviceDir := t.TempDir()
 	plan := network.Plan{

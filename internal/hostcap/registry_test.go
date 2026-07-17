@@ -22,6 +22,9 @@ func TestRegistryHasImplementedAndDesignReady(t *testing.T) {
 	if d.ResultPolicy != ResultNone {
 		t.Fatalf("host.app.open-resource resultPolicy = %q, want none", d.ResultPolicy)
 	}
+	if d.ResidualPolicy != ResidualExternalUnmanaged {
+		t.Fatalf("host.app.open-resource residualPolicy = %q, want external-unmanaged", d.ResidualPolicy)
+	}
 	if d.DecisionPolicy != DecisionDefaultAllowAudited {
 		t.Fatalf("safe-mode decisionPolicy = %q, want default-allow-audited", d.DecisionPolicy)
 	}
@@ -45,6 +48,31 @@ func TestRegistryHasImplementedAndDesignReady(t *testing.T) {
 		if dd.Status != StatusDesignReady {
 			t.Fatalf("%s status = %q, want design-ready", id, dd.Status)
 		}
+	}
+}
+
+func TestResultNoneCannotHideManagedResidual(t *testing.T) {
+	descriptor := CapabilityDescriptor{
+		ID: "host.test.managed-result-none", RiskClass: RiskLow,
+		IntentSchema: "test-intent/v1", ResultPolicy: ResultNone,
+		ResidualPolicy: ResidualManaged, ProviderRef: ProviderAppOpenResource,
+		DecisionPolicy: DecisionDefaultAllowAudited, LifecyclePolicy: LifecycleSession,
+		Platforms: []Platform{PlatformDarwin}, Status: StatusImplemented,
+	}
+	prior := registry
+	registry = append(append([]CapabilityDescriptor(nil), prior...), descriptor)
+	t.Cleanup(func() { registry = prior })
+	if err := Validate(); err == nil {
+		t.Fatal("result-none descriptor concealed a managed residual")
+	}
+}
+
+func TestExternalUnmanagedHandoffInvariant(t *testing.T) {
+	if err := EnsureExternalUnmanagedHandoff(CapabilityAppOpenResource); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureExternalUnmanagedHandoff(CapabilityServiceBridge); err == nil {
+		t.Fatal("managed service bridge passed the external handoff invariant")
 	}
 }
 

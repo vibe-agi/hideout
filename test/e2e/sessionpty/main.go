@@ -215,6 +215,9 @@ func runDaemonCrash(opts options) (crashResult, error) {
 	if failureErr == nil || (!strings.Contains(failureOutput, "session.cleanup.failed") && !strings.Contains(failureOutput, "explicit recovery")) {
 		return crashResult{}, fmt.Errorf("restart did not fail closed for stale owners: err=%v output=%q", failureErr, failureOutput)
 	}
+	if err := waitReconciliationSettled(opts, record.ID); err != nil {
+		return crashResult{}, err
+	}
 	if output, err := runHideout(opts, "stop", record.Name); err != nil {
 		return crashResult{}, fmt.Errorf("explicit stop recovery: %w output=%q", err, output)
 	}
@@ -230,6 +233,30 @@ func runDaemonCrash(opts options) (crashResult, error) {
 	}
 	_, _ = runHideout(opts, "daemon", "stop")
 	return crashResult{sessionIDs: sessionIDs}, nil
+}
+
+func waitReconciliationSettled(opts options, environmentID string) error {
+	deadline := time.Now().Add(probeTimeout)
+	for time.Now().Before(deadline) {
+		output, err := runHideout(opts, "daemon", "status")
+		if err == nil {
+			var status struct {
+				Lifecycle []struct {
+					EnvironmentID  string `json:"environmentId"`
+					Reconciliation string `json:"reconciliation"`
+				} `json:"lifecycle"`
+			}
+			if json.Unmarshal([]byte(output), &status) == nil {
+				for _, item := range status.Lifecycle {
+					if item.EnvironmentID == environmentID && item.Reconciliation != "pending" {
+						return nil
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return fmt.Errorf("replacement daemon reconciliation remained pending for environment %s", environmentID)
 }
 
 func startPTYClient(opts options, target ...string) (*ptyClient, error) {

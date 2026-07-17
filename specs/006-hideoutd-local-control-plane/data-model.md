@@ -18,7 +18,9 @@ Rules:
 
 - Exactly one instance per `storeRoot`; a second start reports the existing
   instance rather than racing (single-instance lock + socket liveness probe).
-- The ephemeral control files (socket, token, lock) are recreated per start; the
+- The socket and token are recreated per start. The private lock file remains at
+  one stable inode across starts and only its advisory lock ownership changes;
+  unlinking it at shutdown would permit split-brain lock ownership. The
   daemon-local audit log is append-only and survives stop/restart as evidence.
   There is no durable event log and no persisted operation/ownership state.
 
@@ -55,14 +57,14 @@ Rules:
 The daemon mounts `manager.API.Handler()`; the served route set is the current
 typed surface, enumerated in [contracts/api-parity-matrix.md](contracts/api-parity-matrix.md):
 the authoritative route inventory is the production `manager.ManagerRoutes()`
-registry, which both embedded and daemon dispatch consume. The daemon's own status
-and event-subscription endpoints are a
+registry, which both embedded and daemon dispatch consume. The daemon's own status,
+event-subscription, background, and typed lifecycle-coordination endpoints are a
 separate surface outside `/api/v1/…`, inventoried in the parity matrix.
 
 Rules:
 
-- No new Manager operation class, raw profile write, or host execution is added; the
-  daemon-specific status/event endpoints live outside the parity-locked subrouter.
+- No raw profile write, raw VM operation, or host execution is added; the
+  daemon-specific endpoints live outside the parity-locked subrouter.
 - Confirmation-required operations fail closed unless CLI/WebUI supplied confirmation
   (the daemon never prompts).
 

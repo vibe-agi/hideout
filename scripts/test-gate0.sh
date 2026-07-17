@@ -48,6 +48,8 @@ test -f schemas/host-app-inspection.schema.json
 test -f schemas/active-session-summary.schema.json
 test -f schemas/environment-activation-receipt.schema.json
 test -f schemas/environment-service-state.schema.json
+test -f schemas/lifecycle-journal.schema.json
+test -f schemas/lifecycle-status.schema.json
 scripts/test-runtime-smoke.sh
 
 # Test/evidence spine (026): one Go-owned proof registry feeds shell gates,
@@ -309,3 +311,8 @@ rm -rf "$ui_e2e_tmp"
 # service identity, namespace command construction, and Manager wiring. Real
 # process/mount isolation remains a separate explicit macOS/Lima Gate 2.
 scripts/test-concurrent-sessions-smoke.sh
+
+# Resource lifecycle and final-session stop (036): closed catalog, pure stop
+# reducer, strict journal, typed backend observation, and redaction. Real Lima
+# stop behavior remains an explicit lifecycle Gate 2 lane.
+scripts/test-lifecycle-smoke.sh

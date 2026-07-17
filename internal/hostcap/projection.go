@@ -9,6 +9,11 @@ import (
 
 type BindingIdentityResolver func(OpenResourceBinding) (OpenResourceBinding, error)
 
+// HandoffLifecycleBegin records a prospective host-app handoff before the
+// launcher receives authority. The returned completion function is called
+// exactly once; launched is false for refusal, suppression, or launch failure.
+type HandoffLifecycleBegin func(command string) (complete func(launched bool) error, err error)
+
 // ProjectionConfig bundles the per-run/session projection dependencies that are
 // not resource-specific. The broker supplies the ResourceResolver at call time
 // (it owns the host-path mapping); the manager supplies everything else.
@@ -25,6 +30,7 @@ type ProjectionConfig struct {
 	ResolveIdentity    BindingIdentityResolver
 	RevalidateIdentity IdentityRevalidator
 	ValidateLifecycle  func(OpenResourceBinding) error
+	BeginHandoff       HandoffLifecycleBegin
 	identityMu         sync.Mutex
 	resolvedIdentities map[string]OpenResourceBinding
 }
@@ -59,12 +65,27 @@ func (c *ProjectionConfig) OpenCommand(ctx context.Context, command, bindingDige
 		}
 		binding = resolved
 	}
+	complete := func(bool) error { return nil }
+	if c.BeginHandoff != nil {
+		var beginErr error
+		complete, beginErr = c.BeginHandoff(command)
+		if beginErr != nil {
+			return OpenResult{}, binding, &Error{Code: CodeProviderUnavailable, Reason: "host application lifecycle registration failed"}
+		}
+	}
 	result, err := OpenBoundResource(ctx, binding, request, BoundOpenContext{
 		SessionID: sessionID, Profile: profile, RunID: c.RunID, Command: command, SafeStateBase: c.SafeUserDataDir,
 		Platform: c.Platform, Resources: resolver,
 		GrantScopeBase: c.GrantScopeBase, Grants: c.Grants, Launcher: c.Launcher, Deduper: c.Deduper, RevalidateIdentity: c.RevalidateIdentity,
 		ValidateLifecycle: c.ValidateLifecycle,
 	})
+	launched := err == nil && result.Outcome == outcomeLaunched && !result.Suppressed
+	if lifecycleErr := complete(launched); lifecycleErr != nil {
+		if err != nil {
+			return result, binding, err
+		}
+		return OpenResult{}, binding, &Error{Code: CodeProviderUnavailable, Reason: "host application lifecycle completion failed"}
+	}
 	return result, binding, err
 }
 

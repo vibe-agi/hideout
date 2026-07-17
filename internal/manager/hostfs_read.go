@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/hostfs/readgrant"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -174,6 +175,13 @@ func (p *hostFSReadProvider) ProposeHostFSRead(_ context.Context, proposal broke
 		state.UpdatedAt = now
 		if err := p.store.SaveState(state); err != nil {
 			return err
+		}
+		if p.core.LifecycleResources != nil {
+			if err := p.core.LifecycleResources.RecordSessionFact(context.Background(), p.sessionID, lifecycle.FactSpec{
+				Kind: lifecycle.KindDecisionRecord, ID: created.ID, Class: lifecycle.FactRetained,
+			}); err != nil {
+				return err
+			}
 		}
 		result = broker.HostFSReadProposalResult{Code: broker.HostFSErrorReadApprovalRequired, DecisionRef: created.ID}
 		return nil
@@ -469,6 +477,28 @@ func (c Core) approveHostFSRead(req DecisionResolveRequest, d decision.Decision)
 	var resolution decision.Resolution
 	var updated decision.Decision
 	var activationErr error
+	var lifecycleRef lifecycle.ResourceRef
+	if c.LifecycleResources != nil {
+		lifecycleRef, err = c.LifecycleResources.RegisterSessionResource(context.Background(), d.Source.Session, lifecycle.RegistrationSpec{
+			Kind: lifecycle.KindHostFSLiveGrant, ID: d.ID,
+			OwnerKind: "manager", OwnerID: d.Source.Session, State: lifecycle.StateStarting,
+			Dependencies: []lifecycle.DependencySpec{
+				{Ref: lifecycle.ResourceRef{Kind: lifecycle.KindHostFSReadProvider, ID: d.Source.Session}, StopMode: lifecycle.StopModeDrain},
+				{Ref: lifecycle.ResourceRef{Kind: lifecycle.KindRunSession, ID: d.Source.Session}, StopMode: lifecycle.StopModeDrain},
+			},
+			Persistence: lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.ClosePreStopDrain,
+			PossibleVMDependency: true,
+		})
+		if err != nil {
+			return decision.Resolution{}, err
+		}
+	}
+	lifecycleCommitted := false
+	defer func() {
+		if !lifecycleCommitted && lifecycleRef.Kind != "" {
+			_ = c.LifecycleResources.ReleaseSessionResource(context.Background(), d.Source.Session, lifecycleRef, activationErr)
+		}
+	}()
 	err = providerStore.WithExclusive(func() error {
 		state, err := providerStore.LoadState()
 		if err != nil {
@@ -520,6 +550,15 @@ func (c Core) approveHostFSRead(req DecisionResolveRequest, d decision.Decision)
 			activationErr = err
 			return failHostFSReadActivation(c, providerStore, state, key, updated, err)
 		}
+		if lifecycleRef.Kind != "" {
+			if err := c.LifecycleResources.TransitionSessionResource(context.Background(), d.Source.Session, lifecycleRef, lifecycle.StateActive); err != nil {
+				activationErr = err
+				if restoreErr := restoreHostFSReadManifest(providerStore, previous, hadPrevious); restoreErr != nil {
+					activationErr = errors.Join(activationErr, restoreErr)
+				}
+				return failHostFSReadActivation(c, providerStore, state, key, updated, activationErr)
+			}
+		}
 		if err := c.emitDecisionAudit(decision.ActionDecisionApply, "allow", updated, map[string]any{
 			"reason":           req.Reason,
 			"operation":        readgrant.OperationRead,
@@ -536,6 +575,7 @@ func (c Core) approveHostFSRead(req DecisionResolveRequest, d decision.Decision)
 		}
 		resolution.ProviderResult["generation"] = manifest.Generation
 		resolution.ProviderResult["expiresAt"] = now.Add(hostFSReadGrantLifetime)
+		lifecycleCommitted = true
 		return nil
 	})
 	if err != nil {

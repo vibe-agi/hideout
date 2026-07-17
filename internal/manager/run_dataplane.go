@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	hostfsoverlay "github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	"github.com/vibe-agi/hideout/internal/hostfs/readgrant"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -43,6 +44,7 @@ type RunDataPlaneOptions struct {
 	EndpointCandidates         []RunEndpointCandidate
 	EndpointExposures          []RunEndpointExposureRequest
 	RequireSessionSupervisor   bool
+	Lifecycle                  lifecycle.Registration
 }
 
 type RunDataPlane struct {
@@ -63,16 +65,30 @@ type RunDataPlane struct {
 	cancel               context.CancelFunc
 	hostFSReadOwner      *readgrant.Owner
 	projectionGrantIDs   []string
+	lifecycle            lifecycle.Registration
+	lifecycleRefs        []lifecycle.ResourceRef
 }
 
-func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runNetwork RunNetwork, opts RunDataPlaneOptions) (RunDataPlane, error) {
+func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runNetwork RunNetwork, opts RunDataPlaneOptions) (result RunDataPlane, retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := hostcap.EnsureExternalUnmanagedHandoff(hostcap.CapabilityAppOpenResource); err != nil {
+		return RunDataPlane{}, fmt.Errorf("host-app lifecycle invariant: %w", err)
 	}
 	aw := runSession.Audit
 	if aw == nil {
 		aw = audit.NewDiscard()
 	}
+	lifecycleEffects := newRunLifecycleEffects(opts.Lifecycle, runSession.Layout.ID)
+	lifecycleTracker := newRunLifecycleTracker(opts.Lifecycle)
+	lifecycleTransferred := false
+	var lifecycleStartupCleanupErr error
+	defer func() {
+		if !lifecycleTransferred {
+			retErr = errors.Join(retErr, lifecycleTracker.rollback(lifecycleStartupCleanupErr))
+		}
+	}()
 	portBridges, err := resolveRunEndpointExposures(runSession, opts.OpenTargets, opts.EndpointCandidates, opts.EndpointExposures)
 	if err != nil {
 		_ = emitEndpointExposureDeny(aw, runSession, opts.EndpointExposures, err)
@@ -156,6 +172,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		ResolveIdentity:    c.hostAppRunBindingIdentityResolver(runSession, hostFSPolicy, hostAppForbiddenRoots),
 		RevalidateIdentity: c.hostAppRunIdentityRevalidator(runSession, hostFSPolicy, hostAppForbiddenRoots),
 		ValidateLifecycle:  hostAppLifecycle,
+		BeginHandoff:       lifecycleEffects.beginHandoff,
 	}
 	adapters, err := cmdadapter.CompileWithResolver(runSession.Plan.RuntimeProfile, runSession.ProfileDir, adapterpack.RuntimeResolver{Store: adapterpack.NewStore(c.Store.Root)})
 	if err != nil {
@@ -165,13 +182,60 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err := MaterializeHostFSD(runSession.RuntimeShimDir, runSession.Plan.Backend, hostFSEnabled); err != nil {
 		return RunDataPlane{}, err
 	}
+	var hostFSRef lifecycle.ResourceRef
+	var brokerRef lifecycle.ResourceRef
+	bridgeRefs := make([]lifecycle.ResourceRef, 0, len(portBridges))
+	if opts.Lifecycle != nil {
+		if hostFSEnabled {
+			hostFSRef, err = lifecycleTracker.plan(ctx, lifecycle.RegistrationSpec{
+				Kind: lifecycle.KindHostFSReadProvider, ID: runSession.Layout.ID,
+				OwnerKind: "session", OwnerID: runSession.Layout.ID,
+				Dependencies: []lifecycle.DependencySpec{{Ref: opts.Lifecycle.Session(), StopMode: lifecycle.StopModeDrain}},
+				Persistence:  lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.ClosePreStopDrain,
+				PossibleVMDependency: true,
+			})
+			if err != nil {
+				return RunDataPlane{}, err
+			}
+		}
+		brokerRef, err = lifecycleTracker.plan(ctx, lifecycle.RegistrationSpec{
+			Kind: lifecycle.KindBrokerListener, ID: runSession.Layout.ID,
+			OwnerKind: "session", OwnerID: runSession.Layout.ID,
+			Dependencies: []lifecycle.DependencySpec{{Ref: opts.Lifecycle.Session(), StopMode: lifecycle.StopModeDrain}},
+			Persistence:  lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.ClosePreStopDrain,
+			PossibleVMDependency: true,
+		})
+		if err != nil {
+			return RunDataPlane{}, err
+		}
+		for index := range portBridges {
+			ref, planErr := lifecycleTracker.plan(ctx, lifecycle.RegistrationSpec{
+				Kind: lifecycle.KindRunBridge, ID: fmt.Sprintf("%s-%d", runSession.Layout.ID, index+1),
+				OwnerKind: "session", OwnerID: runSession.Layout.ID,
+				Dependencies: []lifecycle.DependencySpec{
+					{Ref: opts.Lifecycle.Root(), StopMode: lifecycle.StopModePin},
+					{Ref: opts.Lifecycle.Session(), StopMode: lifecycle.StopModeDrain},
+				},
+				Persistence: lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.ClosePreStopDrain,
+				PossibleVMDependency: true,
+			})
+			if planErr != nil {
+				return RunDataPlane{}, planErr
+			}
+			bridgeRefs = append(bridgeRefs, ref)
+		}
+		if err := lifecycleTracker.commit(ctx); err != nil {
+			return RunDataPlane{}, err
+		}
+	}
 	hostFSService := hostfs.NewService(hostFSPolicy)
+	hostFSService.BeginStage = lifecycleEffects.beginHostFSStage
 	var hostFSReadOwner *readgrant.Owner
 	var hostFSReadProvider *hostFSReadProvider
 	ownerTransferred := false
 	defer func() {
 		if !ownerTransferred && hostFSReadOwner != nil {
-			_ = hostFSReadOwner.Close()
+			lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr, hostFSReadOwner.Close())
 		}
 	}()
 	if hostFSEnabled {
@@ -184,6 +248,9 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 			return RunDataPlane{}, err
 		}
 		hostFSService.ReadAuthority = newHostAppRunResourceAuthority(hostFSReadProvider, runSession.Plan.ProfileName)
+		if err := lifecycleTracker.activate(ctx, hostFSRef); err != nil {
+			return RunDataPlane{}, err
+		}
 	}
 	if hostFSPolicyHasOverlay(hostFSPolicy) {
 		overlayStore, err := hostfsoverlay.NewStore(filepath.Join(runSession.Layout.Dir, "hostfs-overlay"))
@@ -231,17 +298,23 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		HostApp:             hostAppProjection,
 	}
 	if err := server.StartEndpoint(brokerCtx, listenEndpoint); err != nil {
+		lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr, server.Close())
+		cancel()
+		return RunDataPlane{}, err
+	}
+	if err := lifecycleTracker.activate(ctx, brokerRef); err != nil {
+		lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr, server.Close())
 		cancel()
 		return RunDataPlane{}, err
 	}
 	guestEndpoint, err := BrokerEndpointForGuest(runSession.Plan.Backend, server.Endpoint)
 	if err != nil {
-		_ = server.Close()
+		lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr, server.Close())
 		cancel()
 		return RunDataPlane{}, err
 	}
 	if err := WriteBrokerEndpoint(runSession.Layout.BrokerEndpointPath, guestEndpoint); err != nil {
-		_ = server.Close()
+		lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr, server.Close())
 		cancel()
 		return RunDataPlane{}, err
 	}
@@ -274,19 +347,31 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 			}
 		}(),
 	}); err != nil {
-		_ = server.Close()
+		lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr, server.Close())
 		cancel()
 		return RunDataPlane{}, err
 	}
 	portBridgeLeases, portBridgeEndpoints, err := startRunPortBridges(brokerCtx, runSession, portBridges, env, opts.Backend, aw)
 	if err != nil {
-		_ = closeRunPortBridgeLeases(portBridgeLeases, aw, runSession.Layout.ID, runSession.Plan.ProfileName, runSession.Plan.Backend)
-		_ = server.Close()
+		lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr,
+			closeRunPortBridgeLeases(portBridgeLeases, aw, runSession.Layout.ID, runSession.Plan.ProfileName, runSession.Plan.Backend),
+			server.Close())
 		cancel()
 		return RunDataPlane{}, err
 	}
+	for _, ref := range bridgeRefs {
+		if err := lifecycleTracker.activate(ctx, ref); err != nil {
+			lifecycleStartupCleanupErr = errors.Join(lifecycleStartupCleanupErr,
+				closeRunPortBridgeLeases(portBridgeLeases, aw, runSession.Layout.ID, runSession.Plan.ProfileName, runSession.Plan.Backend),
+				server.Close())
+			cancel()
+			return RunDataPlane{}, err
+		}
+	}
 	ownerTransferred = true
 	projectionGrantTransferred = true
+	lifecycleTransferred = true
+	lifecycleRefs := lifecycleTracker.transfer()
 	return RunDataPlane{
 		Registry:             registry,
 		HostFSPolicy:         hostFSPolicy,
@@ -305,6 +390,8 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		cancel:               cancel,
 		hostFSReadOwner:      hostFSReadOwner,
 		projectionGrantIDs:   append([]string(nil), projectionGrantIDs...),
+		lifecycle:            opts.Lifecycle,
+		lifecycleRefs:        lifecycleRefs,
 	}, nil
 }
 
@@ -433,24 +520,33 @@ func (g runProjectionGrantChecker) TrustedGrantActiveForResource(scope hostcap.G
 func (c Core) CloseRunDataPlane(dataPlane RunDataPlane) error {
 	var errs []error
 	if err := closeRunPortBridgeLeases(dataPlane.portBridgeLeases, dataPlane.audit, dataPlane.auditSession, dataPlane.auditProfile, dataPlane.auditBackend); err != nil {
-		errs = append(errs, err)
+		errs = append(errs, fmt.Errorf("close run port bridges: %w", err))
 	}
 	if dataPlane.cancel != nil {
 		dataPlane.cancel()
 	}
 	if dataPlane.Broker != nil {
 		if err := dataPlane.Broker.Close(); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("close run broker: %w", err))
 		}
 	}
 	if dataPlane.hostFSReadOwner != nil {
 		if err := dataPlane.hostFSReadOwner.Close(); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("close HostFS read owner: %w", err))
 		}
 	}
 	for _, decisionID := range dataPlane.projectionGrantIDs {
 		if err := c.invalidateProjectionGrant(decisionID, "session-ended"); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("invalidate host-app projection grant: %w", err))
+		}
+	}
+	providerErr := errors.Join(errs...)
+	for index := len(dataPlane.lifecycleRefs) - 1; index >= 0; index-- {
+		if dataPlane.lifecycle == nil {
+			break
+		}
+		if err := dataPlane.lifecycle.Release(context.Background(), dataPlane.lifecycleRefs[index], providerErr); err != nil {
+			errs = append(errs, fmt.Errorf("release lifecycle resource %s: %w", dataPlane.lifecycleRefs[index].Kind, err))
 		}
 	}
 	return errors.Join(errs...)

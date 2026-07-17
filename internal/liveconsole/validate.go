@@ -3,6 +3,8 @@ package liveconsole
 import (
 	"errors"
 	"fmt"
+
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 )
 
 func ValidateEvent(ev Event) error {
@@ -49,6 +51,11 @@ func payloadField(payload EventPayload, field string) string {
 		return payload.RecordKind
 	case "noticeId":
 		return payload.NoticeID
+	case "lifecycle":
+		if payload.Lifecycle != nil && payload.Lifecycle.Schema == lifecycle.StatusSchema && payload.Lifecycle.EnvironmentID != "" {
+			return payload.Lifecycle.EnvironmentID
+		}
+		return ""
 	default:
 		return ""
 	}

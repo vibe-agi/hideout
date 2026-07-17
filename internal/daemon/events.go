@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 )
 
@@ -172,6 +173,20 @@ func (b *eventBus) publishBackground(id, op, status string) {
 			ID:     id,
 			Op:     op,
 			Status: status,
+		},
+	})
+}
+
+func (b *eventBus) publishLifecycle(status lifecycle.Status, phase string) {
+	copy := status
+	b.publish(Event{
+		Kind:   liveconsole.KindLifecycle,
+		Phase:  phase,
+		Entity: liveconsole.EntityRef{Kind: liveconsole.KindLifecycle, ID: status.EnvironmentID},
+		Payload: liveconsole.EventPayload{
+			ID:        status.EnvironmentID,
+			Status:    string(status.Activity),
+			Lifecycle: &copy,
 		},
 	})
 }

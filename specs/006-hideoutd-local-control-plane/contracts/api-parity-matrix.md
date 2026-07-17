@@ -38,10 +38,17 @@ authenticated UI at the loopback root:
   as background work (FR-010). It runs the same `Core.ApplyEnvironmentStop`/
   `ApplyEnvironmentClean` and rejects any other op class; it adds no new Manager
   operation class.
+- `POST /daemon/lifecycle/stop` — serialize an observed environment stop through
+  the 036 lifecycle coordinator.
+- `POST /daemon/lifecycle/mutate` — serialize an existing typed destructive
+  environment mutation with lifecycle reconciliation and active-resource state.
+- `POST /daemon/lifecycle/reconcile` — retry one blocked environment's typed
+  reconciliation in the current daemon epoch; backs `hideout daemon reconcile`.
 
-These endpoints add no Manager operation class, no raw profile write, and no host
-execution. This list is the complete daemon-specific surface; any addition MUST be
-inventoried here.
+These endpoints add no raw profile write or host execution. The lifecycle
+extensions coordinate existing typed Manager/backend actions; they do not expose
+raw VM operations or treat journal state as authority. This list is the complete
+daemon-specific surface; any addition MUST be inventoried here.
 
 ## Rules
 

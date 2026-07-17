@@ -653,8 +653,11 @@ mutate unrelated stores directly.
   tail, `evidence/export/apply`, and existing run session cleanup; no durable
   log; streams end on credential expiry), runs existing typed environment
   stop/clean as background work with queryable status, and fails closed after
-  restart for live resources it cannot prove it owns. Its own status/event and
-  background endpoints are a separate surface outside `/api/v1/`. A second
+  restart for live resources it cannot prove it owns. Its own status, event,
+  background, and lifecycle stop/mutation/reconciliation endpoints are a
+  production-inventoried surface outside `/api/v1/`. The lifecycle coordinator
+  serializes ownership and backend observation but grants no capability
+  authority and exposes no raw VM operation. A second
   private listener owns bounded full-duplex run sessions. The thin CLI presents
   Manager reviews and owns local raw-terminal restoration; the daemon owns
   Manager/backend/session workers; a fixed Linux guest supervisor owns each

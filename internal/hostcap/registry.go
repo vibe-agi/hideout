@@ -35,6 +35,7 @@ var registry = []CapabilityDescriptor{
 		IntentSchema:    IntentSchemaOpenResourceV2,
 		ResourceKinds:   []ResourceKind{KindWorkspace, KindHostFS},
 		ResultPolicy:    ResultNone,
+		ResidualPolicy:  ResidualExternalUnmanaged,
 		ProviderRef:     ProviderAppOpenResource,
 		DecisionPolicy:  DecisionDefaultAllowAudited,
 		LifecyclePolicy: LifecycleSession,
@@ -47,6 +48,7 @@ var registry = []CapabilityDescriptor{
 		IntentSchema:    "service-bridge-intent/v1",
 		ResourceKinds:   []ResourceKind{KindDevice, KindEndpoint},
 		ResultPolicy:    ResultLease,
+		ResidualPolicy:  ResidualManaged,
 		ProviderRef:     ProviderDesignReady,
 		DecisionPolicy:  DecisionOperatorGrant,
 		LifecyclePolicy: LifecycleSession,
@@ -59,6 +61,7 @@ var registry = []CapabilityDescriptor{
 		IntentSchema:    "automation-invoke-intent/v1",
 		ResourceKinds:   []ResourceKind{},
 		ResultPolicy:    ResultBoundedTyped,
+		ResidualPolicy:  ResidualNone,
 		ProviderRef:     ProviderDesignReady,
 		DecisionPolicy:  DecisionOperatorGrant,
 		LifecyclePolicy: LifecycleSession,
@@ -109,6 +112,15 @@ func Validate() error {
 		if !validResultPolicy(d.ResultPolicy) {
 			return fmt.Errorf("descriptor %q: unknown resultPolicy %q", d.ID, d.ResultPolicy)
 		}
+		if !validResidualPolicy(d.ResidualPolicy) {
+			return fmt.Errorf("descriptor %q: unknown residualPolicy %q", d.ID, d.ResidualPolicy)
+		}
+		if d.ResultPolicy == ResultNone && d.ResidualPolicy == ResidualManaged {
+			return fmt.Errorf("descriptor %q: result-none cannot leave a managed residual", d.ID)
+		}
+		if d.ResidualPolicy == ResidualExternalUnmanaged && d.ResultPolicy != ResultNone {
+			return fmt.Errorf("descriptor %q: external-unmanaged handoff must be result-none", d.ID)
+		}
 		if !validDecisionPolicy(d.DecisionPolicy) {
 			return fmt.Errorf("descriptor %q: unknown decisionPolicy %q", d.ID, d.DecisionPolicy)
 		}
@@ -137,6 +149,19 @@ func Validate() error {
 				return fmt.Errorf("descriptor %q: unknown platform %q", d.ID, p)
 			}
 		}
+	}
+	return nil
+}
+
+// EnsureExternalUnmanagedHandoff proves that a fire-and-forget provider cannot
+// hide a managed bridge, worker, endpoint, or guest process behind ResultNone.
+func EnsureExternalUnmanagedHandoff(id string) error {
+	d, err := EnsureImplemented(id)
+	if err != nil {
+		return err
+	}
+	if d.ResultPolicy != ResultNone || d.ResidualPolicy != ResidualExternalUnmanaged {
+		return fmt.Errorf("capability %q is not an external-unmanaged result-none handoff", id)
 	}
 	return nil
 }

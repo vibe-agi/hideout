@@ -137,6 +137,30 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 			return err
 		}
 		return validateConcurrentPerformanceArtifact(data, expectedCommit, expectedRuntime)
+	case ArtifactValidatorLifecycleLocalV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateLifecycleLocalArtifact(data, expectedCommit)
+	case ArtifactValidatorLifecycleModelV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateLifecycleModelArtifact(data, expectedCommit)
+	case ArtifactValidatorLifecycleRealV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateLifecycleRealArtifact(data, expectedCommit)
+	case ArtifactValidatorLifecyclePerformanceV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateLifecyclePerformanceArtifact(data, expectedCommit, expectedRuntime)
 	default:
 		return fmt.Errorf("unsupported artifact validator %q", validator)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 )
@@ -35,8 +36,21 @@ type API struct {
 	Now                       func() time.Time
 	RunBackend                RunBackendFactory
 	RunOpener                 RunOpenerFactory
+	RunLifecycle              lifecycle.Registrar
 	EnvOperator               EnvironmentOperator
+	EnvironmentStopApply      EnvironmentStopApplyFunc
+	EnvironmentCleanApply     EnvironmentCleanApplyFunc
 }
+
+// EnvironmentStopApplyFunc lets a hosting control plane serialize backend
+// stops without moving environment authority into the lifecycle registry.
+// Embedded Manager users leave it nil and retain the existing direct apply.
+type EnvironmentStopApplyFunc func(context.Context, EnvironmentActionPlan) (EnvironmentActionResult, error)
+
+// EnvironmentCleanApplyFunc lets a hosting control plane keep destructive
+// environment removal serialized with its lifecycle metadata. Embedded
+// Manager users leave it nil and retain the existing direct apply.
+type EnvironmentCleanApplyFunc func(context.Context, EnvironmentActionPlan) (EnvironmentActionResult, error)
 
 // TokenValidator validates an operator credential without exposing token
 // lifecycle state to the Manager API. When configured on API it replaces the
@@ -589,7 +603,7 @@ func (api API) serveRunApply(w http.ResponseWriter, r *http.Request) {
 	runCtx, cancelRun := api.bindRunCredentialContext(r)
 	defer cancelRun()
 	result, runErr := service.Apply(runCtx, prepared, serviceRequest, RunServiceDependencies{
-		Backend: be, OpenerForSession: api.runOpenerForSession(req, prepared.Plan),
+		Backend: be, OpenerForSession: api.runOpenerForSession(req, prepared.Plan), Lifecycle: api.RunLifecycle,
 	})
 	resp := APIResponse{
 		Version:  APIVersion,
@@ -1283,7 +1297,13 @@ func (api API) serveEnvironmentStopApply(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, applyErr := api.Core.ApplyEnvironmentStop(r.Context(), plan, EnvironmentApplyOptions{Operator: api.EnvOperator})
+	apply := api.EnvironmentStopApply
+	if apply == nil {
+		apply = func(ctx context.Context, value EnvironmentActionPlan) (EnvironmentActionResult, error) {
+			return api.Core.ApplyEnvironmentStop(ctx, value, EnvironmentApplyOptions{Operator: api.EnvOperator})
+		}
+	}
+	result, applyErr := apply(r.Context(), plan)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "environment/stop/apply",
@@ -1336,7 +1356,13 @@ func (api API) serveEnvironmentCleanApply(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, applyErr := api.Core.ApplyEnvironmentClean(r.Context(), plan, EnvironmentApplyOptions{Operator: api.EnvOperator})
+	apply := api.EnvironmentCleanApply
+	if apply == nil {
+		apply = func(ctx context.Context, value EnvironmentActionPlan) (EnvironmentActionResult, error) {
+			return api.Core.ApplyEnvironmentClean(ctx, value, EnvironmentApplyOptions{Operator: api.EnvOperator})
+		}
+	}
+	result, applyErr := apply(r.Context(), plan)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "environment/clean/apply",

@@ -314,6 +314,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
   <button class="tab" type="button" data-panel="profiles">Profiles</button>
   <button class="tab" type="button" data-panel="environments">Environments</button>
   <button class="tab" type="button" data-panel="sessions">Sessions</button>
+  <button class="tab" type="button" data-panel="lifecycle">Lifecycle</button>
   <button class="tab" type="button" data-panel="capabilities">Capabilities</button>
   <button class="tab" type="button" data-panel="hostfs-writes">HostFS Writes</button>
   <button class="tab" type="button" data-panel="decisions">Decisions</button>
@@ -507,6 +508,9 @@ function scopedOverview() {
   if (!selectedProfile) return source;
   const network = Object.assign({}, source.network || {});
   network.profileDefaults = filterByProfile(network.profileDefaults, "profile");
+	const environments = filterByProfile(source.environments, "profile");
+	const environmentIDs = new Set(environments.map(function(value) { return value && value.id; }));
+	const lifecycle = (source.lifecycle || []).filter(function(value) { return value && environmentIDs.has(value.environmentId); });
 	const hostfsWrites = filterByProfile(source.hostfsWrites, "profile");
 	const decisionRows = filterByProfile(source.decisionRows, "profile");
 	const noticeRows = filterByProfile(source.noticeRows, "profile");
@@ -523,14 +527,15 @@ function scopedOverview() {
 	};
   return Object.assign({}, source, {
     profiles: filterByProfile(source.profiles, "name"),
-    environments: filterByProfile(source.environments, "profile"),
+    environments: environments,
     sessions: filterByProfile(source.sessions, "profile"),
 	  network: network,
 	  hostfsWrites: hostfsWrites,
 	  decisionRows: decisionRows,
 	  noticeRows: noticeRows,
 	  decisions: decisions,
-	  notices: notices
+	  notices: notices,
+	  lifecycle: lifecycle
   });
 }
 function withScopedOverview(fn) {
@@ -609,6 +614,7 @@ function renderSummary() {
   const sessions = overview.sessions || [];
   const backends = overview.backends || [];
   const background = overview.background || [];
+  const lifecycle = overview.lifecycle || [];
   const hostfsWrites = overview.hostfsWrites || [];
   const decisions = overview.decisionRows || [];
   const notices = overview.noticeRows || [];
@@ -621,6 +627,7 @@ function renderSummary() {
     metric("Profiles", profiles.length, profiles.map(function(p) { return p.name; }).join(", ")),
     metric("Environments", environments.length, environments.slice(0, 3).map(function(e) { return (e.status || "unknown") + ":" + (e.profile || "-"); }).join(", ")),
     metric("Sessions", sessions.length, sessions.filter(function(s) { return s.hasAudit; }).length + " with audit"),
+    metric("Lifecycle", lifecycle.length, lifecycle.slice(0, 3).map(function(row) { return (row.activity || "unknown") + ":" + (row.environmentId || "environment"); }).join(", ")),
     metric("Backends", available + "/" + backends.length, backends.map(function(b) { return b.name; }).join(", ")),
     metric("Background", background.length, background.slice(0, 3).map(function(b) { return (b.op || "op") + ":" + (b.status || "unknown"); }).join(", ")),
     metric("HostFS Writes", hostfsWrites.length, hostfsWrites.slice(0, 3).map(function(w) { return (w.operation || "op") + ":" + (w.status || "pending"); }).join(", ")),
@@ -666,6 +673,7 @@ function domainOwner(name) {
     profiles: "profile",
     environments: "manager/environment",
     sessions: "manager/backend",
+    lifecycle: "daemon/lifecycle",
     capabilities: "policy/cmdproxy",
     "hostfs-writes": "manager/hostfs-overlay",
     decisions: "manager/decision-center",
@@ -685,6 +693,7 @@ const renderers = {
     const init = overview.init || {};
     const initSteps = init.nextSteps || [];
     const background = overview.background || [];
+    const lifecycle = overview.lifecycle || [];
     const exports = overview.exportOutcomes || [];
     const cleanups = overview.cleanupOutcomes || [];
     const hostfsWrites = overview.hostfsWrites || [];
@@ -695,6 +704,7 @@ const renderers = {
       item("Init", init.initialized ? "initialized" : "needs setup", [["profile", init.profile], ["pendingTasks", init.pendingTasks], ["nextSteps", initSteps.map(function(step) { return (step.label || step.id) + ": " + step.command; })]], init.pendingTasks ? "warn" : "ok"),
       item("Broker", "host boundary", [["actions", overview.broker && overview.broker.actions], ["commandProxies", overview.broker && overview.broker.commandProxies]], "info"),
       item("Environments", "reusable guest state", [["count", (overview.environments || []).length], ["running", (overview.environments || []).filter(function(e) { return e.status === "running"; }).length]], "info"),
+      item("Lifecycle", "dependency-derived VM activity", [["environments", lifecycle.length], ["states", lifecycle.slice(0, 5).map(function(row) { return (row.environmentId || "environment") + ":" + (row.activity || "unknown"); })]], lifecycle.some(function(row) { return row.activity === "blocked-unproved" || row.activity === "stopping-unknown"; }) ? "error" : "info"),
       item("Background", "daemon work", [["count", background.length], ["recent", background.slice(0, 5).map(function(b) { return (b.id || "bg") + ":" + (b.op || "op") + ":" + (b.status || "unknown"); })]], background.some(function(b) { return b.status === "failed"; }) ? "error" : "info"),
       item("HostFS Writes", "staged host mutations", [["pending", hostfsWrites.length], ["recent", hostfsWrites.slice(0, 5).map(function(w) { return (w.operation || "op") + ":" + (w.status || "pending") + ":" + (w.path || ""); })]], hostfsWrites.some(function(w) { return w.status === "failed" || w.status === "conflict"; }) ? "error" : "warn"),
       item("Decisions", "actionable operator queue", [["rows", decisions.length], ["summary", overview.decisions && ("pending=" + (overview.decisions.pending || 0) + " claimed=" + (overview.decisions.claimed || 0) + " terminal=" + (overview.decisions.terminal || 0))], ["recent", decisions.slice(0, 5).map(function(d) { return (d.kind || "decision") + ":" + (d.status || "pending") + ":" + (d.id || ""); })]], decisions.some(function(d) { return d.status === "failed" || d.status === "timed-out"; }) ? "error" : decisions.length ? "warn" : "ok"),
@@ -708,6 +718,7 @@ const renderers = {
     const actionSummary = consoleActionSummary();
     const background = overview.background || [];
     const environments = overview.environments || [];
+    const lifecycle = overview.lifecycle || [];
     const hostfsWrites = overview.hostfsWrites || [];
     const decisions = overview.decisionRows || [];
     const notices = overview.noticeRows || [];
@@ -717,6 +728,7 @@ const renderers = {
       item("Action Required", "existing authority only", [["total", actionSummary.total], ["hostfsWrites", actionSummary.hostfsWrites], ["decisions", actionSummary.decisions], ["notices", actionSummary.notices]], actionSummary.total ? "warn" : "ok"),
       item("Stream", liveStreamState || "seeding", [["state", liveStreamState], ["reason", liveStreamReason], ["lastSeq", liveLastSeq], ["fallback", liveStreamState === "disconnected" ? "manual refresh or daemon-less interval" : "none while healthy"]], streamTone),
       item("Environments", "manager overview", [["count", environments.length], ["running", environments.filter(function(e) { return e.status === "running"; }).length], ["recent", environments.slice(0, 5).map(function(e) { return (e.name || e.id || "env") + ":" + (e.status || "unknown"); })]], "info"),
+      item("Lifecycle", "daemon-derived activity", [["count", lifecycle.length], ["recent", lifecycle.slice(0, 5).map(function(row) { return (row.environmentId || "environment") + ":" + (row.activity || "unknown"); })]], lifecycle.some(function(row) { return row.activity === "blocked-unproved" || row.activity === "stopping-unknown"; }) ? "error" : "info"),
       item("Background", "daemon env stop/clean only", [["count", background.length], ["recent", background.slice(0, 5).map(function(b) { return (b.id || "bg") + ":" + (b.op || "op") + ":" + (b.status || "unknown"); })]], background.some(function(b) { return b.status === "failed"; }) ? "error" : "info"),
       item("HostFS Writes", "staged write decisions", [["actionable", actionSummary.hostfsWrites], ["recent", hostfsWrites.slice(0, 5).map(function(w) { return (w.decisionId || "write") + ":" + (w.status || "pending"); })]], actionSummary.hostfsWrites ? "warn" : "ok"),
       item("Decisions", "decision center", [["actionable", actionSummary.decisions], ["summary", overview.decisions && ("pending=" + (overview.decisions.pending || 0) + " claimed=" + (overview.decisions.claimed || 0) + " terminal=" + (overview.decisions.terminal || 0))], ["recent", decisions.slice(0, 5).map(function(d) { return (d.id || "decision") + ":" + (d.status || "pending"); })]], actionSummary.decisions ? "warn" : "ok"),
@@ -724,6 +736,14 @@ const renderers = {
     ].concat(statusRows.map(function(row) {
       return item(row.label, row.status, [["detail", row.detail], ["next", row.next]], row.status === "explicit" ? "info" : "ok");
     })).join("") + "</div>";
+  },
+  lifecycle: function() {
+    const values = overview.lifecycle || [];
+    if (!values.length) return empty("No lifecycle observations");
+    return '<div class="items">' + values.map(function(row) {
+      const tone = row.activity === "blocked-unproved" || row.activity === "stopping-unknown" ? "error" : row.activity === "idle-grace" || row.activity === "stopping" ? "warn" : "info";
+      return item(row.environmentId || "environment", row.activity || "unknown", [["backend", row.backendState], ["backend observed", row.backendObservedAt], ["generation", row.startGeneration], ["reconciliation", row.reconciliation], ["idleDeadline", row.idleDeadline], ["pins", (row.pins || []).map(function(value) { return value.kind + ":" + value.state; })], ["drains", (row.drains || []).map(function(value) { return value.kind + ":" + value.state; })], ["retained history facts", (row.retained || []).map(function(value) { return value.kind + ":" + value.state; })], ["handoff history facts", (row.handoffs || []).map(function(value) { return value.kind + ":" + value.state; })], ["orphans", (row.orphans || []).map(function(value) { return value.kind + ":" + value.state; })], ["reason", row.reasonCode]], tone);
+    }).join("") + "</div>";
   },
   "hostfs-writes": function() {
     const rows = overview.hostfsWrites || [];
@@ -1522,13 +1542,14 @@ function daemonAPI(path) {
   });
 }
 function seedEmptyOverview() {
-  return {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}, background: [], exportOutcomes: [], cleanupOutcomes: [], hostfsWrites: [], decisionRows: [], noticeRows: [], decisions: {pending: 0, claimed: 0, terminal: 0}, notices: {unacknowledged: 0, total: 0}};
+  return {profiles: [], environments: [], sessions: [], backends: [], network: {profileDefaults: []}, capabilities: {}, broker: {}, audit: {}, settings: {}, background: [], lifecycle: [], exportOutcomes: [], cleanupOutcomes: [], hostfsWrites: [], decisionRows: [], noticeRows: [], decisions: {pending: 0, claimed: 0, terminal: 0}, notices: {unacknowledged: 0, total: 0}};
 }
 function ensureLiveCollections() {
   if (!overview) overview = seedEmptyOverview();
   if (!Array.isArray(overview.environments)) overview.environments = [];
   if (!Array.isArray(overview.sessions)) overview.sessions = [];
   if (!Array.isArray(overview.background)) overview.background = [];
+  if (!Array.isArray(overview.lifecycle)) overview.lifecycle = [];
   if (!Array.isArray(overview.exportOutcomes)) overview.exportOutcomes = [];
   if (!Array.isArray(overview.cleanupOutcomes)) overview.cleanupOutcomes = [];
   if (!Array.isArray(overview.hostfsWrites)) overview.hostfsWrites = [];
@@ -1660,6 +1681,10 @@ function applyLiveEvent(event) {
   } else if (event.kind === "notice") {
     overview.noticeRows = upsertByID(overview.noticeRows, noticeRowFromPayload(payload));
     updateNoticeSummary();
+  } else if (event.kind === "lifecycle") {
+    const row = redactValue(payload.lifecycle || {});
+    if (!row.environmentId) return false;
+    overview.lifecycle = upsertByID(overview.lifecycle, Object.assign({id: redactText(row.environmentId)}, row));
   } else {
     return false;
   }
@@ -1686,6 +1711,7 @@ async function seedLiveConsole() {
     try {
       const status = await daemonAPI("status");
       overview.background = Array.isArray(status.background) ? status.background : [];
+      overview.lifecycle = Array.isArray(status.lifecycle) ? status.lifecycle.map(function(row) { return Object.assign({id: redactText(row.environmentId)}, redactValue(row)); }) : [];
     } catch {}
     try {
 	  const hostfsStatus = await api("hostfs/write/status" + (selectedProfile ? "?profile=" + encodeURIComponent(selectedProfile) : ""));

@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/recovery"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
@@ -74,6 +75,159 @@ type EnvironmentActionTarget struct {
 type EnvironmentOperator interface {
 	StopInstance(context.Context, string) error
 	Cleanup(context.Context, *backend.Session) error
+}
+
+// EnvironmentLifecycleBackend combines the existing non-destructive stop
+// operation with an independent backend fact source. Command success alone is
+// never accepted as stop proof.
+type EnvironmentLifecycleBackend interface {
+	EnvironmentOperator
+	backend.LifecycleObserver
+}
+
+type EnvironmentLifecycleBackendFactory func(environment.Record) (EnvironmentLifecycleBackend, error)
+
+// StopEnvironmentIncarnation performs the coordinator-owned automatic stop
+// transaction while preserving Manager's environment-lock authority.
+func (c Core) StopEnvironmentIncarnation(ctx context.Context, request lifecycle.StopRequest, provider EnvironmentLifecycleBackend) (lifecycle.StopResult, error) {
+	if provider == nil {
+		return lifecycle.StopResult{}, errors.New("environment lifecycle backend is required")
+	}
+	if err := request.Incarnation.Validate(true); err != nil {
+		return lifecycle.StopResult{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	store := environment.Store{Root: c.Store.Root}
+	lock, err := store.LockContext(ctx, request.Incarnation.EnvironmentID)
+	if err != nil {
+		return lifecycle.StopResult{}, err
+	}
+	defer lock.Unlock()
+	record, err := store.Load(request.Incarnation.EnvironmentID)
+	if err != nil {
+		return lifecycle.StopResult{}, err
+	}
+	if record.InstanceName != request.Incarnation.InstanceName || record.Backend != "lima" {
+		return lifecycle.StopResult{ReasonCode: "environment-identity-mismatch"}, errors.New("automatic stop environment identity mismatch")
+	}
+	switch request.Mode {
+	case "automatic":
+		if err := requireEnvironmentOwnersAbsentForAutomaticStop(store, record.ID); err != nil {
+			return lifecycle.StopResult{ReasonCode: "session-owner-present-or-unproved"}, err
+		}
+	case "explicit-recovery":
+		if err := requireEnvironmentOwnersStaleForStop(store, record.ID); err != nil {
+			return lifecycle.StopResult{ReasonCode: "session-owner-live-or-unproved"}, err
+		}
+	default:
+		return lifecycle.StopResult{ReasonCode: "stop-mode-invalid"}, errors.New("environment lifecycle stop mode is invalid")
+	}
+	result, err := observeAndStopEnvironment(ctx, record.InstanceName, request.Incarnation.BootID, provider)
+	if err != nil {
+		return result, err
+	}
+	committed, err := c.commitObservedEnvironmentStop(store, record, result.Observation, request.Mode)
+	if err != nil {
+		return committed, err
+	}
+	if request.Mode == "explicit-recovery" {
+		if recoveryErr := recoverStoppedEnvironmentOwners(store, record.ID); recoveryErr != nil {
+			committed.CleanupUnproved = true
+			committed.ReasonCode = "explicit-recovery-unproved"
+			return committed, recoveryErr
+		}
+	}
+	return committed, nil
+}
+
+func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID string, provider EnvironmentLifecycleBackend) (lifecycle.StopResult, error) {
+	before := provider.ObserveLifecycle(ctx, instanceName)
+	if err := validateLifecycleObservationForInstance(before, instanceName); err != nil {
+		return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-observation-invalid"), ReasonCode: "backend-observation-invalid"}, err
+	}
+	if before.State == backend.LifecycleStopped || before.State == backend.LifecycleAbsent {
+		return lifecycle.StopResult{Observation: before}, nil
+	}
+	if before.State != backend.LifecycleRunning || (expectedBootID != "" && before.BootID != expectedBootID) {
+		return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-incarnation-changed"), ReasonCode: "backend-incarnation-changed"}, errors.New("stop backend incarnation is not the observed target")
+	}
+	boundBootID := before.BootID
+	stopCtx, cancelStop := context.WithTimeout(ctx, 30*time.Second)
+	stopErr := provider.StopInstance(stopCtx, instanceName)
+	cancelStop()
+	if stopErr != nil {
+		return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-stop-failed"), ReasonCode: "backend-stop-failed"}, stopErr
+	}
+	observeCtx, cancelObserve := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelObserve()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		observation := provider.ObserveLifecycle(observeCtx, instanceName)
+		if err := validateLifecycleObservationForInstance(observation, instanceName); err != nil {
+			return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-observation-invalid"), ReasonCode: "backend-observation-invalid"}, err
+		}
+		switch observation.State {
+		case backend.LifecycleStopped, backend.LifecycleAbsent:
+			return lifecycle.StopResult{Observation: observation}, nil
+		case backend.LifecycleRunning:
+			if observation.BootID != boundBootID {
+				return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-incarnation-changed"), ReasonCode: "backend-incarnation-changed"}, errors.New("backend restarted during stop observation")
+			}
+		case backend.LifecycleUnknown:
+			// Inventory can be transient while Lima stops. Keep observing within
+			// the independent five-second proof window.
+		}
+		select {
+		case <-observeCtx.Done():
+			return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-stop-observation-timeout"), ReasonCode: "backend-stop-observation-timeout"}, observeCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func validateLifecycleObservationForInstance(observation backend.LifecycleObservation, instanceName string) error {
+	if err := observation.Validate(); err != nil {
+		return fmt.Errorf("invalid backend lifecycle observation: %w", err)
+	}
+	if observation.InstanceName != instanceName {
+		return errors.New("backend lifecycle observation belongs to another instance")
+	}
+	return nil
+}
+
+func requireEnvironmentOwnersAbsentForAutomaticStop(store environment.Store, environmentID string) error {
+	owners, err := session.ListOwners(store.OwnerRoot(environmentID))
+	if err != nil {
+		return err
+	}
+	if len(owners) != 0 {
+		return fmt.Errorf("automatic stop requires an empty proved owner set; found %d owner record(s)", len(owners))
+	}
+	return nil
+}
+
+func (c Core) commitObservedEnvironmentStop(store environment.Store, record environment.Record, observation backend.LifecycleObservation, mode string) (lifecycle.StopResult, error) {
+	record.Status = "stopped"
+	record.LastEndedAt = time.Now().UTC()
+	if err := store.Save(record); err != nil {
+		return lifecycle.StopResult{}, err
+	}
+	if err := invalidateStoppedEnvironmentRuntime(store, record); err != nil {
+		return lifecycle.StopResult{}, err
+	}
+	reason := "automatic-final-session"
+	if mode == "explicit-recovery" {
+		reason = "operator-requested"
+	}
+	c.emitOperation("environment", "complete", environmentOperationDetails(EnvironmentActionStop, environmentActionTargetFromRecord(record, reason), "stopped"))
+	return lifecycle.StopResult{Observation: observation}, nil
+}
+
+func lifecycleUnknownObservation(instanceName, reason string) backend.LifecycleObservation {
+	return backend.LifecycleObservation{State: backend.LifecycleUnknown, InstanceName: instanceName, ObservedAt: time.Now().UTC(), ReasonCode: reason}
 }
 
 type EnvironmentApplyOptions struct {
@@ -385,7 +539,15 @@ func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, op
 		}
 		return EnvironmentActionTarget{}, environmentActionTargetFromRecord(rec, "no-lima-instance"), nil
 	}
-	if err := operator.StopInstance(ctx, rec.InstanceName); err != nil {
+	if observed, ok := operator.(EnvironmentLifecycleBackend); ok {
+		result, stopErr := observeAndStopEnvironment(ctx, rec.InstanceName, "", observed)
+		if stopErr != nil {
+			return EnvironmentActionTarget{}, EnvironmentActionTarget{}, stopErr
+		}
+		if result.Observation.State != backend.LifecycleStopped && result.Observation.State != backend.LifecycleAbsent {
+			return EnvironmentActionTarget{}, EnvironmentActionTarget{}, errors.New("environment stop lacks terminal backend observation")
+		}
+	} else if err := operator.StopInstance(ctx, rec.InstanceName); err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
 	rec.Status = "stopped"

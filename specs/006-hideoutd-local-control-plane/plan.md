@@ -58,8 +58,8 @@ mint/persist, event fan-out, background registry, restart fail-closed) and a
 backend capability and no new redaction engine.
 
 **Storage**: No new persistent store and no durable event log. A runtime
-subdirectory under the store holds ephemeral control files recreated per start (the
-Unix socket, the operator-token file `0600`, the single-instance lock) and one
+subdirectory under the store holds per-instance control files (the Unix socket and
+operator-token file `0600`), one stable `0600` single-instance lock inode, and one
 persistent evidence file: the daemon-local audit log (`daemon-audit.jsonl`), which
 is append-only and SURVIVES stop/restart because auth refusals, lifecycle, and
 restart-orphan records are evidence, not per-instance diagnostics. Session audit
@@ -164,7 +164,8 @@ internal/
 │                       # mounts manager.API.Handler() as the parity-locked Manager
 │                       # subrouter behind an auth-refusal recorder (logs 401s to the
 │                       # daemon audit log without altering responses); serves its own
-│                       # status/stop/events/background endpoints (separate surface); the
+│                       # status/stop/events/background and later typed lifecycle
+│                       # coordination endpoints (separate surface); the
 │                       # live event fan-out (bounded per subscriber); the persistent
 │                       # daemon-local audit log; and the background-operation registry
 │                       # (v1: env stop/clean apply only).

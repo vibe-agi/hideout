@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -19,6 +20,11 @@ const (
 	// the same assessment completes immediately afterward. Keep the operation
 	// bounded, but leave enough time for the host trust service to answer.
 	darwinIdentityCommandTimeout = 30 * time.Second
+	// System policy assessment is materially slower than signature integrity
+	// verification. Cache only a successful assessment for the exact observed
+	// bundle path and signing facts; codesign verify/display still run on every
+	// observation and any identity change gets a different key.
+	darwinTrustCacheTTL = 5 * time.Minute
 )
 
 var errDarwinIdentityOutputLimit = errors.New("darwin identity command output exceeded its Core limit")
@@ -46,6 +52,13 @@ func (b *boundedDarwinIdentityOutput) Write(data []byte) (int, error) {
 func (b *boundedDarwinIdentityOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 type darwinIdentityCommandRunner func(context.Context, string, ...string) ([]byte, error)
+
+type darwinTrustCache struct {
+	mu      sync.Mutex
+	entries map[string]time.Time
+}
+
+var processDarwinTrustCache = &darwinTrustCache{entries: map[string]time.Time{}}
 
 func execDarwinIdentityCommand(ctx context.Context, executable string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, executable, args...)
@@ -79,7 +92,7 @@ func execDarwinIdentityCommand(ctx context.Context, executable string, args ...s
 // service and then reads signing facts. It never accepts a caller-supplied
 // requirement as an authentication anchor.
 func ObserveDarwinSigningIdentity(bundlePath string) (SigningObservation, error) {
-	return observeDarwinSigningIdentity(bundlePath, execDarwinIdentityCommand)
+	return observeDarwinSigningIdentityCached(bundlePath, execDarwinIdentityCommand, darwinIdentityCommandTimeout, processDarwinTrustCache, time.Now().UTC())
 }
 
 func observeDarwinSigningIdentity(bundlePath string, run darwinIdentityCommandRunner) (SigningObservation, error) {
@@ -87,6 +100,10 @@ func observeDarwinSigningIdentity(bundlePath string, run darwinIdentityCommandRu
 }
 
 func observeDarwinSigningIdentityWithTimeout(bundlePath string, run darwinIdentityCommandRunner, timeout time.Duration) (SigningObservation, error) {
+	return observeDarwinSigningIdentityCached(bundlePath, run, timeout, nil, time.Time{})
+}
+
+func observeDarwinSigningIdentityCached(bundlePath string, run darwinIdentityCommandRunner, timeout time.Duration, cache *darwinTrustCache, now time.Time) (SigningObservation, error) {
 	if run == nil {
 		return SigningObservation{}, errors.New("darwin identity command runner is unavailable")
 	}
@@ -114,13 +131,48 @@ func observeDarwinSigningIdentityWithTimeout(bundlePath string, run darwinIdenti
 	if err != nil {
 		return SigningObservation{}, err
 	}
+	trustKey := strings.Join([]string{bundlePath, facts.BundleID, facts.TeamID, facts.CodeIdentity}, "\x00")
+	if cache != nil && cache.accepted(trustKey, now) {
+		facts.Trusted = true
+		facts.TrustAnchor = "macos-system-policy"
+		return facts, nil
+	}
 	if _, trustErr := runDarwinIdentityStep(run, timeout, "/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", bundlePath); trustErr == nil {
 		facts.Trusted = true
 		facts.TrustAnchor = "macos-system-policy"
+		if cache != nil {
+			cache.remember(trustKey, now)
+		}
 	} else if errors.Is(trustErr, context.DeadlineExceeded) {
 		return SigningObservation{}, errors.New("macOS system trust assessment timed out")
 	}
 	return facts, nil
+}
+
+func (c *darwinTrustCache) accepted(key string, now time.Time) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	expiresAt, ok := c.entries[key]
+	if !ok || !now.Before(expiresAt) {
+		delete(c.entries, key)
+		return false
+	}
+	return true
+}
+
+func (c *darwinTrustCache) remember(key string, now time.Time) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]time.Time{}
+	}
+	c.entries[key] = now.Add(darwinTrustCacheTTL)
 }
 
 func runDarwinIdentityStep(run darwinIdentityCommandRunner, timeout time.Duration, executable string, args ...string) ([]byte, error) {

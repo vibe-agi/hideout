@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
@@ -234,7 +235,7 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 	return runEnv, cleanupErr
 }
 
-func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, serviceCleanup func(context.Context) error) (retErr error) {
+func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, serviceCleanup func(context.Context) error, lifecycleRegistration ...lifecycle.Registration) (retErr error) {
 	if !runEnv.Active || owner == nil {
 		return cleanupErr
 	}
@@ -250,7 +251,15 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 			updateErr := owner.Update(session.OwnerStateFailed, failure.Error())
 			// Release liveness but retain failed metadata; deleting it would turn an
 			// unproved cleanup into a false-success status.
-			return errors.Join(err, updateErr, owner.Release())
+			failure = errors.Join(failure, updateErr, owner.Release())
+			// The transition lock protects provider cleanup, not lifecycle handle
+			// ownership. Even when it cannot be acquired, seal the registration so
+			// the coordinator records a blocked cleanup instead of retaining a
+			// phantom active session forever.
+			if len(lifecycleRegistration) != 0 && lifecycleRegistration[0] != nil {
+				failure = errors.Join(failure, lifecycleRegistration[0].Finish(context.Background(), failure))
+			}
+			return failure
 		}
 	}
 	defer func() {
@@ -299,9 +308,23 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 	}
 	combinedErr := errors.Join(priorCleanupErr, finalErr)
 	if combinedErr != nil {
-		finalErr = errors.Join(finalErr, owner.Update(session.OwnerStateFailed, combinedErr.Error()), owner.Release())
+		if err := owner.Update(session.OwnerStateFailed, combinedErr.Error()); err != nil {
+			finalErr = errors.Join(finalErr, fmt.Errorf("record failed session cleanup: %w", err))
+		}
+		if err := owner.Release(); err != nil {
+			finalErr = errors.Join(finalErr, fmt.Errorf("release failed session owner: %w", err))
+		}
 	} else {
-		finalErr = errors.Join(finalErr, owner.Close())
+		if err := owner.Close(); err != nil {
+			finalErr = errors.Join(finalErr, fmt.Errorf("close completed session owner: %w", err))
+		}
+	}
+	combinedErr = errors.Join(priorCleanupErr, finalErr)
+	if len(lifecycleRegistration) != 0 && lifecycleRegistration[0] != nil {
+		lifecycleErr := lifecycleRegistration[0].Finish(context.Background(), combinedErr)
+		if lifecycleErr != nil {
+			finalErr = errors.Join(finalErr, fmt.Errorf("finish lifecycle registration: %w", lifecycleErr))
+		}
 	}
 	rec, loadErr := store.Load(runEnv.Record.ID)
 	if loadErr != nil {

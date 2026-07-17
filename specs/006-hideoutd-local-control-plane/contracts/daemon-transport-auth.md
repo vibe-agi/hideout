@@ -11,9 +11,10 @@
   background-operation inventory (validates against `schemas/daemon-status.schema.json`).
 - `hideout daemon stop` performs ordered shutdown: in-flight and background operations
   finish or fail closed with recorded terminal status, subscribers get a terminal
-  event, and the socket/lock are removed.
-- A stale socket/lock from a crash is detected on the next start and either safely
-  reclaimed or the start fails closed with a diagnostic.
+  event, the socket is removed, and the stable lock inode is unlocked but retained.
+- A stale socket from a crash is detected on the next start. The stable private lock
+  inode is acquired rather than unlinked; a held lock fails closed, while an unlocked
+  inode is safely reused.
 
 ## Daemon-Specific Endpoints (separate surface)
 
@@ -28,6 +29,13 @@ All are operator-token authenticated and add no Manager operation class:
 - `POST /daemon/background` — submit an existing typed environment stop/clean apply
   as background work (`{"op":"environment-stop"|"environment-clean","ids":[...]}`);
   it runs the same Core apply and rejects any other op class.
+- `POST /daemon/lifecycle/stop` — request a serialized, backend-observed
+  environment stop through the 036 coordinator.
+- `POST /daemon/lifecycle/mutate` — serialize an existing typed destructive
+  environment mutation with lifecycle state.
+- `POST /daemon/lifecycle/reconcile` — retry one blocked environment's typed
+  reconciliation in the current daemon epoch; it never promotes journal state
+  into current proof.
 
 ## Primary Transport (guest-unreachable placement)
 

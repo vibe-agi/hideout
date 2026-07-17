@@ -58,6 +58,9 @@ var daemonEndpointSpecs = []EndpointSpec{
 	},
 	daemonEndpoint(http.MethodPost, backgroundPath, "submit existing typed env stop/clean as background work"),
 	daemonEndpoint(http.MethodGet, eventsPath, "stream live daemon events"),
+	daemonEndpoint(http.MethodPost, lifecycleMutatePath, "serialize explicit destructive environment mutation with lifecycle state"),
+	daemonEndpoint(http.MethodPost, lifecycleReconcilePath, "retry one blocked lifecycle reconciliation in the current daemon epoch"),
+	daemonEndpoint(http.MethodPost, lifecycleStopPath, "request serialized observed environment stop"),
 	daemonEndpoint(http.MethodGet, statusPath, "read daemon status"),
 	daemonEndpoint(http.MethodPost, stopPath, "request ordered daemon shutdown"),
 }

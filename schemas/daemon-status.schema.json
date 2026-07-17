@@ -67,6 +67,13 @@
           }
         }
       }
+    },
+    "lifecycle": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "lifecycle-status.schema.json"
+      }
     }
   }
 }

@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/lifecycle-journal.schema.json",
+  "title": "Hideout lifecycle journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "environmentId", "startGeneration", "reconciliation", "updatedAt"],
+  "properties": {
+    "schema": { "const": "hideout.lifecycle-journal/v1" },
+    "environmentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "startGeneration": { "type": "integer", "minimum": 1 },
+    "incarnation": { "$ref": "#/$defs/incarnation" },
+    "resources": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/resource" }
+    },
+    "facts": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/fact" }
+    },
+    "idleDeadline": { "$ref": "#/$defs/idleDeadline" },
+    "stopAttempt": { "$ref": "#/$defs/stopAttempt" },
+    "reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["daemonInstanceId", "state", "observedAt"],
+      "properties": {
+        "daemonInstanceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "enum": ["pending", "complete", "blocked"] },
+        "reasonCode": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+        "observedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "incarnation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environmentId", "startGeneration", "instanceName"],
+      "properties": {
+        "environmentId": { "type": "string" },
+        "startGeneration": { "type": "integer", "minimum": 1 },
+        "instanceName": { "type": "string" },
+        "bootId": { "type": "string" }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "owner", "state", "persistence", "closePolicy", "updatedAt"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/resourceRef" },
+        "owner": { "$ref": "#/$defs/ownerRef" },
+        "state": { "enum": ["planned", "starting", "active", "draining", "orphaned"] },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/dependency" }
+        },
+        "persistence": { "enum": ["ephemeral", "retained", "evidence"] },
+        "closePolicy": { "enum": ["pre-stop-drain", "co-terminate-with-root", "survive-root", "external-unmanaged"] },
+        "incarnation": { "$ref": "#/$defs/incarnation" },
+        "possibleVmDependency": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "class", "generation", "recordedAt"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/factKind" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "class": { "enum": ["retained", "handoff"] },
+        "generation": { "type": "integer", "minimum": 1 },
+        "recordedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "resourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "generation"],
+      "properties": {
+		"kind": { "$ref": "#/$defs/resourceKind" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "generation": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ownerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "generation"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "generation": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "stopMode"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/resourceRef" },
+        "stopMode": { "enum": ["pin", "drain"] }
+      }
+    },
+    "idleDeadline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["incarnation", "daemonInstanceId", "scheduledAt", "deadline", "generation"],
+      "properties": {
+        "incarnation": { "$ref": "#/$defs/incarnation" },
+        "daemonInstanceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "scheduledAt": { "type": "string", "format": "date-time" },
+        "deadline": { "type": "string", "format": "date-time" },
+        "generation": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stopAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "incarnation", "daemonInstanceId", "mode", "state", "startedAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "incarnation": { "$ref": "#/$defs/incarnation" },
+        "daemonInstanceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "mode": { "enum": ["automatic", "explicit-recovery"] },
+        "state": { "enum": ["planned", "draining", "invoked", "observing", "committed", "unknown", "failed"] },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "observation": { "$ref": "#/$defs/observation" }
+      }
+    },
+	"resourceKind": {
+	  "enum": [
+	    "backend.incarnation",
+	    "broker.listener",
+	    "endpoint.run-bridge",
+	    "guest.supervisor",
+	    "guest.target",
+	    "host.materialization.live-projection",
+	    "host.materialization.snapshot",
+	    "hostfs.live-read-grant",
+	    "hostfs.read-provider",
+	    "network.environment-service",
+	    "run.session"
+	  ]
+	},
+	"factKind": {
+	  "enum": ["decision.record", "hostapp.handoff", "hostfs.staged-object"]
+	},
+	"observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "observedAt"],
+      "properties": {
+        "state": { "enum": ["running", "stopped", "absent", "unknown", "not-applicable"] },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "reasonCode": { "type": "string", "maxLength": 128 }
+      }
+    }
+  }
+}

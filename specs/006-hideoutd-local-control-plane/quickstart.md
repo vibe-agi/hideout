@@ -76,9 +76,10 @@ that operations and other subscribers are unaffected and daemon memory stays bou
 ## 8b. Daemon-Specific Endpoints Are A Separate Surface (unit) — FR-016
 
 Assert the daemon's own endpoints — loopback-only `GET /`, `GET /daemon/status`,
-`POST /daemon/stop`, `GET /daemon/events`, and `POST /daemon/background` — live
-outside `/api/v1/…`, add no Manager operation class, and are subject to the same
-authentication and redaction as Manager routes.
+`POST /daemon/stop`, `GET /daemon/events`, `POST /daemon/background`, and the
+036 `POST /daemon/lifecycle/{stop,mutate,reconcile}` extensions — live outside
+`/api/v1/…`, expose no raw profile write, raw VM operation, or host execution,
+and are subject to the same authentication and redaction as Manager routes.
 
 ## 9. Surfaces Consume Events (unit) — FR-009
 

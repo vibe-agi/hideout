@@ -63,10 +63,13 @@ type Service struct {
 	Overlay        *overlay.Store
 	Context        OverlayContext
 	ReadAuthority  ReadAuthority
-	enumSem        chan struct{}
-	readDir        func(string) ([]os.DirEntry, error)
-	lstat          func(string) (os.FileInfo, error)
-	now            func() time.Time
+	// BeginStage records retained lifecycle metadata before Overlay.Stage can
+	// create durable state. The completion callback is called exactly once.
+	BeginStage func() (complete func(staged bool) error, err error)
+	enumSem    chan struct{}
+	readDir    func(string) ([]os.DirEntry, error)
+	lstat      func(string) (os.FileInfo, error)
+	now        func() time.Time
 }
 
 type ReadGrantCheck struct {
@@ -451,6 +454,13 @@ func (s Service) StageWrite(req WriteRequest) (WriteResult, error) {
 			return WriteResult{}, err
 		}
 	}
+	complete := func(bool) error { return nil }
+	if s.BeginStage != nil {
+		complete, err = s.BeginStage()
+		if err != nil {
+			return WriteResult{}, err
+		}
+	}
 	stageReq := overlay.StageRequest{
 		SessionID:       s.Context.SessionID,
 		Profile:         s.Context.Profile,
@@ -474,6 +484,9 @@ func (s Service) StageWrite(req WriteRequest) (WriteResult, error) {
 	}
 	result, err := s.Overlay.Stage(stageReq)
 	if err != nil {
+		return WriteResult{}, errors.Join(err, complete(false))
+	}
+	if err := complete(true); err != nil {
 		return WriteResult{}, err
 	}
 	return WriteResult{

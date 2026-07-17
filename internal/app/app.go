@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/hostopen"
 	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
@@ -74,6 +76,8 @@ var (
 	Commit    = "unknown"
 	BuildTime = "unknown"
 )
+
+const lifecycleAutomaticStopPromoted = false
 
 func Main(args []string, stdout, stderr io.Writer) int {
 	a := app{stdout: stdout, stderr: stderr, stdin: os.Stdin}
@@ -3073,12 +3077,42 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 				[]string{"hideout cleanup --dry-run", "hideout clean --dry-run --stopped"},
 			)
 		case "daemon":
-			addDoctorFeatureFinding(builder, "feature-daemon", "daemon", doctorpkg.StatusPass,
-				"daemon command and schemas are packaged; runtime availability is checked by daemon smoke",
-				[]string{"daemon CLI and schemas are present in this build"},
-				nil,
-				[]string{"daemon live socket/auth proof requires daemon smoke or a running daemon"},
-				[]string{"hideout daemon status", "scripts/test-daemon-smoke.sh"},
+			statusCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			daemonStatus, statusErr := daemon.FetchStatus(statusCtx, store.Root)
+			cancel()
+			if statusErr != nil {
+				addDoctorFeatureFinding(builder, "feature-daemon", "daemon", doctorpkg.StatusWarn,
+					"daemon is not currently observable",
+					nil,
+					[]string{"authenticated daemon status could not be read"},
+					[]string{"a live daemon smoke is still required for transport and authentication proof"},
+					[]string{"hideout daemon start", "scripts/test-daemon-smoke.sh"},
+				)
+				continue
+			}
+			blocked := 0
+			for _, row := range daemonStatus.Lifecycle {
+				if row.Activity == lifecycle.ActivityBlocked || row.Activity == lifecycle.ActivityStoppingUnknown {
+					blocked++
+				}
+			}
+			findingStatus := doctorpkg.StatusPass
+			candidates := []string(nil)
+			if blocked != 0 {
+				findingStatus = doctorpkg.StatusWarn
+				candidates = append(candidates, "one or more environments have unproved lifecycle state")
+			}
+			addDoctorFeatureFinding(builder, "feature-daemon", "daemon", findingStatus,
+				fmt.Sprintf("state=%s sessions=%d lifecycle=%d blocked=%d", daemonStatus.State, len(daemonStatus.Sessions), len(daemonStatus.Lifecycle), blocked),
+				[]string{
+					fmt.Sprintf("state=%s", daemonStatus.State),
+					fmt.Sprintf("sessions=%d", len(daemonStatus.Sessions)),
+					fmt.Sprintf("lifecycle=%d", len(daemonStatus.Lifecycle)),
+					fmt.Sprintf("blocked=%d", blocked),
+				},
+				candidates,
+				[]string{"real backend stop observation still requires the lifecycle Lima gate"},
+				[]string{"hideout daemon status --human", "hideout doctor --feature sessions --level deep"},
 			)
 		case "decisions":
 			if decisionErr != nil {
@@ -6803,9 +6837,32 @@ func (a app) envDestructive(args []string, verb string) error {
 	}
 	core := manager.New(store)
 	applyOpts := manager.EnvironmentApplyOptions{Operator: a.environmentOperator(*verbose)}
+	selected, err := core.EnvironmentByName(name)
+	if err != nil {
+		return err
+	}
+	// Preserve the cheap, side-effect-free refusal before daemon routing. The
+	// daemon still reloads the record under the environment mutation lock before
+	// it performs any destructive work.
+	if selected.Status == "running" && !*force {
+		return fmt.Errorf("environment %q is running; stop it first: hideout stop %s (or pass --force to %s)", selected.Name, selected.Name, verb)
+	}
+	mutate := func() (environment.Record, error) {
+		if selected.Backend == "lima" {
+			return a.mutateEnvironmentViaDaemon(store, selected.ID, verb, *force)
+		}
+		switch verb {
+		case "recreate":
+			return core.RecreateEnvironment(context.Background(), name, *force, applyOpts)
+		case "remove":
+			return core.RemoveEnvironment(context.Background(), name, *force, applyOpts)
+		default:
+			return environment.Record{}, errors.New("unsupported environment mutation")
+		}
+	}
 	switch verb {
 	case "recreate":
-		rec, err := core.RecreateEnvironment(context.Background(), name, *force, applyOpts)
+		rec, err := mutate()
 		if err != nil {
 			return err
 		}
@@ -6813,13 +6870,55 @@ func (a app) envDestructive(args []string, verb string) error {
 		fmt.Fprintf(a.stdout, "  image: %s\n", rec.ImageRef)
 		fmt.Fprintf(a.stdout, "run: hideout run --env %s -- <command>\n", rec.Name)
 	case "remove":
-		rec, err := core.RemoveEnvironment(context.Background(), name, *force, applyOpts)
+		rec, err := mutate()
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(a.stdout, "removed environment %s (%s)\n", rec.Name, rec.ID)
 	}
 	return nil
+}
+
+func (a app) mutateEnvironmentViaDaemon(store profile.Store, environmentID, operation string, force bool) (environment.Record, error) {
+	executableFn := a.daemonExecutable
+	if executableFn == nil {
+		executableFn = os.Executable
+	}
+	executable, err := executableFn()
+	if err != nil {
+		return environment.Record{}, fmt.Errorf("resolve hideout executable: %w", err)
+	}
+	ensure := a.ensureDaemon
+	if ensure == nil {
+		ensure = daemon.EnsureStarted
+	}
+	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
+		Store: store, Executable: executable, Diagnostics: a.stderr,
+	}); err != nil {
+		return environment.Record{}, fmt.Errorf("serialized environment mutation requires hideoutd: %w", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"environmentId": environmentID,
+		"operation":     operation,
+		"force":         force,
+	})
+	if err != nil {
+		return environment.Record{}, err
+	}
+	data, err := a.daemonRequest(store.Root, http.MethodPost, "/daemon/lifecycle/mutate", bytes.NewReader(payload))
+	if err != nil {
+		return environment.Record{}, err
+	}
+	var response struct {
+		Record environment.Record `json:"record"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return environment.Record{}, fmt.Errorf("decode daemon environment mutation: %w", err)
+	}
+	if response.Record.ID != environmentID {
+		return environment.Record{}, errors.New("daemon environment mutation returned another environment")
+	}
+	return response.Record, nil
 }
 
 func (a app) envCreate(args []string) error {
@@ -6940,16 +7039,96 @@ func (a app) stopEnvironments(args []string) error {
 		fmt.Fprintf(a.stdout, "stop: environments=%d would stop=%d skipped=%d\n", plan.Total, len(plan.Targets), len(plan.Skipped))
 		return nil
 	}
-	result, err := core.ApplyEnvironmentStop(context.Background(), plan, manager.EnvironmentApplyOptions{
-		Operator: a.environmentOperator(*verbose),
-	})
-	if err != nil {
-		return err
+	daemonPlan, directPlan := partitionEnvironmentLifecyclePlan(plan)
+	applied := make([]manager.EnvironmentActionTarget, 0, len(plan.Targets))
+	if len(daemonPlan.Targets) != 0 {
+		daemonApplied, daemonErr := a.stopEnvironmentsViaDaemon(store, daemonPlan)
+		if daemonErr != nil {
+			return daemonErr
+		}
+		applied = append(applied, daemonApplied...)
 	}
-	a.writeEnvironmentTargets("stopped", result.Applied)
-	a.writeEnvironmentSkipped(result.Skipped)
-	fmt.Fprintf(a.stdout, "stop: environments=%d stopped=%d skipped=%d\n", plan.Total, len(result.Applied), len(result.Skipped))
+	if len(directPlan.Targets) != 0 {
+		result, applyErr := core.ApplyEnvironmentStop(context.Background(), directPlan, manager.EnvironmentApplyOptions{
+			Operator: a.environmentOperator(*verbose),
+		})
+		if applyErr != nil {
+			return applyErr
+		}
+		applied = append(applied, result.Applied...)
+	}
+	applied = orderEnvironmentTargets(plan.Targets, applied)
+	a.writeEnvironmentTargets("stopped", applied)
+	a.writeEnvironmentSkipped(plan.Skipped)
+	fmt.Fprintf(a.stdout, "stop: environments=%d stopped=%d skipped=%d\n", plan.Total, len(applied), len(plan.Skipped))
 	return nil
+}
+
+func (a app) stopEnvironmentsViaDaemon(store profile.Store, plan manager.EnvironmentActionPlan) ([]manager.EnvironmentActionTarget, error) {
+	if len(plan.Targets) == 0 {
+		return nil, nil
+	}
+	executableFn := a.daemonExecutable
+	if executableFn == nil {
+		executableFn = os.Executable
+	}
+	executable, err := executableFn()
+	if err != nil {
+		return nil, fmt.Errorf("resolve hideout executable: %w", err)
+	}
+	ensure := a.ensureDaemon
+	if ensure == nil {
+		ensure = daemon.EnsureStarted
+	}
+	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
+		Store: store, Executable: executable, Diagnostics: a.stderr,
+	}); err != nil {
+		return nil, fmt.Errorf("serialized environment stop requires hideoutd: %w", err)
+	}
+	applied := make([]manager.EnvironmentActionTarget, 0, len(plan.Targets))
+	for _, target := range plan.Targets {
+		data, err := json.Marshal(map[string]string{"environmentId": target.ID})
+		if err != nil {
+			return applied, err
+		}
+		if _, err := a.daemonRequest(store.Root, http.MethodPost, "/daemon/lifecycle/stop", strings.NewReader(string(data))); err != nil {
+			return applied, err
+		}
+		target.Status = "stopped"
+		applied = append(applied, target)
+	}
+	return applied, nil
+}
+
+func partitionEnvironmentLifecyclePlan(plan manager.EnvironmentActionPlan) (manager.EnvironmentActionPlan, manager.EnvironmentActionPlan) {
+	daemonPlan := plan
+	directPlan := plan
+	daemonPlan.Targets = nil
+	directPlan.Targets = nil
+	daemonPlan.Skipped = nil
+	directPlan.Skipped = nil
+	for _, target := range plan.Targets {
+		if target.Backend == "lima" {
+			daemonPlan.Targets = append(daemonPlan.Targets, target)
+		} else {
+			directPlan.Targets = append(directPlan.Targets, target)
+		}
+	}
+	return daemonPlan, directPlan
+}
+
+func orderEnvironmentTargets(order, values []manager.EnvironmentActionTarget) []manager.EnvironmentActionTarget {
+	byID := make(map[string]manager.EnvironmentActionTarget, len(values))
+	for _, value := range values {
+		byID[value.ID] = value
+	}
+	result := make([]manager.EnvironmentActionTarget, 0, len(values))
+	for _, target := range order {
+		if value, ok := byID[target.ID]; ok {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func (a app) cleanEnvironments(args []string) error {
@@ -6987,16 +7166,78 @@ func (a app) cleanEnvironments(args []string) error {
 		fmt.Fprintf(a.stdout, "clean: environments=%d would remove=%d\n", plan.Total, len(plan.Targets))
 		return nil
 	}
-	result, err := core.ApplyEnvironmentClean(context.Background(), plan, manager.EnvironmentApplyOptions{
-		Operator: a.environmentOperator(*verbose),
-	})
-	if err != nil {
-		return err
+	daemonPlan, directPlan := partitionEnvironmentLifecyclePlan(plan)
+	applied := make([]manager.EnvironmentActionTarget, 0, len(plan.Targets))
+	skipped := append([]manager.EnvironmentActionTarget(nil), plan.Skipped...)
+	if len(daemonPlan.Targets) != 0 {
+		result, daemonErr := a.cleanEnvironmentsViaDaemon(store, daemonPlan, *stoppedOnly)
+		if daemonErr != nil {
+			return daemonErr
+		}
+		applied = append(applied, result.Applied...)
+		skipped = append(skipped, result.Skipped...)
 	}
-	a.writeEnvironmentTargets("removed", result.Applied)
-	a.writeEnvironmentSkipped(result.Skipped)
-	fmt.Fprintf(a.stdout, "clean: environments=%d removed=%d\n", plan.Total, len(result.Applied))
+	if len(directPlan.Targets) != 0 {
+		result, applyErr := core.ApplyEnvironmentClean(context.Background(), directPlan, manager.EnvironmentApplyOptions{
+			Operator: a.environmentOperator(*verbose),
+		})
+		if applyErr != nil {
+			return applyErr
+		}
+		applied = append(applied, result.Applied...)
+		skipped = append(skipped, result.Skipped...)
+	}
+	applied = orderEnvironmentTargets(plan.Targets, applied)
+	a.writeEnvironmentTargets("removed", applied)
+	a.writeEnvironmentSkipped(skipped)
+	fmt.Fprintf(a.stdout, "clean: environments=%d removed=%d\n", plan.Total, len(applied))
 	return nil
+}
+
+func (a app) cleanEnvironmentsViaDaemon(store profile.Store, plan manager.EnvironmentActionPlan, stoppedOnly bool) (manager.EnvironmentActionResult, error) {
+	if len(plan.Targets) == 0 {
+		return manager.EnvironmentActionResult{Plan: plan}, nil
+	}
+	executableFn := a.daemonExecutable
+	if executableFn == nil {
+		executableFn = os.Executable
+	}
+	executable, err := executableFn()
+	if err != nil {
+		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("resolve hideout executable: %w", err)
+	}
+	ensure := a.ensureDaemon
+	if ensure == nil {
+		ensure = daemon.EnsureStarted
+	}
+	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
+		Store: store, Executable: executable, Diagnostics: a.stderr,
+	}); err != nil {
+		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("serialized environment clean requires hideoutd: %w", err)
+	}
+	ids := make([]string, 0, len(plan.Targets))
+	for _, target := range plan.Targets {
+		ids = append(ids, target.ID)
+	}
+	payload, err := json.Marshal(manager.EnvironmentActionAPIRequest{IDs: ids, StoppedOnly: stoppedOnly})
+	if err != nil {
+		return manager.EnvironmentActionResult{Plan: plan}, err
+	}
+	data, err := a.daemonRequest(store.Root, http.MethodPost, "/api/v1/environment/clean/apply", bytes.NewReader(payload))
+	if err != nil {
+		return manager.EnvironmentActionResult{Plan: plan}, err
+	}
+	var response struct {
+		Data   manager.EnvironmentActionResult `json:"data"`
+		Errors []string                        `json:"errors"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("decode daemon environment clean response: %w", err)
+	}
+	if len(response.Errors) != 0 {
+		return response.Data, errors.New(strings.Join(response.Errors, "; "))
+	}
+	return response.Data, nil
 }
 
 func parseIdleDuration(value string) (time.Duration, bool, error) {
@@ -7124,7 +7365,7 @@ func (a app) ui(args []string) error {
 
 func (a app) daemonCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hideout daemon start|status|stop")
+		return errors.New("usage: hideout daemon start|status|reconcile|stop")
 	}
 	switch args[0] {
 	case "start":
@@ -7133,9 +7374,56 @@ func (a app) daemonCommand(args []string) error {
 		return a.daemonStatus(args[1:])
 	case "stop":
 		return a.daemonStop(args[1:])
+	case "reconcile":
+		return a.daemonReconcile(args[1:])
 	default:
 		return fmt.Errorf("unknown daemon command %q", args[0])
 	}
+}
+
+func (a app) daemonReconcile(args []string) error {
+	fs := flag.NewFlagSet("daemon reconcile", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	environmentRef := fs.String("env", "", "environment name or id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*environmentRef) == "" {
+		return errors.New("usage: hideout daemon reconcile --env <name-or-id>")
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	environmentStore := environment.Store{Root: store.Root}
+	record, err := environmentStore.Load(*environmentRef)
+	if err != nil {
+		record, err = environmentStore.LoadByName(*environmentRef)
+		if err != nil {
+			return err
+		}
+	}
+	body, err := json.Marshal(map[string]string{"environmentId": record.ID})
+	if err != nil {
+		return err
+	}
+	response, err := a.daemonRequest(store.Root, http.MethodPost, "/daemon/lifecycle/reconcile", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Started   bool             `json:"started"`
+		Lifecycle lifecycle.Status `json:"lifecycle"`
+	}
+	if err := json.Unmarshal(response, &result); err != nil {
+		return fmt.Errorf("decode lifecycle reconciliation response: %w", err)
+	}
+	state := "coalesced"
+	if result.Started {
+		state = "started"
+	}
+	fmt.Fprintf(a.stdout, "Lifecycle reconciliation %s for %s (%s)\n", state, record.Name, result.Lifecycle.Reconciliation)
+	return nil
 }
 
 func (a app) daemonStart(args []string) error {
@@ -7179,6 +7467,15 @@ func (a app) daemonStart(args []string) error {
 }
 
 func (a app) daemonStatus(args []string) error {
+	fs := flag.NewFlagSet("daemon status", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	human := fs.Bool("human", false, "render compact operator status")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: hideout daemon status [--human]")
+	}
 	store, err := profile.DefaultStore()
 	if err != nil {
 		return err
@@ -7187,8 +7484,45 @@ func (a app) daemonStatus(args []string) error {
 	if err != nil {
 		return err
 	}
-	a.stdout.Write(body)
+	if !*human {
+		a.stdout.Write(body)
+		return nil
+	}
+	var status daemon.Status
+	if err := json.Unmarshal(body, &status); err != nil {
+		return fmt.Errorf("decode daemon status: %w", err)
+	}
+	writeDaemonStatusHuman(a.stdout, status, time.Now().UTC())
 	return nil
+}
+
+func writeDaemonStatusHuman(w io.Writer, status daemon.Status, now time.Time) {
+	fmt.Fprintf(w, "Daemon       %s\n", status.State)
+	fmt.Fprintf(w, "Sessions     %d\n", len(status.Sessions))
+	if len(status.Lifecycle) == 0 {
+		fmt.Fprintln(w, "Lifecycle    no observed environments")
+		return
+	}
+	for _, row := range status.Lifecycle {
+		activity := audit.RedactString(string(row.Activity))
+		if row.IdleDeadline != nil {
+			remaining := row.IdleDeadline.Sub(now)
+			if remaining < 0 {
+				remaining = 0
+			}
+			activity += fmt.Sprintf(" (%s remaining)", remaining.Round(time.Second))
+		}
+		fmt.Fprintf(w, "Environment  %s\n", audit.RedactString(row.EnvironmentID))
+		fmt.Fprintf(w, "  Backend    %s generation=%d observed=%s\n", audit.RedactString(row.BackendState), row.StartGeneration, row.BackendObservedAt.UTC().Format(time.RFC3339))
+		fmt.Fprintf(w, "  Activity   %s\n", activity)
+		fmt.Fprintf(w, "  Resources  pins=%d drains=%d orphans=%d\n",
+			len(row.Pins), len(row.Drains), len(row.Orphans))
+		fmt.Fprintf(w, "  History    retained-facts=%d handoff-facts=%d\n",
+			len(row.Retained), len(row.Handoffs))
+		if row.ReasonCode != "" {
+			fmt.Fprintf(w, "  Reason     %s\n", audit.RedactString(row.ReasonCode))
+		}
+	}
 }
 
 func (a app) daemonStop(args []string) error {
@@ -7213,6 +7547,9 @@ func (a app) daemonRequest(storeRoot, method, path string, body io.Reader) ([]by
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Host = "localhost"
 	resp, err := client.Do(req)
 	if err != nil {
@@ -7241,11 +7578,48 @@ func (a app) runServiceBackend(req manager.RunServiceRequest, plan manager.RunPl
 	return a.backend(plan.Backend, opts), nil
 }
 
+func (a app) environmentLifecycleBackend(record environment.Record) (manager.EnvironmentLifecycleBackend, error) {
+	provider := a.backend(record.Backend, runOptions{backendName: record.Backend})
+	lifecycleBackend, ok := provider.(manager.EnvironmentLifecycleBackend)
+	if !ok {
+		return nil, fmt.Errorf("backend %q does not support observed lifecycle stop", record.Backend)
+	}
+	return lifecycleBackend, nil
+}
+
 func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Options {
+	sshClients := lima.NewSSHClientPool()
+	backendForRun := func(name string, opts runOptions) backend.Backend {
+		provider := a.backend(name, opts)
+		switch value := provider.(type) {
+		case lima.Backend:
+			value.SSHClients = sshClients
+			return value
+		case *lima.Backend:
+			value.SSHClients = sshClients
+			return value
+		default:
+			return provider
+		}
+	}
 	return daemon.Options{
 		Store: store, TTL: ttl,
-		RunBackend:        a.runAPIBackend,
-		RunServiceBackend: a.runServiceBackend,
+		RunBackend: func(req manager.RunAPIRequest, plan manager.RunPlan) (backend.Backend, error) {
+			return backendForRun(plan.Backend, runOptions{backendName: plan.Backend, allowWeakIsolation: req.AllowWeakIsolation}), nil
+		},
+		RunServiceBackend: func(req manager.RunServiceRequest, plan manager.RunPlan) (backend.Backend, error) {
+			return backendForRun(plan.Backend, runOptions{backendName: plan.Backend, allowWeakIsolation: req.AllowWeakIsolation}), nil
+		},
+		LifecycleBackend: func(record environment.Record) (manager.EnvironmentLifecycleBackend, error) {
+			provider := backendForRun(record.Backend, runOptions{backendName: record.Backend})
+			lifecycleBackend, ok := provider.(manager.EnvironmentLifecycleBackend)
+			if !ok {
+				return nil, fmt.Errorf("backend %q does not support observed lifecycle stop", record.Backend)
+			}
+			return lifecycleBackend, nil
+		},
+		LifecycleAutomaticStop: lifecycleAutomaticStopPromoted || os.Getenv("HIDEOUT_036_AUTOMATIC_STOP") == "1",
+		BackendShutdown:        sshClients.Close,
 		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
 			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
 		},
@@ -7392,6 +7766,7 @@ func buildTUILiveState(ctx context.Context, core manager.Core, profileName, heal
 		})
 	}
 	var background []liveconsole.BackgroundRow
+	var lifecycleRows []lifecycle.Status
 	var daemonStatusErr error
 	if health == liveconsole.HealthLive {
 		status, err := daemon.FetchStatus(ctx, core.Store.Root)
@@ -7401,6 +7776,7 @@ func buildTUILiveState(ctx context.Context, core manager.Core, profileName, heal
 			for _, row := range status.Background {
 				background = append(background, liveconsole.BackgroundRow{ID: audit.RedactString(row.ID), Op: audit.RedactString(row.Op), Status: audit.RedactString(row.Status)})
 			}
+			lifecycleRows = append([]lifecycle.Status(nil), status.Lifecycle...)
 		}
 	}
 	seed := liveconsole.BuildSeed(liveconsole.SeedInput{
@@ -7412,6 +7788,7 @@ func buildTUILiveState(ctx context.Context, core manager.Core, profileName, heal
 		Decisions:       decisionRows,
 		Notices:         noticeRows,
 		StatusRows:      tuiConsoleStatusRows(overview),
+		Lifecycle:       lifecycleRows,
 		ProfileScope:    profileName,
 		StreamHealth:    health,
 	})
@@ -7660,6 +8037,23 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	}
 	for _, bg := range state.Background {
 		fmt.Fprintf(w, "  - %s  op=%s  status=%s\n", dash(bg.ID), dash(bg.Op), dash(bg.Status))
+	}
+
+	fmt.Fprintln(w, "\nLifecycle")
+	if len(state.Lifecycle) == 0 {
+		fmt.Fprintln(w, "  none")
+	}
+	for _, row := range state.Lifecycle {
+		deadline := "-"
+		if row.IdleDeadline != nil {
+			deadline = row.IdleDeadline.UTC().Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "  - %s  backend=%s  backend-observed=%s  activity=%s  generation=%d  pins=%d drains=%d orphans=%d  retained-facts=%d handoff-facts=%d  deadline=%s\n",
+			dash(row.EnvironmentID), dash(row.BackendState), row.BackendObservedAt.UTC().Format(time.RFC3339), dash(string(row.Activity)), row.StartGeneration,
+			len(row.Pins), len(row.Drains), len(row.Orphans), len(row.Retained), len(row.Handoffs), deadline)
+		if row.Reconciliation != "complete" || row.ReasonCode != "" {
+			fmt.Fprintf(w, "    reconciliation=%s reason=%s next=hideout doctor --feature daemon --level deep\n", dash(row.Reconciliation), dash(row.ReasonCode))
+		}
 	}
 
 	fmt.Fprintln(w, "\nHostFS Writes")

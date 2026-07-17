@@ -39,6 +39,8 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/hostfs/overlay"
 	"github.com/vibe-agi/hideout/internal/inittask"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
+	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/packagekit"
@@ -51,6 +53,44 @@ import (
 
 type appSessionSetupRunner struct {
 	checkErr error
+}
+
+type deterministicAppLifecycleBackend struct {
+	mu           sync.Mutex
+	operator     manager.EnvironmentLifecycleBackend
+	instanceName string
+	bootID       string
+	stopped      bool
+}
+
+func (b *deterministicAppLifecycleBackend) ObserveLifecycle(_ context.Context, instanceName string) backend.LifecycleObservation {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	observation := backend.LifecycleObservation{
+		InstanceName: instanceName,
+		ObservedAt:   time.Now().UTC(),
+	}
+	if b.stopped {
+		observation.State = backend.LifecycleStopped
+		return observation
+	}
+	observation.State = backend.LifecycleRunning
+	observation.BootID = b.bootID
+	return observation
+}
+
+func (b *deterministicAppLifecycleBackend) StopInstance(ctx context.Context, instanceName string) error {
+	if err := b.operator.StopInstance(ctx, instanceName); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.stopped = true
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *deterministicAppLifecycleBackend) Cleanup(ctx context.Context, session *backend.Session) error {
+	return b.operator.Cleanup(ctx, session)
 }
 
 func (r appSessionSetupRunner) Check(context.Context, string) error { return r.checkErr }
@@ -73,6 +113,67 @@ func installAppTestSessionSupervisor(t *testing.T, dir string) string {
 	}
 	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, path)
 	return path
+}
+
+func waitForAppLifecycleReconciliation(t *testing.T, d *daemon.Daemon, environmentID string) {
+	t.Helper()
+	// Production lifecycle observation is bounded at five seconds. Tests that
+	// require completion must allow that bound even when Gate 0 runs packages in
+	// parallel, while retaining a finite failure deadline.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, status := range d.Status().Lifecycle {
+			if status.EnvironmentID != environmentID {
+				continue
+			}
+			if status.Reconciliation == "complete" {
+				return
+			}
+			if status.Reconciliation == "blocked" {
+				t.Fatalf("lifecycle reconciliation blocked: %+v", status)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("lifecycle reconciliation did not complete: %+v", d.Status().Lifecycle)
+}
+
+func seedAppLifecycleJournal(t *testing.T, storeRoot string, record environment.Record) {
+	t.Helper()
+	const bootID = "01234567-89ab-cdef-0123-456789abcdef"
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store:    lifecycle.JournalStore{Root: storeRoot},
+		DaemonID: "daemon-app-test-seed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := coordinator.BeginAttach(context.Background(), lifecycle.AttachRequest{
+		EnvironmentID: record.ID,
+		InstanceName:  record.InstanceName,
+		SessionID:     "ses_app_test_seed",
+		Observation: backend.LifecycleObservation{
+			State:        backend.LifecycleRunning,
+			InstanceName: record.InstanceName,
+			BootID:       bootID,
+			ObservedAt:   time.Now().UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registration.BindBoot(context.Background(), bootID); err != nil {
+		t.Fatal(err)
+	}
+	if err := registration.Transition(context.Background(), registration.Session(), lifecycle.StateActive); err != nil {
+		t.Fatal(err)
+	}
+	if err := registration.Finish(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestParseInitRuntimeSelectionAndImageConflict(t *testing.T) {
@@ -3224,11 +3325,36 @@ func TestAppEnvironmentOperatorSuppressesControlOutputUnlessVerbose(t *testing.T
 }
 
 func TestEnvironmentLifecycleCommandsSuppressBackendControlOutput(t *testing.T) {
-	home := t.TempDir()
+	home, err := os.MkdirTemp("/tmp", "hideout-app-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 	fakeBin := t.TempDir()
 	fakeLimactl := filepath.Join(fakeBin, "limactl")
-	if err := os.WriteFile(fakeLimactl, []byte("#!/bin/sh\necho raw-control-stdout\necho raw-control-stderr >&2\nexit 0\n"), 0o755); err != nil {
+	stoppedPath := filepath.Join(t.TempDir(), "stopped")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "list" ] && [ "$2" = "--format" ]; then
+  if [ -f %q ]; then
+    printf '%%s\n' '{"name":"hideout-fake","status":"Stopped"}'
+  else
+    printf '%%s\n' '{"name":"hideout-fake","status":"Running"}'
+  fi
+  exit 0
+fi
+if [ "$1" = "shell" ]; then
+  printf '%%s\n' '01234567-89ab-cdef-0123-456789abcdef'
+  exit 0
+fi
+echo raw-control-stdout
+echo raw-control-stderr >&2
+if [ "$1" = "stop" ]; then
+  : > %q
+fi
+exit 0
+`, stoppedPath, stoppedPath)
+	if err := os.WriteFile(fakeLimactl, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake limactl: %v", err)
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -3253,6 +3379,26 @@ func TestEnvironmentLifecycleCommandsSuppressBackendControlOutput(t *testing.T) 
 	if err := envStore.Save(rec); err != nil {
 		t.Fatalf("save environment: %v", err)
 	}
+	seedAppLifecycleJournal(t, store.Root, rec)
+	daemonApp := app{stdout: io.Discard, stderr: io.Discard, stdin: strings.NewReader("")}
+	operator, err := daemonApp.environmentLifecycleBackend(rec)
+	if err != nil {
+		t.Fatalf("lifecycle backend: %v", err)
+	}
+	lifecycleBackend := &deterministicAppLifecycleBackend{
+		operator: operator, instanceName: rec.InstanceName,
+		bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}
+	daemonOpts := daemonApp.daemonOptions(store, 15*time.Minute)
+	daemonOpts.LifecycleBackend = func(environment.Record) (manager.EnvironmentLifecycleBackend, error) {
+		return lifecycleBackend, nil
+	}
+	d, err := daemon.Start(daemonOpts)
+	if err != nil {
+		t.Fatalf("start lifecycle owner daemon: %v", err)
+	}
+	defer d.Stop(context.Background())
+	waitForAppLifecycleReconciliation(t, d, rec.ID)
 
 	var out, errOut bytes.Buffer
 	code := Main([]string{"stop", rec.ID}, &out, &errOut)
@@ -5927,22 +6073,49 @@ fi
 }
 
 func TestRunLimaDefaultReusesWorkspaceEnvironment(t *testing.T) {
-	home := t.TempDir()
+	home, err := os.MkdirTemp("/tmp", "hideout-app-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	workspace := t.TempDir()
 	fakeBin := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "limactl.log")
 	statePath := filepath.Join(t.TempDir(), "limactl.instances")
+	stoppedPath := filepath.Join(t.TempDir(), "limactl.stopped")
 	script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %q
 if [ "$1" = "list" ] && [ "$2" = "--quiet" ]; then
   [ -f %q ] && cat %q
   exit 0
 fi
+if [ "$1" = "list" ] && [ "$2" = "--format" ]; then
+  if [ ! -f %q ]; then
+    exit 0
+  fi
+  instance="$(cat %q)"
+  if [ -f %q ]; then
+    printf '{"name":"%%s","status":"Stopped"}\n' "$instance"
+  else
+    printf '{"name":"%%s","status":"Running"}\n' "$instance"
+  fi
+  exit 0
+fi
+if [ "$1" = "shell" ]; then
+  printf '%%s\n' '01234567-89ab-cdef-0123-456789abcdef'
+  exit 0
+fi
 if [ "$1" = "start" ] && [ "$3" = "--name" ]; then
   printf '%%s\n' "$4" > %q
 fi
+if [ "$1" = "start" ]; then
+  rm -f %q
+fi
+if [ "$1" = "stop" ]; then
+  : > %q
+fi
 exit 0
-`, logPath, statePath, statePath, statePath)
+`, logPath, statePath, statePath, statePath, statePath, stoppedPath, statePath, stoppedPath, stoppedPath)
 	if err := os.WriteFile(filepath.Join(fakeBin, "limactl"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -6025,6 +6198,14 @@ exit 0
 	if !strings.Contains(out.String(), records[0].ID) || !strings.Contains(out.String(), records[0].Name) {
 		t.Fatalf("env list output missing environment metadata:\n%s", out.String())
 	}
+	seedAppLifecycleJournal(t, envStore.Root, records[0])
+	daemonApp := app{stdout: io.Discard, stderr: io.Discard, stdin: strings.NewReader("")}
+	d, err := daemon.Start(daemonApp.daemonOptions(profile.Store{Root: envStore.Root}, 15*time.Minute))
+	if err != nil {
+		t.Fatalf("start lifecycle owner daemon: %v", err)
+	}
+	defer d.Stop(context.Background())
+	waitForAppLifecycleReconciliation(t, d, records[0].ID)
 
 	out.Reset()
 	errOut.Reset()
@@ -6072,6 +6253,44 @@ exit 0
 	}
 	if len(records) != 0 {
 		t.Fatalf("clean should remove environment records, got %+v", records)
+	}
+	if statuses := d.Status().Lifecycle; len(statuses) != 0 {
+		t.Fatalf("clean should remove daemon lifecycle metadata, got %+v", statuses)
+	}
+}
+
+func TestStopLimaFailsClosedWhenDaemonUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := environment.Store{Root: filepath.Join(home, ".hideout")}
+	record, err := store.Create(environment.Spec{
+		Name: "serialized-stop", ImageRef: environment.BuiltinBaseImage,
+		Profile: "default", Backend: "lima", Workspace: t.TempDir(),
+		GuestWorkspace: "/workspace", InstanceName: "hideout-serialized-stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Status = "ready"
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
+	a.daemonExecutable = func() (string, error) { return "/tmp/hideout-test", nil }
+	a.ensureDaemon = func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error) {
+		return daemon.Status{}, errors.New("unavailable")
+	}
+	err = a.stopEnvironments([]string{record.ID})
+	if err == nil || !strings.Contains(err.Error(), "serialized environment stop requires hideoutd") {
+		t.Fatalf("stop error=%v", err)
+	}
+	loaded, err := store.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "ready" {
+		t.Fatalf("daemon failure fell back to a direct stop: %+v", loaded)
 	}
 }
 
@@ -8179,7 +8398,7 @@ func TestEnvDestructiveCommandsAndWorkspaceGuard(t *testing.T) {
 	t.Chdir(workspace)
 
 	var out, errOut bytes.Buffer
-	if code := Main([]string{"env", "create", "boxed"}, &out, &errOut); code != 0 {
+	if code := Main([]string{"env", "create", "boxed", "--backend", "native"}, &out, &errOut); code != 0 {
 		t.Fatalf("env create: %s", errOut.String())
 	}
 
@@ -8223,6 +8442,40 @@ func TestEnvDestructiveCommandsAndWorkspaceGuard(t *testing.T) {
 	}
 	if _, err := envStore.LoadByName("boxed"); err == nil {
 		t.Fatal("record should be gone")
+	}
+}
+
+func TestEnvDestructiveRunningRefusalDoesNotStartDaemon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	record, err := manager.New(store).CreateEnvironment(manager.EnvironmentCreateOptions{
+		Name: "running-lima", Profile: "default", Backend: "lima", Workspace: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Status = "running"
+	if err := (environment.Store{Root: store.Root}).Save(record); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	started := false
+	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
+	a.ensureDaemon = func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error) {
+		started = true
+		return daemon.Status{}, errors.New("must not be called")
+	}
+	err = a.envDestructive([]string{"running-lima"}, "recreate")
+	if err == nil || !strings.Contains(err.Error(), "hideout stop running-lima") {
+		t.Fatalf("running refusal=%v", err)
+	}
+	if started {
+		t.Fatal("side-effect-free running refusal started hideoutd")
 	}
 }
 
@@ -8277,6 +8530,209 @@ func TestDaemonAbsentDegradesGracefully(t *testing.T) {
 	}
 }
 
+func TestDaemonLifecycleHumanStatusIsCompactAndRedacted(t *testing.T) {
+	secret := "cap_0123456789abcdef0123456789abcdef"
+	deadline := time.Date(2026, 7, 16, 13, 0, 15, 0, time.UTC)
+	status := daemon.Status{
+		State: "serving", Sessions: []daemon.SessionStatus{{ID: "session-one"}},
+		Lifecycle: []lifecycle.Status{{
+			Schema: lifecycle.StatusSchema, EnvironmentID: secret, StartGeneration: 3,
+			BackendState: "running", BackendObservedAt: time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC), Activity: lifecycle.ActivityIdleGrace, IdleDeadline: &deadline,
+			Reconciliation: "complete", Retained: []lifecycle.ResourceSummary{{Kind: lifecycle.KindHostFSStaged, ID: "overlay-one", State: lifecycle.StateReleased}},
+			Handoffs: []lifecycle.ResourceSummary{{Kind: lifecycle.KindHostAppHandoff, ID: "handoff-one", State: lifecycle.StateReleased}},
+		}},
+	}
+	var out bytes.Buffer
+	writeDaemonStatusHuman(&out, status, time.Date(2026, 7, 16, 13, 0, 5, 0, time.UTC))
+	text := out.String()
+	for _, want := range []string{"Daemon       serving", "Sessions     1", "Activity   idle-grace (10s remaining)", "pins=0 drains=0 orphans=0", "retained-facts=1 handoff-facts=1"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("human lifecycle status missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, secret) {
+		t.Fatalf("human lifecycle status leaked control material: %s", text)
+	}
+}
+
+func TestTUILifecycleStatusRendersTypedClassification(t *testing.T) {
+	deadline := time.Date(2026, 7, 16, 13, 0, 15, 0, time.UTC)
+	state := liveconsole.State{Lifecycle: []lifecycle.Status{{
+		Schema: lifecycle.StatusSchema, EnvironmentID: "env-lifecycle", StartGeneration: 4,
+		BackendState: "running", BackendObservedAt: time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC), Activity: lifecycle.ActivityBlocked, IdleDeadline: &deadline,
+		Reconciliation: "blocked", ReasonCode: "cleanup-unproved",
+		Pins:     []lifecycle.ResourceSummary{{Kind: lifecycle.KindRunSession, ID: "ses-pin", State: lifecycle.StateActive}},
+		Drains:   []lifecycle.ResourceSummary{{Kind: lifecycle.KindNetworkService, ID: "net-drain", State: lifecycle.StateOrphaned}},
+		Retained: []lifecycle.ResourceSummary{{Kind: lifecycle.KindHostFSStaged, ID: "overlay-history", State: lifecycle.StateReleased}},
+		Handoffs: []lifecycle.ResourceSummary{{Kind: lifecycle.KindHostAppHandoff, ID: "handoff-history", State: lifecycle.StateReleased}},
+		Orphans:  []lifecycle.ResourceSummary{{Kind: lifecycle.KindNetworkService, ID: "net-drain", State: lifecycle.StateOrphaned}},
+	}}}
+	var out bytes.Buffer
+	writeTUILiveDashboard(&out, state, nil, "")
+	text := out.String()
+	for _, want := range []string{
+		"env-lifecycle", "backend=running", "activity=blocked-unproved", "generation=4",
+		"pins=1 drains=1 orphans=1", "retained-facts=1 handoff-facts=1", "reconciliation=blocked",
+		"reason=cleanup-unproved", "hideout doctor --feature daemon --level deep",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("TUI lifecycle output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+type appDoctorLifecycleBackend struct {
+	observation backend.LifecycleObservation
+}
+
+func (b appDoctorLifecycleBackend) ObserveLifecycle(context.Context, string) backend.LifecycleObservation {
+	return b.observation
+}
+
+func (appDoctorLifecycleBackend) StopInstance(context.Context, string) error { return nil }
+func (appDoctorLifecycleBackend) Cleanup(context.Context, *backend.Session) error {
+	return nil
+}
+
+type appRetryLifecycleBackend struct {
+	mu           sync.Mutex
+	instanceName string
+	calls        int
+}
+
+func (b *appRetryLifecycleBackend) ObserveLifecycle(context.Context, string) backend.LifecycleObservation {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls++
+	if b.calls == 1 {
+		return backend.LifecycleObservation{
+			State: backend.LifecycleUnknown, InstanceName: b.instanceName,
+			ObservedAt: time.Now().UTC(), ReasonCode: "inventory-unavailable",
+		}
+	}
+	return backend.LifecycleObservation{
+		State: backend.LifecycleRunning, InstanceName: b.instanceName,
+		BootID: "01234567-89ab-cdef-0123-456789abcdef", ObservedAt: time.Now().UTC(),
+	}
+}
+
+func (*appRetryLifecycleBackend) StopInstance(context.Context, string) error { return nil }
+func (*appRetryLifecycleBackend) Cleanup(context.Context, *backend.Session) error {
+	return nil
+}
+
+func TestDaemonReconcileCLIResolvesEnvironmentNameAndRetries(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "hideout-reconcile-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Setenv("HIDEOUT_STORE_ROOT", root)
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("default")); err != nil {
+		t.Fatal(err)
+	}
+	record, err := (environment.Store{Root: root}).Create(environment.Spec{
+		Name: "retry-by-name", ImageRef: environment.BuiltinBaseImage,
+		Profile: "default", Backend: "lima", Workspace: t.TempDir(),
+		GuestWorkspace: "/workspace", InstanceName: "hideout-retry-by-name",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAppLifecycleJournal(t, root, record)
+	provider := &appRetryLifecycleBackend{instanceName: record.InstanceName}
+	d, err := daemon.Start(daemon.Options{
+		Store: store, LifecycleIdleGrace: time.Hour,
+		LifecycleBackend: func(environment.Record) (manager.EnvironmentLifecycleBackend, error) { return provider, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop(context.Background())
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := d.Status().Lifecycle
+		if len(status) == 1 && status[0].ReasonCode == "inventory-unavailable" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"daemon", "reconcile", "--env", record.Name}, &out, &errOut); code != 0 {
+		t.Fatalf("daemon reconcile exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "reconciliation started") {
+		t.Fatalf("reconcile output=%s", out.String())
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := d.Status().Lifecycle
+		if len(status) == 1 && status[0].Activity == lifecycle.ActivityIdleGrace {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("CLI retry did not complete reconciliation: %+v", d.Status().Lifecycle)
+}
+
+func TestDoctorDaemonFeatureReportsBlockedLifecycleTruth(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "hideout-doctor-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	t.Setenv("HIDEOUT_STORE_ROOT", root)
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("default")); err != nil {
+		t.Fatal(err)
+	}
+	record, err := (environment.Store{Root: root}).Create(environment.Spec{
+		Name: "doctor-lifecycle", ImageRef: environment.BuiltinBaseImage,
+		Profile: "default", Backend: "lima", Workspace: t.TempDir(),
+		GuestWorkspace: "/workspace", InstanceName: "hideout-doctor-lifecycle",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAppLifecycleJournal(t, root, record)
+	provider := appDoctorLifecycleBackend{observation: backend.LifecycleObservation{
+		State: backend.LifecycleUnknown, InstanceName: record.InstanceName,
+		ObservedAt: time.Now().UTC(), ReasonCode: "inventory-unavailable",
+	}}
+	d, err := daemon.Start(daemon.Options{
+		Store: store,
+		LifecycleBackend: func(environment.Record) (manager.EnvironmentLifecycleBackend, error) {
+			return provider, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop(context.Background())
+
+	var out, errOut bytes.Buffer
+	code := Main([]string{"doctor", "--backend", "native", "--feature", "daemon", "--level", "deep", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("doctor exit=%d stderr=%s output=%s", code, errOut.String(), out.String())
+	}
+	var report doctorpkg.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range report.Findings {
+		if finding.CheckID != "feature-daemon" {
+			continue
+		}
+		if finding.Status != doctorpkg.StatusWarn || !strings.Contains(finding.Summary, "blocked=1") {
+			t.Fatalf("doctor lifecycle finding lost blocked truth: %+v", finding)
+		}
+		return
+	}
+	t.Fatalf("doctor report omitted daemon lifecycle finding: %+v", report.Findings)
+}
+
 func TestRuntimeStatusHumanAndJSONSurfacesKeepRecoveryParity(t *testing.T) {
 	recoveryEntry, ok := recovery.Lookup(recovery.CodeRuntimeBaselineMissing)
 	if !ok {
@@ -8317,5 +8773,45 @@ func TestRuntimeStatusHumanAndJSONSurfacesKeepRecoveryParity(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestDaemonOptionsGateAutomaticStopAndShareLimaSSHTransports(t *testing.T) {
+	t.Setenv("HIDEOUT_036_AUTOMATIC_STOP", "")
+	opts := (app{}).daemonOptions(profile.Store{Root: t.TempDir()}, 15*time.Minute)
+	defer opts.BackendShutdown()
+	if opts.LifecycleAutomaticStop {
+		t.Fatal("unpromoted production composition enabled automatic stop")
+	}
+	first, err := opts.RunServiceBackend(manager.RunServiceRequest{}, manager.RunPlan{Backend: "lima"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := opts.RunServiceBackend(manager.RunServiceRequest{}, manager.RunPlan{Backend: "lima"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLima, ok := first.(lima.Backend)
+	if !ok || firstLima.SSHClients == nil {
+		t.Fatalf("first daemon Lima backend lacks SSH pool: %T", first)
+	}
+	secondLima, ok := second.(lima.Backend)
+	if !ok || secondLima.SSHClients != firstLima.SSHClients {
+		t.Fatal("daemon run backends do not share one transport owner")
+	}
+	lifecycleBackend, err := opts.LifecycleBackend(environment.Record{Backend: "lima"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycleLima, ok := lifecycleBackend.(lima.Backend)
+	if !ok || lifecycleLima.SSHClients != firstLima.SSHClients {
+		t.Fatal("lifecycle stop backend does not share the daemon transport owner")
+	}
+
+	t.Setenv("HIDEOUT_036_AUTOMATIC_STOP", "1")
+	gateOpts := (app{}).daemonOptions(profile.Store{Root: t.TempDir()}, 15*time.Minute)
+	defer gateOpts.BackendShutdown()
+	if !gateOpts.LifecycleAutomaticStop {
+		t.Fatal("explicit 036 candidate gate did not enable automatic stop")
 	}
 }

@@ -19,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 
 export HIDEOUT_STORE_ROOT="$store"
-mkdir -p "$store"
+install -d -m 700 "$store"
 
 bin="$tmp/hideout"
 go build -o "$bin" ./cmd/hideout

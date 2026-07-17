@@ -111,7 +111,7 @@ func (s *Store) Decisions(filter ListFilter) ([]Decision, error) {
 	}
 	out := make([]Decision, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !committedJSONEntry(entry) {
 			continue
 		}
 		var d Decision
@@ -434,7 +434,7 @@ func (s *Store) TimeoutExpiredDecisions(now time.Time) ([]Decision, error) {
 	}
 	var out []Decision
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !committedJSONEntry(entry) {
 			continue
 		}
 		var d Decision
@@ -529,7 +529,7 @@ func (s *Store) Notices(filter ListFilter) ([]Notice, error) {
 	}
 	out := make([]Notice, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !committedJSONEntry(entry) {
 			continue
 		}
 		var n Notice
@@ -637,6 +637,14 @@ func (s *Store) decisionPath(id string) string {
 
 func (s *Store) noticePath(id string) string {
 	return filepath.Join(s.noticesDir(), id+".json")
+}
+
+func committedJSONEntry(entry os.DirEntry) bool {
+	if entry.IsDir() {
+		return false
+	}
+	name := entry.Name()
+	return !strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".json")
 }
 
 func (s *Store) lockFile() (func() error, error) {

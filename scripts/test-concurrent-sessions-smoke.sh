@@ -30,6 +30,7 @@ bin="$tmp/hideout"
 store="$tmp/store"
 workspace="$tmp/workspace"
 mkdir -p "$store" "$workspace"
+chmod 700 "$store"
 go build -o "$bin" ./cmd/hideout
 export HIDEOUT_STORE_ROOT="$store"
 

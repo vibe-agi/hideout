@@ -287,7 +287,11 @@ func QualifiedRunStateRoot(base, qualifiedAppRef, runID string) (string, error) 
 	if strings.TrimSpace(qualifiedAppRef) == "" || strings.TrimSpace(runID) == "" || strings.ContainsRune(qualifiedAppRef, '\x00') || strings.ContainsRune(runID, '\x00') {
 		return "", errors.New("appopen: qualified app and run identity are required")
 	}
-	return filepath.Join(base, "apps", shortIdentity(qualifiedAppRef), "runs", shortIdentity(runID)), nil
+	// GUI applications commonly create local IPC sockets below their user-data
+	// directory. Keep the qualified state path compact enough for Darwin's
+	// 103-byte Unix socket limit while retaining a 96-bit, app-and-run-bound
+	// identity. The profile-owned base still provides profile separation.
+	return filepath.Join(base, "r", shortIdentity(qualifiedAppRef+"\x00"+runID)), nil
 }
 
 func ValidateSafetyProfile(profile SafetyProfile) error {

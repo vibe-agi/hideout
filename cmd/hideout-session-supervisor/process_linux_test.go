@@ -183,6 +183,26 @@ func TestPipeStdinEOFCausesRealChildEOF(t *testing.T) {
 	}
 }
 
+func TestPipeStdinEOFAfterTargetExitIsIdempotent(t *testing.T) {
+	spec := linuxTestStart(t, terminalSpec{Mode: "none"}, []string{"true"})
+	wire := newRecordingWire()
+	process, err := startTarget(spec, wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process.queue.begin()
+	result := <-process.wait
+	if result.completion.ExitCode != 0 {
+		t.Fatalf("completion=%+v wait=%v", result.completion, result.err)
+	}
+	if err := process.closeInput(); err != nil {
+		t.Fatalf("EOF after target exit: %v", err)
+	}
+	if err := process.finishOutput(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompletionPreservesExitAndSignalStatus(t *testing.T) {
 	exit := completionFromWaitStatus(syscall.WaitStatus(42 << 8))
 	if exit.Kind != "exit" || exit.ExitCode != 42 || !exit.Completed {

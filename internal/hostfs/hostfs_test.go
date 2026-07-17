@@ -348,6 +348,22 @@ func TestOverlayGrantDoesNotGrantLowerReadBeforeStage(t *testing.T) {
 	}
 	service := NewService(policy)
 	service.Overlay = store
+	beginCount := 0
+	var completion []bool
+	service.BeginStage = func() (func(bool) error, error) {
+		beginCount++
+		operations, err := store.Operations()
+		if err != nil {
+			return nil, err
+		}
+		if len(operations) != 0 {
+			t.Fatal("HostFS overlay was staged before lifecycle registration")
+		}
+		return func(staged bool) error {
+			completion = append(completion, staged)
+			return nil
+		}, nil
+	}
 	if _, err := service.Read(path, 0, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("overlay grant must not grant lower read before stage, got %v", err)
 	}
@@ -363,6 +379,9 @@ func TestOverlayGrantDoesNotGrantLowerReadBeforeStage(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "lower-secret" {
 		t.Fatalf("lower host file changed or unreadable: %q err=%v", got, err)
+	}
+	if beginCount != 1 || len(completion) != 1 || !completion[0] {
+		t.Fatalf("stage lifecycle begin=%d completion=%v", beginCount, completion)
 	}
 }
 

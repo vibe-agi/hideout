@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -1163,6 +1164,47 @@ func TestAPIRunApplyUsesManagerApplyRun(t *testing.T) {
 	}
 }
 
+func TestAPIRunApplyUsesConfiguredLifecycleRegistrar(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("api-lifecycle")); err != nil {
+		t.Fatal(err)
+	}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-api-lifecycle", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coordinator.Close()
+	fake := &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}, journal: journalStore,
+		bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}
+	api := API{
+		Core: Core{Store: store}, Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute),
+		RunBackend:   func(RunAPIRequest, RunPlan) (backend.Backend, error) { return fake, nil },
+		RunLifecycle: coordinator,
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/run/apply", RunAPIRequest{
+		ProfileName: "api-lifecycle", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !fake.planned {
+		t.Fatal("Manager HTTP run/apply bypassed the configured lifecycle registrar")
+	}
+}
+
 func TestAPIRunApplyRequiresConfiguredBackendFactory(t *testing.T) {
 	api := API{
 		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
@@ -1273,6 +1315,78 @@ func TestAPIEnvironmentLifecyclePlanAndApply(t *testing.T) {
 	}
 	if _, err := envStore.Load(rec.ID); err == nil {
 		t.Fatalf("environment should have been removed")
+	}
+}
+
+func TestAPIEnvironmentStopUsesHostingControlPlaneApply(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	envStore := environment.Store{Root: store.Root}
+	record, err := envStore.Create(environment.Spec{
+		Name: "hosted-stop", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
+		Workspace: "/work/project", GuestWorkspace: "/workspace", InstanceName: "hideout-hosted-stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Status = "running"
+	if err := envStore.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	api := API{
+		Core: New(store), Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute),
+		EnvironmentStopApply: func(_ context.Context, plan EnvironmentActionPlan) (EnvironmentActionResult, error) {
+			calls++
+			return EnvironmentActionResult{Plan: plan, Applied: append([]EnvironmentActionTarget(nil), plan.Targets...), Skipped: []EnvironmentActionTarget{}}, nil
+		},
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/environment/stop/apply", EnvironmentActionAPIRequest{IDs: []string{record.ID}})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || calls != 1 || !strings.Contains(resp.Body.String(), `"errors":[]`) {
+		t.Fatalf("status=%d calls=%d body=%s", resp.Code, calls, resp.Body.String())
+	}
+	loaded, err := envStore.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "running" {
+		t.Fatalf("direct Manager operator ran instead of hosting control plane: %+v", loaded)
+	}
+}
+
+func TestAPIEnvironmentCleanUsesHostingControlPlaneApply(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	envStore := environment.Store{Root: store.Root}
+	record, err := envStore.Create(environment.Spec{
+		Name: "hosted-clean", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
+		Workspace: "/work/project", GuestWorkspace: "/workspace", InstanceName: "hideout-hosted-clean",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Status = "stopped"
+	if err := envStore.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	api := API{
+		Core: New(store), Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute),
+		EnvironmentCleanApply: func(_ context.Context, plan EnvironmentActionPlan) (EnvironmentActionResult, error) {
+			calls++
+			return EnvironmentActionResult{Plan: plan, Applied: append([]EnvironmentActionTarget(nil), plan.Targets...), Skipped: []EnvironmentActionTarget{}}, nil
+		},
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/environment/clean/apply", EnvironmentActionAPIRequest{IDs: []string{record.ID}})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || calls != 1 || !strings.Contains(resp.Body.String(), `"errors":[]`) {
+		t.Fatalf("status=%d calls=%d body=%s", resp.Code, calls, resp.Body.String())
+	}
+	if _, err := envStore.Load(record.ID); err != nil {
+		t.Fatalf("direct Manager clean ran instead of hosting control plane: %v", err)
 	}
 }
 
