@@ -77,8 +77,6 @@ var (
 	BuildTime = "unknown"
 )
 
-const lifecycleAutomaticStopPromoted = false
-
 func Main(args []string, stdout, stderr io.Writer) int {
 	a := app{stdout: stdout, stderr: stderr, stdin: os.Stdin}
 	if err := a.run(args); err != nil {
@@ -7618,7 +7616,7 @@ func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Option
 			}
 			return lifecycleBackend, nil
 		},
-		LifecycleAutomaticStop: lifecycleAutomaticStopPromoted || os.Getenv("HIDEOUT_036_AUTOMATIC_STOP") == "1",
+		LifecycleAutomaticStop: true,
 		BackendShutdown:        sshClients.Close,
 		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
 			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)

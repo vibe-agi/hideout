@@ -8776,12 +8776,11 @@ func TestRuntimeStatusHumanAndJSONSurfacesKeepRecoveryParity(t *testing.T) {
 	}
 }
 
-func TestDaemonOptionsGateAutomaticStopAndShareLimaSSHTransports(t *testing.T) {
-	t.Setenv("HIDEOUT_036_AUTOMATIC_STOP", "")
+func TestDaemonOptionsEnableAutomaticStopAndShareLimaSSHTransports(t *testing.T) {
 	opts := (app{}).daemonOptions(profile.Store{Root: t.TempDir()}, 15*time.Minute)
 	defer opts.BackendShutdown()
-	if opts.LifecycleAutomaticStop {
-		t.Fatal("unpromoted production composition enabled automatic stop")
+	if !opts.LifecycleAutomaticStop {
+		t.Fatal("production composition did not enable automatic stop")
 	}
 	first, err := opts.RunServiceBackend(manager.RunServiceRequest{}, manager.RunPlan{Backend: "lima"})
 	if err != nil {
@@ -8806,12 +8805,5 @@ func TestDaemonOptionsGateAutomaticStopAndShareLimaSSHTransports(t *testing.T) {
 	lifecycleLima, ok := lifecycleBackend.(lima.Backend)
 	if !ok || lifecycleLima.SSHClients != firstLima.SSHClients {
 		t.Fatal("lifecycle stop backend does not share the daemon transport owner")
-	}
-
-	t.Setenv("HIDEOUT_036_AUTOMATIC_STOP", "1")
-	gateOpts := (app{}).daemonOptions(profile.Store{Root: t.TempDir()}, 15*time.Minute)
-	defer gateOpts.BackendShutdown()
-	if !gateOpts.LifecycleAutomaticStop {
-		t.Fatal("explicit 036 candidate gate did not enable automatic stop")
 	}
 }

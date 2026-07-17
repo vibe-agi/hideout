@@ -71,7 +71,6 @@ gate2_036_build_tree() {
 gate2_036_command_env() {
   local store="$1" lima_home="$2" bin="$3" arch="$4"
 	env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
-		HIDEOUT_036_AUTOMATIC_STOP=1 \
 		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch" \
     HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch" \
     HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch" \
