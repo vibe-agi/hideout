@@ -132,7 +132,12 @@ separate mount namespace, PID namespace, private `/proc`, runtime child,
 broker/data plane, and HostFS authority. This prevents one ordinary target
 from reading or signaling sibling control state, but does not filter effects
 through the shared workspace and does not contain guest root. Releasing the
-last session owner does not automatically stop the VM.
+last current-incarnation pin starts a bounded grace only after provider drains
+complete. Hideout then rechecks owner locks and observed backend identity before
+non-destructively stopping that exact Lima instance. Unknown inventory,
+orphaned ownership, failed cleanup, or a changed boot identity blocks automatic
+stop. This lifecycle mechanism does not strengthen the ordinary-target or
+guest-root isolation boundary.
 
 When the shared default environment ships, sessions from different workspaces
 share one guest kernel: cross-workspace isolation inside that environment is

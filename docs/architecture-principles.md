@@ -174,6 +174,18 @@ Per-run authority includes:
 
 Every `hideout run` refreshes these even when it resumes a warm environment.
 
+The daemon owns one closed resource-lifecycle catalog for each current backend
+incarnation. Run sessions and run-scoped bridges pin the VM; provider cleanup
+and shared-service teardown drain before release; audit, staged HostFS state,
+cache/disk state, and completed host-app handoffs are retained facts rather
+than keepalive leases. When the final pin and drain release, the coordinator
+starts a visible 15-second grace, rechecks owner locks and the observed backend
+boot identity, and non-destructively stops that exact Lima instance. A new
+attach cancels the grace. Unknown inventory, a changed incarnation, an orphan,
+or unproved cleanup blocks automatic stop rather than guessing. Stop never
+cleans or deletes the environment and never terminates an independent host
+application.
+
 Environments are named, user-selected runtime boxes. The implicit environment
 is currently pinned to one profile and one workspace. Multiple runs may own
 that same warm environment concurrently; each run gets a separate runtime

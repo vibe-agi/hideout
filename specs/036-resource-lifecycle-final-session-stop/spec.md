@@ -2,7 +2,7 @@
 
 **Feature Branch**: `036-resource-lifecycle-final-session-stop`
 **Created**: 2026-07-16
-**Status**: Draft
+**Status**: Implemented
 **Input**: Stop a preserved VM after the final VM-dependent resource ends,
 without closing independent host applications or deleting retained state, using
 one lifecycle model that remains correct across concurrent attachment, cleanup

@@ -1468,16 +1468,17 @@ ordinary-target isolation, or performance claims.
 It validates strict owner, activation, and environment-service schemas; owner
 flock reconciliation; transition-lock races; per-session runtime and HostFS
 state; Manager/CLI status parity; explicit-stop refusal; and a native mechanics
-fixture with two overlapping commands. The native fixture must retain a warm
-environment after the final owner exits and must never be described as
-isolation evidence.
+fixture with two overlapping commands. That native fixture exercises 034
+mechanics only and retains its environment after the final owner exits; it is
+neither isolation nor 036 automatic-stop evidence.
 
-`scripts/test-doc-truth-smoke.sh` requires all five registered 034 proof IDs in
-`docs/claim-boundaries.md`. Its negative fixtures reject cross-workspace shared
-VM support, automatic final-session stop, exhaustive terminal-emulator, theme,
-OSC, or detach coverage, guest-root containment, and native/local substitution
-for the real Lima gate. Dynamic `SIGWINCH` resize is implemented and belongs to
-the positive 034 contract; broader terminal-emulator hardening remains 037.
+`scripts/test-doc-truth-smoke.sh` requires the registered 034 and 036 proof IDs
+in `docs/claim-boundaries.md`. Its 034 negative fixtures reject cross-workspace
+shared VM support, treating 034 local smoke as final-session-stop proof,
+exhaustive terminal-emulator/theme/OSC coverage, guest-root containment, and
+native/local substitution for the real Lima gate. Dynamic `SIGWINCH` resize is
+implemented and belongs to the positive 034 contract; broader
+terminal-emulator hardening remains outside that feature.
 
 ### Concurrent Session Real macOS Arm64 Lima Gate 2
 
@@ -1498,9 +1499,11 @@ Lima instance while ordinary targets receive distinct session IDs, private
 HostFS authority, with one full activation plus two warm attaches. It must also
 prove a live owner blocks explicit stop, killing
 one host owner leaves a sibling and the environment service alive, the last
-exit does not stop the VM, explicit idle stop succeeds, and guest root can see
-both ordinary targets as a positive control for the documented non-claim. A
-real PTY lane must additionally prove initial dimensions, a live `SIGWINCH`
+exit in the pre-036 034 candidate leaves the VM warm, explicit idle stop
+succeeds, and guest root can see both ordinary targets as a positive control
+for the documented non-claim. Current final-session-stop behavior is proved
+only by Gate 036 below. A real PTY lane must additionally prove initial
+dimensions, a live `SIGWINCH`
 resize, representative full-screen control bytes, Ctrl-C exit status 130,
 terminal restoration after daemon loss, client unblocking, target reaping,
 restart refusal for unproved owners, explicit recovery, and a successful run
@@ -1525,7 +1528,7 @@ binding, the unchanged fixture digest, and recomputes every reported median,
 p95, and ratio from the retained arrays. A self-comparison or edited summary
 therefore cannot satisfy the performance proof.
 
-### Evidence Refusal
+### 034 Evidence Refusal
 
 The wrapper emits `hideout.product-hardening-evidence/v1` under the ignored
 evidence root. `034.concurrent-sessions.real-gate2.isolation` and
@@ -1545,3 +1548,70 @@ Evaluator and readiness tests must reject each of these independently:
   or environment identity;
 - a missing retained artifact, digest mismatch, or path escape; and
 - documentation that promotes any 034 non-claim to a supported behavior.
+
+## Gate 036: Resource Lifecycle And Final-Session Stop
+
+Status: **Implemented and promoted from clean real macOS arm64 Lima proof.**
+Gate 0 proves the closed resource catalog, transition model, journal, status
+parity, fail-closed reconciliation, and redaction. It cannot establish an
+observed VM stop or user-command performance.
+
+### Gate 0 And Race Lanes
+
+```sh
+scripts/test-lifecycle-smoke.sh
+go test -race ./internal/lifecycle ./internal/decision ./internal/daemon ./internal/manager
+```
+
+The local lane emits `036.lifecycle.gate0.mechanics` and
+`036.lifecycle.gate0.model-replay`. Exhaustive and randomized replay must cover
+attach, release, drain, grace, stop, shutdown, restart, generation fencing,
+failed cleanup, and corrupt/partial journal states. A lifecycle backend factory
+alone must not enable side effects in an alternate daemon composition.
+
+### Real macOS Arm64 Lima Gate 2
+
+```sh
+HIDEOUT_036_SHORT_TMPDIR=/tmp \
+  scripts/test-lifecycle-lima-e2e.sh --all --require-real \
+  --samples 30 --warmups 3 --iterations 100 \
+  --out .hideout-release-evidence/036-resource-lifecycle
+```
+
+The real lane is one ordered topology. It proves sibling preservation, the
+run-bridge pin and close, retained guest disk/profile cache/audit/staged
+overlay, independent host-app handoff, PTY-owner crash recovery, 100 real
+attach/stop races, new boot generation, stale-owner explicit recovery,
+ambiguous-stop refusal, bounded daemon status/shutdown, and exact observed
+non-destructive stop after the final pin/drain and 15-second grace. Unknown
+inventory, orphaned ownership, failed cleanup, and boot change must never
+publish stopped or cross into automatic stop.
+
+The performance sub-lane builds the exact pre-036 commit and candidate in
+separate trees, then alternates at least 30 paired samples of the literal
+user-visible command `hideout run -- git status --short` on the same host,
+runtime artifact, and fixture. Candidate median overhead may exceed baseline by
+at most 5% or 10 ms, whichever is larger. Raw arrays, fixture digest, runtime
+identity, clean commit identities, and recomputed medians are retained.
+
+The promoted proof is bound to commit
+`0fe099f20e354d5d52187d9c8d5406a367d19d52`, runtime
+`developer-standard/2026.07.0` artifact SHA-256
+`79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134`,
+and evidence manifest SHA-256
+`b050dfc5c9230bed526132339e7a707a325d352b6ed6baf37c07af09910029fc`.
+All 20 lifecycle checks passed; the 30-sample candidate median was 170.511 ms
+against 271.180 ms for pre-036 commit
+`127ef937b120f0faa719611abcb3a1816e331266`.
+
+### 036 Evidence Refusal
+
+`036.lifecycle.real-gate2.lifecycle` and
+`036.lifecycle.real-gate2.performance` require real-gate evidence, clean exact
+commit/runtime binding, the registered evidence classes, and digest-verified
+artifacts. `036.lifecycle.real-gate2.not-run`, native, local-fast, a reduced
+probe, command success without backend observation, or an edited `passed`
+summary cannot satisfy the claim. Documentation must retain the non-claims:
+automatic stop does not clean/delete retained state, terminate independent host
+apps, preserve detached run bridges, provide guest-root containment, or guess
+through unknown ownership/backend state.

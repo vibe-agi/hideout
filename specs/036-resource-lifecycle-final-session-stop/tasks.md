@@ -183,13 +183,13 @@ retained and independent effects are not counted as active sessions.
 
 **Purpose**: Close documentation, evidence, migration, and full-gate work.
 
-- [ ] T056 [P] Update lifecycle architecture and current behavior in `docs/architecture-principles.md`, `docs/privacy-run-design.md`, and `docs/STATUS.md`
-- [ ] T057 [P] Update lifecycle claims/non-claims and gate requirements in `docs/threat-model.md`, `docs/claim-boundaries.md`, and `docs/privacy-run-test-plan.md`
-- [ ] T058 [P] Update daemon/TUI/WebUI lifecycle UX in `docs/tui-webui-experience.md`
+- [X] T056 [P] Update lifecycle architecture and current behavior in `docs/architecture-principles.md`, `docs/privacy-run-design.md`, and `docs/STATUS.md`
+- [X] T057 [P] Update lifecycle claims/non-claims and gate requirements in `docs/threat-model.md`, `docs/claim-boundaries.md`, and `docs/privacy-run-test-plan.md`
+- [X] T058 [P] Update daemon/TUI/WebUI lifecycle UX in `docs/tui-webui-experience.md`
 - [X] T059 Register 036 local and real-Lima proof IDs in `internal/productevidence/registry.go` and emit evidence from `scripts/test-lifecycle-smoke.sh` and `scripts/test-lifecycle-lima-e2e.sh`
 - [X] T060 Add fail-closed missing-journal and current owner-state reconciliation in `internal/daemon/lifecycle_test.go`, catalog-to-schema/no-second-list checks in `internal/lifecycle/status_schema_test.go`, and docs-truth inputs in `scripts/test-lifecycle-smoke.sh`
 - [X] T061 Run `go mod tidy` if imports changed, then run build, vet, gofmt, diff-check, full tests, markdownlint, and Gate 0 from `specs/036-resource-lifecycle-final-session-stop/quickstart.md`
-- [ ] T062 Run all real macOS arm64 Lima lifecycle scenarios, bind evidence to the exact candidate commit/runtime, and update `docs/STATUS.md` only after every required marker passes
+- [X] T062 Run all real macOS arm64 Lima lifecycle scenarios, bind evidence to the exact candidate commit/runtime, and update `docs/STATUS.md` only after every required marker passes
 
 ---
 
@@ -289,19 +289,19 @@ found by the production-path review before claiming 036 complete.
 - [X] T074 Register 036 local/race/real-Lima proof IDs and emit strict exact-
   commit/runtime evidence with artifact digest verification, per T059/T062
   (missing)
-- [ ] T075 Update current product docs and claim boundaries only from the
+- [X] T075 Update current product docs and claim boundaries only from the
   resulting evidence, preserving explicit-stop truth until promotion, per
   FR-024 and T056-T058 (missing)
 - [X] T076 Reconcile T015-T055 against concrete source/tests, marking only
   independently evidenced tasks complete and rewriting no historical task IDs,
   per the implementation tracking contract (partial)
-- [ ] T077 Run `go mod tidy`, build, vet, gofmt, diff-check, full tests,
+- [X] T077 Run `go mod tidy`, build, vet, gofmt, diff-check, full tests,
   randomized/race lanes, markdownlint, Gate 0, and the real Lima gate; retain
   exact outputs for completion audit, per T061/T062 (missing)
 - [X] T078 Keep production automatic stop disabled while T063-T077 are
   incomplete, with a test proving a configured lifecycle backend alone cannot
   enable side effects, per Decision 13 and FR-023 (contradicts)
-- [ ] T079 Enable production automatic stop only after T077 evidence passes,
+- [X] T079 Enable production automatic stop only after T077 evidence passes,
   rerun the exact candidate gates, and bind the promoted behavior to
   `docs/STATUS.md`, per Decision 13 and FR-023 (missing)
 

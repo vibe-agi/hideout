@@ -114,7 +114,9 @@ release manifest 和有界验证证据。
 - 目标一旦获得 guest root，Hideout 不声称仍能保持原隔离保证。
 - `--backend native` 只是开发 harness，不是隔离边界。
 - 并发复用目前只覆盖同一个 pinned workspace，不会把无关项目放进同一个默认 VM。
-- 最后一个 session 退出后 VM 仍保持 warm；当前仍需显式运行 `hideout stop`。
+- 最后一个依赖 VM 的资源及 provider cleanup 释放后，Hideout 等待 15 秒并以非破坏
+  方式停止 Lima VM。environment、guest disk、cache、audit 与 staged HostFS 状态都会
+  保留；ownership 或 backend 状态不明时不会自动停止。
 - 初始终端尺寸和实时 SIGWINCH resize 已支持；完整终端模拟器、主题、OSC/CSI 和
   detach 行为不在当前声明内。
 

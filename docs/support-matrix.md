@@ -99,7 +99,7 @@ platform, backend, maturity, or automatic-update claims below.
 - `privacy-prerequisites`: Privacy networking depends on an operator-provided proxy, mediated resolver, and real Gate 3 evidence.
 - `ui-maturity`: The local TUI and WebUI are supervised alpha surfaces, not a polished remote operations service.
 - `cross-workspace-shared-vm`: Concurrent runs currently require the same pinned workspace; one default VM across workspaces is not implemented.
-- `automatic-final-session-stop`: The last session leaves the environment warm; stop remains explicit.
+- `automatic-stop-cleanup`: Automatic final-session stop is non-destructive and does not clean or delete retained state.
 - `terminal-emulator-hardening`: Initial dimensions and dynamic SIGWINCH resize are supported; exhaustive terminal-emulator, theme, OSC/CSI, and detach behavior is not claimed.
 
 ## Release Readiness

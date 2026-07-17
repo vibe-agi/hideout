@@ -103,7 +103,7 @@ func BuiltinMatrix() Matrix {
 			{ID: "privacy-prerequisites", Summary: "Privacy networking depends on an operator-provided proxy, mediated resolver, and real Gate 3 evidence.", AppliesTo: []string{"feature/dns-mediation"}, Guidance: "do not treat direct mode or local doctor output as a privacy proof"},
 			{ID: "ui-maturity", Summary: "The local TUI and WebUI are supervised alpha operator surfaces, not a polished remote operations service.", AppliesTo: []string{"feature/decision-center"}, Guidance: "retain CLI and audit evidence as the authoritative recovery surfaces"},
 			{ID: "cross-workspace-shared-vm", Summary: "Concurrent runs currently require the same pinned workspace; one default VM across workspaces is not implemented.", AppliesTo: []string{"feature/concurrent-run-sessions"}, Guidance: "use separate existing workspace environments until the 035 transport and isolation contract lands"},
-			{ID: "automatic-final-session-stop", Summary: "The last session leaves its environment warm; stop remains explicit.", AppliesTo: []string{"feature/concurrent-run-sessions"}, Guidance: "run hideout stop explicitly until the 036 lifecycle lease contract lands"},
+			{ID: "automatic-stop-cleanup", Summary: "Automatic final-session stop is non-destructive and does not clean or delete retained state.", AppliesTo: []string{"feature/resource-lifecycle"}, Guidance: "use explicit hideout clean or env remove operations when deletion is intended"},
 			{ID: "terminal-emulator-hardening", Summary: "Dynamic PTY resize is supported, but exhaustive terminal-emulator, theme, OSC/CSI, and detach behavior is not claimed.", AppliesTo: []string{"feature/concurrent-run-sessions"}, Guidance: "treat target terminal output as locally rendered untrusted bytes and use the 037 matrix for broader claims"},
 		},
 	}
@@ -219,7 +219,7 @@ func RequiredNonClaimIDs() []string {
 		"privacy-prerequisites",
 		"ui-maturity",
 		"cross-workspace-shared-vm",
-		"automatic-final-session-stop",
+		"automatic-stop-cleanup",
 		"terminal-emulator-hardening",
 	}
 }

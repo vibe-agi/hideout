@@ -147,7 +147,8 @@ done < <(jq -r '
     or .featureId == "029-hostfs-discoverable-namespace"
     or .featureId == "031-supported-cli-runtime"
     or .featureId == "032-community-host-app-recipes"
-    or .featureId == "034-concurrent-run-sessions")
+    or .featureId == "034-concurrent-run-sessions"
+    or .featureId == "036-resource-lifecycle-final-session-stop")
   | .proofId
 ' "$registry_json")
 
@@ -181,7 +182,7 @@ scan_files() {
   {
     printf '%s\n' README.md README.zh-CN.md
     find docs -maxdepth 1 -type f -name '*.md' | sort
-    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions \
+    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions specs/036-resource-lifecycle-final-session-stop \
       -type f -name '*.md' | sort
   } | grep -v '^\.' | sort -u
 }
@@ -263,8 +264,8 @@ concurrent_sessions_overclaim_category() {
   local lower="$1"
   case "$lower" in
     *cross-workspace*"shared vm"*supported*|*cross-workspace*"shared environment"*supported*) printf 'concurrent-cross-workspace'; return ;;
-    *last*session*"auto-stop"*supported*|*last*session*automatically*stops*) printf 'concurrent-auto-stop'; return ;;
-		*all*terminal*emulator*fully*supported*|*all*terminal*theme*fully*supported*|*osc*fully*supported*) printf 'concurrent-terminal-emulator-hardening'; return ;;
+    *034*local*proves*automatic*"final-session stop"*|*034*local*proves*"final-session-stop"*) printf 'concurrent-false-lifecycle-gate'; return ;;
+    *all*terminal*emulator*fully*supported*|*all*terminal*theme*fully*supported*|*osc*fully*supported*) printf 'concurrent-terminal-emulator-hardening'; return ;;
     *guest-root*session*containment*provided*|*guest-root*session*containment*supported*|*guest\ root*cannot*inspect*sibling*) printf 'concurrent-guest-root-containment'; return ;;
     *native*proves*session*isolation*|*local*smoke*proves*session*isolation*) printf 'concurrent-false-real-gate'; return ;;
   esac
@@ -398,8 +399,8 @@ validate_hostfs_visibility_overclaim_fixtures() {
 validate_concurrent_sessions_overclaim_fixtures() {
   local fixtures=(
     "Cross-workspace shared VM is supported"
-    "The last session automatically stops the VM"
-		"All terminal emulator, theme, and OSC behavior is fully supported"
+    "034 local smoke proves automatic final-session stop"
+    "All terminal emulator, theme, and OSC behavior is fully supported"
     "Guest-root session containment is provided"
     "Native proves session isolation"
   )

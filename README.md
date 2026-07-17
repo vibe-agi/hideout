@@ -132,7 +132,10 @@ the machine-readable release manifest, and bounded verification evidence.
 - `--backend native` is a development harness, not an isolation boundary.
 - Concurrent reuse currently applies only to the same pinned workspace. It
   does not share one default VM across unrelated project directories.
-- The last session does not automatically stop the VM; use `hideout stop`.
+- After the final VM-dependent resource and provider cleanup release, Hideout
+  waits 15 seconds and non-destructively stops the Lima VM. The environment,
+  guest disk, caches, audit, and staged HostFS state remain; unknown ownership
+  or backend state blocks automatic stop.
 - Initial terminal dimensions and live SIGWINCH resize are supported. Exhaustive
   terminal-emulator, theme, OSC/CSI, and detach behavior remains outside the
   current claim.

@@ -226,6 +226,9 @@ Shows:
 - audit path;
 - environment reuse.
 - audit and runtime cleanup command hints.
+- typed lifecycle state for the observed backend incarnation: active pins,
+  provider drains, idle-grace deadline, retained facts, independent handoffs,
+  orphans, reconciliation state, and fail-closed reason.
 
 Design-ready interactive session observer:
 
@@ -266,6 +269,15 @@ command process under a terminal harness; render-only tests are not sufficient
 for that lane. Richer terminal lifecycle controls should call the same Manager
 environment endpoints rather than reimplementing store or backend cleanup
 logic.
+
+Both surfaces consume the daemon's typed lifecycle status/events. `pinned`,
+`draining`, `idle-grace`, `stopping-unknown`, `stopped`, and
+`blocked-unproved` remain distinct; unknown is never rendered as stopped. The
+idle-grace deadline is visible and a new attach removes it. Retained HostFS,
+audit, disk/cache facts and completed host-app handoffs are shown separately
+from active session counts so they do not look like VM keepalive resources.
+Explicit stop/clean actions continue to use the same Manager/lifecycle
+transaction and cannot bypass a live pin or unresolved reconciliation.
 
 ## WebUI Initial Pages
 

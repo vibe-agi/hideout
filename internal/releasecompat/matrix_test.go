@@ -37,13 +37,13 @@ func TestBuiltinMatrixValidatesRequiredRows(t *testing.T) {
 func TestBuiltinMatrixCarriesPublicAlphaNonClaims(t *testing.T) {
 	matrix := BuiltinMatrix()
 	want := map[string]bool{
-		"public-alpha-maturity":        false,
-		"runtime-freshness":            false,
-		"privacy-prerequisites":        false,
-		"ui-maturity":                  false,
-		"cross-workspace-shared-vm":    false,
-		"automatic-final-session-stop": false,
-		"terminal-emulator-hardening":  false,
+		"public-alpha-maturity":       false,
+		"runtime-freshness":           false,
+		"privacy-prerequisites":       false,
+		"ui-maturity":                 false,
+		"cross-workspace-shared-vm":   false,
+		"automatic-stop-cleanup":      false,
+		"terminal-emulator-hardening": false,
 	}
 	for _, nonClaim := range matrix.NonClaims {
 		if _, ok := want[nonClaim.ID]; ok {

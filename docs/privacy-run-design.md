@@ -4253,8 +4253,15 @@ same pinned profile, backend, runtime, identity, network configuration, and
 workspace. Manager serializes environment transitions and shared-service
 mutation, while every run holds an OS-backed owner lease and uses a distinct
 runtime child. A finishing run may clean only its own authority and must not
-remove a sibling runtime or shared service. The last session leaves the warm
-environment ready; stop remains an explicit operator action.
+remove a sibling runtime or shared service. After the final VM-dependent pin
+and provider drain release, the daemon starts a 15-second grace, revalidates
+the current owner graph and backend boot identity, and non-destructively stops
+that exact Lima instance. A concurrent attach cancels the grace. Unknown
+inventory, cleanup failure, orphaned ownership, or an incarnation change fails
+closed and leaves the VM untouched. The environment record, guest disk,
+profile cache, audit, decisions, and staged HostFS overlay remain available for
+the next start. A completed host-app launch is an independent handoff and does
+not pin the VM or make Hideout responsible for terminating the host app.
 
 CLI interruption is part of the run lifecycle. `SIGINT` and `SIGTERM` must cancel
 the active run context and let Manager perform ordered teardown: command stop,
