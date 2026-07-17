@@ -159,11 +159,20 @@ func TestDaemonServesStatusWhileLifecycleReconciliationIsPending(t *testing.T) {
 	if code, body := daemonPost(t, d, lifecycleStopPath, `{"environmentId":"`+record.ID+`"}`, d.Token()); code != http.StatusConflict || !strings.Contains(string(body), lifecycle.ErrReconciliationInFlight.Error()) {
 		t.Fatalf("stop crossed reconciliation fence: code=%d body=%s", code, body)
 	}
-	if code, body := daemonPost(t, d, lifecycleMutatePath, `{"environmentId":"`+record.ID+`","operation":"remove","force":true}`, d.Token()); code != http.StatusConflict || !strings.Contains(string(body), lifecycle.ErrReconciliationInFlight.Error()) {
-		t.Fatalf("mutation crossed reconciliation fence: code=%d body=%s", code, body)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(provider.release)
+	}()
+	mutationStarted := time.Now()
+	if code, body := daemonPost(t, d, lifecycleMutatePath, `{"environmentId":"`+record.ID+`","operation":"remove","force":true}`, d.Token()); code != http.StatusOK {
+		t.Fatalf("mutation did not wait for reconciliation: code=%d body=%s", code, body)
 	}
-	close(provider.release)
-	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleGrace)
+	if elapsed := time.Since(mutationStarted); elapsed < 40*time.Millisecond {
+		t.Fatalf("mutation crossed the reconciliation fence after %s", elapsed)
+	}
+	if loaded, err := (environment.Store{Root: store.Root}).Load(record.ID); err == nil {
+		t.Fatalf("waited mutation did not remove environment: %+v", loaded)
+	}
 }
 
 func TestDaemonRetriesBlockedLifecycleReconciliationInSameEpoch(t *testing.T) {

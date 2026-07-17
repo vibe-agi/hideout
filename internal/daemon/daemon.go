@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -32,6 +33,7 @@ func IsAlreadyRunning(err error) bool { return errors.Is(err, errAlreadyRunning)
 // Options configures a daemon start.
 type Options struct {
 	Store              profile.Store
+	BuildID            string
 	TTL                time.Duration
 	CredentialGrace    time.Duration
 	Now                func() time.Time
@@ -57,6 +59,7 @@ type Options struct {
 // Daemon is the single per-store local control-plane process.
 type Daemon struct {
 	store            profile.Store
+	buildID          string
 	runtimeDir       string
 	socket           string
 	instanceID       string
@@ -101,6 +104,10 @@ type Daemon struct {
 func Start(opts Options) (*Daemon, error) {
 	if opts.Store.Root == "" {
 		return nil, errors.New("daemon: store root is required")
+	}
+	buildID, err := resolveBuildID(opts.BuildID)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: resolve build identity: %w", err)
 	}
 	dir, err := ensurePlacement(opts.Store.Root)
 	if err != nil {
@@ -262,6 +269,7 @@ func Start(opts Options) (*Daemon, error) {
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	d := &Daemon{
 		store:            opts.Store,
+		buildID:          buildID,
 		runtimeDir:       dir,
 		socket:           sock,
 		instanceID:       instanceID,
@@ -394,7 +402,7 @@ func (d *Daemon) Status() Status {
 	state := d.state
 	d.mu.Unlock()
 	status := Status{
-		Version: statusVersion, State: state, InstanceID: d.instanceID,
+		Version: statusVersion, BuildID: d.buildID, State: state, InstanceID: d.instanceID,
 		StartedAt:  d.startedAt.Format(time.RFC3339),
 		Transport:  StatusTransport{Socket: d.socket, SessionSocket: d.sessionListener.Socket(), SessionProtocol: SessionProtocolVersion},
 		Background: d.bg.inventory(),

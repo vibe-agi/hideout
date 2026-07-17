@@ -6891,7 +6891,7 @@ func (a app) mutateEnvironmentViaDaemon(store profile.Store, environmentID, oper
 		ensure = daemon.EnsureStarted
 	}
 	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
-		Store: store, Executable: executable, Diagnostics: a.stderr,
+		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
 	}); err != nil {
 		return environment.Record{}, fmt.Errorf("serialized environment mutation requires hideoutd: %w", err)
 	}
@@ -7079,7 +7079,7 @@ func (a app) stopEnvironmentsViaDaemon(store profile.Store, plan manager.Environ
 		ensure = daemon.EnsureStarted
 	}
 	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
-		Store: store, Executable: executable, Diagnostics: a.stderr,
+		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
 	}); err != nil {
 		return nil, fmt.Errorf("serialized environment stop requires hideoutd: %w", err)
 	}
@@ -7209,7 +7209,7 @@ func (a app) cleanEnvironmentsViaDaemon(store profile.Store, plan manager.Enviro
 		ensure = daemon.EnsureStarted
 	}
 	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
-		Store: store, Executable: executable, Diagnostics: a.stderr,
+		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
 	}); err != nil {
 		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("serialized environment clean requires hideoutd: %w", err)
 	}
@@ -7601,7 +7601,7 @@ func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Option
 		}
 	}
 	return daemon.Options{
-		Store: store, TTL: ttl,
+		Store: store, TTL: ttl, BuildID: daemonBuildID(),
 		RunBackend: func(req manager.RunAPIRequest, plan manager.RunPlan) (backend.Backend, error) {
 			return backendForRun(plan.Backend, runOptions{backendName: plan.Backend, allowWeakIsolation: req.AllowWeakIsolation}), nil
 		},

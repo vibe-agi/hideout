@@ -215,7 +215,7 @@ func (d *Daemon) applyEnvironmentCleanPlan(ctx context.Context, plan manager.Env
 		}
 		var err error
 		if target.Backend == "lima" {
-			err = d.lifecycle.RunDestructiveMutation(ctx, target.ID, apply)
+			err = d.runDestructiveMutation(ctx, target.ID, apply)
 		} else {
 			err = apply(ctx)
 		}
@@ -248,7 +248,7 @@ func (d *Daemon) applyEnvironmentMutation(ctx context.Context, environmentID, op
 		return environment.Record{}, err
 	}
 	var result environment.Record
-	err = d.lifecycle.RunDestructiveMutation(ctx, environmentID, func(mutationCtx context.Context) error {
+	err = d.runDestructiveMutation(ctx, environmentID, func(mutationCtx context.Context) error {
 		var mutationErr error
 		switch operation {
 		case "remove":
@@ -264,6 +264,18 @@ func (d *Daemon) applyEnvironmentMutation(ctx context.Context, environmentID, op
 		return mutationErr
 	})
 	return result, err
+}
+
+func (d *Daemon) runDestructiveMutation(ctx context.Context, environmentID string, mutate func(context.Context) error) error {
+	for {
+		if err := d.lifecycle.WaitReconciliation(ctx, environmentID); err != nil {
+			return err
+		}
+		err := d.lifecycle.RunDestructiveMutation(ctx, environmentID, mutate)
+		if !errors.Is(err, lifecycle.ErrReconciliationInFlight) {
+			return err
+		}
+	}
 }
 
 // reconcileRestartResidue proves and removes only host-side state whose exact

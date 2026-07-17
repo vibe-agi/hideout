@@ -37,6 +37,59 @@ func TestEnsureStartedReturnsAuthenticatedReadyDaemonWithoutStarting(t *testing.
 	}
 }
 
+func TestEnsureStartedRejectsDaemonFromAnotherBuild(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprintf("active=%t", active), func(t *testing.T) {
+			store := testStore(t)
+			var starts atomic.Int32
+			_, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+				Store: store, BuildID: strings.Repeat("b", 64), Timeout: time.Second,
+				Probe: func(context.Context, string) (Status, error) {
+					status := readyDaemonStatus(store.Root)
+					status.BuildID = strings.Repeat("a", 64)
+					if active {
+						status.Sessions = []SessionStatus{{ID: "session-active"}}
+					}
+					return status, nil
+				},
+				Starter: func(DaemonStartRequest) error {
+					starts.Add(1)
+					return nil
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "hideout daemon stop") {
+				t.Fatalf("EnsureStarted error = %v", err)
+			}
+			if starts.Load() != 0 {
+				t.Fatalf("mismatched daemon caused %d competing starts", starts.Load())
+			}
+		})
+	}
+}
+
+func TestEnsureStartedRejectsDaemonWithoutBuildIdentity(t *testing.T) {
+	store := testStore(t)
+	var starts atomic.Int32
+	_, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+		Store: store, BuildID: strings.Repeat("b", 64), Timeout: time.Second,
+		Probe: func(context.Context, string) (Status, error) {
+			status := readyDaemonStatus(store.Root)
+			status.BuildID = ""
+			return status, nil
+		},
+		Starter: func(DaemonStartRequest) error {
+			starts.Add(1)
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unidentified") || !strings.Contains(err.Error(), "hideout daemon stop") {
+		t.Fatalf("EnsureStarted error = %v", err)
+	}
+	if starts.Load() != 0 {
+		t.Fatalf("unidentified daemon caused %d competing starts", starts.Load())
+	}
+}
+
 func TestEnsureStartedConcurrentClientsCreateOneProcess(t *testing.T) {
 	store := testStore(t)
 	var ready atomic.Bool
@@ -250,8 +303,13 @@ func TestStartDetachedDaemonReturnsBeforeChildCompletes(t *testing.T) {
 }
 
 func readyDaemonStatus(storeRoot string) Status {
+	buildID, err := currentProcessBuildID()
+	if err != nil {
+		panic(err)
+	}
 	return Status{
 		Version: statusVersion,
+		BuildID: buildID,
 		State:   "serving",
 		Transport: StatusTransport{
 			Socket: socketPathFor(storeRoot), SessionSocket: SessionSocketPath(storeRoot),

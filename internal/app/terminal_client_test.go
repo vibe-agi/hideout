@@ -105,7 +105,7 @@ func TestExecutableRunUsesDaemonClientAndPreservesExitCode(t *testing.T) {
 	sessionCalls := 0
 	ensureRunDaemon = func(_ context.Context, opts daemon.EnsureStartedOptions) (daemon.Status, error) {
 		ensureCalls++
-		if opts.Store.Root != filepath.Join(home, ".hideout") || opts.Executable != "/test/hideout" {
+		if opts.Store.Root != filepath.Join(home, ".hideout") || opts.Executable != "/test/hideout" || len(opts.BuildID) != 64 || !validHex(opts.BuildID) {
 			t.Fatalf("ensure opts=%+v", opts)
 		}
 		return daemon.Status{}, nil

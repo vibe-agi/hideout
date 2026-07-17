@@ -89,7 +89,7 @@ func (a app) runViaDaemon(opts runOptions) error {
 		ensure = ensureRunDaemon
 	}
 	if _, err := ensure(ctx, daemon.EnsureStartedOptions{
-		Store: store, Executable: executable, Diagnostics: a.stderr,
+		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
 	}); err != nil {
 		return err
 	}

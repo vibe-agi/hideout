@@ -53,6 +53,7 @@ type DaemonReadinessProbe func(context.Context, string) (Status, error)
 type EnsureStartedOptions struct {
 	Store        profile.Store
 	Executable   string
+	BuildID      string
 	Timeout      time.Duration
 	PollInterval time.Duration
 	Starter      DaemonStarter
@@ -102,10 +103,17 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 			return Status{}, fmt.Errorf("daemon auto-start: resolve current executable: %w", err)
 		}
 	}
+	opts.BuildID, err = resolveBuildID(opts.BuildID)
+	if err != nil {
+		return Status{}, fmt.Errorf("daemon auto-start: resolve exact build identity: %w", err)
+	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
-	if status, ok := probeReady(waitCtx, opts.Store.Root, opts.Probe); ok {
+	if status, err := opts.Probe(waitCtx, opts.Store.Root); err == nil && daemonStatusServing(opts.Store.Root, status) {
+		if status.BuildID != opts.BuildID {
+			return Status{}, daemonBuildMismatchError(status)
+		}
 		return status, nil
 	}
 
@@ -113,7 +121,7 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 	lockFile, err := acquireLock(autostartLockPath)
 	if err != nil {
 		if IsAlreadyRunning(err) {
-			return waitForDaemonReady(waitCtx, opts.Store.Root, opts.PollInterval, opts.Probe)
+			return waitForDaemonReady(waitCtx, opts.Store.Root, opts.BuildID, opts.PollInterval, opts.Probe)
 		}
 		return Status{}, fmt.Errorf("daemon auto-start: acquire start lock: %w", err)
 	}
@@ -124,8 +132,11 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 
 	// Another process may have become ready while this client waited for the start
 	// lock. Re-probe before creating a process.
-	if status, ok := probeReady(waitCtx, opts.Store.Root, opts.Probe); ok {
-		return status, nil
+	if status, err := opts.Probe(waitCtx, opts.Store.Root); err == nil && daemonStatusServing(opts.Store.Root, status) {
+		if status.BuildID == opts.BuildID {
+			return status, nil
+		}
+		return Status{}, daemonBuildMismatchError(status)
 	}
 
 	// A held daemon.lock means a daemon process already owns startup. Do not create a
@@ -134,7 +145,7 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 	instanceLock, lockErr := acquireLock(instanceLockPath)
 	if lockErr != nil {
 		if IsAlreadyRunning(lockErr) {
-			return waitForDaemonReady(waitCtx, opts.Store.Root, opts.PollInterval, opts.Probe)
+			return waitForDaemonReady(waitCtx, opts.Store.Root, opts.BuildID, opts.PollInterval, opts.Probe)
 		}
 		return Status{}, fmt.Errorf("daemon auto-start: inspect instance ownership: %w", lockErr)
 	}
@@ -160,23 +171,27 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 		return Status{}, fmt.Errorf("daemon auto-start: close startup log: %w", closeErr)
 	}
 
-	status, err := waitForDaemonReady(waitCtx, opts.Store.Root, opts.PollInterval, opts.Probe)
+	status, err := waitForDaemonReady(waitCtx, opts.Store.Root, opts.BuildID, opts.PollInterval, opts.Probe)
 	if err != nil {
 		emitStartupDiagnostic(opts.Diagnostics, filepath.Join(dir, autostartLogName))
 	}
 	return status, err
 }
 
-func waitForDaemonReady(ctx context.Context, storeRoot string, interval time.Duration, probe DaemonReadinessProbe) (Status, error) {
+func waitForDaemonReady(ctx context.Context, storeRoot, buildID string, interval time.Duration, probe DaemonReadinessProbe) (Status, error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var lastErr error
 	for {
 		if status, err := probe(ctx, storeRoot); err == nil {
-			if daemonStatusReady(storeRoot, status) {
+			if daemonStatusReady(storeRoot, buildID, status) {
 				return status, nil
 			}
-			lastErr = errors.New("authenticated status did not report serving state")
+			if daemonStatusServing(storeRoot, status) && status.BuildID != buildID {
+				return Status{}, daemonBuildMismatchError(status)
+			} else {
+				lastErr = errors.New("authenticated status did not report serving state")
+			}
 		} else {
 			lastErr = err
 		}
@@ -192,16 +207,25 @@ func waitForDaemonReady(ctx context.Context, storeRoot string, interval time.Dur
 	}
 }
 
-func probeReady(ctx context.Context, storeRoot string, probe DaemonReadinessProbe) (Status, bool) {
-	status, err := probe(ctx, storeRoot)
-	return status, err == nil && daemonStatusReady(storeRoot, status)
+func daemonStatusReady(storeRoot, buildID string, status Status) bool {
+	return daemonStatusServing(storeRoot, status) && status.BuildID == buildID
 }
 
-func daemonStatusReady(storeRoot string, status Status) bool {
+func daemonStatusServing(storeRoot string, status Status) bool {
 	return status.Version == statusVersion && status.State == "serving" &&
 		filepath.Clean(status.Transport.Socket) == filepath.Clean(socketPathFor(storeRoot)) &&
 		filepath.Clean(status.Transport.SessionSocket) == filepath.Clean(SessionSocketPath(storeRoot)) &&
 		status.Transport.SessionProtocol == SessionProtocolVersion
+}
+
+func daemonBuildMismatchError(status Status) error {
+	running := strings.TrimSpace(status.BuildID)
+	if running == "" {
+		running = "unidentified"
+	} else if len(running) > 12 {
+		running = running[:12]
+	}
+	return fmt.Errorf("daemon auto-start: running daemon build %s differs from the installed CLI; run hideout daemon stop, then retry", running)
 }
 
 func startDetachedDaemon(req DaemonStartRequest) error {

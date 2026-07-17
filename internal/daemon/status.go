@@ -1,6 +1,11 @@
 package daemon
 
-import "github.com/vibe-agi/hideout/internal/lifecycle"
+import (
+	"encoding/hex"
+	"strings"
+
+	"github.com/vibe-agi/hideout/internal/lifecycle"
+)
 
 const (
 	statusVersion = "hideout.daemon-status/v1"
@@ -9,6 +14,7 @@ const (
 // Status is the daemon status/inventory shape (schemas/daemon-status.schema.json).
 type Status struct {
 	Version              string             `json:"version"`
+	BuildID              string             `json:"buildId"`
 	State                string             `json:"state"`
 	InstanceID           string             `json:"instanceId,omitempty"`
 	StartedAt            string             `json:"startedAt,omitempty"`
@@ -44,4 +50,12 @@ type BackgroundStatus struct {
 	ID     string `json:"id"`
 	Op     string `json:"op"`
 	Status string `json:"status"`
+}
+
+func validBuildID(value string) bool {
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }

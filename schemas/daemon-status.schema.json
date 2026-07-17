@@ -4,10 +4,14 @@
   "title": "Hideout daemon status",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "state", "transport"],
+  "required": ["version", "buildId", "state", "transport"],
   "properties": {
     "version": {
       "const": "hideout.daemon-status/v1"
+    },
+    "buildId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     },
     "state": {
       "enum": ["starting", "serving", "stopping", "stopped"]
