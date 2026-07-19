@@ -243,7 +243,9 @@ func TestHostAppInspectionReportsConflictGrantOutcomeAndExactRecovery(t *testing
 		Environment: RunEnvironment{Active: true, Record: environment.Record{ID: "env_inspection", Profile: "privacy"}},
 		Layout:      session.Layout{ID: "ses_inspection"},
 	}
-	grantBinding := projectionGrantBindingForRun(runSession, hostcap.OpenResourceBinding{
+	grantBinding := projectionGrantBindingForRun(runSession, runSessionWorkspaceAuthority{
+		WorkspaceID: "wrk_inspection", HostRoot: runSession.Plan.Workspace, GuestRoot: "/workspace",
+	}, hostcap.OpenResourceBinding{
 		PackID: firstPlan.PackID, RevisionID: firstPlan.RevisionID, BindingID: "open-resource",
 		QualifiedAppRef: firstPlan.PackID + "/" + firstPlan.RevisionID + "/editor",
 		BindingDigest:   firstPlan.ExpectedPermissionFingerprint, Commands: []string{"shared-inspect"},

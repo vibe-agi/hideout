@@ -45,6 +45,7 @@ var SupportedFeatures = []string{
 	"projection",
 	"runtime",
 	"sessions",
+	"workspace",
 }
 
 type Request struct {

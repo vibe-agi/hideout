@@ -7,21 +7,24 @@ import (
 )
 
 const (
-	KindBackendIncarnation      ResourceKind = "backend.incarnation"
-	KindRunSession              ResourceKind = "run.session"
-	KindGuestSupervisor         ResourceKind = "guest.supervisor"
-	KindGuestTarget             ResourceKind = "guest.target"
-	KindBrokerListener          ResourceKind = "broker.listener"
-	KindHostFSReadProvider      ResourceKind = "hostfs.read-provider"
-	KindHostFSLiveGrant         ResourceKind = "hostfs.live-read-grant"
-	KindNetworkService          ResourceKind = "network.environment-service"
-	KindRunBridge               ResourceKind = "endpoint.run-bridge"
-	KindHostAppHandoff          ResourceKind = "hostapp.handoff"
-	KindHostFSStaged            ResourceKind = "hostfs.staged-object"
-	KindDecisionRecord          ResourceKind = "decision.record"
-	KindAuditEvent              ResourceKind = "audit.event"
-	KindMaterializationSnapshot ResourceKind = "host.materialization.snapshot"
-	KindMaterializationLive     ResourceKind = "host.materialization.live-projection"
+	KindBackendIncarnation          ResourceKind = "backend.incarnation"
+	KindRunSession                  ResourceKind = "run.session"
+	KindGuestSupervisor             ResourceKind = "guest.supervisor"
+	KindGuestTarget                 ResourceKind = "guest.target"
+	KindBrokerListener              ResourceKind = "broker.listener"
+	KindHostFSReadProvider          ResourceKind = "hostfs.read-provider"
+	KindHostFSLiveGrant             ResourceKind = "hostfs.live-read-grant"
+	KindWorkspaceHostProvider       ResourceKind = "workspace.host-provider"
+	KindWorkspaceGuestView          ResourceKind = "workspace.guest-view"
+	KindWorkspaceEnvironmentService ResourceKind = "workspace.environment-service"
+	KindNetworkService              ResourceKind = "network.environment-service"
+	KindRunBridge                   ResourceKind = "endpoint.run-bridge"
+	KindHostAppHandoff              ResourceKind = "hostapp.handoff"
+	KindHostFSStaged                ResourceKind = "hostfs.staged-object"
+	KindDecisionRecord              ResourceKind = "decision.record"
+	KindAuditEvent                  ResourceKind = "audit.event"
+	KindMaterializationSnapshot     ResourceKind = "host.materialization.snapshot"
+	KindMaterializationLive         ResourceKind = "host.materialization.live-projection"
 )
 
 type DependencyRule struct {
@@ -49,6 +52,8 @@ type RecoveryProbe string
 const (
 	RecoveryBackendObservation RecoveryProbe = "backend-observation"
 	RecoverySessionAbsence     RecoveryProbe = "session-absence"
+	RecoveryWorkspaceProvider  RecoveryProbe = "workspace-provider-absence"
+	RecoveryWorkspaceView      RecoveryProbe = "workspace-view-absence"
 	RecoveryNetworkRuntime     RecoveryProbe = "network-runtime"
 )
 
@@ -66,6 +71,8 @@ var productionCatalog = []Descriptor{
 	{KindBrokerListener, KindImplemented, []string{"session"}, []DependencyRule{{KindRunSession, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoverySessionAbsence, "broker listener", true},
 	{KindHostFSReadProvider, KindImplemented, []string{"session"}, []DependencyRule{{KindRunSession, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoverySessionAbsence, "HostFS read provider", true},
 	{KindHostFSLiveGrant, KindImplemented, []string{"manager"}, []DependencyRule{{KindHostFSReadProvider, []StopMode{StopModeDrain}}, {KindRunSession, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoverySessionAbsence, "HostFS live read grant", true},
+	{KindWorkspaceHostProvider, KindImplemented, []string{"manager"}, []DependencyRule{{KindBackendIncarnation, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoveryWorkspaceProvider, "workspace host provider", true},
+	{KindWorkspaceGuestView, KindImplemented, []string{"session"}, []DependencyRule{{KindBackendIncarnation, []StopMode{StopModeDrain}}, {KindRunSession, []StopMode{StopModeDrain}}, {KindWorkspaceHostProvider, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoveryWorkspaceView, "workspace guest view", true},
 	{KindNetworkService, KindImplemented, []string{"manager"}, []DependencyRule{{KindBackendIncarnation, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoveryNetworkRuntime, "environment network service", true},
 	{KindRunBridge, KindImplemented, []string{"session"}, []DependencyRule{{KindBackendIncarnation, []StopMode{StopModePin}}, {KindRunSession, []StopMode{StopModeDrain}}}, []PersistenceClass{PersistenceEphemeral}, []ClosePolicy{ClosePreStopDrain}, RecoverySessionAbsence, "run endpoint bridge", true},
 	{KindMaterializationSnapshot, KindDesignReady, []string{"manager"}, nil, []PersistenceClass{PersistenceRetained}, []ClosePolicy{CloseSurviveRoot}, "", "host materialization snapshot", false},
@@ -90,7 +97,7 @@ func RecoveryProbes() []RecoveryProbe {
 
 func validRecoveryProbe(probe RecoveryProbe) bool {
 	switch probe {
-	case RecoveryBackendObservation, RecoverySessionAbsence, RecoveryNetworkRuntime:
+	case RecoveryBackendObservation, RecoverySessionAbsence, RecoveryWorkspaceProvider, RecoveryWorkspaceView, RecoveryNetworkRuntime:
 		return true
 	default:
 		return false

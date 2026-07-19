@@ -21,29 +21,32 @@ func TestActiveSessionSummaryBuilderIsAuthoritativeAndPathFree(t *testing.T) {
 	root := t.TempDir()
 	store := environment.Store{Root: root}
 	env, err := store.Create(environment.Spec{
-		Name:           "owners",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/Users/private/project",
-		GuestWorkspace: "/workspace",
+		Name:              "owners",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "lima",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/Users/private/project",
+		BoundGuestRoot: "/workspace",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
 	record := session.OwnerRecord{
-		Schema:        session.ActiveSessionSchema,
-		SessionID:     "ses_20260716T120000Z_0123456789abcdef",
-		EnvironmentID: env.ID,
-		Profile:       "default",
-		Backend:       "lima",
-		WorkspaceID:   strings.Repeat("a", 64),
-		State:         session.OwnerStateRunning,
-		TerminalMode:  session.TerminalPTY,
-		StartedAt:     now,
-		UpdatedAt:     now,
-		CommandClass:  "bash",
+		Schema:            session.ActiveSessionSchema,
+		SessionID:         "ses_20260716T120000Z_0123456789abcdef",
+		EnvironmentID:     env.ID,
+		Profile:           "default",
+		Backend:           "lima",
+		WorkspaceID:       "wrk_" + strings.Repeat("a", 64),
+		SessionSnapshotID: testSessionSnapshotID(),
+		State:             session.OwnerStateRunning,
+		TerminalMode:      session.TerminalPTY,
+		StartedAt:         now,
+		UpdatedAt:         now,
+		CommandClass:      "bash",
 	}
 	owner, err := session.AcquireOwner(store.OwnerRoot(env.ID), record)
 	if err != nil {
@@ -58,12 +61,18 @@ func TestActiveSessionSummaryBuilderIsAuthoritativeAndPathFree(t *testing.T) {
 	if len(active) != 1 || active[0].ID != record.SessionID || active[0].OwnerStatus != session.OwnerLive {
 		t.Fatalf("active=%+v", active)
 	}
+	if active[0].SessionSnapshotID != record.SessionSnapshotID {
+		t.Fatalf("active session snapshot=%q want %q", active[0].SessionSnapshotID, record.SessionSnapshotID)
+	}
 	overview, err := core.Overview(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(overview.Sessions) != 1 || overview.Sessions[0].Path != "" || overview.Sessions[0].EnvironmentID != env.ID {
 		t.Fatalf("sessions=%+v", overview.Sessions)
+	}
+	if overview.Sessions[0].SessionSnapshotID != record.SessionSnapshotID {
+		t.Fatalf("overview session snapshot=%q want %q", overview.Sessions[0].SessionSnapshotID, record.SessionSnapshotID)
 	}
 	if len(overview.Environments) != 1 || overview.Environments[0].ActiveSessions != 1 || overview.Environments[0].OwnerHealth != "live" {
 		t.Fatalf("environments=%+v", overview.Environments)
@@ -84,7 +93,7 @@ func TestNewAttachRefusesStaleOrFailedOwnerEvidence(t *testing.T) {
 	store := environment.Store{Root: root}
 	env, err := store.Create(environment.Spec{
 		Name: "blocked-attach", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: t.TempDir(), GuestWorkspace: "/workspace",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +101,7 @@ func TestNewAttachRefusesStaleOrFailedOwnerEvidence(t *testing.T) {
 	now := time.Now().UTC()
 	record := session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef",
-		EnvironmentID: env.ID, Profile: "default", Backend: "lima", WorkspaceID: strings.Repeat("a", 64),
+		EnvironmentID: env.ID, Profile: "default", Backend: "lima", WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "bash",
 	}
@@ -122,7 +131,7 @@ func TestRunStatusServesProfileScopedPathFreeOwnerModel(t *testing.T) {
 	store := environment.Store{Root: root}
 	env, err := store.Create(environment.Spec{
 		Name: "api-owners", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: "/Users/private/project", GuestWorkspace: "/workspace", InstanceName: "hideout-api-owners",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: "/Users/private/project", BoundGuestRoot: "/workspace", InstanceName: "hideout-api-owners",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +142,7 @@ func TestRunStatusServesProfileScopedPathFreeOwnerModel(t *testing.T) {
 	now := time.Now().UTC()
 	owner, err := session.AcquireOwner(store.OwnerRoot(env.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef",
-		EnvironmentID: env.ID, Profile: "default", Backend: "lima", WorkspaceID: strings.Repeat("a", 64),
+		EnvironmentID: env.ID, Profile: "default", Backend: "lima", WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalPTY,
 		StartedAt: now, UpdatedAt: now, CommandClass: "bash",
 	})
@@ -177,7 +186,7 @@ func TestActiveSessionSummarySurfacesUnprovableOwnerWithoutRawRecord(t *testing.
 	store := environment.Store{Root: root}
 	env, err := store.Create(environment.Spec{
 		Name: "broken-owner", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: t.TempDir(), GuestWorkspace: "/workspace",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace",
 	})
 	if err != nil {
 		t.Fatal(err)

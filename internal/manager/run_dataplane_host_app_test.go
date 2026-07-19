@@ -20,7 +20,11 @@ func TestCompileRunProjectionGrantsKeepsMixedBindingAccessIndependent(t *testing
 		runProjectionTestBinding("community.ask-editor", "ask-command", "ask-editor", "ask-editor", hostcap.BindingAccessAskEachRun),
 	}
 
-	byCommand, required := compileRunProjectionGrants(runSession, bindings)
+	authority, err := workspaceAuthorityForRunSession(runSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCommand, required := compileRunProjectionGrants(runSession, authority, bindings)
 	commands := make([]string, 0, len(required))
 	for _, binding := range required {
 		commands = append(commands, binding.Command)

@@ -103,6 +103,7 @@ func newProjectionServer(t *testing.T, hostRoot string, hostApp *hostcap.Project
 		Backend:         "lima",
 		HostRoot:        hostRoot,
 		GuestRoot:       "/workspace",
+		WorkspaceID:     "wrk_broker_projection_fixture",
 		CommandRegistry: testProjectionRegistry(t, digest),
 		Evaluator:       policy.NewEvaluator(profile.Default("privacy")),
 		Audit:           writer,
@@ -172,7 +173,7 @@ func projectionConfig(t *testing.T, launcher appopen.Launcher) (*hostcap.Project
 	state := t.TempDir()
 	return &hostcap.ProjectionConfig{
 		Platform: hostcap.PlatformDarwin, SafeUserDataDir: state,
-		Launcher: launcher, Bindings: catalog, RunID: "run_1",
+		Launcher: launcher, Bindings: catalog, RunID: "run_1", WorkspaceID: "wrk_broker_projection_fixture",
 		ValidateLifecycle: func(hostcap.OpenResourceBinding) error { return nil },
 		RevalidateIdentity: func(expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
 			return hostcap.RevalidateApplicationIdentity(expectation, previous, opts)
@@ -287,6 +288,40 @@ func TestProjectionEscapeAndHappyPath(t *testing.T) {
 	joined := strings.Join(launcher.argv[0], " ")
 	if !strings.Contains(joined, hostRoot) {
 		t.Fatalf("host argv should contain the resolved host path: %v", launcher.argv[0])
+	}
+}
+
+func TestProjectionWorkspaceAuthorityKeepsConcurrentSessionRootsSeparate(t *testing.T) {
+	roots := []string{t.TempDir(), t.TempDir()}
+	for _, root := range roots {
+		if err := os.WriteFile(filepath.Join(root, "same.go"), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, root := range roots {
+		launcher := &recordingLauncher{}
+		projection, digest := projectionConfig(t, launcher)
+		server, _ := newProjectionServer(t, root, projection, digest)
+		authorityID := "wrk_concurrent_" + string(rune('a'+index))
+		server.SessionID = "ses_concurrent_" + string(rune('a'+index))
+		server.WorkspaceID = authorityID
+		projection.WorkspaceID = authorityID
+		req := projectionRequest(codeIntent("/workspace/same.go"), digest)
+		req.SessionID = server.SessionID
+		resp := server.Handle(context.Background(), req)
+		if resp.Status != "ok" || len(launcher.argv) != 1 || !strings.Contains(strings.Join(launcher.argv[0], " "), filepath.Join(root, "same.go")) {
+			t.Fatalf("session %d did not resolve through its attachment: response=%+v argv=%v", index, resp, launcher.argv)
+		}
+		otherRoot := roots[1-index]
+		if strings.Contains(strings.Join(launcher.argv[0], " "), otherRoot) {
+			t.Fatalf("session %d crossed into sibling root %q: %v", index, otherRoot, launcher.argv[0])
+		}
+
+		projection.WorkspaceID = "wrk_wrong_attachment"
+		resp = server.Handle(context.Background(), req)
+		if resp.Status != "denied" || resp.Data["code"] != hostcap.CodePathNoHostMapping || len(launcher.argv) != 1 {
+			t.Fatalf("session %d accepted mismatched attachment authority: response=%+v argv=%v", index, resp, launcher.argv)
+		}
 	}
 }
 

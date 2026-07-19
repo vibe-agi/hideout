@@ -115,7 +115,7 @@ func (c Core) RuntimeStatus(handle string) (runtimeverify.StatusView, error) {
 		return runtimeverify.StatusView{}, err
 	}
 	if record.Runtime != nil {
-		if !runtimeReceiptAuthoritySafe(record.Workspace, c.Store.Root) {
+		if !runtimeReceiptAuthoritySafeForEnvironment(record, c.Store.Root) {
 			return runtimeUnknownStatus(record, "workspace overlaps host-only runtime receipt authority"), nil
 		}
 		if _, err := c.currentRuntimeResolution(record); err != nil {
@@ -172,7 +172,7 @@ func (c Core) PlanRuntimeVerify(handle string) (RuntimeVerifyPlan, error) {
 	if record.Status == "running" {
 		return RuntimeVerifyPlan{}, errors.New("runtime environment has an active operation; retry after it completes")
 	}
-	if !runtimeReceiptAuthoritySafe(record.Workspace, c.Store.Root) {
+	if !runtimeReceiptAuthoritySafeForEnvironment(record, c.Store.Root) {
 		return RuntimeVerifyPlan{}, errors.New("runtime verification is unavailable because the workspace overlaps host-only receipt authority")
 	}
 	if _, err := c.Store.Load(record.Profile); err != nil {
@@ -241,7 +241,14 @@ func (c Core) ApplyRuntimeVerify(ctx context.Context, plan RuntimeVerifyPlan, be
 		return result, err
 	}
 	runPlan := runtimeVerificationRunPlan(record, p)
-	runEnv := selectedRunEnvironment(envStore, record, true, false, false)
+	configuration, err := RuntimeConfigurationForProfile(p, record.Backend, record.Mode)
+	if err != nil {
+		return result, err
+	}
+	runEnv := selectedRunEnvironment(envStore, record, environment.Spec{
+		MachineIdentityID:   configuration.Layers.MachineID,
+		BootConfigurationID: configuration.Layers.BootID,
+	}, p, true, false, false)
 	runSession, err := c.BeginRunSession(runPlan, runEnv, RunSessionOptions{})
 	if err != nil {
 		return result, err
@@ -259,7 +266,7 @@ func (c Core) ApplyRuntimeVerify(ctx context.Context, plan RuntimeVerifyPlan, be
 		return result, fmt.Errorf("invalidate prior runtime verification: %w", err)
 	}
 	spec := c.runSpec(runSession, runEnv, RunDataPlane{Env: append([]string(nil), runSession.Env.Env...)}, RunNetwork{})
-	if err := c.attachRuntimeVerification(&spec, runSession, runEnv, be.Name()); err != nil {
+	if err := c.attachRuntimeVerification(&spec, runSession, runEnv, be.Name(), runtimeVerificationMachineAuthority); err != nil {
 		return result, err
 	}
 	session, err := be.Prepare(ctx, spec)
@@ -376,10 +383,19 @@ func runtimeReceiptAuthoritySafe(workspace, storeRoot string) bool {
 	return rootPath != "" && !pathInRoot(workspacePath, rootPath) && !pathInRoot(rootPath, workspacePath)
 }
 
+func runtimeReceiptAuthoritySafeForEnvironment(record environment.Record, storeRoot string) bool {
+	binding, ok := pinnedEnvironmentWorkspace(record)
+	if !ok {
+		return record.Mode == environment.ModeShared
+	}
+	return runtimeReceiptAuthoritySafe(binding.HostRoot, storeRoot)
+}
+
 func runtimeVerificationRunPlan(record environment.Record, p profile.Profile) RunPlan {
+	binding, _ := pinnedEnvironmentWorkspace(record)
 	return RunPlan{
 		Version: RunPlanVersion, ProfileName: p.Name, Backend: record.Backend,
-		Workspace: record.Workspace, GuestWorkspace: record.GuestWorkspace,
+		Workspace: binding.HostRoot, GuestWorkspace: binding.GuestRoot,
 		WorkspaceMode: p.Workspace.Mode, PathMode: p.Workspace.PathMode,
 		NetworkMode: p.Network.Mode, Profile: p, RuntimeProfile: p,
 	}

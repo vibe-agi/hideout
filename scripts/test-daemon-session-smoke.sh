@@ -10,6 +10,7 @@ command -v jq >/dev/null 2>&1 || { echo "daemon-session-smoke: jq required" >&2;
 tmp="$(hideout_mktemp_daemon_store)"
 store="$tmp/s"
 bin="$tmp/hideout"
+workspace="$tmp/workspace"
 cleanup() {
   HIDEOUT_STORE_ROOT="$store" "$bin" daemon stop >/dev/null 2>&1 || true
   rm -rf "$tmp"
@@ -17,11 +18,12 @@ cleanup() {
 trap cleanup EXIT
 
 go build -o "$bin" ./cmd/hideout
+mkdir -p "$workspace"
 export HIDEOUT_STORE_ROOT="$store"
 "$bin" init --no-input --profile default --template dev --backend native --network direct >/dev/null
 
 set +e
-"$bin" run --backend native --allow-weak-isolation --terminal never -- \
+"$bin" run --backend native --allow-weak-isolation --terminal never --workspace "$workspace" -- \
   sh -c 'printf "stdout\000bytes"; printf stderr >&2; exit 17' \
   >"$tmp/stdout" 2>"$tmp/stderr"
 status=$?

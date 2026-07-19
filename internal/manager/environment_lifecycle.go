@@ -337,19 +337,23 @@ func (c Core) ApplyEnvironmentClean(ctx context.Context, plan EnvironmentActionP
 
 func environmentOperationDetails(action string, target EnvironmentActionTarget, status string) map[string]any {
 	details := map[string]any{
-		"action":         string(action),
-		"id":             target.ID,
-		"profile":        target.Profile,
-		"backend":        target.Backend,
-		"status":         status,
-		"workspace":      target.Workspace,
-		"guestWorkspace": target.GuestWorkspace,
-		"instanceName":   target.InstanceName,
-		"lastSessionId":  target.LastSessionID,
-		"lastCommand":    target.LastCommand,
-		"createdAt":      target.CreatedAt,
-		"lastStartedAt":  target.LastStartedAt,
-		"lastEndedAt":    target.LastEndedAt,
+		"action":        string(action),
+		"id":            target.ID,
+		"profile":       target.Profile,
+		"backend":       target.Backend,
+		"status":        status,
+		"instanceName":  target.InstanceName,
+		"lastSessionId": target.LastSessionID,
+		"lastCommand":   target.LastCommand,
+		"createdAt":     target.CreatedAt,
+		"lastStartedAt": target.LastStartedAt,
+		"lastEndedAt":   target.LastEndedAt,
+	}
+	if target.Workspace != "" {
+		details["workspace"] = target.Workspace
+	}
+	if target.GuestWorkspace != "" {
+		details["guestWorkspace"] = target.GuestWorkspace
 	}
 	if details["status"] == "" {
 		details["status"] = target.Status
@@ -485,21 +489,24 @@ func environmentActionFilter(opts EnvironmentActionOptions) EnvironmentActionFil
 }
 
 func environmentActionTargetFromRecord(rec environment.Record, reason string) EnvironmentActionTarget {
-	return EnvironmentActionTarget{
-		ID:             rec.ID,
-		Profile:        rec.Profile,
-		Backend:        rec.Backend,
-		Status:         rec.Status,
-		Workspace:      rec.Workspace,
-		GuestWorkspace: rec.GuestWorkspace,
-		InstanceName:   rec.InstanceName,
-		LastSessionID:  rec.LastSessionID,
-		LastCommand:    rec.LastCommand,
-		CreatedAt:      rec.CreatedAt,
-		LastStartedAt:  rec.LastStartedAt,
-		LastEndedAt:    rec.LastEndedAt,
-		Reason:         reason,
+	target := EnvironmentActionTarget{
+		ID:            rec.ID,
+		Profile:       rec.Profile,
+		Backend:       rec.Backend,
+		Status:        rec.Status,
+		InstanceName:  rec.InstanceName,
+		LastSessionID: rec.LastSessionID,
+		LastCommand:   rec.LastCommand,
+		CreatedAt:     rec.CreatedAt,
+		LastStartedAt: rec.LastStartedAt,
+		LastEndedAt:   rec.LastEndedAt,
+		Reason:        reason,
 	}
+	if binding, ok := pinnedEnvironmentWorkspace(rec); ok {
+		target.Workspace = binding.HostRoot
+		target.GuestWorkspace = binding.GuestRoot
+	}
+	return target
 }
 
 func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, operator EnvironmentOperator, id string) (EnvironmentActionTarget, EnvironmentActionTarget, error) {
@@ -861,8 +868,7 @@ func (c Core) ApplyEnvironmentCreate(plan EnvironmentCreatePlan) (environment.Re
 			return environment.Record{}, errors.New("profile runtime changed between environment plan and apply")
 		}
 	}
-	spec := RunEnvironmentSpec(p, plan.Backend, workspace, guestWorkspace)
-	spec.Name = plan.Name
+	spec := dedicatedRunEnvironmentSpec(p, plan.Backend, workspace, guestWorkspace, plan.Name)
 	spec.AutoNamed = plan.AutoNamed
 	spec.ImageRef = plan.ImageRef
 	if plan.Runtime != nil {
@@ -871,6 +877,15 @@ func (c Core) ApplyEnvironmentCreate(plan EnvironmentCreatePlan) (environment.Re
 	} else {
 		spec.Runtime = nil
 	}
+	pinned := p
+	pinned.Environment.BaseImage = spec.ImageRef
+	pinned.Environment.Runtime = cloneRuntimeProvenance(spec.Runtime)
+	configuration, err := RuntimeConfigurationForProfile(pinned, plan.Backend, environment.ModeDedicated)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	spec.MachineIdentityID = configuration.Layers.MachineID
+	spec.BootConfigurationID = configuration.Layers.BootID
 	rec, err := store.Create(spec)
 	if err != nil {
 		return environment.Record{}, err
@@ -881,15 +896,16 @@ func (c Core) ApplyEnvironmentCreate(plan EnvironmentCreatePlan) (environment.Re
 			return environment.Record{}, err
 		}
 	}
-	c.emitEnvironmentAudit("env.create", "allow", map[string]any{
+	details := map[string]any{
 		"environmentName": rec.Name,
 		"environmentId":   rec.ID,
 		"autoNamed":       rec.AutoNamed,
 		"imageRef":        rec.ImageRef,
-		"workspace":       rec.Workspace,
 		"backend":         rec.Backend,
 		"profile":         rec.Profile,
-	})
+	}
+	addPinnedEnvironmentWorkspace(details, rec)
+	c.emitEnvironmentAudit("env.create", "allow", details)
 	return rec, nil
 }
 
@@ -1012,21 +1028,22 @@ func (c Core) RemoveEnvironment(ctx context.Context, name string, force bool, op
 	if err := store.Remove(rec.ID); err != nil {
 		return environment.Record{}, err
 	}
-	c.emitEnvironmentAudit("env.remove", "allow", map[string]any{
+	details := map[string]any{
 		"environmentName": rec.Name,
 		"environmentId":   rec.ID,
 		"imageRef":        rec.ImageRef,
-		"workspace":       rec.Workspace,
 		"backend":         rec.Backend,
 		"force":           force,
-	})
+	}
+	addPinnedEnvironmentWorkspace(details, rec)
+	c.emitEnvironmentAudit("env.remove", "allow", details)
 	return rec, nil
 }
 
 // RecreateEnvironment destroys the environment's guest and rebuilds the
-// record from its pinned declaration under the same name and id, refreshing
-// the backend configuration version and profile identity fields to current
-// values. It is the explicit answer to a drift report.
+// record from its pinned declaration under the same name and id. It is the
+// explicit answer to machine-identity or static-mount drift; session, service,
+// and reconcilable boot changes must use their narrower lifecycle paths.
 func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, opts EnvironmentApplyOptions) (environment.Record, error) {
 	store, err := c.environmentStore()
 	if err != nil {
@@ -1061,11 +1078,17 @@ func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, 
 	if err != nil {
 		return environment.Record{}, err
 	}
-	rec.BackendConfigVersion = backendConfigVersion(rec.Backend)
-	rec.ProfileID = p.Metadata["profileId"]
-	rec.IdentityID = p.Metadata["identityId"]
 	rec.User = p.Identity.User
 	rec.Hostname = p.Identity.Hostname
+	pinned := p
+	pinned.Environment.BaseImage = rec.ImageRef
+	pinned.Environment.Runtime = cloneRuntimeProvenance(rec.Runtime)
+	configuration, err := RuntimeConfigurationForProfile(pinned, rec.Backend, rec.Mode)
+	if err != nil {
+		return environment.Record{}, err
+	}
+	rec.MachineIdentityID = configuration.Layers.MachineID
+	rec.BootConfigurationID = configuration.Layers.BootID
 	rec.Status = "ready"
 	rec.LastSessionID = ""
 	rec.LastCommand = ""
@@ -1075,14 +1098,15 @@ func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, 
 	if err := store.ClearRuntime(rec.ID); err != nil {
 		return environment.Record{}, err
 	}
-	c.emitEnvironmentAudit("env.recreate", "allow", map[string]any{
+	details := map[string]any{
 		"environmentName": rec.Name,
 		"environmentId":   rec.ID,
 		"imageRef":        rec.ImageRef,
-		"workspace":       rec.Workspace,
 		"backend":         rec.Backend,
 		"force":           force,
-	})
+	}
+	addPinnedEnvironmentWorkspace(details, rec)
+	c.emitEnvironmentAudit("env.recreate", "allow", details)
 	return rec, nil
 }
 

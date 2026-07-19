@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 type RunDataPlaneOptions struct {
@@ -76,6 +77,10 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err := hostcap.EnsureExternalUnmanagedHandoff(hostcap.CapabilityAppOpenResource); err != nil {
 		return RunDataPlane{}, fmt.Errorf("host-app lifecycle invariant: %w", err)
 	}
+	workspaceAuthority, err := workspaceAuthorityForDataPlane(runSession)
+	if err != nil {
+		return RunDataPlane{}, fmt.Errorf("resolve run data-plane workspace authority: %w", err)
+	}
 	aw := runSession.Audit
 	if aw == nil {
 		aw = audit.NewDiscard()
@@ -114,7 +119,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err != nil {
 		return RunDataPlane{}, err
 	}
-	hostAppForbiddenRoots, err := c.hostAppRunForbiddenRoots(runSession, hostFSPolicy)
+	hostAppForbiddenRoots, err := c.hostAppRunForbiddenRoots(runSession, workspaceAuthority, hostFSPolicy)
 	if err != nil {
 		return RunDataPlane{}, err
 	}
@@ -136,7 +141,14 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err := MaterializeSessionSupervisor(runSession.RuntimeShimDir, runSession.Plan.Backend, opts.RequireSessionSupervisor); err != nil {
 		return RunDataPlane{}, err
 	}
-	grantBindings, requiredGrantBindings := compileRunProjectionGrants(runSession, hostAppBindings.Bindings())
+	if err := MaterializeWorkspacePortal(
+		runSession.RuntimeShimDir,
+		runSession.Plan.Backend,
+		runSession.WorkspaceAttachment.Transport == workspaceattach.SelectedTransport,
+	); err != nil {
+		return RunDataPlane{}, err
+	}
+	grantBindings, requiredGrantBindings := compileRunProjectionGrants(runSession, workspaceAuthority, hostAppBindings.Bindings())
 	projectionGrantIDs := []string{}
 	projectionGrantTransferred := false
 	defer func() {
@@ -168,9 +180,10 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Deduper:            newProjectionDeduper(),
 		Bindings:           hostAppBindings,
 		RunID:              runSession.Layout.ID,
-		GrantScopeBase:     projectionGrantScopeBase(runSession),
-		ResolveIdentity:    c.hostAppRunBindingIdentityResolver(runSession, hostFSPolicy, hostAppForbiddenRoots),
-		RevalidateIdentity: c.hostAppRunIdentityRevalidator(runSession, hostFSPolicy, hostAppForbiddenRoots),
+		WorkspaceID:        workspaceAuthority.WorkspaceID,
+		GrantScopeBase:     projectionGrantScopeBase(runSession, workspaceAuthority),
+		ResolveIdentity:    c.hostAppRunBindingIdentityResolver(runSession, workspaceAuthority, hostFSPolicy, hostAppForbiddenRoots),
+		RevalidateIdentity: c.hostAppRunIdentityRevalidator(runSession, workspaceAuthority, hostFSPolicy, hostAppForbiddenRoots),
 		ValidateLifecycle:  hostAppLifecycle,
 		BeginHandoff:       lifecycleEffects.beginHandoff,
 	}
@@ -279,17 +292,18 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Token:               token,
 		Socket:              runSession.Layout.BrokerSock,
 		Endpoint:            listenEndpoint,
-		HostRoot:            runSession.Plan.Workspace,
-		GuestRoot:           runSession.Plan.GuestWorkspace,
+		HostRoot:            workspaceAuthority.HostRoot,
+		GuestRoot:           workspaceAuthority.GuestRoot,
+		WorkspaceID:         workspaceAuthority.WorkspaceID,
 		Profile:             runSession.Plan.ProfileName,
-		ProfileDir:          runSession.ProfileDir,
+		ProfileDir:          filepath.Join(runSession.RuntimeSessionDir, "policy"),
 		Backend:             runSession.Plan.Backend,
 		WorkspaceMode:       runSession.Plan.RuntimeProfile.Workspace.Mode,
 		NetworkMode:         runSession.Plan.RuntimeProfile.Network.Mode,
 		Commands:            registry.ShimNames(),
 		CommandRegistry:     registry,
 		CommandAdapters:     adapters,
-		ScriptRefs:          runSession.Plan.RuntimeProfile.Policy.ScriptRefs,
+		ScriptRefs:          runSession.PolicyScriptRefs,
 		Evaluator:           policy.NewEvaluator(runSession.Plan.RuntimeProfile),
 		Audit:               runSession.Audit,
 		Opener:              opener,
@@ -331,8 +345,9 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Details: func() map[string]any {
 			visibility := summarizeHostFSVisibility(runSession.Plan.RuntimeProfile, hostFSPolicy)
 			return map[string]any{
-				"workspace":                runSession.Plan.Workspace,
-				"guestWork":                runSession.Plan.GuestWorkspace,
+				"workspace":                workspaceAuthority.HostRoot,
+				"guestWork":                workspaceAuthority.GuestRoot,
+				"workspaceId":              workspaceAuthority.WorkspaceID,
 				"network":                  runSession.Plan.RuntimeProfile.Network.Mode,
 				"networkPlan":              presence(runNetwork.Plan.ManifestPath),
 				"command":                  strings.Join(runSession.Plan.Command, " "),
@@ -415,7 +430,7 @@ func prepareProjectionSafeDataDir(path string) error {
 // compileRunProjectionGrants derives approval work only from immutable binding
 // access. Profile ide-mode compatibility has already been compiled into the
 // built-in VS Code binding by CompileHostAppCatalog.
-func compileRunProjectionGrants(runSession RunSession, appBindings []hostcap.OpenResourceBinding) (map[string]projectionGrantBinding, []projectionGrantBinding) {
+func compileRunProjectionGrants(runSession RunSession, authority runSessionWorkspaceAuthority, appBindings []hostcap.OpenResourceBinding) (map[string]projectionGrantBinding, []projectionGrantBinding) {
 	byCommand := map[string]projectionGrantBinding{}
 	var required []projectionGrantBinding
 	for _, appBinding := range appBindings {
@@ -423,7 +438,7 @@ func compileRunProjectionGrants(runSession RunSession, appBindings []hostcap.Ope
 			continue
 		}
 		for _, command := range appBinding.Commands {
-			binding := projectionGrantBindingForRun(runSession, appBinding, command)
+			binding := projectionGrantBindingForRun(runSession, authority, appBinding, command)
 			byCommand[command] = binding
 			required = append(required, binding)
 		}
@@ -766,6 +781,17 @@ func MaterializeSessionSupervisor(dir, backendName string, required bool) error 
 	return copyExecutable(source, filepath.Join(dir, helperbin.LinuxSessionSupervisorCommand))
 }
 
+func MaterializeWorkspacePortal(dir, backendName string, required bool) error {
+	if !required || backendName != "lima" {
+		return nil
+	}
+	source := ResolveLinuxWorkspacePortalPath()
+	if source == "" {
+		return errors.New("shared Lima workspaces require a manifest-verified linux hideout-workspace-portal")
+	}
+	return copyExecutable(source, filepath.Join(dir, helperbin.LinuxWorkspacePortalCommand))
+}
+
 func ResolveShimPath() string {
 	return helperbin.ResolveShimPath()
 }
@@ -800,6 +826,14 @@ func ResolveLinuxSessionSupervisorPath() string {
 		return ""
 	}
 	return helperbin.ResolveLinuxSessionSupervisorPath(store.Root, runtime.GOARCH)
+}
+
+func ResolveLinuxWorkspacePortalPath() string {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return ""
+	}
+	return helperbin.ResolveLinuxWorkspacePortalPath(store.Root, runtime.GOARCH)
 }
 
 func DefaultLinuxShimPath(goarch string) (string, error) {

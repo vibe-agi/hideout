@@ -5,15 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
+	"github.com/vibe-agi/hideout/internal/packagekit"
 	"github.com/vibe-agi/hideout/internal/productevidence"
 	"github.com/vibe-agi/hideout/internal/recovery"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 func TestLocalFastReadinessIsNotReleaseEvidence(t *testing.T) {
@@ -846,26 +851,9 @@ func writeProductEvidence(t *testing.T, path, commit string, reqs []productevide
 			Artifacts:       []productevidence.ArtifactRef{},
 			RedactionStatus: productevidence.RedactionPassed,
 		}
-		if req.ArtifactPolicy != productevidence.ArtifactPolicyNone {
-			rel := filepath.Join("artifacts", req.ProofID+".txt")
-			artifactPath := filepath.Join(filepath.Dir(path), rel)
-			if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			artifactData := []byte("unit fixture\n")
-			if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
-				artifactData = semanticProductArtifact(t, req.ArtifactValidator, commit, runtimeBindingFixture())
-			}
-			if err := os.WriteFile(artifactPath, artifactData, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			proof.Artifacts = append(proof.Artifacts, productevidence.ArtifactRef{
-				Kind:            "log",
-				Path:            rel,
-				RedactionStatus: productevidence.RedactionPassed,
-				Description:     "unit fixture artifact",
-			})
-		}
+		packageIdentity := packageIdentityFixture()
+		packageIdentity.SourceCommit = commit
+		proof.Artifacts = writeRequirementArtifacts(t, filepath.Dir(path), req, commit, runtimeBindingFixture(), packageIdentity)
 		manifest.Proofs = append(manifest.Proofs, proof)
 	}
 	if err := productevidence.WriteFile(path, manifest); err != nil {
@@ -919,19 +907,6 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 		if req.RequiredFor != productevidence.RequiredForReleaseCandidate {
 			continue
 		}
-		rel := filepath.Join("artifacts", req.ProofID+".log")
-		artifact := filepath.Join(filepath.Dir(path), rel)
-		if err := os.MkdirAll(filepath.Dir(artifact), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		artifactData := []byte("runtime proof\n")
-		if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
-			artifactData = semanticProductArtifact(t, req.ArtifactValidator, commit, binding)
-		}
-		if err := os.WriteFile(artifact, artifactData, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		artifactSum := sha256.Sum256(artifactData)
 		mode := req.RequiredMode
 		if mode == "" {
 			mode = "real-gate"
@@ -945,7 +920,7 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 			Status: productevidence.StatusPassed, CommandSummary: "runtime fixture",
 			CoveredClaims:   coveredClaimsForRequirement(req),
 			Prerequisites:   []productevidence.PrerequisiteStatus{{Name: "real-runtime", Status: "available"}},
-			Artifacts:       []productevidence.ArtifactRef{{Kind: "log", Path: rel, SHA256: hex.EncodeToString(artifactSum[:]), RedactionStatus: productevidence.RedactionPassed}},
+			Artifacts:       writeRequirementArtifacts(t, filepath.Dir(path), req, commit, binding, packageIdentity),
 			RedactionStatus: productevidence.RedactionPassed,
 		}
 		if req.RuntimePolicy == productevidence.RuntimePolicyExactReal {
@@ -957,6 +932,314 @@ func writeRuntimeProductEvidence(t *testing.T, path, commit string, binding prod
 	if err := productevidence.WriteFile(path, manifest); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeRequirementArtifacts(t *testing.T, root string, req productevidence.ProofRequirement, commit string, binding productevidence.RuntimeBinding, packageIdentity productevidence.PackageIdentity) []productevidence.ArtifactRef {
+	t.Helper()
+	if req.ArtifactPolicy == productevidence.ArtifactPolicyNone {
+		return nil
+	}
+	artifacts := map[string][]byte{}
+	switch req.ArtifactValidator {
+	case productevidence.ArtifactValidatorSharedWorkspaceBehaviorV1,
+		productevidence.ArtifactValidatorSharedWorkspacePerformanceV1:
+		artifacts = sharedWorkspaceSemanticArtifacts(t, req.ArtifactValidator, commit, binding, packageIdentity)
+	default:
+		rel := filepath.Join("artifacts", req.ProofID+".log")
+		data := []byte("runtime proof\n")
+		if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
+			data = semanticProductArtifact(t, req.ArtifactValidator, commit, binding)
+		}
+		artifacts[rel] = data
+	}
+	paths := make([]string, 0, len(artifacts))
+	for path := range artifacts {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	refs := make([]productevidence.ArtifactRef, 0, len(paths))
+	for _, rel := range paths {
+		data := artifacts[rel]
+		artifactPath := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(artifactPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(artifactPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		kind := "log"
+		if (req.ArtifactValidator == productevidence.ArtifactValidatorSharedWorkspaceBehaviorV1 ||
+			req.ArtifactValidator == productevidence.ArtifactValidatorSharedWorkspacePerformanceV1) &&
+			!strings.HasSuffix(rel, ".values") && !strings.HasSuffix(rel, ".tsv") {
+			kind = "manifest"
+		}
+		refs = append(refs, productevidence.ArtifactRef{
+			Kind: kind, Path: rel, SHA256: hex.EncodeToString(sum[:]),
+			RedactionStatus: productevidence.RedactionPassed,
+			Description:     "release-readiness semantic fixture artifact",
+		})
+	}
+	return refs
+}
+
+func sharedWorkspaceSemanticArtifacts(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding, packageIdentity productevidence.PackageIdentity) map[string][]byte {
+	t.Helper()
+	decisionData := readSharedWorkspaceDecisionFixture(t)
+	var decision workspaceattach.ResearchDecision
+	if err := json.Unmarshal(decisionData, &decision); err != nil {
+		t.Fatal(err)
+	}
+	if validator == productevidence.ArtifactValidatorSharedWorkspaceBehaviorV1 {
+		return sharedWorkspaceBehaviorArtifacts(t, commit, binding, packageIdentity, decisionData)
+	}
+	if validator == productevidence.ArtifactValidatorSharedWorkspacePerformanceV1 {
+		return sharedWorkspacePerformanceArtifacts(t, commit, binding, packageIdentity, decision, decisionData)
+	}
+	t.Fatalf("unsupported shared-workspace semantic validator %q", validator)
+	return nil
+}
+
+func sharedWorkspaceBehaviorArtifacts(t *testing.T, commit string, binding productevidence.RuntimeBinding, packageIdentity productevidence.PackageIdentity, decisionData []byte) map[string][]byte {
+	t.Helper()
+	helperDigest := strings.Repeat("d", 64)
+	checks := trueMap([]string{
+		"oneMachineTwoProjects", "disjointIsolation", "sameRootLocks", "nestedAuthority",
+		"siblingDetach", "lifecycleIntegration", "restartNoReadoption", "packagedHelperVerified", "hostPathRedacted",
+	})
+	relationChecks := trueMap([]string{
+		"oneEnvironment", "oneInstance", "sameBootAcrossDisjointRoots", "sameBootAcrossNestedRoots",
+		"disjointBidirectionalUnavailable", "siblingDetachPreservedExecution", "sameRootLockOwnersIndependent", "nestedAuthorityEnforced",
+	})
+	lifecycleChecks := trueMap([]string{
+		"siblingDetachPreservedExecution", "bridgePinnedMachine", "graceCancelledByCrossWorkspaceAttach",
+		"graceCancelReusedBoot", "exactFinalStopObserved", "restartDidNotReadoptWorkspaceAuthority",
+		"postReconciliationAttachUsedFreshAuthority",
+	})
+	manifest := packagekit.Manifest{
+		Schema:  packagekit.ArtifactSchema,
+		Release: packagekit.ReleaseInfo{ProductVersion: packageIdentity.ProductVersion},
+		Source:  packagekit.SourceInfo{Commit: packageIdentity.SourceCommit},
+		Target:  packagekit.Target{HostOS: packageIdentity.HostOS, HostArch: packageIdentity.HostArch, LinuxGuestArch: "arm64"},
+		Files: []packagekit.File{{
+			Path: "bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-arm64",
+			Kind: "linux-helper", SHA256: helperDigest, Executable: true,
+		}},
+	}
+	helper := helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxWorkspacePortalCommand,
+		TargetOS: "linux", TargetArch: "arm64", Artifact: helperbin.LinuxWorkspacePortalCommand + "-linux-arm64", SHA256: helperDigest,
+	}
+	artifacts := map[string][]byte{
+		"artifacts/behavior/relations.json": fixtureJSON(t, map[string]any{
+			"schema": "hideout.shared-workspace-relations/v1", "status": "passed",
+			"environmentCount": 1, "instanceCount": 1, "checks": relationChecks,
+		}),
+		"artifacts/behavior/lifecycle.json": fixtureJSON(t, map[string]any{
+			"schema": "hideout.shared-workspace-lifecycle/v1", "status": "passed",
+			"firstGeneration": 1, "restartGeneration": 2, "elapsedSeconds": 1, "checks": lifecycleChecks,
+		}),
+		"artifacts/behavior/correctness.json":                      fixtureJSON(t, validSharedWorkspaceCorrectnessFixture(30)),
+		"artifacts/behavior/research-decision.json":                decisionData,
+		"artifacts/behavior/package-manifest.json":                 fixtureJSON(t, manifest),
+		"artifacts/behavior/workspace-portal-helper.manifest.json": fixtureJSON(t, helper),
+	}
+	descriptors := map[string]any{}
+	for key, path := range map[string]string{
+		"relations": "artifacts/behavior/relations.json", "lifecycle": "artifacts/behavior/lifecycle.json",
+		"correctness": "artifacts/behavior/correctness.json", "researchDecision": "artifacts/behavior/research-decision.json",
+		"packageManifest":               "artifacts/behavior/package-manifest.json",
+		"workspacePortalHelperManifest": "artifacts/behavior/workspace-portal-helper.manifest.json",
+	} {
+		descriptors[key] = fixtureDigest(path, artifacts[path])
+	}
+	artifacts["behavior.json"] = fixtureJSON(t, map[string]any{
+		"schema": "hideout.shared-workspace-real-gate2/v1", "status": "passed",
+		"commit": commit, "dirty": false, "backend": "lima", "hostOS": "darwin", "hostArch": "arm64",
+		"transport": "workspace-portal", "packageIdentity": packageIdentity, "runtime": binding,
+		"artifacts": descriptors, "checks": checks,
+	})
+	return artifacts
+}
+
+func sharedWorkspacePerformanceArtifacts(t *testing.T, commit string, binding productevidence.RuntimeBinding, packageIdentity productevidence.PackageIdentity, decision workspaceattach.ResearchDecision, decisionData []byte) map[string][]byte {
+	t.Helper()
+	candidatePaths := map[string]string{
+		"git-status":           "artifacts/performance/candidate/git-status.values",
+		"package-scan":         "artifacts/performance/candidate/package-scan.values",
+		"atomic-host-to-guest": "artifacts/performance/candidate/atomic-host-to-guest.values",
+		"atomic-guest-to-host": "artifacts/performance/candidate/atomic-guest-to-host.values",
+		"mount-ready":          "artifacts/performance/candidate/mount-ready.values",
+		"first-byte":           "artifacts/performance/candidate/first-byte.values",
+		"saturation-metadata":  "artifacts/performance/candidate/saturation-metadata.values",
+	}
+	controlPaths := map[string]string{
+		"git-status":   "artifacts/performance/filesystem-control/git-status.values",
+		"package-scan": "artifacts/performance/filesystem-control/package-scan.values",
+	}
+	researchPaths := map[string]string{
+		"first-byte": "artifacts/performance/research-baseline/first-byte.values",
+	}
+	correctness := validSharedWorkspaceCorrectnessFixture(30)
+	artifacts := map[string][]byte{
+		"artifacts/performance/research-baseline/fixture.sha256":      []byte(decision.Provenance.FixtureDigest + "\n"),
+		"artifacts/performance/filesystem-control/paired-samples.tsv": sharedWorkspacePairedSamplesFixture(100, 100, 100, 100, 30),
+		"artifacts/performance/correctness.json":                      fixtureJSON(t, correctness),
+		"artifacts/performance/saturation.json":                       fixtureJSON(t, map[string]any{"teardownMs": 100}),
+		"artifacts/performance/research-decision.json":                decisionData,
+	}
+	for id, path := range candidatePaths {
+		count := 30
+		if id == "saturation-metadata" {
+			count = 100
+		}
+		artifacts[path] = fixtureSamples(100, count)
+	}
+	for _, path := range controlPaths {
+		artifacts[path] = fixtureSamples(100, 30)
+	}
+	for _, path := range researchPaths {
+		artifacts[path] = fixtureSamples(100, 30)
+	}
+	candidateDescriptors := map[string]any{}
+	for id, path := range candidatePaths {
+		candidateDescriptors[id] = fixtureDigest(path, artifacts[path])
+	}
+	controlDescriptors := map[string]any{}
+	for id, path := range controlPaths {
+		controlDescriptors[id] = fixtureDigest(path, artifacts[path])
+	}
+	researchDescriptors := map[string]any{}
+	for id, path := range researchPaths {
+		researchDescriptors[id] = fixtureDigest(path, artifacts[path])
+	}
+	metrics := make([]map[string]any, 0, 6)
+	for _, id := range []string{"git-status", "package-scan", "atomic-host-to-guest", "atomic-guest-to-host", "mount-ready", "first-byte"} {
+		metric := map[string]any{
+			"id": id, "candidate": map[string]any{"samples": 30, "medianMs": 100, "p95Ms": 100},
+			"referenceKind": "absolute-threshold", "passed": true,
+		}
+		if _, ok := controlPaths[id]; ok {
+			metric["reference"] = map[string]any{"samples": 30, "medianMs": 100, "p95Ms": 100}
+			metric["referenceKind"] = "paired-static-virtiofs"
+		} else if _, ok := researchPaths[id]; ok {
+			metric["reference"] = map[string]any{"samples": 30, "medianMs": 100, "p95Ms": 100}
+			metric["referenceKind"] = "retained-research-baseline"
+		}
+		metrics = append(metrics, metric)
+	}
+	pairedPath := "artifacts/performance/filesystem-control/paired-samples.tsv"
+	controlManifestPath := "artifacts/performance/filesystem-control/manifest.json"
+	artifacts[controlManifestPath] = fixtureJSON(t, map[string]any{
+		"schema": "hideout.shared-workspace-paired-control/v1", "commit": commit, "dirty": false,
+		"mechanism":     "profile-cache-static-virtiofs",
+		"guestRoot":     "/hideout/profile/cache/035-static-virtiofs-control",
+		"fixtureSHA256": decision.Provenance.FixtureDigest,
+		"samples":       30, "warmups": 1, "sampleOrder": "alternating-pairs",
+		"artifacts": controlDescriptors, "pairedSamples": fixtureDigest(pairedPath, artifacts[pairedPath]),
+	})
+	artifacts["performance.json"] = fixtureJSON(t, map[string]any{
+		"schema": "hideout.shared-workspace-gate2-evaluation/v1", "result": "passed", "thresholdsPassed": true,
+		"fixtureSHA256":    decision.Provenance.FixtureDigest,
+		"candidate":        map[string]any{"commit": commit, "dirty": false},
+		"researchBaseline": map[string]any{"commit": decision.Provenance.Commit, "dirty": decision.Provenance.Dirty},
+		"filesystemControl": map[string]any{
+			"commit": commit, "dirty": false, "mechanism": "profile-cache-static-virtiofs",
+			"guestRoot": "/hideout/profile/cache/035-static-virtiofs-control", "sampleOrder": "alternating-pairs",
+		},
+		"packageIdentity": packageIdentity, "runtime": binding,
+		"methodology": map[string]any{
+			"samples": 30, "warmups": 1, "filesystemSampleOrder": "alternating-pairs",
+			"firstByteSampleOrder": "one-warmup-then-measured",
+			"gitMedianAbsoluteMs":  2000, "gitMedianBaselineRatio": 2, "packageMedianBaselineRatio": 3,
+			"atomicVisibilityP95Ms": 250, "mountReadyP95Ms": 1000,
+			"firstByteAbsoluteAllowanceMs": 500, "firstByteBaselineAllowance": 0.15, "saturationTeardownMs": 5000,
+		},
+		"metrics":     metrics,
+		"correctness": map[string]any{"passed": true, "observation": correctness},
+		"saturation": map[string]any{
+			"passed": true, "observation": map[string]any{"teardownMs": 100},
+			"metadata": map[string]any{"samples": 100, "medianMs": 100, "p95Ms": 100},
+		},
+		"artifacts": map[string]any{
+			"candidate": candidateDescriptors, "filesystemControl": controlDescriptors,
+			"researchBaseline":          researchDescriptors,
+			"fixture":                   fixtureDigest("artifacts/performance/research-baseline/fixture.sha256", artifacts["artifacts/performance/research-baseline/fixture.sha256"]),
+			"filesystemControlManifest": fixtureDigest(controlManifestPath, artifacts[controlManifestPath]),
+			"pairedSamples":             fixtureDigest(pairedPath, artifacts[pairedPath]),
+			"correctness":               fixtureDigest("artifacts/performance/correctness.json", artifacts["artifacts/performance/correctness.json"]),
+			"saturation":                fixtureDigest("artifacts/performance/saturation.json", artifacts["artifacts/performance/saturation.json"]),
+			"researchDecision":          fixtureDigest("artifacts/performance/research-decision.json", artifacts["artifacts/performance/research-decision.json"]),
+		},
+	})
+	return artifacts
+}
+
+func validSharedWorkspaceCorrectnessFixture(samples int) map[string]any {
+	return map[string]any{
+		"schema":            "hideout.shared-workspace-correctness/v1",
+		"hostCreateVisible": true, "targetCreateVisible": true,
+		"hostAtomicReplaceVisible": true, "targetAtomicReplaceVisible": true,
+		"renameVisible": true, "deleteVisible": true, "modeVisible": true, "flushDurable": true,
+		"sameRootLocksConflict": true, "rootEscapeRejected": true, "symlinkEscapeRejected": true,
+		"watcherStreamHealthy": true, "silentShortWrites": 0, "falseSuccesses": 0,
+		"hostWatcherSamples": samples, "targetWatcherSamples": samples,
+	}
+}
+
+func trueMap(names []string) map[string]bool {
+	values := make(map[string]bool, len(names))
+	for _, name := range names {
+		values[name] = true
+	}
+	return values
+}
+
+func fixtureSamples(value float64, count int) []byte {
+	return []byte(strings.Repeat(fmt.Sprintf("%.6f\n", value), count))
+}
+
+func sharedWorkspacePairedSamplesFixture(gitCandidate, gitControl, packageCandidate, packageControl float64, count int) []byte {
+	values := map[string]map[string]float64{
+		"git-status":   {"candidate": gitCandidate, "control": gitControl},
+		"package-scan": {"candidate": packageCandidate, "control": packageControl},
+	}
+	var out strings.Builder
+	for _, metric := range []string{"git-status", "package-scan"} {
+		for index := 1; index <= count; index++ {
+			sides := []string{"candidate", "control"}
+			if index%2 == 0 {
+				sides[0], sides[1] = sides[1], sides[0]
+			}
+			for _, side := range sides {
+				fmt.Fprintf(&out, "%s\t%d\t%s\t%.6f\n", metric, index, side, values[metric][side])
+			}
+		}
+	}
+	return []byte(out.String())
+}
+
+func fixtureDigest(path string, data []byte) map[string]any {
+	sum := sha256.Sum256(data)
+	return map[string]any{"path": path, "sha256": hex.EncodeToString(sum[:])}
+}
+
+func fixtureJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(data, '\n')
+}
+
+func readSharedWorkspaceDecisionFixture(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "dist", "workspace-research", "035", "decision.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func semanticProductArtifact(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding) []byte {

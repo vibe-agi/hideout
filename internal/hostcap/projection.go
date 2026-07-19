@@ -26,6 +26,7 @@ type ProjectionConfig struct {
 	Deduper            Deduper
 	Bindings           BindingCatalog
 	RunID              string
+	WorkspaceID        string
 	GrantScopeBase     GrantScope
 	ResolveIdentity    BindingIdentityResolver
 	RevalidateIdentity IdentityRevalidator
@@ -74,7 +75,7 @@ func (c *ProjectionConfig) OpenCommand(ctx context.Context, command, bindingDige
 		}
 	}
 	result, err := OpenBoundResource(ctx, binding, request, BoundOpenContext{
-		SessionID: sessionID, Profile: profile, RunID: c.RunID, Command: command, SafeStateBase: c.SafeUserDataDir,
+		SessionID: sessionID, Profile: profile, RunID: c.RunID, WorkspaceID: c.WorkspaceID, Command: command, SafeStateBase: c.SafeUserDataDir,
 		Platform: c.Platform, Resources: resolver,
 		GrantScopeBase: c.GrantScopeBase, Grants: c.Grants, Launcher: c.Launcher, Deduper: c.Deduper, RevalidateIdentity: c.RevalidateIdentity,
 		ValidateLifecycle: c.ValidateLifecycle,

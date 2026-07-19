@@ -18,6 +18,8 @@ const (
 	ManifestVersion                       = "hideout.helper-manifest/v1"
 	LinuxSessionSupervisorCommand         = "hideout-session-supervisor"
 	LinuxSessionSupervisorPathEnvironment = "HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH"
+	LinuxWorkspacePortalCommand           = "hideout-workspace-portal"
+	LinuxWorkspacePortalPathEnvironment   = "HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH"
 )
 
 type BuildOptions struct {
@@ -57,6 +59,13 @@ func DefaultLinuxSessionSupervisorPath(storeRoot, goarch string) string {
 		goarch = "unknown"
 	}
 	return filepath.Join(storeRoot, "bin", LinuxSessionSupervisorCommand+"-linux-"+goarch)
+}
+
+func DefaultLinuxWorkspacePortalPath(storeRoot, goarch string) string {
+	if goarch == "" {
+		goarch = "unknown"
+	}
+	return filepath.Join(storeRoot, "bin", LinuxWorkspacePortalCommand+"-linux-"+goarch)
 }
 
 func ResolveShimPath() string {
@@ -230,11 +239,53 @@ func ResolveLinuxSessionSupervisorPath(storeRoot, goarch string) string {
 	return ""
 }
 
+// ResolveLinuxWorkspacePortalPath accepts only a manifest-bound Linux helper.
+// The research probe binary is deliberately not a fallback product helper.
+func ResolveLinuxWorkspacePortalPath(storeRoot, goarch string) string {
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	if !SupportedLinuxGuestArch(goarch) {
+		return ""
+	}
+	if path := os.Getenv(LinuxWorkspacePortalPathEnvironment); path != "" {
+		if StoreHelperCurrent(path, LinuxWorkspacePortalCommand, goarch) {
+			return path
+		}
+		return ""
+	}
+	name := LinuxWorkspacePortalCommand + "-linux-" + goarch
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), name)
+		if StoreHelperCurrent(candidate, LinuxWorkspacePortalCommand, goarch) {
+			return candidate
+		}
+	}
+	if storeRoot != "" {
+		candidate := DefaultLinuxWorkspacePortalPath(storeRoot, goarch)
+		if StoreHelperCurrent(candidate, LinuxWorkspacePortalCommand, goarch) {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath(name); err == nil && StoreHelperCurrent(path, LinuxWorkspacePortalCommand, goarch) {
+		return path
+	}
+	return ""
+}
+
 func BuildLinuxSessionSupervisor(opts BuildOptions) error {
 	if !SupportedLinuxGuestArch(opts.GOARCH) {
 		return fmt.Errorf("unsupported Linux guest supervisor architecture %q", opts.GOARCH)
 	}
 	opts.Command = LinuxSessionSupervisorCommand
+	return BuildLinuxCommand(opts)
+}
+
+func BuildLinuxWorkspacePortal(opts BuildOptions) error {
+	if !SupportedLinuxGuestArch(opts.GOARCH) {
+		return fmt.Errorf("unsupported Linux workspace portal architecture %q", opts.GOARCH)
+	}
+	opts.Command = LinuxWorkspacePortalCommand
 	return BuildLinuxCommand(opts)
 }
 

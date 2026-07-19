@@ -34,6 +34,7 @@ var errOutputBackpressure = errors.New("supervisor output queue exceeded its bou
 
 type supervisorWire interface {
 	ReadStart() (startSpec, error)
+	ReadCommit() error
 	ReadControl() (supervisorControl, error)
 	WriteReady() error
 	WriteOutput(outputKind, []byte) error

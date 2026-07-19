@@ -35,6 +35,7 @@ func TestApplyRunBindsRuntimeReceiptAuditAndBoundaryOutcome(t *testing.T) {
 			workspace := t.TempDir()
 			catalog, provenance := runtimeRunCatalogFixture()
 			p := profile.Default("runtime")
+			p.Workspace.PathMode = "preserve"
 			p.Environment.BaseImage = ""
 			p.Environment.Runtime = &provenance
 			if err := store.Save(p); err != nil {
@@ -42,7 +43,13 @@ func TestApplyRunBindsRuntimeReceiptAuditAndBoundaryOutcome(t *testing.T) {
 			}
 			core := New(store)
 			core.RuntimeCatalogLoader = func() (runtimecatalog.Catalog, error) { return catalog, nil }
+			core.RuntimeResolver = catalog.Resolve
 			core.RuntimeDiskCheck = func(string, int64) error { return nil }
+			if _, err := core.CreateEnvironment(EnvironmentCreateOptions{
+				Name: "runtime-receipt-dedicated", Profile: "runtime", Backend: "lima", Workspace: workspace,
+			}); err != nil {
+				t.Fatal(err)
+			}
 			plan, err := core.PlanRun(RunPlanOptions{
 				ProfileName: "runtime", Backend: "lima", Workspace: workspace, Command: []string{"tool"},
 			})
@@ -51,7 +58,7 @@ func TestApplyRunBindsRuntimeReceiptAuditAndBoundaryOutcome(t *testing.T) {
 			}
 			targetRan := false
 			var observedReceipt runtimeverify.Receipt
-			fake := &applyRunFakeBackend{name: "lima"}
+			fake := newRuntimeLimaApplyBackend()
 			fake.runFunc = func(session *backend.Session) error {
 				if session.RuntimeContract == nil || session.RuntimeResultSink == nil {
 					return errors.New("runtime verification was not attached")
@@ -95,7 +102,7 @@ func TestApplyRunBindsRuntimeReceiptAuditAndBoundaryOutcome(t *testing.T) {
 				return nil
 			}
 			result, runErr := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
-				Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true}, Opener: broker.NoopOpener{},
+				Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{EnvName: "runtime-receipt-dedicated", Create: true}, Opener: broker.NoopOpener{},
 			})
 			if tc.wantTargetRun && runErr != nil {
 				t.Fatalf("ApplyRun: %v", runErr)
@@ -143,13 +150,27 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 	}
 	core := New(store)
 	core.RuntimeCatalogLoader = func() (runtimecatalog.Catalog, error) { return catalog, nil }
+	core.RuntimeResolver = catalog.Resolve
 	core.RuntimeDiskCheck = func(string, int64) error { return nil }
+	runtimeProfile, err := store.Load("runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeProfile.Workspace.PathMode = "preserve"
+	if err := store.Save(runtimeProfile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.CreateEnvironment(EnvironmentCreateOptions{
+		Name: "runtime-command-dedicated", Profile: "runtime", Backend: "lima", Workspace: workspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := core.PlanRun(RunPlanOptions{ProfileName: "runtime", Backend: "lima", Workspace: workspace, Command: []string{"missing-tool"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	targetSideEffect := false
-	fake := &applyRunFakeBackend{name: "lima"}
+	fake := newRuntimeLimaApplyBackend()
 	fake.runFunc = func(session *backend.Session) error {
 		if err := session.PrivilegeStatusSink(privilege.Status{Status: privilege.StatusEnforced}); err != nil {
 			return err
@@ -165,7 +186,7 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 		return nil
 	}
 	_, err = core.ApplyRun(context.Background(), plan, ApplyRunOptions{
-		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true}, Opener: broker.NoopOpener{},
+		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{EnvName: "runtime-command-dedicated", Create: true}, Opener: broker.NoopOpener{},
 	})
 	var recoveryErr RuntimeRecoveryError
 	if !errors.As(err, &recoveryErr) || recoveryErr.Code != "runtime.command.missing" {
@@ -174,6 +195,37 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 	if targetSideEffect {
 		t.Fatal("missing exact command reached target side effect")
 	}
+}
+
+const runtimeLimaTestBootID = "01234567-89ab-cdef-0123-456789abcdef"
+
+type runtimeLimaApplyBackend struct {
+	*applyRunFakeBackend
+}
+
+func newRuntimeLimaApplyBackend() *runtimeLimaApplyBackend {
+	return &runtimeLimaApplyBackend{applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}}
+}
+
+func (*runtimeLimaApplyBackend) Activate(_ context.Context, session *backend.Session, _ []string) error {
+	session.ExpectedBootID = runtimeLimaTestBootID
+	return nil
+}
+
+func (*runtimeLimaApplyBackend) StartEnvironmentNetwork(context.Context, *backend.Session, string, string, []string) error {
+	return nil
+}
+
+func (*runtimeLimaApplyBackend) VerifyEnvironmentNetwork(context.Context, *backend.Session, string, []string) error {
+	return nil
+}
+
+func (*runtimeLimaApplyBackend) VerifyDirectEnvironmentNetwork(context.Context, *backend.Session, string, []string) error {
+	return nil
+}
+
+func (*runtimeLimaApplyBackend) StopEnvironmentNetwork(context.Context, *backend.Session, string, string, []string) error {
+	return nil
 }
 
 func runtimeReason(pass bool) string {

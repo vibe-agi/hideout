@@ -58,6 +58,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 type app struct {
@@ -114,6 +115,8 @@ func (a app) run(args []string) error {
 		return a.profile(args[1:])
 	case "env":
 		return a.envCommand(args[1:])
+	case "session":
+		return a.sessionCommand(args[1:])
 	case "runtime":
 		return a.runtimeCommand(args[1:])
 	case "stop":
@@ -177,6 +180,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --no-fs read:/path --no-profile-fs -- <command>")
 	fmt.Fprintln(a.stdout, "  hideout run --verbose -- <command>  # print Hideout control-plane progress and summary")
+	fmt.Fprintln(a.stdout, "  hideout env list | hideout env inspect <name>")
+	fmt.Fprintln(a.stdout, "  hideout session list | hideout session inspect <session-id>")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Profile and HostFS:")
 	fmt.Fprintln(a.stdout, "  hideout profile init <name>")
@@ -184,6 +189,7 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout profile rotate-identity <name>")
 	fmt.Fprintln(a.stdout, "  hideout profile reset <name>")
 	fmt.Fprintln(a.stdout, "  hideout profile path <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile workspace-path-mode <name> [alias|preserve]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> list")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> add --fs <kind:/path> [--reason <text>]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
@@ -1183,12 +1189,15 @@ func (a app) profileUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile rotate-identity <name>")
 	fmt.Fprintln(a.stdout, "  hideout profile reset <name>")
 	fmt.Fprintln(a.stdout, "  hideout profile path <name>")
+	fmt.Fprintln(a.stdout, "  hideout profile workspace-path-mode <name> [alias|preserve]")
+	fmt.Fprintln(a.stdout, "  hideout profile network <name> [direct|tun2socks [flags]]")
 	fmt.Fprintln(a.stdout, "  hideout profile fs <name> <list|add|deny|remove>")
 	fmt.Fprintln(a.stdout, "  hideout profile env <name> <list|set|unset|inherit|uninherit|deny|undeny>")
 	fmt.Fprintln(a.stdout, "  hideout profile home <name> import --from <path> --to <relative-path> [--force]")
 	fmt.Fprintln(a.stdout, "  hideout profile tools <name> <list|expected>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> <list|add-open|remove>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> <list|add-local|add-builtin-root-sensitive|enable|disable|refresh-digest|remove>")
+	fmt.Fprintln(a.stdout, "  hideout profile ide-mode <name> [safe|trusted-host-ide]")
 }
 
 func (a app) profileFSUsage() {
@@ -2406,8 +2415,10 @@ func explainText(p profile.Profile, opts runOptions, layout session.Layout, runE
 	netPlan, netErr := netpolicy.Prepare(netpolicy.Spec{
 		Profile:          p,
 		Backend:          backendName,
-		SessionDir:       layout.Dir,
-		GuestSessionDir:  guestSessionDirForBackend(backendName),
+		ArtifactDir:      layout.Dir,
+		GuestArtifactDir: guestSessionDirForBackend(backendName),
+		SecretDir:        layout.Dir,
+		GuestSecretDir:   guestSessionDirForBackend(backendName),
 		TargetEnv:        env.Env,
 		Resolver:         netpolicy.EnvSecretResolver{},
 		LocalBypassHosts: localBypassHostsForBackend(backendName),
@@ -2445,7 +2456,13 @@ func explainText(p profile.Profile, opts runOptions, layout session.Layout, runE
 		}
 		fmt.Fprintf(&b, "Lima instance: %s (%s)\n", limaInstanceName(p, layout, opts, runEnv), scope)
 		if runEnv.Active {
-			fmt.Fprintf(&b, "Environment: %s status=%s workspace=%s\n", runEnv.Record.ID, explainValue(runEnv.Record.Status, "ready"), runEnv.Record.Workspace)
+			fmt.Fprintf(&b, "Environment: %s status=%s mode=%s\n", runEnv.Record.ID, explainValue(runEnv.Record.Status, "ready"), runEnv.Record.Mode)
+			if hostRoot, guestRoot, ok := runEnv.Record.WorkspaceBinding(); ok {
+				fmt.Fprintf(&b, "Pinned workspace: %s -> %s\n", hostRoot, guestRoot)
+			} else {
+				fmt.Fprintf(&b, "Workspace attachment: session-scoped at %s; the shared machine stores no selected or last project\n", opts.guestWorkspace)
+			}
+			writeEnvironmentTrustGuidance(&b, runEnv.Record, "")
 		}
 	}
 	if opts.ephemeral {
@@ -2948,11 +2965,11 @@ func (a app) doctor(args []string) error {
 	checkMountPlan(backendName, runtimeProfile, layout, workspace, guestWorkspace, identityDir, report)
 	checkLimaGeneratedConfig(backendName, runtimeProfile, layout, workspace, guestWorkspace, identityDir, report)
 	env := envpolicy.Build(envpolicy.Spec{
-		Profile:          runtimeProfile,
-		ProfileDir:       identityDir,
-		SessionDir:       layout.Dir,
-		ShimDir:          layout.ShimDir,
-		GitSafeDirectory: guestWorkspace,
+		Profile:            runtimeProfile,
+		ProfileDir:         identityDir,
+		SessionDir:         layout.Dir,
+		ShimDir:            layout.ShimDir,
+		GitSafeDirectories: []string{guestWorkspace},
 	})
 	checkEnv(env, report)
 	checkPolicy(runtimeProfile, profileDir, report)
@@ -3302,6 +3319,65 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 			addDoctorFeatureFindingWithRecovery(builder, "feature-sessions", "sessions", status, summary,
 				facts, nil, []string{"ordinary-target isolation requires real 034 Gate 2; guest-root containment remains a non-claim"},
 				[]string{"hideout env list", "scripts/test-concurrent-sessions-e2e.sh"}, recoveryCode)
+		case "workspace":
+			rootReport := workspaceattach.ProbeHostRootPrerequisite(workspace)
+			metadataStatus := doctorpkg.WorkspaceMetadataNotRun
+			metadataKind := "prerequisite-not-met"
+			if rootReport.Status == workspaceattach.ResearchCheckPassed && p.Workspace.PathMode == "alias" {
+				metadataStatus, metadataKind = doctorpkg.WorkspaceMetadataPassed, "none"
+				if err := manager.ValidateAliasWorkspaceMetadata(workspace); err != nil {
+					var external manager.ExternalWorkspaceMetadataError
+					if errors.As(err, &external) {
+						metadataStatus, metadataKind = doctorpkg.WorkspaceMetadataExternal, external.Kind
+					} else {
+						metadataStatus, metadataKind = doctorpkg.WorkspaceMetadataUnproved, "validation-failed"
+					}
+				}
+			}
+
+			workspaceEnvironments := make([]doctorpkg.WorkspaceEnvironmentObservation, 0)
+			relevantEnvironmentIDs := map[string]bool{}
+			if overviewErr == nil {
+				for _, environmentSummary := range overview.Environments {
+					if environmentSummary.Profile != p.Name {
+						continue
+					}
+					relevantEnvironmentIDs[environmentSummary.ID] = true
+					workspaceEnvironments = append(workspaceEnvironments, doctorpkg.WorkspaceEnvironmentObservation{
+						ID: environmentSummary.ID, Mode: string(environmentSummary.Mode), AutoNamed: environmentSummary.AutoNamed,
+						SharedSlot: environmentSummary.SharedSlot, ActiveSessions: environmentSummary.ActiveSessions,
+						ActiveWorkspaceViews:   environmentSummary.ActiveWorkspaceViews,
+						WorkspaceProviderState: environmentSummary.WorkspaceProviderState, OwnerHealth: environmentSummary.OwnerHealth,
+					})
+				}
+			}
+			statusCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			daemonStatus, daemonStatusErr := daemon.FetchStatus(statusCtx, store.Root)
+			cancel()
+			attachments := make([]workspaceattach.AttachmentSummary, 0)
+			lifecycleRows := make([]lifecycle.Status, 0)
+			if daemonStatusErr == nil {
+				for _, attachment := range daemonStatus.WorkspaceAttachments {
+					if relevantEnvironmentIDs[attachment.EnvironmentID] {
+						attachments = append(attachments, attachment)
+					}
+				}
+				for _, row := range daemonStatus.Lifecycle {
+					if relevantEnvironmentIDs[row.EnvironmentID] {
+						lifecycleRows = append(lifecycleRows, row)
+					}
+				}
+			}
+			builder.AddWorkspaceDiagnostics(doctorpkg.WorkspaceDiagnosticInput{
+				Backend: backendName, PathMode: p.Workspace.PathMode,
+				SelectedTransport: workspaceattach.SelectedTransport,
+				TransportSupported: backendName == "lima" && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" &&
+					workspaceattach.SelectedTransport == workspaceattach.CandidatePortal,
+				ExpectedSharedSlot: environment.SharedSlotID(p.Name), Root: rootReport,
+				MetadataStatus: metadataStatus, MetadataKind: metadataKind,
+				Environments: workspaceEnvironments, Attachments: attachments, Lifecycle: lifecycleRows,
+				DaemonObserved: daemonStatusErr == nil,
+			})
 		case "lima":
 			status, msg := doctorLimaFeatureStatus(overview, overviewErr, backendName)
 			addDoctorFeatureFinding(builder, "feature-lima", "lima", status, msg,
@@ -3797,12 +3873,11 @@ func checkMountPlan(backendName string, p profile.Profile, layout session.Layout
 			report("mount", "error", "workspace mapping is unavailable")
 			return
 		}
-		cfg, err := lima.ConfigForRunSpec(backend.RunSpec{
-			Profile:    p,
-			ImageRef:   p.BaseImageOrBuiltin(),
-			HostWork:   hostRoot,
-			GuestWork:  guestRoot,
-			ProfileDir: profileDir,
+		cfg, err := lima.ConfigForMachineSpec(backend.MachineActivationSpec{
+			ImageRef: p.BaseImageOrBuiltin(), Profile: p, ProfileDir: profileDir,
+			IdentityRoot: profileDir, Mode: environment.ModeWorkspaceBound,
+		}, &lima.StaticRunMounts{
+			Workspace:  backend.WorkspaceAttachmentSpec{HostRoot: hostRoot, GuestRoot: guestRoot, Transport: backend.WorkspaceTransportStatic},
 			SessionDir: layout.Dir,
 		})
 		if err != nil {
@@ -3876,14 +3951,12 @@ func checkLimaGeneratedConfig(backendName string, p profile.Profile, layout sess
 		return
 	}
 	configPath := filepath.Join(layout.Dir, "doctor-lima.yaml")
-	limaCfg, err := lima.ConfigForRunSpec(backend.RunSpec{
-		Profile:      p,
-		ImageRef:     p.BaseImageOrBuiltin(),
-		HostWork:     hostRoot,
-		GuestWork:    guestRoot,
-		ProfileDir:   identityRoot,
-		SessionDir:   layout.Dir,
-		IdentityRoot: identityRoot,
+	limaCfg, err := lima.ConfigForMachineSpec(backend.MachineActivationSpec{
+		ImageRef: p.BaseImageOrBuiltin(), Profile: p, ProfileDir: identityRoot,
+		IdentityRoot: identityRoot, Mode: environment.ModeWorkspaceBound,
+	}, &lima.StaticRunMounts{
+		Workspace:  backend.WorkspaceAttachmentSpec{HostRoot: hostRoot, GuestRoot: guestRoot, Transport: backend.WorkspaceTransportStatic},
+		SessionDir: layout.Dir,
 	})
 	if err != nil {
 		report("lima-config", "error", "invalid base image declaration: "+err.Error())
@@ -4082,8 +4155,10 @@ func checkNetwork(p profile.Profile, backendName string, layout session.Layout, 
 	plan, err := netpolicy.Prepare(netpolicy.Spec{
 		Profile:          p,
 		Backend:          backendName,
-		SessionDir:       layout.Dir,
-		GuestSessionDir:  guestSessionDirForBackend(backendName),
+		ArtifactDir:      layout.Dir,
+		GuestArtifactDir: guestSessionDirForBackend(backendName),
+		SecretDir:        layout.Dir,
+		GuestSecretDir:   guestSessionDirForBackend(backendName),
 		TargetEnv:        env.Env,
 		Resolver:         netpolicy.EnvSecretResolver{},
 		LocalBypassHosts: localBypassHostsForBackend(backendName),
@@ -4349,6 +4424,10 @@ func (a app) profile(args []string) error {
 		}
 		fmt.Fprintln(a.stdout, store.ProfilePath(args[1]))
 		return nil
+	case "workspace-path-mode":
+		return a.profileWorkspacePathMode(store, args[1:])
+	case "network":
+		return a.profileNetwork(store, args[1:])
 	case "fs":
 		return a.profileFS(store, args[1:])
 	case "env":
@@ -4366,6 +4445,87 @@ func (a app) profile(args []string) error {
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
+}
+
+func (a app) profileWorkspacePathMode(store profile.Store, args []string) error {
+	if len(args) < 1 || len(args) > 2 || containsHelpToken(args) {
+		fmt.Fprintln(a.stdout, "usage: hideout profile workspace-path-mode <name> [alias|preserve]")
+		return nil
+	}
+	if len(args) == 1 {
+		p, err := store.Load(args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, p.Workspace.PathMode)
+		return nil
+	}
+	p, err := store.SetWorkspacePathMode(args[0], args[1])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "workspace path mode for %s set to %s\n", p.Name, p.Workspace.PathMode)
+	return nil
+}
+
+func (a app) profileNetwork(store profile.Store, args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		fmt.Fprintln(a.stdout, "usage: hideout profile network <name> [direct|tun2socks [--proxy-secret <ref> --mediated-resolver <ip>]]")
+		return nil
+	}
+	name := args[0]
+	if len(args) == 1 {
+		p, err := store.Load(name)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "mode=%s", p.Network.Mode)
+		if p.Network.ProxySecretRef != "" {
+			fmt.Fprintf(a.stdout, " proxySecretRef=%s", p.Network.ProxySecretRef)
+		}
+		if p.Network.MediatedResolver != "" {
+			fmt.Fprintf(a.stdout, " mediatedResolver=%s", p.Network.MediatedResolver)
+		}
+		fmt.Fprintln(a.stdout)
+		return nil
+	}
+	mode := args[1]
+	network := profile.Network{Mode: mode, ProxyEnvVisible: false}
+	switch mode {
+	case profile.NetworkModeDirect:
+		if len(args) != 2 {
+			return errors.New("usage: hideout profile network <name> direct")
+		}
+	case profile.NetworkModeTun2Socks:
+		fs := flag.NewFlagSet("profile network tun2socks", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		secretRef := fs.String("proxy-secret", "", "host-only proxy secret reference")
+		resolver := fs.String("mediated-resolver", "", "mediated DNS resolver IP")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected profile network argument %q", fs.Arg(0))
+		}
+		if strings.TrimSpace(*secretRef) == "" || strings.TrimSpace(*resolver) == "" {
+			return errors.New("tun2socks requires --proxy-secret and --mediated-resolver")
+		}
+		network.ProxySecretRef = *secretRef
+		network.MediatedResolver = *resolver
+	default:
+		return fmt.Errorf("unsupported network mode %q", mode)
+	}
+	p, err := store.SetNetwork(name, network)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "network for %s set to %s", p.Name, p.Network.Mode)
+	if p.Network.MediatedResolver != "" {
+		fmt.Fprintf(a.stdout, " resolver=%s", p.Network.MediatedResolver)
+	}
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "active reusable environments apply this service generation on the next attach. Proxy-upstream and DNS changes are online; direct/proxy posture changes wait for active sibling sessions to exit. No VM recreate or restart is required.")
+	return nil
 }
 
 // profileIdeMode reads or sets the host-app projection IDE mode for a profile.
@@ -6548,19 +6708,22 @@ func (a app) envList(args []string) error {
 	if err != nil {
 		return err
 	}
-	overview, err := manager.New(store).Overview(context.Background())
+	overview, err := operatorManagerOverview(context.Background(), store)
 	if err != nil && overview.Version == "" {
 		return err
+	}
+	if err != nil {
+		fmt.Fprintf(a.stderr, "warning: manager overview is partial: %s\n", audit.RedactString(err.Error()))
 	}
 	environments := overview.Environments
 	if len(environments) == 0 {
 		fmt.Fprintln(a.stdout, "environments: none")
 		return nil
 	}
-	fmt.Fprintln(a.stdout, "NAME\tKIND\tIMAGE\tBACKEND\tSTATUS\tACTIVE\tOWNER_HEALTH\tDISK\tLAST_STARTED\tWORKSPACE\tID")
+	fmt.Fprintln(a.stdout, "NAME\tKIND\tMODE\tIMAGE\tBACKEND\tSTATUS\tSESSIONS\tVIEWS\tPROVIDER\tOWNER_HEALTH\tTRUST_DOMAIN\tDISK\tLAST_STARTED\tWORKSPACE\tID")
 	for _, env := range environments {
 		if env.Status == "unsupported-version" {
-			fmt.Fprintf(a.stdout, "-\tunsupported-version\t-\t-\t%s\t0\t-\t%s\t-\t-\t%s\n",
+			fmt.Fprintf(a.stdout, "-\tunsupported-version\t-\t-\t-\t%s\t0\t0\t-\t-\tunknown\t%s\t-\t-\t%s\n",
 				env.Status, environmentDiskUsage(store.Root, env.ID), env.ID)
 			continue
 		}
@@ -6568,20 +6731,132 @@ func (a app) envList(args []string) error {
 		if env.AutoNamed {
 			kind = "auto"
 		}
-		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(a.stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			env.Name,
 			kind,
+			explainValue(string(env.Mode), "unknown"),
 			abbreviateImageRef(env.ImageRef),
 			env.Backend,
 			explainValue(env.Status, "ready"),
 			env.ActiveSessions,
+			env.ActiveWorkspaceViews,
+			explainValue(env.WorkspaceProviderState, "-"),
 			explainValue(env.OwnerHealth, "-"),
+			environmentTrustDomain(env.Mode),
 			environmentDiskUsage(store.Root, env.ID),
 			formatEnvironmentTime(env.LastStartedAt),
 			env.Workspace,
 			env.ID)
 	}
+	fmt.Fprintln(a.stdout, "shared machines reuse one guest kernel, root disk, global tools/caches, profile state, and compatible machine services; workspace views are not separate VM walls")
+	fmt.Fprintln(a.stdout, "inspect a row for copyable separate-VM and separate-profile guidance: hideout env inspect <name>")
 	return nil
+}
+
+func (a app) sessionCommand(args []string) error {
+	if len(args) == 0 || containsHelpToken(args) {
+		fmt.Fprintln(a.stdout, "usage: hideout session <list|inspect> ...")
+		fmt.Fprintln(a.stdout, "  hideout session list [--profile <name>]")
+		fmt.Fprintln(a.stdout, "  hideout session inspect <session-id>")
+		return nil
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	overview, overviewErr := operatorManagerOverview(context.Background(), store)
+	if overviewErr != nil && overview.Version == "" {
+		return overviewErr
+	}
+	if overviewErr != nil {
+		fmt.Fprintf(a.stderr, "warning: manager overview is partial: %s\n", audit.RedactString(overviewErr.Error()))
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("session list", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		profileName := fs.String("profile", "", "filter by profile")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: hideout session list [--profile <name>]")
+		}
+		if *profileName != "" {
+			if err := profile.ValidateName(*profileName); err != nil {
+				return err
+			}
+		}
+		return writeSessionList(a.stdout, overview.Sessions, *profileName)
+	case "inspect":
+		if len(args) != 2 || !session.ValidID(args[1]) {
+			return errors.New("usage: hideout session inspect <session-id>")
+		}
+		for _, summary := range overview.Sessions {
+			if summary.ID == args[1] {
+				writeSessionInspect(a.stdout, summary)
+				return nil
+			}
+		}
+		return fmt.Errorf("session %q not found", args[1])
+	default:
+		return fmt.Errorf("unknown session subcommand %q (expected list or inspect)", args[0])
+	}
+}
+
+func writeSessionList(w io.Writer, sessions []manager.SessionSummary, profileName string) error {
+	if len(sessions) == 0 {
+		fmt.Fprintln(w, "sessions: none")
+		return nil
+	}
+	fmt.Fprintln(w, "ID\tENVIRONMENT\tPROFILE\tSTATE\tOWNER\tWORKSPACE_VIEW\tLABEL\tGUEST\tTRANSPORT\tRELATION\tBLOCKER")
+	written := 0
+	for _, summary := range sessions {
+		if profileName != "" && summary.Profile != profileName {
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			dash(summary.ID), dash(summary.EnvironmentID), dash(summary.Profile), dash(string(summary.State)), dash(string(summary.OwnerStatus)),
+			dash(string(summary.WorkspaceViewState)), dash(summary.WorkspaceLabel), dash(summary.GuestWorkspace), dash(summary.WorkspaceTransport),
+			dash(workspaceRelationsLabel(summary.WorkspaceRelations)), dash(summary.WorkspaceBlockerCode))
+		written++
+	}
+	if written == 0 {
+		fmt.Fprintln(w, "sessions: none in selected profile")
+	}
+	return nil
+}
+
+func writeSessionInspect(w io.Writer, summary manager.SessionSummary) {
+	fmt.Fprintf(w, "session: %s\n", summary.ID)
+	fmt.Fprintf(w, "  environment: %s\n", dash(summary.EnvironmentID))
+	fmt.Fprintf(w, "  profile: %s\n", dash(summary.Profile))
+	fmt.Fprintf(w, "  state: %s owner=%s terminal=%s\n", dash(string(summary.State)), dash(string(summary.OwnerStatus)), dash(string(summary.TerminalMode)))
+	fmt.Fprintln(w, "  workspace-view:")
+	fmt.Fprintf(w, "    id: %s\n", dash(summary.WorkspaceID))
+	fmt.Fprintf(w, "    label: %s (display only; never authority)\n", dash(summary.WorkspaceLabel))
+	fmt.Fprintf(w, "    guest: %s transport=%s state=%s\n", dash(summary.GuestWorkspace), dash(summary.WorkspaceTransport), dash(string(summary.WorkspaceViewState)))
+	for _, relation := range summary.WorkspaceRelations {
+		fmt.Fprintf(w, "    relation: %s position=%s other=%s\n", dash(string(relation.Relation)), dash(relation.SelectedPosition), dash(relation.OtherWorkspaceID))
+	}
+	if summary.WorkspaceBlockerCode != "" {
+		fmt.Fprintf(w, "    blocker: %s\n", summary.WorkspaceBlockerCode)
+		fmt.Fprintln(w, "    recovery: hideout doctor --feature daemon --level deep")
+	}
+	if summary.EnvironmentID != "" {
+		fmt.Fprintf(w, "  machine: hideout env inspect %s\n", summary.EnvironmentID)
+	}
+}
+
+func workspaceRelationsLabel(relations []workspaceattach.RootRelationNotice) string {
+	values := make([]string, 0, len(relations))
+	for _, relation := range relations {
+		values = append(values, string(relation.Relation)+":"+relation.SelectedPosition)
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.Join(values, ",")
 }
 
 func (a app) runtimeCommand(args []string) error {
@@ -6962,7 +7237,7 @@ func (a app) envCreate(args []string) error {
 	}
 	fmt.Fprintf(a.stdout, "created environment %s (%s)\n", rec.Name, rec.ID)
 	fmt.Fprintf(a.stdout, "  image: %s\n", rec.ImageRef)
-	fmt.Fprintf(a.stdout, "  workspace: %s\n", rec.Workspace)
+	fmt.Fprintf(a.stdout, "  workspace: %s\n", rec.HostWorkspace())
 	fmt.Fprintf(a.stdout, "  backend: %s profile: %s\n", rec.Backend, rec.Profile)
 	fmt.Fprintf(a.stdout, "run: hideout run --env %s -- <command>\n", rec.Name)
 	return nil
@@ -6981,27 +7256,96 @@ func (a app) envInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	rec, err := manager.New(store).EnvironmentByName(fs.Arg(0))
+	core := manager.New(store)
+	rec, err := core.EnvironmentByName(fs.Arg(0))
 	if err != nil {
 		return err
+	}
+	overview, overviewErr := operatorManagerOverview(context.Background(), store)
+	if overviewErr != nil && overview.Version == "" {
+		return overviewErr
+	}
+	if overviewErr != nil {
+		fmt.Fprintf(a.stderr, "warning: manager overview is partial: %s\n", audit.RedactString(overviewErr.Error()))
+	}
+	var summary manager.EnvironmentSummary
+	for _, candidate := range overview.Environments {
+		if candidate.ID == rec.ID {
+			summary = candidate
+			break
+		}
 	}
 	fmt.Fprintf(a.stdout, "environment: %s\n", rec.Name)
 	fmt.Fprintf(a.stdout, "  id: %s\n", rec.ID)
 	fmt.Fprintf(a.stdout, "  auto-named: %t\n", rec.AutoNamed)
 	fmt.Fprintf(a.stdout, "  status: %s\n", rec.Status)
+	fmt.Fprintf(a.stdout, "  mode: %s\n", rec.Mode)
 	fmt.Fprintln(a.stdout, "  identity:")
 	fmt.Fprintf(a.stdout, "    image: %s\n", rec.ImageRef)
-	fmt.Fprintf(a.stdout, "    backend-config: %s\n", rec.BackendConfigVersion)
-	fmt.Fprintf(a.stdout, "    workspace: %s -> %s\n", rec.Workspace, rec.GuestWorkspace)
+	fmt.Fprintf(a.stdout, "    machine: %s\n", rec.MachineIdentityID)
+	fmt.Fprintf(a.stdout, "    boot: %s\n", rec.BootConfigurationID)
+	if summary.ServiceStatus != "" {
+		fmt.Fprintf(a.stdout, "    service: %s mode=%s configuration=%s fingerprint=%s\n",
+			summary.ServiceStatus, dash(summary.ServiceMode), dash(summary.ServiceConfigurationID), dash(summary.ServiceFingerprint))
+	}
+	if rec.Mode == environment.ModeShared {
+		fmt.Fprintf(a.stdout, "    shared-slot: %s\n", rec.SharedSlot)
+		fmt.Fprintln(a.stdout, "    workspace: none (projects are immutable session attachments)")
+	} else {
+		fmt.Fprintf(a.stdout, "    workspace: %s -> %s\n", rec.HostWorkspace(), rec.GuestWorkspaceRoot())
+	}
 	fmt.Fprintf(a.stdout, "  backend: %s profile: %s\n", rec.Backend, rec.Profile)
 	if rec.InstanceName != "" {
 		fmt.Fprintf(a.stdout, "  instance: %s\n", rec.InstanceName)
 	}
-	status, statusErr := manager.New(store).RuntimeStatus(rec.ID)
+	fmt.Fprintf(a.stdout, "  active: sessions=%d workspace-views=%d provider=%s owner=%s\n",
+		summary.ActiveSessions, summary.ActiveWorkspaceViews, dash(summary.WorkspaceProviderState), dash(summary.OwnerHealth))
+	for _, view := range overview.Sessions {
+		if view.EnvironmentID != rec.ID || (view.WorkspaceID == "" && view.WorkspaceViewState == "") {
+			continue
+		}
+		fmt.Fprintf(a.stdout, "  workspace-view: session=%s label=%s id=%s guest=%s transport=%s state=%s relation=%s blocker=%s\n",
+			dash(view.ID), dash(view.WorkspaceLabel), dash(view.WorkspaceID), dash(view.GuestWorkspace), dash(view.WorkspaceTransport),
+			dash(string(view.WorkspaceViewState)), dash(workspaceRelationsLabel(view.WorkspaceRelations)), dash(view.WorkspaceBlockerCode))
+	}
+	writeEnvironmentTrustGuidance(a.stdout, rec, "  ")
+	status, statusErr := core.RuntimeStatus(rec.ID)
 	if statusErr == nil {
 		writeRuntimeStatus(a.stdout, "  runtime", status)
 	}
 	return nil
+}
+
+func environmentTrustDomain(mode environment.Mode) string {
+	switch mode {
+	case environment.ModeShared:
+		return "shared-vm+profile"
+	case environment.ModeDedicated:
+		return "dedicated-vm+shared-profile"
+	case environment.ModeWorkspaceBound:
+		return "workspace-bound"
+	default:
+		return "unknown"
+	}
+}
+
+func writeEnvironmentTrustGuidance(w io.Writer, rec environment.Record, indent string) {
+	backendName := rec.Backend
+	if backendName == "" {
+		backendName = "lima"
+	}
+	switch rec.Mode {
+	case environment.ModeShared:
+		fmt.Fprintf(w, "%strust-domain: shared guest kernel, root disk, global tools/caches, profile state, and compatible machine services\n", indent)
+		fmt.Fprintf(w, "%sworkspace-views: private per session; they are not separate VM walls\n", indent)
+		fmt.Fprintf(w, "%sseparate-vm: hideout env create isolated --workspace \"$PWD\" --profile %s --backend %s\n", indent, rec.Profile, backendName)
+		fmt.Fprintf(w, "%sseparate-profile-and-vm: hideout profile clone %s isolated && hideout env create isolated --workspace \"$PWD\" --profile isolated --backend %s\n", indent, rec.Profile, backendName)
+	case environment.ModeDedicated:
+		fmt.Fprintf(w, "%strust-domain: dedicated guest kernel and root disk; profile-owned home/config/cache state remains shared with profile %s\n", indent, rec.Profile)
+		fmt.Fprintf(w, "%sseparate-profile-state: hideout profile clone %s isolated && hideout env create isolated --workspace \"$PWD\" --profile isolated --backend %s\n", indent, rec.Profile, backendName)
+	case environment.ModeWorkspaceBound:
+		fmt.Fprintf(w, "%strust-domain: project-pinned workspace-bound machine; shared cross-workspace mode is not active on this backend/platform\n", indent)
+	}
 }
 
 func (a app) stopEnvironments(args []string) error {
@@ -7269,8 +7613,8 @@ func (a app) writeEnvironmentSkipped(targets []manager.EnvironmentActionTarget) 
 	}
 }
 
-func formatEnvironmentTime(value time.Time) string {
-	if value.IsZero() {
+func formatEnvironmentTime(value *time.Time) string {
+	if value == nil || value.IsZero() {
 		return "-"
 	}
 	return value.UTC().Format(time.RFC3339)
@@ -7528,10 +7872,12 @@ func (a app) daemonStop(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := a.daemonRequest(store.Root, http.MethodPost, "/daemon/stop", nil); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := daemon.StopRunning(ctx, store.Root); err != nil {
 		return err
 	}
-	fmt.Fprintln(a.stdout, "hideoutd stopping")
+	fmt.Fprintln(a.stdout, "hideoutd stopped")
 	return nil
 }
 
@@ -7559,6 +7905,58 @@ func (a app) daemonRequest(storeRoot, method, path string, body io.Reader) ([]by
 		return nil, fmt.Errorf("daemon request failed (%s): %s", resp.Status, strings.TrimSpace(string(data)))
 	}
 	return data, nil
+}
+
+// operatorManagerOverview uses the daemon-owned Manager Core whenever a daemon
+// token exists. This is the only read path that can seed already-active
+// workspace views; the event stream intentionally has no replay. A store with no
+// running daemon remains inspectable from durable local state.
+func operatorManagerOverview(ctx context.Context, store profile.Store) (manager.Overview, error) {
+	overview, available, err := fetchDaemonManagerOverview(ctx, store.Root)
+	if available {
+		return overview, err
+	}
+	return manager.New(store).Overview(ctx)
+}
+
+func fetchDaemonManagerOverview(ctx context.Context, storeRoot string) (manager.Overview, bool, error) {
+	client, base, token, err := daemon.DialClient(storeRoot)
+	if err != nil {
+		return manager.Overview{}, false, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/overview", nil)
+	if err != nil {
+		return manager.Overview{}, true, err
+	}
+	req.Host = "localhost"
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return manager.Overview{}, true, fmt.Errorf("daemon manager overview: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return manager.Overview{}, true, fmt.Errorf("daemon manager overview: %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	var envelope struct {
+		Version  string           `json:"version"`
+		Resource string           `json:"resource"`
+		Data     manager.Overview `json:"data"`
+		Errors   []string         `json:"errors"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 8<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return manager.Overview{}, true, fmt.Errorf("decode daemon manager overview: %w", err)
+	}
+	if envelope.Version != manager.APIVersion || envelope.Resource != "overview" || envelope.Data.Version == "" {
+		return manager.Overview{}, true, errors.New("daemon manager overview identity is invalid")
+	}
+	if len(envelope.Errors) != 0 {
+		return envelope.Data, true, errors.New(strings.Join(envelope.Errors, "; "))
+	}
+	return envelope.Data, true, nil
 }
 
 func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (backend.Backend, error) {
@@ -7617,6 +8015,7 @@ func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Option
 			return lifecycleBackend, nil
 		},
 		LifecycleAutomaticStop: true,
+		WorkspaceProviders:     lima.NewWorkspaceProviderFactory(),
 		BackendShutdown:        sshClients.Close,
 		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
 			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
@@ -7704,6 +8103,14 @@ func (a app) tui(args []string) error {
 
 func buildTUILiveState(ctx context.Context, core manager.Core, profileName, health string) (liveconsole.State, error) {
 	overview, overviewErr := core.Overview(ctx)
+	if health == liveconsole.HealthLive {
+		if daemonOverview, available, daemonErr := fetchDaemonManagerOverview(ctx, core.Store.Root); available {
+			overview = daemonOverview
+			overviewErr = daemonErr
+		} else if daemonErr != nil {
+			overviewErr = errors.Join(overviewErr, daemonErr)
+		}
+	}
 	hostFSStatus, hostFSErr := core.HostFSWriteStatus(manager.HostFSWriteStatusRequest{Profile: profileName})
 	decisions, decisionErr := core.ListDecisions(manager.DecisionListRequest{Profile: profileName, IncludeTerminal: true})
 	notices, noticeErr := core.ListNotices(manager.NoticeListRequest{Profile: profileName})
@@ -7958,15 +8365,21 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 			fmt.Fprintf(w, "  - %s  status=%s (clean and recreate)\n", dash(env.ID), env.Status)
 			continue
 		}
-		fmt.Fprintf(w, "  - %s (%s)  status=%s  active=%d owner=%s  image=%s  backend=%s  profile=%s  workspace=%s  last=%s\n",
+		fmt.Fprintf(w, "  - %s (%s)  status=%s  mode=%s active=%d sessions=%d active-views=%d provider=%s owner=%s  image=%s  backend=%s  profile=%s  shared-slot=%s machine-id=%s workspace=%s  last=%s\n",
 			dash(env.Name),
 			kind,
 			dash(env.Status),
+			dash(string(env.Mode)),
 			env.ActiveSessions,
+			env.ActiveSessions,
+			env.ActiveWorkspaceViews,
+			dash(env.WorkspaceProviderState),
 			dash(env.OwnerHealth),
 			dash(abbreviateImageRef(env.ImageRef)),
 			dash(env.Backend),
 			dash(env.Profile),
+			dash(env.SharedSlot),
+			dash(env.MachineIdentityID),
 			dash(env.Workspace),
 			dash(env.LastCommand),
 		)
@@ -7985,6 +8398,16 @@ func writeTUIDashboard(w io.Writer, overview manager.Overview, events []audit.Ev
 	}
 	for _, s := range sessions {
 		fmt.Fprintf(w, "  - %s  profile=%s environment=%s state=%s owner=%s terminal=%s command=%s audit=%t network=%s privilege=%s runtime=%t\n", dash(s.ID), dash(s.Profile), dash(s.EnvironmentID), dash(string(s.State)), dash(string(s.OwnerStatus)), dash(string(s.TerminalMode)), dash(s.CommandClass), s.HasAudit, dash(s.NetworkMode), privilegeForTUI(s.GuestPrivilege), s.HasEphemeralState)
+		if s.WorkspaceID != "" || s.WorkspaceViewState != "" {
+			fmt.Fprintf(w, "    workspace-view=%s label=%s id=%s guest=%s transport=%s\n",
+				dash(string(s.WorkspaceViewState)), dash(s.WorkspaceLabel), dash(s.WorkspaceID), dash(s.GuestWorkspace), dash(s.WorkspaceTransport))
+			for _, relation := range s.WorkspaceRelations {
+				fmt.Fprintf(w, "    relation=%s position=%s other=%s\n", dash(string(relation.Relation)), dash(relation.SelectedPosition), dash(relation.OtherWorkspaceID))
+			}
+			if s.WorkspaceBlockerCode != "" {
+				fmt.Fprintf(w, "    workspace-blocker=%s\n", dash(s.WorkspaceBlockerCode))
+			}
+		}
 		next := sessionNextCommandsForTUI(s)
 		if len(next) > 0 {
 			fmt.Fprintf(w, "    next: %s\n", strings.Join(next, "  "))

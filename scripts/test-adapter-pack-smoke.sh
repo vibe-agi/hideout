@@ -8,6 +8,7 @@ cd "$ROOT"
 tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/hideout-adapter-pack-smoke.XXXXXX")"
 store="$(hideout_mktemp_daemon_store)"
 hideout="$tmp_home/hideout"
+workspace="$tmp_home/workspace"
 cleanup() {
   HIDEOUT_STORE_ROOT="$store" "$hideout" daemon stop >/dev/null 2>&1 || true
   rm -rf "$tmp_home" "$store"
@@ -17,6 +18,7 @@ trap cleanup EXIT
 go test -count=1 ./internal/adapterpack ./internal/cmdadapter ./internal/broker ./internal/manager ./internal/app
 go build -o "$hideout" ./cmd/hideout
 go build -o "$tmp_home/hideout-shim" ./cmd/hideout-shim
+mkdir -p "$workspace"
 
 pack_dir="$tmp_home/pack"
 mkdir -p "$pack_dir"
@@ -115,7 +117,7 @@ jq -e --arg revision "$revision_id" --arg digest "$source_digest" '
 
 set +e
 HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  "$hideout" run --profile smoke --backend native --allow-weak-isolation -- tool-x --unsafe \
+  "$hideout" run --profile smoke --backend native --allow-weak-isolation --workspace "$workspace" -- tool-x --unsafe \
   >"$tmp_home/run.out" 2>"$tmp_home/run.err"
 run_rc=$?
 set -e

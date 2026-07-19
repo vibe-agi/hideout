@@ -27,6 +27,8 @@ var Required033ProofIDs = RequiredProofIDsForFeature(Feature033)
 
 var Required034ProofIDs = RequiredProofIDsForFeature(Feature034)
 
+var Required035ProofIDs = RequiredProofIDsForFeature(Feature035)
+
 var Required036ProofIDs = RequiredProofIDsForFeature(Feature036)
 
 type Aggregate struct {

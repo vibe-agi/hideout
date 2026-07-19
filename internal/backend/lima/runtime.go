@@ -72,7 +72,7 @@ func (b Backend) observeRuntimeBatch(ctx context.Context, session *backend.Sessi
 	limit := len(contract.Observations)*(runtimeProcessOutputLimit+256) + 256
 	stdout := &boundedRuntimeCapture{limit: limit}
 	stderr := &boundedRuntimeCapture{limit: runtimeProcessOutputLimit}
-	err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, []string{"sh", "-c", script}), hostEnv, nil, stdout, stderr)
+	err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, "/", env, []string{"sh", "-c", script}), hostEnv, nil, stdout, stderr)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -360,7 +360,7 @@ func (b Backend) runtimeGuestPackageInventorySHA256(ctx context.Context, runner 
 func (b Backend) runtimeGuestFact(ctx context.Context, runner CommandRunner, hostEnv []string, session *backend.Session, command []string) (string, error) {
 	capture := &boundedRuntimeCapture{limit: 256}
 	env := []string{"HOME=/hideout/profile/home", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, session.GuestWork, env, command), hostEnv, nil, capture, capture); err != nil {
+	if err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, "/", env, command), hostEnv, nil, capture, capture); err != nil {
 		return "", err
 	}
 	if capture.truncated {

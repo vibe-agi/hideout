@@ -117,6 +117,12 @@ go -C "$source" run ./internal/helperbin/cmd/build-session-supervisor \
   --goarch "$arch" \
   --source "$source" >/dev/null
 
+echo "install-local: building linux workspace portal for $arch"
+go -C "$source" run ./internal/helperbin/cmd/build-workspace-portal \
+  --out "$prefix/bin/hideout-workspace-portal-linux-$arch" \
+  --goarch "$arch" \
+  --source "$source" >/dev/null
+
 echo "install-local: building linux DoH DNS stub for $arch"
 GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
   go build -trimpath -o "$prefix/bin/hideout-dns-stub-linux-$arch" ./cmd/hideout-dns-stub >/dev/null

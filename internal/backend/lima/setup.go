@@ -34,6 +34,7 @@ const (
 	setupCategoryNetwork     = "network"
 	setupCategoryHostFS      = "hostfs"
 	setupCategorySessionView = "session-view"
+	setupCategoryBoot        = "boot-configuration"
 )
 
 // SetupCommandRunner executes Go-owned privileged setup/cleanup commands. It is

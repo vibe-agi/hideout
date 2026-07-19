@@ -153,6 +153,80 @@ func TestStoreSaveAtomicallyReplacesProfileJSON(t *testing.T) {
 	}
 }
 
+func TestStoreSetWorkspacePathModePreservesProfileState(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	p := Default("workspace-mode")
+	p.Git.UserEmail = "operator@example.com"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load(p.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.SetWorkspacePathMode(p.Name, WorkspacePathModePreserve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Workspace.PathMode != WorkspacePathModePreserve {
+		t.Fatalf("path mode=%q", updated.Workspace.PathMode)
+	}
+	if updated.Metadata["profileId"] != before.Metadata["profileId"] || updated.Metadata["identityId"] != before.Metadata["identityId"] || updated.Git.UserEmail != before.Git.UserEmail {
+		t.Fatalf("workspace mode update changed unrelated profile state: before=%+v after=%+v", before, updated)
+	}
+
+	if _, err := store.SetWorkspacePathMode(p.Name, "automatic"); err == nil {
+		t.Fatal("unsupported workspace path mode was accepted")
+	}
+	after, err := store.Load(p.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Workspace.PathMode != WorkspacePathModePreserve {
+		t.Fatalf("failed update changed path mode to %q", after.Workspace.PathMode)
+	}
+}
+
+func TestStoreSetNetworkPreservesProfileStateAndRejectsInvalidConfig(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	p := Default("network")
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load(p.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.SetNetwork(p.Name, Network{
+		Mode:             NetworkModeTun2Socks,
+		ProxySecretRef:   "default-proxy",
+		MediatedResolver: "1.1.1.1",
+		ProxyEnvVisible:  false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Network.Mode != NetworkModeTun2Socks || updated.Network.ProxySecretRef != "default-proxy" || updated.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("network update mismatch: %+v", updated.Network)
+	}
+	if updated.Metadata["profileId"] != before.Metadata["profileId"] || updated.Metadata["identityId"] != before.Metadata["identityId"] {
+		t.Fatalf("network update changed profile identity: before=%+v after=%+v", before.Metadata, updated.Metadata)
+	}
+
+	if _, err := store.SetNetwork(p.Name, Network{Mode: NetworkModeTun2Socks}); err == nil {
+		t.Fatal("incomplete tun2socks configuration was accepted")
+	}
+	after, err := store.Load(p.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Network != updated.Network {
+		t.Fatalf("failed update changed network: before=%+v after=%+v", updated.Network, after.Network)
+	}
+}
+
 func TestMaterializeIdentityStateRejectsInvalidHomeXDGMappings(t *testing.T) {
 	for _, tt := range []struct {
 		name      string

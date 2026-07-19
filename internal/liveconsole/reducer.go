@@ -1,8 +1,12 @@
 package liveconsole
 
 import (
+	"time"
+
 	"github.com/vibe-agi/hideout/internal/audit"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const tailLimit = 20
@@ -33,6 +37,8 @@ func Apply(state *State, ev Event) ApplyResult {
 		upsertEnvironment(state, ev.Payload)
 	case KindSession:
 		upsertSession(state, ev.Payload)
+	case KindWorkspaceView:
+		upsertWorkspaceView(state, ev.Payload)
 	case KindBackground:
 		upsertBackground(state, ev.Payload)
 	case KindAudit:
@@ -124,8 +130,8 @@ func upsertEnvironment(state *State, p EventPayload) {
 		LastSessionID:  p.LastSessionID,
 		LastCommand:    p.LastCommand,
 		CreatedAt:      p.CreatedAt,
-		LastStartedAt:  p.LastStartedAt,
-		LastEndedAt:    p.LastEndedAt,
+		LastStartedAt:  optionalEventTime(p.LastStartedAt),
+		LastEndedAt:    optionalEventTime(p.LastEndedAt),
 	}
 	for i := range state.Overview.Environments {
 		if state.Overview.Environments[i].ID == p.ID || (p.Name != "" && state.Overview.Environments[i].Name == p.Name) {
@@ -137,6 +143,9 @@ func upsertEnvironment(state *State, p EventPayload) {
 }
 
 func mergeEnvironment(old, next manager.EnvironmentSummary) manager.EnvironmentSummary {
+	if next.Schema == "" {
+		next.Schema = old.Schema
+	}
 	if next.Name == "" {
 		next.Name = old.Name
 	}
@@ -148,6 +157,18 @@ func mergeEnvironment(old, next manager.EnvironmentSummary) manager.EnvironmentS
 	}
 	if next.ImageRef == "" {
 		next.ImageRef = old.ImageRef
+	}
+	if next.Mode == "" {
+		next.Mode = old.Mode
+	}
+	if next.SharedSlot == "" {
+		next.SharedSlot = old.SharedSlot
+	}
+	if next.MachineIdentityID == "" {
+		next.MachineIdentityID = old.MachineIdentityID
+	}
+	if next.RecordVersion == "" {
+		next.RecordVersion = old.RecordVersion
 	}
 	if next.Workspace == "" {
 		next.Workspace = old.Workspace
@@ -170,13 +191,33 @@ func mergeEnvironment(old, next manager.EnvironmentSummary) manager.EnvironmentS
 	if next.CreatedAt.IsZero() {
 		next.CreatedAt = old.CreatedAt
 	}
-	if next.LastStartedAt.IsZero() {
+	if next.LastStartedAt == nil {
 		next.LastStartedAt = old.LastStartedAt
 	}
-	if next.LastEndedAt.IsZero() {
+	if next.LastEndedAt == nil {
 		next.LastEndedAt = old.LastEndedAt
 	}
+	if next.ActiveSessions == 0 {
+		next.ActiveSessions = old.ActiveSessions
+	}
+	if next.ActiveWorkspaceViews == 0 {
+		next.ActiveWorkspaceViews = old.ActiveWorkspaceViews
+	}
+	if next.WorkspaceProviderState == "" {
+		next.WorkspaceProviderState = old.WorkspaceProviderState
+	}
+	if next.OwnerHealth == "" {
+		next.OwnerHealth = old.OwnerHealth
+	}
 	return next
+}
+
+func optionalEventTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	value = value.UTC()
+	return &value
 }
 
 func upsertSession(state *State, p EventPayload) {
@@ -215,6 +256,114 @@ func mergeSession(old, next manager.SessionSummary) manager.SessionSummary {
 	next.HasProxySecretFile = next.HasProxySecretFile || old.HasProxySecretFile
 	next.HasEphemeralState = next.HasEphemeralState || old.HasEphemeralState
 	return next
+}
+
+func upsertWorkspaceView(state *State, p EventPayload) {
+	sessionID := p.Session
+	if sessionID == "" {
+		sessionID = p.ID
+	}
+	row := manager.SessionSummary{
+		ID: sessionID, Profile: p.Profile, EnvironmentID: p.EnvironmentID,
+		WorkspaceID: p.WorkspaceID, WorkspaceLabel: redactText(p.WorkspaceLabel),
+		GuestWorkspace: p.GuestWorkspace, WorkspaceTransport: p.WorkspaceTransport,
+		WorkspaceViewState:     p.WorkspaceViewState,
+		WorkspaceRelations:     append([]workspaceattach.RootRelationNotice(nil), p.WorkspaceRelations...),
+		WorkspaceCleanupStatus: p.CleanupStatus, WorkspaceBlockerCode: redactText(p.BlockerCode),
+	}
+	updated := false
+	for i := range state.Overview.Sessions {
+		if state.Overview.Sessions[i].ID != sessionID {
+			continue
+		}
+		existing := state.Overview.Sessions[i]
+		if row.Profile == "" {
+			row.Profile = existing.Profile
+		}
+		if row.EnvironmentID == "" {
+			row.EnvironmentID = existing.EnvironmentID
+		}
+		row.Path = existing.Path
+		row.AuditPath = existing.AuditPath
+		row.HasAudit = existing.HasAudit
+		row.HasBrokerEndpoint = existing.HasBrokerEndpoint
+		row.HasNetworkPlan = existing.HasNetworkPlan
+		row.HasProxySecretFile = existing.HasProxySecretFile
+		row.HasEphemeralState = existing.HasEphemeralState
+		row.NetworkMode = existing.NetworkMode
+		row.GuestPrivilege = existing.GuestPrivilege
+		row.State = existing.State
+		row.OwnerStatus = existing.OwnerStatus
+		row.TerminalMode = existing.TerminalMode
+		row.StartedAt = existing.StartedAt
+		row.UpdatedAt = existing.UpdatedAt
+		row.CommandClass = existing.CommandClass
+		row.CleanupError = existing.CleanupError
+		state.Overview.Sessions[i] = row
+		updated = true
+		break
+	}
+	if !updated {
+		state.Overview.Sessions = append(state.Overview.Sessions, row)
+	}
+	recomputeWorkspaceMachine(state, p.EnvironmentID)
+}
+
+func recomputeWorkspaceMachine(state *State, environmentID string) {
+	if environmentID == "" {
+		return
+	}
+	active := 0
+	providerState := ""
+	for _, row := range state.Overview.Sessions {
+		if row.EnvironmentID != environmentID || row.WorkspaceViewState == "" {
+			continue
+		}
+		if workspaceViewIsActive(row.WorkspaceViewState) {
+			active++
+		}
+		providerState = mergeWorkspaceViewState(providerState, row.WorkspaceViewState)
+	}
+	for i := range state.Overview.Environments {
+		machine := &state.Overview.Environments[i]
+		if machine.ID != environmentID || machine.Mode != environment.ModeShared {
+			continue
+		}
+		machine.ActiveSessions = active
+		machine.ActiveWorkspaceViews = active
+		machine.WorkspaceProviderState = providerState
+	}
+}
+
+func workspaceViewIsActive(state workspaceattach.AttachmentState) bool {
+	switch state {
+	case workspaceattach.AttachmentProviderStarting, workspaceattach.AttachmentProviderReady,
+		workspaceattach.AttachmentViewMounting, workspaceattach.AttachmentReady, workspaceattach.AttachmentDraining:
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeWorkspaceViewState(current string, state workspaceattach.AttachmentState) string {
+	next := "not-started"
+	switch state {
+	case workspaceattach.AttachmentProviderStarting:
+		next = "starting"
+	case workspaceattach.AttachmentProviderReady, workspaceattach.AttachmentViewMounting, workspaceattach.AttachmentReady:
+		next = "ready"
+	case workspaceattach.AttachmentDraining:
+		next = "draining"
+	case workspaceattach.AttachmentReleased:
+		next = "released"
+	case workspaceattach.AttachmentUnproved:
+		next = "unproved"
+	}
+	rank := map[string]int{"": 0, "not-started": 1, "released": 2, "starting": 3, "ready": 4, "draining": 5, "unproved": 6}
+	if rank[next] > rank[current] {
+		return next
+	}
+	return current
 }
 
 func upsertBackground(state *State, p EventPayload) {

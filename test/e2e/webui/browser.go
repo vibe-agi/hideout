@@ -18,12 +18,17 @@ import (
 )
 
 type BrowserResult struct {
-	PanelsVisible         []string          `json:"panelsVisible"`
-	LiveUpdateObserved    bool              `json:"liveUpdateObserved"`
-	HiddenPollingDetected bool              `json:"hiddenPollingDetected"`
-	ActionRoundTrip       BrowserAction     `json:"actionRoundTrip"`
-	AuthFailureObserved   bool              `json:"authFailureObserved"`
-	Artifacts             map[string]string `json:"artifacts"`
+	PanelsVisible          []string          `json:"panelsVisible"`
+	LiveUpdateObserved     bool              `json:"liveUpdateObserved"`
+	HiddenPollingDetected  bool              `json:"hiddenPollingDetected"`
+	WorkspaceMachineCount  int               `json:"workspaceMachineCount"`
+	WorkspaceViewCount     int               `json:"workspaceViewCount"`
+	WorkspaceRelationSeen  bool              `json:"workspaceRelationSeen"`
+	WorkspaceReleaseSeen   bool              `json:"workspaceReleaseSeen"`
+	WorkspacePrivateHidden bool              `json:"workspacePrivateHidden"`
+	ActionRoundTrip        BrowserAction     `json:"actionRoundTrip"`
+	AuthFailureObserved    bool              `json:"authFailureObserved"`
+	Artifacts              map[string]string `json:"artifacts"`
 }
 
 type BrowserAction struct {
@@ -50,6 +55,8 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 		"--base-url", fixture.BaseURL,
 		"--token", fixture.Token,
 		"--notice-id", fixture.NoticeID,
+		"--fixture-url", fixture.ControlURL,
+		"--fixture-key", fixture.ControlKey,
 		"--out", outDir,
 	)
 	cmd.Env = append(os.Environ(), "HIDEOUT_UI_E2E_HEADLESS="+envDefault("HIDEOUT_UI_E2E_HEADLESS", "1"))
@@ -70,6 +77,10 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 	}
 	if !result.LiveUpdateObserved {
 		t.Fatalf("browser proof did not observe live update: %+v", result)
+	}
+	if result.WorkspaceMachineCount != 1 || result.WorkspaceViewCount != 2 ||
+		!result.WorkspaceRelationSeen || !result.WorkspaceReleaseSeen || !result.WorkspacePrivateHidden {
+		t.Fatalf("browser workspace-view proof is incomplete: %+v", result)
 	}
 	if !result.AuthFailureObserved {
 		t.Fatalf("browser proof did not observe auth failure: %+v", result)

@@ -181,8 +181,8 @@ func TestRunServiceEphemeralIdentityRemainsBoundAcrossRevalidation(t *testing.T)
 	if _, err := service.Apply(context.Background(), prepared, req, RunServiceDependencies{Backend: fake}); err != nil {
 		t.Fatalf("Apply rejected its reviewed ephemeral identity: %v", err)
 	}
-	if fake.spec.Profile.Metadata["identityId"] != identityID {
-		t.Fatalf("applied identity=%q want reviewed %q", fake.spec.Profile.Metadata["identityId"], identityID)
+	if fake.spec.Machine.Profile.Metadata["identityId"] != identityID {
+		t.Fatalf("applied identity=%q want reviewed %q", fake.spec.Machine.Profile.Metadata["identityId"], identityID)
 	}
 }
 

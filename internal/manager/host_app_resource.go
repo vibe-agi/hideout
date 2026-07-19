@@ -192,8 +192,8 @@ func (p *hostFSReadProvider) HostAppResourceAuthorityLost(owner hostfs.HostAppRe
 // hostAppRunForbiddenRoots assembles the production launch-time overlap
 // boundary from Manager-owned state. Mutable package state is consulted only
 // while compiling the immutable run; final checks retain those source roots.
-func (c Core) hostAppRunForbiddenRoots(runSession RunSession, policy hostfs.EffectivePolicy) ([]string, error) {
-	roots, err := c.hostAppRunLiveForbiddenRoots(runSession, policy)
+func (c Core) hostAppRunForbiddenRoots(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy) ([]string, error) {
+	roots, err := c.hostAppRunLiveForbiddenRoots(runSession, authority, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -210,11 +210,11 @@ func (c Core) hostAppRunForbiddenRoots(runSession RunSession, policy hostfs.Effe
 	return canonicalHostAppRunForbiddenRoots(roots)
 }
 
-func (c Core) hostAppRunLiveForbiddenRoots(runSession RunSession, policy hostfs.EffectivePolicy) ([]string, error) {
+func (c Core) hostAppRunLiveForbiddenRoots(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy) ([]string, error) {
 	roots := []string{
 		c.Store.Root,
 		os.TempDir(),
-		runSession.Plan.Workspace,
+		authority.HostRoot,
 		runSession.Layout.Root,
 		runSession.Layout.Dir,
 		runSession.Layout.TmpDir,
@@ -226,7 +226,6 @@ func (c Core) hostAppRunLiveForbiddenRoots(runSession RunSession, policy hostfs.
 		runSession.IdentityDir,
 		runSession.RuntimeSessionDir,
 		runSession.RuntimeShimDir,
-		runSession.Environment.Record.Workspace,
 	}
 	if filepath.IsAbs(runSession.AuditPath) {
 		roots = append(roots, runSession.AuditPath)
@@ -254,10 +253,10 @@ func (c Core) hostAppRunLiveForbiddenRoots(runSession RunSession, policy hostfs.
 	return canonicalHostAppRunForbiddenRoots(roots)
 }
 
-func (c Core) hostAppRunIdentityRevalidator(runSession RunSession, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.IdentityRevalidator {
+func (c Core) hostAppRunIdentityRevalidator(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.IdentityRevalidator {
 	initialRoots = append([]string(nil), initialRoots...)
 	return func(expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
-		roots, err := c.hostAppRunIdentityRoots(runSession, policy, initialRoots)
+		roots, err := c.hostAppRunIdentityRoots(runSession, authority, policy, initialRoots)
 		if err != nil {
 			return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "launch-time application overlap boundary is invalid"}
 		}
@@ -265,10 +264,10 @@ func (c Core) hostAppRunIdentityRevalidator(runSession RunSession, policy hostfs
 	}
 }
 
-func (c Core) hostAppRunBindingIdentityResolver(runSession RunSession, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.BindingIdentityResolver {
+func (c Core) hostAppRunBindingIdentityResolver(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.BindingIdentityResolver {
 	initialRoots = append([]string(nil), initialRoots...)
 	return func(binding hostcap.OpenResourceBinding) (hostcap.OpenResourceBinding, error) {
-		roots, err := c.hostAppRunIdentityRoots(runSession, policy, initialRoots)
+		roots, err := c.hostAppRunIdentityRoots(runSession, authority, policy, initialRoots)
 		if err != nil {
 			return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "on-demand application overlap boundary is unavailable"}
 		}
@@ -276,8 +275,8 @@ func (c Core) hostAppRunBindingIdentityResolver(runSession RunSession, policy ho
 	}
 }
 
-func (c Core) hostAppRunIdentityRoots(runSession RunSession, policy hostfs.EffectivePolicy, initialRoots []string) ([]string, error) {
-	liveRoots, err := c.hostAppRunLiveForbiddenRoots(runSession, policy)
+func (c Core) hostAppRunIdentityRoots(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy, initialRoots []string) ([]string, error) {
+	liveRoots, err := c.hostAppRunLiveForbiddenRoots(runSession, authority, policy)
 	if err != nil {
 		return nil, err
 	}

@@ -148,6 +148,7 @@ done < <(jq -r '
     or .featureId == "031-supported-cli-runtime"
     or .featureId == "032-community-host-app-recipes"
     or .featureId == "034-concurrent-run-sessions"
+    or .featureId == "035-shared-default-vm-cross-workspace"
     or .featureId == "036-resource-lifecycle-final-session-stop")
   | .proofId
 ' "$registry_json")
@@ -182,7 +183,7 @@ scan_files() {
   {
     printf '%s\n' README.md README.zh-CN.md
     find docs -maxdepth 1 -type f -name '*.md' | sort
-    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions specs/036-resource-lifecycle-final-session-stop \
+    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions specs/035-shared-default-vm-cross-workspace specs/036-resource-lifecycle-final-session-stop \
       -type f -name '*.md' | sort
   } | grep -v '^\.' | sort -u
 }
@@ -230,46 +231,56 @@ record_overclaim() {
 
 hostfs_visibility_overclaim_category() {
   local lower="$1"
+  category_result=""
   case "$lower" in
-    *hostfs*visibility*enabled*silently*|*hostfs*visibility*enabled*"by default"*) printf 'hostfs-visibility-default'; return ;;
-    *discover*grants*"file content"*|*discover*grants*"execute authority"*) printf 'hostfs-discover-content'; return ;;
-    *hidden*predictable*reveal*"no information"*) printf 'hostfs-predictable-hidden'; return ;;
-    *arbitrary*tools*receive*"rich approval prose"*) printf 'hostfs-arbitrary-tool-prose'; return ;;
-    *retryable*means*"approval decision exists"*|*retryable*proves*"decision exists"*) printf 'hostfs-retryable-authority'; return ;;
-    *local-fast*satisfies*"real gate 2"*|*local-fast*replaces*"real gate 2"*) printf 'hostfs-local-real-gate'; return ;;
-    *discover*provides*"guest-root containment"*|*discover*filters*"workspace content"*) printf 'hostfs-discover-overreach'; return ;;
+    *hostfs*visibility*enabled*silently*|*hostfs*visibility*enabled*"by default"*) category_result='hostfs-visibility-default'; return ;;
+    *discover*grants*"file content"*|*discover*grants*"execute authority"*) category_result='hostfs-discover-content'; return ;;
+    *hidden*predictable*reveal*"no information"*) category_result='hostfs-predictable-hidden'; return ;;
+    *arbitrary*tools*receive*"rich approval prose"*) category_result='hostfs-arbitrary-tool-prose'; return ;;
+    *retryable*means*"approval decision exists"*|*retryable*proves*"decision exists"*) category_result='hostfs-retryable-authority'; return ;;
+    *local-fast*satisfies*"real gate 2"*|*local-fast*replaces*"real gate 2"*) category_result='hostfs-local-real-gate'; return ;;
+    *discover*provides*"guest-root containment"*|*discover*filters*"workspace content"*) category_result='hostfs-discover-overreach'; return ;;
   esac
-  printf ''
 }
 
 host_app_pack_overclaim_category() {
   local lower="$1"
+  category_result=""
   case "$lower" in
-    *community*pack*"arbitrary host command"*|*community*recipe*"arbitrary host command"*) printf 'host-app-arbitrary-host-command'; return ;;
-    *community*pack*"ships its own host effect"*|*community*pack*"includes its own host effect"*|*community*pack*"brings its own host effect"*) printf 'host-app-pack-provides-effect'; return ;;
-    *self-signed*app*verified*|*self-signed*bundle*verified*|*self\ signed*app*verified*|*self\ signed*bundle*verified*) printf 'host-app-self-signed-verified'; return ;;
-    *package*"signing requirement"*verif*app*|*package*"designated requirement"*verif*app*|*package*"signing requirement"*authenticat*app*|*package*requirement*authenticat*app*) printf 'host-app-package-self-attestation'; return ;;
-    *package*defines*safe*posture*|*package*controls*safe*mode*|*pack*declares*safe*|*safe*"declared by the pack"*) printf 'host-app-package-safe-authority'; return ;;
-    *unverified*app*"without confirmation"*|*unsigned*app*"without confirmation"*) printf 'host-app-unverified-no-confirmation'; return ;;
-    *unknown*projected*command*fallback*|*unknown*projected*command*"falls back"*|*unbound*command*fallback*|*unbound*command*"falls back"*) printf 'host-app-command-fallback'; return ;;
-    *guest*appref*select*host*app*|*package*appref*select*host*app*) printf 'host-app-cross-binding-selection'; return ;;
-    *old\ session*changes\ immediately*|*existing\ session*changes\ immediately*|*enabl*changes*old\ session*immediately*|*enabl*old\ session*immediately*) printf 'host-app-old-session-mutation'; return ;;
-    *see-only*"can open"*|*see\ only*"can open"*|*discover-only*"can open"*) printf 'host-app-see-only-open'; return ;;
-    *native*replaces*"real gate 2"*|*native*satisfies*"real gate 2"*|*local-only*replaces*"real gate 2"*|*local-only*satisfies*"real gate 2"*|*package*self-test*replaces*"real gate 2"*|*package*self-test*satisfies*"real gate 2"*) printf 'host-app-false-real-gate'; return ;;
+    *community*pack*"arbitrary host command"*|*community*recipe*"arbitrary host command"*) category_result='host-app-arbitrary-host-command'; return ;;
+    *community*pack*"ships its own host effect"*|*community*pack*"includes its own host effect"*|*community*pack*"brings its own host effect"*) category_result='host-app-pack-provides-effect'; return ;;
+    *self-signed*app*verified*|*self-signed*bundle*verified*|*self\ signed*app*verified*|*self\ signed*bundle*verified*) category_result='host-app-self-signed-verified'; return ;;
+    *package*"signing requirement"*verif*app*|*package*"designated requirement"*verif*app*|*package*"signing requirement"*authenticat*app*|*package*requirement*authenticat*app*) category_result='host-app-package-self-attestation'; return ;;
+    *package*defines*safe*posture*|*package*controls*safe*mode*|*pack*declares*safe*|*safe*"declared by the pack"*) category_result='host-app-package-safe-authority'; return ;;
+    *unverified*app*"without confirmation"*|*unsigned*app*"without confirmation"*) category_result='host-app-unverified-no-confirmation'; return ;;
+    *unknown*projected*command*fallback*|*unknown*projected*command*"falls back"*|*unbound*command*fallback*|*unbound*command*"falls back"*) category_result='host-app-command-fallback'; return ;;
+    *guest*appref*select*host*app*|*package*appref*select*host*app*) category_result='host-app-cross-binding-selection'; return ;;
+    *old\ session*changes\ immediately*|*existing\ session*changes\ immediately*|*enabl*changes*old\ session*immediately*|*enabl*old\ session*immediately*) category_result='host-app-old-session-mutation'; return ;;
+    *see-only*"can open"*|*see\ only*"can open"*|*discover-only*"can open"*) category_result='host-app-see-only-open'; return ;;
+    *native*replaces*"real gate 2"*|*native*satisfies*"real gate 2"*|*local-only*replaces*"real gate 2"*|*local-only*satisfies*"real gate 2"*|*package*self-test*replaces*"real gate 2"*|*package*self-test*satisfies*"real gate 2"*) category_result='host-app-false-real-gate'; return ;;
   esac
-  printf ''
 }
 
 concurrent_sessions_overclaim_category() {
   local lower="$1"
+  category_result=""
   case "$lower" in
-    *cross-workspace*"shared vm"*supported*|*cross-workspace*"shared environment"*supported*) printf 'concurrent-cross-workspace'; return ;;
-    *034*local*proves*automatic*"final-session stop"*|*034*local*proves*"final-session-stop"*) printf 'concurrent-false-lifecycle-gate'; return ;;
-    *all*terminal*emulator*fully*supported*|*all*terminal*theme*fully*supported*|*osc*fully*supported*) printf 'concurrent-terminal-emulator-hardening'; return ;;
-    *guest-root*session*containment*provided*|*guest-root*session*containment*supported*|*guest\ root*cannot*inspect*sibling*) printf 'concurrent-guest-root-containment'; return ;;
-    *native*proves*session*isolation*|*local*smoke*proves*session*isolation*) printf 'concurrent-false-real-gate'; return ;;
+    *cross-workspace*"shared vm"*supported*|*cross-workspace*"shared environment"*supported*) category_result='concurrent-cross-workspace'; return ;;
+    *034*local*proves*automatic*"final-session stop"*|*034*local*proves*"final-session-stop"*) category_result='concurrent-false-lifecycle-gate'; return ;;
+    *all*terminal*emulator*fully*supported*|*all*terminal*theme*fully*supported*|*osc*fully*supported*) category_result='concurrent-terminal-emulator-hardening'; return ;;
+    *guest-root*session*containment*provided*|*guest-root*session*containment*supported*|*guest\ root*cannot*inspect*sibling*) category_result='concurrent-guest-root-containment'; return ;;
+    *native*proves*session*isolation*|*local*smoke*proves*session*isolation*) category_result='concurrent-false-real-gate'; return ;;
   esac
-  printf ''
+}
+
+shared_workspace_overclaim_category() {
+  local lower="$1"
+  category_result=""
+  case "$lower" in
+    *shared*vm*"separate vm"*wall*|*shared*kernel*"vm-level isolation"*) category_result='shared-workspace-vm-wall'; return ;;
+    *ancestor*descendant*"mutually isolated"*|*nested*workspace*"mutually isolated"*) category_result='shared-workspace-nested-isolation'; return ;;
+    *guest-root*cannot*"sibling workspace"*|*guest\ root*cannot*"other attached workspace"*) category_result='shared-workspace-guest-root-containment'; return ;;
+  esac
 }
 
 scan_overclaims() {
@@ -278,9 +289,12 @@ scan_overclaims() {
     [ -f "$file" ] || continue
     local line_no=0
     local hostfs_negative_context=0
-    while IFS= read -r line || [ -n "$line" ]; do
+    while IFS= read -r lower || [ -n "$lower" ]; do
       line_no=$((line_no + 1))
-      lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+      # Lowercase once per file instead of spawning one `tr` process per line.
+      # Findings intentionally retain the normalized line: all matchers and
+      # negative-context guards operate on that same representation.
+      line="$lower"
       if [[ "$lower" == *"docs truth rejects"* || "$lower" == *"docs truth must reject"* ]]; then
         hostfs_negative_context=4
       fi
@@ -313,24 +327,32 @@ scan_overclaims() {
           case "$lower" in *not*|*does\ not*|*intent*) ;; *) record_overclaim root-containment "$file" "$line_no" "$line" ;; esac
           ;;
       esac
-      hostfs_category="$(hostfs_visibility_overclaim_category "$lower")"
+      hostfs_visibility_overclaim_category "$lower"
+      hostfs_category="$category_result"
       if [ -n "$hostfs_category" ]; then
         if [ "$hostfs_negative_context" -eq 0 ]; then
           case "$lower" in *not*|*never*|*must\ not*|*does\ not*|*cannot*|*reject*|*given*docs*claim*) ;; *) record_overclaim "$hostfs_category" "$file" "$line_no" "$line" ;; esac
         fi
       fi
-      host_app_category="$(host_app_pack_overclaim_category "$lower")"
+      host_app_pack_overclaim_category "$lower"
+      host_app_category="$category_result"
       if [ -n "$host_app_category" ]; then
         case "$lower" in *not*|*never*|*must\ not*|*does\ not*|*cannot*|*reject*|*forbid*|*insufficient*|*claim\ pending*|*given*docs*claim*) ;; *) record_overclaim "$host_app_category" "$file" "$line_no" "$line" ;; esac
       fi
-      concurrent_category="$(concurrent_sessions_overclaim_category "$lower")"
+      concurrent_sessions_overclaim_category "$lower"
+      concurrent_category="$category_result"
       if [ -n "$concurrent_category" ]; then
         case "$lower" in *not*|*never*|*must\ not*|*does\ not*|*cannot*|*reject*|*non-claim*|*given*docs*claim*) ;; *) record_overclaim "$concurrent_category" "$file" "$line_no" "$line" ;; esac
+      fi
+      shared_workspace_overclaim_category "$lower"
+      shared_workspace_category="$category_result"
+      if [ -n "$shared_workspace_category" ]; then
+        case "$lower" in *not*|*never*|*must\ not*|*does\ not*|*cannot\ claim*|*non-claim*|*given*docs*claim*) ;; *) record_overclaim "$shared_workspace_category" "$file" "$line_no" "$line" ;; esac
       fi
       if [ "$hostfs_negative_context" -gt 0 ]; then
         hostfs_negative_context=$((hostfs_negative_context - 1))
       fi
-    done <"$file"
+    done < <(LC_ALL=C awk '{ print tolower($0) }' "$file")
   done < <(scan_files)
 
   if [ -s "$out/reports/overclaim-findings.tsv" ]; then
@@ -362,7 +384,8 @@ validate_host_app_pack_overclaim_fixtures() {
   local line category
   : >"$out/reports/host-app-pack-overclaim-fixtures.jsonl"
   for line in "${fixtures[@]}"; do
-    category="$(host_app_pack_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')")"
+    host_app_pack_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+    category="$category_result"
     if [ -z "$category" ]; then
       echo "doc-truth-smoke: 032 overclaim fixture was not rejected: $line" >&2
       exit 1
@@ -386,7 +409,8 @@ validate_hostfs_visibility_overclaim_fixtures() {
   local line category
   : >"$out/reports/hostfs-visibility-overclaim-fixtures.jsonl"
   for line in "${fixtures[@]}"; do
-    category="$(hostfs_visibility_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')")"
+    hostfs_visibility_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+    category="$category_result"
     if [ -z "$category" ]; then
       echo "doc-truth-smoke: 029 overclaim fixture was not rejected: $line" >&2
       exit 1
@@ -407,7 +431,8 @@ validate_concurrent_sessions_overclaim_fixtures() {
   local line category
   : >"$out/reports/concurrent-sessions-overclaim-fixtures.jsonl"
   for line in "${fixtures[@]}"; do
-    category="$(concurrent_sessions_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')")"
+    concurrent_sessions_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+    category="$category_result"
     if [ -z "$category" ]; then
       echo "doc-truth-smoke: 034 overclaim fixture was not rejected: $line" >&2
       exit 1
@@ -419,6 +444,37 @@ validate_concurrent_sessions_overclaim_fixtures() {
   jq -s '{fixtures: ., status: "passed"}' \
     "$out/reports/concurrent-sessions-overclaim-fixtures.jsonl" \
     >"$out/reports/concurrent-sessions-overclaim-fixtures.json"
+}
+
+validate_shared_workspace_nonclaims() {
+  grep -q 'sessions from different workspaces' docs/threat-model.md
+  grep -q 'share one guest kernel' docs/threat-model.md
+  grep -q 'For A3 guest-root targets, the shared machine is one trust domain' docs/threat-model.md
+  grep -q 'may bypass ordinary session-view isolation and reach other attached workspaces' docs/threat-model.md
+  grep -q 'Ancestor and descendant selections are asymmetric' docs/threat-model.md
+  grep -q 'root are not isolated' docs/threat-model.md
+
+  local fixtures=(
+    "A shared VM provides a separate VM wall for each workspace"
+    "Ancestor and descendant workspaces are mutually isolated"
+    "Guest-root cannot inspect a sibling workspace"
+  )
+  local line category
+  : >"$out/reports/shared-workspace-nonclaims.jsonl"
+  for line in "${fixtures[@]}"; do
+    shared_workspace_overclaim_category "$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+    category="$category_result"
+    if [ -z "$category" ]; then
+      echo "doc-truth-smoke: 035 non-claim fixture was not rejected: $line" >&2
+      exit 1
+    fi
+    jq -n --arg text "$line" --arg category "$category" \
+      '{text: $text, category: $category, rejected: true}' \
+      >>"$out/reports/shared-workspace-nonclaims.jsonl"
+  done
+  jq -s '{fixtures: ., source: "docs/threat-model.md", status: "passed"}' \
+    "$out/reports/shared-workspace-nonclaims.jsonl" \
+    >"$out/reports/shared-workspace-nonclaims.json"
 }
 
 validate_hostfs_selector_docs() {
@@ -684,7 +740,8 @@ write_manifest() {
     <(artifact_obj "docs-report" "reports/overclaim-scan.json" "known overclaim scan report") \
     <(artifact_obj "docs-report" "reports/hostfs-visibility-overclaim-fixtures.json" "029 known-overclaim rejection fixtures") \
     <(artifact_obj "docs-report" "reports/host-app-pack-overclaim-fixtures.json" "032 known-overclaim rejection fixtures") \
-    <(artifact_obj "docs-report" "reports/concurrent-sessions-overclaim-fixtures.json" "034 known-overclaim rejection fixtures") >"$overclaim_artifacts"
+    <(artifact_obj "docs-report" "reports/concurrent-sessions-overclaim-fixtures.json" "034 known-overclaim rejection fixtures") \
+    <(artifact_obj "docs-report" "reports/shared-workspace-nonclaims.json" "035 shared-kernel, nested-root, and guest-root non-claim fixtures") >"$overclaim_artifacts"
   jq -s '.' \
     <(artifact_obj "docs-report" "reports/command-checks.json" "curated command checks") \
     <(artifact_obj "docs-report" "reports/command-examples.json" "curated command fixture") >"$command_artifacts"
@@ -812,6 +869,7 @@ scan_overclaims
 validate_hostfs_visibility_overclaim_fixtures
 validate_host_app_pack_overclaim_fixtures
 validate_concurrent_sessions_overclaim_fixtures
+validate_shared_workspace_nonclaims
 validate_hostfs_selector_docs
 validate_command_examples
 validate_cross_docs

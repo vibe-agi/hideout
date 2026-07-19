@@ -356,9 +356,9 @@ func (b *concurrentRunBackend) Prepare(_ context.Context, spec backend.RunSpec) 
 	b.releases[spec.SessionID] = make(chan struct{})
 	b.mu.Unlock()
 	return &backend.Session{
-		ID: spec.SessionID, EnvironmentID: spec.EnvironmentID, Backend: b.Name(),
-		HostWork: spec.HostWork, GuestWork: spec.GuestWork, SessionDir: spec.SessionDir,
-		RuntimeRoot: spec.RuntimeRoot, PreserveInstance: true,
+		ID: spec.SessionID, EnvironmentID: spec.Machine.EnvironmentID, Backend: b.Name(),
+		HostWork: spec.Workspace.HostRoot, GuestWork: spec.Workspace.GuestRoot, SessionDir: spec.SessionDir,
+		RuntimeRoot: spec.Machine.RuntimeRoot, PreserveInstance: true,
 	}, nil
 }
 

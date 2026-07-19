@@ -5,24 +5,36 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/lifecycle"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const (
-	statusVersion = "hideout.daemon-status/v1"
+	statusVersion      = "hideout.daemon-status/v1"
+	stopReceiptVersion = "hideout.daemon-stop-receipt/v1"
 )
+
+// StopReceipt identifies the exact daemon instance whose ordered shutdown was
+// accepted. Clients use it to prove that instance has relinquished ownership
+// before reporting a completed stop.
+type StopReceipt struct {
+	Version    string `json:"version"`
+	InstanceID string `json:"instanceId"`
+	Status     string `json:"status"`
+}
 
 // Status is the daemon status/inventory shape (schemas/daemon-status.schema.json).
 type Status struct {
-	Version              string             `json:"version"`
-	BuildID              string             `json:"buildId"`
-	State                string             `json:"state"`
-	InstanceID           string             `json:"instanceId,omitempty"`
-	StartedAt            string             `json:"startedAt,omitempty"`
-	CredentialGeneration uint64             `json:"credentialGeneration,omitempty"`
-	Transport            StatusTransport    `json:"transport"`
-	Sessions             []SessionStatus    `json:"sessions,omitempty"`
-	Background           []BackgroundStatus `json:"background,omitempty"`
-	Lifecycle            []lifecycle.Status `json:"lifecycle,omitempty"`
+	Version              string                              `json:"version"`
+	BuildID              string                              `json:"buildId"`
+	State                string                              `json:"state"`
+	InstanceID           string                              `json:"instanceId,omitempty"`
+	StartedAt            string                              `json:"startedAt,omitempty"`
+	CredentialGeneration uint64                              `json:"credentialGeneration,omitempty"`
+	Transport            StatusTransport                     `json:"transport"`
+	Sessions             []SessionStatus                     `json:"sessions,omitempty"`
+	WorkspaceAttachments []workspaceattach.AttachmentSummary `json:"workspaceAttachments,omitempty"`
+	Background           []BackgroundStatus                  `json:"background,omitempty"`
+	Lifecycle            []lifecycle.Status                  `json:"lifecycle,omitempty"`
 }
 
 type StatusTransport struct {
@@ -32,17 +44,18 @@ type StatusTransport struct {
 }
 
 type SessionStatus struct {
-	Schema        string `json:"schema"`
-	ID            string `json:"id"`
-	EnvironmentID string `json:"environmentId"`
-	Profile       string `json:"profile"`
-	Backend       string `json:"backend"`
-	WorkspaceID   string `json:"workspaceId,omitempty"`
-	State         string `json:"state"`
-	OwnerStatus   string `json:"ownerStatus"`
-	TerminalMode  string `json:"terminalMode"`
-	StartedAt     string `json:"startedAt"`
-	CommandClass  string `json:"commandClass,omitempty"`
+	Schema            string `json:"schema"`
+	ID                string `json:"id"`
+	EnvironmentID     string `json:"environmentId"`
+	Profile           string `json:"profile"`
+	Backend           string `json:"backend"`
+	WorkspaceID       string `json:"workspaceId,omitempty"`
+	SessionSnapshotID string `json:"sessionSnapshotId"`
+	State             string `json:"state"`
+	OwnerStatus       string `json:"ownerStatus"`
+	TerminalMode      string `json:"terminalMode"`
+	StartedAt         string `json:"startedAt"`
+	CommandClass      string `json:"commandClass,omitempty"`
 }
 
 // BackgroundStatus reports a background operation (populated in the US3 slice).

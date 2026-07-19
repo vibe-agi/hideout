@@ -119,7 +119,8 @@ profile.
 Workspace contents and workspace metadata are deliberately shared with the
 target command. In `pathMode=preserve`, this includes host path shape such as the
 username in `/Users/<name>/project`. That is a compatibility choice, not an
-identity-hiding guarantee. Use `pathMode=alias` when path privacy is more
+identity-hiding guarantee. Use
+`hideout profile workspace-path-mode <name> alias` when path privacy is more
 important than exact path compatibility.
 
 User mental model:
@@ -1374,26 +1375,59 @@ Environment = the reusable guest machine Hideout uses for a run or a named
 project boundary.
 ```
 
-The implemented model has one deterministic implicit environment per profile
-and workspace, plus explicitly named environments. Its workspace mount stays
-static for the environment lifetime. Concurrent runs that resolve to that
-same environment share the workspace and guest kernel but own distinct
-runtime children, broker/data planes, mount namespaces, PID namespaces, and
-private `/proc` views. This protects ordinary target processes from sibling
-session authority; it is not guest-root containment. A future cross-workspace
-shared `default` environment remains design-ready only. Changing an
-environment's pinned configuration (base image digest, backend, profile
-binding, or workspace) is drift: the product fails closed and offers
-recreation, never a silent switch.
+The implemented 035 model uses one stable automatic machine slot selected by a
+canonical profile slot plus machine identity. Its record contains no
+selected, last, placeholder, or historical workspace. Every run instead owns
+an immutable attachment with the canonical captured host root, stable root
+identity, one store-keyed opaque workspace ID, exact backend incarnation,
+logical and physical guest roots, and the selected transport. Explicit named
+environments remain dedicated, project-pinned VM walls; native and platforms
+without promoted real evidence remain explicit workspace-bound modes rather
+than silently sharing.
+
+The accepted transport is `workspace-portal`. Shared-mode Lima YAML contains no
+project mount. The daemon-owned session worker starts one bounded Go-owned
+provider for the captured root, mounts the corresponding opaque physical view
+inside the session namespace, and exposes that view at `/workspace`. Broker,
+host-app projection, Git safe-directory setup, audit, status, and cleanup all
+consume the same attachment and workspace ID. They may not derive a second ID,
+consult environment history, string-replace `/workspace`, or accept a guest or
+display label as authority.
+
+This protects ordinary target processes from sibling session authority; it is
+not guest-root containment. A new project is an attachment, not machine drift.
+
+Configuration is split by the smallest lifecycle operation that can make a
+change effective:
+
+| Layer | Representative inputs | Effective operation |
+| --- | --- | --- |
+| Machine identity | backend, image content and guest architecture, target OS user/UID, guest machine-id, VM/mount implementation, workspace isolation shape, and static-Lima workspace access/path presentation | explicit recreate |
+| Boot configuration | hostname and future environment-global presentation owned by privileged setup | controlled online reconfigure; stop/start only when a backend cannot prove reconfiguration |
+| Environment service | direct/proxy route, host gateway upstream, mediated DNS, other reference-counted shared services | serialized online switch with rollback; no VM recreate or restart; a VM-global posture switch waits for sibling sessions to exit |
+| Session snapshot | env, Git, timezone/locale, tool expectations, shims, shared-Portal/native workspace presentation, HostFS and command policy, adapters, host capabilities, endpoint requests, audit, policy source bytes | next session; no VM restart |
+
+Machine selection compares only machine identity. Distribution URLs, catalog
+labels, network mode, proxy reference, resolver, profile policy, and session
+presentation do not become recreate axes unless that presentation is part of a
+static Lima workspace mount. Hostname is reconciled against the
+current boot. Proxy-upstream and DNS changes replace one environment-service
+generation online. Accepted gateway connections retain their old route while
+newly accepted connections use the staged route, and a failed guest DNS/route
+transition restores the prior generation when rollback can be proved. A
+direct-to-proxy or proxy-to-direct change is also applied to the existing VM,
+but fails closed while another target session is active because the current
+guest route is environment-global. The operator retries after those sessions
+exit; Hideout does not silently mutate their network posture.
 
 The implementation still separates reusable environment state from per-run
 authority. A reusable environment may keep:
 
 - generated profile identity state for the selected profile;
-- guest home/config/cache/data/browser state owned by that profile and
-  workspace;
+- guest home/config/cache/data/browser state owned by that profile;
 - tool installs, package caches, and other guest-local developer state;
-- workspace mount configuration and backend metadata;
+- machine-compatible backend metadata, but no selected or historical automatic
+  workspace;
 - audit history and run metadata.
 
 A reusable environment must not keep active authority from a previous run:
@@ -1402,39 +1436,39 @@ A reusable environment must not keep active authority from a previous run:
 - broker endpoint files;
 - command proxy shims;
 - proxy secret runtime files;
-- active network routes or `tun2socks` processes;
+- per-session proxy secret files (the environment may retain a separately
+  owned, authenticated network service and its non-secret state);
 - active PortBridge, browser-control, preview-open, or DevTools endpoints;
 - session tmp files.
 
 Every `hideout run`, including a resumed run, creates a new session ID, broker
-token, command proxy shim set, network plan, audit context, and cleanup scope.
+token, command proxy shim set, immutable policy/Git snapshot, audit context,
+and cleanup scope. It selects or verifies the current environment network
+service generation rather than treating network posture as machine identity.
 Reusing an environment is a startup optimization and a user workflow feature; it
 is not permission to reuse per-run capability material.
 
-Default environment selection:
+The current automatic selector is:
 
 ```text
-profile + workspace -> deterministic auto-name -> the one named environment
+canonical profile + machine compatibility -> one stable automatic machine
+current project + exact incarnation + run  -> one immutable attachment/view
 ```
 
-`hideout run -- <command>` resolves the current workspace to its
-deterministic auto-named environment for the selected profile, creating it on
-first use and reusing it afterward. `hideout run --env <name> -- <command>`
-selects a named environment explicitly; it accepts names only, and the record
-supplies the profile, backend, pinned image declaration, and pinned workspace
-binding — conflicting inputs fail closed. There is no most-recently-used
-fingerprint selection and no silent derivation of replacement environments.
+It does not consult most-recent state and does not create a second automatic
+machine when attachment fails. Explicit `--env <name>` continues to select a
+dedicated project-pinned record. Native and unpromoted platforms use an
+explicit workspace-bound record rather than pretending to provide the shared
+contract.
 
-Environment identity is fixed at creation: the pinned image declaration, the
-backend configuration version, and the pinned workspace. Use-time drift on
-the backend-configuration or workspace axes fails closed with a drift report
-naming each axis (pinned and current values) plus a copyable
-`hideout env recreate <name>` command. Workspace identity is compared by real
-file identity, not string paths. Expected-command declarations are live
-diagnostics, not identity: changing them never drifts an environment and
-never forces a rebuild. The previous `--new` and `--resume` flags are
-removed; `hideout env create` is the explicit way to make an environment, and
-`hideout env recreate` is the explicit answer to drift.
+An automatic shared machine is fixed by machine identity, not the entire
+profile: image/runtime content, backend, guest architecture and target user,
+guest machine-id, VM/mount implementation, and isolation shape. Workspace,
+network/DNS, hostname, policy, and expected-command declarations are not
+machine identity axes. A dedicated or workspace-bound record continues to pin
+the exact project. All root identity is compared by captured file identity,
+not string paths. `hideout env create` is the explicit way to make a separate
+environment, and `hideout env recreate` is reserved for machine drift.
 
 `hideout run --rm -- <command>` creates a disposable run. It may still use
 profile identity defaults, but it removes the runtime environment after the
@@ -2351,12 +2385,12 @@ declarative guest base image reference is not such a recipe: referencing an
 existing image is data the backend consumes to start the guest, not steps
 Hideout executes.
 
-Tool policy and the declared base image are part of the reusable environment
-identity: changing expected-command declarations or the base image digest
-creates or selects a matching environment instead of reusing an older guest
-with stale commands or a stale image. Backend configuration version is
-also part of the environment identity so backend security-policy changes do not
-reuse older VMs with stale generated YAML.
+The declared base-image content and VM isolation structure form machine
+identity: changing either requires explicit recreation rather than reusing a
+guest with the wrong disk or isolation boundary. Tool declarations and policy
+belong to an immutable session snapshot, so a new run receives the new values
+without replacing the VM. Boot presentation and environment services are
+reconciled independently and must not become hidden machine-identity inputs.
 
 Lima environment preparation is a managed phase, not an uncontrolled guest
 image hook. Hideout starts the VM from the declared base image, runs the
@@ -2545,6 +2579,13 @@ normal atomic optional-index refresh and lock behavior, which keeps repeated
 status checks fast on the shared workspace. An operator may set the variable
 explicitly for a specialized background workflow; Hideout does not silently
 trade away normal Git performance for that workflow.
+
+Shared Workspace Portal sessions additionally set the process-scoped Git
+configuration `core.preloadIndex=false`. The Portal preserves Git's filesystem
+semantics, but parallel index preload adds userspace FUSE scheduling overhead
+without reducing metadata operations. The setting exists only in the target
+environment: Hideout does not edit repository, profile-home, or host Git
+configuration, and other environment modes retain normal Git scheduling.
 
 Default user denied patterns:
 
@@ -4248,12 +4289,12 @@ runner. Their domain model, API shape, and schema still need to remain stable.
 model ships, it defaults to the most recent environment for the current
 profile/workspace pair. The user should not need to choose a session for normal
 work.
-Reusable environments permit concurrent runs only when they resolve to the
-same pinned profile, backend, runtime, identity, network configuration, and
-workspace. Manager serializes environment transitions and shared-service
-mutation, while every run holds an OS-backed owner lease and uses a distinct
-runtime child. A finishing run may clean only its own authority and must not
-remove a sibling runtime or shared service. After the final VM-dependent pin
+Reusable environments permit concurrent runs when they resolve to the same
+machine identity. Each run may carry a different immutable session snapshot;
+Manager serializes boot reconciliation and environment-service mutation, while
+every run holds an OS-backed owner lease and uses a distinct runtime child. A
+finishing run may clean only its own authority and must not remove a sibling
+runtime or an environment service still referenced by the machine. After the final VM-dependent pin
 and provider drain release, the daemon starts a 15-second grace, revalidates
 the current owner graph and backend boot identity, and non-destructively stops
 that exact Lima instance. A concurrent attach cancels the grace. Unknown
@@ -4270,8 +4311,9 @@ and session-local secret cleanup. Forced process death such as `SIGKILL` remains
 outside this guarantee and is handled by later cleanup/doctor repair.
 
 `hideout run --env <name> -- <command>` runs inside a named environment; the
-record supplies profile, backend, image, and workspace binding, and
-conflicting inputs or identity drift fail closed with a recreate hint.
+record supplies profile, backend, image, and workspace binding. Machine drift
+fails closed with a recreate hint; boot, service, and session differences use
+their narrower lifecycle operations.
 
 `hideout run --rm -- <command>` runs without leaving a reusable environment
 behind. Runtime credentials are still regenerated for the run and cleaned up

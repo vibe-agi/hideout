@@ -98,12 +98,20 @@ unsigned app stays visibly `unverified-app`, is bound to an exact Core-computed
 bundle-tree digest, and uses `ask-each-run`. Package signing requirements,
 package tests, or a self-signed bundle do not manufacture a verified identity.
 
-Workspace resources come from the current session mapping. A HostFS resource
-must already have active same-session content authority; discover-only
-`see`/`see-dir`/`see-tree` visibility is not enough. The recipe and guest never
-receive the resolved host path. There is no generic host exec, raw argv, result
-stream, persistent profile allowance, JavaScript pack grammar, or marketplace
-signing claim.
+Workspace resources come from the current session's immutable workspace
+attachment. Under the promoted 035 contract, Core first verifies that the attachment's
+workspace ID, captured root identity, logical root, physical view, session, and
+backend incarnation still match. It then resolves the structured relative path
+through that attachment. Environment history, the current process directory,
+display labels, guest-supplied app references, and independent path hashing are
+not authority. Two sessions may both name `/workspace/same.go`; each resolves
+only through its own attachment, and a mismatch fails before host effect.
+
+A HostFS resource must already have active same-session content authority;
+discover-only `see`/`see-dir`/`see-tree` visibility is not enough. The recipe,
+guest, event stream, and public evidence never receive the resolved host path.
+There is no generic host exec, raw argv, result stream, persistent profile
+allowance, JavaScript pack grammar, or marketplace signing claim.
 
 See [host-app-recipes.md](host-app-recipes.md) for the operator/contributor
 lifecycle and its explicit CLI boundary.

@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -23,8 +24,9 @@ import (
 )
 
 const (
-	readTimeout = 30 * time.Second
-	maxMessage  = 4096
+	readTimeout        = 30 * time.Second
+	maxMessage         = 4096
+	listenPairAttempts = 16
 )
 
 // Server listens for DNS queries on both UDP and TCP at one address.
@@ -41,6 +43,37 @@ type Server struct {
 // queries are answered with it so a mediated resolver actually resolves; when
 // nil, queries are still recorded but answered with no records.
 func Listen(address string, answer net.IP) (*Server, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port != "0" {
+		return listenExact(address, answer)
+	}
+	udpAddress, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for range listenPairAttempts {
+		udpConn, err := net.ListenUDP("udp", udpAddress)
+		if err != nil {
+			return nil, err
+		}
+		selected, ok := udpConn.LocalAddr().(*net.UDPAddr)
+		if !ok {
+			_ = udpConn.Close()
+			return nil, errors.New("dns listener is not UDP")
+		}
+		tcpAddress := net.JoinHostPort(selected.IP.String(), strconv.Itoa(selected.Port))
+		tcpLn, err := net.Listen("tcp", tcpAddress)
+		if err == nil {
+			return &Server{udp: udpConn, tcp: tcpLn, answer: answer}, nil
+		}
+		lastErr = err
+		_ = udpConn.Close()
+	}
+	return nil, fmt.Errorf("bind DNS TCP/UDP listener pair: %w", lastErr)
+}
+
+func listenExact(address string, answer net.IP) (*Server, error) {
 	tcpLn, err := net.Listen("tcp", address)
 	if err != nil {
 		return nil, err

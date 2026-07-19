@@ -32,6 +32,7 @@ func newRecordingWire() *recordingWire {
 }
 
 func (*recordingWire) ReadStart() (startSpec, error) { return startSpec{}, io.EOF }
+func (*recordingWire) ReadCommit() error             { return nil }
 func (w *recordingWire) ReadControl() (supervisorControl, error) {
 	result := <-w.controls
 	return result.control, result.err
@@ -65,6 +66,60 @@ func (w *recordingWire) completed() targetCompletion {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.completion
+}
+
+type commitFailureWire struct {
+	spec      startSpec
+	commitErr error
+	ready     bool
+}
+
+func (w *commitFailureWire) ReadStart() (startSpec, error) { return w.spec, nil }
+func (w *commitFailureWire) ReadCommit() error             { return w.commitErr }
+func (*commitFailureWire) ReadControl() (supervisorControl, error) {
+	return supervisorControl{}, io.EOF
+}
+func (w *commitFailureWire) WriteReady() error {
+	w.ready = true
+	return nil
+}
+func (*commitFailureWire) WriteOutput(outputKind, []byte) error   { return nil }
+func (*commitFailureWire) WriteError(string, string) error        { return nil }
+func (*commitFailureWire) WriteCompletion(targetCompletion) error { return nil }
+
+func TestSupervisorDoesNotStartTargetBeforeCommit(t *testing.T) {
+	commitErr := errors.New("activation was not committed")
+	sessionID := "ses_20260716T120000Z_0123456789abcdef"
+	wire := &commitFailureWire{
+		commitErr: commitErr,
+		spec: startSpec{
+			Protocol: testProtocol, SessionID: sessionID, TargetUser: "developer",
+			GuestWork: "/workspace", Argv: []string{"true"}, Terminal: terminalSpec{Mode: "none"},
+			ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef",
+			SessionSource:  "/hideout/runtime/sessions/" + sessionID,
+		},
+	}
+	started := false
+	err := runSupervisorWire(
+		wire,
+		func(startSpec) error { return nil },
+		func(startSpec, supervisorWire) (*targetProcess, error) {
+			started = true
+			return nil, errors.New("target starter must not run")
+		},
+		func(*targetProcess, supervisorWire) error {
+			return errors.New("target runner must not run")
+		},
+	)
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("runSupervisorWire error=%v", err)
+	}
+	if !wire.ready {
+		t.Fatal("supervisor did not publish authenticated readiness before waiting for commit")
+	}
+	if started {
+		t.Fatal("target starter ran before daemon commit")
+	}
 }
 
 func TestPipeTargetKeepsStdoutStderrSeparateAndReaps(t *testing.T) {
@@ -246,6 +301,7 @@ func TestOutputQueueFailsClosedInsteadOfDropping(t *testing.T) {
 type blockingWire struct{ release chan struct{} }
 
 func (*blockingWire) ReadStart() (startSpec, error)           { return startSpec{}, io.EOF }
+func (*blockingWire) ReadCommit() error                       { return nil }
 func (*blockingWire) ReadControl() (supervisorControl, error) { return supervisorControl{}, io.EOF }
 func (*blockingWire) WriteReady() error                       { return nil }
 func (*blockingWire) WriteError(string, string) error         { return nil }

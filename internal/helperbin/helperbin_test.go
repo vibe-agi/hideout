@@ -17,6 +17,7 @@ func TestFindSourceRootWalksUpFromPackageDirectory(t *testing.T) {
 		filepath.Join(root, "cmd", "hideout-shim"),
 		filepath.Join(root, "cmd", "hideout-hostfsd"),
 		filepath.Join(root, "cmd", LinuxSessionSupervisorCommand),
+		filepath.Join(root, "cmd", LinuxWorkspacePortalCommand),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("source root %q missing %s: %v", root, path, err)
@@ -34,6 +35,37 @@ func TestDefaultLinuxHelperPathsUseStoreBin(t *testing.T) {
 	}
 	if got, want := DefaultLinuxSessionSupervisorPath(root, "arm64"), filepath.Join(root, "bin", "hideout-session-supervisor-linux-arm64"); got != want {
 		t.Fatalf("DefaultLinuxSessionSupervisorPath=%q want %q", got, want)
+	}
+	if got, want := DefaultLinuxWorkspacePortalPath(root, "arm64"), filepath.Join(root, "bin", "hideout-workspace-portal-linux-arm64"); got != want {
+		t.Fatalf("DefaultLinuxWorkspacePortalPath=%q want %q", got, want)
+	}
+}
+
+func TestResolveLinuxWorkspacePortalRequiresExactManifestIdentity(t *testing.T) {
+	t.Setenv(LinuxWorkspacePortalPathEnvironment, "")
+	t.Setenv("PATH", t.TempDir())
+	root := t.TempDir()
+	path := DefaultLinuxWorkspacePortalPath(root, "arm64")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("portal-helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLinuxWorkspacePortalPath(root, "arm64"); got != "" {
+		t.Fatalf("workspace portal resolved without manifest: %q", got)
+	}
+	if err := WriteStoreHelperManifest(path, LinuxWorkspacePortalCommand, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLinuxWorkspacePortalPath(root, "arm64"); got != path {
+		t.Fatalf("ResolveLinuxWorkspacePortalPath=%q want %q", got, path)
+	}
+	if err := os.WriteFile(path, []byte("replaced"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveLinuxWorkspacePortalPath(root, "arm64"); got != "" {
+		t.Fatalf("workspace portal resolved after digest drift: %q", got)
 	}
 }
 
@@ -158,6 +190,13 @@ func TestBuildLinuxSessionSupervisorRejectsUnsupportedArchitecture(t *testing.T)
 	err := BuildLinuxSessionSupervisor(BuildOptions{Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: "."})
 	if err == nil {
 		t.Fatal("BuildLinuxSessionSupervisor accepted unsupported architecture")
+	}
+}
+
+func TestBuildLinuxWorkspacePortalRejectsUnsupportedArchitecture(t *testing.T) {
+	err := BuildLinuxWorkspacePortal(BuildOptions{Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: "."})
+	if err == nil {
+		t.Fatal("BuildLinuxWorkspacePortal accepted unsupported architecture")
 	}
 }
 

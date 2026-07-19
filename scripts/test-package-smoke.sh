@@ -79,6 +79,8 @@ for path in \
   "$prefix/bin/hideout-shim" \
   "$prefix/bin/hideout-shim-linux-$arch" \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
+  "$prefix/bin/hideout-session-supervisor-linux-$arch" \
+  "$prefix/bin/hideout-workspace-portal-linux-$arch" \
   "$prefix/install.sh" \
   "$prefix/package-manifest.json" \
   "$prefix/README.md" \
@@ -117,6 +119,8 @@ done
 
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-workspace-portal-linux-$arch.manifest.json"
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$prefix/package-manifest.json"
 for manifest in \
   "$prefix/host-app/recipes/builtin-vscode.json" \
@@ -145,6 +149,8 @@ jq -e \
     .layout.root == "hideout" and
     (.layout.binaries | index("bin/hideout")) and
     (.layout.binaries | index("bin/hideout-shim-linux-" + $host_arch)) and
+    (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $host_arch)) and
+    (.layout.binaries | index("bin/hideout-workspace-portal-linux-" + $host_arch)) and
     (.layout.entrypoints | index("install.sh")) and
     (.layout.entrypoints | index("README.md")) and
     (.layout.entrypoints | index("README.zh-CN.md")) and
@@ -165,6 +171,8 @@ jq -e \
     (.files | type == "array" and length >= 8) and
     any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-session-supervisor-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-workspace-portal-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "install.sh" and .kind == "installer" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
@@ -335,6 +343,8 @@ test -x "$installed_prefix/bin/hideout"
 test -x "$installed_prefix/bin/hideout-shim"
 test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
+test -x "$installed_prefix/bin/hideout-session-supervisor-linux-$arch"
+test -x "$installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -f "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_prefix/share/hideout/schemas/package-manifest.schema.json"
 test -f "$installed_prefix/share/hideout/schemas/runtime-catalog.schema.json"
@@ -462,6 +472,8 @@ test -x "$default_installed_prefix/bin/hideout"
 test -x "$default_installed_prefix/bin/hideout-shim"
 test -x "$default_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-hostfsd-linux-$arch"
+test -x "$default_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
+test -x "$default_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -f "$default_installed_store/install-state.json"
 test -f "$default_installed_store/profiles/default/profile.json"
 grep -q 'backend: lima' "$tmp/package-default-install.out"
@@ -488,6 +500,8 @@ test -x "$skip_installed_prefix/bin/hideout"
 test -x "$skip_installed_prefix/bin/hideout-shim"
 test -x "$skip_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-hostfsd-linux-$arch"
+test -x "$skip_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
+test -x "$skip_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 if [ -e "$skip_installed_store/install-state.json" ] || [ -e "$skip_installed_store/profiles/default/profile.json" ]; then
   echo "package-smoke: package installer --skip-init wrote init state" >&2
   cat "$tmp/package-skip-install.out" >&2

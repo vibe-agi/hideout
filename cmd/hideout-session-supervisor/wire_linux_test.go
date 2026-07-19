@@ -28,6 +28,9 @@ func TestSessionWireRequiresStartAndPreservesBinaryControls(t *testing.T) {
 	if err := writer.WriteControl(sessionwire.TypeSupervisorStart, start); err != nil {
 		t.Fatal(err)
 	}
+	if err := writer.Write(sessionwire.TypeSupervisorCommit, nil); err != nil {
+		t.Fatal(err)
+	}
 	binaryInput := []byte{0, 1, '\n', 0xff, 0x1b}
 	if err := writer.Write(sessionwire.TypeStdin, binaryInput); err != nil {
 		t.Fatal(err)
@@ -52,6 +55,9 @@ func TestSessionWireRequiresStartAndPreservesBinaryControls(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotStart.Env, []string{"A=first", "Z=last"}) {
 		t.Fatalf("environment=%q", gotStart.Env)
+	}
+	if err := wire.ReadCommit(); err != nil {
+		t.Fatal(err)
 	}
 	want := []supervisorControl{
 		{Kind: controlStdin, Data: binaryInput},

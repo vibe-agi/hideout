@@ -129,6 +129,7 @@ type Server struct {
 	Endpoint            Endpoint
 	HostRoot            string
 	GuestRoot           string
+	WorkspaceID         string
 	Profile             string
 	ProfileDir          string
 	Backend             string
@@ -734,6 +735,15 @@ func (s *Server) normalizeBrokerRequestCWD(req *Request) error {
 	}
 	if s.GuestRoot == "" || s.HostRoot == "" {
 		return errors.New("workspace mapping is unavailable for broker request args.cwd")
+	}
+	// The native backend is a weak host-side harness, so its process reports the
+	// host workspace as cwd even when the profile exposes the guest alias. Convert
+	// only an in-workspace native cwd to the guest identity before applying the
+	// same mapping and symlink checks used for guest requests.
+	if s.Backend == "native" {
+		if hostRel, hostErr := relInsideRoot(s.HostRoot, clean); hostErr == nil && !pathEscapesRoot(hostRel) {
+			clean = filepath.Join(s.GuestRoot, hostRel)
+		}
 	}
 	rel, err := relInsideRoot(s.GuestRoot, clean)
 	if err != nil || pathEscapesRoot(rel) {

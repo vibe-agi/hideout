@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"github.com/vibe-agi/hideout/internal/helperbin"
 )
 
 var (
@@ -185,6 +187,9 @@ func VerifyArtifact(root string, manifest Manifest) error {
 			return fmt.Errorf("package manifest must checksum %q", rel)
 		}
 	}
+	if err := verifyRequiredLinuxSessionHelpers(root, manifest.Target.LinuxGuestArch, manifest.Files); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -196,6 +201,9 @@ func VerifyInstalled(prefix string, state InstallState) error {
 	if err := verifyInstalledActive(cleanPrefix, state); err != nil {
 		return err
 	}
+	if err := verifyRequiredLinuxSessionHelpers(cleanPrefix, state.Package.Target.LinuxGuestArch, state.Files); err != nil {
+		return err
+	}
 	for _, stale := range state.ObsoleteFiles {
 		joined, err := JoinRelative(cleanPrefix, stale.Path)
 		if err != nil {
@@ -205,6 +213,33 @@ func VerifyInstalled(prefix string, state InstallState) error {
 			return fmt.Errorf("obsolete package-owned file %q remains from previous package; hint: run hideout package repair --prefix %s", stale.Path, cleanPrefix)
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("obsolete package-owned file %q: %w", stale.Path, err)
+		}
+	}
+	return nil
+}
+
+func verifyRequiredLinuxSessionHelpers(root, guestArch string, files []File) error {
+	indexed := make(map[string]File, len(files))
+	for _, file := range files {
+		indexed[file.Path] = file
+	}
+	for _, command := range []string{helperbin.LinuxSessionSupervisorCommand, helperbin.LinuxWorkspacePortalCommand} {
+		binaryRel := "bin/" + command + "-linux-" + guestArch
+		manifestRel := binaryRel + ".manifest.json"
+		binary, binaryOK := indexed[binaryRel]
+		manifest, manifestOK := indexed[manifestRel]
+		if !binaryOK || binary.Kind != "linux-helper" || !binary.Executable {
+			return fmt.Errorf("package requires executable Linux helper %q", binaryRel)
+		}
+		if !manifestOK || manifest.Kind != "helper-manifest" || manifest.Executable {
+			return fmt.Errorf("package requires helper manifest %q", manifestRel)
+		}
+		binaryPath, err := JoinRelative(root, binaryRel)
+		if err != nil {
+			return err
+		}
+		if !helperbin.StoreHelperCurrent(binaryPath, command, guestArch) {
+			return fmt.Errorf("package Linux helper identity is invalid for %q", binaryRel)
 		}
 	}
 	return nil

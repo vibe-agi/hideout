@@ -16,6 +16,7 @@ class Hideout < Formula
   skip_clean "bin/hideout-dns-stub-linux-arm64",
              "bin/hideout-hostfsd-linux-arm64",
              "bin/hideout-session-supervisor-linux-arm64",
+             "bin/hideout-workspace-portal-linux-arm64",
              "bin/hideout-shim-linux-arm64"
 
   def install

@@ -281,7 +281,7 @@ run_browser_proof() {
     HIDEOUT_UI_E2E_OUT="$browser_dir" \
     HIDEOUT_UI_E2E_ARTIFACT_PREFIX="browser" \
     HIDEOUT_CHROME_PATH="$chrome" \
-    go test ./test/e2e/webui -run TestBrowserProofPasses -count=1
+    go test -tags=hideout_e2e ./test/e2e/webui -run TestBrowserProofPasses -count=1
   if [ ! -s "$browser_dir/proofs.jsonl" ]; then
     echo "test-ui-e2e: browser proof did not write proofs.jsonl" >&2
     exit 1
@@ -309,7 +309,7 @@ run_tui_proof() {
     HIDEOUT_UI_E2E_OUT="$tui_dir" \
     HIDEOUT_UI_E2E_ARTIFACT_PREFIX="tui" \
     HIDEOUT_TUI_SCRIPT_PATH="$script_bin" \
-    go test ./test/e2e/tui -run TestTUIProofPasses -count=1
+    go test -tags=hideout_e2e ./test/e2e/tui -run TestTUIProofPasses -count=1
   if [ ! -s "$tui_dir/proofs.jsonl" ]; then
     echo "test-ui-e2e: TUI proof did not write proofs.jsonl" >&2
     exit 1

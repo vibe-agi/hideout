@@ -1,0 +1,40 @@
+{
+  "schema": "hideout.workspace-vz-support/v1",
+  "candidate": "vz-live-multiple-share",
+  "status": "unsupported",
+  "observed": {
+    "host": "macOS arm64",
+    "lima": "2.1.4",
+    "codeHexVZ": "3.7.1",
+    "appleSDKMutableRuntimeShare": true,
+    "emptyMultipleShareConfiguration": true,
+    "limaAuthenticatedLiveShareAPI": false,
+    "codeHexRuntimeDeviceShareWrapper": false
+  },
+  "upstream": [
+    {
+      "component": "Apple Virtualization.framework",
+      "license": "Apple SDK terms",
+      "role": "runtime mutable VZVirtioFileSystemDevice.share primitive"
+    },
+    {
+      "component": "github.com/lima-vm/lima/v2",
+      "version": "2.1.4",
+      "license": "Apache-2.0",
+      "role": "current VM owner; no live share mutation RPC"
+    },
+    {
+      "component": "github.com/Code-Hex/vz/v3",
+      "version": "3.7.1",
+      "license": "MIT",
+      "role": "configuration wrapper; no running filesystem-device wrapper"
+    }
+  ],
+  "package": {
+    "requiresPatchedLimaOrOwnedVZDriver": true,
+    "requiresVirtualizationEntitlement": "com.apple.security.virtualization",
+    "releaseSigningPathAvailable": false,
+    "supportOwnershipAccepted": false
+  },
+  "decision": "The SDK primitive alone is insufficient. Hideout will not fork or inject into Lima merely to make this research candidate appear complete."
+}

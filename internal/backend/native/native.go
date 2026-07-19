@@ -29,21 +29,27 @@ func (b Backend) Available(context.Context) error {
 }
 
 func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Session, error) {
+	if err := spec.Machine.Validate(); err != nil {
+		return nil, err
+	}
+	if err := spec.Workspace.Validate(spec.Machine.Mode); err != nil {
+		return nil, err
+	}
 	privilegedSetupRequired := spec.PrivilegedSetupRequired || spec.NetworkPrivilegedSetup || spec.HostFSEnabled
 	return &backend.Session{
 		ID:                        spec.SessionID,
-		EnvironmentID:             spec.EnvironmentID,
+		EnvironmentID:             spec.Machine.EnvironmentID,
 		Backend:                   b.Name(),
-		HostWork:                  spec.HostWork,
-		GuestWork:                 spec.GuestWork,
+		HostWork:                  spec.Workspace.HostRoot,
+		GuestWork:                 spec.Workspace.GuestRoot,
 		GuestHome:                 spec.GuestHome,
 		Env:                       append([]string(nil), spec.Env...),
 		ShimDir:                   spec.ShimDir,
-		ProfileDir:                spec.ProfileDir,
-		IdentityMode:              spec.IdentityMode,
-		IdentityRoot:              spec.IdentityRoot,
+		ProfileDir:                spec.Machine.ProfileDir,
+		IdentityMode:              spec.Machine.IdentityMode,
+		IdentityRoot:              spec.Machine.IdentityRoot,
 		SessionDir:                spec.SessionDir,
-		RuntimeRoot:               spec.RuntimeRoot,
+		RuntimeRoot:               spec.Machine.RuntimeRoot,
 		SessionIsolationRequired:  false,
 		TargetUser:                spec.TargetUser,
 		Broker:                    spec.Broker,
@@ -52,8 +58,8 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		NetworkCleanupPath:        spec.NetworkCleanupPath,
 		NetworkCleanupGuestPath:   spec.NetworkCleanupGuestPath,
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
-		InstanceName:              spec.InstanceName,
-		PreserveInstance:          spec.PreserveInstance,
+		InstanceName:              spec.Machine.InstanceName,
+		PreserveInstance:          spec.Machine.PreserveInstance,
 		NetworkPrivilegedSetup:    spec.NetworkPrivilegedSetup,
 		PrivilegedSetupRequired:   privilegedSetupRequired,
 		PrivilegeStatusSink:       spec.PrivilegeStatusSink,

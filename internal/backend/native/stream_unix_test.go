@@ -15,20 +15,24 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/profile"
 )
+
+const nativeTestSessionSnapshotID = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 func TestRunWithStreamsPreservesPipeOutputAndExit(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var ready atomic.Bool
-	session := &backend.Session{ID: "ses_native_pipe", Backend: "native", HostWork: t.TempDir()}
+	session := &backend.Session{ID: "ses_native_pipe", EnvironmentID: "env_native_pipe", SessionSnapshotID: nativeTestSessionSnapshotID, InstanceName: "native-pipe", Backend: "native", HostWork: t.TempDir()}
 	err := (Backend{AllowWeakIsolation: true}).RunWithStreams(
 		context.Background(), session,
 		[]string{"sh", "-c", "printf 'out\\000bytes'; printf err >&2; exit 17"}, testNativeEnv(),
 		backend.RunStreams{
 			Stdout: &stdout, Stderr: &stderr,
-			Ready: func(got *backend.Session) error {
-				if got != session {
-					t.Fatal("ready changed session")
+			Ready: func(got backend.SessionReadyProof) error {
+				if err := got.ValidateSession(session, false); err != nil {
+					t.Fatal(err)
 				}
 				ready.Store(true)
 				return nil
@@ -49,11 +53,11 @@ func TestRunWithStreamsDoesNotWaitForClientStdinAfterTargetExit(t *testing.T) {
 	defer stdin.Close()
 	defer keepOpen.Close()
 	done := make(chan error, 1)
-	session := &backend.Session{ID: "ses_native_open_stdin", Backend: "native", HostWork: t.TempDir()}
+	session := &backend.Session{ID: "ses_native_open_stdin", EnvironmentID: "env_native_open_stdin", SessionSnapshotID: nativeTestSessionSnapshotID, InstanceName: "native-open-stdin", Backend: "native", HostWork: t.TempDir()}
 	go func() {
 		done <- (Backend{AllowWeakIsolation: true}).RunWithStreams(
 			context.Background(), session, []string{"sh", "-c", "exit 0"}, testNativeEnv(),
-			backend.RunStreams{Stdin: stdin, Ready: func(*backend.Session) error { return nil }},
+			backend.RunStreams{Stdin: stdin, Ready: func(backend.SessionReadyProof) error { return nil }},
 		)
 	}()
 	select {
@@ -67,10 +71,15 @@ func TestRunWithStreamsDoesNotWaitForClientStdinAfterTargetExit(t *testing.T) {
 }
 
 func TestPreparePreservesDaemonSessionIdentity(t *testing.T) {
+	root := t.TempDir()
 	session, err := (Backend{AllowWeakIsolation: true}).Prepare(context.Background(), backend.RunSpec{
-		SessionID: "ses_native_identity", EnvironmentID: "env_native_identity",
-		HostWork: t.TempDir(), GuestWork: "/workspace", InstanceName: "native-instance",
-		PreserveInstance: true,
+		Machine: backend.MachineActivationSpec{
+			EnvironmentID: "env_native_identity", ImageRef: environment.BuiltinBaseImage,
+			Profile: profile.Default("native"), ProfileDir: root,
+			InstanceName: "native-instance", PreserveInstance: true, Mode: environment.ModeWorkspaceBound,
+		},
+		Workspace: backend.WorkspaceAttachmentSpec{HostRoot: root, GuestRoot: "/workspace", Transport: backend.WorkspaceTransportStatic},
+		SessionID: "ses_native_identity",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,12 +94,12 @@ func TestPreparePreservesDaemonSessionIdentity(t *testing.T) {
 
 func TestRunWithStreamsAllocatesPTYWithInitialSize(t *testing.T) {
 	var terminal bytes.Buffer
-	session := &backend.Session{ID: "ses_native_pty", Backend: "native", HostWork: t.TempDir()}
+	session := &backend.Session{ID: "ses_native_pty", EnvironmentID: "env_native_pty", SessionSnapshotID: nativeTestSessionSnapshotID, InstanceName: "native-pty", Backend: "native", HostWork: t.TempDir()}
 	err := (Backend{AllowWeakIsolation: true}).RunWithStreams(
 		context.Background(), session, []string{"sh", "-c", "stty size"}, testNativeEnv(),
 		backend.RunStreams{
 			Terminal: true, Rows: 29, Columns: 103, Term: "xterm-256color", PTY: &terminal,
-			Ready: func(*backend.Session) error { return nil },
+			Ready: func(backend.SessionReadyProof) error { return nil },
 		},
 	)
 	if err != nil {

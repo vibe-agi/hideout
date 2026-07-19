@@ -498,7 +498,7 @@ func controlForType(frameType Type) (Control, bool, error) {
 		return &Review{}, false, nil
 	case TypeStarted:
 		return &Started{}, false, nil
-	case TypeStdinEOF, TypeCancel, TypeHeartbeat:
+	case TypeStdinEOF, TypeCancel, TypeSupervisorCommit, TypeHeartbeat:
 		return &emptyControl{}, true, nil
 	case TypeResize:
 		return &Resize{}, false, nil

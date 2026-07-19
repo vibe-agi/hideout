@@ -17,14 +17,17 @@ func TestProductionCatalogIsClosedAndProbeBacked(t *testing.T) {
 		}
 	}
 	probes := RecoveryProbes()
-	wantProbes := []RecoveryProbe{RecoveryBackendObservation, RecoverySessionAbsence, RecoveryNetworkRuntime}
+	wantProbes := []RecoveryProbe{RecoveryBackendObservation, RecoverySessionAbsence, RecoveryWorkspaceProvider, RecoveryWorkspaceView, RecoveryNetworkRuntime}
 	if !slices.Equal(probes, wantProbes) {
 		t.Fatalf("recovery probes=%v want=%v", probes, wantProbes)
 	}
-	for _, kind := range []ResourceKind{KindBackendIncarnation, KindRunSession, KindGuestSupervisor, KindGuestTarget, KindBrokerListener, KindHostFSReadProvider, KindHostFSLiveGrant, KindNetworkService, KindRunBridge} {
+	for _, kind := range []ResourceKind{KindBackendIncarnation, KindRunSession, KindGuestSupervisor, KindGuestTarget, KindBrokerListener, KindHostFSReadProvider, KindHostFSLiveGrant, KindWorkspaceHostProvider, KindWorkspaceGuestView, KindNetworkService, KindRunBridge} {
 		if !seen[kind] {
 			t.Fatalf("production kind %s is missing", kind)
 		}
+	}
+	if _, ok := Lookup(KindWorkspaceEnvironmentService); ok {
+		t.Fatal("Portal topology invented a workspace environment service")
 	}
 	facts := map[ResourceKind]FactClass{}
 	for _, descriptor := range FactCatalog() {
@@ -39,6 +42,39 @@ func TestProductionCatalogIsClosedAndProbeBacked(t *testing.T) {
 		if descriptor, ok := Lookup(kind); ok && descriptor.ProductionRegistrar {
 			t.Fatalf("non-live fact %s entered the resource graph", kind)
 		}
+	}
+}
+
+func TestWorkspaceCatalogRequiresMeasuredProviderViewTopology(t *testing.T) {
+	root := testResource(KindBackendIncarnation, "root", 1, StateActive, "daemon", PersistenceEphemeral, CloseCoTerminateWithRoot)
+	root.Incarnation = &EnvironmentRef{EnvironmentID: "env_test", StartGeneration: 1, InstanceName: "hideout-test", BootID: testBootID}
+	session := testResource(KindRunSession, "session", 1, StateActive, "daemon", PersistenceEphemeral, ClosePreStopDrain)
+	session.Dependencies = []DependencySpec{{Ref: root.Ref, StopMode: StopModePin}}
+	provider := testResource(KindWorkspaceHostProvider, "provider", 1, StateActive, "manager", PersistenceEphemeral, ClosePreStopDrain)
+	provider.Dependencies = []DependencySpec{{Ref: root.Ref, StopMode: StopModeDrain}}
+	view := testResource(KindWorkspaceGuestView, "view", 1, StateActive, "session", PersistenceEphemeral, ClosePreStopDrain)
+	view.Dependencies = []DependencySpec{
+		{Ref: root.Ref, StopMode: StopModeDrain},
+		{Ref: session.Ref, StopMode: StopModeDrain},
+		{Ref: provider.Ref, StopMode: StopModeDrain},
+	}
+	if err := ValidateGraph([]Resource{root, session, provider, view}, true); err != nil {
+		t.Fatalf("measured Portal topology rejected: %v", err)
+	}
+	for index := range view.Dependencies {
+		invalid := view
+		invalid.Dependencies = append([]DependencySpec(nil), view.Dependencies...)
+		invalid.Dependencies = append(invalid.Dependencies[:index], invalid.Dependencies[index+1:]...)
+		if err := ValidateGraph([]Resource{root, session, provider, invalid}, true); err == nil {
+			t.Fatalf("workspace view without dependency %d was accepted", index)
+		}
+	}
+	provider.Dependencies = []DependencySpec{{Ref: session.Ref, StopMode: StopModeDrain}}
+	if err := ValidateGraph([]Resource{root, session, provider}, true); err == nil {
+		t.Fatal("same-root-capable provider was incorrectly made session-owned")
+	}
+	if validRecoveryProbe("workspace-unknown-probe") {
+		t.Fatal("unknown workspace recovery probe entered the closed catalog")
 	}
 }
 

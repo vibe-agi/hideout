@@ -127,7 +127,11 @@ func notifyNativeReady(streams backend.RunStreams, session *backend.Session) err
 	if streams.Ready == nil {
 		return nil
 	}
-	return streams.Ready(session)
+	proof, err := backend.ReadyProofForSession(session, backend.SessionReadyNativeHarness)
+	if err != nil {
+		return err
+	}
+	return streams.Ready(proof)
 }
 
 func controlNativeProcess(ctx context.Context, pid int, terminal *os.File, controls <-chan backend.RunControl) {

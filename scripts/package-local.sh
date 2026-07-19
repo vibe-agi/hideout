@@ -90,34 +90,34 @@ sha256_file() {
   fi
 }
 
-verify_session_supervisor() {
-  local root="$1" arch="$2"
-  local binary="$root/bin/hideout-session-supervisor-linux-$arch"
+verify_linux_helper() {
+  local root="$1" arch="$2" command="$3"
+  local binary="$root/bin/$command-linux-$arch"
   local manifest="$binary.manifest.json"
   if [ ! -f "$binary" ] || [ -L "$binary" ] || [ ! -x "$binary" ]; then
-    echo "package-local: required Linux session supervisor is missing or not executable: $binary" >&2
+    echo "package-local: required Linux helper $command is missing or not executable: $binary" >&2
     return 1
   fi
   if [ ! -f "$manifest" ] || [ -L "$manifest" ]; then
-    echo "package-local: required Linux session supervisor manifest is missing: $manifest" >&2
+    echo "package-local: required Linux helper $command manifest is missing: $manifest" >&2
     return 1
   fi
-  if ! jq -e --arg arch "$arch" --arg artifact "$(basename "$binary")" '
+  if ! jq -e --arg arch "$arch" --arg command "$command" --arg artifact "$(basename "$binary")" '
     .version == "hideout.helper-manifest/v1" and
-    .command == "hideout-session-supervisor" and
+    .command == $command and
     .targetOS == "linux" and
     .targetArch == $arch and
     .artifact == $artifact and
     (.sha256 | test("^[a-f0-9]{64}$"))
   ' "$manifest" >/dev/null; then
-    echo "package-local: Linux session supervisor manifest identity is invalid: $manifest" >&2
+    echo "package-local: Linux helper $command manifest identity is invalid: $manifest" >&2
     return 1
   fi
   local want got
   want="$(jq -er '.sha256' "$manifest")"
   got="$(sha256_file "$binary")"
   if [ "$want" != "$got" ]; then
-    echo "package-local: Linux session supervisor checksum mismatch: want $want got $got" >&2
+    echo "package-local: Linux helper $command checksum mismatch: want $want got $got" >&2
     return 1
   fi
 }
@@ -226,7 +226,8 @@ finalize_package() {
 
   local guest_arch
   guest_arch="$(jq -er '.guestArch' "$metadata")"
-  verify_session_supervisor "$prefix" "$guest_arch"
+  verify_linux_helper "$prefix" "$guest_arch" "hideout-session-supervisor"
+  verify_linux_helper "$prefix" "$guest_arch" "hideout-workspace-portal"
 
   local files_ndjson="$root/.files.ndjson"
   : >"$files_ndjson"

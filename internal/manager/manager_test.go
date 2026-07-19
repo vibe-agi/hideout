@@ -140,6 +140,18 @@ func setFakeLinuxShim(t *testing.T) {
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", path)
 }
 
+func setFakeLinuxWorkspacePortal(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), helperbin.LinuxWorkspacePortalCommand+"-linux-"+runtime.GOARCH)
+	if err := os.WriteFile(path, []byte("fake linux workspace portal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := helperbin.WriteStoreHelperManifest(path, helperbin.LinuxWorkspacePortalCommand, runtime.GOARCH); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(helperbin.LinuxWorkspacePortalPathEnvironment, path)
+}
+
 func TestCorePlanRunOwnsProfileBackendAndWorkspace(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
@@ -1279,16 +1291,16 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 		t.Fatalf("run result does not match schema: %v\n%s", err, resultData)
 	}
 	spec := fake.spec
-	if spec.SessionID != result.SessionID || spec.Profile.Name != "default" || spec.HostWork != workspace || spec.GuestWork != workspace {
+	if spec.SessionID != result.SessionID || spec.Machine.Profile.Name != "default" || spec.Workspace.HostRoot != workspace || spec.Workspace.GuestRoot != "/workspace" {
 		t.Fatalf("run spec identity/workspace mismatch: %+v", spec)
 	}
-	if spec.ProfileDir != store.ProfileDir("default") {
-		t.Fatalf("ProfileDir=%q want persistent profile dir", spec.ProfileDir)
+	if spec.Machine.ProfileDir != store.ProfileDir("default") {
+		t.Fatalf("ProfileDir=%q want persistent profile dir", spec.Machine.ProfileDir)
 	}
-	if spec.IdentityMode != "ephemeral" || spec.IdentityRoot == spec.ProfileDir || filepath.Base(spec.IdentityRoot) != "identity" {
-		t.Fatalf("ephemeral identity spec mismatch: mode=%q root=%q profile=%q", spec.IdentityMode, spec.IdentityRoot, spec.ProfileDir)
+	if spec.Machine.IdentityMode != "ephemeral" || spec.Machine.IdentityRoot == spec.Machine.ProfileDir || filepath.Base(spec.Machine.IdentityRoot) != "identity" {
+		t.Fatalf("ephemeral identity spec mismatch: mode=%q root=%q profile=%q", spec.Machine.IdentityMode, spec.Machine.IdentityRoot, spec.Machine.ProfileDir)
 	}
-	if spec.GuestHome != filepath.Join(spec.IdentityRoot, "home") {
+	if spec.GuestHome != filepath.Join(spec.Machine.IdentityRoot, "home") {
 		t.Fatalf("GuestHome=%q should come from identity root", spec.GuestHome)
 	}
 	if !spec.HostFSEnabled || !reflect.DeepEqual(spec.HostFSGrafts, []string{"/Users/alice/Downloads"}) {
@@ -1296,7 +1308,7 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 	}
 	if !containsEnvPrefixManagerTest(fake.runEnv, broker.EnvEndpoint+"=unix://") ||
 		!containsEnvPrefixManagerTest(fake.runEnv, broker.EnvToken+"=cap_") ||
-		!containsEnvPrefixManagerTest(fake.runEnv, "HOME="+filepath.Join(spec.IdentityRoot, "home")) {
+		!containsEnvPrefixManagerTest(fake.runEnv, "HOME="+filepath.Join(spec.Machine.IdentityRoot, "home")) {
 		t.Fatalf("run env missing broker or identity values: %+v", fake.runEnv)
 	}
 	data, err := os.ReadFile(result.AuditPath)
@@ -1320,7 +1332,7 @@ func TestCoreApplyRunOwnsBackendExecutionAndAudit(t *testing.T) {
 			t.Fatalf("audit missing action %s:\n%s", action, auditText)
 		}
 	}
-	if strings.Contains(auditText, "cap_") || strings.Contains(auditText, spec.IdentityRoot) {
+	if strings.Contains(auditText, "cap_") || strings.Contains(auditText, spec.Machine.IdentityRoot) {
 		t.Fatalf("audit leaked broker token or identity root:\n%s", auditText)
 	}
 }
@@ -1920,6 +1932,11 @@ func TestCoreApplyRunRejectsInvalidEndpointExposureRequests(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := profile.Store{Root: t.TempDir()}
+			profileValue := profile.Default("default")
+			profileValue.Workspace.PathMode = "preserve"
+			if err := store.Save(profileValue); err != nil {
+				t.Fatal(err)
+			}
 			core := New(store)
 			fake := &applyRunFakeBackend{}
 			plan, err := core.PlanRun(RunPlanOptions{
@@ -1931,18 +1948,25 @@ func TestCoreApplyRunRejectsInvalidEndpointExposureRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PlanRun: %v", err)
 			}
+			environmentName := ""
 			if tt.backendName == "lima" {
 				shimPath := filepath.Join(t.TempDir(), "hideout-shim-linux")
 				if err := os.WriteFile(shimPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 					t.Fatalf("write fake linux shim: %v", err)
 				}
 				t.Setenv("HIDEOUT_LINUX_SHIM_PATH", shimPath)
+				if _, err := core.CreateEnvironment(EnvironmentCreateOptions{
+					Name: "endpoint-validation-dedicated", Profile: "default", Backend: "lima", Workspace: plan.Workspace,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				environmentName = "endpoint-validation-dedicated"
 			}
 			result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
 				Backend:                    fake,
 				RequestedBackend:           tt.requestedBackend,
 				AllowWeakIsolation:         tt.backendName == "native",
-				Environment:                RunEnvironmentOptions{Create: true},
+				Environment:                RunEnvironmentOptions{EnvName: environmentName, Create: true},
 				OpenTargets:                tt.openTargets,
 				EndpointCandidates:         tt.candidates,
 				EndpointExposures:          tt.exposures,
@@ -2461,7 +2485,7 @@ func TestCoreApplyRunWaitsForLockedEnvironmentUntilContextCancellation(t *testin
 
 func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
-	p := profile.Default("default")
+	p := runtimeConfigurationTestProfile("default")
 	spec := RunEnvironmentSpec(p, "lima", t.TempDir(), "/workspace")
 	envStore := environment.Store{Root: store.Root}
 	rec, err := envStore.Create(spec)
@@ -2475,8 +2499,8 @@ func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.
 
 	selected, err := New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
-		Workspace:      spec.Workspace,
-		GuestWorkspace: spec.GuestWorkspace,
+		Workspace:      spec.BoundWorkspace,
+		GuestWorkspace: spec.BoundGuestRoot,
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{
 		EnvName:        rec.Name,
@@ -2489,8 +2513,8 @@ func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.
 	_ = selected
 	selected, err = New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
-		Workspace:      spec.Workspace,
-		GuestWorkspace: spec.GuestWorkspace,
+		Workspace:      spec.BoundWorkspace,
+		GuestWorkspace: spec.BoundGuestRoot,
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{
 		RemoveAfterRun: true,
@@ -2510,12 +2534,13 @@ func TestCoreSelectRunEnvironmentExpectedCommandChangesReuseEnvironment(t *testi
 	// or demand a new one.
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
-	p := profile.Default("default")
+	p := runtimeConfigurationTestProfile("default")
 	envStore := environment.Store{Root: store.Root}
-	rec, err := envStore.Create(RunEnvironmentSpec(p, "lima", workspace, workspace))
+	initial, err := SelectRunEnvironment(envStore, p, "lima", workspace, "/workspace", false, RunEnvironmentOptions{Create: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	rec := initial.Record
 	rec.InstanceName = "hideout-default-env-oldtools"
 	if err := envStore.Save(rec); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -2526,7 +2551,7 @@ func TestCoreSelectRunEnvironmentExpectedCommandChangesReuseEnvironment(t *testi
 	selected, err := New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
-		GuestWorkspace: workspace,
+		GuestWorkspace: "/workspace",
 		RuntimeProfile: withTool,
 	}, RunEnvironmentOptions{Create: true})
 	if err != nil {
@@ -2539,7 +2564,7 @@ func TestCoreSelectRunEnvironmentExpectedCommandChangesReuseEnvironment(t *testi
 	resumed, err := New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
-		GuestWorkspace: workspace,
+		GuestWorkspace: "/workspace",
 		RuntimeProfile: withTool,
 	}, RunEnvironmentOptions{EnvName: rec.Name, Create: true})
 	if err != nil {
@@ -2550,13 +2575,16 @@ func TestCoreSelectRunEnvironmentExpectedCommandChangesReuseEnvironment(t *testi
 	}
 }
 
-func TestCoreSelectRunEnvironmentBackendConfigChangeFailsClosed(t *testing.T) {
+func TestCoreSelectRunEnvironmentMachineIdentityChangeFailsClosed(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()
-	p := profile.Default("default")
-	currentSpec := RunEnvironmentSpec(p, "lima", workspace, workspace)
+	p := runtimeConfigurationTestProfile("default")
+	currentSpec, err := automaticRunEnvironmentSpecForPlatform(p, "lima", workspace, "/workspace", "darwin", "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
 	oldSpec := currentSpec
-	oldSpec.BackendConfigVersion = "lima-config/old"
+	oldSpec.MachineIdentityID = "sha256:" + strings.Repeat("0", 64)
 
 	envStore := environment.Store{Root: store.Root}
 	rec, err := envStore.Create(oldSpec)
@@ -2568,13 +2596,12 @@ func TestCoreSelectRunEnvironmentBackendConfigChangeFailsClosed(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Interim contract until the drift report lands: a backend-config change
-	// on the auto-named environment fails closed instead of silently deriving
-	// a replacement. The US3 drift matrix supersedes this assertion.
+	// A machine-identity change on the shared slot fails closed instead of
+	// silently deriving a replacement.
 	_, err = New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
-		GuestWorkspace: workspace,
+		GuestWorkspace: "/workspace",
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{Create: true})
 	if err == nil {
@@ -2585,11 +2612,11 @@ func TestCoreSelectRunEnvironmentBackendConfigChangeFailsClosed(t *testing.T) {
 	_, err = New(store).SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
-		GuestWorkspace: workspace,
+		GuestWorkspace: "/workspace",
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{EnvName: rec.Name, Create: true})
-	if err == nil || !strings.Contains(err.Error(), "backendConfig") {
-		t.Fatalf("selecting stale backend config by name should drift-fail closed, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "machine") {
+		t.Fatalf("selecting stale machine identity by name should drift-fail closed, got %v", err)
 	}
 }
 
@@ -2658,14 +2685,14 @@ func TestOverviewSummarizesDomainsWithoutSecretValues(t *testing.T) {
 	}
 	envStore := environment.Store{Root: store.Root}
 	envRec, err := envStore.Create(environment.Spec{
-		Name:           "fixture-env-108",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/work/project",
-		GuestWorkspace: "/work/project",
-		ProfileID:      p.Metadata["profileId"],
-		IdentityID:     p.Metadata["identityId"],
+		Name:              "fixture-env-108",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "lima",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/work/project",
+		BoundGuestRoot: "/work/project",
 		InstanceName:   "hideout-default-env-test",
 	})
 	if err != nil {
@@ -2796,12 +2823,14 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 	envStore := environment.Store{Root: store.Root}
 	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
 	ready, err := envStore.Create(environment.Spec{
-		Name:           "fixture-env-109",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/work/ready",
-		GuestWorkspace: "/workspace",
+		Name:              "fixture-env-109",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "lima",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/work/ready",
+		BoundGuestRoot: "/workspace",
 		InstanceName:   "hideout-ready",
 	})
 	if err != nil {
@@ -2813,12 +2842,14 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped, err := envStore.Create(environment.Spec{
-		Name:           "fixture-env-110",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/work/stopped",
-		GuestWorkspace: "/workspace",
+		Name:              "fixture-env-110",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "lima",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/work/stopped",
+		BoundGuestRoot: "/workspace",
 		InstanceName:   "hideout-stopped",
 	})
 	if err != nil {
@@ -2830,12 +2861,14 @@ func TestEnvironmentLifecyclePlansAndAppliesStopAndClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeRec, err := envStore.Create(environment.Spec{
-		Name:           "fixture-env-1",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "native",
-		Workspace:      "/work/native",
-		GuestWorkspace: "/work/native",
+		Name:              "fixture-env-1",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "native",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/work/native",
+		BoundGuestRoot: "/work/native",
 	})
 	if err != nil {
 		t.Fatalf("create native environment: %v", err)
@@ -3270,16 +3303,16 @@ func (b *applyRunFakeBackend) Prepare(_ context.Context, spec backend.RunSpec) (
 	}
 	return &backend.Session{
 		ID:                        spec.SessionID,
-		EnvironmentID:             spec.EnvironmentID,
+		EnvironmentID:             spec.Machine.EnvironmentID,
 		Backend:                   b.Name(),
-		HostWork:                  spec.HostWork,
-		GuestWork:                 spec.GuestWork,
+		HostWork:                  spec.Workspace.HostRoot,
+		GuestWork:                 spec.Workspace.GuestRoot,
 		GuestHome:                 spec.GuestHome,
 		Env:                       append([]string(nil), spec.Env...),
 		ShimDir:                   spec.ShimDir,
-		ProfileDir:                spec.ProfileDir,
-		IdentityMode:              spec.IdentityMode,
-		IdentityRoot:              spec.IdentityRoot,
+		ProfileDir:                spec.Machine.ProfileDir,
+		IdentityMode:              spec.Machine.IdentityMode,
+		IdentityRoot:              spec.Machine.IdentityRoot,
 		SessionDir:                spec.SessionDir,
 		Broker:                    spec.Broker,
 		NetworkBootstrapPath:      spec.NetworkBootstrapPath,
@@ -3289,8 +3322,8 @@ func (b *applyRunFakeBackend) Prepare(_ context.Context, spec backend.RunSpec) (
 		HostFSEnabled:             spec.HostFSEnabled,
 		HostFSGrafts:              append([]string(nil), spec.HostFSGrafts...),
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
-		InstanceName:              spec.InstanceName,
-		PreserveInstance:          spec.PreserveInstance,
+		InstanceName:              spec.Machine.InstanceName,
+		PreserveInstance:          spec.Machine.PreserveInstance,
 		NetworkPrivilegedSetup:    spec.NetworkPrivilegedSetup,
 		PrivilegedSetupRequired:   spec.PrivilegedSetupRequired,
 		PrivilegeStatusSink:       spec.PrivilegeStatusSink,

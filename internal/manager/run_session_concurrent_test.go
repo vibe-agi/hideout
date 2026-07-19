@@ -3,6 +3,7 @@ package manager
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -66,5 +67,217 @@ func TestReusableRunSessionsUseUniqueRuntimeChildrenAndClearOnlyOwner(t *testing
 	}
 	if err := environmentStore.ClearSessionRuntime(runEnvironment.Record.ID, second.Layout.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionOnlyProfileChangeUsesSameMachineAndNewSnapshot(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	plan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.EnsureRunInitialized(plan); err != nil {
+		t.Fatal(err)
+	}
+	runEnvironment, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.CloseRunSession(first)
+
+	p, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Env.Public["SESSION_ONLY"] = "changed"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	changedPlan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedEnvironment, err := core.SelectRunEnvironment(changedPlan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := core.BeginRunSession(changedPlan, changedEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.CloseRunSession(second)
+
+	if changedEnvironment.Record.ID != runEnvironment.Record.ID || changedEnvironment.Record.MachineIdentityID != runEnvironment.Record.MachineIdentityID || changedEnvironment.Record.BootConfigurationID != runEnvironment.Record.BootConfigurationID {
+		t.Fatalf("session-only change replaced machine: before=%+v after=%+v", runEnvironment.Record, changedEnvironment.Record)
+	}
+	if first.SessionSnapshotID == second.SessionSnapshotID || second.SessionSnapshotID != changedEnvironment.Configuration.Layers.SessionID {
+		t.Fatalf("session snapshots first=%q second=%q desired=%q", first.SessionSnapshotID, second.SessionSnapshotID, changedEnvironment.Configuration.Layers.SessionID)
+	}
+}
+
+func TestPolicySourceIsImmutableWithinSessionAndChangesForNextSession(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	initialPlan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.EnsureRunInitialized(initialPlan); err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Policy.ScriptRefs = []profile.ScriptRef{{
+		ID: "command", Path: "policy/command.js", Entrypoints: []string{"decideCommand"},
+	}}
+	if err := os.MkdirAll(filepath.Join(store.ProfileDir("default"), "policy"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(store.ProfileDir("default"), "policy", "command.js")
+	if err := os.WriteFile(sourcePath, []byte("function decideCommand() { return { decision: 'allow', reason: 'v1' }; }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnvironment, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.PolicyScriptRefs) != 1 || filepath.IsAbs(first.PolicyScriptRefs[0].Path) || first.PolicyScriptRefs[0].Path != "00.js" {
+		t.Fatalf("first session policy refs=%+v", first.PolicyScriptRefs)
+	}
+	firstSnapshotPath := filepath.Join(first.RuntimeSessionDir, "policy", first.PolicyScriptRefs[0].Path)
+	firstBytes, err := os.ReadFile(firstSnapshotPath)
+	if err != nil || !strings.Contains(string(firstBytes), "'v1'") {
+		t.Fatalf("first policy snapshot=%q err=%v", firstBytes, err)
+	}
+
+	if err := os.WriteFile(sourcePath, []byte("function decideCommand() { return { decision: 'deny', reason: 'v2' }; }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstAfterEdit, err := os.ReadFile(firstSnapshotPath)
+	if err != nil || string(firstAfterEdit) != string(firstBytes) {
+		t.Fatalf("running session policy changed after profile edit: before=%q after=%q err=%v", firstBytes, firstAfterEdit, err)
+	}
+
+	changedPlan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedEnvironment, err := core.SelectRunEnvironment(changedPlan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := core.BeginRunSession(changedPlan, changedEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := os.ReadFile(filepath.Join(second.RuntimeSessionDir, "policy", second.PolicyScriptRefs[0].Path))
+	if err != nil || !strings.Contains(string(secondBytes), "'v2'") {
+		t.Fatalf("second policy snapshot=%q err=%v", secondBytes, err)
+	}
+	if first.SessionSnapshotID == second.SessionSnapshotID {
+		t.Fatalf("policy content change kept session snapshot id %q", first.SessionSnapshotID)
+	}
+
+	environmentStore := environment.Store{Root: store.Root}
+	for _, runSession := range []RunSession{first, second} {
+		if _, err := core.CloseRunSession(runSession); err != nil {
+			t.Fatal(err)
+		}
+		if err := environmentStore.ClearSessionRuntime(runEnvironment.Record.ID, runSession.Layout.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestGitConfigurationIsImmutableWithinSessionAndChangesForNextSession(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	core := New(store)
+	workspace := t.TempDir()
+	plan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.EnsureRunInitialized(plan); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnvironment, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBytes, err := os.ReadFile(first.GitConfigPath)
+	if err != nil || !strings.Contains(string(firstBytes), "Developer") {
+		t.Fatalf("first Git snapshot=%q err=%v", firstBytes, err)
+	}
+
+	p, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Git.UserName = "Changed Operator"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	firstAfterEdit, err := os.ReadFile(first.GitConfigPath)
+	if err != nil || string(firstAfterEdit) != string(firstBytes) {
+		t.Fatalf("running session Git config changed: before=%q after=%q err=%v", firstBytes, firstAfterEdit, err)
+	}
+
+	changedPlan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedEnvironment, err := core.SelectRunEnvironment(changedPlan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := core.BeginRunSession(changedPlan, changedEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBytes, err := os.ReadFile(second.GitConfigPath)
+	if err != nil || !strings.Contains(string(secondBytes), "Changed Operator") {
+		t.Fatalf("second Git snapshot=%q err=%v", secondBytes, err)
+	}
+	if first.SessionSnapshotID == second.SessionSnapshotID {
+		t.Fatalf("Git configuration change kept session snapshot id %q", first.SessionSnapshotID)
+	}
+
+	environmentStore := environment.Store{Root: store.Root}
+	for _, runSession := range []RunSession{first, second} {
+		if _, err := core.CloseRunSession(runSession); err != nil {
+			t.Fatal(err)
+		}
+		if err := environmentStore.ClearSessionRuntime(runEnvironment.Record.ID, runSession.Layout.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

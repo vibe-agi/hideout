@@ -130,8 +130,10 @@ the machine-readable release manifest, and bounded verification evidence.
   separate proxy and DNS prerequisites.
 - Hideout does not claim protection after a target obtains guest root.
 - `--backend native` is a development harness, not an isolation boundary.
-- Concurrent reuse currently applies only to the same pinned workspace. It
-  does not share one default VM across unrelated project directories.
+- Compatible automatic macOS arm64 Lima runs share one profile-backed VM across
+  project directories. Each session receives one exact `/workspace` view; this
+  shared guest kernel is not a VM wall between projects. Use a dedicated named
+  environment when projects require separate VM trust domains.
 - After the final VM-dependent resource and provider cleanup release, Hideout
   waits 15 seconds and non-destructively stops the Lima VM. The environment,
   guest disk, caches, audit, and staged HostFS state remain; unknown ownership

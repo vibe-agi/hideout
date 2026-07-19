@@ -48,10 +48,8 @@ func projectionGrantFixture(t *testing.T) (Core, profile.Profile, RunSession, pr
 			RuntimeProfile: p,
 		},
 		Environment: RunEnvironment{Active: true, Record: environment.Record{
-			ID:         "env_projection",
-			Profile:    p.Name,
-			ProfileID:  p.Metadata["profileId"],
-			IdentityID: p.Metadata["identityId"],
+			ID: "env_projection", Profile: p.Name,
+			Mode: environment.ModeWorkspaceBound, BoundWorkspace: workspace, BoundGuestRoot: "/workspace",
 		}},
 		Layout: session.Layout{ID: "ses_projection_1"},
 	}
@@ -61,7 +59,11 @@ func projectionGrantFixture(t *testing.T) (Core, profile.Profile, RunSession, pr
 		BindingDigest:   "sha256:" + strings.Repeat("a", 64), Commands: []string{"editor"},
 		ResourceKinds: []hostcap.ResourceKind{hostcap.KindWorkspace, hostcap.KindHostFS},
 	}
-	return core, p, runSession, projectionGrantBindingForRun(runSession, appBinding, "editor")
+	authority, err := workspaceAuthorityForRunSession(runSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return core, p, runSession, projectionGrantBindingForRun(runSession, authority, appBinding, "editor")
 }
 
 func projectionGrantCheckerForTest(root string, binding projectionGrantBinding) decisionIdeGrantChecker {
@@ -91,7 +93,7 @@ func TestProjectionIdeModeRequestIsNotAuthority(t *testing.T) {
 }
 
 func TestProjectionTrustedGrantDecisionApproveRevokeAndBinding(t *testing.T) {
-	core, p, _, binding := projectionGrantFixture(t)
+	core, p, runSession, binding := projectionGrantFixture(t)
 	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +159,7 @@ func TestProjectionTrustedGrantDecisionApproveRevokeAndBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), binding.HostWorkspace) {
+	if strings.Contains(string(raw), runSession.Plan.Workspace) {
 		t.Fatalf("decision record must use a workspace identity, not host path: %s", raw)
 	}
 }

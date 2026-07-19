@@ -9,6 +9,7 @@ license text and copyright notices.
 | `github.com/Masterminds/semver/v3` | `v3.2.1` | MIT |
 | `github.com/creack/pty` | `v1.1.24` | MIT |
 | `github.com/dop251/goja` | `58d95d85e994` | MIT |
+| `github.com/fsnotify/fsnotify` | `v1.10.1` | BSD-3-Clause |
 | `github.com/hanwen/go-fuse/v2` | `v2.10.1` | BSD-3-Clause |
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | Apache-2.0 |
 | `golang.org/x/crypto` | `v0.53.0` | BSD-3-Clause |

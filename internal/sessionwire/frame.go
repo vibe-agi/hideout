@@ -77,6 +77,7 @@ const (
 	TypeCompletion
 	TypeSupervisorStart
 	TypeSupervisorReady
+	TypeSupervisorCommit
 	TypeHeartbeat
 	TypeSupervisorError
 )
@@ -123,6 +124,8 @@ func (t Type) String() string {
 		return "supervisor-start"
 	case TypeSupervisorReady:
 		return "supervisor-ready"
+	case TypeSupervisorCommit:
+		return "supervisor-commit"
 	case TypeHeartbeat:
 		return "heartbeat"
 	case TypeSupervisorError:
@@ -162,7 +165,7 @@ func (t Type) allowed(direction Direction) bool {
 		return direction == ClientToDaemon
 	case TypeHelloAccepted, TypeReview, TypeStarted, TypeNotice, TypeError:
 		return direction == DaemonToClient
-	case TypeSupervisorStart, TypeHeartbeat:
+	case TypeSupervisorStart, TypeSupervisorCommit, TypeHeartbeat:
 		return direction == DaemonToSupervisor
 	case TypeSupervisorReady, TypeSupervisorError:
 		return direction == SupervisorToDaemon

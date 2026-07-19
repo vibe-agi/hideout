@@ -15,7 +15,7 @@ import (
 
 func TestPrepareDirectWritesManifest(t *testing.T) {
 	p := profile.Default("test")
-	plan, err := Prepare(Spec{Profile: p, SessionDir: t.TempDir(), TargetEnv: []string{"HOME=/hideout/profile/home"}})
+	plan, err := Prepare(Spec{Profile: p, ArtifactDir: t.TempDir(), TargetEnv: []string{"HOME=/hideout/profile/home"}})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -61,11 +61,11 @@ func TestPrepareDirectWritesManifest(t *testing.T) {
 
 func TestPrepareRejectsProxyEnvLeak(t *testing.T) {
 	p := profile.Default("test")
-	_, err := Prepare(Spec{Profile: p, SessionDir: t.TempDir(), TargetEnv: []string{"HTTP_PROXY=http://proxy"}})
+	_, err := Prepare(Spec{Profile: p, ArtifactDir: t.TempDir(), TargetEnv: []string{"HTTP_PROXY=http://proxy"}})
 	if err == nil || !strings.Contains(err.Error(), "proxy variables") {
 		t.Fatalf("expected proxy env leak failure, got %v", err)
 	}
-	_, err = Prepare(Spec{Profile: p, SessionDir: t.TempDir(), TargetEnv: []string{"ALL_PROXY=socks5://proxy"}})
+	_, err = Prepare(Spec{Profile: p, ArtifactDir: t.TempDir(), TargetEnv: []string{"ALL_PROXY=socks5://proxy"}})
 	if err == nil || !strings.Contains(err.Error(), "proxy variables") {
 		t.Fatalf("expected all_proxy env leak failure, got %v", err)
 	}
@@ -74,7 +74,7 @@ func TestPrepareRejectsProxyEnvLeak(t *testing.T) {
 func TestTun2SocksRequiresSecretRef(t *testing.T) {
 	p := profile.Default("test")
 	p.Network.Mode = ModeTun2Socks
-	plan, err := Prepare(Spec{Profile: p, SessionDir: t.TempDir()})
+	plan, err := Prepare(Spec{Profile: p, ArtifactDir: t.TempDir()})
 	if err == nil || !strings.Contains(err.Error(), "proxySecretRef") {
 		t.Fatalf("expected proxySecretRef failure, got plan=%+v err=%v", plan, err)
 	}
@@ -123,7 +123,7 @@ func TestTun2SocksWithoutMediatedResolverFailsClosed(t *testing.T) {
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
 		Profile:       p,
-		SessionDir:    sessionDir,
+		ArtifactDir:   sessionDir,
 		RuntimeVerify: true,
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
@@ -149,8 +149,8 @@ func TestTun2SocksInvalidMediatedResolverFailsClosed(t *testing.T) {
 	p.Network.ProxySecretRef = "default-proxy"
 	p.Network.MediatedResolver = "not-an-ip"
 	plan, err := Prepare(Spec{
-		Profile:    p,
-		SessionDir: t.TempDir(),
+		Profile:     p,
+		ArtifactDir: t.TempDir(),
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
 		}},
@@ -167,8 +167,8 @@ func TestTun2SocksDoesNotWriteSecretWhenRoutingCannotBeVerified(t *testing.T) {
 	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
-		Profile:    p,
-		SessionDir: sessionDir,
+		Profile:     p,
+		ArtifactDir: sessionDir,
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
 		}},
@@ -212,8 +212,10 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
 		Profile:          p,
-		SessionDir:       sessionDir,
-		GuestSessionDir:  "/hideout/session",
+		ArtifactDir:      sessionDir,
+		GuestArtifactDir: "/hideout/session",
+		SecretDir:        sessionDir,
+		GuestSecretDir:   "/hideout/session",
 		LocalBypassHosts: []string{"host.lima.internal", "host.lima.internal"},
 		RuntimeVerify:    true,
 		Resolver: EnvSecretResolver{Env: []string{
@@ -268,8 +270,12 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read bootstrap: %v", err)
 	}
-	if !strings.Contains(string(bootstrap), "tun2socks --device tun://hideout0 --proxy \"$proxy_url\"") {
+	if !strings.Contains(string(bootstrap), "tun2socks -config \"$gateway_config\"") ||
+		!strings.Contains(string(bootstrap), "chmod 0600 \"$gateway_config\"") {
 		t.Fatalf("runtime verify bootstrap missing tun2socks start: %s", bootstrap)
+	}
+	if strings.Contains(string(bootstrap), "tun2socks --device") || strings.Contains(string(bootstrap), "--proxy \"$proxy_url\"") {
+		t.Fatalf("runtime verify bootstrap exposes proxy material in process arguments: %s", bootstrap)
 	}
 	// DNS closure: start the DoH stub, redirect guest :53 to it, and blackhole
 	// connected-subnet resolvers, established after the default route is on TUN.
@@ -405,9 +411,11 @@ func TestTun2SocksProxySecretWriteFailsClosedOnExistingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := Prepare(Spec{
-		Profile:       p,
-		SessionDir:    sessionDir,
-		RuntimeVerify: true,
+		Profile:        p,
+		ArtifactDir:    sessionDir,
+		SecretDir:      sessionDir,
+		GuestSecretDir: "/hideout/session",
+		RuntimeVerify:  true,
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
 		}},
@@ -441,9 +449,11 @@ func TestTun2SocksRemovesProxySecretWhenArtifactWriteFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := Prepare(Spec{
-		Profile:       p,
-		SessionDir:    sessionDir,
-		RuntimeVerify: true,
+		Profile:        p,
+		ArtifactDir:    sessionDir,
+		SecretDir:      sessionDir,
+		GuestSecretDir: "/hideout/session",
+		RuntimeVerify:  true,
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
 		}},
@@ -466,10 +476,15 @@ func TestTun2SocksDryRunDoesNotWriteArtifactsOrSecret(t *testing.T) {
 	p.Network.MediatedResolver = "1.1.1.1"
 	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
-		Profile:       p,
-		SessionDir:    sessionDir,
-		RuntimeVerify: true,
-		DryRun:        true,
+		Profile:         p,
+		ArtifactDir:     sessionDir,
+		SecretDir:       sessionDir,
+		GuestSecretDir:  "/hideout/session",
+		RuntimeVerify:   true,
+		DryRun:          true,
+		GatewayProxyURL: "socks5://guest:internal@127.0.0.1:1081",
+		GatewayID:       "gw_test",
+		ConfigurationID: "sha256:" + strings.Repeat("c", 64),
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=socks5://user:pass@127.0.0.1:1080",
 		}},
@@ -492,10 +507,13 @@ func TestTun2SocksVerifiedPlan(t *testing.T) {
 	p.Network.Mode = ModeTun2Socks
 	p.Network.ProxySecretRef = "default-proxy"
 	p.Network.MediatedResolver = "1.1.1.1"
+	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
-		Profile:    p,
-		SessionDir: t.TempDir(),
-		Verified:   true,
+		Profile:        p,
+		ArtifactDir:    sessionDir,
+		SecretDir:      sessionDir,
+		GuestSecretDir: "/hideout/session",
+		Verified:       true,
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=http://127.0.0.1:8080",
 		}},
@@ -510,8 +528,12 @@ func TestTun2SocksVerifiedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read bootstrap: %v", err)
 	}
-	if !strings.Contains(string(bootstrap), "tun2socks --device tun://hideout0 --proxy \"$proxy_url\"") {
+	if !strings.Contains(string(bootstrap), "tun2socks -config \"$gateway_config\"") ||
+		!strings.Contains(string(bootstrap), "chmod 0600 \"$gateway_config\"") {
 		t.Fatalf("bootstrap missing tun2socks start: %s", bootstrap)
+	}
+	if strings.Contains(string(bootstrap), "tun2socks --device") || strings.Contains(string(bootstrap), "--proxy \"$proxy_url\"") {
+		t.Fatalf("bootstrap exposes proxy material in process arguments: %s", bootstrap)
 	}
 	if !strings.Contains(string(bootstrap), "ip route replace default dev hideout0 metric 1") {
 		t.Fatalf("bootstrap missing route replacement: %s", bootstrap)
@@ -546,9 +568,12 @@ func TestServiceFingerprintIsCanonicalAndSecretSensitive(t *testing.T) {
 		p.Network.Mode = ModeTun2Socks
 		p.Network.ProxySecretRef = "default-proxy"
 		p.Network.MediatedResolver = "1.1.1.1"
+		sessionDir := t.TempDir()
 		plan, err := Prepare(Spec{
 			Profile:          p,
-			SessionDir:       t.TempDir(),
+			ArtifactDir:      sessionDir,
+			SecretDir:        sessionDir,
+			GuestSecretDir:   "/hideout/session",
 			LocalBypassHosts: bypass,
 			RuntimeVerify:    true,
 			DryRun:           true,
@@ -583,11 +608,17 @@ func TestEnvironmentServiceStateRoundTripContainsNoSecrets(t *testing.T) {
 	p.Network.ProxySecretRef = "default-proxy"
 	p.Network.MediatedResolver = "1.1.1.1"
 	secret := "socks5://user:password@127.0.0.1:1080"
+	sessionDir := t.TempDir()
 	plan, err := Prepare(Spec{
-		Profile:       p,
-		SessionDir:    t.TempDir(),
-		RuntimeVerify: true,
-		DryRun:        true,
+		Profile:         p,
+		ArtifactDir:     sessionDir,
+		SecretDir:       sessionDir,
+		GuestSecretDir:  "/hideout/session",
+		RuntimeVerify:   true,
+		DryRun:          true,
+		GatewayProxyURL: "socks5://guest:internal@127.0.0.1:1081",
+		GatewayID:       "gw_test",
+		ConfigurationID: "sha256:" + strings.Repeat("c", 64),
 		Resolver: EnvSecretResolver{Env: []string{
 			SecretEnvName("default-proxy") + "=" + secret,
 		}},
@@ -617,7 +648,7 @@ func TestEnvironmentServiceStateRoundTripContainsNoSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.ConfigurationFingerprint != plan.ConfigurationFingerprint || loaded.Status != ServiceReady {
+	if loaded.ConfigurationFingerprint != plan.ConfigurationFingerprint || loaded.ConfigurationID != plan.ConfigurationID || loaded.Status != ServiceReady {
 		t.Fatalf("loaded state=%+v", loaded)
 	}
 	var raw map[string]any
@@ -630,7 +661,10 @@ func TestEnvironmentServiceStateRoundTripContainsNoSecrets(t *testing.T) {
 }
 
 func TestReadyEnvironmentServiceRequiresGuestBootIdentity(t *testing.T) {
-	plan := Plan{Mode: ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("a", 64)}
+	plan := Plan{
+		Mode: ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("a", 64),
+		GatewayID: "gw_test", ConfigurationID: "sha256:" + strings.Repeat("c", 64), MediatedResolver: "1.1.1.1",
+	}
 	if _, err := BuildServiceState("env_20260716t120000z0123456789abcdef", plan, ServiceReady, "", time.Now().UTC(), nil); err == nil || !strings.Contains(err.Error(), "boot identity") {
 		t.Fatalf("ready state accepted no boot identity: %v", err)
 	}

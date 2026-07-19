@@ -24,8 +24,13 @@ import (
 )
 
 const (
-	SchemaVersion       = "hideout.profile/v1"
-	MaxPolicyScriptRefs = 16
+	SchemaVersion             = "hideout.profile/v1"
+	MaxPolicyScriptRefs       = 16
+	WorkspaceModeReadWrite    = "read-write"
+	WorkspacePathModeAlias    = "alias"
+	WorkspacePathModePreserve = "preserve"
+	NetworkModeDirect         = "direct"
+	NetworkModeTun2Socks      = "tun2socks"
 )
 
 type Profile struct {
@@ -275,8 +280,8 @@ func Default(name string) Profile {
 			Locale:   "C.UTF-8",
 		},
 		Workspace: Workspace{
-			Mode:     "read-write",
-			PathMode: "preserve",
+			Mode:     WorkspaceModeReadWrite,
+			PathMode: WorkspacePathModeAlias,
 		},
 		Env: Env{
 			Public:  map[string]string{},
@@ -288,7 +293,7 @@ func Default(name string) Profile {
 			UserEmail: "developer@example.com",
 		},
 		Network: Network{
-			Mode:            "direct",
+			Mode:            NetworkModeDirect,
 			ProxyEnvVisible: false,
 		},
 		Tools: Tools{},
@@ -495,6 +500,33 @@ func (s Store) Save(p Profile) error {
 	}
 	data = append(data, '\n')
 	return atomicWriteFile(s.ProfilePath(p.Name), data, 0o600)
+}
+
+func (s Store) SetWorkspacePathMode(name, mode string) (Profile, error) {
+	if mode != WorkspacePathModeAlias && mode != WorkspacePathModePreserve {
+		return Profile{}, fmt.Errorf("unsupported workspace pathMode %q", mode)
+	}
+	p, err := s.Load(name)
+	if err != nil {
+		return Profile{}, err
+	}
+	p.Workspace.PathMode = mode
+	if err := s.Save(p); err != nil {
+		return Profile{}, err
+	}
+	return p, nil
+}
+
+func (s Store) SetNetwork(name string, network Network) (Profile, error) {
+	p, err := s.Load(name)
+	if err != nil {
+		return Profile{}, err
+	}
+	p.Network = network
+	if err := s.Save(p); err != nil {
+		return Profile{}, err
+	}
+	return p, nil
 }
 
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
@@ -742,10 +774,10 @@ func (p Profile) Validate() error {
 	if err := validateHostname(p.Identity.Hostname); err != nil {
 		return err
 	}
-	if p.Workspace.Mode != "read-write" {
+	if p.Workspace.Mode != WorkspaceModeReadWrite {
 		return fmt.Errorf("unsupported workspace mode %q", p.Workspace.Mode)
 	}
-	if p.Workspace.PathMode != "preserve" && p.Workspace.PathMode != "alias" {
+	if p.Workspace.PathMode != WorkspacePathModePreserve && p.Workspace.PathMode != WorkspacePathModeAlias {
 		return fmt.Errorf("unsupported workspace pathMode %q", p.Workspace.PathMode)
 	}
 	if p.Env.Public == nil || p.Env.Deny == nil || p.Env.Inherit == nil {
@@ -766,13 +798,13 @@ func (p Profile) Validate() error {
 	if p.Network.Mode == "" {
 		return errors.New("network mode is required")
 	}
-	if p.Network.Mode != "direct" && p.Network.Mode != "tun2socks" {
+	if p.Network.Mode != NetworkModeDirect && p.Network.Mode != NetworkModeTun2Socks {
 		return fmt.Errorf("unsupported network mode %q", p.Network.Mode)
 	}
 	if p.Network.ProxyEnvVisible {
 		return errors.New("network.proxyEnvVisible must be false")
 	}
-	if p.Network.Mode == "tun2socks" && strings.TrimSpace(p.Network.ProxySecretRef) == "" {
+	if p.Network.Mode == NetworkModeTun2Socks && strings.TrimSpace(p.Network.ProxySecretRef) == "" {
 		return errors.New("tun2socks requires network.proxySecretRef")
 	}
 	if strings.TrimSpace(p.Network.ProxySecretRef) != "" {
@@ -1470,7 +1502,7 @@ func MaterializeIdentityState(dir string, p Profile) error {
 	if err := materializeMachineID(filepath.Join(dir, "machine", "machine-id"), p.Metadata["machineId"]); err != nil {
 		return err
 	}
-	if err := materializeGitConfig(filepath.Join(dir, "home", ".gitconfig"), p.Git); err != nil {
+	if err := MaterializeGitConfig(filepath.Join(dir, "home", ".gitconfig"), p.Git); err != nil {
 		return err
 	}
 	if err := materializeHomeXDGLinks(filepath.Join(dir, "home")); err != nil {
@@ -1513,7 +1545,10 @@ func ensureRelativeSymlink(linkPath, target string) error {
 	return os.Symlink(target, linkPath)
 }
 
-func materializeGitConfig(path string, git Git) error {
+// MaterializeGitConfig writes the declarative Git identity to an exact path.
+// Run sessions use this to freeze Git configuration independently from the
+// mutable profile home mounted into the guest.
+func MaterializeGitConfig(path string, git Git) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

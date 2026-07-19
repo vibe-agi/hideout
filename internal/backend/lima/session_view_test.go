@@ -102,10 +102,27 @@ func TestIsolatedCommandPreflightDistinguishesMissingCommandFromViewFailure(t *t
 		t.Fatal("failed preflight recorded an isolated target start")
 	}
 
-	brokenView := &isolatedRunSetupRunner{checkErr: fakeExitStatusError(32)}
-	err = (Backend{SetupRunner: brokenView}).Run(context.Background(), session, []string{"sh"}, []string{"PATH=/usr/bin:/bin"})
-	if errors.As(err, &notFound) || !strings.Contains(err.Error(), "session isolation command preflight failed") {
+	brokenView := &isolatedRunSetupRunner{checkErr: fakeExitStatusError(32), checkStderr: "mount point does not exist\n"}
+	err = (Backend{SetupRunner: brokenView, ControlStderr: io.Discard}).Run(context.Background(), session, []string{"sh"}, []string{"PATH=/usr/bin:/bin"})
+	if errors.As(err, &notFound) || !strings.Contains(err.Error(), "session isolation command preflight failed") ||
+		!strings.Contains(err.Error(), "mount point does not exist") {
 		t.Fatalf("view failure was misclassified: %T %v", err, err)
+	}
+}
+
+func TestPortalWorkspaceRejectsLegacyDirectRunBeforeCreatingASecondView(t *testing.T) {
+	runner := &isolatedRunSetupRunner{}
+	session := &backend.Session{
+		ID: "ses_20260716T120000Z_0123456789abcdef", InstanceName: "hideout-test",
+		ConfigPath: "/unused/lima.yaml", GuestWork: "/workspace", RuntimeReady: true, SessionIsolationRequired: true,
+		Workspace: backend.WorkspaceAttachmentSpec{Transport: backend.WorkspaceTransportPortal},
+	}
+	err := (Backend{SetupRunner: runner}).Run(context.Background(), session, []string{"sh"}, []string{"PATH=/usr/bin:/bin"})
+	if err == nil || !strings.Contains(err.Error(), "requires the daemon session stream") {
+		t.Fatalf("Portal direct-run error=%v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("Portal direct run created duplicate views: %q", runner.commands)
 	}
 }
 
@@ -533,7 +550,7 @@ func TestSessionViewMasksSiblingRuntimeAndUsesPrivateProcAndMounts(t *testing.T)
 		"unshare --mount --pid --fork --kill-child=KILL --mount-proc=/proc",
 		"mount --make-rprivate /",
 		"mount --bind \"$1\" /hideout/session",
-		"mount -t tmpfs -o mode=000,size=4096 hideout-runtime-private /hideout/runtime",
+		"mount -t tmpfs -o mode=0700,size=128m hideout-runtime-private /hideout/runtime",
 		"/hideout/session/shims/hideout-hostfsd",
 		"cleanup_session_view",
 		"'setpriv' '--reuid=developer' '--regid=developer' '--init-groups'",
@@ -547,6 +564,62 @@ func TestSessionViewMasksSiblingRuntimeAndUsesPrivateProcAndMounts(t *testing.T)
 	}
 	if strings.Contains(joined, "nsenter") || strings.Contains(joined, "--user") || strings.Contains(joined, "--map-root-user") {
 		t.Fatalf("session view accidentally claimed a user/root namespace boundary: %q", command)
+	}
+}
+
+func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
+	workspace := backend.WorkspaceAttachmentSpec{
+		HostRoot: "/Users/alice/private/project", GuestRoot: "/workspace",
+		Transport: backend.WorkspaceTransportPortal,
+		Portal: &backend.WorkspacePortalBinding{
+			PhysicalGuestRoot:   "/hideout/workspaces/wrk_0123456789abcdef",
+			Endpoint:            "host.lima.internal:43127",
+			CredentialGuestPath: "/hideout/session/workspace/credential.bin",
+		},
+	}
+	command, err := BuildSessionViewCommand(SessionViewSpec{
+		SessionID: "ses_20260716T120000Z_0123456789abcdef", TargetUser: "developer",
+		GuestWork: "/workspace", Env: []string{"PATH=/hideout/session/shims:/usr/bin"},
+		Command: []string{"git", "status"}, Workspace: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(command, " ")
+	for _, required := range []string{
+		"mkdir -p /hideout/workspaces",
+		"mount -t tmpfs -o mode=0711,size=16m hideout-workspaces-private /hideout/workspaces",
+		"/hideout/session/shims/hideout-workspace-portal",
+		"'--endpoint' 'host.lima.internal:43127'",
+		"'--credential-file' '/hideout/session/workspace/credential.bin'",
+		"'--mount' '/hideout/workspaces/wrk_0123456789abcdef'",
+		"mount --rbind '/hideout/workspaces/wrk_0123456789abcdef' \"$workspace_root/workspace\"",
+		"'chroot' '/hideout/runtime/workspace-rootfs'",
+		"umount -R '/hideout/runtime/workspace-rootfs'",
+		"umount '/hideout/workspaces/wrk_0123456789abcdef'",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("Portal session view missing %q:\n%s", required, joined)
+		}
+	}
+	if strings.Index(joined, "mkdir -p /hideout/workspaces") > strings.Index(joined, "mount -t tmpfs -o mode=0711,size=16m hideout-workspaces-private /hideout/workspaces") {
+		t.Fatal("Portal staging root was mounted before its private mount point existed")
+	}
+	if strings.Contains(joined, workspace.HostRoot) || strings.Contains(joined, "/Users/alice") {
+		t.Fatalf("Portal session command exposed host root: %s", joined)
+	}
+}
+
+func TestSessionViewRejectsIncompletePortalWorkspace(t *testing.T) {
+	workspace := backend.WorkspaceAttachmentSpec{
+		HostRoot: t.TempDir(), GuestRoot: "/workspace", Transport: backend.WorkspaceTransportPortal,
+	}
+	_, err := BuildSessionViewCommand(SessionViewSpec{
+		SessionID: "ses_20260716T120000Z_0123456789abcdef", TargetUser: "developer",
+		GuestWork: "/workspace", Command: []string{"true"}, Workspace: workspace,
+	})
+	if err == nil {
+		t.Fatal("incomplete Portal workspace was accepted")
 	}
 }
 
@@ -668,6 +741,7 @@ type sessionViewSetupRunner struct {
 type isolatedRunSetupRunner struct {
 	commands      [][]string
 	checkErr      error
+	checkStderr   string
 	targetErr     error
 	waitForCancel bool
 	targetEntered chan struct{}
@@ -678,6 +752,7 @@ func (r *isolatedRunSetupRunner) Check(context.Context, string) error { return n
 func (r *isolatedRunSetupRunner) Run(ctx context.Context, _ string, _ string, _ []string, command []string, _ io.Reader, stdout io.Writer, stderr io.Writer) error {
 	r.commands = append(r.commands, append([]string(nil), command...))
 	if len(r.commands) == 1 {
+		_, _ = io.WriteString(stderr, r.checkStderr)
 		return r.checkErr
 	}
 	if r.waitForCancel {

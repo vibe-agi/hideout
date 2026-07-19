@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/privilege"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -57,6 +59,7 @@ type SessionViewSpec struct {
 	GuardianControl      bool
 	SessionSupervisor    bool
 	RequiredRuntimePaths []string
+	Workspace            backend.WorkspaceAttachmentSpec
 }
 
 const GuestSessionSupervisorPath = GuestSessionDir + "/shims/hideout-session-supervisor"
@@ -105,6 +108,18 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 			return nil, fmt.Errorf("runtime prerequisite %q is outside the session view", requiredPath)
 		}
 	}
+	portalWorkspace := spec.Workspace.Transport == backend.WorkspaceTransportPortal
+	if portalWorkspace {
+		if err := spec.Workspace.Validate(environment.ModeShared); err != nil {
+			return nil, err
+		}
+		if spec.GuestWork != workspaceattach.LogicalWorkspaceRoot ||
+			spec.Workspace.GuestRoot != workspaceattach.LogicalWorkspaceRoot ||
+			!strings.HasPrefix(spec.Workspace.Portal.PhysicalGuestRoot, workspaceattach.PhysicalWorkspaceBase+"/") ||
+			spec.Workspace.Portal.CredentialGuestPath != workspaceattach.PortalCredentialGuestPath {
+			return nil, errors.New("session Portal workspace binding is inconsistent")
+		}
+	}
 
 	var script strings.Builder
 	script.WriteString("set -eu\n")
@@ -124,7 +139,10 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 		fmt.Fprintf(&script, "sleep %s\n", sessionRuntimeReadyDelay)
 		script.WriteString("done\n")
 	}
-	script.WriteString("mount -t tmpfs -o mode=000,size=4096 hideout-runtime-private /hideout/runtime\n")
+	if portalWorkspace {
+		writePortalWorkspaceMount(&script, spec)
+	}
+	script.WriteString("mount -t tmpfs -o mode=0700,size=128m hideout-runtime-private /hideout/runtime\n")
 	script.WriteString("shift\n")
 	for _, assignment := range sessionViewSetupEnv(spec.Env) {
 		fmt.Fprintf(&script, "export %s\n", shellQuote(assignment))
@@ -138,8 +156,15 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	if spec.HostFSEnabled {
 		fmt.Fprintf(&script, "sh -c %s%s\n", shellQuote(HostFSStartScript(spec.HostFSGrafts)), supervisorSetupRedirect(spec))
 	}
+	if portalWorkspace {
+		writePortalWorkspaceRoot(&script, spec)
+		writePortalWorkspaceSeal(&script, spec)
+	}
 	script.WriteString("cleanup_session_view() {\n")
 	script.WriteString(":\n")
+	if portalWorkspace {
+		writePortalWorkspaceCleanup(&script, spec)
+	}
 	if spec.HostFSEnabled {
 		script.WriteString(HostFSCleanupScript())
 	}
@@ -148,7 +173,6 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	}
 	script.WriteString("}\n")
 	script.WriteString("trap cleanup_session_view EXIT HUP INT TERM\n")
-	fmt.Fprintf(&script, "cd %s\n", shellQuote(spec.GuestWork))
 	script.WriteString("set +e\n")
 	target := []string{"setpriv", "--reuid=" + spec.TargetUser, "--regid=" + spec.TargetUser, "--init-groups", "--", "env", "-i"}
 	if spec.SessionSupervisor {
@@ -156,6 +180,16 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	}
 	target = append(target, spec.Env...)
 	target = append(target, spec.Command...)
+	if portalWorkspace {
+		target = append([]string{
+			"chroot", guestWorkspaceRootFS,
+			"unshare", "--mount", "--pid", "--fork", "--kill-child=KILL", "--mount-proc=/proc", "--",
+			"/bin/sh", "-c", `cd "$1"; shift; exec "$@"`,
+			"hideout-session-target", spec.GuestWork,
+		}, target...)
+	} else {
+		fmt.Fprintf(&script, "cd %s\n", shellQuote(spec.GuestWork))
+	}
 	fmt.Fprintf(&script, "%s\n", shellJoin(target))
 	script.WriteString("status=$?\nset -e\ncleanup_session_view\ntrap - EXIT HUP INT TERM\nexit \"$status\"\n")
 
@@ -187,6 +221,90 @@ exec "$@"
 	return append(command, viewCommand...), nil
 }
 
+func writePortalWorkspaceMount(script *strings.Builder, spec SessionViewSpec) {
+	portal := spec.Workspace.Portal
+	script.WriteString("mkdir -p /hideout/workspaces\n")
+	script.WriteString("mount -t tmpfs -o mode=0711,size=16m hideout-workspaces-private /hideout/workspaces\n")
+	fmt.Fprintf(script, "mkdir -p %s\n", shellQuote(portal.PhysicalGuestRoot))
+	script.WriteString("workspace_uid=$(id -u " + shellQuote(spec.TargetUser) + ")\n")
+	script.WriteString("workspace_gid=$(id -g " + shellQuote(spec.TargetUser) + ")\n")
+	script.WriteString("workspace_ready=/hideout/session/workspace/mount-ready\n")
+	script.WriteString("rm -f \"$workspace_ready\"\n")
+	command := []string{
+		GuestWorkspacePortalPath,
+		"--endpoint", portal.Endpoint,
+		"--credential-file", portal.CredentialGuestPath,
+		"--mount", portal.PhysicalGuestRoot,
+		"--ready-file", "/hideout/session/workspace/mount-ready",
+		"--allow-other", "--uid", `"$workspace_uid"`, "--gid", `"$workspace_gid"`,
+	}
+	// UID/GID are the only shell-expanded values; all authority-bearing values
+	// remain individually quoted structured fields.
+	line := shellJoin(command)
+	line = strings.ReplaceAll(line, shellQuote(`"$workspace_uid"`), `"$workspace_uid"`)
+	line = strings.ReplaceAll(line, shellQuote(`"$workspace_gid"`), `"$workspace_gid"`)
+	fmt.Fprintf(script, "%s >&2 &\n", line)
+	script.WriteString("workspace_portal_pid=$!\n")
+	script.WriteString("workspace_attempt=0\n")
+	script.WriteString("while [ ! -f \"$workspace_ready\" ]; do\n")
+	script.WriteString("  kill -0 \"$workspace_portal_pid\" 2>/dev/null || { wait \"$workspace_portal_pid\"; exit 125; }\n")
+	script.WriteString("  workspace_attempt=$((workspace_attempt + 1))\n")
+	script.WriteString("  [ \"$workspace_attempt\" -lt 100 ] || { echo 'hideout: workspace Portal mount readiness timed out' >&2; exit 125; }\n")
+	script.WriteString("  sleep 0.01\n")
+	script.WriteString("done\n")
+}
+
+func writePortalWorkspaceRoot(script *strings.Builder, spec SessionViewSpec) {
+	physical := spec.Workspace.Portal.PhysicalGuestRoot
+	fmt.Fprintf(script, "workspace_root=%s\n", shellQuote(guestWorkspaceRootFS))
+	script.WriteString("mkdir -p \"$workspace_root\"\n")
+	script.WriteString("mount -t tmpfs -o mode=0755,size=16m hideout-workspace-rootfs \"$workspace_root\"\n")
+	script.WriteString("mkdir -p \"$workspace_root\"/dev \"$workspace_root\"/etc \"$workspace_root\"/proc \"$workspace_root\"/sys \"$workspace_root\"/usr \"$workspace_root\"/var \"$workspace_root\"/run \"$workspace_root\"/opt \"$workspace_root\"/tmp \"$workspace_root\"/workspace\n")
+	script.WriteString("mkdir -p \"$workspace_root\"/hideout/profile \"$workspace_root\"/hideout/session \"$workspace_root\"/hideout/hostfs \"$workspace_root\"/hideout/runtime\n")
+	script.WriteString("for workspace_source in /dev /etc /proc /sys /usr /var /run /opt; do\n")
+	script.WriteString("  [ ! -e \"$workspace_source\" ] || { mount --rbind \"$workspace_source\" \"$workspace_root$workspace_source\"; mount --make-rslave \"$workspace_root$workspace_source\"; }\n")
+	script.WriteString("done\n")
+	script.WriteString("mount --rbind /hideout/profile \"$workspace_root/hideout/profile\"\n")
+	script.WriteString("mount --make-rslave \"$workspace_root/hideout/profile\"\n")
+	script.WriteString("mount --rbind /hideout/session \"$workspace_root/hideout/session\"\n")
+	script.WriteString("mount --make-rslave \"$workspace_root/hideout/session\"\n")
+	script.WriteString("[ ! -d /hideout/hostfs ] || { mount --rbind /hideout/hostfs \"$workspace_root/hideout/hostfs\"; mount --make-rslave \"$workspace_root/hideout/hostfs\"; }\n")
+	fmt.Fprintf(script, "mount --rbind %s \"$workspace_root/workspace\"\n", shellQuote(physical))
+	script.WriteString("mount --make-rslave \"$workspace_root/workspace\"\n")
+	script.WriteString("chmod 1777 \"$workspace_root/tmp\"\n")
+	script.WriteString("chmod 000 \"$workspace_root/hideout/runtime\"\n")
+	script.WriteString("ln -s usr/bin \"$workspace_root/bin\"\n")
+	script.WriteString("ln -s usr/sbin \"$workspace_root/sbin\"\n")
+	script.WriteString("ln -s usr/lib \"$workspace_root/lib\"\n")
+	script.WriteString("[ ! -e /lib64 ] || ln -s usr/lib64 \"$workspace_root/lib64\"\n")
+}
+
+func writePortalWorkspaceSeal(script *strings.Builder, spec SessionViewSpec) {
+	physical := spec.Workspace.Portal.PhysicalGuestRoot
+	// The helper consumes the one-session credential before mount readiness. The
+	// target never needs it, the staging mount, or the helper's control endpoint.
+	fmt.Fprintf(script, "rm -f %s\n", shellQuote(spec.Workspace.Portal.CredentialGuestPath))
+	fmt.Fprintf(script, "umount %s\n", shellQuote(physical))
+	script.WriteString("umount /hideout/workspaces\n")
+}
+
+func writePortalWorkspaceCleanup(script *strings.Builder, spec SessionViewSpec) {
+	physical := spec.Workspace.Portal.PhysicalGuestRoot
+	script.WriteString("umount -R " + shellQuote(guestWorkspaceRootFS) + " 2>/dev/null || true\n")
+	fmt.Fprintf(script, "umount %s 2>/dev/null || true\n", shellQuote(physical))
+	script.WriteString("if [ -n \"${workspace_portal_pid:-}\" ]; then\n")
+	script.WriteString("  kill \"$workspace_portal_pid\" 2>/dev/null || true\n")
+	script.WriteString("  workspace_stop_attempt=0\n")
+	script.WriteString("  while kill -0 \"$workspace_portal_pid\" 2>/dev/null; do\n")
+	script.WriteString("    workspace_stop_attempt=$((workspace_stop_attempt + 1))\n")
+	script.WriteString("    [ \"$workspace_stop_attempt\" -lt 100 ] || { kill -KILL \"$workspace_portal_pid\" 2>/dev/null || true; break; }\n")
+	script.WriteString("    sleep 0.01\n")
+	script.WriteString("  done\n")
+	script.WriteString("  wait \"$workspace_portal_pid\" 2>/dev/null || true\n")
+	script.WriteString("fi\n")
+	script.WriteString("umount /hideout/workspaces 2>/dev/null || true\n")
+}
+
 func sessionRuntimeReadyCondition(paths []string) string {
 	checks := make([]string, 0, len(paths))
 	for _, requiredPath := range paths {
@@ -205,6 +323,9 @@ func sessionRuntimePrerequisites(session *backend.Session, supervisor bool) []st
 		}
 		if session.HostFSEnabled {
 			paths = append(paths, GuestSessionDir+"/shims/hideout-hostfsd")
+		}
+		if session.Workspace.Transport == backend.WorkspaceTransportPortal {
+			paths = append(paths, GuestWorkspacePortalPath)
 		}
 	}
 	if supervisor {
@@ -422,6 +543,9 @@ func (b Backend) sessionViewActivationProbe(ctx context.Context, session *backen
 }
 
 func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Session, env, command []string) error {
+	if session.Workspace.Transport == backend.WorkspaceTransportPortal {
+		return errors.New("Portal workspace execution requires the daemon session stream")
+	}
 	targetUser := session.TargetUser
 	if targetUser == "" {
 		targetUser = "developer"
@@ -434,10 +558,12 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		Command:              CommandCheck(command[0]),
 		ExpectedBootID:       session.ExpectedBootID,
 		RequiredRuntimePaths: sessionRuntimePrerequisites(session, false),
+		Workspace:            session.Workspace,
 	})
 	if err != nil {
 		return err
 	}
+	preflightStderr := &boundedRuntimeCapture{limit: runtimeProcessOutputLimit}
 	runPreflight := func() error {
 		return b.setupRunner().Run(
 			ctx,
@@ -447,12 +573,12 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 			checkCommand,
 			nil,
 			b.controlStdout(),
-			b.controlStderr(),
+			io.MultiWriter(b.controlStderr(), preflightStderr),
 		)
 	}
 	if b.SetupRunner != nil {
 		if err := runPreflight(); err != nil {
-			return isolatedCommandPreflightError(b, session, command, env, err)
+			return isolatedCommandPreflightError(b, session, command, env, err, preflightStderr.String())
 		}
 	}
 	viewCommand, err := BuildSessionViewCommand(SessionViewSpec{
@@ -468,6 +594,7 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 		HostFSGrafts:         session.HostFSGrafts,
 		ExpectedBootID:       session.ExpectedBootID,
 		GuardianControl:      true,
+		Workspace:            session.Workspace,
 	})
 	if err != nil {
 		return err
@@ -492,8 +619,9 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 	}
 	defer lease.Close()
 	client := lease.Client()
-	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), b.controlStderr()); err != nil {
-		return isolatedCommandPreflightError(b, session, command, env, err)
+	preflightStderr = &boundedRuntimeCapture{limit: runtimeProcessOutputLimit}
+	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), io.MultiWriter(b.controlStderr(), preflightStderr)); err != nil {
+		return isolatedCommandPreflightError(b, session, command, env, err, preflightStderr.String())
 	}
 	session.IsolationRunStarted = true
 	var runErr error
@@ -520,13 +648,16 @@ func (b Backend) runIsolatedSession(ctx context.Context, session *backend.Sessio
 	return errors.Join(runErr, eventErr)
 }
 
-func isolatedCommandPreflightError(b Backend, session *backend.Session, command, env []string, err error) error {
+func isolatedCommandPreflightError(b Backend, session *backend.Session, command, env []string, err error, stderr string) error {
 	var status interface{ ExitStatus() int }
 	if errors.As(err, &status) && status.ExitStatus() == 127 {
 		return backend.CommandNotFoundError{
 			Backend: b.Name(), Command: command[0], Path: backend.EnvValue(env, "PATH"), Workspace: session.GuestWork,
 			Hint: "install the command in the guest environment; no host or sibling-session fallback was attempted",
 		}
+	}
+	if detail := strings.TrimSpace(stderr); detail != "" {
+		return fmt.Errorf("session isolation command preflight failed: %w: %s", err, detail)
 	}
 	return fmt.Errorf("session isolation command preflight failed: %w", err)
 }

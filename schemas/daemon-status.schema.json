@@ -53,6 +53,13 @@
         "$ref": "active-session-summary.schema.json"
       }
     },
+    "workspaceAttachments": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "workspace-attachment.schema.json"
+      }
+    },
     "background": {
       "type": "array",
       "items": {

@@ -126,7 +126,7 @@ func TestStopEnvironmentIncarnationRefusesAnyOwnerRecord(t *testing.T) {
 	store := environment.Store{Root: core.Store.Root}
 	owner, err := session.AcquireOwner(store.OwnerRoot(record.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef", EnvironmentID: record.ID,
-		Profile: "default", Backend: "lima", WorkspaceID: strings.Repeat("a", 64), State: session.OwnerStateRunning,
+		Profile: "default", Backend: "lima", WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(), State: session.OwnerStateRunning,
 		TerminalMode: session.TerminalNone, StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), CommandClass: "bash",
 	})
 	if err != nil {
@@ -149,7 +149,7 @@ func observedStopFixture(t *testing.T) (Core, environment.Record) {
 	environmentStore := environment.Store{Root: store.Root}
 	record, err := environmentStore.Create(environment.Spec{
 		Name: "lifecycle", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: t.TempDir(), GuestWorkspace: "/workspace", InstanceName: "hideout-lifecycle-test",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace", InstanceName: "hideout-lifecycle-test",
 	})
 	if err != nil {
 		t.Fatal(err)

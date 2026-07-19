@@ -16,10 +16,12 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 func TestRuntimeCatalogAndInspectionUseOneCoreModel(t *testing.T) {
@@ -357,8 +359,8 @@ func TestOrdinaryRunFailureAndCleanupInvalidateHistoricalReceipt(t *testing.T) {
 				t.Fatal(err)
 			}
 			plan, err := core.PlanRun(RunPlanOptions{
-				ProfileName: record.Profile, Backend: "lima", Workspace: record.Workspace,
-				GuestWorkspace: record.GuestWorkspace, Command: []string{"true"},
+				ProfileName: record.Profile, Backend: "lima", Workspace: record.HostWorkspace(),
+				GuestWorkspace: record.GuestWorkspaceRoot(), Command: []string{"true"},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -393,7 +395,7 @@ func TestUnsafeWorkspaceCanRunOnlyWithoutTrustedRuntimeReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record.Workspace = core.Store.Root
+	record.DedicatedWorkspace = core.Store.Root
 	if err := (environment.Store{Root: core.Store.Root}).Save(record); err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +414,9 @@ func TestUnsafeWorkspaceCanRunOnlyWithoutTrustedRuntimeReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runEnv := selectedRunEnvironment(environment.Store{Root: core.Store.Root}, record, true, false, false)
+	runEnv := selectedRunEnvironment(environment.Store{Root: core.Store.Root}, record, environment.Spec{
+		MachineIdentityID: record.MachineIdentityID, BootConfigurationID: record.BootConfigurationID,
+	}, p, true, false, false)
 	runSession, err := core.BeginRunSession(runtimeVerificationRunPlan(record, p), runEnv, RunSessionOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +427,7 @@ func TestUnsafeWorkspaceCanRunOnlyWithoutTrustedRuntimeReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := core.runSpec(runSession, runEnv, RunDataPlane{Env: append([]string(nil), runSession.Env.Env...)}, RunNetwork{})
-	if err := core.attachRuntimeVerification(&spec, runSession, runEnv, "lima"); err != nil {
+	if err := core.attachRuntimeVerification(&spec, runSession, runEnv, "lima", runtimeVerificationSessionAuthority); err != nil {
 		t.Fatal(err)
 	}
 	if spec.RuntimeContract == nil || spec.RuntimeInstanceExpected == nil || spec.RuntimeResultSink == nil || spec.PrivilegeStatusSink == nil {
@@ -441,6 +445,39 @@ func TestUnsafeWorkspaceCanRunOnlyWithoutTrustedRuntimeReadiness(t *testing.T) {
 	}
 	if _, err := (runtimeverify.Store{Root: core.Store.Root}).Load(record.ID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unsafe workspace persisted trusted runtime receipt: %v", err)
+	}
+}
+
+func TestRuntimeReceiptAuthoritySeparatesSharedAttachmentFromMachineVerification(t *testing.T) {
+	storeRoot := t.TempDir()
+	if err := os.Chmod(storeRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	core := Core{Store: profile.Store{Root: storeRoot}}
+	registration := workspacePlanRegistration{incarnation: lifecycle.EnvironmentRef{
+		EnvironmentID: "env_sharedfixture", StartGeneration: 2, InstanceName: "hideout-default-env-fixture",
+		BootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}}
+	runSession := workspaceRunSessionFixture(workspace, "ses_runtime_authority")
+	plan, err := core.PlanRunWorkspaceAttachment(runSession, registration, WorkspaceAttachPlanOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := core.ApplyRunWorkspaceAttachment(runSession, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if safe, err := core.runtimeReceiptAuthorityForRun(bound, bound.Environment, runtimeVerificationSessionAuthority); err != nil || !safe {
+		t.Fatalf("attachment receipt authority safe=%v err=%v", safe, err)
+	}
+	withoutAttachment := bound
+	withoutAttachment.WorkspaceAttachment = workspaceattach.Attachment{}
+	if _, err := core.runtimeReceiptAuthorityForRun(withoutAttachment, withoutAttachment.Environment, runtimeVerificationSessionAuthority); err == nil {
+		t.Fatal("shared session receipt authority accepted an empty attachment")
+	}
+	if safe, err := core.runtimeReceiptAuthorityForRun(withoutAttachment, withoutAttachment.Environment, runtimeVerificationMachineAuthority); err != nil || !safe {
+		t.Fatalf("explicit machine verification safe=%v err=%v", safe, err)
 	}
 }
 
@@ -480,7 +517,7 @@ func runtimeVerifyCoreFixture(t *testing.T) (Core, environment.Record) {
 	}
 	workspace := t.TempDir()
 	envStore := environment.Store{Root: store.Root}
-	record, err := envStore.Create(RunEnvironmentSpec(p, "lima", workspace, "/workspace"))
+	record, err := envStore.Create(dedicatedRunEnvironmentSpec(p, "lima", workspace, "/workspace", "runtime-test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +575,11 @@ func runtimeReceiptFixture(record environment.Record) runtimeverify.Receipt {
 			return &expected
 		}(),
 	})
-	receipt, _, err := runtimeReceipt(selectedRunEnvironment(environment.Store{}, record, true, false, false), contract, report, "lima")
+	p := profile.Default(record.Profile)
+	p.Metadata = map[string]string{"profileId": "prf_runtime_receipt", "identityId": "id_runtime_receipt"}
+	receipt, _, err := runtimeReceipt(selectedRunEnvironment(environment.Store{}, record, environment.Spec{
+		MachineIdentityID: record.MachineIdentityID, BootConfigurationID: record.BootConfigurationID,
+	}, p, true, false, false), contract, report, "lima")
 	if err != nil {
 		panic(err)
 	}

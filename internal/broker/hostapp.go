@@ -30,9 +30,12 @@ type brokerResourceResolver struct {
 func (r *brokerResourceResolver) ResolveResource(guestPath string) (hostcap.ResolvedResource, error) {
 	clean := filepath.Clean(guestPath)
 	if hostPath, err := r.s.mapGuestPath(clean); err == nil {
+		if strings.TrimSpace(r.s.WorkspaceID) == "" {
+			return hostcap.ResolvedResource{}, &hostcap.Error{Code: hostcap.CodePathNoHostMapping, Reason: "workspace attachment authority is unavailable"}
+		}
 		rel := r.s.workspaceRelative(clean)
 		r.resolved = hostcap.ResourceRef{Kind: hostcap.KindWorkspace, GuestPath: clean, RelativePath: rel}
-		return hostcap.ResolvedResource{Ref: r.resolved, HostPath: hostPath}, nil
+		return hostcap.ResolvedResource{Ref: r.resolved, HostPath: hostPath, AuthorityID: r.s.WorkspaceID}, nil
 	}
 	const portal = "/hideout/hostfs"
 	if clean == portal || !strings.HasPrefix(clean, portal+"/") || r.s.HostFS == nil {
@@ -62,7 +65,8 @@ func (r *brokerResourceResolver) RevalidateResource(previous hostcap.ResolvedRes
 		return nil
 	}
 	hostPath, err := r.s.mapGuestPath(previous.Ref.GuestPath)
-	if err != nil || hostPath != previous.HostPath || previous.Ref.Kind != hostcap.KindWorkspace {
+	if err != nil || hostPath != previous.HostPath || previous.Ref.Kind != hostcap.KindWorkspace ||
+		strings.TrimSpace(r.s.WorkspaceID) == "" || previous.AuthorityID != r.s.WorkspaceID {
 		return &hostcap.Error{Code: hostcap.CodePathNoHostMapping, Reason: "resource mapping or authority changed before launch"}
 	}
 	return nil

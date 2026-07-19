@@ -14,7 +14,20 @@ import (
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 )
 
-func (c Core) attachRuntimeVerification(spec *backend.RunSpec, runSession RunSession, runEnv RunEnvironment, backendName string) error {
+type runtimeVerificationAuthority string
+
+const (
+	runtimeVerificationSessionAuthority runtimeVerificationAuthority = "session-workspace"
+	runtimeVerificationMachineAuthority runtimeVerificationAuthority = "machine"
+)
+
+func (c Core) attachRuntimeVerification(
+	spec *backend.RunSpec,
+	runSession RunSession,
+	runEnv RunEnvironment,
+	backendName string,
+	authority runtimeVerificationAuthority,
+) error {
 	if spec == nil || runEnv.Record.Runtime == nil {
 		return nil
 	}
@@ -22,7 +35,10 @@ func (c Core) attachRuntimeVerification(spec *backend.RunSpec, runSession RunSes
 	if err := receiptStore.Remove(runEnv.Record.ID); err != nil {
 		return fmt.Errorf("invalidate prior runtime verification: %w", err)
 	}
-	receiptAuthoritySafe := runtimeReceiptAuthoritySafe(runEnv.Record.Workspace, c.Store.Root)
+	receiptAuthoritySafe, err := c.runtimeReceiptAuthorityForRun(runSession, runEnv, authority)
+	if err != nil {
+		return err
+	}
 	provenance := *runEnv.Record.Runtime
 	resolution, err := c.currentRuntimeResolution(runEnv.Record)
 	if err != nil {
@@ -126,6 +142,28 @@ func (c Core) attachRuntimeVerification(spec *backend.RunSpec, runSession RunSes
 		return nil
 	}
 	return nil
+}
+
+func (c Core) runtimeReceiptAuthorityForRun(
+	runSession RunSession,
+	runEnv RunEnvironment,
+	authority runtimeVerificationAuthority,
+) (bool, error) {
+	switch authority {
+	case runtimeVerificationSessionAuthority:
+		workspaceAuthority, err := workspaceAuthorityForRunSession(runSession)
+		if err != nil {
+			return false, fmt.Errorf("resolve runtime receipt session authority: %w", err)
+		}
+		return runtimeReceiptAuthoritySafe(workspaceAuthority.HostRoot, c.Store.Root), nil
+	case runtimeVerificationMachineAuthority:
+		if !runEnv.Active || runSession.Environment.Record.ID != runEnv.Record.ID {
+			return false, errors.New("runtime receipt machine authority does not match the selected environment")
+		}
+		return runtimeReceiptAuthoritySafeForEnvironment(runEnv.Record, c.Store.Root), nil
+	default:
+		return false, errors.New("runtime verification authority is required")
+	}
 }
 
 func runtimeReceipt(runEnv RunEnvironment, contract backend.RuntimeContract, report backend.RuntimeObservationReport, backendName string) (runtimeverify.Receipt, []string, error) {

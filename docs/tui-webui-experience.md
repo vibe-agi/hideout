@@ -279,6 +279,24 @@ from active session counts so they do not look like VM keepalive resources.
 Explicit stop/clean actions continue to use the same Manager/lifecycle
 transaction and cannot bypass a live pin or unresolved reconciliation.
 
+The 035 contract makes machine and project views separate UI resources:
+
+- one environment row represents the reusable machine slot, compatibility ID,
+  backend incarnation, lifecycle state, active session count, active workspace
+  view count, selected transport service state, and redacted blockers;
+- one session/workspace-view row represents the attachment workspace ID,
+  non-authoritative basename-plus-short-ID label, logical `/workspace` root,
+  transport, view state, overlap notice, and attachment cleanup state; and
+- profile scoping filters both rows and their actions without changing
+  authority.
+
+An automatic machine row never contains a selected, last, placeholder, or
+actionable workspace. A display label is not a host root and cannot be sent
+back as an attachment or projection parameter. Concurrent disjoint projects
+must render as one machine with distinct view/session rows; same, nested, and
+overlapping roots remain explicit relations rather than being collapsed by
+their common logical `/workspace` path.
+
 ## WebUI Initial Pages
 
 ### Audit Explorer

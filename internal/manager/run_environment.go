@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,8 +18,6 @@ import (
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
 )
-
-const limaBackendConfigVersion = "lima-config/v3/no-default-port-forwards"
 
 type RunEnvironmentOptions struct {
 	EnvName        string
@@ -35,6 +34,8 @@ type RunEnvironment struct {
 	PreserveInstance bool
 	RemoveAfterRun   bool
 	Created          bool
+	Configuration    RuntimeConfiguration
+	BootReconfigure  bool
 }
 
 func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (RunEnvironment, error) {
@@ -55,15 +56,16 @@ func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (Ru
 	}
 	runEnv, err := SelectRunEnvironment(store, plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace, plan.Ephemeral, opts)
 	if err == nil && runEnv.Created && runEnv.Record.ID != "env_new" {
-		c.emitEnvironmentAudit("env.create", "allow", map[string]any{
+		details := map[string]any{
 			"environmentName": runEnv.Record.Name,
 			"environmentId":   runEnv.Record.ID,
 			"autoNamed":       runEnv.Record.AutoNamed,
 			"imageRef":        runEnv.Record.ImageRef,
-			"workspace":       runEnv.Record.Workspace,
 			"backend":         runEnv.Record.Backend,
 			"profile":         runEnv.Record.Profile,
-		})
+		}
+		addPinnedEnvironmentWorkspace(details, runEnv.Record)
+		c.emitEnvironmentAudit("env.create", "allow", details)
 	}
 	var drift *DriftError
 	if errors.As(err, &drift) {
@@ -83,7 +85,12 @@ func runtimeProvenanceForRun(store environment.Store, plan RunPlan, opts RunEnvi
 		}
 		return cloneRuntimeProvenance(rec.Runtime), nil
 	}
-	spec := RunEnvironmentSpec(plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace)
+	spec, err := automaticRunEnvironmentSpecForPlatform(
+		plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace, runtime.GOOS, runtime.GOARCH,
+	)
+	if err != nil {
+		return nil, err
+	}
 	if rec, err := store.LoadByName(spec.Name); err == nil {
 		return cloneRuntimeProvenance(rec.Runtime), nil
 	} else if !errors.Is(err, environment.ErrNameNotFound) {
@@ -112,48 +119,82 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 		if err != nil {
 			return RunEnvironment{}, err
 		}
-		spec := RunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
+		spec, err := runEnvironmentSpecForRecord(rec, p, backendName, workspace, guestWorkspace)
+		if err != nil {
+			return RunEnvironment{}, err
+		}
 		if err := ValidateEnvironmentRecord(rec, spec); err != nil {
 			return RunEnvironment{}, err
 		}
-		return selectedEnvironmentWithInstance(store, rec, p, opts.Create)
+		return selectedEnvironmentWithInstance(store, rec, spec, p, opts.Create)
 	}
 	if ephemeral || opts.RemoveAfterRun {
 		// Disposable sessions stay record-less by contract.
 		return RunEnvironment{}, nil
 	}
-	spec := RunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
+	return selectAutomaticRunEnvironmentForPlatform(
+		store, p, backendName, workspace, guestWorkspace, ephemeral, opts, runtime.GOOS, runtime.GOARCH,
+	)
+}
+
+func selectAutomaticRunEnvironmentForPlatform(
+	store environment.Store,
+	p profile.Profile,
+	backendName, workspace, guestWorkspace string,
+	ephemeral bool,
+	opts RunEnvironmentOptions,
+	hostOS, hostArch string,
+) (RunEnvironment, error) {
+	if ephemeral || opts.RemoveAfterRun {
+		return RunEnvironment{}, nil
+	}
+	spec, err := automaticRunEnvironmentSpecForPlatform(p, backendName, workspace, guestWorkspace, hostOS, hostArch)
+	if err != nil {
+		return RunEnvironment{}, err
+	}
+	var slotLock *environment.Lock
+	if spec.Mode == environment.ModeShared {
+		slotLock, err = store.LockSharedSlot(spec.SharedSlot)
+		if err != nil {
+			return RunEnvironment{}, err
+		}
+		defer slotLock.Unlock()
+	}
 	rec, err := store.LoadByName(spec.Name)
 	switch {
 	case err == nil:
 		if err := ValidateEnvironmentRecord(rec, spec); err != nil {
 			return RunEnvironment{}, err
 		}
-		return selectedEnvironmentWithInstance(store, rec, p, opts.Create)
+		return selectedEnvironmentWithInstance(store, rec, spec, p, opts.Create)
 	case !errors.Is(err, environment.ErrNameNotFound):
 		return RunEnvironment{}, err
 	}
 	if !opts.Create {
 		rec := environment.Record{
-			ID:                   "env_new",
-			Name:                 spec.Name,
-			AutoNamed:            spec.AutoNamed,
-			ImageRef:             spec.ImageRef,
-			Profile:              spec.Profile,
-			Backend:              spec.Backend,
-			BackendConfigVersion: spec.BackendConfigVersion,
-			Workspace:            spec.Workspace,
-			GuestWorkspace:       spec.GuestWorkspace,
-			ProfileID:            spec.ProfileID,
-			IdentityID:           spec.IdentityID,
-			User:                 spec.User,
-			Hostname:             spec.Hostname,
-			Status:               "new",
+			ID:                  "env_new",
+			Version:             environment.RecordVersion,
+			Name:                spec.Name,
+			AutoNamed:           spec.AutoNamed,
+			ImageRef:            spec.ImageRef,
+			Profile:             spec.Profile,
+			Backend:             spec.Backend,
+			Mode:                spec.Mode,
+			SharedSlot:          spec.SharedSlot,
+			MachineIdentityID:   spec.MachineIdentityID,
+			BootConfigurationID: spec.BootConfigurationID,
+			DedicatedWorkspace:  spec.DedicatedWorkspace,
+			DedicatedGuestRoot:  spec.DedicatedGuestRoot,
+			BoundWorkspace:      spec.BoundWorkspace,
+			BoundGuestRoot:      spec.BoundGuestRoot,
+			User:                spec.User,
+			Hostname:            spec.Hostname,
+			Status:              "new",
 		}
 		if spec.Backend == "lima" {
 			rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, "env_new")
 		}
-		return selectedRunEnvironment(store, rec, true, false, true), nil
+		return selectedRunEnvironment(store, rec, spec, p, true, false, true), nil
 	}
 	created, err := store.Create(spec)
 	if err != nil {
@@ -165,10 +206,10 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 			return RunEnvironment{}, err
 		}
 	}
-	return selectedRunEnvironment(store, created, true, false, true), nil
+	return selectedRunEnvironment(store, created, spec, p, true, false, true), nil
 }
 
-func selectedEnvironmentWithInstance(store environment.Store, rec environment.Record, p profile.Profile, persist bool) (RunEnvironment, error) {
+func selectedEnvironmentWithInstance(store environment.Store, rec environment.Record, spec environment.Spec, p profile.Profile, persist bool) (RunEnvironment, error) {
 	if rec.Backend == "lima" && rec.InstanceName == "" {
 		rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, rec.ID)
 		if persist {
@@ -177,7 +218,7 @@ func selectedEnvironmentWithInstance(store environment.Store, rec environment.Re
 			}
 		}
 	}
-	return selectedRunEnvironment(store, rec, true, false, false), nil
+	return selectedRunEnvironment(store, rec, spec, p, true, false, false), nil
 }
 
 func (c Core) PrepareRunEnvironment(runEnv RunEnvironment) error {
@@ -348,33 +389,105 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 }
 
 func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {
+	return workspaceBoundRunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
+}
+
+func automaticRunEnvironmentSpecForPlatform(
+	p profile.Profile,
+	backendName, workspace, guestWorkspace, hostOS, hostArch string,
+) (environment.Spec, error) {
+	spec := workspaceBoundRunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
+	if backendName != "lima" || hostOS != "darwin" || hostArch != "arm64" {
+		return spec, nil
+	}
+	if p.Workspace.PathMode != profile.WorkspacePathModeAlias {
+		return environment.Spec{}, fmt.Errorf("shared default Lima environments require workspace pathMode=alias; run 'hideout profile workspace-path-mode %s alias', or create a dedicated environment with 'hideout env create <name> ...' and run it with --env <name>", p.Name)
+	}
+	spec.Name = environment.SharedDisplayName(p.Name)
+	spec.AutoNamed = true
+	spec.Mode = environment.ModeShared
+	spec.SharedSlot = environment.SharedSlotID(p.Name)
+	spec.BoundWorkspace = ""
+	spec.BoundGuestRoot = ""
+	setConfigurationIDs(&spec, p, backendName, environment.ModeShared)
+	return spec, nil
+}
+
+func workspaceBoundRunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {
 	var runtimeProvenance *environment.RuntimeProvenance
 	if p.Environment.Runtime != nil {
 		copy := *p.Environment.Runtime
 		runtimeProvenance = &copy
 	}
+	_, _, machineID, bootID, err := MachineBootConfigurationForProfile(p, backendName, environment.ModeWorkspaceBound)
+	if err != nil {
+		// Run plans validate profiles before this pure constructor is called. Keep
+		// an invalid value so Store.Create fails closed instead of hiding the error.
+		machineID, bootID = "", ""
+	}
 	return environment.Spec{
-		Name:                 environment.AutoName(p.Name, workspace),
-		AutoNamed:            true,
-		ImageRef:             p.BaseImageOrBuiltin(),
-		Profile:              p.Name,
-		Backend:              backendName,
-		BackendConfigVersion: backendConfigVersion(backendName),
-		Workspace:            workspace,
-		GuestWorkspace:       guestWorkspace,
-		ProfileID:            p.Metadata["profileId"],
-		IdentityID:           p.Metadata["identityId"],
-		User:                 p.Identity.User,
-		Hostname:             p.Identity.Hostname,
-		Runtime:              runtimeProvenance,
+		Name:                environment.AutoName(p.Name, workspace),
+		AutoNamed:           true,
+		ImageRef:            p.BaseImageOrBuiltin(),
+		Profile:             p.Name,
+		Backend:             backendName,
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   machineID,
+		BootConfigurationID: bootID,
+		BoundWorkspace:      filepath.Clean(workspace),
+		BoundGuestRoot:      filepath.Clean(guestWorkspace),
+		User:                p.Identity.User,
+		Hostname:            p.Identity.Hostname,
+		Runtime:             runtimeProvenance,
 	}
 }
 
-func backendConfigVersion(backendName string) string {
-	if backendName == "lima" {
-		return limaBackendConfigVersion
+func dedicatedRunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace, name string) environment.Spec {
+	spec := workspaceBoundRunEnvironmentSpec(p, backendName, workspace, guestWorkspace)
+	spec.Name = name
+	spec.AutoNamed = false
+	spec.Mode = environment.ModeDedicated
+	spec.DedicatedWorkspace = spec.BoundWorkspace
+	spec.DedicatedGuestRoot = spec.BoundGuestRoot
+	spec.BoundWorkspace = ""
+	spec.BoundGuestRoot = ""
+	setConfigurationIDs(&spec, p, backendName, environment.ModeDedicated)
+	return spec
+}
+
+func runEnvironmentSpecForRecord(
+	record environment.Record,
+	p profile.Profile,
+	backendName, workspace, guestWorkspace string,
+) (environment.Spec, error) {
+	switch record.Mode {
+	case environment.ModeShared:
+		return automaticRunEnvironmentSpecForPlatform(p, backendName, workspace, guestWorkspace, runtime.GOOS, runtime.GOARCH)
+	case environment.ModeDedicated:
+		spec := dedicatedRunEnvironmentSpec(p, backendName, workspace, guestWorkspace, record.Name)
+		spec.ImageRef = record.ImageRef
+		spec.Runtime = cloneRuntimeProvenance(record.Runtime)
+		pinned := p
+		pinned.Environment.BaseImage = record.ImageRef
+		pinned.Environment.Runtime = cloneRuntimeProvenance(record.Runtime)
+		setConfigurationIDs(&spec, pinned, backendName, environment.ModeDedicated)
+		return spec, nil
+	case environment.ModeWorkspaceBound:
+		return workspaceBoundRunEnvironmentSpec(p, backendName, workspace, guestWorkspace), nil
+	default:
+		return environment.Spec{}, fmt.Errorf("environment %q has unsupported mode %q", record.Name, record.Mode)
 	}
-	return ""
+}
+
+func setConfigurationIDs(spec *environment.Spec, p profile.Profile, backendName string, mode environment.Mode) {
+	_, _, machineID, bootID, err := MachineBootConfigurationForProfile(p, backendName, mode)
+	if err != nil {
+		spec.MachineIdentityID = ""
+		spec.BootConfigurationID = ""
+		return
+	}
+	spec.MachineIdentityID = machineID
+	spec.BootConfigurationID = bootID
 }
 
 // DriftAxis names one drifted identity input with its pinned and current
@@ -385,8 +498,9 @@ type DriftAxis struct {
 	Current string `json:"current"`
 }
 
-// DriftError is the fail-closed use-time drift report: backend configuration
-// and pinned workspace are the two drift axes. It never triggers a rebuild.
+// DriftError is the fail-closed use-time drift report: machine identity and a
+// dedicated static workspace binding are the only run-selection drift axes. It
+// never triggers a rebuild.
 type DriftError struct {
 	Environment string
 	Axes        []DriftAxis
@@ -412,25 +526,42 @@ func ValidateEnvironmentRecord(rec environment.Record, spec environment.Spec) er
 	if rec.Backend != spec.Backend {
 		return fmt.Errorf("environment %s uses backend %q, not %q", rec.ID, rec.Backend, spec.Backend)
 	}
-	if rec.ProfileID != spec.ProfileID || rec.IdentityID != spec.IdentityID || rec.User != spec.User || rec.Hostname != spec.Hostname {
-		return fmt.Errorf("environment %q identity no longer matches the selected profile; recreate it: hideout env recreate %s", rec.Name, rec.Name)
-	}
 	var axes []DriftAxis
-	if rec.BackendConfigVersion != spec.BackendConfigVersion {
-		axes = append(axes, DriftAxis{Axis: "backendConfig", Pinned: rec.BackendConfigVersion, Current: spec.BackendConfigVersion})
+	if rec.Mode != spec.Mode {
+		axes = append(axes, DriftAxis{Axis: "mode", Pinned: string(rec.Mode), Current: string(spec.Mode)})
 	}
-	if !sameWorkspaceIdentity(rec.Workspace, spec.Workspace) ||
-		filepath.Clean(rec.GuestWorkspace) != filepath.Clean(spec.GuestWorkspace) {
+	if rec.SharedSlot != spec.SharedSlot {
+		axes = append(axes, DriftAxis{Axis: "sharedSlot", Pinned: rec.SharedSlot, Current: spec.SharedSlot})
+	}
+	if rec.MachineIdentityID != spec.MachineIdentityID {
+		axes = append(axes, DriftAxis{Axis: "machine", Pinned: rec.MachineIdentityID, Current: spec.MachineIdentityID})
+	}
+	recordBinding, recordBound := pinnedEnvironmentWorkspace(rec)
+	recordWorkspace, recordGuestRoot := recordBinding.HostRoot, recordBinding.GuestRoot
+	specWorkspace, specGuestRoot, specBound := specWorkspaceBinding(spec)
+	if recordBound != specBound || (recordBound && (!sameWorkspaceIdentity(recordWorkspace, specWorkspace) ||
+		filepath.Clean(recordGuestRoot) != filepath.Clean(specGuestRoot))) {
 		axes = append(axes, DriftAxis{
 			Axis:    "workspace",
-			Pinned:  rec.Workspace + " -> " + rec.GuestWorkspace,
-			Current: spec.Workspace + " -> " + spec.GuestWorkspace,
+			Pinned:  recordWorkspace + " -> " + recordGuestRoot,
+			Current: specWorkspace + " -> " + specGuestRoot,
 		})
 	}
 	if len(axes) > 0 {
 		return &DriftError{Environment: rec.Name, Axes: axes}
 	}
 	return nil
+}
+
+func specWorkspaceBinding(spec environment.Spec) (hostRoot, guestRoot string, ok bool) {
+	switch spec.Mode {
+	case environment.ModeDedicated:
+		return spec.DedicatedWorkspace, spec.DedicatedGuestRoot, true
+	case environment.ModeWorkspaceBound:
+		return spec.BoundWorkspace, spec.BoundGuestRoot, true
+	default:
+		return "", "", false
+	}
 }
 
 // sameWorkspaceIdentity compares workspaces by real file identity, not string
@@ -445,7 +576,17 @@ func sameWorkspaceIdentity(pinned, current string) bool {
 	return err1 == nil && err2 == nil && os.SameFile(pi, ci)
 }
 
-func selectedRunEnvironment(store environment.Store, rec environment.Record, preserve, removeAfterRun, created bool) RunEnvironment {
+func selectedRunEnvironment(store environment.Store, rec environment.Record, spec environment.Spec, p profile.Profile, preserve, removeAfterRun, created bool) RunEnvironment {
+	configuration, configurationErr := RuntimeConfigurationForProfile(p, rec.Backend, rec.Mode)
+	if configurationErr != nil {
+		machine, boot, machineID, bootID, machineErr := MachineBootConfigurationForProfile(p, rec.Backend, rec.Mode)
+		if machineErr == nil {
+			configuration.Machine = machine
+			configuration.Boot = boot
+			configuration.Layers.MachineID = machineID
+			configuration.Layers.BootID = bootID
+		}
+	}
 	return RunEnvironment{
 		Active:           true,
 		Record:           rec,
@@ -455,5 +596,7 @@ func selectedRunEnvironment(store environment.Store, rec environment.Record, pre
 		PreserveInstance: preserve,
 		RemoveAfterRun:   removeAfterRun,
 		Created:          created,
+		Configuration:    configuration,
+		BootReconfigure:  rec.BootConfigurationID != spec.BootConfigurationID,
 	}
 }

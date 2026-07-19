@@ -23,6 +23,8 @@ import (
 	runsession "github.com/vibe-agi/hideout/internal/session"
 )
 
+const daemonTestBootConfigurationID = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
 type daemonLifecycleBackend struct {
 	mu           sync.Mutex
 	observation  backend.LifecycleObservation
@@ -212,7 +214,10 @@ func TestDaemonBoundsParallelLifecycleReconciliation(t *testing.T) {
 	for index := 1; index < 7; index++ {
 		if _, err := environmentStore.Create(environment.Spec{
 			Name: fmt.Sprintf("parallel-%d", index), ImageRef: environment.BuiltinBaseImage,
-			Profile: "default", Backend: "lima", Workspace: t.TempDir(), GuestWorkspace: "/workspace",
+			Profile: "default", Backend: "lima", Mode: environment.ModeWorkspaceBound,
+			MachineIdentityID:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			BootConfigurationID: daemonTestBootConfigurationID,
+			BoundWorkspace:      t.TempDir(), BoundGuestRoot: "/workspace",
 			InstanceName: fmt.Sprintf("hideout-parallel-%d", index),
 		}); err != nil {
 			t.Fatal(err)
@@ -385,8 +390,9 @@ func TestDaemonRestartProvesStaleOwnerAndActivationAbsent(t *testing.T) {
 	}
 	ownerRecord := runsession.OwnerRecord{
 		Schema: runsession.ActiveSessionSchema, SessionID: sessionID,
-		EnvironmentID: record.ID, Profile: "default", Backend: "lima", WorkspaceID: strings.Repeat("a", 64),
-		State: runsession.OwnerStateRunning, TerminalMode: runsession.TerminalNone,
+		EnvironmentID: record.ID, Profile: "default", Backend: "lima", WorkspaceID: "wrk_" + strings.Repeat("a", 64),
+		SessionSnapshotID: "sha256:" + strings.Repeat("c", 64),
+		State:             runsession.OwnerStateRunning, TerminalMode: runsession.TerminalNone,
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), CommandClass: "bash",
 	}
 	ownerData, err := json.Marshal(ownerRecord)
@@ -479,8 +485,9 @@ func TestDaemonRestartLeavesStaleOwnerOrphaned(t *testing.T) {
 	environmentStore := environment.Store{Root: store.Root}
 	owner, err := runsession.AcquireOwner(environmentStore.OwnerRoot(record.ID), runsession.OwnerRecord{
 		Schema: runsession.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef",
-		EnvironmentID: record.ID, Profile: "default", Backend: "lima", WorkspaceID: strings.Repeat("a", 64),
-		State: runsession.OwnerStateFailed, TerminalMode: runsession.TerminalNone,
+		EnvironmentID: record.ID, Profile: "default", Backend: "lima", WorkspaceID: "wrk_" + strings.Repeat("a", 64),
+		SessionSnapshotID: "sha256:" + strings.Repeat("c", 64),
+		State:             runsession.OwnerStateFailed, TerminalMode: runsession.TerminalNone,
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), CommandClass: "bash",
 	})
 	if err != nil {
@@ -553,7 +560,7 @@ func TestLifecycleBackendFactoryAloneDoesNotEnableAutomaticStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Stop(context.Background())
-	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleGrace)
+	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleEligible)
 	time.Sleep(80 * time.Millisecond)
 	if calls := provider.stopCalls.Load(); calls != 0 {
 		t.Fatalf("backend factory silently enabled automatic stop: calls=%d", calls)
@@ -832,6 +839,7 @@ func TestDaemonLifecycleMutationWithoutForceDoesNotPoisonRunningState(t *testing
 		t.Fatal(err)
 	}
 	defer d.Stop(context.Background())
+	waitForLifecycleReconciliation(t, d, record.ID)
 	code, _ := daemonPost(t, d, lifecycleMutatePath, `{"environmentId":"`+record.ID+`","operation":"remove"}`, d.Token())
 	if code != http.StatusConflict {
 		t.Fatalf("running mutation without force code=%d", code)
@@ -850,7 +858,10 @@ func daemonLifecycleEnvironment(t *testing.T) (profile.Store, environment.Record
 	store := testStore(t)
 	record, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
 		Name: "lifecycle", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: t.TempDir(), GuestWorkspace: "/workspace", InstanceName: "hideout-lifecycle-test",
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		BootConfigurationID: daemonTestBootConfigurationID,
+		BoundWorkspace:      t.TempDir(), BoundGuestRoot: "/workspace", InstanceName: "hideout-lifecycle-test",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,9 +21,10 @@ import (
 )
 
 const (
-	recordFile = "environment.json"
-	lockFile   = ".lock"
-	version    = "hideout.environment/v2"
+	recordFile    = "environment.json"
+	lockFile      = ".lock"
+	RecordVersion = "hideout.environment/v2"
+	version       = RecordVersion
 
 	// BuiltinBaseImage is the explicit default base image declaration carried
 	// by the shipped default profile. It replaces the previous backend
@@ -37,9 +40,22 @@ const (
 	// StatusCreated marks a record whose guest has never booted. It is not a
 	// stop target: there is no instance to stop yet.
 	StatusCreated = "created"
+	StatusNew     = "new"
+	StatusReady   = "ready"
+	StatusRunning = "running"
+	StatusStopped = "stopped"
+	StatusError   = "error"
 
 	reservedName  = "default"
 	maxNameLength = 64
+)
+
+type Mode string
+
+const (
+	ModeShared         Mode = "shared"
+	ModeDedicated      Mode = "dedicated"
+	ModeWorkspaceBound Mode = "workspace-bound"
 )
 
 // ErrUnsupportedVersion is returned when an operation touches an environment
@@ -56,45 +72,144 @@ type Lock struct {
 }
 
 type Spec struct {
-	Name                 string
-	AutoNamed            bool
-	ImageRef             string
-	Runtime              *RuntimeProvenance
-	Profile              string
-	Backend              string
-	BackendConfigVersion string
-	Workspace            string
-	GuestWorkspace       string
-	ProfileID            string
-	IdentityID           string
-	User                 string
-	Hostname             string
-	InstanceName         string
+	Name                string
+	AutoNamed           bool
+	ImageRef            string
+	Runtime             *RuntimeProvenance
+	Profile             string
+	Backend             string
+	Mode                Mode
+	SharedSlot          string
+	MachineIdentityID   string
+	BootConfigurationID string
+	DedicatedWorkspace  string
+	DedicatedGuestRoot  string
+	BoundWorkspace      string
+	BoundGuestRoot      string
+	User                string
+	Hostname            string
+	InstanceName        string
 }
 
 type Record struct {
-	Version              string             `json:"version"`
-	ID                   string             `json:"id"`
-	Name                 string             `json:"name"`
-	AutoNamed            bool               `json:"autoNamed,omitempty"`
-	ImageRef             string             `json:"imageRef"`
-	Runtime              *RuntimeProvenance `json:"runtime,omitempty"`
-	Profile              string             `json:"profile"`
-	Backend              string             `json:"backend"`
-	BackendConfigVersion string             `json:"backendConfigVersion,omitempty"`
-	Workspace            string             `json:"workspace"`
-	GuestWorkspace       string             `json:"guestWorkspace"`
-	ProfileID            string             `json:"profileId,omitempty"`
-	IdentityID           string             `json:"identityId,omitempty"`
-	User                 string             `json:"user,omitempty"`
-	Hostname             string             `json:"hostname,omitempty"`
-	InstanceName         string             `json:"instanceName,omitempty"`
-	Status               string             `json:"status"`
-	LastSessionID        string             `json:"lastSessionId,omitempty"`
-	LastCommand          string             `json:"lastCommand,omitempty"`
-	CreatedAt            time.Time          `json:"createdAt"`
-	LastStartedAt        time.Time          `json:"lastStartedAt,omitempty"`
-	LastEndedAt          time.Time          `json:"lastEndedAt,omitempty"`
+	Version             string             `json:"version"`
+	ID                  string             `json:"id"`
+	Name                string             `json:"name"`
+	AutoNamed           bool               `json:"autoNamed,omitempty"`
+	ImageRef            string             `json:"imageRef"`
+	Runtime             *RuntimeProvenance `json:"runtime,omitempty"`
+	Profile             string             `json:"profile"`
+	Backend             string             `json:"backend"`
+	Mode                Mode               `json:"mode"`
+	SharedSlot          string             `json:"sharedSlot,omitempty"`
+	MachineIdentityID   string             `json:"machineIdentityId"`
+	BootConfigurationID string             `json:"bootConfigurationId"`
+	DedicatedWorkspace  string             `json:"dedicatedWorkspace,omitempty"`
+	DedicatedGuestRoot  string             `json:"dedicatedGuestRoot,omitempty"`
+	BoundWorkspace      string             `json:"boundWorkspace,omitempty"`
+	BoundGuestRoot      string             `json:"boundGuestRoot,omitempty"`
+	User                string             `json:"user,omitempty"`
+	Hostname            string             `json:"hostname,omitempty"`
+	InstanceName        string             `json:"instanceName,omitempty"`
+	Status              string             `json:"status"`
+	LastSessionID       string             `json:"lastSessionId,omitempty"`
+	LastCommand         string             `json:"lastCommand,omitempty"`
+	CreatedAt           time.Time          `json:"createdAt"`
+	LastStartedAt       time.Time          `json:"lastStartedAt,omitempty"`
+	LastEndedAt         time.Time          `json:"lastEndedAt,omitempty"`
+}
+
+func SharedSlotID(profileName string) string {
+	sum := sha256.Sum256([]byte("hideout.environment.shared-slot\x00" + strings.ToLower(strings.TrimSpace(profileName))))
+	return "slot_" + hex.EncodeToString(sum[:])
+}
+
+func SharedDisplayName(profileName string) string {
+	if strings.EqualFold(strings.TrimSpace(profileName), "default") {
+		return "default"
+	}
+	return "default:" + strings.TrimSpace(profileName)
+}
+
+func (r Record) WorkspaceBinding() (hostRoot, guestRoot string, ok bool) {
+	switch r.Mode {
+	case ModeDedicated:
+		return r.DedicatedWorkspace, r.DedicatedGuestRoot, true
+	case ModeWorkspaceBound:
+		return r.BoundWorkspace, r.BoundGuestRoot, true
+	default:
+		return "", "", false
+	}
+}
+
+func (r Record) HostWorkspace() string {
+	hostRoot, _, _ := r.WorkspaceBinding()
+	return hostRoot
+}
+
+func (r Record) GuestWorkspaceRoot() string {
+	_, guestRoot, _ := r.WorkspaceBinding()
+	return guestRoot
+}
+
+func (r Record) Validate() error {
+	if r.Version != version || !ValidID(r.ID) {
+		return errors.New("environment record identity is invalid")
+	}
+	if strings.TrimSpace(r.Profile) == "" || strings.TrimSpace(r.Backend) == "" || strings.TrimSpace(r.ImageRef) == "" {
+		return errors.New("environment record machine facts are incomplete")
+	}
+	if _, err := ParseImageDeclaration(r.ImageRef); err != nil {
+		return err
+	}
+	if r.Runtime != nil {
+		if err := r.Runtime.Validate(); err != nil {
+			return err
+		}
+		if r.ImageRef != r.Runtime.ImageRef() {
+			return errors.New("runtime provenance does not match environment imageRef")
+		}
+	}
+	if !strings.HasPrefix(r.MachineIdentityID, "sha256:") || !isLowerHex(strings.TrimPrefix(r.MachineIdentityID, "sha256:"), 64) {
+		return errors.New("environment machineIdentityId is invalid")
+	}
+	if !strings.HasPrefix(r.BootConfigurationID, "sha256:") || !isLowerHex(strings.TrimPrefix(r.BootConfigurationID, "sha256:"), 64) {
+		return errors.New("environment bootConfigurationId is invalid")
+	}
+	if r.CreatedAt.IsZero() || !slices.Contains([]string{
+		StatusNew, StatusCreated, StatusReady, StatusRunning, StatusStopped, StatusError,
+	}, r.Status) {
+		return errors.New("environment record lifecycle state is invalid")
+	}
+	switch r.Mode {
+	case ModeShared:
+		if r.Name != SharedDisplayName(r.Profile) || r.SharedSlot != SharedSlotID(r.Profile) ||
+			r.DedicatedWorkspace != "" || r.DedicatedGuestRoot != "" || r.BoundWorkspace != "" || r.BoundGuestRoot != "" {
+			return errors.New("shared environment must use its stable slot and carry no workspace binding")
+		}
+	case ModeDedicated:
+		if err := ValidateName(r.Name); err != nil {
+			return err
+		}
+		if r.SharedSlot != "" || !validWorkspaceBinding(r.DedicatedWorkspace, r.DedicatedGuestRoot) || r.BoundWorkspace != "" || r.BoundGuestRoot != "" {
+			return errors.New("dedicated environment requires exactly one dedicated workspace binding")
+		}
+	case ModeWorkspaceBound:
+		if err := ValidateName(r.Name); err != nil {
+			return err
+		}
+		if r.SharedSlot != "" || !validWorkspaceBinding(r.BoundWorkspace, r.BoundGuestRoot) || r.DedicatedWorkspace != "" || r.DedicatedGuestRoot != "" {
+			return errors.New("workspace-bound environment requires exactly one bound workspace binding")
+		}
+	default:
+		return fmt.Errorf("unsupported environment mode %q", r.Mode)
+	}
+	return nil
+}
+
+func validWorkspaceBinding(hostRoot, guestRoot string) bool {
+	return filepath.IsAbs(hostRoot) && filepath.Clean(hostRoot) == hostRoot &&
+		filepath.IsAbs(guestRoot) && filepath.Clean(guestRoot) == guestRoot
 }
 
 type RuntimeProvenance struct {
@@ -325,7 +440,7 @@ func isHex64(s string) bool {
 }
 
 func (s Store) Create(spec Spec) (Record, error) {
-	if err := ValidateName(spec.Name); err != nil {
+	if err := validateSpec(spec); err != nil {
 		return Record{}, err
 	}
 	if _, err := ParseImageDeclaration(spec.ImageRef); err != nil {
@@ -350,29 +465,91 @@ func (s Store) Create(spec Spec) (Record, error) {
 	}
 	now := time.Now().UTC()
 	rec := Record{
-		Version:              version,
-		ID:                   id,
-		Name:                 spec.Name,
-		AutoNamed:            spec.AutoNamed,
-		ImageRef:             spec.ImageRef,
-		Runtime:              cloneRuntimeProvenance(spec.Runtime),
-		Profile:              spec.Profile,
-		Backend:              spec.Backend,
-		BackendConfigVersion: spec.BackendConfigVersion,
-		Workspace:            filepath.Clean(spec.Workspace),
-		GuestWorkspace:       filepath.Clean(spec.GuestWorkspace),
-		ProfileID:            spec.ProfileID,
-		IdentityID:           spec.IdentityID,
-		User:                 spec.User,
-		Hostname:             spec.Hostname,
-		InstanceName:         spec.InstanceName,
-		Status:               StatusCreated,
-		CreatedAt:            now,
+		Version:             version,
+		ID:                  id,
+		Name:                spec.Name,
+		AutoNamed:           spec.AutoNamed,
+		ImageRef:            spec.ImageRef,
+		Runtime:             cloneRuntimeProvenance(spec.Runtime),
+		Profile:             spec.Profile,
+		Backend:             spec.Backend,
+		Mode:                spec.Mode,
+		SharedSlot:          spec.SharedSlot,
+		MachineIdentityID:   spec.MachineIdentityID,
+		BootConfigurationID: spec.BootConfigurationID,
+		DedicatedWorkspace:  cleanOptionalPath(spec.DedicatedWorkspace),
+		DedicatedGuestRoot:  cleanOptionalPath(spec.DedicatedGuestRoot),
+		BoundWorkspace:      cleanOptionalPath(spec.BoundWorkspace),
+		BoundGuestRoot:      cleanOptionalPath(spec.BoundGuestRoot),
+		User:                spec.User,
+		Hostname:            spec.Hostname,
+		InstanceName:        spec.InstanceName,
+		Status:              StatusCreated,
+		CreatedAt:           now,
 	}
-	if err := s.Save(rec); err != nil {
+	if err := s.publishNew(rec); err != nil {
 		return Record{}, err
 	}
 	return rec, nil
+}
+
+// publishNew makes a new environment visible only after its complete record is
+// present. Readers deliberately treat a valid environment directory without an
+// environment.json as corruption, so creating the final directory before the
+// record would expose a false-corruption window to concurrent daemon requests.
+func (s Store) publishNew(rec Record) error {
+	data, err := marshalRecord(rec)
+	if err != nil {
+		return err
+	}
+	parent := s.environmentsDir()
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	final := s.dir(rec.ID)
+	if _, err := os.Lstat(final); err == nil {
+		return fmt.Errorf("environment %s already exists", rec.ID)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	staging, err := os.MkdirTemp(parent, ".creating-"+rec.ID+"-")
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	if err := os.WriteFile(filepath.Join(staging, recordFile), data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(staging, final); err != nil {
+		return err
+	}
+	published = true
+	return nil
+}
+
+func validateSpec(spec Spec) error {
+	probe := Record{
+		Version: version, ID: "env_00000000000000000000", Name: spec.Name, AutoNamed: spec.AutoNamed,
+		ImageRef: spec.ImageRef, Runtime: cloneRuntimeProvenance(spec.Runtime), Profile: spec.Profile, Backend: spec.Backend,
+		Mode: spec.Mode, SharedSlot: spec.SharedSlot,
+		MachineIdentityID: spec.MachineIdentityID, BootConfigurationID: spec.BootConfigurationID,
+		DedicatedWorkspace: cleanOptionalPath(spec.DedicatedWorkspace),
+		DedicatedGuestRoot: cleanOptionalPath(spec.DedicatedGuestRoot), BoundWorkspace: cleanOptionalPath(spec.BoundWorkspace),
+		BoundGuestRoot: cleanOptionalPath(spec.BoundGuestRoot), Status: StatusCreated, CreatedAt: time.Now().UTC(),
+	}
+	return probe.Validate()
+}
+
+func cleanOptionalPath(value string) string {
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
 }
 
 // ErrNameNotFound reports that no supported-version environment record
@@ -401,37 +578,30 @@ func (s Store) LoadByName(name string) (Record, error) {
 }
 
 func (s Store) Save(rec Record) error {
-	if !ValidID(rec.ID) {
-		return fmt.Errorf("invalid environment id %q", rec.ID)
-	}
-	if rec.Version == "" {
-		rec.Version = version
-	}
-	if rec.Status == "" {
-		rec.Status = "ready"
-	}
-	if rec.Runtime != nil {
-		if err := rec.Runtime.Validate(); err != nil {
-			return err
-		}
-		if rec.ImageRef != rec.Runtime.ImageRef() {
-			return errors.New("runtime provenance does not match environment imageRef")
-		}
-	}
 	path := s.recordPath(rec.ID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(rec, "", "  ")
+	data, err := marshalRecord(rec)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func marshalRecord(rec Record) ([]byte, error) {
+	if err := rec.Validate(); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }
 
 func cloneRuntimeProvenance(in *RuntimeProvenance) *RuntimeProvenance {
@@ -536,6 +706,31 @@ func (s Store) Remove(id string) error {
 
 func (s Store) Lock(id string) (*Lock, error) {
 	return s.tryLock(id)
+}
+
+// LockSharedSlot serializes first creation and selection of one automatic
+// shared machine. The slot lock is not a target-lifetime or authority lock.
+func (s Store) LockSharedSlot(slot string) (*Lock, error) {
+	if !strings.HasPrefix(slot, "slot_") || !isLowerHex(strings.TrimPrefix(slot, "slot_"), 64) {
+		return nil, errors.New("shared environment slot id is invalid")
+	}
+	dir := filepath.Join(s.environmentsDir(), ".slots")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("shared environment slot directory must be private and real")
+	}
+	file, err := os.OpenFile(filepath.Join(dir, slot+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return &Lock{file: file}, nil
 }
 
 // LockContext waits only for an environment lifecycle transition. It is not a
@@ -669,7 +864,7 @@ func (s Store) PrepareSessionRuntime(id, sessionID string) (string, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"bootstrap", "network", "shims", "tmp"} {
+	for _, name := range []string{"bootstrap", "identity", "network", "shims", "tmp"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
 			_ = removeSessionRuntimeDir(dir)
 			return "", err
@@ -784,16 +979,28 @@ func (s Store) loadExact(id string) (Record, error) {
 		return Record{}, err
 	}
 	var rec Record
-	if err := json.Unmarshal(data, &rec); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rec); err != nil {
 		// A corrupt or partially written record is treated like a foreign
 		// version: never read through, guided to clean and recreate.
 		return Record{}, fmt.Errorf("environment %s: unreadable record: %w", id, ErrUnsupportedVersion)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Record{}, fmt.Errorf("environment %s: trailing record data: %w", id, ErrUnsupportedVersion)
 	}
 	if rec.Version != version {
 		return Record{}, fmt.Errorf("environment %s has record version %q: %w", id, rec.Version, ErrUnsupportedVersion)
 	}
 	if rec.ID == "" {
 		rec.ID = id
+	}
+	if rec.ID != id {
+		return Record{}, fmt.Errorf("environment %s record id mismatch: %w", id, ErrUnsupportedVersion)
+	}
+	if err := rec.Validate(); err != nil {
+		return Record{}, fmt.Errorf("environment %s has unsupported record shape (%v): %w", id, err, ErrUnsupportedVersion)
 	}
 	return rec, nil
 }

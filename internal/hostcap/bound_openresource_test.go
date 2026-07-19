@@ -64,11 +64,11 @@ func (d *boundRecordingDeduper) Release(key string) { d.releases = append(d.rele
 
 func TestOpenBoundResourceDedupRemainsTransactionalAfterLegacyPathRemoval(t *testing.T) {
 	binding := profileIDEModeTestBinding(t, "community.editor", "editor-command", "editor", "editor", BindingAccessAskEachRun)
-	resource := ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"}, HostPath: "/host/workspace/main.go"}
+	resource := ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"}, HostPath: "/host/workspace/main.go", AuthorityID: testWorkspaceAuthorityID}
 	request := BoundOpenRequest{Resources: []UnboundResource{{GuestPath: resource.Ref.GuestPath}}}
 	open := func(deduper Deduper, launcher *fakeLauncher, request BoundOpenRequest) (OpenResult, error) {
 		return OpenBoundResource(context.Background(), binding, request, BoundOpenContext{
-			SessionID: "session", Profile: "privacy", RunID: "run", Command: "editor",
+			SessionID: "session", Profile: "privacy", RunID: "run", WorkspaceID: testWorkspaceAuthorityID, Command: "editor",
 			Resources: fakeBoundResolver{resource: resource}, Grants: fakeGrants{active: true}, Launcher: launcher, Deduper: deduper,
 			RevalidateIdentity: func(_ ApplicationExpectation, previous ObservedApplicationIdentity) (ObservedApplicationIdentity, error) {
 				return previous, nil
@@ -151,11 +151,12 @@ func openProfileIDEModeTestBinding(t *testing.T, binding OpenResourceBinding, gr
 	return OpenBoundResource(context.Background(), binding, BoundOpenRequest{
 		Resources: []UnboundResource{{GuestPath: "/workspace/main.go"}},
 	}, BoundOpenContext{
-		SessionID: "session", Profile: "privacy", RunID: "run", Command: binding.Commands[0],
+		SessionID: "session", Profile: "privacy", RunID: "run", WorkspaceID: testWorkspaceAuthorityID, Command: binding.Commands[0],
 		SafeStateBase: t.TempDir(), Platform: PlatformDarwin,
 		Resources: fakeBoundResolver{resource: ResolvedResource{
-			Ref:      ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"},
-			HostPath: "/host/workspace/main.go",
+			Ref:         ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"},
+			HostPath:    "/host/workspace/main.go",
+			AuthorityID: testWorkspaceAuthorityID,
 		}},
 		Grants: grants, Launcher: launcher,
 		RevalidateIdentity: func(_ ApplicationExpectation, previous ObservedApplicationIdentity) (ObservedApplicationIdentity, error) {

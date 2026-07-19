@@ -34,14 +34,14 @@ func (b *daemonStreamBackend) Name() string                    { return "native"
 func (b *daemonStreamBackend) Available(context.Context) error { return nil }
 func (b *daemonStreamBackend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Session, error) {
 	return &backend.Session{
-		ID: spec.SessionID, EnvironmentID: spec.EnvironmentID, Backend: "native",
-		HostWork: spec.HostWork, GuestWork: spec.GuestWork, GuestHome: spec.GuestHome,
+		ID: spec.SessionID, EnvironmentID: spec.Machine.EnvironmentID, Backend: "native",
+		HostWork: spec.Workspace.HostRoot, GuestWork: spec.Workspace.GuestRoot, GuestHome: spec.GuestHome,
 		Env: append([]string(nil), spec.Env...), ShimDir: spec.ShimDir,
-		ProfileDir: spec.ProfileDir, IdentityMode: spec.IdentityMode,
-		IdentityRoot: spec.IdentityRoot, SessionDir: spec.SessionDir,
-		RuntimeRoot: spec.RuntimeRoot, TargetUser: spec.TargetUser,
-		Broker: spec.Broker, InstanceName: spec.InstanceName,
-		PreserveInstance:         spec.PreserveInstance,
+		ProfileDir: spec.Machine.ProfileDir, IdentityMode: spec.Machine.IdentityMode,
+		IdentityRoot: spec.Machine.IdentityRoot, SessionDir: spec.SessionDir,
+		RuntimeRoot: spec.Machine.RuntimeRoot, TargetUser: spec.TargetUser,
+		Broker: spec.Broker, InstanceName: spec.Machine.InstanceName,
+		PreserveInstance:         spec.Machine.PreserveInstance,
 		PrivilegeStatusSink:      spec.PrivilegeStatusSink,
 		PrivilegedSetupEventSink: spec.PrivilegedSetupEventSink,
 	}, nil
@@ -68,7 +68,11 @@ func (b *daemonStreamBackend) RunWithStreams(ctx context.Context, session *backe
 			return ctx.Err()
 		}
 	}
-	if err := streams.Ready(session); err != nil {
+	proof, err := backend.ReadyProofForSession(session, backend.SessionReadyNativeHarness)
+	if err != nil {
+		return err
+	}
+	if err := streams.Ready(proof); err != nil {
 		return err
 	}
 	if b.block {

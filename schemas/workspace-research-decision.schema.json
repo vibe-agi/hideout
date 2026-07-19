@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/workspace-research-decision.schema.json",
+  "title": "Hideout workspace transport research decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "feature",
+    "result",
+    "candidateResults",
+    "pathIdentity",
+    "operationMatrix",
+    "performance",
+    "topology",
+    "provenance",
+    "artifacts",
+    "decisionAt"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.workspace-research-decision/v1" },
+    "feature": { "const": "035" },
+    "result": { "enum": ["accepted", "rejected"] },
+    "selectedCandidate": {
+      "enum": ["vz-live-multiple-share", "workspace-portal"]
+    },
+    "candidateResults": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/candidateResult" }
+    },
+    "pathIdentity": { "$ref": "#/$defs/pathIdentity" },
+    "operationMatrix": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/operation" }
+    },
+    "limits": { "$ref": "#/$defs/limits" },
+    "performance": { "$ref": "#/$defs/performance" },
+    "topology": { "$ref": "#/$defs/topology" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "decisionAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "result": { "const": "accepted" } } },
+      "then": { "required": ["selectedCandidate", "limits"] },
+      "else": { "not": { "required": ["selectedCandidate"] } }
+    }
+  ],
+  "$defs": {
+    "candidateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "status", "checks", "summary"],
+      "properties": {
+        "candidate": {
+          "enum": ["vz-live-multiple-share", "workspace-portal"]
+        },
+        "status": { "enum": ["passed", "failed"] },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/check" }
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "failureCodes": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/code" }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "result", "evidenceRefs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/code" },
+        "result": { "enum": ["passed", "failed", "not-applicable"] },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/relativePath" }
+        },
+        "notes": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "pathIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logicalRoot", "physicalRootPattern", "mechanism", "tools"],
+      "properties": {
+        "logicalRoot": { "const": "/workspace" },
+        "physicalRootPattern": {
+          "type": "string",
+          "pattern": "^/hideout/workspaces/<workspaceId>$"
+        },
+        "mechanism": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "tools": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/toolObservation" }
+        }
+      }
+    },
+    "toolObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "result", "evidenceRef"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "result": { "enum": ["passed", "failed"] },
+        "evidenceRef": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "support", "result"],
+      "properties": {
+        "operation": { "$ref": "#/$defs/code" },
+        "support": { "enum": ["required", "supported", "unsupported"] },
+        "result": { "enum": ["passed", "failed", "not-applicable"] },
+        "errno": { "type": "string", "pattern": "^E[A-Z0-9]+$" },
+        "evidenceRef": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "viewsPerEnvironment",
+        "handlesPerSession",
+        "inFlightPerSession",
+        "queuedBytesPerSession",
+        "frameBytes",
+        "directoryEntries"
+      ],
+      "properties": {
+        "viewsPerEnvironment": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "handlesPerSession": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "inFlightPerSession": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "queuedBytesPerSession": { "type": "integer", "minimum": 4096, "maximum": 1073741824 },
+        "frameBytes": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
+        "directoryEntries": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metrics", "thresholdsPassed", "rawSamplesRef"],
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/performanceMetric" }
+        },
+        "thresholdsPassed": { "type": "boolean" },
+        "rawSamplesRef": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "performanceMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "candidate"],
+      "properties": {
+        "id": {
+          "enum": [
+            "git-status",
+            "package-scan",
+            "atomic-host-to-guest",
+            "atomic-guest-to-host",
+            "mount-ready",
+            "first-byte"
+          ]
+        },
+        "baseline": { "$ref": "#/$defs/performanceResult" },
+        "candidate": { "$ref": "#/$defs/performanceResult" }
+      }
+    },
+    "performanceResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "medianMs", "p95Ms"],
+      "properties": {
+        "samples": { "type": "integer", "minimum": 30 },
+        "medianMs": { "type": "number", "minimum": 0 },
+        "p95Ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostProcesses", "guestProcesses", "controlPaths", "dataPaths"],
+      "properties": {
+        "hostProcesses": { "$ref": "#/$defs/nonEmptyStrings" },
+        "guestProcesses": { "$ref": "#/$defs/nonEmptyStrings" },
+        "controlPaths": { "$ref": "#/$defs/nonEmptyStrings" },
+        "dataPaths": { "$ref": "#/$defs/nonEmptyStrings" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "dirty",
+        "hostArch",
+        "macosVersion",
+        "limaVersion",
+        "runtimeDigest",
+        "fixtureDigest",
+        "toolVersions"
+      ],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "dirty": { "type": "boolean" },
+        "hostArch": { "const": "arm64" },
+        "macosVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "limaVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "runtimeDigest": { "$ref": "#/$defs/sha256" },
+        "fixtureDigest": { "$ref": "#/$defs/sha256" },
+        "toolVersions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "nonEmptyStrings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^/].*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "code": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}

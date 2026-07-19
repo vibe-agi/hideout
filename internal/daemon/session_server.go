@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,6 +25,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const (
@@ -37,17 +37,18 @@ const (
 )
 
 type sessionServer struct {
-	core            manager.Core
-	credentials     *credentialManager
-	instanceID      string
-	registry        *sessionRegistry
-	backendFactory  manager.RunServiceBackendFactory
-	openerFactory   manager.RunServiceOpenerFactory
-	audit           *auditLog
-	leaseDuration   time.Duration
-	renewalInterval time.Duration
-	writeTimeout    time.Duration
-	lifecycle       lifecycle.Registrar
+	core               manager.Core
+	credentials        *credentialManager
+	instanceID         string
+	registry           *sessionRegistry
+	backendFactory     manager.RunServiceBackendFactory
+	openerFactory      manager.RunServiceOpenerFactory
+	audit              *auditLog
+	leaseDuration      time.Duration
+	renewalInterval    time.Duration
+	writeTimeout       time.Duration
+	lifecycle          lifecycle.Registrar
+	workspaceProviders workspaceattach.ProviderFactory
 }
 
 func (s *sessionServer) serve(listener net.Listener) error {
@@ -144,7 +145,11 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 	}
 	defer func() {
 		cancelRun()
-		s.registry.finish(connectionID, "")
+		cleanup := ""
+		if err := worker.releaseWorkspaceAttachment(context.Background()); err != nil {
+			cleanup = err.Error()
+		}
+		s.registry.finish(connectionID, cleanup)
 	}()
 
 	stdinReader, stdinWriter := io.Pipe()
@@ -165,9 +170,9 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 		Stderr:   &sessionFrameWriter{writer: writer, frameType: sessionwire.TypeStderr},
 		PTY:      &sessionFrameWriter{writer: writer, frameType: sessionwire.TypeTerminal},
 		Controls: controls,
-		Ready: func(session *backend.Session) error {
-			if session == nil {
-				return errors.New("backend reported ready without a session")
+		Ready: func(proof backend.SessionReadyProof) error {
+			if err := proof.Validate(); err != nil {
+				return fmt.Errorf("backend reported invalid ready proof: %w", err)
 			}
 			readyMu.Lock()
 			defer readyMu.Unlock()
@@ -175,16 +180,16 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 				return errors.New("backend reported session ready more than once")
 			}
 			if err := worker.markStarted(sessionStart{
-				SessionID: session.ID, EnvironmentID: session.EnvironmentID,
+				SessionID: proof.SessionID, EnvironmentID: proof.EnvironmentID,
 				Profile: prepared.Plan.ProfileName, Backend: prepared.Plan.Backend,
-				TerminalMode: string(req.Terminal.Mode),
-				WorkspaceID:  fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Clean(prepared.Plan.Workspace)))),
-				CommandClass: filepath.Base(prepared.Plan.Command[0]),
+				TerminalMode:      string(req.Terminal.Mode),
+				SessionSnapshotID: proof.SessionSnapshotID,
+				CommandClass:      filepath.Base(prepared.Plan.Command[0]),
 			}); err != nil {
 				return err
 			}
 			if err := writer.WriteControl(sessionwire.TypeStarted, &sessionwire.Started{
-				SessionID: session.ID, EnvironmentID: session.EnvironmentID,
+				SessionID: proof.SessionID, EnvironmentID: proof.EnvironmentID,
 				Terminal: sessionWireTerminal(req.Terminal), RenewalIntervalMs: durationMillis(s.renewal()),
 			}); err != nil {
 				return err
@@ -204,7 +209,15 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 		openerForSession = opener
 	}
 	result, runErr := service.Apply(runCtx, prepared, req, manager.RunServiceDependencies{
-		Backend: be, OpenerForSession: openerForSession, Streams: streams, Lifecycle: s.lifecycle,
+		Backend: be, OpenerForSession: openerForSession,
+		PrepareWorkspaceAttachment: func(runSession *manager.RunSession) error {
+			return worker.prepareWorkspaceAttachment(runCtx, s.workspaceProviders, runSession)
+		},
+		ActivateWorkspaceAttachment: func(runSession *manager.RunSession) error {
+			return worker.activateWorkspaceAttachment(runCtx, runSession)
+		},
+		ReleaseWorkspaceAttachment: worker.releaseWorkspaceAttachment,
+		Streams:                    streams, Lifecycle: s.lifecycle,
 	})
 	_ = stdinReader.Close()
 	select {
@@ -223,6 +236,13 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 		}
 		_ = writeSessionError(writer, "session.start.failed", runErr.Error(), false)
 		return
+	}
+	if cleanupErr := worker.releaseWorkspaceAttachment(context.Background()); cleanupErr != nil {
+		if result.CleanupError == "" {
+			result.CleanupError = cleanupErr.Error()
+		} else {
+			result.CleanupError += "; " + cleanupErr.Error()
+		}
 	}
 	completion := completionForRun(result, runErr)
 	if err := writer.WriteControl(sessionwire.TypeCompletion, &completion); err != nil {

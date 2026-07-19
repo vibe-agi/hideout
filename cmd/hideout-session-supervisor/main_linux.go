@@ -20,6 +20,19 @@ type controlResult struct {
 
 func runSupervisor(reader io.Reader, writer io.Writer) error {
 	wire := newSessionWire(reader, writer)
+	return runSupervisorWire(wire, verifySupervisorContext, startTarget, superviseTarget)
+}
+
+type supervisorContextVerifier func(startSpec) error
+type supervisorTargetStarter func(startSpec, supervisorWire) (*targetProcess, error)
+type supervisorTargetRunner func(*targetProcess, supervisorWire) error
+
+func runSupervisorWire(
+	wire supervisorWire,
+	verify supervisorContextVerifier,
+	start supervisorTargetStarter,
+	run supervisorTargetRunner,
+) error {
 	spec, err := wire.ReadStart()
 	if err != nil {
 		return writeInitialFailure(wire, "supervisor.start.invalid", err)
@@ -27,22 +40,22 @@ func runSupervisor(reader io.Reader, writer io.Writer) error {
 	if err := validateStart(spec, sessionwire.SupervisorProtocol); err != nil {
 		return writeInitialFailure(wire, "supervisor.start.invalid", err)
 	}
-	if err := verifySupervisorContext(spec); err != nil {
+	if err := verify(spec); err != nil {
 		return writeInitialFailure(wire, "supervisor.context.invalid", err)
 	}
 
-	process, err := startTarget(spec, wire)
+	if err := wire.WriteReady(); err != nil {
+		return fmt.Errorf("write supervisor ready: %w", err)
+	}
+	if err := wire.ReadCommit(); err != nil {
+		return fmt.Errorf("read supervisor commit: %w", err)
+	}
+	process, err := start(spec, wire)
 	if err != nil {
 		return writeInitialFailure(wire, "supervisor.target.start-failed", err)
 	}
-	if err := wire.WriteReady(); err != nil {
-		process.terminateAndWait()
-		process.queue.discardOutput()
-		_ = process.finishOutput()
-		return fmt.Errorf("write supervisor ready: %w", err)
-	}
 	process.queue.begin()
-	return superviseTarget(process, wire)
+	return run(process, wire)
 }
 
 func writeInitialFailure(wire supervisorWire, code string, failure error) error {

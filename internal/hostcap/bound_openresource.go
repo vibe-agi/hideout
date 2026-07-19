@@ -35,8 +35,9 @@ func (r BoundOpenRequest) Validate() error {
 }
 
 type ResolvedResource struct {
-	Ref      ResourceRef
-	HostPath string
+	Ref         ResourceRef
+	HostPath    string
+	AuthorityID string `json:"-"`
 }
 
 // ResourceResolver derives workspace vs HostFS portal from the live session
@@ -52,6 +53,7 @@ type BoundOpenContext struct {
 	SessionID          string
 	Profile            string
 	RunID              string
+	WorkspaceID        string
 	Command            string
 	SafeStateBase      string
 	Platform           Platform
@@ -86,6 +88,10 @@ func OpenBoundResource(ctx context.Context, binding OpenResourceBinding, request
 	}
 	if strings.TrimSpace(resource.HostPath) == "" {
 		return OpenResult{}, &Error{Code: CodePathNoHostMapping, Reason: "resource resolved to an empty host path"}
+	}
+	if resource.Ref.Kind == KindWorkspace &&
+		(strings.TrimSpace(oc.WorkspaceID) == "" || resource.AuthorityID != oc.WorkspaceID) {
+		return OpenResult{}, &Error{Code: CodePathNoHostMapping, Reason: "workspace resource is not bound to this session attachment"}
 	}
 
 	mode := appopen.ModeSafe

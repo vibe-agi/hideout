@@ -4,14 +4,17 @@
   "title": "Hideout environment service state",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "environmentId", "kind", "status", "configurationFingerprint", "mode", "startedAt"],
+  "required": ["schema", "environmentId", "kind", "status", "configurationFingerprint", "configurationId", "mode", "gatewayId", "startedAt"],
   "properties": {
     "schema": {"const": "hideout.environment-service/v1"},
     "environmentId": {"type": "string", "pattern": "^env_[A-Za-z0-9_]+$"},
     "kind": {"const": "network"},
-    "status": {"enum": ["starting", "ready", "cleaning", "failed"]},
+    "status": {"enum": ["starting", "switching", "ready", "cleaning", "failed"]},
     "configurationFingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "configurationId": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
     "mode": {"enum": ["direct", "tun2socks"]},
+    "gatewayId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\s]+$"},
+    "resolver": {"type": "string", "format": "ipv4"},
     "bootId": {"type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"},
     "startedAt": {"type": "string", "format": "date-time"},
     "updatedAt": {"type": "string", "format": "date-time"},
@@ -19,8 +22,12 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"status": {"enum": ["ready", "cleaning"]}}},
+      "if": {"properties": {"status": {"enum": ["switching", "ready", "cleaning"]}}},
       "then": {"required": ["bootId"]}
+    },
+    {
+      "if": {"properties": {"mode": {"const": "tun2socks"}}},
+      "then": {"required": ["resolver"]}
     }
   ]
 }

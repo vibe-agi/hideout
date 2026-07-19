@@ -144,6 +144,7 @@ func ephemeralPaths(dir, id string) []string {
 		filepath.Join(dir, "shims"),
 		filepath.Join(dir, "bootstrap"),
 		filepath.Join(dir, "identity"),
+		filepath.Join(dir, "policy"),
 		filepath.Join(dir, "broker.sock"),
 		filepath.Join(shortSocketDir(), "hideout-"+id+".sock"),
 		filepath.Join(dir, "broker-endpoint.json"),

@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +25,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/recovery"
 	runsession "github.com/vibe-agi/hideout/internal/session"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const (
@@ -37,23 +37,26 @@ const (
 )
 
 type ApplyRunOptions struct {
-	Backend                    backend.Backend
-	RequestedBackend           string
-	AllowWeakIsolation         bool
-	Environment                RunEnvironmentOptions
-	AuditPath                  string
-	HostFSRun                  hostfs.Config
-	DisableProfileHostFSGrants bool
-	PortBridges                []RunPortBridgeRequest
-	OpenTargets                []RunOpenTargetOwner
-	EndpointCandidates         []RunEndpointCandidate
-	EndpointExposures          []RunEndpointExposureRequest
-	Network                    RunNetworkOptions
-	Opener                     broker.Opener
-	OpenerForSession           func(RunSession) broker.Opener
-	TerminalMode               runsession.TerminalMode
-	Streams                    *backend.RunStreams
-	Lifecycle                  lifecycle.Registrar
+	Backend                     backend.Backend
+	RequestedBackend            string
+	AllowWeakIsolation          bool
+	Environment                 RunEnvironmentOptions
+	AuditPath                   string
+	HostFSRun                   hostfs.Config
+	DisableProfileHostFSGrants  bool
+	PortBridges                 []RunPortBridgeRequest
+	OpenTargets                 []RunOpenTargetOwner
+	EndpointCandidates          []RunEndpointCandidate
+	EndpointExposures           []RunEndpointExposureRequest
+	Network                     RunNetworkOptions
+	Opener                      broker.Opener
+	OpenerForSession            func(RunSession) broker.Opener
+	PrepareWorkspaceAttachment  func(*RunSession) error
+	ActivateWorkspaceAttachment func(*RunSession) error
+	ReleaseWorkspaceAttachment  func(context.Context) error
+	TerminalMode                runsession.TerminalMode
+	Streams                     *backend.RunStreams
+	Lifecycle                   lifecycle.Registrar
 }
 
 type RunResult struct {
@@ -125,12 +128,17 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		if loadErr != nil {
 			return result, fmt.Errorf("reload selected environment after transition lock: %w", loadErr)
 		}
-		if validateErr := ValidateEnvironmentRecord(current, RunEnvironmentSpec(
-			plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace,
-		)); validateErr != nil {
+		expectedSpec, specErr := runEnvironmentSpecForRecord(
+			current, plan.RuntimeProfile, plan.Backend, plan.Workspace, plan.GuestWorkspace,
+		)
+		if specErr != nil {
+			return result, specErr
+		}
+		if validateErr := ValidateEnvironmentRecord(current, expectedSpec); validateErr != nil {
 			return result, validateErr
 		}
 		runEnv.Record = current
+		runEnv.BootReconfigure = current.BootConfigurationID != expectedSpec.BootConfigurationID
 		if err := requireAttachableEnvironmentOwners(environmentStore, current.ID); err != nil {
 			return result, err
 		}
@@ -146,6 +154,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	var lifecycleSupervisorRef lifecycle.ResourceRef
 	var lifecycleTargetRef lifecycle.ResourceRef
 	var lifecycleNetworkRef lifecycle.ResourceRef
+	var workspaceLifecycleRefs runWorkspaceLifecycleRefs
 	if opts.Lifecycle != nil && runEnv.Active && runEnv.Record.Backend == "lima" {
 		observation, observeErr := lifecycleObservationForAttach(
 			ctx, opts.Lifecycle, opts.Backend, runEnv.Record.ID, runEnv.Record.InstanceName,
@@ -190,6 +199,34 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			return result, err
 		}
 	}
+	if runEnv.Record.Mode == environment.ModeShared {
+		if lifecycleRegistration == nil {
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, ErrSharedWorkspaceDaemonOwnerRequired
+		}
+		if opts.PrepareWorkspaceAttachment == nil || opts.ActivateWorkspaceAttachment == nil || opts.ReleaseWorkspaceAttachment == nil {
+			_ = lifecycleRegistration.Finish(context.Background(), nil)
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, ErrSharedWorkspaceDaemonOwnerRequired
+		}
+		if opts.Streams == nil || opts.Streams.Ready == nil {
+			_ = lifecycleRegistration.Finish(context.Background(), nil)
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, ErrSharedWorkspaceReadyBarrierRequired
+		}
+		workspacePlan, planErr := c.PlanRunWorkspaceAttachment(runSession, lifecycleRegistration, WorkspaceAttachPlanOptions{})
+		if planErr != nil {
+			_ = lifecycleRegistration.Finish(context.Background(), nil)
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, planErr
+		}
+		runSession, err = c.ApplyRunWorkspaceAttachment(runSession, workspacePlan)
+		if err != nil {
+			_ = lifecycleRegistration.Finish(context.Background(), nil)
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, err
+		}
+	}
 	var (
 		owner                     *runsession.Owner
 		lifecycleCleanupErr       error
@@ -200,20 +237,29 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		if terminalMode == "" {
 			terminalMode = runsession.TerminalNone
 		}
-		workspaceID := fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Clean(runEnv.Record.Workspace))))
+		workspaceAuthority, authorityErr := workspaceAuthorityForRunSession(runSession)
+		if authorityErr != nil {
+			if lifecycleRegistration != nil {
+				_ = lifecycleRegistration.Transition(ctx, lifecycleRegistration.Session(), lifecycle.StateFailed)
+				_ = lifecycleRegistration.Finish(ctx, authorityErr)
+			}
+			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+			return result, authorityErr
+		}
 		now := time.Now().UTC()
 		owner, err = runsession.AcquireOwner(environmentStore.OwnerRoot(runEnv.Record.ID), runsession.OwnerRecord{
-			Schema:        runsession.ActiveSessionSchema,
-			SessionID:     runSession.Layout.ID,
-			EnvironmentID: runEnv.Record.ID,
-			Profile:       plan.ProfileName,
-			Backend:       plan.Backend,
-			WorkspaceID:   workspaceID,
-			State:         runsession.OwnerStatePreparing,
-			TerminalMode:  terminalMode,
-			StartedAt:     now,
-			UpdatedAt:     now,
-			CommandClass:  ownerCommandClass(plan.Command[0]),
+			Schema:            runsession.ActiveSessionSchema,
+			SessionID:         runSession.Layout.ID,
+			EnvironmentID:     runEnv.Record.ID,
+			Profile:           plan.ProfileName,
+			Backend:           plan.Backend,
+			WorkspaceID:       workspaceAuthority.WorkspaceID,
+			SessionSnapshotID: runSession.SessionSnapshotID,
+			State:             runsession.OwnerStatePreparing,
+			TerminalMode:      terminalMode,
+			StartedAt:         now,
+			UpdatedAt:         now,
+			CommandClass:      ownerCommandClass(plan.Command[0]),
 		})
 		if err != nil {
 			if lifecycleRegistration != nil {
@@ -247,6 +293,32 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, closeErr)
 		result.CleanupError = appendCleanupError(result.CleanupError, closeErr)
 	}()
+	if runEnv.Record.Mode == environment.ModeShared {
+		workspaceLifecycleRefs, err = registerRunWorkspaceLifecycle(ctx, lifecycleRegistration, runSession.WorkspaceAttachment)
+		if err != nil {
+			return result, err
+		}
+		if err := startRunWorkspaceLifecycle(ctx, lifecycleRegistration, workspaceLifecycleRefs); err != nil {
+			return result, err
+		}
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cleanupErr := releaseRunWorkspaceLifecycle(cleanupCtx, lifecycleRegistration, workspaceLifecycleRefs, opts.ReleaseWorkspaceAttachment)
+			cancel()
+			lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, cleanupErr)
+			result.CleanupError = appendCleanupError(result.CleanupError, cleanupErr)
+			if cleanupErr != nil && retErr == nil {
+				result.Error = cleanupErr.Error()
+				retErr = cleanupErr
+			}
+		}()
+		if err := opts.PrepareWorkspaceAttachment(&runSession); err != nil {
+			return result, fmt.Errorf("prepare shared workspace provider with daemon session owner: %w", err)
+		}
+		if err := lifecycleRegistration.Transition(ctx, workspaceLifecycleRefs.Provider, lifecycle.StateActive); err != nil {
+			return result, fmt.Errorf("activate workspace provider lifecycle: %w", err)
+		}
+	}
 	if plan.Ephemeral {
 		if err := profile.MaterializeIdentityState(runSession.IdentityDir, plan.RuntimeProfile); err != nil {
 			return result, err
@@ -271,6 +343,18 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	runNetwork, netErr := c.PrepareRunNetwork(runSession, opts.Network)
+	defer func() {
+		if runNetwork.GatewayChange == nil {
+			return
+		}
+		rollbackErr := runNetwork.GatewayChange.Rollback()
+		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, rollbackErr)
+		result.CleanupError = appendCleanupError(result.CleanupError, rollbackErr)
+		if rollbackErr != nil && retErr == nil {
+			result.Error = rollbackErr.Error()
+			retErr = rollbackErr
+		}
+	}()
 	defer func() {
 		if !runNetwork.EnvironmentServiceStart {
 			return
@@ -316,13 +400,16 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		}
 	}()
 	runSpec := c.runSpec(runSession, runEnv, dataPlane, runNetwork)
-	if err := c.attachRuntimeVerification(&runSpec, runSession, runEnv, opts.Backend.Name()); err != nil {
+	if err := c.attachRuntimeVerification(&runSpec, runSession, runEnv, opts.Backend.Name(), runtimeVerificationSessionAuthority); err != nil {
 		return result, err
 	}
 	session, err := opts.Backend.Prepare(ctx, runSpec)
 	if err != nil {
 		return result, err
 	}
+	// Manager owns the immutable policy/configuration snapshot. Bind it after
+	// backend preparation so no backend implementation can omit or rewrite it.
+	session.SessionSnapshotID = runSession.SessionSnapshotID
 	result.EnvironmentID = session.EnvironmentID
 	result.EnvironmentName = runEnv.Record.Name
 	result.InstanceName = session.InstanceName
@@ -330,7 +417,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	if runNetwork.EnvironmentService {
 		controller, _ := opts.Backend.(backend.EnvironmentNetworkServiceController)
 		environmentServiceCleanup = func(cleanupCtx context.Context) error {
-			return stopRunNetworkService(cleanupCtx, runNetwork, controller, session, dataPlane.Env)
+			return c.stopRunNetworkService(cleanupCtx, runNetwork, controller, session, dataPlane.Env)
 		}
 	}
 	defer func() {
@@ -392,10 +479,42 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 				}
 			}
 		}
+		if runEnv.BootReconfigure {
+			controller, ok := opts.Backend.(backend.EnvironmentBootController)
+			if !ok {
+				return result, errors.New("selected backend cannot reconcile the environment boot configuration")
+			}
+			if err := controller.ReconcileEnvironmentBoot(ctx, session, runEnv.Configuration.Boot, dataPlane.Env); err != nil {
+				return result, fmt.Errorf("reconcile environment boot configuration: %w", err)
+			}
+			rec := runEnv.Record
+			rec.BootConfigurationID = runEnv.Configuration.Layers.BootID
+			rec.Hostname = runEnv.Configuration.Boot.Hostname
+			if err := environmentStore.Save(rec); err != nil {
+				return result, fmt.Errorf("record reconciled environment boot configuration: %w", err)
+			}
+			runEnv.Record = rec
+			runEnv.BootReconfigure = false
+			runSession.Environment = runEnv
+			_ = runSession.Audit.Emit(audit.Event{
+				Session: runSession.Layout.ID, Profile: plan.ProfileName, Backend: plan.Backend,
+				Action: "environment.boot.reconfigure", Decision: "allow",
+				Details: map[string]any{"environmentId": rec.ID, "bootConfigurationId": rec.BootConfigurationID, "hostname": rec.Hostname},
+			})
+		}
 		if lifecycleRegistration != nil {
 			if err := lifecycleRegistration.BindBoot(ctx, session.ExpectedBootID); err != nil {
 				return result, err
 			}
+		}
+		if runEnv.Record.Mode == environment.ModeShared {
+			if err := bindRunWorkspaceIncarnation(&runSession, lifecycleRegistration.Incarnation()); err != nil {
+				return result, err
+			}
+			if err := opts.ActivateWorkspaceAttachment(&runSession); err != nil {
+				return result, fmt.Errorf("activate shared workspace view with daemon session owner: %w", err)
+			}
+			runSession.WorkspaceAttachment.State = workspaceattach.AttachmentViewMounting
 		}
 		controller, _ := opts.Backend.(backend.EnvironmentNetworkServiceController)
 		if lifecycleRegistration != nil && runNetwork.EnvironmentService {
@@ -440,7 +559,8 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	previewCtx, cancelPreview := context.WithCancel(ctx)
 	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
 	var runErr error
-	if lifecycleRegistration != nil {
+	deferSharedReady := lifecycleRegistration != nil && runEnv.Record.Mode == environment.ModeShared
+	if lifecycleRegistration != nil && !deferSharedReady {
 		if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleSupervisorRef); err != nil {
 			cancelPreview()
 			return result, err
@@ -455,7 +575,37 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		if !ok {
 			runErr = errors.New("backend does not support daemon run streams")
 		} else {
-			runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, *opts.Streams)
+			streams := *opts.Streams
+			if deferSharedReady {
+				downstreamReady := streams.Ready
+				readyActivated := false
+				streams.Ready = func(proof backend.SessionReadyProof) error {
+					if readyActivated {
+						return errors.New("shared workspace ready barrier was entered more than once")
+					}
+					if err := proof.ValidateSession(session, true); err != nil {
+						return err
+					}
+					if err := activateLifecycleResource(ctx, lifecycleRegistration, workspaceLifecycleRefs.View); err != nil {
+						return err
+					}
+					if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleSupervisorRef); err != nil {
+						return err
+					}
+					if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleTargetRef); err != nil {
+						return err
+					}
+					runSession.WorkspaceAttachment.State = workspaceattach.AttachmentReady
+					if err := downstreamReady(proof); err != nil {
+						return err
+					}
+					readyActivated = true
+					return nil
+				}
+				runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, streams)
+			} else {
+				runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, streams)
+			}
 		}
 	} else {
 		runErr = opts.Backend.Run(ctx, session, plan.Command, dataPlane.Env)
@@ -740,22 +890,39 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 		networkCleanupPath = ""
 		networkCleanupGuestPath = ""
 	}
+	machineMode := environment.ModeWorkspaceBound
+	workspaceTransport := backend.WorkspaceTransportStatic
+	if runEnv.Active {
+		machineMode = runEnv.Record.Mode
+		if machineMode == environment.ModeShared {
+			workspaceTransport = backend.WorkspaceTransportPortal
+		}
+	}
+	workspace := backend.WorkspaceAttachmentSpec{
+		HostRoot: runSession.Plan.Workspace, GuestRoot: runSession.Plan.GuestWorkspace, Transport: workspaceTransport,
+	}
+	if machineMode == environment.ModeShared && runSession.WorkspacePortal != nil {
+		workspace.Portal = &backend.WorkspacePortalBinding{
+			PhysicalGuestRoot:   runSession.WorkspaceAttachment.PhysicalGuestRoot,
+			Endpoint:            runSession.WorkspacePortal.Endpoint,
+			CredentialGuestPath: runSession.WorkspacePortal.CredentialGuestPath,
+		}
+	}
 	return backend.RunSpec{
+		Machine: backend.MachineActivationSpec{
+			EnvironmentID: runEnv.Record.ID, ImageRef: runImageRef(runEnv, runSession.Plan.RuntimeProfile),
+			Profile: runSession.Plan.RuntimeProfile, ProfileDir: runSession.ProfileDir,
+			IdentityMode: IdentityMode(runSession.Plan), IdentityRoot: runSession.IdentityDir,
+			RuntimeRoot: runEnv.RuntimeDir, InstanceName: runEnv.InstanceName,
+			PreserveInstance: runEnv.PreserveInstance, Mode: machineMode,
+		},
+		Workspace:                 workspace,
 		SessionID:                 runSession.Layout.ID,
-		EnvironmentID:             runEnv.Record.ID,
-		ImageRef:                  runImageRef(runEnv, runSession.Plan.RuntimeProfile),
-		Profile:                   runSession.Plan.RuntimeProfile,
 		Command:                   append([]string(nil), runSession.Plan.Command...),
 		Env:                       append([]string(nil), dataPlane.Env...),
-		HostWork:                  runSession.Plan.Workspace,
-		GuestWork:                 runSession.Plan.GuestWorkspace,
 		GuestHome:                 filepath.Join(runSession.IdentityDir, "home"),
 		ShimDir:                   runSession.RuntimeShimDir,
-		ProfileDir:                runSession.ProfileDir,
-		IdentityMode:              IdentityMode(runSession.Plan),
-		IdentityRoot:              runSession.IdentityDir,
 		SessionDir:                runSession.RuntimeSessionDir,
-		RuntimeRoot:               runEnv.RuntimeDir,
 		SessionIsolationRequired:  runEnv.Active && runSession.Plan.Backend == "lima",
 		TargetUser:                runSession.Plan.RuntimeProfile.Identity.User,
 		Broker:                    dataPlane.BrokerGuestEndpoint,
@@ -766,8 +933,6 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 		HostFSEnabled:             dataPlane.HostFSEnabled,
 		HostFSGrafts:              append([]string(nil), dataPlane.HostFSGrafts...),
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), dataPlane.PortBridges...),
-		InstanceName:              runEnv.InstanceName,
-		PreserveInstance:          runEnv.PreserveInstance,
 		AuditPath:                 runSession.AuditPath,
 		NetworkPrivilegedSetup:    runNetwork.Plan.Mode == netpolicy.ModeTun2Socks,
 		PrivilegedSetupRequired:   runNetwork.Plan.Mode == netpolicy.ModeTun2Socks || dataPlane.HostFSEnabled,
@@ -873,6 +1038,13 @@ func emitRunSetupAudit(aw *audit.Writer, runSession RunSession, opts ApplyRunOpt
 	}
 	env := runSession.Env
 	plan := runSession.Plan
+	var workspaceAuthority runSessionWorkspaceAuthority
+	if runSession.Environment.Active {
+		workspaceAuthority, err = workspaceAuthorityForRunSession(runSession)
+		if err != nil {
+			return err
+		}
+	}
 	for _, event := range []audit.Event{
 		{
 			Session:  runSession.Layout.ID,
@@ -913,6 +1085,8 @@ func emitRunSetupAudit(aw *audit.Writer, runSession RunSession, opts ApplyRunOpt
 			Action:   "workspace.mapping",
 			Decision: "allow",
 			Details: map[string]any{
+				"environmentId":    runSession.Environment.Record.ID,
+				"workspaceId":      workspaceAuthority.WorkspaceID,
 				"host":             plan.Workspace,
 				"guest":            plan.GuestWorkspace,
 				"mode":             plan.RuntimeProfile.Workspace.Mode,

@@ -70,6 +70,17 @@ func (w *sessionWire) ReadStart() (startSpec, error) {
 	}, nil
 }
 
+func (w *sessionWire) ReadCommit() error {
+	frame, err := w.reader.ReadFrame()
+	if err != nil {
+		return err
+	}
+	if frame.Type != sessionwire.TypeSupervisorCommit || len(frame.Payload) != 0 {
+		return fmt.Errorf("supervisor ready must be followed by an empty commit frame, got %s", frame.Type)
+	}
+	return nil
+}
+
 func (w *sessionWire) ReadControl() (supervisorControl, error) {
 	for {
 		frame, err := w.reader.ReadFrame()

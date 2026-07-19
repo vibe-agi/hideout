@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/environment-summary.schema.json",
+  "title": "Hideout environment machine summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "mode",
+    "machineIdentityId",
+    "bootConfigurationId",
+    "profile",
+    "backend",
+    "status",
+    "createdAt",
+    "activeSessions",
+    "activeWorkspaceViews"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.environment-summary/v1" },
+    "id": { "type": "string", "pattern": "^env_[A-Za-z0-9_-]{1,124}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "autoNamed": { "type": "boolean" },
+    "mode": { "enum": ["shared", "dedicated", "workspace-bound"] },
+    "sharedSlot": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "machineIdentityId": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "bootConfigurationId": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "serviceConfigurationId": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "serviceFingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "serviceMode": {"enum": ["direct", "tun2socks"]},
+    "serviceStatus": {"enum": ["starting", "switching", "ready", "cleaning", "failed", "unprovable"]},
+    "imageRef": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "recordVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "profile": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "backend": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "status": {
+      "enum": [
+        "new",
+        "created",
+        "ready",
+        "running",
+        "stopped",
+        "error",
+        "unsupported-version"
+      ]
+    },
+    "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "guestWorkspace": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "workspaceLabel": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "instanceName": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "lastSessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "lastCommand": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "lastStartedAt": { "type": "string", "format": "date-time" },
+    "lastEndedAt": { "type": "string", "format": "date-time" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "activeSessions": { "type": "integer", "minimum": 0, "maximum": 256 },
+    "activeWorkspaceViews": { "type": "integer", "minimum": 0, "maximum": 256 },
+    "workspaceProviderState": {
+      "enum": ["not-started", "starting", "ready", "draining", "released", "unproved"]
+    },
+    "ownerHealth": { "enum": ["live", "stale", "unprovable"] },
+    "blockers": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/recovery" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "mode": { "const": "shared" } },
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["sharedSlot"],
+        "not": {
+          "anyOf": [
+            { "required": ["workspace"] },
+            { "required": ["guestWorkspace"] },
+            { "required": ["workspaceLabel"] }
+          ]
+        }
+      },
+      "else": {
+        "required": ["workspace", "guestWorkspace", "workspaceLabel"],
+        "not": { "required": ["sharedSlot"] }
+      }
+    }
+  ],
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "running"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "family": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "maturity": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "artifactSHA256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "running": { "type": "boolean" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "lastStatus": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "failedIds": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "privilegeStatus": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "recoveryCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recovery": { "$ref": "#/$defs/recovery" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "reason", "hint"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "hint": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "nextActions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "docsRefs": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      }
+    }
+  }
+}

@@ -51,6 +51,22 @@ func payloadField(payload EventPayload, field string) string {
 		return payload.RecordKind
 	case "noticeId":
 		return payload.NoticeID
+	case "attachmentId":
+		return payload.AttachmentID
+	case "session":
+		return payload.Session
+	case "environmentId":
+		return payload.EnvironmentID
+	case "workspaceId":
+		return payload.WorkspaceID
+	case "workspaceLabel":
+		return payload.WorkspaceLabel
+	case "guestWorkspace":
+		return payload.GuestWorkspace
+	case "workspaceTransport":
+		return payload.WorkspaceTransport
+	case "workspaceViewState":
+		return string(payload.WorkspaceViewState)
 	case "lifecycle":
 		if payload.Lifecycle != nil && payload.Lifecycle.Schema == lifecycle.StatusSchema && payload.Lifecycle.EnvironmentID != "" {
 			return payload.Lifecycle.EnvironmentID

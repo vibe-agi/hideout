@@ -3,6 +3,8 @@
 .hideout-release-evidence/
 .hideout-operator*
 /dist/runtime/
+/dist/product-evidence/
+/dist/workspace-research/
 
 # Go build/test artifacts
 *.exe

@@ -10,6 +10,8 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostcap/appopen"
 )
 
+const testWorkspaceAuthorityID = "wrk_test_session_authority"
+
 type fakeBoundResolver struct {
 	resource      ResolvedResource
 	err           error
@@ -124,9 +126,9 @@ func TestOpenBoundResourceUsesOneGenericPathForTwoRecipes(t *testing.T) {
 				Resources: []UnboundResource{{GuestPath: "/workspace/src/main.go"}},
 				Location:  &Location{Line: 12, Column: 3}, WindowMode: WindowReuse,
 			}, BoundOpenContext{
-				SessionID: "sess", Profile: "privacy", RunID: "run", SafeStateBase: base,
+				SessionID: "sess", Profile: "privacy", RunID: "run", WorkspaceID: testWorkspaceAuthorityID, SafeStateBase: base,
 				Platform:  PlatformDarwin,
-				Resources: fakeBoundResolver{resource: ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/src/main.go", RelativePath: "src/main.go"}, HostPath: "/host/project/src/main.go"}},
+				Resources: fakeBoundResolver{resource: ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/src/main.go", RelativePath: "src/main.go"}, HostPath: "/host/project/src/main.go", AuthorityID: testWorkspaceAuthorityID}},
 				Launcher:  launcher, RevalidateIdentity: func(ApplicationExpectation, ObservedApplicationIdentity) (ObservedApplicationIdentity, error) {
 					return identity, nil
 				},
@@ -209,12 +211,13 @@ func TestOpenBoundResourceRejectsResourceRetargetAtLauncherGuard(t *testing.T) {
 	binding.SafetyProfileID, binding.SafetyProfileVersion = "", ""
 	binding, _ = FinalizeBindingDigest(binding)
 	resolver := &raceBoundResolver{resource: ResolvedResource{
-		Ref:      ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/a.go", RelativePath: "a.go"},
-		HostPath: "/host/workspace/a.go",
+		Ref:         ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/a.go", RelativePath: "a.go"},
+		HostPath:    "/host/workspace/a.go",
+		AuthorityID: testWorkspaceAuthorityID,
 	}}
 	launcher := &fakeLauncher{beforeGuard: func() { resolver.failFinal = true }}
 	_, err := OpenBoundResource(context.Background(), binding, BoundOpenRequest{Resources: []UnboundResource{{GuestPath: "/workspace/a.go"}}}, BoundOpenContext{
-		SessionID: "session", Profile: "privacy", RunID: "run", Command: "editor",
+		SessionID: "session", Profile: "privacy", RunID: "run", WorkspaceID: testWorkspaceAuthorityID, Command: "editor",
 		Resources: resolver, Grants: fakeGrants{active: true}, Launcher: launcher,
 		RevalidateIdentity: func(_ ApplicationExpectation, prior ObservedApplicationIdentity) (ObservedApplicationIdentity, error) {
 			return prior, nil
@@ -280,8 +283,8 @@ func TestOpenBoundResourceRejectsAppReplacementAtLauncherGuard(t *testing.T) {
 	checks := 0
 	launcher := &fakeLauncher{beforeGuard: func() { replaced = true }}
 	_, err := OpenBoundResource(context.Background(), binding, BoundOpenRequest{Resources: []UnboundResource{{GuestPath: "/workspace/a.go"}}}, BoundOpenContext{
-		SessionID: "session", Profile: "privacy", RunID: "run", Command: "editor",
-		Resources: fakeBoundResolver{resource: ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/a.go"}, HostPath: "/host/workspace/a.go"}},
+		SessionID: "session", Profile: "privacy", RunID: "run", WorkspaceID: testWorkspaceAuthorityID, Command: "editor",
+		Resources: fakeBoundResolver{resource: ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/a.go"}, HostPath: "/host/workspace/a.go", AuthorityID: testWorkspaceAuthorityID}},
 		Grants:    fakeGrants{active: true}, Launcher: launcher,
 		RevalidateIdentity: func(_ ApplicationExpectation, prior ObservedApplicationIdentity) (ObservedApplicationIdentity, error) {
 			checks++

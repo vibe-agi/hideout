@@ -112,7 +112,8 @@ func TestActiveSessionSummaryRedactsRawOwnerPathsAndCleanupMaterial(t *testing.T
 	store := profile.Store{Root: t.TempDir()}
 	environmentStore := environment.Store{Root: store.Root}
 	record, err := environmentStore.Create(environment.Spec{
-		Name: "redaction", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "native", Workspace: t.TempDir(), GuestWorkspace: "/workspace",
+		Name: "redaction", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "native",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +125,7 @@ func TestActiveSessionSummaryRedactsRawOwnerPathsAndCleanupMaterial(t *testing.T
 	owner, err := runsession.AcquireOwner(environmentStore.OwnerRoot(record.ID), runsession.OwnerRecord{
 		Schema: runsession.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_00112233445566778899",
 		EnvironmentID: record.ID, Profile: "default", Backend: "native",
-		WorkspaceID: strings.Repeat("a", 64), State: runsession.OwnerStatePreparing,
+		WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(), State: runsession.OwnerStatePreparing,
 		TerminalMode: runsession.TerminalNone, StartedAt: now, UpdatedAt: now, CommandClass: "hold",
 	})
 	if err != nil {

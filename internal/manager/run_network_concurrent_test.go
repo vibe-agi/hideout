@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,13 +12,14 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/backend/lima"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
-func TestDirectNetworkPlansRemainSessionLocal(t *testing.T) {
+func TestDirectNetworkUsesOneReusableEnvironmentService(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
 	plan, err := core.PlanRun(RunPlanOptions{ProfileName: "default", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"}})
@@ -45,21 +47,33 @@ func TestDirectNetworkPlansRemainSessionLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !first.EnvironmentService || !first.EnvironmentServiceStart || first.EnvironmentServiceAction != networkServiceStart {
+		t.Fatalf("first direct service=%+v", first)
+	}
+	controller := &recordingNetworkServiceController{}
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	if err := core.StartRunNetworkService(context.Background(), firstSession, &first, controller, &backend.Session{ID: firstSession.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
+		t.Fatal(err)
+	}
 	second, err := core.PrepareRunNetwork(secondSession, RunNetworkOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.EnvironmentService || second.EnvironmentService {
-		t.Fatalf("direct network unexpectedly became an environment service: first=%+v second=%+v", first, second)
+	if !second.EnvironmentService || second.EnvironmentServiceStart || second.EnvironmentServiceAction != networkServiceReuse {
+		t.Fatalf("second direct service=%+v", second)
 	}
-	firstRoot := filepath.Dir(first.Plan.ManifestPath)
-	secondRoot := filepath.Dir(second.Plan.ManifestPath)
-	if firstRoot == secondRoot || firstRoot != firstSession.RuntimeSessionDir || secondRoot != secondSession.RuntimeSessionDir {
-		t.Fatalf("direct network runtime is not session-local: first=%q second=%q", firstRoot, secondRoot)
+	if first.ServiceDir != second.ServiceDir || first.Plan.GatewayID != second.Plan.GatewayID {
+		t.Fatalf("direct service identity drifted: first=%+v second=%+v", first, second)
+	}
+	if err := core.StartRunNetworkService(context.Background(), secondSession, &second, controller, &backend.Session{ID: secondSession.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if controller.directVerifies != 2 || controller.starts != 0 || controller.stops != 0 {
+		t.Fatalf("direct service verification=%+v", controller)
 	}
 }
 
-func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndRejectsSecretDrift(t *testing.T) {
+func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnline(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	p := profile.Default("privacy")
 	p.Network.Mode = network.ModeTun2Socks
@@ -90,6 +104,18 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndRejectsSecretDrift
 	if !first.EnvironmentService || !first.EnvironmentServiceStart || first.Plan.ConfigurationFingerprint == "" {
 		t.Fatalf("first service=%+v", first)
 	}
+	wantFirstSecret := filepath.Join(firstSession.RuntimeSessionDir, "network", "proxy.url")
+	wantFirstGuestSecret := lima.GuestRuntimeDir + "/sessions/" + firstSession.Layout.ID + "/network/proxy.url"
+	if first.Plan.ProxySecretPath != wantFirstSecret || first.Plan.GuestProxySecretPath != wantFirstGuestSecret {
+		t.Fatalf("first secret authority host=%q guest=%q want=%q %q", first.Plan.ProxySecretPath, first.Plan.GuestProxySecretPath, wantFirstSecret, wantFirstGuestSecret)
+	}
+	for _, artifact := range []string{first.Plan.ManifestPath, first.Plan.BootstrapPath, first.Plan.CleanupPath} {
+		rel, relErr := filepath.Rel(first.ServiceDir, artifact)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Fatalf("environment service artifact escaped shared root: path=%q rel=%q err=%v", artifact, rel, relErr)
+		}
+	}
+	assertDirectoryExcludesRawNetworkSecret(t, first.ServiceDir, "socks5://user:one@127.0.0.1:1080")
 	state, err := network.LoadServiceState(first.ServiceStatePath)
 	if err != nil || state.Status != network.ServiceStarting {
 		t.Fatalf("starting state=%+v err=%v", state, err)
@@ -105,6 +131,9 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndRejectsSecretDrift
 	}
 	if controller.starts != 1 || first.EnvironmentServiceStart || !first.Plan.Verified {
 		t.Fatalf("first owner did not establish the environment service: controller=%+v plan=%+v", controller, first)
+	}
+	if _, err := os.Lstat(wantFirstSecret); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consumed session secret remains after service start: %v", err)
 	}
 	ready, err := network.LoadServiceState(first.ServiceStatePath)
 	if err != nil || ready.Status != network.ServiceReady || ready.BootID != bootID {
@@ -127,6 +156,13 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndRejectsSecretDrift
 	if second.EnvironmentServiceStart || second.Plan.Verified || !second.Plan.RuntimeVerify || second.Plan.ConfigurationFingerprint != first.Plan.ConfigurationFingerprint {
 		t.Fatalf("matching reuse=%+v", second)
 	}
+	wantSecondSecret := filepath.Join(secondSession.RuntimeSessionDir, "network", "proxy.url")
+	if second.Plan.ProxySecretPath != wantSecondSecret || second.Plan.ProxySecretPath == first.Plan.ProxySecretPath {
+		t.Fatalf("reuse secret authority=%q want distinct session path %q", second.Plan.ProxySecretPath, wantSecondSecret)
+	}
+	if _, err := os.Lstat(wantSecondSecret); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matching service reuse materialized a session secret: %v", err)
+	}
 	if err := core.StartRunNetworkService(context.Background(), secondSession, &second, controller, &backend.Session{ID: secondSession.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +170,18 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndRejectsSecretDrift
 		t.Fatalf("reuse was not runtime verified: controller=%+v plan=%+v", controller, second.Plan)
 	}
 	driftResolver := network.EnvSecretResolver{Env: []string{network.SecretEnvName("shared-proxy") + "=socks5://user:two@127.0.0.1:1080"}}
-	if _, err := core.PrepareRunNetwork(secondSession, RunNetworkOptions{Resolver: driftResolver}); err == nil || !strings.Contains(err.Error(), "conflicts with a live owner") {
-		t.Fatalf("secret drift error=%v", err)
+	drift, err := core.PrepareRunNetwork(secondSession, RunNetworkOptions{Resolver: driftResolver})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drift.EnvironmentServiceAction != networkServiceGateway || drift.EnvironmentServiceStart {
+		t.Fatalf("proxy switch plan=%+v", drift)
+	}
+	if err := core.StartRunNetworkService(context.Background(), secondSession, &drift, controller, &backend.Session{ID: secondSession.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if controller.starts != 1 || controller.stops != 0 || controller.verifies != 2 {
+		t.Fatalf("proxy switch restarted guest service: controller=%+v", controller)
 	}
 	data, err := os.ReadFile(first.ServiceStatePath)
 	if err != nil {
@@ -145,6 +191,194 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndRejectsSecretDrift
 		if strings.Contains(string(data), forbidden) {
 			t.Fatalf("state leaked %q: %s", forbidden, data)
 		}
+	}
+}
+
+func TestEnvironmentNetworkServiceSwitchesDirectProxyAndDNSWithoutRecreate(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	p := profile.Default("switchable")
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	p, err = store.Load(p.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	workspace := t.TempDir()
+	controller := &recordingNetworkServiceController{}
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	begin := func() (RunSession, error) {
+		plan, err := core.PlanRun(RunPlanOptions{ProfileName: p.Name, Backend: "lima", Workspace: workspace, Command: []string{"true"}})
+		if err != nil {
+			return RunSession{}, err
+		}
+		runEnvironment, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+		if err != nil {
+			return RunSession{}, err
+		}
+		return core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
+	}
+	apply := func(session RunSession, resolver network.SecretResolver) RunNetwork {
+		t.Helper()
+		runNetwork, err := core.PrepareRunNetwork(session, RunNetworkOptions{Resolver: resolver})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runNetwork.Plan.Mode == network.ModeTun2Socks {
+			if err := os.WriteFile(filepath.Join(session.RuntimeShimDir, "hideout-dns-stub"), []byte("helper"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := core.StartRunNetworkService(context.Background(), session, &runNetwork, controller, &backend.Session{ID: session.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
+			t.Fatal(err)
+		}
+		return runNetwork
+	}
+
+	directSession, err := begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.CloseRunSession(directSession)
+	direct := apply(directSession, nil)
+	if direct.EnvironmentServiceAction != networkServiceStart {
+		t.Fatalf("initial direct action=%q", direct.EnvironmentServiceAction)
+	}
+	environmentID := directSession.Environment.Record.ID
+	machineID := directSession.Environment.Record.MachineIdentityID
+	bootConfigurationID := directSession.Environment.Record.BootConfigurationID
+
+	p.Network.Mode = network.ModeTun2Socks
+	p.Network.ProxySecretRef = "switch-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	proxyResolver := network.EnvSecretResolver{Env: []string{network.SecretEnvName("switch-proxy") + "=socks5://user:one@127.0.0.1:1080"}}
+	proxySession, err := begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.CloseRunSession(proxySession)
+	proxy := apply(proxySession, proxyResolver)
+	if proxySession.Environment.Record.ID != environmentID || proxy.EnvironmentServiceAction != networkServiceEnableProxy || controller.starts != 1 {
+		t.Fatalf("direct-to-proxy recreated or missed live enable: env=%q action=%q controller=%+v", proxySession.Environment.Record.ID, proxy.EnvironmentServiceAction, controller)
+	}
+
+	p.Network.MediatedResolver = "9.9.9.9"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	dnsSession, err := begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.CloseRunSession(dnsSession)
+	dns := apply(dnsSession, proxyResolver)
+	if dnsSession.Environment.Record.ID != environmentID || dns.EnvironmentServiceAction != networkServiceDNS || len(controller.dnsSwitches) != 1 || controller.dnsSwitches[0] != [2]string{"1.1.1.1", "9.9.9.9"} {
+		t.Fatalf("DNS switch=%+v controller=%+v", dns, controller)
+	}
+
+	p.Network.Mode = network.ModeDirect
+	p.Network.ProxySecretRef = ""
+	p.Network.MediatedResolver = ""
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	finalSession, err := begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.CloseRunSession(finalSession)
+	final := apply(finalSession, nil)
+	if finalSession.Environment.Record.ID != environmentID || final.EnvironmentServiceAction != networkServiceDisableProxy || controller.stops != 1 || controller.directVerifies < 2 {
+		t.Fatalf("proxy-to-direct recreated or missed live disable: env=%q action=%q controller=%+v", finalSession.Environment.Record.ID, final.EnvironmentServiceAction, controller)
+	}
+	if finalSession.Environment.Record.MachineIdentityID != machineID || finalSession.Environment.Record.BootConfigurationID != bootConfigurationID {
+		t.Fatalf("network switch changed machine/boot identity: before=%s/%s after=%s/%s", machineID, bootConfigurationID, finalSession.Environment.Record.MachineIdentityID, finalSession.Environment.Record.BootConfigurationID)
+	}
+	state, err := network.LoadServiceState(final.ServiceStatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ConfigurationID != finalSession.Environment.Configuration.Layers.ServicesID || state.Status != network.ServiceReady || state.Mode != network.ModeDirect {
+		t.Fatalf("final service state=%+v desired=%s", state, finalSession.Environment.Configuration.Layers.ServicesID)
+	}
+	summaries := environmentSummaries(store.Root)
+	if len(summaries) != 1 || summaries[0].ServiceConfigurationID != state.ConfigurationID || summaries[0].ServiceFingerprint != state.ConfigurationFingerprint || summaries[0].ServiceStatus != string(network.ServiceReady) {
+		t.Fatalf("environment service summary=%+v state=%+v", summaries, state)
+	}
+}
+
+func TestEnvironmentNetworkPostureSwitchWaitsForSiblingSessionWithoutRecreate(t *testing.T) {
+	core, store, runSession, _ := preparedReadyEnvironmentNetworkService(t)
+	configuration, err := RuntimeConfigurationForProfile(runSession.Plan.RuntimeProfile, runSession.Plan.Backend, runSession.Environment.Record.Mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSession.Environment.Configuration = configuration
+	now := time.Now().UTC()
+	sibling, err := session.AcquireOwner(store.OwnerRoot(runSession.Environment.Record.ID), session.OwnerRecord{
+		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120001Z_fedcba9876543210", EnvironmentID: runSession.Environment.Record.ID,
+		Profile: runSession.Plan.ProfileName, Backend: runSession.Plan.Backend, WorkspaceID: "wrk_" + strings.Repeat("b", 64), SessionSnapshotID: testSessionSnapshotID(),
+		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
+		StartedAt: now, UpdatedAt: now, CommandClass: "sleep",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked, err := core.PrepareRunNetwork(runSession, RunNetworkOptions{})
+	if err == nil || !strings.Contains(err.Error(), "requires no active sibling sessions") {
+		t.Fatalf("posture switch with a sibling session err=%v plan=%+v", err, blocked)
+	}
+	if blocked.EnvironmentServiceAction != networkServiceDisableProxy {
+		t.Fatalf("blocked action=%q", blocked.EnvironmentServiceAction)
+	}
+	if _, statErr := os.Stat(blocked.PreviousPlan.CleanupPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("blocked transition materialized shared cleanup state: %v", statErr)
+	}
+	if err := sibling.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := core.PrepareRunNetwork(runSession, RunNetworkOptions{})
+	if err != nil {
+		t.Fatalf("posture switch did not become attachable after sibling exit: %v", err)
+	}
+	if retry.EnvironmentServiceAction != networkServiceDisableProxy || retry.GatewayChange == nil {
+		t.Fatalf("retry=%+v", retry)
+	}
+	if err := retry.GatewayChange.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDirectoryExcludesRawNetworkSecret(t *testing.T, root, secret string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == "proxy.url" {
+			return fmt.Errorf("shared service contains session secret file %s", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), secret) || strings.Contains(string(data), network.SecretEnvName("shared-proxy")) {
+			return fmt.Errorf("shared service artifact %s contains raw session credential material", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -170,10 +404,117 @@ func TestEnvironmentNetworkServiceRejectsStaleBootAndFailedRuntimeHealth(t *test
 	}
 }
 
+func TestEnvironmentNetworkDNSFailureRestoresProvedPreviousGeneration(t *testing.T) {
+	core, _, runSession, runNetwork := preparedReadyEnvironmentNetworkService(t)
+	previous := *runNetwork.PreviousServiceState
+	runNetwork.Plan.MediatedResolver = "9.9.9.9"
+	runNetwork.Plan.ConfigurationFingerprint = strings.Repeat("c", 64)
+	runNetwork.EnvironmentServiceAction = networkServiceDNS
+	runNetwork.EnvironmentServiceStart = true
+	if err := os.WriteFile(filepath.Join(runSession.RuntimeShimDir, "hideout-dns-stub"), []byte("helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	controller := &recordingNetworkServiceController{dnsErr: backend.EnvironmentServiceReconfigureError{
+		Operation: "reconfigure environment DNS", RollbackProved: true, Cause: errors.New("replacement failed"),
+	}}
+	err := core.StartRunNetworkService(
+		context.Background(), runSession, &runNetwork, controller,
+		&backend.Session{ID: runSession.Layout.ID, ExpectedBootID: previous.BootID}, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "replacement failed") {
+		t.Fatalf("DNS switch error=%v", err)
+	}
+	state, loadErr := network.LoadServiceState(runNetwork.ServiceStatePath)
+	if loadErr != nil || state.Status != network.ServiceReady || state.ConfigurationFingerprint != previous.ConfigurationFingerprint || state.Resolver != previous.Resolver {
+		t.Fatalf("restored state=%+v err=%v", state, loadErr)
+	}
+}
+
+func TestEnvironmentNetworkServiceStartFailureScrubsSessionSecret(t *testing.T) {
+	core, runSession, runNetwork := preparedStartingEnvironmentNetworkService(t)
+	controller := &recordingNetworkServiceController{startErr: errors.New("setup identity rejected network start")}
+	err := core.StartRunNetworkService(
+		context.Background(), runSession, &runNetwork, controller,
+		&backend.Session{ID: runSession.Layout.ID, ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef"}, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "setup identity rejected") {
+		t.Fatalf("network start error=%v", err)
+	}
+	if _, err := os.Lstat(runNetwork.Plan.ProxySecretPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed network start retained session secret: %v", err)
+	}
+	state, err := network.LoadServiceState(runNetwork.ServiceStatePath)
+	if err != nil || state.Status != network.ServiceFailed {
+		t.Fatalf("failed network state=%+v err=%v", state, err)
+	}
+}
+
+func TestEnvironmentNetworkServiceRefusesReadyWithUnremovableSessionSecret(t *testing.T) {
+	core, runSession, runNetwork := preparedStartingEnvironmentNetworkService(t)
+	if err := os.Remove(runNetwork.Plan.ProxySecretPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runNetwork.Plan.ProxySecretPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runNetwork.Plan.ProxySecretPath, "retained"), []byte("not-a-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := core.StartRunNetworkService(
+		context.Background(), runSession, &runNetwork, &recordingNetworkServiceController{},
+		&backend.Session{ID: runSession.Layout.ID, ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef"}, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "remove consumed session network secret") {
+		t.Fatalf("unremovable session secret error=%v", err)
+	}
+	if runNetwork.Plan.Verified || !runNetwork.EnvironmentServiceStart {
+		t.Fatalf("service became ready with retained secret: %+v", runNetwork)
+	}
+	state, stateErr := network.LoadServiceState(runNetwork.ServiceStatePath)
+	if stateErr != nil || state.Status != network.ServiceFailed {
+		t.Fatalf("retained-secret state=%+v err=%v", state, stateErr)
+	}
+}
+
+func preparedStartingEnvironmentNetworkService(t *testing.T) (Core, RunSession, RunNetwork) {
+	t.Helper()
+	store := profile.Store{Root: t.TempDir()}
+	p := profile.Default("privacy")
+	p.Network.Mode = network.ModeTun2Socks
+	p.Network.ProxySecretRef = "shared-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{ProfileName: p.Name, Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnvironment, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSession, err := core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = core.CloseRunSession(runSession) })
+	resolver := network.EnvSecretResolver{Env: []string{network.SecretEnvName("shared-proxy") + "=socks5://user:one@127.0.0.1:1080"}}
+	runNetwork, err := core.PrepareRunNetwork(runSession, RunNetworkOptions{Resolver: resolver, Verified: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runSession.RuntimeShimDir, "hideout-dns-stub"), []byte("helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return core, runSession, runNetwork
+}
+
 func preparedReadyEnvironmentNetworkService(t *testing.T) (Core, environment.Store, RunSession, RunNetwork) {
 	t.Helper()
 	core, store, record := concurrentLifecycleFixture(t)
-	plan, err := core.PlanRun(RunPlanOptions{ProfileName: record.Profile, Backend: record.Backend, Workspace: record.Workspace, Command: []string{"true"}})
+	plan, err := core.PlanRun(RunPlanOptions{ProfileName: record.Profile, Backend: record.Backend, Workspace: record.HostWorkspace(), Command: []string{"true"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +524,10 @@ func preparedReadyEnvironmentNetworkService(t *testing.T) (Core, environment.Sto
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = core.CloseRunSession(runSession) })
-	servicePlan := network.Plan{Mode: network.ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("b", 64)}
+	servicePlan := network.Plan{
+		Mode: network.ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("b", 64),
+		GatewayID: "gw_test", ConfigurationID: testEnvironmentServiceConfigurationID(), MediatedResolver: "1.1.1.1",
+	}
 	serviceDir := store.RuntimeNetworkServiceDir(record.ID)
 	state, err := network.BuildServiceState(record.ID, servicePlan, network.ServiceReady, "01234567-89ab-cdef-0123-456789abcdef", time.Now().UTC(), nil)
 	if err != nil {
@@ -196,6 +540,7 @@ func preparedReadyEnvironmentNetworkService(t *testing.T) (Core, environment.Sto
 	return core, store, runSession, RunNetwork{
 		Plan: servicePlan, EnvironmentService: true, ServiceDir: serviceDir,
 		GuestServiceDir: "/hideout/runtime/services/network", ServiceStatePath: statePath,
+		PreviousServiceState: &state, EnvironmentServiceAction: networkServiceReuse,
 	}
 }
 
@@ -206,7 +551,7 @@ func TestLastOwnerReconcilesCrashedSiblingBeforeNetworkServiceCleanup(t *testing
 	now := time.Now().UTC()
 	owner, err := session.AcquireOwner(store.OwnerRoot(record.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: currentID, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("a", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "true",
 	})
@@ -224,7 +569,7 @@ func TestLastOwnerReconcilesCrashedSiblingBeforeNetworkServiceCleanup(t *testing
 	}
 	staleRecord := session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: staleID, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("a", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute), CommandClass: "true",
 	}
@@ -242,6 +587,7 @@ func TestLastOwnerReconcilesCrashedSiblingBeforeNetworkServiceCleanup(t *testing
 	serviceDir := store.RuntimeNetworkServiceDir(record.ID)
 	servicePlan := network.Plan{
 		Mode: network.ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("b", 64),
+		GatewayID: "gw_test", ConfigurationID: testEnvironmentServiceConfigurationID(), MediatedResolver: "1.1.1.1",
 		GuestCleanupPath: "/hideout/runtime/services/network/cleanup.sh",
 	}
 	state, err := network.BuildServiceState(record.ID, servicePlan, network.ServiceReady, "01234567-89ab-cdef-0123-456789abcdef", now, nil)
@@ -260,7 +606,7 @@ func TestLastOwnerReconcilesCrashedSiblingBeforeNetworkServiceCleanup(t *testing
 	runEnvironment := RunEnvironment{Active: true, Record: record, RuntimeDir: store.RuntimeDir(record.ID), PreserveInstance: true}
 	var held *environment.Lock
 	err = core.finishConcurrentRunEnvironment(context.Background(), &held, runEnvironment, owner, currentID, nil, func(ctx context.Context) error {
-		return stopRunNetworkService(ctx, runNetwork, controller, &backend.Session{ID: currentID}, nil)
+		return core.stopRunNetworkService(ctx, runNetwork, controller, &backend.Session{ID: currentID}, nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +634,7 @@ func TestUnprovableSiblingBlocksSharedServiceAndActivationCleanup(t *testing.T) 
 	now := time.Now().UTC()
 	owner, err := session.AcquireOwner(store.OwnerRoot(record.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: currentID, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("a", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "sleep",
 	})
@@ -344,7 +690,7 @@ func TestEnvironmentLockFailureStillFinishesLifecycleRegistration(t *testing.T) 
 	now := time.Now().UTC()
 	owner, err := session.AcquireOwner(store.OwnerRoot(record.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: sessionID, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("a", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "true",
 	})
@@ -379,6 +725,7 @@ func TestStopEnvironmentNetworkServiceCleansOnlyServiceDirectory(t *testing.T) {
 	serviceDir := t.TempDir()
 	plan := network.Plan{
 		Mode: network.ModeTun2Socks, ConfigurationFingerprint: strings.Repeat("a", 64),
+		GatewayID: "gw_test", ConfigurationID: testEnvironmentServiceConfigurationID(), MediatedResolver: "1.1.1.1",
 		GuestCleanupPath: "/hideout/runtime/services/network/cleanup.sh",
 	}
 	state, err := network.BuildServiceState("env_20260716t120000z0123456789abcdef", plan, network.ServiceReady, "01234567-89ab-cdef-0123-456789abcdef", time.Now().UTC(), nil)
@@ -397,7 +744,7 @@ func TestStopEnvironmentNetworkServiceCleansOnlyServiceDirectory(t *testing.T) {
 		Plan: plan, EnvironmentService: true, ServiceDir: serviceDir,
 		GuestServiceDir: "/hideout/runtime/services/network", ServiceStatePath: statePath,
 	}
-	if err := stopRunNetworkService(context.Background(), runNetwork, controller, &backend.Session{ID: "ses_test"}, nil); err != nil {
+	if err := (Core{}).stopRunNetworkService(context.Background(), runNetwork, controller, &backend.Session{ID: "ses_test"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if controller.stops != 1 {
@@ -460,10 +807,19 @@ func TestCopyNetworkHelperRejectsOversizeWithoutLeavingPartialTarget(t *testing.
 }
 
 type recordingNetworkServiceController struct {
-	starts    int
-	verifies  int
-	stops     int
-	verifyErr error
+	starts         int
+	verifies       int
+	directVerifies int
+	stops          int
+	startErr       error
+	verifyErr      error
+	dnsErr         error
+	dnsSwitches    [][2]string
+}
+
+func (c *recordingNetworkServiceController) ReconfigureEnvironmentNetworkDNS(_ context.Context, _ *backend.Session, _ string, oldResolver, newResolver string, _ []string) error {
+	c.dnsSwitches = append(c.dnsSwitches, [2]string{oldResolver, newResolver})
+	return c.dnsErr
 }
 
 func (c *recordingNetworkServiceController) VerifyEnvironmentNetwork(context.Context, *backend.Session, string, []string) error {
@@ -471,9 +827,14 @@ func (c *recordingNetworkServiceController) VerifyEnvironmentNetwork(context.Con
 	return c.verifyErr
 }
 
+func (c *recordingNetworkServiceController) VerifyDirectEnvironmentNetwork(context.Context, *backend.Session, string, []string) error {
+	c.directVerifies++
+	return c.verifyErr
+}
+
 func (c *recordingNetworkServiceController) StartEnvironmentNetwork(context.Context, *backend.Session, string, string, []string) error {
 	c.starts++
-	return nil
+	return c.startErr
 }
 
 func (c *recordingNetworkServiceController) StopEnvironmentNetwork(context.Context, *backend.Session, string, string, []string) error {

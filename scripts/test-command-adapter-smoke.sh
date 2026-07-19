@@ -8,6 +8,7 @@ cd "$ROOT"
 tmp_home="$(mktemp -d "${TMPDIR:-/tmp}/hideout-command-adapter-smoke.XXXXXX")"
 store="$(hideout_mktemp_daemon_store)"
 hideout="$tmp_home/hideout"
+workspace="$tmp_home/workspace"
 cleanup() {
   HIDEOUT_STORE_ROOT="$store" "$hideout" daemon stop >/dev/null 2>&1 || true
   rm -rf "$tmp_home" "$store"
@@ -18,6 +19,7 @@ go test -count=1 ./internal/cmdadapter ./internal/cmdproxy ./internal/broker ./i
 
 go build -o "$hideout" ./cmd/hideout
 go build -o "$tmp_home/hideout-shim" ./cmd/hideout-shim
+mkdir -p "$workspace"
 
 HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" profile init smoke >/dev/null
 HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" "$hideout" profile command-adapter smoke add-builtin-root-sensitive >"$tmp_home/add.out"
@@ -38,7 +40,7 @@ jq -e '
 
 set +e
 HIDEOUT_STORE_ROOT="$store" HIDEOUT_SHIM_PATH="$tmp_home/hideout-shim" \
-  "$hideout" run --profile smoke --backend native --allow-weak-isolation -- sudo apt install nodejs \
+  "$hideout" run --profile smoke --backend native --allow-weak-isolation --workspace "$workspace" -- sudo apt install nodejs \
   >"$tmp_home/run.out" 2>"$tmp_home/run.err"
 run_rc=$?
 set -e

@@ -149,31 +149,31 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	if spec.SessionID == "" {
 		return nil, errors.New("session ID is required")
 	}
-	if spec.Profile.Name == "" {
-		return nil, errors.New("profile name is required")
+	if err := spec.Machine.Validate(); err != nil {
+		return nil, err
 	}
-	if spec.HostWork == "" || spec.GuestWork == "" {
-		return nil, errors.New("workspace mapping is required")
+	if err := spec.Workspace.Validate(spec.Machine.Mode); err != nil {
+		return nil, err
 	}
-	if spec.ProfileDir == "" || spec.SessionDir == "" {
-		return nil, errors.New("profile and session directories are required")
+	if spec.SessionDir == "" {
+		return nil, errors.New("session directory is required")
 	}
-	identityMode := spec.IdentityMode
+	identityMode := spec.Machine.IdentityMode
 	if identityMode == "" {
 		identityMode = "persistent"
 	}
-	identityRoot := spec.IdentityRoot
+	identityRoot := spec.Machine.IdentityRoot
 	if identityRoot == "" {
-		identityRoot = spec.ProfileDir
+		identityRoot = spec.Machine.ProfileDir
 	}
-	instance := spec.InstanceName
+	instance := spec.Machine.InstanceName
 	if instance == "" {
-		instance = InstanceNameForSession(spec.Profile.Name, spec.SessionID)
+		instance = InstanceNameForSession(spec.Machine.Profile.Name, spec.SessionID)
 	}
 	configPath := filepath.Join(spec.SessionDir, "lima.yaml")
 	bootstrapPath := filepath.Join(spec.SessionDir, "bootstrap", "bootstrap.sh")
 	manifestPath := filepath.Join(spec.SessionDir, "guest-bootstrap.json")
-	registry, err := cmdproxy.RegistryFromProfile(spec.Profile)
+	registry, err := cmdproxy.RegistryFromProfile(spec.Machine.Profile)
 	if err != nil {
 		return nil, err
 	}
@@ -183,9 +183,9 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	}
 	if err := WriteToolManifest(manifestPath, ToolManifest{
 		Version:           "hideout.tool-bootstrap/v1",
-		ExpectedCommands:  append([]string(nil), spec.Profile.Tools.ExpectedCommands...),
-		ProfileID:         spec.Profile.Metadata["profileId"],
-		IdentityID:        spec.Profile.Metadata["identityId"],
+		ExpectedCommands:  append([]string(nil), spec.Machine.Profile.Tools.ExpectedCommands...),
+		ProfileID:         spec.Machine.Profile.Metadata["profileId"],
+		IdentityID:        spec.Machine.Profile.Metadata["identityId"],
 		IdentityMode:      identityMode,
 		IdentityRoot:      identityRoot,
 		InstanceName:      instance,
@@ -194,7 +194,11 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	}); err != nil {
 		return nil, err
 	}
-	cfg, err := ConfigForRunSpec(spec)
+	var staticMounts *StaticRunMounts
+	if spec.Machine.Mode != environment.ModeShared {
+		staticMounts = &StaticRunMounts{Workspace: spec.Workspace, SessionDir: spec.SessionDir}
+	}
+	cfg, err := ConfigForMachineSpec(spec.Machine, staticMounts)
 	if err != nil {
 		return nil, err
 	}
@@ -204,19 +208,20 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	privilegedSetupRequired := spec.PrivilegedSetupRequired || spec.NetworkPrivilegedSetup || spec.HostFSEnabled
 	return &backend.Session{
 		ID:                        spec.SessionID,
-		EnvironmentID:             spec.EnvironmentID,
+		EnvironmentID:             spec.Machine.EnvironmentID,
 		Backend:                   b.Name(),
-		HostWork:                  spec.HostWork,
-		GuestWork:                 spec.GuestWork,
+		HostWork:                  spec.Workspace.HostRoot,
+		GuestWork:                 spec.Workspace.GuestRoot,
+		Workspace:                 spec.Workspace,
 		GuestHome:                 GuestProfileDir + "/home",
 		Env:                       append([]string(nil), spec.Env...),
 		ShimDir:                   GuestSessionDir + "/shims",
 		Broker:                    spec.Broker,
 		SessionDir:                spec.SessionDir,
-		RuntimeRoot:               spec.RuntimeRoot,
+		RuntimeRoot:               spec.Machine.RuntimeRoot,
 		SessionIsolationRequired:  spec.SessionIsolationRequired,
 		TargetUser:                spec.TargetUser,
-		ProfileDir:                spec.ProfileDir,
+		ProfileDir:                spec.Machine.ProfileDir,
 		IdentityMode:              identityMode,
 		IdentityRoot:              identityRoot,
 		ConfigPath:                configPath,
@@ -230,7 +235,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		HostFSGrafts:              append([]string(nil), spec.HostFSGrafts...),
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), spec.PortBridges...),
 		InstanceName:              instance,
-		PreserveInstance:          spec.PreserveInstance,
+		PreserveInstance:          spec.Machine.PreserveInstance,
 		NetworkPrivilegedSetup:    spec.NetworkPrivilegedSetup,
 		PrivilegedSetupRequired:   privilegedSetupRequired,
 		PrivilegeStatusSink:       spec.PrivilegeStatusSink,
@@ -371,6 +376,31 @@ func (b Backend) WarmActivate(ctx context.Context, session *backend.Session, env
 	return nil
 }
 
+func (b Backend) ReconcileEnvironmentBoot(ctx context.Context, session *backend.Session, configuration environment.BootConfiguration, env []string) error {
+	if session == nil || strings.TrimSpace(session.InstanceName) == "" {
+		return errors.New("environment boot reconciliation requires a running instance")
+	}
+	if err := configuration.Validate(); err != nil {
+		return err
+	}
+	script := `set -eu
+hostname_value=$1
+tmp=/etc/hostname.hideout-tmp
+printf '%s\n' "$hostname_value" > "$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" /etc/hostname
+hostname "$hostname_value"
+test "$(hostname)" = "$hostname_value"
+test "$(cat /etc/hostname)" = "$hostname_value"
+`
+	bootSession := *session
+	bootSession.PrivilegedSetupRequired = true
+	return b.runSetupCommand(
+		ctx, &bootSession, setupCategoryBoot, "/", SetupEnv(env),
+		[]string{"sh", "-c", script, "hideout-boot-reconcile", configuration.Hostname}, nil,
+	)
+}
+
 func (b Backend) StartEnvironmentNetwork(ctx context.Context, session *backend.Session, workdir, bootstrapPath string, env []string) error {
 	if session == nil || strings.TrimSpace(bootstrapPath) == "" {
 		return errors.New("environment network bootstrap is required")
@@ -400,11 +430,109 @@ grep -q '^nameserver 127\.0\.0\.1\([[:space:]]\|$\)' /etc/resolv.conf
 	)
 }
 
+func (b Backend) VerifyDirectEnvironmentNetwork(ctx context.Context, session *backend.Session, workdir string, env []string) error {
+	if session == nil || !sessionViewBootPattern.MatchString(session.ExpectedBootID) || path.Clean(workdir) != workdir || !path.IsAbs(workdir) {
+		return errors.New("direct environment network verification requires a current boot identity and absolute service directory")
+	}
+	script := `set -eu
+expected_boot=$1
+service_dir=$2
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
+if ip link show dev hideout0 >/dev/null 2>&1; then
+  echo 'hideout: stale privacy TUN remains while direct network is selected' >&2
+  exit 127
+fi
+default_route=$(ip route show default | head -n 1 || true)
+[ -n "$default_route" ] || { echo 'hideout: direct network has no default route' >&2; exit 127; }
+case "$default_route" in
+  *' dev hideout0'|*' dev hideout0 '* ) echo 'hideout: direct network still routes through hideout0' >&2; exit 127 ;;
+esac
+if [ -r "$service_dir/dns-stub.pid" ] && kill -0 "$(cat "$service_dir/dns-stub.pid")" 2>/dev/null; then
+  echo 'hideout: stale privacy DNS service remains while direct network is selected' >&2
+  exit 127
+fi
+`
+	return b.runSetupCommand(
+		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),
+		[]string{"sh", "-c", script, "hideout-direct-network-verify", session.ExpectedBootID, workdir}, nil,
+	)
+}
+
 func (b Backend) StopEnvironmentNetwork(ctx context.Context, session *backend.Session, workdir, cleanupPath string, env []string) error {
 	if session == nil || strings.TrimSpace(cleanupPath) == "" {
 		return errors.New("environment network cleanup is required")
 	}
 	return b.runSetupCleanup(ctx, session, setupCategoryNetwork, workdir, cleanupGuestEnv(env), []string{cleanupPath})
+}
+
+func (b Backend) ReconfigureEnvironmentNetworkDNS(ctx context.Context, session *backend.Session, workdir, oldResolver, newResolver string, env []string) error {
+	if session == nil || path.Clean(workdir) != workdir || !path.IsAbs(workdir) || net.ParseIP(oldResolver) == nil || net.ParseIP(newResolver) == nil {
+		return errors.New("environment DNS reconfiguration requires a running service and IP-literal resolvers")
+	}
+	script := `set -eu
+service_dir=$1
+old_resolver=$2
+new_resolver=$3
+helper="$service_dir/hideout-dns-stub"
+pid_file="$service_dir/dns-stub.pid"
+rollback_marker="$service_dir/dns-switch-rollback-proved"
+rm -f "$rollback_marker"
+test -x "$helper"
+test -r "$pid_file"
+old_pid=$(sed -n '1p' "$pid_file")
+kill "$old_pid" 2>/dev/null || true
+i=0
+while kill -0 "$old_pid" 2>/dev/null && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$old_pid" 2>/dev/null; then
+  echo 'hideout: existing DNS service did not stop for reconfiguration' >&2
+  exit 127
+fi
+start_stub() {
+  resolver=$1
+  "$helper" --listen 127.0.0.1:53 --doh-server "$resolver" > "$service_dir/dns-stub.log" 2>&1 &
+  candidate_pid=$!
+  sleep 0.2
+  kill -0 "$candidate_pid" 2>/dev/null
+}
+if start_stub "$new_resolver"; then
+  printf '%s\n' "$candidate_pid" > "$pid_file.tmp"
+  mv "$pid_file.tmp" "$pid_file"
+  printf '%s\n' "$new_resolver" > "$service_dir/mediated-resolver"
+  exit 0
+fi
+if start_stub "$old_resolver"; then
+  printf '%s\n' "$candidate_pid" > "$pid_file.tmp"
+  mv "$pid_file.tmp" "$pid_file"
+  printf '%s\n' "$old_resolver" > "$service_dir/mediated-resolver"
+  : > "$rollback_marker"
+fi
+echo 'hideout: replacement DNS service failed; previous resolver restart was attempted' >&2
+exit 127
+	`
+	reconfigureErr := b.runSetupCommand(
+		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),
+		[]string{"sh", "-c", script, "hideout-network-dns-reconfigure", workdir, oldResolver, newResolver}, nil,
+	)
+	if reconfigureErr == nil {
+		return nil
+	}
+	verifyRollback := `set -eu
+service_dir=$1
+old_resolver=$2
+test -f "$service_dir/dns-switch-rollback-proved"
+test "$(cat "$service_dir/mediated-resolver")" = "$old_resolver"
+test -r "$service_dir/dns-stub.pid"
+kill -0 "$(cat "$service_dir/dns-stub.pid")" 2>/dev/null
+rm -f "$service_dir/dns-switch-rollback-proved"
+`
+	rollbackErr := b.runSetupCommand(
+		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),
+		[]string{"sh", "-c", verifyRollback, "hideout-network-dns-rollback-verify", workdir, oldResolver}, nil,
+	)
+	return backend.EnvironmentServiceReconfigureError{
+		Operation: "reconfigure environment DNS", RollbackProved: rollbackErr == nil,
+		Cause: errors.Join(reconfigureErr, rollbackErr),
+	}
 }
 
 func (b Backend) terminalBridgeAvailable(ctx context.Context, runner CommandRunner, hostEnv []string, session *backend.Session, env []string) bool {
@@ -769,11 +897,21 @@ func compileImageDeclaration(ref string) ([]string, []limaImage, error) {
 	return []string{decl.Ref}, nil, nil
 }
 
-// ConfigForRunSpec validates the pinned image declaration and builds the lima
-// configuration, failing closed on an unusable declaration. It is the only
-// config builder: there is no panic-on-invalid variant, so every caller
-// (Prepare, doctor, tests) goes through the same fail-closed error path.
-func ConfigForRunSpec(spec backend.RunSpec) (limaConfig, error) {
+// StaticRunMounts exists only for dedicated, workspace-bound, and disposable
+// machines. Shared activation must pass nil so selected project facts cannot
+// enter the retained Lima configuration.
+type StaticRunMounts struct {
+	Workspace  backend.WorkspaceAttachmentSpec
+	SessionDir string
+}
+
+// ConfigForMachineSpec validates the pinned image declaration and builds the
+// Lima machine configuration. Workspace authority is a distinct input that is
+// forbidden for shared activation.
+func ConfigForMachineSpec(spec backend.MachineActivationSpec, static *StaticRunMounts) (limaConfig, error) {
+	if err := spec.Validate(); err != nil {
+		return limaConfig{}, err
+	}
 	identityRoot := spec.IdentityRoot
 	if identityRoot == "" {
 		identityRoot = spec.ProfileDir
@@ -781,6 +919,28 @@ func ConfigForRunSpec(spec backend.RunSpec) (limaConfig, error) {
 	base, images, err := compileImageDeclaration(spec.ImageRef)
 	if err != nil {
 		return limaConfig{}, err
+	}
+	mounts := identityStateMounts(identityRoot)
+	switch spec.Mode {
+	case environment.ModeShared:
+		if static != nil {
+			return limaConfig{}, errors.New("shared machine configuration rejects static workspace mounts")
+		}
+		mounts = append(mounts, mount{Location: spec.RuntimeRoot, MountPoint: GuestRuntimeDir, Writable: true})
+	case environment.ModeDedicated, environment.ModeWorkspaceBound:
+		if static == nil {
+			return limaConfig{}, errors.New("static machine configuration requires an exact workspace mapping")
+		}
+		if err := static.Workspace.Validate(spec.Mode); err != nil {
+			return limaConfig{}, err
+		}
+		if !filepath.IsAbs(static.SessionDir) {
+			return limaConfig{}, errors.New("static machine session directory must be absolute")
+		}
+		mounts = append([]mount{{
+			Location: static.Workspace.HostRoot, MountPoint: static.Workspace.GuestRoot, Writable: true,
+		}}, mounts...)
+		mounts = append(mounts, sessionStateMounts(static.SessionDir, spec.RuntimeRoot, spec.EnvironmentID != "")...)
 	}
 	return limaConfig{
 		Base:         base,
@@ -799,9 +959,7 @@ func ConfigForRunSpec(spec backend.RunSpec) (limaConfig, error) {
 			System: false,
 			User:   false,
 		},
-		Mounts: append([]mount{
-			{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
-		}, append(identityStateMounts(identityRoot), sessionStateMounts(spec.SessionDir, spec.RuntimeRoot, spec.EnvironmentID != "")...)...),
+		Mounts: mounts,
 		PortForwards: []portForward{
 			{
 				GuestIP:           "0.0.0.0",
@@ -1107,7 +1265,11 @@ func GuestEnv(env []string) []string {
 		case "XDG_DATA_HOME":
 			value = GuestProfileDir + "/data"
 		case "GIT_CONFIG_GLOBAL":
-			value = GuestProfileDir + "/home/.gitconfig"
+			if filepath.Base(value) == "gitconfig" && filepath.Base(filepath.Dir(value)) == "identity" {
+				value = GuestSessionDir + "/identity/gitconfig"
+			} else {
+				value = GuestProfileDir + "/home/.gitconfig"
+			}
 		case "PATH":
 			value = GuestSessionDir + "/shims:" + GuestProfileDir + "/home/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 		}

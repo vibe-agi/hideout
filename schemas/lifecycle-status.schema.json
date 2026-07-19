@@ -51,7 +51,9 @@
 	    "hostfs.read-provider",
 	    "hostfs.staged-object",
 	    "network.environment-service",
-	    "run.session"
+	    "run.session",
+	    "workspace.guest-view",
+	    "workspace.host-provider"
 	  ]
 	}
   }

@@ -6,23 +6,25 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const (
 	EventVersion = "hideout.daemon-event/v1"
 	SeedVersion  = "hideout.live-console-seed/v1"
 
-	KindEnvironment = "environment"
-	KindSession     = "session"
-	KindBackground  = "background"
-	KindAudit       = "audit"
-	KindExport      = "export"
-	KindCleanup     = "cleanup"
-	KindHostFSWrite = "hostfs-write"
-	KindDecision    = "decision"
-	KindNotice      = "notice"
-	KindLifecycle   = "lifecycle"
-	KindTerminal    = "terminal"
+	KindEnvironment   = "environment"
+	KindSession       = "session"
+	KindWorkspaceView = "workspace-view"
+	KindBackground    = "background"
+	KindAudit         = "audit"
+	KindExport        = "export"
+	KindCleanup       = "cleanup"
+	KindHostFSWrite   = "hostfs-write"
+	KindDecision      = "decision"
+	KindNotice        = "notice"
+	KindLifecycle     = "lifecycle"
+	KindTerminal      = "terminal"
 
 	HealthSeeding           = "seeding"
 	HealthLive              = "live"
@@ -56,49 +58,58 @@ type Event struct {
 }
 
 type EventPayload struct {
-	ID                string            `json:"id,omitempty"`
-	Name              string            `json:"name,omitempty"`
-	AutoNamed         bool              `json:"autoNamed,omitempty"`
-	Status            string            `json:"status,omitempty"`
-	Profile           string            `json:"profile,omitempty"`
-	Backend           string            `json:"backend,omitempty"`
-	Workspace         string            `json:"workspace,omitempty"`
-	GuestWorkspace    string            `json:"guestWorkspace,omitempty"`
-	ImageRef          string            `json:"imageRef,omitempty"`
-	InstanceName      string            `json:"instanceName,omitempty"`
-	LastSessionID     string            `json:"lastSessionId,omitempty"`
-	LastCommand       string            `json:"lastCommand,omitempty"`
-	CreatedAt         time.Time         `json:"createdAt,omitempty"`
-	LastStartedAt     time.Time         `json:"lastStartedAt,omitempty"`
-	LastEndedAt       time.Time         `json:"lastEndedAt,omitempty"`
-	NetworkMode       string            `json:"networkMode,omitempty"`
-	HasAudit          bool              `json:"hasAudit,omitempty"`
-	HasEphemeralState bool              `json:"hasEphemeralState,omitempty"`
-	Op                string            `json:"op,omitempty"`
-	Time              time.Time         `json:"time,omitempty"`
-	Session           string            `json:"session,omitempty"`
-	Action            string            `json:"action,omitempty"`
-	Decision          string            `json:"decision,omitempty"`
-	Details           map[string]any    `json:"details,omitempty"`
-	Source            string            `json:"source,omitempty"`
-	ArtifactPath      string            `json:"artifactPath,omitempty"`
-	Sessions          int               `json:"sessions,omitempty"`
-	Removed           []string          `json:"removed,omitempty"`
-	SecretState       string            `json:"secretState,omitempty"`
-	Reason            string            `json:"reason,omitempty"`
-	OperationID       string            `json:"operationId,omitempty"`
-	DecisionID        string            `json:"decisionId,omitempty"`
-	Operation         string            `json:"operation,omitempty"`
-	Path              string            `json:"path,omitempty"`
-	DestinationPath   string            `json:"destinationPath,omitempty"`
-	PrivilegeStatus   string            `json:"privilegeStatus,omitempty"`
-	NoticeID          string            `json:"noticeId,omitempty"`
-	RecordKind        string            `json:"recordKind,omitempty"`
-	Severity          string            `json:"severity,omitempty"`
-	Acknowledged      bool              `json:"acknowledged,omitempty"`
-	DefaultOutcome    string            `json:"defaultOutcome,omitempty"`
-	Preview           any               `json:"preview,omitempty"`
-	Lifecycle         *lifecycle.Status `json:"lifecycle,omitempty"`
+	ID                 string                               `json:"id,omitempty"`
+	Name               string                               `json:"name,omitempty"`
+	AutoNamed          bool                                 `json:"autoNamed,omitempty"`
+	Status             string                               `json:"status,omitempty"`
+	Profile            string                               `json:"profile,omitempty"`
+	Backend            string                               `json:"backend,omitempty"`
+	Workspace          string                               `json:"workspace,omitempty"`
+	GuestWorkspace     string                               `json:"guestWorkspace,omitempty"`
+	ImageRef           string                               `json:"imageRef,omitempty"`
+	InstanceName       string                               `json:"instanceName,omitempty"`
+	LastSessionID      string                               `json:"lastSessionId,omitempty"`
+	LastCommand        string                               `json:"lastCommand,omitempty"`
+	CreatedAt          time.Time                            `json:"createdAt,omitempty"`
+	LastStartedAt      time.Time                            `json:"lastStartedAt,omitempty"`
+	LastEndedAt        time.Time                            `json:"lastEndedAt,omitempty"`
+	NetworkMode        string                               `json:"networkMode,omitempty"`
+	HasAudit           bool                                 `json:"hasAudit,omitempty"`
+	HasEphemeralState  bool                                 `json:"hasEphemeralState,omitempty"`
+	Op                 string                               `json:"op,omitempty"`
+	Time               time.Time                            `json:"time,omitempty"`
+	Session            string                               `json:"session,omitempty"`
+	Action             string                               `json:"action,omitempty"`
+	Decision           string                               `json:"decision,omitempty"`
+	Details            map[string]any                       `json:"details,omitempty"`
+	Source             string                               `json:"source,omitempty"`
+	ArtifactPath       string                               `json:"artifactPath,omitempty"`
+	Sessions           int                                  `json:"sessions,omitempty"`
+	Removed            []string                             `json:"removed,omitempty"`
+	SecretState        string                               `json:"secretState,omitempty"`
+	Reason             string                               `json:"reason,omitempty"`
+	OperationID        string                               `json:"operationId,omitempty"`
+	DecisionID         string                               `json:"decisionId,omitempty"`
+	Operation          string                               `json:"operation,omitempty"`
+	Path               string                               `json:"path,omitempty"`
+	DestinationPath    string                               `json:"destinationPath,omitempty"`
+	PrivilegeStatus    string                               `json:"privilegeStatus,omitempty"`
+	NoticeID           string                               `json:"noticeId,omitempty"`
+	RecordKind         string                               `json:"recordKind,omitempty"`
+	Severity           string                               `json:"severity,omitempty"`
+	Acknowledged       bool                                 `json:"acknowledged,omitempty"`
+	DefaultOutcome     string                               `json:"defaultOutcome,omitempty"`
+	Preview            any                                  `json:"preview,omitempty"`
+	Lifecycle          *lifecycle.Status                    `json:"lifecycle,omitempty"`
+	AttachmentID       string                               `json:"attachmentId,omitempty"`
+	EnvironmentID      string                               `json:"environmentId,omitempty"`
+	WorkspaceID        string                               `json:"workspaceId,omitempty"`
+	WorkspaceLabel     string                               `json:"workspaceLabel,omitempty"`
+	WorkspaceTransport string                               `json:"workspaceTransport,omitempty"`
+	WorkspaceViewState workspaceattach.AttachmentState      `json:"workspaceViewState,omitempty"`
+	WorkspaceRelations []workspaceattach.RootRelationNotice `json:"workspaceRelations,omitempty"`
+	BlockerCode        string                               `json:"blockerCode,omitempty"`
+	CleanupStatus      string                               `json:"cleanupStatus,omitempty"`
 }
 
 type BackgroundRow struct {

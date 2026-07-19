@@ -18,9 +18,11 @@ const uiURL = arg("--url");
 const baseURL = arg("--base-url");
 const token = arg("--token");
 const noticeID = arg("--notice-id");
+const fixtureURL = arg("--fixture-url");
+const fixtureKey = arg("--fixture-key");
 const outDir = arg("--out");
-if (!chromePath || !uiURL || !baseURL || !token || !noticeID || !outDir) {
-  throw new Error("--chrome, --url, --base-url, --token, --notice-id, and --out are required");
+if (!chromePath || !uiURL || !baseURL || !token || !noticeID || !fixtureURL || !fixtureKey || !outDir) {
+  throw new Error("--chrome, --url, --base-url, --token, --notice-id, --fixture-url, --fixture-key, and --out are required");
 }
 
 function redact(value) {
@@ -220,6 +222,36 @@ async function main() {
     const idlePolls = cdp.eventCount(overviewAuditRequest) - pollBaseline;
     if (idlePolls !== 0) throw new Error(`hidden polling while stream idle: ${idlePolls}`);
 
+    const workspaceResponse = await fetch(`${fixtureURL}/workspace-views/ready`, {
+      method: "POST",
+      headers: {"X-Hideout-E2E-Key": fixtureKey}
+    });
+    if (!workspaceResponse.ok) throw new Error(`workspace fixture failed: ${workspaceResponse.status}`);
+    await waitFor(cdp, "overview.environments.filter((row) => row.id && row.mode === 'shared' && row.activeWorkspaceViews === 2).length === 1 && overview.sessions.filter((row) => row.workspaceViewState === 'ready').length === 2");
+    await evalValue(cdp, `document.querySelector('[data-panel="environments"]').click(); true`);
+    await waitFor(cdp, "/activeWorkspaceViews\\s+2/.test(document.body.innerText) && /mode\\s+shared/.test(document.body.innerText)");
+    const machineCount = await evalValue(cdp, "overview.environments.filter((row) => row.mode === 'shared' && row.activeWorkspaceViews === 2).length");
+    await evalValue(cdp, `document.querySelector('[data-panel="sessions"]').click(); true`);
+    await waitFor(cdp, "document.body.innerText.includes('project-a [aaaaaaaa]') && document.body.innerText.includes('project-b [bbbbbbbb]') && document.body.innerText.includes('disjoint:peer:')");
+    const workspaceState = await evalValue(cdp, `(() => ({
+      views: overview.sessions.filter((row) => row.workspaceViewState === "ready").length,
+      relation: overview.sessions.filter((row) => Array.isArray(row.workspaceRelations) && row.workspaceRelations.some((rel) => rel.relation === "disjoint" && rel.selectedPosition === "peer")).length === 2,
+      privateHidden: !${JSON.stringify(["/Users/private/workspace-a", "/Users/private/workspace-b", "private-root-handle", "cap_0123456789abcdef0123456789abcdef"])}.some((value) => JSON.stringify(overview).includes(value) || document.body.innerText.includes(value))
+    }))()`);
+    if (machineCount !== 1 || workspaceState.views !== 2 || !workspaceState.relation || !workspaceState.privateHidden) {
+      throw new Error(`workspace view state mismatch: machine=${machineCount} state=${JSON.stringify(workspaceState)}`);
+    }
+    const workspaceScreenshot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    await writeFile(join(outDir, "webui-workspaces.png"), Buffer.from(workspaceScreenshot.data, "base64"));
+
+    const releaseResponse = await fetch(`${fixtureURL}/workspace-views/release-a`, {
+      method: "POST",
+      headers: {"X-Hideout-E2E-Key": fixtureKey}
+    });
+    if (!releaseResponse.ok) throw new Error(`workspace release fixture failed: ${releaseResponse.status}`);
+    await waitFor(cdp, "overview.environments.some((row) => row.mode === 'shared' && row.activeWorkspaceViews === 1) && overview.sessions.some((row) => row.id === 'ses_ui_e2e_a' && row.workspaceViewState === 'released') && overview.sessions.some((row) => row.id === 'ses_ui_e2e_b' && row.workspaceViewState === 'ready')");
+    const workspaceReleaseSeen = true;
+
     const beforeEventText = await evalValue(cdp, "document.body.innerText");
     const bgResp = await fetch(`${baseURL}/daemon/background`, {
       method: "POST",
@@ -265,6 +297,11 @@ async function main() {
       panelsVisible,
       liveUpdateObserved: true,
       hiddenPollingDetected: false,
+      workspaceMachineCount: machineCount,
+      workspaceViewCount: workspaceState.views,
+      workspaceRelationSeen: workspaceState.relation,
+      workspaceReleaseSeen,
+      workspacePrivateHidden: workspaceState.privateHidden,
       actionRoundTrip: {
         action: "notice.ack",
         requestObserved: true,
@@ -274,7 +311,7 @@ async function main() {
       },
       authFailureObserved: true,
       artifacts: {
-        screenshot: "webui-console.png",
+        screenshot: "webui-workspaces.png",
         "event-summary": "network-summary.json",
         log: "dom-summary.txt"
       }

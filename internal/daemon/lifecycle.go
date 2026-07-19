@@ -373,6 +373,14 @@ func reconcileRestartResidue(ctx context.Context, store environment.Store, recor
 			if err := reconcileActivationReceipt(store, record, observation, owners, proveAbsent); err != nil {
 				reasons = appendReason(reasons, "activation-receipt-unproved")
 			}
+		case lifecycle.RecoveryWorkspaceProvider:
+			if err := proveWorkspaceHostProvidersAbsent(store.Root, record.ID); err != nil {
+				reasons = appendReason(reasons, "workspace-provider-absence-unproved")
+			}
+		case lifecycle.RecoveryWorkspaceView:
+			if err := proveWorkspaceGuestViewsAbsent(store.Root, record.ID, proveAbsent); err != nil {
+				reasons = appendReason(reasons, "workspace-view-absence-unproved")
+			}
 		case lifecycle.RecoveryNetworkRuntime:
 			if nonempty, err := directoryHasEntries(store.RuntimeNetworkServiceDir(record.ID)); err != nil {
 				reasons = appendReason(reasons, "network-runtime-unprovable")
@@ -398,6 +406,57 @@ func reconcileRestartResidue(ctx context.Context, store environment.Store, recor
 	}
 	slices.Sort(reasons)
 	return owners, reasons
+}
+
+func proveWorkspaceHostProvidersAbsent(storeRoot, environmentID string) error {
+	journal, err := (lifecycle.JournalStore{Root: storeRoot}).Load(environmentID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, resource := range journal.Resources {
+		if resource.Ref.Kind != lifecycle.KindWorkspaceHostProvider {
+			continue
+		}
+		// The accepted Portal host provider is an in-process hideoutd resource.
+		// Reconciliation runs only after the new daemon owns the singleton lock,
+		// which independently proves the previous process and its provider gone.
+		if resource.Owner.Kind != "manager" {
+			return errors.New("workspace host provider owner is unproved")
+		}
+	}
+	return nil
+}
+
+func proveWorkspaceGuestViewsAbsent(storeRoot, environmentID string, proveSessionAbsent func(string) error) error {
+	journal, err := (lifecycle.JournalStore{Root: storeRoot}).Load(environmentID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var result error
+	for _, resource := range journal.Resources {
+		if resource.Ref.Kind != lifecycle.KindWorkspaceGuestView {
+			continue
+		}
+		sessionID := ""
+		for _, dependency := range resource.Dependencies {
+			if dependency.Ref.Kind == lifecycle.KindRunSession && dependency.StopMode == lifecycle.StopModeDrain {
+				sessionID = dependency.Ref.ID
+				break
+			}
+		}
+		if sessionID == "" {
+			result = errors.Join(result, errors.New("workspace guest view lacks a session absence identity"))
+			continue
+		}
+		result = errors.Join(result, proveSessionAbsent(sessionID))
+	}
+	return result
 }
 
 func reconcileOrphanSessionRuntime(store environment.Store, environmentID string, owners map[string]bool, proveAbsent func(string) error) error {

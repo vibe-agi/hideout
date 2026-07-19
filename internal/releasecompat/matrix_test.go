@@ -24,6 +24,7 @@ func TestBuiltinMatrixValidatesRequiredRows(t *testing.T) {
 		"feature/supported-cli-runtime",
 		"feature/community-host-app-recipes",
 		"feature/concurrent-run-sessions",
+		"feature/shared-default-vm-cross-workspace",
 		"release/public-alpha-package",
 		"release/developer-id-notarization",
 		"gate/release-candidate",

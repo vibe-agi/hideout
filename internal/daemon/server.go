@@ -306,7 +306,9 @@ func (d *Daemon) serveStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopping"})
+	writeJSON(w, http.StatusOK, StopReceipt{
+		Version: stopReceiptVersion, InstanceID: d.instanceID, Status: "stopping",
+	})
 	go func() { _ = d.Stop(context.Background()) }()
 }
 

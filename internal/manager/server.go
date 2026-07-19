@@ -845,7 +845,8 @@ const renderers = {
     const envHTML = environments.length ? panelLimitNotice("environments", visibleEnvironments.length, environments.length) + '<div class="items">' + visibleEnvironments.map(function(e) {
       const tone = e.status === "running" ? "warn" : e.status === "stopped" ? "info" : "ok";
       const title = e.name ? (e.name + (e.autoNamed ? " (auto)" : "")) : e.id;
-      return item(title, e.status || "environment", [["image", e.imageRef], ["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["activeSessions", e.activeSessions || 0], ["ownerHealth", e.ownerHealth], ["id", e.id], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
+      const trustDomain = e.mode === "shared" ? "shared guest kernel, root disk, tools, caches and profile state" : "separate machine identity";
+      return item(title, e.status || "environment", [["mode", e.mode], ["sharedSlot", e.sharedSlot], ["machineIdentityId", e.machineIdentityId], ["trustDomain", trustDomain], ["image", e.imageRef], ["profile", e.profile], ["backend", e.backend], ["instance", e.instanceName], ["workspace", e.workspace], ["guestWorkspace", e.guestWorkspace], ["activeSessions", e.activeSessions || 0], ["activeWorkspaceViews", e.activeWorkspaceViews || 0], ["workspaceProviderState", e.workspaceProviderState], ["ownerHealth", e.ownerHealth], ["id", e.id], ["lastSessionId", e.lastSessionId], ["lastCommand", e.lastCommand], ["lastStartedAt", e.lastStartedAt], ["lastEndedAt", e.lastEndedAt]], tone);
     }).join("") + "</div>" : empty("No reusable environments");
     return '<form id="environmentForm" class="item">' +
       '<div class="form-grid">' +
@@ -862,7 +863,8 @@ const renderers = {
     if (!sessions.length) return empty("No sessions");
     const visibleSessions = visibleSessionsForPanel(sessions);
     return panelLimitNotice("sessions", visibleSessions.length, sessions.length) + '<div class="items">' + visibleSessions.map(function(s) {
-      return item(s.id, s.profile || "session", [["backend", s.backend], ["environmentId", s.environmentId], ["state", s.state], ["ownerStatus", s.ownerStatus], ["terminalMode", s.terminalMode], ["commandClass", s.commandClass], ["networkMode", s.networkMode], ["guestPrivilege", guestPrivilegeLabel(s.guestPrivilege)], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.ownerStatus === "unprovable" || s.cleanupError ? "error" : s.ownerStatus === "live" ? "warn" : s.hasProxySecretFile ? "warn" : "ok");
+      const relations = (s.workspaceRelations || []).map(function(row) { return (row.relation || "unknown") + ":" + (row.selectedPosition || "peer") + ":" + (row.otherWorkspaceId || "workspace"); });
+      return item(s.workspaceLabel || s.id, s.profile || "session", [["sessionId", s.id], ["backend", s.backend], ["environmentId", s.environmentId], ["workspaceId", s.workspaceId], ["guestWorkspace", s.guestWorkspace], ["workspaceTransport", s.workspaceTransport], ["workspaceViewState", s.workspaceViewState], ["workspaceRelations", relations], ["workspaceBlocker", s.workspaceBlockerCode], ["state", s.state], ["ownerStatus", s.ownerStatus], ["terminalMode", s.terminalMode], ["commandClass", s.commandClass], ["networkMode", s.networkMode], ["guestPrivilege", guestPrivilegeLabel(s.guestPrivilege)], ["auditPath", s.auditPath], ["hasAudit", s.hasAudit], ["hasBrokerEndpoint", s.hasBrokerEndpoint], ["hasNetworkPlan", s.hasNetworkPlan], ["hasProxySecretFile", s.hasProxySecretFile], ["hasEphemeralState", s.hasEphemeralState], ["next", sessionNextCommands(s)]], s.workspaceViewState === "unproved" || s.ownerStatus === "unprovable" || s.cleanupError ? "error" : s.ownerStatus === "live" ? "warn" : s.hasProxySecretFile ? "warn" : "ok");
     }).join("") + "</div>";
   },
   capabilities: function() {
@@ -1571,6 +1573,65 @@ function upsertByID(values, row) {
   rows.unshift(row);
   return rows;
 }
+function workspaceViewActive(state) {
+  return state === "provider-starting" || state === "provider-ready" || state === "view-mounting" || state === "ready" || state === "draining";
+}
+function workspaceProviderState(rows) {
+  const rank = {"":0,"not-started":1,"released":2,"starting":3,"ready":4,"draining":5,"unproved":6};
+  let selected = "";
+  (rows || []).forEach(function(row) {
+    const state = row && row.workspaceViewState;
+    let next = "not-started";
+    if (state === "provider-starting") next = "starting";
+    else if (state === "provider-ready" || state === "view-mounting" || state === "ready") next = "ready";
+    else if (state === "draining") next = "draining";
+    else if (state === "released") next = "released";
+    else if (state === "unproved") next = "unproved";
+    if ((rank[next] || 0) > (rank[selected] || 0)) selected = next;
+  });
+  return selected;
+}
+function workspaceRelationRows(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(function(value) {
+    return {
+      relation: redactText(value && value.relation),
+      selectedPosition: redactText(value && value.selectedPosition),
+      workspaceId: redactText(value && value.workspaceId),
+      otherWorkspaceId: redactText(value && value.otherWorkspaceId)
+    };
+  });
+}
+function workspaceViewRow(payload) {
+  return {
+    id: redactText(payload.session || payload.id),
+    profile: redactText(payload.profile),
+    environmentId: redactText(payload.environmentId),
+    workspaceId: redactText(payload.workspaceId),
+    workspaceLabel: redactText(payload.workspaceLabel),
+    guestWorkspace: redactText(payload.guestWorkspace),
+    workspaceTransport: redactText(payload.workspaceTransport),
+    workspaceViewState: redactText(payload.workspaceViewState),
+    workspaceRelations: workspaceRelationRows(payload.workspaceRelations),
+    workspaceBlockerCode: redactText(payload.blockerCode),
+    workspaceCleanupStatus: redactText(payload.cleanupStatus)
+  };
+}
+function recomputeWorkspaceMachine(environmentId) {
+  if (!environmentId) return;
+  const views = (overview.sessions || []).filter(function(row) {
+    return row && row.environmentId === environmentId && row.workspaceViewState;
+  });
+  const active = views.filter(function(row) { return workspaceViewActive(row.workspaceViewState); }).length;
+  overview.environments = (overview.environments || []).map(function(row) {
+    if (!row || row.id !== environmentId || row.mode !== "shared") return row;
+    return Object.assign({}, row, {
+      activeSessions: active,
+      activeWorkspaceViews: active,
+      workspaceProviderState: workspaceProviderState(views)
+    });
+  });
+}
 function capTail(values, limit) {
   const rows = Array.isArray(values) ? values.slice(0, limit || 20) : [];
   return rows;
@@ -1663,6 +1724,15 @@ function applyLiveEvent(event) {
     overview.environments = upsertByID(overview.environments, payload);
   } else if (event.kind === "session") {
     overview.sessions = upsertByID(overview.sessions, payload);
+  } else if (event.kind === "workspace-view") {
+    const row = workspaceViewRow(payload);
+    if (!payload.attachmentId || !payload.session || !row.id || !row.environmentId || !row.workspaceId || !row.workspaceLabel || !row.guestWorkspace || !row.workspaceTransport || !row.workspaceViewState) {
+      markLiveHealth("schema-mismatch", "invalid workspace-view event");
+      renderAll();
+      return false;
+    }
+    overview.sessions = upsertByID(overview.sessions, row);
+    recomputeWorkspaceMachine(row.environmentId);
   } else if (event.kind === "background") {
     overview.background = upsertByID(overview.background, {id: payload.id, op: payload.op, status: payload.status});
   } else if (event.kind === "audit") {

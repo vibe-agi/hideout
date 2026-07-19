@@ -77,6 +77,39 @@ This is the first compatibility proof: it demonstrates the packaged VM,
 workspace, identity, and retained runtime. Direct networking does not hide the
 network origin and is not a privacy-network claim.
 
+### Shared machine and separate-VM escape hatches
+
+The 035 contract changes the automatic macOS arm64 Lima shape from one VM per
+project to one compatible machine per canonical profile. Each run still gets an
+immutable exact-project attachment and sees its selected project at
+`/workspace`; a display label or previous project is never attachment
+authority. Clean real behavior and performance evidence backs this supported
+source-tree behavior.
+
+Different projects in the same automatic machine share one guest
+kernel. Ordinary non-root sessions receive separate process/mount views and
+cannot select a sibling attachment, but guest root is not contained. Use a
+dedicated named environment when projects require a VM wall:
+
+```bash
+hideout env create isolated --workspace "$PWD" --profile default --backend lima
+hideout run --env isolated -- bash
+```
+
+Use a cloned profile plus a dedicated environment when projects must also have
+separate guest home, identity, cache, and environment-service network posture:
+
+```bash
+hideout profile clone default isolated
+hideout env create isolated --workspace "$PWD" --profile isolated --backend lima
+hideout run --env isolated -- bash
+```
+
+The Workspace Portal is the live workspace transport, not HostFS overlay or a
+copy/sync layer. Workspace writes change the selected host project immediately.
+Paths outside that project still use explicit HostFS discover/read/write
+authority.
+
 The retained runtime is a separate, approximately 1 GB first-use download; it
 is not embedded in the smaller Hideout host package. If Lima startup takes
 longer than one second, Hideout prints a concise status line and periodic
@@ -113,6 +146,30 @@ a replacement for that gate.
 
 Hideout never changes a requested privacy profile to direct networking when a
 proxy, mediated resolver, or other privacy prerequisite is missing.
+
+To change an existing profile instead of creating a separate one, persist only
+the host-secret reference and resolver. If an already-running daemon did not
+inherit the referenced host secret, stop it before active work and let the next
+run start it with that environment. The next attach switches the reusable
+environment's egress and DNS service without recreating or restarting the VM.
+A direct/proxy posture change requires all earlier target sessions in that VM
+to have exited; this prevents one session from silently changing a sibling's
+network boundary:
+
+```bash
+export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
+hideout profile network default tun2socks \
+  --proxy-secret default-proxy \
+  --mediated-resolver 1.1.1.1
+hideout run -- true
+```
+
+The proxy URL remains in the host environment; the profile stores only
+`default-proxy`. Changing the upstream behind an existing proxy generation is
+online: accepted TCP connections may finish on the previous route while new
+connections use the new route. Mediated DNS can also switch online. Switching
+between direct and proxy posture is environment-wide and waits for exclusive
+session ownership, but still uses the same guest boot and disk.
 
 ## Install The Tested Agent CLI
 

@@ -103,7 +103,7 @@ func TestEventCatalogProducerMappingsAreExplicit(t *testing.T) {
 	mappings := EventProducerMappings()
 	for _, producer := range []string{
 		KindEnvironment, KindSession, KindBackground, KindAudit, KindExport,
-		KindCleanup, KindHostFSWrite, KindDecision, KindNotice, KindLifecycle, KindTerminal,
+		KindWorkspaceView, KindCleanup, KindHostFSWrite, KindDecision, KindNotice, KindLifecycle, KindTerminal,
 		"host-app", "run", "operation", "*",
 	} {
 		if mappings[producer] == "" {
@@ -186,6 +186,22 @@ func clearPayloadField(payload *EventPayload, field string) {
 		payload.RecordKind = ""
 	case "noticeId":
 		payload.NoticeID = ""
+	case "attachmentId":
+		payload.AttachmentID = ""
+	case "session":
+		payload.Session = ""
+	case "environmentId":
+		payload.EnvironmentID = ""
+	case "workspaceId":
+		payload.WorkspaceID = ""
+	case "workspaceLabel":
+		payload.WorkspaceLabel = ""
+	case "guestWorkspace":
+		payload.GuestWorkspace = ""
+	case "workspaceTransport":
+		payload.WorkspaceTransport = ""
+	case "workspaceViewState":
+		payload.WorkspaceViewState = ""
 	case "lifecycle":
 		payload.Lifecycle = nil
 	}

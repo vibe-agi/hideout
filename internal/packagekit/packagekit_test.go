@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 )
 
@@ -49,6 +50,47 @@ func TestInstallWritesInstalledManifestAndVerifiesPrefix(t *testing.T) {
 	writeState(t, prefix, state)
 	if _, err := Verify(prefix); err == nil || !strings.Contains(err.Error(), "prefix mismatch") {
 		t.Fatalf("expected relocation mismatch, got %v", err)
+	}
+}
+
+func TestWorkspacePortalHelperIsVerifiedRepairedAndUninstalled(t *testing.T) {
+	root := writeTestArtifact(t, nil)
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := Install(InstallOptions{PackageRoot: root, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatal(err)
+	}
+	portal := filepath.Join(prefix, "bin", helperbin.LinuxWorkspacePortalCommand+"-linux-"+runtime.GOARCH)
+	if !helperbin.StoreHelperCurrent(portal, helperbin.LinuxWorkspacePortalCommand, runtime.GOARCH) {
+		t.Fatal("installed workspace Portal helper identity is not current")
+	}
+	if err := os.Remove(portal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(prefix); err == nil {
+		t.Fatal("installed package verification accepted a missing workspace Portal helper")
+	}
+	if _, err := Install(InstallOptions{PackageRoot: root, Prefix: prefix, StoreRoot: store}); err != nil {
+		t.Fatalf("reinstall did not repair workspace Portal helper: %v", err)
+	}
+	if _, err := Verify(prefix); err != nil {
+		t.Fatalf("repaired package verification: %v", err)
+	}
+	if _, err := Uninstall(UninstallOptions{Prefix: prefix}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{portal, helperbin.ManifestPath(portal)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("uninstall retained workspace Portal asset %q: %v", path, err)
+		}
+	}
+}
+
+func TestPackageVerificationRejectsSelfConsistentOuterManifestWithInvalidPortalIdentity(t *testing.T) {
+	rel := "bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH + ".manifest.json"
+	root := writeTestArtifact(t, map[string]string{rel: "{}\n"})
+	if _, err := Verify(root); err == nil || !strings.Contains(err.Error(), "workspace-portal") {
+		t.Fatalf("Verify invalid nested Portal identity error=%v", err)
 	}
 }
 
@@ -452,8 +494,10 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 	}{
 		"bin/hideout":      {kind: "binary", executable: true, data: "#!/bin/sh\n"},
 		"bin/hideout-shim": {kind: "binary", executable: true, data: "#!/bin/sh\n"},
-		"bin/hideout-shim-linux-" + runtime.GOARCH:    {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
-		"bin/hideout-hostfsd-linux-" + runtime.GOARCH: {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/hideout-shim-linux-" + runtime.GOARCH:                                    {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", executable: true, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", executable: false, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", executable: false, data: "readme zh\n"},
@@ -466,6 +510,23 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"docs/STATUS.md":                       {kind: "doc", executable: false, data: "status\n"},
 		"runtime/catalog.json":                 {kind: "runtime-catalog", executable: false, data: "{}\n"},
 		"runtime/contract.json":                {kind: "runtime-contract", executable: false, data: "{}\n"},
+	}
+	for _, command := range []string{helperbin.LinuxSessionSupervisorCommand, helperbin.LinuxWorkspacePortalCommand} {
+		binaryRel := "bin/" + command + "-linux-" + runtime.GOARCH
+		binary := files[binaryRel]
+		sum := sha256.Sum256([]byte(binary.data))
+		helperManifest, err := json.MarshalIndent(helperbin.Manifest{
+			Version: helperbin.ManifestVersion, Command: command, TargetOS: "linux", TargetArch: runtime.GOARCH,
+			Artifact: filepath.Base(binaryRel), SHA256: hex.EncodeToString(sum[:]), Builder: "unit-test", BuiltAt: "2026-07-09T00:00:00Z",
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[binaryRel+".manifest.json"] = struct {
+			kind       string
+			executable bool
+			data       string
+		}{kind: "helper-manifest", data: string(helperManifest) + "\n"}
 	}
 	for rel, data := range overrides {
 		spec := files[rel]
@@ -495,6 +556,8 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 				"bin/hideout-shim",
 				"bin/hideout-shim-linux-" + runtime.GOARCH,
 				"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
+				"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH,
+				"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
 			},
 			Entrypoints: []string{"install.sh", "README.md", "README.zh-CN.md"},
 			Directories: []string{"schemas", "docs", "packaging", "runtime"},

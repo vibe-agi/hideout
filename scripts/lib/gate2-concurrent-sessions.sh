@@ -259,7 +259,7 @@ while [ ! -f /workspace/c.release ]; do sleep 0.05; done
 	test "$(cat "$hostfs_file")" = "host-lower"
 	test "$(cat "$workspace/a.overlay")" = "first-staged"
 	HIDEOUT_STORE_ROOT="$store" "$hideout" env list >"$out/logs/env-active.out"
-	awk 'NR == 2 { exit !($6 == 3 && $5 == "running") }' "$out/logs/env-active.out"
+	awk 'NR == 2 { exit !($7 == 3 && $6 == "running") }' "$out/logs/env-active.out"
   local env_name
   env_name="$(awk 'NR == 2 {print $1}' "$out/logs/env-active.out")"
   [ -n "$env_name" ]
@@ -303,7 +303,7 @@ ROOTSH
 	third_pid=""
 	GATE2_034_CLEANUP_THIRD_PID=""
 	HIDEOUT_STORE_ROOT="$store" "$hideout" env list >"$out/logs/env-two.out"
-	awk 'NR == 2 { exit !($6 == 2 && $5 == "running") }' "$out/logs/env-two.out"
+	awk 'NR == 2 { exit !($7 == 2 && $6 == "running") }' "$out/logs/env-two.out"
 
 	local interrupted_session terminated_probe owner_release_start owner_release_end owner_release_ms owner_reconciled
 	interrupted_session="$(cat "$workspace/a.session")"
@@ -318,7 +318,7 @@ ROOTSH
 	owner_reconciled=0
 	for _ in $(seq 1 20); do
 		if HIDEOUT_STORE_ROOT="$store" "$hideout" env list >"$out/logs/env-owner-reconcile.out" 2>"$out/logs/env-owner-reconcile.err" &&
-			awk 'NR == 2 { exit !($6 == 1 && $5 == "running") }' "$out/logs/env-owner-reconcile.out"; then
+			awk 'NR == 2 { exit !($7 == 1 && $6 == "running") }' "$out/logs/env-owner-reconcile.out"; then
 			owner_reconciled=1
 			break
 		fi
@@ -358,14 +358,14 @@ ROOTSH
   gate2_034_wait_file "$workspace/b.alive" "surviving sibling"
   kill -0 "$second_pid"
   HIDEOUT_STORE_ROOT="$store" "$hideout" env list >"$out/logs/env-one.out"
-  awk 'NR == 2 { exit !($6 == 1 && $5 == "running") }' "$out/logs/env-one.out"
+  awk 'NR == 2 { exit !($7 == 1 && $6 == "running") }' "$out/logs/env-one.out"
 
   touch "$workspace/b.release"
   wait "$second_pid"
   second_pid=""
   GATE2_034_CLEANUP_SECOND_PID=""
   HIDEOUT_STORE_ROOT="$store" "$hideout" env list >"$out/logs/env-ready.out"
-  awk 'NR == 2 { exit !($6 == 0 && $5 == "ready") }' "$out/logs/env-ready.out"
+  awk 'NR == 2 { exit !($7 == 0 && $6 == "ready") }' "$out/logs/env-ready.out"
 	if find "$store/environments" -path '*/owners/*' -mindepth 4 -print -quit | grep -q .; then
 		echo "concurrent-sessions gate2: stale owner evidence remains after exact cleanup" >&2
 		return 1

@@ -22,6 +22,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/portbridge"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -75,8 +76,8 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 			t.Fatalf("lima config should not include %s:\n%s", forbidden, data)
 		}
 	}
-	if cfg.User.Name != spec.Profile.Identity.User ||
-		cfg.User.Home != "/home/"+spec.Profile.Identity.User ||
+	if cfg.User.Name != spec.Machine.Profile.Identity.User ||
+		cfg.User.Home != "/home/"+spec.Machine.Profile.Identity.User ||
 		cfg.User.UID != 1000 ||
 		cfg.User.Shell != "/bin/bash" {
 		t.Fatalf("lima config should pin guest OS user identity for os.userInfo: %+v", cfg.User)
@@ -111,13 +112,13 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 		t.Fatalf("provision should set guest machine-id from profile identity state: %s", cfg.Provision[0].Script)
 	}
 	wantMounts := []mount{
-		{Location: spec.HostWork, MountPoint: spec.GuestWork, Writable: true},
-		{Location: filepath.Join(spec.ProfileDir, "home"), MountPoint: GuestProfileDir + "/home", Writable: true},
-		{Location: filepath.Join(spec.ProfileDir, "cache"), MountPoint: GuestProfileDir + "/cache", Writable: true},
-		{Location: filepath.Join(spec.ProfileDir, "config"), MountPoint: GuestProfileDir + "/config", Writable: true},
-		{Location: filepath.Join(spec.ProfileDir, "data"), MountPoint: GuestProfileDir + "/data", Writable: true},
-		{Location: filepath.Join(spec.ProfileDir, "browser"), MountPoint: GuestProfileDir + "/browser", Writable: true},
-		{Location: filepath.Join(spec.ProfileDir, "machine"), MountPoint: GuestProfileDir + "/machine", Writable: false},
+		{Location: spec.Workspace.HostRoot, MountPoint: spec.Workspace.GuestRoot, Writable: true},
+		{Location: filepath.Join(spec.Machine.ProfileDir, "home"), MountPoint: GuestProfileDir + "/home", Writable: true},
+		{Location: filepath.Join(spec.Machine.ProfileDir, "cache"), MountPoint: GuestProfileDir + "/cache", Writable: true},
+		{Location: filepath.Join(spec.Machine.ProfileDir, "config"), MountPoint: GuestProfileDir + "/config", Writable: true},
+		{Location: filepath.Join(spec.Machine.ProfileDir, "data"), MountPoint: GuestProfileDir + "/data", Writable: true},
+		{Location: filepath.Join(spec.Machine.ProfileDir, "browser"), MountPoint: GuestProfileDir + "/browser", Writable: true},
+		{Location: filepath.Join(spec.Machine.ProfileDir, "machine"), MountPoint: GuestProfileDir + "/machine", Writable: false},
 		{Location: filepath.Join(spec.SessionDir, "tmp"), MountPoint: GuestSessionDir + "/tmp", Writable: true},
 		{Location: filepath.Join(spec.SessionDir, "shims"), MountPoint: GuestSessionDir + "/shims", Writable: true},
 		{Location: filepath.Join(spec.SessionDir, "network"), MountPoint: GuestSessionDir + "/network", Writable: true},
@@ -138,7 +139,7 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 			t.Fatalf("lima config must not mount %s: %+v", label, cfg.Mounts)
 		}
 		switch m.Location {
-		case spec.ProfileDir, filepath.Join(spec.ProfileDir, "profile.json"), filepath.Join(spec.ProfileDir, "identity.json"), filepath.Join(spec.ProfileDir, "policy"):
+		case spec.Machine.ProfileDir, filepath.Join(spec.Machine.ProfileDir, "profile.json"), filepath.Join(spec.Machine.ProfileDir, "identity.json"), filepath.Join(spec.Machine.ProfileDir, "policy"):
 			t.Fatalf("lima config must not expose profile control-plane path as a guest mount: %+v", m)
 		}
 		switch m.Location {
@@ -309,8 +310,8 @@ func TestLimaHostKeyCallbackDefaultConfigIsLoopbackOnly(t *testing.T) {
 func TestPrepareMountsEnvironmentRuntimeRoot(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.EnvironmentID = "env_20260702t124639zabcdef1234567890"
-	spec.SessionDir = filepath.Join(root, "environments", spec.EnvironmentID, "runtime")
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.SessionDir = filepath.Join(root, "environments", spec.Machine.EnvironmentID, "runtime")
 	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -342,8 +343,8 @@ func TestPrepareMountsEnvironmentRuntimeRoot(t *testing.T) {
 func TestPrepareUsesSessionScopedInstanceForEphemeralIdentity(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.IdentityMode = "ephemeral"
-	spec.IdentityRoot = filepath.Join(spec.SessionDir, "identity")
+	spec.Machine.IdentityMode = "ephemeral"
+	spec.Machine.IdentityRoot = filepath.Join(spec.SessionDir, "identity")
 	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -351,7 +352,7 @@ func TestPrepareUsesSessionScopedInstanceForEphemeralIdentity(t *testing.T) {
 	if session.InstanceName != "hideout-client-a-session-1" {
 		t.Fatalf("instance=%s", session.InstanceName)
 	}
-	if session.IdentityMode != "ephemeral" || session.IdentityRoot != spec.IdentityRoot {
+	if session.IdentityMode != "ephemeral" || session.IdentityRoot != spec.Machine.IdentityRoot {
 		t.Fatalf("session identity binding mismatch: %+v spec=%+v", session, spec)
 	}
 	data, err := os.ReadFile(session.ConfigPath)
@@ -363,10 +364,10 @@ func TestPrepareUsesSessionScopedInstanceForEphemeralIdentity(t *testing.T) {
 		t.Fatalf("yaml decode: %v\n%s", err, data)
 	}
 	for _, subdir := range []string{"home", "cache", "config", "data", "browser", "machine"} {
-		want := filepath.Join(spec.IdentityRoot, subdir)
+		want := filepath.Join(spec.Machine.IdentityRoot, subdir)
 		found := false
 		for _, m := range cfg.Mounts {
-			if m.Location == filepath.Join(spec.ProfileDir, subdir) {
+			if m.Location == filepath.Join(spec.Machine.ProfileDir, subdir) {
 				t.Fatalf("ephemeral mount should use identity root, not persistent profile dir: %+v", m)
 			}
 			if m.Location == want && m.MountPoint == GuestProfileDir+"/"+subdir {
@@ -384,7 +385,7 @@ func TestPrepareUsesSessionScopedInstanceForEphemeralIdentity(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"identityMode": "ephemeral"`,
-		`"identityRoot": "` + spec.IdentityRoot + `"`,
+		`"identityRoot": "` + spec.Machine.IdentityRoot + `"`,
 		`"instanceName": "hideout-client-a-session-1"`,
 	} {
 		if !bytes.Contains(manifest, []byte(want)) {
@@ -396,7 +397,7 @@ func TestPrepareUsesSessionScopedInstanceForEphemeralIdentity(t *testing.T) {
 func TestPrepareUsesProfileCommandProxyShims(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	delete(spec.Profile.CommandProxy.Commands, "xdg-open")
+	delete(spec.Machine.Profile.CommandProxy.Commands, "xdg-open")
 	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -420,8 +421,8 @@ func TestPrepareUsesProfileCommandProxyShims(t *testing.T) {
 func TestPrepareDoesNotProvisionToolsFromLegacyFields(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.Profile.Tools.Presets = []string{"base-dev", "node-dev"}
-	spec.Profile.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
+	spec.Machine.Profile.Tools.Presets = []string{"base-dev", "node-dev"}
+	spec.Machine.Profile.Tools.NPMGlobals = []profile.NPMGlobalPackage{{
 		Package:  "@example/agent-cli@1.2.3",
 		Commands: []string{"agent-cli"},
 	}}
@@ -584,6 +585,15 @@ func TestGuestRuntimePathIsShimsThenDurableUserThenSystem(t *testing.T) {
 	}
 }
 
+func TestGuestEnvMapsSessionGitSnapshotWithoutExposingHostPath(t *testing.T) {
+	env := GuestEnv([]string{
+		"GIT_CONFIG_GLOBAL=/Users/alice/.hideout/environments/env_1/runtime/sessions/ses_1/identity/gitconfig",
+	})
+	if got := backend.EnvValue(env, "GIT_CONFIG_GLOBAL"); got != "/hideout/session/identity/gitconfig" {
+		t.Fatalf("guest session Git config=%q", got)
+	}
+}
+
 func TestGuestBrokerEndpointUsesLimaHostAlias(t *testing.T) {
 	got, err := GuestBrokerEndpoint(broker.TCPEndpoint("0.0.0.0:4321"))
 	if err != nil {
@@ -711,14 +721,14 @@ func TestRunBuildsStartAndShellCommands(t *testing.T) {
 		t.Fatalf("bootstrap args=%v want %v", runner.calls[2].args, wantBootstrap)
 	}
 	wantCheck := []string{
-		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
+		"shell", "--tty=false", "--workdir", spec.Workspace.GuestRoot, session.InstanceName, "--", "env", "-i",
 		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "SERVICE_TOKEN=secret", "HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1", "sh", "-c", "command -v \"$1\" >/dev/null 2>&1 || exit 127", "hideout-command-check", "sh",
 	}
 	if !reflect.DeepEqual(runner.calls[3].args, wantCheck) {
 		t.Fatalf("command check args=%v want %v", runner.calls[3].args, wantCheck)
 	}
 	wantShell := []string{
-		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
+		"shell", "--tty=false", "--workdir", spec.Workspace.GuestRoot, session.InstanceName, "--", "env", "-i",
 		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", "SERVICE_TOKEN=secret", "HIDEOUT_BROKER_ENDPOINT=tcp://127.0.0.1:1", "sh", "-c", "pwd",
 	}
 	if !reflect.DeepEqual(runner.calls[4].args, wantShell) {
@@ -993,10 +1003,10 @@ func TestHostFSStartScriptFailsClosedOnMissingPrerequisites(t *testing.T) {
 func TestRunStartsExistingPreservedInstanceByName(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.EnvironmentID = "env_20260702t124639zabcdef1234567890"
-	spec.InstanceName = InstanceNameForEnvironment(spec.Profile.Name, spec.EnvironmentID)
-	spec.PreserveInstance = true
-	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", listOutput: spec.InstanceName + "\n"}
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = true
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", listOutput: spec.Machine.InstanceName + "\n"}
 	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
 	if err != nil {
@@ -1019,10 +1029,10 @@ func TestRunStartsExistingPreservedInstanceByName(t *testing.T) {
 func TestRunStartsExistingEnvironmentInstanceByNameWhenRemoveAfterRun(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.EnvironmentID = "env_20260702t124639zabcdef1234567890"
-	spec.InstanceName = InstanceNameForEnvironment(spec.Profile.Name, spec.EnvironmentID)
-	spec.PreserveInstance = false
-	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", listOutput: spec.InstanceName + "\n"}
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = false
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", listOutput: spec.Machine.InstanceName + "\n"}
 	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
 	if err != nil {
@@ -1049,9 +1059,9 @@ func TestRunStartsExistingEnvironmentInstanceByNameWhenRemoveAfterRun(t *testing
 func TestRunCreatesMissingPreservedInstanceFromConfig(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.EnvironmentID = "env_20260702t124639zabcdef1234567890"
-	spec.InstanceName = InstanceNameForEnvironment(spec.Profile.Name, spec.EnvironmentID)
-	spec.PreserveInstance = true
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = true
 	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
 	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
@@ -1110,9 +1120,9 @@ func TestStartupProgressIsQuietForFastStartAndVisibleForSlowStart(t *testing.T) 
 func TestCleanupSkipsGuestCommandsWhenRunStartDidNotComplete(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.EnvironmentID = "env_20260715t120000zabcdef1234567890"
-	spec.InstanceName = InstanceNameForEnvironment(spec.Profile.Name, spec.EnvironmentID)
-	spec.PreserveInstance = true
+	spec.Machine.EnvironmentID = "env_20260715t120000zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = true
 	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl", failCall: 2}
 	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
@@ -1171,7 +1181,7 @@ func TestRunReportsMissingGuestCommandWithBackendContext(t *testing.T) {
 	if !errors.As(err, &notFound) {
 		t.Fatalf("expected CommandNotFoundError, got %T %v", err, err)
 	}
-	if notFound.Backend != "lima" || notFound.Command != "missing-tool" || notFound.Workspace != spec.GuestWork {
+	if notFound.Backend != "lima" || notFound.Command != "missing-tool" || notFound.Workspace != spec.Workspace.GuestRoot {
 		t.Fatalf("unexpected missing command context: %+v", notFound)
 	}
 	if len(runner.calls) != 4 {
@@ -1192,7 +1202,7 @@ func TestCleanupRunsNetworkCleanupScript(t *testing.T) {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	want := []string{
-		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
+		"shell", "--tty=false", "--workdir", spec.Workspace.GuestRoot, session.InstanceName, "--", "env", "-i",
 		"HOME=/hideout/profile/home", "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", GuestSessionDir + "/network/cleanup.sh",
 	}
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[0].args, want) {
@@ -1221,7 +1231,7 @@ func TestCleanupUsesLastRunGuestEnv(t *testing.T) {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	want := []string{
-		"shell", "--tty=false", "--workdir", spec.GuestWork, session.InstanceName, "--", "env", "-i",
+		"shell", "--tty=false", "--workdir", spec.Workspace.GuestRoot, session.InstanceName, "--", "env", "-i",
 		"HOME=/hideout/profile/home", "PATH=/hideout/session/shims:/usr/bin", GuestSessionDir + "/network/cleanup.sh",
 	}
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[0].args, want) {
@@ -1235,16 +1245,16 @@ func TestCleanupUsesLastRunGuestEnv(t *testing.T) {
 func TestCleanupPreservesEnvironmentInstance(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
-	spec.EnvironmentID = "env_20260702t124639zabcdef1234567890"
-	spec.InstanceName = InstanceNameForEnvironment(spec.Profile.Name, spec.EnvironmentID)
-	spec.PreserveInstance = true
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = true
 	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
 	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
 	session, err := b.Prepare(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if session.InstanceName != spec.InstanceName || session.EnvironmentID != spec.EnvironmentID || !session.PreserveInstance {
+	if session.InstanceName != spec.Machine.InstanceName || session.EnvironmentID != spec.Machine.EnvironmentID || !session.PreserveInstance {
 		t.Fatalf("environment session fields not preserved: %+v", session)
 	}
 	if err := b.Cleanup(context.Background(), session); err != nil {
@@ -1331,18 +1341,20 @@ func testRunSpec(root string) backend.RunSpec {
 		"identityId": "id_abcdef1234567890",
 	}
 	return backend.RunSpec{
+		Machine: backend.MachineActivationSpec{
+			ImageRef: "template:_images/ubuntu-lts", Profile: p,
+			ProfileDir:   filepath.Join(root, "profiles", "client-a"),
+			IdentityMode: "persistent", IdentityRoot: filepath.Join(root, "profiles", "client-a"),
+			InstanceName: "hideout-client-a-session-1", Mode: environment.ModeWorkspaceBound,
+		},
+		Workspace: backend.WorkspaceAttachmentSpec{
+			HostRoot: filepath.Join(root, "workspace"), GuestRoot: "/Users/alice/project", Transport: backend.WorkspaceTransportStatic,
+		},
 		SessionID:                 "ses_1",
-		ImageRef:                  "template:_images/ubuntu-lts",
-		Profile:                   p,
 		Command:                   []string{"sh"},
 		Env:                       []string{"HOME=/hideout/profile/home"},
-		HostWork:                  filepath.Join(root, "workspace"),
-		GuestWork:                 "/Users/alice/project",
 		GuestHome:                 GuestProfileDir + "/home",
 		ShimDir:                   filepath.Join(root, "sessions", "ses_1", "shims"),
-		ProfileDir:                filepath.Join(root, "profiles", "client-a"),
-		IdentityMode:              "persistent",
-		IdentityRoot:              filepath.Join(root, "profiles", "client-a"),
 		SessionDir:                filepath.Join(root, "sessions", "ses_1"),
 		Broker:                    broker.TCPEndpoint("host.lima.internal:1234"),
 		NetworkBootstrapPath:      filepath.Join(root, "sessions", "ses_1", "network", "bootstrap.sh"),
@@ -1519,6 +1531,73 @@ type recordingSetupRunner struct {
 	failRun   bool
 }
 
+func TestReconcileEnvironmentBootUsesSetupIdentity(t *testing.T) {
+	runner := &recordingSetupRunner{}
+	b := Backend{SetupRunner: runner}
+	session := &backend.Session{InstanceName: "hideout-shared", TargetUser: "developer"}
+	configuration := environment.BootConfiguration{
+		Schema:   environment.BootConfigurationSchema,
+		Hostname: "hideout-dev",
+	}
+
+	if err := b.ReconcileEnvironmentBoot(context.Background(), session, configuration, []string{"HOME=/tmp/ignored"}); err != nil {
+		t.Fatalf("reconcile environment boot: %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("setup calls = %d, want check and run", len(runner.calls))
+	}
+	if !runner.calls[0].check || runner.calls[0].instance != session.InstanceName {
+		t.Fatalf("unexpected setup check: %#v", runner.calls[0])
+	}
+	call := runner.calls[1]
+	if call.instance != session.InstanceName || call.workdir != "/" {
+		t.Fatalf("unexpected setup target: %#v", call)
+	}
+	if len(call.command) != 5 || call.command[0] != "sh" || call.command[1] != "-c" || call.command[4] != configuration.Hostname {
+		t.Fatalf("unexpected boot reconciliation command: %#v", call.command)
+	}
+	if !strings.Contains(call.command[2], "mv \"$tmp\" /etc/hostname") || !strings.Contains(call.command[2], "hostname \"$hostname_value\"") {
+		t.Fatalf("boot reconciliation is not atomic and explicit: %q", call.command[2])
+	}
+	if session.PrivilegedSetupRequired {
+		t.Fatal("reconciliation mutated the target session authority")
+	}
+}
+
+func TestReconcileEnvironmentBootFailsClosed(t *testing.T) {
+	valid := environment.BootConfiguration{
+		Schema:   environment.BootConfigurationSchema,
+		Hostname: "hideout-dev",
+	}
+
+	t.Run("invalid configuration", func(t *testing.T) {
+		runner := &recordingSetupRunner{}
+		b := Backend{SetupRunner: runner}
+		err := b.ReconcileEnvironmentBoot(context.Background(), &backend.Session{InstanceName: "hideout-shared"}, environment.BootConfiguration{}, nil)
+		if err == nil || len(runner.calls) != 0 {
+			t.Fatalf("invalid configuration was executed: err=%v calls=%#v", err, runner.calls)
+		}
+	})
+
+	t.Run("setup identity unavailable", func(t *testing.T) {
+		runner := &recordingSetupRunner{failCheck: true}
+		b := Backend{SetupRunner: runner}
+		err := b.ReconcileEnvironmentBoot(context.Background(), &backend.Session{InstanceName: "hideout-shared"}, valid, nil)
+		if err == nil || !strings.Contains(err.Error(), "setup identity unavailable") {
+			t.Fatalf("setup identity failure was not propagated: %v", err)
+		}
+	})
+
+	t.Run("setup command fails", func(t *testing.T) {
+		runner := &recordingSetupRunner{failRun: true}
+		b := Backend{SetupRunner: runner}
+		err := b.ReconcileEnvironmentBoot(context.Background(), &backend.Session{InstanceName: "hideout-shared"}, valid, nil)
+		if err == nil || !strings.Contains(err.Error(), "setup run failed") {
+			t.Fatalf("setup failure was not propagated: %v", err)
+		}
+	})
+}
+
 func (r *recordingSetupRunner) Check(_ context.Context, instanceName string) error {
 	r.calls = append(r.calls, recordedSetupCall{instance: instanceName, check: true})
 	if r.failCheck {
@@ -1606,12 +1685,20 @@ func (r *cleanupContextRunner) Run(ctx context.Context, name string, args []stri
 	return nil
 }
 
-func TestConfigForRunSpecCompilesImageDeclaration(t *testing.T) {
-	base := backend.RunSpec{Profile: profile.Default("img-test")}
+func TestConfigForMachineSpecCompilesImageDeclaration(t *testing.T) {
+	root := t.TempDir()
+	base := backend.MachineActivationSpec{
+		Profile: profile.Default("img-test"), ProfileDir: filepath.Join(root, "profile"),
+		IdentityRoot: filepath.Join(root, "profile"), Mode: environment.ModeWorkspaceBound,
+	}
+	static := &StaticRunMounts{
+		Workspace:  backend.WorkspaceAttachmentSpec{HostRoot: filepath.Join(root, "workspace"), GuestRoot: "/workspace", Transport: backend.WorkspaceTransportStatic},
+		SessionDir: filepath.Join(root, "session"),
+	}
 
 	spec := base
 	spec.ImageRef = "template:_images/debian-13"
-	cfg, err := ConfigForRunSpec(spec)
+	cfg, err := ConfigForMachineSpec(spec, static)
 	if err != nil {
 		t.Fatalf("template declaration should build: %v", err)
 	}
@@ -1624,7 +1711,7 @@ func TestConfigForRunSpecCompilesImageDeclaration(t *testing.T) {
 
 	spec = base
 	spec.ImageRef = "https://example.com/images/dev.qcow2#sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	cfg, err = ConfigForRunSpec(spec)
+	cfg, err = ConfigForMachineSpec(spec, static)
 	if err != nil {
 		t.Fatalf("url declaration should build: %v", err)
 	}
@@ -1641,11 +1728,11 @@ func TestConfigForRunSpecCompilesImageDeclaration(t *testing.T) {
 	// a different image: an empty or unusable ref fails closed.
 	spec = base
 	spec.ImageRef = ""
-	if _, err := ConfigForRunSpec(spec); err == nil {
+	if _, err := ConfigForMachineSpec(spec, static); err == nil {
 		t.Fatal("empty image declaration must fail closed, not fall back")
 	}
 	spec.ImageRef = "ubuntu:24.04"
-	if _, err := ConfigForRunSpec(spec); err == nil {
+	if _, err := ConfigForMachineSpec(spec, static); err == nil {
 		t.Fatal("unusable image declaration must fail closed, not fall back")
 	}
 }

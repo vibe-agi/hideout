@@ -101,10 +101,13 @@ type PreparedRun struct {
 }
 
 type RunServiceDependencies struct {
-	Backend          backend.Backend
-	OpenerForSession func(RunSession) broker.Opener
-	Streams          *backend.RunStreams
-	Lifecycle        lifecycle.Registrar
+	Backend                     backend.Backend
+	OpenerForSession            func(RunSession) broker.Opener
+	PrepareWorkspaceAttachment  func(*RunSession) error
+	ActivateWorkspaceAttachment func(*RunSession) error
+	ReleaseWorkspaceAttachment  func(context.Context) error
+	Streams                     *backend.RunStreams
+	Lifecycle                   lifecycle.Registrar
 }
 
 type RunServiceBackendFactory func(RunServiceRequest, RunPlan) (backend.Backend, error)
@@ -203,16 +206,19 @@ func (s RunService) Apply(ctx context.Context, prepared PreparedRun, req RunServ
 		Environment: RunEnvironmentOptions{
 			EnvName: effective.EnvironmentName, RemoveAfterRun: effective.RemoveEnvironment, Create: true,
 		},
-		AuditPath:                  effective.AuditPath,
-		HostFSRun:                  effective.HostFSRun,
-		DisableProfileHostFSGrants: effective.DisableProfileHostFSGrants,
-		OpenTargets:                append([]RunOpenTargetOwner(nil), effective.OpenTargets...),
-		EndpointCandidates:         append([]RunEndpointCandidate(nil), effective.EndpointCandidates...),
-		EndpointExposures:          append([]RunEndpointExposureRequest(nil), effective.EndpointExposures...),
-		OpenerForSession:           deps.OpenerForSession,
-		TerminalMode:               effective.Terminal.Mode,
-		Streams:                    deps.Streams,
-		Lifecycle:                  deps.Lifecycle,
+		AuditPath:                   effective.AuditPath,
+		HostFSRun:                   effective.HostFSRun,
+		DisableProfileHostFSGrants:  effective.DisableProfileHostFSGrants,
+		OpenTargets:                 append([]RunOpenTargetOwner(nil), effective.OpenTargets...),
+		EndpointCandidates:          append([]RunEndpointCandidate(nil), effective.EndpointCandidates...),
+		EndpointExposures:           append([]RunEndpointExposureRequest(nil), effective.EndpointExposures...),
+		OpenerForSession:            deps.OpenerForSession,
+		PrepareWorkspaceAttachment:  deps.PrepareWorkspaceAttachment,
+		ActivateWorkspaceAttachment: deps.ActivateWorkspaceAttachment,
+		ReleaseWorkspaceAttachment:  deps.ReleaseWorkspaceAttachment,
+		TerminalMode:                effective.Terminal.Mode,
+		Streams:                     deps.Streams,
+		Lifecycle:                   deps.Lifecycle,
 	})
 }
 

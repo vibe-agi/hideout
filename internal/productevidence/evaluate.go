@@ -241,7 +241,7 @@ func evaluateRequirement(req ProofRequirement, proof ProofEntry, identity proofF
 	if root := strings.TrimSpace(opts.ArtifactRoots[req.ProofID]); root != "" {
 		artifactRoot = root
 	}
-	if status, summary := evaluateArtifacts(req, proof, artifactRoot, releaseCandidate, opts.ExpectedCommit, opts.ExpectedRuntime); status != EvalSatisfied {
+	if status, summary := evaluateArtifacts(req, proof, artifactRoot, releaseCandidate, opts.ExpectedCommit, opts.ExpectedPackage, opts.ExpectedRuntime); status != EvalSatisfied {
 		result.Status = status
 		result.Summary = summary
 		return result
@@ -339,7 +339,7 @@ func staleSummary(req ProofRequirement) string {
 	return "proof is stale for freshnessPolicy=" + req.FreshnessPolicy
 }
 
-func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, releaseCandidate bool, expectedCommit string, expectedRuntime *RuntimeExpectation) (string, string) {
+func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, releaseCandidate bool, expectedCommit string, expectedPackage *PackageIdentity, expectedRuntime *RuntimeExpectation) (string, string) {
 	switch req.ArtifactPolicy {
 	case ArtifactPolicyNone:
 		return EvalSatisfied, ""
@@ -390,7 +390,7 @@ func evaluateArtifacts(req ProofRequirement, proof ProofEntry, root string, rele
 			artifactData[artifact.Path] = data
 		}
 	}
-	if err := validateRegisteredArtifact(req.ArtifactValidator, proof.Artifacts, artifactData, strings.TrimSpace(expectedCommit), expectedRuntime); err != nil {
+	if err := validateRegisteredArtifact(req.ArtifactValidator, proof.Artifacts, artifactData, strings.TrimSpace(expectedCommit), expectedPackage, expectedRuntime); err != nil {
 		return EvalArtifactInvalid, err.Error()
 	}
 	return EvalSatisfied, ""

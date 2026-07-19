@@ -36,7 +36,7 @@ func TestProjectionResolvesSafeApplicationIdentityOnlyOnFirstCommandUse(t *testi
 		}
 	}}
 	projection := &ProjectionConfig{
-		Platform: PlatformDarwin, SafeUserDataDir: t.TempDir(), Bindings: catalog, Launcher: launcher, RunID: "run_1",
+		Platform: PlatformDarwin, SafeUserDataDir: t.TempDir(), Bindings: catalog, Launcher: launcher, RunID: "run_1", WorkspaceID: testWorkspaceAuthorityID,
 		ValidateLifecycle: func(OpenResourceBinding) error { return nil },
 		ResolveIdentity: func(binding OpenResourceBinding) (OpenResourceBinding, error) {
 			identityChecks++
@@ -65,7 +65,7 @@ func TestProjectionResolvesSafeApplicationIdentityOnlyOnFirstCommandUse(t *testi
 	}
 	request := BoundOpenRequest{Resources: []UnboundResource{{GuestPath: "/workspace/main.go"}}}
 	resource := fakeBoundResolver{resource: ResolvedResource{
-		Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"}, HostPath: "/host/workspace/main.go",
+		Ref: ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"}, HostPath: "/host/workspace/main.go", AuthorityID: testWorkspaceAuthorityID,
 	}}
 	for i := 0; i < 2; i++ {
 		if _, _, err := projection.OpenCommand(context.Background(), "code", static.BindingDigest, request, resource, "session_1", "privacy"); err != nil {
@@ -90,7 +90,7 @@ func TestProjectionRejectsLazyResolverThatChangesImmutableBinding(t *testing.T) 
 	}
 	launcher := &fakeLauncher{}
 	projection := &ProjectionConfig{
-		Bindings: catalog, Launcher: launcher,
+		Bindings: catalog, Launcher: launcher, WorkspaceID: testWorkspaceAuthorityID,
 		ValidateLifecycle: func(OpenResourceBinding) error { return nil },
 		ResolveIdentity: func(binding OpenResourceBinding) (OpenResourceBinding, error) {
 			binding.Commands = []string{"other"}
@@ -100,7 +100,7 @@ func TestProjectionRejectsLazyResolverThatChangesImmutableBinding(t *testing.T) 
 		},
 	}
 	request := BoundOpenRequest{Resources: []UnboundResource{{GuestPath: "/workspace/main.go"}}}
-	resource := fakeBoundResolver{resource: ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace}, HostPath: "/host/workspace/main.go"}}
+	resource := fakeBoundResolver{resource: ResolvedResource{Ref: ResourceRef{Kind: KindWorkspace}, HostPath: "/host/workspace/main.go", AuthorityID: testWorkspaceAuthorityID}}
 	_, _, err = projection.OpenCommand(context.Background(), "code", static.BindingDigest, request, resource, "session_1", "privacy")
 	if CodeOf(err) != CodeAppIdentityDrift || len(launcher.ran) != 0 {
 		t.Fatalf("mutated lazy binding reached launch: err=%v launches=%v", err, launcher.ran)

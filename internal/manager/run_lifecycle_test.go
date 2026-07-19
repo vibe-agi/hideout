@@ -21,6 +21,8 @@ type lifecycleApplyBackend struct {
 	bootID         string
 	planned        bool
 	networkPlanned bool
+	beforeReady    func(*backend.Session) error
+	targetRuns     int
 }
 
 func (b *lifecycleApplyBackend) ObserveLifecycle(_ context.Context, instanceName string) backend.LifecycleObservation {
@@ -30,7 +32,7 @@ func (b *lifecycleApplyBackend) ObserveLifecycle(_ context.Context, instanceName
 }
 
 func (b *lifecycleApplyBackend) Prepare(ctx context.Context, spec backend.RunSpec) (*backend.Session, error) {
-	journal, err := b.journal.Load(spec.EnvironmentID)
+	journal, err := b.journal.Load(spec.Machine.EnvironmentID)
 	if err != nil {
 		return nil, fmt.Errorf("planned lifecycle journal missing before backend prepare: %w", err)
 	}
@@ -60,6 +62,26 @@ func (b *lifecycleApplyBackend) Activate(_ context.Context, session *backend.Ses
 	return nil
 }
 
+func (b *lifecycleApplyBackend) RunWithStreams(ctx context.Context, session *backend.Session, command []string, env []string, streams backend.RunStreams) error {
+	proof, err := backend.ReadyProofForSession(session, backend.SessionReadyAuthenticatedSupervisor)
+	if err != nil {
+		return err
+	}
+	if b.beforeReady != nil {
+		if err := b.beforeReady(session); err != nil {
+			return err
+		}
+	}
+	if streams.Ready == nil {
+		return errors.New("test stream is missing ready barrier")
+	}
+	if err := streams.Ready(proof); err != nil {
+		return err
+	}
+	b.targetRuns++
+	return b.applyRunFakeBackend.Run(ctx, session, command, env)
+}
+
 func (b *lifecycleApplyBackend) StartEnvironmentNetwork(_ context.Context, session *backend.Session, _ string, _ string, _ []string) error {
 	journal, err := b.journal.Load(session.EnvironmentID)
 	if err != nil {
@@ -78,12 +100,17 @@ func (*lifecycleApplyBackend) VerifyEnvironmentNetwork(context.Context, *backend
 	return nil
 }
 
+func (*lifecycleApplyBackend) VerifyDirectEnvironmentNetwork(context.Context, *backend.Session, string, []string) error {
+	return nil
+}
+
 func (*lifecycleApplyBackend) StopEnvironmentNetwork(context.Context, *backend.Session, string, string, []string) error {
 	return nil
 }
 
 func TestApplyRunRegistersLifecycleBeforeBackendAuthority(t *testing.T) {
 	setFakeLinuxShim(t)
+	setFakeLinuxWorkspacePortal(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -113,6 +140,10 @@ func TestApplyRunRegistersLifecycleBeforeBackendAuthority(t *testing.T) {
 	}
 	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
 		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true}, Lifecycle: coordinator,
+		PrepareWorkspaceAttachment:  func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ActivateWorkspaceAttachment: func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ReleaseWorkspaceAttachment:  func(context.Context) error { return nil },
+		Streams:                     &backend.RunStreams{Ready: func(backend.SessionReadyProof) error { return nil }},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,8 +173,96 @@ func TestApplyRunRegistersLifecycleBeforeBackendAuthority(t *testing.T) {
 	}
 }
 
+func TestApplyRunSharedReadyBarrierActivatesBeforeCommitAndPreventsTargetOnRejection(t *testing.T) {
+	setFakeLinuxShim(t)
+	setFakeLinuxWorkspacePortal(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("ready-barrier")); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "ready-barrier", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-ready-barrier-test", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateFor := func(kind lifecycle.ResourceKind) (lifecycle.ResourceState, error) {
+		for _, status := range coordinator.Snapshot() {
+			for _, resources := range [][]lifecycle.ResourceSummary{status.Pins, status.Drains, status.Orphans} {
+				for _, resource := range resources {
+					if resource.Kind == kind {
+						return resource.State, nil
+					}
+				}
+			}
+		}
+		return "", fmt.Errorf("resource %s is missing from lifecycle snapshot", kind)
+	}
+	beforeReadyPlanned := false
+	downstreamSawActive := false
+	fake := &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}, journal: journalStore,
+		bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}
+	fake.beforeReady = func(session *backend.Session) error {
+		for _, kind := range []lifecycle.ResourceKind{lifecycle.KindGuestSupervisor, lifecycle.KindGuestTarget} {
+			state, stateErr := stateFor(kind)
+			if stateErr != nil {
+				return stateErr
+			}
+			if state != lifecycle.StatePlanned {
+				return fmt.Errorf("%s state before authenticated ready=%s", kind, state)
+			}
+		}
+		beforeReadyPlanned = true
+		return nil
+	}
+	rejected := errors.New("daemon refused ready publication")
+	_, err = core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true}, Lifecycle: coordinator,
+		PrepareWorkspaceAttachment:  func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ActivateWorkspaceAttachment: func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ReleaseWorkspaceAttachment:  func(context.Context) error { return nil },
+		Streams: &backend.RunStreams{Ready: func(proof backend.SessionReadyProof) error {
+			for _, kind := range []lifecycle.ResourceKind{lifecycle.KindGuestSupervisor, lifecycle.KindGuestTarget} {
+				state, stateErr := stateFor(kind)
+				if stateErr != nil {
+					return stateErr
+				}
+				if state != lifecycle.StateActive {
+					return fmt.Errorf("%s state at daemon commit=%s", kind, state)
+				}
+			}
+			downstreamSawActive = true
+			return rejected
+		}},
+	})
+	if !errors.Is(err, rejected) {
+		t.Fatalf("ApplyRun error=%v", err)
+	}
+	if !beforeReadyPlanned || !downstreamSawActive {
+		t.Fatalf("ready ordering planned=%v active=%v", beforeReadyPlanned, downstreamSawActive)
+	}
+	if fake.targetRuns != 0 {
+		t.Fatalf("target ran %d time(s) after ready publication was rejected", fake.targetRuns)
+	}
+}
+
 func TestApplyRunPlansEnvironmentNetworkBeforeProviderStart(t *testing.T) {
 	setFakeLinuxShim(t)
+	setFakeLinuxWorkspacePortal(t)
 	dnsStub := filepath.Join(t.TempDir(), "hideout-dns-stub-linux")
 	if err := os.WriteFile(dnsStub, []byte("dns-stub"), 0o700); err != nil {
 		t.Fatal(err)
@@ -181,6 +300,10 @@ func TestApplyRunPlansEnvironmentNetworkBeforeProviderStart(t *testing.T) {
 	}
 	_, err = core.ApplyRun(context.Background(), plan, ApplyRunOptions{
 		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true}, Lifecycle: coordinator,
+		PrepareWorkspaceAttachment:  func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ActivateWorkspaceAttachment: func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ReleaseWorkspaceAttachment:  func(context.Context) error { return nil },
+		Streams:                     &backend.RunStreams{Ready: func(backend.SessionReadyProof) error { return nil }},
 		Network: RunNetworkOptions{
 			Resolver: network.EnvSecretResolver{Env: []string{network.SecretEnvName("shared-proxy") + "=socks5://user:pass@127.0.0.1:1080"}},
 			Verified: true,

@@ -23,12 +23,16 @@ import (
 )
 
 type Result struct {
-	ConsoleVisible        bool              `json:"consoleVisible"`
-	InitialRenderCount    int               `json:"initialRenderCount"`
-	RenderCountAfterEvent int               `json:"renderCountAfterEvent"`
-	LiveUpdateObserved    bool              `json:"liveUpdateObserved"`
-	FallbackObserved      bool              `json:"fallbackObserved"`
-	Artifacts             map[string]string `json:"artifacts"`
+	ConsoleVisible         bool              `json:"consoleVisible"`
+	InitialRenderCount     int               `json:"initialRenderCount"`
+	RenderCountAfterEvent  int               `json:"renderCountAfterEvent"`
+	LiveUpdateObserved     bool              `json:"liveUpdateObserved"`
+	FallbackObserved       bool              `json:"fallbackObserved"`
+	WorkspaceMachineCount  int               `json:"workspaceMachineCount"`
+	WorkspaceViewCount     int               `json:"workspaceViewCount"`
+	WorkspaceRelationSeen  bool              `json:"workspaceRelationSeen"`
+	WorkspacePrivateHidden bool              `json:"workspacePrivateHidden"`
+	Artifacts              map[string]string `json:"artifacts"`
 }
 
 func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outDir string) Result {
@@ -78,6 +82,30 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	if initialRenders != 1 {
 		t.Fatalf("TUI rendered %d times while stream was healthy and idle; want exactly 1", initialRenders)
 	}
+	if err := fixture.PublishWorkspaceViews("ready"); err != nil {
+		t.Fatalf("publish workspace-view evidence: %v", err)
+	}
+	waitForTranscript(t, rawTranscript, func(s string) bool {
+		latest := latestDashboard(s)
+		return strings.Contains(latest, "project-a [aaaaaaaa]") &&
+			strings.Contains(latest, "project-b [bbbbbbbb]") &&
+			strings.Contains(latest, "active-views=2") &&
+			strings.Contains(latest, "relation=disjoint position=peer")
+	}, 10*time.Second)
+	workspaceScreen := latestDashboard(readTranscript(t, rawTranscript))
+	if count := strings.Count(workspaceScreen, "machine-id="+fixture.MachineIdentityID); count != 1 {
+		t.Fatalf("TUI shared machine rows=%d want=1:\n%s", count, workspaceScreen)
+	}
+	if count := strings.Count(workspaceScreen, "workspace-view="); count != 2 {
+		t.Fatalf("TUI workspace-view rows=%d want=2:\n%s", count, workspaceScreen)
+	}
+	privateHidden := true
+	for _, sentinel := range webui.WorkspacePrivateSentinels() {
+		if strings.Contains(readTranscript(t, rawTranscript), sentinel) {
+			privateHidden = false
+			t.Fatalf("TUI transcript leaked workspace private sentinel %q", sentinel)
+		}
+	}
 
 	ackNotice(t, fixture)
 	waitForTranscript(t, rawTranscript, func(s string) bool {
@@ -125,11 +153,15 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 		t.Fatal(err)
 	}
 	result := Result{
-		ConsoleVisible:        true,
-		InitialRenderCount:    initialRenders,
-		RenderCountAfterEvent: eventRenders,
-		LiveUpdateObserved:    true,
-		FallbackObserved:      true,
+		ConsoleVisible:         true,
+		InitialRenderCount:     initialRenders,
+		RenderCountAfterEvent:  eventRenders,
+		LiveUpdateObserved:     true,
+		FallbackObserved:       true,
+		WorkspaceMachineCount:  1,
+		WorkspaceViewCount:     2,
+		WorkspaceRelationSeen:  true,
+		WorkspacePrivateHidden: privateHidden,
 		Artifacts: map[string]string{
 			"terminal-capture": "terminal-capture.txt",
 			"event-summary":    "tui-result.json",
@@ -145,6 +177,14 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 		t.Fatal(err)
 	}
 	return result
+}
+
+func latestDashboard(transcript string) string {
+	const clear = "\x1b[H\x1b[2J"
+	if index := strings.LastIndex(transcript, clear); index >= 0 {
+		return transcript[index+len(clear):]
+	}
+	return transcript
 }
 
 func buildHideoutBinary(t *testing.T, prereq Prerequisites, root, outDir string) string {

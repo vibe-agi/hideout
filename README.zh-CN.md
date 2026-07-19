@@ -113,7 +113,9 @@ release manifest 和有界验证证据。
 - `direct` 网络不会隐藏网络身份；隐私网络需要额外的代理和 DNS 前置条件。
 - 目标一旦获得 guest root，Hideout 不声称仍能保持原隔离保证。
 - `--backend native` 只是开发 harness，不是隔离边界。
-- 并发复用目前只覆盖同一个 pinned workspace，不会把无关项目放进同一个默认 VM。
+- 兼容的 macOS arm64 Lima 自动运行会跨项目复用同一个 profile 对应的 VM，每个 session
+  仍只获得自己精确的 `/workspace` 视图。共享 guest kernel 不等于项目间的 VM 隔离墙；
+  需要独立 VM 信任域时，应创建 dedicated named environment。
 - 最后一个依赖 VM 的资源及 provider cleanup 释放后，Hideout 等待 15 秒并以非破坏
   方式停止 Lima VM。environment、guest disk、cache、audit 与 staged HostFS 状态都会
   保留；ownership 或 backend 状态不明时不会自动停止。

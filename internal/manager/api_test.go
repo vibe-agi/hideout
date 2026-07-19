@@ -1171,12 +1171,62 @@ func TestAPIRunApplyUsesConfiguredLifecycleRegistrar(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := profile.Store{Root: root}
-	if err := store.Save(profile.Default("api-lifecycle")); err != nil {
+	profileValue := profile.Default("api-lifecycle")
+	profileValue.Workspace.PathMode = "preserve"
+	if err := store.Save(profileValue); err != nil {
 		t.Fatal(err)
 	}
 	journalStore := lifecycle.JournalStore{Root: root}
 	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
 		Store: journalStore, DaemonID: "daemon-api-lifecycle", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coordinator.Close()
+	fake := &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}, journal: journalStore,
+		bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}
+	workspace := t.TempDir()
+	if _, err := (Core{Store: store}).CreateEnvironment(EnvironmentCreateOptions{
+		Name: "api-lifecycle-dedicated", Profile: "api-lifecycle", Backend: "lima", Workspace: workspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := API{
+		Core: Core{Store: store}, Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute),
+		RunBackend:   func(RunAPIRequest, RunPlan) (backend.Backend, error) { return fake, nil },
+		RunLifecycle: coordinator,
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/run/apply", RunAPIRequest{
+		ProfileName: "api-lifecycle", Backend: "lima", Workspace: workspace, Command: []string{"true"},
+		EnvironmentName: "api-lifecycle-dedicated",
+	})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !fake.planned {
+		t.Fatal("Manager HTTP run/apply bypassed the configured lifecycle registrar")
+	}
+}
+
+func TestAPIRunApplyCannotOwnSharedWorkspaceAttachment(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("api-shared-owner")); err != nil {
+		t.Fatal(err)
+	}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-api-shared-owner", IdleGrace: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1192,16 +1242,16 @@ func TestAPIRunApplyUsesConfiguredLifecycleRegistrar(t *testing.T) {
 		RunLifecycle: coordinator,
 	}
 	req := newAPIJSONRequest(http.MethodPost, "/api/v1/run/apply", RunAPIRequest{
-		ProfileName: "api-lifecycle", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+		ProfileName: "api-shared-owner", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
 	})
 	req.Header.Set("Authorization", "Bearer ui_token")
 	resp := httptest.NewRecorder()
 	api.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), ErrSharedWorkspaceDaemonOwnerRequired.Error()) {
+		t.Fatalf("shared Manager API did not refuse alternate ownership: status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	if !fake.planned {
-		t.Fatal("Manager HTTP run/apply bypassed the configured lifecycle registrar")
+	if fake.planned {
+		t.Fatal("shared Manager API reached backend authority without daemon session worker")
 	}
 }
 
@@ -1228,12 +1278,14 @@ func TestAPIEnvironmentLifecyclePlanAndApply(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	envStore := environment.Store{Root: store.Root}
 	rec, err := envStore.Create(environment.Spec{
-		Name:           "fixture-env-106",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/work/project",
-		GuestWorkspace: "/workspace",
+		Name:              "fixture-env-106",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "lima",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/work/project",
+		BoundGuestRoot: "/workspace",
 		InstanceName:   "hideout-env-test",
 	})
 	if err != nil {
@@ -1323,7 +1375,7 @@ func TestAPIEnvironmentStopUsesHostingControlPlaneApply(t *testing.T) {
 	envStore := environment.Store{Root: store.Root}
 	record, err := envStore.Create(environment.Spec{
 		Name: "hosted-stop", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: "/work/project", GuestWorkspace: "/workspace", InstanceName: "hideout-hosted-stop",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: "/work/project", BoundGuestRoot: "/workspace", InstanceName: "hideout-hosted-stop",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1361,7 +1413,7 @@ func TestAPIEnvironmentCleanUsesHostingControlPlaneApply(t *testing.T) {
 	envStore := environment.Store{Root: store.Root}
 	record, err := envStore.Create(environment.Spec{
 		Name: "hosted-clean", ImageRef: environment.BuiltinBaseImage, Profile: "default", Backend: "lima",
-		Workspace: "/work/project", GuestWorkspace: "/workspace", InstanceName: "hideout-hosted-clean",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: "/work/project", BoundGuestRoot: "/workspace", InstanceName: "hideout-hosted-clean",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1588,14 +1640,14 @@ func TestAPIExposesDomainResourcesWithoutSecretValues(t *testing.T) {
 	// not verbatim user URL data.
 	mustWriteManagerTest(t, filepath.Join(store.Root, "sessions", "ses_1", "audit.jsonl"), `{"time":"2026-07-01T00:00:00Z","session":"ses_1","profile":"default","backend":"native","action":"host.open","decision":"allow","details":{"target":"https://example.com/path?token=abc"}}`+"\n", 0o600)
 	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
-		Name:           "fixture-env-107",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/work/project",
-		GuestWorkspace: "/work/project",
-		ProfileID:      p.Metadata["profileId"],
-		IdentityID:     p.Metadata["identityId"],
+		Name:              "fixture-env-107",
+		ImageRef:          environment.BuiltinBaseImage,
+		Profile:           "default",
+		Backend:           "lima",
+		Mode:              environment.ModeWorkspaceBound,
+		MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(),
+		BoundWorkspace: "/work/project",
+		BoundGuestRoot: "/work/project",
 		InstanceName:   "hideout-default-env-test",
 	})
 	if err != nil {

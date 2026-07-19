@@ -32,8 +32,8 @@ type EventCatalogEntry struct {
 // representative catalog before UI code can claim live coverage.
 func PanelEventCoverage() map[string][]string {
 	return map[string][]string{
-		"environments": {KindEnvironment},
-		"sessions":     {KindSession},
+		"environments": {KindEnvironment, KindWorkspaceView},
+		"sessions":     {KindSession, KindWorkspaceView},
 		"background":   {KindBackground},
 		"audit":        {KindAudit},
 		"denied-audit": {KindAudit},
@@ -73,6 +73,7 @@ func ReducerEventKinds() []string {
 	return []string{
 		KindEnvironment,
 		KindSession,
+		KindWorkspaceView,
 		KindBackground,
 		KindAudit,
 		KindExport,
@@ -199,8 +200,23 @@ func RepresentativeEvents() []Event {
 		},
 		{
 			Version: EventVersion,
-			Kind:    KindTerminal,
+			Kind:    KindWorkspaceView,
+			Phase:   "progress",
 			Seq:     12,
+			Entity: EntityRef{
+				Kind: KindWorkspaceView, ID: "att_alpha", Profile: "alpha", Session: "ses_alpha",
+			},
+			Payload: EventPayload{
+				ID: "ses_alpha", AttachmentID: "att_alpha", Session: "ses_alpha", EnvironmentID: "env_alpha",
+				Profile: "alpha", WorkspaceID: "wrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				WorkspaceLabel: "project [aaaaaaaa]", GuestWorkspace: "/workspace", WorkspaceTransport: "workspace-portal",
+				WorkspaceViewState: "ready",
+			},
+		},
+		{
+			Version: EventVersion,
+			Kind:    KindTerminal,
+			Seq:     13,
 			Entity:  EntityRef{Kind: "stream"},
 			Payload: EventPayload{Reason: "stream closed"},
 		},
@@ -230,6 +246,20 @@ var eventCatalog = []EventCatalogEntry{
 		GoReducer:      true,
 		JSReducer:      true,
 		Panels:         []string{"sessions"},
+	},
+	{
+		Kind:           KindWorkspaceView,
+		ProducerKinds:  []string{KindWorkspaceView},
+		Source:         EventSourceProduction,
+		ProductionSite: "daemon.sessionRegistry workspace attachment transitions",
+		RequiredFields: []string{
+			"attachmentId", "session", "environmentId", "workspaceId", "workspaceLabel",
+			"guestWorkspace", "workspaceTransport", "workspaceViewState",
+		},
+		Redaction: RedactionControlPlaneStripped,
+		GoReducer: true,
+		JSReducer: true,
+		Panels:    []string{"environments", "sessions"},
 	},
 	{
 		Kind:           KindBackground,

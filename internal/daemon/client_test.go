@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,4 +79,56 @@ func TestFetchStatusSeedsExistingBackgroundWork(t *testing.T) {
 		}
 	}
 	t.Fatalf("background operation missing from status seed: %+v", status.Background)
+}
+
+func TestStopRunningWaitsForCompleteShutdownAndAllowsImmediateRestart(t *testing.T) {
+	store := testStore(t)
+	shutdownEntered := make(chan struct{})
+	shutdownRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(shutdownRelease) }) }
+	d, err := Start(Options{Store: store, BackendShutdown: func() error {
+		close(shutdownEntered)
+		<-shutdownRelease
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		release()
+		_ = d.Stop(context.Background())
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- StopRunning(ctx, store.Root) }()
+	select {
+	case <-shutdownEntered:
+	case <-time.After(time.Second):
+		t.Fatal("ordered shutdown did not reach the injected backend boundary")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("StopRunning returned before the daemon released ownership: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopRunning did not observe completed shutdown")
+	}
+
+	restarted, err := Start(Options{Store: store})
+	if err != nil {
+		t.Fatalf("immediate restart after successful StopRunning: %v", err)
+	}
+	if err := restarted.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }

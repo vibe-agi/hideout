@@ -41,6 +41,17 @@ func TestBuildDoesNotInheritUnlistedEnvAndSetsSyntheticHome(t *testing.T) {
 	}
 }
 
+func TestBuildUsesSessionGitConfigurationSnapshot(t *testing.T) {
+	p := profile.Default("test")
+	result := Build(Spec{
+		Profile: p, ProfileDir: "/tmp/hideout/profile", SessionDir: "/tmp/hideout/session",
+		GitConfigPath: "/tmp/hideout/session/identity/gitconfig", HostEnv: []string{},
+	})
+	if got := result.Synthetic["GIT_CONFIG_GLOBAL"]; got != "/tmp/hideout/session/identity/gitconfig" {
+		t.Fatalf("GIT_CONFIG_GLOBAL=%q", got)
+	}
+}
+
 func TestBuildDenyPatternsSupportGeneralGlobs(t *testing.T) {
 	p := profile.Default("test")
 	p.Env.Deny = []string{"*TOKEN*", "*SECRET*"}
@@ -129,16 +140,16 @@ func TestBuildSyntheticPATHPrefixesShimDir(t *testing.T) {
 	}
 }
 
-func TestBuildPinsGitSafeDirectoryToMountedWorkspace(t *testing.T) {
+func TestBuildPinsOnlyExactGitSafeDirectories(t *testing.T) {
 	p := profile.Default("test")
 	p.Env.Public["GIT_CONFIG_COUNT"] = "99"
 	p.Env.Public["GIT_CONFIG_VALUE_0"] = "*"
 	p.Env.Public["GIT_CONFIG_PARAMETERS"] = "'safe.directory=*'"
 	result := Build(Spec{
-		Profile:          p,
-		ProfileDir:       "/tmp/hideout/profile",
-		SessionDir:       "/tmp/hideout/session",
-		GitSafeDirectory: "/workspace",
+		Profile:            p,
+		ProfileDir:         "/tmp/hideout/profile",
+		SessionDir:         "/tmp/hideout/session",
+		GitSafeDirectories: []string{"/workspace", "/hideout/workspaces/wrk_verified"},
 	})
 	env := strings.Join(result.Env, "\n")
 	for _, want := range []string{
@@ -146,7 +157,7 @@ func TestBuildPinsGitSafeDirectoryToMountedWorkspace(t *testing.T) {
 		"GIT_CONFIG_KEY_0=safe.directory",
 		"GIT_CONFIG_VALUE_0=/workspace",
 		"GIT_CONFIG_KEY_1=safe.directory",
-		"GIT_CONFIG_VALUE_1=/workspace/*",
+		"GIT_CONFIG_VALUE_1=/hideout/workspaces/wrk_verified",
 	} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("workspace Git trust missing %q from %s", want, env)
@@ -154,6 +165,35 @@ func TestBuildPinsGitSafeDirectoryToMountedWorkspace(t *testing.T) {
 	}
 	if strings.Contains(env, "GIT_CONFIG_COUNT=99") || strings.Contains(env, "GIT_CONFIG_VALUE_0=*") || strings.Contains(env, "GIT_CONFIG_PARAMETERS") {
 		t.Fatalf("profile overrode Core-owned Git trust: %s", env)
+	}
+	if strings.Contains(env, "/workspace/*") {
+		t.Fatalf("Git trust widened with a child wildcard: %s", env)
+	}
+}
+
+func TestBuildDisablesGitPreloadWithoutWideningWorkspaceTrust(t *testing.T) {
+	p := profile.Default("test")
+	result := Build(Spec{
+		Profile:                p,
+		ProfileDir:             "/tmp/hideout/profile",
+		SessionDir:             "/tmp/hideout/session",
+		DisableGitPreloadIndex: true,
+		GitSafeDirectories:     []string{"/workspace"},
+	})
+	env := strings.Join(result.Env, "\n")
+	for _, want := range []string{
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=core.preloadIndex",
+		"GIT_CONFIG_VALUE_0=false",
+		"GIT_CONFIG_KEY_1=safe.directory",
+		"GIT_CONFIG_VALUE_1=/workspace",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("Portal Git tuning missing %q from %s", want, env)
+		}
+	}
+	if strings.Contains(env, "safe.directory=*") || strings.Contains(env, "/workspace/*") {
+		t.Fatalf("Portal Git tuning widened workspace trust: %s", env)
 	}
 }
 

@@ -90,6 +90,11 @@ func (c Core) PlanRun(opts RunPlanOptions) (RunPlan, error) {
 			return RunPlan{}, err
 		}
 	}
+	if runtimeProfile.Workspace.PathMode == "alias" {
+		if err := ValidateAliasWorkspaceMetadata(hostWorkspace); err != nil {
+			return RunPlan{}, err
+		}
+	}
 	backendName := ResolveBackendName(opts.Backend)
 	if backendName != "native" && backendName != "lima" {
 		return RunPlan{}, fmt.Errorf("backend %q is not implemented yet", backendName)

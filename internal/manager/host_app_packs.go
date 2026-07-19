@@ -1520,7 +1520,9 @@ func (c Core) hostAppForbiddenOverlapRoots(profileName string, source hostapppac
 	if records, err := (environment.Store{Root: c.Store.Root}).List(); err == nil {
 		for _, record := range records {
 			if record.Profile == profileName {
-				roots = append(roots, record.Workspace)
+				if binding, ok := pinnedEnvironmentWorkspace(record); ok {
+					roots = append(roots, binding.HostRoot)
+				}
 			}
 		}
 	} else {

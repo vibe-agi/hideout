@@ -49,6 +49,12 @@ import (
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
+)
+
+const (
+	appTestMachineIdentityID   = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	appTestBootConfigurationID = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 )
 
 type appSessionSetupRunner struct {
@@ -102,17 +108,24 @@ func (r appSessionSetupRunner) Run(_ context.Context, _ string, _ string, _ []st
 	return nil
 }
 
-func installAppTestSessionSupervisor(t *testing.T, dir string) string {
+func installAppTestLinuxSessionHelpers(t *testing.T, dir string) {
 	t.Helper()
-	path := filepath.Join(dir, helperbin.LinuxSessionSupervisorCommand+"-linux-"+runtime.GOARCH)
-	if err := os.WriteFile(path, []byte("test session supervisor"), 0o700); err != nil {
-		t.Fatal(err)
+	for _, helper := range []struct {
+		command string
+		envName string
+	}{
+		{command: helperbin.LinuxSessionSupervisorCommand, envName: helperbin.LinuxSessionSupervisorPathEnvironment},
+		{command: helperbin.LinuxWorkspacePortalCommand, envName: helperbin.LinuxWorkspacePortalPathEnvironment},
+	} {
+		path := filepath.Join(dir, helper.command+"-linux-"+runtime.GOARCH)
+		if err := os.WriteFile(path, []byte("test "+helper.command), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := helperbin.WriteStoreHelperManifest(path, helper.command, runtime.GOARCH); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(helper.envName, path)
 	}
-	if err := helperbin.WriteStoreHelperManifest(path, helperbin.LinuxSessionSupervisorCommand, runtime.GOARCH); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, path)
-	return path
 }
 
 func waitForAppLifecycleReconciliation(t *testing.T, d *daemon.Daemon, environmentID string) {
@@ -1508,7 +1521,8 @@ func TestDoctorSessionsReportsFailedOwnerAndServiceConflict(t *testing.T) {
 		if err := netpolicy.WriteServiceState(statePath, netpolicy.ServiceState{
 			Schema: netpolicy.EnvironmentServiceSchema, EnvironmentID: env.ID, Kind: "network",
 			Status: netpolicy.ServiceFailed, ConfigurationFingerprint: strings.Repeat("a", 64),
-			Mode: netpolicy.ModeTun2Socks, StartedAt: now, UpdatedAt: now, LastError: "service setup failed",
+			ConfigurationID: "sha256:" + strings.Repeat("c", 64), Mode: netpolicy.ModeTun2Socks,
+			GatewayID: "gw_doctor", Resolver: "1.1.1.1", StartedAt: now, UpdatedAt: now, LastError: "service setup failed",
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -1533,7 +1547,8 @@ func sessionDoctorFixture(t *testing.T, backendName string) (profile.Store, prof
 	envStore := environment.Store{Root: store.Root}
 	env, err := envStore.Create(environment.Spec{
 		Name: "doctor-sessions", ImageRef: environment.BuiltinBaseImage, Profile: p.Name, Backend: backendName,
-		Workspace: t.TempDir(), GuestWorkspace: "/workspace", InstanceName: "hideout-doctor-sessions",
+		Mode: environment.ModeWorkspaceBound, MachineIdentityID: appTestMachineIdentityID, BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace", InstanceName: "hideout-doctor-sessions",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1550,8 +1565,9 @@ func acquireSessionDoctorOwner(t *testing.T, store profile.Store, env environmen
 	now := time.Now().UTC()
 	owner, err := session.AcquireOwner((environment.Store{Root: store.Root}).OwnerRoot(env.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef",
-		EnvironmentID: env.ID, Profile: env.Profile, Backend: env.Backend, WorkspaceID: strings.Repeat("a", 64),
-		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
+		EnvironmentID: env.ID, Profile: env.Profile, Backend: env.Backend, WorkspaceID: "wrk_" + strings.Repeat("a", 64),
+		SessionSnapshotID: "sha256:" + strings.Repeat("c", 64),
+		State:             session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "shell",
 	})
 	if err != nil {
@@ -1723,10 +1739,12 @@ func writeTestPackageRoot(t *testing.T) string {
 		mode os.FileMode
 		data string
 	}{
-		"bin/hideout":                          {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
-		"bin/hideout-shim":                     {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
-		"bin/hideout-shim-linux-arm64":         {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
-		"bin/hideout-hostfsd-linux-arm64":      {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout":      {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout-shim": {kind: "binary", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout-shim-linux-" + runtime.GOARCH:                                    {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", mode: 0o755, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", mode: 0o644, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", mode: 0o644, data: "readme zh\n"},
@@ -1736,6 +1754,23 @@ func writeTestPackageRoot(t *testing.T) string {
 		"runtime/catalog.json":                 {kind: "runtime-catalog", mode: 0o644, data: "{}\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
+	}
+	for _, command := range []string{helperbin.LinuxSessionSupervisorCommand, helperbin.LinuxWorkspacePortalCommand} {
+		binaryRel := "bin/" + command + "-linux-" + runtime.GOARCH
+		binary := files[binaryRel]
+		sum := sha256.Sum256([]byte(binary.data))
+		helperManifest, err := json.MarshalIndent(helperbin.Manifest{
+			Version: helperbin.ManifestVersion, Command: command, TargetOS: "linux", TargetArch: runtime.GOARCH,
+			Artifact: filepath.Base(binaryRel), SHA256: hex.EncodeToString(sum[:]), Builder: "unit-test", BuiltAt: "2026-01-01T00:00:00Z",
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[binaryRel+".manifest.json"] = struct {
+			kind string
+			mode os.FileMode
+			data string
+		}{kind: "helper-manifest", mode: 0o644, data: string(helperManifest) + "\n"}
 	}
 	manifest := packagekit.Manifest{Schema: packagekit.ArtifactSchema}
 	manifest.BuiltAt = "2026-01-01T00:00:00Z"
@@ -1751,8 +1786,10 @@ func writeTestPackageRoot(t *testing.T) string {
 	manifest.Layout.Binaries = []string{
 		"bin/hideout",
 		"bin/hideout-shim",
-		"bin/hideout-shim-linux-arm64",
-		"bin/hideout-hostfsd-linux-arm64",
+		"bin/hideout-shim-linux-" + runtime.GOARCH,
+		"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
+		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH,
+		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
 	}
 	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
 	manifest.Layout.Directories = []string{"schemas", "docs", "packaging", "runtime"}
@@ -3364,13 +3401,16 @@ exit 0
 	}
 	envStore := environment.Store{Root: store.Root}
 	rec, err := envStore.Create(environment.Spec{
-		Name:           "fixture-env-101",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/work",
-		GuestWorkspace: "/workspace",
-		InstanceName:   "hideout-fake",
+		Name:                "fixture-env-101",
+		ImageRef:            environment.BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   appTestMachineIdentityID,
+		BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace:      "/work",
+		BoundGuestRoot:      "/workspace",
+		InstanceName:        "hideout-fake",
 	})
 	if err != nil {
 		t.Fatalf("create environment: %v", err)
@@ -4558,6 +4598,102 @@ func TestProfileInitRejectsExistingProfile(t *testing.T) {
 	}
 }
 
+func TestProfileWorkspacePathModeCommandReadsAndUpdatesProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"profile", "init", "test"}, &out, &errOut); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"profile", "workspace-path-mode", "test"}, &out, &errOut); code != 0 {
+		t.Fatalf("read exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.TrimSpace(out.String()) != profile.WorkspacePathModeAlias {
+		t.Fatalf("default path mode output=%q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"profile", "workspace-path-mode", "test", profile.WorkspacePathModePreserve}, &out, &errOut); code != 0 {
+		t.Fatalf("update exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "workspace path mode for test set to preserve") {
+		t.Fatalf("unexpected update output: %s", out.String())
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.Load("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Workspace.PathMode != profile.WorkspacePathModePreserve {
+		t.Fatalf("stored path mode=%q", p.Workspace.PathMode)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"profile", "workspace-path-mode", "test", "automatic"}, &out, &errOut); code == 0 {
+		t.Fatal("unsupported path mode command succeeded")
+	}
+	p, err = store.Load("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Workspace.PathMode != profile.WorkspacePathModePreserve {
+		t.Fatalf("failed command changed path mode to %q", p.Workspace.PathMode)
+	}
+}
+
+func TestProfileNetworkCommandConfiguresReferenceWithoutSecretValue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"profile", "init", "test"}, &out, &errOut); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	args := []string{"profile", "network", "test", "tun2socks", "--proxy-secret", "default-proxy", "--mediated-resolver", "1.1.1.1"}
+	if code := Main(args, &out, &errOut); code != 0 {
+		t.Fatalf("network update exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "network for test set to tun2socks resolver=1.1.1.1") ||
+		!strings.Contains(out.String(), "direct/proxy posture changes wait for active sibling sessions to exit") ||
+		!strings.Contains(out.String(), "No VM recreate or restart is required") || strings.Contains(out.String(), "socks5://") {
+		t.Fatalf("unexpected network output: %s", out.String())
+	}
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := store.Load("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Network.Mode != profile.NetworkModeTun2Socks || p.Network.ProxySecretRef != "default-proxy" || p.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("stored network mismatch: %+v", p.Network)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"profile", "network", "test", "direct"}, &out, &errOut); code != 0 {
+		t.Fatalf("direct update exit=%d stderr=%s", code, errOut.String())
+	}
+	p, err = store.Load("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Network.Mode != profile.NetworkModeDirect || p.Network.ProxySecretRef != "" || p.Network.MediatedResolver != "" {
+		t.Fatalf("direct mode retained proxy configuration: %+v", p.Network)
+	}
+}
+
 func TestProfileRotateAndResetCommandsChangeIdentity(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -5556,15 +5692,16 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	envRec, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
-		Name:           "fixture-env-102",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      "/tmp/hideout-project",
-		GuestWorkspace: "/tmp/hideout-project",
-		ProfileID:      p.Metadata["profileId"],
-		IdentityID:     p.Metadata["identityId"],
-		InstanceName:   "hideout-default-env-test",
+		Name:                "fixture-env-102",
+		ImageRef:            environment.BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   appTestMachineIdentityID,
+		BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace:      "/tmp/hideout-project",
+		BoundGuestRoot:      "/tmp/hideout-project",
+		InstanceName:        "hideout-default-env-test",
 	})
 	if err != nil {
 		t.Fatalf("create environment: %v", err)
@@ -5661,7 +5798,7 @@ func TestTUIRendersConcurrentOwnerState(t *testing.T) {
 		}},
 	}, nil, nil, nil, "")
 	text := out.String()
-	for _, want := range []string{"active=2 owner=live", "state=running owner=live terminal=pty command=bash"} {
+	for _, want := range []string{"active=2", "sessions=2", "owner=live", "state=running owner=live terminal=pty command=bash"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("TUI owner output missing %q:\n%s", want, text)
 		}
@@ -5684,8 +5821,8 @@ func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 	}
 	envStore := environment.Store{Root: store.Root}
 	for _, spec := range []environment.Spec{
-		{Name: "agent-env", ImageRef: environment.BuiltinBaseImage, Profile: "agent", Backend: "lima", Workspace: "/work/agent", GuestWorkspace: "/workspace", InstanceName: "hideout-agent-env"},
-		{Name: "smoke-env", ImageRef: environment.BuiltinBaseImage, Profile: "smoke", Backend: "lima", Workspace: "/work/smoke", GuestWorkspace: "/workspace", InstanceName: "hideout-smoke-env"},
+		{Name: "agent-env", ImageRef: environment.BuiltinBaseImage, Profile: "agent", Backend: "lima", Mode: environment.ModeWorkspaceBound, MachineIdentityID: appTestMachineIdentityID, BootConfigurationID: appTestBootConfigurationID, BoundWorkspace: "/work/agent", BoundGuestRoot: "/workspace", InstanceName: "hideout-agent-env"},
+		{Name: "smoke-env", ImageRef: environment.BuiltinBaseImage, Profile: "smoke", Backend: "lima", Mode: environment.ModeWorkspaceBound, MachineIdentityID: appTestMachineIdentityID, BootConfigurationID: appTestBootConfigurationID, BoundWorkspace: "/work/smoke", BoundGuestRoot: "/workspace", InstanceName: "hideout-smoke-env"},
 	} {
 		rec, err := envStore.Create(spec)
 		if err != nil {
@@ -6053,12 +6190,25 @@ fi
 		"xdg_cache=" + filepath.Join(profileDir, "cache"),
 		"xdg_data=" + filepath.Join(profileDir, "data"),
 		"sensitive_env_absent=yes",
-		"git_config_global=" + filepath.Join(fakeHome, ".gitconfig"),
 		"git_email=developer@example.com",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("stdout missing %q: %s", want, out.String())
 		}
+	}
+	gitConfig := ""
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.HasPrefix(line, "git_config_global=") {
+			gitConfig = strings.TrimPrefix(line, "git_config_global=")
+			break
+		}
+	}
+	wantRuntimeRoot := filepath.Join(home, ".hideout", "environments") + string(filepath.Separator)
+	if !strings.HasPrefix(gitConfig, wantRuntimeRoot) || filepath.Base(gitConfig) != "gitconfig" || filepath.Base(filepath.Dir(gitConfig)) != "identity" {
+		t.Fatalf("Git configuration is not an immutable session snapshot: %q", gitConfig)
+	}
+	if gitConfig == filepath.Join(fakeHome, ".gitconfig") {
+		t.Fatalf("Git configuration fell back to mutable profile home: %q", gitConfig)
 	}
 	written, err := os.ReadFile(filepath.Join(workspace, "output.txt"))
 	if err != nil {
@@ -6126,7 +6276,7 @@ exit 0
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
-	installAppTestSessionSupervisor(t, fakeBin)
+	installAppTestLinuxSessionHelpers(t, fakeBin)
 
 	for i := 0; i < 2; i++ {
 		var out, errOut bytes.Buffer
@@ -6265,8 +6415,8 @@ func TestStopLimaFailsClosedWhenDaemonUnavailable(t *testing.T) {
 	store := environment.Store{Root: filepath.Join(home, ".hideout")}
 	record, err := store.Create(environment.Spec{
 		Name: "serialized-stop", ImageRef: environment.BuiltinBaseImage,
-		Profile: "default", Backend: "lima", Workspace: t.TempDir(),
-		GuestWorkspace: "/workspace", InstanceName: "hideout-serialized-stop",
+		Profile: "default", Backend: "lima", Mode: environment.ModeWorkspaceBound, MachineIdentityID: appTestMachineIdentityID, BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace", InstanceName: "hideout-serialized-stop",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -6303,7 +6453,7 @@ func TestRunCLIAllowsOverlappingCommandsInOneWorkspaceEnvironment(t *testing.T) 
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
-	installAppTestSessionSupervisor(t, t.TempDir())
+	installAppTestLinuxSessionHelpers(t, t.TempDir())
 
 	profileStore := profile.Store{Root: filepath.Join(home, ".hideout")}
 	core := manager.New(profileStore)
@@ -6340,7 +6490,19 @@ func TestRunCLIAllowsOverlappingCommandsInOneWorkspaceEnvironment(t *testing.T) 
 			outcomes <- outcome{stdout: stdout.String(), stderr: stderr.String(), err: err}
 		}()
 	}
-	ids := []string{receiveAppSessionStart(t, fake.started), receiveAppSessionStart(t, fake.started)}
+	ids := make([]string, 0, 2)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for len(ids) < 2 {
+		select {
+		case id := <-fake.started:
+			ids = append(ids, id)
+		case early := <-outcomes:
+			t.Fatalf("CLI run ended before overlap: err=%v stdout=%s stderr=%s", early.err, early.stdout, early.stderr)
+		case <-deadline.C:
+			t.Fatal("timed out waiting for overlapping CLI runs")
+		}
+	}
 	if ids[0] == ids[1] {
 		t.Fatalf("CLI runs shared a session ID: %q", ids[0])
 	}
@@ -6390,12 +6552,15 @@ type appConcurrentBackend struct {
 	fullActivations int
 	warmActivations int
 	activationOwner string
+	bootID          string
 	releases        map[string]chan struct{}
 	started         chan string
 }
 
 func newAppConcurrentBackend() *appConcurrentBackend {
-	return &appConcurrentBackend{releases: map[string]chan struct{}{}, started: make(chan string, 2)}
+	return &appConcurrentBackend{
+		bootID: "01234567-89ab-cdef-0123-456789abcdef", releases: map[string]chan struct{}{}, started: make(chan string, 2),
+	}
 }
 
 func (b *appConcurrentBackend) Name() string                    { return "lima" }
@@ -6406,10 +6571,10 @@ func (b *appConcurrentBackend) Prepare(_ context.Context, spec backend.RunSpec) 
 	b.releases[spec.SessionID] = make(chan struct{})
 	b.mu.Unlock()
 	return &backend.Session{
-		ID: spec.SessionID, EnvironmentID: spec.EnvironmentID, Backend: b.Name(),
-		HostWork: spec.HostWork, GuestWork: spec.GuestWork, SessionDir: spec.SessionDir,
-		RuntimeRoot: spec.RuntimeRoot, InstanceName: spec.InstanceName,
-		PreserveInstance: spec.PreserveInstance, SessionIsolationRequired: spec.SessionIsolationRequired,
+		ID: spec.SessionID, EnvironmentID: spec.Machine.EnvironmentID, Backend: b.Name(),
+		HostWork: spec.Workspace.HostRoot, GuestWork: spec.Workspace.GuestRoot, SessionDir: spec.SessionDir,
+		RuntimeRoot: spec.Machine.RuntimeRoot, InstanceName: spec.Machine.InstanceName,
+		PreserveInstance: spec.Machine.PreserveInstance, SessionIsolationRequired: spec.SessionIsolationRequired,
 	}, nil
 }
 
@@ -6417,6 +6582,7 @@ func (b *appConcurrentBackend) Activate(_ context.Context, session *backend.Sess
 	b.mu.Lock()
 	b.fullActivations++
 	b.activationOwner = session.ID
+	session.ExpectedBootID = b.bootID
 	b.mu.Unlock()
 	session.RuntimeReady = true
 	return nil
@@ -6431,6 +6597,7 @@ func (b *appConcurrentBackend) WarmActivationOwner(*backend.Session) (string, er
 func (b *appConcurrentBackend) WarmActivate(_ context.Context, session *backend.Session, _ []string) error {
 	b.mu.Lock()
 	b.warmActivations++
+	session.ExpectedBootID = b.bootID
 	b.mu.Unlock()
 	session.RuntimeReady = true
 	return nil
@@ -6475,13 +6642,16 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 	store := environment.Store{Root: filepath.Join(home, ".hideout")}
 	now := time.Now().UTC()
 	old, err := store.Create(environment.Spec{
-		Name:           "fixture-env-103",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
-		InstanceName:   "hideout-old",
+		Name:                "fixture-env-103",
+		ImageRef:            environment.BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   appTestMachineIdentityID,
+		BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
+		InstanceName:        "hideout-old",
 	})
 	if err != nil {
 		t.Fatalf("Create old: %v", err)
@@ -6492,13 +6662,16 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 		t.Fatalf("Save old: %v", err)
 	}
 	recent, err := store.Create(environment.Spec{
-		Name:           "fixture-env-104",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
-		InstanceName:   "hideout-recent",
+		Name:                "fixture-env-104",
+		ImageRef:            environment.BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   appTestMachineIdentityID,
+		BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
+		InstanceName:        "hideout-recent",
 	})
 	if err != nil {
 		t.Fatalf("Create recent: %v", err)
@@ -6509,13 +6682,16 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 		t.Fatalf("Save recent: %v", err)
 	}
 	running, err := store.Create(environment.Spec{
-		Name:           "fixture-env-105",
-		ImageRef:       environment.BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
-		InstanceName:   "hideout-running",
+		Name:                "fixture-env-105",
+		ImageRef:            environment.BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                environment.ModeWorkspaceBound,
+		MachineIdentityID:   appTestMachineIdentityID,
+		BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
+		InstanceName:        "hideout-running",
 	})
 	if err != nil {
 		t.Fatalf("Create running: %v", err)
@@ -6593,7 +6769,7 @@ exit 0
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
-	installAppTestSessionSupervisor(t, fakeBin)
+	installAppTestLinuxSessionHelpers(t, fakeBin)
 
 	var out, errOut bytes.Buffer
 	code := Main([]string{
@@ -6666,7 +6842,7 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://user:pass@proxy.invalid:8443")
 	t.Setenv("HIDEOUT_SECRET_DEFAULT_PROXY", "socks5://127.0.0.1:1080")
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
-	installAppTestSessionSupervisor(t, fakeBin)
+	installAppTestLinuxSessionHelpers(t, fakeBin)
 
 	var out, errOut bytes.Buffer
 	a := app{stdout: &out, stderr: &errOut, stdin: strings.NewReader("")}
@@ -8261,7 +8437,7 @@ func TestEnvCreateAndInspect(t *testing.T) {
 	if rec.ImageRef != "template:_images/ubuntu-lts" || rec.AutoNamed {
 		t.Fatalf("unexpected record: %+v", rec)
 	}
-	if filepath.Clean(rec.Workspace) != filepath.Clean(mustEvalSymlinks(t, workspace)) && filepath.Clean(rec.Workspace) != filepath.Clean(workspace) {
+	if filepath.Clean(rec.HostWorkspace()) != filepath.Clean(mustEvalSymlinks(t, workspace)) && filepath.Clean(rec.HostWorkspace()) != filepath.Clean(workspace) {
 		t.Fatalf("workspace should pin the invoking directory: %+v", rec)
 	}
 
@@ -8271,7 +8447,11 @@ func TestEnvCreateAndInspect(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("env inspect exit=%d stderr=%s", code, errOut.String())
 	}
-	for _, want := range []string{"work", "template:_images/ubuntu-lts", rec.ID, "lima"} {
+	for _, want := range []string{
+		"work", "template:_images/ubuntu-lts", rec.ID, "lima", "mode: dedicated",
+		"dedicated guest kernel and root disk", "profile-owned home/config/cache state remains shared",
+		`hideout profile clone default isolated`,
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("inspect output missing %q: %s", want, out.String())
 		}
@@ -8363,15 +8543,20 @@ func TestEnvListShowsAllAndTopLevelListIsGone(t *testing.T) {
 	if !strings.Contains(text, "work") {
 		t.Fatalf("env list missing explicit environment: %s", text)
 	}
-	auto := environment.AutoName("default", autoWS)
+	auto := environment.SharedDisplayName("default")
 	if !strings.Contains(text, auto) || !strings.Contains(text, "auto") {
-		t.Fatalf("env list missing auto-named marker for %s: %s", auto, text)
+		t.Fatalf("env list missing shared automatic environment %s: %s", auto, text)
 	}
 	if !strings.Contains(text, "unsupported-version") || !strings.Contains(text, oldID) {
 		t.Fatalf("env list missing unsupported-version row: %s", text)
 	}
 	if !strings.Contains(text, "template:_images/ubuntu-lts") && !strings.Contains(text, "ubuntu-lts") {
 		t.Fatalf("env list missing image column: %s", text)
+	}
+	for _, want := range []string{"MODE", "SESSIONS", "VIEWS", "PROVIDER", "TRUST_DOMAIN", "shared-vm+profile", "workspace views are not separate VM walls"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("env list missing machine/view truth %q: %s", want, text)
+		}
 	}
 
 	// top-level list is gone
@@ -8388,6 +8573,55 @@ func TestEnvListShowsAllAndTopLevelListIsGone(t *testing.T) {
 	errOut.Reset()
 	if code := Main([]string{"run", "--new", "--", "true"}, &out, &errOut); code == 0 {
 		t.Fatal("--new must be removed")
+	}
+}
+
+func TestSessionListAndInspectRenderWorkspaceViewsWithoutAuthorityPaths(t *testing.T) {
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	summary := manager.SessionSummary{
+		ID: "ses_20260717T120000Z_0123456789abcdef", Profile: "default", EnvironmentID: "env_20260717t120000z0123456789abcdef",
+		State: session.OwnerStateRunning, OwnerStatus: session.OwnerLive, TerminalMode: session.TerminalPTY,
+		WorkspaceID: workspaceID, WorkspaceLabel: "project-a [aaaaaaaa]", GuestWorkspace: "/workspace",
+		WorkspaceTransport: workspaceattach.SelectedTransport, WorkspaceViewState: workspaceattach.AttachmentReady,
+		WorkspaceRelations: []workspaceattach.RootRelationNotice{{
+			Relation: workspaceattach.RootDisjoint, SelectedPosition: workspaceattach.RelationPositionPeer,
+			WorkspaceID: workspaceID, OtherWorkspaceID: "wrk_" + strings.Repeat("b", 64),
+		}},
+	}
+	var out bytes.Buffer
+	if err := writeSessionList(&out, []manager.SessionSummary{summary}, "default"); err != nil {
+		t.Fatal(err)
+	}
+	writeSessionInspect(&out, summary)
+	text := out.String()
+	for _, want := range []string{
+		"WORKSPACE_VIEW", "project-a [aaaaaaaa]", "/workspace", workspaceattach.SelectedTransport,
+		"disjoint:peer", "display only; never authority", "hideout env inspect " + summary.EnvironmentID,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("session output missing %q: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"/Users/private", "canonicalHostRoot", "rootHandleIdentity", "cap_"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("session output leaked %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestSharedEnvironmentGuidanceNamesTrustDomainAndBothIsolationEscapes(t *testing.T) {
+	record := environment.Record{Mode: environment.ModeShared, Profile: "default", Backend: "lima"}
+	var out bytes.Buffer
+	writeEnvironmentTrustGuidance(&out, record, "")
+	text := out.String()
+	for _, want := range []string{
+		"shared guest kernel, root disk, global tools/caches, profile state", "not separate VM walls",
+		`hideout env create isolated --workspace "$PWD" --profile default --backend lima`,
+		`hideout profile clone default isolated && hideout env create isolated --workspace "$PWD" --profile isolated --backend lima`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("shared environment guidance missing %q: %s", want, text)
+		}
 	}
 }
 
@@ -8634,8 +8868,8 @@ func TestDaemonReconcileCLIResolvesEnvironmentNameAndRetries(t *testing.T) {
 	}
 	record, err := (environment.Store{Root: root}).Create(environment.Spec{
 		Name: "retry-by-name", ImageRef: environment.BuiltinBaseImage,
-		Profile: "default", Backend: "lima", Workspace: t.TempDir(),
-		GuestWorkspace: "/workspace", InstanceName: "hideout-retry-by-name",
+		Profile: "default", Backend: "lima", Mode: environment.ModeWorkspaceBound, MachineIdentityID: appTestMachineIdentityID, BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace", InstanceName: "hideout-retry-by-name",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -8690,8 +8924,8 @@ func TestDoctorDaemonFeatureReportsBlockedLifecycleTruth(t *testing.T) {
 	}
 	record, err := (environment.Store{Root: root}).Create(environment.Spec{
 		Name: "doctor-lifecycle", ImageRef: environment.BuiltinBaseImage,
-		Profile: "default", Backend: "lima", Workspace: t.TempDir(),
-		GuestWorkspace: "/workspace", InstanceName: "hideout-doctor-lifecycle",
+		Profile: "default", Backend: "lima", Mode: environment.ModeWorkspaceBound, MachineIdentityID: appTestMachineIdentityID, BootConfigurationID: appTestBootConfigurationID,
+		BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace", InstanceName: "hideout-doctor-lifecycle",
 	})
 	if err != nil {
 		t.Fatal(err)

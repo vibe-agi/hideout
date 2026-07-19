@@ -5,31 +5,115 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/broker"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/privilege"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
+type WorkspaceTransport string
+
+const (
+	WorkspaceTransportStatic WorkspaceTransport = "static"
+	WorkspaceTransportPortal WorkspaceTransport = "workspace-portal"
+)
+
+// MachineActivationSpec is intentionally incapable of naming a project. A
+// shared machine can therefore be created and started before any workspace
+// authority exists.
+type MachineActivationSpec struct {
+	EnvironmentID    string
+	ImageRef         string
+	Profile          profile.Profile
+	ProfileDir       string
+	IdentityMode     string
+	IdentityRoot     string
+	RuntimeRoot      string
+	InstanceName     string
+	PreserveInstance bool
+	Mode             environment.Mode
+}
+
+func (spec MachineActivationSpec) Validate() error {
+	if spec.Profile.Name == "" || spec.ImageRef == "" || spec.ProfileDir == "" || !filepath.IsAbs(spec.ProfileDir) {
+		return errors.New("machine activation profile, image, and profile directory are required")
+	}
+	if spec.IdentityRoot != "" && !filepath.IsAbs(spec.IdentityRoot) {
+		return errors.New("machine activation identity root must be absolute")
+	}
+	switch spec.Mode {
+	case environment.ModeShared:
+		if spec.EnvironmentID == "" || spec.RuntimeRoot == "" || !filepath.IsAbs(spec.RuntimeRoot) {
+			return errors.New("shared machine activation requires environment identity and runtime root")
+		}
+	case environment.ModeDedicated, environment.ModeWorkspaceBound:
+	default:
+		return fmt.Errorf("unsupported machine activation mode %q", spec.Mode)
+	}
+	return nil
+}
+
+// WorkspaceAttachmentSpec is the exact project authority admitted after
+// machine selection. It is never inferred from MachineActivationSpec.
+type WorkspaceAttachmentSpec struct {
+	HostRoot  string
+	GuestRoot string
+	Transport WorkspaceTransport
+	Portal    *WorkspacePortalBinding
+}
+
+type WorkspacePortalBinding struct {
+	PhysicalGuestRoot   string
+	Endpoint            string
+	CredentialGuestPath string
+}
+
+func (spec WorkspaceAttachmentSpec) Validate(machineMode environment.Mode) error {
+	if !filepath.IsAbs(spec.HostRoot) || filepath.Clean(spec.HostRoot) != spec.HostRoot ||
+		!filepath.IsAbs(spec.GuestRoot) || filepath.Clean(spec.GuestRoot) != spec.GuestRoot {
+		return errors.New("workspace attachment requires clean absolute host and guest roots")
+	}
+	if machineMode == environment.ModeShared {
+		if spec.Transport != WorkspaceTransportPortal {
+			return errors.New("shared machine requires the selected dynamic workspace transport")
+		}
+		if spec.Portal == nil || !filepath.IsAbs(spec.Portal.PhysicalGuestRoot) ||
+			filepath.Clean(spec.Portal.PhysicalGuestRoot) != spec.Portal.PhysicalGuestRoot ||
+			!strings.HasPrefix(spec.Portal.PhysicalGuestRoot, "/hideout/workspaces/") ||
+			!filepath.IsAbs(spec.Portal.CredentialGuestPath) ||
+			filepath.Clean(spec.Portal.CredentialGuestPath) != spec.Portal.CredentialGuestPath ||
+			strings.TrimSpace(spec.Portal.Endpoint) == "" {
+			return errors.New("shared machine requires a complete workspace Portal binding")
+		}
+		host, port, err := net.SplitHostPort(spec.Portal.Endpoint)
+		if err != nil || strings.TrimSpace(host) == "" || port == "" || port == "0" {
+			return errors.New("shared machine workspace Portal endpoint is invalid")
+		}
+		return nil
+	}
+	if spec.Transport != WorkspaceTransportStatic {
+		return errors.New("dedicated and workspace-bound machines require an exact static workspace mapping")
+	}
+	if spec.Portal != nil {
+		return errors.New("static workspace mapping cannot carry Portal authority")
+	}
+	return nil
+}
+
 type RunSpec struct {
+	Machine                   MachineActivationSpec
+	Workspace                 WorkspaceAttachmentSpec
 	SessionID                 string
-	EnvironmentID             string
-	ImageRef                  string
-	Profile                   profile.Profile
 	Command                   []string
 	Env                       []string
-	HostWork                  string
-	GuestWork                 string
 	GuestHome                 string
 	ShimDir                   string
-	ProfileDir                string
-	IdentityMode              string
-	IdentityRoot              string
 	SessionDir                string
-	RuntimeRoot               string
 	SessionIsolationRequired  bool
 	TargetUser                string
 	Broker                    broker.Endpoint
@@ -40,8 +124,6 @@ type RunSpec struct {
 	HostFSEnabled             bool
 	HostFSGrafts              []string
 	PortBridges               []PortBridgeEndpoint
-	InstanceName              string
-	PreserveInstance          bool
 	AuditPath                 string
 	NetworkPrivilegedSetup    bool
 	PrivilegedSetupRequired   bool
@@ -64,9 +146,11 @@ type PrivilegedSetupEvent struct {
 type Session struct {
 	ID                        string
 	EnvironmentID             string
+	SessionSnapshotID         string
 	Backend                   string
 	HostWork                  string
 	GuestWork                 string
+	Workspace                 WorkspaceAttachmentSpec
 	GuestHome                 string
 	Env                       []string
 	ShimDir                   string
@@ -159,7 +243,75 @@ type RunStreams struct {
 	Stderr   io.Writer
 	PTY      io.Writer
 	Controls <-chan RunControl
-	Ready    func(*Session) error
+	Ready    func(SessionReadyProof) error
+}
+
+type SessionReadySource string
+
+const (
+	SessionReadyAuthenticatedSupervisor SessionReadySource = "authenticated-guest-supervisor"
+	SessionReadyNativeHarness           SessionReadySource = "native-harness"
+)
+
+// SessionReadyProof is emitted only after a concrete execution supervisor has
+// proved its session and incarnation identity, and before the target is
+// authorized to start. It carries no workspace root or control credential.
+type SessionReadyProof struct {
+	SessionID         string
+	EnvironmentID     string
+	SessionSnapshotID string
+	InstanceName      string
+	BootID            string
+	Source            SessionReadySource
+}
+
+func ReadyProofForSession(session *Session, source SessionReadySource) (SessionReadyProof, error) {
+	if session == nil {
+		return SessionReadyProof{}, errors.New("ready proof requires a prepared session")
+	}
+	proof := SessionReadyProof{
+		SessionID: session.ID, EnvironmentID: session.EnvironmentID,
+		SessionSnapshotID: session.SessionSnapshotID,
+		InstanceName:      session.InstanceName, BootID: session.ExpectedBootID, Source: source,
+	}
+	if err := proof.Validate(); err != nil {
+		return SessionReadyProof{}, err
+	}
+	return proof, nil
+}
+
+func (proof SessionReadyProof) Validate() error {
+	if strings.TrimSpace(proof.SessionID) == "" || strings.TrimSpace(proof.EnvironmentID) == "" ||
+		!environment.ValidConfigurationID(proof.SessionSnapshotID) {
+		return errors.New("session ready proof identity is incomplete")
+	}
+	switch proof.Source {
+	case SessionReadyAuthenticatedSupervisor:
+		if strings.TrimSpace(proof.InstanceName) == "" || strings.TrimSpace(proof.BootID) == "" {
+			return errors.New("authenticated session ready proof requires a boot identity")
+		}
+	case SessionReadyNativeHarness:
+		if proof.BootID != "" {
+			return errors.New("native ready proof cannot claim a guest boot identity")
+		}
+	default:
+		return errors.New("session ready proof source is invalid")
+	}
+	return nil
+}
+
+func (proof SessionReadyProof) ValidateSession(session *Session, requireAuthenticated bool) error {
+	if err := proof.Validate(); err != nil {
+		return err
+	}
+	if session == nil || proof.SessionID != session.ID || proof.EnvironmentID != session.EnvironmentID ||
+		proof.SessionSnapshotID != session.SessionSnapshotID || proof.InstanceName != session.InstanceName || proof.BootID != session.ExpectedBootID {
+		return errors.New("session ready proof does not match the prepared session")
+	}
+	if requireAuthenticated && proof.Source != SessionReadyAuthenticatedSupervisor {
+		return errors.New("shared workspace activation requires authenticated guest supervisor proof")
+	}
+	return nil
 }
 
 // StreamRunner is required for the daemon session transport. A backend that
@@ -185,7 +337,37 @@ type WarmActivator interface {
 type EnvironmentNetworkServiceController interface {
 	StartEnvironmentNetwork(ctx context.Context, session *Session, workdir, bootstrapPath string, env []string) error
 	VerifyEnvironmentNetwork(ctx context.Context, session *Session, workdir string, env []string) error
+	VerifyDirectEnvironmentNetwork(ctx context.Context, session *Session, workdir string, env []string) error
 	StopEnvironmentNetwork(ctx context.Context, session *Session, workdir, cleanupPath string, env []string) error
+}
+
+type EnvironmentNetworkDNSController interface {
+	ReconfigureEnvironmentNetworkDNS(ctx context.Context, session *Session, workdir, oldResolver, newResolver string, env []string) error
+}
+
+// EnvironmentServiceReconfigureError reports a failed live change and whether
+// the backend independently proved that the previous service generation was
+// restored. Manager may retain a ready state only when RollbackProved is true.
+type EnvironmentServiceReconfigureError struct {
+	Operation      string
+	RollbackProved bool
+	Cause          error
+}
+
+func (e EnvironmentServiceReconfigureError) Error() string {
+	if e.Cause == nil {
+		return e.Operation + " failed"
+	}
+	return e.Operation + ": " + e.Cause.Error()
+}
+
+func (e EnvironmentServiceReconfigureError) Unwrap() error { return e.Cause }
+
+// EnvironmentBootController reconciles environment-global presentation that
+// can be changed safely on a running guest. It must not recreate the instance
+// or execute target-supplied commands.
+type EnvironmentBootController interface {
+	ReconcileEnvironmentBoot(ctx context.Context, session *Session, configuration environment.BootConfiguration, env []string) error
 }
 
 type CommandNotFoundError struct {

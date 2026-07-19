@@ -48,13 +48,15 @@ const (
 	RuntimePolicyNone      = "none"
 	RuntimePolicyExactReal = "exact-real"
 
-	ArtifactValidatorNone                    = ""
-	ArtifactValidatorConcurrentIsolationV1   = "concurrent-sessions-isolation/v1"
-	ArtifactValidatorConcurrentPerformanceV1 = "concurrent-sessions-performance/v1"
-	ArtifactValidatorLifecycleLocalV1        = "resource-lifecycle-local/v1"
-	ArtifactValidatorLifecycleModelV1        = "resource-lifecycle-model/v1"
-	ArtifactValidatorLifecycleRealV1         = "resource-lifecycle-real/v1"
-	ArtifactValidatorLifecyclePerformanceV1  = "resource-lifecycle-performance/v1"
+	ArtifactValidatorNone                         = ""
+	ArtifactValidatorConcurrentIsolationV1        = "concurrent-sessions-isolation/v1"
+	ArtifactValidatorConcurrentPerformanceV1      = "concurrent-sessions-performance/v1"
+	ArtifactValidatorLifecycleLocalV1             = "resource-lifecycle-local/v1"
+	ArtifactValidatorLifecycleModelV1             = "resource-lifecycle-model/v1"
+	ArtifactValidatorLifecycleRealV1              = "resource-lifecycle-real/v1"
+	ArtifactValidatorLifecyclePerformanceV1       = "resource-lifecycle-performance/v1"
+	ArtifactValidatorSharedWorkspaceBehaviorV1    = "shared-workspace-behavior/v1"
+	ArtifactValidatorSharedWorkspacePerformanceV1 = "shared-workspace-performance/v1"
 )
 
 var validRequirementLayers = []string{
@@ -96,6 +98,8 @@ var validArtifactValidators = []string{
 	ArtifactValidatorLifecycleModelV1,
 	ArtifactValidatorLifecycleRealV1,
 	ArtifactValidatorLifecyclePerformanceV1,
+	ArtifactValidatorSharedWorkspaceBehaviorV1,
+	ArtifactValidatorSharedWorkspacePerformanceV1,
 }
 
 type ProofRequirement struct {
@@ -199,6 +203,19 @@ func ProductHardeningRequirements() []ProofRequirement {
 		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-performance-real-gate2", ArtifactValidatorConcurrentPerformanceV1, "034.FR-009", "034.SC-004"),
 		req(Feature034, Proof034RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "034.SC-001", "034.SC-012"),
 		req(Feature034, Proof034DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "034.FR-017", "034.FR-024", "034.SC-014"),
+
+		req(Feature035, Proof035Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"035.FR-001", "035.FR-002", "035.FR-003", "035.FR-004", "035.FR-005", "035.FR-006", "035.FR-009", "035.FR-012", "035.FR-013", "035.FR-014", "035.FR-015", "035.FR-016", "035.FR-017", "035.FR-018", "035.FR-020", "035.FR-021", "035.FR-023", "035.FR-024", "035.FR-025", "035.FR-026", "035.FR-029", "035.FR-031", "035.FR-032", "035.FR-033", "035.FR-035", "035.FR-036", "035.FR-038", "035.FR-039", "035.FR-040", "035.FR-041",
+			"035.SC-012", "035.SC-013", "035.SC-014", "035.SC-015", "035.SC-017", "035.SC-019", "035.SC-020", "035.SC-021", "035.SC-023"),
+		runtimeEvidenceClassValidatorReq(Feature035, Proof035RealBehavior, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "shared-workspace-real-gate2", ArtifactValidatorSharedWorkspaceBehaviorV1,
+			"035.FR-001", "035.FR-003", "035.FR-004", "035.FR-005", "035.FR-007", "035.FR-008", "035.FR-009", "035.FR-010", "035.FR-011", "035.FR-012", "035.FR-013", "035.FR-014", "035.FR-015", "035.FR-016", "035.FR-017", "035.FR-018", "035.FR-019", "035.FR-020", "035.FR-021", "035.FR-022", "035.FR-023", "035.FR-024", "035.FR-025", "035.FR-027", "035.FR-029", "035.FR-030", "035.FR-031", "035.FR-032", "035.FR-033", "035.FR-034", "035.FR-035", "035.FR-037", "035.FR-039", "035.FR-040", "035.FR-041",
+			"035.SC-001", "035.SC-002", "035.SC-003", "035.SC-004", "035.SC-006", "035.SC-007", "035.SC-008", "035.SC-009", "035.SC-010", "035.SC-011", "035.SC-012", "035.SC-013", "035.SC-014", "035.SC-016", "035.SC-017", "035.SC-018", "035.SC-019", "035.SC-020", "035.SC-021", "035.SC-022", "035.SC-023"),
+		runtimeEvidenceClassValidatorReq(Feature035, Proof035RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "shared-workspace-performance-real-gate2", ArtifactValidatorSharedWorkspacePerformanceV1,
+			"035.FR-006", "035.FR-022", "035.FR-028", "035.FR-032", "035.SC-005"),
+		req(Feature035, Proof035RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"035.FR-028", "035.SC-001", "035.SC-005"),
+		req(Feature035, Proof035DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"035.FR-018", "035.FR-019", "035.FR-025", "035.FR-027", "035.FR-034", "035.FR-040", "035.SC-012", "035.SC-018", "035.SC-022"),
 
 		validatorReq(Feature036, Proof036Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, ArtifactValidatorLifecycleLocalV1,
 			"036.FR-001", "036.FR-002", "036.FR-003", "036.FR-004", "036.FR-005", "036.FR-006", "036.FR-007", "036.FR-008", "036.FR-009", "036.FR-010", "036.FR-011", "036.FR-012", "036.FR-013", "036.FR-014", "036.FR-015", "036.FR-016", "036.FR-017", "036.FR-018", "036.FR-019", "036.FR-020", "036.FR-021", "036.FR-022", "036.FR-023", "036.FR-024", "036.FR-025", "036.FR-026", "036.FR-027", "036.FR-028", "036.FR-029", "036.FR-030", "036.FR-031", "036.SC-011", "036.SC-012", "036.SC-013", "036.SC-018", "036.SC-019", "036.SC-020", "036.SC-021"),

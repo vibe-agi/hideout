@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/workspace-attachment.schema.json",
+  "title": "Hideout public workspace attachment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "attachmentId",
+    "sessionId",
+    "environmentId",
+    "incarnation",
+    "workspaceId",
+    "logicalGuestRoot",
+    "physicalGuestRoot",
+    "transport",
+    "providerRef",
+    "guestViewRef",
+    "state",
+    "createdAt"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.workspace-attachment/v1" },
+    "attachmentId": { "$ref": "#/$defs/id" },
+    "sessionId": { "$ref": "#/$defs/id" },
+    "environmentId": { "$ref": "#/$defs/id" },
+    "incarnation": { "$ref": "#/$defs/incarnation" },
+    "workspaceId": { "type": "string", "pattern": "^wrk_[a-f0-9]{64}$" },
+    "displayLabel": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "logicalGuestRoot": { "const": "/workspace" },
+    "physicalGuestRoot": {
+      "type": "string",
+      "pattern": "^/hideout/workspaces/wrk_[a-f0-9]{64}$"
+    },
+    "transport": {
+      "const": "workspace-portal"
+    },
+    "providerRef": { "$ref": "#/$defs/providerRef" },
+    "guestViewRef": { "$ref": "#/$defs/guestViewRef" },
+    "state": {
+      "enum": [
+        "planned",
+        "provider-starting",
+        "provider-ready",
+        "view-mounting",
+        "ready",
+        "draining",
+        "released",
+        "unproved"
+      ]
+    },
+    "relationNotices": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workspaceId", "relation"],
+        "properties": {
+          "workspaceId": { "type": "string", "pattern": "^wrk_[a-f0-9]{64}$" },
+          "relation": { "enum": ["same", "nested", "disjoint"] }
+        }
+      }
+    },
+    "blockerCode": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "cleanupProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observedAt"],
+      "properties": {
+        "status": { "enum": ["absent", "unproved"] },
+        "reasonCode": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "observedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "incarnation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environmentId", "startGeneration", "instanceName", "bootId"],
+      "properties": {
+        "environmentId": { "$ref": "#/$defs/id" },
+        "startGeneration": { "type": "integer", "minimum": 1 },
+        "instanceName": { "$ref": "#/$defs/id" },
+        "bootId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "providerRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "generation"],
+      "properties": {
+        "kind": { "const": "workspace.host-provider" },
+        "id": { "$ref": "#/$defs/id" },
+        "generation": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "guestViewRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "generation"],
+      "properties": {
+        "kind": { "const": "workspace.guest-view" },
+        "id": { "$ref": "#/$defs/id" },
+        "generation": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

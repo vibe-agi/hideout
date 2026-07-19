@@ -11,38 +11,48 @@ import (
 const Schema = "hideout.recovery-codes/v1"
 
 const (
-	CodePackageObsoleteLeftover     = "package.obsolete-leftover"
-	CodePackagePrerequisiteMissing  = "package.prerequisite.missing"
-	CodePackageMigrationUnsupported = "package.migration.unsupported"
-	CodePackagePlatformUnsupported  = "package.platform.unsupported"
-	CodeInitProxySecretMissing      = "init.proxy-secret.missing"
-	CodeInitMediatedResolverMissing = "init.mediated-resolver.missing"
-	CodePrivilegeStatusDegraded     = "privilege.status.degraded"
-	CodeReleaseGateEvidenceMissing  = "release.gate-evidence.missing"
-	CodeReleaseEvidenceStale        = "release.evidence.stale"
-	CodeReleasePackageIdentity      = "release.package.identity-invalid"
-	CodeReleaseSigningRequired      = "release.signing.required"
-	CodeReleaseNotarizationRequired = "release.notarization.required"
-	CodeReleaseRepositoryPrereq     = "release.repository.prerequisite"
-	CodeHostFSReservedRootDenied    = "hostfs.reserved-root.denied"
-	CodeDecisionClaimExpired        = "decision.claim.expired"
-	CodeRuntimeSelectionUnsupported = "runtime.selection.unsupported"
-	CodeRuntimeCatalogInvalid       = "runtime.catalog.invalid"
-	CodeRuntimeArtifactUnavailable  = "runtime.artifact.unavailable"
-	CodeRuntimeArtifactDigest       = "runtime.artifact.digest-mismatch"
-	CodeRuntimeDiskInsufficient     = "runtime.disk.insufficient"
-	CodeRuntimeBoundaryMissing      = "runtime.boundary.missing"
-	CodeRuntimeBaselineMissing      = "runtime.baseline.missing"
-	CodeRuntimeCommandMissing       = "runtime.command.missing"
-	CodeRuntimeNetworkDenied        = "runtime.network.denied"
-	CodeRuntimeDNSFailed            = "runtime.dns.failed"
-	CodeRuntimeRegistryFailed       = "runtime.registry.failed"
-	CodeRuntimePrefixUnwritable     = "runtime.prefix.unwritable"
-	CodeSessionOwnerUnprovable      = "session.owner.unprovable"
-	CodeSessionIsolationUnsupported = "session.isolation.unsupported"
-	CodeSessionServiceConflict      = "session.service.conflict"
-	CodeSessionCleanupFailed        = "session.cleanup.failed"
-	CodeEnvironmentActiveSessions   = "environment.active-sessions"
+	CodePackageObsoleteLeftover       = "package.obsolete-leftover"
+	CodePackagePrerequisiteMissing    = "package.prerequisite.missing"
+	CodePackageMigrationUnsupported   = "package.migration.unsupported"
+	CodePackagePlatformUnsupported    = "package.platform.unsupported"
+	CodeInitProxySecretMissing        = "init.proxy-secret.missing"
+	CodeInitMediatedResolverMissing   = "init.mediated-resolver.missing"
+	CodePrivilegeStatusDegraded       = "privilege.status.degraded"
+	CodeReleaseGateEvidenceMissing    = "release.gate-evidence.missing"
+	CodeReleaseEvidenceStale          = "release.evidence.stale"
+	CodeReleasePackageIdentity        = "release.package.identity-invalid"
+	CodeReleaseSigningRequired        = "release.signing.required"
+	CodeReleaseNotarizationRequired   = "release.notarization.required"
+	CodeReleaseRepositoryPrereq       = "release.repository.prerequisite"
+	CodeHostFSReservedRootDenied      = "hostfs.reserved-root.denied"
+	CodeDecisionClaimExpired          = "decision.claim.expired"
+	CodeRuntimeSelectionUnsupported   = "runtime.selection.unsupported"
+	CodeRuntimeCatalogInvalid         = "runtime.catalog.invalid"
+	CodeRuntimeArtifactUnavailable    = "runtime.artifact.unavailable"
+	CodeRuntimeArtifactDigest         = "runtime.artifact.digest-mismatch"
+	CodeRuntimeDiskInsufficient       = "runtime.disk.insufficient"
+	CodeRuntimeBoundaryMissing        = "runtime.boundary.missing"
+	CodeRuntimeBaselineMissing        = "runtime.baseline.missing"
+	CodeRuntimeCommandMissing         = "runtime.command.missing"
+	CodeRuntimeNetworkDenied          = "runtime.network.denied"
+	CodeRuntimeDNSFailed              = "runtime.dns.failed"
+	CodeRuntimeRegistryFailed         = "runtime.registry.failed"
+	CodeRuntimePrefixUnwritable       = "runtime.prefix.unwritable"
+	CodeSessionOwnerUnprovable        = "session.owner.unprovable"
+	CodeSessionIsolationUnsupported   = "session.isolation.unsupported"
+	CodeSessionServiceConflict        = "session.service.conflict"
+	CodeSessionCleanupFailed          = "session.cleanup.failed"
+	CodeEnvironmentActiveSessions     = "environment.active-sessions"
+	CodeEnvironmentRecordUnsupported  = "environment.record.unsupported"
+	CodeEnvironmentCompatibilityDrift = "environment.compatibility.drift"
+	CodeEnvironmentWorkspaceMismatch  = "environment.workspace.mismatch"
+	CodeEnvironmentSharedPreserve     = "environment.shared.preserve-unsupported"
+	CodeWorkspaceTransportUnsupported = "workspace.transport.unsupported"
+	CodeWorkspaceRootUnstable         = "workspace.root.unstable"
+	CodeWorkspaceHostPermission       = "workspace.host-permission.denied"
+	CodeWorkspaceCapacityExhausted    = "workspace.capacity.exhausted"
+	CodeWorkspaceCleanupUnproved      = "workspace.cleanup.unproved"
+	CodeWorkspaceExternalMetadata     = "workspace.external-metadata.unsupported"
 
 	// Community host-app recipe lifecycle (032).
 	CodeHostAppSourceInvalid            = "host-app.source.invalid"
@@ -155,6 +165,16 @@ func containsControlPlaneMaterial(value string) bool {
 
 var registry = []Code{
 	{Code: CodeEnvironmentActiveSessions, Subsystem: "environment", Severity: "warning", Reason: "the environment still has active run-session owners", Hint: "exit the active sessions and retry the explicit stop", NextActions: []string{"hideout env list"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
+	{Code: CodeEnvironmentRecordUnsupported, Subsystem: "environment", Severity: "error", Reason: "the environment record predates the clean shared/dedicated/workspace-bound model", Hint: "remove the alpha record and let Hideout create a current one; project content is not removed", NextActions: []string{"hideout env remove <name> --force"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
+	{Code: CodeEnvironmentCompatibilityDrift, Subsystem: "environment", Severity: "error", Reason: "the stable automatic slot exists but its pinned machine posture differs from the selected profile or runtime", Hint: "inspect the drift and explicitly recreate the same slot instead of creating another automatic VM", NextActions: []string{"hideout env inspect <name>", "hideout env recreate <name> --force"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
+	{Code: CodeEnvironmentWorkspaceMismatch, Subsystem: "environment", Severity: "error", Reason: "a dedicated or workspace-bound environment is pinned to a different exact project", Hint: "run from the pinned project or create a distinct named environment for this project", NextActions: []string{"hideout env inspect <name>", "hideout env create <new-name> --profile <profile> --backend lima"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
+	{Code: CodeEnvironmentSharedPreserve, Subsystem: "environment", Severity: "error", Reason: "shared automatic mode requires the neutral alias workspace path and cannot preserve a raw host path", Hint: "use a privacy/alias profile or create a named dedicated environment when absolute path preservation is required", NextActions: []string{"hideout env create <name> --profile <profile> --backend lima"}, DocsRefs: []string{"docs/privacy-run-design.md", "docs/threat-model.md"}},
+	{Code: CodeWorkspaceTransportUnsupported, Subsystem: "workspace", Severity: "error", Reason: "the selected platform or package cannot provide the promoted exact dynamic workspace transport", Hint: "inspect platform support and use the documented workspace-bound mode until an equivalent real gate is promoted", NextActions: []string{"hideout support matrix --json", "hideout doctor --feature packaging --level deep"}, DocsRefs: []string{"docs/support-matrix.md"}},
+	{Code: CodeWorkspaceRootUnstable, Subsystem: "workspace", Severity: "error", Reason: "the selected project root changed identity or could not be held safely during attachment", Hint: "restore a stable local directory and retry without replacing or renaming the root during admission", NextActions: []string{"hideout doctor --feature hostfs --probe-hostfs-root <absolute-root>"}, DocsRefs: []string{"docs/threat-model.md"}},
+	{Code: CodeWorkspaceHostPermission, Subsystem: "workspace", Severity: "error", Reason: "the host denied the provider permission to open or watch the selected project", Hint: "review host privacy permissions for the Hideout process and probe the exact root again", NextActions: []string{"hideout doctor --feature hostfs --probe-hostfs-root <absolute-root>"}, DocsRefs: []string{"docs/first-run-alpha.md", "docs/threat-model.md"}},
+	{Code: CodeWorkspaceCapacityExhausted, Subsystem: "workspace", Severity: "warning", Reason: "the environment or session reached a declared workspace view, handle, request, byte, or enumeration limit", Hint: "inspect active sessions, exit unused work, and retry; capacity refusal does not create partial authority", NextActions: []string{"hideout env inspect <name>", "hideout tui --once"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
+	{Code: CodeWorkspaceCleanupUnproved, Subsystem: "workspace", Severity: "error", Reason: "workspace provider or guest-view cleanup cannot be proved for the exact machine incarnation", Hint: "do not reattach or auto-stop; inspect the environment and explicitly remove the incarnation when retained work has been reviewed", NextActions: []string{"hideout env inspect <name>", "hideout env remove <name> --force"}, DocsRefs: []string{"docs/privacy-run-design.md", "docs/threat-model.md"}},
+	{Code: CodeWorkspaceExternalMetadata, Subsystem: "workspace", Severity: "error", Reason: "project metadata contains an external absolute host path that cannot preserve identity under the neutral shared alias", Hint: "repair the external metadata or use a named dedicated environment with an explicitly reviewed path posture", NextActions: []string{"hideout env create <name> --profile <profile> --backend lima"}, DocsRefs: []string{"docs/privacy-run-design.md"}},
 	{Code: CodeDecisionClaimExpired, Subsystem: "decision", Severity: "warning", Reason: "decision claim expired or is no longer usable", Hint: "claim the decision again before applying it", NextActions: []string{"hideout decision claim <id>"}, DocsRefs: []string{"docs/first-run-alpha.md"}},
 	{Code: CodeHostFSReservedRootDenied, Subsystem: "hostfs", Severity: "error", Reason: "HostFS request targets a reserved Hideout or credential root", Hint: "choose a workspace path outside reserved roots", NextActions: []string{"hideout doctor --feature hostfs"}, DocsRefs: []string{"docs/hostfs-overlay-design.md"}},
 	{Code: CodeHostAppSourceInvalid, Subsystem: "host-app", Severity: "error", Reason: "the host-app recipe source is malformed, unavailable, or not exactly locked", Hint: "validate a bounded local snapshot or a git source pinned to an exact commit", NextActions: []string{"hideout app validate <source>"}, DocsRefs: []string{"docs/host-app-recipes.md"}},

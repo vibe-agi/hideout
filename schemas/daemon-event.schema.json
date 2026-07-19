@@ -10,7 +10,7 @@
       "const": "hideout.daemon-event/v1"
     },
     "kind": {
-      "enum": ["environment", "session", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "lifecycle", "terminal"]
+      "enum": ["environment", "session", "workspace-view", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "lifecycle", "terminal"]
     },
     "phase": {
       "enum": ["start", "progress", "complete", "failed"]
@@ -25,7 +25,7 @@
       "required": ["kind"],
       "properties": {
         "kind": {
-          "enum": ["environment", "session", "run", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "lifecycle", "stream"]
+          "enum": ["environment", "session", "workspace-view", "run", "background", "audit", "export", "cleanup", "hostfs-write", "decision", "notice", "lifecycle", "stream"]
         },
         "id": {
           "type": "string"
@@ -108,6 +108,62 @@
         },
         "session": {
           "type": "string"
+        },
+        "attachmentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "environmentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "workspaceId": {
+          "type": "string",
+          "pattern": "^wrk_[a-f0-9]{64}$"
+        },
+        "workspaceLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "workspaceTransport": {
+          "const": "workspace-portal"
+        },
+        "workspaceViewState": {
+          "enum": [
+            "planned",
+            "provider-starting",
+            "provider-ready",
+            "view-mounting",
+            "ready",
+            "draining",
+            "released",
+            "unproved"
+          ]
+        },
+        "workspaceRelations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["relation", "selectedPosition", "workspaceId", "otherWorkspaceId"],
+            "properties": {
+              "relation": {"enum": ["same", "nested", "disjoint"]},
+              "selectedPosition": {"enum": ["ancestor", "descendant", "peer"]},
+              "workspaceId": {"type": "string", "pattern": "^wrk_[a-f0-9]{64}$"},
+              "otherWorkspaceId": {"type": "string", "pattern": "^wrk_[a-f0-9]{64}$"}
+            }
+          }
+        },
+        "blockerCode": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "cleanupStatus": {
+          "enum": ["absent", "unproved"]
         },
         "action": {
           "type": "string"
@@ -233,6 +289,33 @@
         "properties": {
           "payload": {
             "required": ["id"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "workspace-view"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["entity", "payload"],
+        "properties": {
+          "payload": {
+            "required": [
+              "attachmentId",
+              "session",
+              "environmentId",
+              "workspaceId",
+              "workspaceLabel",
+              "guestWorkspace",
+              "workspaceTransport",
+              "workspaceViewState"
+            ]
           }
         }
       }

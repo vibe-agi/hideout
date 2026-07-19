@@ -71,14 +71,6 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 	if targetUser == "" {
 		targetUser = "developer"
 	}
-	checkCommand, err := BuildSessionViewCommand(SessionViewSpec{
-		SessionID: session.ID, TargetUser: targetUser, GuestWork: session.GuestWork,
-		Env: env, Command: CommandCheck(command[0]), ExpectedBootID: session.ExpectedBootID,
-		RequiredRuntimePaths: sessionRuntimePrerequisites(session, true),
-	})
-	if err != nil {
-		return err
-	}
 	viewCommand, err := BuildSessionViewCommand(SessionViewSpec{
 		SessionID: session.ID, TargetUser: targetUser, GuestWork: session.GuestWork,
 		Env: env, Command: []string{GuestSessionSupervisorPath}, RunBootstrap: true,
@@ -88,6 +80,7 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 		HostFSGrafts:         session.HostFSGrafts,
 		ExpectedBootID:       session.ExpectedBootID,
 		SessionSupervisor:    true,
+		Workspace:            session.Workspace,
 	})
 	if err != nil {
 		return err
@@ -99,9 +92,6 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 	}
 	defer lease.Close()
 	client := lease.Client()
-	if err := b.runSSHClientCommand(ctx, client, checkCommand, nil, b.controlStdout(), b.controlStderr()); err != nil {
-		return isolatedCommandPreflightError(b, session, command, env, err)
-	}
 
 	session.IsolationRunStarted = true
 	setupReported := false
@@ -264,8 +254,15 @@ func (b Backend) runSupervisorProtocol(
 						return fmt.Errorf("record supervisor setup readiness: %w", err)
 					}
 				}
-				if err := streams.Ready(prepared); err != nil {
+				proof, proofErr := backend.ReadyProofForSession(prepared, backend.SessionReadyAuthenticatedSupervisor)
+				if proofErr != nil {
+					return fmt.Errorf("build authenticated supervisor ready proof: %w", proofErr)
+				}
+				if err := streams.Ready(proof); err != nil {
 					return fmt.Errorf("publish daemon session readiness: %w", err)
+				}
+				if err := writer.Write(sessionwire.TypeSupervisorCommit, nil); err != nil {
+					return fmt.Errorf("commit supervisor target start: %w", err)
 				}
 				ready = true
 			case sessionwire.TypeTerminal, sessionwire.TypeStdout, sessionwire.TypeStderr:

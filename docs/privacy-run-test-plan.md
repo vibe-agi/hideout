@@ -1462,7 +1462,7 @@ Status: **Implemented; real proof remains commit- and runtime-bound.** Gate 0
 proves local ownership mechanics only. It cannot establish Linux namespace,
 ordinary-target isolation, or performance claims.
 
-### Gate 0
+### 034 Gate 0
 
 `scripts/test-concurrent-sessions-smoke.sh` runs from `scripts/test-gate0.sh`.
 It validates strict owner, activation, and environment-service schemas; owner
@@ -1548,6 +1548,116 @@ Evaluator and readiness tests must reject each of these independently:
   or environment identity;
 - a missing retained artifact, digest mismatch, or path escape; and
 - documentation that promotes any 034 non-claim to a supported behavior.
+
+## Gate 035: Shared Default VM Across Workspaces
+
+Status: **Implemented and promoted from clean real macOS arm64 Lima behavior
+and performance evidence.** Gate 0 proves deterministic domain contracts only.
+It cannot establish a live Workspace Portal filesystem,
+cross-workspace ordinary-target isolation, host permission behavior, observed
+VM reuse/stop, or performance.
+
+### 035 Gate 0
+
+`scripts/test-shared-workspace-smoke.sh` runs from `scripts/test-gate0.sh`. The
+local lane must prove all of the following without source-text-only assertions:
+
+1. one stable automatic slot excludes workspace/session facts and rejects
+   machine drift without creating a hidden second VM;
+2. shared, dedicated, workspace-bound, and disposable record invariants are
+   distinct, with no old-record dual reader;
+3. one private store-keyed workspace ID drives root identity, attachment,
+   broker/projection mapping, lifecycle, status, events, and evidence;
+4. traversal, symlink/rename/root-replacement races, reserved roots, guessed
+   sibling IDs, malformed protocol frames, stale credentials, and provider
+   overload fail closed;
+5. disjoint, nested, ancestor/descendant, and same-root relations retain their
+   declared authority and reference-count behavior;
+6. filesystem operation, lock/handle, direct-write, watcher/cache, crash, and
+   ambiguous-cleanup fixtures match the accepted Workspace Portal matrix;
+7. provider/view/service resources commit before effects, activate only after
+   authenticated supervisor readiness, and release dependent-first through the
+   existing 036 coordinator;
+8. daemon restart never re-adopts attachment authority, and attach/stop races
+   cannot bypass an unproved incarnation;
+9. shared network service state is reference-counted while run secrets remain
+   session scoped, and HostFS overlay behavior is unchanged;
+10. Manager, CLI, TUI, WebUI, doctor, audit, event, schema, recovery, lifecycle,
+    and product-evidence contracts agree on one machine plus distinct views and
+    contain no raw host root, workspace key, token, or broker secret; and
+11. logical `/workspace`, opaque physical project identity, exact Git
+    safe-directory forms, and attachment-bound host projection remain aligned.
+
+The lane emits `035.shared-workspace.gate0.mechanics` and
+`035.shared-workspace.docs.claim-boundary`. Passing them alone does not
+establish the real cross-workspace claim.
+
+### 035 Real macOS Arm64 Lima Gate 2
+
+Run the release-shaped installed-package wrapper on the exact candidate:
+
+```sh
+scripts/test-shared-workspace-lima-e2e.sh \
+  --require-real \
+  --samples 30 \
+  --out .hideout-release-evidence/035-shared-workspace
+```
+
+The retained behavior artifact must prove one automatic environment, one Lima
+instance, and one observed boot serving simultaneous disjoint projects through
+the packaged Workspace Portal. Each target sees only its own marker at logical
+`/workspace`; same/nested/disjoint roots match their declared relation; host and
+guest mutations, atomic save, watchers, lock/handle ownership, sibling detach,
+network/HostFS/terminal continuity, and attachment-bound `open .`/`code .`
+mapping all use the correct project. Shared Lima YAML and pre-attach mount state
+contain no project, parent, home, dummy mount, or hidden fallback transport.
+
+The same topology must prove provider/view lifecycle registration, a real
+bridge pin, exact 036 grace/stop, grace cancellation by a new project, daemon
+loss and explicit recovery, typed root/TCC/metadata failures, bounded overload,
+browser and PTY machine/view rendering, project-state separation for
+representative shell/Git/language/agent tools, and absence of injected host or
+control sentinels from guest/public artifacts. Guest root is a positive-control
+non-claim, never a passing isolation assertion.
+
+The performance artifact uses fixed 10,000-entry Git and 20,000-operation
+package fixtures. One target process in one shared VM warms both the Portal
+candidate and the profile cache's static virtiofs control, then alternates their
+order for at least 30 paired samples. The artifact retains the interleaved
+records and both extracted distributions; the semantic evaluator re-derives and
+cross-checks them. This controls host load, VM scheduling, runtime, cache window,
+and sample order without weakening any threshold. The accepted research
+baseline remains the transport-selection provenance and warm first-target-byte
+reference only. Acceptance requires:
+
+- the real Portal target has Core-owned process configuration
+  `core.preloadIndex=false`, with no persistent Git config mutation or wildcard
+  workspace trust; and
+
+- Git status median at most 2.0 seconds and at most 2x static-virtiofs median;
+- package fixture median at most 3x static-virtiofs median;
+- host/target atomic-save visibility p95 at most 250 ms;
+- mounted-ready p95 at most 1 second; and
+- warm first-target-byte p95 no greater than retained research baseline p95 plus
+  `max(500 ms, 15% of baseline p95)`.
+
+`035.shared-workspace.real-gate2.behavior` and
+`035.shared-workspace.real-gate2.performance` require the exact clean commit,
+package/runtime/fixture identities, evidence classes, retained artifact paths,
+and matching digests. `035.shared-workspace.real-gate2.not-run`, native,
+source-tree helpers, local-fast output, missing artifacts, edited summaries,
+dirty/stale provenance, threshold relaxation, or a different transport cannot
+satisfy promotion.
+
+The retained clean candidate at commit
+`1584e18f6eb945b69cebe60851b5d3f3bfbfccd8` passed both real proofs. Its
+product-evidence manifest SHA-256 is
+`e4ac83a0c8f3d489ac931479d87e666c24c39ea974a110693a46dd6c39564f13`, and
+the verified package archive SHA-256 is
+`7f6a6e7298163188b48e49747d23941e27a54858019c66b3b8b9038387af886b`.
+The 30-sample `git status` median was `49.757 ms` versus `62.208 ms` for
+the paired static-virtiofs control. Warm first-target-byte p95 was
+`780.694 ms` versus the retained research baseline of `910.457 ms`.
 
 ## Gate 036: Resource Lifecycle And Final-Session Stop
 

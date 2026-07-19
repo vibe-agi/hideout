@@ -15,17 +15,40 @@ import (
 func validOwnerRecord() OwnerRecord {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	return OwnerRecord{
-		Schema:        ActiveSessionSchema,
-		SessionID:     "ses_20260716T120000Z_0123456789abcdef",
-		EnvironmentID: "env_20260716t120000z0123456789abcdef",
-		Profile:       "default",
-		Backend:       "lima",
-		WorkspaceID:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		State:         OwnerStatePreparing,
-		TerminalMode:  TerminalNone,
-		StartedAt:     now,
-		UpdatedAt:     now,
-		CommandClass:  "bash",
+		Schema:            ActiveSessionSchema,
+		SessionID:         "ses_20260716T120000Z_0123456789abcdef",
+		EnvironmentID:     "env_20260716t120000z0123456789abcdef",
+		Profile:           "default",
+		Backend:           "lima",
+		WorkspaceID:       "wrk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SessionSnapshotID: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		State:             OwnerStatePreparing,
+		TerminalMode:      TerminalNone,
+		StartedAt:         now,
+		UpdatedAt:         now,
+		CommandClass:      "bash",
+	}
+}
+
+func TestOwnerRecordRequiresOpaqueWorkspaceIdentity(t *testing.T) {
+	record := validOwnerRecord()
+	record.WorkspaceID = ""
+	if _, err := AcquireOwner(t.TempDir(), record); err == nil {
+		t.Fatal("owner record accepted empty workspace authority")
+	}
+	record.WorkspaceID = strings.Repeat("a", 64)
+	if _, err := AcquireOwner(t.TempDir(), record); err == nil {
+		t.Fatal("owner record accepted legacy raw path digest")
+	}
+}
+
+func TestOwnerRecordRequiresCanonicalSessionSnapshotIdentity(t *testing.T) {
+	record := validOwnerRecord()
+	for _, invalid := range []string{"", strings.Repeat("c", 64), "sha256:" + strings.Repeat("C", 64)} {
+		record.SessionSnapshotID = invalid
+		if _, err := AcquireOwner(t.TempDir(), record); err == nil {
+			t.Fatalf("owner record accepted invalid session snapshot %q", invalid)
+		}
 	}
 }
 

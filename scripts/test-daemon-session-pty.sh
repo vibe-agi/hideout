@@ -18,6 +18,7 @@ fi
 tmp="$(hideout_mktemp_daemon_store)"
 store="$tmp/s"
 bin="$tmp/hideout"
+workspace="$tmp/workspace"
 cleanup() {
   HIDEOUT_STORE_ROOT="$store" "$bin" daemon stop >/dev/null 2>&1 || true
   rm -rf "$tmp"
@@ -25,19 +26,20 @@ cleanup() {
 trap cleanup EXIT
 
 go build -o "$bin" ./cmd/hideout
+mkdir -p "$workspace"
 export HIDEOUT_STORE_ROOT="$store"
 "$bin" init --no-input --profile default --template dev --backend native --network direct >/dev/null
 
-HIDEOUT_PTY_BIN="$bin" expect <<'EXPECT'
+HIDEOUT_PTY_BIN="$bin" HIDEOUT_PTY_WORKSPACE="$workspace" expect <<'EXPECT'
 set timeout 15
 set stty_init "rows 24 columns 80"
 log_user 0
-spawn -noecho $env(HIDEOUT_PTY_BIN) run --backend native --allow-weak-isolation --terminal always -- sh -c {printf 'initial:'; stty size; trap 'printf "resized:"; stty size; exit 0' WINCH; printf 'ready\n'; while :; do sleep 1; done}
+spawn -noecho $env(HIDEOUT_PTY_BIN) run --backend native --allow-weak-isolation --terminal always --workspace $env(HIDEOUT_PTY_WORKSPACE) -- sh -c {printf 'initial:'; stty size; trap 'printf "resized:"; stty size; exit 0' WINCH; printf 'ready\n'; while :; do sleep 1; done}
 expect {
   -re {initial:24 80.*ready} {}
   timeout {puts stderr "daemon-session-pty: initial size not observed"; exit 2}
 }
-exec /bin/stty rows 31 columns 97 <@ $spawn_id
+stty rows 31 columns 97 < $spawn_out(slave,name)
 exec kill -WINCH [exp_pid -i $spawn_id]
 expect {
   -re {resized:31 97} {}
@@ -47,7 +49,7 @@ expect eof
 set status [lindex [wait] 3]
 if {$status != 0} {puts stderr "daemon-session-pty: resize target exit=$status"; exit 4}
 
-spawn -noecho $env(HIDEOUT_PTY_BIN) run --backend native --allow-weak-isolation --terminal always -- sh -c {trap 'printf "caught-int\n"; exit 130' INT; printf 'ready\n'; while :; do sleep 1; done}
+spawn -noecho $env(HIDEOUT_PTY_BIN) run --backend native --allow-weak-isolation --terminal always --workspace $env(HIDEOUT_PTY_WORKSPACE) -- sh -c {trap 'printf "caught-int\n"; exit 130' INT; printf 'ready\n'; while :; do sleep 1; done}
 expect {
   -re {ready} {}
   timeout {puts stderr "daemon-session-pty: signal target not ready"; exit 5}

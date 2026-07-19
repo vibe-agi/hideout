@@ -16,7 +16,9 @@ import (
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
+	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const (
@@ -48,8 +50,9 @@ type Options struct {
 	LifecycleAutomaticStop bool
 	// BackendShutdown releases process-scoped backend transports after sessions
 	// and lifecycle work have drained. It must not carry capability authority.
-	BackendShutdown func() error
-	SessionCapacity int
+	BackendShutdown    func() error
+	WorkspaceProviders workspaceattach.ProviderFactory
+	SessionCapacity    int
 	// LiveResources lists resources that could survive a restart (running
 	// environments). Defaults to none; the daemon reports any it cannot prove it
 	// owns as orphans. Injectable for tests.
@@ -78,6 +81,7 @@ type Daemon struct {
 	lifecycle        *lifecycle.Coordinator
 	lifecycleBackend manager.EnvironmentLifecycleBackendFactory
 	backendShutdown  func() error
+	networkGateways  *netpolicy.GatewayRegistry
 	lifecycleCtx     context.Context
 	lifecycleCancel  context.CancelFunc
 	lifecycleWG      sync.WaitGroup
@@ -266,6 +270,8 @@ func Start(opts Options) (*Daemon, error) {
 		})
 	}
 	sessions := newSessionRegistry(opts.SessionCapacity, opts.Now)
+	sessions.setWorkspacePublisher(bus.publishWorkspaceViews)
+	core.ActiveWorkspaceViews = sessions.workspaceViewSnapshots
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	d := &Daemon{
 		store:            opts.Store,
@@ -285,6 +291,7 @@ func Start(opts Options) (*Daemon, error) {
 		lifecycle:        lifecycleCoordinator,
 		lifecycleBackend: opts.LifecycleBackend,
 		backendShutdown:  opts.BackendShutdown,
+		networkGateways:  core.NetworkGateways,
 		lifecycleCtx:     lifecycleCtx,
 		lifecycleCancel:  lifecycleCancel,
 		lifecycleSlots:   make(chan struct{}, 4),
@@ -311,6 +318,7 @@ func Start(opts Options) (*Daemon, error) {
 		core: core, credentials: credentials, instanceID: instanceID,
 		registry: sessions, backendFactory: opts.RunServiceBackend,
 		openerFactory: opts.RunServiceOpener, audit: al, lifecycle: lifecycleCoordinator,
+		workspaceProviders: opts.WorkspaceProviders,
 	}
 	d.server = &http.Server{Handler: d.buildHandler()}
 	d.startAuditTail()
@@ -418,9 +426,13 @@ func (d *Daemon) Status() Status {
 			Schema: "hideout.active-session/v1", ID: snapshot.SessionID,
 			EnvironmentID: snapshot.EnvironmentID, Profile: snapshot.Profile,
 			Backend: snapshot.Backend, WorkspaceID: snapshot.WorkspaceID,
-			State: snapshot.State, OwnerStatus: "live", TerminalMode: snapshot.TerminalMode,
+			SessionSnapshotID: snapshot.SessionSnapshotID,
+			State:             snapshot.State, OwnerStatus: "live", TerminalMode: snapshot.TerminalMode,
 			StartedAt: snapshot.StartedAt, CommandClass: snapshot.CommandClass,
 		})
+	}
+	for _, snapshot := range d.sessions.workspaceViewSnapshots() {
+		status.WorkspaceAttachments = append(status.WorkspaceAttachments, snapshot.Attachment)
 	}
 	if d.lifecycle != nil {
 		status.Lifecycle = d.lifecycle.Snapshot()
@@ -431,17 +443,26 @@ func (d *Daemon) Status() Status {
 // Stop performs an ordered shutdown: drain in-flight requests, record the stop,
 // remove the socket, and release the stable lock inode. It is idempotent.
 func (d *Daemon) Stop(ctx context.Context) error {
-	d.mu.Lock()
-	if d.state == "stopping" || d.state == "stopped" {
-		d.mu.Unlock()
-		return nil
-	}
-	d.state = "stopping"
-	d.mu.Unlock()
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	d.mu.Lock()
+	if d.state == "stopped" {
+		d.mu.Unlock()
+		return nil
+	}
+	if d.state == "stopping" {
+		done := d.done
+		d.mu.Unlock()
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("wait for ordered daemon shutdown: %w", ctx.Err())
+		}
+	}
+	d.state = "stopping"
+	d.mu.Unlock()
 	var stopErr error
 	if d.lifecycleCancel != nil {
 		d.lifecycleCancel()
@@ -493,6 +514,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.lifecycle != nil {
 		stopErr = errors.Join(stopErr, d.lifecycle.Close())
+	}
+	if d.networkGateways != nil {
+		stopErr = errors.Join(stopErr, d.networkGateways.Close())
 	}
 	if d.backendShutdown != nil {
 		stopErr = errors.Join(stopErr, d.backendShutdown())

@@ -126,8 +126,8 @@ The workspace is intentionally shared unless a later workspace-filtering
 feature is enabled. Project-local secrets inside the workspace are not protected
 by the Phase 1 default workspace model.
 
-Concurrent runs for the same pinned workspace share one guest kernel and the
-writable workspace. For ordinary non-root target processes, each run has a
+Compatible automatic runs may select different workspaces while sharing one
+guest kernel. For ordinary non-root target processes, each run has a
 separate mount namespace, PID namespace, private `/proc`, runtime child,
 broker/data plane, and HostFS authority. This prevents one ordinary target
 from reading or signaling sibling control state, but does not filter effects
@@ -139,12 +139,38 @@ orphaned ownership, failed cleanup, or a changed boot identity blocks automatic
 stop. This lifecycle mechanism does not strengthen the ordinary-target or
 guest-root isolation boundary.
 
-When the shared default environment ships, sessions from different workspaces
-share one guest kernel: cross-workspace isolation inside that environment is
-session mount-namespace level, which is weaker than the VM boundary between
-environments. Guest-root target code (A3) in a shared environment may reach
-other attached workspaces. Operators who need the VM-level wall between
-projects create a dedicated named environment.
+Under promoted 035 on macOS arm64 Lima, sessions from different workspaces
+share one guest kernel. Each ordinary target receives a private mount/PID
+namespace, private
+`/proc`, runtime child, broker, HostFS authority, and one exact Workspace Portal
+view. The automatic machine record contains no selected workspace, and the
+target cannot choose a sibling workspace ID or physical mount root.
+
+For A1/A2 ordinary non-root targets, the product claims that a disjoint
+sibling workspace is absent from path lookup, `/proc`, broker/projection
+authority, and session cleanup effects. The writable selected workspace remains
+an intentional collaboration surface, so effects in the same or overlapping
+root are not isolated. Ancestor and descendant selections are asymmetric
+authorities: selecting an ancestor intentionally includes its descendants.
+
+For A3 guest-root targets, the shared machine is one trust domain. Guest root
+may bypass ordinary session-view isolation and reach other attached workspaces;
+035 does not claim otherwise. Operators who need a VM-level wall create a
+dedicated named environment, and operators who need separate guest profile
+state clone the profile and create the dedicated environment. The Workspace
+Portal is not HostFS overlay, DLP, copy-back, or a broad hidden host-home mount.
+Unknown attachment, provider, cleanup, incarnation, or root-identity state
+fails closed and blocks reuse/automatic stop instead of guessing.
+
+Configuration lifecycle is not one trust bucket. Only image/disk genesis and
+isolation structure are machine identity and require recreation. Hostname is a
+privileged boot reconfiguration; egress and DNS are an authenticated,
+serialized environment service; env/policy/tool/HostFS/adapter/host-capability
+inputs are session snapshots. Policy and Git source bytes are copied into the
+private session runtime before target execution. A live HostFS policy reread
+may revoke authority but cannot add authority absent from that session. A
+failed or unproved service transition fails closed and cannot silently promote
+network or session input into a new VM with different authority.
 
 ## Adversaries
 

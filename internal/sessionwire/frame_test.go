@@ -32,6 +32,7 @@ func TestFrameCatalogDirections(t *testing.T) {
 		{TypeCompletion, []Direction{DaemonToClient, SupervisorToDaemon}},
 		{TypeSupervisorStart, []Direction{DaemonToSupervisor}},
 		{TypeSupervisorReady, []Direction{SupervisorToDaemon}},
+		{TypeSupervisorCommit, []Direction{DaemonToSupervisor}},
 		{TypeHeartbeat, []Direction{DaemonToSupervisor}},
 		{TypeSupervisorError, []Direction{SupervisorToDaemon}},
 	}

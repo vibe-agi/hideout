@@ -50,6 +50,12 @@ test -f schemas/environment-activation-receipt.schema.json
 test -f schemas/environment-service-state.schema.json
 test -f schemas/lifecycle-journal.schema.json
 test -f schemas/lifecycle-status.schema.json
+test -f schemas/workspace-research-decision.schema.json
+test -f schemas/workspace-attachment.schema.json
+test -f schemas/environment-summary.schema.json
+test -f cmd/hideout-workspace-probe/main.go
+test -f test/fixtures/workspaceattach/generate.sh
+test -f scripts/lib/workspace-research.sh
 scripts/test-runtime-smoke.sh
 
 # Test/evidence spine (026): one Go-owned proof registry feeds shell gates,
@@ -63,7 +69,8 @@ jq -e '
   ([.requirements[] | select(.featureId == "029-hostfs-discoverable-namespace")] | length == 8) and
   ([.requirements[] | select(.featureId == "031-supported-cli-runtime")] | length == 8) and
   ([.requirements[] | select(.featureId == "032-community-host-app-recipes")] | length == 4) and
-  ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7)
+  ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7) and
+  ([.requirements[] | select(.featureId == "035-shared-default-vm-cross-workspace")] | length == 5)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -77,7 +84,13 @@ jq -e '
   any(.codes[]; .code == "release.gate-evidence.missing") and
   any(.codes[]; .code == "release.package.identity-invalid") and
   any(.codes[]; .code == "release.signing.required") and
-  any(.codes[]; .code == "release.notarization.required")
+  any(.codes[]; .code == "release.notarization.required") and
+  any(.codes[]; .code == "workspace.transport.unsupported") and
+  any(.codes[]; .code == "workspace.root.unstable") and
+  any(.codes[]; .code == "workspace.host-permission.denied") and
+  any(.codes[]; .code == "workspace.capacity.exhausted") and
+  any(.codes[]; .code == "workspace.cleanup.unproved") and
+  any(.codes[]; .code == "workspace.external-metadata.unsupported")
 ' "$recovery_registry_tmp" >/dev/null
 rm -f "$recovery_registry_tmp"
 
@@ -187,6 +200,10 @@ scripts/test-daemon-smoke.sh
 scripts/test-daemon-session-smoke.sh
 scripts/test-daemon-session-pty.sh
 scripts/test-concurrent-sessions-e2e.sh
+# Shared-default cross-workspace mechanics (035): two projects converge on one
+# machine incarnation while daemon workers retain distinct immutable views.
+# This local lane intentionally makes no real filesystem-isolation claim.
+scripts/test-shared-workspace-smoke.sh
 
 # Daemon live operations console (no Lima): typed seed/event contracts and
 # payload-driven UI proof. Initially a skeleton smoke, expanded by 007.

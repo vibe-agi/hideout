@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -14,17 +16,17 @@ import (
 func TestStoreCreateLoadByNameAndResolve(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	spec := Spec{
-		Name:                 "latest-test",
-		ImageRef:             BuiltinBaseImage,
-		Profile:              "default",
-		Backend:              "lima",
-		BackendConfigVersion: "lima-config/test-a",
-		Workspace:            filepath.Join(t.TempDir(), "workspace"),
-		GuestWorkspace:       "/workspace",
-		ProfileID:            "prf_1111",
-		IdentityID:           "id_2222",
-		User:                 "developer",
-		Hostname:             "devbox",
+		Name:                "latest-test",
+		ImageRef:            BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      filepath.Join(t.TempDir(), "workspace"),
+		BoundGuestRoot:      "/workspace",
+		User:                "developer",
+		Hostname:            "devbox",
 	}
 	rec, err := store.Create(spec)
 	if err != nil {
@@ -52,17 +54,98 @@ func TestStoreCreateLoadByNameAndResolve(t *testing.T) {
 	}
 }
 
+func TestEnvironmentModesRejectCrossModeWorkspaceAuthority(t *testing.T) {
+	workspace := filepath.Clean(t.TempDir())
+	base := Record{
+		Version: version, ID: "env_20260717t000000z0123456789abcdef", ImageRef: BuiltinBaseImage,
+		Profile: "default", Backend: "lima", MachineIdentityID: testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		Status:              StatusCreated, CreatedAt: time.Now().UTC(),
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{"shared", func(rec *Record) {
+			rec.Mode = ModeShared
+			rec.Name = SharedDisplayName(rec.Profile)
+			rec.SharedSlot = SharedSlotID(rec.Profile)
+		}},
+		{"dedicated", func(rec *Record) {
+			rec.Mode = ModeDedicated
+			rec.Name = "dedicated"
+			rec.DedicatedWorkspace = workspace
+			rec.DedicatedGuestRoot = "/workspace"
+		}},
+		{"workspace-bound", func(rec *Record) {
+			rec.Mode = ModeWorkspaceBound
+			rec.Name = "workspace-bound"
+			rec.BoundWorkspace = workspace
+			rec.BoundGuestRoot = "/workspace"
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := base
+			tt.mutate(&rec)
+			if err := rec.Validate(); err != nil {
+				t.Fatalf("valid %s record rejected: %v", tt.name, err)
+			}
+			invalid := rec
+			if rec.Mode == ModeShared {
+				invalid.BoundWorkspace = workspace
+				invalid.BoundGuestRoot = "/workspace"
+			} else {
+				invalid.SharedSlot = SharedSlotID(rec.Profile)
+			}
+			if err := invalid.Validate(); err == nil {
+				t.Fatalf("cross-mode authority accepted: %+v", invalid)
+			}
+		})
+	}
+}
+
+func TestOldAlphaRecordWithoutModeFailsClosedWithoutDualReader(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	id := "env_20260717t000000zfedcba9876543210"
+	dir := filepath.Join(store.Root, "environments", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := map[string]any{
+		"version": version, "id": id, "name": "old-alpha", "imageRef": BuiltinBaseImage,
+		"profile": "default", "backend": "lima", "workspace": t.TempDir(),
+		"guestWorkspace": "/workspace", "status": StatusReady, "createdAt": time.Now().UTC(),
+	}
+	data, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, recordFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(id); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("old alpha record error=%v", err)
+	}
+	if err := store.Save(Record{ID: id, Version: version}); err == nil {
+		t.Fatal("missing mode was silently defaulted during save")
+	}
+}
+
 func TestStorePinsRuntimeProvenanceWithoutInferringIt(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	provenance := testRuntimeProvenance()
 	rec, err := store.Create(Spec{
-		Name:           "runtime-pinned",
-		ImageRef:       provenance.ImageRef(),
-		Runtime:        &provenance,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
+		Name:                "runtime-pinned",
+		ImageRef:            provenance.ImageRef(),
+		Runtime:             &provenance,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -76,12 +159,15 @@ func TestStorePinsRuntimeProvenanceWithoutInferringIt(t *testing.T) {
 	}
 
 	custom, err := store.Create(Spec{
-		Name:           "custom-unverified",
-		ImageRef:       provenance.ImageRef(),
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
+		Name:                "custom-unverified",
+		ImageRef:            provenance.ImageRef(),
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("Create custom: %v", err)
@@ -94,13 +180,16 @@ func TestStorePinsRuntimeProvenanceWithoutInferringIt(t *testing.T) {
 func TestStoreRejectsRuntimeProvenanceThatDoesNotMatchImage(t *testing.T) {
 	provenance := testRuntimeProvenance()
 	_, err := (Store{Root: t.TempDir()}).Create(Spec{
-		Name:           "runtime-mismatch",
-		ImageRef:       BuiltinBaseImage,
-		Runtime:        &provenance,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
+		Name:                "runtime-mismatch",
+		ImageRef:            BuiltinBaseImage,
+		Runtime:             &provenance,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
 	})
 	if err == nil || !strings.Contains(err.Error(), "runtime provenance") {
 		t.Fatalf("expected runtime provenance mismatch, got %v", err)
@@ -146,12 +235,15 @@ func testRuntimeProvenance() RuntimeProvenance {
 func TestClearRuntimePreservesMountRootsAndRemovesContents(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	rec, err := store.Create(Spec{
-		Name:           "runtime-test",
-		ImageRef:       BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
+		Name:                "runtime-test",
+		ImageRef:            BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -192,12 +284,15 @@ func TestClearRuntimePreservesMountRootsAndRemovesContents(t *testing.T) {
 func TestStoreLockIsExclusiveAndReleasable(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	rec, err := store.Create(Spec{
-		Name:           "lock-test",
-		ImageRef:       BuiltinBaseImage,
-		Profile:        "default",
-		Backend:        "lima",
-		Workspace:      t.TempDir(),
-		GuestWorkspace: "/workspace",
+		Name:                "lock-test",
+		ImageRef:            BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      t.TempDir(),
+		BoundGuestRoot:      "/workspace",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -362,6 +457,48 @@ func TestCreateEnforcesNameUniquenessCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestConcurrentCreatesPublishOnlyCompleteEnvironmentDirectories(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	const callers = 64
+	start := make(chan struct{})
+	errorsOut := make(chan error, callers)
+	var group sync.WaitGroup
+	for index := range callers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			spec := testSpecNamed(fmt.Sprintf("work-%02d", index), filepath.Join(t.TempDir(), "workspace"))
+			_, err := store.Create(spec)
+			errorsOut <- err
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(errorsOut)
+	for err := range errorsOut {
+		if err != nil {
+			t.Fatalf("concurrent create observed a partial environment: %v", err)
+		}
+	}
+	records, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != callers {
+		t.Fatalf("created %d complete records, want %d", len(records), callers)
+	}
+	entries, err := os.ReadDir(store.environmentsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".creating-") {
+			t.Fatalf("staging directory escaped publication: %s", entry.Name())
+		}
+	}
+}
+
 func TestCreateRequiresImageRefAndValidName(t *testing.T) {
 	store := Store{Root: t.TempDir()}
 	spec := testSpecNamed("work", "/tmp/ws")
@@ -432,7 +569,7 @@ func TestListSurfacesForeignRecordsAsUnsupportedRows(t *testing.T) {
 	for _, rec := range records {
 		if rec.Status == StatusUnsupportedVersion {
 			unsupported++
-			if rec.Name != "" || rec.ImageRef != "" || rec.Workspace != "" || rec.Profile != "" {
+			if rec.Name != "" || rec.ImageRef != "" || rec.Mode != "" || rec.BoundWorkspace != "" || rec.Profile != "" {
 				t.Fatalf("unsupported row must not trust old fields: %+v", rec)
 			}
 			if rec.ID == "" {
@@ -509,14 +646,24 @@ func TestAutoNameDeterministicAndMoveSensitive(t *testing.T) {
 
 func testSpecNamed(name, workspace string) Spec {
 	return Spec{
-		Name:                 name,
-		ImageRef:             BuiltinBaseImage,
-		Profile:              "default",
-		Backend:              "lima",
-		BackendConfigVersion: "lima-config/v3",
-		Workspace:            workspace,
-		GuestWorkspace:       "/workspace",
+		Name:                name,
+		ImageRef:            BuiltinBaseImage,
+		Profile:             "default",
+		Backend:             "lima",
+		Mode:                ModeWorkspaceBound,
+		MachineIdentityID:   testMachineIdentityID(),
+		BootConfigurationID: testBootConfigurationID(),
+		BoundWorkspace:      workspace,
+		BoundGuestRoot:      "/workspace",
 	}
+}
+
+func testMachineIdentityID() string {
+	return "sha256:" + strings.Repeat("d", 64)
+}
+
+func testBootConfigurationID() string {
+	return "sha256:" + strings.Repeat("b", 64)
 }
 
 func plantRecordFixture(t *testing.T, store Store, id, fixture string) {

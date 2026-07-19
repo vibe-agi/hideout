@@ -11,7 +11,8 @@
     "environmentId": {"type": "string", "pattern": "^env_[A-Za-z0-9_]+$"},
     "profile": {"type": "string", "minLength": 1, "maxLength": 128},
     "backend": {"type": "string", "minLength": 1, "maxLength": 32},
-    "workspaceId": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "workspaceId": {"type": "string", "pattern": "^wrk_[a-f0-9]{64}$"},
+    "sessionSnapshotId": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
     "state": {"enum": ["preparing", "running", "cleaning", "failed"]},
     "ownerStatus": {"enum": ["live", "stale", "unprovable"]},
     "terminalMode": {"enum": ["none", "pty"]},
@@ -19,5 +20,11 @@
     "updatedAt": {"type": "string", "format": "date-time"},
     "commandClass": {"type": "string", "pattern": "^[A-Za-z0-9._+-]{1,128}$"},
     "cleanupError": {"type": "string", "maxLength": 512}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ownerStatus": {"enum": ["live", "stale"]}}},
+      "then": {"required": ["sessionSnapshotId"]}
+    }
+  ]
 }

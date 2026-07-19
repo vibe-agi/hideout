@@ -3,10 +3,8 @@ package manager
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +26,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 type Core struct {
@@ -55,6 +54,27 @@ type Core struct {
 	// HostAppForbiddenRoots supplies active run/HostFS roots not represented by
 	// persisted profile and environment state. Errors fail identity review closed.
 	HostAppForbiddenRoots func(profileName string) ([]string, error)
+	// ActiveWorkspaceViews is supplied only by hideoutd. It returns daemon-owned,
+	// in-memory attachment observations; Manager copies only the explicitly public
+	// fields below and never derives an active workspace from environment history.
+	ActiveWorkspaceViews func() []WorkspaceViewSnapshot
+	// NetworkGateways owns host-loopback, per-environment egress selectors. Core
+	// keeps only the registry pointer; guest routing remains backend-controlled.
+	NetworkGateways *network.GatewayRegistry
+}
+
+const EnvironmentSummarySchema = "hideout.environment-summary/v1"
+
+// WorkspaceViewSnapshot is a daemon-to-Manager observation. The private fields
+// support internal correlation and adversarial tests but are never serialized or
+// copied into Overview.
+type WorkspaceViewSnapshot struct {
+	Attachment         workspaceattach.AttachmentSummary
+	Profile            string
+	Relations          []workspaceattach.RootRelationNotice
+	CanonicalHostRoot  string `json:"-"`
+	RootHandleIdentity string `json:"-"`
+	ProviderCredential string `json:"-"`
 }
 
 type BackendCheck struct {
@@ -145,47 +165,68 @@ const (
 )
 
 type SessionSummary struct {
-	ID                 string                    `json:"id"`
-	Profile            string                    `json:"profile,omitempty"`
-	Path               string                    `json:"path"`
-	AuditPath          string                    `json:"auditPath,omitempty"`
-	HasAudit           bool                      `json:"hasAudit"`
-	HasBrokerEndpoint  bool                      `json:"hasBrokerEndpoint"`
-	HasNetworkPlan     bool                      `json:"hasNetworkPlan"`
-	HasProxySecretFile bool                      `json:"hasProxySecretFile"`
-	HasEphemeralState  bool                      `json:"hasEphemeralState"`
-	NetworkMode        string                    `json:"networkMode,omitempty"`
-	GuestPrivilege     *BoundaryPrivilegeSummary `json:"guestPrivilege,omitempty"`
-	EnvironmentID      string                    `json:"environmentId,omitempty"`
-	State              session.OwnerState        `json:"state,omitempty"`
-	OwnerStatus        session.OwnerStatus       `json:"ownerStatus,omitempty"`
-	TerminalMode       session.TerminalMode      `json:"terminalMode,omitempty"`
-	StartedAt          time.Time                 `json:"startedAt,omitempty"`
-	UpdatedAt          time.Time                 `json:"updatedAt,omitempty"`
-	CommandClass       string                    `json:"commandClass,omitempty"`
-	CleanupError       string                    `json:"cleanupError,omitempty"`
+	ID                     string                               `json:"id"`
+	Profile                string                               `json:"profile,omitempty"`
+	Path                   string                               `json:"path"`
+	AuditPath              string                               `json:"auditPath,omitempty"`
+	HasAudit               bool                                 `json:"hasAudit"`
+	HasBrokerEndpoint      bool                                 `json:"hasBrokerEndpoint"`
+	HasNetworkPlan         bool                                 `json:"hasNetworkPlan"`
+	HasProxySecretFile     bool                                 `json:"hasProxySecretFile"`
+	HasEphemeralState      bool                                 `json:"hasEphemeralState"`
+	NetworkMode            string                               `json:"networkMode,omitempty"`
+	GuestPrivilege         *BoundaryPrivilegeSummary            `json:"guestPrivilege,omitempty"`
+	EnvironmentID          string                               `json:"environmentId,omitempty"`
+	State                  session.OwnerState                   `json:"state,omitempty"`
+	OwnerStatus            session.OwnerStatus                  `json:"ownerStatus,omitempty"`
+	TerminalMode           session.TerminalMode                 `json:"terminalMode,omitempty"`
+	StartedAt              time.Time                            `json:"startedAt,omitempty"`
+	UpdatedAt              time.Time                            `json:"updatedAt,omitempty"`
+	CommandClass           string                               `json:"commandClass,omitempty"`
+	CleanupError           string                               `json:"cleanupError,omitempty"`
+	WorkspaceID            string                               `json:"workspaceId,omitempty"`
+	SessionSnapshotID      string                               `json:"sessionSnapshotId,omitempty"`
+	WorkspaceLabel         string                               `json:"workspaceLabel,omitempty"`
+	GuestWorkspace         string                               `json:"guestWorkspace,omitempty"`
+	WorkspaceTransport     string                               `json:"workspaceTransport,omitempty"`
+	WorkspaceViewState     workspaceattach.AttachmentState      `json:"workspaceViewState,omitempty"`
+	WorkspaceRelations     []workspaceattach.RootRelationNotice `json:"workspaceRelations,omitempty"`
+	WorkspaceCleanupStatus string                               `json:"workspaceCleanupStatus,omitempty"`
+	WorkspaceBlockerCode   string                               `json:"workspaceBlockerCode,omitempty"`
 }
 
 type EnvironmentSummary struct {
-	ID             string                    `json:"id"`
-	Name           string                    `json:"name,omitempty"`
-	AutoNamed      bool                      `json:"autoNamed,omitempty"`
-	ImageRef       string                    `json:"imageRef,omitempty"`
-	Version        string                    `json:"version,omitempty"`
-	Profile        string                    `json:"profile"`
-	Backend        string                    `json:"backend"`
-	Status         string                    `json:"status"`
-	Workspace      string                    `json:"workspace"`
-	GuestWorkspace string                    `json:"guestWorkspace"`
-	InstanceName   string                    `json:"instanceName,omitempty"`
-	LastSessionID  string                    `json:"lastSessionId,omitempty"`
-	LastCommand    string                    `json:"lastCommand,omitempty"`
-	CreatedAt      time.Time                 `json:"createdAt"`
-	LastStartedAt  time.Time                 `json:"lastStartedAt,omitempty"`
-	LastEndedAt    time.Time                 `json:"lastEndedAt,omitempty"`
-	Runtime        *runtimeverify.StatusView `json:"runtime,omitempty"`
-	ActiveSessions int                       `json:"activeSessions"`
-	OwnerHealth    string                    `json:"ownerHealth,omitempty"`
+	Schema                 string                    `json:"schema"`
+	ID                     string                    `json:"id"`
+	Name                   string                    `json:"name,omitempty"`
+	AutoNamed              bool                      `json:"autoNamed,omitempty"`
+	ImageRef               string                    `json:"imageRef,omitempty"`
+	Profile                string                    `json:"profile"`
+	Backend                string                    `json:"backend"`
+	Status                 string                    `json:"status"`
+	Mode                   environment.Mode          `json:"mode"`
+	SharedSlot             string                    `json:"sharedSlot,omitempty"`
+	MachineIdentityID      string                    `json:"machineIdentityId"`
+	BootConfigurationID    string                    `json:"bootConfigurationId"`
+	ServiceConfigurationID string                    `json:"serviceConfigurationId,omitempty"`
+	ServiceFingerprint     string                    `json:"serviceFingerprint,omitempty"`
+	ServiceMode            string                    `json:"serviceMode,omitempty"`
+	ServiceStatus          string                    `json:"serviceStatus,omitempty"`
+	RecordVersion          string                    `json:"recordVersion,omitempty"`
+	Workspace              string                    `json:"workspace,omitempty"`
+	GuestWorkspace         string                    `json:"guestWorkspace,omitempty"`
+	WorkspaceLabel         string                    `json:"workspaceLabel,omitempty"`
+	InstanceName           string                    `json:"instanceName,omitempty"`
+	LastSessionID          string                    `json:"lastSessionId,omitempty"`
+	LastCommand            string                    `json:"lastCommand,omitempty"`
+	CreatedAt              time.Time                 `json:"createdAt"`
+	LastStartedAt          *time.Time                `json:"lastStartedAt,omitempty"`
+	LastEndedAt            *time.Time                `json:"lastEndedAt,omitempty"`
+	Runtime                *runtimeverify.StatusView `json:"runtime,omitempty"`
+	ActiveSessions         int                       `json:"activeSessions"`
+	ActiveWorkspaceViews   int                       `json:"activeWorkspaceViews"`
+	WorkspaceProviderState string                    `json:"workspaceProviderState,omitempty"`
+	OwnerHealth            string                    `json:"ownerHealth,omitempty"`
 }
 
 type BackendSummary struct {
@@ -286,7 +327,8 @@ type AuditEventFilter struct {
 
 func New(store profile.Store) Core {
 	return Core{
-		Store: store,
+		Store:           store,
+		NetworkGateways: network.NewGatewayRegistry(),
 	}
 }
 
@@ -385,8 +427,11 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 	sessions, auditCount := c.sessionSummaries()
 	active, activeErr := c.ActiveSessionSummaries()
 	sessions = mergeActiveSessionSummaries(sessions, active)
+	workspaceViews := c.activeWorkspaceViewSnapshots()
+	sessions = mergeWorkspaceViewSummaries(sessions, workspaceViews)
 	environments := environmentSummaries(c.Store.Root)
 	environments = annotateEnvironmentOwners(environments, active)
+	environments = annotateEnvironmentWorkspaceViews(environments, workspaceViews)
 	registry := c.commandProxy(profiles)
 	capabilities := capabilitySummary(profiles, registry)
 	decisionStatus, _ := c.DecisionStatus()
@@ -428,6 +473,33 @@ func (c Core) Overview(ctx context.Context) (Overview, error) {
 	}, errors.Join(append(profileErrors, activeErr)...)
 }
 
+func (c Core) activeWorkspaceViewSnapshots() []WorkspaceViewSnapshot {
+	if c.ActiveWorkspaceViews == nil {
+		return nil
+	}
+	observed := c.ActiveWorkspaceViews()
+	out := make([]WorkspaceViewSnapshot, 0, len(observed))
+	for _, value := range observed {
+		summary := value.Attachment
+		if summary.Schema != workspaceattach.AttachmentSummarySchema || summary.SessionID == "" ||
+			summary.EnvironmentID == "" || summary.WorkspaceID == "" || summary.LogicalGuestRoot != workspaceattach.LogicalWorkspaceRoot ||
+			summary.Transport != workspaceattach.SelectedTransport {
+			continue
+		}
+		copyValue := WorkspaceViewSnapshot{Attachment: summary, Profile: value.Profile}
+		for _, relation := range value.Relations {
+			if relation.WorkspaceID == summary.WorkspaceID && relation.OtherWorkspaceID != "" {
+				copyValue.Relations = append(copyValue.Relations, relation)
+			}
+		}
+		out = append(out, copyValue)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Attachment.SessionID < out[j].Attachment.SessionID
+	})
+	return out
+}
+
 // ActiveSessionSummaries is the single public owner-summary builder. It never
 // exposes lock paths, PIDs, raw workspace paths, or control-plane material.
 func (c Core) ActiveSessionSummaries() ([]session.ActiveSessionSummary, error) {
@@ -452,14 +524,13 @@ func (c Core) ActiveSessionSummaries() ([]session.ActiveSessionSummary, error) {
 				if startedAt.IsZero() {
 					startedAt = time.Unix(0, 0).UTC()
 				}
-				workspaceID := fmt.Sprintf("%x", sha256.Sum256([]byte(filepath.Clean(environmentRecord.Workspace))))
 				record = session.OwnerRecord{
 					Schema:        session.ActiveSessionSchema,
 					SessionID:     owner.SessionID,
 					EnvironmentID: environmentRecord.ID,
 					Profile:       environmentRecord.Profile,
 					Backend:       environmentRecord.Backend,
-					WorkspaceID:   workspaceID,
+					WorkspaceID:   "",
 					State:         session.OwnerStateFailed,
 					TerminalMode:  session.TerminalNone,
 					StartedAt:     startedAt,
@@ -496,7 +567,46 @@ func mergeActiveSessionSummaries(existing []SessionSummary, active []session.Act
 		summary.UpdatedAt = item.UpdatedAt
 		summary.CommandClass = item.CommandClass
 		summary.CleanupError = item.CleanupError
+		summary.SessionSnapshotID = item.SessionSnapshotID
 		// Raw implementation paths are not part of an active owner view.
+		summary.Path = ""
+	}
+	sort.Slice(existing, func(i, j int) bool { return existing[i].ID < existing[j].ID })
+	return existing
+}
+
+func mergeWorkspaceViewSummaries(existing []SessionSummary, views []WorkspaceViewSnapshot) []SessionSummary {
+	byID := make(map[string]int, len(existing))
+	for i := range existing {
+		byID[existing[i].ID] = i
+	}
+	for _, view := range views {
+		attachment := view.Attachment
+		index, ok := byID[attachment.SessionID]
+		if !ok {
+			existing = append(existing, SessionSummary{ID: attachment.SessionID})
+			index = len(existing) - 1
+			byID[attachment.SessionID] = index
+		}
+		summary := &existing[index]
+		if summary.EnvironmentID != "" && summary.EnvironmentID != attachment.EnvironmentID {
+			continue
+		}
+		if summary.WorkspaceID != "" && summary.WorkspaceID != attachment.WorkspaceID {
+			continue
+		}
+		summary.EnvironmentID = attachment.EnvironmentID
+		summary.WorkspaceID = attachment.WorkspaceID
+		summary.WorkspaceLabel = attachment.DisplayLabel
+		summary.GuestWorkspace = attachment.LogicalGuestRoot
+		summary.WorkspaceTransport = attachment.Transport
+		summary.WorkspaceViewState = attachment.State
+		summary.WorkspaceRelations = append([]workspaceattach.RootRelationNotice(nil), view.Relations...)
+		if attachment.CleanupProof != nil {
+			summary.WorkspaceCleanupStatus = attachment.CleanupProof.Status
+			summary.WorkspaceBlockerCode = attachment.CleanupProof.ReasonCode
+		}
+		// Active workspace rows never expose the implementation session directory.
 		summary.Path = ""
 	}
 	sort.Slice(existing, func(i, j int) bool { return existing[i].ID < existing[j].ID })
@@ -527,6 +637,42 @@ func annotateEnvironmentOwners(environments []EnvironmentSummary, active []sessi
 		environments[i].OwnerHealth = health
 	}
 	return environments
+}
+
+func annotateEnvironmentWorkspaceViews(environments []EnvironmentSummary, views []WorkspaceViewSnapshot) []EnvironmentSummary {
+	for i := range environments {
+		providerState := ""
+		for _, view := range views {
+			if view.Attachment.EnvironmentID != environments[i].ID {
+				continue
+			}
+			environments[i].ActiveWorkspaceViews++
+			providerState = mergeWorkspaceProviderState(providerState, view.Attachment.State)
+		}
+		environments[i].WorkspaceProviderState = providerState
+	}
+	return environments
+}
+
+func mergeWorkspaceProviderState(current string, state workspaceattach.AttachmentState) string {
+	next := "not-started"
+	switch state {
+	case workspaceattach.AttachmentProviderStarting:
+		next = "starting"
+	case workspaceattach.AttachmentProviderReady, workspaceattach.AttachmentViewMounting, workspaceattach.AttachmentReady:
+		next = "ready"
+	case workspaceattach.AttachmentDraining:
+		next = "draining"
+	case workspaceattach.AttachmentReleased:
+		next = "released"
+	case workspaceattach.AttachmentUnproved:
+		next = "unproved"
+	}
+	rank := map[string]int{"": 0, "not-started": 1, "released": 2, "starting": 3, "ready": 4, "draining": 5, "unproved": 6}
+	if rank[next] > rank[current] {
+		return next
+	}
+	return current
 }
 
 func adapterPackSummaries(c Core) []AdapterPackSummary {
@@ -637,7 +783,8 @@ func sortAuditEvents(events []audit.Event) {
 }
 
 func environmentSummaries(storeRoot string) []EnvironmentSummary {
-	records, err := (environment.Store{Root: storeRoot}).List()
+	environmentStore := environment.Store{Root: storeRoot}
+	records, err := environmentStore.List()
 	if err != nil {
 		return nil
 	}
@@ -648,27 +795,102 @@ func environmentSummaries(storeRoot string) []EnvironmentSummary {
 			receipt = &loaded
 		}
 		runtimeStatus := runtimeverify.BuildStatus(rec, runtimeEnvironmentRunning(rec), receipt)
-		out = append(out, EnvironmentSummary{
-			ID:             rec.ID,
-			Name:           rec.Name,
-			AutoNamed:      rec.AutoNamed,
-			ImageRef:       rec.ImageRef,
-			Version:        rec.Version,
-			Profile:        rec.Profile,
-			Backend:        rec.Backend,
-			Status:         rec.Status,
-			Workspace:      rec.Workspace,
-			GuestWorkspace: rec.GuestWorkspace,
-			InstanceName:   rec.InstanceName,
-			LastSessionID:  rec.LastSessionID,
-			LastCommand:    rec.LastCommand,
-			CreatedAt:      rec.CreatedAt,
-			LastStartedAt:  rec.LastStartedAt,
-			LastEndedAt:    rec.LastEndedAt,
-			Runtime:        &runtimeStatus,
-		})
+		summary := EnvironmentSummary{
+			Schema:              EnvironmentSummarySchema,
+			ID:                  rec.ID,
+			Name:                rec.Name,
+			AutoNamed:           rec.AutoNamed,
+			ImageRef:            rec.ImageRef,
+			Profile:             rec.Profile,
+			Backend:             rec.Backend,
+			Status:              rec.Status,
+			Mode:                rec.Mode,
+			SharedSlot:          rec.SharedSlot,
+			MachineIdentityID:   rec.MachineIdentityID,
+			BootConfigurationID: rec.BootConfigurationID,
+			RecordVersion:       rec.Version,
+			InstanceName:        rec.InstanceName,
+			CreatedAt:           rec.CreatedAt,
+			LastStartedAt:       optionalTime(rec.LastStartedAt),
+			LastEndedAt:         optionalTime(rec.LastEndedAt),
+			Runtime:             &runtimeStatus,
+		}
+		serviceStatePath := filepath.Join(environmentStore.RuntimeNetworkServiceDir(rec.ID), "state.json")
+		if serviceState, serviceErr := network.LoadServiceState(serviceStatePath); serviceErr == nil {
+			summary.ServiceConfigurationID = serviceState.ConfigurationID
+			summary.ServiceFingerprint = serviceState.ConfigurationFingerprint
+			summary.ServiceMode = serviceState.Mode
+			summary.ServiceStatus = string(serviceState.Status)
+		} else if !errors.Is(serviceErr, os.ErrNotExist) {
+			summary.ServiceStatus = "unprovable"
+		}
+		if binding, ok := pinnedEnvironmentWorkspace(rec); ok {
+			summary.Workspace = binding.HostRoot
+			summary.GuestWorkspace = binding.GuestRoot
+			summary.WorkspaceLabel = workspaceSummaryLabel(binding.HostRoot, rec.ID)
+			summary.LastSessionID = rec.LastSessionID
+			summary.LastCommand = rec.LastCommand
+		}
+		out = append(out, summary)
 	}
 	return out
+}
+
+func optionalTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	value = value.UTC()
+	return &value
+}
+
+func workspaceSummaryLabel(hostRoot, environmentID string) string {
+	name := filepath.Base(filepath.Clean(hostRoot))
+	if name == "." || name == string(filepath.Separator) || strings.TrimSpace(name) == "" {
+		name = "workspace"
+	}
+	shortID := strings.TrimPrefix(environmentID, "env_")
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return name + " [" + shortID + "]"
+}
+
+// ScopeOverview is the single machine/view profile filter used by CLI, TUI,
+// WebUI seeds, and tests. Labels and counts never select authority.
+func ScopeOverview(in Overview, profileName string) Overview {
+	if profileName == "" {
+		return in
+	}
+	profiles := make([]ProfileSummary, 0, len(in.Profiles))
+	for _, value := range in.Profiles {
+		if value.Name == profileName {
+			profiles = append(profiles, value)
+		}
+	}
+	environments := make([]EnvironmentSummary, 0, len(in.Environments))
+	for _, value := range in.Environments {
+		if value.Profile == profileName {
+			environments = append(environments, value)
+		}
+	}
+	sessions := make([]SessionSummary, 0, len(in.Sessions))
+	for _, value := range in.Sessions {
+		if value.Profile == profileName {
+			sessions = append(sessions, value)
+		}
+	}
+	network := make([]ProfileNetworkSummary, 0, len(in.Network.ProfileDefaults))
+	for _, value := range in.Network.ProfileDefaults {
+		if value.Profile == profileName {
+			network = append(network, value)
+		}
+	}
+	in.Profiles = profiles
+	in.Environments = environments
+	in.Sessions = sessions
+	in.Network.ProfileDefaults = network
+	return in
 }
 
 func readAuditEvents(path string, filter AuditEventFilter) ([]audit.Event, error) {

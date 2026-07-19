@@ -435,17 +435,21 @@ func matchingEnvironment(opts options) (environment.Record, error) {
 	if err != nil {
 		return environment.Record{}, err
 	}
-	cleanWorkspace, err := filepath.EvalSymlinks(opts.workspace)
-	if err != nil {
-		return environment.Record{}, err
-	}
+	var matched *environment.Record
 	for _, record := range records {
-		recordWorkspace, evalErr := filepath.EvalSymlinks(record.Workspace)
-		if evalErr == nil && record.Profile == opts.profile && recordWorkspace == cleanWorkspace {
-			return record, nil
+		if record.Profile != opts.profile || record.Backend != "lima" || record.Mode != environment.ModeShared || !record.AutoNamed {
+			continue
 		}
+		if matched != nil {
+			return environment.Record{}, fmt.Errorf("multiple shared automatic environments match profile %q", opts.profile)
+		}
+		copy := record
+		matched = &copy
 	}
-	return environment.Record{}, errors.New("matching environment record not found")
+	if matched == nil {
+		return environment.Record{}, errors.New("matching shared automatic environment not found")
+	}
+	return *matched, nil
 }
 
 func waitTargetsGone(opts options, instance string, sessionIDs []string) error {

@@ -146,7 +146,9 @@
 	    "hostfs.live-read-grant",
 	    "hostfs.read-provider",
 	    "network.environment-service",
-	    "run.session"
+	    "run.session",
+	    "workspace.guest-view",
+	    "workspace.host-provider"
 	  ]
 	},
 	"factKind": {

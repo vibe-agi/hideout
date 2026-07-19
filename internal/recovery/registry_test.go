@@ -44,6 +44,16 @@ func TestRegistryContainsV1CodesOnce(t *testing.T) {
 		CodeSessionServiceConflict,
 		CodeSessionCleanupFailed,
 		CodeEnvironmentActiveSessions,
+		CodeEnvironmentRecordUnsupported,
+		CodeEnvironmentCompatibilityDrift,
+		CodeEnvironmentWorkspaceMismatch,
+		CodeEnvironmentSharedPreserve,
+		CodeWorkspaceTransportUnsupported,
+		CodeWorkspaceRootUnstable,
+		CodeWorkspaceHostPermission,
+		CodeWorkspaceCapacityExhausted,
+		CodeWorkspaceCleanupUnproved,
+		CodeWorkspaceExternalMetadata,
 	}
 	seen := map[string]int{}
 	for _, entry := range All() {
@@ -52,6 +62,27 @@ func TestRegistryContainsV1CodesOnce(t *testing.T) {
 	for _, code := range want {
 		if seen[code] != 1 {
 			t.Fatalf("code %s count=%d", code, seen[code])
+		}
+	}
+}
+
+func TestSharedWorkspaceRecoveryCodesAreCompleteAndActionable(t *testing.T) {
+	codes := []string{
+		CodeEnvironmentRecordUnsupported, CodeEnvironmentCompatibilityDrift,
+		CodeEnvironmentWorkspaceMismatch, CodeEnvironmentSharedPreserve,
+		CodeWorkspaceTransportUnsupported, CodeWorkspaceRootUnstable,
+		CodeWorkspaceHostPermission, CodeWorkspaceCapacityExhausted,
+		CodeWorkspaceCleanupUnproved, CodeWorkspaceExternalMetadata,
+	}
+	for _, code := range codes {
+		entry, ok := Lookup(code)
+		if !ok || entry.Reason == "" || entry.Hint == "" || len(entry.NextActions) == 0 || len(entry.DocsRefs) == 0 {
+			t.Fatalf("shared workspace recovery code %q is incomplete: %+v", code, entry)
+		}
+		for _, action := range entry.NextActions {
+			if !strings.HasPrefix(action, "hideout ") {
+				t.Fatalf("shared workspace recovery action is not a public CLI command: %+v", entry)
+			}
 		}
 	}
 }

@@ -186,16 +186,42 @@ or unproved cleanup blocks automatic stop rather than guessing. Stop never
 cleans or deletes the environment and never terminates an independent host
 application.
 
-Environments are named, user-selected runtime boxes. The implicit environment
-is currently pinned to one profile and one workspace. Multiple runs may own
-that same warm environment concurrently; each run gets a separate runtime
-child, broker/data plane, mount namespace, PID namespace, and private `/proc`.
-The mounted workspace is intentionally shared and writable. Sharing one
-default VM across different workspaces remains a later design, not current
-behavior. Session namespaces are an ordinary-target boundary, not a wall
-against guest root. Changing an environment's pinned configuration (base
-image digest, backend, profile binding, or workspace) is drift: the product
-fails closed and offers recreation, never a silent switch.
+Environments are named, user-selected runtime boxes. Compatible automatic
+macOS arm64 Lima runs use one stable slot selected by canonical profile slot
+plus machine identity; workspace identity is absent from the machine
+record. Each run owns an immutable workspace attachment to that exact backend
+incarnation, and shared-mode Lima configuration contains no project mount.
+
+The promoted 035 transport is the Go-owned Workspace Portal. It
+exports exactly one captured host root through bounded broker RPC and mounts
+one opaque project-specific physical root inside the run's private namespace.
+The target sees only the logical `/workspace` entry. It cannot select another
+physical workspace ID, and no subsystem may recover project authority from an
+environment's history, a display label, or a path hash of its own.
+
+Each run still gets a separate runtime child, broker/data plane, mount
+namespace, PID namespace, private `/proc`, and workspace view. The selected
+project remains intentionally writable. Session namespaces are an
+ordinary-target boundary, not a wall against guest root. Explicit named
+environments remain the separate-VM escape hatch and pin one exact project.
+Environment configuration has four lifecycle layers. Machine identity contains
+only disk genesis and isolation structure: backend, image content/guest
+architecture, target OS user/UID, guest machine-id, VM/mount implementation,
+and shared-versus-dedicated workspace isolation. A Lima static mount also pins
+its access/path presentation; the shared Portal and native host-process paths
+do not. A change there requires an explicit recreate. Boot presentation such
+as hostname is reconciled by a
+Go-owned privileged controller without replacing the disk. Environment
+services such as proxy upstream and mediated DNS are switched online under one
+serialized service generation with rollback. Direct-to-proxy posture changes
+also keep the same running VM, but because routing is currently VM-global they
+must wait until no sibling target session is active. Env, Git,
+locale/timezone, tool expectations, shims, HostFS/command policy, adapters,
+host capabilities, audit policy, and policy source bytes are frozen for each
+new session. Shared-Portal workspace presentation also belongs to the new
+session, while a static Lima mount projects the same profile field into machine
+identity. A profile field may project into more than one layer; that does
+not promote the whole profile into machine identity.
 
 ### 6. Policy Is Composed, Deny Wins
 
@@ -205,9 +231,14 @@ win over allow rules.
 
 No layer may implement "last flag wins" for privacy authority.
 
-Policy is live: grant and deny changes, script updates, and env policy edits
-take effect on the next evaluated request without restarting the environment.
-Only physical mounts follow the environment lifecycle.
+Policy is session-scoped by default: declarative grant, script, env, Git, shim,
+and capability changes affect a new session without restarting the
+environment. Policy script bytes and Git configuration are copied into the
+private session runtime before the target starts. The deliberate live exception
+is revocation: Manager may re-read operator-owned HostFS policy to remove
+authority from an already-running host-app handoff, but it may never use that
+path to expand the session snapshot. Physical machine changes follow the
+machine lifecycle.
 
 ### 7. Observable By Default
 

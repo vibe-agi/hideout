@@ -8,6 +8,8 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
+	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 // Event is one item in the live stream (schemas/daemon-event.schema.json).
@@ -189,6 +191,49 @@ func (b *eventBus) publishLifecycle(status lifecycle.Status, phase string) {
 			Lifecycle: &copy,
 		},
 	})
+}
+
+func (b *eventBus) publishWorkspaceViews(views []manager.WorkspaceViewSnapshot) {
+	for _, view := range views {
+		attachment := view.Attachment
+		if attachment.Schema != workspaceattach.AttachmentSummarySchema || attachment.AttachmentID == "" ||
+			attachment.SessionID == "" || attachment.EnvironmentID == "" || attachment.WorkspaceID == "" {
+			continue
+		}
+		payload := liveconsole.EventPayload{
+			ID: attachment.SessionID, AttachmentID: attachment.AttachmentID,
+			Session: attachment.SessionID, EnvironmentID: attachment.EnvironmentID,
+			Profile: audit.RedactString(view.Profile), WorkspaceID: attachment.WorkspaceID,
+			WorkspaceLabel: audit.RedactString(attachment.DisplayLabel),
+			GuestWorkspace: attachment.LogicalGuestRoot, WorkspaceTransport: attachment.Transport,
+			WorkspaceViewState: attachment.State,
+			WorkspaceRelations: append([]workspaceattach.RootRelationNotice(nil), view.Relations...),
+			Status:             string(attachment.State),
+		}
+		if attachment.CleanupProof != nil {
+			payload.CleanupStatus = attachment.CleanupProof.Status
+			payload.BlockerCode = audit.RedactString(attachment.CleanupProof.ReasonCode)
+		}
+		b.publish(Event{
+			Kind: liveconsole.KindWorkspaceView, Phase: workspaceViewEventPhase(attachment.State),
+			Entity: liveconsole.EntityRef{
+				Kind: liveconsole.KindWorkspaceView, ID: attachment.AttachmentID,
+				Profile: payload.Profile, Session: attachment.SessionID,
+			},
+			Payload: payload,
+		})
+	}
+}
+
+func workspaceViewEventPhase(state workspaceattach.AttachmentState) string {
+	switch state {
+	case workspaceattach.AttachmentReady, workspaceattach.AttachmentReleased:
+		return "complete"
+	case workspaceattach.AttachmentUnproved:
+		return "failed"
+	default:
+		return "progress"
+	}
 }
 
 // publish fans an event out to current subscribers. A subscriber whose bounded

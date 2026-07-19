@@ -2,16 +2,321 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 )
+
+func TestRuntimeConfigurationSeparatesMachineBootServiceAndSessionInputs(t *testing.T) {
+	p := runtimeConfigurationTestProfile("compatibility")
+	base, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertImpact := func(name string, mutate func(*profile.Profile), want environment.ChangeImpact, wantLayers ...string) {
+		t.Helper()
+		encoded, err := json.Marshal(p)
+		if err != nil {
+			t.Fatalf("%s clone: %v", name, err)
+		}
+		var changedProfile profile.Profile
+		if err := json.Unmarshal(encoded, &changedProfile); err != nil {
+			t.Fatalf("%s clone: %v", name, err)
+		}
+		mutate(&changedProfile)
+		changed, err := RuntimeConfigurationForProfile(changedProfile, "lima", environment.ModeShared)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		changes := environment.CompareConfigurations(base, changed)
+		if got := environment.RequiredImpact(changes); got != want {
+			t.Fatalf("%s impact=%q want=%q base=%+v changed=%+v", name, got, want, base.Layers, changed.Layers)
+		}
+		if len(wantLayers) > 0 {
+			gotLayers := make(map[string]bool, len(changes))
+			for _, change := range changes {
+				gotLayers[change.Layer] = true
+			}
+			if len(gotLayers) != len(wantLayers) {
+				t.Fatalf("%s changed layers=%v want=%v", name, gotLayers, wantLayers)
+			}
+			for _, layer := range wantLayers {
+				if !gotLayers[layer] {
+					t.Fatalf("%s changed layers=%v missing=%q", name, gotLayers, layer)
+				}
+			}
+		}
+	}
+	assertImpact("image", func(value *profile.Profile) { value.Environment.BaseImage = "template:_images/debian-12" }, environment.ImpactRecreate, "machine")
+	assertImpact("profile-reference", func(value *profile.Profile) { value.Metadata["profileId"] = "profile-other" }, environment.ImpactNewSession, "session")
+	assertImpact("identity-reference", func(value *profile.Profile) { value.Metadata["identityId"] = "identity-other" }, environment.ImpactNewSession, "session")
+	assertImpact("unrelated-metadata", func(value *profile.Profile) { value.Metadata["note"] = "operator-only" }, environment.ImpactNone)
+	assertImpact("guest-machine-id", func(value *profile.Profile) { value.Metadata["machineId"] = strings.Repeat("b", 32) }, environment.ImpactRecreate, "machine")
+	assertImpact("user", func(value *profile.Profile) { value.Identity.User = "operator2" }, environment.ImpactRecreate, "machine", "session")
+	assertImpact("hostname", func(value *profile.Profile) { value.Identity.Hostname = "hideout2" }, environment.ImpactReconfigure, "boot", "session")
+	assertImpact("timezone", func(value *profile.Profile) { value.Identity.Timezone = "Asia/Singapore" }, environment.ImpactNewSession, "session")
+	assertImpact("locale", func(value *profile.Profile) { value.Identity.Locale = "en_US.UTF-8" }, environment.ImpactNewSession, "session")
+	assertImpact("workspace-path-mode", func(value *profile.Profile) { value.Workspace.PathMode = "preserve" }, environment.ImpactNewSession, "session")
+	assertImpact("public-env", func(value *profile.Profile) { value.Env.Public["FEATURE"] = "on" }, environment.ImpactNewSession, "session")
+	assertImpact("deny-env", func(value *profile.Profile) { value.Env.Deny = []string{"SECRET_*"} }, environment.ImpactNewSession, "session")
+	assertImpact("inherit-env", func(value *profile.Profile) { value.Env.Inherit = append(value.Env.Inherit, "EDITOR") }, environment.ImpactNewSession, "session")
+	assertImpact("git", func(value *profile.Profile) { value.Git.UserEmail = "other@example.com" }, environment.ImpactNewSession, "session")
+	assertImpact("network", func(value *profile.Profile) {
+		value.Network.Mode = profile.NetworkModeTun2Socks
+		value.Network.ProxySecretRef = "default-proxy"
+		value.Network.MediatedResolver = "1.1.1.1"
+	}, environment.ImpactLive, "environment-services")
+	assertImpact("proxy-env-presentation", func(value *profile.Profile) { value.Network.ProxyEnvVisible = true }, environment.ImpactNewSession, "session")
+	assertImpact("tools", func(value *profile.Profile) { value.Tools.ExpectedCommands = []string{"git", "node"} }, environment.ImpactNewSession, "session")
+	assertImpact("host-open", func(value *profile.Profile) { value.HostCapabilities.Open.AllowURLs = false }, environment.ImpactNewSession, "session")
+	assertImpact("endpoint-exposure", func(value *profile.Profile) {
+		value.EndpointExposure.HostToGuest = []profile.EndpointCandidate{{ID: "dev", Owner: "target", TargetAddress: "127.0.0.1:3000"}}
+	}, environment.ImpactNewSession, "session")
+	assertImpact("hostfs", func(value *profile.Profile) {
+		value.HostFS.Grants = []hostfs.Rule{{HostPath: "/tmp/input", Ops: []hostfs.Op{hostfs.OpRead}, Scope: hostfs.ScopeExactFile, Reason: "fixture"}}
+	}, environment.ImpactNewSession, "session")
+	assertImpact("command-proxy", func(value *profile.Profile) {
+		value.CommandProxy.Commands["browse"] = profile.CommandProxyCommand{Route: "host-broker", Action: "host.open", ArgvSchema: "open-target-v1"}
+	}, environment.ImpactNewSession, "session")
+	assertImpact("command-adapter", func(value *profile.Profile) {
+		value.CommandAdapters.Adapters = map[string]profile.CommandAdapter{"fixture": {Enabled: true, Builtin: "fixture"}}
+	}, environment.ImpactNewSession, "session")
+	assertImpact("policy-capability", func(value *profile.Profile) {
+		value.Policy.MaxCapabilities = append(value.Policy.MaxCapabilities, "host.fs.write.plan")
+	}, environment.ImpactNewSession, "session")
+	assertImpact("policy-source", func(value *profile.Profile) {
+		value.Policy.ScriptRefs = []profile.ScriptRef{{ID: "fixture", Path: "policy.js", Entrypoints: []string{"decideCommand"}}}
+	}, environment.ImpactNewSession, "session")
+	assertImpact("audit", func(value *profile.Profile) { value.Audit.Enabled = false }, environment.ImpactNewSession, "session")
+
+	first := RunEnvironmentSpec(p, "lima", "/Users/alice/project-a", "/workspace")
+	second := RunEnvironmentSpec(p, "lima", "/Users/bob/project-b", "/different-session-root")
+	if first.MachineIdentityID != second.MachineIdentityID || first.BootConfigurationID != second.BootConfigurationID {
+		t.Fatalf("workspace/session facts changed machine identity: %q != %q", first.MachineIdentityID, second.MachineIdentityID)
+	}
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, excluded := range []string{"/Users/alice/project-a", "ses_secret", "git status", "xterm-256color", "cap_secret", "env://HIDEOUT_SECRET_PROXY"} {
+		if strings.Contains(string(encoded), excluded) {
+			t.Fatalf("machine compatibility leaked session-only fact %q: %s", excluded, encoded)
+		}
+	}
+}
+
+func TestRuntimeConfigurationCoversEveryTopLevelProfileDomain(t *testing.T) {
+	// This is a drift guard, not the lifecycle algorithm. A new profile domain
+	// must be deliberately added here and to RuntimeConfigurationForProfile
+	// instead of silently inheriting machine/recreate semantics or no semantics.
+	want := map[string]string{
+		"schemaVersion":    "validation-only",
+		"name":             "stable-slot-selection",
+		"identity":         "machine+boot+session",
+		"workspace":        "mode-dependent-machine+session",
+		"env":              "session",
+		"git":              "session",
+		"network":          "environment-service+session-presentation",
+		"tools":            "session",
+		"environment":      "image-machine+runtime-contract-session",
+		"hostCapabilities": "session",
+		"endpointExposure": "session",
+		"hostfs":           "session",
+		"commandProxy":     "session",
+		"commandAdapters":  "session",
+		"policy":           "session",
+		"audit":            "session",
+		"metadata":         "selected-machine+session+control-only",
+	}
+	typeOfProfile := reflect.TypeOf(profile.Profile{})
+	got := make(map[string]bool, typeOfProfile.NumField())
+	for index := 0; index < typeOfProfile.NumField(); index++ {
+		field := typeOfProfile.Field(index)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			t.Fatalf("profile field %s has no lifecycle-addressable JSON name", field.Name)
+		}
+		if _, ok := want[name]; !ok {
+			t.Fatalf("profile domain %q (%s) has no explicit lifecycle classification", name, field.Name)
+		}
+		got[name] = true
+	}
+	if len(got) != len(want) {
+		for name, classification := range want {
+			if !got[name] {
+				t.Fatalf("stale lifecycle classification %q=%q has no profile field", name, classification)
+			}
+		}
+	}
+}
+
+func TestSharedSlotIsStableAcrossProjectsAndPostureDrift(t *testing.T) {
+	first := environment.SharedSlotID(" Default ")
+	if first != environment.SharedSlotID("default") || first != environment.SharedSlotID("DEFAULT") {
+		t.Fatalf("shared slot is not canonical: %q", first)
+	}
+	if first == environment.SharedSlotID("other") {
+		t.Fatal("distinct profiles share an automatic slot")
+	}
+	p := runtimeConfigurationTestProfile("default")
+	before, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Identity.Hostname = "changed-host"
+	after, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Layers.MachineID != after.Layers.MachineID || before.Layers.BootID == after.Layers.BootID || first != environment.SharedSlotID(p.Name) {
+		t.Fatalf("hostname must change boot configuration but not machine or slot: before=%+v after=%+v slot=%q", before.Layers, after.Layers, first)
+	}
+}
+
+func TestRuntimeCatalogMetadataDoesNotBecomeMachineIdentity(t *testing.T) {
+	p := runtimeConfigurationTestProfile("runtime-layers")
+	_, provenance := runtimeRunCatalogFixture()
+	p.Environment.Runtime = &provenance
+	base, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeImpact := func(name string, mutate func(*environment.RuntimeProvenance), want environment.ChangeImpact, wantLayers ...string) {
+		t.Helper()
+		changedProfile := p
+		changedProvenance := provenance
+		mutate(&changedProvenance)
+		changedProfile.Environment.Runtime = &changedProvenance
+		changed, err := RuntimeConfigurationForProfile(changedProfile, "lima", environment.ModeShared)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		changes := environment.CompareConfigurations(base, changed)
+		if got := environment.RequiredImpact(changes); got != want {
+			t.Fatalf("%s impact=%q want=%q changes=%+v", name, got, want, changes)
+		}
+		gotLayers := make(map[string]bool, len(changes))
+		for _, change := range changes {
+			gotLayers[change.Layer] = true
+		}
+		if len(gotLayers) != len(wantLayers) {
+			t.Fatalf("%s changed layers=%v want=%v", name, gotLayers, wantLayers)
+		}
+		for _, layer := range wantLayers {
+			if !gotLayers[layer] {
+				t.Fatalf("%s changed layers=%v missing=%q", name, gotLayers, layer)
+			}
+		}
+	}
+
+	assertRuntimeImpact("catalog-release", func(value *environment.RuntimeProvenance) {
+		value.CatalogRelease = "2026.08.0"
+	}, environment.ImpactNone)
+	assertRuntimeImpact("artifact-location", func(value *environment.RuntimeProvenance) {
+		value.ArtifactLocation = "https://downloads.example.test/runtime-mirror.qcow2"
+	}, environment.ImpactNone)
+	assertRuntimeImpact("contract", func(value *environment.RuntimeProvenance) {
+		value.ContractDigest = "sha256:" + strings.Repeat("d", 64)
+	}, environment.ImpactNewSession, "session")
+	assertRuntimeImpact("package-inventory", func(value *environment.RuntimeProvenance) {
+		value.PackageInventoryDigest = "sha256:" + strings.Repeat("e", 64)
+	}, environment.ImpactNewSession, "session")
+	assertRuntimeImpact("image-content", func(value *environment.RuntimeProvenance) {
+		value.ArtifactSHA256 = strings.Repeat("f", 64)
+	}, environment.ImpactRecreate, "machine")
+}
+
+func TestBackendAndIsolationStructureRemainMachineIdentity(t *testing.T) {
+	p := runtimeConfigurationTestProfile("machine-structure")
+	shared, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dedicated, err := RuntimeConfigurationForProfile(p, "lima", environment.ModeDedicated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changes := environment.CompareConfigurations(shared, dedicated); environment.RequiredImpact(changes) != environment.ImpactRecreate || len(changes) != 1 || changes[0].Layer != "machine" {
+		t.Fatalf("workspace isolation changes=%+v", changes)
+	}
+	staticWorkspaceChanged := p
+	staticWorkspaceChanged.Workspace.PathMode = profile.WorkspacePathModePreserve
+	changedDedicated, err := RuntimeConfigurationForProfile(staticWorkspaceChanged, "lima", environment.ModeDedicated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staticChanges := environment.CompareConfigurations(dedicated, changedDedicated)
+	if environment.RequiredImpact(staticChanges) != environment.ImpactRecreate {
+		t.Fatalf("static workspace impact=%q changes=%+v", environment.RequiredImpact(staticChanges), staticChanges)
+	}
+	staticLayers := map[string]bool{}
+	for _, change := range staticChanges {
+		staticLayers[change.Layer] = true
+	}
+	if !staticLayers["machine"] || !staticLayers["session"] {
+		t.Fatalf("static workspace changed layers=%v", staticLayers)
+	}
+	native, err := RuntimeConfigurationForProfile(p, "native", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := environment.CompareConfigurations(shared, native)
+	if environment.RequiredImpact(changes) != environment.ImpactRecreate {
+		t.Fatalf("backend impact=%q changes=%+v", environment.RequiredImpact(changes), changes)
+	}
+	gotLayers := map[string]bool{}
+	for _, change := range changes {
+		gotLayers[change.Layer] = true
+	}
+	if !gotLayers["machine"] || !gotLayers["boot"] {
+		t.Fatalf("backend changed layers=%v", gotLayers)
+	}
+	changedNative, err := RuntimeConfigurationForProfile(staticWorkspaceChanged, "native", environment.ModeShared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeChanges := environment.CompareConfigurations(native, changedNative); environment.RequiredImpact(nativeChanges) != environment.ImpactNewSession || len(nativeChanges) != 1 || nativeChanges[0].Layer != "session" {
+		t.Fatalf("native workspace changes=%+v", nativeChanges)
+	}
+}
+
+func runtimeConfigurationTestProfile(name string) profile.Profile {
+	p := profile.Default(name)
+	p.Metadata = map[string]string{
+		"profileId":  "profile-fixture-" + name,
+		"identityId": "identity-fixture-" + name,
+		"machineId":  strings.Repeat("a", 32),
+	}
+	return p
+}
+
+func TestRuntimeConfigurationAcceptsMaterializedNativeProfile(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	p, err := store.LoadOrInit("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Network.Mode = profile.NetworkModeTun2Socks
+	p.Network.ProxySecretRef = "missing-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+
+	configuration, err := RuntimeConfigurationForProfile(p, "native", environment.ModeWorkspaceBound)
+	if err != nil {
+		t.Fatalf("runtime configuration: %v", err)
+	}
+	if configuration.Layers.MachineID == "" || configuration.Layers.BootID == "" || configuration.Layers.ServicesID == "" || configuration.Layers.SessionID == "" {
+		t.Fatalf("runtime configuration has an empty layer: %+v", configuration.Layers)
+	}
+}
 
 func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
@@ -29,7 +334,7 @@ func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 	selected, err := core.SelectRunEnvironment(RunPlan{
 		Backend:        "lima",
 		Workspace:      workspace,
-		GuestWorkspace: created.GuestWorkspace,
+		GuestWorkspace: created.GuestWorkspaceRoot(),
 		RuntimeProfile: p,
 	}, RunEnvironmentOptions{EnvName: "work", Create: true})
 	if err != nil {
@@ -39,9 +344,24 @@ func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 		t.Fatalf("wrong record selected: %+v", selected.Record)
 	}
 
+	bootChanged := p
+	bootChanged.Identity.Hostname = "hideout-work"
+	reconfigured, err := core.SelectRunEnvironment(RunPlan{
+		Backend:        "lima",
+		Workspace:      workspace,
+		GuestWorkspace: created.GuestWorkspaceRoot(),
+		RuntimeProfile: bootChanged,
+	}, RunEnvironmentOptions{EnvName: "work", Create: true})
+	if err != nil {
+		t.Fatalf("hostname-only change must not require recreate: %v", err)
+	}
+	if !reconfigured.BootReconfigure || reconfigured.Configuration.Boot.Hostname != bootChanged.Identity.Hostname {
+		t.Fatalf("hostname change was not classified as boot reconfigure: %+v", reconfigured)
+	}
+
 	// unknown name points at env list
 	_, err = core.SelectRunEnvironment(RunPlan{
-		Backend: "lima", Workspace: workspace, GuestWorkspace: created.GuestWorkspace, RuntimeProfile: p,
+		Backend: "lima", Workspace: workspace, GuestWorkspace: created.GuestWorkspaceRoot(), RuntimeProfile: p,
 	}, RunEnvironmentOptions{EnvName: "ghost", Create: true})
 	if err == nil || !strings.Contains(err.Error(), "env list") {
 		t.Fatalf("unknown name should mention env list, got %v", err)
@@ -49,7 +369,7 @@ func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 
 	// record ids are not accepted as names
 	_, err = core.SelectRunEnvironment(RunPlan{
-		Backend: "lima", Workspace: workspace, GuestWorkspace: created.GuestWorkspace, RuntimeProfile: p,
+		Backend: "lima", Workspace: workspace, GuestWorkspace: created.GuestWorkspaceRoot(), RuntimeProfile: p,
 	}, RunEnvironmentOptions{EnvName: created.ID, Create: true})
 	if err == nil {
 		t.Fatal("record id must not resolve as a name")
@@ -58,7 +378,7 @@ func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 	// conflicting profile fails closed
 	other := profile.Default("other")
 	_, err = core.SelectRunEnvironment(RunPlan{
-		Backend: "lima", Workspace: workspace, GuestWorkspace: created.GuestWorkspace, RuntimeProfile: other,
+		Backend: "lima", Workspace: workspace, GuestWorkspace: created.GuestWorkspaceRoot(), RuntimeProfile: other,
 	}, RunEnvironmentOptions{EnvName: "work", Create: true})
 	if err == nil || !strings.Contains(err.Error(), "profile") {
 		t.Fatalf("conflicting profile must fail closed, got %v", err)
@@ -66,7 +386,7 @@ func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 
 	// conflicting backend fails closed
 	_, err = core.SelectRunEnvironment(RunPlan{
-		Backend: "native", Workspace: workspace, GuestWorkspace: created.GuestWorkspace, RuntimeProfile: p,
+		Backend: "native", Workspace: workspace, GuestWorkspace: created.GuestWorkspaceRoot(), RuntimeProfile: p,
 	}, RunEnvironmentOptions{EnvName: "work", Create: true})
 	if err == nil || !strings.Contains(err.Error(), "backend") {
 		t.Fatalf("conflicting backend must fail closed, got %v", err)
@@ -74,7 +394,7 @@ func TestSelectRunEnvironmentByNameBindsRecord(t *testing.T) {
 
 	// conflicting workspace fails closed
 	_, err = core.SelectRunEnvironment(RunPlan{
-		Backend: "lima", Workspace: t.TempDir(), GuestWorkspace: created.GuestWorkspace, RuntimeProfile: p,
+		Backend: "lima", Workspace: t.TempDir(), GuestWorkspace: created.GuestWorkspaceRoot(), RuntimeProfile: p,
 	}, RunEnvironmentOptions{EnvName: "work", Create: true})
 	if err == nil || !strings.Contains(err.Error(), "workspace") {
 		t.Fatalf("conflicting workspace must fail closed, got %v", err)
@@ -95,9 +415,12 @@ func TestSelectRunEnvironmentAutoNamedResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantName := environment.AutoName(p.Name, workspace)
+	wantName := environment.SharedDisplayName(p.Name)
 	if !first.Created || first.Record.Name != wantName || !first.Record.AutoNamed {
-		t.Fatalf("first use should create the auto-named environment %q: %+v", wantName, first.Record)
+		t.Fatalf("first use should create the stable shared environment %q: %+v", wantName, first.Record)
+	}
+	if first.Record.Mode != environment.ModeShared || first.Record.SharedSlot != environment.SharedSlotID(p.Name) {
+		t.Fatalf("first use did not select the shared slot: %+v", first.Record)
 	}
 	if first.Record.ImageRef != p.BaseImageOrBuiltin() {
 		t.Fatalf("auto-named environment should pin the profile image default: %+v", first.Record)
@@ -213,18 +536,19 @@ func TestDriftReportAxesAndSameFileWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// backendConfig drift: pinned and current values named, recreate hint given
+	// Machine identity drift names the exact lifecycle layer and recreate action.
 	envStore := environment.Store{Root: store.Root}
-	rec.BackendConfigVersion = "lima-config/old"
+	currentMachineID := rec.MachineIdentityID
+	rec.MachineIdentityID = "sha256:" + strings.Repeat("0", 64)
 	if err := envStore.Save(rec); err != nil {
 		t.Fatal(err)
 	}
-	_, err = core.SelectRunEnvironment(RunPlan{Backend: "lima", Workspace: workspace, GuestWorkspace: rec.GuestWorkspace, RuntimeProfile: p}, RunEnvironmentOptions{EnvName: "drifty", Create: true})
+	_, err = core.SelectRunEnvironment(RunPlan{Backend: "lima", Workspace: workspace, GuestWorkspace: rec.GuestWorkspaceRoot(), RuntimeProfile: p}, RunEnvironmentOptions{EnvName: "drifty", Create: true})
 	if err == nil {
-		t.Fatal("backendConfig drift must fail closed")
+		t.Fatal("machine identity drift must fail closed")
 	}
 	msg := err.Error()
-	for _, want := range []string{"backendConfig", "lima-config/old", "hideout env recreate drifty"} {
+	for _, want := range []string{"machine", rec.MachineIdentityID, "hideout env recreate drifty"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("drift report missing %q: %s", want, msg)
 		}
@@ -236,7 +560,7 @@ func TestDriftReportAxesAndSameFileWorkspace(t *testing.T) {
 	}
 
 	// workspace drift via a genuinely different directory
-	rec.BackendConfigVersion = backendConfigVersion("lima")
+	rec.MachineIdentityID = currentMachineID
 	if err := envStore.Save(rec); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +575,7 @@ func TestDriftReportAxesAndSameFileWorkspace(t *testing.T) {
 	if err := os.Symlink(workspace, linked); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := core.SelectRunEnvironment(RunPlan{Backend: "lima", Workspace: linked, GuestWorkspace: rec.GuestWorkspace, RuntimeProfile: p}, RunEnvironmentOptions{EnvName: "drifty", Create: true}); err != nil {
+	if _, err := core.SelectRunEnvironment(RunPlan{Backend: "lima", Workspace: linked, GuestWorkspace: rec.GuestWorkspaceRoot(), RuntimeProfile: p}, RunEnvironmentOptions{EnvName: "drifty", Create: true}); err != nil {
 		t.Fatalf("same file identity must not drift: %v", err)
 	}
 }
@@ -265,7 +589,7 @@ func TestRecreateEnvironmentGuardForceAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	envStore := environment.Store{Root: store.Root}
-	rec.BackendConfigVersion = "lima-config/old"
+	rec.MachineIdentityID = "sha256:" + strings.Repeat("0", 64)
 	rec.Status = "running"
 	if err := envStore.Save(rec); err != nil {
 		t.Fatal(err)
@@ -285,10 +609,10 @@ func TestRecreateEnvironmentGuardForceAndRefresh(t *testing.T) {
 	if rebuilt.Name != "rebuild" || rebuilt.ID != rec.ID {
 		t.Fatalf("recreate must keep name and record id: %+v", rebuilt)
 	}
-	if rebuilt.BackendConfigVersion != backendConfigVersion("lima") {
-		t.Fatalf("recreate must refresh backend config version: %+v", rebuilt)
+	if rebuilt.MachineIdentityID == rec.MachineIdentityID || rebuilt.BootConfigurationID == "" {
+		t.Fatalf("recreate must refresh machine and boot identities: %+v", rebuilt)
 	}
-	if rebuilt.ImageRef != rec.ImageRef || rebuilt.Workspace != rec.Workspace {
+	if rebuilt.ImageRef != rec.ImageRef || rebuilt.HostWorkspace() != rec.HostWorkspace() {
 		t.Fatalf("recreate must keep pinned declaration and workspace: %+v", rebuilt)
 	}
 	if rebuilt.Status != "ready" {

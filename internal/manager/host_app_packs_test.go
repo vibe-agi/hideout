@@ -318,7 +318,7 @@ func TestHostAppIdentityReviewReceivesCompleteDerivedForbiddenRoots(t *testing.T
 	workspace := filepath.Join(root, "workspace")
 	if _, err := (environment.Store{Root: store.Root}).Create(environment.Spec{
 		Name: "host-app-overlap", ImageRef: environment.BuiltinBaseImage, Profile: "privacy",
-		Backend: "native", Workspace: workspace, GuestWorkspace: "/workspace",
+		Backend: "native", Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: workspace, BoundGuestRoot: "/workspace",
 	}); err != nil {
 		t.Fatal(err)
 	}

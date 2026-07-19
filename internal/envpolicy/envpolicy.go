@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -19,12 +20,14 @@ type Result struct {
 }
 
 type Spec struct {
-	Profile          profile.Profile
-	ProfileDir       string
-	SessionDir       string
-	ShimDir          string
-	GitSafeDirectory string
-	HostEnv          []string
+	Profile                profile.Profile
+	ProfileDir             string
+	SessionDir             string
+	ShimDir                string
+	GitConfigPath          string
+	GitSafeDirectories     []string
+	DisableGitPreloadIndex bool
+	HostEnv                []string
 }
 
 func Build(spec Spec) Result {
@@ -60,6 +63,10 @@ func Build(spec Spec) Result {
 		}
 	}
 
+	gitConfigPath := spec.GitConfigPath
+	if gitConfigPath == "" {
+		gitConfigPath = filepath.Join(spec.ProfileDir, "home", ".gitconfig")
+	}
 	synthetic := map[string]string{
 		"HOME":              filepath.Join(spec.ProfileDir, "home"),
 		"USER":              spec.Profile.Identity.User,
@@ -69,7 +76,7 @@ func Build(spec Spec) Result {
 		"XDG_CONFIG_HOME":   filepath.Join(spec.ProfileDir, "config"),
 		"XDG_CACHE_HOME":    filepath.Join(spec.ProfileDir, "cache"),
 		"XDG_DATA_HOME":     filepath.Join(spec.ProfileDir, "data"),
-		"GIT_CONFIG_GLOBAL": filepath.Join(spec.ProfileDir, "home", ".gitconfig"),
+		"GIT_CONFIG_GLOBAL": gitConfigPath,
 		"TZ":                spec.Profile.Identity.Timezone,
 		"LANG":              spec.Profile.Identity.Locale,
 		"LC_ALL":            spec.Profile.Identity.Locale,
@@ -78,15 +85,25 @@ func Build(spec Spec) Result {
 	if spec.ShimDir != "" {
 		synthetic["PATH"] = spec.ShimDir + ":" + defaultToolPath
 	}
-	if spec.GitSafeDirectory != "" {
-		// The mounted workspace is already explicit operator-granted authority.
-		// Trust only that Git root and repositories below it; never disable the
-		// ownership check globally with safe.directory=*.
-		synthetic["GIT_CONFIG_COUNT"] = "2"
-		synthetic["GIT_CONFIG_KEY_0"] = "safe.directory"
-		synthetic["GIT_CONFIG_VALUE_0"] = spec.GitSafeDirectory
-		synthetic["GIT_CONFIG_KEY_1"] = "safe.directory"
-		synthetic["GIT_CONFIG_VALUE_1"] = strings.TrimRight(spec.GitSafeDirectory, "/") + "/*"
+	gitConfigCount := len(spec.GitSafeDirectories)
+	if spec.DisableGitPreloadIndex {
+		gitConfigCount++
+	}
+	if gitConfigCount > 0 {
+		// Portal tuning changes scheduling only. Trust entries still come from
+		// verified run authority and never synthesize child wildcards.
+		synthetic["GIT_CONFIG_COUNT"] = strconv.Itoa(gitConfigCount)
+		offset := 0
+		if spec.DisableGitPreloadIndex {
+			synthetic["GIT_CONFIG_KEY_0"] = "core.preloadIndex"
+			synthetic["GIT_CONFIG_VALUE_0"] = "false"
+			offset = 1
+		}
+		for index, directory := range spec.GitSafeDirectories {
+			suffix := strconv.Itoa(index + offset)
+			synthetic["GIT_CONFIG_KEY_"+suffix] = "safe.directory"
+			synthetic["GIT_CONFIG_VALUE_"+suffix] = directory
+		}
 	}
 	for k, v := range spec.Profile.Env.Public {
 		if !isHardBlockedEnv(k) && !matchesAny(k, spec.Profile.Env.Deny) {

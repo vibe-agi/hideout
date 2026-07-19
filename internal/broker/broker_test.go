@@ -1500,6 +1500,31 @@ func TestHandleRejectsInvalidCWDBeforeScripts(t *testing.T) {
 	}
 }
 
+func TestNormalizeBrokerRequestCWDMapsNativeHostWorkspaceToGuestAlias(t *testing.T) {
+	hostRoot := t.TempDir()
+	hostCWD := filepath.Join(hostRoot, "src", "pkg")
+	if err := os.MkdirAll(hostCWD, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server := Server{Backend: "native", HostRoot: hostRoot, GuestRoot: "/workspace"}
+	req := Request{Args: map[string]any{"cwd": hostCWD}}
+	if err := server.normalizeBrokerRequestCWD(&req); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := req.Args["cwd"], "/workspace/src/pkg"; got != want {
+		t.Fatalf("normalized cwd=%v want %q", got, want)
+	}
+}
+
+func TestNormalizeBrokerRequestCWDDoesNotAcceptHostWorkspaceForGuestBackend(t *testing.T) {
+	hostRoot := t.TempDir()
+	server := Server{Backend: "lima", HostRoot: hostRoot, GuestRoot: "/workspace"}
+	req := Request{Args: map[string]any{"cwd": hostRoot}}
+	if err := server.normalizeBrokerRequestCWD(&req); err == nil || !strings.Contains(err.Error(), "outside workspace") {
+		t.Fatalf("expected guest backend to reject host cwd, got %v", err)
+	}
+}
+
 func TestHandleRejectsInvalidCWDWithoutAuditingRawPath(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
 	writer, err := audit.NewFile(auditPath)

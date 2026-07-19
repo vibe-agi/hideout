@@ -21,6 +21,9 @@ cleanup() {
   if [ -n "$pid_one" ]; then kill "$pid_one" 2>/dev/null || true; fi
   if [ -n "$pid_two" ]; then kill "$pid_two" 2>/dev/null || true; fi
   if [ -n "$pid_three" ]; then kill "$pid_three" 2>/dev/null || true; fi
+  if [ -n "$pid_one" ]; then wait "$pid_one" 2>/dev/null || true; fi
+  if [ -n "$pid_two" ]; then wait "$pid_two" 2>/dev/null || true; fi
+  if [ -n "$pid_three" ]; then wait "$pid_three" 2>/dev/null || true; fi
   HIDEOUT_STORE_ROOT="$store" "$bin" daemon stop >/dev/null 2>&1 || true
   rm -rf "$tmp"
 }
@@ -75,7 +78,7 @@ pid_three=$!
 wait_for_file "$tmp/three.started"
 
 running=$("$bin" env list)
-printf '%s\n' "$running" | awk -F '\t' 'NR > 1 && $5 == "running" && $6 == "3" { found=1 } END { exit !found }'
+printf '%s\n' "$running" | awk -F '\t' 'NR > 1 && $6 == "running" && $7 == "3" { found=1 } END { exit !found }'
 
 touch "$tmp/one.release"
 if ! wait "$pid_one"; then
@@ -85,7 +88,7 @@ fi
 pid_one=
 kill -0 "$pid_two"
 two_left=$("$bin" env list)
-printf '%s\n' "$two_left" | awk -F '\t' 'NR > 1 && $5 == "running" && $6 == "2" { found=1 } END { exit !found }'
+printf '%s\n' "$two_left" | awk -F '\t' 'NR > 1 && $6 == "running" && $7 == "2" { found=1 } END { exit !found }'
 
 touch "$tmp/two.release"
 if ! wait "$pid_two"; then
@@ -95,7 +98,7 @@ fi
 pid_two=
 kill -0 "$pid_three"
 one_left=$("$bin" env list)
-printf '%s\n' "$one_left" | awk -F '\t' 'NR > 1 && $5 == "running" && $6 == "1" { found=1 } END { exit !found }'
+printf '%s\n' "$one_left" | awk -F '\t' 'NR > 1 && $6 == "running" && $7 == "1" { found=1 } END { exit !found }'
 
 touch "$tmp/three.release"
 if ! wait "$pid_three"; then
@@ -104,7 +107,7 @@ if ! wait "$pid_three"; then
 fi
 pid_three=
 idle=$("$bin" env list)
-printf '%s\n' "$idle" | awk -F '\t' 'NR > 1 && $5 == "ready" && $6 == "0" { found=1 } END { exit !found }'
+printf '%s\n' "$idle" | awk -F '\t' 'NR > 1 && $6 == "ready" && $7 == "0" { found=1 } END { exit !found }'
 if grep -q 'already in use' "$tmp/one.log" "$tmp/two.log" "$tmp/three.log"; then
   echo "hideout: concurrent run regressed to the environment-busy error" >&2
   exit 1

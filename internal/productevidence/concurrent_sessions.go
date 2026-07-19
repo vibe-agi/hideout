@@ -121,7 +121,7 @@ type concurrentPerformanceEvidence struct {
 	} `json:"workspaceFixture"`
 }
 
-func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts map[string][]byte, expectedCommit string, expectedRuntime *RuntimeExpectation) error {
+func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts map[string][]byte, expectedCommit string, expectedPackage *PackageIdentity, expectedRuntime *RuntimeExpectation) error {
 	switch validator {
 	case ArtifactValidatorNone:
 		return nil
@@ -161,6 +161,10 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 			return err
 		}
 		return validateLifecyclePerformanceArtifact(data, expectedCommit, expectedRuntime)
+	case ArtifactValidatorSharedWorkspaceBehaviorV1:
+		return validateSharedWorkspaceBehaviorArtifact(refs, artifacts, expectedCommit, expectedPackage, expectedRuntime)
+	case ArtifactValidatorSharedWorkspacePerformanceV1:
+		return validateSharedWorkspacePerformanceArtifact(refs, artifacts, expectedCommit, expectedPackage, expectedRuntime)
 	default:
 		return fmt.Errorf("unsupported artifact validator %q", validator)
 	}

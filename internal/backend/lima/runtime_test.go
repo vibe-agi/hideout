@@ -39,6 +39,7 @@ func TestRuntimeObservationRunsBeforeSetupAsTargetDirectArgv(t *testing.T) {
 	if strings.Count(batch, runtimeBatchRecordPrefix) < 1 || !strings.Contains(batch, "command -v 'sh'") || !strings.Contains(batch, "'sh' '--version'") {
 		t.Fatalf("runtime observations were not emitted as one fixed batch: %s", batch)
 	}
+	assertMachineFactArgv(t, runner.calls[5].args)
 	if strings.Contains(batch, "/Users/alice") || !strings.Contains(batch, "PATH=/hideout/session/shims:/hideout/profile/home/.local/bin") {
 		t.Fatalf("runtime batch did not use target guest env: %s", batch)
 	}
@@ -194,6 +195,8 @@ func TestRuntimeInstanceInspectionBindsInventoryImageArchAndBoot(t *testing.T) {
 	if len(runner.calls) != 4 {
 		t.Fatalf("runtime instance observation calls=%+v", runner.calls)
 	}
+	assertMachineFactArgv(t, runner.calls[1].args)
+	assertMachineFactArgv(t, runner.calls[2].args)
 	assertDirectPackageInventoryArgv(t, runner.calls[3].args)
 }
 
@@ -310,6 +313,16 @@ func assertDirectPackageInventoryArgv(t *testing.T, args []string) {
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, " sh ") || strings.Contains(joined, "PATH=") || strings.Contains(joined, "/workspace") {
 		t.Fatalf("package inventory probe used shell, target PATH, or target workdir: %q", args)
+	}
+}
+
+func assertMachineFactArgv(t *testing.T, args []string) {
+	t.Helper()
+	if len(args) < 5 || args[0] != "shell" || args[2] != "--workdir" || args[3] != "/" {
+		t.Fatalf("machine fact probe did not use the guest root: %q", args)
+	}
+	if strings.Contains(strings.Join(args, " "), "/workspace") {
+		t.Fatalf("machine fact probe depended on the inactive workspace view: %q", args)
 	}
 }
 

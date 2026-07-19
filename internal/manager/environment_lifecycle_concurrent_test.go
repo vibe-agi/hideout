@@ -92,7 +92,7 @@ func TestEnvironmentStopReconcilesStaleOwnerAndExactRuntime(t *testing.T) {
 	now := time.Now().UTC()
 	data, err := json.Marshal(session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: id, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("a", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateRunning, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "sleep",
 	})
@@ -135,7 +135,7 @@ func TestEnvironmentStopRecoversFailedOwnerOnlyAfterInstanceStops(t *testing.T) 
 	now := time.Now().UTC()
 	data, err := json.Marshal(session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: id, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("b", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("b", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateFailed, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "bash", CleanupError: "cleanup proof failed",
 	})
@@ -178,7 +178,7 @@ func TestEnvironmentStopRetainsFailedOwnerWhenInstanceStopFails(t *testing.T) {
 	now := time.Now().UTC()
 	data, err := json.Marshal(session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: id, EnvironmentID: record.ID,
-		Profile: record.Profile, Backend: record.Backend, WorkspaceID: strings.Repeat("c", 64),
+		Profile: record.Profile, Backend: record.Backend, WorkspaceID: "wrk_" + strings.Repeat("c", 64), SessionSnapshotID: testSessionSnapshotID(),
 		State: session.OwnerStateFailed, TerminalMode: session.TerminalNone,
 		StartedAt: now, UpdatedAt: now, CommandClass: "bash", CleanupError: "cleanup proof failed",
 	})
@@ -304,7 +304,7 @@ func concurrentLifecycleFixture(t *testing.T) (Core, environment.Store, environm
 	store := environment.Store{Root: profileStore.Root}
 	record, err := store.Create(environment.Spec{
 		Name: "concurrent-lifecycle", ImageRef: environment.BuiltinBaseImage,
-		Profile: "default", Backend: "lima", Workspace: t.TempDir(), GuestWorkspace: "/workspace",
+		Profile: "default", Backend: "lima", Mode: environment.ModeWorkspaceBound, MachineIdentityID: testEnvironmentMachineIdentityID(), BootConfigurationID: testEnvironmentBootConfigurationID(), BoundWorkspace: t.TempDir(), BoundGuestRoot: "/workspace",
 		InstanceName: "hideout-concurrent-lifecycle",
 	})
 	if err != nil {
@@ -326,7 +326,7 @@ func acquireLifecycleOwner(t *testing.T, store environment.Store, record environ
 	owner, err := session.AcquireOwner(store.OwnerRoot(record.ID), session.OwnerRecord{
 		Schema: session.ActiveSessionSchema, SessionID: "ses_20260716T120000Z_0123456789abcdef",
 		EnvironmentID: record.ID, Profile: record.Profile, Backend: record.Backend,
-		WorkspaceID: strings.Repeat("a", 64), State: session.OwnerStateRunning,
+		WorkspaceID: "wrk_" + strings.Repeat("a", 64), SessionSnapshotID: testSessionSnapshotID(), State: session.OwnerStateRunning,
 		TerminalMode: session.TerminalPTY, StartedAt: now, UpdatedAt: now, CommandClass: "bash",
 	})
 	if err != nil {

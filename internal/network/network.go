@@ -50,14 +50,22 @@ type EnvSecretResolver struct {
 type Spec struct {
 	Profile          profile.Profile
 	Backend          string
-	SessionDir       string
-	GuestSessionDir  string
+	ArtifactDir      string
+	GuestArtifactDir string
+	SecretDir        string
+	GuestSecretDir   string
 	TargetEnv        []string
 	Resolver         SecretResolver
 	LocalBypassHosts []string
 	Verified         bool
 	RuntimeVerify    bool
 	DryRun           bool
+	// GatewayProxyURL is a Hideout-minted, guest-facing SOCKS endpoint. When
+	// present, the resolved operator proxy remains host-only and this URL is the
+	// only proxy material written into the guest session handoff.
+	GatewayProxyURL string
+	GatewayID       string
+	ConfigurationID string
 }
 
 type Plan struct {
@@ -80,15 +88,19 @@ type Plan struct {
 	CleanupPath              string   `json:"-"`
 	GuestCleanupPath         string   `json:"guestCleanupPath"`
 	ConfigurationFingerprint string   `json:"-"`
+	ConfigurationID          string   `json:"-"`
+	UpstreamProxyURL         string   `json:"-"`
+	GatewayID                string   `json:"-"`
 }
 
 type ServiceStatus string
 
 const (
-	ServiceStarting ServiceStatus = "starting"
-	ServiceReady    ServiceStatus = "ready"
-	ServiceCleaning ServiceStatus = "cleaning"
-	ServiceFailed   ServiceStatus = "failed"
+	ServiceStarting  ServiceStatus = "starting"
+	ServiceSwitching ServiceStatus = "switching"
+	ServiceReady     ServiceStatus = "ready"
+	ServiceCleaning  ServiceStatus = "cleaning"
+	ServiceFailed    ServiceStatus = "failed"
 )
 
 type ServiceState struct {
@@ -97,7 +109,10 @@ type ServiceState struct {
 	Kind                     string        `json:"kind"`
 	Status                   ServiceStatus `json:"status"`
 	ConfigurationFingerprint string        `json:"configurationFingerprint"`
+	ConfigurationID          string        `json:"configurationId"`
 	Mode                     string        `json:"mode"`
+	GatewayID                string        `json:"gatewayId"`
+	Resolver                 string        `json:"resolver,omitempty"`
 	BootID                   string        `json:"bootId,omitempty"`
 	StartedAt                time.Time     `json:"startedAt"`
 	UpdatedAt                time.Time     `json:"updatedAt,omitempty"`
@@ -107,25 +122,27 @@ type ServiceState struct {
 var environmentIDPattern = regexp.MustCompile(`^env_[a-z0-9]+$`)
 
 func Prepare(spec Spec) (Plan, error) {
-	if spec.SessionDir == "" {
-		return Plan{}, errors.New("session directory is required")
+	if spec.ArtifactDir == "" {
+		return Plan{}, errors.New("network artifact directory is required")
 	}
-	guestSessionDir := spec.GuestSessionDir
-	if guestSessionDir == "" {
-		guestSessionDir = "/hideout/session"
+	guestArtifactDir := spec.GuestArtifactDir
+	if guestArtifactDir == "" {
+		guestArtifactDir = "/hideout/session"
 	}
 	if ContainsProxyEnv(spec.TargetEnv) {
 		return Plan{}, errors.New("target env contains proxy variables")
 	}
 	plan := Plan{
 		Mode:               spec.Profile.Network.Mode,
+		GatewayID:          strings.TrimSpace(spec.GatewayID),
+		ConfigurationID:    strings.TrimSpace(spec.ConfigurationID),
 		Verified:           spec.Profile.Network.Mode == ModeDirect,
-		ManifestPath:       filepath.Join(spec.SessionDir, "network-plan.json"),
-		GuestManifestPath:  guestSessionDir + "/network-plan.json",
-		BootstrapPath:      filepath.Join(spec.SessionDir, "network", "bootstrap.sh"),
-		GuestBootstrapPath: guestSessionDir + "/network/bootstrap.sh",
-		CleanupPath:        filepath.Join(spec.SessionDir, "network", "cleanup.sh"),
-		GuestCleanupPath:   guestSessionDir + "/network/cleanup.sh",
+		ManifestPath:       filepath.Join(spec.ArtifactDir, "network-plan.json"),
+		GuestManifestPath:  guestArtifactDir + "/network-plan.json",
+		BootstrapPath:      filepath.Join(spec.ArtifactDir, "network", "bootstrap.sh"),
+		GuestBootstrapPath: guestArtifactDir + "/network/bootstrap.sh",
+		CleanupPath:        filepath.Join(spec.ArtifactDir, "network", "cleanup.sh"),
+		GuestCleanupPath:   guestArtifactDir + "/network/cleanup.sh",
 	}
 	if plan.Mode == "" {
 		plan.Mode = ModeDirect
@@ -197,15 +214,21 @@ func Prepare(spec Spec) (Plan, error) {
 		plan.Engine = ModeTun2Socks
 		plan.DNSPolicy = "guest DNS is redirected to the declared mediated resolver over the TUN privacy path; connected-subnet resolvers are blocked so no query bypasses the TUN; a connected-subnet-only environment is refused"
 		plan.ProxySecretRef = ref
+		plan.UpstreamProxyURL = secret
 		plan.ConfigurationFingerprint = networkFingerprint(plan, ref, secret)
 		plan.Verified = spec.Verified
 		plan.RuntimeVerify = spec.RuntimeVerify
 		if !plan.Verified {
 			if plan.RuntimeVerify {
-				secretPath := filepath.Join(spec.SessionDir, "network", "proxy.url")
-				plan.ProxySecretPath = secretPath
-				plan.GuestProxySecretPath = guestSessionDir + "/network/proxy.url"
-				if err := writeProxySecret(secretPath, secret, spec.DryRun); err != nil {
+				if err := assignProxySecretPaths(&plan, spec); err != nil {
+					_ = maybeWriteArtifacts(plan, spec.DryRun)
+					return plan, err
+				}
+				proxyMaterial, err := guestProxyMaterial(secret, spec.GatewayProxyURL)
+				if err != nil {
+					return plan, err
+				}
+				if err := writeProxySecret(plan.ProxySecretPath, proxyMaterial, spec.DryRun); err != nil {
 					return plan, err
 				}
 				plan.Reason = "tun2socks routing will be verified inside the guest before launching target command"
@@ -216,10 +239,15 @@ func Prepare(spec Spec) (Plan, error) {
 			_ = maybeWriteArtifacts(plan, spec.DryRun)
 			return plan, ErrRoutingUnverified
 		}
-		secretPath := filepath.Join(spec.SessionDir, "network", "proxy.url")
-		plan.ProxySecretPath = secretPath
-		plan.GuestProxySecretPath = guestSessionDir + "/network/proxy.url"
-		if err := writeProxySecret(secretPath, secret, spec.DryRun); err != nil {
+		if err := assignProxySecretPaths(&plan, spec); err != nil {
+			_ = maybeWriteArtifacts(plan, spec.DryRun)
+			return plan, err
+		}
+		proxyMaterial, err := guestProxyMaterial(secret, spec.GatewayProxyURL)
+		if err != nil {
+			return plan, err
+		}
+		if err := writeProxySecret(plan.ProxySecretPath, proxyMaterial, spec.DryRun); err != nil {
 			return plan, err
 		}
 		plan.Reason = "tun2socks routing verified"
@@ -227,6 +255,36 @@ func Prepare(spec Spec) (Plan, error) {
 	default:
 		return plan, fmt.Errorf("unsupported network mode %q", plan.Mode)
 	}
+}
+
+func guestProxyMaterial(upstream, gateway string) (string, error) {
+	if strings.TrimSpace(gateway) == "" {
+		return upstream, nil
+	}
+	if err := validateProxyURL(gateway); err != nil {
+		return "", fmt.Errorf("invalid environment network gateway: %w", err)
+	}
+	parsed, _ := url.Parse(gateway)
+	if parsed.Scheme != "socks5" || parsed.User == nil {
+		return "", errors.New("environment network gateway requires authenticated socks5")
+	}
+	username := parsed.User.Username()
+	password, passwordSet := parsed.User.Password()
+	if username == "" || !passwordSet || password == "" {
+		return "", errors.New("environment network gateway credential is incomplete")
+	}
+	return gateway, nil
+}
+
+func assignProxySecretPaths(plan *Plan, spec Spec) error {
+	if strings.TrimSpace(spec.SecretDir) == "" || strings.TrimSpace(spec.GuestSecretDir) == "" {
+		plan.FailClosed = true
+		plan.Reason = "tun2socks requires explicit host and guest session-secret directories"
+		return errors.New(plan.Reason)
+	}
+	plan.ProxySecretPath = filepath.Join(spec.SecretDir, "network", "proxy.url")
+	plan.GuestProxySecretPath = spec.GuestSecretDir + "/network/proxy.url"
+	return nil
 }
 
 func networkFingerprint(plan Plan, secretRef, secret string) string {
@@ -275,7 +333,10 @@ func BuildServiceState(environmentID string, plan Plan, status ServiceStatus, bo
 		Kind:                     "network",
 		Status:                   status,
 		ConfigurationFingerprint: plan.ConfigurationFingerprint,
+		ConfigurationID:          plan.ConfigurationID,
 		Mode:                     plan.Mode,
+		GatewayID:                plan.GatewayID,
+		Resolver:                 plan.MediatedResolver,
 		BootID:                   bootID,
 		StartedAt:                startedAt.UTC(),
 		UpdatedAt:                now,
@@ -300,21 +361,30 @@ func (s ServiceState) Validate() error {
 		return fmt.Errorf("unsupported environment service kind %q", s.Kind)
 	}
 	switch s.Status {
-	case ServiceStarting, ServiceReady, ServiceCleaning, ServiceFailed:
+	case ServiceStarting, ServiceSwitching, ServiceReady, ServiceCleaning, ServiceFailed:
 	default:
 		return fmt.Errorf("invalid environment service status %q", s.Status)
 	}
 	if len(s.ConfigurationFingerprint) != 64 || !lowerHex(s.ConfigurationFingerprint) {
 		return errors.New("environment service configuration fingerprint is invalid")
 	}
+	if !strings.HasPrefix(s.ConfigurationID, "sha256:") || len(s.ConfigurationID) != len("sha256:")+64 || !lowerHex(strings.TrimPrefix(s.ConfigurationID, "sha256:")) {
+		return errors.New("environment service configuration id is invalid")
+	}
 	if s.Mode != ModeDirect && s.Mode != ModeTun2Socks {
 		return fmt.Errorf("unsupported environment service mode %q", s.Mode)
+	}
+	if strings.TrimSpace(s.GatewayID) == "" || len(s.GatewayID) > 128 || strings.ContainsAny(s.GatewayID, " \t\r\n") {
+		return errors.New("environment service gateway identity is invalid")
+	}
+	if s.Mode == ModeTun2Socks && net.ParseIP(s.Resolver) == nil {
+		return errors.New("privacy environment service resolver is invalid")
 	}
 	if s.BootID != "" && !serviceBootIDPattern.MatchString(s.BootID) {
 		return errors.New("environment service boot identity is invalid")
 	}
-	if (s.Status == ServiceReady || s.Status == ServiceCleaning) && s.BootID == "" {
-		return errors.New("ready or cleaning environment service must be bound to a guest boot identity")
+	if (s.Status == ServiceSwitching || s.Status == ServiceReady || s.Status == ServiceCleaning) && s.BootID == "" {
+		return errors.New("switching, ready, or cleaning environment service must be bound to a guest boot identity")
 	}
 	if s.StartedAt.IsZero() || s.UpdatedAt.IsZero() || s.UpdatedAt.Before(s.StartedAt) {
 		return errors.New("environment service timestamps are invalid")
@@ -587,6 +657,12 @@ func BootstrapScript(plan Plan) string {
 		fmt.Fprintf(&b, "proxy_url=$(sed -n '1p' %s)\n", shellQuote(proxyPath))
 		fmt.Fprintf(&b, "rm -f %s\n", shellQuote(proxyPath))
 		b.WriteString("[ -n \"$proxy_url\" ] || { echo 'hideout: proxy secret is empty' >&2; exit 127; }\n")
+		b.WriteString("gateway_config=/run/hideout/network/tun2socks.yaml\n")
+		b.WriteString("umask 077\n")
+		b.WriteString("mkdir -p /run/hideout/network\n")
+		b.WriteString("printf 'device: tun://hideout0\\nproxy: %s\\nloglevel: warn\\n' \"$proxy_url\" > \"$gateway_config\"\n")
+		b.WriteString("chmod 0600 \"$gateway_config\"\n")
+		b.WriteString("unset proxy_url\n")
 		b.WriteString("default_route=$(ip route show default | head -n 1 || true)\n")
 		b.WriteString("printf '%s\\n' \"$default_route\" > /hideout/session/network/default-route.before\n")
 		b.WriteString("default_gw=$(printf '%s\\n' \"$default_route\" | awk '{for (i=1;i<=NF;i++) if ($i==\"via\") print $(i+1)}')\n")
@@ -595,6 +671,7 @@ func BootstrapScript(plan Plan) string {
 		for i, host := range plan.LocalBypassHosts {
 			writeLocalBypassSetup(&b, i, host)
 		}
+		b.WriteString("proxy_url=$(sed -n 's/^proxy: //p' \"$gateway_config\")\n")
 		b.WriteString("proxy_authority=${proxy_url#*://}\n")
 		b.WriteString("proxy_authority=${proxy_authority%%/*}\n")
 		b.WriteString("proxy_authority=${proxy_authority##*@}\n")
@@ -611,7 +688,7 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("    ;;\n")
 		b.WriteString("esac\n")
 		b.WriteString("proxy_route_existing=$(ip route show \"$proxy_route_host/32\" 2>/dev/null | head -n 1 || true)\n")
-		b.WriteString("if ip link show dev hideout0 >/dev/null 2>&1; then echo 'hideout: privacy network is already active or stale; wait for the active run or recreate the environment' >&2; exit 127; fi\n")
+		b.WriteString("if ip link show dev hideout0 >/dev/null 2>&1; then echo 'hideout: privacy network is already active or stale; wait for the active service transition, or stop and restart the environment to recover stale guest state' >&2; exit 127; fi\n")
 		b.WriteString("ip tuntap add mode tun dev hideout0 || { echo 'hideout: hideout0 creation failed' >&2; exit 127; }\n")
 		b.WriteString("ip addr add 198.18.0.1/15 dev hideout0 || { echo 'hideout: hideout0 address setup failed' >&2; exit 127; }\n")
 		b.WriteString("ip link set dev hideout0 up\n")
@@ -622,7 +699,8 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("else\n")
 		b.WriteString("  ip route replace \"$proxy_route_host\" dev \"$default_dev\" || { echo 'hideout: proxy endpoint route setup failed' >&2; exit 127; }\n")
 		b.WriteString("fi\n")
-		b.WriteString("tun2socks --device tun://hideout0 --proxy \"$proxy_url\" > /hideout/session/network/tun2socks.log 2>&1 &\n")
+		b.WriteString("tun2socks -config \"$gateway_config\" > /hideout/session/network/tun2socks.log 2>&1 &\n")
+		b.WriteString("unset proxy_url proxy_authority\n")
 		b.WriteString("echo $! > /hideout/session/network/tun2socks.pid\n")
 		b.WriteString("sleep 0.2\n")
 		b.WriteString("kill -0 \"$(cat /hideout/session/network/tun2socks.pid)\" 2>/dev/null || { echo 'hideout: tun2socks failed to start' >&2; exit 127; }\n")
@@ -692,7 +770,7 @@ func CleanupScript(plan Plan) string {
 		b.WriteString("  ip link set dev hideout0 down 2>/dev/null || true\n")
 		b.WriteString("  ip tuntap del mode tun dev hideout0 2>/dev/null || true\n")
 		b.WriteString("fi\n")
-		b.WriteString("rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/proxy.url\n")
+		b.WriteString("rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/proxy.url /run/hideout/network/tun2socks.yaml\n")
 		b.WriteString("write_status 'tun2socks cleanup complete'\n")
 		b.WriteString("[ \"$tun2socks_stop_failed\" -eq 0 ] || exit 1\n")
 	default:

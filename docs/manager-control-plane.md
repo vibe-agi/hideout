@@ -203,12 +203,20 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   backend normalization, and workspace-to-guest mapping.
 - Manager Core owns reusable environment selection, environment runtime
   preparation, and environment start/finish status transitions for `run`.
+- Manager Core computes four independent configuration identities. Machine
+  identity alone selects/recreates a disk; boot configuration is reconciled by
+  the backend; environment services are switched online under a serialized
+  generation; session configuration is frozen into each new runtime child.
 - Manager Core owns run session lifecycle setup and teardown: session layout,
   profile/runtime identity paths, env policy materialization, audit writer
   activation, audit close, and sensitive session cleanup.
-- Manager Core owns run network setup: direct/tun2socks plan preparation,
-  hidden proxy secret materialization, backend-specific runtime verification
-  flags, and `network.setup` audit.
+- Manager Core owns the environment network service: an authenticated
+  host-loopback gateway selects direct or operator-provided upstream egress;
+  guest `tun2socks` points only at that gateway; mediated DNS and upstream
+  changes switch online with rollback and current-boot verification. A
+  direct/proxy posture transition keeps the same VM but requires exclusive
+  target-session ownership because routing is VM-global. Proxy material is
+  absent from target env, service state, and process argv.
 - Manager Core owns run data plane setup and teardown before backend execution:
   broker token and endpoint lifecycle, broker endpoint file, command proxy shim
   materialization, HostFS effective policy/service, HostFS guest helper

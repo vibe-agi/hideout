@@ -146,7 +146,6 @@ type projectionGrantBinding struct {
 	Profile         string
 	Backend         string
 	RunID           string
-	HostWorkspace   string
 	WorkspaceID     string
 	EnvironmentID   string
 	ProfileID       string
@@ -163,12 +162,7 @@ type projectionGrantBinding struct {
 	HostFSOwner     string
 }
 
-func projectionGrantBindingForRun(runSession RunSession, appBinding hostcap.OpenResourceBinding, command string) projectionGrantBinding {
-	workspace := filepath.Clean(runSession.Plan.Workspace)
-	if resolved, err := filepath.EvalSymlinks(workspace); err == nil {
-		workspace = resolved
-	}
-	workspaceSum := sha256.Sum256([]byte(workspace))
+func projectionGrantBindingForRun(runSession RunSession, authority runSessionWorkspaceAuthority, appBinding hostcap.OpenResourceBinding, command string) projectionGrantBinding {
 	environmentID := strings.TrimSpace(runSession.Environment.Record.ID)
 	if environmentID == "" {
 		environmentID = "recordless:" + runSession.Layout.ID
@@ -184,8 +178,7 @@ func projectionGrantBindingForRun(runSession RunSession, appBinding hostcap.Open
 		Profile:         runSession.Plan.ProfileName,
 		Backend:         runSession.Plan.Backend,
 		RunID:           runSession.Layout.ID,
-		HostWorkspace:   workspace,
-		WorkspaceID:     fmt.Sprintf("wrk_%x", workspaceSum[:12]),
+		WorkspaceID:     authority.WorkspaceID,
 		EnvironmentID:   environmentID,
 		ProfileID:       runSession.Plan.RuntimeProfile.Metadata["profileId"],
 		IdentityID:      runSession.Plan.RuntimeProfile.Metadata["identityId"],
@@ -216,8 +209,8 @@ func projectionDecisionResourceClasses(kinds []hostcap.ResourceKind) string {
 	return strings.Join(classes, ",")
 }
 
-func projectionGrantScopeBase(runSession RunSession) hostcap.GrantScope {
-	return projectionGrantBindingForRun(runSession, hostcap.OpenResourceBinding{}, "").scope()
+func projectionGrantScopeBase(runSession RunSession, authority runSessionWorkspaceAuthority) hostcap.GrantScope {
+	return projectionGrantBindingForRun(runSession, authority, hostcap.OpenResourceBinding{}, "").scope()
 }
 
 func (b projectionGrantBinding) decisionID() string {

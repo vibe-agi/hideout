@@ -6,6 +6,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.2.1
 	github.com/creack/pty v1.1.24
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/crypto v0.53.0

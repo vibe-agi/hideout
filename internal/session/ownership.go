@@ -57,58 +57,62 @@ var (
 	ErrOwnerCleanupFailed = errors.New("session cleanup is not proved complete")
 
 	ownerEnvironmentIDPattern = regexp.MustCompile(`^env_[a-z0-9]+$`)
-	ownerWorkspaceIDPattern   = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	ownerWorkspaceIDPattern   = regexp.MustCompile(`^wrk_[a-f0-9]{64}$`)
+	ownerSnapshotIDPattern    = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 	ownerCommandClassPattern  = regexp.MustCompile(`^[A-Za-z0-9._+-]{1,128}$`)
 )
 
 // OwnerRecord is durable, non-secret metadata. Process identity and lock paths
 // are deliberately absent: owner liveness comes only from the kernel lock.
 type OwnerRecord struct {
-	Schema        string       `json:"schema"`
-	SessionID     string       `json:"id"`
-	EnvironmentID string       `json:"environmentId"`
-	Profile       string       `json:"profile"`
-	Backend       string       `json:"backend"`
-	WorkspaceID   string       `json:"workspaceId,omitempty"`
-	State         OwnerState   `json:"state"`
-	TerminalMode  TerminalMode `json:"terminalMode"`
-	StartedAt     time.Time    `json:"startedAt"`
-	UpdatedAt     time.Time    `json:"updatedAt"`
-	CommandClass  string       `json:"commandClass,omitempty"`
-	CleanupError  string       `json:"cleanupError,omitempty"`
+	Schema            string       `json:"schema"`
+	SessionID         string       `json:"id"`
+	EnvironmentID     string       `json:"environmentId"`
+	Profile           string       `json:"profile"`
+	Backend           string       `json:"backend"`
+	WorkspaceID       string       `json:"workspaceId,omitempty"`
+	SessionSnapshotID string       `json:"sessionSnapshotId"`
+	State             OwnerState   `json:"state"`
+	TerminalMode      TerminalMode `json:"terminalMode"`
+	StartedAt         time.Time    `json:"startedAt"`
+	UpdatedAt         time.Time    `json:"updatedAt"`
+	CommandClass      string       `json:"commandClass,omitempty"`
+	CleanupError      string       `json:"cleanupError,omitempty"`
 }
 
 type ActiveSessionSummary struct {
-	Schema        string       `json:"schema"`
-	ID            string       `json:"id"`
-	EnvironmentID string       `json:"environmentId"`
-	Profile       string       `json:"profile"`
-	Backend       string       `json:"backend"`
-	WorkspaceID   string       `json:"workspaceId,omitempty"`
-	State         OwnerState   `json:"state"`
-	OwnerStatus   OwnerStatus  `json:"ownerStatus"`
-	TerminalMode  TerminalMode `json:"terminalMode"`
-	StartedAt     time.Time    `json:"startedAt"`
-	UpdatedAt     time.Time    `json:"updatedAt,omitempty"`
-	CommandClass  string       `json:"commandClass,omitempty"`
-	CleanupError  string       `json:"cleanupError,omitempty"`
+	Schema            string       `json:"schema"`
+	ID                string       `json:"id"`
+	EnvironmentID     string       `json:"environmentId"`
+	Profile           string       `json:"profile"`
+	Backend           string       `json:"backend"`
+	WorkspaceID       string       `json:"workspaceId,omitempty"`
+	SessionSnapshotID string       `json:"sessionSnapshotId,omitempty"`
+	State             OwnerState   `json:"state"`
+	OwnerStatus       OwnerStatus  `json:"ownerStatus"`
+	TerminalMode      TerminalMode `json:"terminalMode"`
+	StartedAt         time.Time    `json:"startedAt"`
+	UpdatedAt         time.Time    `json:"updatedAt,omitempty"`
+	CommandClass      string       `json:"commandClass,omitempty"`
+	CleanupError      string       `json:"cleanupError,omitempty"`
 }
 
 func (r OwnerRecord) Summary(status OwnerStatus) ActiveSessionSummary {
 	return ActiveSessionSummary{
-		Schema:        ActiveSessionSchema,
-		ID:            r.SessionID,
-		EnvironmentID: r.EnvironmentID,
-		Profile:       r.Profile,
-		Backend:       r.Backend,
-		WorkspaceID:   r.WorkspaceID,
-		State:         r.State,
-		OwnerStatus:   status,
-		TerminalMode:  r.TerminalMode,
-		StartedAt:     r.StartedAt,
-		UpdatedAt:     r.UpdatedAt,
-		CommandClass:  r.CommandClass,
-		CleanupError:  r.CleanupError,
+		Schema:            ActiveSessionSchema,
+		ID:                r.SessionID,
+		EnvironmentID:     r.EnvironmentID,
+		Profile:           r.Profile,
+		Backend:           r.Backend,
+		WorkspaceID:       r.WorkspaceID,
+		SessionSnapshotID: r.SessionSnapshotID,
+		State:             r.State,
+		OwnerStatus:       status,
+		TerminalMode:      r.TerminalMode,
+		StartedAt:         r.StartedAt,
+		UpdatedAt:         r.UpdatedAt,
+		CommandClass:      r.CommandClass,
+		CleanupError:      r.CleanupError,
 	}
 }
 
@@ -461,8 +465,11 @@ func validateOwnerRecord(record OwnerRecord) error {
 	if strings.TrimSpace(record.Backend) == "" || len(record.Backend) > 32 || strings.TrimSpace(record.Backend) != record.Backend {
 		return errors.New("owner backend is required and bounded")
 	}
-	if record.WorkspaceID != "" && !ownerWorkspaceIDPattern.MatchString(record.WorkspaceID) {
-		return errors.New("owner workspaceId must be a lowercase SHA-256")
+	if !ownerWorkspaceIDPattern.MatchString(record.WorkspaceID) {
+		return errors.New("owner workspaceId must be an opaque workspace identity")
+	}
+	if !ownerSnapshotIDPattern.MatchString(record.SessionSnapshotID) {
+		return errors.New("owner sessionSnapshotId must identify a canonical session snapshot")
 	}
 	switch record.State {
 	case OwnerStatePreparing, OwnerStateRunning, OwnerStateCleaning, OwnerStateFailed:

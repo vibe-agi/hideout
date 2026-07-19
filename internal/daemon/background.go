@@ -102,15 +102,17 @@ func (r *bgRegistry) submit(op string, run func(context.Context) error) (string,
 
 func (r *bgRegistry) setStatus(id, status string) {
 	r.mu.Lock()
-	var op string
-	if rec, ok := r.ops[id]; ok {
-		rec.Status = status
-		op = rec.Op
+	rec, ok := r.ops[id]
+	if !ok {
+		r.mu.Unlock()
+		return
 	}
+	// Publish the durable/user-visible notice before making the registry status
+	// observable. Status readers can therefore use a terminal status as a barrier:
+	// the matching notice and event have already been emitted when they see it.
+	r.publishStatus(id, rec.Op, status)
+	rec.Status = status
 	r.mu.Unlock()
-	if op != "" {
-		r.publishStatus(id, op, status)
-	}
 }
 
 func (r *bgRegistry) publishStatus(id, op, status string) {
