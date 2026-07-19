@@ -72,8 +72,10 @@ func TestSetupFreshReviewConfirmAndApply(t *testing.T) {
 	for _, want := range []string{
 		"Set up Hideout", "Lima virtual machine", "developer-standard 2026.07.0",
 		"read/write at /workspace", "hidden unless you grant access",
+		"projects share one default VM", "hideout env create",
 		"does not hide your network origin", "Audit: always on",
 		"no VM start or runtime download", "Hideout configuration is ready",
+		"hideout run -- code .",
 		"hideout run -- codex --version",
 	} {
 		if !strings.Contains(output, want) {

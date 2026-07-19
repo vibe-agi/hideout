@@ -22,10 +22,13 @@ existing Manager planner, policy checks, decision workflow, and apply path.
 There is no generic host-command or capability fallback.
 
 `internal/operatorintent` owns and tests this grammar contract. The top-level
-CLI currently maps only `show connection` and `connect` through this intent
-layer. Existing commands retain their current dispatch; the remaining intent
-entries are not activated until each has an explicit Manager plan mapping and
-behavioral parity tests.
+CLI currently maps `setup`, `show connection`, `connect`, and profile-scoped
+`allow`/`deny` through this intent layer; `allow`/`deny` reuse the Manager
+profile HostFS planner and carry an authority-parity test against the advanced
+`profile fs` surface. `--once` and `--for-this-project` parse but fail closed
+pending the scope design recorded in `docs/DEBT.md`. Existing commands retain
+their current dispatch; the remaining intent entries are not activated until
+each has an explicit Manager plan mapping and behavioral parity tests.
 
 ## Model Inventory
 

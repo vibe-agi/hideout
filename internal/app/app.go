@@ -109,7 +109,7 @@ func (a app) run(args []string) error {
 		return a.initCommand(args[1:])
 	case "run":
 		return a.runCommand(args[1:], false)
-	case "setup", "show", "connect":
+	case "setup", "show", "connect", "allow", "deny":
 		return a.operatorIntent(args)
 	case "explain":
 		return a.runCommand(args[1:], true)
@@ -176,6 +176,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout show connection [for profile <name>]")
 	fmt.Fprintln(a.stdout, "  hideout connect directly [for profile <name>]")
 	fmt.Fprintln(a.stdout, "  hideout connect through <proxy-secret> [using <resolver>] [for profile <name>]")
+	fmt.Fprintln(a.stdout, "  hideout allow read|write|all <path> [--for-profile <name>]")
+	fmt.Fprintln(a.stdout, "  hideout deny read|write|all <path> [--for-profile <name>]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "First run:")
 	fmt.Fprintln(a.stdout, "  hideout setup")
@@ -4556,6 +4558,8 @@ func (a app) operatorIntent(args []string) error {
 	switch value := intent.(type) {
 	case operatorintent.Setup:
 		return a.setupCommand()
+	case operatorintent.Access:
+		return a.operatorAccess(value)
 	case operatorintent.Show:
 		store, err := profile.DefaultStore()
 		if err != nil {

@@ -659,6 +659,11 @@ mutate unrelated stores directly.
 - A resident `hideoutd` is implemented. Executable CLI runs are daemon-only;
   non-executable planning and UI observation may retain explicitly documented
   local behavior without becoming a run owner.
+- Daemon auto-start replaces a stale build in place: when the serving daemon
+  reports a different provable build identity and zero live sessions, the CLI
+  performs the ordered shutdown and starts its own build. A daemon with live
+  sessions or without a provable build identity is never stopped automatically;
+  those cases keep the fail-closed mismatch error and its recovery guidance.
 
 ### Implemented Resident Runtime
 

@@ -19,6 +19,7 @@ func TestParseNaturalOperatorIntents(t *testing.T) {
 		{[]string{"connect", "through", "charles"}, Connect{Connection: ConnectionProxy, ProxyName: "charles"}},
 		{[]string{"connect", "through", "charles", "using", "1.1.1.1"}, Connect{Connection: ConnectionProxy, ProxyName: "charles", Resolver: "1.1.1.1"}},
 		{[]string{"connect", "through", "charles", "using", "1.1.1.1", "for", "profile", "work"}, Connect{Connection: ConnectionProxy, ProxyName: "charles", Resolver: "1.1.1.1", ProfileName: "work"}},
+		{[]string{"allow", "read", "/Users/alice/spec.md"}, Access{Effect: AccessAllow, Operation: AccessRead, Path: "/Users/alice/spec.md", Scope: ScopeProfile}},
 		{[]string{"allow", "read", "/Users/alice/spec.md", "--for-this-project"}, Access{Effect: AccessAllow, Operation: AccessRead, Path: "/Users/alice/spec.md", Scope: ScopeProject}},
 		{[]string{"deny", "all", "/Users/alice/.ssh", "--for-profile", "work"}, Access{Effect: AccessDeny, Operation: AccessAll, Path: "/Users/alice/.ssh", Scope: ScopeProfile, ProfileName: "work"}},
 		{[]string{"approve", "request", "dec_123"}, Request{Action: RequestApprove, ID: "dec_123"}},

@@ -4,6 +4,25 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
+# --quick is the inner-loop tier: vet, format, cached tests, lint, schema
+# syntax. It allows Go test caching so only changed packages re-run, and it
+# proves nothing about smokes, evidence, or packaging. Full gate0 (no flag)
+# remains required before any commit or claim.
+if [ "${1:-}" = "--quick" ]; then
+  go vet ./...
+  unformatted="$(gofmt -l cmd internal test)"
+  if [ -n "$unformatted" ]; then
+    echo "gate0 --quick: gofmt required for:" >&2
+    echo "$unformatted" >&2
+    exit 1
+  fi
+  go test ./...
+  markdownlint-cli2 'docs/*.md'
+  jq empty schemas/*.json
+  echo "gate0 --quick passed; run the full gate before commit"
+  exit 0
+fi
+
 go test -count=1 ./...
 scripts/test-formal-models.sh
 scripts/test-install-smoke.sh

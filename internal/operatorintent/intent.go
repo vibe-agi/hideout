@@ -98,7 +98,6 @@ const (
 type AccessScope string
 
 const (
-	ScopeAsk     AccessScope = "ask"
 	ScopeOnce    AccessScope = "once"
 	ScopeProject AccessScope = "project"
 	ScopeProfile AccessScope = "profile"
@@ -278,7 +277,10 @@ func parseAccess(effect AccessEffect, args []string) (Intent, error) {
 	if path == "" || strings.HasPrefix(path, "-") {
 		return nil, errors.New("access path is required before scope options")
 	}
-	intent := Access{Effect: effect, Operation: operation, Path: path, Scope: ScopeAsk}
+	// Durable profile policy is the default carrier: the operator typing the
+	// command is the confirmation. Session-, project-, and ask-scoped carriers
+	// are design-pending (docs/DEBT.md).
+	intent := Access{Effect: effect, Operation: operation, Path: path, Scope: ScopeProfile}
 	switch len(args) {
 	case 2:
 		return intent, nil

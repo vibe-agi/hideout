@@ -37,34 +37,104 @@ func TestEnsureStartedReturnsAuthenticatedReadyDaemonWithoutStarting(t *testing.
 	}
 }
 
-func TestEnsureStartedRejectsDaemonFromAnotherBuild(t *testing.T) {
-	for _, active := range []bool{false, true} {
-		t.Run(fmt.Sprintf("active=%t", active), func(t *testing.T) {
-			store := testStore(t)
-			var starts atomic.Int32
-			_, err := EnsureStarted(context.Background(), EnsureStartedOptions{
-				Store: store, BuildID: strings.Repeat("b", 64), Timeout: time.Second,
-				Probe: func(context.Context, string) (Status, error) {
-					status := readyDaemonStatus(store.Root)
-					status.BuildID = strings.Repeat("a", 64)
-					if active {
-						status.Sessions = []SessionStatus{{ID: "session-active"}}
-					}
-					return status, nil
-				},
-				Starter: func(DaemonStartRequest) error {
-					starts.Add(1)
-					return nil
-				},
-			})
-			if err == nil || !strings.Contains(err.Error(), "hideout daemon stop") {
-				t.Fatalf("EnsureStarted error = %v", err)
-			}
-			if starts.Load() != 0 {
-				t.Fatalf("mismatched daemon caused %d competing starts", starts.Load())
-			}
+func TestEnsureStartedReplacesIdleDaemonFromAnotherBuildOnly(t *testing.T) {
+	newBuild := strings.Repeat("b", 64)
+	oldBuild := strings.Repeat("a", 64)
+
+	t.Run("live-sessions-keep-fail-closed", func(t *testing.T) {
+		store := testStore(t)
+		var starts, stops atomic.Int32
+		_, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+			Store: store, BuildID: newBuild, Timeout: time.Second,
+			Probe: func(context.Context, string) (Status, error) {
+				status := readyDaemonStatus(store.Root)
+				status.BuildID = oldBuild
+				status.Sessions = []SessionStatus{{ID: "session-active"}}
+				return status, nil
+			},
+			Stopper: func(context.Context, string) error {
+				stops.Add(1)
+				return nil
+			},
+			Starter: func(DaemonStartRequest) error {
+				starts.Add(1)
+				return nil
+			},
 		})
-	}
+		if err == nil || !strings.Contains(err.Error(), "hideout daemon stop") {
+			t.Fatalf("EnsureStarted error = %v", err)
+		}
+		if starts.Load() != 0 || stops.Load() != 0 {
+			t.Fatalf("live-session daemon was disturbed: starts=%d stops=%d", starts.Load(), stops.Load())
+		}
+	})
+
+	t.Run("idle-daemon-is-replaced", func(t *testing.T) {
+		store := testStore(t)
+		var starts, stops atomic.Int32
+		var stopped, started atomic.Bool
+		status, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+			Store: store, BuildID: newBuild, Timeout: 2 * time.Second, PollInterval: time.Millisecond,
+			Probe: func(context.Context, string) (Status, error) {
+				if !stopped.Load() {
+					status := readyDaemonStatus(store.Root)
+					status.BuildID = oldBuild
+					return status, nil
+				}
+				if !started.Load() {
+					return Status{}, errors.New("no daemon is serving")
+				}
+				status := readyDaemonStatus(store.Root)
+				status.BuildID = newBuild
+				return status, nil
+			},
+			Stopper: func(context.Context, string) error {
+				stops.Add(1)
+				stopped.Store(true)
+				return nil
+			},
+			Starter: func(DaemonStartRequest) error {
+				starts.Add(1)
+				started.Store(true)
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("EnsureStarted: %v", err)
+		}
+		if status.BuildID != newBuild {
+			t.Fatalf("status build = %q, want the replacing CLI build", status.BuildID)
+		}
+		if stops.Load() != 1 || starts.Load() != 1 {
+			t.Fatalf("replacement path stops=%d starts=%d", stops.Load(), starts.Load())
+		}
+	})
+
+	t.Run("stop-failure-keeps-fail-closed", func(t *testing.T) {
+		store := testStore(t)
+		var starts atomic.Int32
+		_, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+			Store: store, BuildID: newBuild, Timeout: time.Second,
+			Probe: func(context.Context, string) (Status, error) {
+				status := readyDaemonStatus(store.Root)
+				status.BuildID = oldBuild
+				return status, nil
+			},
+			Stopper: func(context.Context, string) error {
+				return errors.New("ordered shutdown refused")
+			},
+			Starter: func(DaemonStartRequest) error {
+				starts.Add(1)
+				return nil
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "hideout daemon stop") || !strings.Contains(err.Error(), "automatic replacement failed") {
+			t.Fatalf("EnsureStarted error = %v", err)
+		}
+		if starts.Load() != 0 {
+			t.Fatalf("failed replacement caused %d competing starts", starts.Load())
+		}
+	})
 }
 
 func TestEnsureStartedRejectsDaemonWithoutBuildIdentity(t *testing.T) {

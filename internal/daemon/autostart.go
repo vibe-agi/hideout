@@ -58,7 +58,10 @@ type EnsureStartedOptions struct {
 	PollInterval time.Duration
 	Starter      DaemonStarter
 	Probe        DaemonReadinessProbe
-	Diagnostics  io.Writer
+	// Stopper performs the ordered shutdown used to replace an idle daemon
+	// from another build. Nil means the production StopRunning path.
+	Stopper     func(context.Context, string) error
+	Diagnostics io.Writer
 }
 
 // InternalDaemonServeArgs returns a fresh argv for the hidden daemon process role.
@@ -111,10 +114,14 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	if status, err := opts.Probe(waitCtx, opts.Store.Root); err == nil && daemonStatusServing(opts.Store.Root, status) {
-		if status.BuildID != opts.BuildID {
-			return Status{}, daemonBuildMismatchError(status)
+		if status.BuildID == opts.BuildID {
+			return status, nil
 		}
-		return status, nil
+		if err := replaceStaleBuildDaemon(waitCtx, opts, status); err != nil {
+			return Status{}, err
+		}
+		// The idle previous-build daemon completed ordered shutdown; continue
+		// into the normal start path below.
 	}
 
 	autostartLockPath := filepath.Join(dir, autostartLockName)
@@ -136,7 +143,9 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 		if status.BuildID == opts.BuildID {
 			return status, nil
 		}
-		return Status{}, daemonBuildMismatchError(status)
+		if err := replaceStaleBuildDaemon(waitCtx, opts, status); err != nil {
+			return Status{}, err
+		}
 	}
 
 	// A held daemon.lock means a daemon process already owns startup. Do not create a
@@ -243,6 +252,27 @@ func daemonBuildMismatchError(status Status) error {
 		running = running[:12]
 	}
 	return fmt.Errorf("daemon auto-start: running daemon build %s differs from the installed CLI; run hideout daemon stop, then retry", running)
+}
+
+// replaceStaleBuildDaemon performs an ordered shutdown of an idle daemon from
+// another build so the current CLI can start its own build in place. A daemon
+// with live sessions or without a provable build identity is never stopped
+// automatically; those cases keep the fail-closed mismatch error.
+func replaceStaleBuildDaemon(ctx context.Context, opts EnsureStartedOptions, status Status) error {
+	if strings.TrimSpace(status.BuildID) == "" || len(status.Sessions) != 0 {
+		return daemonBuildMismatchError(status)
+	}
+	stopper := opts.Stopper
+	if stopper == nil {
+		stopper = StopRunning
+	}
+	if opts.Diagnostics != nil {
+		fmt.Fprintln(opts.Diagnostics, "hideoutd build changed; replacing the idle previous-build daemon")
+	}
+	if err := stopper(ctx, opts.Store.Root); err != nil {
+		return fmt.Errorf("%s (automatic replacement failed: %s)", daemonBuildMismatchError(status).Error(), audit.RedactString(err.Error()))
+	}
+	return nil
 }
 
 func startDetachedDaemon(req DaemonStartRequest) error {
