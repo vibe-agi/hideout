@@ -51,3 +51,6 @@ Rules:
 | UI E2E lanes (TUI/browser/HostFS decision) are env-var gated and never run in the default gate | Before any UI behavior claim is made externally | 2026-07-11 verification |
 | HostFS per-op RPC performance ceiling for metadata-heavy workloads | Real-user reports of slow metadata operations on large repos | privacy-run-design |
 | 011-016 low-priority leftovers: two weak assertions in 011; human-channel redaction symmetry in 015 | Opportunistic; bundle lifecycle or decision-center rework touches those files | 011-016 acceptance |
+| `env list` shows `ready` for an environment whose lifecycle reconciliation is blocked (run/stop are refused while the listing looks healthy) | Next lifecycle UX slice, or the first user report of the mismatch | 2026-07-20 first-run walkthrough |
+| One guest write stages two `hostfs.write` decisions (per-op granularity: create + write); operator-facing count reads noisy | Decision-center UX iteration | 2026-07-20 first-run walkthrough |
+| Repeated write to a path with an undecided pending decision surfaces as a bare guest `EIO` with no typed explanation | HostFS write-overlay UX iteration | 2026-07-20 first-run walkthrough |

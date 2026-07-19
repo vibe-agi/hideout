@@ -4550,6 +4550,24 @@ func (a app) profileNetwork(store profile.Store, args []string) error {
 	return nil
 }
 
+// showTopicEquivalentCommand keeps the half-built natural grammar honest: a
+// parsed but unactivated topic names the advanced command that answers the
+// same question today instead of a dead-end "not mapped" error.
+func showTopicEquivalentCommand(topic operatorintent.ShowTopic) string {
+	switch topic {
+	case operatorintent.ShowStatus:
+		return "hideout doctor && hideout env list"
+	case operatorintent.ShowActivity:
+		return "hideout audit show --limit 20"
+	case operatorintent.ShowRequests:
+		return "hideout decision list"
+	case operatorintent.ShowAccess:
+		return "hideout profile fs default list"
+	default:
+		return "hideout help"
+	}
+}
+
 func (a app) operatorIntent(args []string) error {
 	intent, err := operatorintent.Parse(args)
 	if err != nil {
@@ -4561,14 +4579,14 @@ func (a app) operatorIntent(args []string) error {
 	case operatorintent.Access:
 		return a.operatorAccess(value)
 	case operatorintent.Show:
+		if value.Topic != operatorintent.ShowConnection {
+			return fmt.Errorf("show %s is not activated yet; use: %s", value.Topic, showTopicEquivalentCommand(value.Topic))
+		}
 		store, err := profile.DefaultStore()
 		if err != nil {
 			return err
 		}
 		core := manager.New(store)
-		if value.Topic != operatorintent.ShowConnection {
-			return fmt.Errorf("show %s is not mapped yet", value.Topic)
-		}
 		state, err := core.ProfileNetwork(value.ProfileName)
 		if err != nil {
 			return err

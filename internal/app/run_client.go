@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/daemon"
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
 	runsession "github.com/vibe-agi/hideout/internal/session"
@@ -113,7 +114,32 @@ func (a app) runViaDaemon(opts runOptions) error {
 	if opts.verbose && result.RunResult.Version != "" {
 		a.writeRunResultSummary(result.RunResult)
 	}
+	a.notifyPendingWriteDecisions(store.Root, result.Started.SessionID)
 	return runErr
+}
+
+// notifyPendingWriteDecisions surfaces staged HostFS writes left behind by
+// this session. Guest-visible write success without this line is a maze: the
+// operator would have to already know that decisions exist and where to look.
+// It must go through Manager's aggregated listing: operator-center decision
+// records are materialized lazily from the session overlay store, so reading
+// the decision store directly right after a run observes nothing.
+// Best-effort presentation only; it never alters run outcome or decisions.
+func (a app) notifyPendingWriteDecisions(storeRoot, sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	pending, err := manager.New(profile.Store{Root: storeRoot}).ListDecisions(manager.DecisionListRequest{
+		Kind: decision.KindHostFSWrite, State: decision.StatePending, Session: sessionID,
+	})
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	noun := "decision"
+	if len(pending) > 1 {
+		noun = "decisions"
+	}
+	fmt.Fprintf(a.stderr, "hideout: %d staged write %s await your review: hideout decision list\n", len(pending), noun)
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

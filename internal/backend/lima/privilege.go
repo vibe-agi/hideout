@@ -39,10 +39,12 @@ func (b Backend) probeGuestPrivilege(ctx context.Context, session *backend.Sessi
 
 func (b Backend) runPrivilegeCheck(ctx context.Context, session *backend.Session, runner CommandRunner, hostEnv, targetEnv []string, name privilege.CheckName, command []string, parseUID bool) privilege.CheckResult {
 	var stdout, stderr bytes.Buffer
-	workdir := session.GuestWork
-	if workdir == "" {
-		workdir = GuestSessionDir + "/tmp"
-	}
+	// Privilege checks probe target identity (uid, sudo reachability) and are
+	// independent of the workspace. They run during activation, before any
+	// per-session workspace view exists in shared machines, so the workspace
+	// path must not be the working directory (it would fail every check with
+	// "cd: no such file or directory"). Root mirrors runtime observation.
+	workdir := "/"
 	err := runner.Run(ctx, b.limactl(), ShellArgs(session.InstanceName, workdir, targetEnv, command), hostEnv, nil, &stdout, &stderr)
 	observed := strings.TrimSpace(stdout.String())
 	errText := strings.TrimSpace(stderr.String())

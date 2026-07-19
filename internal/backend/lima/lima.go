@@ -1404,6 +1404,15 @@ func (b Backend) stdin() io.Reader {
 	return os.Stdin
 }
 
+// WithProgress returns a copy whose startup progress notices go to the given
+// writer. The daemon session server uses it to route slow-boot notices and
+// heartbeats onto the operator's session stderr stream instead of the
+// daemon's own stderr.
+func (b Backend) WithProgress(progress io.Writer) backend.Backend {
+	b.Progress = progress
+	return b
+}
+
 func (b Backend) stdout() io.Writer {
 	if b.Stdout != nil {
 		return b.Stdout

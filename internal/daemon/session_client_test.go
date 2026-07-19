@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,66 @@ type testRemoteExit int
 
 func (e testRemoteExit) Error() string { return "test target exit" }
 func (e testRemoteExit) ExitCode() int { return int(e) }
+
+func TestRunSessionClientDisplaysPreStartProgressAndRefusesPreStartStdout(t *testing.T) {
+	drainRegistry := func(t *testing.T, registry *sessionRegistry) {
+		t.Helper()
+		drainCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := registry.drain(drainCtx); err != nil {
+			t.Fatalf("drain session registry: %v", err)
+		}
+	}
+	t.Run("pre-start-stderr-is-progress", func(t *testing.T) {
+		server, token, fake, registry := newTestSessionServer(t, false)
+		defer drainRegistry(t, registry)
+		fake.preStartProgress = "hideout: starting Lima environment \"hideout-test\"\n"
+		var stdout, stderr bytes.Buffer
+		result, err := RunSessionClient(context.Background(), SessionClientOptions{
+			Store: profile.Store{Root: server.core.Store.Root},
+			Request: manager.RunServiceRequest{
+				Version: manager.RunServiceRequestVersion, Backend: "native", Workspace: t.TempDir(),
+				Command: []string{"tool"}, AllowWeakIsolation: true,
+				Terminal: manager.TerminalDescriptor{Mode: "none"},
+			},
+			Stdout: &stdout, Stderr: &stderr,
+			Dial:      sessionPipeDial(server),
+			ReadToken: func(string) (string, error) { return token, nil },
+		})
+		if err != nil {
+			t.Fatalf("RunSessionClient: %v", err)
+		}
+		if result.Started.SessionID == "" {
+			t.Fatalf("session did not start: %+v", result)
+		}
+		if !strings.Contains(stderr.String(), "starting Lima environment") {
+			t.Fatalf("pre-start progress did not reach the operator stream: %q", stderr.String())
+		}
+	})
+	t.Run("pre-start-stdout-refused", func(t *testing.T) {
+		server, token, fake, registry := newTestSessionServer(t, false)
+		defer drainRegistry(t, registry)
+		fake.preStartStdout = true
+		var stdout, stderr bytes.Buffer
+		_, err := RunSessionClient(context.Background(), SessionClientOptions{
+			Store: profile.Store{Root: server.core.Store.Root},
+			Request: manager.RunServiceRequest{
+				Version: manager.RunServiceRequestVersion, Backend: "native", Workspace: t.TempDir(),
+				Command: []string{"tool"}, AllowWeakIsolation: true,
+				Terminal: manager.TerminalDescriptor{Mode: "none"},
+			},
+			Stdout: &stdout, Stderr: &stderr,
+			Dial:      sessionPipeDial(server),
+			ReadToken: func(string) (string, error) { return token, nil },
+		})
+		if err == nil || !strings.Contains(err.Error(), "before session start") {
+			t.Fatalf("pre-start stdout was not refused: err=%v", err)
+		}
+		if strings.Contains(stdout.String(), "premature-stdout") {
+			t.Fatalf("premature target stdout reached the operator: %q", stdout.String())
+		}
+	})
+}
 
 func TestRunSessionClientStreamsAndMapsExactRemoteExit(t *testing.T) {
 	server, token, fake, _ := newTestSessionServer(t, false)

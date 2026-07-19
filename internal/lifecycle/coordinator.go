@@ -393,7 +393,7 @@ func (c *Coordinator) StopExplicit(ctx context.Context, environmentID string) (S
 	if recoveryBlocked && recoveryReason != "cleanup-unproved" && recoveryReason != "owner-requires-explicit-recovery" {
 		status := c.statusLocked(environmentID, state)
 		c.mu.Unlock()
-		return status, errors.New("lifecycle explicit stop is blocked by unclassified provider state")
+		return status, errors.New("lifecycle explicit stop is blocked by unclassified provider state; restart the local control plane (hideout daemon stop, then retry) so it re-reconciles the environment")
 	}
 	recoverableOrphans := 0
 	for _, resource := range state.journal.Resources {

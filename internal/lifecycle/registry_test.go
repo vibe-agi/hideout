@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -496,4 +497,12 @@ func findResource(t *testing.T, resources []Resource, ref ResourceRef) Resource 
 	}
 	t.Fatalf("resource %s not found", ref.Key())
 	return Resource{}
+}
+
+func TestBlockedLifecycleErrorsCarryARunnableRecoveryHint(t *testing.T) {
+	// A fail-closed refusal without an exit is a dead end: both blocked
+	// messages must name the control-plane restart that re-reconciles.
+	if !strings.Contains(ErrAttachBlocked.Error(), "hideout daemon stop") {
+		t.Fatalf("attach-blocked error has no runnable recovery hint: %v", ErrAttachBlocked)
+	}
 }

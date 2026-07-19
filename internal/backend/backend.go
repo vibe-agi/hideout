@@ -225,6 +225,14 @@ type Backend interface {
 	Cleanup(ctx context.Context, session *Session) error
 }
 
+// ProgressRedirector lets a session owner route human startup progress (slow
+// VM boot notices, heartbeats) to the operator-facing stream. Without this, a
+// daemon-hosted backend writes progress to the daemon's own stderr, which no
+// operator sees. It carries presentation only, never authority.
+type ProgressRedirector interface {
+	WithProgress(progress io.Writer) Backend
+}
+
 type RunControlKind string
 
 const (

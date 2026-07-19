@@ -631,6 +631,39 @@ func TestRunProbesGuestPrivilegeBeforeTargetCommand(t *testing.T) {
 	if runner.targetBeforeStatus {
 		t.Fatal("target command ran before privilege status emission")
 	}
+	if len(runner.probeWorkdirs) == 0 {
+		t.Fatal("no privilege probe workdirs were captured")
+	}
+	for _, workdir := range runner.probeWorkdirs {
+		// Probes run during activation, before any per-session workspace view
+		// exists in shared machines; a workspace working directory would fail
+		// every check with "cd: no such file or directory".
+		if workdir != "/" {
+			t.Fatalf("privilege probe used workspace-dependent workdir %q", workdir)
+		}
+	}
+}
+
+func TestWithProgressRedirectsOnlyTheProgressWriter(t *testing.T) {
+	var buf bytes.Buffer
+	base := Backend{Progress: io.Discard, Stdout: os.Stdout, ControlStdout: io.Discard}
+	redirector, ok := any(base).(backend.ProgressRedirector)
+	if !ok {
+		t.Fatal("lima backend must implement backend.ProgressRedirector")
+	}
+	replaced, ok := redirector.WithProgress(&buf).(Backend)
+	if !ok {
+		t.Fatal("WithProgress must return a lima backend")
+	}
+	if replaced.Progress != io.Writer(&buf) {
+		t.Fatalf("progress writer was not replaced: %T", replaced.Progress)
+	}
+	if base.Progress != io.Discard {
+		t.Fatal("WithProgress mutated the original backend")
+	}
+	if replaced.Stdout != base.Stdout || replaced.ControlStdout != base.ControlStdout {
+		t.Fatal("WithProgress changed unrelated writers")
+	}
 }
 
 func TestRunReportsDegradedWhenTargetCanPasswordlessSudo(t *testing.T) {
@@ -1634,14 +1667,27 @@ type privilegeProbeRunner struct {
 	sudoSucceeds       bool
 	statusEmitted      *bool
 	targetBeforeStatus bool
+	probeWorkdirs      []string
 }
 
 func (r *privilegeProbeRunner) LookPath(string) (string, error) {
 	return "/opt/homebrew/bin/limactl", nil
 }
 
+func shellArgsWorkdir(args []string) string {
+	for index, arg := range args {
+		if arg == "--workdir" && index+1 < len(args) {
+			return args[index+1]
+		}
+	}
+	return ""
+}
+
 func (r *privilegeProbeRunner) Run(_ context.Context, _ string, args []string, _ []string, _ io.Reader, stdout, stderr io.Writer) error {
 	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "id -u") || strings.Contains(joined, "sudo -n true") {
+		r.probeWorkdirs = append(r.probeWorkdirs, shellArgsWorkdir(args))
+	}
 	switch {
 	case len(args) >= 1 && args[0] == "start":
 		return nil

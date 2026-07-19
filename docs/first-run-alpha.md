@@ -198,6 +198,15 @@ and validator.
 
 ## Install The Tested Agent CLI
 
+Installing any tool in the guest follows three rules, and the commands below
+are just this shape applied to one agent:
+
+1. the guest home (`/hideout/profile/home`) persists across sessions, so a
+   tool installed once stays installed;
+2. install into `$HOME/.local` — its `bin` directory is already on the guest
+   `PATH`, and no `sudo` or system prefix is needed or available;
+3. pin exact versions so later runs stay reproducible.
+
 Install the pinned evidence package into the durable target-owned prefix. This
 runs inside the selected guest and requires neither `sudo` nor a host-global npm
 prefix:

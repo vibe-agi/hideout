@@ -208,6 +208,11 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 	if s.openerFactory != nil {
 		openerForSession = opener
 	}
+	// Human startup progress (slow VM boot notice, heartbeat) must reach the
+	// operator's terminal, not the daemon's detached stderr.
+	if redirector, ok := be.(backend.ProgressRedirector); ok {
+		be = redirector.WithProgress(streams.Stderr)
+	}
 	result, runErr := service.Apply(runCtx, prepared, req, manager.RunServiceDependencies{
 		Backend: be, OpenerForSession: openerForSession,
 		PrepareWorkspaceAttachment: func(runSession *manager.RunSession) error {

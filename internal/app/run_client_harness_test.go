@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/backend/native"
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/daemon"
+	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -323,4 +326,47 @@ func appTestCompletion(result manager.RunResult, err error) sessionwire.Completi
 	}
 	out.ExitCode = 1
 	return out
+}
+
+func TestNotifyPendingWriteDecisionsCountsOnlyThisSessionsPendingWrites(t *testing.T) {
+	root := t.TempDir()
+	store := decision.NewStore(root)
+	now := time.Now().UTC()
+	mk := func(id, kind, state, session string) decision.Decision {
+		return decision.Decision{
+			ID: id, Kind: kind, State: state,
+			Source:         decision.Source{Profile: "default", Session: session, Backend: "lima", Surface: "hostfs"},
+			Preview:        decision.Preview{Summary: "test staged write"},
+			AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
+			DefaultOutcome: decision.DefaultOutcomeDeny,
+			TimeoutAt:      now.Add(time.Hour), CreatedAt: now,
+		}
+	}
+	for _, d := range []decision.Decision{
+		mk("hfwdec_aaaaaaaaaaaaaaaaaaaa", decision.KindHostFSWrite, decision.StatePending, "ses_this"),
+		mk("hfwdec_bbbbbbbbbbbbbbbbbbbb", decision.KindHostFSWrite, decision.StatePending, "ses_this"),
+		mk("hfwdec_cccccccccccccccccccc", decision.KindHostFSWrite, decision.StatePending, "ses_other"),
+		mk("hfwdec_dddddddddddddddddddd", decision.KindHostFSWrite, decision.StateDenied, "ses_this"),
+		mk("hfrdec_eeeeeeeeeeeeeeeeeeee", decision.KindHostFSRead, decision.StatePending, "ses_this"),
+	} {
+		if _, err := store.CreateOrUpdateDecision(d); err != nil {
+			t.Fatalf("seed decision %s: %v", d.ID, err)
+		}
+	}
+	var stderr bytes.Buffer
+	a := app{stderr: &stderr}
+	a.notifyPendingWriteDecisions(root, "ses_this")
+	if got := stderr.String(); !strings.Contains(got, "2 staged write decisions await your review: hideout decision list") {
+		t.Fatalf("notification = %q", got)
+	}
+	stderr.Reset()
+	a.notifyPendingWriteDecisions(root, "ses_quiet")
+	if stderr.Len() != 0 {
+		t.Fatalf("session without pending writes produced output: %q", stderr.String())
+	}
+	stderr.Reset()
+	a.notifyPendingWriteDecisions(root, "")
+	if stderr.Len() != 0 {
+		t.Fatalf("empty session id produced output: %q", stderr.String())
+	}
 }

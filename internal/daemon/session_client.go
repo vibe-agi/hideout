@@ -220,7 +220,19 @@ func RunSessionClient(ctx context.Context, opts SessionClientOptions) (SessionCl
 			})
 		case sessionwire.TypeTerminal, sessionwire.TypeStdout, sessionwire.TypeStderr:
 			if !started {
-				return result, fmt.Errorf("daemon sent %s before session start", frame.Type)
+				if frame.Type != sessionwire.TypeStderr {
+					return result, fmt.Errorf("daemon sent %s before session start", frame.Type)
+				}
+				// Pre-start stderr carries the daemon's control-plane startup
+				// progress (slow VM boot notice, heartbeat): the target has
+				// not run yet, so display it. Target data channels (stdout,
+				// terminal) stay refused until the started control frame.
+				if opts.Stderr != nil {
+					if _, err := opts.Stderr.Write(frame.Payload); err != nil {
+						return result, err
+					}
+				}
+				break
 			}
 			var dst io.Writer
 			switch frame.Type {

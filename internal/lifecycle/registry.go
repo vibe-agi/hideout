@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	ErrAttachBlocked          = errors.New("lifecycle attach is blocked pending reconciliation")
+	ErrAttachBlocked          = errors.New("lifecycle attach is blocked pending reconciliation; restart the local control plane (hideout daemon stop, then retry) so it re-reconciles the environment")
 	ErrReconciliationInFlight = errors.New("lifecycle reconciliation is in flight")
 	ErrStopInFlight           = errors.New("lifecycle stop is in flight")
 	ErrCoordinatorClosed      = errors.New("lifecycle coordinator is closed")

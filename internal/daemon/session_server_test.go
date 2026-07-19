@@ -22,12 +22,24 @@ import (
 )
 
 type daemonStreamBackend struct {
-	mu          sync.Mutex
-	legacyCalls int
-	streamCalls int
-	block       bool
-	runErr      error
-	readyDelay  time.Duration
+	mu               sync.Mutex
+	legacyCalls      int
+	streamCalls      int
+	block            bool
+	runErr           error
+	readyDelay       time.Duration
+	progress         io.Writer
+	preStartProgress string
+	preStartStdout   bool
+}
+
+// WithProgress implements backend.ProgressRedirector so tests can prove the
+// session server routes startup progress onto the operator stream.
+func (b *daemonStreamBackend) WithProgress(progress io.Writer) backend.Backend {
+	b.mu.Lock()
+	b.progress = progress
+	b.mu.Unlock()
+	return b
 }
 
 func (b *daemonStreamBackend) Name() string                    { return "native" }
@@ -55,9 +67,23 @@ func (b *daemonStreamBackend) Run(context.Context, *backend.Session, []string, [
 func (b *daemonStreamBackend) RunWithStreams(ctx context.Context, session *backend.Session, _ []string, _ []string, streams backend.RunStreams) error {
 	b.mu.Lock()
 	b.streamCalls++
+	progress := b.progress
 	b.mu.Unlock()
 	if streams.Ready == nil {
 		return errors.New("ready callback missing")
+	}
+	if b.preStartProgress != "" {
+		if progress == nil {
+			return errors.New("pre-start progress requires the redirected progress writer")
+		}
+		if _, err := progress.Write([]byte(b.preStartProgress)); err != nil {
+			return err
+		}
+	}
+	if b.preStartStdout {
+		if _, err := streams.Stdout.Write([]byte("premature-stdout")); err != nil {
+			return err
+		}
 	}
 	if b.readyDelay > 0 {
 		timer := time.NewTimer(b.readyDelay)
