@@ -15,6 +15,8 @@ when reviewing architecture changes.
    reach-back invariants.
 4. [STATUS.md](STATUS.md) summarizes current implementation status. Update this
    file when code changes the delivered product surface.
+   [DEBT.md](DEBT.md) is the deferred-debt ledger: intentionally deferred work
+   with its trigger condition. Converge/analyze reviews check it.
 5. [support-matrix.md](support-matrix.md) defines the alpha platform/backend,
    gate-required feature, schema/ABI, and non-claim matrix.
 6. [privacy-run-test-plan.md](privacy-run-test-plan.md) defines gates and
@@ -53,6 +55,7 @@ Subsystem documents:
 - `privacy-run-design.md` owns the Phase 1 product contract.
 - `threat-model.md` owns security claims and non-claims.
 - `STATUS.md` owns current implementation status.
+- `DEBT.md` owns deferred work and its trigger conditions.
 - `support-matrix.md` mirrors the Go-owned alpha support matrix and release
   readiness/non-claim posture.
 - `ecosystem-foundation-design.md` owns the ecosystem resource model,

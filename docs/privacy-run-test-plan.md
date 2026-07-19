@@ -98,6 +98,22 @@ scripts/test-phase1.sh --operator-cli
 Every implementation change must choose a test scope before coding. The scope
 is based on the authority that changed, not on the file name alone.
 
+Delivery discipline (constitution 1.3.0):
+
+- A new assertion is delivered only with a mutation proof: temporarily break
+  the guarded implementation, observe the test fail, then restore it. A new
+  judge or gate check is delivered only with a negative fixture that shows it
+  firing. Green-only assertions have historically pinned defective behavior as
+  expected and do not count as coverage.
+- An implementation batch ships its own adversarial report — fresh-eyes
+  findings, mutation proofs, and negative fixtures — so external review can
+  spot-check at a depth matched to the batch's risk instead of re-deriving it.
+- Work a slice intentionally defers must land in [DEBT.md](DEBT.md) with a
+  concrete trigger condition before the slice is marked done.
+- `scripts/test-gate0.sh --quick` is the inner-loop tier only (vet, format,
+  cached tests, markdown lint, schema syntax); it never satisfies a gate,
+  claim, or commit requirement. The full gate remains mandatory before commit.
+
 Change-to-gate mapping:
 
 | Change area | Minimum local check | Boundary proof | Release-candidate check |

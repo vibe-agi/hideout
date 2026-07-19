@@ -1,17 +1,15 @@
 <!--
 Sync Impact Report
-Version change: 1.1.0 -> 1.2.0
+Version change: 1.2.0 -> 1.3.0
 Modified principles:
-- II. Typed Authority Through Manager And Go Core: added the positive default
-  that new flexible product judgments live in constrained JS decision points
-  over Go primitives, not in compiled Go.
-- IV. Evidence And Gates Are Product Requirements: replaced heuristic
-  redaction wording with the deterministic redaction contract (Hideout-minted
-  control-plane credentials stripped exactly; user/application data verbatim
-  in host-local audit).
-- Product Constraints: added the prosumer/MVP scope constraint; added the
-  declarative guest base image carve-out to the ecosystem authority bullet;
-  aligned the product definition with the mediation-first North Star.
+- IV. Evidence And Gates Are Product Requirements: new assertions require a
+  mutation proof (break the implementation, observe red); new judges require a
+  negative fixture. Green-only assertions are not delivered.
+- Development Workflow: deferred work must land in docs/DEBT.md with a trigger
+  condition before a slice closes; implementation batches ship their own
+  adversarial report (fresh-eyes findings, mutation proofs, negative fixtures)
+  for external spot-checking; new CLI commands get their own file and
+  materially-changed monolith commands are extracted opportunistically.
 Added sections:
 - none
 Removed sections:
@@ -20,7 +18,7 @@ Templates requiring updates:
 - ✅ .specify/templates/plan-template.md (no changes required)
 - ✅ .specify/templates/spec-template.md (no changes required)
 - ✅ .specify/templates/tasks-template.md (no changes required)
-- ✅ docs/README.md
+- ✅ docs/README.md (DEBT.md ledger indexed)
 Follow-up TODOs: none
 -->
 
@@ -106,9 +104,15 @@ Any feature that crosses filesystem, network, backend, host-open, endpoint
 exposure, script, or lifecycle boundaries MUST include positive tests and
 fail-closed or redaction tests. Product isolation claims MUST be backed by the
 relevant release gates, not by the weak native harness.
+A new assertion is not delivered until it has a mutation proof: temporarily
+break the guarded implementation and observe the test fail, then restore it. A
+new judge or gate check is not delivered until a negative fixture shows it
+firing. "The test passes" alone is not evidence the test can fail; green tests
+have historically pinned defective behavior as expected.
 
 Rationale: A privacy runner that cannot show what happened cannot be trusted.
-Tests and release evidence are part of the capability contract.
+Tests and release evidence are part of the capability contract, and an
+assertion that has never been seen red is not yet part of that contract.
 
 ### V. Installability And Runtime Lifecycle Are Core
 
@@ -194,6 +198,18 @@ Probe -> Design Contract -> Product Path -> Release Gate
   Changes that alter claims or non-claims MUST update `docs/threat-model.md`.
   Changes that introduce authority MUST update the relevant design contract and
   test plan before implementation is considered complete.
+- Work a slice intentionally defers MUST be recorded in `docs/DEBT.md` with a
+  concrete trigger condition before the slice is marked done; converge/analyze
+  reviews check this ledger. A deferral that lives only in a closed spec or a
+  reviewer's memory does not exist.
+- An implementation batch MUST ship with its own adversarial report: the
+  fresh-eyes findings, the mutation proofs for new assertions, and the negative
+  fixtures for new judges. External review then spot-checks that report at a
+  depth matched to the batch's risk instead of re-deriving it from scratch.
+- New CLI commands get their own file (the `setup.go` pattern); when an
+  existing command in a monolithic file is materially changed, extract it into
+  its own file in the same change. Monoliths shrink opportunistically, never
+  through big-bang rewrites.
 
 ## Governance
 
@@ -223,4 +239,4 @@ Complexity Tracking with a concrete reason and a rejected simpler alternative.
 Privacy-boundary violations that weaken fail-closed behavior, typed authority,
 or audit evidence are not waivable.
 
-**Version**: 1.2.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-07-06
+**Version**: 1.3.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-07-19

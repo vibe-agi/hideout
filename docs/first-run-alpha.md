@@ -129,6 +129,11 @@ boot:
 hideout runtime inspect developer-standard
 ```
 
+The fastest way to feel the boundary after the first run succeeds is the host
+editor bridge: `hideout run -- code .` opens the selected project in your host
+VS Code through a typed, audited host-app permission — the guest has no `code`
+binary at all. See [Open In A Host Editor](#open-in-a-host-editor).
+
 ## Privacy Follow-Up
 
 Create a separate privacy profile only when its prerequisites are available:
