@@ -2,8 +2,8 @@
 
 **Feature Branch**: `038-zero-friction-setup`
 **Created**: 2026-07-19
-**Status**: Implemented (evidence from a dirty worktree at `48af97e`;
-not clean release provenance — regenerate real evidence after commit)
+**Status**: Implemented (real evidence regenerated at `298db95`,
+clean worktree; manifest SHA-256 `13d54f9a…d9eb6492`)
 **Input**: Add one short, honest first-run setup path for the public macOS
 alpha. A new operator should be able to install Hideout, review one fixed
 default posture, confirm once, run a real command in Lima, and install and run
