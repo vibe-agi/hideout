@@ -165,6 +165,17 @@ The successful first release lets a developer:
 - open URLs and workspace files through a brokered host path;
 - inspect what was allowed, denied, faked, inherited, and audited.
 
+The primary interactive configuration path is `hideout setup`. It is a fixed
+projection over the same daemon-hosted Manager InitService used by advanced
+`hideout init`: default profile, developer template, Lima, direct networking,
+the exact retained `developer-standard` runtime, `/workspace`, no outside
+HostFS visibility, and always-on audit. It presents one local review and
+defaults to rejection. Confirmation is bound to the reviewed semantic plan;
+apply re-observes state under the profile lock and rejects drift. Setup writes
+configuration only. It does not start a VM, download the runtime, grant later
+capabilities, or establish isolation or privacy-network evidence. Automation
+and all non-default choices remain explicit `hideout init --no-input` inputs.
+
 Primary users:
 
 - developers running AI agents or third-party CLIs against local projects;

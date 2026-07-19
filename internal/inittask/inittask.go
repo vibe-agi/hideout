@@ -28,6 +28,7 @@ const (
 	AuditFile    = "init-audit.jsonl"
 
 	OperationInitApply      = "init.apply"
+	OperationSetupApply     = "setup.apply"
 	OperationRunInitApply   = "run.init.apply"
 	OperationDoctorFixApply = "doctor.fix.apply"
 )
@@ -63,6 +64,7 @@ type Options struct {
 
 type ApplyOptions struct {
 	NoInput        bool
+	Confirmed      bool
 	DryRun         bool
 	Operation      string
 	AuditPath      string
@@ -345,7 +347,7 @@ func ApplyMachine(store profile.Store, plan Plan, opts ApplyOptions) (Result, er
 			}
 			continue
 		}
-		if task.RequiresConfirm || task.Risk == "requires-confirmation" {
+		if (task.RequiresConfirm || task.Risk == "requires-confirmation") && !opts.Confirmed {
 			if opts.NoInput {
 				err := fmt.Errorf("init task %s requires confirmation", task.Kind)
 				_ = emitTaskAudit(aw, plan, task, opts.Operation, "error", "blocked", err)

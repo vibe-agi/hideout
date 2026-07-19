@@ -915,6 +915,7 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 			IdentityMode: IdentityMode(runSession.Plan), IdentityRoot: runSession.IdentityDir,
 			RuntimeRoot: runEnv.RuntimeDir, InstanceName: runEnv.InstanceName,
 			PreserveInstance: runEnv.PreserveInstance, Mode: machineMode,
+			Runtime: runtimePresentation(runSession.Plan.RuntimeProfile),
 		},
 		Workspace:                 workspace,
 		SessionID:                 runSession.Layout.ID,
@@ -985,6 +986,17 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 				Details:  privilege.PrivilegedSetupDetails(event.Category, event.Status, event.Setup, event.Reason),
 			})
 		},
+	}
+}
+
+func runtimePresentation(p profile.Profile) *backend.RuntimePresentation {
+	if p.Environment.Runtime == nil {
+		return nil
+	}
+	value := p.Environment.Runtime
+	return &backend.RuntimePresentation{
+		Family: value.Family, Revision: value.Revision, Maturity: value.Maturity,
+		DownloadBytes: value.DownloadBytes,
 	}
 }
 

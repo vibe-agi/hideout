@@ -31,13 +31,13 @@ The public alpha supports Apple Silicon Macs. Homebrew installs Hideout and its
 
 ```bash
 brew install vibe-agi/tap/hideout
-hideout init --template dev --profile default --backend lima \
-  --network direct --runtime developer-standard --no-input
+hideout setup
 ```
 
 The formula verifies the immutable archive checksum, macOS code signature, and
 Hideout package manifest. Installation does not start a VM or create a profile;
-the explicit `init` command does. The inspectable standalone installer, manual
+the interactive `setup` review creates the supported default configuration but
+still does not start a VM or download the runtime. The inspectable standalone installer, manual
 download, repair, and uninstall paths remain documented in
 [Distribution And Bootstrap](docs/distribution-bootstrap.md).
 
@@ -54,6 +54,10 @@ hideout run -- sh -lc 'uname -s; id -u'
 
 # The project remains an ordinary writable Git checkout.
 hideout run -- git status --short
+
+# Read or change the connection used by new sessions.
+hideout show connection
+hideout connect directly
 ```
 
 Keep a shell open in one terminal and run an agent or another command from the

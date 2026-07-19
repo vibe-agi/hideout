@@ -30,6 +30,7 @@ Subsystem documents:
 | Backend capability | [backend-capability-matrix.md](backend-capability-matrix.md) |
 | Distribution and first run | [distribution-bootstrap.md](distribution-bootstrap.md) |
 | External alpha first run | [first-run-alpha.md](first-run-alpha.md) |
+| Formal lifecycle models | [formal-models.md](formal-models.md) |
 | Ecosystem foundation | [ecosystem-foundation-design.md](ecosystem-foundation-design.md): canonical resource model, policy composition, Hideoutfile contract, guest base-environment artifact class (declarative base image references; distinct from imperative environment recipes, which remain prohibited), and ecosystem delivery sequence. |
 | HostFS overlay | [hostfs-overlay-design.md](hostfs-overlay-design.md) |
 | Host capability projection | [host-capability-projection.md](host-capability-projection.md) |

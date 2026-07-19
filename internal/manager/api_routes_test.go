@@ -39,6 +39,27 @@ func TestManagerRouteInventoryRecognizesEveryRoute(t *testing.T) {
 	}
 }
 
+func TestManagerRouteInventoryAndResponseSchemaStayInParity(t *testing.T) {
+	routes := map[string]bool{}
+	for _, spec := range ManagerRoutes() {
+		routes[spec.ResponseResource()] = true
+	}
+	schemaResources := map[string]bool{}
+	for _, resource := range managerAPISchemaResourceEnum(t) {
+		schemaResources[resource] = true
+	}
+	for resource := range routes {
+		if !schemaResources[resource] {
+			t.Errorf("production route %q is absent from manager-api schema", resource)
+		}
+	}
+	for resource := range schemaResources {
+		if !routes[resource] {
+			t.Errorf("manager-api schema resource %q has no production route", resource)
+		}
+	}
+}
+
 func TestManagerRouteRecognizerRejectsUnknownAndWrongClass(t *testing.T) {
 	if _, ok := RecognizeManagerRoute(http.MethodGet, "/api/v1/does-not-exist"); ok {
 		t.Fatal("unknown Manager route recognized")

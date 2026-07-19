@@ -271,6 +271,27 @@ func TestEnsureStartedRejectsUnauthenticatedOrWrongSocketStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonStatusServingAcceptsPhysicalStoreAlias(t *testing.T) {
+	root := t.TempDir()
+	realStore := filepath.Join(root, "real-store")
+	if err := os.MkdirAll(filepath.Join(realStore, runtimeDirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasStore := filepath.Join(root, "store-alias")
+	if err := os.Symlink(realStore, aliasStore); err != nil {
+		t.Fatal(err)
+	}
+
+	status := readyDaemonStatus(realStore)
+	if !daemonStatusServing(aliasStore, status) {
+		t.Fatalf("authenticated status through physical store alias was rejected: %+v", status.Transport)
+	}
+	status.Transport.Socket = filepath.Join(realStore, runtimeDirName, "other.sock")
+	if daemonStatusServing(aliasStore, status) {
+		t.Fatal("different daemon socket basename was accepted")
+	}
+}
+
 func TestStartDetachedDaemonReturnsBeforeChildCompletes(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "started")
 	output, err := os.CreateTemp(t.TempDir(), "daemon-output-*")

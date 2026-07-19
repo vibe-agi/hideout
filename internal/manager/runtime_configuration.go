@@ -48,15 +48,17 @@ func RuntimeConfigurationForProfile(p profile.Profile, backendName string, mode 
 	}
 
 	egress := "direct"
+	serviceNetwork := environment.NetworkServiceConfiguration{Egress: egress}
 	if p.Network.Mode == profile.NetworkModeTun2Socks {
 		egress = "proxy"
-	}
-	services := environment.EnvironmentServiceConfiguration{
-		Schema: environment.EnvironmentServiceConfigurationSchema,
-		Network: environment.NetworkServiceConfiguration{
+		serviceNetwork = environment.NetworkServiceConfiguration{
 			Egress: egress, ProxySecretRef: p.Network.ProxySecretRef,
 			Resolver: p.Network.MediatedResolver,
-		},
+		}
+	}
+	services := environment.EnvironmentServiceConfiguration{
+		Schema:  environment.EnvironmentServiceConfigurationSchema,
+		Network: serviceNetwork,
 	}
 	snapshot, sessionID, err := SessionSnapshotForProfile(p)
 	if err != nil {

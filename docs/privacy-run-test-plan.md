@@ -259,6 +259,17 @@ Required evidence:
   `--real-backend` mode records explicit pass or `not-run` evidence for the
   Lima/privacy path, and `--require-real` is the manual/release-style mode for
   hosts where real proof is mandatory.
+- Zero-friction setup (038) adds, rather than replaces, two lanes in the same
+  harness. `--setup-local-fast` installs the candidate with `--skip-init` and
+  executes the installed `hideout setup` under a real PTY; it proves review,
+  confirmation, configuration-only apply, schema validity, and zero Lima
+  invocation. `--setup-real-backend --require-real` uses the candidate binary
+  and real macOS arm64 Lima to prove `/workspace`, both account-home and target
+  `HOME` layers, non-root identity, exact runtime, audit, Boundary evidence,
+  final-session stop, exact environment reuse, and an exact-integrity agent
+  installed and executed by name in separate sessions. The retained 022
+  `--real-backend` privacy lane remains distinct and mandatory for its network
+  claim. Local/native and `not-run` output cannot satisfy either real lane.
 - UI E2E proof (`scripts/test-ui-e2e.sh`, wired into Gate 0) writes a
   `hideout.product-hardening-evidence/v1` manifest. On hosts with local
   Chrome/Chromium and `script(1)`, targeted runs can require executed browser
@@ -505,6 +516,19 @@ Required checks:
   to their documented lifecycle;
 - `doctor` distinguishes missing Lima, invalid YAML, broken mount, invalid
   profile, bad proxy secret, broker failure, and policy script failure.
+
+#### Required Gate 2 Step: Zero-Friction Setup
+
+The 038 setup lane consumes a distributed candidate, not a source-tree binary:
+
+```bash
+scripts/test-first-run-e2e.sh --setup-real-backend --require-real --out <dir>
+```
+
+The proof must contain `038.setup.real-gate2.first-run` and
+`038.setup.real-gate2.agent-install-run` as passed results for the exact
+candidate. `038.setup.real-gate2.not-run`, native execution, elapsed-time-only
+reuse inference, or the separate 022 privacy lane cannot satisfy these claims.
 
 #### Required Gate 2 Step: Host Capability Projection
 

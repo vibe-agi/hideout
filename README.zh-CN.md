@@ -30,12 +30,12 @@ hideout audit show --limit 5
 
 ```bash
 brew install vibe-agi/tap/hideout
-hideout init --template dev --profile default --backend lima \
-  --network direct --runtime developer-standard --no-input
+hideout setup
 ```
 
 Formula 会校验不可变归档的 checksum、macOS 代码签名和 Hideout 包清单。安装过程
-不会启动 VM 或创建 profile；显式 `init` 命令才会执行初始化。可审阅的 standalone
+不会启动 VM 或创建 profile；交互式 `setup` 会先展示固定的默认配置，确认后只写入
+配置，仍不会启动 VM 或下载 runtime。可审阅的 standalone
 installer、手动下载、修复和卸载流程仍见
 [Distribution And Bootstrap](docs/distribution-bootstrap.md)。
 
@@ -51,6 +51,10 @@ hideout run -- sh -lc 'uname -s; id -u'
 
 # 项目仍然是普通、可写的 Git checkout。
 hideout run -- git status --short
+
+# 查看或修改新 session 使用的网络连接。
+hideout show connection
+hideout connect directly
 ```
 
 完整的 15 分钟流程还包括安装测试过的 agent CLI、用本机编辑器打开 workspace、

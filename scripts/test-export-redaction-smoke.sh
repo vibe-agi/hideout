@@ -3,16 +3,20 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "export-redaction-smoke: jq required" >&2; exit 127; }
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-export-redaction.XXXXXX")"
+tmp="$(hideout_mktemp_daemon_store)"
+store="$tmp/store"
 cleanup() {
-  rm -rf "$tmp"
+	if [ -d "$store" ]; then
+		HIDEOUT_STORE_ROOT="$store" go run ./cmd/hideout daemon stop >/dev/null 2>&1 || true
+	fi
+	rm -rf "$tmp"
 }
 trap cleanup EXIT
 
-store="$tmp/store"
 export HIDEOUT_STORE_ROOT="$store"
 
 go run ./cmd/hideout init --no-input --profile default --template dev --backend native --network direct >/dev/null

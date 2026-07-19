@@ -359,6 +359,9 @@ func (s Store) Load(name string) (Profile, error) {
 	if err := dec.Decode(&p); err != nil {
 		return Profile{}, err
 	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Profile{}, errors.New("profile must contain exactly one JSON value")
+	}
 	legacyRules, err := collectLegacyListRules(p)
 	if err != nil {
 		return Profile{}, err
@@ -488,6 +491,14 @@ func (s Store) Save(p Profile) error {
 		return err
 	}
 	dir := s.ProfileDir(p.Name)
+	for _, privateDir := range []string{s.Root, filepath.Join(s.Root, "profiles"), dir} {
+		if err := os.MkdirAll(privateDir, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(privateDir, 0o700); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "policy"), 0o700); err != nil {
 		return err
 	}
@@ -511,18 +522,6 @@ func (s Store) SetWorkspacePathMode(name, mode string) (Profile, error) {
 		return Profile{}, err
 	}
 	p.Workspace.PathMode = mode
-	if err := s.Save(p); err != nil {
-		return Profile{}, err
-	}
-	return p, nil
-}
-
-func (s Store) SetNetwork(name string, network Network) (Profile, error) {
-	p, err := s.Load(name)
-	if err != nil {
-		return Profile{}, err
-	}
-	p.Network = network
 	if err := s.Save(p); err != nil {
 		return Profile{}, err
 	}

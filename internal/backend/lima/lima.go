@@ -244,6 +244,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		RuntimeInstanceExpected:   cloneRuntimeInstanceExpectation(spec.RuntimeInstanceExpected),
 		RuntimeResultSink:         spec.RuntimeResultSink,
 		RuntimeCompletionSink:     spec.RuntimeCompletionSink,
+		RuntimePresentation:       cloneRuntimePresentation(spec.Machine.Runtime),
 	}, nil
 }
 
@@ -638,7 +639,7 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 		}
 	}
 	session.RunAttempted = true
-	if err := runWithStartupProgress(b.Progress, session.InstanceName, func() error {
+	if err := runWithStartupProgress(b.Progress, session.InstanceName, session.RuntimePresentation, func() error {
 		return runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr())
 	}); err != nil {
 		return nil, nil, err
@@ -742,11 +743,11 @@ func (b Backend) Cleanup(ctx context.Context, session *backend.Session) error {
 	return errors.Join(errs...)
 }
 
-func runWithStartupProgress(progress io.Writer, instance string, run func() error) error {
-	return runWithStartupProgressTimings(progress, instance, startupNoticeDelay, startupNoticeInterval, run)
+func runWithStartupProgress(progress io.Writer, instance string, runtime *backend.RuntimePresentation, run func() error) error {
+	return runWithStartupProgressTimings(progress, instance, runtime, startupNoticeDelay, startupNoticeInterval, run)
 }
 
-func runWithStartupProgressTimings(progress io.Writer, instance string, delay, interval time.Duration, run func() error) error {
+func runWithStartupProgressTimings(progress io.Writer, instance string, runtime *backend.RuntimePresentation, delay, interval time.Duration, run func() error) error {
 	if progress == nil || progress == io.Discard {
 		return run()
 	}
@@ -761,7 +762,7 @@ func runWithStartupProgressTimings(progress io.Writer, instance string, delay, i
 	case err := <-result:
 		return err
 	case <-timer.C:
-		fmt.Fprintf(progress, "hideout: starting Lima environment %q; first start may download the configured image (use --verbose for backend details)\n", instance)
+		writeStartupNotice(progress, instance, runtime)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -776,6 +777,39 @@ func runWithStartupProgressTimings(progress io.Writer, instance string, delay, i
 			fmt.Fprintf(progress, "hideout: still starting Lima environment %q (%s elapsed)\n", instance, startupElapsed(time.Since(started)))
 		}
 	}
+}
+
+func writeStartupNotice(progress io.Writer, instance string, runtime *backend.RuntimePresentation) {
+	if runtime == nil || strings.TrimSpace(runtime.Family) == "" || strings.TrimSpace(runtime.Revision) == "" {
+		fmt.Fprintf(progress, "hideout: starting Lima environment %q; first start may download the configured image (use --verbose for backend details)\n", instance)
+		return
+	}
+	maturity := strings.TrimSpace(runtime.Maturity)
+	if maturity == "" {
+		maturity = "status unavailable"
+	}
+	fmt.Fprintf(progress, "hideout: starting Lima environment %q with runtime %s@%s (%s, %s); first use may download it\n",
+		instance, runtime.Family, runtime.Revision, maturity, formatRuntimeDownload(runtime.DownloadBytes))
+}
+
+func formatRuntimeDownload(value int64) string {
+	if value <= 0 {
+		return "declared size unavailable"
+	}
+	const gib = int64(1 << 30)
+	const mib = int64(1 << 20)
+	if value >= gib {
+		return fmt.Sprintf("%.1f GiB declared download", float64(value)/float64(gib))
+	}
+	return fmt.Sprintf("%.0f MiB declared download", float64(value)/float64(mib))
+}
+
+func cloneRuntimePresentation(value *backend.RuntimePresentation) *backend.RuntimePresentation {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func startupElapsed(elapsed time.Duration) time.Duration {

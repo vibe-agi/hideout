@@ -3,12 +3,18 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "onboarding-smoke: jq required" >&2; exit 127; }
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-onboarding.XXXXXX")"
+tmp="$(hideout_mktemp_daemon_store)"
 cleanup() {
-  rm -rf "$tmp"
+	for candidate in "$tmp"/*-store; do
+		if [ -d "$candidate/daemon" ]; then
+			HIDEOUT_STORE_ROOT="$candidate" go run ./cmd/hideout daemon stop >/dev/null 2>&1 || true
+		fi
+	done
+	rm -rf "$tmp"
 }
 trap cleanup EXIT
 
@@ -113,7 +119,7 @@ jq -e '.metadata.templateId == "debug" and .metadata.templatePosture == "debug-l
 jq -e '.effectivePosture == "dev" and any(.nonClaims[]; contains("does not claim"))' "$store/profiles/alpha-dev/onboarding-evidence.json" >/dev/null
 jq -e '.effectivePosture == "debug-local" and any(.nonClaims[]; contains("does not claim"))' "$store/profiles/alpha-debug/onboarding-evidence.json" >/dev/null
 
-grep -q -- '--template dev' README.md
+grep -q '^hideout setup$' README.md
 grep -q -- '--template privacy' docs/first-run-alpha.md
 
 echo "onboarding-smoke: passed"

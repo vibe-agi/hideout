@@ -3,8 +3,9 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-package-smoke.XXXXXX")"
+tmp="$(hideout_mktemp_daemon_store)"
 cleanup() {
   rm -rf "$tmp"
 }
@@ -284,6 +285,7 @@ if grep -q 'Press Ctrl-C to stop' "$tmp/ui.out"; then
   cat "$tmp/ui.out" >&2
   exit 1
 fi
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" daemon stop >"$tmp/daemon-stop.out"
 
 HIDEOUT_STORE_ROOT="$tmp/lima-store" "$prefix/bin/hideout" doctor --fix --dry-run --backend lima --workspace "$workspace" >"$tmp/lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-shim: ok' "$tmp/lima-doctor-fix-dry.out"
@@ -373,6 +375,7 @@ grep -q 'profile: ok default' "$tmp/package-installed-doctor.out"
 HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" --feature packaging --format json >"$tmp/package-installed-doctor-packaging.json"
 grep -q 'external-prerequisite tun2socks=' "$tmp/package-installed-doctor-packaging.json"
 grep -q 'packageOwned=false' "$tmp/package-installed-doctor-packaging.json"
+HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" daemon stop >"$tmp/package-installed-daemon-stop.out"
 
 durable_fixture="$installed_store/evidence/keep.json"
 mkdir -p "$(dirname "$durable_fixture")"
@@ -492,6 +495,7 @@ HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hid
 grep -q 'task helper.install.linux-shim: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-hostfsd: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
 grep -q 'task helper.install.linux-session-supervisor: ok' "$tmp/package-default-lima-doctor-fix-dry.out"
+HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" daemon stop >"$tmp/package-default-daemon-stop.out"
 
 skip_installed_prefix="$tmp/package-skip-installed"
 skip_installed_store="$tmp/package-skip-store"
@@ -502,6 +506,8 @@ test -x "$skip_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
+HIDEOUT_STORE_ROOT="$skip_installed_store" "$skip_installed_prefix/bin/hideout" help >"$tmp/package-help.out"
+grep -q 'hideout setup' "$tmp/package-help.out"
 if [ -e "$skip_installed_store/install-state.json" ] || [ -e "$skip_installed_store/profiles/default/profile.json" ]; then
   echo "package-smoke: package installer --skip-init wrote init state" >&2
   cat "$tmp/package-skip-install.out" >&2
@@ -518,6 +524,7 @@ if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_installed_store" >/dev/nu
   echo "package-smoke: package installer persisted raw proxy URL" >&2
   exit 1
 fi
+HIDEOUT_STORE_ROOT="$proxy_installed_store" "$proxy_installed_prefix/bin/hideout" daemon stop >"$tmp/package-proxy-daemon-stop.out"
 
 copy_artifacts
 echo "package-smoke: passed"

@@ -337,6 +337,16 @@ func (c Core) PlanInit(opts inittask.Options) (inittask.Plan, error) {
 }
 
 func (c Core) ApplyInit(plan inittask.Plan, opts inittask.ApplyOptions) (inittask.Result, error) {
+	var result inittask.Result
+	err := c.withProfileMutationLock(plan.Profile, func() error {
+		var applyErr error
+		result, applyErr = c.applyInitLocked(plan, opts)
+		return applyErr
+	})
+	return result, err
+}
+
+func (c Core) applyInitLocked(plan inittask.Plan, opts inittask.ApplyOptions) (inittask.Result, error) {
 	if opts.Operation == "" {
 		opts.Operation = inittask.OperationInitApply
 	}

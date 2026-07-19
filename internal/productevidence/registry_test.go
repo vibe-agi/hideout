@@ -38,6 +38,35 @@ func TestProofRegistryValidatesAndIsDeterministic(t *testing.T) {
 	}
 }
 
+func Test038RequirementsRegisterAllStableProofs(t *testing.T) {
+	requirements := RequirementsForFeature(Feature038)
+	if len(requirements) != 8 {
+		t.Fatalf("038 requirements=%d, want 8", len(requirements))
+	}
+	seen := map[string]ProofRequirement{}
+	for _, requirement := range requirements {
+		seen[requirement.ProofID] = requirement
+		if len(requirement.ClaimIDs) == 0 {
+			t.Fatalf("proof %s has no claims", requirement.ProofID)
+		}
+	}
+	for _, proofID := range []string{
+		Proof038IntentPlanParity, Proof038CancelDriftReadonly, Proof038DaemonRecovery,
+		Proof038PackagePTY, Proof038RealFirstRun, Proof038RealAgentInstallRun,
+		Proof038RealGate2NotRun, Proof038DocsTruth,
+	} {
+		if _, ok := seen[proofID]; !ok {
+			t.Fatalf("missing 038 proof %s", proofID)
+		}
+	}
+	if seen[Proof038RealFirstRun].RuntimePolicy != RuntimePolicyExactReal || seen[Proof038RealAgentInstallRun].RuntimePolicy != RuntimePolicyExactReal {
+		t.Fatal("real 038 proofs are not bound to exact real runtime evidence")
+	}
+	if seen[Proof038RealGate2NotRun].RequiredFor != RequiredForSupportingOnly {
+		t.Fatalf("not-run requiredFor=%s", seen[Proof038RealGate2NotRun].RequiredFor)
+	}
+}
+
 func TestProofRegistryCovers021To025RequiredProofsExactlyOnce(t *testing.T) {
 	view, err := RegistryView()
 	if err != nil {

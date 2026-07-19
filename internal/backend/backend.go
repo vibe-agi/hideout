@@ -37,6 +37,16 @@ type MachineActivationSpec struct {
 	InstanceName     string
 	PreserveInstance bool
 	Mode             environment.Mode
+	Runtime          *RuntimePresentation
+}
+
+// RuntimePresentation carries package-owned, non-secret facts for honest
+// first-start progress. It grants no runtime or image authority.
+type RuntimePresentation struct {
+	Family        string
+	Revision      string
+	Maturity      string
+	DownloadBytes int64
 }
 
 func (spec MachineActivationSpec) Validate() error {
@@ -183,6 +193,7 @@ type Session struct {
 	RuntimeInstanceExpected   *RuntimeInstanceExpectation
 	RuntimeResultSink         func(RuntimeObservationReport) error
 	RuntimeCompletionSink     func(error) error
+	RuntimePresentation       *RuntimePresentation
 	ActivationOwnerID         string
 	ExpectedBootID            string
 	RunAttempted              bool

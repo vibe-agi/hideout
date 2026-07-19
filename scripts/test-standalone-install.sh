@@ -31,7 +31,7 @@ trap cleanup 0 HUP INT TERM
 
 HIDEOUT_INSTALL_INVENTORY_FILE="$ROOT/releases/current.json" \
 HIDEOUT_INSTALL_PACKAGE_FILE="$package" \
-  "$ROOT/install.sh" --prefix "$tmp/prefix" --store "$tmp/store" --skip-init \
+  "$ROOT/install.sh" --prefix "$tmp/prefix" --store "$tmp/store" \
   >"$tmp/install.out"
 
 "$tmp/prefix/bin/hideout" version >"$tmp/version.out"
@@ -39,11 +39,12 @@ grep -Fx 'hideout 0.1.0-alpha.1' "$tmp/version.out" >/dev/null
 "$tmp/prefix/bin/hideout" package verify "$tmp/prefix" >/dev/null
 test ! -e "$tmp/store/profiles/default/profile.json"
 grep -F "Hideout 0.1.0-alpha.1 installed at $tmp/prefix/bin/hideout" "$tmp/install.out" >/dev/null
+grep -F "$tmp/prefix/bin/hideout setup" "$tmp/install.out" >/dev/null
 
 jq '.current.package.artifactSHA256 = ("0" * 64)' releases/current.json >"$tmp/bad-current.json"
 if HIDEOUT_INSTALL_INVENTORY_FILE="$tmp/bad-current.json" \
   HIDEOUT_INSTALL_PACKAGE_FILE="$package" \
-  "$ROOT/install.sh" --prefix "$tmp/rejected-prefix" --store "$tmp/rejected-store" --skip-init \
+  "$ROOT/install.sh" --prefix "$tmp/rejected-prefix" --store "$tmp/rejected-store" \
   >"$tmp/rejected.out" 2>"$tmp/rejected.err"; then
   echo "standalone-install: mismatched package digest was accepted" >&2
   exit 1

@@ -3,8 +3,9 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-install-smoke.XXXXXX")"
+tmp="$(hideout_mktemp_daemon_store)"
 cleanup() {
   rm -rf "$tmp"
 }
@@ -59,6 +60,7 @@ if HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --profile d
   exit 1
 fi
 grep -q 'already exists' "$tmp/init2.err"
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" daemon stop >"$tmp/daemon-stop.out"
 
 fix_store="$tmp/fix-store"
 HIDEOUT_STORE_ROOT="$fix_store" "$prefix/bin/hideout" doctor --fix --dry-run --backend native >"$tmp/doctor-fix-dry.out"
@@ -89,6 +91,7 @@ if grep -R 'socks5://user:pass@127.0.0.1:7890' "$proxy_store" >/dev/null 2>&1; t
   echo "install-smoke: proxy install persisted raw proxy URL" >&2
   exit 1
 fi
+HIDEOUT_STORE_ROOT="$proxy_store" "$proxy_prefix/bin/hideout" daemon stop >"$tmp/proxy-daemon-stop.out"
 
 package_stage="$tmp/package-stage"
 package_archive="$tmp/hideout-test.tar.gz"

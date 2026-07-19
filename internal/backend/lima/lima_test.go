@@ -1082,7 +1082,7 @@ func TestRunCreatesMissingPreservedInstanceFromConfig(t *testing.T) {
 
 func TestStartupProgressIsQuietForFastStartAndVisibleForSlowStart(t *testing.T) {
 	var progress bytes.Buffer
-	if err := runWithStartupProgressTimings(&progress, "hideout-fast", time.Hour, time.Hour, func() error { return nil }); err != nil {
+	if err := runWithStartupProgressTimings(&progress, "hideout-fast", nil, time.Hour, time.Hour, func() error { return nil }); err != nil {
 		t.Fatalf("fast start: %v", err)
 	}
 	if progress.Len() != 0 {
@@ -1094,7 +1094,9 @@ func TestStartupProgressIsQuietForFastStartAndVisibleForSlowStart(t *testing.T) 
 	release := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- runWithStartupProgressTimings(&progress, "hideout-slow", time.Millisecond, time.Hour, func() error {
+		done <- runWithStartupProgressTimings(&progress, "hideout-slow", &backend.RuntimePresentation{
+			Family: "developer-standard", Revision: "2026.07.0", Maturity: "preview", DownloadBytes: 1 << 30,
+		}, time.Millisecond, time.Hour, func() error {
 			close(entered)
 			<-release
 			return nil
@@ -1108,11 +1110,19 @@ func TestStartupProgressIsQuietForFastStartAndVisibleForSlowStart(t *testing.T) 
 	}
 	for _, want := range []string{
 		`starting Lima environment "hideout-slow"`,
-		"first start may download the configured image",
+		"runtime developer-standard@2026.07.0",
+		"preview",
+		"1.0 GiB declared download",
+		"first use may download it",
 		"Lima environment ready",
 	} {
 		if !strings.Contains(progress.String(), want) {
 			t.Fatalf("slow start progress missing %q: %q", want, progress.String())
+		}
+	}
+	for _, forbidden := range []string{"%", "downloaded bytes", "estimated"} {
+		if strings.Contains(progress.String(), forbidden) {
+			t.Fatalf("startup progress fabricated observation %q: %q", forbidden, progress.String())
 		}
 	}
 }

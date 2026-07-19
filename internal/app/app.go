@@ -46,6 +46,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/operatorintent"
 	"github.com/vibe-agi/hideout/internal/packagekit"
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/portbridge"
@@ -70,6 +71,9 @@ type app struct {
 	ensureDaemon          func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error)
 	sessionClient         func(context.Context, daemon.SessionClientOptions) (daemon.SessionClientResult, error)
 	daemonExecutable      func() (string, error)
+	initPrepare           func(context.Context, profile.Store, manager.InitServiceRequest) (manager.PreparedInit, error)
+	initApply             func(context.Context, profile.Store, manager.PreparedInit, *manager.InitConfirmation) (manager.InitApplyResult, error)
+	terminalInteractive   func() bool
 }
 
 var (
@@ -105,6 +109,8 @@ func (a app) run(args []string) error {
 		return a.initCommand(args[1:])
 	case "run":
 		return a.runCommand(args[1:], false)
+	case "setup", "show", "connect":
+		return a.operatorIntent(args)
 	case "explain":
 		return a.runCommand(args[1:], true)
 	case "doctor":
@@ -163,12 +169,17 @@ func (a app) run(args []string) error {
 
 func (a app) usage() {
 	fmt.Fprintln(a.stdout, "Usage:")
+	fmt.Fprintln(a.stdout, "  hideout setup")
 	fmt.Fprintln(a.stdout, "  hideout init --template privacy --profile <name> --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input")
 	fmt.Fprintln(a.stdout, "  hideout doctor")
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
+	fmt.Fprintln(a.stdout, "  hideout show connection [for profile <name>]")
+	fmt.Fprintln(a.stdout, "  hideout connect directly [for profile <name>]")
+	fmt.Fprintln(a.stdout, "  hideout connect through <proxy-secret> [using <resolver>] [for profile <name>]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "First run:")
-	fmt.Fprintln(a.stdout, "  hideout init --template privacy --profile default --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input")
+	fmt.Fprintln(a.stdout, "  hideout setup")
+	fmt.Fprintln(a.stdout, "  # automation/advanced: hideout init [flags] --no-input")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Run and explain:")
 	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
@@ -1488,6 +1499,10 @@ func codedInitError(err error) error {
 	}
 	msg := err.Error()
 	switch {
+	case errors.Is(err, manager.ErrInitPlanStale) || strings.Contains(msg, manager.ErrInitPlanStale.Error()):
+		return withRecoveryCode(err, recovery.CodeSetupPlanStale)
+	case errors.Is(err, errInitDaemonUnavailable):
+		return withRecoveryCode(err, recovery.CodeSetupDaemonUnavailable)
 	case strings.Contains(msg, "requires a proxy secret ref"):
 		entry, _ := recovery.Lookup(recovery.CodeInitProxySecretMissing)
 		return fmt.Errorf("code=%s reason=%s hint=%s: %w", entry.Code, entry.Reason, entry.Hint, err)
@@ -1625,41 +1640,23 @@ func (a app) initCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	core := manager.New(store)
-	plan, err := core.PlanInit(inittask.Options{
-		ProfileName:                opts.profileName,
-		Backend:                    opts.backendName,
-		Network:                    opts.networkMode,
-		ProxySecretRef:             opts.proxySecret,
-		MediatedResolver:           opts.mediatedResolver,
-		TemplateID:                 opts.templateID,
-		PrivilegeStatus:            opts.privilegeStatus,
-		PrivilegeReason:            opts.privilegeReason,
-		PrivilegeGuidance:          opts.privilegeGuidance,
-		PrivilegeSource:            opts.privilegeSource,
-		AllowDegradedTemplate:      opts.allowDegradedTemplate,
-		Onboarding:                 true,
-		ExplicitProfile:            opts.explicitProfile,
-		ExplicitTemplate:           opts.explicitTemplate,
-		ExplicitBackend:            opts.explicitBackend,
-		ExplicitNetwork:            opts.explicitNetwork,
-		NoInput:                    opts.noInput,
-		VisibilitySelection:        opts.hostFSVisibility,
-		VisibilityRoots:            opts.hostFSLandmarks.Values(),
-		NameDisclosureAcknowledged: opts.acknowledgeNameDisclosure,
-		ExplicitVisibility:         opts.explicitVisibility,
-		RuntimeFamily:              opts.runtimeFamily,
-		ImageRef:                   opts.imageRef,
-	})
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	if err := a.ensureInitDaemon(ctx, store); err != nil {
+		return codedInitError(err)
+	}
+	request := initServiceRequestFromOptions(opts)
+	prepared, err := a.prepareInit(ctx, store, request)
 	if err != nil {
 		return codedInitError(err)
 	}
 	if opts.dryRun {
-		writeInitPlan(a.stdout, "Hideout init plan", plan)
+		writeInitPlan(a.stdout, "Hideout init plan", prepared.Plan)
 		return nil
 	}
+	var confirmation *manager.InitConfirmation
 	if !opts.noInput {
-		writeInitReview(a.stdout, plan)
+		writeInitReview(a.stdout, prepared.Plan)
 		confirmed, err := a.confirmInit(initInput)
 		if err != nil {
 			return err
@@ -1667,15 +1664,37 @@ func (a app) initCommand(args []string) error {
 		if !confirmed {
 			return errors.New("init cancelled")
 		}
+		confirmation = &manager.InitConfirmation{
+			ReviewVersion: prepared.Review.Version,
+			PlanDigest:    prepared.Review.PlanDigest,
+			Confirmed:     true,
+		}
 	}
-	result, err := core.ApplyInit(plan, inittask.ApplyOptions{
-		NoInput: opts.noInput,
-	})
+	result, err := a.applyInit(ctx, store, prepared, confirmation)
 	if err != nil {
 		return codedInitError(err)
 	}
-	writeInitResult(a.stdout, "Hideout init", result)
+	writeInitResult(a.stdout, "Hideout init", result.Result)
 	return nil
+}
+
+func initServiceRequestFromOptions(opts initCommandOptions) manager.InitServiceRequest {
+	return manager.InitServiceRequest{
+		Version: manager.InitServiceRequestVersion, Mode: manager.InitModeInit,
+		ProfileName: opts.profileName, Backend: opts.backendName, Network: opts.networkMode,
+		ProxySecretRef: opts.proxySecret, MediatedResolver: opts.mediatedResolver,
+		TemplateID: opts.templateID, PrivilegeStatus: opts.privilegeStatus,
+		PrivilegeReason: opts.privilegeReason, PrivilegeGuidance: opts.privilegeGuidance,
+		PrivilegeSource: opts.privilegeSource, AllowDegradedTemplate: opts.allowDegradedTemplate,
+		Onboarding: true, ExplicitProfile: opts.explicitProfile,
+		ExplicitTemplate: opts.explicitTemplate, ExplicitBackend: opts.explicitBackend,
+		ExplicitNetwork: opts.explicitNetwork, NoInput: opts.noInput,
+		HostFSVisibility:           opts.hostFSVisibility,
+		HostFSVisibilityRoots:      opts.hostFSLandmarks.Values(),
+		NameDisclosureAcknowledged: opts.acknowledgeNameDisclosure,
+		ExplicitVisibility:         opts.explicitVisibility,
+		RuntimeFamily:              opts.runtimeFamily, ImageRef: opts.imageRef,
+	}
 }
 
 func parseInitCommandOptions(args []string) (initCommandOptions, error) {
@@ -4474,23 +4493,24 @@ func (a app) profileNetwork(store profile.Store, args []string) error {
 		return nil
 	}
 	name := args[0]
+	core := manager.New(store)
 	if len(args) == 1 {
-		p, err := store.Load(name)
+		state, err := core.ProfileNetwork(name)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.stdout, "mode=%s", p.Network.Mode)
-		if p.Network.ProxySecretRef != "" {
-			fmt.Fprintf(a.stdout, " proxySecretRef=%s", p.Network.ProxySecretRef)
+		fmt.Fprintf(a.stdout, "mode=%s", state.Mode)
+		if state.ProxySecretRef != "" {
+			fmt.Fprintf(a.stdout, " proxySecretRef=%s", state.ProxySecretRef)
 		}
-		if p.Network.MediatedResolver != "" {
-			fmt.Fprintf(a.stdout, " mediatedResolver=%s", p.Network.MediatedResolver)
+		if state.MediatedResolver != "" {
+			fmt.Fprintf(a.stdout, " mediatedResolver=%s", state.MediatedResolver)
 		}
 		fmt.Fprintln(a.stdout)
 		return nil
 	}
 	mode := args[1]
-	network := profile.Network{Mode: mode, ProxyEnvVisible: false}
+	opts := manager.ProfileNetworkOptions{ProfileName: name, Mode: mode}
 	switch mode {
 	case profile.NetworkModeDirect:
 		if len(args) != 2 {
@@ -4510,22 +4530,110 @@ func (a app) profileNetwork(store profile.Store, args []string) error {
 		if strings.TrimSpace(*secretRef) == "" || strings.TrimSpace(*resolver) == "" {
 			return errors.New("tun2socks requires --proxy-secret and --mediated-resolver")
 		}
-		network.ProxySecretRef = *secretRef
-		network.MediatedResolver = *resolver
+		opts.ProxySecretRef = *secretRef
+		opts.MediatedResolver = *resolver
 	default:
 		return fmt.Errorf("unsupported network mode %q", mode)
 	}
-	p, err := store.SetNetwork(name, network)
+	result, err := planAndApplyProfileNetwork(core, opts)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "network for %s set to %s", p.Name, p.Network.Mode)
-	if p.Network.MediatedResolver != "" {
-		fmt.Fprintf(a.stdout, " resolver=%s", p.Network.MediatedResolver)
+	fmt.Fprintf(a.stdout, "network for %s set to %s", result.Network.Profile, result.Network.Mode)
+	if result.Network.Mode == profile.NetworkModeTun2Socks && result.Network.MediatedResolver != "" {
+		fmt.Fprintf(a.stdout, " resolver=%s", result.Network.MediatedResolver)
 	}
 	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "active reusable environments apply this service generation on the next attach. Proxy-upstream and DNS changes are online; direct/proxy posture changes wait for active sibling sessions to exit. No VM recreate or restart is required.")
+	fmt.Fprintln(a.stdout, "active reusable environments apply this service generation on the next eligible attach. Proxy-upstream and DNS changes are online; direct/proxy posture changes wait for active sibling sessions to exit. No VM recreate or restart is required.")
 	return nil
+}
+
+func (a app) operatorIntent(args []string) error {
+	intent, err := operatorintent.Parse(args)
+	if err != nil {
+		return err
+	}
+	switch value := intent.(type) {
+	case operatorintent.Setup:
+		return a.setupCommand()
+	case operatorintent.Show:
+		store, err := profile.DefaultStore()
+		if err != nil {
+			return err
+		}
+		core := manager.New(store)
+		if value.Topic != operatorintent.ShowConnection {
+			return fmt.Errorf("show %s is not mapped yet", value.Topic)
+		}
+		state, err := core.ProfileNetwork(value.ProfileName)
+		if err != nil {
+			return err
+		}
+		return writeNaturalConnection(a.stdout, state)
+	case operatorintent.Connect:
+		store, err := profile.DefaultStore()
+		if err != nil {
+			return err
+		}
+		core := manager.New(store)
+		opts := manager.ProfileNetworkOptions{ProfileName: value.ProfileName}
+		switch value.Connection {
+		case operatorintent.ConnectionDirect:
+			opts.Mode = profile.NetworkModeDirect
+		case operatorintent.ConnectionProxy:
+			opts.Mode = profile.NetworkModeTun2Socks
+			opts.ProxySecretRef = value.ProxyName
+			opts.MediatedResolver = value.Resolver
+		default:
+			return fmt.Errorf("unsupported connection intent %q", value.Connection)
+		}
+		result, err := planAndApplyProfileNetwork(core, opts)
+		if err != nil {
+			return err
+		}
+		if result.Applied {
+			fmt.Fprint(a.stdout, "Updated: ")
+		} else {
+			fmt.Fprint(a.stdout, "Already set: ")
+		}
+		if err := writeNaturalConnection(a.stdout, result.Network); err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, "Existing sessions are unchanged; the next eligible attach applies this connection without recreating the VM.")
+		return nil
+	default:
+		return fmt.Errorf("operator intent %q is not mapped yet", intent.Kind())
+	}
+}
+
+func planAndApplyProfileNetwork(core manager.Core, opts manager.ProfileNetworkOptions) (manager.ProfileNetworkResult, error) {
+	plan, err := core.PlanProfileNetwork(opts)
+	if err != nil {
+		return manager.ProfileNetworkResult{}, err
+	}
+	return core.ApplyProfileNetwork(plan)
+}
+
+func writeNaturalConnection(w io.Writer, state manager.ProfileNetworkState) error {
+	switch state.Mode {
+	case profile.NetworkModeDirect:
+		if _, err := fmt.Fprintf(w, "%s is set to connect directly on the next eligible attach", state.Profile); err != nil {
+			return err
+		}
+		if state.ProxySecretRef != "" && state.MediatedResolver != "" {
+			_, err := fmt.Fprintf(w, " (saved proxy: %s using %s)", state.ProxySecretRef, state.MediatedResolver)
+			if err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintln(w, ".")
+		return err
+	case profile.NetworkModeTun2Socks:
+		_, err := fmt.Fprintf(w, "%s is set to connect through %s using %s on the next eligible attach.\n", state.Profile, state.ProxySecretRef, state.MediatedResolver)
+		return err
+	default:
+		return fmt.Errorf("unsupported stored network mode %q", state.Mode)
+	}
 }
 
 // profileIdeMode reads or sets the host-app projection IDE mode for a profile.

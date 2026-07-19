@@ -35,13 +35,13 @@ class Hideout < Formula
 
   def caveats
     <<~EOS
-      Hideout is installed but not initialized. Create the supported default
-      profile with:
+      Hideout is installed but not configured. Review and create the supported
+      default configuration with:
 
-        hideout init --template dev --profile default --backend lima \\
-          --network direct --runtime developer-standard --no-input
+        hideout setup
 
-      First use downloads the retained developer runtime separately; expect
+      Setup does not start a VM or download the runtime. First run downloads
+      the retained developer runtime separately; expect
       approximately 1 GB. Hideout user state remains under ~/.hideout and is
       preserved by brew upgrade and brew uninstall.
     EOS

@@ -14,7 +14,7 @@ The authoritative inventory is the production `manager.ManagerRoutes()` registry
 in `internal/manager/routes.go`. Both dispatch and drift tests consume this registry;
 this contract deliberately does not repeat a manually maintained route table.
 
-At this revision the registry contains **26 GET + 34 POST = 60 routes**. That count
+At this revision the registry contains **30 GET + 40 POST = 70 routes**. That count
 is descriptive, not authoritative. A route change is complete only when its
 `RouteSpec` (method, resource pattern, owner, and description), dispatch handling,
 and route tests change together. Dynamic member routes use the same `{id}` patterns

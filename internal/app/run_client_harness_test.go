@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/daemon"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
@@ -33,6 +34,12 @@ func TestMain(m *testing.M) {
 	}
 	runExecutable = func() (string, error) { return "/test/hideout", nil }
 	runDaemonSession = runSessionInProcessForAppTests
+	initDaemonPrepare = func(_ context.Context, store profile.Store, request manager.InitServiceRequest) (manager.PreparedInit, error) {
+		return (manager.InitService{Core: manager.New(store)}).Prepare(request)
+	}
+	initDaemonApply = func(_ context.Context, store profile.Store, prepared manager.PreparedInit, confirmation *manager.InitConfirmation) (manager.InitApplyResult, error) {
+		return (manager.InitService{Core: manager.New(store)}).Apply(prepared, confirmation)
+	}
 	os.Exit(m.Run())
 }
 

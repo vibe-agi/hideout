@@ -5,6 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
 go test -count=1 ./...
+scripts/test-formal-models.sh
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh
 scripts/test-standalone-install.sh
@@ -70,7 +71,8 @@ jq -e '
   ([.requirements[] | select(.featureId == "031-supported-cli-runtime")] | length == 8) and
   ([.requirements[] | select(.featureId == "032-community-host-app-recipes")] | length == 4) and
   ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7) and
-  ([.requirements[] | select(.featureId == "035-shared-default-vm-cross-workspace")] | length == 5)
+  ([.requirements[] | select(.featureId == "035-shared-default-vm-cross-workspace")] | length == 5) and
+  ([.requirements[] | select(.featureId == "038-zero-friction-setup")] | length == 8)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -309,12 +311,13 @@ rm -rf "$public_alpha_tmp"
 # examples in the user-facing path.
 scripts/test-first-run-docs-smoke.sh
 
-# Alpha first-run E2E proof (022): package install with --skip-init through one
-# installed-binary local-fast command, evidence schema validation, and
-# audit/Boundary capture. This is a weak/native package mechanics proof, not
-# real Lima/privacy evidence.
+# Alpha first-run E2E proof (022) and zero-friction setup (038) share one
+# candidate package. The setup lane executes the installed binary in a real PTY
+# and proves configuration-only behavior; neither local lane is Lima evidence.
 first_run_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-first-run-gate0.XXXXXX")"
-scripts/test-first-run-e2e.sh --local-fast --out "$first_run_tmp"
+scripts/package-local.sh --out "$first_run_tmp/hideout.tar.gz" >"$first_run_tmp/package.out"
+scripts/test-first-run-e2e.sh --local-fast --package "$first_run_tmp/hideout.tar.gz" --out "$first_run_tmp/022"
+scripts/test-first-run-e2e.sh --setup-local-fast --package "$first_run_tmp/hideout.tar.gz" --out "$first_run_tmp/038"
 rm -rf "$first_run_tmp"
 
 # UI E2E product-hardening evidence (021): schema and not-run semantics only in

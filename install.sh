@@ -5,14 +5,13 @@ repository="vibe-agi/hideout"
 inventory_url="${HIDEOUT_INSTALL_INVENTORY_URL:-https://raw.githubusercontent.com/vibe-agi/hideout/master/releases/current.json}"
 prefix="${HIDEOUT_INSTALL_PREFIX:-$HOME/.local}"
 store="${HIDEOUT_STORE_ROOT:-$HOME/.hideout}"
-skip_init=0
 
 usage() {
   cat <<'USAGE'
 Install the current verified Hideout public alpha on macOS arm64.
 
 Usage:
-  ./install.sh [--prefix <dir>] [--store <dir>] [--skip-init]
+  ./install.sh [--prefix <dir>] [--store <dir>]
 
 Environment:
   HIDEOUT_INSTALL_PREFIX          default: ~/.local
@@ -50,10 +49,6 @@ while [ "$#" -gt 0 ]; do
       store="$2"
       shift 2
       ;;
-    --skip-init)
-      skip_init=1
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -81,12 +76,6 @@ for command in curl tar shasum; do
 done
 [ -x /usr/bin/plutil ] || die "required command not found: /usr/bin/plutil"
 [ -x /usr/bin/codesign ] || die "required command not found: /usr/bin/codesign"
-
-profile="$store/profiles/default/profile.json"
-if [ "$skip_init" -eq 0 ] && [ ! -f "$profile" ]; then
-  command -v limactl >/dev/null 2>&1 ||
-    die "Lima is required for first setup; install it with: brew install lima"
-fi
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-install.XXXXXX")"
 cleanup() {
@@ -166,29 +155,12 @@ manifest="$package_root/package-manifest.json"
 
 "$package_root/install.sh" --prefix "$prefix" --store "$store" --skip-init
 
-if [ "$skip_init" -eq 0 ]; then
-  if [ -f "$profile" ]; then
-    echo "hideout-install: preserving existing default profile"
-  else
-    "$prefix/bin/hideout" init \
-      --template dev \
-      --profile default \
-      --backend lima \
-      --network direct \
-      --runtime developer-standard \
-      --no-input
-  fi
-fi
-
 echo
 echo "Hideout $version installed at $prefix/bin/hideout"
-if [ "$skip_init" -eq 1 ]; then
-  echo "Initialize it:"
-  echo "  $prefix/bin/hideout init --template dev --backend lima --network direct --runtime developer-standard --no-input"
-else
-  echo "Run it from a dedicated project checkout:"
-  echo "  $prefix/bin/hideout run -- git status --short"
-fi
+echo "Configure it interactively (no VM start or runtime download):"
+echo "  $prefix/bin/hideout setup"
+echo "Then run it from a dedicated project checkout:"
+echo "  $prefix/bin/hideout run -- git status --short"
 case ":$PATH:" in
   *":$prefix/bin:"*) ;;
   *) echo "Add it to PATH: export PATH=\"$prefix/bin:\$PATH\"" ;;

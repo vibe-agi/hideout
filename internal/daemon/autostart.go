@@ -213,9 +213,26 @@ func daemonStatusReady(storeRoot, buildID string, status Status) bool {
 
 func daemonStatusServing(storeRoot string, status Status) bool {
 	return status.Version == statusVersion && status.State == "serving" &&
-		filepath.Clean(status.Transport.Socket) == filepath.Clean(socketPathFor(storeRoot)) &&
-		filepath.Clean(status.Transport.SessionSocket) == filepath.Clean(SessionSocketPath(storeRoot)) &&
+		sameSocketPath(status.Transport.Socket, socketPathFor(storeRoot)) &&
+		sameSocketPath(status.Transport.SessionSocket, SessionSocketPath(storeRoot)) &&
 		status.Transport.SessionProtocol == SessionProtocolVersion
+}
+
+// sameSocketPath compares the physical runtime directory while preserving the
+// socket basename. This accepts platform aliases such as macOS /tmp ->
+// /private/tmp without accepting a different daemon endpoint.
+func sameSocketPath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if left == right {
+		return true
+	}
+	if filepath.Base(left) != filepath.Base(right) {
+		return false
+	}
+	leftDir, leftErr := filepath.EvalSymlinks(filepath.Dir(left))
+	rightDir, rightErr := filepath.EvalSymlinks(filepath.Dir(right))
+	return leftErr == nil && rightErr == nil && filepath.Clean(leftDir) == filepath.Clean(rightDir)
 }
 
 func daemonBuildMismatchError(status Status) error {

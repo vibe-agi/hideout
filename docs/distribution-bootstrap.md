@@ -19,8 +19,7 @@ source:
 
 ```bash
 brew install vibe-agi/tap/hideout
-hideout init --template dev --profile default --backend lima \
-  --network direct --runtime developer-standard --no-input
+hideout setup
 ```
 
 Homebrew verifies the immutable archive checksum and installs Lima as a formula
@@ -28,7 +27,10 @@ dependency. The Hideout formula independently verifies the macOS code signature
 and delegates to the package-owned typed installer with `--skip-init`. Formula
 installation is therefore non-interactive and Cellar-scoped: it does not start
 a VM, download the retained runtime, or write profile state under `~/.hideout`.
-The explicit `hideout init` command is the authority-bearing first-run step.
+Interactive `hideout setup` is the authority-bearing first-run step. It presents
+the fixed supported configuration and requires explicit confirmation, but does
+not start a VM or download the retained runtime. Automation and advanced
+configuration use `hideout init --no-input`.
 Normal Homebrew uninstall preserves Hideout user state.
 
 The canonical published formula lives in
@@ -51,8 +53,9 @@ It reads the published identity from
 SHA-256, checks package version and source-commit binding, verifies the macOS
 code signature, and then invokes the package's own typed installer with an
 explicit prefix and store. It does not install Lima, use `sudo`, or modify shell
-startup files. Override `--prefix`, `--store`, or use `--skip-init` when those
-defaults are not appropriate.
+startup files. Override `--prefix` or `--store` when those defaults are not
+appropriate. The standalone installer never configures a profile; run
+`hideout setup` afterward.
 
 Operators who do not run remote scripts directly can inspect the same script:
 
@@ -79,12 +82,10 @@ tar -xzf "$package"
   --skip-init
 ```
 
-After a manual install, run the same initialization used by the standalone
-path:
+After a manual install, run the same setup used by the Homebrew path:
 
 ```bash
-hideout init --template dev --profile default --backend lima \
-  --network direct --runtime developer-standard --no-input
+hideout setup
 ```
 
 ## Problem

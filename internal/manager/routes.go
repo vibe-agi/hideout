@@ -23,6 +23,29 @@ func (r RouteSpec) SamplePath() string {
 	return "/api/v1/" + sampleResource(r.Resource)
 }
 
+func (r RouteSpec) ResponseResource() string {
+	switch r.Resource {
+	case "decisions/{id}":
+		return "decision/inspect"
+	case "decisions/{id}/claim":
+		return "decision/claim"
+	case "decisions/{id}/approve":
+		return "decision/approve"
+	case "decisions/{id}/deny":
+		return "decision/deny"
+	case "decisions/{id}/reopen":
+		return "decision/reopen"
+	case "decisions/{id}/revoke":
+		return "decision/revoke"
+	case "notices/{id}":
+		return "notice/inspect"
+	case "notices/{id}/ack":
+		return "notice/ack"
+	default:
+		return r.Resource
+	}
+}
+
 func ManagerRoutes() []RouteSpec {
 	out := append([]RouteSpec(nil), managerRouteSpecs...)
 	slices.SortFunc(out, func(a, b RouteSpec) int {
@@ -167,6 +190,8 @@ var managerRouteSpecs = []RouteSpec{
 	routeSpec(http.MethodPost, "profile/env/plan", "plan profile environment change"),
 	routeSpec(http.MethodPost, "profile/hostfs/apply", "apply HostFS profile rule change"),
 	routeSpec(http.MethodPost, "profile/hostfs/plan", "plan HostFS profile rule change"),
+	routeSpec(http.MethodPost, "profile/network/apply", "apply profile network posture change"),
+	routeSpec(http.MethodPost, "profile/network/plan", "plan profile network posture change"),
 	routeSpec(http.MethodPost, "run/apply", "apply run"),
 	routeSpec(http.MethodPost, "run/plan", "plan run"),
 	routeSpec(http.MethodPost, "runtime/verify/apply", "apply runtime verification"),

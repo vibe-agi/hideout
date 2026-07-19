@@ -19,24 +19,32 @@ It does not create new security claims; current claims and non-claims remain in
 ## Install And Verify
 
 Install the signed package and Lima dependency from the official Homebrew tap,
-then create the default profile explicitly:
+then review and create the supported default configuration:
 
 ```bash
 brew install vibe-agi/tap/hideout
 hideout version
 hideout package verify "$(brew --prefix hideout)"
-hideout init --template dev --profile default --backend lima \
-  --network direct --runtime developer-standard --no-input
+hideout setup
 hideout doctor
 ```
 
 The formula validates the archive SHA-256, macOS signature, and package
 manifest before installing into the Homebrew Cellar. Formula installation does
 not start a VM, download the retained runtime, or write profile state under
-`~/.hideout`; the explicit `init` command creates the direct-network Lima
-profile. See [distribution-bootstrap.md](distribution-bootstrap.md) for the
+`~/.hideout`. Interactive `hideout setup` reviews and writes the fixed
+direct-network Lima configuration; it still does not start a VM or download
+the runtime. Automation and advanced profiles continue to use explicit
+`hideout init --no-input`. See [distribution-bootstrap.md](distribution-bootstrap.md) for the
 inspectable standalone installer, manual download, custom prefixes, repair,
 and uninstall.
+
+For non-interactive automation, spell out the same fixed choices:
+
+```bash
+hideout init --template dev --profile default --backend lima \
+  --network direct --runtime developer-standard --no-input
+```
 
 Homebrew users should repair a damaged keg through Homebrew:
 
@@ -69,7 +77,7 @@ target:
 
 ```bash
 cd /path/to/sanitized/project
-hideout run --profile default --backend lima -- pwd
+hideout run -- pwd
 hideout audit show --limit 20
 ```
 
@@ -158,9 +166,8 @@ network boundary:
 
 ```bash
 export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
-hideout profile network default tun2socks \
-  --proxy-secret default-proxy \
-  --mediated-resolver 1.1.1.1
+hideout connect through default-proxy using 1.1.1.1
+hideout show connection
 hideout run -- true
 ```
 
@@ -170,6 +177,19 @@ online: accepted TCP connections may finish on the previous route while new
 connections use the new route. Mediated DNS can also switch online. Switching
 between direct and proxy posture is environment-wide and waits for exclusive
 session ownership, but still uses the same guest boot and disk.
+
+Switch back without forgetting the saved proxy and resolver:
+
+```bash
+hideout connect directly
+hideout connect through default-proxy
+```
+
+Existing target sessions keep their accepted route. The next eligible attach
+applies the selected posture. Advanced automation can use the existing
+`profile network` command or the typed Manager `profile/network/plan` and
+`profile/network/apply` routes; all three paths use the same Manager planner
+and validator.
 
 ## Install The Tested Agent CLI
 

@@ -4689,8 +4689,95 @@ func TestProfileNetworkCommandConfiguresReferenceWithoutSecretValue(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Network.Mode != profile.NetworkModeDirect || p.Network.ProxySecretRef != "" || p.Network.MediatedResolver != "" {
-		t.Fatalf("direct mode retained proxy configuration: %+v", p.Network)
+	if p.Network.Mode != profile.NetworkModeDirect || p.Network.ProxySecretRef != "default-proxy" || p.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("direct mode forgot reusable proxy configuration: %+v", p.Network)
+	}
+}
+
+func TestNaturalConnectionCommandsUseProfileNetworkPlanApply(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+
+	if code := Main([]string{"connect", "through", "charles"}, &out, &errOut); code == 0 {
+		t.Fatal("first proxy connection without a resolver succeeded")
+	}
+	if !strings.Contains(errOut.String(), "connect through charles using <resolver>") {
+		t.Fatalf("missing natural resolver recovery: %s", errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"connect", "through", "charles", "using", "1.1.1.1"}, &out, &errOut); code != 0 {
+		t.Fatalf("connect exit=%d stderr=%s", code, errOut.String())
+	}
+	for _, want := range []string{
+		"Updated: default is set to connect through charles using 1.1.1.1 on the next eligible attach.",
+		"Existing sessions are unchanged",
+		"without recreating the VM",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("connect output missing %q: %s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"show", "connection"}, &out, &errOut); code != 0 {
+		t.Fatalf("show exit=%d stderr=%s", code, errOut.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "default is set to connect through charles using 1.1.1.1 on the next eligible attach." {
+		t.Fatalf("show output=%q", got)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"connect", "directly"}, &out, &errOut); code != 0 {
+		t.Fatalf("direct exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "default is set to connect directly on the next eligible attach (saved proxy: charles using 1.1.1.1).") {
+		t.Fatalf("direct output=%s", out.String())
+	}
+
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Network.Mode != profile.NetworkModeDirect || stored.Network.ProxySecretRef != "charles" || stored.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("natural command stored network=%+v", stored.Network)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"connect", "through", "next-proxy"}, &out, &errOut); code != 0 {
+		t.Fatalf("resolver reuse exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "through next-proxy using 1.1.1.1 on the next eligible attach") {
+		t.Fatalf("resolver reuse output=%s", out.String())
+	}
+}
+
+func TestNaturalConnectionCommandsRespectExplicitProfileScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	if code := Main([]string{"connect", "through", "work-proxy", "using", "9.9.9.9", "for", "profile", "work"}, &out, &errOut); code != 0 {
+		t.Fatalf("connect exit=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "work is set to connect through work-proxy using 9.9.9.9 on the next eligible attach") {
+		t.Fatalf("connect output=%s", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := Main([]string{"show", "connection", "for", "profile", "work"}, &out, &errOut); code != 0 {
+		t.Fatalf("show exit=%d stderr=%s", code, errOut.String())
+	}
+	if strings.TrimSpace(out.String()) != "work is set to connect through work-proxy using 9.9.9.9 on the next eligible attach." {
+		t.Fatalf("show output=%q", out.String())
 	}
 }
 

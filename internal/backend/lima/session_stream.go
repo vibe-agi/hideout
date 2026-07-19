@@ -52,6 +52,9 @@ func (b Backend) RunWithStreams(ctx context.Context, session *backend.Session, c
 		return errors.New("lima daemon session requires the isolated session supervisor")
 	}
 	if !session.RuntimeReady {
+		if streams.Stderr != nil {
+			b.Progress = streams.Stderr
+		}
 		if err := b.Activate(ctx, session, env); err != nil {
 			return err
 		}

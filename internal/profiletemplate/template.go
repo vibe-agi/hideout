@@ -239,13 +239,8 @@ func Render(req Request) (Rendered, error) {
 	}
 
 	p := profile.Default(normalized.ProfileName)
-	// Privacy and hardened profiles default the workspace to alias mode so the
-	// guest sees /workspace and the host username/path shape is not synthesized
-	// into the default workspace path (030). dev/debug keep the preserve default
-	// for cross-boundary absolute-path compatibility.
-	if tmpl.ID == Privacy || tmpl.ID == Hardened {
-		p.Workspace.PathMode = "alias"
-	}
+	// Every new template inherits the product-wide /workspace alias. Preserve is
+	// an explicit advanced choice, never a template-dependent default.
 	p.Network.Mode = normalized.Network
 	p.Network.ProxyEnvVisible = false
 	p.Network.ProxySecretRef = normalized.ProxySecretRef

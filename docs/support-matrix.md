@@ -55,6 +55,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `helper/linux-hostfsd` | supported | Gate 0 package smoke |
 | `helper/linux-dns-stub` | supported | Gate 3 hidden proxy |
 | `helper/linux-session-supervisor` | supported | Gate 0 package smoke and 034 real Lima Gate 2 |
+| `helper/linux-workspace-portal` | supported | Gate 0 package smoke and 035 real Lima Gate 2 |
 
 ## Feature And Gate Support
 
@@ -73,6 +74,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `feature/community-host-app-recipes` | gate-required | External-pack Gate 2 |
 | `feature/concurrent-run-sessions` | gate-required | 034 real Lima Gate 2 |
 | `feature/shared-default-vm-cross-workspace` | gate-required | 035 clean real macOS arm64 Lima behavior and performance evidence |
+| `feature/zero-friction-setup` | gate-required | 038 packaged PTY plus real macOS arm64 Lima first-run and agent evidence |
 | `release/public-alpha-package` | gate-required | Gate 0, Gate 2, Gate 3, anonymous receipt |
 | `release/developer-id-notarization` | gate-required | Developer ID and accepted notarization |
 | `gate/release-candidate` | gate-required | Gate 2 and Gate 3 real evidence |

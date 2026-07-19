@@ -17,7 +17,6 @@ import (
 	exportboundary "github.com/vibe-agi/hideout/internal/export"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/hostfs"
-	"github.com/vibe-agi/hideout/internal/inittask"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
@@ -98,23 +97,9 @@ type RunStatusResponse struct {
 }
 
 type InitAPIRequest struct {
-	ProfileName                string   `json:"profile,omitempty"`
-	Backend                    string   `json:"backend,omitempty"`
-	Network                    string   `json:"network,omitempty"`
-	ProxySecretRef             string   `json:"proxySecretRef,omitempty"`
-	MediatedResolver           string   `json:"mediatedResolver,omitempty"`
-	TemplateID                 string   `json:"template,omitempty"`
-	PrivilegeStatus            string   `json:"privilegeStatus,omitempty"`
-	PrivilegeReason            string   `json:"privilegeReason,omitempty"`
-	PrivilegeGuidance          string   `json:"privilegeGuidance,omitempty"`
-	PrivilegeSource            string   `json:"privilegeSource,omitempty"`
-	AllowDegradedTemplate      bool     `json:"allowDegradedTemplate,omitempty"`
-	HostFSVisibility           string   `json:"hostfsVisibility,omitempty"`
-	HostFSVisibilityRoots      []string `json:"hostfsVisibilityRoots,omitempty"`
-	NameDisclosureAcknowledged bool     `json:"nameDisclosureAcknowledged,omitempty"`
-	DryRun                     bool     `json:"dryRun,omitempty"`
-	RuntimeFamily              string   `json:"runtime,omitempty"`
-	ImageRef                   string   `json:"image,omitempty"`
+	Request      *InitServiceRequest `json:"request,omitempty"`
+	Prepared     *PreparedInit       `json:"prepared,omitempty"`
+	Confirmation *InitConfirmation   `json:"confirmation,omitempty"`
 }
 
 type EnvironmentActionAPIRequest struct {
@@ -186,6 +171,13 @@ type ProfileEnvAPIRequest struct {
 	Operation   string `json:"operation"`
 	Name        string `json:"name,omitempty"`
 	Value       string `json:"value,omitempty"`
+}
+
+type ProfileNetworkAPIRequest struct {
+	ProfileName      string `json:"profile,omitempty"`
+	Mode             string `json:"mode"`
+	ProxySecretRef   string `json:"proxySecretRef,omitempty"`
+	MediatedResolver string `json:"mediatedResolver,omitempty"`
 }
 
 type ExportAPIRequest struct {
@@ -472,6 +464,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec Ro
 		api.serveProfileEnvPlan(w, r)
 	case "profile/env/apply":
 		api.serveProfileEnvApply(w, r)
+	case "profile/network/plan":
+		api.serveProfileNetworkPlan(w, r)
+	case "profile/network/apply":
+		api.serveProfileNetworkApply(w, r)
 	case "evidence/export/plan":
 		api.serveExportPlan(w, r)
 	case "evidence/export/apply":
@@ -519,7 +515,11 @@ func (api API) serveInitPlan(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanInit(initOptionsFromAPIRequest(req))
+	if req.Request == nil || req.Prepared != nil || req.Confirmation != nil {
+		writeAPIError(w, http.StatusBadRequest, "init plan requires request only")
+		return
+	}
+	prepared, err := (InitService{Core: api.Core}).Prepare(*req.Request)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -527,7 +527,7 @@ func (api API) serveInitPlan(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, APIResponse{
 		Version:  APIVersion,
 		Resource: "init/plan",
-		Data:     plan,
+		Data:     prepared,
 		Errors:   []string{},
 	})
 }
@@ -538,15 +538,11 @@ func (api API) serveInitApply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanInit(initOptionsFromAPIRequest(req))
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
+	if req.Prepared == nil || req.Request != nil {
+		writeAPIError(w, http.StatusBadRequest, "init apply requires prepared plan")
 		return
 	}
-	result, applyErr := api.Core.ApplyInit(plan, inittask.ApplyOptions{
-		NoInput: true,
-		DryRun:  req.DryRun,
-	})
+	result, applyErr := (InitService{Core: api.Core}).Apply(*req.Prepared, req.Confirmation)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "init/apply",
@@ -1504,6 +1500,49 @@ func (api API) serveProfileEnvApply(w http.ResponseWriter, r *http.Request) {
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (api API) serveProfileNetworkPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeProfileNetworkAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanProfileNetwork(profileNetworkOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/network/plan",
+		Data:     plan,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveProfileNetworkApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeProfileNetworkAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := api.Core.PlanProfileNetwork(profileNetworkOptionsFromAPIRequest(req))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, applyErr := api.Core.ApplyProfileNetwork(plan)
+	resp := APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/network/apply",
+		Data:     result,
+		Errors:   []string{},
+	}
+	if applyErr != nil {
+		resp.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, resp)
+}
+
 func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview Overview, overviewErr error) {
 	sessions := nonNilSlice(overview.Sessions)
 	if rawProfile := strings.TrimSpace(r.URL.Query().Get("profile")); rawProfile != "" {
@@ -1725,6 +1764,14 @@ func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (Profile
 	return req, nil
 }
 
+func decodeProfileNetworkAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileNetworkAPIRequest, error) {
+	var req ProfileNetworkAPIRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid profile-network request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
 func decodeStrictJSON(w http.ResponseWriter, r *http.Request, out any, message string) error {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -1748,34 +1795,6 @@ func decodeExportAPIRequest(w http.ResponseWriter, r *http.Request) (ExportAPIRe
 		return req, errors.New("invalid export request")
 	}
 	return req, nil
-}
-
-func initOptionsFromAPIRequest(req InitAPIRequest) inittask.Options {
-	return inittask.Options{
-		ProfileName:                req.ProfileName,
-		Backend:                    req.Backend,
-		Network:                    req.Network,
-		ProxySecretRef:             req.ProxySecretRef,
-		MediatedResolver:           req.MediatedResolver,
-		TemplateID:                 req.TemplateID,
-		PrivilegeStatus:            req.PrivilegeStatus,
-		PrivilegeReason:            req.PrivilegeReason,
-		PrivilegeGuidance:          req.PrivilegeGuidance,
-		PrivilegeSource:            req.PrivilegeSource,
-		AllowDegradedTemplate:      req.AllowDegradedTemplate,
-		Onboarding:                 req.TemplateID != "",
-		ExplicitProfile:            req.ProfileName != "",
-		ExplicitTemplate:           req.TemplateID != "",
-		ExplicitBackend:            req.Backend != "",
-		ExplicitNetwork:            req.Network != "",
-		NoInput:                    true,
-		VisibilitySelection:        req.HostFSVisibility,
-		VisibilityRoots:            append([]string(nil), req.HostFSVisibilityRoots...),
-		NameDisclosureAcknowledged: req.NameDisclosureAcknowledged,
-		ExplicitVisibility:         req.HostFSVisibility != "",
-		RuntimeFamily:              req.RuntimeFamily,
-		ImageRef:                   req.ImageRef,
-	}
 }
 
 func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {
@@ -1914,6 +1933,15 @@ func profileEnvOptionsFromAPIRequest(req ProfileEnvAPIRequest) ProfileEnvOptions
 		Operation:   req.Operation,
 		Name:        req.Name,
 		Value:       req.Value,
+	}
+}
+
+func profileNetworkOptionsFromAPIRequest(req ProfileNetworkAPIRequest) ProfileNetworkOptions {
+	return ProfileNetworkOptions{
+		ProfileName:      req.ProfileName,
+		Mode:             req.Mode,
+		ProxySecretRef:   req.ProxySecretRef,
+		MediatedResolver: req.MediatedResolver,
 	}
 }
 

@@ -6,10 +6,11 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "daemon-smoke: jq required" >&2; exit 127; }
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hd-smoke.XXXXXX")"
+tmp="$(hideout_mktemp_daemon_store)"
 store="$tmp/store"
 daemon_pid=""
 cleanup() {
@@ -24,8 +25,6 @@ install -d -m 700 "$store"
 bin="$tmp/hideout"
 go build -o "$bin" ./cmd/hideout
 
-"$bin" init --no-input --profile default --template dev --backend native --network direct >/dev/null
-
 # Start the daemon in the background.
 "$bin" daemon start >"$tmp/start.out" 2>&1 &
 daemon_pid=$!
@@ -38,6 +37,11 @@ for _ in $(seq 1 50); do
 done
 [ -S "$sock" ] || { echo "daemon-smoke: socket not created" >&2; cat "$tmp/start.out" >&2; exit 1; }
 token="$(tr -d '\n' <"$token_file")"
+
+# Initialize through the already-running authenticated daemon. Since 038, init
+# itself auto-starts hideoutd, so starting the lifecycle fixture first avoids a
+# competing process and verifies the production Manager path.
+"$bin" init --no-input --profile default --template dev --backend native --network direct >/dev/null
 
 curl_sock() { curl -sS --unix-socket "$sock" "$@"; }
 

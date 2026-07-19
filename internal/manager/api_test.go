@@ -507,6 +507,41 @@ func TestAPIInitRejectsLegacyToolSupplyPayload(t *testing.T) {
 	}
 }
 
+func TestAPIInitPreparedContractRejectsUnknownAndUnboundPayloads(t *testing.T) {
+	api := API{
+		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	setupRequest := SetupInitServiceRequest()
+	requestJSON, err := json.Marshal(setupRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "unknown outer field", path: "/api/v1/init/plan", body: `{"request":` + string(requestJSON) + `,"unknown":true}`},
+		{name: "unknown request field", path: "/api/v1/init/plan", body: `{"request":{"version":"` + InitServiceRequestVersion + `","mode":"setup","unknown":true}}`},
+		{name: "options-only apply", path: "/api/v1/init/apply", body: `{"request":` + string(requestJSON) + `}`},
+		{name: "empty apply", path: "/api/v1/init/apply", body: `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Host = "localhost"
+			req.Header.Set("Authorization", "Bearer ui_token")
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+			api.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+			}
+		})
+	}
+}
+
 func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	api := API{
@@ -514,15 +549,31 @@ func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
 		Token:     "ui_token",
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
-	reqBody := InitAPIRequest{
-		ProfileName:      "api-privacy",
-		TemplateID:       "privacy",
-		Backend:          "native",
-		Network:          "tun2socks",
-		ProxySecretRef:   "default-proxy",
-		MediatedResolver: "1.1.1.1",
+	serviceRequest := InitServiceRequest{
+		Version: InitServiceRequestVersion, Mode: InitModeInit,
+		ProfileName: "api-privacy", TemplateID: "privacy", Backend: "native",
+		Network: "tun2socks", ProxySecretRef: "default-proxy", MediatedResolver: "1.1.1.1",
+		Onboarding: true, ExplicitProfile: true, ExplicitTemplate: true,
+		ExplicitBackend: true, ExplicitNetwork: true, NoInput: true,
 	}
-	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", reqBody)
+	planReq := newAPIJSONRequest(http.MethodPost, "/api/v1/init/plan", InitAPIRequest{Request: &serviceRequest})
+	planReq.Header.Set("Authorization", "Bearer ui_token")
+	planResp := httptest.NewRecorder()
+	api.ServeHTTP(planResp, planReq)
+	if planResp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", planResp.Code, planResp.Body.String())
+	}
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(planResp.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var prepared PreparedInit
+	if err := json.Unmarshal(envelope.Data, &prepared); err != nil {
+		t.Fatal(err)
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", InitAPIRequest{Prepared: &prepared})
 	req.Header.Set("Authorization", "Bearer ui_token")
 	resp := httptest.NewRecorder()
 	api.ServeHTTP(resp, req)
@@ -556,6 +607,27 @@ func TestAPIInitApplyConfiguresTun2SocksProxySecretRef(t *testing.T) {
 	}
 	if loaded.Metadata["templateId"] != "privacy" {
 		t.Fatalf("template metadata missing: %+v", loaded.Metadata)
+	}
+}
+
+func TestAPIInitApplyRejectsOptionsOnlyRequest(t *testing.T) {
+	api := API{
+		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/init/apply", map[string]any{
+		"request": map[string]any{
+			"version": InitServiceRequestVersion,
+			"mode":    InitModeInit,
+			"profile": "default",
+		},
+	})
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "requires prepared plan") {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }
 
@@ -916,6 +988,81 @@ func TestAPIProfileEnvPlanAndApplyDoesNotEchoValues(t *testing.T) {
 	}
 	if loaded.Env.Public["SERVICE_TOKEN"] != "secret-value" {
 		t.Fatalf("env value was not persisted: %+v", loaded.Env.Public)
+	}
+}
+
+func TestAPIProfileNetworkPlanAndApplyUsesManagerAuthority(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	api := API{
+		Core:      New(store),
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	schema := compileManagerAPISchema(t)
+	reqBody := ProfileNetworkAPIRequest{
+		ProfileName:      "default",
+		Mode:             profile.NetworkModeTun2Socks,
+		ProxySecretRef:   "charles",
+		MediatedResolver: "1.1.1.1",
+	}
+	req := newAPIJSONRequest(http.MethodPost, "/api/v1/profile/network/plan", reqBody)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	for _, want := range []string{
+		`"resource":"profile/network/plan"`,
+		`"mode":"tun2socks"`,
+		`"proxySecretRef":"charles"`,
+		`"mediatedResolver":"1.1.1.1"`,
+		`"changed":true`,
+	} {
+		if !strings.Contains(resp.Body.String(), want) {
+			t.Fatalf("profile-network plan missing %q: %s", want, resp.Body.String())
+		}
+	}
+	if _, err := store.Load("default"); err == nil {
+		t.Fatal("profile-network plan created profile state")
+	}
+
+	req = newAPIJSONRequest(http.MethodPost, "/api/v1/profile/network/apply", reqBody)
+	req.Header.Set("X-Hideout-UI-Token", "ui_token")
+	resp = httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	validateManagerAPIResponse(t, schema, resp.Body.Bytes())
+	if !strings.Contains(resp.Body.String(), `"resource":"profile/network/apply"`) ||
+		!strings.Contains(resp.Body.String(), `"applied":true`) {
+		t.Fatalf("unexpected profile-network apply: %s", resp.Body.String())
+	}
+	loaded, err := store.Load("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Network.ProxySecretRef != "charles" || loaded.Network.MediatedResolver != "1.1.1.1" {
+		t.Fatalf("network was not persisted: %+v", loaded.Network)
+	}
+}
+
+func TestAPIProfileNetworkRejectsUnknownFields(t *testing.T) {
+	api := API{Core: New(profile.Store{Root: t.TempDir()}), Token: "ui_token", ExpiresAt: time.Now().Add(time.Minute)}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/profile/network/plan", strings.NewReader(`{
+		"profile":"default",
+		"mode":"direct",
+		"hostCommand":"/usr/bin/ssh"
+	}`))
+	req.Host = "127.0.0.1"
+	req.Header.Set("Authorization", "Bearer ui_token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "invalid profile-network request") {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }
 

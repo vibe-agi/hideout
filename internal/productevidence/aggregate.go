@@ -31,6 +31,8 @@ var Required035ProofIDs = RequiredProofIDsForFeature(Feature035)
 
 var Required036ProofIDs = RequiredProofIDsForFeature(Feature036)
 
+var Required038ProofIDs = RequiredProofIDsForFeature(Feature038)
+
 type Aggregate struct {
 	Proofs       map[string]ProofEntry
 	Claims       map[string][]ProofEntry

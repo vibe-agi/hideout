@@ -227,6 +227,23 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"036.SC-010"),
 		req(Feature036, Proof036RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "036.SC-002", "036.SC-003"),
 		req(Feature036, Proof036DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "036.FR-003", "036.FR-008", "036.FR-014", "036.FR-019", "036.FR-021", "036.FR-024"),
+
+		req(Feature038, Proof038IntentPlanParity, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-001", "038.FR-002", "038.FR-008", "038.FR-010", "038.FR-030", "038.FR-031", "038.SC-005", "038.SC-015"),
+		req(Feature038, Proof038CancelDriftReadonly, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-005", "038.FR-006", "038.FR-007", "038.FR-014", "038.FR-015", "038.FR-016", "038.SC-003", "038.SC-004"),
+		req(Feature038, Proof038DaemonRecovery, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-029", "038.FR-032", "038.FR-035", "038.SC-010", "038.SC-012"),
+		req(Feature038, Proof038PackagePTY, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-001", "038.FR-003", "038.FR-004", "038.FR-005", "038.FR-009", "038.FR-012", "038.FR-013", "038.FR-017", "038.FR-018", "038.FR-019", "038.FR-020", "038.FR-021", "038.FR-026", "038.FR-027", "038.SC-001", "038.SC-002", "038.SC-009", "038.SC-013"),
+		runtimeReq(Feature038, Proof038RealFirstRun, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-022", "038.FR-023", "038.FR-024", "038.FR-025", "038.SC-006", "038.SC-007", "038.SC-008", "038.SC-016"),
+		runtimeReq(Feature038, Proof038RealAgentInstallRun, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-033", "038.FR-034", "038.SC-014"),
+		req(Feature038, Proof038RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"038.FR-024", "038.FR-028", "038.SC-006", "038.SC-011"),
+		req(Feature038, Proof038DocsTruth, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"038.FR-028", "038.SC-013"),
 	}
 	sortRequirements(rows)
 	return rows

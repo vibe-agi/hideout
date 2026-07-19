@@ -77,6 +77,7 @@ if [ -z "$prefix" ] || [ -z "$store" ]; then
 fi
 
 mkdir -p "$prefix/bin" "$store"
+chmod 0700 "$store"
 prefix="$(cd "$prefix" && pwd -P)"
 store="$(cd "$store" && pwd -P)"
 source="$(cd "$source" && pwd -P)"

@@ -288,6 +288,13 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
   mutate only durable `profile.env.public`, `profile.env.inherit`, and
   `profile.env.deny` policy, use the same profile validator as CLI
   `profile env`, and must not return public env values in plan/apply responses.
+- Manager API exposes profile network posture changes through
+  `POST /api/v1/profile/network/plan` and
+  `POST /api/v1/profile/network/apply`. Natural CLI `show connection` and
+  `connect directly|through` use the same Core planner. Plans contain only the
+  proxy secret reference and mediated resolver, never the proxy value. Direct
+  posture can retain the prior proxy selection for a later switch, but inactive
+  proxy material is omitted from the environment service configuration.
 - Manager API exposes controlled adapter-pack lifecycle actions:
   `GET /api/v1/adapter-packs`, `GET /api/v1/adapter-pack/inspect`, and
   `POST /api/v1/adapter-pack/plan|apply`. These routes install, test, enable,
@@ -297,7 +304,8 @@ cross-subsystem status source is [STATUS.md](STATUS.md).
 - The profile mutation endpoints above describe the current implemented
   surface accurately. As the API stabilizes they converge to a single
   `POST /api/v1/profile/policy/plan` and `POST /api/v1/profile/policy/apply`
-  pair with a `kind` discriminator (`command-proxy`, `hostfs`, `env`).
+  pair with a `kind` discriminator (`command-proxy`, `hostfs`, `env`,
+  `network`).
   Convergence changes endpoint shape only; validators, plan/apply semantics,
   and authority bounds are unchanged.
 - `run/apply` executes only through a configured `RunBackendFactory`. The local
@@ -341,20 +349,21 @@ Current API v1 init and run resources:
 
 ```text
 POST /api/v1/init/plan
-  Input: InitAPIRequest with profile, backend, network, machine-setup inputs,
-  expected-command diagnostic declarations, and an optional guest base image
-  declaration.
-  Output: InitPlan with typed InitTasks and structured nextSteps.
+  Input: InitAPIRequest containing one typed InitServiceRequest with profile,
+  backend, network, runtime, machine-setup, and advanced init inputs.
+  Output: PreparedInit with the canonical review, semantic plan digest, typed
+  InitPlan, and structured nextSteps.
   Authority: planning only; no profile mutation, helper build, backend prepare,
   broker, HostFS service, package install, or host command execution.
 
 POST /api/v1/init/apply
-  Input: InitAPIRequest.
-  Output: InitResult with the same plan/nextSteps shape.
-  Authority: applies the same PlanInit -> ApplyInit chain as CLI init and
-  doctor fix. It may create store/profile state and write helper-artifact
-  install metadata. It runs without an interactive prompt channel in API v1,
-  so confirmation-required tasks fail closed.
+  Input: InitAPIRequest containing the exact PreparedInit and an explicit
+  confirmation bound to its review version and semantic plan digest.
+  Output: InitApplyResult with the applied Manager result.
+  Authority: under the profile mutation lock, re-observes current state,
+  rebuilds the effect-relevant plan, rejects drift, and applies that current
+  plan only when it still matches the reviewed digest. The daemon never
+  manufactures confirmation or treats a missing prompt as approval.
 
 POST /api/v1/run/plan
   Input: RunAPIRequest with profile, backend, workspace, network override,
