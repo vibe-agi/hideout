@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/hostcap"
+	"github.com/vibe-agi/hideout/internal/hostcap/appopen"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 )
 
@@ -152,6 +153,18 @@ func (s *Server) handleHostAppOpen(ctx context.Context, req Request, resp Respon
 		outcome = "suppressed"
 	}
 	resp.Data = map[string]any{"outcome": outcome}
+	// A silent launch hides the posture: the operator cannot tell the safe
+	// window (isolated profile, extensions disabled) from their native IDE,
+	// and never learns the trusted upgrade exists. Mode is a two-value
+	// posture fact, not a host path or identity, so it may cross to the guest.
+	if outcome == "launched" {
+		switch result.Mode {
+		case appopen.ModeSafe:
+			resp.Stderr = "hideout: opened in a safe host app window (isolated profile, extensions disabled); for your full native IDE: hideout profile ide-mode " + s.Profile + " trusted-host-ide"
+		case appopen.ModeTrusted:
+			resp.Stderr = "hideout: opened in your trusted host IDE"
+		}
+	}
 	s.emit(req, resp, s.hostAppAuditDetails(req, request, binding, string(result.Mode), outcome, "", resolver.auditResource()))
 	return resp
 }

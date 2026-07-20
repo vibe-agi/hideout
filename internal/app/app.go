@@ -6850,6 +6850,10 @@ func (a app) envList(args []string) error {
 		fmt.Fprintln(a.stdout, "environments: none")
 		return nil
 	}
+	// The stored record status (ready/running/error) knows nothing about the
+	// daemon's lifecycle journal; an environment whose reconciliation is
+	// blocked refuses both attach and stop and must not present as healthy.
+	blockedReconciliations := lifecycle.BlockedEnvironmentReconciliations(store.Root)
 	fmt.Fprintln(a.stdout, "NAME\tKIND\tMODE\tIMAGE\tBACKEND\tSTATUS\tSESSIONS\tVIEWS\tPROVIDER\tOWNER_HEALTH\tTRUST_DOMAIN\tDISK\tLAST_STARTED\tWORKSPACE\tID")
 	for _, env := range environments {
 		if env.Status == "unsupported-version" {
@@ -6867,7 +6871,7 @@ func (a app) envList(args []string) error {
 			explainValue(string(env.Mode), "unknown"),
 			abbreviateImageRef(env.ImageRef),
 			env.Backend,
-			explainValue(env.Status, "ready"),
+			environmentListStatus(env, blockedReconciliations),
 			env.ActiveSessions,
 			env.ActiveWorkspaceViews,
 			explainValue(env.WorkspaceProviderState, "-"),
@@ -6880,7 +6884,20 @@ func (a app) envList(args []string) error {
 	}
 	fmt.Fprintln(a.stdout, "shared machines reuse one guest kernel, root disk, global tools/caches, profile state, and compatible machine services; workspace views are not separate VM walls")
 	fmt.Fprintln(a.stdout, "inspect a row for copyable separate-VM and separate-profile guidance: hideout env inspect <name>")
+	if len(blockedReconciliations) > 0 {
+		fmt.Fprintln(a.stdout, "blocked environments refuse attach and stop until the control plane re-reconciles: hideout daemon stop, then retry")
+	}
 	return nil
+}
+
+// environmentListStatus overrides the stored record status when the daemon's
+// lifecycle journal marks the environment blocked; the record alone would
+// present a refusing environment as ready.
+func environmentListStatus(env manager.EnvironmentSummary, blocked map[string]string) string {
+	if reason, ok := blocked[env.ID]; ok {
+		return "blocked:" + reason
+	}
+	return explainValue(env.Status, "ready")
 }
 
 func (a app) sessionCommand(args []string) error {

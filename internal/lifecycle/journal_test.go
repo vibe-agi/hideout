@@ -121,3 +121,43 @@ func validJournal(t *testing.T) Journal {
 		Reconciliation: Reconciliation{DaemonInstanceID: "daemon-test", State: "complete", ObservedAt: now}, UpdatedAt: now,
 	}
 }
+
+func TestBlockedEnvironmentReconciliationsListsOnlyBlockedJournals(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := JournalStore{Root: root}
+	now := time.Now().UTC()
+
+	blocked := newJournal("env-blocked-1", "daemon-a", 3, now)
+	blocked.Reconciliation = blockedReconciliation("daemon-a", "backend-incarnation-changed", now)
+	if err := store.Write(blocked); err != nil {
+		t.Fatal(err)
+	}
+	healthy := newJournal("env-healthy-1", "daemon-a", 2, now)
+	healthy.Reconciliation = Reconciliation{DaemonInstanceID: "daemon-a", State: "complete", ObservedAt: now}
+	if err := store.Write(healthy); err != nil {
+		t.Fatal(err)
+	}
+
+	out := BlockedEnvironmentReconciliations(root)
+	if len(out) != 1 {
+		t.Fatalf("blocked map = %+v", out)
+	}
+	if reason := out["env-blocked-1"]; reason != "backend-incarnation-changed" {
+		t.Fatalf("blocked reason = %q", reason)
+	}
+	if empty := BlockedEnvironmentReconciliations(chmodPrivateDir(t)); len(empty) != 0 {
+		t.Fatalf("empty store produced entries: %+v", empty)
+	}
+}
+
+func chmodPrivateDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}

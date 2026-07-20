@@ -422,3 +422,29 @@ func newJournal(environmentID, daemonID string, generation uint64, now time.Time
 func journalError(label string, err error) error {
 	return fmt.Errorf("%s lifecycle journal: %w", label, err)
 }
+
+// BlockedEnvironmentReconciliations reports environments whose journal records
+// a blocked reconciliation, keyed by environment id with the bounded reason
+// code. Listing surfaces consult it so an environment that refuses attach and
+// stop cannot present as healthy. Read-only and best-effort: an unreadable
+// store or journal yields no entry rather than an error.
+func BlockedEnvironmentReconciliations(storeRoot string) map[string]string {
+	store := JournalStore{Root: storeRoot}
+	ids, err := store.ListEnvironmentIDs()
+	if err != nil || len(ids) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for _, id := range ids {
+		journal, err := store.Load(id)
+		if err != nil || journal.Reconciliation.State != "blocked" {
+			continue
+		}
+		reason := journal.Reconciliation.ReasonCode
+		if reason == "" {
+			reason = "reconciliation-blocked"
+		}
+		out[id] = reason
+	}
+	return out
+}

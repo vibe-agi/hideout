@@ -279,6 +279,14 @@ func TestProjectionEscapeAndHappyPath(t *testing.T) {
 	if resp.Status != "ok" || resp.Data["outcome"] != "launched" {
 		t.Fatalf("happy path should launch: %+v", resp)
 	}
+	// The safe launch must disclose its posture and the trusted upgrade path;
+	// a silent open is indistinguishable from the operator's native IDE.
+	if !strings.Contains(resp.Stderr, "safe host app window") ||
+		!strings.Contains(resp.Stderr, "extensions disabled") ||
+		!strings.Contains(resp.Stderr, "hideout profile ide-mode") ||
+		!strings.Contains(resp.Stderr, "trusted-host-ide") {
+		t.Fatalf("safe launch did not disclose posture and upgrade path: %q", resp.Stderr)
+	}
 	assertNoHostPath(t, resp, hostRoot)
 	if len(launcher.argv) != 1 {
 		t.Fatalf("expected one launch, got %d", len(launcher.argv))
