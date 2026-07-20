@@ -547,7 +547,13 @@ else
   fi
   printf "hostfs_node=skip\n"
 fi
-./hideout-gate-fsread --read "$1" --deny "$5"
+# This check exercises HostFS read from a compiled Go program (os.ReadFile),
+# not workspace execution. The workspace is a Lima vz virtiofs mount that does
+# not support execve of binaries stored on it (they fail with EOPNOTSUPP; see
+# docs/DEBT.md "virtiofs workspace execute"), so copy the helper to an
+# exec-capable path before running it.
+cp ./hideout-gate-fsread /tmp/hideout-gate-fsread
+/tmp/hideout-gate-fsread --read "$1" --deny "$5"
 if cat "$5" >/dev/null 2>&1; then
   echo "ungranted hostfs path unexpectedly readable" >&2
   exit 44

@@ -594,6 +594,8 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 		"'--credential-file' '/hideout/session/workspace/credential.bin'",
 		"'--mount' '/hideout/workspaces/wrk_0123456789abcdef'",
 		"mount --rbind '/hideout/workspaces/wrk_0123456789abcdef' \"$workspace_root/workspace\"",
+		"for hostfs_root in Users Volumes private; do",
+		"ln -s \"/hideout/hostfs/$hostfs_root\" \"$workspace_root/$hostfs_root\"",
 		"'chroot' '/hideout/runtime/workspace-rootfs'",
 		"umount -R '/hideout/runtime/workspace-rootfs'",
 		"umount '/hideout/workspaces/wrk_0123456789abcdef'",
