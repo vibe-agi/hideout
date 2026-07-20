@@ -9,15 +9,16 @@ import (
 type Kind string
 
 const (
-	KindSetup   Kind = "setup"
-	KindRun     Kind = "run"
-	KindShow    Kind = "show"
-	KindOpen    Kind = "open"
-	KindConnect Kind = "connect"
-	KindAccess  Kind = "access"
-	KindRequest Kind = "request"
-	KindStop    Kind = "stop"
-	KindRemove  Kind = "remove"
+	KindSetup        Kind = "setup"
+	KindRun          Kind = "run"
+	KindShow         Kind = "show"
+	KindOpen         Kind = "open"
+	KindConnect      Kind = "connect"
+	KindAccess       Kind = "access"
+	KindRequest      Kind = "request"
+	KindStop         Kind = "stop"
+	KindRemove       Kind = "remove"
+	KindHostAppTrust Kind = "host-app"
 )
 
 type Intent interface {
@@ -113,6 +114,18 @@ type Access struct {
 
 func (Access) Kind() Kind { return KindAccess }
 
+// HostAppTrust is the operator's allow/deny of trusted (native) opening for one
+// projected host-app command (e.g. `code`) in the current workspace. It carries
+// no path: the workspace is the project directory the command runs in, resolved
+// by Core. Command names the projected host-app command being trusted.
+type HostAppTrust struct {
+	Effect      AccessEffect
+	Command     string
+	ProfileName string
+}
+
+func (HostAppTrust) Kind() Kind { return KindHostAppTrust }
+
 type RequestAction string
 
 const (
@@ -167,10 +180,16 @@ func Parse(args []string) (Intent, error) {
 	case "connect":
 		return parseConnect(args[1:])
 	case "allow":
+		if len(args) > 1 && args[1] == "host-app" {
+			return parseHostAppTrust(AccessAllow, args[2:])
+		}
 		return parseAccess(AccessAllow, args[1:])
 	case "deny":
 		if len(args) > 1 && args[1] == "request" {
 			return parseRequest(RequestDeny, args[2:])
+		}
+		if len(args) > 1 && args[1] == "host-app" {
+			return parseHostAppTrust(AccessDeny, args[2:])
 		}
 		return parseAccess(AccessDeny, args[1:])
 	case "approve":
@@ -303,6 +322,27 @@ func parseAccess(effect AccessEffect, args []string) (Intent, error) {
 		return intent, nil
 	default:
 		return nil, errors.New("only one access scope may be selected")
+	}
+}
+
+func parseHostAppTrust(effect AccessEffect, args []string) (Intent, error) {
+	usage := errors.New("usage: hideout allow|deny host-app <command> [--for-profile <name>]")
+	if len(args) < 1 || !validName(args[0]) {
+		return nil, usage
+	}
+	intent := HostAppTrust{Effect: effect, Command: args[0]}
+	rest := args[1:]
+	switch len(rest) {
+	case 0:
+		return intent, nil
+	case 2:
+		if rest[0] != "--for-profile" || !validName(rest[1]) {
+			return nil, errors.New("--for-profile requires a profile name")
+		}
+		intent.ProfileName = rest[1]
+		return intent, nil
+	default:
+		return nil, usage
 	}
 }
 

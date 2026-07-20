@@ -1,57 +1,76 @@
-# Contract: Operator Trusted-IDE Grant Commands
+# Contract: Operator Host-App Trust Grant Commands
 
 <!-- markdownlint-disable MD013 -->
 
 Reuses the `operatorintent` `allow`/`deny` surface. All commands are host-CLI +
 authenticated-daemon only; no guest/broker entry point exists.
 
-## `hideout allow ide-trust`
+> Naming: the operator surface is fully generic (`host-app`, not `ide`). Internal
+> Go types and files keep the historical `TrustedIDE*` / `trusted-ide-grant`
+> spelling; that split is intentional and tracked in `docs/DEBT.md`.
 
-Grant trusted (native) host-IDE for the current workspace under the active
-profile.
+## `hideout allow host-app <command>`
+
+Grant trusted (native) opening of one projected host-app command (e.g. `code`)
+for the current workspace under the active profile.
 
 - Run in the project directory. Core derives the workspace identity the same way
-  a run does and reads the built-in editor binding's `qualifiedAppRef` +
-  `bindingDigest`, then writes a grant entry.
+  a run does and reads the command's built-in host-app binding identifiers
+  (`qualifiedAppRef`, `bindingDigest`), then writes a grant entry. Because the
+  binding digest depends on the run-time observed app identity, the grant
+  promotes the request record a prior trusted run left behind for that
+  `(workspace, command)`.
 - Optional `--for-profile <name>` selects a non-default profile (mirrors the
   existing `allow` scope flag).
-- Preconditions: the profile's IDE mode is `trusted-host-ide`. If it is `safe`,
-  the command refuses and names `hideout profile ide-mode <p> trusted-host-ide`
-  (a grant while safe would be inert and misleading).
-- Idempotent: granting an already-granted `(workspace, binding)` is a no-op
-  success.
-- Output: confirms the workspace + editor now trusted; no host path or secret in
-  the output.
-- Audit: one `host-app.ide-trust` grant event with Core-derived identifiers only.
+- Preconditions: the profile's host-app mode is `trusted`. If it is `safe`, the
+  command refuses and names `hideout profile host-app-mode <p> trusted` (a grant
+  while safe would be inert and misleading).
+- Idempotent: granting an already-granted `(workspace, command, binding)` is a
+  no-op success.
+- Output: confirms the workspace + command now trusted and names the revoke
+  command; no host path or secret in the output. Example:
 
-## `hideout deny ide-trust`
+  ```text
+  native host app "code" allowed for this project under profile default
+  it will open natively here; revoke with: hideout deny host-app code
+  ```
 
-Revoke the current workspace's trusted-IDE grant under the active profile.
+- Audit: one operator-center event `action=host-app.trust`, `decision=grant`,
+  with Core-derived identifiers only (`profile`, `command`, `workspaceId`,
+  `qualifiedAppRef`, `bindingDigest`).
+
+## `hideout deny host-app <command>`
+
+Revoke the current workspace's trusted host-app grant under the active profile.
 
 - Run in the project directory (same identity derivation) or accept the same
   scope flag.
 - Removing a non-existent grant is a no-op success.
-- After revoke, the next projected open returns to the guided/refused path.
-- Audit: one `host-app.ide-trust` revoke event.
+- After revoke, the next projected open returns to the safe isolated window.
+- Output example:
+
+  ```text
+  native host app "code" revoked for this project under profile default; it now opens in the safe isolated window
+  ```
+
+- Audit: one operator-center event `action=host-app.trust`, `decision=revoke`.
 
 ## Fail-closed refusal message (open time)
 
 When trusted mode is selected but no grant matches, the projected open refuses
-with no host launch. The guest-visible stderr names the exact grant path, e.g.:
+with no host launch. The guest-visible stderr names the exact grant path:
 
 ```text
-hideout: this project is not trusted for your native editor; to allow it:
-  hideout allow ide-trust
-(safe mode opens an isolated editor window with no grant needed)
+this project is not trusted for the native host app; to allow it, run on the host: hideout allow host-app code
 ```
 
-## `hideout profile ide-mode <p>` (existing, extended output)
+## `hideout profile host-app-mode <p>` (existing, extended output)
 
-- Continues to show `safe` / `trusted-host-ide`.
-- When trusted, additionally indicates whether the current (or a) workspace is
-  granted, so a standing grant is visible (FR-008).
-- `hideout profile ide-mode <p> safe` additionally deletes the profile's
-  trusted-IDE grants (revocation on mode downgrade).
+- Continues to show `safe` / `trusted`.
+- When trusted, additionally indicates whether the profile holds any standing
+  host-app trust grants, so a standing grant is visible (FR-008).
+- `hideout profile host-app-mode <p> safe` additionally deletes the profile's
+  trusted host-app grants (revocation on mode downgrade).
 
 ## Invariants
 

@@ -88,8 +88,14 @@
     {
       "id": "projection-trusted-mode",
       "classification": "intentionally-not-executed",
-      "command": ["profile", "ide-mode", "privacy", "trusted-host-ide"],
-      "reason": "changes a real profile request and requires a live run-bound decision before it carries authority"
+      "command": ["profile", "host-app-mode", "privacy", "trusted"],
+      "reason": "changes a real profile request; trusted opens still require an explicit per-project grant (hideout allow host-app <command>) before they carry authority"
+    },
+    {
+      "id": "projection-host-app-grant",
+      "classification": "intentionally-not-executed",
+      "command": ["allow", "host-app", "code"],
+      "reason": "grants trusted native opening for the current project; mutates guest-unreachable profile policy and must run on the host inside a real workspace"
     },
     {
       "id": "projection-grant-revoke",

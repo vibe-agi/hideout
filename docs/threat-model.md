@@ -491,11 +491,11 @@ Claim:
   the guest, the grammar/adapter, the intent, the projection event, or exported
   evidence. Only Core resolves the host path from the session-bound workspace
   mapping.
-- A2-A3: the default IDE open mode is safe: an isolated editor profile with
+- A2-A3: the default host-app open mode is safe: an isolated editor profile with
   extensions disabled and Workspace Trust left enabled, so a guest-authored
-  workspace auto-task does not run on open. `trusted-host-ide` requires an
-  explicit, revocable operator grant held in guest-unreachable control-plane
-  state.
+  workspace auto-task does not run on open. Trusted mode requires an explicit,
+  revocable operator grant (`hideout allow host-app <command>`) held as durable
+  per-profile+workspace policy in guest-unreachable control-plane state.
 
 Workspace username/path privacy (alias mode): for new privacy and hardened Lima
 profiles using alias mode, Hideout does not synthesize the host username or host

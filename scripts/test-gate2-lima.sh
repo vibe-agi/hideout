@@ -272,6 +272,10 @@ store="$tmp/store"
 lima_home="$(hideout_mktemp_lima_home)"
 workspace="$tmp/workspace"
 mkdir -p "$bin" "$store" "$workspace"
+# The daemon requires a private store root (lifecycle journal inventory,
+# internal/lifecycle/journal.go requirePrivateDir). mkdir leaves group/other
+# bits, so make the store 0700 to match how real `hideout setup` creates it.
+chmod 0700 "$store"
 
 hideout="$bin/hideout"
 if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then

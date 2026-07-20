@@ -10,7 +10,7 @@ profile + workspace + app binding. Stored on the guest-unreachable control plane
 ### Storage
 
 - Location: `profiles/<profile>/ide-trust-grants.json` (beside the existing
-  `ide-mode.json`), under the reserved store the guest cannot reach.
+  `host-app-mode.json`), under the reserved store the guest cannot reach.
 - File mode `0600`; written atomically (temp + rename), like other profile
   policy files.
 - A manifest holds a list of grants so one profile can trust more than one
@@ -48,15 +48,15 @@ symmetry with other profile-store manifests.
 ### Match semantics (open time)
 
 A run's projected open is trusted-authorized iff a stored grant entry equals the
-run's `(workspaceId, qualifiedAppRef, bindingDigest)` AND the profile IDE mode is
-`trusted-host-ide`. Any inequality → no match → fail closed. Safe mode ignores
+run's `(workspaceId, qualifiedAppRef, bindingDigest)` AND the profile host-app mode is
+`trusted`. Any inequality → no match → fail closed. Safe mode ignores
 grants entirely.
 
 ### Lifecycle / state transitions
 
 ```text
 (no grant)
-   │  operator: hideout allow ide-trust  (in the project dir)
+   │  operator: hideout allow host-app code  (in the project dir)
    ▼
 GRANTED ──────────────────────────────────────────────┐
    │  match at open time → trusted native launch       │ (reuse, any later run)
@@ -65,22 +65,22 @@ GRANTED ────────────────────────
    ▼                                                    │
 NO MATCH → fail closed, refusal names the grant command │
                                                         │
-   │  operator: hideout deny ide-trust                  │
-   │  OR: profile ide-mode <p> safe (drops all)         │
+   │  operator: hideout deny host-app code                  │
+   │  OR: profile host-app-mode <p> safe (drops all)         │
    ▼                                                    │
 (no grant) ◄────────────────────────────────────────────┘
 ```
 
 ## Relationship to existing entities
 
-- **Profile IDE mode (`ide-mode.json`)**: unchanged; still gates whether trusted
+- **Profile host-app mode (`host-app-mode.json`)**: unchanged; still gates whether trusted
   is even eligible. The grant is the second, per-workspace half. Safe mode makes
   grants inert and (on switch to safe) deletes them.
 - **Host-app binding (`OpenResourceBinding`)**: supplies `qualifiedAppRef` and
-  `bindingDigest`; its `Access` (compiled from ide-mode) still selects the
+  `bindingDigest`; its `Access` (compiled from host-app-mode) still selects the
   ask-each-run path. The grant is what that path now consults first.
 - **`GrantScope`**: already carries `WorkspaceID`, `QualifiedAppRef`,
   `BindingDigest`, `Profile` at the check point — the grant match reads these.
-- **Per-run projection decision**: for trusted-IDE, superseded by the persistent
+- **Per-run projection decision**: for trusted host-app, superseded by the persistent
   grant. Other decision kinds (HostFS read/write, ask-each-run community packs)
   are unchanged.

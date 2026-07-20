@@ -3,6 +3,7 @@ package manager
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
@@ -158,4 +159,37 @@ func builtinSourceForProfileIDEModeTest(t *testing.T, sources []hostAppCatalogSo
 	}
 	t.Fatal("built-in host-app catalog source is absent")
 	return hostAppCatalogSource{}
+}
+
+// TestRunProjectionGrantChecksPersistentGrantBeforeDecision proves US1: a
+// durable trusted-IDE workspace grant authorizes the open through
+// runProjectionGrantChecker WITHOUT any per-run decision. This is the one-shot
+// deadlock fix.
+func TestRunProjectionGrantChecksPersistentGrantBeforeDecision(t *testing.T) {
+	root := t.TempDir()
+	binding := projectionGrantBinding{
+		Profile: "default", Backend: "lima", Command: "code",
+		SessionID: "ses_1", RunID: "ses_1", EnvironmentID: "env_1",
+		WorkspaceID: "wrk_t007", QualifiedApp: "builtin.vscode/rev_1/vscode",
+		BindingDigest: "sha256:t007", ResourceClasses: "workspace",
+	}
+	checker := runProjectionGrantChecker{storeRoot: root, bindings: map[string]projectionGrantBinding{binding.Command: binding}}
+	scope := binding.scope()
+
+	// No grant, no decision → not active.
+	if checker.TrustedGrantActive(scope) {
+		t.Fatal("active with neither grant nor decision")
+	}
+	// Trusted mode + persistent grant → active, no per-run decision needed.
+	if err := WriteProjectionIdeMode(root, "default", ProjectionIdeModeTrusted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := addTrustedIDEGrant(root, "default", TrustedIDEGrant{
+		WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !checker.TrustedGrantActive(scope) {
+		t.Fatal("persistent grant did not authorize without a per-run decision")
+	}
 }

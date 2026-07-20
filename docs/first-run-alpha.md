@@ -287,25 +287,29 @@ hideout run --profile default --backend lima -- code -g src/main.go:12:3
 The default safe mode uses run-scoped VS Code state, disables extensions and
 automatic workspace tasks, and returns no host data to the guest. It needs no
 approval and opens immediately, and it prints a one-line notice naming the safe
-posture and the `trusted-host-ide` upgrade. Safe mode is the recommended and
-fully working default; keep it unless you specifically need your own editor
-profile and extensions.
+posture and how to upgrade. Safe mode is the recommended and fully working
+default; keep it unless you specifically need your own editor profile and
+extensions.
 
-Requesting your full, native editor is `trusted-host-ide` mode
-(`hideout profile ide-mode default trusted-host-ide`). It is separate from
-authority: a trusted launch fails closed unless a local operator has approved
-the `host-app.open-resource` decision for the run that makes the request.
-Hideout does not pass through raw guest argv, resolve `code` from ambient
-`PATH`, or fall back to generic host execution.
+Requesting your full, native host app is trusted mode. Turn it on for a profile
+with `hideout profile host-app-mode default trusted`, then grant the specific
+command for the current project by running, on the host from inside the project
+directory:
 
-**Current limit — trusted mode is not yet usable for one-shot commands.** The
-trusted decision is bound to the live run that raises it, and `hideout run --
-code .` triggers the open request and exits before an operator has any window to
-claim and approve it; the decision then goes `stale`. Approval currently only
-completes inside a long-lived run that stays alive while a second terminal
-approves. Persisting an approved trusted grant per profile and workspace so a
-one-shot `code .` can reuse it is the design intent and a tracked gap
-([DEBT.md](DEBT.md)). Until then, use safe mode for `code .`.
+```bash
+hideout allow host-app code
+```
+
+The grant is a durable per-profile, per-workspace policy stored in
+guest-unreachable control-plane state and keyed by a Core-derived workspace
+identity, so a later one-shot `hideout run -- code .` reuses it and opens
+natively with no live approval window. It is separate from the running command's
+authority: without the grant a trusted launch fails closed and names the exact
+command to allow. Revoke at any time with `hideout deny host-app code`; the next
+open falls back to the safe isolated window. Changing the workspace or the app
+identity re-closes the grant until you re-affirm it. Hideout never passes through
+raw guest argv, resolves `code` from ambient `PATH`, or falls back to generic
+host execution.
 
 ## Operator Console
 

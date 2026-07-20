@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/trusted-ide-grant.schema.json",
+  "title": "Hideout Trusted Host-IDE Grant Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "profile",
+    "grants"
+  ],
+  "properties": {
+    "version": {
+      "const": "hideout.trusted-ide-grants/v1"
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "grants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspaceId",
+          "qualifiedAppRef",
+          "bindingDigest",
+          "grantedAt"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "qualifiedAppRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bindingDigest": {
+            "type": "string",
+            "minLength": 1
+          },
+          "grantedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

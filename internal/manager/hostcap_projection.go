@@ -39,10 +39,12 @@ func newProjectionDeduper() *projectionDeduper {
 	}
 }
 
-// ProjectionIdeModeSafe / ...Trusted are the persisted per-profile IDE modes.
+// ProjectionIdeModeSafe / ...Trusted are the persisted per-profile host-app
+// projection modes (user-facing: `safe` / `trusted`). The Go identifiers keep
+// their historical names; the values and command surface are generic host-app.
 const (
 	ProjectionIdeModeSafe    = "safe"
-	ProjectionIdeModeTrusted = "trusted-host-ide"
+	ProjectionIdeModeTrusted = "trusted"
 )
 
 type projectionIdeModeState struct {
@@ -50,11 +52,11 @@ type projectionIdeModeState struct {
 	SetAt time.Time `json:"setAt"`
 }
 
-// projectionIdeModePath is the per-profile IDE-mode file. It lives under the
-// reserved, guest-unreachable store, keyed by profile — so the guest cannot flip
-// itself into trusted mode by writing to the workspace.
+// projectionIdeModePath is the per-profile host-app-mode file. It lives under
+// the reserved, guest-unreachable store, keyed by profile — so the guest cannot
+// flip itself into trusted mode by writing to the workspace.
 func projectionIdeModePath(storeRoot, profileName string) string {
-	return filepath.Join(storeRoot, "profiles", profileName, "ide-mode.json")
+	return filepath.Join(storeRoot, "profiles", profileName, "host-app-mode.json")
 }
 
 // ReadProjectionIdeMode returns the persisted mode for a profile, defaulting to
@@ -79,7 +81,7 @@ func ReadProjectionIdeMode(storeRoot, profileName string) string {
 func WriteProjectionIdeMode(storeRoot, profileName, mode string, now time.Time) error {
 	mode = strings.TrimSpace(mode)
 	if mode != ProjectionIdeModeSafe && mode != ProjectionIdeModeTrusted {
-		return errors.New("ide mode must be safe or trusted-host-ide")
+		return errors.New("host-app mode must be safe or trusted")
 	}
 	dir := filepath.Join(storeRoot, "profiles", profileName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -120,6 +122,11 @@ func (c Core) SetProjectionIdeMode(profileName, mode string) error {
 	if mode == ProjectionIdeModeSafe {
 		auditDecision = "revoke"
 		if err := c.invalidateProjectionGrantsForProfile(profileName, "profile-mode-set-safe"); err != nil {
+			return err
+		}
+		// Switching to safe drops durable host-app trust grants too, so a later
+		// switch back to trusted re-requires them.
+		if err := removeAllTrustedIDEGrants(c.Store.Root, profileName); err != nil {
 			return err
 		}
 	}
@@ -253,7 +260,7 @@ func (b projectionGrantBinding) scope() hostcap.GrantScope {
 
 func (c Core) ensureProjectionTrustedDecision(binding projectionGrantBinding) (decision.Decision, error) {
 	if ReadProjectionIdeMode(c.Store.Root, binding.Profile) != ProjectionIdeModeTrusted {
-		return decision.Decision{}, errors.New("trusted-host-ide is not requested for profile")
+		return decision.Decision{}, errors.New("trusted host-app mode is not requested for profile")
 	}
 	store, err := c.decisionStore()
 	if err != nil {
@@ -324,9 +331,13 @@ func projectionGrantMatches(d decision.Decision, binding projectionGrantBinding)
 	return true
 }
 
-// decisionIdeGrantChecker admits only the exact approved decision for the
-// current run binding. The requested profile mode is necessary but never
-// sufficient, and a stale/denied/revoked record carries no authority.
+// decisionIdeGrantChecker is TEST-ONLY (039 FR-011). The single PRODUCTION
+// trusted-grant check path is runProjectionGrantChecker (run_dataplane.go),
+// which StartRunDataPlane wires into the broker; it consults the durable
+// host-app trust grant first, then the per-run decision. This parallel checker
+// has no production caller — it exists only for projection-mode unit tests that
+// exercise the per-run decision + ide-mode gating in isolation. Keep it out of
+// any run/broker wiring.
 type decisionIdeGrantChecker struct {
 	storeRoot string
 	bindings  map[string]projectionGrantBinding

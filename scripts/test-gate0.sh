@@ -47,6 +47,7 @@ test -f schemas/guest-privilege-status.schema.json
 test -f schemas/hostfs-write-decision.schema.json
 test -f schemas/hostfs-write-event.schema.json
 test -f schemas/decision-record.schema.json
+test -f schemas/trusted-ide-grant.schema.json
 test -f schemas/notice-record.schema.json
 test -f schemas/onboarding-evidence.schema.json
 test -f schemas/doctor-report.schema.json

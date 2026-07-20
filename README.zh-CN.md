@@ -24,8 +24,8 @@ hideout audit show --limit 5
 `code .` 默认在一个**安全隔离的编辑器窗口**中打开项目——独立的 VS Code
 profile、禁用扩展和自动 workspace 任务——因为该项目刚被工具改写过。这个默认
 无需任何批准,只要求一个受支持、已签名的本机编辑器。若要改用你**完整的原生
-VS Code** 打开,则是单独的 opt-in（`trusted-host-ide` 模式）；其工作方式与当前
-限制见 [docs/first-run-alpha.md](docs/first-run-alpha.md#open-in-a-host-editor)。
+VS Code** 打开,则是单独的 opt-in（trusted 模式,通过 `hideout allow host-app code`
+按项目授权）；其工作方式见 [docs/first-run-alpha.md](docs/first-run-alpha.md#open-in-a-host-editor)。
 
 ## 安装
 

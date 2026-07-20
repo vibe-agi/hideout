@@ -519,6 +519,18 @@ func (g runProjectionGrantChecker) TrustedGrantActive(scope hostcap.GrantScope) 
 	if !ok || g.storeRoot == "" || scope != binding.scope() {
 		return false
 	}
+	// A durable trusted-IDE workspace grant (operator profile policy) authorizes
+	// the open without a per-run decision — this is what makes one-shot `code .`
+	// usable in trusted mode. It requires trusted ide-mode and an exact match on
+	// the Core-derived workspace + binding identity; safe mode and any drift fail
+	// closed here and fall through to the per-run decision path below.
+	if trustedIDEGrantMatches(g.storeRoot, scope) {
+		return true
+	}
+	// No persistent grant. In trusted mode, record a request so `allow
+	// ide-trust` can promote the exact run-observed identity (best-effort hint,
+	// never authority), then fall through to the per-run decision path.
+	maybeRecordTrustedIDERequest(g.storeRoot, scope)
 	d, err := decision.NewStore(g.storeRoot).RawDecision(binding.decisionID())
 	return err == nil && d.State == decision.StateApproved && projectionGrantMatches(d, binding)
 }

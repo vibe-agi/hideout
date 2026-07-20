@@ -137,23 +137,29 @@ lifecycle and its explicit CLI boundary.
    valid projected command resolves its selected app on first use and every
    actual launch still performs final identity and resource revalidation.
 
-## Safe and trusted IDE modes
+## Safe and trusted host-app modes
 
-- **safe** (default): the host editor opens with a run-scoped, profile-owned
+- **safe** (default): the host app opens with a run-scoped, profile-owned
   isolated user-data directory,
   extensions disabled, workspace auto-tasks not run, and Workspace Trust left
   enabled. It never uses `--disable-workspace-trust`. A later run does not inherit
   a prior run's workspace-trust state, and the package-owned safe configuration
   disables automatic tasks even within the current run.
-- **trusted-host-ide**: uses the operator's normal editor configuration. It
-  requires an explicit operator grant through the decision center, is denied
-  without it, is revocable, and is bound to the live run/session/profile/
-  workspace identity. The requested mode persists only in guest-unreachable
-  control-plane state; the grant expires when that run ends and is never stored
-  in the workspace. A denied trusted request does not silently launch safe mode;
-  the operator explicitly selects `safe` to return to safe opens.
+- **trusted**: uses the operator's normal host-app configuration. It requires an
+  explicit operator grant created on the host with `hideout allow host-app
+  <command>` from inside the project directory, and is denied without one. The
+  grant is a durable per-profile, per-workspace policy keyed by a Core-derived
+  workspace identity plus the resolved app binding digest, stored only in
+  guest-unreachable control-plane state and never in the workspace. Because it
+  persists, a one-shot `code .` reuses it with no live approval window — the gap
+  that made trusted mode unusable for one-shot commands before. It is revocable
+  with `hideout deny host-app <command>`, and a change to the workspace or app
+  identity re-closes it until the operator re-affirms. A denied trusted request
+  does not silently launch safe mode; selecting `safe`
+  (`hideout profile host-app-mode <p> safe`) both returns to safe opens and drops
+  every trusted grant for the profile.
 
-Hideout does not claim to protect the host editor from a malicious workspace;
+Hideout does not claim to protect the host app from a malicious workspace;
 Workspace Trust remains the editor's mechanism. Hideout disarms the obvious
 auto-execution vectors by default and records that a guest-writable workspace was
 opened in a host application.

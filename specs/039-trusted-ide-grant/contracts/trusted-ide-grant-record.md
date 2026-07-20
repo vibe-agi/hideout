@@ -38,10 +38,10 @@ Order:
 2. **Persistent grant check (new)**: read the profile's grant manifest; a grant
    matches iff `workspaceId == scope.WorkspaceID`,
    `qualifiedAppRef == scope.QualifiedAppRef`,
-   `bindingDigest == scope.BindingDigest`, and the profile IDE mode is
-   `trusted-host-ide`. On match → authorized (trusted launch).
+   `bindingDigest == scope.BindingDigest`, and the profile host-app mode is
+   `trusted`. On match → authorized (trusted launch).
 3. On no match → fall through to the existing per-run decision lookup (kept for
-   compatibility with any non-trusted-IDE ask-each-run binding), which for a
+   compatibility with any non-trusted host-app ask-each-run binding), which for a
    one-shot trusted `code .` yields no approval → refuse.
 
 `TrustedGrantActiveForResource` continues to require the resource class to be in
@@ -58,8 +58,8 @@ production trusted-grant decision path (FR-011, SC-006).
 
 | Event | When | Key details (Core-derived only) |
 | --- | --- | --- |
-| `host-app.ide-trust` decision=`grant` | operator grants | profile, workspaceId, qualifiedAppRef, bindingDigest |
-| `host-app.ide-trust` decision=`revoke` | operator revokes / safe-mode drop | profile, workspaceId (or "all") |
+| `host-app.trust` decision=`grant` | operator grants | profile, workspaceId, qualifiedAppRef, bindingDigest |
+| `host-app.trust` decision=`revoke` | operator revokes / safe-mode drop | profile, workspaceId (or "all") |
 | `host.app.open-resource` outcome=`launched` mode=`trusted` | grant match → native launch | existing projection audit + trusted mode |
 | `host.app.open-resource` outcome=`refused` code=trusted-denied | no grant | existing projection refusal audit |
 

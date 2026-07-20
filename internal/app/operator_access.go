@@ -138,3 +138,47 @@ func appliedHostFSRuleID(result manager.ProfileHostFSResult, selector string) st
 	}
 	return "recorded"
 }
+
+// operatorHostAppTrust maps `allow|deny host-app <command>` onto Manager's
+// trusted host-app grant policy for the current project directory. Grant
+// promotes the run-recorded request (the run-accurate app identity) for the
+// named command in the workspace the operator is standing in; deny removes it.
+// No path is taken from the guest; Core derives the workspace identity from the
+// command's working directory.
+func (a app) operatorHostAppTrust(intent operatorintent.HostAppTrust) error {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return err
+	}
+	profileName := intent.ProfileName
+	if profileName == "" {
+		profileName = "default"
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	core := manager.New(store)
+	switch intent.Effect {
+	case operatorintent.AccessAllow:
+		result, err := core.GrantHostAppTrust(profileName, cwd, intent.Command)
+		if err != nil {
+			return err
+		}
+		verb := "allowed"
+		if !result.Granted {
+			verb = "already allowed"
+		}
+		fmt.Fprintf(a.stdout, "native host app %q %s for this project under profile %s\n", intent.Command, verb, result.Profile)
+		fmt.Fprintf(a.stdout, "it will open natively here; revoke with: hideout deny host-app %s\n", intent.Command)
+		return nil
+	case operatorintent.AccessDeny:
+		if err := core.RevokeHostAppTrust(profileName, cwd, intent.Command); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "native host app %q revoked for this project under profile %s; it now opens in the safe isolated window\n", intent.Command, profileName)
+		return nil
+	default:
+		return fmt.Errorf("unsupported host-app trust effect %q", intent.Effect)
+	}
+}

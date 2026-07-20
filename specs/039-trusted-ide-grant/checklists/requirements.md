@@ -35,7 +35,7 @@
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
 - Validation passed on first iteration. One judgment call: the spec names
-  `code .`, `trusted-host-ide`, `ide-mode`, and "VS Code binding" — these are
+  `code .`, `trusted`, `host-app-mode`, and "VS Code binding" — these are
   the existing product's own capability/mode names and the named first consumer,
   not new implementation choices, so they are allowed under the generality
   guidance (grant semantics stay editor-agnostic per FR-004/generality item).

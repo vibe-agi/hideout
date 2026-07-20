@@ -7,8 +7,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -127,6 +129,65 @@ func TestOperatorAccessMatchesAdvancedProfileFSAuthority(t *testing.T) {
 	n, adv := natural.HostFS.Grants[0], advanced.HostFS.Grants[0]
 	if n.HostPath != adv.HostPath || !reflect.DeepEqual(n.Ops, adv.Ops) || n.Scope != adv.Scope || n.Overlay != adv.Overlay {
 		t.Fatalf("authority parity broken:\nnatural  = %+v\nadvanced = %+v", n, adv)
+	}
+}
+
+// TestOperatorAllowHostAppFailsClosedAndDenyIsNoOp covers the app-level dispatch
+// of `allow|deny host-app <command>`. The grant success + idempotency promotion
+// path is covered hermetically at the Manager layer
+// (TestGrantAndRevokeTrustedIDEPromotesRequest); seeding a run request needs
+// Manager-internal helpers, so this test asserts the app wiring and the
+// fail-closed branches reachable from the CLI surface.
+func TestOperatorAllowHostAppFailsClosedAndDenyIsNoOp(t *testing.T) {
+	a, stdout, store := newOperatorAccessTestApp(t)
+	// Core derives the workspace identity under the store root, which must be 0700.
+	if err := os.MkdirAll(store.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	// 1. Safe mode (default): `allow host-app code` refuses, names the mode
+	//    upgrade, and does not create the profile. Mutation proof: removing the
+	//    trusted-mode gate in GrantHostAppTrust changes the refusal to the
+	//    no-request message, so this host-app-mode assertion goes red (verified
+	//    2026-07-20).
+	err := a.run([]string{"allow", "host-app", "code"})
+	if err == nil || !strings.Contains(err.Error(), "host-app-mode") {
+		t.Fatalf("safe-mode allow err=%v, want host-app-mode guidance", err)
+	}
+	if _, statErr := os.Lstat(store.ProfilePath("default")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed grant touched the profile: %v", statErr)
+	}
+
+	// 2. Trusted mode but no run-recorded request → refuse and name the run-once
+	//    path; still no grant is written.
+	if err := manager.WriteProjectionIdeMode(store.Root, "default", manager.ProjectionIdeModeTrusted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	err = a.run([]string{"allow", "host-app", "code"})
+	if err == nil || !strings.Contains(err.Error(), "no host-app trust request") {
+		t.Fatalf("no-request allow err=%v, want run-once guidance", err)
+	}
+	if manager.New(store).HasHostAppTrustGrants("default") {
+		t.Fatal("no-request allow wrote a grant")
+	}
+
+	// 3. `deny host-app code` with no grant is a no-op success that names the safe
+	//    fallback, exercising the deny dispatch wiring with no host path leak.
+	stdout.Reset()
+	if err := a.run([]string{"deny", "host-app", "code"}); err != nil {
+		t.Fatalf("deny no-op: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "revoked") || !strings.Contains(out, "safe isolated window") {
+		t.Fatalf("deny output = %q", out)
+	}
+	if strings.Contains(out, workspace) {
+		t.Fatalf("deny output leaked host path: %q", out)
 	}
 }
 

@@ -31,7 +31,7 @@ const (
 var registry = []CapabilityDescriptor{
 	{
 		ID:              CapabilityAppOpenResource,
-		RiskClass:       RiskLow, // safe mode; trusted-host-ide elevates at dispatch
+		RiskClass:       RiskLow, // safe mode; trusted host-app mode elevates at dispatch
 		IntentSchema:    IntentSchemaOpenResourceV2,
 		ResourceKinds:   []ResourceKind{KindWorkspace, KindHostFS},
 		ResultPolicy:    ResultNone,

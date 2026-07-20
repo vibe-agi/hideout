@@ -10,11 +10,11 @@ command semantics are in [data-model.md](data-model.md) and
 
 - macOS arm64 with Lima (real projection path); a supported, code-signed VS Code.
 - A dedicated store and a Git project directory.
-- `hideout setup` completed; profile IDE mode set to `trusted-host-ide`.
+- `hideout setup` completed; profile host-app mode set to `trusted`.
 
 ## Scenario 1 — Grant once, reuse across runs (US1 / SC-001)
 
-1. In the project directory: `hideout allow ide-trust`.
+1. In the project directory: `hideout allow host-app code`.
 2. Run a one-shot open: `hideout run -- code .`.
 3. Expected: the full native editor opens (operator's own profile, extensions
    enabled), exit success, no prompt or approval step.
@@ -26,16 +26,16 @@ command semantics are in [data-model.md](data-model.md) and
 1. Fresh store/profile in trusted mode, no grant for the workspace.
 2. Run `hideout run -- code .`.
 3. Expected: refused, no editor launched, and the stderr names
-   `hideout allow ide-trust` as the way to allow it.
-4. Run `hideout allow ide-trust`, then rerun `hideout run -- code .`: now opens
+   `hideout allow host-app code` as the way to allow it.
+4. Run `hideout allow host-app code`, then rerun `hideout run -- code .`: now opens
    natively (refused → granted with no other change).
 
 ## Scenario 3 — Revoke and safe-mode return to guided/safe (US3 / SC-003)
 
 1. With a grant present and `code .` opening natively, run
-   `hideout deny ide-trust`.
+   `hideout deny host-app code`.
 2. Run `hideout run -- code .`: back to the refused/guided path.
-3. Grant again, then `hideout profile ide-mode default safe`.
+3. Grant again, then `hideout profile host-app-mode default safe`.
 4. Run `hideout run -- code .`: opens in the safe isolated window (grant deleted
    by the safe switch; no grant needed for safe).
 

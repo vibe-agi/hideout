@@ -336,8 +336,9 @@ Current smoke surface shows:
   `hostfs.write` decision record; share/export decisions and privilege/background
   notices are observed through the same live-console reducer state;
 - `host-app.open-resource` decisions with the same authenticated
-  claim/approve/deny/revoke/reopen lifecycle. The requested IDE mode is visible
-  state, not authority; only a live run-scoped grant permits trusted launch;
+  claim/approve/deny/revoke/reopen lifecycle. The requested host-app mode is
+  visible state, not authority; a durable per-profile+workspace grant
+  (`hideout allow host-app <command>`) permits trusted launch;
 - an Operator Console tab that groups action-required counts, stream health,
   doctor/package/support status, environments, background work, HostFS writes,
   decisions, and notices without adding new authority;

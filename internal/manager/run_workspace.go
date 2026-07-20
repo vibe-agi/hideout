@@ -195,15 +195,7 @@ func (c Core) PlanRunWorkspaceAttachment(runSession RunSession, registration lif
 	if err := ValidateWorkspaceMountSafety(canonicalRoot, c.Store.Root); err != nil {
 		return WorkspaceAttachPlan{}, err
 	}
-	stateExists, err := workspaceAttachmentStateExists(c.Store.Root)
-	if err != nil {
-		return WorkspaceAttachPlan{}, err
-	}
-	key, err := workspaceattach.LoadOrCreateIdentityKey(c.Store.Root, stateExists)
-	if err != nil {
-		return WorkspaceAttachPlan{}, err
-	}
-	workspaceID, err := workspaceattach.DeriveWorkspaceID(key, canonicalRoot, rootIdentity)
+	workspaceID, err := c.deriveWorkspaceIDFromRoot(canonicalRoot, rootIdentity)
 	if err != nil {
 		return WorkspaceAttachPlan{}, err
 	}

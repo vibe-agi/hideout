@@ -675,7 +675,7 @@ func (p ProjectionInspection) CandidateCauses() []string {
 		causes = append(causes, "no enabled host-app binding has a verified provider identity")
 	}
 	if p.RequestedMode == ProjectionIdeModeTrusted && p.ApprovedGrantRecords == 0 {
-		causes = append(causes, "trusted-host-ide is requested but no run-bound decision is approved")
+		causes = append(causes, "trusted host-app mode is requested but no run-bound decision is approved")
 	}
 	if strings.TrimSpace(p.PathShadowObservation) == "not-run" {
 		causes = append(causes, "host-side doctor has not observed the real guest PATH")

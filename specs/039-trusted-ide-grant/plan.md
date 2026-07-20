@@ -8,8 +8,8 @@
 
 ## Summary
 
-Replace the per-live-run trusted-IDE decision (which deadlocks one-shot `code .`)
-with a durable trusted-IDE grant scoped to profile + workspace + app binding, the
+Replace the per-live-run trusted host-app decision (which deadlocks one-shot `code .`)
+with a durable trusted host-app grant scoped to profile + workspace + app binding, the
 same policy shape as a HostFS profile grant. The open-time check
 (`runProjectionGrantChecker.TrustedGrantActive`) consults the persistent grant
 before any per-run decision; trusted mode with no grant fails closed and names
@@ -21,14 +21,14 @@ spike (2026-07-20). Safe mode is unchanged and remains the default.
 **Language/Version**: Go 1.25 (existing Hideout module).
 
 **Primary Dependencies**: existing internal packages —
-`internal/manager` (run data plane, projection grant checker, profile IDE mode),
+`internal/manager` (run data plane, projection grant checker, profile host-app mode),
 `internal/hostcap` (grant scope, open-resource binding),
 `internal/workspaceattach` (workspace identity derivation),
 `internal/operatorintent` (natural `allow`/`deny` grammar),
 `internal/audit`, `internal/profile`.
 
 **Storage**: one new per-profile JSON policy file under the reserved,
-guest-unreachable store (`profiles/<p>/`), beside the existing `ide-mode.json`.
+guest-unreachable store (`profiles/<p>/`), beside the existing `host-app-mode.json`.
 Atomic write, `0600`, strict schema. No new store subsystem.
 
 **Testing**: `go test` (unit/contract in `internal/manager`), the existing
@@ -63,20 +63,20 @@ handful of workspaces per profile.
   time in `runProjectionGrantChecker`. No JavaScript/config participates; the
   guest supplies nothing — the workspace identity and app binding are Core-
   derived. This matches the existing HostFS profile-grant authority shape.
-- **Workspace And Policy**: Adds a per-profile trusted-IDE grant keyed by the
+- **Workspace And Policy**: Adds a per-profile trusted host-app grant keyed by the
   Core-derived workspace identity + app binding. It does not change workspace
   mounts, HostFS rules, passthrough mounts, env policy, or proxy secrets.
-  Revocation: switching the profile to safe mode drops all trusted-IDE grants
+  Revocation: switching the profile to safe mode drops all trusted host-app grants
   (extends existing safe-mode invalidation); an explicit revoke drops one.
   Drift in workspace identity or binding digest fails the match (re-grant).
 - **Generality And Provider Scope**: The grant model is generic to host-app
   projection bindings (keyed by binding, not by "VS Code"). The built-in VS Code
   binding is the first and only consumer in this slice; no editor-specific
-  semantics enter Core. `code .`/`trusted-host-ide`/`ide-mode` are existing
+  semantics enter Core. `code .`/`trusted`/`host-app-mode` are existing
   product names, not new provider coupling.
 - **Evidence And Redaction**: New audit events for grant / reuse / refuse /
   revoke, carrying only Core-derived identifiers. Grant existence surfaces
-  through the profile `ide-mode` inspection output. The broker already discloses
+  through the profile `host-app-mode` inspection output. The broker already discloses
   safe-vs-trusted posture on launch (038/2ccdd40). No host path/username/token/
   machine-id/argv in the grant record, audit, or guest-visible response.
 - **Backend And Distribution**: Native harness proves unit/contract behavior;
@@ -116,7 +116,7 @@ specs/039-trusted-ide-grant/
 
 ```text
 internal/manager/
-├── hostcap_projection.go        # ide-mode read/write; trusted grant store
+├── hostcap_projection.go        # host-app-mode read/write; trusted grant store
 │                                #   read/write/revoke; delete or document the
 │                                #   test-only decisionIdeGrantChecker (FR-011)
 ├── run_dataplane.go             # runProjectionGrantChecker.TrustedGrantActive
@@ -125,11 +125,11 @@ internal/manager/
 └── run_dataplane_host_app_test.go # open-time check unit coverage
 
 internal/operatorintent/
-├── intent.go                    # `allow ide-trust` / `deny ide-trust` grammar
+├── intent.go                    # `allow host-app code` / `deny host-app code` grammar
 └── intent_test.go               # grammar parse tests
 
 internal/app/
-├── operator_access.go           # wire ide-trust intent to Manager grant/revoke
+├── operator_access.go           # wire host-app trust intent to Manager grant/revoke
 ├── operator_access_test.go      # command behavior + audit
 └── app.go                       # usage line
 

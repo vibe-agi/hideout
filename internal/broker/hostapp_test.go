@@ -283,8 +283,8 @@ func TestProjectionEscapeAndHappyPath(t *testing.T) {
 	// a silent open is indistinguishable from the operator's native IDE.
 	if !strings.Contains(resp.Stderr, "safe host app window") ||
 		!strings.Contains(resp.Stderr, "extensions disabled") ||
-		!strings.Contains(resp.Stderr, "hideout profile ide-mode") ||
-		!strings.Contains(resp.Stderr, "trusted-host-ide") {
+		!strings.Contains(resp.Stderr, "hideout profile host-app-mode") ||
+		!strings.Contains(resp.Stderr, "hideout allow host-app") {
 		t.Fatalf("safe launch did not disclose posture and upgrade path: %q", resp.Stderr)
 	}
 	assertNoHostPath(t, resp, hostRoot)
@@ -503,6 +503,10 @@ func TestProjectionWorkspaceApprovalCannotAuthorizeHostFSPortalClass(t *testing.
 	resp := server.Handle(context.Background(), projectionRequest(codeIntent("/hideout/hostfs"+hostFile), binding.BindingDigest))
 	if resp.Status != "denied" || resp.Data["code"] != hostcap.CodeModeTrustedDenied || len(launcher.argv) != 0 {
 		t.Fatalf("workspace approval crossed into HostFS: response=%+v argv=%v", resp, launcher.argv)
+	}
+	// US2: the trusted-denied refusal must name the grant command, not dead-end.
+	if !strings.Contains(resp.Stderr, "hideout allow host-app") {
+		t.Fatalf("trusted-denied refusal did not name the grant command: %q", resp.Stderr)
 	}
 	assertProjectionRefusalBindingEvidence(t, auditPath, binding, hostFile)
 }

@@ -192,11 +192,22 @@ run_projection_gate2() {
   projection_workspace="$(mktemp -d "$HOME/hideout-gate2-projection.XXXXXX")"
   projection_control_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-control.XXXXXX")"
   projection_trusted_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-trusted.XXXXXX")"
+  projection_grant_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-grant.XXXXXX")"
   # 032 isolates safe state by qualified app and run beneath this Core-owned
   # base. Match the base, then discover the exact materialized settings file.
   projection_safe_data_dir="$store/profiles/$profile_name/host-app/state"
 
   projection_prepare_privacy_network
+
+  # The daemon captures its secret environment once, at autostart
+  # (internal/daemon/autostart.go environmentWithStoreRoot(os.Environ(), ...)),
+  # and run network setup resolves --proxy-secret from that frozen daemon env
+  # (internal/manager/run_network.go). The earlier smoke lane already
+  # auto-started the daemon before this projection proxy secret existed, so the
+  # live daemon cannot resolve "projection-proxy". Stop it here; the projection
+  # init just below re-autostarts a daemon that inherits the freshly exported
+  # HIDEOUT_SECRET_PROJECTION_PROXY. VMs persist across a daemon stop.
+  HIDEOUT_STORE_ROOT="$store" "$hideout" daemon stop >/dev/null 2>&1 || true
 
   if ! HIDEOUT_STORE_ROOT="$store" \
     HIDEOUT_SECRET_PROJECTION_PROXY="$HIDEOUT_SECRET_PROJECTION_PROXY" \
@@ -282,9 +293,83 @@ printf "projection_proxy_secret_absent=yes\n"
   run_projection_safe_code "$profile_name"
   run_projection_hostfs_resource "$profile_name"
   run_projection_trusted_lifecycle "$profile_name"
+  run_projection_persistent_grant_lifecycle "$profile_name"
   if [ -n "${HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK:-}" ]; then
     run_projection_external_pack "$profile_name" "$HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK"
   fi
+}
+
+# run_projection_persistent_grant_lifecycle proves the 039 durable grant path
+# (grant once on the host -> later one-shot runs open natively -> revoke).
+# It is distinct from run_projection_trusted_lifecycle, which exercises the
+# live run-bound decision fallback. The grant command derives the workspace
+# identity from its working directory, so it is invoked with cwd == the run's
+# --workspace so both derive the same workspaceID (proven equal; see 039 T008a).
+run_projection_persistent_grant_lifecycle() {
+  local profile_name="$1"
+  echo "gate2: running persistent host-app grant lifecycle (039)"
+  HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" trusted >/dev/null
+
+  # 1. Trusted mode, no grant: the one-shot open refuses (no host launch),
+  #    records a promotion request, and names the exact grant command.
+  local refuse1="$tmp/projection-grant-refuse1.out"
+  set +e
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
+      --proxy-secret projection-proxy --workspace "$projection_grant_workspace" -- \
+      code -n . >"$refuse1" 2>&1
+  local rc1=$?
+  set -e
+  if [ "$rc1" = "0" ]; then
+    echo "gate2: ungranted trusted one-shot open should have refused" >&2
+    cat "$refuse1" >&2
+    return 1
+  fi
+  grep -q "hideout allow host-app code" "$refuse1"
+
+  # 2. Operator grants on the host from inside the project dir (cwd == the run
+  #    workspace), promoting the recorded request into a durable grant.
+  local grant_out="$tmp/projection-grant.out"
+  ( cd "$projection_grant_workspace" && HIDEOUT_STORE_ROOT="$store" \
+      "$hideout" allow host-app code ) >"$grant_out" 2>&1
+  grep -q "allowed for this project" "$grant_out"
+
+  # 3. A separate one-shot run reuses the durable grant and opens natively.
+  local reuse_out="$tmp/projection-grant-reuse.out"
+  if ! HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
+      --proxy-secret projection-proxy --workspace "$projection_grant_workspace" -- \
+      code -n . >"$reuse_out" 2>&1; then
+    echo "gate2: granted one-shot reuse should have opened natively" >&2
+    cat "$reuse_out" >&2
+    return 1
+  fi
+  grep -q "opened in your trusted host app" "$reuse_out"
+
+  # 4. Revoke removes the durable grant.
+  local revoke_out="$tmp/projection-grant-revoke.out"
+  ( cd "$projection_grant_workspace" && HIDEOUT_STORE_ROOT="$store" \
+      "$hideout" deny host-app code ) >"$revoke_out" 2>&1
+  grep -q "revoked for this project" "$revoke_out"
+
+  # 5. After revoke the one-shot open fails closed again with the named path.
+  local refuse2="$tmp/projection-grant-refuse2.out"
+  set +e
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
+      --proxy-secret projection-proxy --workspace "$projection_grant_workspace" -- \
+      code -n . >"$refuse2" 2>&1
+  local rc2=$?
+  set -e
+  if [ "$rc2" = "0" ]; then
+    echo "gate2: revoked trusted one-shot open should have refused" >&2
+    cat "$refuse2" >&2
+    return 1
+  fi
+  grep -q "hideout allow host-app code" "$refuse2"
+
+  HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" safe >/dev/null
+  printf 'projection_persistent_grant=passed\n'
 }
 
 run_projection_safe_code() {
@@ -305,7 +390,7 @@ run_projection_safe_code() {
   }]
 }
 JSON
-  HIDEOUT_STORE_ROOT="$store" "$hideout" profile ide-mode "$profile_name" safe >/dev/null
+  HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" safe >/dev/null
   local safe_run_status=0
   local safe_process_pid=""
   with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
@@ -384,7 +469,7 @@ run_projection_hostfs_resource() {
   local basename_target
   basename_target="$(basename "$hostfs_file")"
 
-  HIDEOUT_STORE_ROOT="$store" "$hideout" profile ide-mode "$profile_name" safe >/dev/null
+  HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" safe >/dev/null
   if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
 	  "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
 	    --proxy-secret projection-proxy --workspace "$projection_workspace" \
@@ -460,7 +545,7 @@ printf "projection_hostfs_ungranted_denied=passed\n"
 run_projection_trusted_lifecycle() {
   local profile_name="$1"
   echo "gate2: running trusted IDE decision lifecycle"
-  HIDEOUT_STORE_ROOT="$store" "$hideout" profile ide-mode "$profile_name" trusted-host-ide >/dev/null
+  HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" trusted >/dev/null
   (
     set +e
     HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
@@ -526,10 +611,10 @@ printf "%s\n" "$revoked_rc" > trusted-revoked.rc
   local trusted_session trusted_audit
   trusted_session="$(HIDEOUT_STORE_ROOT="$store" "$hideout" decision inspect "$decision_id" | jq -r '.source.session')"
   trusted_audit="$store/sessions/$trusted_session/audit.jsonl"
-  grep -q '"mode":"trusted-host-ide"' "$trusted_audit"
+  grep -q '"mode":"trusted-host-app"' "$trusted_audit"
   grep -q '"outcome":"launched"' "$trusted_audit"
   grep -q '"code":"projection.mode.trusted-denied"' "$trusted_audit"
-  HIDEOUT_STORE_ROOT="$store" "$hideout" profile ide-mode "$profile_name" safe >/dev/null
+  HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" safe >/dev/null
   printf 'projection_trusted_grant=passed\n'
 }
 

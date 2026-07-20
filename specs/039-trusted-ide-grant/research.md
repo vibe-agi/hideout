@@ -7,7 +7,7 @@ real-Lima spike that proved path B end to end. No open NEEDS CLARIFICATION.
 
 ## D1 — Grant is durable profile policy, not a per-run decision
 
-**Decision**: Store an approved trusted-IDE grant as a per-profile JSON file
+**Decision**: Store an approved trusted host-app grant as a per-profile JSON file
 under `profiles/<p>/`, read every run, keyed by `(workspaceID, qualifiedAppRef,
 bindingDigest)`. It is operator policy of the same shape as a HostFS profile
 grant, not a per-run capability token.
@@ -55,33 +55,44 @@ plus the binding's app ref and digest). The spike wrote a grant with exactly
 these three fields and matched it at open time. This satisfies FR-004 (keyed by
 Core-derived identity) and FR-010 (no host path/secret in the key).
 
-## D4 — Grant command derives the workspace identity the same way a run does
+## D4 — Grant command derives workspaceID but promotes the run-observed digest (revised after implementation probe)
 
-**Decision**: `hideout allow ide-trust`, run in the project directory, derives
-`workspaceID` with the same functions the run uses (`CaptureRootIdentity(cwd)`,
-`LoadOrCreateIdentityKey(store)`, `DeriveWorkspaceID(...)`), reads the built-in
-VS Code binding's `qualifiedAppRef` and `bindingDigest` from
-`CompileHostAppCatalog`, then writes the grant. `hideout deny ide-trust` revokes
-the current workspace's grant. This reuses the `operatorintent` `allow`/`deny`
-surface (FR-001, FR-006).
+**Decision (revised)**: `hideout allow host-app code` in the project directory
+derives `workspaceID` itself (the deterministic path, proven equal to a run's by
+T008a), but takes `qualifiedAppRef` and `bindingDigest` from a run-written
+request rather than computing them independently. Flow: a trusted-mode run with
+no grant fails closed AND records a request (workspaceID + qualifiedAppRef +
+bindingDigest, all run-accurate) under `profiles/<p>/ide-trust-request.json`;
+`allow host-app code` derives the current workspaceID, reads the request, verifies
+`request.workspaceID == derived workspaceID` (so it can only promote a request
+for the project the operator is standing in), and writes the grant using the
+derived workspaceID plus the request's app ref + digest. `deny host-app code`
+removes the derived workspace's grant (FR-001, FR-006).
 
-**Rationale**: Workspace-identity derivation inputs (store identity key, canonical
-workspace root, root file identity) are all deterministic and available when the
-operator is in the project directory, so the command reproduces the exact
-`workspaceID` a run computes — verified reproducible in the run-workspace code
-path. This gives the immediate `allow read <path>`-style authorization (no
-"fail first" required), matching the established HostFS grant UX.
+**Rationale — why not derive the digest too**: `ComputeBindingDigest` keeps
+`ObservedIdentityDigest` in the digest UNLESS the binding is `IdentityDeferred`,
+and `identityDeferred = (Access == safe)`. In trusted mode the built-in VS Code
+binding's access is compiled to `ask-each-run`, so `identityDeferred` is false
+and the digest depends on the run-time observed editor identity. A grant command
+computing the digest independently would (a) need to observe the host editor
+itself, with a different `forbiddenRoots` set than a run, and (b) be unverifiable
+in unit tests (no real editor). Promoting the run-written digest keeps the grant
+keyed on exactly what the run will present, with equality by construction, and it
+is the path the spike already proved on real Lima. `workspaceID` stays derived
+(T008a) so the promotion is bound to the current project, not just the most
+recent request.
 
-**Alternatives considered**: request-driven promotion (spike used this: run
-records a request, operator promotes it). Rejected as the primary UX because it
-forces a "fail first" step unlike other `allow` commands; the derived-in-place
-command is more self-consistent. (The fail-closed refusal still names the
-command, so an operator who does hit the refusal is guided — FR-003.)
+**Alternatives considered**: fully independent derivation of both workspaceID
+and digest — rejected: the digest depends on run-time editor observation
+(above), so independent computation risks silent non-match and cannot be unit-
+verified. The small UX cost (run `code .` once to record the request, then
+`allow host-app code`) is acceptable because the fail-closed refusal already names
+the grant command (FR-003), making the sequence self-guiding.
 
 ## D5 — Fail-closed refusal names the grant command
 
 **Decision**: When trusted mode has no matching grant, the projected open refuses
-with no host launch and the message names `hideout allow ide-trust` (run in the
+with no host launch and the message names `hideout allow host-app code` (run in the
 project directory). No stale decision is left behind.
 
 **Rationale**: FR-003 and the 2026-07-20 walkthrough finding — the current
@@ -94,9 +105,9 @@ delivery channel.
 **Decision**: A grant matches only when all key fields equal the current run's
 values; a changed `workspaceID` (different project) or `bindingDigest` (changed
 editor build/binding) simply does not match, re-requiring a grant. Switching the
-profile to safe mode deletes all trusted-IDE grants for the profile (extend the
-existing `invalidateProjectionGrantsForProfile` path); `deny ide-trust` deletes
-one. Grant existence is shown by `profile ide-mode`.
+profile to safe mode deletes all trusted host-app grants for the profile (extend the
+existing `invalidateProjectionGrantsForProfile` path); `deny host-app code` deletes
+one. Grant existence is shown by `profile host-app-mode`.
 
 **Rationale**: FR-006/FR-007/FR-008. Matching-by-equality gives drift
 re-confirmation for free; no separate expiry timer is needed (out of scope per
@@ -108,14 +119,14 @@ spec). Safe-mode revocation reuses the existing invalidation hook.
 atomic write — a guest writing the workspace cannot mint/refresh/read it;
 (2) keyed by Core-derived workspace identity, never a guest path;
 (3) drift (workspace/app identity) re-requires a grant; (4) visible via
-`ide-mode`, revocable via safe-mode/`deny ide-trust`, and every grant/reuse/
+`host-app-mode`, revocable via safe-mode/`deny host-app code`, and every grant/reuse/
 refuse/revoke is audited.
 
 **Rationale**: Directly the spec's four security invariants; mirrors the
-guest-unreachable placement already proven for `ide-mode.json`. The residual
+guest-unreachable placement already proven for `host-app-mode.json`. The residual
 trusted-mode risk (guest-writable workspace may carry `.vscode` tasks) is
 inherent to trusted mode, identical under the old per-run path, disclosed on
-`ide-mode trusted-host-ide`, and mitigated by safe mode being the default.
+`host-app-mode trusted`, and mitigated by safe mode being the default.
 
 ## D8 — Evidence and delivery discipline
 
@@ -128,3 +139,53 @@ negative fixture (constitution 1.3.0).
 **Rationale**: FR-008, SC-001..SC-006, and the project's mutation/negative-
 fixture requirement. The spike already demonstrated the real-Lima loop manually;
 this makes it a repeatable, asserted lane.
+
+## D9 — Operator surface generalized from `ide` to `host-app`
+
+**Decision**: The draft named the commands `hideout allow ide-trust` /
+`profile ide-mode <p> trusted-host-ide`. On operator review this was rejected as
+too concrete ("who is the IDE?") for a Core capability that is deliberately
+application-agnostic (`host.app.open-resource`). The shipped surface is fully
+generic: the operator types `hideout allow host-app <command>` or
+`hideout deny host-app <command>`, sets the mode with
+`hideout profile host-app-mode`, and the launch/audit mode value is
+`trusted-host-app` (was `trusted-host-ide`). Core carries no domain word like
+"ide". Internal Go types,
+the grant store file (`ide-trust-grants.json`), the request file
+(`ide-trust-request.json`), and this spec directory keep the historical
+`TrustedIDE*` / `trusted-ide` spelling; that user-invisible split is tracked in
+`docs/DEBT.md`.
+
+**Rationale**: There is no compatibility burden (no external users yet), so the
+rename was free, and the generic surface matches the projection's actual design
+(a terminal editor, a browser, adb, etc. could all be host apps). The
+appopen package's own doc already promised "no editor- or vendor-specific
+vocabulary", which the old `trusted-host-ide` value contradicted.
+
+## D10 — Batch adversarial review (constitution 1.3.0)
+
+**Decision**: Fresh-eyes falsification pass against the four security seams and
+the FRs, run 2026-07-20 against the shipped code (not memory). Attempts and
+outcomes:
+
+- *Guest forges/reads a grant by writing `/workspace`* → refuted: the grant and
+  request live under `storeRoot/profiles/<p>/`, never the workspace
+  (`TestTrustedIDEGrantGuestWorkspaceWriteCannotForge`).
+- *A different workspace or drifted binding reuses a grant* → refuted: match
+  requires exact `(workspaceId, qualifiedAppRef, bindingDigest)` equality and
+  trusted mode (`TestTrustedIDEGrantMatchRequiresTrustedModeAndExactKeys`,
+  T017 drift cases); real-Lima confirmed `--workspace X` and `cd X && allow`
+  derive the same workspaceID (grant reused, exit 0).
+- *Trusted mode with no grant silently opens or falls back to safe* → refuted:
+  fail-closed refusal, no host launch, exit 126, names `hideout allow host-app
+  code` (real-Lima + `hostapp_test.go`).
+- *Two production grant checkers* → refuted: `runProjectionGrantChecker` is the
+  sole production wiring (`run_dataplane.go:178`); `decisionIdeGrantChecker` has
+  only test callers and is documented TEST-ONLY (FR-011).
+- *A stale `trusted-host-ide` literal still drives behavior* → refuted: zero
+  occurrences remain in code/scripts/schema; the audit value is
+  `trusted-host-app`, asserted in the gate.
+
+**Outcome**: No open finding. Build, vet, gofmt, full `go test`, gate0, and
+markdownlint all green; the persistent-grant real-Lima lane is codified and its
+command sequence was verified end-to-end this session.

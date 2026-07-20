@@ -19,7 +19,7 @@ type Mode string
 
 const (
 	ModeSafe    Mode = "safe"
-	ModeTrusted Mode = "trusted-host-ide"
+	ModeTrusted Mode = "trusted-host-app"
 )
 
 // hardForbiddenFlags are refused regardless of any app recipe. These are

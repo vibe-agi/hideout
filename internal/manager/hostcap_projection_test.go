@@ -87,7 +87,7 @@ func TestProjectionIdeModeRequestIsNotAuthority(t *testing.T) {
 	if err != nil || got != ProjectionIdeModeTrusted {
 		t.Fatalf("ProjectionIdeMode = %q err=%v", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(core.Store.Root, "profiles", p.Name, "ide-mode.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(core.Store.Root, "profiles", p.Name, "host-app-mode.json")); err != nil {
 		t.Fatalf("mode should persist under the reserved store: %v", err)
 	}
 }
@@ -388,7 +388,7 @@ func TestProjectionModeGrantCheckerReadsControlPlaneNotWorkspace(t *testing.T) {
 	// counts.
 	root := t.TempDir()
 	// A stray file elsewhere is ignored.
-	if err := os.WriteFile(filepath.Join(t.TempDir(), "ide-mode.json"), []byte(`{"mode":"trusted-host-ide"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(t.TempDir(), "host-app-mode.json"), []byte(`{"mode":"trusted"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if (decisionIdeGrantChecker{storeRoot: root}).TrustedGrantActive(hostcap.GrantScope{SessionID: "s", Profile: "privacy"}) {

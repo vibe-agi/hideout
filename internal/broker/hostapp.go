@@ -137,7 +137,7 @@ func (s *Server) handleHostAppOpen(ctx context.Context, req Request, resp Respon
 		}
 		scope := hostcap.GrantScopeForBinding(s.HostApp.GrantScopeBase, binding, req.Command, req.SessionID, s.Profile, s.HostApp.RunID)
 		if s.HostApp.Grants == nil || !hostcap.TrustedGrantActiveForResource(s.HostApp.Grants, scope, resource.Ref) {
-			return s.hostAppRefusedBoundResource(req, resp, hostcap.CodeModeTrustedDenied, "host application access requires an exact resource-scoped operator grant", request, binding, "", resource.Ref)
+			return s.hostAppRefusedBoundResource(req, resp, hostcap.CodeModeTrustedDenied, "this project is not trusted for the native host app; to allow it, run on the host: hideout allow host-app "+req.Command, request, binding, "", resource.Ref)
 		}
 	}
 	result, binding, err := s.HostApp.OpenCommand(ctx, req.Command, bindingDigest, request, resolver, req.SessionID, s.Profile)
@@ -154,15 +154,15 @@ func (s *Server) handleHostAppOpen(ctx context.Context, req Request, resp Respon
 	}
 	resp.Data = map[string]any{"outcome": outcome}
 	// A silent launch hides the posture: the operator cannot tell the safe
-	// window (isolated profile, extensions disabled) from their native IDE,
+	// window (isolated profile, extensions disabled) from their native host app,
 	// and never learns the trusted upgrade exists. Mode is a two-value
 	// posture fact, not a host path or identity, so it may cross to the guest.
 	if outcome == "launched" {
 		switch result.Mode {
 		case appopen.ModeSafe:
-			resp.Stderr = "hideout: opened in a safe host app window (isolated profile, extensions disabled); for your full native IDE: hideout profile ide-mode " + s.Profile + " trusted-host-ide"
+			resp.Stderr = "hideout: opened in a safe host app window (isolated profile, extensions disabled); to open " + req.Command + " natively: hideout profile host-app-mode " + s.Profile + " trusted, then hideout allow host-app " + req.Command
 		case appopen.ModeTrusted:
-			resp.Stderr = "hideout: opened in your trusted host IDE"
+			resp.Stderr = "hideout: opened in your trusted host app"
 		}
 	}
 	s.emit(req, resp, s.hostAppAuditDetails(req, request, binding, string(result.Mode), outcome, "", resolver.auditResource()))

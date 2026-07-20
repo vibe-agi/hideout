@@ -178,6 +178,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout connect through <proxy-secret> [using <resolver>] [for profile <name>]")
 	fmt.Fprintln(a.stdout, "  hideout allow read|write|all <path> [--for-profile <name>]")
 	fmt.Fprintln(a.stdout, "  hideout deny read|write|all <path> [--for-profile <name>]")
+	fmt.Fprintln(a.stdout, "  hideout allow ide-trust [--for-profile <name>]   (native editor for this project)")
+	fmt.Fprintln(a.stdout, "  hideout deny ide-trust [--for-profile <name>]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "First run:")
 	fmt.Fprintln(a.stdout, "  hideout setup")
@@ -1210,7 +1212,7 @@ func (a app) profileUsage() {
 	fmt.Fprintln(a.stdout, "  hideout profile tools <name> <list|expected>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> <list|add-open|remove>")
 	fmt.Fprintln(a.stdout, "  hideout profile command-adapter <name> <list|add-local|add-builtin-root-sensitive|enable|disable|refresh-digest|remove>")
-	fmt.Fprintln(a.stdout, "  hideout profile ide-mode <name> [safe|trusted-host-ide]")
+	fmt.Fprintln(a.stdout, "  hideout profile host-app-mode <name> [safe|trusted]")
 }
 
 func (a app) profileFSUsage() {
@@ -4461,7 +4463,7 @@ func (a app) profile(args []string) error {
 		return a.profileCommandProxy(store, args[1:])
 	case "command-adapter":
 		return a.profileCommandAdapter(store, args[1:])
-	case "ide-mode":
+	case "host-app-mode":
 		return a.profileIdeMode(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
@@ -4578,6 +4580,8 @@ func (a app) operatorIntent(args []string) error {
 		return a.setupCommand()
 	case operatorintent.Access:
 		return a.operatorAccess(value)
+	case operatorintent.HostAppTrust:
+		return a.operatorHostAppTrust(value)
 	case operatorintent.Show:
 		if value.Topic != operatorintent.ShowConnection {
 			return fmt.Errorf("show %s is not activated yet; use: %s", value.Topic, showTopicEquivalentCommand(value.Topic))
@@ -4658,18 +4662,18 @@ func writeNaturalConnection(w io.Writer, state manager.ProfileNetworkState) erro
 	}
 }
 
-// profileIdeMode reads or sets the host-app projection IDE mode for a profile.
+// profileIdeMode reads or sets the host-app projection mode for a profile.
 //
-//	hideout profile ide-mode <name>                     # show current mode
-//	hideout profile ide-mode <name> safe                # default; isolated editor
-//	hideout profile ide-mode <name> trusted-host-ide    # explicit opt-in
+//	hideout profile host-app-mode <name>            # show current mode
+//	hideout profile host-app-mode <name> safe       # default; isolated host app
+//	hideout profile host-app-mode <name> trusted    # explicit opt-in
 //
-// trusted-host-ide opens the guest-writable workspace in the operator's full
-// editor and is an explicit, revocable operator grant held in guest-unreachable
-// control-plane state. Selecting safe revokes it.
+// trusted mode opens the guest-writable workspace in the operator's full
+// native host app and is an explicit, revocable operator grant held in
+// guest-unreachable control-plane state. Selecting safe revokes it.
 func (a app) profileIdeMode(store profile.Store, args []string) error {
 	if len(args) == 0 || containsHelpToken(args) {
-		fmt.Fprintln(a.stdout, "usage: hideout profile ide-mode <name> [safe|trusted-host-ide]")
+		fmt.Fprintln(a.stdout, "usage: hideout profile host-app-mode <name> [safe|trusted]")
 		return nil
 	}
 	name := args[0]
@@ -4683,19 +4687,22 @@ func (a app) profileIdeMode(store profile.Store, args []string) error {
 			return err
 		}
 		fmt.Fprintln(a.stdout, mode)
+		if mode == manager.ProjectionIdeModeTrusted && core.HasHostAppTrustGrants(name) {
+			fmt.Fprintln(a.stdout, "grants: one or more projects are trusted for native host apps")
+		}
 		return nil
 	}
 	if len(args) != 2 {
-		return errors.New("usage: hideout profile ide-mode <name> [safe|trusted-host-ide]")
+		return errors.New("usage: hideout profile host-app-mode <name> [safe|trusted]")
 	}
 	mode := args[1]
 	if mode == manager.ProjectionIdeModeTrusted {
-		fmt.Fprintln(a.stderr, "warning: trusted-host-ide opens the guest-writable workspace in your full editor, which may run workspace tasks and extensions; the default safe mode isolates the editor.")
+		fmt.Fprintln(a.stderr, "warning: trusted mode opens the guest-writable workspace in your full native host app, which may run workspace tasks and extensions; the default safe mode isolates it.")
 	}
 	if err := core.SetProjectionIdeMode(name, mode); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "ide-mode for %s set to %s\n", name, mode)
+	fmt.Fprintf(a.stdout, "host-app-mode for %s set to %s\n", name, mode)
 	return nil
 }
 

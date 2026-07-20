@@ -10,11 +10,13 @@
 
 **Input**: User description: "Make trusted-host-ide usable for one-shot commands
 like `code .` by persisting an operator-granted trust as profile+workspace
-policy, replacing the per-live-run decision that deadlocks."
+policy, replacing the per-live-run decision that deadlocks." (During
+implementation the operator surface was generalized from `ide`/`ide-mode` to the
+domain-neutral `host-app`; see research.md D9.)
 
 ## Context
 
-`trusted-host-ide` mode lets a projected command such as `code .` open the
+`trusted` mode lets a projected command such as `code .` open the
 workspace in the operator's full, native editor (extensions and workspace tasks
 enabled) instead of the default safe, isolated editor window. Today the mode is
 unusable for one-shot commands: the trusted authorization is raised as a
@@ -51,7 +53,7 @@ prompt.
    for the current workspace, **When** a one-shot `hideout run -- code .` runs,
    **Then** the full native editor opens and the command exits successfully with
    no approval step.
-2. **Given** a trusted-IDE grant exists for workspace A, **When** the operator
+2. **Given** a trusted host-app grant exists for workspace A, **When** the operator
    runs `code .` in a later, separate run for workspace A, **Then** it reuses
    the grant and opens natively without re-granting.
 
@@ -101,17 +103,17 @@ apply.
 
 **Acceptance Scenarios**:
 
-1. **Given** a trusted-IDE grant, **When** the operator revokes it (explicit
+1. **Given** a trusted host-app grant, **When** the operator revokes it (explicit
    revoke or switching the profile to safe mode), **Then** the next `code .`
    returns to the safe launch or the guided grant path.
-2. **Given** a trusted-IDE grant for workspace A, **When** the operator runs
+2. **Given** a trusted host-app grant for workspace A, **When** the operator runs
    `code .` in a different workspace B, **Then** the grant does not apply and B
    is treated as ungranted.
-3. **Given** a trusted-IDE grant, **When** the granted host application's
+3. **Given** a trusted host-app grant, **When** the granted host application's
    identity changes (a different editor build/binding), **Then** the grant no
    longer matches and a new grant is required.
-4. **Given** any trusted-IDE grant exists, **When** the operator inspects the
-   profile's IDE mode, **Then** the existence of the grant is visible.
+4. **Given** any trusted host-app grant exists, **When** the operator inspects the
+   profile's host-app mode, **Then** the existence of the grant is visible.
 
 ---
 
@@ -119,10 +121,10 @@ apply.
 
 - A guest/agent process that writes the workspace (including `.vscode` files or
   a forged grant file in the workspace) MUST NOT be able to create, refresh, or
-  read a trusted-IDE grant.
-- The safe (default) mode path is unaffected by any trusted-IDE grant and never
+  read a trusted host-app grant.
+- The safe (default) mode path is unaffected by any trusted host-app grant and never
   requires one.
-- Switching a profile from trusted to safe MUST drop trusted-IDE grants for that
+- Switching a profile from trusted to safe MUST drop trusted host-app grants for that
   profile so a later switch back to trusted re-requires the grant.
 - Two workspaces that resolve to the same project identity are one grant; two
   distinct projects are two grants.
@@ -140,7 +142,7 @@ apply.
   a workspace-identity mismatch, or a host-app-identity mismatch all resolve to
   "no grant" and refuse. Safe mode remains the default when trusted is not
   selected.
-- **User authority and policy**: The trusted-IDE grant is durable operator
+- **User authority and policy**: The trusted host-app grant is durable operator
   policy, the same shape and lifecycle as a HostFS profile grant: operator
   grants it explicitly, it is stored in the profile, read every run, and
   revocable. It is NOT per-run capability authority (broker tokens, session
@@ -174,22 +176,22 @@ apply.
   closed with no host launch and MUST name the exact command to grant trusted
   IDE for the current workspace. It MUST NOT leave only a stale, unactionable
   decision.
-- **FR-004**: A trusted-IDE grant MUST be keyed by the Core-derived workspace
+- **FR-004**: A trusted host-app grant MUST be keyed by the Core-derived workspace
   identity and the host-app binding identity (including its digest), so a grant
   for one workspace or one app binding never authorizes another.
-- **FR-005**: A trusted-IDE grant MUST be stored on the control plane the guest
+- **FR-005**: A trusted host-app grant MUST be stored on the control plane the guest
   cannot reach (profile-owned store). Guest-side writes, including to the
   workspace, MUST NOT be able to create, refresh, or read a grant.
 - **FR-006**: Switching a profile to safe mode MUST revoke that profile's
-  trusted-IDE grants, and an explicit revoke MUST drop a grant without leaving
+  trusted host-app grants, and an explicit revoke MUST drop a grant without leaving
   trusted mode.
 - **FR-007**: A change in the granted workspace identity or host-app binding
   identity MUST cause the grant to no longer match, re-requiring a grant.
-- **FR-008**: The existence of a trusted-IDE grant MUST be visible to the
+- **FR-008**: The existence of a trusted host-app grant MUST be visible to the
   operator (e.g. through the profile IDE-mode inspection surface) and the grant,
   reuse, refusal, and revocation MUST be auditable.
 - **FR-009**: Safe mode MUST remain the default and MUST be unaffected by the
-  presence or absence of any trusted-IDE grant.
+  presence or absence of any trusted host-app grant.
 - **FR-010**: The grant record, its audit, and any guest-visible response MUST
   contain no host path, host username, capability token, machine identifier, or
   raw guest argv.
@@ -238,7 +240,7 @@ apply.
 - The workspace identity and host-app binding identity (including digest) used to
   key a grant are already computed and available at the open-time check (spike-
   confirmed).
-- Safe mode, the broker safe-vs-trusted disclosure line, and the `ide-mode`
+- Safe mode, the broker safe-vs-trusted disclosure line, and the `host-app-mode`
   command already exist and are reused; this feature does not redesign them.
 - The first-run projected-command shim timing flake observed during the spike is
   a separate, pre-existing issue tracked in DEBT and is out of scope here.
