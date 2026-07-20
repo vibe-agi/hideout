@@ -681,6 +681,18 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("printf 'device: tun://hideout0\\nproxy: %s\\nloglevel: warn\\n' \"$proxy_url\" > \"$gateway_config\"\n")
 		b.WriteString("chmod 0600 \"$gateway_config\"\n")
 		b.WriteString("unset proxy_url\n")
+		// Self-heal a retained privacy network from an unclean prior teardown or
+		// an interrupted run on this boot: reconcile it to a clean direct slate
+		// before capturing the baseline route and re-establishing. hideout0 only
+		// exists on the boot that created it (a reboot clears it), so the saved
+		// before-route is this boot's real direct route and is safe to restore.
+		b.WriteString("if ip link show dev hideout0 >/dev/null 2>&1; then\n")
+		b.WriteString("  if [ -r /hideout/session/network/tun2socks.pid ]; then kill \"$(sed -n '1p' /hideout/session/network/tun2socks.pid)\" 2>/dev/null || true; fi\n")
+		b.WriteString("  if [ -r /hideout/session/network/dns-stub.pid ]; then kill \"$(sed -n '1p' /hideout/session/network/dns-stub.pid)\" 2>/dev/null || true; fi\n")
+		b.WriteString("  if [ -s /hideout/session/network/default-route.before ]; then ip route replace $(sed -n '1p' /hideout/session/network/default-route.before) 2>/dev/null || true; fi\n")
+		b.WriteString("  ip link set dev hideout0 down 2>/dev/null || true\n")
+		b.WriteString("  ip tuntap del mode tun dev hideout0 2>/dev/null || ip link del dev hideout0 2>/dev/null || true\n")
+		b.WriteString("fi\n")
 		b.WriteString("default_route=$(ip route show default | head -n 1 || true)\n")
 		b.WriteString("printf '%s\\n' \"$default_route\" > /hideout/session/network/default-route.before\n")
 		b.WriteString("default_gw=$(printf '%s\\n' \"$default_route\" | awk '{for (i=1;i<=NF;i++) if ($i==\"via\") print $(i+1)}')\n")
@@ -706,7 +718,9 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("    ;;\n")
 		b.WriteString("esac\n")
 		b.WriteString("proxy_route_existing=$(ip route show \"$proxy_route_host/32\" 2>/dev/null | head -n 1 || true)\n")
-		b.WriteString("if ip link show dev hideout0 >/dev/null 2>&1; then echo 'hideout: privacy network is already active or stale; wait for the active service transition, or stop and restart the environment to recover stale guest state' >&2; exit 127; fi\n")
+		// Any stale hideout0 was reconciled above; a residual device here means the
+		// reconcile could not clear it, so creation fails closed rather than
+		// silently adopting foreign guest state.
 		b.WriteString("ip tuntap add mode tun dev hideout0 || { echo 'hideout: hideout0 creation failed' >&2; exit 127; }\n")
 		b.WriteString("ip addr add 198.18.0.1/15 dev hideout0 || { echo 'hideout: hideout0 address setup failed' >&2; exit 127; }\n")
 		b.WriteString("ip link set dev hideout0 up\n")

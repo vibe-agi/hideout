@@ -228,9 +228,8 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		}
 	}
 	var (
-		owner                     *runsession.Owner
-		lifecycleCleanupErr       error
-		environmentServiceCleanup func(context.Context) error
+		owner               *runsession.Owner
+		lifecycleCleanupErr error
 	)
 	if runEnv.Active {
 		terminalMode := opts.TerminalMode
@@ -272,7 +271,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		// Registered before the narrower cleanup defers below so this runs last:
 		// all session authority is gone before the owner and runtime child.
 		defer func() {
-			finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, environmentServiceCleanup, lifecycleRegistration)
+			finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, lifecycleRegistration)
 			if finishErr != nil {
 				result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
 				if retErr == nil {
@@ -414,12 +413,6 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	result.EnvironmentName = runEnv.Record.Name
 	result.InstanceName = session.InstanceName
 	result.PreserveInstance = session.PreserveInstance
-	if runNetwork.EnvironmentService {
-		controller, _ := opts.Backend.(backend.EnvironmentNetworkServiceController)
-		environmentServiceCleanup = func(cleanupCtx context.Context) error {
-			return c.stopRunNetworkService(cleanupCtx, runNetwork, controller, session, dataPlane.Env)
-		}
-	}
 	defer func() {
 		cleanupErr := opts.Backend.Cleanup(ctx, session)
 		decision := "allow"
@@ -985,8 +978,7 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 				Decision: decision,
 				Details:  privilege.PrivilegedSetupDetails(event.Category, event.Status, event.Setup, event.Reason),
 			})
-			// The environment network service is environment-scoped and its
-			// privileged cleanup runs from finishConcurrentRunEnvironment, which by
+			// Privileged cleanup runs from the deferred run finalization, which by
 			// design executes after CloseRunSession has closed the per-session audit
 			// (see the deferred cleanup ordering). The cleanup itself has already
 			// succeeded, so a closed session writer must not fail it; its audit at

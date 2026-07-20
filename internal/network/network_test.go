@@ -318,7 +318,7 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	}
 	for _, want := range []string{
 		"proxy endpoint route setup failed",
-		"privacy network is already active or stale",
+		"ip tuntap del mode tun dev hideout0 2>/dev/null || ip link del dev hideout0 2>/dev/null || true",
 		"ip tuntap add mode tun dev hideout0 ||",
 		"hideout0 address setup failed",
 		"verified_default_route=$(ip route show default",

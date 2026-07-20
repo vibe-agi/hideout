@@ -313,7 +313,6 @@ func reconcileRestartResidue(ctx context.Context, store environment.Store, recor
 
 	reasons := make([]string, 0, 4)
 	owners := []runsession.OwnerObservation{}
-	liveOwners := 0
 	for _, probe := range lifecycle.RecoveryProbes() {
 		switch probe {
 		case lifecycle.RecoveryBackendObservation:
@@ -360,12 +359,8 @@ func reconcileRestartResidue(ctx context.Context, store environment.Store, recor
 				reasons = appendReason(reasons, "owner-inventory-unavailable")
 			}
 			ownerSet := make(map[string]bool, len(owners))
-			liveOwners = 0
 			for _, owner := range owners {
 				ownerSet[owner.SessionID] = true
-				if owner.Status == runsession.OwnerLive {
-					liveOwners++
-				}
 			}
 			if err := reconcileOrphanSessionRuntime(store, record.ID, ownerSet, proveAbsent); err != nil {
 				reasons = appendReason(reasons, "session-runtime-unproved")
@@ -391,9 +386,12 @@ func reconcileRestartResidue(ctx context.Context, store environment.Store, recor
 						reasons = appendReason(reasons, "network-runtime-cleanup-failed")
 					}
 				case backend.LifecycleRunning:
-					if liveOwners == 0 {
-						reasons = appendReason(reasons, "network-runtime-unproved")
-					}
+					// The environment network service is environment-scoped: it is
+					// set up on the first run of a boot, retained across idle-grace
+					// for same-boot reuse, and scrubbed once the guest is observed
+					// stopped/absent (above). Presence while the guest runs — with
+					// or without live owners — is the expected steady state, not an
+					// unproved residual that must block automatic stop.
 				default:
 					reasons = appendReason(reasons, "network-runtime-unproved")
 				}

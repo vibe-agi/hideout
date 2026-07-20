@@ -276,7 +276,7 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 	return runEnv, cleanupErr
 }
 
-func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, serviceCleanup func(context.Context) error, lifecycleRegistration ...lifecycle.Registration) (retErr error) {
+func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, lifecycleRegistration ...lifecycle.Registration) (retErr error) {
 	if !runEnv.Active || owner == nil {
 		return cleanupErr
 	}
@@ -338,12 +338,12 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 	}
 	// Shared environment authority may be removed only when the complete owner
 	// set is proved and empty. A corrupt or failed sibling record is not proof
-	// that no sibling still depends on the service or activation receipt.
-	if ownersProvedIdle && siblingLive == 0 && serviceCleanup != nil {
-		serviceCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		finalErr = errors.Join(finalErr, serviceCleanup(serviceCtx))
-		cancel()
-	}
+	// that no sibling still depends on the activation receipt.
+	//
+	// The environment network service is deliberately NOT torn down here: it is
+	// an environment-scoped resource retained across idle-grace so a later
+	// same-boot run reuses it. The daemon lifecycle reconciliation scrubs it
+	// once the guest is observed stopped (non-destructive automatic stop).
 	if ownersProvedIdle && siblingLive == 0 {
 		finalErr = errors.Join(finalErr, backend.RemoveActivationReceipt(runEnv.RuntimeDir))
 	}

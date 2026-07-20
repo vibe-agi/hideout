@@ -163,14 +163,17 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnlin
 	if second.Plan.ProxySecretPath != wantSecondSecret || second.Plan.ProxySecretPath == first.Plan.ProxySecretPath {
 		t.Fatalf("reuse secret authority=%q want distinct session path %q", second.Plan.ProxySecretPath, wantSecondSecret)
 	}
-	if _, err := os.Lstat(wantSecondSecret); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("matching service reuse materialized a session secret: %v", err)
-	}
 	if err := core.StartRunNetworkService(context.Background(), secondSession, &second, controller, &backend.Session{ID: secondSession.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if controller.verifies != 1 || !second.Plan.Verified {
 		t.Fatalf("reuse was not runtime verified: controller=%+v plan=%+v", controller, second.Plan)
+	}
+	// The reuse path materializes the bootstrap secret so a failed current-boot
+	// verification can self-heal, but a successful verification must leave no
+	// consumed session secret behind.
+	if _, err := os.Lstat(wantSecondSecret); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reuse left a consumed session secret behind: %v", err)
 	}
 	driftResolver := network.EnvSecretResolver{Env: []string{network.SecretEnvName("shared-proxy") + "=socks5://user:two@127.0.0.1:1080"}}
 	drift, err := core.PrepareRunNetwork(secondSession, RunNetworkOptions{Resolver: driftResolver})
@@ -388,25 +391,69 @@ func assertDirectoryExcludesRawNetworkSecret(t *testing.T, root, secret string) 
 	}
 }
 
-func TestEnvironmentNetworkServiceRejectsStaleBootAndFailedRuntimeHealth(t *testing.T) {
+func writeNetworkShimHelpers(t *testing.T, shimDir string) {
+	t.Helper()
+	if err := os.MkdirAll(shimDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tun2socks", "hideout-dns-stub"} {
+		if err := os.WriteFile(filepath.Join(shimDir, name), []byte(name+"-bin"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestEnvironmentNetworkServiceSelfHealsStaleReuse(t *testing.T) {
+	// A reuse whose current-boot verification fails — the guest rebooted or was
+	// recreated, or a prior teardown was unclean — self-heals by re-establishing
+	// the privacy network fresh instead of forcing the operator to stop the
+	// environment. The idempotent bootstrap reconciles any stale guest remnant
+	// before the fresh setup, so the run ends on a verified private network.
 	core, _, runSession, runNetwork := preparedReadyEnvironmentNetworkService(t)
+	writeNetworkShimHelpers(t, runSession.RuntimeShimDir)
+	controller := &recordingNetworkServiceController{verifyErr: errors.New("tun process is gone")}
+	current := &backend.Session{ID: runSession.Layout.ID, ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef"}
+	if err := core.StartRunNetworkService(context.Background(), runSession, &runNetwork, controller, current, nil); err != nil {
+		t.Fatalf("stale reuse did not self-heal: %v", err)
+	}
+	if controller.verifies != 1 || controller.starts != 1 {
+		t.Fatalf("reuse self-heal did not re-establish the network: controller=%+v", controller)
+	}
+	state, loadErr := network.LoadServiceState(runNetwork.ServiceStatePath)
+	if loadErr != nil || state.Status != network.ServiceReady {
+		t.Fatalf("self-healed state=%+v err=%v", state, loadErr)
+	}
+
+	// When the re-establishment itself fails, the run fails closed and records
+	// the failure rather than proceeding on an unverified network.
+	core, _, runSession, runNetwork = preparedReadyEnvironmentNetworkService(t)
+	writeNetworkShimHelpers(t, runSession.RuntimeShimDir)
+	controller = &recordingNetworkServiceController{
+		verifyErr: errors.New("tun process is gone"),
+		startErr:  errors.New("setup identity rejected network start"),
+	}
+	if err := core.StartRunNetworkService(context.Background(), runSession, &runNetwork, controller, current, nil); err == nil ||
+		!strings.Contains(err.Error(), "setup identity rejected network start") {
+		t.Fatalf("failed re-establishment err=%v", err)
+	}
+	state, loadErr = network.LoadServiceState(runNetwork.ServiceStatePath)
+	if loadErr != nil || state.Status != network.ServiceFailed {
+		t.Fatalf("failed re-establish state=%+v err=%v", state, loadErr)
+	}
+}
+
+func TestEnvironmentNetworkServiceRejectsStaleBootForNonReuseTransition(t *testing.T) {
+	// Non-reuse transitions (DNS switch, proxy restart, posture changes) mutate
+	// the previously established guest network. If the guest booted anew that
+	// network is gone, so they must fail closed rather than mutate nothing.
+	core, _, runSession, runNetwork := preparedReadyEnvironmentNetworkService(t)
+	runNetwork.EnvironmentServiceAction = networkServiceRestartProxy
+	runNetwork.EnvironmentServiceStart = true
 	controller := &recordingNetworkServiceController{}
 	staleBoot := &backend.Session{ID: runSession.Layout.ID, ExpectedBootID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	err := core.StartRunNetworkService(context.Background(), runSession, &runNetwork, controller, staleBoot, nil)
-	if err == nil || !strings.Contains(err.Error(), "belongs to guest boot") || controller.verifies != 0 {
-		t.Fatalf("stale boot reuse err=%v controller=%+v", err, controller)
-	}
-
-	core, _, runSession, runNetwork = preparedReadyEnvironmentNetworkService(t)
-	controller = &recordingNetworkServiceController{verifyErr: errors.New("tun process is gone")}
-	current := &backend.Session{ID: runSession.Layout.ID, ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef"}
-	err = core.StartRunNetworkService(context.Background(), runSession, &runNetwork, controller, current, nil)
-	if err == nil || !strings.Contains(err.Error(), "verify environment network service") {
-		t.Fatalf("health verification err=%v", err)
-	}
-	state, loadErr := network.LoadServiceState(runNetwork.ServiceStatePath)
-	if loadErr != nil || state.Status != network.ServiceFailed || !strings.Contains(state.LastError, "tun process is gone") {
-		t.Fatalf("failed state=%+v err=%v", state, loadErr)
+	if err == nil || !strings.Contains(err.Error(), "belongs to guest boot") || controller.verifies != 0 || controller.starts != 0 {
+		t.Fatalf("stale boot non-reuse transition err=%v controller=%+v", err, controller)
 	}
 }
 
@@ -556,7 +603,7 @@ func preparedReadyEnvironmentNetworkService(t *testing.T) (Core, environment.Sto
 	}
 }
 
-func TestLastOwnerReconcilesCrashedSiblingBeforeNetworkServiceCleanup(t *testing.T) {
+func TestLastOwnerReconcilesCrashedSiblingAndRetainsNetworkService(t *testing.T) {
 	core, store, record := concurrentLifecycleFixture(t)
 	currentID := "ses_20260716T120000Z_0123456789abcdef"
 	staleID := "ses_20260716T115900Z_fedcba9876543210"
@@ -610,21 +657,18 @@ func TestLastOwnerReconcilesCrashedSiblingBeforeNetworkServiceCleanup(t *testing
 	if err := network.WriteServiceState(statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	controller := &recordingNetworkServiceController{}
-	runNetwork := RunNetwork{
-		Plan: servicePlan, EnvironmentService: true, ServiceDir: serviceDir,
-		GuestServiceDir: "/hideout/runtime/services/network", ServiceStatePath: statePath,
-	}
 	runEnvironment := RunEnvironment{Active: true, Record: record, RuntimeDir: store.RuntimeDir(record.ID), PreserveInstance: true}
 	var held *environment.Lock
-	err = core.finishConcurrentRunEnvironment(context.Background(), &held, runEnvironment, owner, currentID, nil, func(ctx context.Context) error {
-		return core.stopRunNetworkService(ctx, runNetwork, controller, &backend.Session{ID: currentID}, nil)
-	})
+	err = core.finishConcurrentRunEnvironment(context.Background(), &held, runEnvironment, owner, currentID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if controller.stops != 1 {
-		t.Fatalf("network service stop calls=%d", controller.stops)
+	// The environment network service is environment-scoped: the last owner
+	// leaving must NOT tear it down. It is retained across idle-grace so a
+	// later same-boot run reuses it, and is scrubbed only once the guest is
+	// observed stopped by the daemon lifecycle reconciliation.
+	if _, err := network.LoadServiceState(statePath); err != nil {
+		t.Fatalf("environment network service state was not retained for reuse: %v", err)
 	}
 	for _, id := range []string{currentID, staleID} {
 		if _, err := os.Stat(store.RuntimeSessionDir(record.ID, id)); !errors.Is(err, os.ErrNotExist) {
@@ -674,19 +718,11 @@ func TestUnprovableSiblingBlocksSharedServiceAndActivationCleanup(t *testing.T) 
 		Active: true, Record: record, RuntimeDir: store.RuntimeDir(record.ID), PreserveInstance: true,
 	}
 	var held *environment.Lock
-	serviceCleanupCalls := 0
 	err = core.finishConcurrentRunEnvironment(
 		context.Background(), &held, runEnvironment, owner, currentID, nil,
-		func(context.Context) error {
-			serviceCleanupCalls++
-			return nil
-		},
 	)
 	if !errors.Is(err, session.ErrOwnerUnprovable) {
 		t.Fatalf("unprovable sibling cleanup error=%v", err)
-	}
-	if serviceCleanupCalls != 0 {
-		t.Fatalf("shared service cleanup ran with unprovable sibling: %d", serviceCleanupCalls)
 	}
 	if _, err := os.Stat(activationPath); err != nil {
 		t.Fatalf("activation receipt was removed with unprovable sibling: %v", err)
@@ -721,7 +757,7 @@ func TestEnvironmentLockFailureStillFinishesLifecycleRegistration(t *testing.T) 
 	}
 	var held *environment.Lock
 	err = core.finishConcurrentRunEnvironment(
-		context.Background(), &held, runEnvironment, owner, sessionID, nil, nil, registration,
+		context.Background(), &held, runEnvironment, owner, sessionID, nil, registration,
 	)
 	if err == nil {
 		t.Fatal("missing environment lock unexpectedly produced successful cleanup")

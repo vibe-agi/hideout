@@ -210,6 +210,18 @@ func (c Core) prepareEnvironmentNetworkService(runSession RunSession, spec netpo
 			}
 		}
 		if runNetwork.EnvironmentServiceAction == networkServiceReuse || runNetwork.EnvironmentServiceAction == networkServiceGateway {
+			if !dryRun {
+				// Materialize the bootstrap artifacts even on the reuse path so a
+				// failed current-boot verification can self-heal by re-establishing
+				// the network from this same plan (the bootstrap reconciles any
+				// stale guest remnant first).
+				spec.DryRun = false
+				materialized, materializeErr := netpolicy.Prepare(spec)
+				if materializeErr != nil {
+					return runNetwork, materializeErr
+				}
+				runNetwork.Plan = materialized
+			}
 			runNetwork.Plan.Verified = false
 			runNetwork.Plan.RuntimeVerify = candidate.Mode == netpolicy.ModeTun2Socks
 			runNetwork.Plan.Reason = "environment network service requires current-boot verification"
@@ -338,7 +350,10 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 	startedAt := time.Now().UTC()
 	if runNetwork.PreviousServiceState != nil {
 		startedAt = runNetwork.PreviousServiceState.StartedAt
-		if runNetwork.PreviousServiceState.BootID != session.ExpectedBootID {
+		if runNetwork.PreviousServiceState.BootID != session.ExpectedBootID && action != networkServiceReuse {
+			// Non-reuse transitions mutate the previously established guest network;
+			// if the guest booted anew that network is gone, so fail closed. A reuse
+			// on a changed boot self-heals below by re-establishing from scratch.
 			return fmt.Errorf("environment network service belongs to guest boot %q, current boot is %q; stop the environment before retrying", runNetwork.PreviousServiceState.BootID, session.ExpectedBootID)
 		}
 		if action != networkServiceReuse {
@@ -363,12 +378,27 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 	copyHelper := func() error {
 		return copyNetworkHelper(runSession.RuntimeShimDir, runNetwork.ServiceDir)
 	}
+	establishTun := func() error {
+		if err := activateGateway(); err != nil {
+			return err
+		}
+		if err := copyHelper(); err != nil {
+			return err
+		}
+		return controller.StartEnvironmentNetwork(ctx, session, runNetwork.GuestServiceDir, runNetwork.Plan.GuestBootstrapPath, env)
+	}
 	var operationErr error
 	switch action {
 	case networkServiceReuse, networkServiceGateway:
 		if runNetwork.Plan.Mode == netpolicy.ModeTun2Socks {
 			operationErr = controller.VerifyEnvironmentNetwork(ctx, session, runNetwork.GuestServiceDir, env)
-			if operationErr != nil {
+			if operationErr != nil && action == networkServiceReuse {
+				// Self-heal: the persisted privacy network is not valid on the
+				// current guest (rebooted, recreated, or an unclean prior
+				// teardown). Re-establish it fresh; the idempotent bootstrap
+				// reconciles any stale remnant first.
+				operationErr = establishTun()
+			} else if operationErr != nil {
 				operationErr = fmt.Errorf("verify environment network service: %w", operationErr)
 			}
 		} else if controller != nil {
@@ -382,12 +412,7 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 		}
 	case networkServiceStart, networkServiceEnableProxy:
 		if runNetwork.Plan.Mode == netpolicy.ModeTun2Socks {
-			if operationErr = activateGateway(); operationErr == nil {
-				operationErr = copyHelper()
-			}
-			if operationErr == nil {
-				operationErr = controller.StartEnvironmentNetwork(ctx, session, runNetwork.GuestServiceDir, runNetwork.Plan.GuestBootstrapPath, env)
-			}
+			operationErr = establishTun()
 		} else if controller != nil {
 			operationErr = controller.VerifyDirectEnvironmentNetwork(ctx, session, runNetwork.GuestServiceDir, env)
 			if operationErr == nil {
