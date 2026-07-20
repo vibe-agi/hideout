@@ -22,7 +22,13 @@ hideout run -- code .
 hideout audit show --limit 5
 ```
 
-`code .` requires a supported host editor and an approved host-app permission.
+By default `code .` opens the project in a **safe, isolated editor window** — a
+separate VS Code profile with extensions and automatic workspace tasks disabled —
+because the workspace was just written by a tool. This default needs no approval
+and requires only a supported, code-signed host editor. Opening the project in
+your **full, native VS Code** instead is a separate opt-in (`trusted-host-ide`
+mode); see [docs/first-run-alpha.md](docs/first-run-alpha.md#open-in-a-host-editor)
+for how it works and its current limits.
 
 ## Install
 
