@@ -277,6 +277,13 @@ func writePortalWorkspaceRoot(script *strings.Builder, spec SessionViewSpec) {
 	script.WriteString("ln -s usr/sbin \"$workspace_root/sbin\"\n")
 	script.WriteString("ln -s usr/lib \"$workspace_root/lib\"\n")
 	script.WriteString("[ ! -e /lib64 ] || ln -s usr/lib64 \"$workspace_root/lib64\"\n")
+	// Mirror the managed-instance host-path roots so a granted host file remains
+	// reachable at its natural path inside the isolated session view, not only
+	// under /hideout/hostfs. The FUSE mount + broker still mediate every access,
+	// so an ungranted path resolves to nothing.
+	script.WriteString("for hostfs_root in Users Volumes private; do\n")
+	script.WriteString("  if [ ! -e \"$workspace_root/$hostfs_root\" ]; then ln -s \"/hideout/hostfs/$hostfs_root\" \"$workspace_root/$hostfs_root\" 2>/dev/null || true; fi\n")
+	script.WriteString("done\n")
 }
 
 func writePortalWorkspaceSeal(script *strings.Builder, spec SessionViewSpec) {
