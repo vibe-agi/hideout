@@ -225,6 +225,15 @@ run_projection_gate2() {
     cat "$tmp/projection-control-init.out" "$tmp/projection-control-init.err" >&2
     return 1
   fi
+  # Profiles default to privacy-preserving alias workspace paths. This is the
+  # positive control that must EXPOSE the host path to prove the detector works,
+  # so opt it into preserve explicitly.
+  if ! HIDEOUT_STORE_ROOT="$store" "$hideout" profile workspace-path-mode "$control_profile" preserve \
+    >>"$tmp/projection-control-init.out" 2>>"$tmp/projection-control-init.err"; then
+    echo "gate2: projection preserve-control workspace-path-mode preserve failed" >&2
+    cat "$tmp/projection-control-init.out" "$tmp/projection-control-init.err" >&2
+    return 1
+  fi
 
   local detector_control="$tmp/projection-detector-control.out"
   printf 'USER=%s\nHOME=%s\npath=%s/project\n' "$(id -un)" "$HOME" "$HOME" >"$detector_control"
@@ -277,10 +286,23 @@ printf "projection_proxy_secret_absent=yes\n"
   fi
 
   local preserve_out="$tmp/projection-preserve-control.out"
+  # The shared default Lima environment only supports alias workspaces. A
+  # preserve-mode positive control must therefore run in a dedicated named
+  # environment: dedicated envs honor the profile's preserve pathMode and are
+  # isolation-capable, unlike the shared default or a record-less run.
+  local preserve_env="g2pcp"
+  if ! HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" env create "$preserve_env" --profile "$control_profile" --backend lima --workspace "$projection_control_workspace" \
+    >"$tmp/projection-preserve-env.out" 2>"$tmp/projection-preserve-env.err"; then
+    echo "gate2: preserve-mode positive control dedicated env create failed" >&2
+    cat "$tmp/projection-preserve-env.out" "$tmp/projection-preserve-env.err" >&2
+    return 1
+  fi
   if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
-    "$hideout" run --profile "$control_profile" --backend lima --workspace "$projection_control_workspace" -- sh -eu -c 'printf "pwd=%s\n" "$PWD"' \
+    "$hideout" run --env "$preserve_env" --profile "$control_profile" --backend lima --workspace "$projection_control_workspace" -- sh -eu -c 'printf "pwd=%s\n" "$PWD"' \
     >"$preserve_out" 2>"$tmp/projection-preserve-control.err"; then
     echo "gate2: preserve-mode positive control failed" >&2
+    cat "$preserve_out" "$tmp/projection-preserve-control.err" >&2
     return 1
   fi
   if ! projection_output_contains_host_identity "$preserve_out"; then
@@ -314,7 +336,7 @@ run_projection_persistent_grant_lifecycle() {
   #    records a promotion request, and names the exact grant command.
   local refuse1="$tmp/projection-grant-refuse1.out"
   set +e
-  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
       --proxy-secret projection-proxy --workspace "$projection_grant_workspace" -- \
       code -n . >"$refuse1" 2>&1
@@ -325,18 +347,31 @@ run_projection_persistent_grant_lifecycle() {
     cat "$refuse1" >&2
     return 1
   fi
-  grep -q "hideout allow host-app code" "$refuse1"
+  if ! grep -q "hideout allow host-app code" "$refuse1"; then
+    echo "gate2: 039 step1 ungranted refusal did not name the grant command:" >&2
+    cat "$refuse1" >&2
+    return 1
+  fi
 
   # 2. Operator grants on the host from inside the project dir (cwd == the run
-  #    workspace), promoting the recorded request into a durable grant.
+  #    workspace) under the privacy profile, promoting the recorded request into
+  #    a durable grant.
   local grant_out="$tmp/projection-grant.out"
-  ( cd "$projection_grant_workspace" && HIDEOUT_STORE_ROOT="$store" \
-      "$hideout" allow host-app code ) >"$grant_out" 2>&1
-  grep -q "allowed for this project" "$grant_out"
+  if ! ( cd "$projection_grant_workspace" && HIDEOUT_STORE_ROOT="$store" \
+      "$hideout" allow host-app code --for-profile "$profile_name" ) >"$grant_out" 2>&1; then
+    echo "gate2: 039 step2 grant command failed:" >&2
+    cat "$grant_out" >&2
+    return 1
+  fi
+  if ! grep -q "allowed for this project" "$grant_out"; then
+    echo "gate2: 039 step2 grant did not confirm:" >&2
+    cat "$grant_out" >&2
+    return 1
+  fi
 
   # 3. A separate one-shot run reuses the durable grant and opens natively.
   local reuse_out="$tmp/projection-grant-reuse.out"
-  if ! HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
       --proxy-secret projection-proxy --workspace "$projection_grant_workspace" -- \
       code -n . >"$reuse_out" 2>&1; then
@@ -344,18 +379,30 @@ run_projection_persistent_grant_lifecycle() {
     cat "$reuse_out" >&2
     return 1
   fi
-  grep -q "opened in your trusted host app" "$reuse_out"
+  if ! grep -q "opened in your trusted host app" "$reuse_out"; then
+    echo "gate2: 039 step3 granted reuse did not open natively:" >&2
+    cat "$reuse_out" >&2
+    return 1
+  fi
 
-  # 4. Revoke removes the durable grant.
+  # 4. Revoke removes the durable grant under the privacy profile.
   local revoke_out="$tmp/projection-grant-revoke.out"
-  ( cd "$projection_grant_workspace" && HIDEOUT_STORE_ROOT="$store" \
-      "$hideout" deny host-app code ) >"$revoke_out" 2>&1
-  grep -q "revoked for this project" "$revoke_out"
+  if ! ( cd "$projection_grant_workspace" && HIDEOUT_STORE_ROOT="$store" \
+      "$hideout" deny host-app code --for-profile "$profile_name" ) >"$revoke_out" 2>&1; then
+    echo "gate2: 039 step4 revoke command failed:" >&2
+    cat "$revoke_out" >&2
+    return 1
+  fi
+  if ! grep -q "revoked for this project" "$revoke_out"; then
+    echo "gate2: 039 step4 revoke did not confirm:" >&2
+    cat "$revoke_out" >&2
+    return 1
+  fi
 
   # 5. After revoke the one-shot open fails closed again with the named path.
   local refuse2="$tmp/projection-grant-refuse2.out"
   set +e
-  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
       --proxy-secret projection-proxy --workspace "$projection_grant_workspace" -- \
       code -n . >"$refuse2" 2>&1
@@ -366,7 +413,11 @@ run_projection_persistent_grant_lifecycle() {
     cat "$refuse2" >&2
     return 1
   fi
-  grep -q "hideout allow host-app code" "$refuse2"
+  if ! grep -q "hideout allow host-app code" "$refuse2"; then
+    echo "gate2: 039 step5 revoked refusal did not name the grant command:" >&2
+    cat "$refuse2" >&2
+    return 1
+  fi
 
   HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" safe >/dev/null
   printf 'projection_persistent_grant=passed\n'
