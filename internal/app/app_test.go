@@ -6929,6 +6929,11 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://user:pass@proxy.invalid:8443")
 	t.Setenv("HIDEOUT_SECRET_DEFAULT_PROXY", "socks5://127.0.0.1:1080")
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", linuxShim)
+	linuxTun2Socks := filepath.Join(fakeBin, "tun2socks-linux")
+	if err := os.WriteFile(linuxTun2Socks, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HIDEOUT_LINUX_TUN2SOCKS_PATH", linuxTun2Socks)
 	installAppTestLinuxSessionHelpers(t, fakeBin)
 
 	var out, errOut bytes.Buffer

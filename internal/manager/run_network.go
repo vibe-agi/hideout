@@ -133,6 +133,10 @@ func (c Core) prepareEnvironmentNetworkService(runSession RunSession, spec netpo
 	spec.GuestArtifactDir = guestServiceDir
 	spec.SecretDir = runSession.RuntimeSessionDir
 	spec.GuestSecretDir = lima.GuestRuntimeDir + "/sessions/" + runSession.Layout.ID
+	// The environment network privileged setup runs before per-session shims are
+	// mounted, so its bootstrap must find the network helpers in the service dir
+	// (copyNetworkHelper places them here), not the per-session shim dir.
+	spec.GuestHelperDir = guestServiceDir
 	spec.DryRun = true
 	candidate, err := netpolicy.Prepare(spec)
 	if err != nil {
@@ -530,28 +534,41 @@ func (c Core) discardUnstartedEnvironmentNetworkService(environmentID string) er
 	return nil
 }
 
+// copyNetworkHelper co-locates the network helpers with the environment network
+// service bootstrap. The privileged setup runs before per-session shims are
+// mounted, so tun2socks and hideout-dns-stub must live in the service dir the
+// bootstrap can reach; the guest bootstrap prepends this dir to PATH.
 func copyNetworkHelper(sessionShimDir, serviceDir string) error {
-	source := filepath.Join(sessionShimDir, "hideout-dns-stub")
+	if err := os.MkdirAll(serviceDir, 0o700); err != nil {
+		return err
+	}
+	for _, name := range []string{"tun2socks", "hideout-dns-stub"} {
+		if err := copyNetworkHelperFile(sessionShimDir, serviceDir, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyNetworkHelperFile(sessionShimDir, serviceDir, name string) error {
+	source := filepath.Join(sessionShimDir, name)
 	input, err := os.Open(source)
 	if err != nil {
-		return fmt.Errorf("environment network helper: %w", err)
+		return fmt.Errorf("environment network helper %s: %w", name, err)
 	}
 	defer input.Close()
 	info, err := input.Stat()
 	if err != nil {
-		return fmt.Errorf("environment network helper: %w", err)
+		return fmt.Errorf("environment network helper %s: %w", name, err)
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("environment network helper must be a regular file")
+		return fmt.Errorf("environment network helper %s must be a regular file", name)
 	}
 	if info.Size() > maxEnvironmentNetworkHelperBytes {
-		return fmt.Errorf("environment network helper exceeds %d bytes", maxEnvironmentNetworkHelperBytes)
+		return fmt.Errorf("environment network helper %s exceeds %d bytes", name, maxEnvironmentNetworkHelperBytes)
 	}
-	if err := os.MkdirAll(serviceDir, 0o700); err != nil {
-		return err
-	}
-	target := filepath.Join(serviceDir, "hideout-dns-stub")
-	output, err := os.CreateTemp(serviceDir, ".hideout-dns-stub-")
+	target := filepath.Join(serviceDir, name)
+	output, err := os.CreateTemp(serviceDir, "."+name+"-")
 	if err != nil {
 		return err
 	}
@@ -568,7 +585,7 @@ func copyNetworkHelper(sessionShimDir, serviceDir string) error {
 	}
 	written, copyErr := io.Copy(output, input)
 	if copyErr == nil && written != info.Size() {
-		copyErr = errors.New("environment network helper changed while being copied")
+		copyErr = fmt.Errorf("environment network helper %s changed while being copied", name)
 	}
 	if copyErr == nil {
 		copyErr = output.Sync()

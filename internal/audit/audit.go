@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// ErrWriterClosed is returned by Emit after the writer has been closed. It is a
+// sentinel so best-effort emitters (e.g. environment-scoped cleanup that
+// outlives the per-session audit by design) can tolerate it via errors.Is.
+var ErrWriterClosed = errors.New("audit writer is closed")
+
 // Redaction is deterministic, not heuristic. Core strips only what it minted
 // and can name exactly: the HIDEOUT_SECRET_* backing namespace, Core-minted
 // control-plane token values (cap_/ui_ + hex), Core's own control-plane detail
@@ -93,7 +98,7 @@ func (w *Writer) Emit(e Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
-		return errors.New("audit writer is closed")
+		return ErrWriterClosed
 	}
 	return w.enc.Encode(e)
 }

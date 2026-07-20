@@ -268,6 +268,11 @@ func TestApplyRunPlansEnvironmentNetworkBeforeProviderStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HIDEOUT_LINUX_DNS_STUB_PATH", dnsStub)
+	tun2socks := filepath.Join(t.TempDir(), "tun2socks-linux")
+	if err := os.WriteFile(tun2socks, []byte("tun2socks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HIDEOUT_LINUX_TUN2SOCKS_PATH", tun2socks)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)

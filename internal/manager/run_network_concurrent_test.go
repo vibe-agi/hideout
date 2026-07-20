@@ -124,6 +124,9 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnlin
 	if err := os.WriteFile(filepath.Join(firstSession.RuntimeShimDir, "hideout-dns-stub"), helper, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(firstSession.RuntimeShimDir, "tun2socks"), []byte("tun2socks-bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	controller := &recordingNetworkServiceController{}
 	bootID := "01234567-89ab-cdef-0123-456789abcdef"
 	if err := core.StartRunNetworkService(context.Background(), firstSession, &first, controller, &backend.Session{ID: firstSession.Layout.ID, ExpectedBootID: bootID}, nil); err != nil {
@@ -228,6 +231,9 @@ func TestEnvironmentNetworkServiceSwitchesDirectProxyAndDNSWithoutRecreate(t *te
 		}
 		if runNetwork.Plan.Mode == network.ModeTun2Socks {
 			if err := os.WriteFile(filepath.Join(session.RuntimeShimDir, "hideout-dns-stub"), []byte("helper"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(session.RuntimeShimDir, "tun2socks"), []byte("tun2socks-bin"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -414,6 +420,9 @@ func TestEnvironmentNetworkDNSFailureRestoresProvedPreviousGeneration(t *testing
 	if err := os.WriteFile(filepath.Join(runSession.RuntimeShimDir, "hideout-dns-stub"), []byte("helper"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(runSession.RuntimeShimDir, "tun2socks"), []byte("tun2socks-bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	controller := &recordingNetworkServiceController{dnsErr: backend.EnvironmentServiceReconfigureError{
 		Operation: "reconfigure environment DNS", RollbackProved: true, Cause: errors.New("replacement failed"),
 	}}
@@ -506,6 +515,9 @@ func preparedStartingEnvironmentNetworkService(t *testing.T) (Core, RunSession, 
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(runSession.RuntimeShimDir, "hideout-dns-stub"), []byte("helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runSession.RuntimeShimDir, "tun2socks"), []byte("tun2socks-bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return core, runSession, runNetwork
@@ -784,7 +796,9 @@ func TestDiscardUnstartedEnvironmentNetworkServiceScrubsMaterial(t *testing.T) {
 func TestCopyNetworkHelperRejectsOversizeWithoutLeavingPartialTarget(t *testing.T) {
 	shimDir := t.TempDir()
 	serviceDir := filepath.Join(t.TempDir(), "network")
-	source := filepath.Join(shimDir, "hideout-dns-stub")
+	// tun2socks is the first helper copyNetworkHelper copies, so an oversize one
+	// must be rejected before any target is left behind.
+	source := filepath.Join(shimDir, "tun2socks")
 	file, err := os.OpenFile(source, os.O_CREATE|os.O_WRONLY, 0o700)
 	if err != nil {
 		t.Fatal(err)
@@ -801,7 +815,7 @@ func TestCopyNetworkHelperRejectsOversizeWithoutLeavingPartialTarget(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversize helper error=%v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(serviceDir, "hideout-dns-stub")); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(serviceDir, "tun2socks")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("partial target stat error=%v", statErr)
 	}
 }

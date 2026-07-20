@@ -54,6 +54,12 @@ type Spec struct {
 	GuestArtifactDir string
 	SecretDir        string
 	GuestSecretDir   string
+	// GuestHelperDir is the guest directory that holds the tun2socks and
+	// hideout-dns-stub network helpers for this plan. It defaults to the
+	// per-session shim dir; the environment network service (which runs its
+	// privileged setup before per-session shims are mounted) sets it to its own
+	// mounted service dir so the bootstrap finds the helpers there.
+	GuestHelperDir   string
 	TargetEnv        []string
 	Resolver         SecretResolver
 	LocalBypassHosts []string
@@ -87,6 +93,7 @@ type Plan struct {
 	GuestBootstrapPath       string   `json:"guestBootstrapPath"`
 	CleanupPath              string   `json:"-"`
 	GuestCleanupPath         string   `json:"guestCleanupPath"`
+	GuestHelperDir           string   `json:"guestHelperDir,omitempty"`
 	ConfigurationFingerprint string   `json:"-"`
 	ConfigurationID          string   `json:"-"`
 	UpstreamProxyURL         string   `json:"-"`
@@ -129,6 +136,10 @@ func Prepare(spec Spec) (Plan, error) {
 	if guestArtifactDir == "" {
 		guestArtifactDir = "/hideout/session"
 	}
+	guestHelperDir := strings.TrimSpace(spec.GuestHelperDir)
+	if guestHelperDir == "" {
+		guestHelperDir = "/hideout/session/shims"
+	}
 	if ContainsProxyEnv(spec.TargetEnv) {
 		return Plan{}, errors.New("target env contains proxy variables")
 	}
@@ -143,6 +154,7 @@ func Prepare(spec Spec) (Plan, error) {
 		GuestBootstrapPath: guestArtifactDir + "/network/bootstrap.sh",
 		CleanupPath:        filepath.Join(spec.ArtifactDir, "network", "cleanup.sh"),
 		GuestCleanupPath:   guestArtifactDir + "/network/cleanup.sh",
+		GuestHelperDir:     guestHelperDir,
 	}
 	if plan.Mode == "" {
 		plan.Mode = ModeDirect
@@ -646,6 +658,12 @@ func BootstrapScript(plan Plan) string {
 			return rewriteNetworkGuestPaths(b.String(), plan)
 		}
 		b.WriteString("[ \"$(id -u)\" -eq 0 ] || { echo 'hideout: tun2socks setup requires the Hideout setup identity' >&2; exit 127; }\n")
+		// The privileged network setup can run before the per-session shim dir is
+		// mounted (environment network service path), so prepend the plan's helper
+		// dir — where tun2socks and hideout-dns-stub are placed for this run — to
+		// PATH. For a session run this is the session shim dir already on PATH; for
+		// the environment service it is the mounted service dir.
+		fmt.Fprintf(&b, "PATH=%s:\"$PATH\"\nexport PATH\n", shellQuote(plan.GuestHelperDir))
 		proxyPath := plan.GuestProxySecretPath
 		if proxyPath == "" {
 			proxyPath = "/hideout/session/network/proxy.url"
@@ -844,7 +862,7 @@ func writeDNSMediationSetup(b *strings.Builder, mediatedResolver string) {
 		return
 	}
 	b.WriteString("command -v ip >/dev/null 2>&1 || { echo 'hideout: ip is required for DNS mediation' >&2; exit 127; }\n")
-	b.WriteString("[ -x /hideout/session/shims/hideout-dns-stub ] || { echo 'hideout: hideout-dns-stub is missing from session shims' >&2; exit 127; }\n")
+	b.WriteString("command -v hideout-dns-stub >/dev/null 2>&1 || { echo 'hideout: hideout-dns-stub command missing' >&2; exit 127; }\n")
 	fmt.Fprintf(b, "mediated_resolver=%s\n", shellQuote(mediatedResolver))
 	b.WriteString("printf '%s\\n' \"$mediated_resolver\" > /hideout/session/network/mediated-resolver\n")
 	// Capture the guest's real upstream resolvers before repointing DNS: both the
@@ -856,7 +874,7 @@ func writeDNSMediationSetup(b *strings.Builder, mediatedResolver string) {
 	b.WriteString("chmod 0644 /hideout/session/network/resolvers.before 2>/dev/null || true\n")
 	// Start the DoH stub on 127.0.0.1:53. DNS in on :53, DoH out over HTTPS to
 	// the mediated resolver, which routes through the TUN and the CONNECT proxy.
-	fmt.Fprintf(b, "/hideout/session/shims/hideout-dns-stub --listen %s --doh-server \"$mediated_resolver\" > /hideout/session/network/dns-stub.log 2>&1 &\n", dnsStubAddr)
+	fmt.Fprintf(b, "hideout-dns-stub --listen %s --doh-server \"$mediated_resolver\" > /hideout/session/network/dns-stub.log 2>&1 &\n", dnsStubAddr)
 	b.WriteString("echo $! > /hideout/session/network/dns-stub.pid\n")
 	b.WriteString("sleep 0.2\n")
 	b.WriteString("kill -0 \"$(cat /hideout/session/network/dns-stub.pid)\" 2>/dev/null || { echo 'hideout: hideout-dns-stub failed to start' >&2; exit 127; }\n")

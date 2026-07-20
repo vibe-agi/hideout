@@ -977,7 +977,7 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 			if event.Status == "failed" {
 				decision = "error"
 			}
-			return runSession.Audit.Emit(audit.Event{
+			emitErr := runSession.Audit.Emit(audit.Event{
 				Session:  runSession.Layout.ID,
 				Profile:  runSession.Plan.ProfileName,
 				Backend:  runSession.Plan.Backend,
@@ -985,6 +985,16 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 				Decision: decision,
 				Details:  privilege.PrivilegedSetupDetails(event.Category, event.Status, event.Setup, event.Reason),
 			})
+			// The environment network service is environment-scoped and its
+			// privileged cleanup runs from finishConcurrentRunEnvironment, which by
+			// design executes after CloseRunSession has closed the per-session audit
+			// (see the deferred cleanup ordering). The cleanup itself has already
+			// succeeded, so a closed session writer must not fail it; its audit at
+			// that point is best-effort.
+			if action == privilege.ActionPrivilegedCleanup && errors.Is(emitErr, audit.ErrWriterClosed) {
+				return nil
+			}
+			return emitErr
 		},
 	}
 }
