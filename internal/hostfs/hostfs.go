@@ -86,6 +86,12 @@ type BuildInput struct {
 	Run         Config
 	Now         time.Time
 	StoreRoot   string
+	// Home is the run's effective operator home. When set, credential-root
+	// hiding is applied relative to it in addition to the policy-building
+	// process home, so a relocated per-run HOME cannot expose its own
+	// ~/.ssh-style directories through a broad discovery grant. Additive only:
+	// it can never unhide the process-home credential roots.
+	Home string
 }
 
 type EffectivePolicy struct {
@@ -250,13 +256,13 @@ func Build(input BuildInput) (EffectivePolicy, error) {
 		out.Grants = append(out.Grants, policy.Grants...)
 		out.Deny = append(out.Deny, policy.Deny...)
 	}
-	if err := addImplicitBroadDiscoveryDenies(&out, input.StoreRoot); err != nil {
+	if err := addImplicitBroadDiscoveryDenies(&out, input.StoreRoot, input.Home); err != nil {
 		return EffectivePolicy{}, err
 	}
 	return out, nil
 }
 
-func addImplicitBroadDiscoveryDenies(policy *EffectivePolicy, storeRoot string) error {
+func addImplicitBroadDiscoveryDenies(policy *EffectivePolicy, storeRoot, runHome string) error {
 	if policy == nil {
 		return errors.New("HostFS policy is required")
 	}
@@ -270,11 +276,25 @@ func addImplicitBroadDiscoveryDenies(policy *EffectivePolicy, storeRoot string) 
 	if source == "" {
 		return nil
 	}
-	for _, root := range hostpathrisk.BroadDiscoveryHiddenRoots(storeRoot) {
+	// Always hide credential roots relative to the policy-building process home
+	// (the operator's real home in production). When the run carries a distinct
+	// effective home, hide that home's credential roots too. The union is
+	// additive: a relocated or bogus run home can only add exclusions, never
+	// unhide the process-home roots.
+	roots := hostpathrisk.BroadDiscoveryHiddenRoots(storeRoot)
+	if trimmed := strings.TrimSpace(runHome); filepath.IsAbs(trimmed) {
+		roots = append(roots, hostpathrisk.BroadDiscoveryHiddenRootsFor(trimmed, storeRoot)...)
+	}
+	seen := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
 		clean, err := cleanHostPath(root.Path)
 		if err != nil {
 			return fmt.Errorf("invalid broad-discovery hidden root: %w", err)
 		}
+		if _, dup := seen[clean]; dup {
+			continue
+		}
+		seen[clean] = struct{}{}
 		sum := sha256.Sum256([]byte("implicit-discover-deny\x00" + clean))
 		policy.Deny = append(policy.Deny, Grant{
 			Rule: Rule{

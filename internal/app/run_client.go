@@ -57,6 +57,12 @@ func (a app) runViaDaemon(opts runOptions) error {
 	}
 	defer clientTerminal.Close()
 
+	// The daemon builds HostFS credential-root hiding relative to its own process
+	// home; forward the client's effective home so a per-run relocated HOME also
+	// gets its ~/.ssh-style dirs hidden (additive defense in depth). Empty on
+	// error falls back to the daemon process home.
+	operatorHome, _ := os.UserHomeDir()
+
 	request := manager.RunServiceRequest{
 		Version:     manager.RunServiceRequestVersion,
 		ProfileName: opts.profileName, Backend: opts.backendName,
@@ -68,6 +74,7 @@ func (a app) runViaDaemon(opts runOptions) error {
 		Command: append([]string(nil), opts.command...), PublicEnv: cloneStringMap(opts.envPublic),
 		AuditPath: auditPath, HostFSRun: opts.hostFSRun,
 		DisableProfileHostFSGrants: opts.noProfileHostFSGrants,
+		OperatorHome:               operatorHome,
 		PreviewTargets:             append([]string(nil), opts.previewTargets...),
 		Terminal:                   clientTerminal.Descriptor,
 	}

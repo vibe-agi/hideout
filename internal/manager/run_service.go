@@ -62,6 +62,7 @@ type RunServiceRequest struct {
 	AuditPath                  string                       `json:"auditPath,omitempty"`
 	HostFSRun                  hostfs.Config                `json:"hostfs,omitempty"`
 	DisableProfileHostFSGrants bool                         `json:"disableProfileHostFSGrants,omitempty"`
+	OperatorHome               string                       `json:"operatorHome,omitempty"`
 	OpenTargets                []RunOpenTargetOwner         `json:"openTargets,omitempty"`
 	EndpointCandidates         []RunEndpointCandidate       `json:"endpointCandidates,omitempty"`
 	EndpointExposures          []RunEndpointExposureRequest `json:"endpointExposures,omitempty"`
@@ -209,6 +210,7 @@ func (s RunService) Apply(ctx context.Context, prepared PreparedRun, req RunServ
 		AuditPath:                   effective.AuditPath,
 		HostFSRun:                   effective.HostFSRun,
 		DisableProfileHostFSGrants:  effective.DisableProfileHostFSGrants,
+		OperatorHome:                effective.OperatorHome,
 		OpenTargets:                 append([]RunOpenTargetOwner(nil), effective.OpenTargets...),
 		EndpointCandidates:          append([]RunEndpointCandidate(nil), effective.EndpointCandidates...),
 		EndpointExposures:           append([]RunEndpointExposureRequest(nil), effective.EndpointExposures...),

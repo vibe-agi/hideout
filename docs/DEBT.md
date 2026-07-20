@@ -29,7 +29,6 @@ Rules:
 | Marketplace day-1 triad: signing, revocation, namespace protection | Marketplace/public pack registry launch day | policy-config-supply-chain Trust Model |
 | Tier2 imperative environment recipes remain forbidden pending an independent trust design | Before ecosystem-shared imperative environment builds are accepted | ecosystem principles |
 | 030 gap re-verify: broker did not validate projection command-name registration (audit field spoofable, not privilege); privacy/hardened default-alias had no unit assertion; pathMode-flip drift test missing; schema-struct parity test missing | Re-verify against current code before the next projection slice; observations date to 2026-07-11 and may be partially fixed | 030 acceptance gap list |
-| HostFS undiscoverable-path existence leak: listing a force-hidden path's parent through its natural (raw) path returns EACCES, revealing that the path exists, instead of the ENOENT the `hostfs` service intends (see `hostfs_test.go` ErrNotFound). Surfaced once isolated sessions gained raw-path root symlinks (commit 1d4b0f4); the gate2 "hostfs discoverable namespace smoke" lane now catches it. The daemon-facing FUSE/service must return ENOENT for undiscoverable paths so raw-path listing hides existence | Before HostFS raw-path visibility is claimed hardened, or the next HostFS visibility slice | 2026-07-20 gate2 hostfs discoverable namespace smoke (errno=EACCES, want ENOENT) |
 
 ## Distribution and runtime
 

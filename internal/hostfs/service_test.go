@@ -234,6 +234,74 @@ func TestServiceManualHomeTreeImplicitlyHidesCatalogRootsWithoutRevokingExactRea
 	}
 }
 
+func TestServiceRunHomeHidesCredentialRootWhenProcessHomeDiffers(t *testing.T) {
+	// The persistent daemon builds the policy with its own process home, while a
+	// run may carry a different effective HOME (the gate relocates it per-run).
+	// Credential roots under the run home must still be hidden via BuildInput.Home,
+	// and the process-home roots must stay hidden too (the union is additive).
+	processHome := filepath.Join(t.TempDir(), "daemon-home")
+	if err := os.MkdirAll(processHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", processHome) // os.UserHomeDir() -> processHome, not the run home
+
+	runHome := filepath.Join(t.TempDir(), "run-home")
+	sshDir := filepath.Join(runHome, ".ssh")
+	storeRoot := filepath.Join(runHome, ".hideout")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "id_test"), []byte("run-home-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runHome, "notes.txt"), []byte("visible"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	homeGrant := func() Config {
+		return Config{Grants: []Rule{{
+			ID: "hfs_run_home", HostPath: runHome, Ops: []Op{OpDiscover}, Scope: ScopeDir, Reason: "run home visibility",
+		}}}
+	}
+
+	// Baseline: without BuildInput.Home the run-home credential root is NOT hidden
+	// (process home drives hiding and it differs); a broad see-dir grant leaves
+	// .ssh coarse-visible but non-enumerable (EACCES-class), never ErrNotFound.
+	baseline, err := Build(BuildInput{StoreRoot: storeRoot, Profile: homeGrant()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService(baseline).List(sshDir); errors.Is(err, ErrNotFound) {
+		t.Fatal("baseline: run-home .ssh was hidden without BuildInput.Home; the run-home path is untested")
+	}
+
+	// With BuildInput.Home set to the run home, the credential root is hidden.
+	policy, err := Build(BuildInput{StoreRoot: storeRoot, Home: runHome, Profile: homeGrant()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(policy)
+	if _, err := service.List(sshDir); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("run-home credential root not hidden with BuildInput.Home: err=%v want ErrNotFound", err)
+	}
+	if v := service.Policy.Visibility(sshDir); !v.DiscoverDenied || v.State != VisibilityHidden {
+		t.Fatalf("run-home .ssh visibility not hidden: %+v", v)
+	}
+	entries, err := service.List(runHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name == ".ssh" {
+			t.Fatalf("run-home enumeration exposed the hidden credential root: %+v", entries)
+		}
+	}
+	// Additive: the process-home credential roots keep their implicit deny even
+	// though a distinct run home was supplied.
+	if v := service.Policy.Visibility(filepath.Join(processHome, ".ssh")); !v.DiscoverDenied {
+		t.Fatalf("process-home credential root lost its implicit deny under a run home: %+v", v)
+	}
+}
+
 func TestServiceContentTreeListCannotBypassDiscoverDeny(t *testing.T) {
 	root := t.TempDir()
 	hidden := filepath.Join(root, "hidden.txt")

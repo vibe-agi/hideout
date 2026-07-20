@@ -44,6 +44,7 @@ type ApplyRunOptions struct {
 	AuditPath                   string
 	HostFSRun                   hostfs.Config
 	DisableProfileHostFSGrants  bool
+	OperatorHome                string
 	PortBridges                 []RunPortBridgeRequest
 	OpenTargets                 []RunOpenTargetOwner
 	EndpointCandidates          []RunEndpointCandidate
@@ -376,6 +377,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	dataPlane, err := c.StartRunDataPlane(ctx, runSession, runNetwork, RunDataPlaneOptions{
 		HostFSRun:                  opts.HostFSRun,
 		DisableProfileHostFSGrants: opts.DisableProfileHostFSGrants,
+		OperatorHome:               opts.OperatorHome,
 		Backend:                    opts.Backend,
 		PortBridges:                opts.PortBridges,
 		OpenTargets:                opts.OpenTargets,
@@ -1042,7 +1044,7 @@ func runImageRef(runEnv RunEnvironment, p profile.Profile) string {
 
 func emitRunSetupAudit(aw *audit.Writer, runSession RunSession, opts ApplyRunOptions, storeRoot string) error {
 	hostFSProfile := HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants)
-	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{Profile: hostFSProfile, Run: opts.HostFSRun, StoreRoot: storeRoot})
+	hostFSPolicy, err := hostfs.Build(hostfs.BuildInput{Profile: hostFSProfile, Run: opts.HostFSRun, StoreRoot: storeRoot, Home: opts.OperatorHome})
 	if err != nil {
 		return err
 	}

@@ -38,6 +38,7 @@ import (
 type RunDataPlaneOptions struct {
 	HostFSRun                  hostfs.Config
 	DisableProfileHostFSGrants bool
+	OperatorHome               string
 	Backend                    backend.Backend
 	Opener                     broker.Opener
 	PortBridges                []RunPortBridgeRequest
@@ -115,6 +116,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		Profile:   HostFSProfileForRun(runSession.Plan.RuntimeProfile, opts.DisableProfileHostFSGrants),
 		Run:       opts.HostFSRun,
 		StoreRoot: c.Store.Root,
+		Home:      opts.OperatorHome,
 	})
 	if err != nil {
 		return RunDataPlane{}, err
