@@ -1088,8 +1088,14 @@ if with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima
   echo "gate2: missing command unexpectedly succeeded" >&2
   exit 1
 fi
-if ! grep -q 'command "hideout-missing-command" not found in lima backend' "$tmp/missing.err"; then
-  echo "gate2: missing-command stderr did not contain expected backend context" >&2
+# No host fallback: the miss must be reported by the guest supervisor, which
+# only runs inside the guest and resolves the target command against the guest
+# PATH. Its signature message ("target command %q was not found in PATH",
+# cmd/hideout-session-supervisor/process_linux.go) is distinct from the host
+# backend's "executable file not found in PATH", so matching it proves the
+# lookup stayed in the guest rather than falling back to the host.
+if ! grep -q 'target command "hideout-missing-command" was not found in PATH' "$tmp/missing.err"; then
+  echo "gate2: missing-command stderr did not surface the guest-supervisor not-found error (no host fallback)" >&2
   cat "$tmp/missing.err" >&2
   exit 1
 fi
