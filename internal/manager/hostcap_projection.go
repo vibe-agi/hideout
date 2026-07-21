@@ -114,21 +114,34 @@ func (c Core) SetProjectionHostAppMode(profileName, mode string) error {
 	if _, err := c.Store.Load(profileName); err != nil {
 		return err
 	}
-	if err := WriteProjectionHostAppMode(c.Store.Root, profileName, mode, time.Now()); err != nil {
+	safe := strings.TrimSpace(mode) == ProjectionHostAppModeSafe
+	// Serialize the mode write + safe-mode reset against grant recording:
+	// GrantHostAppTrust takes the same profile lock and re-checks mode inside it,
+	// so a grant added by a racing `allow` cannot survive the safe reset.
+	if err := c.withProfileMutationLock(profileName, func() error {
+		if err := WriteProjectionHostAppMode(c.Store.Root, profileName, mode, time.Now()); err != nil {
+			return err
+		}
+		if !safe {
+			return nil
+		}
+		if err := c.invalidateProjectionGrantsForProfile(profileName, "profile-mode-set-safe"); err != nil {
+			return err
+		}
+		// Switching to safe drops durable host-app trust grants and the run-written
+		// request hints, so a later switch back to trusted re-requires both a fresh
+		// grant and a fresh run-time observation.
+		if err := removeAllTrustedHostAppGrants(c.Store.Root, profileName); err != nil {
+			return err
+		}
+		return removeAllTrustedHostAppRequests(c.Store.Root, profileName)
+	}); err != nil {
 		return err
 	}
 	mode = strings.TrimSpace(mode)
 	auditDecision := "request"
-	if mode == ProjectionHostAppModeSafe {
+	if safe {
 		auditDecision = "revoke"
-		if err := c.invalidateProjectionGrantsForProfile(profileName, "profile-mode-set-safe"); err != nil {
-			return err
-		}
-		// Switching to safe drops durable host-app trust grants too, so a later
-		// switch back to trusted re-requires them.
-		if err := removeAllTrustedHostAppGrants(c.Store.Root, profileName); err != nil {
-			return err
-		}
 	}
 	_ = c.emitOperatorCenterAudit(audit.Event{
 		Profile:  profileName,

@@ -2,6 +2,8 @@ package manager
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,17 +127,23 @@ func writeTrustedHostAppGrants(storeRoot string, manifest trustedHostAppGrantMan
 			return fmt.Errorf("invalid trusted-host-app grant for workspace %q", g.WorkspaceID)
 		}
 	}
-	dir := filepath.Join(storeRoot, "profiles", manifest.Profile)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	path := trustedHostAppGrantsPath(storeRoot, manifest.Profile)
-	tmp, err := os.CreateTemp(dir, ".host-app-trust-grants.json.tmp-*")
+	return writeTrustedHostAppFileAtomic(trustedHostAppGrantsPath(storeRoot, manifest.Profile), append(data, '\n'))
+}
+
+// writeTrustedHostAppFileAtomic writes data to path (mode 0600) via a temp file in
+// the same directory followed by rename, creating the parent dir. Shared by the
+// grant manifest and the per-key request files so temp-file + rename handling
+// lives in one place.
+func writeTrustedHostAppFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -166,9 +174,12 @@ func writeTrustedHostAppGrants(storeRoot string, manifest trustedHostAppGrantMan
 
 // addTrustedHostAppGrant records a grant for the profile. It is idempotent: an
 // identical (workspace, app ref, digest) grant is a no-op success.
-func addTrustedHostAppGrant(storeRoot, profileName string, grant TrustedHostAppGrant, now time.Time) error {
+// addTrustedHostAppGrant records a grant for the profile. It is idempotent: an
+// identical (workspace, app ref, digest) grant is a no-op. It reports whether a
+// new grant was actually added.
+func addTrustedHostAppGrant(storeRoot, profileName string, grant TrustedHostAppGrant, now time.Time) (bool, error) {
 	if !validTrustedHostAppGrant(grant) {
-		return errors.New("trusted-host-app grant requires workspace, app ref, and binding digest")
+		return false, errors.New("trusted-host-app grant requires workspace, app ref, and binding digest")
 	}
 	manifest := readTrustedHostAppGrants(storeRoot, profileName)
 	manifest.Profile = profileName
@@ -176,12 +187,12 @@ func addTrustedHostAppGrant(storeRoot, profileName string, grant TrustedHostAppG
 		if existing.WorkspaceID == grant.WorkspaceID &&
 			existing.QualifiedAppRef == grant.QualifiedAppRef &&
 			existing.BindingDigest == grant.BindingDigest {
-			return nil
+			return false, nil
 		}
 	}
 	grant.GrantedAt = now.UTC()
 	manifest.Grants = append(manifest.Grants, grant)
-	return writeTrustedHostAppGrants(storeRoot, manifest)
+	return true, writeTrustedHostAppGrants(storeRoot, manifest)
 }
 
 // removeTrustedHostAppGrantsForWorkspace drops every grant for one workspace under
@@ -246,24 +257,29 @@ type trustedHostAppRequest struct {
 	RecordedAt      time.Time `json:"recordedAt"`
 }
 
-func trustedHostAppRequestPath(storeRoot, profileName string) string {
-	return filepath.Join(storeRoot, "profiles", profileName, "host-app-trust-request.json")
+func trustedHostAppRequestsDir(storeRoot, profileName string) string {
+	return filepath.Join(storeRoot, "profiles", profileName, "host-app-trust-requests")
 }
 
-// maybeRecordTrustedHostAppRequest records a request when a trusted-mode open finds
-// no grant. Best-effort: a failure to write a hint must never affect the run.
+// trustedHostAppRequestFile keys a recorded request by (workspace, command) so a
+// trusted-mode open in one project cannot clobber another project's request. The
+// command is folded into the key, not just the file body, so distinct commands
+// under the same workspace coexist.
+func trustedHostAppRequestFile(storeRoot, profileName, workspaceID, command string) string {
+	sum := sha256.Sum256([]byte(workspaceID + "\x00" + command))
+	return filepath.Join(trustedHostAppRequestsDir(storeRoot, profileName), hex.EncodeToString(sum[:16])+".json")
+}
+
+// maybeRecordTrustedHostAppRequest records a per-(workspace,command) request when a
+// trusted-mode open finds no grant. Best-effort: a failure to write a hint must
+// never affect the run. Each key is its own atomically written file, so
+// concurrent runs — in different projects or the same one — cannot clobber one
+// another's request.
 func maybeRecordTrustedHostAppRequest(storeRoot string, scope hostcap.GrantScope) {
-	if scope.Profile == "" || scope.WorkspaceID == "" || scope.QualifiedAppRef == "" || scope.BindingDigest == "" {
+	if scope.Profile == "" || scope.WorkspaceID == "" || scope.QualifiedAppRef == "" || scope.BindingDigest == "" || scope.Command == "" {
 		return
 	}
 	if ReadProjectionHostAppMode(storeRoot, scope.Profile) != ProjectionHostAppModeTrusted {
-		return
-	}
-	dir := filepath.Join(storeRoot, "profiles", scope.Profile)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
-	if scope.Command == "" {
 		return
 	}
 	data, err := json.MarshalIndent(trustedHostAppRequest{
@@ -274,22 +290,42 @@ func maybeRecordTrustedHostAppRequest(storeRoot string, scope hostcap.GrantScope
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(trustedHostAppRequestPath(storeRoot, scope.Profile), append(data, '\n'), 0o600)
+	_ = writeTrustedHostAppFileAtomic(trustedHostAppRequestFile(storeRoot, scope.Profile, scope.WorkspaceID, scope.Command), append(data, '\n'))
 }
 
-func readTrustedHostAppRequest(storeRoot, profileName string) (trustedHostAppRequest, bool) {
-	raw, err := os.ReadFile(trustedHostAppRequestPath(storeRoot, profileName))
+// readTrustedHostAppRequestFor returns the request recorded for exactly this
+// (workspace, command) under the profile, decoded with the same hardening as the
+// grant reader (unknown-field rejection, trailing-JSON rejection, version and
+// profile checks). Any absence, malformation, drift, or key mismatch yields
+// false (fail closed).
+func readTrustedHostAppRequestFor(storeRoot, profileName, workspaceID, command string) (trustedHostAppRequest, bool) {
+	raw, err := os.ReadFile(trustedHostAppRequestFile(storeRoot, profileName, workspaceID, command))
 	if err != nil {
 		return trustedHostAppRequest{}, false
 	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
 	var req trustedHostAppRequest
-	if json.Unmarshal(raw, &req) != nil {
+	if err := decoder.Decode(&req); err != nil {
 		return trustedHostAppRequest{}, false
 	}
-	if req.Command == "" || req.WorkspaceID == "" || req.QualifiedAppRef == "" || req.BindingDigest == "" {
+	if decoder.Decode(&struct{}{}) == nil {
+		return trustedHostAppRequest{}, false // trailing JSON: malformed
+	}
+	if req.Version != TrustedHostAppGrantsVersion || req.Profile != profileName {
+		return trustedHostAppRequest{}, false
+	}
+	if req.WorkspaceID != workspaceID || req.Command != command || req.QualifiedAppRef == "" || req.BindingDigest == "" {
 		return trustedHostAppRequest{}, false
 	}
 	return req, true
+}
+
+// removeAllTrustedHostAppRequests drops the profile's recorded requests, used when
+// the profile switches to safe mode so a stale request cannot survive into a
+// later trusted epoch and be promoted without a fresh run-time observation.
+func removeAllTrustedHostAppRequests(storeRoot, profileName string) error {
+	return os.RemoveAll(trustedHostAppRequestsDir(storeRoot, profileName))
 }
 
 // HostAppTrustResult reports the outcome of a host-app trust grant command.
@@ -321,25 +357,25 @@ func (c Core) GrantHostAppTrust(profileName, workspacePath, command string) (Hos
 	if err != nil {
 		return HostAppTrustResult{}, err
 	}
-	req, ok := readTrustedHostAppRequest(c.Store.Root, profileName)
-	if !ok || req.WorkspaceID != workspaceID || req.Command != command {
+	req, ok := readTrustedHostAppRequestFor(c.Store.Root, profileName, workspaceID, command)
+	if !ok {
 		return HostAppTrustResult{}, fmt.Errorf("no host-app trust request for %q in this project yet; run `hideout run -- %s .` here once, then rerun `hideout allow host-app %s`", command, command, command)
 	}
 	grant := TrustedHostAppGrant{WorkspaceID: workspaceID, QualifiedAppRef: req.QualifiedAppRef, BindingDigest: req.BindingDigest}
 	result := HostAppTrustResult{Profile: profileName, WorkspaceID: workspaceID, Command: command}
 	err = c.withProfileMutationLock(profileName, func() error {
-		existing := readTrustedHostAppGrants(c.Store.Root, profileName)
-		already := false
-		for _, g := range existing.Grants {
-			if g.WorkspaceID == grant.WorkspaceID && g.QualifiedAppRef == grant.QualifiedAppRef && g.BindingDigest == grant.BindingDigest {
-				already = true
-				break
-			}
+		// Re-check mode inside the lock. SetProjectionHostAppMode(safe) takes the
+		// same lock and clears grants; without this re-check a grant added by a
+		// racing `allow` could survive the safe reset and reactivate on the next
+		// switch back to trusted.
+		if ReadProjectionHostAppMode(c.Store.Root, profileName) != ProjectionHostAppModeTrusted {
+			return fmt.Errorf("profile %q left trusted host-app mode before the grant was recorded; rerun after `hideout profile host-app-mode %s trusted`", profileName, profileName)
 		}
-		if err := addTrustedHostAppGrant(c.Store.Root, profileName, grant, time.Now()); err != nil {
-			return err
+		added, addErr := addTrustedHostAppGrant(c.Store.Root, profileName, grant, time.Now())
+		if addErr != nil {
+			return addErr
 		}
-		result.Granted = !already
+		result.Granted = added
 		return nil
 	})
 	if err != nil {

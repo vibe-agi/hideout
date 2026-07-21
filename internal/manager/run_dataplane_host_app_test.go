@@ -184,7 +184,7 @@ func TestRunProjectionGrantChecksPersistentGrantBeforeDecision(t *testing.T) {
 	if err := WriteProjectionHostAppMode(root, "default", ProjectionHostAppModeTrusted, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
+	if _, err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
 		WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest,
 	}, time.Now()); err != nil {
 		t.Fatal(err)

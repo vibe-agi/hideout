@@ -44,7 +44,7 @@ func TestTrustedHostAppGrantMatchRequiresTrustedModeAndExactKeys(t *testing.T) {
 		t.Fatal("matched in trusted mode without a grant")
 	}
 
-	if err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
+	if _, err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
 		WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestTrustedHostAppGrantAddIsIdempotentAndPrivateAtomic(t *testing.T) {
 	root := t.TempDir()
 	g := TrustedHostAppGrant{WorkspaceID: "wrk_a", QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:x"}
 	for range 3 {
-		if err := addTrustedHostAppGrant(root, "default", g, time.Now()); err != nil {
+		if _, err := addTrustedHostAppGrant(root, "default", g, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -137,7 +137,7 @@ func TestTrustedHostAppGrantRemoveByWorkspaceAndAll(t *testing.T) {
 	root := t.TempDir()
 	setTrustedHostAppMode(t, root, "default")
 	add := func(ws string) {
-		if err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
+		if _, err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
 			WorkspaceID: ws, QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:x",
 		}, time.Now()); err != nil {
 			t.Fatal(err)
@@ -280,6 +280,55 @@ func TestGrantAndRevokeTrustedHostAppPromotesRequest(t *testing.T) {
 	}
 	if trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("grant still active after revoke")
+	}
+}
+
+func TestTrustedHostAppRequestKeyedPerProjectAndCommand(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	core := New(profile.Store{Root: root})
+	if err := WriteProjectionHostAppMode(root, "default", ProjectionHostAppModeTrusted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	idFor := func(ws string) string {
+		canonical, identity, err := workspaceattach.CaptureRootIdentity(ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := core.deriveWorkspaceIDFromRoot(canonical, identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	wsA, wsB := t.TempDir(), t.TempDir()
+	idA, idB := idFor(wsA), idFor(wsB)
+	scopeA := hostcap.GrantScope{Profile: "default", Command: "code", WorkspaceID: idA, QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:a"}
+	scopeB := hostcap.GrantScope{Profile: "default", Command: "code", WorkspaceID: idB, QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:b"}
+	// Run in project A, then project B under the same profile+command. B must not
+	// clobber A's request (the pre-fix single per-profile slot did).
+	maybeRecordTrustedHostAppRequest(root, scopeA)
+	maybeRecordTrustedHostAppRequest(root, scopeB)
+	if r, err := core.GrantHostAppTrust("default", wsA, "code"); err != nil || !r.Granted {
+		t.Fatalf("project A grant after project B request: result=%+v err=%v (regression: request slot clobbered A)", r, err)
+	}
+	if !trustedHostAppGrantMatches(root, scopeA) {
+		t.Fatal("project A grant did not key on A's own binding digest")
+	}
+	if r, err := core.GrantHostAppTrust("default", wsB, "code"); err != nil || !r.Granted {
+		t.Fatalf("project B grant: result=%+v err=%v", r, err)
+	}
+	if !trustedHostAppGrantMatches(root, scopeB) {
+		t.Fatal("project B grant did not key on B's own binding digest")
+	}
+	// removeAllTrustedHostAppRequests (the safe-mode reset primitive) drops both.
+	if err := removeAllTrustedHostAppRequests(root, "default"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readTrustedHostAppRequestFor(root, "default", idA, "code"); ok {
+		t.Fatal("request survived removeAllTrustedHostAppRequests")
 	}
 }
 
