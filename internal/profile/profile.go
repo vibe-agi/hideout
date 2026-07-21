@@ -675,12 +675,13 @@ func EphemeralIdentityProfile(p Profile) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	machineID, err := newMachineID()
-	if err != nil {
-		return Profile{}, err
-	}
 	ephemeral.Metadata["identityId"] = id
-	ephemeral.Metadata["machineId"] = machineID
+	// machineId is deliberately NOT regenerated. An ephemeral run resolves the
+	// shared default VM, so its environment machine identity (GuestMachineID,
+	// via MachineBootConfigurationForProfile) must stay the VM's persistent
+	// machine-id — otherwise every ephemeral run would drift the shared
+	// environment and fail to reuse it. Only the session identity (home, git,
+	// credentials keyed by identityId) is session-local.
 	ephemeral.Metadata["lineageMode"] = "session-fork"
 	ephemeral.Metadata["createdFrom"] = p.Name
 	ephemeral.Metadata["identityChangedAt"] = time.Now().UTC().Format(time.RFC3339)

@@ -43,7 +43,10 @@ func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (Ru
 		return RunEnvironment{}, errors.New("manager store root is required")
 	}
 	store := environment.Store{Root: c.Store.Root}
-	if opts.Create && !plan.Ephemeral && !opts.RemoveAfterRun {
+	// Ephemeral runs resolve the same shared environment as a normal run (only
+	// identity is session-local), so they get the same runtime-disk precheck.
+	// Only --rm stays record-less and materializes no persistent runtime.
+	if opts.Create && !opts.RemoveAfterRun {
 		provenance, err := runtimeProvenanceForRun(store, plan, opts)
 		if err != nil {
 			return RunEnvironment{}, err
@@ -110,7 +113,7 @@ func cloneRuntimeProvenance(value *environment.RuntimeProvenance) *environment.R
 func SelectRunEnvironment(store environment.Store, p profile.Profile, backendName, workspace, guestWorkspace string, ephemeral bool, opts RunEnvironmentOptions) (RunEnvironment, error) {
 	if name := strings.TrimSpace(opts.EnvName); name != "" {
 		if ephemeral {
-			return RunEnvironment{}, errors.New("--ephemeral cannot be combined with --env; ephemeral runs are record-less")
+			return RunEnvironment{}, errors.New("--ephemeral cannot be combined with --env; ephemeral runs use the default shared environment with session-local identity")
 		}
 		if opts.RemoveAfterRun {
 			return RunEnvironment{}, errors.New("--rm cannot be combined with --env; disposable runs are record-less")
@@ -128,12 +131,16 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 		}
 		return selectedEnvironmentWithInstance(store, rec, spec, p, opts.Create)
 	}
-	if ephemeral || opts.RemoveAfterRun {
-		// Disposable sessions stay record-less by contract.
+	if opts.RemoveAfterRun {
+		// --rm sessions stay record-less/disposable by contract. Ephemeral runs
+		// deliberately do NOT: they resolve the default shared environment and
+		// keep only identity session-local (see RunIdentityDir/IdentityMode), so
+		// the lima daemon's isolated ready proof has the EnvironmentID and
+		// InstanceName it requires.
 		return RunEnvironment{}, nil
 	}
 	return selectAutomaticRunEnvironmentForPlatform(
-		store, p, backendName, workspace, guestWorkspace, ephemeral, opts, runtime.GOOS, runtime.GOARCH,
+		store, p, backendName, workspace, guestWorkspace, opts, runtime.GOOS, runtime.GOARCH,
 	)
 }
 
@@ -141,11 +148,10 @@ func selectAutomaticRunEnvironmentForPlatform(
 	store environment.Store,
 	p profile.Profile,
 	backendName, workspace, guestWorkspace string,
-	ephemeral bool,
 	opts RunEnvironmentOptions,
 	hostOS, hostArch string,
 ) (RunEnvironment, error) {
-	if ephemeral || opts.RemoveAfterRun {
+	if opts.RemoveAfterRun {
 		return RunEnvironment{}, nil
 	}
 	spec, err := automaticRunEnvironmentSpecForPlatform(p, backendName, workspace, guestWorkspace, hostOS, hostArch)

@@ -1588,6 +1588,7 @@ func TestCoreApplyRunEmitsGuestPrivilegeStatusOnce(t *testing.T) {
 		Backend:            fake,
 		RequestedBackend:   "native",
 		AllowWeakIsolation: true,
+		Environment:        RunEnvironmentOptions{Create: true},
 	})
 	if err != nil {
 		t.Fatalf("ApplyRun: %v", err)
@@ -1681,6 +1682,7 @@ func TestCoreApplyRunEmitsPrivilegedSetupEvents(t *testing.T) {
 		Backend:            fake,
 		RequestedBackend:   "native",
 		AllowWeakIsolation: true,
+		Environment:        RunEnvironmentOptions{Create: true},
 	})
 	if err != nil {
 		t.Fatalf("ApplyRun: %v", err)

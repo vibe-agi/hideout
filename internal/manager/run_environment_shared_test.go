@@ -26,7 +26,7 @@ func TestSharedAutomaticFirstRunConvergesOnOneStableSlot(t *testing.T) {
 			<-start
 			result, err := selectAutomaticRunEnvironmentForPlatform(
 				environment.Store{Root: store.Root}, p, "lima", workspaces[index%len(workspaces)], "/workspace",
-				false, RunEnvironmentOptions{Create: true}, "darwin", "arm64",
+				RunEnvironmentOptions{Create: true}, "darwin", "arm64",
 			)
 			if err != nil {
 				errorsOut <- err
@@ -72,7 +72,7 @@ func TestSharedSlotReportsMachineDriftButIgnoresSessionFacts(t *testing.T) {
 	firstWorkspace := t.TempDir()
 	secondWorkspace := t.TempDir()
 	first, err := selectAutomaticRunEnvironmentForPlatform(
-		environment.Store{Root: store.Root}, p, "lima", firstWorkspace, "/workspace", false,
+		environment.Store{Root: store.Root}, p, "lima", firstWorkspace, "/workspace",
 		RunEnvironmentOptions{Create: true}, "darwin", "arm64",
 	)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestSharedSlotReportsMachineDriftButIgnoresSessionFacts(t *testing.T) {
 	}
 
 	second, err := selectAutomaticRunEnvironmentForPlatform(
-		environment.Store{Root: store.Root}, p, "lima", secondWorkspace, "/workspace", false,
+		environment.Store{Root: store.Root}, p, "lima", secondWorkspace, "/workspace",
 		RunEnvironmentOptions{Create: true}, "darwin", "arm64",
 	)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestSharedSlotReportsMachineDriftButIgnoresSessionFacts(t *testing.T) {
 	drifted := p
 	drifted.Environment.BaseImage = "template:_images/debian-12"
 	_, err = selectAutomaticRunEnvironmentForPlatform(
-		environment.Store{Root: store.Root}, drifted, "lima", secondWorkspace, "/workspace", false,
+		environment.Store{Root: store.Root}, drifted, "lima", secondWorkspace, "/workspace",
 		RunEnvironmentOptions{Create: true}, "darwin", "arm64",
 	)
 	var drift *DriftError

@@ -446,15 +446,21 @@ func TestSelectRunEnvironmentAutoNamedResolution(t *testing.T) {
 		t.Fatalf("--rm should stay record-less/disposable: %+v", rm)
 	}
 
-	// --ephemeral unchanged
+	// --ephemeral resolves the SAME shared environment as a normal run; only
+	// identity is session-local (see RunIdentityDir/IdentityMode). It must not
+	// stay record-less, or the lima daemon's isolated ready proof would lack the
+	// EnvironmentID/InstanceName it requires.
 	ephPlan := plan
 	ephPlan.Ephemeral = true
 	eph, err := core.SelectRunEnvironment(ephPlan, RunEnvironmentOptions{Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if eph.Active {
-		t.Fatalf("--ephemeral should stay record-less: %+v", eph)
+	if !eph.Active {
+		t.Fatalf("--ephemeral must resolve the active shared environment: %+v", eph)
+	}
+	if eph.Created || eph.Record.ID != first.Record.ID {
+		t.Fatalf("--ephemeral must reuse the shared environment, not create a new one: %+v", eph.Record)
 	}
 
 	// MRU-style flags are gone from the options surface: resuming by id and
@@ -673,5 +679,15 @@ func TestSelectRunEnvironmentRechecksPinnedRuntimeDiskBeforeCreate(t *testing.T)
 	}
 	if selected.Record.Runtime == nil || *selected.Record.Runtime != resolved.Provenance {
 		t.Fatalf("auto environment lost pinned runtime provenance: %+v", selected.Record)
+	}
+
+	// Ephemeral resolves the same shared environment, so the runtime-disk
+	// precheck must gate it too — it no longer gets skipped as it did while
+	// ephemeral was record-less.
+	ephPlan := plan
+	ephPlan.Ephemeral = true
+	core.RuntimeDiskCheck = func(string, int64) error { return errors.New("available 1 byte") }
+	if _, err := core.SelectRunEnvironment(ephPlan, RunEnvironmentOptions{Create: true}); err == nil || !strings.Contains(err.Error(), "runtime.disk.insufficient") {
+		t.Fatalf("ephemeral run should also fail before environment creation on low disk, got %v", err)
 	}
 }

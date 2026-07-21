@@ -29,6 +29,10 @@
       "type": "string",
       "minLength": 1
     },
+    "environmentName": {
+      "type": "string",
+      "minLength": 1
+    },
     "instanceName": {
       "type": "string",
       "minLength": 1

@@ -1493,8 +1493,11 @@ func TestEphemeralIdentityProfileRegeneratesIdentityAndKeepsPolicy(t *testing.T)
 	if ephemeral.Metadata["identityId"] == "" || ephemeral.Metadata["identityId"] == sourceIdentityID {
 		t.Fatalf("ephemeral identityId was not regenerated: source=%+v ephemeral=%+v", loaded.Metadata, ephemeral.Metadata)
 	}
-	if ephemeral.Metadata["machineId"] == "" || ephemeral.Metadata["machineId"] == sourceMachineID {
-		t.Fatalf("ephemeral machineId was not regenerated: source=%+v ephemeral=%+v", loaded.Metadata, ephemeral.Metadata)
+	// machineId is the shared VM's identity and must NOT be regenerated: an
+	// ephemeral run resolves the shared default VM, so it inherits the base
+	// profile's persistent machine-id. Only identityId is session-local.
+	if ephemeral.Metadata["machineId"] == "" || ephemeral.Metadata["machineId"] != sourceMachineID {
+		t.Fatalf("ephemeral machineId must inherit the shared VM identity: source=%+v ephemeral=%+v", loaded.Metadata, ephemeral.Metadata)
 	}
 	if ephemeral.Metadata["lineageMode"] != "session-fork" ||
 		ephemeral.Metadata["createdFrom"] != "source" ||

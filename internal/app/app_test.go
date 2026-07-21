@@ -4090,7 +4090,7 @@ func TestExplainEphemeralShowsSessionLocalIdentity(t *testing.T) {
 	}
 }
 
-func TestExplainLimaEphemeralShowsSessionScopedInstance(t *testing.T) {
+func TestExplainLimaEphemeralSharesInstanceWithSessionLocalIdentity(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
@@ -4098,12 +4098,19 @@ func TestExplainLimaEphemeralShowsSessionScopedInstance(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "Lima instance: hideout-default-session-") ||
-		!strings.Contains(out.String(), "session scoped") {
-		t.Fatalf("lima ephemeral explain should show session-scoped instance:\n%s", out.String())
+	// Ephemeral resolves the default shared VM (an environment-scoped instance)
+	// and keeps only identity session-local; it is NOT a record-less
+	// session-scoped instance. This is what gives the lima daemon's isolated
+	// ready proof the EnvironmentID/InstanceName it requires.
+	if !strings.Contains(out.String(), "Lima instance: hideout-default-env-") ||
+		!strings.Contains(out.String(), "environment scoped") {
+		t.Fatalf("lima ephemeral explain should share the environment-scoped instance:\n%s", out.String())
 	}
-	if strings.Contains(out.String(), "profile identity scoped") {
-		t.Fatalf("lima ephemeral explain should not claim profile identity scoped instance:\n%s", out.String())
+	if !strings.Contains(out.String(), "Identity storage: ephemeral session-local") {
+		t.Fatalf("lima ephemeral explain should keep identity session-local:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Identity storage: persistent profile") {
+		t.Fatalf("lima ephemeral explain must not use persistent profile identity:\n%s", out.String())
 	}
 }
 
@@ -7089,8 +7096,12 @@ func TestRunNativeEphemeralUsesSessionLocalIdentity(t *testing.T) {
 		t.Fatalf("read persistent machine-id: %v", err)
 	}
 	persistentMachineID := strings.TrimSpace(string(persistentMachine))
-	if sessionMachineID == persistentMachineID {
-		t.Fatalf("ephemeral run reused persistent machine-id %q", sessionMachineID)
+	// machine-id is the shared VM's identity: an ephemeral run inherits the
+	// persistent machine-id — only home/git/identity are session-local. It must
+	// NOT diverge, or the run would drift the shared environment's machine
+	// identity and fail to reuse the VM (proven by gate2 2026-07-21).
+	if sessionMachineID != persistentMachineID {
+		t.Fatalf("ephemeral run should inherit the persistent machine-id: session=%q persistent=%q", sessionMachineID, persistentMachineID)
 	}
 	loaded, err := (profile.Store{Root: filepath.Join(home, ".hideout")}).Load("default")
 	if err != nil {
@@ -7098,9 +7109,6 @@ func TestRunNativeEphemeralUsesSessionLocalIdentity(t *testing.T) {
 	}
 	if loaded.Metadata["machineId"] != persistentMachineID {
 		t.Fatalf("persistent profile machine-id changed: metadata=%+v file=%q", loaded.Metadata, persistentMachineID)
-	}
-	if loaded.Metadata["machineId"] == sessionMachineID {
-		t.Fatalf("ephemeral run wrote session machine-id back to persistent profile: %+v", loaded.Metadata)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".hideout", "profiles", "default", "home", "session-token")); !os.IsNotExist(err) {
 		t.Fatalf("ephemeral run should not write marker to persistent profile home; err=%v", err)
