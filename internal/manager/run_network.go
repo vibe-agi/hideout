@@ -37,6 +37,13 @@ type RunNetwork struct {
 	PreviousPlan             netpolicy.Plan
 	Gateway                  *netpolicy.GatewayRegistry
 	GatewayChange            *netpolicy.GatewayChange
+
+	// materializeSpec, when non-nil, defers bootstrap materialization on the
+	// reuse/gateway path. Healthy reuse leaves the shared guest network
+	// untouched, so it never needs the per-session secret or bootstrap scripts
+	// written to disk; only reuse self-heal re-establishes, and it materializes
+	// from this spec on demand (see StartRunNetworkService).
+	materializeSpec *netpolicy.Spec
 }
 
 const (
@@ -211,16 +218,15 @@ func (c Core) prepareEnvironmentNetworkService(runSession RunSession, spec netpo
 		}
 		if runNetwork.EnvironmentServiceAction == networkServiceReuse || runNetwork.EnvironmentServiceAction == networkServiceGateway {
 			if !dryRun {
-				// Materialize the bootstrap artifacts even on the reuse path so a
-				// failed current-boot verification can self-heal by re-establishing
-				// the network from this same plan (the bootstrap reconciles any
-				// stale guest remnant first).
-				spec.DryRun = false
-				materialized, materializeErr := netpolicy.Prepare(spec)
-				if materializeErr != nil {
-					return runNetwork, materializeErr
-				}
-				runNetwork.Plan = materialized
+				// Defer bootstrap materialization. Healthy reuse leaves the shared
+				// guest network in place, so writing the per-session secret and
+				// bootstrap scripts here is wasted work and an unnecessary
+				// secret-on-disk window. Only reuse self-heal (a failed current-boot
+				// verification) re-establishes the network; StartRunNetworkService
+				// materializes from this spec at that point (the idempotent bootstrap
+				// reconciles any stale guest remnant first).
+				lazySpec := spec
+				runNetwork.materializeSpec = &lazySpec
 			}
 			runNetwork.Plan.Verified = false
 			runNetwork.Plan.RuntimeVerify = candidate.Mode == netpolicy.ModeTun2Socks
@@ -378,6 +384,23 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 	copyHelper := func() error {
 		return copyNetworkHelper(runSession.RuntimeShimDir, runNetwork.ServiceDir)
 	}
+	materialize := func() error {
+		if runNetwork.materializeSpec == nil {
+			return nil
+		}
+		matSpec := *runNetwork.materializeSpec
+		matSpec.DryRun = false
+		materialized, err := netpolicy.Prepare(matSpec)
+		if err != nil {
+			return err
+		}
+		// Preserve the reuse-path plan flags computed during prepare.
+		materialized.Verified = false
+		materialized.RuntimeVerify = runNetwork.Plan.RuntimeVerify
+		materialized.Reason = runNetwork.Plan.Reason
+		runNetwork.Plan = materialized
+		return nil
+	}
 	establishTun := func() error {
 		if err := activateGateway(); err != nil {
 			return err
@@ -399,8 +422,11 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 				// it fresh (the idempotent bootstrap reconciles any stale remnant
 				// first). The retries ensure a transient guest-probe flake does not
 				// tear down and rebuild a healthy shared network a sibling session may
-				// still be using.
-				operationErr = establishTun()
+				// still be using. Materialize the deferred bootstrap artifacts first;
+				// the healthy-reuse path left them unwritten.
+				if operationErr = materialize(); operationErr == nil {
+					operationErr = establishTun()
+				}
 			} else if operationErr != nil {
 				operationErr = fmt.Errorf("verify environment network service: %w", operationErr)
 			}
