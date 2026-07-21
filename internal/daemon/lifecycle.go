@@ -175,6 +175,17 @@ func (d *Daemon) applyEnvironmentStopPlan(ctx context.Context, plan manager.Envi
 		result.Applied = append(result.Applied, applied.Applied...)
 		result.Skipped = append(result.Skipped, applied.Skipped...)
 	}
+	// Release the per-environment host-loopback egress gateway for every stopped
+	// environment. The environment network is retained across runs for same-boot
+	// reuse, but once the environment stops its gateway (listener + accept
+	// goroutine + credentials + live egress dialer) must be closed rather than
+	// lingering — a functional authenticated proxy — until daemon shutdown.
+	// CloseEnvironment is a no-op for environments without a staged gateway.
+	if d.api.Core.NetworkGateways != nil {
+		for _, target := range result.Applied {
+			_ = d.api.Core.NetworkGateways.CloseEnvironment(target.ID)
+		}
+	}
 	return result, nil
 }
 

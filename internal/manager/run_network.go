@@ -391,12 +391,15 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 	switch action {
 	case networkServiceReuse, networkServiceGateway:
 		if runNetwork.Plan.Mode == netpolicy.ModeTun2Socks {
-			operationErr = controller.VerifyEnvironmentNetwork(ctx, session, runNetwork.GuestServiceDir, env)
+			operationErr = verifyReusedEnvironmentNetwork(ctx, controller, session, runNetwork.GuestServiceDir, env)
 			if operationErr != nil && action == networkServiceReuse {
-				// Self-heal: the persisted privacy network is not valid on the
-				// current guest (rebooted, recreated, or an unclean prior
-				// teardown). Re-establish it fresh; the idempotent bootstrap
-				// reconciles any stale remnant first.
+				// Self-heal only after the verify retries above are exhausted: the
+				// persisted privacy network is genuinely invalid on the current guest
+				// (rebooted, recreated, or an unclean prior teardown), so re-establish
+				// it fresh (the idempotent bootstrap reconciles any stale remnant
+				// first). The retries ensure a transient guest-probe flake does not
+				// tear down and rebuild a healthy shared network a sibling session may
+				// still be using.
 				operationErr = establishTun()
 			} else if operationErr != nil {
 				operationErr = fmt.Errorf("verify environment network service: %w", operationErr)
@@ -494,6 +497,28 @@ func removeRunNetworkSecret(path string) error {
 		return fmt.Errorf("remove consumed session network secret: %w", err)
 	}
 	return nil
+}
+
+// verifyReusedEnvironmentNetwork verifies a reused environment network, retrying a
+// few times with a short backoff so a transient guest-probe failure does not drive
+// the destructive self-heal (which tears down and rebuilds a shared network a
+// sibling session may still be using). It returns the last verification error.
+func verifyReusedEnvironmentNetwork(ctx context.Context, controller backend.EnvironmentNetworkServiceController, session *backend.Session, guestServiceDir string, env []string) error {
+	const attempts = 3
+	var err error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		if err = controller.VerifyEnvironmentNetwork(ctx, session, guestServiceDir, env); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 func (c Core) stopRunNetworkService(ctx context.Context, runNetwork RunNetwork, controller backend.EnvironmentNetworkServiceController, session *backend.Session, env []string) error {

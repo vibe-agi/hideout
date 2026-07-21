@@ -688,8 +688,22 @@ func BootstrapScript(plan Plan) string {
 		// before-route is this boot's real direct route and is safe to restore.
 		b.WriteString("if ip link show dev hideout0 >/dev/null 2>&1; then\n")
 		b.WriteString("  if [ -r /hideout/session/network/tun2socks.pid ]; then kill \"$(sed -n '1p' /hideout/session/network/tun2socks.pid)\" 2>/dev/null || true; fi\n")
-		b.WriteString("  if [ -r /hideout/session/network/dns-stub.pid ]; then kill \"$(sed -n '1p' /hideout/session/network/dns-stub.pid)\" 2>/dev/null || true; fi\n")
-		b.WriteString("  if [ -s /hideout/session/network/default-route.before ]; then ip route replace $(sed -n '1p' /hideout/session/network/default-route.before) 2>/dev/null || true; fi\n")
+		// Revert the DNS mediation layer with the exact cleanup steps (stub,
+		// resolv.conf, resolvectl, connected-subnet resolver DROP rules) so the
+		// re-establish below captures resolv.conf.orig/resolvers.before from the
+		// restored slate rather than the already-mediated one — otherwise a
+		// self-heal strands the reused guest on the dead stub and leaves an
+		// unremovable resolver blackhole after teardown.
+		writeDNSMediationCleanup(&b)
+		// Restore the saved direct route using the same validated idiom as
+		// CleanupScript: strip the leading `default ` and only replace when the line
+		// actually was a `default ...` route, so a malformed/foreign first line is
+		// ignored rather than word-split into arbitrary `ip route replace` args.
+		b.WriteString("  if [ -s /hideout/session/network/default-route.before ]; then\n")
+		b.WriteString("    default_route=$(sed -n '1p' /hideout/session/network/default-route.before)\n")
+		b.WriteString("    route_args=${default_route#default }\n")
+		b.WriteString("    if [ -n \"$route_args\" ] && [ \"$route_args\" != \"$default_route\" ]; then ip route replace default $route_args 2>/dev/null || true; fi\n")
+		b.WriteString("  fi\n")
 		b.WriteString("  ip link set dev hideout0 down 2>/dev/null || true\n")
 		b.WriteString("  ip tuntap del mode tun dev hideout0 2>/dev/null || ip link del dev hideout0 2>/dev/null || true\n")
 		b.WriteString("fi\n")

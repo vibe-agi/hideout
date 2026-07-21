@@ -416,8 +416,11 @@ func TestEnvironmentNetworkServiceSelfHealsStaleReuse(t *testing.T) {
 	if err := core.StartRunNetworkService(context.Background(), runSession, &runNetwork, controller, current, nil); err != nil {
 		t.Fatalf("stale reuse did not self-heal: %v", err)
 	}
-	if controller.verifies != 1 || controller.starts != 1 {
-		t.Fatalf("reuse self-heal did not re-establish the network: controller=%+v", controller)
+	// A genuinely-broken network fails all verify retries before the self-heal
+	// re-establishes it once; the retries exist so a transient flake would NOT
+	// reach this destructive path.
+	if controller.verifies != 3 || controller.starts != 1 {
+		t.Fatalf("reuse self-heal did not re-establish the network after verify retries: controller=%+v", controller)
 	}
 	state, loadErr := network.LoadServiceState(runNetwork.ServiceStatePath)
 	if loadErr != nil || state.Status != network.ServiceReady {

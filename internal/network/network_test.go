@@ -344,6 +344,21 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	if strings.Contains(string(bootstrap), "ip tuntap add mode tun dev hideout0 2>/dev/null || true") {
 		t.Fatalf("runtime verify bootstrap must not reuse an active or stale hideout0: %s", bootstrap)
 	}
+	// Self-heal must fully revert the prior DNS mediation (resolver DROP removal +
+	// resolv.conf restore) before deleting hideout0 and re-establishing, so the
+	// re-run captures resolv.conf.orig / resolvers.before from the restored slate,
+	// not the already-mediated view (which would strand the guest on the dead stub
+	// and leave an unremovable resolver blackhole after teardown).
+	reconcileDeleteIdx := strings.Index(string(bootstrap), "ip tuntap del mode tun dev hideout0")
+	dnsRevertIdx := strings.Index(string(bootstrap), `iptables -D OUTPUT -p "$proto" --dport 53 -d "$ns" -j DROP`)
+	if dnsRevertIdx < 0 || reconcileDeleteIdx < 0 || dnsRevertIdx > reconcileDeleteIdx {
+		t.Fatalf("self-heal must revert DNS mediation before deleting hideout0 (dnsRevert=%d delete=%d): %s", dnsRevertIdx, reconcileDeleteIdx, bootstrap)
+	}
+	restoreOrigIdx := strings.Index(string(bootstrap), "cp -a /hideout/session/network/resolv.conf.orig /etc/resolv.conf")
+	captureOrigIdx := strings.Index(string(bootstrap), "cp -a /etc/resolv.conf /hideout/session/network/resolv.conf.orig")
+	if restoreOrigIdx < 0 || captureOrigIdx < 0 || restoreOrigIdx > captureOrigIdx {
+		t.Fatalf("self-heal must restore resolv.conf before the re-establish re-captures it (restore=%d capture=%d): %s", restoreOrigIdx, captureOrigIdx, bootstrap)
+	}
 	cleanup, err := os.ReadFile(plan.CleanupPath)
 	if err != nil {
 		t.Fatalf("read cleanup: %v", err)
