@@ -19,12 +19,12 @@ import (
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
-func TestProjectionIdeModeDefaultsSafe(t *testing.T) {
+func TestProjectionHostAppModeDefaultsSafe(t *testing.T) {
 	root := t.TempDir()
-	if got := ReadProjectionIdeMode(root, "privacy"); got != ProjectionIdeModeSafe {
+	if got := ReadProjectionHostAppMode(root, "privacy"); got != ProjectionHostAppModeSafe {
 		t.Fatalf("default mode = %q, want safe", got)
 	}
-	if (decisionIdeGrantChecker{storeRoot: root}).TrustedGrantActive(hostcap.GrantScope{SessionID: "s", Profile: "privacy"}) {
+	if (decisionHostAppGrantChecker{storeRoot: root}).TrustedGrantActive(hostcap.GrantScope{SessionID: "s", Profile: "privacy"}) {
 		t.Fatal("no trusted grant should be active by default")
 	}
 }
@@ -66,26 +66,26 @@ func projectionGrantFixture(t *testing.T) (Core, profile.Profile, RunSession, pr
 	return core, p, runSession, projectionGrantBindingForRun(runSession, authority, appBinding, "editor")
 }
 
-func projectionGrantCheckerForTest(root string, binding projectionGrantBinding) decisionIdeGrantChecker {
-	return decisionIdeGrantChecker{storeRoot: root, bindings: map[string]projectionGrantBinding{binding.Command: binding}}
+func projectionGrantCheckerForTest(root string, binding projectionGrantBinding) decisionHostAppGrantChecker {
+	return decisionHostAppGrantChecker{storeRoot: root, bindings: map[string]projectionGrantBinding{binding.Command: binding}}
 }
 
-func TestProjectionIdeModeRequestIsNotAuthority(t *testing.T) {
+func TestProjectionHostAppModeRequestIsNotAuthority(t *testing.T) {
 	core, p, _, binding := projectionGrantFixture(t)
 
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
-	if ReadProjectionIdeMode(core.Store.Root, p.Name) != ProjectionIdeModeTrusted {
+	if ReadProjectionHostAppMode(core.Store.Root, p.Name) != ProjectionHostAppModeTrusted {
 		t.Fatal("trusted should be recorded as the requested mode")
 	}
 	checker := projectionGrantCheckerForTest(core.Store.Root, binding)
 	if checker.TrustedGrantActive(binding.scope()) {
 		t.Fatal("a profile mode file must never be sufficient authority")
 	}
-	got, err := core.ProjectionIdeMode(p.Name)
-	if err != nil || got != ProjectionIdeModeTrusted {
-		t.Fatalf("ProjectionIdeMode = %q err=%v", got, err)
+	got, err := core.ProjectionHostAppMode(p.Name)
+	if err != nil || got != ProjectionHostAppModeTrusted {
+		t.Fatalf("ProjectionHostAppMode = %q err=%v", got, err)
 	}
 	if _, err := os.Stat(filepath.Join(core.Store.Root, "profiles", p.Name, "host-app-mode.json")); err != nil {
 		t.Fatalf("mode should persist under the reserved store: %v", err)
@@ -94,7 +94,7 @@ func TestProjectionIdeModeRequestIsNotAuthority(t *testing.T) {
 
 func TestProjectionTrustedGrantDecisionApproveRevokeAndBinding(t *testing.T) {
 	core, p, runSession, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -105,7 +105,7 @@ func TestProjectionTrustedGrantDecisionApproveRevokeAndBinding(t *testing.T) {
 		t.Fatalf("decision binding mismatch: %+v", d)
 	}
 	if !slices.Contains(d.AllowedActions, decision.ActionRevoke) {
-		t.Fatalf("trusted IDE decision must advertise revocation: %+v", d.AllowedActions)
+		t.Fatalf("trusted host-app decision must advertise revocation: %+v", d.AllowedActions)
 	}
 	checker := projectionGrantCheckerForTest(core.Store.Root, binding)
 	if checker.TrustedGrantActive(binding.scope()) {
@@ -119,7 +119,7 @@ func TestProjectionTrustedGrantDecisionApproveRevokeAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !checker.TrustedGrantActive(binding.scope()) {
-		t.Fatal("approved exact binding should activate trusted IDE")
+		t.Fatal("approved exact binding should activate trusted host-app")
 	}
 	for name, mutate := range map[string]func(*hostcap.GrantScope){
 		"session":     func(s *hostcap.GrantScope) { s.SessionID = "other-session" },
@@ -166,7 +166,7 @@ func TestProjectionTrustedGrantDecisionApproveRevokeAndBinding(t *testing.T) {
 
 func TestProjectionDecisionBindsPathFreeResourceAuthorityClasses(t *testing.T) {
 	core, p, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -217,7 +217,7 @@ func TestProjectionDecisionBindsPathFreeResourceAuthorityClasses(t *testing.T) {
 
 func TestProjectionSessionEndInvalidatesApprovedGrant(t *testing.T) {
 	core, p, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -241,7 +241,7 @@ func TestProjectionSessionEndInvalidatesApprovedGrant(t *testing.T) {
 
 func TestProjectionHostFSAuthorityLossInvalidatesApprovedAppDecision(t *testing.T) {
 	core, p, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -279,7 +279,7 @@ func hostcapResourceOwner(binding projectionGrantBinding) hostfs.HostAppResource
 
 func TestProjectionTrustedGrantRevokesThroughManagerAPI(t *testing.T) {
 	core, p, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -310,7 +310,7 @@ func TestProjectionTrustedGrantRevokesThroughManagerAPI(t *testing.T) {
 
 func TestProjectionSettingSafeInvalidatesProfileGrants(t *testing.T) {
 	core, p, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -322,10 +322,10 @@ func TestProjectionSettingSafeInvalidatesProfileGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := core.SetProjectionIdeMode(p.Name, ProjectionIdeModeSafe); err != nil {
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeSafe); err != nil {
 		t.Fatal(err)
 	}
-	if ReadProjectionIdeMode(core.Store.Root, p.Name) != ProjectionIdeModeSafe {
+	if ReadProjectionHostAppMode(core.Store.Root, p.Name) != ProjectionHostAppModeSafe {
 		t.Fatal("after revoke, requested mode should be safe")
 	}
 	if projectionGrantCheckerForTest(core.Store.Root, binding).TrustedGrantActive(binding.scope()) {
@@ -363,21 +363,21 @@ func TestProjectionSafeDataDirRejectsSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := prepareProjectionSafeDataDir(link); err == nil {
-		t.Fatal("safe IDE state must not follow a symlink")
+		t.Fatal("safe host-app state must not follow a symlink")
 	}
 }
 
-func TestProjectionIdeModeRejectsUnknownAndMissingProfile(t *testing.T) {
+func TestProjectionHostAppModeRejectsUnknownAndMissingProfile(t *testing.T) {
 	root := t.TempDir()
 	store := profile.Store{Root: root}
 	core := New(store)
-	if err := core.SetProjectionIdeMode("nope", ProjectionIdeModeTrusted); err == nil {
+	if err := core.SetProjectionHostAppMode("nope", ProjectionHostAppModeTrusted); err == nil {
 		t.Fatal("setting mode for a missing profile should fail")
 	}
 	if _, err := store.LoadOrInit("privacy"); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.SetProjectionIdeMode("privacy", "reckless"); err == nil {
+	if err := core.SetProjectionHostAppMode("privacy", "reckless"); err == nil {
 		t.Fatal("unknown mode should be rejected")
 	}
 }
@@ -391,7 +391,7 @@ func TestProjectionModeGrantCheckerReadsControlPlaneNotWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(t.TempDir(), "host-app-mode.json"), []byte(`{"mode":"trusted"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if (decisionIdeGrantChecker{storeRoot: root}).TrustedGrantActive(hostcap.GrantScope{SessionID: "s", Profile: "privacy"}) {
+	if (decisionHostAppGrantChecker{storeRoot: root}).TrustedGrantActive(hostcap.GrantScope{SessionID: "s", Profile: "privacy"}) {
 		t.Fatal("a workspace marker must not activate trusted mode")
 	}
 }

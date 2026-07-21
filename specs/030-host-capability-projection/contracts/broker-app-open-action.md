@@ -26,7 +26,7 @@ New broker action alongside `host.open` in `internal/broker`. Routed by `Action`
 ## Handling (broker, Core)
 
 1. Strict-decode `intent`; reject unknown fields.
-2. Delegate to the `hostcap` `host.app.open-resource` provider with the session context (workspace `HostRoot`, profile, session id, active IdeMode).
+2. Delegate to the `hostcap` `host.app.open-resource` provider with the session context (workspace `HostRoot`, profile, session id, active HostAppMode).
 3. The provider maps `ResourceRef` → host path under `HostRoot` and re-checks symlink escape using the same helper `host.open` uses; resolves `appRef` via the Core app-identity registry; enforces mode; launches; emits `ide.open` audit.
 
 ## Response (broker → guest)

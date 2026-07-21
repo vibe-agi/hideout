@@ -12,7 +12,7 @@ import (
 
 func TestCompileRunProjectionGrantsKeepsMixedBindingAccessIndependent(t *testing.T) {
 	core, profileRecord, runSession, _ := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(profileRecord.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(profileRecord.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	bindings := []hostcap.OpenResourceBinding{
@@ -35,7 +35,7 @@ func TestCompileRunProjectionGrantsKeepsMixedBindingAccessIndependent(t *testing
 		t.Fatalf("decision commands=%v, want built-in and external ask-each-run only", commands)
 	}
 	if _, ok := byCommand["safe-editor"]; ok {
-		t.Fatal("profile IDE mode created authority for an unrelated safe binding")
+		t.Fatal("profile host-app mode created authority for an unrelated safe binding")
 	}
 	if byCommand["code"].PackID != "builtin.vscode" || byCommand["ask-editor"].PackID != "community.ask-editor" {
 		t.Fatalf("run grant bindings crossed owners: %+v", byCommand)
@@ -47,8 +47,8 @@ func TestCompileRunProjectionGrantsKeepsMixedBindingAccessIndependent(t *testing
 
 func TestRunProjectionAskEachRunDecisionDoesNotDependOnProfileIDEMode(t *testing.T) {
 	core, profileRecord, _, binding := projectionGrantFixture(t)
-	if got := ReadProjectionIdeMode(core.Store.Root, profileRecord.Name); got != ProjectionIdeModeSafe {
-		t.Fatalf("profile IDE mode=%q, want compatibility default safe", got)
+	if got := ReadProjectionHostAppMode(core.Store.Root, profileRecord.Name); got != ProjectionHostAppModeSafe {
+		t.Fatalf("profile host-app mode=%q, want compatibility default safe", got)
 	}
 
 	d, err := core.ensureRunProjectionDecision(binding)
@@ -74,9 +74,9 @@ func TestRunProjectionAskEachRunDecisionDoesNotDependOnProfileIDEMode(t *testing
 		t.Fatal(err)
 	}
 	if !checker.TrustedGrantActive(binding.scope()) {
-		t.Fatal("approved external ask-each-run decision still depended on profile IDE mode")
+		t.Fatal("approved external ask-each-run decision still depended on profile host-app mode")
 	}
-	if got := ReadProjectionIdeMode(core.Store.Root, profileRecord.Name); got != ProjectionIdeModeSafe {
+	if got := ReadProjectionHostAppMode(core.Store.Root, profileRecord.Name); got != ProjectionHostAppModeSafe {
 		t.Fatalf("external decision changed compatibility mode to %q", got)
 	}
 }
@@ -125,7 +125,7 @@ func TestProfileIDEModeCompatibilityDerivesBuiltinBindingAndSafetyFromPackData(t
 		t.Fatalf("built-in permission fingerprint was not derived from pack/profile data")
 	}
 
-	if err := core.SetProjectionIdeMode(profileRecord.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(profileRecord.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	trustedSources, err := core.hostAppCatalogSources(profileRecord.Name)
@@ -162,7 +162,7 @@ func builtinSourceForProfileIDEModeTest(t *testing.T, sources []hostAppCatalogSo
 }
 
 // TestRunProjectionGrantChecksPersistentGrantBeforeDecision proves US1: a
-// durable trusted-IDE workspace grant authorizes the open through
+// durable trusted-host-app workspace grant authorizes the open through
 // runProjectionGrantChecker WITHOUT any per-run decision. This is the one-shot
 // deadlock fix.
 func TestRunProjectionGrantChecksPersistentGrantBeforeDecision(t *testing.T) {
@@ -181,10 +181,10 @@ func TestRunProjectionGrantChecksPersistentGrantBeforeDecision(t *testing.T) {
 		t.Fatal("active with neither grant nor decision")
 	}
 	// Trusted mode + persistent grant → active, no per-run decision needed.
-	if err := WriteProjectionIdeMode(root, "default", ProjectionIdeModeTrusted, time.Now()); err != nil {
+	if err := WriteProjectionHostAppMode(root, "default", ProjectionHostAppModeTrusted, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := addTrustedIDEGrant(root, "default", TrustedIDEGrant{
+	if err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
 		WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest,
 	}, time.Now()); err != nil {
 		t.Fatal(err)

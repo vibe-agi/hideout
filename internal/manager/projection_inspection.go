@@ -68,7 +68,7 @@ func (c Core) ProjectionInspection(profileName string) (ProjectionInspection, er
 		Profile:               profileName,
 		ProfileStatus:         "missing",
 		EnvironmentStatus:     "not-found",
-		RequestedMode:         ReadProjectionIdeMode(c.Store.Root, profileName),
+		RequestedMode:         ReadProjectionHostAppMode(c.Store.Root, profileName),
 		LiveGrantStatus:       "absent",
 		ProviderStatus:        "unknown",
 		PathShadowPolicy:      "projected shim first; projection refusal has no fallback to guest or host commands",
@@ -149,7 +149,7 @@ func (c Core) ProjectionInspection(profileName string) (ProjectionInspection, er
 		// A profile-only diagnostic cannot prove the current session/workspace/
 		// environment binding, so an approved record is not called live here.
 		out.LiveGrantStatus = "approved-record-present; current run binding unobserved"
-	} else if out.RequestedMode == ProjectionIdeModeTrusted {
+	} else if out.RequestedMode == ProjectionHostAppModeTrusted {
 		out.LiveGrantStatus = "approval-required"
 	}
 
@@ -326,7 +326,7 @@ func (c Core) hostAppInspectionSources(profileName, packFilter string) ([]hostAp
 	if packFilter == "" || packFilter == manifest.ID {
 		revision := builtinHostAppRevision()
 		access := hostapppack.AccessSafe
-		if ReadProjectionIdeMode(c.Store.Root, profileName) == ProjectionIdeModeTrusted {
+		if ReadProjectionHostAppMode(c.Store.Root, profileName) == ProjectionHostAppModeTrusted {
 			access = hostapppack.AccessAskEachRun
 		}
 		enablement, err := builtinHostAppEnablement(profileName, manifest, revision, access)
@@ -674,7 +674,7 @@ func (p ProjectionInspection) CandidateCauses() []string {
 	if p.ProviderStatus != "ready" {
 		causes = append(causes, "no enabled host-app binding has a verified provider identity")
 	}
-	if p.RequestedMode == ProjectionIdeModeTrusted && p.ApprovedGrantRecords == 0 {
+	if p.RequestedMode == ProjectionHostAppModeTrusted && p.ApprovedGrantRecords == 0 {
 		causes = append(causes, "trusted host-app mode is requested but no run-bound decision is approved")
 	}
 	if strings.TrimSpace(p.PathShadowObservation) == "not-run" {

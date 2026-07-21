@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Trusted Host-IDE Workspace Grant
+# Specification Quality Checklist: Trusted Host-App Workspace Grant
 
 <!-- markdownlint-disable MD013 -->
 

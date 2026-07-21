@@ -10,7 +10,7 @@
 
 Project one authorized host capability into the guest as a command the CLI already knows. V1 delivers the `code` recipe end-to-end: inside a guest that has no `code` binary, `code .` / `code <path>` / `code -g <file>:<line>:<column>` open the mapped host workspace in a constrained (safe-mode) VS Code, through a typed, audited, fail-closed brokered route, without the guest ever learning the host absolute path or username.
 
-Technical approach: add a Core-owned static capability registry (`CapabilityDescriptor`), a generic `host.app.open-resource` capability provider, a Core/package-owned app-identity registry (`appRef` → host binary/bundle by platform), and a `code` command binding whose declarative grammar parses guest argv into an app-agnostic `OpenResourceIntent` that Go re-decodes and field-validates. Workspace resources cross every guest/adapter/event boundary as a workspace-scoped `ResourceRef` (guest `/workspace/...` + relative path); only Core resolves the host path via the session-bound mapping — the same one-directional invariant that also hides the host username under `pathMode=alias`. Safe mode opens VS Code with an isolated `--user-data-dir`, `--disable-extensions`, auto-tasks not run, and Workspace Trust kept on. `trusted-host-ide` is an explicit, revocable operator grant through the decision center. The registry is designed to accommodate adb, AppleScript templates, and result-streaming, but none of those is implemented in v1.
+Technical approach: add a Core-owned static capability registry (`CapabilityDescriptor`), a generic `host.app.open-resource` capability provider, a Core/package-owned app-identity registry (`appRef` → host binary/bundle by platform), and a `code` command binding whose declarative grammar parses guest argv into an app-agnostic `OpenResourceIntent` that Go re-decodes and field-validates. Workspace resources cross every guest/adapter/event boundary as a workspace-scoped `ResourceRef` (guest `/workspace/...` + relative path); only Core resolves the host path via the session-bound mapping — the same one-directional invariant that also hides the host username under `pathMode=alias`. Safe mode opens VS Code with an isolated `--user-data-dir`, `--disable-extensions`, auto-tasks not run, and Workspace Trust kept on. `trusted-host-app` is an explicit, revocable operator grant through the decision center. The registry is designed to accommodate adb, AppleScript templates, and result-streaming, but none of those is implemented in v1.
 
 This reuses existing infrastructure: command-proxy `Registration` model (`internal/cmdproxy`), broker action routing and workspace-file resolution with symlink-escape recheck (`internal/broker/broker.go`), `pathMode` alias mapping (`internal/manager/run_plan.go`), synthetic identity (`internal/backend/lima`), operator decision center (`internal/decision`, `internal/manager`), command-adapter proposal outcomes (`internal/cmdadapter`), environment drift model with `GuestWorkspace` already a drift axis (`internal/manager/run_environment.go`), and the policy action set (`internal/policy/policy.go`).
 
@@ -20,7 +20,7 @@ This reuses existing infrastructure: command-proxy `Registration` model (`intern
 
 **Primary Dependencies**: Existing internal packages only — `cmdproxy`, `broker`, `hostopen`, `cmdadapter`, `decision`, `manager`, `environment`, `profile`, `backend/lima`, `policy`, `audit`, `recovery`, `productevidence`. Guest-side: existing host command shim (`cmd/hideout-shim`). No new third-party dependency.
 
-**Storage**: Control-plane store (`~/.hideout`, guest-unreachable) for the capability registry data (package-owned static), profile `pathMode`, and the `trusted-host-ide` grant record (via the existing decision store). No new database.
+**Storage**: Control-plane store (`~/.hideout`, guest-unreachable) for the capability registry data (package-owned static), profile `pathMode`, and the `trusted-host-app` grant record (via the existing decision store). No new database.
 
 **Testing**: `go test` (Gate 0 unit/mechanics), plus real macOS arm64 Lima Gate 2 and Gate 3 obligations via `scripts/test-*.sh`. TDD: contract/unit tests precede implementation for each slice.
 
@@ -63,7 +63,7 @@ specs/030-host-capability-projection/
 │   ├── capability-registry.md
 │   ├── code-open-grammar.md
 │   ├── broker-app-open-action.md
-│   └── ide-mode-and-grant.md
+│   └── host-app-mode-and-grant.md
 └── tasks.md             # Phase 2 output (/speckit-tasks)
 ```
 
@@ -87,7 +87,7 @@ internal/
 │   └── broker.go                # EXTEND: route host.app.open-resource, ResourceRef
 ├── manager/
 │   ├── run_plan.go              # EXTEND: workspace ResourceRef mapping (Core-only host path)
-│   ├── hostcap_projection.go    # NEW: projection wiring, inspection, ide-mode grant
+│   ├── hostcap_projection.go    # NEW: projection wiring, inspection, host-app-mode grant
 │   └── run_dataplane.go         # EXTEND: register code binding + provider per run
 ├── profiletemplate/
 │   └── template.go              # EXTEND: privacy/hardened default pathMode=alias

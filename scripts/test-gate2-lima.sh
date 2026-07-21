@@ -109,7 +109,7 @@ wait_for_projection_decision() {
     fi
     sleep 1
   done
-  echo "gate2: timed out waiting for trusted IDE decision" >&2
+  echo "gate2: timed out waiting for trusted host-app decision" >&2
   cat "$output" "$output.err" >&2 2>/dev/null || true
   return 1
 }

@@ -5,9 +5,8 @@
 Reuses the `operatorintent` `allow`/`deny` surface. All commands are host-CLI +
 authenticated-daemon only; no guest/broker entry point exists.
 
-> Naming: the operator surface is fully generic (`host-app`, not `ide`). Internal
-> Go types and files keep the historical `TrustedIDE*` / `trusted-ide-grant`
-> spelling; that split is intentional and tracked in `docs/DEBT.md`.
+> Naming: the operator surface and the internal Go types, files, schema, and
+> spec directory are all fully generic (`host-app`, not `ide`).
 
 ## `hideout allow host-app <command>`
 

@@ -22,35 +22,35 @@ func trustedGrantTestScope(profile string) hostcap.GrantScope {
 	}
 }
 
-func setTrustedIDEMode(t *testing.T, root, profile string) {
+func setTrustedHostAppMode(t *testing.T, root, profile string) {
 	t.Helper()
-	if err := WriteProjectionIdeMode(root, profile, ProjectionIdeModeTrusted, time.Now()); err != nil {
+	if err := WriteProjectionHostAppMode(root, profile, ProjectionHostAppModeTrusted, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestTrustedIDEGrantMatchRequiresTrustedModeAndExactKeys(t *testing.T) {
+func TestTrustedHostAppGrantMatchRequiresTrustedModeAndExactKeys(t *testing.T) {
 	root := t.TempDir()
 	scope := trustedGrantTestScope("default")
 
 	// No grant, no trusted mode → no match.
-	if trustedIDEGrantMatches(root, scope) {
+	if trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("matched with neither grant nor trusted mode")
 	}
 
-	setTrustedIDEMode(t, root, "default")
+	setTrustedHostAppMode(t, root, "default")
 	// Trusted mode but no grant → still no match (fail closed).
-	if trustedIDEGrantMatches(root, scope) {
+	if trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("matched in trusted mode without a grant")
 	}
 
-	if err := addTrustedIDEGrant(root, "default", TrustedIDEGrant{
+	if err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
 		WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	// Trusted mode + matching grant → match.
-	if !trustedIDEGrantMatches(root, scope) {
+	if !trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("did not match with trusted mode and a matching grant")
 	}
 
@@ -63,36 +63,36 @@ func TestTrustedIDEGrantMatchRequiresTrustedModeAndExactKeys(t *testing.T) {
 		},
 		"digest": func(s hostcap.GrantScope) hostcap.GrantScope { s.BindingDigest = "sha256:changed"; return s },
 	} {
-		if trustedIDEGrantMatches(root, mut(scope)) {
+		if trustedHostAppGrantMatches(root, mut(scope)) {
 			t.Fatalf("matched despite %s drift", name)
 		}
 	}
 
 	// Switch to safe mode → grant is inert (no match) even though it exists.
-	if err := WriteProjectionIdeMode(root, "default", ProjectionIdeModeSafe, time.Now()); err != nil {
+	if err := WriteProjectionHostAppMode(root, "default", ProjectionHostAppModeSafe, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if trustedIDEGrantMatches(root, scope) {
+	if trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("matched in safe mode")
 	}
 }
 
-func TestTrustedIDEGrantAddIsIdempotentAndPrivateAtomic(t *testing.T) {
+func TestTrustedHostAppGrantAddIsIdempotentAndPrivateAtomic(t *testing.T) {
 	root := t.TempDir()
-	g := TrustedIDEGrant{WorkspaceID: "wrk_a", QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:x"}
+	g := TrustedHostAppGrant{WorkspaceID: "wrk_a", QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:x"}
 	for range 3 {
-		if err := addTrustedIDEGrant(root, "default", g, time.Now()); err != nil {
+		if err := addTrustedHostAppGrant(root, "default", g, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m := readTrustedIDEGrants(root, "default")
+	m := readTrustedHostAppGrants(root, "default")
 	if len(m.Grants) != 1 {
 		t.Fatalf("idempotent add produced %d grants", len(m.Grants))
 	}
 	if m.Grants[0].GrantedAt.IsZero() {
 		t.Fatal("grantedAt not stamped")
 	}
-	info, err := os.Stat(trustedIDEGrantsPath(root, "default"))
+	info, err := os.Stat(trustedHostAppGrantsPath(root, "default"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,20 +100,20 @@ func TestTrustedIDEGrantAddIsIdempotentAndPrivateAtomic(t *testing.T) {
 		t.Fatalf("grant file mode = %v, want 0600", info.Mode().Perm())
 	}
 	// No leftover temp file from the atomic write.
-	entries, err := os.ReadDir(filepath.Dir(trustedIDEGrantsPath(root, "default")))
+	entries, err := os.ReadDir(filepath.Dir(trustedHostAppGrantsPath(root, "default")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".ide-trust-grants.json.tmp") {
+		if strings.HasPrefix(e.Name(), ".host-app-trust-grants.json.tmp") {
 			t.Fatalf("atomic write left a temp file: %s", e.Name())
 		}
 	}
 }
 
-func TestTrustedIDEGrantMalformedManifestFailsClosed(t *testing.T) {
+func TestTrustedHostAppGrantMalformedManifestFailsClosed(t *testing.T) {
 	root := t.TempDir()
-	setTrustedIDEMode(t, root, "default")
+	setTrustedHostAppMode(t, root, "default")
 	dir := filepath.Join(root, "profiles", "default")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -121,23 +121,23 @@ func TestTrustedIDEGrantMalformedManifestFailsClosed(t *testing.T) {
 	for _, body := range []string{
 		`{not json`,
 		`{"version":"wrong","profile":"default","grants":[]}`,
-		`{"version":"hideout.trusted-ide-grants/v1","profile":"default","grants":[{"workspaceId":"","qualifiedAppRef":"a","bindingDigest":"b"}]}`,
-		`{"version":"hideout.trusted-ide-grants/v1","profile":"default","grants":[{"workspaceId":"wrk_a","qualifiedAppRef":"builtin.vscode/rev_1/vscode","bindingDigest":"sha256:x"}],"extra":1}`,
+		`{"version":"hideout.trusted-host-app-grants/v1","profile":"default","grants":[{"workspaceId":"","qualifiedAppRef":"a","bindingDigest":"b"}]}`,
+		`{"version":"hideout.trusted-host-app-grants/v1","profile":"default","grants":[{"workspaceId":"wrk_a","qualifiedAppRef":"builtin.vscode/rev_1/vscode","bindingDigest":"sha256:x"}],"extra":1}`,
 	} {
-		if err := os.WriteFile(trustedIDEGrantsPath(root, "default"), []byte(body), 0o600); err != nil {
+		if err := os.WriteFile(trustedHostAppGrantsPath(root, "default"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if trustedIDEGrantMatches(root, trustedGrantTestScope("default")) {
+		if trustedHostAppGrantMatches(root, trustedGrantTestScope("default")) {
 			t.Fatalf("malformed manifest matched (should fail closed): %s", body)
 		}
 	}
 }
 
-func TestTrustedIDEGrantRemoveByWorkspaceAndAll(t *testing.T) {
+func TestTrustedHostAppGrantRemoveByWorkspaceAndAll(t *testing.T) {
 	root := t.TempDir()
-	setTrustedIDEMode(t, root, "default")
+	setTrustedHostAppMode(t, root, "default")
 	add := func(ws string) {
-		if err := addTrustedIDEGrant(root, "default", TrustedIDEGrant{
+		if err := addTrustedHostAppGrant(root, "default", TrustedHostAppGrant{
 			WorkspaceID: ws, QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:x",
 		}, time.Now()); err != nil {
 			t.Fatal(err)
@@ -145,46 +145,46 @@ func TestTrustedIDEGrantRemoveByWorkspaceAndAll(t *testing.T) {
 	}
 	add("wrk_a")
 	add("wrk_b")
-	if err := removeTrustedIDEGrantsForWorkspace(root, "default", "wrk_a"); err != nil {
+	if err := removeTrustedHostAppGrantsForWorkspace(root, "default", "wrk_a"); err != nil {
 		t.Fatal(err)
 	}
-	m := readTrustedIDEGrants(root, "default")
+	m := readTrustedHostAppGrants(root, "default")
 	if len(m.Grants) != 1 || m.Grants[0].WorkspaceID != "wrk_b" {
 		t.Fatalf("remove-by-workspace left %+v", m.Grants)
 	}
-	if !hasTrustedIDEGrants(root, "default") {
-		t.Fatal("hasTrustedIDEGrants false with one grant left")
+	if !hasTrustedHostAppGrants(root, "default") {
+		t.Fatal("hasTrustedHostAppGrants false with one grant left")
 	}
-	if err := removeAllTrustedIDEGrants(root, "default"); err != nil {
+	if err := removeAllTrustedHostAppGrants(root, "default"); err != nil {
 		t.Fatal(err)
 	}
-	if hasTrustedIDEGrants(root, "default") {
+	if hasTrustedHostAppGrants(root, "default") {
 		t.Fatal("grants remain after removeAll")
 	}
 	// removeAll on absent file is a no-op success.
-	if err := removeAllTrustedIDEGrants(root, "default"); err != nil {
+	if err := removeAllTrustedHostAppGrants(root, "default"); err != nil {
 		t.Fatalf("removeAll on absent file errored: %v", err)
 	}
 }
 
-func TestTrustedIDEGrantGuestWorkspaceWriteCannotForge(t *testing.T) {
+func TestTrustedHostAppGrantGuestWorkspaceWriteCannotForge(t *testing.T) {
 	root := t.TempDir()
-	setTrustedIDEMode(t, root, "default")
+	setTrustedHostAppMode(t, root, "default")
 	scope := trustedGrantTestScope("default")
 
 	// A guest can only write inside the workspace, never the profile store.
 	// Simulate a forged grant file placed in a workspace directory.
 	workspace := t.TempDir()
-	forged := trustedIDEGrantManifest{
-		Version: TrustedIDEGrantsVersion, Profile: "default",
-		Grants: []TrustedIDEGrant{{WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest, GrantedAt: time.Now()}},
+	forged := trustedHostAppGrantManifest{
+		Version: TrustedHostAppGrantsVersion, Profile: "default",
+		Grants: []TrustedHostAppGrant{{WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef, BindingDigest: scope.BindingDigest, GrantedAt: time.Now()}},
 	}
 	data, _ := json.MarshalIndent(forged, "", "  ")
-	if err := os.WriteFile(filepath.Join(workspace, "ide-trust-grants.json"), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "host-app-trust-grants.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The matcher only reads profiles/<p>/, so a workspace-side forgery is inert.
-	if trustedIDEGrantMatches(root, scope) {
+	if trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("workspace-side forged grant authorized a trusted launch")
 	}
 }
@@ -239,14 +239,14 @@ func TestDeriveWorkspaceIDIsStableForGrantAndRun(t *testing.T) {
 	}
 }
 
-func TestGrantAndRevokeTrustedIDEPromotesRequest(t *testing.T) {
+func TestGrantAndRevokeTrustedHostAppPromotesRequest(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	workspace := t.TempDir()
 	core := New(profile.Store{Root: root})
-	if err := WriteProjectionIdeMode(root, "default", ProjectionIdeModeTrusted, time.Now()); err != nil {
+	if err := WriteProjectionHostAppMode(root, "default", ProjectionHostAppModeTrusted, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	canonical, identity, err := workspaceattach.CaptureRootIdentity(workspace)
@@ -258,17 +258,17 @@ func TestGrantAndRevokeTrustedIDEPromotesRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := hostcap.GrantScope{Profile: "default", Command: "code", WorkspaceID: wsID, QualifiedAppRef: "builtin.vscode/rev_1/vscode", BindingDigest: "sha256:x"}
-	maybeRecordTrustedIDERequest(root, scope)
+	maybeRecordTrustedHostAppRequest(root, scope)
 
 	result, err := core.GrantHostAppTrust("default", workspace, "code")
 	if err != nil {
-		t.Fatalf("GrantTrustedIDE: %v", err)
+		t.Fatalf("GrantTrustedHostApp: %v", err)
 	}
 	if !result.Granted || result.WorkspaceID != wsID {
 		t.Fatalf("grant result = %+v", result)
 	}
-	if !trustedIDEGrantMatches(root, scope) {
-		t.Fatal("grant not active after GrantTrustedIDE")
+	if !trustedHostAppGrantMatches(root, scope) {
+		t.Fatal("grant not active after GrantTrustedHostApp")
 	}
 	// Idempotent second grant.
 	if r2, err := core.GrantHostAppTrust("default", workspace, "code"); err != nil || r2.Granted {
@@ -278,12 +278,12 @@ func TestGrantAndRevokeTrustedIDEPromotesRequest(t *testing.T) {
 	if err := core.RevokeHostAppTrust("default", workspace, "code"); err != nil {
 		t.Fatal(err)
 	}
-	if trustedIDEGrantMatches(root, scope) {
+	if trustedHostAppGrantMatches(root, scope) {
 		t.Fatal("grant still active after revoke")
 	}
 }
 
-func TestGrantTrustedIDERequiresTrustedModeAndRequest(t *testing.T) {
+func TestGrantTrustedHostAppRequiresTrustedModeAndRequest(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -291,12 +291,12 @@ func TestGrantTrustedIDERequiresTrustedModeAndRequest(t *testing.T) {
 	workspace := t.TempDir()
 	core := New(profile.Store{Root: root})
 
-	// Safe mode → refuse, naming the ide-mode command.
+	// Safe mode → refuse, naming the host-app-mode command.
 	if _, err := core.GrantHostAppTrust("default", workspace, "code"); err == nil || !strings.Contains(err.Error(), "host-app-mode") {
-		t.Fatalf("safe-mode grant err=%v, want ide-mode guidance", err)
+		t.Fatalf("safe-mode grant err=%v, want host-app-mode guidance", err)
 	}
 	// Trusted mode but no request → refuse, naming the run-once path.
-	if err := WriteProjectionIdeMode(root, "default", ProjectionIdeModeTrusted, time.Now()); err != nil {
+	if err := WriteProjectionHostAppMode(root, "default", ProjectionHostAppModeTrusted, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := core.GrantHostAppTrust("default", workspace, "code"); err == nil || !strings.Contains(err.Error(), "no host-app trust request") {

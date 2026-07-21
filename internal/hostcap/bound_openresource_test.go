@@ -27,7 +27,7 @@ func TestOpenBoundResourceDerivesModeOnlyFromImmutableBindingAccess(t *testing.T
 			t.Fatal(err)
 		}
 		if result.Mode != appopen.ModeSafe || len(launcher.ran) != 1 {
-			t.Fatalf("profile IDE mode changed external safe access: result=%+v launches=%v", result, launcher.ran)
+			t.Fatalf("profile host-app mode changed external safe access: result=%+v launches=%v", result, launcher.ran)
 		}
 	})
 
@@ -43,7 +43,7 @@ func TestOpenBoundResourceDerivesModeOnlyFromImmutableBindingAccess(t *testing.T
 			t.Fatal(err)
 		}
 		if result.Mode != appopen.ModeTrusted || len(launcher.ran) != 1 {
-			t.Fatalf("external approval depended on profile IDE mode: result=%+v launches=%v", result, launcher.ran)
+			t.Fatalf("external approval depended on profile host-app mode: result=%+v launches=%v", result, launcher.ran)
 		}
 	})
 }

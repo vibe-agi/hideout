@@ -14,7 +14,7 @@ import (
 
 func TestHostAppDecisionUsesGenericKindAndExactBindingScope(t *testing.T) {
 	core, profileRecord, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(profileRecord.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(profileRecord.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -120,7 +120,7 @@ func TestHostAppDecisionUsesGenericKindAndExactBindingScope(t *testing.T) {
 
 func TestHostAppDecisionTimeoutAndOwnerLossFailClosed(t *testing.T) {
 	core, profileRecord, _, binding := projectionGrantFixture(t)
-	if err := core.SetProjectionIdeMode(profileRecord.Name, ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode(profileRecord.Name, ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(binding)
@@ -166,7 +166,7 @@ func TestHostAppUpdateDisableAndRevokeInvalidateApprovedExactDecisions(t *testin
 	}
 	core := Core{Store: store, HostAppPlatform: hostcap.PlatformDarwin}
 	configureManagerHostAppIdentity(t, &core, root)
-	if err := core.SetProjectionIdeMode("privacy", ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode("privacy", ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	packDir := writeManagerHostAppPack(t, root, "community.decision-lifecycle", "decision-editor")

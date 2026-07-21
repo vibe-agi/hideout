@@ -1,4 +1,4 @@
-# Quickstart / Validation: Trusted Host-IDE Workspace Grant
+# Quickstart / Validation: Trusted Host-App Workspace Grant
 
 <!-- markdownlint-disable MD013 -->
 
@@ -41,7 +41,7 @@ command semantics are in [data-model.md](data-model.md) and
 
 ## Scenario 4 — Drift re-requires a grant (US3 / SC-004)
 
-1. Grant trusted IDE in project A; confirm `code .` opens natively in A.
+1. Grant trusted host app in project A; confirm `code .` opens natively in A.
 2. In a different project B (trusted mode), run `hideout run -- code .`:
    refused — A's grant does not authorize B.
 

@@ -1,16 +1,16 @@
-# Contract: Trusted-IDE Grant Record & Open-Time Check
+# Contract: Trusted-Host-App Grant Record & Open-Time Check
 
 <!-- markdownlint-disable MD013 -->
 
 ## Record
 
-- Path: `profiles/<profile>/ide-trust-grants.json`, guest-unreachable, `0600`,
+- Path: `profiles/<profile>/host-app-trust-grants.json`, guest-unreachable, `0600`,
   atomic write.
 - Manifest shape:
 
 ```json
 {
-  "version": "hideout.trusted-ide-grants/v1",
+  "version": "hideout.trusted-host-app-grants/v1",
   "profile": "<profile>",
   "grants": [
     {
@@ -49,7 +49,7 @@ the binding's resource classes, then delegates to `TrustedGrantActive`.
 
 ## Removed / documented twin
 
-`decisionIdeGrantChecker` (`hostcap_projection.go`) has only test callers and is
+`decisionHostAppGrantChecker` (`hostcap_projection.go`) has only test callers and is
 never wired into the production broker. It is deleted, or, if a test still needs
 it, renamed/commented explicitly as test-only so there is exactly one
 production trusted-grant decision path (FR-011, SC-006).

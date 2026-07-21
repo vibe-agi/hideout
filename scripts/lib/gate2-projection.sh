@@ -508,7 +508,7 @@ JSON
   printf 'projection_workspace_resource=passed\n'
 
   # Stop only the isolated safe-profile process. A trusted launch uses the
-  # operator's normal IDE and is intentionally not killed by the gate.
+  # operator's host app and is intentionally not killed by the gate.
   projection_stop_safe_app
 }
 
@@ -595,7 +595,7 @@ printf "projection_hostfs_ungranted_denied=passed\n"
 
 run_projection_trusted_lifecycle() {
   local profile_name="$1"
-  echo "gate2: running trusted IDE decision lifecycle"
+  echo "gate2: running trusted host-app decision lifecycle"
   HIDEOUT_STORE_ROOT="$store" "$hideout" profile host-app-mode "$profile_name" trusted >/dev/null
   (
     set +e
@@ -641,7 +641,7 @@ printf "%s\n" "$revoked_rc" > trusted-revoked.rc
   local decision_id
   decision_id="$(jq -r '[.[] | select(.state == "pending" or .state == "claimed")] | last | .id // empty' "$tmp/projection-decisions.json")"
   if [ -z "$decision_id" ]; then
-    echo "gate2: trusted IDE decision id missing" >&2
+    echo "gate2: trusted host-app decision id missing" >&2
     return 1
   fi
   local claim_json claim_token

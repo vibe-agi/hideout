@@ -280,7 +280,7 @@ func TestProjectionEscapeAndHappyPath(t *testing.T) {
 		t.Fatalf("happy path should launch: %+v", resp)
 	}
 	// The safe launch must disclose its posture and the trusted upgrade path;
-	// a silent open is indistinguishable from the operator's native IDE.
+	// a silent open is indistinguishable from the operator's native host app.
 	if !strings.Contains(resp.Stderr, "safe host app window") ||
 		!strings.Contains(resp.Stderr, "extensions disabled") ||
 		!strings.Contains(resp.Stderr, "hideout profile host-app-mode") ||

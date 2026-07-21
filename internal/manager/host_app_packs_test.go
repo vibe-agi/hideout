@@ -639,7 +639,7 @@ func TestCompileHostAppCatalogKeepsUnclassifiableEagerBuiltinOptional(t *testing
 		t.Fatal(err)
 	}
 	core := Core{Store: store, HostAppPlatform: hostcap.PlatformDarwin}
-	if err := core.SetProjectionIdeMode("privacy", ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode("privacy", ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	checks := 0

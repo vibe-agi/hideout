@@ -430,7 +430,7 @@ func prepareProjectionSafeDataDir(path string) error {
 }
 
 // compileRunProjectionGrants derives approval work only from immutable binding
-// access. Profile ide-mode compatibility has already been compiled into the
+// access. Profile host-app-mode compatibility has already been compiled into the
 // built-in VS Code binding by CompileHostAppCatalog.
 func compileRunProjectionGrants(runSession RunSession, authority runSessionWorkspaceAuthority, appBindings []hostcap.OpenResourceBinding) (map[string]projectionGrantBinding, []projectionGrantBinding) {
 	byCommand := map[string]projectionGrantBinding{}
@@ -449,7 +449,7 @@ func compileRunProjectionGrants(runSession RunSession, authority runSessionWorks
 }
 
 // ensureRunProjectionDecision creates the generic run-scoped approval used by
-// ask-each-run bindings. It intentionally does not consult profile ide-mode;
+// ask-each-run bindings. It intentionally does not consult profile host-app-mode;
 // that setting is only a compatibility input to the built-in catalog binding.
 func (c Core) ensureRunProjectionDecision(binding projectionGrantBinding) (decision.Decision, error) {
 	store, err := c.decisionStore()
@@ -480,13 +480,13 @@ func (c Core) ensureRunProjectionDecision(binding projectionGrantBinding) (decis
 		Risk:  map[string]any{"riskClass": "high", "workspaceWritable": workspaceWritable},
 		ProposedAction: map[string]any{
 			"capability": hostcap.CapabilityAppOpenResource,
-			"mode":       ProjectionIdeModeTrusted,
+			"mode":       ProjectionHostAppModeTrusted,
 			"binding":    binding.data(),
 		},
 		Preview: decision.Preview{
 			Summary: "Allow this exact host-app binding to open its declared resource classes for this run",
 			Facts: map[string]any{
-				"mode":            ProjectionIdeModeTrusted,
+				"mode":            ProjectionHostAppModeTrusted,
 				"workspaceId":     binding.WorkspaceID,
 				"environmentId":   binding.EnvironmentID,
 				"subject":         binding.Subject,
@@ -521,18 +521,18 @@ func (g runProjectionGrantChecker) TrustedGrantActive(scope hostcap.GrantScope) 
 	if !ok || g.storeRoot == "" || scope != binding.scope() {
 		return false
 	}
-	// A durable trusted-IDE workspace grant (operator profile policy) authorizes
+	// A durable trusted-host-app workspace grant (operator profile policy) authorizes
 	// the open without a per-run decision — this is what makes one-shot `code .`
-	// usable in trusted mode. It requires trusted ide-mode and an exact match on
+	// usable in trusted mode. It requires trusted host-app-mode and an exact match on
 	// the Core-derived workspace + binding identity; safe mode and any drift fail
 	// closed here and fall through to the per-run decision path below.
-	if trustedIDEGrantMatches(g.storeRoot, scope) {
+	if trustedHostAppGrantMatches(g.storeRoot, scope) {
 		return true
 	}
 	// No persistent grant. In trusted mode, record a request so `allow
-	// ide-trust` can promote the exact run-observed identity (best-effort hint,
+	// host-app` can promote the exact run-observed identity (best-effort hint,
 	// never authority), then fall through to the per-run decision path.
-	maybeRecordTrustedIDERequest(g.storeRoot, scope)
+	maybeRecordTrustedHostAppRequest(g.storeRoot, scope)
 	d, err := decision.NewStore(g.storeRoot).RawDecision(binding.decisionID())
 	return err == nil && d.State == decision.StateApproved && projectionGrantMatches(d, binding)
 }

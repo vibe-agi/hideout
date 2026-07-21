@@ -1,4 +1,4 @@
-# Contract: IDE Mode & `trusted-host-ide` Grant
+# Contract: Host-App Mode & `trusted-host-app` Grant
 
 <!-- markdownlint-disable MD013 MD060 -->
 
@@ -8,7 +8,7 @@
 - `DecisionPolicy = default-allow-audited`: opens without a per-invocation prompt; every open is audited (`ide.open`, mode `safe`).
 - Behavioral guarantee (test): a workspace `.vscode/tasks.json` with `runOn: folderOpen` that would write a host marker does NOT write it in safe mode.
 
-## `trusted-host-ide` mode
+## `trusted-host-app` mode
 
 - Uses the operator's normal VS Code configuration.
 - `DecisionPolicy = operator-grant`: requires an explicit grant obtained through the existing operator decision center. Without a live grant → `projection.mode.trusted-denied`, with no host launch and no silent safe-mode substitution.
@@ -19,15 +19,15 @@
 ## Grant flow (reuses decision center)
 
 ```text
-operator: request trusted-host-ide for profile P
-  -> decision center creates a grant decision (kind: host-app.trusted-ide)
-  -> operator approves -> IdeMode(P) = trusted-host-ide, GrantRef set
-  -> code .  -> opens with operator config, ide.open audit mode=trusted-host-ide
+operator: request trusted-host-app for profile P
+  -> decision center creates a grant decision (kind: host-app.trusted-host-app)
+  -> operator approves -> HostAppMode(P) = trusted-host-app, GrantRef set
+  -> code .  -> opens with operator config, ide.open audit mode=trusted-host-app
 operator: revoke
-  -> GrantRef invalidated; requested IdeMode(P) remains trusted-host-ide
+  -> GrantRef invalidated; requested HostAppMode(P) remains trusted-host-app
   -> next code .  -> denied
 operator: select safe
-  -> IdeMode(P) = safe
+  -> HostAppMode(P) = safe
   -> next code .  -> safe mode
 ```
 

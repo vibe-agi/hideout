@@ -1073,11 +1073,11 @@ func TestCoreStartRunDataPlaneOwnsBrokerShimsHostFSAndSessionStartAudit(t *testi
 	}
 	wantSafeDataDir := filepath.Join(runSession.ProfileDir, "host-app", "state")
 	if dataPlane.Broker.HostApp == nil || dataPlane.Broker.HostApp.SafeUserDataDir != wantSafeDataDir || strings.HasPrefix(wantSafeDataDir, runSession.Layout.Dir+string(filepath.Separator)) {
-		t.Fatalf("safe IDE state must be profile-owned, not orphaned session state: hostApp=%+v", dataPlane.Broker.HostApp)
+		t.Fatalf("safe host-app state must be profile-owned, not orphaned session state: hostApp=%+v", dataPlane.Broker.HostApp)
 	}
 	info, err := os.Stat(wantSafeDataDir)
 	if err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("safe IDE state info=%v err=%v, want mode 0700", info, err)
+		t.Fatalf("safe host-app state info=%v err=%v, want mode 0700", info, err)
 	}
 	binding, ok := dataPlane.Broker.HostApp.Bindings.ResolveCommand("code")
 	if !ok {

@@ -1,17 +1,17 @@
-# Feature Specification: Trusted Host-IDE Workspace Grant
+# Feature Specification: Trusted Host-App Workspace Grant
 
 <!-- markdownlint-disable MD013 -->
 
-**Feature Branch**: `039-trusted-ide-grant`
+**Feature Branch**: `039-trusted-host-app-grant`
 
 **Created**: 2026-07-20
 
 **Status**: Draft
 
-**Input**: User description: "Make trusted-host-ide usable for one-shot commands
+**Input**: User description: "Make trusted-host-app usable for one-shot commands
 like `code .` by persisting an operator-granted trust as profile+workspace
 policy, replacing the per-live-run decision that deadlocks." (During
-implementation the operator surface was generalized from `ide`/`ide-mode` to the
+implementation the operator surface was generalized from `ide`/`host-app-mode` to the
 domain-neutral `host-app`; see research.md D9.)
 
 ## Context
@@ -24,15 +24,15 @@ per-live-run decision, `code .` triggers the open and exits before an operator
 can approve it, the decision goes stale, and the operator has no window to act.
 
 A throwaway spike on real Lima (2026-07-20) proved the fix: authorize trusted
-IDE as durable operator policy scoped to a profile and workspace — the same
+host app as durable operator policy scoped to a profile and workspace — the same
 shape as a HostFS profile grant — so a later one-shot `code .` reuses it with no
 per-run approval. Safe mode is unchanged and remains the default.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Grant trusted IDE once, open natively thereafter (Priority: P1)
+### User Story 1 - Grant trusted host app once, open natively thereafter (Priority: P1)
 
-An operator who wants their real editor for a project grants trusted IDE for
+An operator who wants their real editor for a project grants trusted host app for
 that workspace once. From then on, `hideout run -- code .` opens the project in
 the full native editor without any per-run prompt or approval, including from a
 fresh one-shot run.
@@ -49,7 +49,7 @@ prompt.
 
 **Acceptance Scenarios**:
 
-1. **Given** trusted mode is selected and the operator has granted trusted IDE
+1. **Given** trusted mode is selected and the operator has granted trusted host app
    for the current workspace, **When** a one-shot `hideout run -- code .` runs,
    **Then** the full native editor opens and the command exits successfully with
    no approval step.
@@ -63,7 +63,7 @@ prompt.
 
 An operator who has selected trusted mode but has not granted the current
 workspace runs `code .`. The command refuses (no host effect) and tells the
-operator exactly how to grant trusted IDE for this workspace.
+operator exactly how to grant trusted host app for this workspace.
 
 **Why this priority**: Fail-closed is the security contract, and a dead-end
 refusal (the current stale-decision behavior) is the usability bug this feature
@@ -87,7 +87,7 @@ grant command.
 
 ### User Story 3 - Revoke and drift return to a safe, re-confirmed state (Priority: P2)
 
-An operator can revoke trusted IDE, and the system automatically re-requires a
+An operator can revoke trusted host app, and the system automatically re-requires a
 grant when the workspace identity or the host application identity changes, so a
 standing grant never silently authorizes a different project or a changed editor.
 
@@ -96,7 +96,7 @@ revocable, and self-invalidating on drift, or it becomes an invisible
 forever-flag. This is required for the feature to be safe to ship, but the core
 grant/reuse loop (US1/US2) can be demonstrated before it.
 
-**Independent Test**: Grant trusted IDE, confirm `code .` opens natively; revoke
+**Independent Test**: Grant trusted host app, confirm `code .` opens natively; revoke
 (or switch the profile to safe mode); confirm `code .` returns to safe/guided
 behavior. Separately, change the workspace and confirm the prior grant does not
 apply.
@@ -152,7 +152,7 @@ apply.
   VS Code binding is the first consumer; nothing in the grant semantics hard-
   codes a specific editor.
 - **Evidence surface**: Granting, reuse, refusal, and revocation are auditable.
-  The grant's existence is visible through the profile IDE-mode surface. The
+  The grant's existence is visible through the profile host app-mode surface. The
   broker already discloses safe-vs-trusted posture on launch.
 - **Secret/redaction boundary**: The grant record and any audit of it contain
   only Core-derived identifiers (workspace identity, app binding reference/
@@ -166,7 +166,7 @@ apply.
 
 ### Functional Requirements
 
-- **FR-001**: An operator MUST be able to grant trusted IDE for a workspace with
+- **FR-001**: An operator MUST be able to grant trusted host app for a workspace with
   an explicit command, and the grant MUST persist across runs until revoked or
   invalidated by drift.
 - **FR-002**: In trusted mode with a matching grant for the current workspace
@@ -174,7 +174,7 @@ apply.
   full native editor with no per-run approval step.
 - **FR-003**: In trusted mode with no matching grant, a projected open MUST fail
   closed with no host launch and MUST name the exact command to grant trusted
-  IDE for the current workspace. It MUST NOT leave only a stale, unactionable
+  host app for the current workspace. It MUST NOT leave only a stale, unactionable
   decision.
 - **FR-004**: A trusted host-app grant MUST be keyed by the Core-derived workspace
   identity and the host-app binding identity (including its digest), so a grant
@@ -188,7 +188,7 @@ apply.
 - **FR-007**: A change in the granted workspace identity or host-app binding
   identity MUST cause the grant to no longer match, re-requiring a grant.
 - **FR-008**: The existence of a trusted host-app grant MUST be visible to the
-  operator (e.g. through the profile IDE-mode inspection surface) and the grant,
+  operator (e.g. through the profile host app-mode inspection surface) and the grant,
   reuse, refusal, and revocation MUST be auditable.
 - **FR-009**: Safe mode MUST remain the default and MUST be unaffected by the
   presence or absence of any trusted host-app grant.
@@ -201,7 +201,7 @@ apply.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Trusted-IDE workspace grant**: durable operator policy authorizing trusted
+- **Trusted-Host-App workspace grant**: durable operator policy authorizing trusted
   (native) host-app open for one profile + workspace + app binding. Attributes:
   Core-derived workspace identity, host-app binding reference and digest,
   profile. No host path or secret. Lifecycle: created by explicit operator

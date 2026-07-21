@@ -251,7 +251,7 @@ func TestHostAppInspectionReportsConflictGrantOutcomeAndExactRecovery(t *testing
 		BindingDigest:   firstPlan.ExpectedPermissionFingerprint, Commands: []string{"shared-inspect"},
 		ResourceKinds: []hostcap.ResourceKind{hostcap.KindWorkspace},
 	}, "shared-inspect")
-	if err := core.SetProjectionIdeMode("privacy", ProjectionIdeModeTrusted); err != nil {
+	if err := core.SetProjectionHostAppMode("privacy", ProjectionHostAppModeTrusted); err != nil {
 		t.Fatal(err)
 	}
 	d, err := core.ensureProjectionTrustedDecision(grantBinding)

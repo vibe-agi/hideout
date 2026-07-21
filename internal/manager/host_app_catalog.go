@@ -233,7 +233,7 @@ func (c Core) hostAppCatalogSources(profileName string) ([]hostAppCatalogSource,
 	}
 	builtinRevision := builtinHostAppRevision()
 	access := hostapppack.AccessSafe
-	if ReadProjectionIdeMode(c.Store.Root, profileName) == ProjectionIdeModeTrusted {
+	if ReadProjectionHostAppMode(c.Store.Root, profileName) == ProjectionHostAppModeTrusted {
 		access = hostapppack.AccessAskEachRun
 	}
 	builtinEnablement, err := builtinHostAppEnablement(profileName, builtinManifest, builtinRevision, access)

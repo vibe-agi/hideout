@@ -388,7 +388,7 @@ audit, evidence, and recovery behavior.
   commands.
 - **FR-019**: Direct-network output MUST NOT imply privacy, mediation,
   anonymity, or hidden network origin.
-- **FR-020**: Setup MUST NOT grant HostFS, trusted IDE, endpoint, adapter-pack,
+- **FR-020**: Setup MUST NOT grant HostFS, trusted host-app, endpoint, adapter-pack,
   community host-app, guest-root, or later decision authority.
 - **FR-021**: Canonical READMEs, first-run documentation, CLI help, package
   caveats, and the published package-manager formula MUST present setup as the

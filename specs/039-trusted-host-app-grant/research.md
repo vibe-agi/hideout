@@ -1,4 +1,4 @@
-# Research: Trusted Host-IDE Workspace Grant
+# Research: Trusted Host-App Workspace Grant
 
 <!-- markdownlint-disable MD013 -->
 
@@ -14,7 +14,7 @@ grant, not a per-run capability token.
 
 **Rationale**: The decision mechanism (`hostfs/readgrant`, overlay write, the
 current trusted decision) is built for *guest-initiated, operator-after-the-fact*
-approval; `readgrant.Manifest.Validate` even binds `sessionID`. Trusted IDE is
+approval; `readgrant.Manifest.Validate` even binds `sessionID`. Trusted Host App is
 the *operator's own up-front intent*, so a decision that dies with the run is a
 category error and the cause of the deadlock. Durable profile policy read each
 run is exactly how HostFS profile grants already work, and does not violate
@@ -26,21 +26,21 @@ across runs — rejected: complicates the decision lifecycle and strains the
 per-run-authority principle. (C) document safe-only, never fix trusted —
 rejected: leaves the headline `code .` native path permanently dead.
 
-## D2 — Landing site is `runProjectionGrantChecker`, not `decisionIdeGrantChecker`
+## D2 — Landing site is `runProjectionGrantChecker`, not `decisionHostAppGrantChecker`
 
 **Decision**: Add the persistent-grant check inside
 `runProjectionGrantChecker.TrustedGrantActive` (`run_dataplane.go:517`), before
 the existing per-run decision lookup. Delete or explicitly document the
-`decisionIdeGrantChecker` twin (`hostcap_projection.go:335`).
+`decisionHostAppGrantChecker` twin (`hostcap_projection.go:335`).
 
 **Rationale**: `StartRunDataPlane` wires only `runProjectionGrantChecker` into
 the broker (`run_dataplane.go:178` → `HostApp: hostAppProjection`).
-`decisionIdeGrantChecker` has only test callers — the production path never runs
+`decisionHostAppGrantChecker` has only test callers — the production path never runs
 it. The spike edited exactly this function and the real `code .` behavior
 changed, confirming the site. Editing the twin would change nothing real
 (FR-011).
 
-**Alternatives considered**: editing `decisionIdeGrantChecker` (the earlier
+**Alternatives considered**: editing `decisionHostAppGrantChecker` (the earlier
 draft's implication) — rejected as dead code by probe.
 
 ## D3 — Grant key fields are all Core-derived and available at the check point
@@ -62,7 +62,7 @@ derives `workspaceID` itself (the deterministic path, proven equal to a run's by
 T008a), but takes `qualifiedAppRef` and `bindingDigest` from a run-written
 request rather than computing them independently. Flow: a trusted-mode run with
 no grant fails closed AND records a request (workspaceID + qualifiedAppRef +
-bindingDigest, all run-accurate) under `profiles/<p>/ide-trust-request.json`;
+bindingDigest, all run-accurate) under `profiles/<p>/host-app-trust-request.json`;
 `allow host-app code` derives the current workspaceID, reads the request, verifies
 `request.workspaceID == derived workspaceID` (so it can only promote a request
 for the project the operator is standing in), and writes the grant using the
@@ -142,25 +142,23 @@ this makes it a repeatable, asserted lane.
 
 ## D9 — Operator surface generalized from `ide` to `host-app`
 
-**Decision**: The draft named the commands `hideout allow ide-trust` /
-`profile ide-mode <p> trusted-host-ide`. On operator review this was rejected as
-too concrete ("who is the IDE?") for a Core capability that is deliberately
+**Decision**: The draft named the commands `hideout allow host-app` /
+`profile host-app-mode <p> trusted-host-app`. On operator review this was rejected as
+too concrete ("who is the host app?") for a Core capability that is deliberately
 application-agnostic (`host.app.open-resource`). The shipped surface is fully
 generic: the operator types `hideout allow host-app <command>` or
 `hideout deny host-app <command>`, sets the mode with
 `hideout profile host-app-mode`, and the launch/audit mode value is
-`trusted-host-app` (was `trusted-host-ide`). Core carries no domain word like
-"ide". Internal Go types,
-the grant store file (`ide-trust-grants.json`), the request file
-(`ide-trust-request.json`), and this spec directory keep the historical
-`TrustedIDE*` / `trusted-ide` spelling; that user-invisible split is tracked in
-`docs/DEBT.md`.
+`trusted-host-app`. Core carries no domain word like "ide": the internal Go
+types, the grant store file (`host-app-trust-grants.json`), the request file
+(`host-app-trust-request.json`), the schema, and this spec directory all use the
+generic `TrustedHostAppGrant*` / `trusted-host-app` spelling.
 
 **Rationale**: There is no compatibility burden (no external users yet), so the
 rename was free, and the generic surface matches the projection's actual design
 (a terminal editor, a browser, adb, etc. could all be host apps). The
 appopen package's own doc already promised "no editor- or vendor-specific
-vocabulary", which the old `trusted-host-ide` value contradicted.
+vocabulary", which the old `trusted-host-app` value contradicted.
 
 ## D10 — Batch adversarial review (constitution 1.3.0)
 
@@ -170,19 +168,19 @@ outcomes:
 
 - *Guest forges/reads a grant by writing `/workspace`* → refuted: the grant and
   request live under `storeRoot/profiles/<p>/`, never the workspace
-  (`TestTrustedIDEGrantGuestWorkspaceWriteCannotForge`).
+  (`TestTrustedHostAppGrantGuestWorkspaceWriteCannotForge`).
 - *A different workspace or drifted binding reuses a grant* → refuted: match
   requires exact `(workspaceId, qualifiedAppRef, bindingDigest)` equality and
-  trusted mode (`TestTrustedIDEGrantMatchRequiresTrustedModeAndExactKeys`,
+  trusted mode (`TestTrustedHostAppGrantMatchRequiresTrustedModeAndExactKeys`,
   T017 drift cases); real-Lima confirmed `--workspace X` and `cd X && allow`
   derive the same workspaceID (grant reused, exit 0).
 - *Trusted mode with no grant silently opens or falls back to safe* → refuted:
   fail-closed refusal, no host launch, exit 126, names `hideout allow host-app
   code` (real-Lima + `hostapp_test.go`).
 - *Two production grant checkers* → refuted: `runProjectionGrantChecker` is the
-  sole production wiring (`run_dataplane.go:178`); `decisionIdeGrantChecker` has
+  sole production wiring (`run_dataplane.go:178`); `decisionHostAppGrantChecker` has
   only test callers and is documented TEST-ONLY (FR-011).
-- *A stale `trusted-host-ide` literal still drives behavior* → refuted: zero
+- *A stale `trusted-host-app` literal still drives behavior* → refuted: zero
   occurrences remain in code/scripts/schema; the audit value is
   `trusted-host-app`, asserted in the gate.
 

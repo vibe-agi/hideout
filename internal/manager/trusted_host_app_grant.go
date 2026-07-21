@@ -17,7 +17,7 @@ import (
 
 // deriveWorkspaceIDFromRoot computes the stable workspace identity from an
 // already-captured root, using the exact key + derivation a run uses. Sharing
-// this one function between run attachment and the trusted-IDE grant command
+// this one function between run attachment and the trusted-host-app grant command
 // guarantees, by construction, that the grant keys on the same workspaceID a
 // run will present (analyze U1 / research D4). Root capture stays at each call
 // site so run keeps its mount-safety ordering unchanged.
@@ -33,79 +33,79 @@ func (c Core) deriveWorkspaceIDFromRoot(canonicalRoot string, rootIdentity works
 	return workspaceattach.DeriveWorkspaceID(key, canonicalRoot, rootIdentity)
 }
 
-// TrustedIDEGrantsVersion is the schema version of the per-profile trusted-IDE
+// TrustedHostAppGrantsVersion is the schema version of the per-profile trusted-host-app
 // grant manifest.
-const TrustedIDEGrantsVersion = "hideout.trusted-ide-grants/v1"
+const TrustedHostAppGrantsVersion = "hideout.trusted-host-app-grants/v1"
 
-// TrustedIDEGrant is durable operator policy authorizing a trusted (native)
+// TrustedHostAppGrant is durable operator policy authorizing a trusted (native)
 // host-app open for one workspace + app binding. It carries only Core-derived
 // identifiers: no host path, username, token, machine id, or raw argv.
-type TrustedIDEGrant struct {
+type TrustedHostAppGrant struct {
 	WorkspaceID     string    `json:"workspaceId"`
 	QualifiedAppRef string    `json:"qualifiedAppRef"`
 	BindingDigest   string    `json:"bindingDigest"`
 	GrantedAt       time.Time `json:"grantedAt"`
 }
 
-// trustedIDEGrantManifest is the per-profile grant file. It lives under the
-// reserved, guest-unreachable store beside ide-mode.json, keyed by profile, so
+// trustedHostAppGrantManifest is the per-profile grant file. It lives under the
+// reserved, guest-unreachable store beside host-app-mode.json, keyed by profile, so
 // a guest writing the workspace can never mint, refresh, or read a grant.
-type trustedIDEGrantManifest struct {
-	Version string            `json:"version"`
-	Profile string            `json:"profile"`
-	Grants  []TrustedIDEGrant `json:"grants"`
+type trustedHostAppGrantManifest struct {
+	Version string                `json:"version"`
+	Profile string                `json:"profile"`
+	Grants  []TrustedHostAppGrant `json:"grants"`
 }
 
-func trustedIDEGrantsPath(storeRoot, profileName string) string {
-	return filepath.Join(storeRoot, "profiles", profileName, "ide-trust-grants.json")
+func trustedHostAppGrantsPath(storeRoot, profileName string) string {
+	return filepath.Join(storeRoot, "profiles", profileName, "host-app-trust-grants.json")
 }
 
-func validTrustedIDEGrant(g TrustedIDEGrant) bool {
+func validTrustedHostAppGrant(g TrustedHostAppGrant) bool {
 	return g.WorkspaceID != "" && g.QualifiedAppRef != "" && g.BindingDigest != ""
 }
 
-// readTrustedIDEGrants returns the profile's grant manifest, or an empty
+// readTrustedHostAppGrants returns the profile's grant manifest, or an empty
 // (no-grants) manifest when the file is absent, unreadable, malformed, or
 // contains any invalid entry. It fails closed to no grants and never to an
 // implicit allow.
-func readTrustedIDEGrants(storeRoot, profileName string) trustedIDEGrantManifest {
-	empty := trustedIDEGrantManifest{Version: TrustedIDEGrantsVersion, Profile: profileName}
-	raw, err := os.ReadFile(trustedIDEGrantsPath(storeRoot, profileName))
+func readTrustedHostAppGrants(storeRoot, profileName string) trustedHostAppGrantManifest {
+	empty := trustedHostAppGrantManifest{Version: TrustedHostAppGrantsVersion, Profile: profileName}
+	raw, err := os.ReadFile(trustedHostAppGrantsPath(storeRoot, profileName))
 	if err != nil {
 		return empty
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	var manifest trustedIDEGrantManifest
+	var manifest trustedHostAppGrantManifest
 	if err := decoder.Decode(&manifest); err != nil {
 		return empty
 	}
 	if err := decoder.Decode(&struct{}{}); err == nil {
 		return empty // trailing JSON: malformed
 	}
-	if manifest.Version != TrustedIDEGrantsVersion || manifest.Profile != profileName {
+	if manifest.Version != TrustedHostAppGrantsVersion || manifest.Profile != profileName {
 		return empty
 	}
 	for _, g := range manifest.Grants {
-		if !validTrustedIDEGrant(g) {
+		if !validTrustedHostAppGrant(g) {
 			return empty
 		}
 	}
 	return manifest
 }
 
-// trustedIDEGrantMatches reports whether a persistent grant authorizes this
-// scope. It requires trusted IDE mode AND an exact match on the Core-derived
+// trustedHostAppGrantMatches reports whether a persistent grant authorizes this
+// scope. It requires trusted host-app mode AND an exact match on the Core-derived
 // workspace identity, app reference, and binding digest. Any inequality, safe
 // mode, or missing/malformed manifest yields false (fail closed).
-func trustedIDEGrantMatches(storeRoot string, scope hostcap.GrantScope) bool {
+func trustedHostAppGrantMatches(storeRoot string, scope hostcap.GrantScope) bool {
 	if scope.WorkspaceID == "" || scope.QualifiedAppRef == "" || scope.BindingDigest == "" {
 		return false
 	}
-	if ReadProjectionIdeMode(storeRoot, scope.Profile) != ProjectionIdeModeTrusted {
+	if ReadProjectionHostAppMode(storeRoot, scope.Profile) != ProjectionHostAppModeTrusted {
 		return false
 	}
-	for _, g := range readTrustedIDEGrants(storeRoot, scope.Profile).Grants {
+	for _, g := range readTrustedHostAppGrants(storeRoot, scope.Profile).Grants {
 		if g.WorkspaceID == scope.WorkspaceID &&
 			g.QualifiedAppRef == scope.QualifiedAppRef &&
 			g.BindingDigest == scope.BindingDigest {
@@ -115,14 +115,14 @@ func trustedIDEGrantMatches(storeRoot string, scope hostcap.GrantScope) bool {
 	return false
 }
 
-func writeTrustedIDEGrants(storeRoot string, manifest trustedIDEGrantManifest) error {
+func writeTrustedHostAppGrants(storeRoot string, manifest trustedHostAppGrantManifest) error {
 	if manifest.Profile == "" {
-		return errors.New("trusted-ide grant manifest requires a profile")
+		return errors.New("trusted-host-app grant manifest requires a profile")
 	}
-	manifest.Version = TrustedIDEGrantsVersion
+	manifest.Version = TrustedHostAppGrantsVersion
 	for _, g := range manifest.Grants {
-		if !validTrustedIDEGrant(g) {
-			return fmt.Errorf("invalid trusted-ide grant for workspace %q", g.WorkspaceID)
+		if !validTrustedHostAppGrant(g) {
+			return fmt.Errorf("invalid trusted-host-app grant for workspace %q", g.WorkspaceID)
 		}
 	}
 	dir := filepath.Join(storeRoot, "profiles", manifest.Profile)
@@ -134,8 +134,8 @@ func writeTrustedIDEGrants(storeRoot string, manifest trustedIDEGrantManifest) e
 		return err
 	}
 	data = append(data, '\n')
-	path := trustedIDEGrantsPath(storeRoot, manifest.Profile)
-	tmp, err := os.CreateTemp(dir, ".ide-trust-grants.json.tmp-*")
+	path := trustedHostAppGrantsPath(storeRoot, manifest.Profile)
+	tmp, err := os.CreateTemp(dir, ".host-app-trust-grants.json.tmp-*")
 	if err != nil {
 		return err
 	}
@@ -164,13 +164,13 @@ func writeTrustedIDEGrants(storeRoot string, manifest trustedIDEGrantManifest) e
 	return nil
 }
 
-// addTrustedIDEGrant records a grant for the profile. It is idempotent: an
+// addTrustedHostAppGrant records a grant for the profile. It is idempotent: an
 // identical (workspace, app ref, digest) grant is a no-op success.
-func addTrustedIDEGrant(storeRoot, profileName string, grant TrustedIDEGrant, now time.Time) error {
-	if !validTrustedIDEGrant(grant) {
-		return errors.New("trusted-ide grant requires workspace, app ref, and binding digest")
+func addTrustedHostAppGrant(storeRoot, profileName string, grant TrustedHostAppGrant, now time.Time) error {
+	if !validTrustedHostAppGrant(grant) {
+		return errors.New("trusted-host-app grant requires workspace, app ref, and binding digest")
 	}
-	manifest := readTrustedIDEGrants(storeRoot, profileName)
+	manifest := readTrustedHostAppGrants(storeRoot, profileName)
 	manifest.Profile = profileName
 	for _, existing := range manifest.Grants {
 		if existing.WorkspaceID == grant.WorkspaceID &&
@@ -181,14 +181,14 @@ func addTrustedIDEGrant(storeRoot, profileName string, grant TrustedIDEGrant, no
 	}
 	grant.GrantedAt = now.UTC()
 	manifest.Grants = append(manifest.Grants, grant)
-	return writeTrustedIDEGrants(storeRoot, manifest)
+	return writeTrustedHostAppGrants(storeRoot, manifest)
 }
 
-// removeTrustedIDEGrantsForWorkspace drops every grant for one workspace under
+// removeTrustedHostAppGrantsForWorkspace drops every grant for one workspace under
 // the profile. Removing an absent grant is a no-op success.
-func removeTrustedIDEGrantsForWorkspace(storeRoot, profileName, workspaceID string) error {
-	manifest := readTrustedIDEGrants(storeRoot, profileName)
-	kept := make([]TrustedIDEGrant, 0, len(manifest.Grants))
+func removeTrustedHostAppGrantsForWorkspace(storeRoot, profileName, workspaceID string) error {
+	manifest := readTrustedHostAppGrants(storeRoot, profileName)
+	kept := make([]TrustedHostAppGrant, 0, len(manifest.Grants))
 	changed := false
 	for _, g := range manifest.Grants {
 		if g.WorkspaceID == workspaceID {
@@ -202,23 +202,23 @@ func removeTrustedIDEGrantsForWorkspace(storeRoot, profileName, workspaceID stri
 	}
 	manifest.Profile = profileName
 	manifest.Grants = kept
-	return writeTrustedIDEGrants(storeRoot, manifest)
+	return writeTrustedHostAppGrants(storeRoot, manifest)
 }
 
-// removeAllTrustedIDEGrants drops every trusted-IDE grant for the profile, used
+// removeAllTrustedHostAppGrants drops every trusted-host-app grant for the profile, used
 // when the profile switches to safe mode.
-func removeAllTrustedIDEGrants(storeRoot, profileName string) error {
-	err := os.Remove(trustedIDEGrantsPath(storeRoot, profileName))
+func removeAllTrustedHostAppGrants(storeRoot, profileName string) error {
+	err := os.Remove(trustedHostAppGrantsPath(storeRoot, profileName))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	return err
 }
 
-// hasTrustedIDEGrants reports whether the profile has any host-app trust grant,
+// hasTrustedHostAppGrants reports whether the profile has any host-app trust grant,
 // for visibility surfaces (e.g. profile host-app-mode output).
-func hasTrustedIDEGrants(storeRoot, profileName string) bool {
-	return len(readTrustedIDEGrants(storeRoot, profileName).Grants) > 0
+func hasTrustedHostAppGrants(storeRoot, profileName string) bool {
+	return len(readTrustedHostAppGrants(storeRoot, profileName).Grants) > 0
 }
 
 // HasHostAppTrustGrants reports whether the profile has any host-app trust
@@ -228,15 +228,15 @@ func (c Core) HasHostAppTrustGrants(profileName string) bool {
 	if err != nil {
 		return false
 	}
-	return hasTrustedIDEGrants(c.Store.Root, name)
+	return hasTrustedHostAppGrants(c.Store.Root, name)
 }
 
-// trustedIDERequest is a run-written hint recording the exact Core-derived
+// trustedHostAppRequest is a run-written hint recording the exact Core-derived
 // identity a trusted-mode open needed but lacked a grant for. It is NOT
-// authority: it exists only so `allow ide-trust` can promote the run-observed
+// authority: it exists only so `allow host-app` can promote the run-observed
 // app ref + binding digest (the digest depends on run-time editor observation,
 // so it cannot be recomputed reliably by the command).
-type trustedIDERequest struct {
+type trustedHostAppRequest struct {
 	Version         string    `json:"version"`
 	Profile         string    `json:"profile"`
 	Command         string    `json:"command"`
@@ -246,17 +246,17 @@ type trustedIDERequest struct {
 	RecordedAt      time.Time `json:"recordedAt"`
 }
 
-func trustedIDERequestPath(storeRoot, profileName string) string {
-	return filepath.Join(storeRoot, "profiles", profileName, "ide-trust-request.json")
+func trustedHostAppRequestPath(storeRoot, profileName string) string {
+	return filepath.Join(storeRoot, "profiles", profileName, "host-app-trust-request.json")
 }
 
-// maybeRecordTrustedIDERequest records a request when a trusted-mode open finds
+// maybeRecordTrustedHostAppRequest records a request when a trusted-mode open finds
 // no grant. Best-effort: a failure to write a hint must never affect the run.
-func maybeRecordTrustedIDERequest(storeRoot string, scope hostcap.GrantScope) {
+func maybeRecordTrustedHostAppRequest(storeRoot string, scope hostcap.GrantScope) {
 	if scope.Profile == "" || scope.WorkspaceID == "" || scope.QualifiedAppRef == "" || scope.BindingDigest == "" {
 		return
 	}
-	if ReadProjectionIdeMode(storeRoot, scope.Profile) != ProjectionIdeModeTrusted {
+	if ReadProjectionHostAppMode(storeRoot, scope.Profile) != ProjectionHostAppModeTrusted {
 		return
 	}
 	dir := filepath.Join(storeRoot, "profiles", scope.Profile)
@@ -266,28 +266,28 @@ func maybeRecordTrustedIDERequest(storeRoot string, scope hostcap.GrantScope) {
 	if scope.Command == "" {
 		return
 	}
-	data, err := json.MarshalIndent(trustedIDERequest{
-		Version: TrustedIDEGrantsVersion, Profile: scope.Profile, Command: scope.Command,
+	data, err := json.MarshalIndent(trustedHostAppRequest{
+		Version: TrustedHostAppGrantsVersion, Profile: scope.Profile, Command: scope.Command,
 		WorkspaceID: scope.WorkspaceID, QualifiedAppRef: scope.QualifiedAppRef,
 		BindingDigest: scope.BindingDigest, RecordedAt: time.Now().UTC(),
 	}, "", "  ")
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(trustedIDERequestPath(storeRoot, scope.Profile), append(data, '\n'), 0o600)
+	_ = os.WriteFile(trustedHostAppRequestPath(storeRoot, scope.Profile), append(data, '\n'), 0o600)
 }
 
-func readTrustedIDERequest(storeRoot, profileName string) (trustedIDERequest, bool) {
-	raw, err := os.ReadFile(trustedIDERequestPath(storeRoot, profileName))
+func readTrustedHostAppRequest(storeRoot, profileName string) (trustedHostAppRequest, bool) {
+	raw, err := os.ReadFile(trustedHostAppRequestPath(storeRoot, profileName))
 	if err != nil {
-		return trustedIDERequest{}, false
+		return trustedHostAppRequest{}, false
 	}
-	var req trustedIDERequest
+	var req trustedHostAppRequest
 	if json.Unmarshal(raw, &req) != nil {
-		return trustedIDERequest{}, false
+		return trustedHostAppRequest{}, false
 	}
 	if req.Command == "" || req.WorkspaceID == "" || req.QualifiedAppRef == "" || req.BindingDigest == "" {
-		return trustedIDERequest{}, false
+		return trustedHostAppRequest{}, false
 	}
 	return req, true
 }
@@ -314,21 +314,21 @@ func (c Core) GrantHostAppTrust(profileName, workspacePath, command string) (Hos
 	if strings.TrimSpace(command) == "" {
 		return HostAppTrustResult{}, errors.New("host-app trust requires a command")
 	}
-	if ReadProjectionIdeMode(c.Store.Root, profileName) != ProjectionIdeModeTrusted {
+	if ReadProjectionHostAppMode(c.Store.Root, profileName) != ProjectionHostAppModeTrusted {
 		return HostAppTrustResult{}, fmt.Errorf("profile %q is not in trusted host-app mode; run: hideout profile host-app-mode %s trusted", profileName, profileName)
 	}
 	workspaceID, err := c.deriveWorkspaceIDForCommand(workspacePath)
 	if err != nil {
 		return HostAppTrustResult{}, err
 	}
-	req, ok := readTrustedIDERequest(c.Store.Root, profileName)
+	req, ok := readTrustedHostAppRequest(c.Store.Root, profileName)
 	if !ok || req.WorkspaceID != workspaceID || req.Command != command {
 		return HostAppTrustResult{}, fmt.Errorf("no host-app trust request for %q in this project yet; run `hideout run -- %s .` here once, then rerun `hideout allow host-app %s`", command, command, command)
 	}
-	grant := TrustedIDEGrant{WorkspaceID: workspaceID, QualifiedAppRef: req.QualifiedAppRef, BindingDigest: req.BindingDigest}
+	grant := TrustedHostAppGrant{WorkspaceID: workspaceID, QualifiedAppRef: req.QualifiedAppRef, BindingDigest: req.BindingDigest}
 	result := HostAppTrustResult{Profile: profileName, WorkspaceID: workspaceID, Command: command}
 	err = c.withProfileMutationLock(profileName, func() error {
-		existing := readTrustedIDEGrants(c.Store.Root, profileName)
+		existing := readTrustedHostAppGrants(c.Store.Root, profileName)
 		already := false
 		for _, g := range existing.Grants {
 			if g.WorkspaceID == grant.WorkspaceID && g.QualifiedAppRef == grant.QualifiedAppRef && g.BindingDigest == grant.BindingDigest {
@@ -336,7 +336,7 @@ func (c Core) GrantHostAppTrust(profileName, workspacePath, command string) (Hos
 				break
 			}
 		}
-		if err := addTrustedIDEGrant(c.Store.Root, profileName, grant, time.Now()); err != nil {
+		if err := addTrustedHostAppGrant(c.Store.Root, profileName, grant, time.Now()); err != nil {
 			return err
 		}
 		result.Granted = !already
@@ -365,7 +365,7 @@ func (c Core) RevokeHostAppTrust(profileName, workspacePath, command string) err
 		return err
 	}
 	err = c.withProfileMutationLock(profileName, func() error {
-		return removeTrustedIDEGrantsForWorkspace(c.Store.Root, profileName, workspaceID)
+		return removeTrustedHostAppGrantsForWorkspace(c.Store.Root, profileName, workspaceID)
 	})
 	if err != nil {
 		return err

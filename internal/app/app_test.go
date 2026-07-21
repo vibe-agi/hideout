@@ -347,7 +347,7 @@ func TestExplainInitializesProfileAndPrintsBoundary(t *testing.T) {
 	}
 }
 
-func TestDecisionRevokeCLIRevokesTrustedIDEGrant(t *testing.T) {
+func TestDecisionRevokeCLIRevokesTrustedHostAppGrant(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	store, err := profile.DefaultStore()
@@ -363,12 +363,12 @@ func TestDecisionRevokeCLIRevokesTrustedIDEGrant(t *testing.T) {
 		Kind:           decision.KindHostAppOpenResource,
 		Source:         decision.Source{Profile: "privacy", Session: "ses_cli_revoke", Backend: "lima"},
 		State:          decision.StatePending,
-		Preview:        decision.Preview{Summary: "trusted IDE grant"},
+		Preview:        decision.Preview{Summary: "trusted host-app grant"},
 		AllowedActions: []string{decision.ActionApprove, decision.ActionDeny},
 		DefaultOutcome: decision.DefaultOutcomeDeny,
 		TimeoutAt:      time.Now().Add(time.Minute),
 		ProviderRef:    decision.ProviderRef{Provider: decision.KindHostAppOpenResource, SessionID: "ses_cli_revoke"},
-		AuditRef:       "audit:trusted-ide:cli-revoke",
+		AuditRef:       "audit:trusted-host-app:cli-revoke",
 	})
 	if err != nil {
 		t.Fatal(err)

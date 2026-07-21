@@ -91,17 +91,17 @@ Maps a stable app id to the host application, per platform. Referenced by id onl
 
 **Validation**: `AppRef` must exist; unresolved host app → `projection.app.absent`; resolver mismatch/drift → `projection.app.identity-drift`. Both fail closed.
 
-## IdeMode (per profile, control-plane state)
+## HostAppMode (per profile, control-plane state)
 
 | Field | Type | Rules |
 |-------|------|-------|
 | `Profile` | string | Owning profile. |
-| `Mode` | enum | `safe` (default) \| `trusted-host-ide`. |
-| `GrantRef` | string? | For `trusted-host-ide`: the decision-center grant record id. |
+| `Mode` | enum | `safe` (default) \| `trusted-host-app`. |
+| `GrantRef` | string? | For `trusted-host-app`: the decision-center grant record id. |
 
-**Validation**: `trusted-host-ide` requires a live `GrantRef`; stored only in guest-unreachable control-plane state keyed by workspace/profile identity; never read from the workspace. Grant is revocable; revocation → next launch denied/safe. Profile/environment identity change invalidates or requires re-affirmation.
+**Validation**: `trusted-host-app` requires a live `GrantRef`; stored only in guest-unreachable control-plane state keyed by workspace/profile identity; never read from the workspace. Grant is revocable; revocation → next launch denied/safe. Profile/environment identity change invalidates or requires re-affirmation.
 
-**State transitions**: requested mode `safe` → operator requests `trusted-host-ide` → run-bound decision pending/approved/denied. Revoke or identity change invalidates the grant but does not silently rewrite the requested mode; trusted opens remain denied until the operator explicitly selects `safe` or obtains a new run-bound grant. Target retries never change either state.
+**State transitions**: requested mode `safe` → operator requests `trusted-host-app` → run-bound decision pending/approved/denied. Revoke or identity change invalidates the grant but does not silently rewrite the requested mode; trusted opens remain denied until the operator explicitly selects `safe` or obtains a new run-bound grant. Target retries never change either state.
 
 ## ProjectionAuditRecord (`ide.open`)
 
@@ -111,7 +111,7 @@ Typed evidence of a projected open.
 |-------|------|-------|
 | `Command` | string | `code`. |
 | `Capability` | string | `host.app.open-resource`. |
-| `Mode` | enum | `safe` \| `trusted-host-ide`. |
+| `Mode` | enum | `safe` \| `trusted-host-app`. |
 | `WorkspaceIdentity` | string | Workspace name/identity, not host path. |
 | `RelativeTarget` | string | Relative resource; no host absolute path. |
 | `Outcome` | enum | `launched` \| `refused` (+ recovery code). |

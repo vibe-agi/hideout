@@ -237,7 +237,7 @@ func (c Core) resolveDecision(req DecisionResolveRequest, approve bool) (decisio
 			return decision.Resolution{}, err
 		}
 		res, updated, err := store.ResolveDecision(req.DecisionID, req.ClaimToken, decision.StateApproved, "allow", req.Reason, map[string]any{
-			"mode":      ProjectionIdeModeTrusted,
+			"mode":      ProjectionHostAppModeTrusted,
 			"sessionId": d.Source.Session,
 		})
 		if err != nil {
@@ -275,7 +275,7 @@ func (c Core) resolveDecision(req DecisionResolveRequest, approve bool) (decisio
 	return res, nil
 }
 
-// RevokeDecision removes an approved trusted-IDE grant without reusing the
+// RevokeDecision removes an approved trusted-host-app grant without reusing the
 // claim token that authorized its creation. Other decision kinds keep their
 // provider-specific lifecycle and cannot be revoked through this method.
 func (c Core) RevokeDecision(req DecisionRevokeRequest) (decision.Resolution, error) {

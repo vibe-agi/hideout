@@ -87,7 +87,7 @@ identity/path in guest intent and no impact on another profile or old session.
 - [X] T039 [US1] Make broker host-app dispatch validate immutable command/binding ownership and pass only internally bound intent/provider identity in `internal/broker/hostapp.go` and `internal/broker/broker.go`
 - [X] T040 [US1] Refactor `host.app.open-resource` to consume a bound app and Core safety decision rather than guest appRef in `internal/hostcap/openresource.go` and `internal/hostcap/projection.go`
 - [X] T041 [US1] Convert VS Code identity, launch, grammar, and safety data to `builtin.vscode` pack and remove `CodeAppRef`, `CodeRegistration`, direct `ResolveApp("vscode")`, and `vscode-user-data` production special cases in `internal/hostcap/recipes/`, `internal/cmdgrammar/`, `internal/cmdproxy/`, and `internal/manager/`
-- [X] T042 [US1] Keep `profile ide-mode` only as a typed compatibility alias to the built-in binding while generic inspection contains no app-specific branch in `internal/app/app.go` and `internal/manager/projection_inspection.go`
+- [X] T042 [US1] Keep `profile host-app-mode` only as a typed compatibility alias to the built-in binding while generic inspection contains no app-specific branch in `internal/app/app.go` and `internal/manager/projection_inspection.go`
 - [X] T043 [US1] Emit install/validate/test/add/enable and launch/refusal audit from validated snapshot/binding facts in `internal/hostapppack/evidence.go` and `internal/manager/host_app_packs.go`
 - [X] T044 [US1] Run US1 tests and emit `032.host-app-pack.gate0.lifecycle` plus `032.host-app-pack.gate0.binding` evidence from `scripts/test-host-app-pack-smoke.sh`
 

@@ -130,22 +130,22 @@ description: "Task list for Host Capability Projection (030)"
 
 ---
 
-## Phase 5: User Story 3 — safe/trusted-host-ide mode (Priority: P3)
+## Phase 5: User Story 3 — safe/trusted-host-app mode (Priority: P3)
 
-**Goal**: safe mode is the default; `trusted-host-ide` is an explicit, revocable operator grant through the decision center, persisted in guest-unreachable control-plane state.
+**Goal**: safe mode is the default; `trusted-host-app` is an explicit, revocable operator grant through the decision center, persisted in guest-unreachable control-plane state.
 
 **Independent test**: trusted denied without grant; grant → operator config; revoke → next launch denied; explicit safe selection restores safe launches; safe-mode folder-open task marker never written.
 
 ### Tests (write first)
 
-- [X] T039 [P] [US3] Test `internal/manager/hostcap_ide_mode_test.go`: without a grant, trusted requested → `projection.mode.trusted-denied` and no host launch; grant via decision center → mode `trusted-host-ide`; revoke → next launch denied; explicit safe selection restores safe launch; mode/grant state not influenced by anything written to the workspace.
+- [X] T039 [P] [US3] Test `internal/manager/hostcap_host_app_mode_test.go`: without a grant, trusted requested → `projection.mode.trusted-denied` and no host launch; grant via decision center → mode `trusted-host-app`; revoke → next launch denied; explicit safe selection restores safe launch; mode/grant state not influenced by anything written to the workspace.
 - [X] T040 [P] [US3] Test `internal/hostcap/appopen/vscode_test.go` (safe-mode behavior): safe argv never contains `--disable-workspace-trust`; a folder-open task fixture marker is not written in safe mode (verified structurally via the argv/flags that disable auto-tasks + extensions).
 
 ### Implementation
 
-- [X] T041 [US3] Implement requested `IdeMode` as per-profile control-plane state and `host-app.trusted-ide` authority through the existing decision center (`internal/decision`, `internal/manager`): claim/approve/deny/timeout/revoke/reopen, with every live grant bound to run/session/profile/workspace/environment/subject under `~/.hideout` — never the workspace. Invalidate on profile/environment identity change or ended/unprovable ownership.
-- [X] T042 [US3] Enforce mode in the provider (Phase 2 `openresource.go`): `safe` default-allow-audited; `trusted-host-ide` requires live grant else `projection.mode.trusted-denied`.
-- [X] T043 [US3] CLI/Manager surface for requesting/inspecting the trusted-ide grant (reuse `hideout decision ...` + a `hideout profile ide-mode` read/plan/apply); no per-invocation prompt for safe mode.
+- [X] T041 [US3] Implement requested `HostAppMode` as per-profile control-plane state and `host-app.trusted-host-app` authority through the existing decision center (`internal/decision`, `internal/manager`): claim/approve/deny/timeout/revoke/reopen, with every live grant bound to run/session/profile/workspace/environment/subject under `~/.hideout` — never the workspace. Invalidate on profile/environment identity change or ended/unprovable ownership.
+- [X] T042 [US3] Enforce mode in the provider (Phase 2 `openresource.go`): `safe` default-allow-audited; `trusted-host-app` requires live grant else `projection.mode.trusted-denied`.
+- [X] T043 [US3] CLI/Manager surface for requesting/inspecting the trusted-host-app grant (reuse `hideout decision ...` + a `hideout profile host-app-mode` read/plan/apply); no per-invocation prompt for safe mode.
 
 ---
 
@@ -161,7 +161,7 @@ description: "Task list for Host Capability Projection (030)"
 
 ### Implementation
 
-- [X] T045 [US4] Implement `doctor --feature projection` in `internal/doctor` reading the projection registry + binding + IdeMode + PATH shadow order; register the feature in the doctor feature list.
+- [X] T045 [US4] Implement `doctor --feature projection` in `internal/doctor` reading the projection registry + binding + HostAppMode + PATH shadow order; register the feature in the doctor feature list.
 - [X] T046 [US4] Add a `ProjectionInspection` read model to `internal/manager` surfaced to doctor (and available to TUI/WebUI later), host paths Core-internal.
 
 ---
@@ -198,7 +198,7 @@ description: "Task list for Host Capability Projection (030)"
 - **US1 (T026–T032)** depends only on Foundational. It is the MVP.
 - **US2 (T033–T038)** depends on Foundational (ResourceRef/alias); independent of US1's flow otherwise.
 - **US3 (T039–T043)** depends on Foundational + the provider (T016) mode hook.
-- **US4 (T044–T046)** depends on Foundational (registry/binding/IdeMode).
+- **US4 (T044–T046)** depends on Foundational (registry/binding/HostAppMode).
 - **Polish/Gates (T047–T056)** after the stories they cover; T049/T050 are operator-run real-backend.
 
 ## Parallel opportunities
@@ -221,7 +221,7 @@ TDD per pair (test → impl). Deliver Foundational + US1 first as the demoable M
 
 - [X] T057 CRITICAL replace ambient `exec.LookPath("code")` app resolution with a Core/package-owned canonical macOS VS Code identity resolver that rejects hostile/workspace-writable PATH candidates and verifies the resolved app/launcher identity immediately before use; add a hostile-PATH executable test per FR-008, Constitution I/II, and SC-002 (contradicts)
 - [X] T058 CRITICAL add a generated-shim TDD integration test and fix `shimEnv` so the materialized `code` shim explicitly selects `host.app.open-resource` on native and Lima instead of falling through to `host.open`; assert the real broker action/grammar/provider path and no fallback per US1/AC1, FR-002, FR-006, and SC-001/SC-002 (contradicts)
-- [X] T059 separate requested IDE mode from authority and implement `host-app.trusted-ide` through the existing decision-center claim/approve/deny/timeout/revoke lifecycle, binding the live grant to session/profile/workspace/environment/subject and invalidating stale identity; remove the profile mode file as its own grant per FR-010, FR-012, and SC-006 (contradicts)
+- [X] T059 separate requested host-app mode from authority and implement `host-app.trusted-host-app` through the existing decision-center claim/approve/deny/timeout/revoke lifecycle, binding the live grant to session/profile/workspace/environment/subject and invalidating stale identity; remove the profile mode file as its own grant per FR-010, FR-012, and SC-006 (contradicts)
 - [X] T060 add projection-specific audit TDD through the real broker request with non-empty argv, then emit action `ide.open` without raw argv/host path/username/token despite shared broker metadata restoration; cover local audit and exported evidence per FR-018, Constitution IV, and SC-003 (contradicts)
 - [X] T061 define and implement an owned host-app launch lifecycle: verify safe-mode state before launch, prevent broker-context cancellation from killing the launcher handoff, wait/release child resources correctly, and clean or durably own isolated VS Code user-data state without cross-launch trust carryover; prove folder-open auto-task absence behaviorally per FR-011, FR-013, Constitution V, and SC-001/SC-006 (partial)
 - [X] T062 harden `code-open-v1` TDD so v1 accepts exactly one resource, requires a positive line for `-g`, parses colon-bearing paths from the right, rejects goto-plus-positional/no-target forms outside the contract, and keeps Core validation aligned per FR-002, FR-005, and SC-001/SC-002 (partial)

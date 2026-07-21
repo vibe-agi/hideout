@@ -175,7 +175,7 @@ profile or `ask-each-run`. Elevated approval uses the existing decision center
 but extends identity to app/package/binding/command/workspace/environment/run.
 Persistent profile allowance is deferred.
 
-**Rationale**: Current trusted IDE decision binds session/profile/workspace
+**Rationale**: Current trusted host-app decision binds session/profile/workspace
 facts (`internal/manager/hostcap_projection.go:210-275`) but assumes one app and
 command. Extending that record is smaller and safer than inventing a durable
 policy in the same feature.

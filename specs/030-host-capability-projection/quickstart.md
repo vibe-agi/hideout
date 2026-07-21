@@ -67,18 +67,18 @@ hideout run --profile privacy --backend lima -- code .   # workspace contains .v
 # assert the host marker the task would write is absent
 
 # request trusted mode; keep the target session alive (for example, an agent or shell)
-hideout profile ide-mode privacy trusted-host-ide
+hideout profile host-app-mode privacy trusted-host-app
 hideout run --profile privacy --backend lima -- sh
 # inside that guest session: code . is denied once and creates a run-bound decision
 
 # from an operator terminal: claim, approve, then retry inside the same guest session
 hideout decision claim <decision-id>
 hideout decision approve --claim-token <claim-token> <decision-id>
-# inside the guest: code . opens with operator config; audit mode=trusted-host-ide
+# inside the guest: code . opens with operator config; audit mode=trusted-host-app
 
 # revoke from the operator terminal; the next same-session guest retry is denied
 hideout decision revoke <decision-id>
-hideout profile ide-mode privacy safe
+hideout profile host-app-mode privacy safe
 # subsequent runs use safe mode again
 ```
 

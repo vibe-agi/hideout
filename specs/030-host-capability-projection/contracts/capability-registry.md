@@ -13,7 +13,7 @@
 | id | riskClass | resultPolicy | resourceKinds | decisionPolicy | status |
 |----|-----------|--------------|---------------|----------------|--------|
 | `host.app.open-resource` (safe) | low | none | [workspace] | default-allow-audited | implemented |
-| `host.app.open-resource` (trusted-host-ide facet) | high | none | [workspace] | operator-grant | implemented |
+| `host.app.open-resource` (trusted-host-app facet) | high | none | [workspace] | operator-grant | implemented |
 | `host.service.bridge` (adb) | high | lease | [device,endpoint] | operator-grant | design-ready |
 | `host.automation.invoke` (applescript) | high | bounded-typed | [] | operator-grant | design-ready |
 
@@ -21,14 +21,14 @@
 
 ## Provider contract: `host.app.open-resource`
 
-Input: a validated `OpenResourceIntent` (see `open-resource-intent.schema.json`) plus the session context (workspace root, profile, session id, active IdeMode).
+Input: a validated `OpenResourceIntent` (see `open-resource-intent.schema.json`) plus the session context (workspace root, profile, session id, active HostAppMode).
 
 Behavior (Go, Core):
 
 1. Re-decode intent strictly (unknown fields rejected).
 2. Resolve `AppRef` through the Core app-identity registry → host app + safe/trusted launch profile. Absent → `projection.app.absent`; drift → `projection.app.identity-drift`.
 3. For each `ResourceRef`: map to host path under the session workspace root, `EvalSymlinks` escape recheck, confirm existence. Escape / guest-only / missing → `projection.path.no-host-mapping`.
-4. Enforce mode: `safe` (low) launches with the isolated safe launch profile; `trusted-host-ide` (high) requires a live operator grant, else `projection.mode.trusted-denied`.
+4. Enforce mode: `safe` (low) launches with the isolated safe launch profile; `trusted-host-app` (high) requires a live operator grant, else `projection.mode.trusted-denied`.
 5. Launch the host app (result policy `none`; no host output returned to guest).
 6. De-duplicate/rate-limit identical `(appRef, host target, window mode)` within a short window.
 7. Emit the `ide.open` audit record (no host path / username / token / raw argv).

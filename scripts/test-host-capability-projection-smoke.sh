@@ -36,7 +36,7 @@ go test ./internal/broker/ -run 'TestProjection'
 go test ./cmd/hideout-shim ./internal/manager -run 'Test(NormalizeInvocationRejectsUnknownActionAndMissingBindingWithoutFallback|GeneratedHostAppShimPinsProjectionActionGrammarAndBinding|ProjectionTrustedGrant|ProjectionSessionEnd|ProjectionSettingSafe|ProjectionInspection|ProjectionSafeDataDir)'
 
 echo "projection-smoke: decision-center grant, doctor truth, and proof registry"
-go test ./internal/app -run 'Test(DecisionRevokeCLIRevokesTrustedIDEGrant|DoctorProjectionFeatureReportsRegistryBindingAndMode)'
+go test ./internal/app -run 'Test(DecisionRevokeCLIRevokesTrustedHostAppGrant|DoctorProjectionFeatureReportsRegistryBindingAndMode)'
 go test ./internal/productevidence -run 'TestProofRegistryCovers030'
 
 echo "projection-smoke: projection recovery codes present with human/JSON parity"

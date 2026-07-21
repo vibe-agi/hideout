@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hideout.local/schemas/trusted-ide-grant.schema.json",
-  "title": "Hideout Trusted Host-IDE Grant Manifest",
+  "$id": "https://hideout.local/schemas/trusted-host-app-grant.schema.json",
+  "title": "Hideout Trusted Host-App Grant Manifest",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -11,7 +11,7 @@
   ],
   "properties": {
     "version": {
-      "const": "hideout.trusted-ide-grants/v1"
+      "const": "hideout.trusted-host-app-grants/v1"
     },
     "profile": {
       "type": "string",

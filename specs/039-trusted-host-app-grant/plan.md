@@ -1,10 +1,10 @@
-# Implementation Plan: Trusted Host-IDE Workspace Grant
+# Implementation Plan: Trusted Host-App Workspace Grant
 
 <!-- markdownlint-disable MD013 -->
 
-**Branch**: `039-trusted-ide-grant` | **Date**: 2026-07-20 | **Spec**: [spec.md](spec.md)
+**Branch**: `039-trusted-host-app-grant` | **Date**: 2026-07-20 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `/specs/039-trusted-ide-grant/spec.md`
+**Input**: Feature specification from `/specs/039-trusted-host-app-grant/spec.md`
 
 ## Summary
 
@@ -90,7 +90,7 @@ handful of workspaces per profile.
   `docs/host-capability-projection.md` (trusted grant lifecycle),
   `docs/first-run-alpha.md` (replace the "trusted not usable for one-shot"
   limitation with the grant flow), `docs/claim-boundaries.md` (grant claim +
-  proof id), and `docs/DEBT.md` (close the trusted-ide one-shot and two-checker
+  proof id), and `docs/DEBT.md` (close the trusted-host-app one-shot and two-checker
   entries). `docs/threat-model.md` reviewed: no new non-claim (this tightens an
   existing high-authority path, does not add one).
 
@@ -101,13 +101,13 @@ No constitution violations — Complexity Tracking not required.
 ### Documentation (this feature)
 
 ```text
-specs/039-trusted-ide-grant/
+specs/039-trusted-host-app-grant/
 ├── plan.md              # This file
 ├── research.md          # Phase 0 output
 ├── data-model.md        # Phase 1 output
 ├── quickstart.md        # Phase 1 output
 ├── contracts/           # Phase 1 output
-│   ├── trusted-ide-grant-record.md
+│   ├── trusted-host-app-grant-record.md
 │   └── operator-grant-commands.md
 └── tasks.md             # Phase 2 output (/speckit-tasks)
 ```
@@ -118,7 +118,7 @@ specs/039-trusted-ide-grant/
 internal/manager/
 ├── hostcap_projection.go        # host-app-mode read/write; trusted grant store
 │                                #   read/write/revoke; delete or document the
-│                                #   test-only decisionIdeGrantChecker (FR-011)
+│                                #   test-only decisionHostAppGrantChecker (FR-011)
 ├── run_dataplane.go             # runProjectionGrantChecker.TrustedGrantActive
 │                                #   consults the persistent grant first (FR-002/003)
 ├── hostcap_projection_test.go   # grant match/miss/drift/guest-cannot-forge
@@ -134,7 +134,7 @@ internal/app/
 └── app.go                       # usage line
 
 schemas/
-└── trusted-ide-grant.schema.json  # grant record schema (if a schema file fits
+└── trusted-host-app-grant.schema.json  # grant record schema (if a schema file fits
                                     #   the existing schema-gate pattern)
 
 scripts/                          # real-Lima projection lane extension

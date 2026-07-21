@@ -32,7 +32,7 @@ other files   hidden unless separately granted
 audit         always on
 ```
 
-Setup grants no HostFS visibility, trusted IDE, host-app recipe, endpoint,
+Setup grants no HostFS visibility, trusted host-app, host-app recipe, endpoint,
 adapter-pack, decision, proxy, or agent credential authority.
 
 ## Fresh Review

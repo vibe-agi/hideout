@@ -135,7 +135,7 @@ func TestOperatorAccessMatchesAdvancedProfileFSAuthority(t *testing.T) {
 // TestOperatorAllowHostAppFailsClosedAndDenyIsNoOp covers the app-level dispatch
 // of `allow|deny host-app <command>`. The grant success + idempotency promotion
 // path is covered hermetically at the Manager layer
-// (TestGrantAndRevokeTrustedIDEPromotesRequest); seeding a run request needs
+// (TestGrantAndRevokeTrustedHostAppPromotesRequest); seeding a run request needs
 // Manager-internal helpers, so this test asserts the app wiring and the
 // fail-closed branches reachable from the CLI surface.
 func TestOperatorAllowHostAppFailsClosedAndDenyIsNoOp(t *testing.T) {
@@ -165,7 +165,7 @@ func TestOperatorAllowHostAppFailsClosedAndDenyIsNoOp(t *testing.T) {
 
 	// 2. Trusted mode but no run-recorded request → refuse and name the run-once
 	//    path; still no grant is written.
-	if err := manager.WriteProjectionIdeMode(store.Root, "default", manager.ProjectionIdeModeTrusted, time.Now()); err != nil {
+	if err := manager.WriteProjectionHostAppMode(store.Root, "default", manager.ProjectionHostAppModeTrusted, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	err = a.run([]string{"allow", "host-app", "code"})

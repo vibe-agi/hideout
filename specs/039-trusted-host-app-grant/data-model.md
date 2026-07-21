@@ -1,15 +1,15 @@
-# Data Model: Trusted Host-IDE Workspace Grant
+# Data Model: Trusted Host-App Workspace Grant
 
 <!-- markdownlint-disable MD013 -->
 
-## Entity: Trusted-IDE workspace grant
+## Entity: Trusted-Host-App workspace grant
 
 Durable operator policy authorizing a trusted (native) host-app open for one
 profile + workspace + app binding. Stored on the guest-unreachable control plane.
 
 ### Storage
 
-- Location: `profiles/<profile>/ide-trust-grants.json` (beside the existing
+- Location: `profiles/<profile>/host-app-trust-grants.json` (beside the existing
   `host-app-mode.json`), under the reserved store the guest cannot reach.
 - File mode `0600`; written atomically (temp + rename), like other profile
   policy files.

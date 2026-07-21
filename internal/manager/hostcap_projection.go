@@ -39,74 +39,74 @@ func newProjectionDeduper() *projectionDeduper {
 	}
 }
 
-// ProjectionIdeModeSafe / ...Trusted are the persisted per-profile host-app
+// ProjectionHostAppModeSafe / ...Trusted are the persisted per-profile host-app
 // projection modes (user-facing: `safe` / `trusted`). The Go identifiers keep
 // their historical names; the values and command surface are generic host-app.
 const (
-	ProjectionIdeModeSafe    = "safe"
-	ProjectionIdeModeTrusted = "trusted"
+	ProjectionHostAppModeSafe    = "safe"
+	ProjectionHostAppModeTrusted = "trusted"
 )
 
-type projectionIdeModeState struct {
+type projectionHostAppModeState struct {
 	Mode  string    `json:"mode"`
 	SetAt time.Time `json:"setAt"`
 }
 
-// projectionIdeModePath is the per-profile host-app-mode file. It lives under
+// projectionHostAppModePath is the per-profile host-app-mode file. It lives under
 // the reserved, guest-unreachable store, keyed by profile — so the guest cannot
 // flip itself into trusted mode by writing to the workspace.
-func projectionIdeModePath(storeRoot, profileName string) string {
+func projectionHostAppModePath(storeRoot, profileName string) string {
 	return filepath.Join(storeRoot, "profiles", profileName, "host-app-mode.json")
 }
 
-// ReadProjectionIdeMode returns the persisted mode for a profile, defaulting to
+// ReadProjectionHostAppMode returns the persisted mode for a profile, defaulting to
 // safe when unset or unreadable (fail closed to the least-authority mode).
-func ReadProjectionIdeMode(storeRoot, profileName string) string {
-	raw, err := os.ReadFile(projectionIdeModePath(storeRoot, profileName))
+func ReadProjectionHostAppMode(storeRoot, profileName string) string {
+	raw, err := os.ReadFile(projectionHostAppModePath(storeRoot, profileName))
 	if err != nil {
-		return ProjectionIdeModeSafe
+		return ProjectionHostAppModeSafe
 	}
-	var st projectionIdeModeState
+	var st projectionHostAppModeState
 	if err := json.Unmarshal(raw, &st); err != nil {
-		return ProjectionIdeModeSafe
+		return ProjectionHostAppModeSafe
 	}
-	if st.Mode == ProjectionIdeModeTrusted {
-		return ProjectionIdeModeTrusted
+	if st.Mode == ProjectionHostAppModeTrusted {
+		return ProjectionHostAppModeTrusted
 	}
-	return ProjectionIdeModeSafe
+	return ProjectionHostAppModeSafe
 }
 
-// WriteProjectionIdeMode persists the requested IDE mode for a profile. This
+// WriteProjectionHostAppMode persists the requested host-app mode for a profile. This
 // file is preference only; it is never sufficient authority for trusted mode.
-func WriteProjectionIdeMode(storeRoot, profileName, mode string, now time.Time) error {
+func WriteProjectionHostAppMode(storeRoot, profileName, mode string, now time.Time) error {
 	mode = strings.TrimSpace(mode)
-	if mode != ProjectionIdeModeSafe && mode != ProjectionIdeModeTrusted {
+	if mode != ProjectionHostAppModeSafe && mode != ProjectionHostAppModeTrusted {
 		return errors.New("host-app mode must be safe or trusted")
 	}
 	dir := filepath.Join(storeRoot, "profiles", profileName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(projectionIdeModeState{Mode: mode, SetAt: now.UTC()}, "", "  ")
+	data, err := json.MarshalIndent(projectionHostAppModeState{Mode: mode, SetAt: now.UTC()}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(projectionIdeModePath(storeRoot, profileName), append(data, '\n'), 0o600)
+	return os.WriteFile(projectionHostAppModePath(storeRoot, profileName), append(data, '\n'), 0o600)
 }
 
-// ProjectionIdeMode returns the persisted IDE mode for a profile.
-func (c Core) ProjectionIdeMode(profileName string) (string, error) {
+// ProjectionHostAppMode returns the persisted host-app mode for a profile.
+func (c Core) ProjectionHostAppMode(profileName string) (string, error) {
 	profileName, err := normalizeProfileNameForProjection(profileName)
 	if err != nil {
 		return "", err
 	}
-	return ReadProjectionIdeMode(c.Store.Root, profileName), nil
+	return ReadProjectionHostAppMode(c.Store.Root, profileName), nil
 }
 
-// SetProjectionIdeMode persists the requested mode. Trusted mode creates no
+// SetProjectionHostAppMode persists the requested mode. Trusted mode creates no
 // authority by itself: each run creates a separately claimable decision bound
 // to that run. Selecting safe invalidates all active grants for the profile.
-func (c Core) SetProjectionIdeMode(profileName, mode string) error {
+func (c Core) SetProjectionHostAppMode(profileName, mode string) error {
 	profileName, err := normalizeProfileNameForProjection(profileName)
 	if err != nil {
 		return err
@@ -114,26 +114,26 @@ func (c Core) SetProjectionIdeMode(profileName, mode string) error {
 	if _, err := c.Store.Load(profileName); err != nil {
 		return err
 	}
-	if err := WriteProjectionIdeMode(c.Store.Root, profileName, mode, time.Now()); err != nil {
+	if err := WriteProjectionHostAppMode(c.Store.Root, profileName, mode, time.Now()); err != nil {
 		return err
 	}
 	mode = strings.TrimSpace(mode)
 	auditDecision := "request"
-	if mode == ProjectionIdeModeSafe {
+	if mode == ProjectionHostAppModeSafe {
 		auditDecision = "revoke"
 		if err := c.invalidateProjectionGrantsForProfile(profileName, "profile-mode-set-safe"); err != nil {
 			return err
 		}
 		// Switching to safe drops durable host-app trust grants too, so a later
 		// switch back to trusted re-requires them.
-		if err := removeAllTrustedIDEGrants(c.Store.Root, profileName); err != nil {
+		if err := removeAllTrustedHostAppGrants(c.Store.Root, profileName); err != nil {
 			return err
 		}
 	}
 	_ = c.emitOperatorCenterAudit(audit.Event{
 		Profile:  profileName,
 		Backend:  "native",
-		Action:   "host-app.ide-mode",
+		Action:   "host-app.mode",
 		Decision: auditDecision,
 		Details:  map[string]any{"profile": profileName, "mode": mode},
 	})
@@ -259,7 +259,7 @@ func (b projectionGrantBinding) scope() hostcap.GrantScope {
 }
 
 func (c Core) ensureProjectionTrustedDecision(binding projectionGrantBinding) (decision.Decision, error) {
-	if ReadProjectionIdeMode(c.Store.Root, binding.Profile) != ProjectionIdeModeTrusted {
+	if ReadProjectionHostAppMode(c.Store.Root, binding.Profile) != ProjectionHostAppModeTrusted {
 		return decision.Decision{}, errors.New("trusted host-app mode is not requested for profile")
 	}
 	store, err := c.decisionStore()
@@ -290,13 +290,13 @@ func (c Core) ensureProjectionTrustedDecision(binding projectionGrantBinding) (d
 		Risk:  map[string]any{"riskClass": "high", "workspaceWritable": workspaceWritable},
 		ProposedAction: map[string]any{
 			"capability": "host.app.open-resource",
-			"mode":       ProjectionIdeModeTrusted,
+			"mode":       ProjectionHostAppModeTrusted,
 			"binding":    binding.data(),
 		},
 		Preview: decision.Preview{
 			Summary: "Allow this exact host-app binding to open its declared resource classes for this run",
 			Facts: map[string]any{
-				"mode":            ProjectionIdeModeTrusted,
+				"mode":            ProjectionHostAppModeTrusted,
 				"workspaceId":     binding.WorkspaceID,
 				"environmentId":   binding.EnvironmentID,
 				"subject":         binding.Subject,
@@ -331,28 +331,28 @@ func projectionGrantMatches(d decision.Decision, binding projectionGrantBinding)
 	return true
 }
 
-// decisionIdeGrantChecker is TEST-ONLY (039 FR-011). The single PRODUCTION
+// decisionHostAppGrantChecker is TEST-ONLY (039 FR-011). The single PRODUCTION
 // trusted-grant check path is runProjectionGrantChecker (run_dataplane.go),
 // which StartRunDataPlane wires into the broker; it consults the durable
 // host-app trust grant first, then the per-run decision. This parallel checker
 // has no production caller — it exists only for projection-mode unit tests that
-// exercise the per-run decision + ide-mode gating in isolation. Keep it out of
+// exercise the per-run decision + host-app-mode gating in isolation. Keep it out of
 // any run/broker wiring.
-type decisionIdeGrantChecker struct {
+type decisionHostAppGrantChecker struct {
 	storeRoot string
 	bindings  map[string]projectionGrantBinding
 }
 
-func (g decisionIdeGrantChecker) TrustedGrantActive(scope hostcap.GrantScope) bool {
+func (g decisionHostAppGrantChecker) TrustedGrantActive(scope hostcap.GrantScope) bool {
 	binding, ok := g.bindings[scope.Command]
-	if !ok || g.storeRoot == "" || scope != binding.scope() || ReadProjectionIdeMode(g.storeRoot, scope.Profile) != ProjectionIdeModeTrusted {
+	if !ok || g.storeRoot == "" || scope != binding.scope() || ReadProjectionHostAppMode(g.storeRoot, scope.Profile) != ProjectionHostAppModeTrusted {
 		return false
 	}
 	d, err := decision.NewStore(g.storeRoot).RawDecision(binding.decisionID())
 	return err == nil && d.State == decision.StateApproved && projectionGrantMatches(d, binding)
 }
 
-func (g decisionIdeGrantChecker) TrustedGrantActiveForResource(scope hostcap.GrantScope, resource hostcap.ResourceRef) bool {
+func (g decisionHostAppGrantChecker) TrustedGrantActiveForResource(scope hostcap.GrantScope, resource hostcap.ResourceRef) bool {
 	binding, ok := g.bindings[scope.Command]
 	class := hostcap.PublicResourceClass(resource.Kind)
 	if !ok || class == "" || !strings.Contains(","+binding.ResourceClasses+",", ","+class+",") {

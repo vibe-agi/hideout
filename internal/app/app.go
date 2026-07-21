@@ -178,8 +178,8 @@ func (a app) usage() {
 	fmt.Fprintln(a.stdout, "  hideout connect through <proxy-secret> [using <resolver>] [for profile <name>]")
 	fmt.Fprintln(a.stdout, "  hideout allow read|write|all <path> [--for-profile <name>]")
 	fmt.Fprintln(a.stdout, "  hideout deny read|write|all <path> [--for-profile <name>]")
-	fmt.Fprintln(a.stdout, "  hideout allow ide-trust [--for-profile <name>]   (native editor for this project)")
-	fmt.Fprintln(a.stdout, "  hideout deny ide-trust [--for-profile <name>]")
+	fmt.Fprintln(a.stdout, "  hideout allow host-app <command> [--for-profile <name>]   (trust a host app to open this project natively)")
+	fmt.Fprintln(a.stdout, "  hideout deny host-app <command> [--for-profile <name>]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "First run:")
 	fmt.Fprintln(a.stdout, "  hideout setup")
@@ -3435,7 +3435,7 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 				addDoctorFeatureFinding(builder, "feature-projection", "projection", doctorpkg.StatusError,
 					"projection inspection failed", nil, []string{inspectErr.Error()},
 					[]string{"real macOS arm64 Lima Gate 2 is still required"},
-					[]string{"hideout profile ide-mode " + req.Profile},
+					[]string{"hideout profile host-app-mode " + req.Profile},
 				)
 				continue
 			}
@@ -3448,7 +3448,7 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 				inspection.ObservedFacts(),
 				inspection.CandidateCauses(),
 				inspection.GateRequired,
-				[]string{"hideout profile ide-mode " + req.Profile, "hideout decision list --kind host-app.open-resource --include-terminal", "hideout run --profile " + req.Profile + " -- code ."},
+				[]string{"hideout profile host-app-mode " + req.Profile, "hideout decision list --kind host-app.open-resource --include-terminal", "hideout run --profile " + req.Profile + " -- code ."},
 			)
 		}
 	}
@@ -4464,7 +4464,7 @@ func (a app) profile(args []string) error {
 	case "command-adapter":
 		return a.profileCommandAdapter(store, args[1:])
 	case "host-app-mode":
-		return a.profileIdeMode(store, args[1:])
+		return a.profileHostAppMode(store, args[1:])
 	default:
 		return fmt.Errorf("unknown profile command %q", args[0])
 	}
@@ -4662,7 +4662,7 @@ func writeNaturalConnection(w io.Writer, state manager.ProfileNetworkState) erro
 	}
 }
 
-// profileIdeMode reads or sets the host-app projection mode for a profile.
+// profileHostAppMode reads or sets the host-app projection mode for a profile.
 //
 //	hideout profile host-app-mode <name>            # show current mode
 //	hideout profile host-app-mode <name> safe       # default; isolated host app
@@ -4671,7 +4671,7 @@ func writeNaturalConnection(w io.Writer, state manager.ProfileNetworkState) erro
 // trusted mode opens the guest-writable workspace in the operator's full
 // native host app and is an explicit, revocable operator grant held in
 // guest-unreachable control-plane state. Selecting safe revokes it.
-func (a app) profileIdeMode(store profile.Store, args []string) error {
+func (a app) profileHostAppMode(store profile.Store, args []string) error {
 	if len(args) == 0 || containsHelpToken(args) {
 		fmt.Fprintln(a.stdout, "usage: hideout profile host-app-mode <name> [safe|trusted]")
 		return nil
@@ -4682,12 +4682,12 @@ func (a app) profileIdeMode(store profile.Store, args []string) error {
 	}
 	core := manager.New(store)
 	if len(args) == 1 {
-		mode, err := core.ProjectionIdeMode(name)
+		mode, err := core.ProjectionHostAppMode(name)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(a.stdout, mode)
-		if mode == manager.ProjectionIdeModeTrusted && core.HasHostAppTrustGrants(name) {
+		if mode == manager.ProjectionHostAppModeTrusted && core.HasHostAppTrustGrants(name) {
 			fmt.Fprintln(a.stdout, "grants: one or more projects are trusted for native host apps")
 		}
 		return nil
@@ -4696,10 +4696,10 @@ func (a app) profileIdeMode(store profile.Store, args []string) error {
 		return errors.New("usage: hideout profile host-app-mode <name> [safe|trusted]")
 	}
 	mode := args[1]
-	if mode == manager.ProjectionIdeModeTrusted {
+	if mode == manager.ProjectionHostAppModeTrusted {
 		fmt.Fprintln(a.stderr, "warning: trusted mode opens the guest-writable workspace in your full native host app, which may run workspace tasks and extensions; the default safe mode isolates it.")
 	}
-	if err := core.SetProjectionIdeMode(name, mode); err != nil {
+	if err := core.SetProjectionHostAppMode(name, mode); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.stdout, "host-app-mode for %s set to %s\n", name, mode)
