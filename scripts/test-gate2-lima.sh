@@ -736,6 +736,7 @@ cat >"$workspace/hostfs-visibility-live.py" <<'PY'
 import errno
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -743,6 +744,14 @@ import time
 
 workspace, approve_path, deny_path, timeout_path, link_path = sys.argv[1:]
 workspace = Path(workspace)
+
+# The workspace is a Lima vz virtiofs mount that does not support execve of
+# binaries stored on it (EOPNOTSUPP; see docs/DEBT.md "virtiofs workspace
+# execute"), so copy the broker-read helper to an exec-capable guest-local path
+# before running it. Mirrors the hostfs grant smoke lane above.
+fsread_bin = "/tmp/hideout-gate-fsread"
+shutil.copyfile("hideout-gate-fsread", fsread_bin)
+os.chmod(fsread_bin, 0o755)
 
 
 def marker(name):
@@ -774,7 +783,7 @@ def expect_eacces(path):
 
 def broker_read(path, success, expected=""):
     proc = subprocess.run(
-        ["./hideout-gate-fsread", "--broker-read", path],
+        [fsread_bin, "--broker-read", path],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -834,13 +843,18 @@ PY
 
 rm -f "$workspace"/vis-*
 echo "gate2: running HostFS live read-decision smoke"
+# The marker handshake files are written by the GUEST, so the script's marker
+# base must be the guest workspace path (/workspace in alias mode), which maps to
+# the host "$workspace" the wait_for_file loops below poll. Passing the host path
+# fails in the isolated session: the host path is only reachable through the
+# read-oriented hostfs FUSE, so creating a marker file there returns ENOENT.
 env \
   HIDEOUT_STORE_ROOT="$store" \
   LIMA_HOME="$lima_home" \
   "$hideout" run --backend lima --workspace "$workspace" \
     --fs "see-dir:$hostfs_live_root" \
     -- python3 ./hostfs-visibility-live.py \
-      "$workspace" \
+      /workspace \
       "$hostfs_live_approve" \
       "$hostfs_live_deny" \
       "$hostfs_live_timeout" \
