@@ -1151,8 +1151,23 @@ fi
 # stop by name releases the VM but keeps the record resumable.
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop "$env_name" >"$tmp/env-stop.out"
 grep -q "stopped: $env_id" "$tmp/env-stop.out"
-lima_status="$(LIMA_HOME="$lima_home" limactl list | awk -v name="$env_instance" 'NR > 1 && $1 == name { print $2; exit }')"
-if [ "$lima_status" != "Stopped" ]; then
+# hideout stop proves LifecycleStopped/Absent before returning, but limactl's
+# inventory can lag or briefly flicker during a graceful vz stop. Sample the
+# instance status for up to 15s and record the timeline so a false-positive
+# stop confirmation (limactl still Running) is distinguishable from a slow stop.
+lima_status="unknown"
+stop_samples=""
+for _sample in $(seq 1 15); do
+  lima_status="$(LIMA_HOME="$lima_home" limactl list | awk -v name="$env_instance" 'NR > 1 && $1 == name { print $2; exit }')"
+  [ -z "$lima_status" ] && lima_status="Absent"
+  stop_samples="$stop_samples ${_sample}s=${lima_status}"
+  if [ "$lima_status" = "Stopped" ] || [ "$lima_status" = "Absent" ]; then
+    break
+  fi
+  sleep 1
+done
+echo "gate2: post-stop lima status timeline:$stop_samples" >&2
+if [ "$lima_status" != "Stopped" ] && [ "$lima_status" != "Absent" ]; then
   echo "gate2: lima instance was not stopped by hideout stop; status=$lima_status instance=$env_instance" >&2
   LIMA_HOME="$lima_home" limactl list >&2 || true
   exit 1
