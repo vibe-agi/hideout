@@ -86,11 +86,14 @@ type BuildInput struct {
 	Run         Config
 	Now         time.Time
 	StoreRoot   string
-	// Home is the run's effective operator home. When set, credential-root
-	// hiding is applied relative to it in addition to the policy-building
-	// process home, so a relocated per-run HOME cannot expose its own
-	// ~/.ssh-style directories through a broad discovery grant. Additive only:
-	// it can never unhide the process-home credential roots.
+	// Home is the run's effective operator home, forwarded from the operator's
+	// (trusted) client. Credential-root hiding is applied relative to it in
+	// addition to the policy-building process home. Additive only: a relocated or
+	// bogus value can never unhide the process-home roots, only add more. It is
+	// per-run because the client can be invoked with a relocated HOME (and it is
+	// how the credential-hiding gate exercises the behavior without touching the
+	// shared daemon's HOME); non-run policy builds correctly fall back to the
+	// daemon's own home.
 	Home string
 }
 

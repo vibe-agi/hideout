@@ -982,10 +982,21 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 			})
 			// Privileged cleanup runs from the deferred run finalization, which by
 			// design executes after CloseRunSession has closed the per-session audit
-			// (see the deferred cleanup ordering). The cleanup itself has already
-			// succeeded, so a closed session writer must not fail it; its audit at
-			// that point is best-effort.
+			// (see the deferred cleanup ordering). Rather than drop the teardown
+			// record (which would leave a one-sided audit trail — setup logged,
+			// teardown not — and make a misbehaving privileged teardown unauditable),
+			// route it to the durable operator-center audit, which outlives the
+			// per-session writer. Best-effort: a closed session writer or a
+			// durable-sink error must not fail cleanup that already succeeded.
 			if action == privilege.ActionPrivilegedCleanup && errors.Is(emitErr, audit.ErrWriterClosed) {
+				_ = c.emitOperatorCenterAudit(audit.Event{
+					Session:  runSession.Layout.ID,
+					Profile:  runSession.Plan.ProfileName,
+					Backend:  runSession.Plan.Backend,
+					Action:   action,
+					Decision: decision,
+					Details:  privilege.PrivilegedSetupDetails(event.Category, event.Status, event.Setup, event.Reason),
+				})
 				return nil
 			}
 			return emitErr
