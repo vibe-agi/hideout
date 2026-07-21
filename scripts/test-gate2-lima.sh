@@ -1140,7 +1140,7 @@ printf "reselect_ok=yes\n"
   exit 1
 fi
 grep -q 'reselect_ok=yes' "$tmp/env-reselect.out"
-env_id="$(awk -F'\t' -v name="$env_name" 'NR > 1 && $1 == name { print $9; exit }' "$tmp/env-list-before.out")"
+env_id="$(awk -F'\t' -v name="$env_name" 'NR > 1 && $1 == name { print $15; exit }' "$tmp/env-list-before.out")"
 env_instance="$(awk -F'"' '/"instanceName"/ { print $4; exit }' "$store/environments/$env_id/environment.json")"
 if [ -z "$env_instance" ]; then
   echo "gate2: environment record is missing instanceName" >&2
@@ -1182,7 +1182,7 @@ printf "named_ok=yes\n"
 fi
 grep -q 'named_ok=yes' "$tmp/env-named.out"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-named.out"
-named_env_id="$(awk -F'\t' 'NR > 1 && $1 == "gate2-named" { print $9; exit }' "$tmp/env-list-named.out")"
+named_env_id="$(awk -F'\t' 'NR > 1 && $1 == "gate2-named" { print $15; exit }' "$tmp/env-list-named.out")"
 if [ -z "$named_env_id" ]; then
   echo "gate2: gate2-named environment missing from list" >&2
   cat "$tmp/env-list-named.out" >&2
