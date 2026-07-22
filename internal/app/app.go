@@ -2027,13 +2027,25 @@ func (a app) runCommand(args []string, explainOnly bool) (retErr error) {
 }
 
 func (a app) writeRunResultSummary(result manager.RunResult) {
-	if result.BoundarySummary == nil && !result.PreserveInstance {
+	// cleanup-required always speaks: the operator has a retained disposable
+	// record to clean, and no other channel names it.
+	if result.BoundarySummary == nil && !result.PreserveInstance && result.EnvironmentDisposition != "cleanup-required" {
 		return
 	}
 	if result.EnvironmentID != "" {
 		fmt.Fprintf(a.stderr, "Hideout environment: %s\n", result.EnvironmentID)
 		if result.EnvironmentName != "" {
 			fmt.Fprintf(a.stderr, "Hideout environment name: %s\n", result.EnvironmentName)
+		}
+		switch result.EnvironmentDisposition {
+		case "removed":
+			fmt.Fprintln(a.stderr, "Hideout disposable environment removed.")
+		case "cleanup-required":
+			handle := result.EnvironmentName
+			if handle == "" {
+				handle = result.EnvironmentID
+			}
+			fmt.Fprintf(a.stderr, "Hideout disposable cleanup required: hideout clean %s\n", handle)
 		}
 		if result.PreserveInstance {
 			handle := result.EnvironmentName

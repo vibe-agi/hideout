@@ -3470,6 +3470,52 @@ exit 0
 	}
 }
 
+func TestWriteRunResultSummaryReportsDisposableDisposition(t *testing.T) {
+	var out, errOut bytes.Buffer
+	a := app{stdout: &out, stderr: &errOut}
+
+	// A cleanly removed disposable stays quiet on the quiet path, exactly like
+	// any other non-preserved run.
+	a.writeRunResultSummary(manager.RunResult{
+		EnvironmentID:          "env_20260722t010203zabcdef1234567890",
+		EnvironmentName:        "rm-0a1b2c3d4e5f",
+		EnvironmentDisposition: "removed",
+	})
+	if errOut.Len() != 0 {
+		t.Fatalf("removed disposable must stay quiet without a boundary summary: %s", errOut.String())
+	}
+
+	// cleanup-required must speak even on the quiet path: the operator has a
+	// retained record to clean and no other channel names it.
+	a.writeRunResultSummary(manager.RunResult{
+		EnvironmentID:          "env_20260722t010203zabcdef1234567890",
+		EnvironmentName:        "rm-0a1b2c3d4e5f",
+		EnvironmentDisposition: "cleanup-required",
+	})
+	summary := errOut.String()
+	if !strings.Contains(summary, "rm-0a1b2c3d4e5f") || !strings.Contains(summary, "hideout clean") {
+		t.Fatalf("cleanup-required disposition must name the retained environment and the clean command:\n%s", summary)
+	}
+	if strings.Contains(summary, "run again:") {
+		t.Fatalf("disposable environments must not advertise a resume hint:\n%s", summary)
+	}
+
+	// With a boundary summary present the removed disposition is disclosed.
+	errOut.Reset()
+	a.writeRunResultSummary(manager.RunResult{
+		EnvironmentID:          "env_20260722t010203zabcdef1234567890",
+		EnvironmentName:        "rm-0a1b2c3d4e5f",
+		EnvironmentDisposition: "removed",
+		BoundarySummary: &manager.BoundarySummary{
+			Version:  manager.BoundarySummaryVersion,
+			Evidence: "disabled",
+		},
+	})
+	if !strings.Contains(errOut.String(), "disposable environment removed") {
+		t.Fatalf("verbose summary must disclose the removed disposition:\n%s", errOut.String())
+	}
+}
+
 func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) {
 	var out, errOut bytes.Buffer
 	a := app{stdout: &out, stderr: &errOut}
