@@ -2485,7 +2485,7 @@ func TestCoreApplyRunWaitsForLockedEnvironmentUntilContextCancellation(t *testin
 	}
 }
 
-func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.T) {
+func TestCoreSelectRunEnvironmentRemoveCreatesDisposableEnvironment(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	p := runtimeConfigurationTestProfile("default")
 	spec := RunEnvironmentSpec(p, "lima", t.TempDir(), "/workspace")
@@ -2498,13 +2498,14 @@ func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.
 	if err := envStore.Save(rec); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-
-	selected, err := New(store).SelectRunEnvironment(RunPlan{
+	plan := RunPlan{
 		Backend:        "lima",
 		Workspace:      spec.BoundWorkspace,
 		GuestWorkspace: spec.BoundGuestRoot,
 		RuntimeProfile: p,
-	}, RunEnvironmentOptions{
+	}
+
+	_, err = New(store).SelectRunEnvironment(plan, RunEnvironmentOptions{
 		EnvName:        rec.Name,
 		RemoveAfterRun: true,
 		Create:         true,
@@ -2512,21 +2513,61 @@ func TestCoreSelectRunEnvironmentResumeRemoveDoesNotPreserveInstance(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "--rm cannot be combined") {
 		t.Fatalf("--rm with --env must fail closed, got %v", err)
 	}
-	_ = selected
-	selected, err = New(store).SelectRunEnvironment(RunPlan{
-		Backend:        "lima",
-		Workspace:      spec.BoundWorkspace,
-		GuestWorkspace: spec.BoundGuestRoot,
-		RuntimeProfile: p,
-	}, RunEnvironmentOptions{
+
+	selected, err := New(store).SelectRunEnvironment(plan, RunEnvironmentOptions{
 		RemoveAfterRun: true,
 		Create:         true,
 	})
 	if err != nil {
 		t.Fatalf("SelectRunEnvironment: %v", err)
 	}
-	if selected.Active {
-		t.Fatalf("--rm runs stay record-less/disposable: %+v", selected)
+	if !selected.Active || !selected.Record.Disposable || !selected.Created {
+		t.Fatalf("--rm must select an active, created disposable environment: %+v", selected)
+	}
+	if selected.Record.Mode != environment.ModeDedicated {
+		t.Fatalf("--rm environment must be dedicated, got %q", selected.Record.Mode)
+	}
+	if selected.PreserveInstance || !selected.RemoveAfterRun {
+		t.Fatalf("--rm must not preserve the instance and must mark removal: %+v", selected)
+	}
+	if !strings.HasPrefix(selected.Record.Name, "rm-") {
+		t.Fatalf("--rm environment name must carry the disposable prefix, got %q", selected.Record.Name)
+	}
+	if selected.Record.InstanceName == "" || selected.InstanceName != selected.Record.InstanceName {
+		t.Fatalf("--rm environment must pin its lima instance name: %+v", selected)
+	}
+	if _, err := envStore.Load(selected.Record.ID); err != nil {
+		t.Fatalf("--rm environment record must be durable for crash recovery: %v", err)
+	}
+
+	second, err := New(store).SelectRunEnvironment(plan, RunEnvironmentOptions{
+		RemoveAfterRun: true,
+		Create:         true,
+	})
+	if err != nil {
+		t.Fatalf("second --rm selection: %v", err)
+	}
+	if second.Record.ID == selected.Record.ID || second.Record.Name == selected.Record.Name {
+		t.Fatalf("concurrent --rm runs need distinct disposable environments: %q vs %q", second.Record.Name, selected.Record.Name)
+	}
+
+	before, err := envStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dry, err := New(store).SelectRunEnvironment(plan, RunEnvironmentOptions{RemoveAfterRun: true})
+	if err != nil {
+		t.Fatalf("explain --rm selection: %v", err)
+	}
+	if dry.Record.ID != "env_new" || !dry.Record.Disposable || dry.PreserveInstance {
+		t.Fatalf("explain --rm must synthesize a disposable plan without persisting: %+v", dry.Record)
+	}
+	after, err := envStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("explain --rm must not persist a record: %d -> %d", len(before), len(after))
 	}
 }
 

@@ -2,6 +2,8 @@ package manager
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -43,10 +45,11 @@ func (c Core) SelectRunEnvironment(plan RunPlan, opts RunEnvironmentOptions) (Ru
 		return RunEnvironment{}, errors.New("manager store root is required")
 	}
 	store := environment.Store{Root: c.Store.Root}
-	// Ephemeral runs resolve the same shared environment as a normal run (only
-	// identity is session-local), so they get the same runtime-disk precheck.
-	// Only --rm stays record-less and materializes no persistent runtime.
-	if opts.Create && !opts.RemoveAfterRun {
+	// Every persisted selection gets the runtime-disk precheck: ephemeral runs
+	// resolve the same shared environment as a normal run, and --rm creates a
+	// dedicated disposable environment whose distinct VM also materializes the
+	// pinned runtime image.
+	if opts.Create {
 		provenance, err := runtimeProvenanceForRun(store, plan, opts)
 		if err != nil {
 			return RunEnvironment{}, err
@@ -132,16 +135,73 @@ func SelectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 		return selectedEnvironmentWithInstance(store, rec, spec, p, opts.Create)
 	}
 	if opts.RemoveAfterRun {
-		// --rm sessions stay record-less/disposable by contract. Ephemeral runs
-		// deliberately do NOT: they resolve the default shared environment and
-		// keep only identity session-local (see RunIdentityDir/IdentityMode), so
-		// the lima daemon's isolated ready proof has the EnvironmentID and
-		// InstanceName it requires.
-		return RunEnvironment{}, nil
+		// --rm runs own a dedicated disposable environment: a durable record and
+		// distinct VM for exactly one run, disposed through the proof-gated
+		// teardown after it. Ephemeral runs deliberately differ: they resolve the
+		// default shared environment and keep only identity session-local (see
+		// RunIdentityDir/IdentityMode), so --rm and --ephemeral stay orthogonal.
+		return selectDisposableRunEnvironment(store, p, backendName, workspace, guestWorkspace, opts)
 	}
 	return selectAutomaticRunEnvironmentForPlatform(
 		store, p, backendName, workspace, guestWorkspace, opts, runtime.GOOS, runtime.GOARCH,
 	)
+}
+
+func selectDisposableRunEnvironment(
+	store environment.Store,
+	p profile.Profile,
+	backendName, workspace, guestWorkspace string,
+	opts RunEnvironmentOptions,
+) (RunEnvironment, error) {
+	name, err := disposableEnvironmentName()
+	if err != nil {
+		return RunEnvironment{}, err
+	}
+	spec := dedicatedRunEnvironmentSpec(p, backendName, workspace, guestWorkspace, name)
+	spec.Disposable = true
+	if !opts.Create {
+		rec := environment.Record{
+			ID:                  "env_new",
+			Version:             environment.RecordVersion,
+			Name:                spec.Name,
+			AutoNamed:           spec.AutoNamed,
+			ImageRef:            spec.ImageRef,
+			Profile:             spec.Profile,
+			Backend:             spec.Backend,
+			Mode:                spec.Mode,
+			MachineIdentityID:   spec.MachineIdentityID,
+			BootConfigurationID: spec.BootConfigurationID,
+			DedicatedWorkspace:  spec.DedicatedWorkspace,
+			DedicatedGuestRoot:  spec.DedicatedGuestRoot,
+			User:                spec.User,
+			Hostname:            spec.Hostname,
+			Disposable:          true,
+			Status:              "new",
+		}
+		if spec.Backend == "lima" {
+			rec.InstanceName = lima.InstanceNameForEnvironment(p.Name, "env_new")
+		}
+		return selectedRunEnvironment(store, rec, spec, p, false, true, true), nil
+	}
+	created, err := store.Create(spec)
+	if err != nil {
+		return RunEnvironment{}, err
+	}
+	if created.Backend == "lima" {
+		created.InstanceName = lima.InstanceNameForEnvironment(p.Name, created.ID)
+		if err := store.Save(created); err != nil {
+			return RunEnvironment{}, err
+		}
+	}
+	return selectedRunEnvironment(store, created, spec, p, false, true, true), nil
+}
+
+func disposableEnvironmentName() (string, error) {
+	var raw [6]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("derive disposable environment name: %w", err)
+	}
+	return "rm-" + hex.EncodeToString(raw[:]), nil
 }
 
 func selectAutomaticRunEnvironmentForPlatform(
@@ -151,9 +211,6 @@ func selectAutomaticRunEnvironmentForPlatform(
 	opts RunEnvironmentOptions,
 	hostOS, hostArch string,
 ) (RunEnvironment, error) {
-	if opts.RemoveAfterRun {
-		return RunEnvironment{}, nil
-	}
 	spec, err := automaticRunEnvironmentSpecForPlatform(p, backendName, workspace, guestWorkspace, hostOS, hostArch)
 	if err != nil {
 		return RunEnvironment{}, err

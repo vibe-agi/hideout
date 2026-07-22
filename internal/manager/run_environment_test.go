@@ -437,13 +437,14 @@ func TestSelectRunEnvironmentAutoNamedResolution(t *testing.T) {
 		t.Fatalf("rerun should reuse the auto-named environment: %+v", second.Record)
 	}
 
-	// --rm stays record-less
+	// --rm creates its own dedicated disposable environment instead of touching
+	// the auto-named reusable record.
 	rm, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{RemoveAfterRun: true, Create: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rm.Active {
-		t.Fatalf("--rm should stay record-less/disposable: %+v", rm)
+	if !rm.Active || !rm.Record.Disposable || rm.Record.ID == first.Record.ID {
+		t.Fatalf("--rm should own a distinct disposable environment: %+v", rm)
 	}
 
 	// --ephemeral resolves the SAME shared environment as a normal run; only
@@ -465,14 +466,25 @@ func TestSelectRunEnvironmentAutoNamedResolution(t *testing.T) {
 
 	// MRU-style flags are gone from the options surface: resuming by id and
 	// --new no longer exist. (Compile-time: RunEnvironmentOptions has no such
-	// fields; runtime assertion below guards the listing count.)
+	// fields; runtime assertion below guards the listing count.) The --rm
+	// selection above owns the only extra record, and it is explicitly marked
+	// disposable rather than a silent reusable environment.
 	envStore := environment.Store{Root: store.Root}
 	records, err := envStore.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("no silent extra environments may exist: %+v", records)
+	reusable := 0
+	disposable := 0
+	for _, rec := range records {
+		if rec.Disposable {
+			disposable++
+			continue
+		}
+		reusable++
+	}
+	if reusable != 1 || disposable != 1 {
+		t.Fatalf("no silent extra environments may exist (want 1 reusable + 1 disposable): %+v", records)
 	}
 }
 

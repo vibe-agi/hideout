@@ -6820,9 +6820,14 @@ func TestStopAndCleanIdleFilters(t *testing.T) {
 	}
 }
 
-func TestSelectRunEnvironmentRemoveStaysRecordless(t *testing.T) {
+func TestSelectRunEnvironmentRemoveCreatesDisposableDedicated(t *testing.T) {
 	store := environment.Store{Root: t.TempDir()}
 	p := profile.Default("default")
+	p.Metadata = map[string]string{
+		"profileId":  "profile-fixture-default",
+		"identityId": "identity-fixture-default",
+		"machineId":  strings.Repeat("a", 32),
+	}
 	opts := runOptions{
 		workspace:      t.TempDir(),
 		guestWorkspace: "/workspace",
@@ -6832,8 +6837,11 @@ func TestSelectRunEnvironmentRemoveStaysRecordless(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectRunEnvironment: %v", err)
 	}
-	if selected.Active {
-		t.Fatalf("--rm runs stay record-less/disposable: %+v", selected)
+	if !selected.Active || !selected.Record.Disposable || selected.Record.Mode != environment.ModeDedicated {
+		t.Fatalf("--rm runs own a dedicated disposable environment: %+v", selected)
+	}
+	if selected.PreserveInstance || !selected.RemoveAfterRun {
+		t.Fatalf("--rm must dispose its instance after the run: %+v", selected)
 	}
 }
 
@@ -6846,8 +6854,8 @@ func TestRunLimaReturnsAndAuditsBackendCleanupFailure(t *testing.T) {
 	script := fmt.Sprintf(`#!/bin/sh
 printf '%%s\n' "$*" >> %q
 case "$*" in
-  *'/network/cleanup.sh'*)
-    echo 'cleanup failed' >&2
+  'delete -f hideout-'*)
+    echo 'delete failed' >&2
     exit 37
     ;;
 esac
@@ -6884,11 +6892,8 @@ exit 0
 	if err != nil {
 		t.Fatalf("read fake limactl log: %v", err)
 	}
-	if !strings.Contains(string(calls), "/hideout/session/network/cleanup.sh") {
-		t.Fatalf("fake limactl did not receive cleanup call: %s", calls)
-	}
 	if !strings.Contains(string(calls), "delete -f hideout-") {
-		t.Fatalf("fake limactl did not receive delete call after cleanup failure: %s", calls)
+		t.Fatalf("fake limactl did not receive the disposable delete call: %s", calls)
 	}
 	auditFiles, err := filepath.Glob(filepath.Join(home, ".hideout", "sessions", "*", "audit.jsonl"))
 	if err != nil {
@@ -6907,7 +6912,7 @@ exit 0
 		`"decision":"allow"`,
 		`"action":"backend.cleanup"`,
 		`"decision":"error"`,
-		`"error":"network cleanup: exit status 37"`,
+		`"error":"delete lima instance hideout-`,
 		`"action":"session.cleanup"`,
 	} {
 		if !strings.Contains(string(auditData), want) {
