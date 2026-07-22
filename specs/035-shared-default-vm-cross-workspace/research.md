@@ -263,7 +263,8 @@ distinct declarative policy.
 
 **Decision**: Promote only macOS arm64 Lima after a real installed-package gate.
 Native and unpromoted Lima platforms create explicit workspace-bound records;
-disposable `--rm` runs remain record-less; `--ephemeral` uses the normal
+disposable `--rm` runs own per-run dedicated disposable records removed on
+proved teardown; `--ephemeral` uses the normal
 platform environment with session-local identity; named environments remain
 dedicated. Docs claim only private exact-root views for ordinary non-root
 targets with disjoint roots. Guest-root containment, project-content anonymity,
@@ -287,7 +288,7 @@ cannot be mutually isolated by definition.
 **Decision**: Shared Workspace Portal sessions set Git's process-scoped
 `core.preloadIndex=false` through Core-owned synthetic environment entries.
 They do not modify repository, profile-home, or host Git configuration. Static,
-dedicated, workspace-bound, native, and record-less sessions retain their
+dedicated, disposable, workspace-bound, and native sessions retain their
 existing Git scheduling behavior. Exact `safe.directory` entries, when a mode
 requires them, remain independent and may never become a wildcard.
 
