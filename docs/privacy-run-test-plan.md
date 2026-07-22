@@ -1831,7 +1831,8 @@ containment.
 
 ## Gate 041: Shared Workspace Portal Executable Support
 
-Status: **Implemented in source; clean exact-package real promotion pending.**
+Status: **Implemented and promoted from clean exact-package real macOS arm64
+Lima evidence.**
 
 ### Gate 0 And Mutation Lane
 
@@ -1892,3 +1893,16 @@ from `/tmp`, or edited `passed` JSON cannot satisfy promotion. The legacy
 aggregate Gate 2 intentionally copies its helper because that lane uses static
 virtiofs; it remains a regression gate and a positive control for the explicit
 non-claim, not workspace-execution evidence.
+
+The retained clean candidate is
+`1182fa10bec965cbdecb714faf6f7f9b587221e6`. All 13 closed behavior checks and
+100 executions across two disjoint workspaces passed. Thirty alternating
+samples measured 980.621 ms warm first-output p95 and a 0.983 direct/control
+median ratio. The product manifest SHA-256 is
+`c84bdaa2a42e16b1bb3e8159d2fcc180590dcbcd3ce7543af70ca1bb8cd9159f`; the
+workspace artifact SHA-256 is
+`ecf8a35f4ce570c02edf65f75a8e0e6eca4f8628996db35f0d731ea12c86cfc7`;
+the exact package SHA-256 is
+`c68b0c4eb9c07970527e40f106032684a16727bd9671de56fc174d156771885b`.
+The focused Portal probe, integrated Lima Gate 2, and full Gate 0 also passed on
+the same source candidate.

@@ -4,8 +4,9 @@
 
 **Date**: 2026-07-22
 
-**Promotion state**: Implementation candidate; clean exact-package evidence is
-not recorded until the candidate commit and full gates pass.
+**Promotion state**: Implemented and promoted for compatible macOS arm64 Lima
+automatic/shared Workspace Portal sessions at clean candidate
+`1182fa10bec965cbdecb714faf6f7f9b587221e6`.
 
 ## Root-Cause Reproduction
 
@@ -68,7 +69,7 @@ The test and `TestProofRegistryCovers041WithoutLettingNotRunSatisfyRealClaims`
 pass locally. The latter proves the supporting `not-run` proof has no exact-real
 runtime policy and cannot satisfy the release-candidate requirement.
 
-## Dirty Diagnostic Probes
+## Pre-Promotion Diagnostic Probes
 
 The focused Portal probe with the restored implementation directly executed an
 interpreted script and Linux arm64 binary while retaining the existing
@@ -84,17 +85,63 @@ execution p95 of approximately 996 ms and median ratio approximately 0.85
 against the same script invoked through guest `/bin/sh`. Probe mode emitted no
 product-hardening manifest.
 
-## Remaining Promotion Evidence
+## Final Promotion Evidence
 
-Before 041 is promoted, retain and identify:
+The final source candidate was clean and exact-package-bound. These commands
+completed successfully:
 
-1. full Gate 0 on the candidate commit;
-2. restored focused Portal correctness evidence;
-3. `scripts/test-workspace-executable-lima-e2e.sh --require-real` with at least
-   30 samples and 100 disjoint executions on a clean exact package;
-4. the integrated `scripts/test-gate2-lima.sh` with its static-virtiofs `/tmp`
-   controls explicit and unable to satisfy the 041 proof; and
-5. final artifact/package/manifest hashes plus a converged FR/SC/task audit.
+```sh
+scripts/test-workspace-portal-lima.sh \
+  /tmp/hideout-041-workspace-portal-clean-1182fa1
+scripts/test-workspace-executable-lima-e2e.sh --require-real \
+  --samples 30 --iterations 100 \
+  --out .hideout-release-evidence/041-workspace-executable-real-gate2-1182fa1
+scripts/test-gate2-lima.sh
+scripts/test-gate0.sh
+```
+
+The focused Portal artifact reports `dirty:false`, direct script and binary
+execution, the full filesystem/cache/lock matrix, and 88.855 ms observed
+host-to-guest convergence upper bound. The product artifact reports all 13
+closed checks true, 100 executions across two disjoint workspaces, 30 timing
+samples, 980.621 ms warm first-output p95, and a 0.983 direct/control median
+ratio. The aggregate Lima gate retained its static-virtiofs `/tmp` controls and
+completed `gate2: passed`; those controls did not contribute to the 041 proof.
+Full Gate 0 then passed all Go packages, Linux cross-build contracts, six TLA+
+models, packaging, docs truth, and product smoke lanes.
+
+Retained SHA-256 identities are:
+
+- product-hardening manifest:
+  `c84bdaa2a42e16b1bb3e8159d2fcc180590dcbcd3ce7543af70ca1bb8cd9159f`;
+- workspace-executable artifact:
+  `ecf8a35f4ce570c02edf65f75a8e0e6eca4f8628996db35f0d731ea12c86cfc7`;
+- exact packaged candidate:
+  `c68b0c4eb9c07970527e40f106032684a16727bd9671de56fc174d156771885b`;
+- focused Portal correctness artifact:
+  `bc7a10229ae794c9529ee01655f31cd2048fd5b588ec033d19bf7a877736d037`.
+
+The product evidence also binds runtime `developer-standard` revision
+`2026.07.0`, runtime artifact SHA-256
+`79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134`,
+and clean runtime build commit `c51aeed1121426ef4ef8bef15105780a20bc23aa`.
+
+## Aggregate Regression Convergence
+
+Clean aggregate runs exposed adjacent timing and networking regressions rather
+than a weakened 041 assertion. The final fixes preserve fail-closed behavior:
+
+- an existing Lima instance retries one ambiguous `limactl start` failure once,
+  then still requires all normal runtime, SSH, privilege, and session checks;
+- Portal readiness and cleanup use bounded 20-second and 10-second waits;
+- trusted-decision visibility keeps the exact deny/approve/revoke assertions
+  with a bounded 60-second observation window and last-error diagnostics;
+- Lima-local bypass aliases are resolved before DNS mediation and pinned only
+  as exactly marked `/etc/hosts` entries, while transient DNS timeouts remain
+  bounded and retryable.
+
+The clean aggregate run passed after these fixes, closing FR-016 and SC-007
+without accepting an unknown state or removing a negative assertion.
 
 Static/dedicated virtiofs remains `not-claimed` regardless of the shared-Portal
 result.

@@ -110,7 +110,7 @@
 
 - [X] T024 [US4] Add executed-tool checkout write and later-session visibility checks to `scripts/test-workspace-executable-lima-e2e.sh`
 - [X] T025 [US4] Preserve host-to-guest invalidation and ordinary write/rename/mode/truncate checks alongside executable operations in `scripts/test-workspace-portal-lima.sh`
-- [ ] T026 [US4] Capture 30 warm first-output samples, enforce p95 at most 2 seconds and median regression at most 10%, and retain raw samples in `scripts/test-workspace-executable-lima-e2e.sh`
+- [X] T026 [US4] Capture 30 warm first-output samples, enforce p95 at most 2 seconds and median regression at most 10%, and retain raw samples in `scripts/test-workspace-executable-lima-e2e.sh`
 
 **Checkpoint**: The host checkout remains the single source of truth and performance stays within the existing warm-run objective.
 
@@ -123,10 +123,10 @@
 - [X] T027 [P] Document the shared-Portal execution design and unchanged authority in `docs/privacy-run-design.md` and `docs/threat-model.md`
 - [X] T028 [P] Add Gate 0, focused Portal, feature Gate 2, mutation, negative-fixture, and integrated regression requirements to `docs/privacy-run-test-plan.md`
 - [X] T029 [P] Add the 041 support row and exact non-claims to `docs/STATUS.md` and `docs/claim-boundaries.md`
-- [ ] T030 Record the flag-removal mutation, evidence false-green fixture, exact commands, and retained artifact identities in `specs/041-workspace-executable-support/adversarial-report.md`
+- [X] T030 Record the flag-removal mutation, evidence false-green fixture, exact commands, and retained artifact identities in `specs/041-workspace-executable-support/adversarial-report.md`
 - [X] T031 Add the 041 local mechanics lane and proof assertions to `scripts/test-gate0.sh`, then run targeted tests, Linux arm64 cross-build, and full Gate 0
-- [ ] T032 Run the focused real Portal probe, feature-specific clean 041 Gate 2, and integrated Lima Gate 2; retain exact-commit artifacts and hashes
-- [ ] T033 Run markdown/doc truth checks, review every FR/SC/acceptance scenario against code and evidence, and mark all completed tasks in `specs/041-workspace-executable-support/tasks.md`
+- [X] T032 Run the focused real Portal probe, feature-specific clean 041 Gate 2, and integrated Lima Gate 2; retain exact-commit artifacts and hashes
+- [X] T033 Run markdown/doc truth checks, review every FR/SC/acceptance scenario against code and evidence, and mark all completed tasks in `specs/041-workspace-executable-support/tasks.md`
 
 ---
 
@@ -184,4 +184,4 @@ Task: add checkout-effect/later-session checks and performance sampling
 
 ## Phase 8: Convergence
 
-- [ ] T034 Diagnose and stabilize the integrated Lima Gate 2 trusted-decision visibility and explicit-stop/resume regressions without weakening their assertions, then retain one complete passing aggregate run per FR-016 and SC-007 (partial)
+- [X] T034 Diagnose and stabilize the integrated Lima Gate 2 trusted-decision visibility and explicit-stop/resume regressions without weakening their assertions, then retain one complete passing aggregate run per FR-016 and SC-007

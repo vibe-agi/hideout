@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-22
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "Advance Hideout toward self-service use by making
 ordinary guest-compatible executables and scripts stored in the selected
