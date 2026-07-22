@@ -66,7 +66,7 @@
 
 **Goal**: Execution retains exact workspace, attachment, session, and no-host-fallback boundaries.
 
-**Independent Test**: Direct helper execution in the integrated Lima Gate 2 reads only the granted HostFS path; escaping/missing paths and disjoint workspace substitutions remain denied.
+**Independent Test**: The feature-specific shared-Portal Gate 2 directly executes each workspace's helper while preserving exact-root negatives; the aggregate static-virtiofs Gate 2 remains green without contributing to the 041 proof.
 
 ### Tests For User Story 2
 
@@ -75,8 +75,8 @@
 
 ### Implementation For User Story 2
 
-- [X] T017 [US2] Remove the `/tmp/hideout-gate-fsread` copy workaround and execute `./hideout-gate-fsread` directly in the HostFS smoke lane in `scripts/test-gate2-lima.sh`
-- [X] T018 [US2] Remove the Python live-lane helper copy and use the workspace binary directly in `scripts/test-gate2-lima.sh`
+- [X] T017 [US2] Keep the `/tmp/hideout-gate-fsread` copy in the legacy static-virtiofs HostFS lane and document why it cannot satisfy 041 in `scripts/test-gate2-lima.sh`
+- [X] T018 [US2] Keep the Python live-lane static-virtiofs helper copy explicit while requiring direct execution only in the feature-specific shared-Portal gate in `scripts/test-gate2-lima.sh`
 - [X] T019 [US2] Bind real evidence to `lima`, `darwin/arm64`, Linux `aarch64`, `workspace-portal`, clean commit, package, runtime, and no-copy/no-fallback checks in `scripts/test-workspace-executable-lima-e2e.sh`
 
 **Checkpoint**: Direct execution changes no workspace, HostFS, lifecycle, or environment authority.
@@ -175,7 +175,7 @@ Task: add checkout-effect/later-session checks and performance sampling
 
 ### Incremental Closure
 
-1. Replace integrated Gate 2 copy workarounds with direct execution.
+1. Keep aggregate static-virtiofs copy controls explicit and outside the claim.
 2. Add isolation, negative compatibility, checkout, and performance lanes.
 3. Register strict product evidence and false-green rejection.
 4. Run clean exact-commit gates, update docs, and promote only the proved scope.

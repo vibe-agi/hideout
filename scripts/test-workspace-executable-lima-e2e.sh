@@ -346,6 +346,12 @@ fi
 
 record="$(find "$store/environments" -name environment.json -type f -print -quit)"
 [ -f "$record" ]
+record_count="$(find "$store/environments" -name environment.json -type f | wc -l | tr -d ' ')"
+[ "$record_count" = 1 ]
+jq -e '.mode == "shared" and (.sharedSlot | length) > 0 and
+  .dedicatedWorkspace == null and .boundWorkspace == null' "$record" >/dev/null
+instance_count="$(LIMA_HOME="$lima_home" limactl list --quiet | awk 'NF {count++} END {print count+0}')"
+[ "$instance_count" = 1 ]
 catalog="$(find "$prefix" -path '*/runtime/catalog.json' -type f -print -quit)"
 [ -f "$catalog" ]
 build_commit="$(jq -r --slurpfile record "$record" '
@@ -373,7 +379,8 @@ jq -n --arg commit "$(git rev-parse HEAD)" --argjson dirty "$(git_dirty)" \
     disjointIsolation:true,escapingSymlinkRejected:true,
     incompatibleFormatFailurePreserved:true,laterSessionVisible:true,
     localLauncher:true,missingInterpreterFailurePreserved:true,
-    noHostFallback:true,noWorkspaceCopy:true,permissionFailurePreserved:true},
+    noHostFallback:true,noWorkspaceCopy:true,permissionFailurePreserved:true,
+    sharedModeObserved:true},
   samples:$samples,warmFirstOutputP95Ms:$warmP95,
   medianRegressionRatio:$medianRatio,nonClaims:{staticVirtiofs:"not-claimed"}
 }' >"$out/artifacts/workspace-executable.json"

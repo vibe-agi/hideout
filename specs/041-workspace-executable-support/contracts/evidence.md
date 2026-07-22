@@ -20,6 +20,7 @@ entry must be true. At minimum it proves:
 - direct interpreted script execution;
 - direct Linux arm64 binary execution;
 - a workspace-local launcher;
+- one observed shared-mode environment and one Lima instance;
 - host checkout write visibility;
 - exact-root and escaping-path refusal;
 - no guest-local workspace copy;

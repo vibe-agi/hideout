@@ -12,7 +12,7 @@ Promote direct execution of guest-compatible scripts, binaries, and
 project-local launchers from the exact selected workspace on the existing
 macOS arm64 Lima shared Workspace Portal. The Linux FUSE client will accept and
 strip `FMODE_EXEC` as a non-semantic local hint while preserving the Portal's
-closed wire flags and exact-root authority. Focused and integrated real gates,
+closed wire flags and exact-root authority. Focused and feature-specific real gates,
 a Go-owned artifact validator, mutation proof, negative evidence fixtures, and
 explicit static/dedicated virtiofs non-claims establish the boundary.
 
@@ -24,7 +24,7 @@ explicit static/dedicated virtiofs non-claims establish the boundary.
 
 **Storage**: no new product state; retained JSON/log gate artifacts only
 
-**Testing**: Go unit/cross-build tests, mutation and negative fixtures, focused Portal Lima probe, full Gate 0, integrated and feature-specific real Lima Gate 2
+**Testing**: Go unit/cross-build tests, mutation and negative fixtures, focused Portal Lima probe, full Gate 0, feature-specific shared-Portal Gate 2, and legacy aggregate Lima regressions
 
 **Target Platform**: macOS arm64 host, Linux arm64 Lima guest, compatible automatic/shared sessions using Workspace Portal
 
@@ -65,8 +65,8 @@ explicit static/dedicated virtiofs non-claims establish the boundary.
   unpromoted. No first-run, repair, package, schema, or InitTask change occurs.
 - **Gates**: Required checks are targeted unit/cross-build tests, mutation and
   negative evidence fixtures, full Gate 0, the focused Portal Lima correctness
-  probe, a clean exact-package 041 Gate 2, and the integrated Lima Gate 2 with
-  direct workspace helper execution.
+  probe, a clean exact-package 041 Gate 2, and the aggregate Lima regression
+  gate with its static-virtiofs non-claim intact.
 - **Status And Docs**: Update `docs/STATUS.md`, `docs/DEBT.md`,
   `docs/claim-boundaries.md`, `docs/privacy-run-design.md`,
   `docs/privacy-run-test-plan.md`, and `docs/threat-model.md`.
@@ -120,7 +120,7 @@ internal/
 scripts/
 ├── test-workspace-portal-lima.sh          # focused transport correctness
 ├── test-workspace-executable-lima-e2e.sh  # exact product proof
-├── test-gate2-lima.sh                     # integrated direct execution regression
+├── test-gate2-lima.sh                     # aggregate static-topology regressions
 └── test-gate0.sh                          # local aggregate
 
 docs/
@@ -133,7 +133,8 @@ docs/
 ```
 
 **Structure Decision**: Extend the existing Workspace Portal flag encoder,
-focused/integrated real gates, and Go product-evidence registry. No new runtime
+focused/feature-specific real gates, aggregate regressions, and the Go
+product-evidence registry. No new runtime
 service, configuration surface, durable model, protocol bit, or UI is added.
 
 ## Implementation Phases
@@ -155,7 +156,8 @@ service, configuration surface, durable model, protocol bit, or UI is added.
 
 ### Phase 2: Product And Evidence
 
-1. Remove `/tmp` executable-copy workarounds from shared product Gate 2 lanes.
+1. Keep legacy static-virtiofs Gate 2 copies explicit and unable to satisfy the
+   shared-Portal claim.
 2. Add a feature-specific exact-candidate real gate with launcher, checkout,
    isolation, negative, 30-sample, and no-fallback checks.
 3. Register a strict Go validator and retain false-green negative fixtures.

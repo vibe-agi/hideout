@@ -1363,7 +1363,7 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 			"checkoutWriteVisible", "directBinary", "directScript", "disjointIsolation",
 			"escapingSymlinkRejected", "incompatibleFormatFailurePreserved", "laterSessionVisible",
 			"localLauncher", "missingInterpreterFailurePreserved", "noHostFallback",
-			"noWorkspaceCopy", "permissionFailurePreserved",
+			"noWorkspaceCopy", "permissionFailurePreserved", "sharedModeObserved",
 		} {
 			checks[name] = true
 		}

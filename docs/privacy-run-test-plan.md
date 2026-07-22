@@ -1888,4 +1888,7 @@ candidate commit, exact package and runtime binding, macOS arm64/Lima/aarch64,
 `workspace-portal`, a closed all-true check inventory, thresholds, redaction,
 and `staticVirtiofs: not-claimed`. The supporting `not-run` proof, native/local
 tests, a dirty or reduced probe, the focused research probe, helper execution
-from `/tmp`, or edited `passed` JSON cannot satisfy promotion.
+from `/tmp`, or edited `passed` JSON cannot satisfy promotion. The legacy
+aggregate Gate 2 intentionally copies its helper because that lane uses static
+virtiofs; it remains a regression gate and a positive control for the explicit
+non-claim, not workspace-execution evidence.

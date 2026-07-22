@@ -556,10 +556,12 @@ else
   fi
   printf "hostfs_node=skip\n"
 fi
-# This check exercises both direct shared-Portal workspace execution and HostFS
-# read from a compiled Go program. A guest-local copy would hide a regression in
-# the workspace execution contract.
-./hideout-gate-fsread --read "$1" --deny "$5"
+# This check exercises HostFS read from a compiled Go program (os.ReadFile),
+# not shared Workspace Portal execution. This legacy Gate 2 topology uses a
+# static Lima virtiofs workspace, whose direct execution remains explicitly
+# unpromoted by feature 041, so copy the helper to an exec-capable guest path.
+cp ./hideout-gate-fsread /tmp/hideout-gate-fsread
+/tmp/hideout-gate-fsread --read "$1" --deny "$5"
 if cat "$5" >/dev/null 2>&1; then
   echo "ungranted hostfs path unexpectedly readable" >&2
   exit 44
@@ -742,6 +744,7 @@ cat >"$workspace/hostfs-visibility-live.py" <<'PY'
 import errno
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -750,9 +753,12 @@ import time
 workspace, approve_path, deny_path, timeout_path, link_path = sys.argv[1:]
 workspace = Path(workspace)
 
-# Execute the packaged test helper from the shared Workspace Portal. Copying it
-# to guest-local storage would make this lane unable to detect FMODE_EXEC drift.
-fsread_bin = "./hideout-gate-fsread"
+# This legacy Gate 2 topology uses a static Lima virtiofs workspace. Feature 041
+# deliberately does not promote direct execution for that mechanism; the
+# feature-specific shared-Portal gate owns the direct-execution assertion.
+fsread_bin = "/tmp/hideout-gate-fsread"
+shutil.copyfile("hideout-gate-fsread", fsread_bin)
+os.chmod(fsread_bin, 0o755)
 
 
 def marker(name):

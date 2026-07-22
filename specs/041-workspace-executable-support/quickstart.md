@@ -45,8 +45,9 @@ scripts/test-gate0.sh
 scripts/test-gate2-lima.sh
 ```
 
-Expected: Gate 0 passes on the host and the ordinary product Gate 2 no longer
-copies workspace helpers into `/tmp` before executing them.
+Expected: Gate 0 passes on the host. The ordinary aggregate Gate 2 keeps its
+explicit `/tmp` helper control because it uses static virtiofs; only the 041
+feature gate establishes direct shared-Portal execution.
 
 ## 5. Verify The Claim Boundary
 

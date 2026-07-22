@@ -65,13 +65,16 @@ selection, mount topology, or trust-domain semantics.
 ## Decision 4: Exercise The Product Path, Not Only The Research Helper
 
 **Decision**: Keep the focused Portal correctness probe for transport evidence,
-and remove guest-local helper copies from the ordinary shared-mode Gate 2 lanes
-so the packaged product directly executes a workspace binary.
+and add a feature-specific packaged shared-mode Gate 2 that directly executes
+workspace content. Keep the legacy static-virtiofs Gate 2 helper copies as
+controls outside the promoted claim.
 
 **Rationale**: The focused probe gives fast flag-level diagnosis and retained
-logs. The integrated Gate 2 proves the selected workspace, daemon, attachment,
-Portal helper, target, HostFS boundary, and candidate package all participate in
-the same execution. Both are needed; neither may be replaced by a native test.
+logs. The feature Gate 2 proves the selected workspace, daemon, attachment,
+Portal helper, target, and candidate package all participate in the same
+execution. The legacy aggregate Gate 2 still protects HostFS and other static
+topology behavior, but its guest-local helper copy cannot satisfy 041. Both real
+lanes are required; neither may be replaced by a native test.
 
 ## Decision 5: Judge The Evidence Semantically
 

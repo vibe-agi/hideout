@@ -92,8 +92,8 @@ Before 041 is promoted, retain and identify:
 2. restored focused Portal correctness evidence;
 3. `scripts/test-workspace-executable-lima-e2e.sh --require-real` with at least
    30 samples and 100 disjoint executions on a clean exact package;
-4. the integrated `scripts/test-gate2-lima.sh` with both `/tmp` copy workarounds
-   absent; and
+4. the integrated `scripts/test-gate2-lima.sh` with its static-virtiofs `/tmp`
+   controls explicit and unable to satisfy the 041 proof; and
 5. final artifact/package/manifest hashes plus a converged FR/SC/task audit.
 
 Static/dedicated virtiofs remains `not-claimed` regardless of the shared-Portal

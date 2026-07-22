@@ -27,6 +27,7 @@ var requiredWorkspaceExecutableChecks = []string{
 	"noHostFallback",
 	"noWorkspaceCopy",
 	"permissionFailurePreserved",
+	"sharedModeObserved",
 }
 
 type workspaceExecutableEvidence struct {
