@@ -644,6 +644,50 @@ func TestAutoNameDeterministicAndMoveSensitive(t *testing.T) {
 	}
 }
 
+func TestDisposableRecordRoundTripAndModeGuard(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	spec := testSpecNamed("rm-0a1b2c3d4e5f", "/tmp/ws-disposable")
+	spec.Mode = ModeDedicated
+	spec.DedicatedWorkspace = spec.BoundWorkspace
+	spec.DedicatedGuestRoot = spec.BoundGuestRoot
+	spec.BoundWorkspace = ""
+	spec.BoundGuestRoot = ""
+	spec.Disposable = true
+	created, err := store.Create(spec)
+	if err != nil {
+		t.Fatalf("Create disposable dedicated: %v", err)
+	}
+	if !created.Disposable {
+		t.Fatal("Create must copy the disposable marker")
+	}
+	loaded, err := store.Load(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Disposable {
+		t.Fatal("disposable marker must survive the record round-trip so a restarted daemon can tell disposable from normal dedicated")
+	}
+
+	shared := loaded
+	shared.Mode = ModeShared
+	shared.Name = SharedDisplayName(shared.Profile)
+	shared.SharedSlot = SharedSlotID(shared.Profile)
+	shared.DedicatedWorkspace = ""
+	shared.DedicatedGuestRoot = ""
+	if err := shared.Validate(); err == nil || !strings.Contains(err.Error(), "disposable") {
+		t.Fatalf("shared mode must reject the disposable marker, got %v", err)
+	}
+	bound := loaded
+	bound.Mode = ModeWorkspaceBound
+	bound.BoundWorkspace = bound.DedicatedWorkspace
+	bound.BoundGuestRoot = bound.DedicatedGuestRoot
+	bound.DedicatedWorkspace = ""
+	bound.DedicatedGuestRoot = ""
+	if err := bound.Validate(); err == nil || !strings.Contains(err.Error(), "disposable") {
+		t.Fatalf("workspace-bound mode must reject the disposable marker, got %v", err)
+	}
+}
+
 func testSpecNamed(name, workspace string) Spec {
 	return Spec{
 		Name:                name,

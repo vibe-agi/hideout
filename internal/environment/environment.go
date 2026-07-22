@@ -89,6 +89,7 @@ type Spec struct {
 	User                string
 	Hostname            string
 	InstanceName        string
+	Disposable          bool
 }
 
 type Record struct {
@@ -111,6 +112,7 @@ type Record struct {
 	User                string             `json:"user,omitempty"`
 	Hostname            string             `json:"hostname,omitempty"`
 	InstanceName        string             `json:"instanceName,omitempty"`
+	Disposable          bool               `json:"disposable,omitempty"`
 	Status              string             `json:"status"`
 	LastSessionID       string             `json:"lastSessionId,omitempty"`
 	LastCommand         string             `json:"lastCommand,omitempty"`
@@ -180,6 +182,12 @@ func (r Record) Validate() error {
 		StatusNew, StatusCreated, StatusReady, StatusRunning, StatusStopped, StatusError,
 	}, r.Status) {
 		return errors.New("environment record lifecycle state is invalid")
+	}
+	// A disposable environment is always its run's own dedicated machine: the
+	// shared slot and workspace-bound records are reusable by contract and must
+	// never carry the pre-authorized destruction marker.
+	if r.Disposable && r.Mode != ModeDedicated {
+		return errors.New("disposable environments must be dedicated")
 	}
 	switch r.Mode {
 	case ModeShared:
@@ -484,6 +492,7 @@ func (s Store) Create(spec Spec) (Record, error) {
 		User:                spec.User,
 		Hostname:            spec.Hostname,
 		InstanceName:        spec.InstanceName,
+		Disposable:          spec.Disposable,
 		Status:              StatusCreated,
 		CreatedAt:           now,
 	}
@@ -540,7 +549,8 @@ func validateSpec(spec Spec) error {
 		MachineIdentityID: spec.MachineIdentityID, BootConfigurationID: spec.BootConfigurationID,
 		DedicatedWorkspace: cleanOptionalPath(spec.DedicatedWorkspace),
 		DedicatedGuestRoot: cleanOptionalPath(spec.DedicatedGuestRoot), BoundWorkspace: cleanOptionalPath(spec.BoundWorkspace),
-		BoundGuestRoot: cleanOptionalPath(spec.BoundGuestRoot), Status: StatusCreated, CreatedAt: time.Now().UTC(),
+		BoundGuestRoot: cleanOptionalPath(spec.BoundGuestRoot), Disposable: spec.Disposable,
+		Status: StatusCreated, CreatedAt: time.Now().UTC(),
 	}
 	return probe.Validate()
 }
