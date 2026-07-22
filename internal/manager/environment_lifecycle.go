@@ -211,6 +211,33 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 	}
 }
 
+// confirmDisposableInstanceAbsent proves a disposable teardown after a
+// successful backend delete: the exact instance must be absent from backend
+// inventory for two consecutive samples. Anything else — still running,
+// stopped-but-present, or unavailable inventory — is not destruction proof;
+// the caller then retains the disposable record instead of faking success.
+func confirmDisposableInstanceAbsent(ctx context.Context, provider EnvironmentLifecycleBackend, instanceName string) bool {
+	for sample := 0; sample < 2; sample++ {
+		if sample > 0 {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return false
+			case <-timer.C:
+			}
+		}
+		observation := provider.ObserveLifecycle(ctx, instanceName)
+		if err := validateLifecycleObservationForInstance(observation, instanceName); err != nil {
+			return false
+		}
+		if observation.State != backend.LifecycleAbsent {
+			return false
+		}
+	}
+	return true
+}
+
 func confirmInitialEnvironmentTerminal(ctx context.Context, instanceName string, initial backend.LifecycleObservation, provider EnvironmentLifecycleBackend) (backend.LifecycleObservation, error) {
 	timer := time.NewTimer(100 * time.Millisecond)
 	defer timer.Stop()

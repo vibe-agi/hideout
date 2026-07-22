@@ -32,6 +32,46 @@ func (b *observedEnvironmentBackend) ObserveLifecycle(_ context.Context, instanc
 	return observation
 }
 
+func TestConfirmDisposableInstanceAbsentRequiresStableAbsence(t *testing.T) {
+	instance := "hideout-default-env-disposable"
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	cases := []struct {
+		name         string
+		observations []backend.LifecycleObservation
+		want         bool
+	}{
+		{"two consecutive absent samples prove destruction", []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleAbsent, instance, "", ""),
+			lifecycleObservation(backend.LifecycleAbsent, instance, "", ""),
+		}, true},
+		{"absent then running is a false terminal, not proof", []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleAbsent, instance, "", ""),
+			lifecycleObservation(backend.LifecycleRunning, instance, bootID, ""),
+		}, false},
+		{"any post-delete presence fails closed", []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleRunning, instance, bootID, ""),
+			lifecycleObservation(backend.LifecycleAbsent, instance, "", ""),
+			lifecycleObservation(backend.LifecycleAbsent, instance, "", ""),
+		}, false},
+		{"stopped-but-present is not destruction proof", []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleStopped, instance, "", ""),
+			lifecycleObservation(backend.LifecycleStopped, instance, "", ""),
+		}, false},
+		{"unavailable inventory fails closed", []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleUnknown, instance, "", "observation-unavailable"),
+			lifecycleObservation(backend.LifecycleAbsent, instance, "", ""),
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &observedEnvironmentBackend{observations: tc.observations}
+			if got := confirmDisposableInstanceAbsent(context.Background(), provider, instance); got != tc.want {
+				t.Fatalf("confirmDisposableInstanceAbsent=%v want %v (observations=%d)", got, tc.want, provider.observeCalls)
+			}
+		})
+	}
+}
+
 func TestStopEnvironmentIncarnationRejectsTransientTerminalProof(t *testing.T) {
 	core, record := observedStopFixture(t)
 	bootID := "01234567-89ab-cdef-0123-456789abcdef"
