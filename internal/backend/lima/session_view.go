@@ -24,6 +24,11 @@ import (
 )
 
 const (
+	workspacePortalReadyAttempts = 1000
+	workspacePortalStopAttempts  = 1000
+)
+
+const (
 	sessionViewProbeTimeout        = 10 * time.Second
 	sessionGuardianWait            = 2 * time.Second
 	sessionGuardianRoot            = "/run/hideout/session-guardians"
@@ -249,7 +254,7 @@ func writePortalWorkspaceMount(script *strings.Builder, spec SessionViewSpec) {
 	script.WriteString("while [ ! -f \"$workspace_ready\" ]; do\n")
 	script.WriteString("  kill -0 \"$workspace_portal_pid\" 2>/dev/null || { wait \"$workspace_portal_pid\"; exit 125; }\n")
 	script.WriteString("  workspace_attempt=$((workspace_attempt + 1))\n")
-	script.WriteString("  [ \"$workspace_attempt\" -lt 100 ] || { echo 'hideout: workspace Portal mount readiness timed out' >&2; exit 125; }\n")
+	fmt.Fprintf(script, "  [ \"$workspace_attempt\" -lt %d ] || { echo 'hideout: workspace Portal mount readiness timed out' >&2; exit 125; }\n", workspacePortalReadyAttempts)
 	script.WriteString("  sleep 0.01\n")
 	script.WriteString("done\n")
 }
@@ -311,7 +316,7 @@ func writePortalWorkspaceCleanup(script *strings.Builder, spec SessionViewSpec) 
 	script.WriteString("  workspace_stop_attempt=0\n")
 	script.WriteString("  while kill -0 \"$workspace_portal_pid\" 2>/dev/null; do\n")
 	script.WriteString("    workspace_stop_attempt=$((workspace_stop_attempt + 1))\n")
-	script.WriteString("    [ \"$workspace_stop_attempt\" -lt 100 ] || { kill -KILL \"$workspace_portal_pid\" 2>/dev/null || true; break; }\n")
+	fmt.Fprintf(script, "    [ \"$workspace_stop_attempt\" -lt %d ] || { kill -KILL \"$workspace_portal_pid\" 2>/dev/null || true; break; }\n", workspacePortalStopAttempts)
 	script.WriteString("    sleep 0.01\n")
 	script.WriteString("  done\n")
 	script.WriteString("  wait \"$workspace_portal_pid\" 2>/dev/null || true\n")

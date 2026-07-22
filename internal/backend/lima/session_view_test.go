@@ -597,6 +597,8 @@ func TestSessionViewConstructsPrivatePortalWorkspaceIdentity(t *testing.T) {
 		"for hostfs_root in Users Volumes private; do",
 		"ln -s \"/hideout/hostfs/$hostfs_root\" \"$workspace_root/$hostfs_root\"",
 		"'chroot' '/hideout/runtime/workspace-rootfs'",
+		`[ "$workspace_attempt" -lt 1000 ]`,
+		`[ "$workspace_stop_attempt" -lt 1000 ]`,
 		"umount -R '/hideout/runtime/workspace-rootfs'",
 		"umount '/hideout/workspaces/wrk_0123456789abcdef'",
 	} {

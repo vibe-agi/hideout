@@ -1062,6 +1062,54 @@ func TestRunStartsExistingPreservedInstanceByName(t *testing.T) {
 	}
 }
 
+func TestRunRetriesExistingPreservedInstanceAfterAmbiguousStartFailure(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = true
+	runner := &recordingRunner{
+		lookPath: "/opt/homebrew/bin/limactl", listOutput: spec.Machine.InstanceName + "\n",
+		failCalls: map[int]bool{2: true},
+	}
+	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := b.Run(context.Background(), session, []string{"true"}, []string{"PATH=/usr/bin:/bin"}); err != nil {
+		t.Fatalf("Run after idempotent existing-instance retry: %v", err)
+	}
+	wantStart := []string{"start", "--tty=false", session.InstanceName}
+	if len(runner.calls) < 3 || !reflect.DeepEqual(runner.calls[1].args, wantStart) || !reflect.DeepEqual(runner.calls[2].args, wantStart) {
+		t.Fatalf("existing instance start was not retried exactly by name: %+v", runner.calls)
+	}
+}
+
+func TestRunFailsClosedWhenExistingInstanceStartRetryFails(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Machine.EnvironmentID = "env_20260702t124639zabcdef1234567890"
+	spec.Machine.InstanceName = InstanceNameForEnvironment(spec.Machine.Profile.Name, spec.Machine.EnvironmentID)
+	spec.Machine.PreserveInstance = true
+	runner := &recordingRunner{
+		lookPath: "/opt/homebrew/bin/limactl", listOutput: spec.Machine.InstanceName + "\n",
+		failCalls: map[int]bool{2: true, 3: true},
+	}
+	b := Backend{Runner: runner, Stdin: bytes.NewBufferString(""), Stdout: io.Discard, Stderr: io.Discard}
+	session, err := b.Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	err = b.Run(context.Background(), session, []string{"true"}, []string{"PATH=/usr/bin:/bin"})
+	if err == nil || !strings.Contains(err.Error(), "retry existing Lima instance start") {
+		t.Fatalf("two failed starts did not fail closed: %v", err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("failed existing instance start should stop after one retry: %+v", runner.calls)
+	}
+}
+
 func TestRunStartsExistingEnvironmentInstanceByNameWhenRemoveAfterRun(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)
@@ -1516,6 +1564,7 @@ type recordingRunner struct {
 	lookPath       string
 	calls          []recordedCall
 	failCall       int
+	failCalls      map[int]bool
 	listOutput     string
 	emitOutput     bool
 	terminalBridge bool
@@ -1541,7 +1590,7 @@ func (r *recordingRunner) LookPath(string) (string, error) {
 
 func (r *recordingRunner) Run(_ context.Context, name string, args []string, env []string, _ io.Reader, stdout, _ io.Writer) error {
 	r.calls = append(r.calls, recordedCall{name: name, args: append([]string(nil), args...), env: append([]string(nil), env...)})
-	if r.failCall > 0 && len(r.calls) == r.failCall {
+	if (r.failCall > 0 && len(r.calls) == r.failCall) || r.failCalls[len(r.calls)] {
 		return errors.New("guest command not found")
 	}
 	if len(args) >= 5 && args[0] == "list" && args[1] == "--format" && args[2] == "json" {

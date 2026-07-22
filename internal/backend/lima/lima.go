@@ -624,12 +624,14 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 		}
 	}
 	startArgs := []string{"start", "--tty=false", "--name", session.InstanceName, session.ConfigPath}
+	startExisting := false
 	if session.PreserveInstance || session.EnvironmentID != "" {
 		exists, err := b.instanceExists(ctx, runner, hostEnv, session.InstanceName)
 		if err != nil {
 			return nil, nil, err
 		}
 		if exists {
+			startExisting = true
 			if session.RuntimeContract != nil {
 				if _, err := b.inspectRuntimeInstance(ctx, runner, hostEnv, session, false); err != nil {
 					return nil, nil, fmt.Errorf("refuse mismatched reusable Lima instance: %w", err)
@@ -639,10 +641,21 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 		}
 	}
 	session.RunAttempted = true
-	if err := runWithStartupProgress(b.Progress, session.InstanceName, session.RuntimePresentation, func() error {
+	start := func() error {
 		return runner.Run(ctx, b.limactl(), startArgs, hostEnv, nil, b.controlStdout(), b.controlStderr())
-	}); err != nil {
-		return nil, nil, err
+	}
+	if err := runWithStartupProgress(b.Progress, session.InstanceName, session.RuntimePresentation, start); err != nil {
+		if !startExisting || ctx.Err() != nil {
+			return nil, nil, err
+		}
+		// Lima can report a guest-agent reconnect failure after a stopped VZ VM
+		// has already reached Running with SSH ready. Reissuing the idempotent
+		// start-by-name command distinguishes that state from a genuine failed
+		// boot. All runtime, SSH, privilege, and session-view probes below still
+		// have to pass; two failed starts remain a hard failure.
+		if retryErr := runWithStartupProgress(b.Progress, session.InstanceName, session.RuntimePresentation, start); retryErr != nil {
+			return nil, nil, errors.Join(err, fmt.Errorf("retry existing Lima instance start: %w", retryErr))
+		}
 	}
 	session.RuntimeReady = true
 	var (

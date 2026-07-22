@@ -253,21 +253,22 @@ cleanup() {
     kill "$named_guard_pid" 2>/dev/null || true
     wait "$named_guard_pid" 2>/dev/null || true
   fi
-  if [ -x "${hideout:-}" ]; then
-    HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
-  fi
-  cleanup_lima_instances
-  if [ -n "${hostfs_protected_dir:-}" ]; then
-    chmod 700 "$hostfs_protected_dir" 2>/dev/null || true
-  fi
-	rm -rf "${hostfs_root:-}" "${hostfs_visibility_root:-}"
-	rm -rf "${projection_workspace:-}" "${projection_control_workspace:-}" "${projection_trusted_workspace:-}" "${projection_external_workspace:-}"
+	if [ -n "${hostfs_protected_dir:-}" ]; then
+		chmod 700 "$hostfs_protected_dir" 2>/dev/null || true
+	fi
 	if [ "${HIDEOUT_GATE2_KEEP_TMP:-0}" = "1" ]; then
 		echo "gate2: retained diagnostic directory: $tmp" >&2
+		echo "gate2: retained diagnostic Lima home: ${lima_home:-unset}" >&2
 	else
+		if [ -x "${hideout:-}" ]; then
+			HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
+		fi
+		cleanup_lima_instances
+		rm -rf "${hostfs_root:-}" "${hostfs_visibility_root:-}"
+		rm -rf "${projection_workspace:-}" "${projection_control_workspace:-}" "${projection_trusted_workspace:-}" "${projection_external_workspace:-}"
 		rm -rf "$tmp"
+		rm -rf "${lima_home:-}"
 	fi
-	rm -rf "${lima_home:-}"
 }
 trap cleanup EXIT
 

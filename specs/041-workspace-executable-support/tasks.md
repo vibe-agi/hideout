@@ -179,3 +179,9 @@ Task: add checkout-effect/later-session checks and performance sampling
 2. Add isolation, negative compatibility, checkout, and performance lanes.
 3. Register strict product evidence and false-green rejection.
 4. Run clean exact-commit gates, update docs, and promote only the proved scope.
+
+---
+
+## Phase 8: Convergence
+
+- [ ] T034 Diagnose and stabilize the integrated Lima Gate 2 trusted-decision visibility and explicit-stop/resume regressions without weakening their assertions, then retain one complete passing aggregate run per FR-016 and SC-007 (partial)

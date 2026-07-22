@@ -608,8 +608,8 @@ printf "%s\n" "$?" > trusted-first.rc
 : > trusted-ready
 attempt=0
 approved_rc=1
-while [ "$attempt" -lt 100 ]; do
-  code -n . >/dev/null 2>&1
+while [ "$attempt" -lt 300 ]; do
+  code -n . >/dev/null 2>trusted-approved-last.err
   approved_rc=$?
   [ "$approved_rc" -eq 0 ] && break
   attempt=$((attempt + 1))
@@ -624,8 +624,8 @@ printf "%s\n" "$approved_rc" > trusted-approved.rc
 # host-side gate revokes the exact grant, without using a host-written signal.
 attempt=0
 revoked_rc=0
-while [ "$attempt" -lt 100 ]; do
-  code -n . >/dev/null 2>&1
+while [ "$attempt" -lt 300 ]; do
+  code -n . >/dev/null 2>trusted-revoked-last.err
   revoked_rc=$?
   [ "$revoked_rc" -ne 0 ] && break
   attempt=$((attempt + 1))
@@ -649,8 +649,15 @@ printf "%s\n" "$revoked_rc" > trusted-revoked.rc
   claim_token="$(printf '%s' "$claim_json" | jq -r '.claimToken')"
   HIDEOUT_STORE_ROOT="$store" "$hideout" decision approve --claim-token "$claim_token" "$decision_id" >/dev/null
   wait_for_file "$projection_trusted_workspace/trusted-approved-ready" "trusted projection approval"
-  test "$(cat "$projection_trusted_workspace/trusted-first.rc")" != "0"
-  test "$(cat "$projection_trusted_workspace/trusted-approved.rc")" = "0"
+  if [ "$(cat "$projection_trusted_workspace/trusted-first.rc")" = "0" ]; then
+    echo "gate2: trusted projection was allowed before approval" >&2
+    return 1
+  fi
+  if [ "$(cat "$projection_trusted_workspace/trusted-approved.rc")" != "0" ]; then
+    echo "gate2: approved trusted projection did not become visible to the live session" >&2
+    cat "$projection_trusted_workspace/trusted-approved-last.err" >&2 2>/dev/null || true
+    return 1
+  fi
   HIDEOUT_STORE_ROOT="$store" "$hideout" decision revoke "$decision_id" >/dev/null
   if ! wait "$projection_run_pid"; then
     echo "gate2: trusted projection guest flow failed" >&2
@@ -658,7 +665,11 @@ printf "%s\n" "$revoked_rc" > trusted-revoked.rc
     return 1
   fi
   projection_run_pid=""
-  test "$(cat "$projection_trusted_workspace/trusted-revoked.rc")" != "0"
+  if [ "$(cat "$projection_trusted_workspace/trusted-revoked.rc")" = "0" ]; then
+    echo "gate2: revoked trusted projection remained active in the live session" >&2
+    cat "$projection_trusted_workspace/trusted-revoked-last.err" >&2 2>/dev/null || true
+    return 1
+  fi
   local trusted_session trusted_audit
   trusted_session="$(HIDEOUT_STORE_ROOT="$store" "$hideout" decision inspect "$decision_id" | jq -r '.source.session')"
   trusted_audit="$store/sessions/$trusted_session/audit.jsonl"
