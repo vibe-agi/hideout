@@ -60,6 +60,8 @@ models=(
   ConfigurationLifecycle
   NetworkTransition
   RequestWorkflow
+  StopObservation
+  AttachReservation
 )
 
 cd "$ROOT"
