@@ -621,11 +621,18 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 	}
 	state.mutation = true
 	state.blocked = true
-	state.journal.Reconciliation = blockedReconciliation(c.daemonID, "destructive-mutation-in-progress", c.nowUTC())
-	if err := c.persistLocked(state); err != nil {
-		state.mutation = false
-		c.mu.Unlock()
-		return err
+	// A never-attached environment (or one whose journal a prior mutation
+	// removed) has no lifecycle journal: its zero start generation would fail
+	// journal identity validation, and there is nothing durable to block. The
+	// in-memory mutation flag alone guards re-entry.
+	journalless := state.journal.StartGeneration == 0
+	if !journalless {
+		state.journal.Reconciliation = blockedReconciliation(c.daemonID, "destructive-mutation-in-progress", c.nowUTC())
+		if err := c.persistLocked(state); err != nil {
+			state.mutation = false
+			c.mu.Unlock()
+			return err
+		}
 	}
 	c.emitLocked(Event{
 		EnvironmentID: environmentID,
@@ -649,7 +656,21 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		return errors.Join(mutationErr, errors.New("lifecycle destructive mutation lost coordinator state"))
 	}
 	state.mutation = false
+	journalless = state.journal.StartGeneration == 0
 	if mutationErr != nil {
+		if journalless {
+			// Nothing durable exists for a journal-less environment: the
+			// mutation error itself is the truth and a retry starts clean.
+			delete(c.environments, environmentID)
+			c.emitLocked(Event{
+				EnvironmentID: environmentID,
+				Kind:          "destructive-mutation-failed",
+				ReasonCode:    "cleanup-unproved",
+				At:            c.nowUTC(),
+			})
+			c.mu.Unlock()
+			return mutationErr
+		}
 		state.journal.Reconciliation = blockedReconciliation(c.daemonID, "cleanup-unproved", c.nowUTC())
 		persistErr := c.persistLocked(state)
 		c.emitLocked(Event{
@@ -661,6 +682,11 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		})
 		c.mu.Unlock()
 		return errors.Join(mutationErr, persistErr)
+	}
+	if journalless {
+		delete(c.environments, environmentID)
+		c.mu.Unlock()
+		return nil
 	}
 	if err := c.store.Remove(environmentID); err != nil {
 		persistErr := c.persistLocked(state)

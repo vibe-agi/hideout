@@ -270,6 +270,40 @@ func TestDestructiveMutationCancelsGraceBlocksAttachAndForgetsOnSuccess(t *testi
 	}
 }
 
+func TestDestructiveMutationOnNeverAttachedEnvironmentRunsWithoutJournal(t *testing.T) {
+	// After recreate removes an environment's journal (or before any first
+	// attach), there is no lifecycle to coordinate: clean/recreate must still
+	// run instead of persisting a zero-generation journal that its own
+	// validation rejects ("lifecycle journal identity is invalid").
+	coordinator, _ := newTestCoordinator(t, false, nil)
+	ran := false
+	if err := coordinator.RunDestructiveMutation(context.Background(), "env-fresh", func(context.Context) error {
+		ran = true
+		return nil
+	}); err != nil {
+		t.Fatalf("mutation on a never-attached environment: %v", err)
+	}
+	if !ran {
+		t.Fatal("mutation callback did not run")
+	}
+	if statuses := coordinator.Snapshot(); len(statuses) != 0 {
+		t.Fatalf("journal-less mutation left lifecycle status: %+v", statuses)
+	}
+	if _, err := coordinator.store.Load("env-fresh"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal-less mutation persisted a journal: %v", err)
+	}
+
+	// A failing mutation on a never-attached environment returns the mutation
+	// error itself, not a journal-validation error, and leaves no residue.
+	want := errors.New("cleanup failed")
+	if err := coordinator.RunDestructiveMutation(context.Background(), "env-fresh", func(context.Context) error { return want }); !errors.Is(err, want) {
+		t.Fatalf("journal-less mutation error=%v want=%v", err, want)
+	}
+	if _, err := coordinator.store.Load("env-fresh"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed journal-less mutation persisted a journal: %v", err)
+	}
+}
+
 func TestDestructiveMutationFailureKeepsBlockedDiscoveryTruth(t *testing.T) {
 	coordinator, _ := newTestCoordinator(t, false, nil)
 	registration := prepareIdleRegistration(t, coordinator)
