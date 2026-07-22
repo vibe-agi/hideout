@@ -293,8 +293,9 @@ drift and no recreate requirement.
 - **FR-001**: The system MUST have exactly one reusable environment model:
   every reusable environment is named, and explicitly created and automatically
   created environments share the same record shape, lifecycle operations,
-  identity rules, and drift semantics. Disposable `--rm` and `--ephemeral`
-  runs remain record-less sessions, not reusable environments.
+  identity rules, and drift semantics. Disposable `--rm` runs remain
+  record-less sessions. `--ephemeral` changes only session identity state and
+  resolves the same reusable environment as the corresponding normal run.
 - **FR-002**: The system MUST provide environment lifecycle commands to
   create, list, inspect, recreate, and remove named environments, and a run
   selector to execute a command inside a named environment.

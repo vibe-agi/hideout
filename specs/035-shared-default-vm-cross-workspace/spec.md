@@ -309,8 +309,10 @@ sentinels.
   and diagnose known incompatible external absolute project metadata before
   target start.
 - **FR-036**: Native runs MUST use explicit workspace-bound mode; disposable
-  runs remain record-less; named environments remain dedicated and project
-  pinned; none may silently enter the shared automatic slot.
+  `--rm` runs remain record-less; `--ephemeral` MUST use the platform's normal
+  environment mode with session-local identity; named environments remain
+  dedicated and project pinned; none may silently enter the shared automatic
+  slot.
 - **FR-037**: Guest ownership MUST be synthetic and non-root without changing
   arbitrary host ownership; unsupported ownership and device operations MUST
   fail truthfully.

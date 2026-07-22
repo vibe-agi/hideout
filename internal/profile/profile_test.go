@@ -372,8 +372,8 @@ func TestMachineIDIndependentAcrossIdentityChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrInit: %v", err)
 	}
-	// A freshly forked identity must not let the new identityId reveal the new
-	// machineId either.
+	// A freshly forked session identity must not let its identityId reveal the
+	// reusable environment's stable machineId.
 	forked, err := EphemeralIdentityProfile(loaded)
 	if err != nil {
 		t.Fatalf("EphemeralIdentityProfile: %v", err)

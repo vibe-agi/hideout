@@ -12,8 +12,10 @@ Closed enum:
 - `workspace-bound`: automatic environment whose backend/platform has not
   passed the shared-attachment gate, including native in 035.
 
-Disposable `--ephemeral` and `--rm` runs remain record-less and therefore have
-no environment mode.
+Disposable `--rm` runs remain record-less and therefore have no environment
+mode. `--ephemeral` is not an environment mode: it resolves the same mode and
+record as the corresponding normal run while replacing only session identity
+state.
 
 ## Shared Slot
 

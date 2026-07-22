@@ -48,13 +48,14 @@ Expected:
 
 ## 3. Mode Matrix And Alpha Reset
 
-Exercise promoted Lima shared mode, explicit named mode, native, disposable
-`--ephemeral`/`--rm`, and an old record fixture.
+Exercise promoted Lima shared mode, explicit named mode, native,
+session-identity `--ephemeral`, disposable `--rm`, and an old record fixture.
 
 Expected:
 
 - shared, dedicated and workspace-bound records satisfy their field invariants;
-- disposable runs create no record;
+- `--ephemeral` reuses the corresponding platform record and `--rm` creates no
+  reusable record;
 - named environment rejects a different project;
 - old record fails with a real remove/recreate command and no dual reader; and
 - no unsupported path silently enters shared mode.

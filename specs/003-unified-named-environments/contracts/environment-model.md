@@ -38,7 +38,9 @@ Contract points:
   input is compared to the pinned workspace by real file identity.
 - A run without `--env` derives the auto-name for (profile, workspace),
   creating the environment on first use with the profile's image default.
-- `--rm` keeps disposable, record-less semantics; `--ephemeral` is unchanged.
+- `--rm` keeps disposable, record-less semantics. `--ephemeral` keeps
+  identity state session-local while resolving the same reusable environment
+  as the corresponding normal run.
 - `env recreate`/`env remove` on a running guest fail closed printing a
   copyable `hideout stop <name>`; `--force` stops first, then proceeds.
 - Reserved name: `default` (any letter case) is rejected at create with a

@@ -263,10 +263,11 @@ distinct declarative policy.
 
 **Decision**: Promote only macOS arm64 Lima after a real installed-package gate.
 Native and unpromoted Lima platforms create explicit workspace-bound records;
-disposable runs remain record-less; named environments remain dedicated. Docs
-claim only private exact-root views for ordinary non-root targets with disjoint
-roots. Guest-root containment, project-content anonymity, profile-state
-isolation, and separate VM walls remain non-claims.
+disposable `--rm` runs remain record-less; `--ephemeral` uses the normal
+platform environment with session-local identity; named environments remain
+dedicated. Docs claim only private exact-root views for ordinary non-root
+targets with disjoint roots. Guest-root containment, project-content anonymity,
+profile-state isolation, and separate VM walls remain non-claims.
 
 **Rationale**: A backend or platform name is not evidence. The shared guest
 kernel/root disk and profile mounts are intentionally common, and nested roots

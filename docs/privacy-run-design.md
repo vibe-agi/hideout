@@ -445,7 +445,7 @@ Treat these as stable contracts.
 | Object | Meaning | Phase 1 responsibility |
 | --- | --- | --- |
 | Profile | User-editable privacy policy and defaults. | Owns env, identity defaults, workspace defaults, network mode, command proxy policy, expected-command declarations, and script refs. |
-| IdentityStore | Generated identity material for persistent profiles and ephemeral sessions. | Owns fake home/config/cache/data/browser state and guest machine identity for the current identity root. |
+| IdentityStore | Generated identity material for persistent profiles and ephemeral sessions. | Owns fake home/config/cache/data/browser state and session identity metadata. The profile-scoped guest machine identity belongs to the reusable environment lifecycle and is projected read-only into each session identity root. |
 | Environment | Resumable isolated environment for one profile and one normalized workspace. | Design-ready default runtime model. It owns reusable guest tool/cache/home state but must not own broker tokens, proxy secret files, network routes, active shims, or other per-run authority. |
 | Session | One command execution under one profile. | Owns session ID, workspace mapping, backend run, broker endpoint, shims, audit file, and explain snapshot. |
 | Backend | Execution substrate. | Starts the Lima guest from the declared base image, mounts workspace and current identity runtime state, launches command, streams stdio. |
@@ -2638,11 +2638,14 @@ the real host home and must not be mounted from the host.
 identity root. This prevents host or profile env from redirecting
 `git config --global` probes back to the real host git config.
 
-`machine-id` is generated identity material owned by IdentityStore. It is
-derived from the current generated identity root, rotates with identity
-reset/rotate, is regenerated for `--ephemeral`, and must not be imported from the
-host. All guest machine-id files managed by Hideout must contain the same
-generated value for that run.
+`machine-id` is generated environment identity material owned by Hideout. It is
+created independently from `identityId`, rotates with an explicit persistent
+profile identity reset/rotate, and must not be imported from the host. A
+reusable VM keeps that machine-id across all sessions, including
+`--ephemeral`; otherwise a session-local identity fork would drift the shared
+machine compatibility identity. Hideout projects the same value into the
+session identity root when one is used, so all guest machine-id files managed
+by Hideout agree with the running environment.
 
 Generated `.gitconfig`:
 
@@ -3642,15 +3645,18 @@ hideout run --ephemeral -- tool args
   -> load selected profile policy
   -> create session-local identity metadata with lineageMode=session-fork
   -> record sourceIdentityId for audit/explain lineage only
-  -> create fresh home/config/cache/data/browser/machine stores under session
+  -> create fresh home/config/cache/data/browser stores under session
+  -> project the reusable environment's stable machine-id into that session root
   -> run the command with the session identity root
   -> delete the session identity root during cleanup
 ```
 
 Ephemeral mode is not profile clone and not identity migration. It must not
 modify the source profile's `identity.json`, persistent home/config/cache/data,
-browser profile, or machine identity. It may copy policy templates before
-rendering them with the session identity.
+browser profile, or environment machine identity. It may copy policy templates
+before rendering them with the session identity. Reusing the environment
+machine-id does not reuse profile home, credentials, browser state, or
+`identityId`.
 
 Exact identity copy is migration, not clone. If identity migration or
 identity export ever ships, it is an explicit command with a warning, never a
@@ -4468,10 +4474,12 @@ Important flags:
 
 `--ephemeral` keeps the selected profile policy but uses session-local identity
 state for this run. The target sees `HOME`, XDG config/cache/data, `.gitconfig`,
-machine-id, and the isolated browser profile under the session directory. These
-identity files are deleted by automatic cleanup together with other
-session-local state. `audit.jsonl` remains so the user keeps evidence of the
-run.
+and the isolated browser profile under the session directory. The same
+directory carries a read-only projection of the reusable environment's stable
+machine-id; `--ephemeral` does not rotate or drift the shared VM. The
+session-local identity files are deleted by automatic cleanup together with
+other session-local state. `audit.jsonl` remains so the user keeps evidence of
+the run.
 
 The weak native backend must require:
 
@@ -4686,9 +4694,10 @@ For Phase 1, a command run under `hideout run` must satisfy:
   fails closed before any host opener runs;
 - URL open uses an isolated browser profile by default;
 - file open is allowed only for mapped workspace files;
-- `--ephemeral` uses a fresh session-local identity root, does not reuse the
-  profile `machine-id` or browser state, and does not modify the source profile
-  identity material;
+- `--ephemeral` uses a fresh session-local identity root, does not reuse profile
+  home, credentials, `identityId`, or browser state, and does not modify the
+  source profile identity material; it preserves and projects the reusable
+  environment's machine-id so the shared VM does not drift;
 - when audit is enabled, audit records session start, workspace mapping, network
   mode, and brokered open;
 - when audit is enabled, audit records script ID/hash when a scripted policy hook

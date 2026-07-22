@@ -50,8 +50,9 @@ by real file identity) and applies to every selection, not only `--resume`.
 The pinned image declaration is immutable record data: profile default changes
 do not drift existing environments, and URL digest mismatch is a boot-time
 verification failure. `--resume <id>` and `--new` disappear with the MRU
-model; `--rm` keeps its record-less disposable semantics; `--ephemeral` is
-unchanged.
+model; `--rm` keeps its record-less disposable semantics. `--ephemeral` is a
+session-identity modifier and resolves the same reusable environment as a
+normal run.
 
 **Alternatives considered**:
 

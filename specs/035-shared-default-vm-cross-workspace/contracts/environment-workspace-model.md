@@ -11,7 +11,8 @@ For every run, Core chooses exactly one mode before backend side effects:
 | No flag, promoted macOS arm64 Lima | `shared` | Stable profile slot | Dynamic exact session attachment |
 | Explicit `--env <name>` | `dedicated` | Named record | Pinned exact project and distinct Lima instance |
 | Native or unpromoted reusable platform | `workspace-bound` | Profile plus exact project | Existing exact static project mapping |
-| `--ephemeral` or `--rm` | none | No record | Disposable exact mapping |
+| `--ephemeral` | Same as the corresponding no-flag platform row | Same reusable record | Same workspace transport with session-local identity |
+| `--rm` | none | No record | Disposable exact mapping |
 
 There is no fallback between rows after selection. Shared transport failure does
 not create a workspace-bound or second shared record. Named project mismatch is
