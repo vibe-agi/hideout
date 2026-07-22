@@ -66,6 +66,7 @@ type Daemon struct {
 	runtimeDir       string
 	socket           string
 	instanceID       string
+	limaHome         string
 	startedAt        time.Time
 	credentials      *credentialManager
 	api              manager.API
@@ -276,6 +277,7 @@ func Start(opts Options) (*Daemon, error) {
 	d := &Daemon{
 		store:            opts.Store,
 		buildID:          buildID,
+		limaHome:         resolveLimaHome(),
 		runtimeDir:       dir,
 		socket:           sock,
 		instanceID:       instanceID,
@@ -411,6 +413,7 @@ func (d *Daemon) Status() Status {
 	d.mu.Unlock()
 	status := Status{
 		Version: statusVersion, BuildID: d.buildID, State: state, InstanceID: d.instanceID,
+		LimaHome:   d.limaHome,
 		StartedAt:  d.startedAt.Format(time.RFC3339),
 		Transport:  StatusTransport{Socket: d.socket, SessionSocket: d.sessionListener.Socket(), SessionProtocol: SessionProtocolVersion},
 		Background: d.bg.inventory(),

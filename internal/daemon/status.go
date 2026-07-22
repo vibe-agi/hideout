@@ -24,8 +24,13 @@ type StopReceipt struct {
 
 // Status is the daemon status/inventory shape (schemas/daemon-status.schema.json).
 type Status struct {
-	Version              string                              `json:"version"`
-	BuildID              string                              `json:"buildId"`
+	Version string `json:"version"`
+	BuildID string `json:"buildId"`
+	// LimaHome is the lima world this daemon resolved at startup and uses for
+	// every backend inventory observation and control command. Clients refuse
+	// a daemon whose lima home differs from their own resolution: such a
+	// daemon would observe and mutate the wrong machine inventory.
+	LimaHome             string                              `json:"limaHome,omitempty"`
 	State                string                              `json:"state"`
 	InstanceID           string                              `json:"instanceId,omitempty"`
 	StartedAt            string                              `json:"startedAt,omitempty"`

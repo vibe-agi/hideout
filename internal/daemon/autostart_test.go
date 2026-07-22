@@ -399,13 +399,67 @@ func readyDaemonStatus(storeRoot string) Status {
 		panic(err)
 	}
 	return Status{
-		Version: statusVersion,
-		BuildID: buildID,
-		State:   "serving",
+		Version:  statusVersion,
+		BuildID:  buildID,
+		LimaHome: resolveLimaHome(),
+		State:    "serving",
 		Transport: StatusTransport{
 			Socket: socketPathFor(storeRoot), SessionSocket: SessionSocketPath(storeRoot),
 			SessionProtocol: SessionProtocolVersion,
 		},
+	}
+}
+
+func TestEnsureStartedRejectsLimaHomeMismatch(t *testing.T) {
+	// A serving daemon that resolved a different lima world than this
+	// invocation would observe and control the wrong backend inventory (the
+	// gate2 false-stop root cause). Like a build mismatch, the connection
+	// fails closed with an explicit remedy instead of adopting the daemon.
+	store := testStore(t)
+	mismatched := readyDaemonStatus(store.Root)
+	mismatched.LimaHome = filepath.Join(t.TempDir(), "other-lima-world")
+	var starts atomic.Int32
+	_, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+		Store: store,
+		Probe: func(context.Context, string) (Status, error) {
+			return mismatched, nil
+		},
+		Starter: func(DaemonStartRequest) error {
+			starts.Add(1)
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "lima home") {
+		t.Fatalf("lima-home mismatch must fail closed with an explicit error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "hideout daemon stop") {
+		t.Fatalf("mismatch error must name the remedy, got %v", err)
+	}
+	if starts.Load() != 0 {
+		t.Fatal("a lima-home mismatch must not spawn a competing daemon")
+	}
+}
+
+func TestEnsureStartedAcceptsMatchingLimaHome(t *testing.T) {
+	limaHome := filepath.Join(t.TempDir(), "lima-world")
+	t.Setenv("LIMA_HOME", limaHome)
+	store := testStore(t)
+	var starts atomic.Int32
+	status, err := EnsureStarted(context.Background(), EnsureStartedOptions{
+		Store: store,
+		Probe: func(context.Context, string) (Status, error) {
+			return readyDaemonStatus(store.Root), nil
+		},
+		Starter: func(DaemonStartRequest) error {
+			starts.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnsureStarted with matching lima home: %v", err)
+	}
+	if status.LimaHome != resolveLimaHome() || starts.Load() != 0 {
+		t.Fatalf("status=%+v starts=%d", status, starts.Load())
 	}
 }
 

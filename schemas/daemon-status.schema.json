@@ -13,6 +13,10 @@
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
+    "limaHome": {
+      "type": "string",
+      "minLength": 1
+    },
     "state": {
       "enum": ["starting", "serving", "stopping", "stopped"]
     },

@@ -115,6 +115,9 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 	defer cancel()
 	if status, err := opts.Probe(waitCtx, opts.Store.Root); err == nil && daemonStatusServing(opts.Store.Root, status) {
 		if status.BuildID == opts.BuildID {
+			if status.LimaHome != resolveLimaHome() {
+				return Status{}, daemonLimaHomeMismatchError(status)
+			}
 			return status, nil
 		}
 		if err := replaceStaleBuildDaemon(waitCtx, opts, status); err != nil {
@@ -141,6 +144,9 @@ func EnsureStarted(ctx context.Context, opts EnsureStartedOptions) (Status, erro
 	// lock. Re-probe before creating a process.
 	if status, err := opts.Probe(waitCtx, opts.Store.Root); err == nil && daemonStatusServing(opts.Store.Root, status) {
 		if status.BuildID == opts.BuildID {
+			if status.LimaHome != resolveLimaHome() {
+				return Status{}, daemonLimaHomeMismatchError(status)
+			}
 			return status, nil
 		}
 		if err := replaceStaleBuildDaemon(waitCtx, opts, status); err != nil {
@@ -194,6 +200,9 @@ func waitForDaemonReady(ctx context.Context, storeRoot, buildID string, interval
 	for {
 		if status, err := probe(ctx, storeRoot); err == nil {
 			if daemonStatusReady(storeRoot, buildID, status) {
+				if status.LimaHome != resolveLimaHome() {
+					return Status{}, daemonLimaHomeMismatchError(status)
+				}
 				return status, nil
 			}
 			if daemonStatusServing(storeRoot, status) && status.BuildID != buildID {
@@ -316,6 +325,37 @@ func openAutostartLog(dir string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// resolveLimaHome names the lima world this process would use: an explicit
+// absolute LIMA_HOME, or the default ~/.lima. The result is normalized to a
+// physical path so platform aliases (macOS /tmp -> /private/tmp) compare
+// equal. Client and daemon must resolve the same world before the daemon may
+// observe or control backend inventory on the client's behalf.
+func resolveLimaHome() string {
+	root := strings.TrimSpace(os.Getenv("LIMA_HOME"))
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Join(home, ".lima")
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if physical, err := filepath.EvalSymlinks(root); err == nil {
+		root = physical
+	}
+	return filepath.Clean(root)
+}
+
+func daemonLimaHomeMismatchError(status Status) error {
+	running := strings.TrimSpace(status.LimaHome)
+	if running == "" {
+		running = "an unidentified lima home"
+	}
+	return fmt.Errorf("daemon lima home mismatch: the running daemon resolved %s while this invocation resolves %s; run hideout daemon stop, then retry", running, resolveLimaHome())
 }
 
 func environmentWithStoreRoot(env []string, storeRoot string) []string {
