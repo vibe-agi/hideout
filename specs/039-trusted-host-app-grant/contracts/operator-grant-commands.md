@@ -14,11 +14,11 @@ Grant trusted (native) opening of one projected host-app command (e.g. `code`)
 for the current workspace under the active profile.
 
 - Run in the project directory. Core derives the workspace identity the same way
-  a run does and reads the command's built-in host-app binding identifiers
-  (`qualifiedAppRef`, `bindingDigest`), then writes a grant entry. Because the
-  binding digest depends on the run-time observed app identity, the grant
-  promotes the request record a prior trusted run left behind for that
-  `(workspace, command)`.
+  a run does, then reads the exact host-app binding identifiers
+  (`qualifiedAppRef`, `bindingDigest`) from the request hint a prior refused
+  trusted run recorded for that `(workspace, command)`. Because the binding
+  digest depends on the run-time observed app identity, the grant promotes that
+  hint instead of recomputing the digest independently.
 - Optional `--for-profile <name>` selects a non-default profile (mirrors the
   existing `allow` scope flag).
 - Preconditions: the profile's host-app mode is `trusted`. If it is `safe`, the

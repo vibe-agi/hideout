@@ -62,7 +62,9 @@ derives `workspaceID` itself (the deterministic path, proven equal to a run's by
 T008a), but takes `qualifiedAppRef` and `bindingDigest` from a run-written
 request rather than computing them independently. Flow: a trusted-mode run with
 no grant fails closed AND records a request (workspaceID + qualifiedAppRef +
-bindingDigest, all run-accurate) under `profiles/<p>/host-app-trust-request.json`;
+bindingDigest, all run-accurate) under a per-key file in
+`profiles/<p>/host-app-trust-requests/`; the file name is derived from
+`(workspaceID, command)` so concurrent projects cannot clobber one another;
 `allow host-app code` derives the current workspaceID, reads the request, verifies
 `request.workspaceID == derived workspaceID` (so it can only promote a request
 for the project the operator is standing in), and writes the grant using the
@@ -150,9 +152,9 @@ generic: the operator types `hideout allow host-app <command>` or
 `hideout deny host-app <command>`, sets the mode with
 `hideout profile host-app-mode`, and the launch/audit mode value is
 `trusted-host-app`. Core carries no domain word like "ide": the internal Go
-types, the grant store file (`host-app-trust-grants.json`), the request file
-(`host-app-trust-request.json`), the schema, and this spec directory all use the
-generic `TrustedHostAppGrant*` / `trusted-host-app` spelling.
+types, the grant store file (`host-app-trust-grants.json`), the request-hint
+directory (`host-app-trust-requests/`), the schema, and this spec directory all
+use the generic `TrustedHostAppGrant*` / `trusted-host-app` spelling.
 
 **Rationale**: There is no compatibility burden (no external users yet), so the
 rename was free, and the generic surface matches the projection's actual design

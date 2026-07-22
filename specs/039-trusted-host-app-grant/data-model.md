@@ -55,21 +55,61 @@ grants entirely.
 ### Lifecycle / state transitions
 
 ```text
-(no grant)
-   │  operator: hideout allow host-app code  (in the project dir)
+(no grant / no hint)
+   │  trusted open → fail closed + record request hint
    ▼
-GRANTED ──────────────────────────────────────────────┐
-   │  match at open time → trusted native launch       │ (reuse, any later run)
-   │                                                    │
-   │  workspace identity or bindingDigest drifts        │
-   ▼                                                    │
-NO MATCH → fail closed, refusal names the grant command │
-                                                        │
-   │  operator: hideout deny host-app code                  │
-   │  OR: profile host-app-mode <p> safe (drops all)         │
-   ▼                                                    │
-(no grant) ◄────────────────────────────────────────────┘
+REQUESTED
+   │  operator: hideout allow host-app code
+   ▼
+GRANTED ────────────────────────────────────────────────┐
+   │  match at open time → trusted native launch         │
+   │  (reuse in any later run)                            │
+   │                                                      │
+   │  workspace identity or bindingDigest drifts          │
+   ▼                                                      │
+NO MATCH → fail closed + record current request hint      │
+                                                          │
+   │  operator: hideout deny host-app code                │
+   │  OR: profile host-app-mode <p> safe (drops all)      │
+   ▼                                                      │
+(no grant) ◄──────────────────────────────────────────────┘
 ```
+
+## Entity: Trusted host-app request hint
+
+A request hint is non-authoritative control-plane state written after a trusted
+open is refused. It captures the exact Core-derived binding observed by that run
+so an explicit host-side grant command can promote it without independently
+recomputing a run-time app identity. Possessing or triggering a hint never
+authorizes a host launch.
+
+### Storage and key
+
+- Location: `profiles/<profile>/host-app-trust-requests/<key>.json` under the
+  guest-unreachable control-plane store.
+- `<key>` is a deterministic digest of `(workspaceId, command)`, allowing
+  concurrent projects and commands to coexist without a shared mutable slot.
+- Each file is written atomically with mode `0600` and decoded strictly;
+  absence, unknown fields, trailing data, version drift, or key mismatch fails
+  closed as “no matching request”.
+
+### Fields and lifecycle
+
+| Field | Meaning | Source |
+| --- | --- | --- |
+| `version` | request/grant format generation | Core constant |
+| `profile` | owning profile | selected profile |
+| `command` | projected command name | immutable binding request |
+| `workspaceId` | current workspace identity | Core run derivation |
+| `qualifiedAppRef` | observed app binding reference | Core projection binding |
+| `bindingDigest` | observed app binding digest | Core projection binding |
+| `recordedAt` | observation time | control plane clock |
+
+The grant command accepts only the hint whose profile, workspace, and command
+match its independently derived inputs. Switching the profile to safe mode
+removes all hints so a later trusted epoch requires a fresh run observation.
+Hints are internal coordination records, not durable policy, public evidence,
+or an additional authorization path.
 
 ## Relationship to existing entities
 
@@ -81,6 +121,9 @@ NO MATCH → fail closed, refusal names the grant command │
   ask-each-run path. The grant is what that path now consults first.
 - **`GrantScope`**: already carries `WorkspaceID`, `QualifiedAppRef`,
   `BindingDigest`, `Profile` at the check point — the grant match reads these.
+- **Request hint**: captures the same Core-derived binding after a refused
+  trusted open but has no authority until an explicit host-side grant promotes
+  an exact `(profile, workspace, command)` match.
 - **Per-run projection decision**: for trusted host-app, superseded by the persistent
   grant. Other decision kinds (HostFS read/write, ask-each-run community packs)
   are unchanged.

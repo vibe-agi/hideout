@@ -14,11 +14,14 @@ command semantics are in [data-model.md](data-model.md) and
 
 ## Scenario 1 — Grant once, reuse across runs (US1 / SC-001)
 
-1. In the project directory: `hideout allow host-app code`.
-2. Run a one-shot open: `hideout run -- code .`.
-3. Expected: the full native editor opens (operator's own profile, extensions
+1. In the project directory, run `hideout run -- code .` once. Expected: the
+   trusted open is refused with no editor launch and names
+   `hideout allow host-app code`; this records the Core-derived request hint.
+2. Run `hideout allow host-app code` in the same project directory.
+3. Run a one-shot open: `hideout run -- code .`.
+4. Expected: the full native editor opens (operator's own profile, extensions
    enabled), exit success, no prompt or approval step.
-4. Run `hideout run -- code .` again (a separate run): still opens natively,
+5. Run `hideout run -- code .` again (a separate run): still opens natively,
    still no prompt — the grant is reused across runs.
 
 ## Scenario 2 — Fail closed with guidance when ungranted (US2 / SC-002)

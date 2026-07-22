@@ -13,8 +13,11 @@ with a durable trusted host-app grant scoped to profile + workspace + app bindin
 same policy shape as a HostFS profile grant. The open-time check
 (`runProjectionGrantChecker.TrustedGrantActive`) consults the persistent grant
 before any per-run decision; trusted mode with no grant fails closed and names
-the grant command. Path B was proven end-to-end on real Lima by a throwaway
-spike (2026-07-20). Safe mode is unchanged and remains the default.
+the grant command while recording a non-authoritative, Core-derived request hint.
+The grant command derives the current workspace identity and promotes the exact
+app binding observed by that refused run. Path B was proven end-to-end on real
+Lima by a throwaway spike (2026-07-20). Safe mode is unchanged and remains the
+default.
 
 ## Technical Context
 
@@ -27,9 +30,11 @@ spike (2026-07-20). Safe mode is unchanged and remains the default.
 `internal/operatorintent` (natural `allow`/`deny` grammar),
 `internal/audit`, `internal/profile`.
 
-**Storage**: one new per-profile JSON policy file under the reserved,
-guest-unreachable store (`profiles/<p>/`), beside the existing `host-app-mode.json`.
-Atomic write, `0600`, strict schema. No new store subsystem.
+**Storage**: one new per-profile JSON policy file plus per-workspace/command
+request-hint files under the reserved, guest-unreachable store (`profiles/<p>/`),
+beside the existing `host-app-mode.json`. Grant and hint writes are atomic and
+`0600`; grant policy has a strict public schema while hints use strict internal
+decoding and never authorize a launch. No new store subsystem.
 
 **Testing**: `go test` (unit/contract in `internal/manager`), the existing
 projection/host-app test suites, and a real-Lima end-to-end lane extending the
@@ -116,8 +121,8 @@ specs/039-trusted-host-app-grant/
 
 ```text
 internal/manager/
-├── hostcap_projection.go        # host-app-mode read/write; trusted grant store
-│                                #   read/write/revoke; delete or document the
+├── trusted_host_app_grant.go    # grant store, request hints, match and lifecycle
+├── hostcap_projection.go        # host-app-mode read/write; safe-mode cleanup;
 │                                #   test-only decisionHostAppGrantChecker (FR-011)
 ├── run_dataplane.go             # runProjectionGrantChecker.TrustedGrantActive
 │                                #   consults the persistent grant first (FR-002/003)
