@@ -940,6 +940,9 @@ func TestCleanupAndStopUseControlOutput(t *testing.T) {
 	if err := b.StopInstance(context.Background(), session.InstanceName); err != nil {
 		t.Fatalf("StopInstance: %v", err)
 	}
+	if got, want := runner.calls[len(runner.calls)-1].args, []string{"stop", "--force", session.InstanceName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("StopInstance args=%v want %v", got, want)
+	}
 	if got, want := controlOut.String(), "call1\ncall2\ncall3\n"; got != want {
 		t.Fatalf("control stdout=%q want %q", got, want)
 	}

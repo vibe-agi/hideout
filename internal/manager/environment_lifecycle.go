@@ -148,7 +148,16 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 		return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-observation-invalid"), ReasonCode: "backend-observation-invalid"}, err
 	}
 	if before.State == backend.LifecycleStopped || before.State == backend.LifecycleAbsent {
-		return lifecycle.StopResult{Observation: before}, nil
+		confirmation, err := confirmInitialEnvironmentTerminal(ctx, instanceName, before, provider)
+		if err != nil {
+			return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-terminal-observation-unstable"), ReasonCode: "backend-terminal-observation-unstable"}, err
+		}
+		if confirmation.State == before.State {
+			return lifecycle.StopResult{Observation: confirmation}, nil
+		}
+		// A terminal inventory sample followed by the same incarnation running is
+		// not stop proof. Bind to the current running observation and stop it.
+		before = confirmation
 	}
 	if before.State != backend.LifecycleRunning || (expectedBootID != "" && before.BootID != expectedBootID) {
 		return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-incarnation-changed"), ReasonCode: "backend-incarnation-changed"}, errors.New("stop backend incarnation is not the observed target")
@@ -164,6 +173,8 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 	defer cancelObserve()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	terminalState := backend.LifecycleState("")
+	terminalCount := 0
 	for {
 		observation := provider.ObserveLifecycle(observeCtx, instanceName)
 		if err := validateLifecycleObservationForInstance(observation, instanceName); err != nil {
@@ -171,14 +182,26 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 		}
 		switch observation.State {
 		case backend.LifecycleStopped, backend.LifecycleAbsent:
-			return lifecycle.StopResult{Observation: observation}, nil
+			if observation.State == terminalState {
+				terminalCount++
+			} else {
+				terminalState = observation.State
+				terminalCount = 1
+			}
+			if terminalCount >= 2 {
+				return lifecycle.StopResult{Observation: observation}, nil
+			}
 		case backend.LifecycleRunning:
+			terminalState = ""
+			terminalCount = 0
 			if observation.BootID != boundBootID {
 				return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-incarnation-changed"), ReasonCode: "backend-incarnation-changed"}, errors.New("backend restarted during stop observation")
 			}
 		case backend.LifecycleUnknown:
 			// Inventory can be transient while Lima stops. Keep observing within
 			// the independent five-second proof window.
+			terminalState = ""
+			terminalCount = 0
 		}
 		select {
 		case <-observeCtx.Done():
@@ -186,6 +209,24 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 		case <-ticker.C:
 		}
 	}
+}
+
+func confirmInitialEnvironmentTerminal(ctx context.Context, instanceName string, initial backend.LifecycleObservation, provider EnvironmentLifecycleBackend) (backend.LifecycleObservation, error) {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return backend.LifecycleObservation{}, ctx.Err()
+	case <-timer.C:
+	}
+	confirmation := provider.ObserveLifecycle(ctx, instanceName)
+	if err := validateLifecycleObservationForInstance(confirmation, instanceName); err != nil {
+		return backend.LifecycleObservation{}, err
+	}
+	if confirmation.State == initial.State || confirmation.State == backend.LifecycleRunning {
+		return confirmation, nil
+	}
+	return backend.LifecycleObservation{}, fmt.Errorf("backend terminal observation changed from %s to %s", initial.State, confirmation.State)
 }
 
 func validateLifecycleObservationForInstance(observation backend.LifecycleObservation, instanceName string) error {

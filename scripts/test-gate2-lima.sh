@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/gate-result.sh"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 . "$ROOT/scripts/lib/lima-temp.sh"
 
 GATE_TIMEOUT="${HIDEOUT_GATE_TIMEOUT:-15m}"
@@ -207,7 +208,10 @@ exit 127
 require_command go
 require_command limactl
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate2.XXXXXX")"
+# The store lives below this root and owns two Unix sockets. macOS's default
+# TMPDIR is long enough to exceed sockaddr_un once the daemon filenames are
+# appended, so use the repository's short daemon-safe temporary root.
+tmp="$(hideout_mktemp_daemon_store)"
 named_guard_pid=""
 visibility_run_pid=""
 projection_run_pid=""
@@ -1151,23 +1155,28 @@ fi
 # stop by name releases the VM but keeps the record resumable.
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" stop "$env_name" >"$tmp/env-stop.out"
 grep -q "stopped: $env_id" "$tmp/env-stop.out"
-# hideout stop proves LifecycleStopped/Absent before returning, but limactl's
-# inventory can lag or briefly flicker during a graceful vz stop. Sample the
-# instance status for up to 15s and record the timeline so a false-positive
-# stop confirmation (limactl still Running) is distinguishable from a slow stop.
+# hideout stop requires stable terminal observations before returning. Confirm
+# independently that the preserved instance remains Stopped for three samples;
+# Absent is not success here because stop must keep the instance resumable.
 lima_status="unknown"
 stop_samples=""
+stable_stopped=0
 for _sample in $(seq 1 15); do
   lima_status="$(LIMA_HOME="$lima_home" limactl list | awk -v name="$env_instance" 'NR > 1 && $1 == name { print $2; exit }')"
   [ -z "$lima_status" ] && lima_status="Absent"
   stop_samples="$stop_samples ${_sample}s=${lima_status}"
-  if [ "$lima_status" = "Stopped" ] || [ "$lima_status" = "Absent" ]; then
+  if [ "$lima_status" = "Stopped" ]; then
+    stable_stopped=$((stable_stopped + 1))
+  else
+    stable_stopped=0
+  fi
+  if [ "$stable_stopped" -ge 3 ]; then
     break
   fi
   sleep 1
 done
 echo "gate2: post-stop lima status timeline:$stop_samples" >&2
-if [ "$lima_status" != "Stopped" ] && [ "$lima_status" != "Absent" ]; then
+if [ "$stable_stopped" -lt 3 ]; then
   echo "gate2: lima instance was not stopped by hideout stop; status=$lima_status instance=$env_instance" >&2
   LIMA_HOME="$lima_home" limactl list >&2 || true
   exit 1

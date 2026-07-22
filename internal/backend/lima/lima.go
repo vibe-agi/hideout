@@ -834,7 +834,11 @@ func (b Backend) StopInstance(ctx context.Context, instanceName string) error {
 			return fmt.Errorf("close Lima SSH transports before stop: %w", err)
 		}
 	}
-	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", instanceName}, HostCommandEnv(os.Environ()), nil, b.controlStdout(), b.controlStderr())
+	// A graceful stop can return successfully while a non-cooperative guest
+	// process keeps the VZ VM running. Environment stop is an explicit lifecycle
+	// boundary, so use Lima's force path and let Manager independently prove the
+	// resulting terminal state before it commits the transition.
+	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", "--force", instanceName}, HostCommandEnv(os.Environ()), nil, b.controlStdout(), b.controlStderr())
 }
 
 func cleanupGuestEnv(env []string) []string {

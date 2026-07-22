@@ -6471,7 +6471,7 @@ exit 0
 	if err != nil {
 		t.Fatalf("read fake limactl log after stop: %v", err)
 	}
-	if !strings.Contains(string(logData), "stop "+starts[0]) {
+	if !strings.Contains(string(logData), "stop --force "+starts[0]) {
 		t.Fatalf("stop should stop reusable lima instance:\n%s", logData)
 	}
 

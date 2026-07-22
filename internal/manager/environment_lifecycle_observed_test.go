@@ -17,9 +17,11 @@ type observedEnvironmentBackend struct {
 	observations []backend.LifecycleObservation
 	stopErr      error
 	stopCalls    int
+	observeCalls int
 }
 
 func (b *observedEnvironmentBackend) ObserveLifecycle(_ context.Context, instanceName string) backend.LifecycleObservation {
+	b.observeCalls++
 	if len(b.observations) == 0 {
 		return backend.LifecycleObservation{State: backend.LifecycleUnknown, InstanceName: instanceName, ObservedAt: time.Now().UTC(), ReasonCode: "fixture-exhausted"}
 	}
@@ -28,6 +30,47 @@ func (b *observedEnvironmentBackend) ObserveLifecycle(_ context.Context, instanc
 		b.observations = b.observations[1:]
 	}
 	return observation
+}
+
+func TestStopEnvironmentIncarnationRejectsTransientTerminalProof(t *testing.T) {
+	core, record := observedStopFixture(t)
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	provider := &observedEnvironmentBackend{observations: []backend.LifecycleObservation{
+		lifecycleObservation(backend.LifecycleRunning, record.InstanceName, bootID, ""),
+		lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
+		lifecycleObservation(backend.LifecycleRunning, record.InstanceName, bootID, ""),
+		lifecycleObservation(backend.LifecycleStopped, record.InstanceName, "", ""),
+	}}
+	result, err := core.StopEnvironmentIncarnation(context.Background(), lifecycle.StopRequest{
+		AttemptID: "stop-test", Mode: "automatic",
+		Incarnation: lifecycle.EnvironmentRef{EnvironmentID: record.ID, StartGeneration: 1, InstanceName: record.InstanceName, BootID: bootID},
+	}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Observation.State != backend.LifecycleStopped || provider.stopCalls != 1 || provider.observeCalls < 5 {
+		t.Fatalf("transient terminal observation was accepted: result=%+v stops=%d observations=%d", result, provider.stopCalls, provider.observeCalls)
+	}
+}
+
+func TestStopEnvironmentIncarnationRechecksInitiallyAbsentInstance(t *testing.T) {
+	core, record := observedStopFixture(t)
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	provider := &observedEnvironmentBackend{observations: []backend.LifecycleObservation{
+		lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
+		lifecycleObservation(backend.LifecycleRunning, record.InstanceName, bootID, ""),
+		lifecycleObservation(backend.LifecycleStopped, record.InstanceName, "", ""),
+	}}
+	result, err := core.StopEnvironmentIncarnation(context.Background(), lifecycle.StopRequest{
+		AttemptID: "stop-test", Mode: "automatic",
+		Incarnation: lifecycle.EnvironmentRef{EnvironmentID: record.ID, StartGeneration: 1, InstanceName: record.InstanceName, BootID: bootID},
+	}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.stopCalls != 1 || result.Observation.State != backend.LifecycleStopped {
+		t.Fatalf("initial transient absence bypassed stop: calls=%d result=%+v", provider.stopCalls, result)
+	}
 }
 
 func (b *observedEnvironmentBackend) StopInstance(context.Context, string) error {
