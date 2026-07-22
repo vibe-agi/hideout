@@ -258,8 +258,14 @@ func (d *Daemon) applyEnvironmentMutation(ctx context.Context, environmentID, op
 	if err != nil {
 		return environment.Record{}, err
 	}
+	if force {
+		// --force stops first: cancel this environment's live sessions so
+		// their ordinary cleanup releases the lifecycle handles the mutation
+		// gate requires to be free.
+		_ = d.sessions.cancelEnvironment(environmentID)
+	}
 	var result environment.Record
-	err = d.runDestructiveMutation(ctx, environmentID, func(mutationCtx context.Context) error {
+	err = d.runDestructiveMutationMode(ctx, environmentID, force, func(mutationCtx context.Context) error {
 		var mutationErr error
 		switch operation {
 		case "remove":
@@ -278,12 +284,31 @@ func (d *Daemon) applyEnvironmentMutation(ctx context.Context, environmentID, op
 }
 
 func (d *Daemon) runDestructiveMutation(ctx context.Context, environmentID string, mutate func(context.Context) error) error {
+	return d.runDestructiveMutationMode(ctx, environmentID, false, mutate)
+}
+
+func (d *Daemon) runDestructiveMutationMode(ctx context.Context, environmentID string, forced bool, mutate func(context.Context) error) error {
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if err := d.lifecycle.WaitReconciliation(ctx, environmentID); err != nil {
 			return err
 		}
 		err := d.lifecycle.RunDestructiveMutation(ctx, environmentID, mutate)
-		if !errors.Is(err, lifecycle.ErrReconciliationInFlight) {
+		switch {
+		case errors.Is(err, lifecycle.ErrReconciliationInFlight):
+			continue
+		case forced && errors.Is(err, lifecycle.ErrMutationBlockedByActivity) && time.Now().Before(deadline):
+			// The forced mutation already cancelled this environment's live
+			// sessions; their cleanup releases the lifecycle handles the
+			// mutation gate requires. Wait bounded instead of failing closed
+			// on first contact.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		default:
 			return err
 		}
 	}

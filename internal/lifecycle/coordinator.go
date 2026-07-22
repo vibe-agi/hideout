@@ -613,7 +613,7 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 	}
 	if len(state.handles) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
 		c.mu.Unlock()
-		return errors.New("lifecycle destructive mutation is blocked by environment activity")
+		return ErrMutationBlockedByActivity
 	}
 	if err := c.cancelDeadlineLocked(state); err != nil {
 		c.mu.Unlock()

@@ -57,6 +57,53 @@ func TestSessionRegistryCapacityIdentityAndIndependentCancellation(t *testing.T)
 	r.finish("conn-b", "")
 }
 
+func TestSessionRegistryCancelEnvironmentTargetsOnlyThatEnvironment(t *testing.T) {
+	r := newSessionRegistry(3, func() time.Time { return time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC) })
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB, cancelB := context.WithCancel(context.Background())
+	ctxC, cancelC := context.WithCancel(context.Background())
+	a, err := r.register("conn-a", cancelA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := r.register("conn-b", cancelB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.register("conn-c", cancelC); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.markStarted(sessionStart{SessionID: "ses_a", EnvironmentID: "env_target", Profile: "default", Backend: "lima", TerminalMode: "pty", SessionSnapshotID: testDaemonSessionSnapshotID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.markStarted(sessionStart{SessionID: "ses_b", EnvironmentID: "env_other", Profile: "default", Backend: "lima", TerminalMode: "none", SessionSnapshotID: testDaemonSessionSnapshotID}); err != nil {
+		t.Fatal(err)
+	}
+	// conn-c never started a session and carries no environment identity; a
+	// per-environment cancellation must not touch it.
+	if cancelled := r.cancelEnvironment("env_target"); cancelled != 1 {
+		t.Fatalf("cancelEnvironment cancelled %d sessions, want 1", cancelled)
+	}
+	select {
+	case <-ctxA.Done():
+	case <-time.After(time.Second):
+		t.Fatal("target environment session was not cancelled")
+	}
+	select {
+	case <-ctxB.Done():
+		t.Fatal("sibling environment session was cancelled")
+	default:
+	}
+	select {
+	case <-ctxC.Done():
+		t.Fatal("unstarted connection was cancelled")
+	default:
+	}
+	r.finish("conn-a", "")
+	r.finish("conn-b", "")
+	r.finish("conn-c", "")
+}
+
 func TestSessionWorkerSolelyOwnsImmutableWorkspaceAttachment(t *testing.T) {
 	r := newSessionRegistry(1, nil)
 	worker, err := r.register("conn-workspace", func() {})

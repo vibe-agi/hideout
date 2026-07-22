@@ -820,6 +820,62 @@ func TestDaemonLifecycleMutationSerializesForceRemoveAndRecreate(t *testing.T) {
 	}
 }
 
+func TestDaemonLifecycleForceMutationWaitsOutLiveSessionActivity(t *testing.T) {
+	// A live run session holds a lifecycle registration handle. recreate
+	// --force cancels the environment's sessions and waits for their handles
+	// to finish instead of failing closed on first contact — the gate2
+	// named-environment lane hit exactly that 409.
+	store, record := daemonLifecycleEnvironment(t)
+	environmentStore := environment.Store{Root: store.Root}
+	record.Status = "running"
+	if err := environmentStore.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	provider := &daemonLifecycleBackend{observation: backend.LifecycleObservation{
+		State: backend.LifecycleRunning, InstanceName: record.InstanceName,
+		BootID: bootID,
+	}}
+	d, err := Start(Options{
+		Store: store, LifecycleIdleGrace: time.Hour,
+		LifecycleBackend: func(environment.Record) (manager.EnvironmentLifecycleBackend, error) { return provider, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop(context.Background())
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelWait()
+	if err := d.lifecycle.WaitReconciliation(waitCtx, record.ID); err != nil {
+		t.Fatalf("wait for lifecycle reconciliation: %v", err)
+	}
+	registration, err := d.lifecycle.BeginAttach(context.Background(), lifecycle.AttachRequest{
+		EnvironmentID: record.ID, InstanceName: record.InstanceName, SessionID: "ses_force_guard",
+		Observation: backend.LifecycleObservation{
+			State: backend.LifecycleRunning, InstanceName: record.InstanceName,
+			BootID: bootID, ObservedAt: time.Now().UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("begin guard attach: %v", err)
+	}
+	go func() {
+		// The cancelled session finishes its cleanup shortly after the force
+		// mutation starts waiting for the environment to quiesce.
+		time.Sleep(400 * time.Millisecond)
+		_ = registration.Finish(context.Background(), nil)
+	}()
+	body := `{"environmentId":"` + record.ID + `","operation":"recreate","force":true}`
+	code, response := daemonPost(t, d, lifecycleMutatePath, body, d.Token())
+	if code != http.StatusOK {
+		t.Fatalf("force mutation with live-session handle code=%d body=%s", code, response)
+	}
+	loaded, loadErr := environmentStore.Load(record.ID)
+	if loadErr != nil || loaded.ID != record.ID || loaded.Status != "ready" {
+		t.Fatalf("recreated record=%+v err=%v", loaded, loadErr)
+	}
+}
+
 func TestDaemonLifecycleMutationWithoutForceDoesNotPoisonRunningState(t *testing.T) {
 	store, record := daemonLifecycleEnvironment(t)
 	environmentStore := environment.Store{Root: store.Root}

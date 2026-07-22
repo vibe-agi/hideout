@@ -503,3 +503,25 @@ func workspaceProfileForAttachment(workers []*sessionWorker, sessionID string) s
 	}
 	return ""
 }
+
+// cancelEnvironment cancels every live session bound to one environment so a
+// forced destructive mutation can wait for the environment to quiesce. The
+// cancellation reuses each connection's own cancel path; workers still run
+// their ordinary cleanup and lifecycle-registration finish.
+func (r *sessionRegistry) cancelEnvironment(environmentID string) int {
+	if environmentID == "" {
+		return 0
+	}
+	r.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(r.workers))
+	for _, worker := range r.workers {
+		if worker.environmentID == environmentID && worker.cancel != nil {
+			cancels = append(cancels, worker.cancel)
+		}
+	}
+	r.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	return len(cancels)
+}

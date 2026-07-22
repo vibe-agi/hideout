@@ -17,6 +17,11 @@ var (
 	ErrReconciliationInFlight = errors.New("lifecycle reconciliation is in flight")
 	ErrStopInFlight           = errors.New("lifecycle stop is in flight")
 	ErrCoordinatorClosed      = errors.New("lifecycle coordinator is closed")
+	// ErrMutationBlockedByActivity reports live environment activity (attached
+	// sessions, an in-flight stop, or another mutation) refusing a destructive
+	// mutation. A forced mutation may cancel the environment's sessions and
+	// retry within a bounded window; everything else treats it as terminal.
+	ErrMutationBlockedByActivity = errors.New("lifecycle destructive mutation is blocked by environment activity")
 )
 
 // AttachRequest contains only stable identities and independently observed
