@@ -1248,8 +1248,12 @@ wait "$named_guard_pid" 2>/dev/null || true
 named_guard_pid=""
 grep -q 'recreated environment gate2-named' "$tmp/env-recreate.out"
 
-# --rm stays record-less: no new reusable environment, no resume hint.
-before_count="$(awk -F'\t' 'NR > 1' "$tmp/env-list-before.out" | wc -l | tr -d ' ')"
+# --rm owns a per-run dedicated disposable environment. The run must succeed,
+# prove its teardown (no cleanup-required disposition), remove the disposable
+# record, delete the disposable lima instance, and print no resume hint.
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-before-rm.out"
+before_rm_count="$(awk -F'\t' 'NR > 1' "$tmp/env-list-before-rm.out" | wc -l | tr -d ' ')"
+LIMA_HOME="$lima_home" limactl list 2>/dev/null | awk 'NR > 1 { print $1 }' | sort >"$tmp/lima-instances-before-rm.txt"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run --backend lima --workspace "$workspace" --rm -- sh -eu -c '
 printf "rm_ok=yes\n"
 ' >"$tmp/env-rm.out" 2>"$tmp/env-rm.err"; then
@@ -1261,6 +1265,29 @@ grep -q 'rm_ok=yes' "$tmp/env-rm.out"
 if grep -q 'run again: hideout run --env' "$tmp/env-rm.err"; then
   echo "gate2: --rm should not print a reusable environment hint" >&2
   cat "$tmp/env-rm.err" >&2
+  exit 1
+fi
+if grep -q 'disposable cleanup required' "$tmp/env-rm.err"; then
+  echo "gate2: --rm teardown was not proved (cleanup-required disposition)" >&2
+  cat "$tmp/env-rm.err" >&2
+  exit 1
+fi
+HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/env-list-after-rm.out"
+after_rm_count="$(awk -F'\t' 'NR > 1' "$tmp/env-list-after-rm.out" | wc -l | tr -d ' ')"
+if [ "$after_rm_count" -ne "$before_rm_count" ]; then
+  echo "gate2: --rm changed the environment record count (before=$before_rm_count after=$after_rm_count)" >&2
+  cat "$tmp/env-list-after-rm.out" >&2
+  exit 1
+fi
+if awk -F'\t' 'NR > 1 && $1 ~ /^rm-/ { found = 1 } END { exit found ? 0 : 1 }' "$tmp/env-list-after-rm.out"; then
+  echo "gate2: --rm retained its disposable environment record" >&2
+  cat "$tmp/env-list-after-rm.out" >&2
+  exit 1
+fi
+LIMA_HOME="$lima_home" limactl list 2>/dev/null | awk 'NR > 1 { print $1 }' | sort >"$tmp/lima-instances-after-rm.txt"
+if ! cmp -s "$tmp/lima-instances-before-rm.txt" "$tmp/lima-instances-after-rm.txt"; then
+  echo "gate2: --rm changed the lima instance inventory" >&2
+  diff "$tmp/lima-instances-before-rm.txt" "$tmp/lima-instances-after-rm.txt" >&2 || true
   exit 1
 fi
 
