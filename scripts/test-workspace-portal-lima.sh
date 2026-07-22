@@ -33,6 +33,7 @@ control="$bootstrap/control"
 host_root="$work_root/host-root"
 host_probe="$work_root/hideout-workspace-probe-host"
 guest_probe="$bootstrap/hideout-workspace-probe"
+guest_exec_probe="$host_root/hideout-workspace-exec-probe"
 guest_script="$bootstrap/guest-check.sh"
 server_pid=""
 guest_pid=""
@@ -63,7 +64,16 @@ printf 'rename-me\n' >"$host_root/rename-by-host.txt"
   go build -o "$host_probe" ./cmd/hideout-workspace-probe
   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o "$guest_probe" ./cmd/hideout-workspace-probe
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+    go build -trimpath -o "$guest_exec_probe" ./cmd/hideout-gate-fsread
 )
+
+cat >"$host_root/workspace-exec-script" <<'SCRIPT'
+#!/bin/sh
+set -eu
+printf 'workspace-script-exec=passed\n'
+SCRIPT
+chmod 0755 "$host_root/workspace-exec-script" "$guest_exec_probe"
 
 "$host_probe" prerequisites \
   --root "$host_root" \
@@ -73,7 +83,15 @@ jq -e '
   .status == "passed" and
   .tccStatus == "available" and
   .scope == "probed-root-only" and
-  ([.principals[] | select(.state == "observed")] | length) == 1
+  ([.principals[] | select(
+    .process == "hideoutd" and .state == "required"
+  )] | length) == 1 and
+  ([.principals[] | select(
+    .process == "hideout" and .state == "required"
+  )] | length) == 1 and
+  ([.principals[] | select(
+    .process == "hideout-workspace-probe" and .state == "diagnostic-only"
+  )] | length) == 1
 ' "$artifact_dir/prerequisites.json" >/dev/null
 
 cat >"$guest_script" <<'GUEST'
@@ -81,6 +99,7 @@ cat >"$guest_script" <<'GUEST'
 set -eu
 
 mountpoint=/tmp/hideout-workspace-portal-research
+portal_helper=/var/tmp/hideout-workspace-probe-$$
 portal_pid=""
 cleanup_guest() {
   if mountpoint -q "$mountpoint"; then
@@ -90,11 +109,14 @@ cleanup_guest() {
     kill "$portal_pid" 2>/dev/null || true
     wait "$portal_pid" 2>/dev/null || true
   fi
+  rm -f "$portal_helper"
 }
 trap cleanup_guest EXIT INT TERM
 
 mkdir -p "$mountpoint"
-/workspace/hideout-workspace-probe portal-mount \
+cp /workspace/hideout-workspace-probe "$portal_helper"
+chmod 0755 "$portal_helper"
+"$portal_helper" portal-mount \
   --endpoint "$(cat /workspace/control/endpoint.txt)" \
   --credential-file /workspace/control/credential.bin \
   --mount "$mountpoint" \
@@ -114,6 +136,12 @@ mountpoint -q "$mountpoint" || {
   echo "portal mount did not become ready" >&2
   exit 1
 }
+
+"$mountpoint/workspace-exec-script" >/workspace/control/workspace-script-exec.out
+"$mountpoint/hideout-workspace-exec-probe" \
+  --read "$mountpoint/original.txt" \
+  --deny "$mountpoint/missing-exec-probe.txt" \
+  >/workspace/control/workspace-binary-exec.out
 
 test "$(cat "$mountpoint/original.txt")" = host-original
 # Prime the FUSE directory cache before the host mutates directory membership.
@@ -229,7 +257,7 @@ hideout run \
   --workspace "$bootstrap" \
   --guest-workspace /workspace \
   --terminal never \
-  -- /workspace/guest-check.sh \
+  -- /bin/sh /workspace/guest-check.sh \
   >"$artifact_dir/raw/guest.stdout" 2>"$artifact_dir/raw/guest.stderr" &
 guest_pid=$!
 
@@ -272,6 +300,9 @@ guest_pid=""
   echo "workspace Portal guest result is not passed" >&2
   exit 1
 }
+grep -Fxq 'workspace-script-exec=passed' "$control/workspace-script-exec.out"
+grep -Fxq 'hostfs_go=host-original' "$control/workspace-binary-exec.out"
+grep -Fxq 'hostfs_go_denied=yes' "$control/workspace-binary-exec.out"
 [[ "$(cat "$host_root/original.txt")" == "host-updated" ]] || exit 1
 [[ "$(stat -f '%Lp' "$host_root/nested/value.txt")" == "640" ]] || exit 1
 [[ "$(stat -f '%z' "$host_root/nested/value.txt")" == "5" ]] || exit 1
@@ -279,6 +310,8 @@ guest_pid=""
 [[ ! -e "$host_root/nested/link.txt" && ! -e "$host_root/escape-link" ]] || exit 1
 
 cp "$control/portal-mount.log" "$artifact_dir/raw/portal-mount.log"
+cp "$control/workspace-script-exec.out" "$artifact_dir/raw/workspace-script-exec.out"
+cp "$control/workspace-binary-exec.out" "$artifact_dir/raw/workspace-binary-exec.out"
 git_dirty=false
 if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]]; then
   git_dirty=true
@@ -307,7 +340,7 @@ jq -n \
     dirty:$dirty,
     guestMachine:$guestMachine,
     hostToGuestConvergenceUpperBoundMs:($convergenceMs|tonumber),
-    operations:["lookup","open","read","create","write","fsync","mkdir","rename","symlink","readlink","chmod","truncate","unlink","flock"],
+    operations:["lookup","open","read","exec-script","exec-binary","create","write","fsync","mkdir","rename","symlink","readlink","chmod","truncate","unlink","flock"],
     cacheInvalidationChecks:["host-replace","host-create","host-delete","host-rename"],
     negativeChecks:["missing-path","escaping-symlink","second-lock-owner"],
     controlMaterialInEvidence:false

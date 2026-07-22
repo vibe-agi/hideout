@@ -4781,3 +4781,27 @@ the Gate 3 privacy/agent-install lane. These observations establish only the
 declared preview contract. They do not establish a supported image, patch SLA,
 automatic refresh, published SBOM, interactive agent authentication, arbitrary
 architecture support, or release readiness.
+
+## Shared Workspace Portal Executable Opens (041)
+
+Linux FUSE marks an open initiated by `execve` with `FMODE_EXEC`. That bit is an
+execution hint, not a read/write/create authority. The Workspace Portal client
+therefore accepts it in the Linux-local closed allowlist and drops it while
+encoding the existing Portal request. The wire protocol still carries only the
+validated access mode and append/create/exclusive/truncate/sync/no-follow bits;
+the host independently decodes that closed set and opens the attachment's
+exact-root-resolved path. Unknown local or wire flags remain rejected.
+
+This correction changes no Manager plan/apply operation, attachment identity,
+credential, provider, lifecycle registration, workspace root, HostFS rule,
+environment selection, target identity, network policy, or execute permission.
+There is no copy-to-guest or host-native execution fallback. Script interpreter,
+binary format/architecture, and permission failures remain ordinary Linux
+target failures.
+
+The promoted scope is deliberately narrower than “all Lima workspaces”:
+compatible automatic/shared sessions already use the daemon-owned Workspace
+Portal and may establish support through clean product evidence. Named or
+dedicated environments retain static virtiofs workspace presentation and remain
+an explicit non-claim until a separate topology/lifecycle design and real gate
+prove otherwise.

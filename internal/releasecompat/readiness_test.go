@@ -1357,6 +1357,24 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 			"candidateSamplesMs": candidate, "baselineSamplesMs": baseline,
 			"candidateMedianMs": 100, "baselineMedianMs": 100, "observedDeltaMs": 0, "allowedDeltaMs": 10,
 		}
+	case productevidence.ArtifactValidatorWorkspaceExecutableV1:
+		checks := map[string]bool{}
+		for _, name := range []string{
+			"checkoutWriteVisible", "directBinary", "directScript", "disjointIsolation",
+			"escapingSymlinkRejected", "incompatibleFormatFailurePreserved", "laterSessionVisible",
+			"localLauncher", "missingInterpreterFailurePreserved", "noHostFallback",
+			"noWorkspaceCopy", "permissionFailurePreserved",
+		} {
+			checks[name] = true
+		}
+		value = map[string]any{
+			"schema": "hideout.workspace-executable-gate2/v1", "status": "passed",
+			"commit": commit, "dirty": false, "backend": "lima",
+			"hostOS": "darwin", "hostArch": "arm64", "guestArch": "aarch64",
+			"workspaceMechanism": "workspace-portal", "checks": checks,
+			"samples": 30, "warmFirstOutputP95Ms": 800, "medianRegressionRatio": 1.02,
+			"nonClaims": map[string]any{"staticVirtiofs": "not-claimed"},
+		}
 	default:
 		t.Fatalf("unknown semantic validator %q", validator)
 	}

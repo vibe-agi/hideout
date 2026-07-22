@@ -695,3 +695,25 @@ unverified. The packaged catalog currently contains one retained,
 digest-pinned macOS arm64 preview artifact. Catalog presence alone creates no
 readiness, maintenance, patch, SBOM, or release claim; those depend on current
 verification and the separately defined evidence gates.
+
+## Workspace-Local Execution Through The Shared Portal (041)
+
+Workspace content is already target-visible, writable project input. Allowing a
+guest-compatible executable bit to take effect does not make that content
+trusted and does not grant host process execution. The target remains inside the
+existing session boundary; the host side performs only the exact-root Portal
+open authorized by the attachment.
+
+Linux FUSE `FMODE_EXEC` is treated as kernel-local metadata. It is accepted only
+by the Linux client allowlist, removed before wire encoding, and cannot request
+write, create, traversal, HostFS, host command, or outside-root authority.
+Unknown flags, stale credentials, attachment/provider/environment/incarnation
+mismatch, admission refusal, and escaping paths continue to fail closed.
+
+The principal regression risks are broad flag acceptance, a hidden executable
+copy, host-native fallback, cross-workspace substitution, and overclaiming the
+static/dedicated virtiofs path. Gate 041 addresses them with a closed encoder,
+unknown-bit test, flag-removal mutation, exact-root negatives, disjoint repeated
+execution, checkout effects, integrated no-copy product lanes, strict redacted
+evidence, and an explicit `staticVirtiofs: not-claimed` field. Shared projects
+still share one guest kernel and receive no VM wall or guest-root containment.

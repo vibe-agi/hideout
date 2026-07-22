@@ -556,13 +556,10 @@ else
   fi
   printf "hostfs_node=skip\n"
 fi
-# This check exercises HostFS read from a compiled Go program (os.ReadFile),
-# not workspace execution. The workspace is a Lima vz virtiofs mount that does
-# not support execve of binaries stored on it (they fail with EOPNOTSUPP; see
-# docs/DEBT.md "virtiofs workspace execute"), so copy the helper to an
-# exec-capable path before running it.
-cp ./hideout-gate-fsread /tmp/hideout-gate-fsread
-/tmp/hideout-gate-fsread --read "$1" --deny "$5"
+# This check exercises both direct shared-Portal workspace execution and HostFS
+# read from a compiled Go program. A guest-local copy would hide a regression in
+# the workspace execution contract.
+./hideout-gate-fsread --read "$1" --deny "$5"
 if cat "$5" >/dev/null 2>&1; then
   echo "ungranted hostfs path unexpectedly readable" >&2
   exit 44
@@ -745,7 +742,6 @@ cat >"$workspace/hostfs-visibility-live.py" <<'PY'
 import errno
 import os
 from pathlib import Path
-import shutil
 import stat
 import subprocess
 import sys
@@ -754,13 +750,9 @@ import time
 workspace, approve_path, deny_path, timeout_path, link_path = sys.argv[1:]
 workspace = Path(workspace)
 
-# The workspace is a Lima vz virtiofs mount that does not support execve of
-# binaries stored on it (EOPNOTSUPP; see docs/DEBT.md "virtiofs workspace
-# execute"), so copy the broker-read helper to an exec-capable guest-local path
-# before running it. Mirrors the hostfs grant smoke lane above.
-fsread_bin = "/tmp/hideout-gate-fsread"
-shutil.copyfile("hideout-gate-fsread", fsread_bin)
-os.chmod(fsread_bin, 0o755)
+# Execute the packaged test helper from the shared Workspace Portal. Copying it
+# to guest-local storage would make this lane unable to detect FMODE_EXEC drift.
+fsread_bin = "./hideout-gate-fsread"
 
 
 def marker(name):

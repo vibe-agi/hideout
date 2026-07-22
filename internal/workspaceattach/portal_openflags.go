@@ -5,6 +5,10 @@ import (
 )
 
 func encodePortalOpenFlags(flags int) (uint32, error) {
+	return encodePortalOpenFlagsWithSupported(flags, portalSupportedLocalOpenFlags())
+}
+
+func encodePortalOpenFlagsWithSupported(flags, supported int) (uint32, error) {
 	var encoded uint32
 	switch flags & syscall.O_ACCMODE {
 	case syscall.O_RDONLY:
@@ -34,7 +38,7 @@ func encodePortalOpenFlags(flags int) (uint32, error) {
 	if flags&syscall.O_NOFOLLOW != 0 {
 		encoded |= portalOpenNoFollow
 	}
-	if unsupported := flags &^ portalSupportedLocalOpenFlags(); unsupported != 0 {
+	if unsupported := flags &^ supported; unsupported != 0 {
 		return 0, syscall.ENOTSUP
 	}
 	return encoded, nil

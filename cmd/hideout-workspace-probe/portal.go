@@ -44,7 +44,14 @@ func runPortalServe(args []string) error {
 		return err
 	}
 	limits := workspaceattach.DefaultPortalLimits()
-	server, err := workspaceattach.NewPortalServer(workspaceattach.PortalServerOptions{Root: *root, Authority: authority, Limits: limits})
+	admission, err := workspaceattach.NewAdmissionController(workspaceattach.SelectedLimits())
+	if err != nil {
+		return err
+	}
+	server, err := workspaceattach.NewPortalServer(workspaceattach.PortalServerOptions{
+		Root: *root, Authority: authority, Limits: limits,
+		EnvironmentID: *environment, ProviderID: "research-provider", Admission: admission,
+	})
 	if err != nil {
 		return err
 	}

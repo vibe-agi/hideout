@@ -22,3 +22,25 @@ func TestPortalOpenFlagsPreserveNoFollowSemantics(t *testing.T) {
 		t.Fatalf("decoded flags omit no-follow semantics: %#x", decoded)
 	}
 }
+
+func TestPortalOpenFlagsAllowedLocalHintDoesNotChangeWireSemantics(t *testing.T) {
+	const localOnlyHint = 1 << 29
+
+	encoded, err := encodePortalOpenFlagsWithSupported(
+		syscall.O_RDONLY|localOnlyHint,
+		syscall.O_ACCMODE|localOnlyHint,
+	)
+	if err != nil {
+		t.Fatalf("encode allowed local-only hint: %v", err)
+	}
+	if encoded != portalOpenReadOnly {
+		t.Fatalf("local-only hint changed wire semantics: %#x", encoded)
+	}
+
+	if _, err := encodePortalOpenFlagsWithSupported(
+		syscall.O_RDONLY|localOnlyHint,
+		syscall.O_ACCMODE,
+	); err != syscall.ENOTSUP {
+		t.Fatalf("encode unallowed local-only hint error=%v, want ENOTSUP", err)
+	}
+}

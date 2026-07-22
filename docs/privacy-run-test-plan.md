@@ -1828,3 +1828,64 @@ the registered lifecycle/performance evidence classes cannot satisfy the real
 claim. Gate 040 adds no CLI, configuration, manifest field, guest authority, or
 fallback path; it does not strengthen shared-VM isolation or guest-root
 containment.
+
+## Gate 041: Shared Workspace Portal Executable Support
+
+Status: **Implemented in source; clean exact-package real promotion pending.**
+
+### Gate 0 And Mutation Lane
+
+```sh
+scripts/test-workspace-executable-smoke.sh
+scripts/test-gate0.sh
+```
+
+The local lane proves that an allowed local-only open hint does not change the
+Portal wire request, an unknown hint still returns `ENOTSUP`, Linux arm64 binds
+the rule to go-fuse `FMODE_EXEC`, the current research probe constructs required
+admission identity, and the 041 proof registry covers every FR/SC. Its strict
+Go evidence judge must reject dirty identity, mechanism drift, missing or false
+checks, fewer than 30 samples, p95 over two seconds, median regression over ten
+percent, an overclaimed static virtiofs mode, and unknown JSON fields.
+
+Temporarily removing `FMODE_EXEC` from the Linux local allowlist must make the
+focused real Portal direct-execution lane fail with `OPEN {EXEC,0x20000}` and
+`EOPNOTSUPP`; restoring it must run both an interpreted script and a Linux arm64
+binary without adding a wire flag.
+
+### Focused Portal Correctness
+
+```sh
+scripts/test-workspace-portal-lima.sh \
+  /tmp/hideout-041-workspace-portal-correctness
+```
+
+This is real macOS arm64 Lima transport evidence for direct script/binary opens,
+ordinary filesystem effects, cache invalidation, escaping symlink refusal, and
+lock behavior. It is valuable diagnosis but uses a research helper and cannot
+by itself promote packaged product support.
+
+### Clean Product Gate 2
+
+```sh
+scripts/test-workspace-executable-lima-e2e.sh --require-real \
+  --samples 30 --iterations 100 \
+  --out .hideout-release-evidence/041-workspace-executable-real-gate2
+scripts/test-gate2-lima.sh
+```
+
+The feature gate builds or consumes one verified package, initializes the exact
+`developer-standard` runtime, and directly executes a workspace script, Linux
+arm64 binary, and relative launcher. It proves checkout write/later-session
+visibility, permission/missing-interpreter/incompatible-format preservation,
+escaping-link refusal, no host fallback, no copied workspace, and 100 rapidly
+repeated executions split across two disjoint workspaces. Thirty alternating
+direct/control samples require nearest-rank p95 at most two seconds and direct
+median at most 1.10 times the same script invoked through guest `/bin/sh`.
+
+`041.workspace-executable.real-gate2.execution` requires a clean 40-character
+candidate commit, exact package and runtime binding, macOS arm64/Lima/aarch64,
+`workspace-portal`, a closed all-true check inventory, thresholds, redaction,
+and `staticVirtiofs: not-claimed`. The supporting `not-run` proof, native/local
+tests, a dirty or reduced probe, the focused research probe, helper execution
+from `/tmp`, or edited `passed` JSON cannot satisfy promotion.

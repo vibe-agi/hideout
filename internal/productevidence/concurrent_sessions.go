@@ -165,6 +165,12 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 		return validateSharedWorkspaceBehaviorArtifact(refs, artifacts, expectedCommit, expectedPackage, expectedRuntime)
 	case ArtifactValidatorSharedWorkspacePerformanceV1:
 		return validateSharedWorkspacePerformanceArtifact(refs, artifacts, expectedCommit, expectedPackage, expectedRuntime)
+	case ArtifactValidatorWorkspaceExecutableV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateWorkspaceExecutableArtifact(data, expectedCommit)
 	default:
 		return fmt.Errorf("unsupported artifact validator %q", validator)
 	}

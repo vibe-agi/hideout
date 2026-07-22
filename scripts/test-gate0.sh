@@ -100,7 +100,8 @@ jq -e '
   ([.requirements[] | select(.featureId == "032-community-host-app-recipes")] | length == 4) and
   ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7) and
   ([.requirements[] | select(.featureId == "035-shared-default-vm-cross-workspace")] | length == 5) and
-  ([.requirements[] | select(.featureId == "038-zero-friction-setup")] | length == 8)
+  ([.requirements[] | select(.featureId == "038-zero-friction-setup")] | length == 8) and
+  ([.requirements[] | select(.featureId == "041-workspace-executable-support")] | length == 4)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -234,6 +235,10 @@ scripts/test-concurrent-sessions-e2e.sh
 # machine incarnation while daemon workers retain distinct immutable views.
 # This local lane intentionally makes no real filesystem-isolation claim.
 scripts/test-shared-workspace-smoke.sh
+# Shared Workspace Portal executable mechanics (041): local flag semantics,
+# Linux arm64 compile contract, strict evidence judge, and proof registration.
+# Direct execution support still requires the clean packaged real Lima gate.
+scripts/test-workspace-executable-smoke.sh
 
 # Daemon live operations console (no Lima): typed seed/event contracts and
 # payload-driven UI proof. Initially a skeleton smoke, expanded by 007.

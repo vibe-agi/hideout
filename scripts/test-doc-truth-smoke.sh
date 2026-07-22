@@ -150,7 +150,8 @@ done < <(jq -r '
     or .featureId == "034-concurrent-run-sessions"
     or .featureId == "035-shared-default-vm-cross-workspace"
 	  or .featureId == "036-resource-lifecycle-final-session-stop"
-	  or .featureId == "040-lifecycle-attach-reservation")
+	  or .featureId == "040-lifecycle-attach-reservation"
+	  or .featureId == "041-workspace-executable-support")
   | .proofId
 ' "$registry_json")
 
@@ -578,6 +579,7 @@ validate_cross_docs() {
   grep -q 'Community Host-App Recipes' docs/README.md
   grep -q '032.host-app-pack.real-gate2.external' docs/claim-boundaries.md
   grep -q '034.concurrent-sessions.docs.claim-boundary' docs/claim-boundaries.md
+  grep -q '041.workspace-executable.docs.claim-boundary' docs/claim-boundaries.md
   grep -q 'Docs truth gate' docs/STATUS.md || true
 
   for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
@@ -858,6 +860,25 @@ write_manifest() {
 		  prerequisites: [{name: "claim-boundaries", status: "available"}],
 		  artifacts: $claimArtifacts[0],
 		  redactionStatus: "passed"
+		},
+		{
+		  proofId: "041.workspace-executable.docs.claim-boundary",
+		  featureId: "041-workspace-executable-support",
+		  mode: "docs",
+		  evidenceClass: "documentation-truth-gate",
+		  status: "passed",
+		  commandSummary: "validate shared-Portal executable support, evidence refusal, and static virtiofs non-claims",
+		  coveredClaims: [
+		    {claimId: "041.FR-010", source: "spec", description: "Unsupported mechanisms remain explicit non-claims without copy or host fallback", scope: "docs"},
+		    {claimId: "041.FR-011", source: "spec", description: "Support documentation and evidence agree on promoted mechanisms", scope: "docs"},
+		    {claimId: "041.FR-013", source: "spec", description: "Disjoint shared attachments retain independent executable identity", scope: "docs"},
+		    {claimId: "041.FR-014", source: "spec", description: "Real evidence binds source, package, runtime, platform, and mechanism", scope: "docs"},
+		    {claimId: "041.FR-016", source: "spec", description: "Existing boundary behavior remains unchanged", scope: "docs"},
+		    {claimId: "041.SC-007", source: "spec", description: "Local and real gates are both required for promotion", scope: "docs"}
+		  ],
+		  prerequisites: [{name: "claim-boundaries", status: "available"}],
+		  artifacts: $claimArtifacts[0],
+		  redactionStatus: "passed"
         }
       ]
     }' >"$manifest"
@@ -874,10 +895,11 @@ validate_manifest() {
       "025.docs.overclaim-scan",
       "029.hostfs-visibility.docs.claim-boundary",
 	  "034.concurrent-sessions.docs.claim-boundary",
-	  "040.attach-reservation.docs.claim-boundary"
+	  "040.attach-reservation.docs.claim-boundary",
+	  "041.workspace-executable.docs.claim-boundary"
     ] | sort) and
     all(.proofs[];
-	  (.featureId == "025-documentation-truth-gate" or .featureId == "029-hostfs-discoverable-namespace" or .featureId == "034-concurrent-run-sessions" or .featureId == "040-lifecycle-attach-reservation") and
+	  (.featureId == "025-documentation-truth-gate" or .featureId == "029-hostfs-discoverable-namespace" or .featureId == "034-concurrent-run-sessions" or .featureId == "040-lifecycle-attach-reservation" or .featureId == "041-workspace-executable-support") and
       .status == "passed" and .redactionStatus == "passed"
     )
   ' "$manifest" >"$out/logs/evidence-content.out"

@@ -57,6 +57,7 @@ const (
 	ArtifactValidatorLifecyclePerformanceV1       = "resource-lifecycle-performance/v1"
 	ArtifactValidatorSharedWorkspaceBehaviorV1    = "shared-workspace-behavior/v1"
 	ArtifactValidatorSharedWorkspacePerformanceV1 = "shared-workspace-performance/v1"
+	ArtifactValidatorWorkspaceExecutableV1        = "workspace-executable/v1"
 )
 
 var validRequirementLayers = []string{
@@ -100,6 +101,7 @@ var validArtifactValidators = []string{
 	ArtifactValidatorLifecyclePerformanceV1,
 	ArtifactValidatorSharedWorkspaceBehaviorV1,
 	ArtifactValidatorSharedWorkspacePerformanceV1,
+	ArtifactValidatorWorkspaceExecutableV1,
 }
 
 type ProofRequirement struct {
@@ -257,6 +259,15 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"040.SC-005", "040.SC-006"),
 		req(Feature040, Proof040DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
 			"040.FR-012", "040.FR-013", "040.FR-014", "040.FR-015", "040.SC-006"),
+
+		req(Feature041, Proof041Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"041.FR-002", "041.FR-003", "041.FR-004", "041.FR-007", "041.FR-009", "041.FR-015", "041.FR-016", "041.SC-005", "041.SC-007"),
+		runtimeEvidenceClassValidatorReq(Feature041, Proof041RealExecution, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "workspace-executable-real-gate2", ArtifactValidatorWorkspaceExecutableV1,
+			"041.FR-001", "041.FR-002", "041.FR-003", "041.FR-004", "041.FR-005", "041.FR-006", "041.FR-007", "041.FR-008", "041.FR-009", "041.FR-012", "041.FR-013", "041.FR-014", "041.FR-015", "041.FR-016", "041.SC-001", "041.SC-002", "041.SC-003", "041.SC-004", "041.SC-005", "041.SC-006", "041.SC-007"),
+		req(Feature041, Proof041RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"041.SC-002", "041.SC-003", "041.SC-004", "041.SC-005", "041.SC-006"),
+		req(Feature041, Proof041DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"041.FR-010", "041.FR-011", "041.FR-013", "041.FR-014", "041.FR-016", "041.SC-007"),
 	}
 	sortRequirements(rows)
 	return rows
