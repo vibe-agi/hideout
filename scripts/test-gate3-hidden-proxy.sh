@@ -198,6 +198,9 @@ trap cleanup EXIT
 bin="$tmp/bin"
 store="$tmp/store"
 lima_home="$(hideout_mktemp_lima_home)"
+# The daemon inherits its lima home from whichever command starts it, and
+# clients fail closed on a lima-home mismatch. Export once for every call.
+export LIMA_HOME="$lima_home"
 workspace="$tmp/workspace"
 mkdir -p "$bin" "$store" "$workspace"
 

@@ -118,10 +118,15 @@ InitialUnknown ==
 
 \* ---- protocol: confirming an initially terminal reading ----
 
+\* Only a reproduced stopped reading confirms success: stop keeps the
+\* instance resumable, so a reproduced absence is a missing machine (or an
+\* observer bound to the wrong backend world) and fails closed.
 ConfirmMatches(kind, isFalse) ==
     /\ phase = "confirm"
     /\ TerminalSampleOK(kind, isFalse)
-    /\ phase' = IF kind = confirmTarget THEN "reported" ELSE "failed"
+    /\ phase' = IF kind = confirmTarget /\ kind = "stopped"
+                  THEN "reported"
+                  ELSE "failed"
     /\ SpendSample(isFalse)
     /\ UNCHANGED <<actual, boot, stopPending, confirmTarget, streakKind,
                     streakLen>>
@@ -157,14 +162,18 @@ ConfirmUnknown ==
 \* ---- protocol: polling after the stop was issued ----
 
 \* Terminal proof requires two consecutive identical terminal readings; a
-\* different terminal kind restarts the streak rather than extending it.
+\* different terminal kind restarts the streak rather than extending it. A
+\* stable stopped reading is the only success: a stable absence means the
+\* machine is gone or the observer is bound to the wrong backend world, and
+\* the protocol fails closed instead of reporting a stop.
 PollTerminal(kind, isFalse) ==
     LET streak == IF streakKind = kind THEN streakLen + 1 ELSE 1 IN
     /\ phase = "poll"
     /\ TerminalSampleOK(kind, isFalse)
     /\ streakKind' = kind
     /\ streakLen' = streak
-    /\ phase' = IF streak >= 2 THEN "reported" ELSE "poll"
+    /\ phase' = IF streak < 2 THEN "poll"
+                ELSE IF kind = "stopped" THEN "reported" ELSE "failed"
     /\ SpendSample(isFalse)
     /\ UNCHANGED <<actual, boot, stopPending, confirmTarget>>
 

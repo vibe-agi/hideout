@@ -274,6 +274,11 @@ trap cleanup EXIT
 bin="$tmp/bin"
 store="$tmp/store"
 lima_home="$(hideout_mktemp_lima_home)"
+# Every hideout invocation in this gate (including sourced lane libraries)
+# must resolve the same lima world: the daemon inherits its lima home from
+# whichever command starts it, and clients now fail closed on a lima-home
+# mismatch. Export once instead of trusting per-call prefixes.
+export LIMA_HOME="$lima_home"
 workspace="$tmp/workspace"
 mkdir -p "$bin" "$store" "$workspace"
 # The daemon requires a private store root (lifecycle journal inventory,
