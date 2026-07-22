@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,13 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
+
+const (
+	portalMountDialTimeout    = 15 * time.Second
+	portalMountDialRetryDelay = 100 * time.Millisecond
+)
+
+type portalDialFunc func(context.Context, string, workspaceattach.PortalCredential, workspaceattach.PortalLimits) (*workspaceattach.PortalClient, error)
 
 func Run(args []string) error {
 	flags := flag.NewFlagSet("hideout-workspace-portal", flag.ContinueOnError)
@@ -43,7 +51,9 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
-	client, err := workspaceattach.DialPortal(context.Background(), *endpoint, credential, workspaceattach.DefaultPortalLimits())
+	dialContext, cancelDial := context.WithTimeout(context.Background(), portalMountDialTimeout)
+	defer cancelDial()
+	client, err := dialPortalForMount(dialContext, *endpoint, credential, workspaceattach.DefaultPortalLimits(), portalMountDialRetryDelay, workspaceattach.DialPortal)
 	if err != nil {
 		return err
 	}
@@ -55,6 +65,26 @@ func Run(args []string) error {
 		return errors.New("portal-mount uid and gid must fit uint32")
 	}
 	return runPortalFuse(client, *mountPoint, *readyFile, *debug, *allowOther, uint32(*uid), uint32(*gid))
+}
+
+func dialPortalForMount(ctx context.Context, address string, credential workspaceattach.PortalCredential, limits workspaceattach.PortalLimits, retryDelay time.Duration, dial portalDialFunc) (*workspaceattach.PortalClient, error) {
+	for {
+		client, err := dial(ctx, address, credential, limits)
+		if err == nil {
+			return client, nil
+		}
+		var dnsErr *net.DNSError
+		if !errors.As(err, &dnsErr) || !dnsErr.IsTimeout || ctx.Err() != nil {
+			return nil, err
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, err
+		case <-timer.C:
+		}
+	}
 }
 
 type portalFuseTree struct {

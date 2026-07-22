@@ -4,14 +4,46 @@ package workspaceportal
 
 import (
 	"context"
+	"errors"
+	"net"
 	"os"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
+
+func TestPortalMountRetriesOnlyDNSTimeouts(t *testing.T) {
+	credential := workspaceattach.PortalCredential{}
+	limits := workspaceattach.DefaultPortalLimits()
+	calls := 0
+	wantClient := &workspaceattach.PortalClient{}
+	client, err := dialPortalForMount(context.Background(), "host.lima.internal:43127", credential, limits, time.Millisecond,
+		func(context.Context, string, workspaceattach.PortalCredential, workspaceattach.PortalLimits) (*workspaceattach.PortalClient, error) {
+			calls++
+			if calls < 3 {
+				return nil, &net.DNSError{Err: "temporary timeout", Name: "host.lima.internal", IsTimeout: true, IsTemporary: true}
+			}
+			return wantClient, nil
+		})
+	if err != nil || client != wantClient || calls != 3 {
+		t.Fatalf("DNS timeout retry client=%v calls=%d err=%v", client, calls, err)
+	}
+
+	want := errors.New("portal credential refused")
+	calls = 0
+	_, err = dialPortalForMount(context.Background(), "host.lima.internal:43127", credential, limits, time.Millisecond,
+		func(context.Context, string, workspaceattach.PortalCredential, workspaceattach.PortalLimits) (*workspaceattach.PortalClient, error) {
+			calls++
+			return nil, want
+		})
+	if !errors.Is(err, want) || calls != 1 {
+		t.Fatalf("non-DNS error was retried calls=%d err=%v", calls, err)
+	}
+}
 
 func TestPortalFuseTreeRenameUpdatesNodeAndDescendantPaths(t *testing.T) {
 	tree := &portalFuseTree{nodes: make(map[string]*portalFuseNode)}

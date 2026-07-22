@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	workspacePortalReadyAttempts = 1000
+	workspacePortalReadyAttempts = 2000
 	workspacePortalStopAttempts  = 1000
 )
 
