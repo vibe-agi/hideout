@@ -152,8 +152,15 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 		if err != nil {
 			return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-terminal-observation-unstable"), ReasonCode: "backend-terminal-observation-unstable"}, err
 		}
-		if confirmation.State == before.State {
+		if confirmation.State == backend.LifecycleStopped && before.State == backend.LifecycleStopped {
 			return lifecycle.StopResult{Observation: confirmation}, nil
+		}
+		if confirmation.State == backend.LifecycleAbsent {
+			// Stable absence is never stop success: stop keeps the instance
+			// resumable and only delete removes it from inventory, so a missing
+			// instance means a destroyed machine or an observer looking at the
+			// wrong backend world. Report the exact condition instead of a stop.
+			return lifecycle.StopResult{Observation: confirmation, ReasonCode: "backend-instance-missing"}, errors.New("backend instance is missing from inventory; stop keeps the instance resumable")
 		}
 		// A terminal inventory sample followed by the same incarnation running is
 		// not stop proof. Bind to the current running observation and stop it.
@@ -173,35 +180,41 @@ func observeAndStopEnvironment(ctx context.Context, instanceName, expectedBootID
 	defer cancelObserve()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	terminalState := backend.LifecycleState("")
-	terminalCount := 0
+	stoppedStreak := 0
+	absentStreak := 0
 	for {
 		observation := provider.ObserveLifecycle(observeCtx, instanceName)
 		if err := validateLifecycleObservationForInstance(observation, instanceName); err != nil {
 			return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-observation-invalid"), ReasonCode: "backend-observation-invalid"}, err
 		}
 		switch observation.State {
-		case backend.LifecycleStopped, backend.LifecycleAbsent:
-			if observation.State == terminalState {
-				terminalCount++
-			} else {
-				terminalState = observation.State
-				terminalCount = 1
-			}
-			if terminalCount >= 2 {
+		case backend.LifecycleStopped:
+			absentStreak = 0
+			stoppedStreak++
+			if stoppedStreak >= 2 {
 				return lifecycle.StopResult{Observation: observation}, nil
 			}
+		case backend.LifecycleAbsent:
+			// stop never removes an instance from inventory; only delete does.
+			// A single absent sample is a transient anomaly, but stable absence
+			// means the machine is gone or the observer is looking at the wrong
+			// backend world — never stop success.
+			stoppedStreak = 0
+			absentStreak++
+			if absentStreak >= 2 {
+				return lifecycle.StopResult{Observation: observation, ReasonCode: "backend-instance-missing"}, errors.New("backend instance went missing during stop observation")
+			}
 		case backend.LifecycleRunning:
-			terminalState = ""
-			terminalCount = 0
+			stoppedStreak = 0
+			absentStreak = 0
 			if observation.BootID != boundBootID {
 				return lifecycle.StopResult{Observation: lifecycleUnknownObservation(instanceName, "backend-incarnation-changed"), ReasonCode: "backend-incarnation-changed"}, errors.New("backend restarted during stop observation")
 			}
 		case backend.LifecycleUnknown:
 			// Inventory can be transient while Lima stops. Keep observing within
 			// the independent five-second proof window.
-			terminalState = ""
-			terminalCount = 0
+			stoppedStreak = 0
+			absentStreak = 0
 		}
 		select {
 		case <-observeCtx.Done():

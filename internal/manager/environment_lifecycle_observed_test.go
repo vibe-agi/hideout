@@ -80,6 +80,7 @@ func TestStopEnvironmentIncarnationRejectsTransientTerminalProof(t *testing.T) {
 		lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
 		lifecycleObservation(backend.LifecycleRunning, record.InstanceName, bootID, ""),
 		lifecycleObservation(backend.LifecycleStopped, record.InstanceName, "", ""),
+		lifecycleObservation(backend.LifecycleStopped, record.InstanceName, "", ""),
 	}}
 	result, err := core.StopEnvironmentIncarnation(context.Background(), lifecycle.StopRequest{
 		AttemptID: "stop-test", Mode: "automatic",
@@ -100,6 +101,7 @@ func TestStopEnvironmentIncarnationRechecksInitiallyAbsentInstance(t *testing.T)
 		lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
 		lifecycleObservation(backend.LifecycleRunning, record.InstanceName, bootID, ""),
 		lifecycleObservation(backend.LifecycleStopped, record.InstanceName, "", ""),
+		lifecycleObservation(backend.LifecycleStopped, record.InstanceName, "", ""),
 	}}
 	result, err := core.StopEnvironmentIncarnation(context.Background(), lifecycle.StopRequest{
 		AttemptID: "stop-test", Mode: "automatic",
@@ -111,6 +113,47 @@ func TestStopEnvironmentIncarnationRechecksInitiallyAbsentInstance(t *testing.T)
 	if provider.stopCalls != 1 || result.Observation.State != backend.LifecycleStopped {
 		t.Fatalf("initial transient absence bypassed stop: calls=%d result=%+v", provider.stopCalls, result)
 	}
+}
+
+func TestStopEnvironmentIncarnationFailsClosedWhenInstanceStaysMissing(t *testing.T) {
+	// A daemon observing the wrong lima world (or a truly deleted instance)
+	// sees stable absence. Stop keeps the instance resumable, so absence is
+	// never stop success: it must fail closed without inventing a stop.
+	core, record := observedStopFixture(t)
+	bootID := "01234567-89ab-cdef-0123-456789abcdef"
+	t.Run("initially missing instance", func(t *testing.T) {
+		provider := &observedEnvironmentBackend{observations: []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
+			lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
+		}}
+		result, err := core.StopEnvironmentIncarnation(context.Background(), lifecycle.StopRequest{
+			AttemptID: "stop-missing-initial", Mode: "automatic",
+			Incarnation: lifecycle.EnvironmentRef{EnvironmentID: record.ID, StartGeneration: 1, InstanceName: record.InstanceName, BootID: bootID},
+		}, provider)
+		if err == nil || provider.stopCalls != 0 {
+			t.Fatalf("stable absence must fail closed before any stop: err=%v stops=%d", err, provider.stopCalls)
+		}
+		if result.ReasonCode != "backend-instance-missing" || result.Observation.State == backend.LifecycleStopped {
+			t.Fatalf("missing instance must not report stopped: %+v", result)
+		}
+	})
+	t.Run("instance vanishes after stop", func(t *testing.T) {
+		provider := &observedEnvironmentBackend{observations: []backend.LifecycleObservation{
+			lifecycleObservation(backend.LifecycleRunning, record.InstanceName, bootID, ""),
+			lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
+			lifecycleObservation(backend.LifecycleAbsent, record.InstanceName, "", ""),
+		}}
+		result, err := core.StopEnvironmentIncarnation(context.Background(), lifecycle.StopRequest{
+			AttemptID: "stop-missing-poll", Mode: "automatic",
+			Incarnation: lifecycle.EnvironmentRef{EnvironmentID: record.ID, StartGeneration: 1, InstanceName: record.InstanceName, BootID: bootID},
+		}, provider)
+		if err == nil || provider.stopCalls != 1 {
+			t.Fatalf("stable post-stop absence must fail closed: err=%v stops=%d", err, provider.stopCalls)
+		}
+		if result.ReasonCode != "backend-instance-missing" || result.Observation.State == backend.LifecycleStopped {
+			t.Fatalf("vanished instance must not report stopped: %+v", result)
+		}
+	})
 }
 
 func (b *observedEnvironmentBackend) StopInstance(context.Context, string) error {
