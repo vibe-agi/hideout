@@ -3287,6 +3287,8 @@ type applyRunFakeBackend struct {
 	runSession   backend.Session
 	runCommand   []string
 	runEnv       []string
+	observations []backend.LifecycleObservation
+	observeCalls int
 }
 
 type managerRecordingOpener struct {

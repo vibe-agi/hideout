@@ -69,6 +69,10 @@ type RunResult struct {
 	EnvironmentName  string           `json:"environmentName,omitempty"`
 	InstanceName     string           `json:"instanceName,omitempty"`
 	PreserveInstance bool             `json:"preserveInstance,omitempty"`
+	// EnvironmentDisposition reports what happened to a disposable (--rm)
+	// environment: "removed" after a proved teardown, "cleanup-required" when
+	// the record was retained for reconcile/clean. Empty for reusable runs.
+	EnvironmentDisposition string `json:"environmentDisposition,omitempty"`
 	AuditPath        string           `json:"auditPath,omitempty"`
 	BoundarySummary  *BoundarySummary `json:"boundarySummary,omitempty"`
 	Command          []string         `json:"command"`
@@ -231,6 +235,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	var (
 		owner               *runsession.Owner
 		lifecycleCleanupErr error
+		disposalProved      bool
 	)
 	if runEnv.Active {
 		terminalMode := opts.TerminalMode
@@ -272,7 +277,8 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		// Registered before the narrower cleanup defers below so this runs last:
 		// all session authority is gone before the owner and runtime child.
 		defer func() {
-			finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, lifecycleRegistration)
+			disposition, finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, disposalProved, lifecycleRegistration)
+			result.EnvironmentDisposition = disposition
 			if finishErr != nil {
 				result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
 				if retErr == nil {
@@ -423,6 +429,14 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			"environment":      session.EnvironmentID,
 			"instance":         session.InstanceName,
 			"preserveInstance": session.PreserveInstance,
+		}
+		if runEnv.Active && runEnv.Record.Disposable {
+			// A clean backend cleanup plus a stable-absent inventory observation
+			// is the destruction proof the disposable teardown consumes; anything
+			// less retains the record instead of faking success.
+			disposalProved = cleanupErr == nil && disposableCleanupProved(opts.Backend, runEnv.Record)
+			details["disposable"] = true
+			details["disposalProved"] = disposalProved
 		}
 		if runEnv.Active {
 			lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, cleanupErr)

@@ -328,20 +328,19 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 	} else {
 		rec.Status = "ready"
 	}
-	if runEnv.RemoveAfterRun && cleanupErr == nil {
-		if err := store.Remove(runEnv.Record.ID); err != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("environment remove: %w", err))
-		}
-	} else if err := store.Save(rec); err != nil {
+	// Disposable (--rm) teardown never reaches this path: those runs are
+	// Active and finish through finishConcurrentRunEnvironment's proof-gated
+	// disposal instead.
+	if err := store.Save(rec); err != nil {
 		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("environment save: %w", err))
 	}
 	runEnv.Record = rec
 	return runEnv, cleanupErr
 }
 
-func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, lifecycleRegistration ...lifecycle.Registration) (retErr error) {
+func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, disposalProved bool, lifecycleRegistration ...lifecycle.Registration) (disposition string, retErr error) {
 	if !runEnv.Active || owner == nil {
-		return cleanupErr
+		return "", cleanupErr
 	}
 	store := environment.Store{Root: c.Store.Root}
 	lock := *held
@@ -363,7 +362,10 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 			if len(lifecycleRegistration) != 0 && lifecycleRegistration[0] != nil {
 				failure = errors.Join(failure, lifecycleRegistration[0].Finish(context.Background(), failure))
 			}
-			return failure
+			if runEnv.Record.Disposable {
+				disposition = "cleanup-required"
+			}
+			return disposition, failure
 		}
 	}
 	defer func() {
@@ -432,9 +434,15 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 	}
 	rec, loadErr := store.Load(runEnv.Record.ID)
 	if loadErr != nil {
-		return errors.Join(finalErr, loadErr)
+		if runEnv.Record.Disposable {
+			disposition = "cleanup-required"
+		}
+		return disposition, errors.Join(finalErr, loadErr)
 	}
 	rec.LastEndedAt = time.Now().UTC()
+	if rec.Disposable {
+		return c.disposeFinishedEnvironment(store, rec, disposalProved && ownersProvedIdle && siblingLive == 0, finalErr)
+	}
 	if siblingLive > 0 {
 		rec.Status = "running"
 	} else if errors.Join(priorCleanupErr, finalErr) != nil {
@@ -448,7 +456,69 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 	// The caller already recorded priorCleanupErr at the authority boundary
 	// where it occurred. Return only errors introduced by owner/environment
 	// finalization so RunResult does not report the same cleanup failure twice.
-	return finalErr
+	return "", finalErr
+}
+
+// disposeFinishedEnvironment finishes a disposable environment with graded
+// failure handling: a proved teardown (machine destroyed, owners proved idle)
+// releases the gateway and removes the record even when session cleanup
+// errored — the error still returns to the caller. An unproved teardown, a
+// gateway that refuses to close, or a failed removal retains the record in
+// error state for reconcile/clean instead of faking success. Target-command
+// failure never reaches this decision; it is not a cleanup error.
+func (c Core) disposeFinishedEnvironment(store environment.Store, rec environment.Record, proved bool, finalErr error) (string, error) {
+	auditDetails := map[string]any{
+		"environmentId":   rec.ID,
+		"environmentName": rec.Name,
+		"instance":        rec.InstanceName,
+	}
+	if proved {
+		removalErr := error(nil)
+		if c.NetworkGateways != nil {
+			removalErr = c.NetworkGateways.CloseEnvironment(rec.ID)
+			if removalErr != nil {
+				removalErr = fmt.Errorf("close disposable environment gateway: %w", removalErr)
+			}
+		}
+		if removalErr == nil {
+			removalErr = store.Remove(rec.ID)
+			if removalErr != nil {
+				removalErr = fmt.Errorf("remove disposable environment record: %w", removalErr)
+			}
+		}
+		if removalErr == nil {
+			auditDetails["disposition"] = "removed"
+			c.emitEnvironmentAudit("env.dispose", "allow", auditDetails)
+			return "removed", finalErr
+		}
+		finalErr = errors.Join(finalErr, removalErr)
+	}
+	rec.Status = environment.StatusError
+	if err := store.Save(rec); err != nil {
+		finalErr = errors.Join(finalErr, fmt.Errorf("retain disposable environment record: %w", err))
+	}
+	auditDetails["disposition"] = "cleanup-required"
+	c.emitEnvironmentAudit("env.dispose", "deny", auditDetails)
+	return "cleanup-required", finalErr
+}
+
+// disposableCleanupProved proves the backend actually destroyed a disposable
+// environment's machine. Lima instances must be observed stably absent; a
+// backend without lifecycle observation over a lima record cannot prove
+// anything and fails closed. Non-VM backends (the weak native harness) have
+// no machine inventory to consult, so a clean cleanup return is their best
+// available evidence.
+func disposableCleanupProved(b backend.Backend, rec environment.Record) bool {
+	if rec.Backend != "lima" {
+		return true
+	}
+	observer, ok := b.(EnvironmentLifecycleBackend)
+	if !ok {
+		return false
+	}
+	proveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return confirmDisposableInstanceAbsent(proveCtx, observer, rec.InstanceName)
 }
 
 func RunEnvironmentSpec(p profile.Profile, backendName, workspace, guestWorkspace string) environment.Spec {

@@ -40,6 +40,9 @@
     "preserveInstance": {
       "type": "boolean"
     },
+    "environmentDisposition": {
+      "enum": ["removed", "cleanup-required"]
+    },
     "auditPath": {
       "type": "string",
       "minLength": 1

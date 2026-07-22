@@ -662,7 +662,7 @@ func TestLastOwnerReconcilesCrashedSiblingAndRetainsNetworkService(t *testing.T)
 	}
 	runEnvironment := RunEnvironment{Active: true, Record: record, RuntimeDir: store.RuntimeDir(record.ID), PreserveInstance: true}
 	var held *environment.Lock
-	err = core.finishConcurrentRunEnvironment(context.Background(), &held, runEnvironment, owner, currentID, nil)
+	_, err = core.finishConcurrentRunEnvironment(context.Background(), &held, runEnvironment, owner, currentID, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,8 +721,8 @@ func TestUnprovableSiblingBlocksSharedServiceAndActivationCleanup(t *testing.T) 
 		Active: true, Record: record, RuntimeDir: store.RuntimeDir(record.ID), PreserveInstance: true,
 	}
 	var held *environment.Lock
-	err = core.finishConcurrentRunEnvironment(
-		context.Background(), &held, runEnvironment, owner, currentID, nil,
+	_, err = core.finishConcurrentRunEnvironment(
+		context.Background(), &held, runEnvironment, owner, currentID, nil, false,
 	)
 	if !errors.Is(err, session.ErrOwnerUnprovable) {
 		t.Fatalf("unprovable sibling cleanup error=%v", err)
@@ -759,8 +759,8 @@ func TestEnvironmentLockFailureStillFinishesLifecycleRegistration(t *testing.T) 
 		t.Fatal(err)
 	}
 	var held *environment.Lock
-	err = core.finishConcurrentRunEnvironment(
-		context.Background(), &held, runEnvironment, owner, sessionID, nil, registration,
+	_, err = core.finishConcurrentRunEnvironment(
+		context.Background(), &held, runEnvironment, owner, sessionID, nil, false, registration,
 	)
 	if err == nil {
 		t.Fatal("missing environment lock unexpectedly produced successful cleanup")
