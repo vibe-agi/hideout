@@ -857,6 +857,8 @@ func writeLocalBypassSetup(b *strings.Builder, index int, host string) {
 	b.WriteString("  *[!0-9.]*)\n")
 	fmt.Fprintf(b, "    %s_route_host=$(awk -v host=\"$%s_host\" '($1 !~ /^#/){for (i=2;i<=NF;i++) if ($i==host) {print $1; exit}}' /etc/hosts)\n", prefix, prefix)
 	fmt.Fprintf(b, "    [ -n \"$%s_route_host\" ] || { echo %s >&2; exit 127; }\n", prefix, shellQuote("hideout: local bypass host "+host+" must be an IP literal or present in /etc/hosts before tun2socks starts"))
+	fmt.Fprintf(b, "    %s_hosts_line=\"$%s_route_host $%s_host # hideout-managed-local-bypass\"\n", prefix, prefix, prefix)
+	fmt.Fprintf(b, "    grep -Fqx \"$%s_hosts_line\" /etc/hosts 2>/dev/null || printf '%%s\\n' \"$%s_hosts_line\" >> /etc/hosts\n", prefix, prefix)
 	b.WriteString("    ;;\n")
 	b.WriteString("esac\n")
 	fmt.Fprintf(b, "%s_route_existing=$(ip route show \"$%s_route_host/32\" 2>/dev/null | head -n 1 || true)\n", prefix, prefix)
@@ -958,6 +960,15 @@ func writeDNSMediationCleanup(b *strings.Builder) {
 	b.WriteString("if [ -r /hideout/session/network/dns-stub.pid ]; then\n")
 	b.WriteString("  dns_stub_pid=$(sed -n '1p' /hideout/session/network/dns-stub.pid)\n")
 	b.WriteString("  if [ -n \"$dns_stub_pid\" ]; then kill \"$dns_stub_pid\" 2>/dev/null || true; fi\n")
+	b.WriteString("fi\n")
+	// Named local-bypass hosts are pinned before DNS is redirected so host-local
+	// control traffic never leaks into, or depends on, the mediated public
+	// resolver. Remove only lines carrying Hideout's exact marker.
+	b.WriteString("if grep -q ' # hideout-managed-local-bypass$' /etc/hosts 2>/dev/null; then\n")
+	b.WriteString("  hosts_without_hideout=/run/hideout/network/hosts.without-hideout.$$\n")
+	b.WriteString("  sed '/ # hideout-managed-local-bypass$/d' /etc/hosts > \"$hosts_without_hideout\" 2>/dev/null \\\n")
+	b.WriteString("    && cat \"$hosts_without_hideout\" > /etc/hosts 2>/dev/null || true\n")
+	b.WriteString("  rm -f \"$hosts_without_hideout\" 2>/dev/null || true\n")
 	b.WriteString("fi\n")
 	// Restore /etc/resolv.conf (original symlink or file) and remove blackholes.
 	b.WriteString("if [ -f /hideout/session/network/resolv.conf.link ]; then\n")

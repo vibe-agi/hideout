@@ -330,6 +330,8 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 		"proxy endpoint route loops through tun2socks",
 		"local_bypass_0_route_host=$(awk -v host=\"$local_bypass_0_host\"",
 		"local bypass host host.lima.internal must be an IP literal or present in /etc/hosts before tun2socks starts",
+		"local_bypass_0_hosts_line=\"$local_bypass_0_route_host $local_bypass_0_host # hideout-managed-local-bypass\"",
+		"grep -Fqx \"$local_bypass_0_hosts_line\" /etc/hosts",
 		"ip route replace \"$local_bypass_0_route_host\"",
 		"local_bypass_0_route_after=$(ip route get \"$local_bypass_0_route_host\"",
 		"local-bypass-0-route.after",
@@ -375,6 +377,7 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 		"ip route replace default $route_args",
 		"ip tuntap del mode tun dev hideout0",
 		"rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/proxy.url",
+		"sed '/ # hideout-managed-local-bypass$/d' /etc/hosts",
 	} {
 		if !strings.Contains(string(cleanup), want) {
 			t.Fatalf("cleanup missing %q: %s", want, cleanup)
