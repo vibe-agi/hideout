@@ -1,0 +1,44 @@
+name: Hideout CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hideout-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate0:
+    name: Build, test, and Gate 0
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install the declared Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install pinned Gate 0 tooling
+        run: |
+          set -euo pipefail
+          npm install --global --ignore-scripts \
+            markdownlint-cli2@0.22.1 markdownlint@0.40.0
+          npm list --global --depth=0 --json | jq -e '
+            .dependencies["markdownlint-cli2"].version == "0.22.1" and
+            .dependencies.markdownlint.version == "0.40.0"
+          ' >/dev/null
+
+      - name: Run the complete local contract gate
+        run: scripts/test-gate0.sh
