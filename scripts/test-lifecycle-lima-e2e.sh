@@ -11,11 +11,17 @@ cd "$ROOT"
 mode="local-fast"
 require_real=0
 probe=0
+feature_040=0
 out="${HIDEOUT_036_EVIDENCE_DIR:-$ROOT/.hideout-release-evidence/036-resource-lifecycle}"
 baseline_commit="127ef937b120f0faa719611abcb3a1816e331266"
+baseline_explicit=0
+baseline_040_commit="322c3c6cc9561eea21d4ed20ab78172429654c54"
 samples=30
 warmups=3
 races=100
+proof_040_real_lifecycle="040.attach-reservation.real-gate2.lifecycle"
+proof_040_real_performance="040.attach-reservation.real-gate2.performance"
+proof_040_real_not_run="040.attach-reservation.real-gate2.not-run"
 
 usage() {
   cat <<'USAGE'
@@ -24,7 +30,8 @@ Usage: scripts/test-lifecycle-lima-e2e.sh [options]
   --local-fast                 run complete local lifecycle evidence (default)
   --real-gate2 | --all         run the real macOS arm64 Lima lifecycle gate
   --require-real               fail rather than emit supporting not-run evidence
-  --baseline-commit <commit>   exact pre-036 comparison commit
+  --feature-040                emit only 040 proof using the exact pre-040 baseline
+  --baseline-commit <commit>   exact feature comparison commit
   --samples <n>                measured samples (real evidence requires at least 30)
   --warmups <n>                excluded warm-up samples (real evidence requires at least 3)
   --iterations <n>             attach/stop races (real evidence requires at least 100)
@@ -38,7 +45,8 @@ while [ "$#" -gt 0 ]; do
     --local-fast) mode="local-fast"; shift ;;
     --real-gate2|--all) mode="real-gate2"; shift ;;
     --require-real) require_real=1; shift ;;
-    --baseline-commit) baseline_commit="${2:-}"; shift 2 ;;
+    --feature-040) feature_040=1; shift ;;
+    --baseline-commit) baseline_commit="${2:-}"; baseline_explicit=1; shift 2 ;;
     --samples) samples="${2:-}"; shift 2 ;;
     --warmups) warmups="${2:-}"; shift 2 ;;
     --iterations) races="${2:-}"; shift 2 ;;
@@ -48,6 +56,10 @@ while [ "$#" -gt 0 ]; do
     *) echo "resource-lifecycle e2e: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [ "$feature_040" = "1" ] && [ "$baseline_explicit" = "0" ]; then
+  baseline_commit="$baseline_040_commit"
+fi
 
 for value_name in samples warmups races; do
   eval "value=\${$value_name}"
@@ -75,6 +87,12 @@ out="$(cd "$out" && pwd -P)"
 manifest="$out/product-hardening-evidence.json"
 registry="$out/reports/proof-registry.json"
 go run ./cmd/hideout support proof-registry --json >"$registry"
+for proof_id in "$proof_040_real_lifecycle" "$proof_040_real_performance" "$proof_040_real_not_run"; do
+  jq -e --arg id "$proof_id" '.requirements[] | select(.proofId == $id)' "$registry" >/dev/null || {
+    echo "resource-lifecycle e2e: 040 proof is not registered: $proof_id" >&2
+    exit 1
+  }
+done
 
 sha256_file() { shasum -a 256 "$1" | awk '{print $1}'; }
 git_dirty() {
@@ -85,7 +103,7 @@ claims_json() {
   local proof_id="$1"
   jq -c --arg id "$proof_id" '
     [.requirements[] | select(.proofId == $id) | .claimIds[] |
-      {claimId:.,source:"spec",description:("036 registered contract " + .),scope:"resource-lifecycle"}]
+      {claimId:.,source:"spec",description:("registered contract " + .),scope:"resource-lifecycle"}]
   ' "$registry"
 }
 
@@ -98,16 +116,16 @@ artifact_json() {
 
 proof_json() {
   local proof_id="$1" status="$2" class="$3" summary="$4" artifact="$5"
-  local reason="$6" runtime="${7:-null}" claims
+  local reason="$6" runtime="${7:-null}" feature_id="${8:-036-resource-lifecycle-final-session-stop}" claims
   claims="$(claims_json "$proof_id")"
   [ "$(jq 'length' <<<"$claims")" -gt 0 ] || {
     echo "resource-lifecycle e2e: proof is not registered: $proof_id" >&2
     return 1
   }
-  jq -n --arg proofId "$proof_id" --arg status "$status" --arg class "$class" \
+  jq -n --arg proofId "$proof_id" --arg status "$status" --arg class "$class" --arg featureId "$feature_id" \
     --arg summary "$summary" --arg reason "$reason" --argjson claims "$claims" \
     --argjson artifact "$artifact" --argjson runtime "$runtime" '
-    {proofId:$proofId,featureId:"036-resource-lifecycle-final-session-stop",mode:"real-gate",
+	{proofId:$proofId,featureId:$featureId,mode:"real-gate",
      evidenceClass:$class,status:$status,commandSummary:$summary,coveredClaims:$claims,
      prerequisites:(if $status == "not-run" then
        [{name:"real-macos-arm64-lima-vscode",status:"missing",reason:$reason}]
@@ -160,9 +178,20 @@ if [ -n "$missing" ]; then
     echo "resource-lifecycle e2e: $reason" >&2
     exit 1
   fi
-  artifact="$(artifact_json logs/not-run.json '036 real Gate 2 not-run reason')"
-  jq -s '.' <(proof_json '036.lifecycle.real-gate2.not-run' not-run \
-    resource-lifecycle-real-gate2-not-run 'real lifecycle Gate 2 was not run' "$artifact" "$reason") >"$proofs"
+  artifact="$(artifact_json logs/not-run.json 'real Gate 2 not-run reason')"
+  if [ "$feature_040" = "1" ]; then
+	  jq -s '.' \
+	    <(proof_json "$proof_040_real_not_run" not-run \
+	      attach-reservation-real-gate2-not-run 'real attach-reservation Gate 2 was not run' "$artifact" "$reason" null \
+	      '040-lifecycle-attach-reservation') >"$proofs"
+  else
+	  jq -s '.' \
+	    <(proof_json '036.lifecycle.real-gate2.not-run' not-run \
+	      resource-lifecycle-real-gate2-not-run 'real lifecycle Gate 2 was not run' "$artifact" "$reason") \
+	    <(proof_json "$proof_040_real_not_run" not-run \
+	      attach-reservation-real-gate2-not-run 'real attach-reservation Gate 2 was not run' "$artifact" "$reason" null \
+	      '040-lifecycle-attach-reservation') >"$proofs"
+  fi
   write_manifest "$proofs"
   rm -f "$proofs"
   echo "resource-lifecycle e2e: passed mode=real-gate2 status=not-run evidence=$manifest"
@@ -176,21 +205,48 @@ if [ "$probe" = "1" ]; then
 fi
 
 performance="$out/logs/performance.json"
+jq -e '.status == "passed" and .checks.attachWaitsForReconciliation and
+  .checks.attachStopRaceSafe and .checks.cancellationBeforeOwnerClean and
+  .checks.restartBeforeOwnerClean and .checks.restartAfterOwnerFailClosed and
+  .checks.siblingSessionPreserved and .checks.stopUnknownBlocksAttach' "$out/result.json" >/dev/null
+jq -e '.status == "passed" and .methodology.samples >= 30 and
+  .candidateP95Ms <= 2000 and .candidateWithinTwoSeconds*100 >= .candidateSampleCount*95 and
+  .candidate.commit != "" and .candidate.dirty == false and .runtime.buildDirty == false' "$performance" >/dev/null
 runtime="$(jq -c --arg environmentId "$GATE2_036_ENV_ID" '
   {schema:"hideout.runtime-evidence-binding/v1",family:.runtime.family,
    revision:.runtime.revision,artifactSHA256:.runtime.artifactSHA256,
    environmentId:$environmentId,hostOS:.host.os,hostArch:.host.arch,
    guestArch:"aarch64",buildCommit:.runtime.buildCommit,buildDirty:.runtime.buildDirty}
 ' "$performance")"
-lifecycle_artifact="$(artifact_json result.json '036 real Lima lifecycle result')"
-performance_artifact="$(artifact_json logs/performance.json '036 user-command performance comparison')"
-jq -s '.' \
-  <(proof_json '036.lifecycle.real-gate2.lifecycle' passed resource-lifecycle-real-gate2 \
-    'validated real final-session stop, races, retained state, handoff, restart, recovery, and observation' \
-    "$lifecycle_artifact" 'real macOS arm64 Lima evidence' "$runtime") \
-  <(proof_json '036.lifecycle.real-gate2.performance' passed resource-lifecycle-performance-real-gate2 \
-    'validated hideout run -- git status --short against the exact pre-036 baseline' \
-    "$performance_artifact" 'same fixture, host, and exact runtime artifact' "$runtime") >"$proofs"
+lifecycle_artifact="$(artifact_json result.json 'real Lima lifecycle result')"
+performance_artifact="$(artifact_json logs/performance.json 'user-command performance comparison')"
+if [ "$feature_040" = "1" ]; then
+	jq -s '.' \
+	  <(proof_json "$proof_040_real_lifecycle" passed attach-reservation-real-gate2 \
+	    'validated real reconciliation-first, reservation-first, cancellation, restart boundaries, siblings, and redaction' \
+	    "$lifecycle_artifact" 'real macOS arm64 Lima attach-reservation evidence' "$runtime" \
+	    '040-lifecycle-attach-reservation') \
+	  <(proof_json "$proof_040_real_performance" passed attach-reservation-performance-real-gate2 \
+	    'validated 30 warm attach samples with nearest-rank p95 and at least 95 percent within two seconds' \
+	    "$performance_artifact" 'same fixture, host, exact source, and exact runtime artifact' "$runtime" \
+	    '040-lifecycle-attach-reservation') >"$proofs"
+else
+	jq -s '.' \
+	  <(proof_json '036.lifecycle.real-gate2.lifecycle' passed resource-lifecycle-real-gate2 \
+	    'validated real final-session stop, races, retained state, handoff, restart, recovery, and observation' \
+	    "$lifecycle_artifact" 'real macOS arm64 Lima evidence' "$runtime") \
+	  <(proof_json '036.lifecycle.real-gate2.performance' passed resource-lifecycle-performance-real-gate2 \
+	    'validated hideout run -- git status --short against the exact pre-036 baseline' \
+	    "$performance_artifact" 'same fixture, host, and exact runtime artifact' "$runtime") \
+	  <(proof_json "$proof_040_real_lifecycle" passed attach-reservation-real-gate2 \
+	    'validated real reconciliation-first, reservation-first, cancellation, restart boundaries, siblings, and redaction' \
+	    "$lifecycle_artifact" 'real macOS arm64 Lima attach-reservation evidence' "$runtime" \
+	    '040-lifecycle-attach-reservation') \
+	  <(proof_json "$proof_040_real_performance" passed attach-reservation-performance-real-gate2 \
+	    'validated 30 warm attach samples with nearest-rank p95 and at least 95 percent within two seconds' \
+	    "$performance_artifact" 'same fixture, host, exact source, and exact runtime artifact' "$runtime" \
+	    '040-lifecycle-attach-reservation') >"$proofs"
+fi
 write_manifest "$proofs"
 scan_public_evidence
 rm -f "$proofs"

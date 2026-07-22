@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"sort"
 	"sync"
@@ -24,6 +23,23 @@ var (
 	ErrMutationBlockedByActivity = errors.New("lifecycle destructive mutation is blocked by environment activity")
 )
 
+// AttachBlockedError preserves the bounded reconciliation reason without
+// exposing provider identities or control material. Callers may translate a
+// known reason into an existing product recovery code while errors.Is still
+// classifies it as ErrAttachBlocked.
+type AttachBlockedError struct {
+	ReasonCode string
+}
+
+func (e *AttachBlockedError) Error() string {
+	if e != nil && e.ReasonCode == "owner-requires-explicit-recovery" {
+		return ErrAttachBlocked.Error() + ": explicit recovery is required"
+	}
+	return ErrAttachBlocked.Error()
+}
+
+func (*AttachBlockedError) Unwrap() error { return ErrAttachBlocked }
+
 // AttachRequest contains only stable identities and independently observed
 // backend state. It deliberately excludes backend handles and credentials.
 type AttachRequest struct {
@@ -31,6 +47,13 @@ type AttachRequest struct {
 	InstanceName  string
 	SessionID     string
 	Observation   backend.LifecycleObservation
+}
+
+// EstablishmentRequest contains the opaque identities needed to reserve an
+// attach boundary before Manager publishes session runtime state.
+type EstablishmentRequest struct {
+	EnvironmentID string
+	SessionID     string
 }
 
 // RegistrationSpec describes one resource before its effect becomes usable.
@@ -57,7 +80,17 @@ type FactSpec struct {
 // the implementation; Manager remains the authority that creates and closes
 // the represented effects.
 type Registrar interface {
+	ReserveAttach(context.Context, EstablishmentRequest) (EstablishmentReservation, error)
 	BeginAttach(context.Context, AttachRequest) (Registration, error)
+}
+
+// EstablishmentReservation is daemon-local coordination, not durable session
+// authority. Prepare proves the backend incarnation, Promote replaces the
+// reservation with a normal registration, and Abort releases only this claim.
+type EstablishmentReservation interface {
+	Prepare(context.Context, AttachRequest) (EnvironmentRef, error)
+	Promote(context.Context) (Registration, error)
+	Abort(context.Context, error) error
 }
 
 // ActiveAttachObservationProvider is an optional warm-sibling fast path. It
@@ -394,6 +427,7 @@ func (c *Coordinator) RecordSessionFact(ctx context.Context, sessionID string, s
 type registryEnvironment struct {
 	journal       Journal
 	handles       map[string]bool
+	establishing  map[string]*establishment
 	committed     map[string]bool
 	closing       map[string]bool
 	mutation      bool
@@ -446,91 +480,23 @@ func committedHandleCount(state *registryEnvironment) int {
 }
 
 func (c *Coordinator) BeginAttach(ctx context.Context, request AttachRequest) (Registration, error) {
-	if err := contextError(ctx); err != nil {
-		return nil, err
-	}
-	if !idPattern.MatchString(request.EnvironmentID) || !idPattern.MatchString(request.InstanceName) || !idPattern.MatchString(request.SessionID) {
-		return nil, errors.New("lifecycle attach identity is invalid")
-	}
-	if err := request.Observation.Validate(); err != nil {
-		return nil, err
-	}
-	if request.Observation.InstanceName != request.InstanceName {
-		return nil, fmt.Errorf("%w: backend observation belongs to another instance", ErrAttachBlocked)
-	}
-	if request.Observation.State == backend.LifecycleUnknown {
-		return nil, fmt.Errorf("%w: backend observation is unknown", ErrAttachBlocked)
-	}
-
-	for {
-		if err := c.WaitReconciliation(ctx, request.EnvironmentID); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		state, err := c.loadEnvironmentLocked(request.EnvironmentID)
-		if err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
-		if !state.reconciling {
-			break
-		}
-		c.mu.Unlock()
-	}
-	defer c.mu.Unlock()
-	if c.closing || c.closed {
-		return nil, ErrCoordinatorClosed
-	}
-	state := c.environments[request.EnvironmentID]
-	if state.blocked {
-		return nil, ErrAttachBlocked
-	}
-	if state.mutation {
-		return nil, ErrStopInFlight
-	}
-	if attemptBlocksAttach(state.journal.StopAttempt) {
-		return nil, ErrStopInFlight
-	}
-	if len(state.handles) != 0 && !observationMatchesIncarnation(state.journal.Incarnation, request.Observation) {
-		return nil, fmt.Errorf("%w: backend incarnation changed while sessions are active", ErrAttachBlocked)
-	}
-	state.observation = request.Observation
-	c.cancelDeadlineForAttachLocked(state)
-
-	incarnation, root, err := c.selectIncarnationLocked(state, request)
+	reservation, err := c.ReserveAttach(ctx, EstablishmentRequest{
+		EnvironmentID: request.EnvironmentID,
+		SessionID:     request.SessionID,
+	})
 	if err != nil {
 		return nil, err
 	}
-	handleID := request.SessionID
-	if state.handles[handleID] {
-		return nil, errors.New("lifecycle session is already registered")
-	}
-	state.handles[handleID] = true
-	delete(state.closing, handleID)
-
-	sessionRef := ResourceRef{Kind: KindRunSession, ID: request.SessionID, Generation: incarnation.StartGeneration}
-	session := Resource{
-		Ref:                  sessionRef,
-		Owner:                OwnerRef{Kind: "daemon", ID: c.daemonID, Generation: incarnation.StartGeneration},
-		State:                StatePlanned,
-		Dependencies:         []DependencySpec{{Ref: root, StopMode: StopModePin}},
-		Persistence:          PersistenceEphemeral,
-		ClosePolicy:          CloseCoTerminateWithRoot,
-		PossibleVMDependency: true,
-		UpdatedAt:            c.nowUTC(),
-	}
-	if err := addOrJoinResource(state, handleID, session); err != nil {
-		delete(state.handles, handleID)
+	if _, err := reservation.Prepare(ctx, request); err != nil {
+		_ = reservation.Abort(context.Background(), err)
 		return nil, err
 	}
-	state.journal.Reconciliation = Reconciliation{DaemonInstanceID: c.daemonID, State: "complete", ObservedAt: c.nowUTC()}
-	state.committed[handleID] = false
-	c.emitLocked(Event{EnvironmentID: request.EnvironmentID, Generation: incarnation.StartGeneration, Kind: "resource-registered", At: c.nowUTC()})
-	return &registration{
-		coordinator: c, environment: request.EnvironmentID, id: handleID,
-		incarnation: incarnation, root: root, session: sessionRef,
-		refs: []ResourceRef{sessionRef},
-	}, nil
+	registration, err := reservation.Promote(ctx)
+	if err != nil {
+		_ = reservation.Abort(context.Background(), err)
+		return nil, err
+	}
+	return registration, nil
 }
 
 func observationMatchesIncarnation(incarnation *EnvironmentRef, observation backend.LifecycleObservation) bool {

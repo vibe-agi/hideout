@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
+	runsession "github.com/vibe-agi/hideout/internal/session"
 )
 
 type lifecycleApplyBackend struct {
@@ -106,6 +110,219 @@ func (*lifecycleApplyBackend) VerifyDirectEnvironmentNetwork(context.Context, *b
 
 func (*lifecycleApplyBackend) StopEnvironmentNetwork(context.Context, *backend.Session, string, string, []string) error {
 	return nil
+}
+
+type establishmentOrderingRegistrar struct {
+	inner  *lifecycle.Coordinator
+	store  environment.Store
+	events []string
+}
+
+type rejectingEstablishmentRegistrar struct {
+	err error
+}
+
+func (r rejectingEstablishmentRegistrar) ReserveAttach(context.Context, lifecycle.EstablishmentRequest) (lifecycle.EstablishmentReservation, error) {
+	return nil, r.err
+}
+
+func (rejectingEstablishmentRegistrar) BeginAttach(context.Context, lifecycle.AttachRequest) (lifecycle.Registration, error) {
+	return nil, errors.New("legacy BeginAttach invoked")
+}
+
+func (r *establishmentOrderingRegistrar) ReserveAttach(ctx context.Context, request lifecycle.EstablishmentRequest) (lifecycle.EstablishmentReservation, error) {
+	if _, err := os.Stat(r.store.RuntimeSessionDir(request.EnvironmentID, request.SessionID)); !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("session runtime existed before reservation: %w", err)
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	lock, err := r.store.LockContext(lockCtx, request.EnvironmentID)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("transition lock was held before reservation: %w", err)
+	}
+	if err := lock.Unlock(); err != nil {
+		return nil, err
+	}
+	r.events = append(r.events, "reserve")
+	reservation, err := r.inner.ReserveAttach(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &establishmentOrderingReservation{inner: reservation, registrar: r, request: request}, nil
+}
+
+func (*establishmentOrderingRegistrar) BeginAttach(context.Context, lifecycle.AttachRequest) (lifecycle.Registration, error) {
+	return nil, errors.New("legacy BeginAttach invoked")
+}
+
+type establishmentOrderingReservation struct {
+	inner     lifecycle.EstablishmentReservation
+	registrar *establishmentOrderingRegistrar
+	request   lifecycle.EstablishmentRequest
+}
+
+func (r *establishmentOrderingReservation) Prepare(ctx context.Context, request lifecycle.AttachRequest) (lifecycle.EnvironmentRef, error) {
+	if _, err := os.Stat(r.registrar.store.RuntimeSessionDir(request.EnvironmentID, request.SessionID)); !errors.Is(err, os.ErrNotExist) {
+		return lifecycle.EnvironmentRef{}, fmt.Errorf("session runtime existed before establishment prepare: %w", err)
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	lock, err := r.registrar.store.LockContext(lockCtx, request.EnvironmentID)
+	cancel()
+	if err == nil {
+		_ = lock.Unlock()
+		return lifecycle.EnvironmentRef{}, errors.New("transition lock was not held during establishment prepare")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return lifecycle.EnvironmentRef{}, fmt.Errorf("probe transition lock during establishment prepare: %w", err)
+	}
+	r.registrar.events = append(r.registrar.events, "prepare")
+	return r.inner.Prepare(ctx, request)
+}
+
+func (r *establishmentOrderingReservation) Promote(ctx context.Context) (lifecycle.Registration, error) {
+	if _, err := os.Stat(r.registrar.store.RuntimeSessionDir(r.request.EnvironmentID, r.request.SessionID)); err != nil {
+		return nil, fmt.Errorf("session runtime missing before establishment promotion: %w", err)
+	}
+	owners, err := runsession.ListOwners(r.registrar.store.OwnerRoot(r.request.EnvironmentID))
+	if err != nil {
+		return nil, err
+	}
+	ownerLive := false
+	for _, owner := range owners {
+		if owner.SessionID == r.request.SessionID && owner.Status == runsession.OwnerLive {
+			ownerLive = true
+			break
+		}
+	}
+	if !ownerLive {
+		return nil, errors.New("durable live session owner missing before establishment promotion")
+	}
+	r.registrar.events = append(r.registrar.events, "promote")
+	return r.inner.Promote(ctx)
+}
+
+func (r *establishmentOrderingReservation) Abort(ctx context.Context, cause error) error {
+	r.registrar.events = append(r.registrar.events, "abort")
+	return r.inner.Abort(ctx, cause)
+}
+
+func TestApplyRunEstablishmentOrdersReservationLockRuntimeOwnerAndPromotion(t *testing.T) {
+	setFakeLinuxShim(t)
+	setFakeLinuxWorkspacePortal(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("establishment-order")); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "establishment-order", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-establishment-order", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrar := &establishmentOrderingRegistrar{inner: coordinator, store: environment.Store{Root: root}}
+	fake := &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}, journal: journalStore,
+		bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}
+	fake.beforeReady = func(*backend.Session) error {
+		registrar.events = append(registrar.events, "ready")
+		return nil
+	}
+	_, err = core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true}, Lifecycle: registrar,
+		PrepareWorkspaceAttachment:  func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ActivateWorkspaceAttachment: func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+		ReleaseWorkspaceAttachment:  func(context.Context) error { return nil },
+		Streams:                     &backend.RunStreams{Ready: func(backend.SessionReadyProof) error { return nil }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"reserve", "prepare", "promote", "ready"}; !slices.Equal(registrar.events, want) {
+		t.Fatalf("establishment order=%v want=%v", registrar.events, want)
+	}
+}
+
+func TestApplyRunReservationFailurePublishesNoRuntimeOrTarget(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("establishment-rejected")); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "establishment-rejected", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("reservation rejected")
+	fake := &lifecycleApplyBackend{applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true},
+		Lifecycle: rejectingEstablishmentRegistrar{err: sentinel},
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("ApplyRun error=%v", err)
+	}
+	if fake.targetRuns != 0 {
+		t.Fatalf("reservation failure launched %d targets", fake.targetRuns)
+	}
+	if result.SessionID == "" {
+		t.Fatal("reservation attempt did not allocate an opaque session identity")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "sessions", result.SessionID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("reservation failure published global session runtime: %v", statErr)
+	}
+}
+
+func TestApplyRunMapsOwnerBlockedReservationToExistingRecoveryCode(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("owner-recovery")); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "owner-recovery", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &lifecycleApplyBackend{applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true},
+		Lifecycle: rejectingEstablishmentRegistrar{err: &lifecycle.AttachBlockedError{ReasonCode: "owner-requires-explicit-recovery"}},
+	})
+	if EnvironmentRecoveryCode(err) != "session.cleanup.failed" || !strings.Contains(err.Error(), "explicit recovery") {
+		t.Fatalf("owner recovery error=%T %v", err, err)
+	}
+	if result.SessionID == "" || fake.targetRuns != 0 {
+		t.Fatalf("owner recovery result=%+v targetRuns=%d", result, fake.targetRuns)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "sessions", result.SessionID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("owner recovery rejection published global runtime: %v", statErr)
+	}
 }
 
 func TestApplyRunRegistersLifecycleBeforeBackendAuthority(t *testing.T) {

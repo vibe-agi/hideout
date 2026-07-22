@@ -61,23 +61,23 @@ type ApplyRunOptions struct {
 }
 
 type RunResult struct {
-	Version          string           `json:"version"`
-	SessionID        string           `json:"sessionId"`
-	Profile          string           `json:"profile"`
-	Backend          string           `json:"backend"`
-	EnvironmentID    string           `json:"environmentId,omitempty"`
-	EnvironmentName  string           `json:"environmentName,omitempty"`
-	InstanceName     string           `json:"instanceName,omitempty"`
-	PreserveInstance bool             `json:"preserveInstance,omitempty"`
+	Version          string `json:"version"`
+	SessionID        string `json:"sessionId"`
+	Profile          string `json:"profile"`
+	Backend          string `json:"backend"`
+	EnvironmentID    string `json:"environmentId,omitempty"`
+	EnvironmentName  string `json:"environmentName,omitempty"`
+	InstanceName     string `json:"instanceName,omitempty"`
+	PreserveInstance bool   `json:"preserveInstance,omitempty"`
 	// EnvironmentDisposition reports what happened to a disposable (--rm)
 	// environment: "removed" after a proved teardown, "cleanup-required" when
 	// the record was retained for reconcile/clean. Empty for reusable runs.
-	EnvironmentDisposition string `json:"environmentDisposition,omitempty"`
-	AuditPath        string           `json:"auditPath,omitempty"`
-	BoundarySummary  *BoundarySummary `json:"boundarySummary,omitempty"`
-	Command          []string         `json:"command"`
-	Error            string           `json:"error,omitempty"`
-	CleanupError     string           `json:"cleanupError,omitempty"`
+	EnvironmentDisposition string           `json:"environmentDisposition,omitempty"`
+	AuditPath              string           `json:"auditPath,omitempty"`
+	BoundarySummary        *BoundarySummary `json:"boundarySummary,omitempty"`
+	Command                []string         `json:"command"`
+	Error                  string           `json:"error,omitempty"`
+	CleanupError           string           `json:"cleanupError,omitempty"`
 }
 
 func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) (result RunResult, retErr error) {
@@ -110,6 +110,48 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, err
 	}
 	environmentStore := environment.Store{Root: c.Store.Root}
+	var (
+		allocatedLayout     *runsession.Layout
+		establishment       lifecycle.EstablishmentReservation
+		preparedIncarnation lifecycle.EnvironmentRef
+	)
+	if opts.Lifecycle != nil && runEnv.Active && runEnv.Record.Backend == "lima" {
+		layout, allocateErr := c.AllocateRunSession()
+		if allocateErr != nil {
+			return result, allocateErr
+		}
+		allocatedLayout = &layout
+		result.SessionID = layout.ID
+		establishment, err = opts.Lifecycle.ReserveAttach(ctx, lifecycle.EstablishmentRequest{
+			EnvironmentID: runEnv.Record.ID,
+			SessionID:     layout.ID,
+		})
+		if err != nil {
+			var blocked *lifecycle.AttachBlockedError
+			if errors.As(err, &blocked) && blocked.ReasonCode == "owner-requires-explicit-recovery" {
+				return result, &EnvironmentOwnerError{
+					Code: recovery.CodeSessionCleanupFailed, EnvironmentID: runEnv.Record.ID,
+					Err: fmt.Errorf("stale session owner requires explicit recovery: %w", runsession.ErrOwnerCleanupFailed),
+				}
+			}
+			return result, err
+		}
+		defer func() {
+			if establishment == nil {
+				return
+			}
+			abortCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			abortErr := establishment.Abort(abortCtx, retErr)
+			cancel()
+			if abortErr != nil {
+				result.CleanupError = appendCleanupError(result.CleanupError, abortErr)
+				if retErr == nil {
+					result.Error = abortErr.Error()
+					retErr = abortErr
+				}
+			}
+		}()
+	}
 	var transitionLock *environment.Lock
 	if runEnv.Active {
 		transitionLock, err = environmentStore.LockContext(ctx, runEnv.Record.ID)
@@ -147,96 +189,106 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		if err := requireAttachableEnvironmentOwners(environmentStore, current.ID); err != nil {
 			return result, err
 		}
+		if establishment != nil {
+			observation, observeErr := lifecycleObservationForAttach(
+				ctx, opts.Lifecycle, opts.Backend, runEnv.Record.ID, runEnv.Record.InstanceName,
+			)
+			if observeErr != nil {
+				return result, observeErr
+			}
+			preparedIncarnation, err = establishment.Prepare(ctx, lifecycle.AttachRequest{
+				EnvironmentID: runEnv.Record.ID,
+				InstanceName:  runEnv.Record.InstanceName,
+				SessionID:     allocatedLayout.ID,
+				Observation:   observation,
+			})
+			if err != nil {
+				return result, err
+			}
+		}
 	}
-	runSession, err := c.BeginRunSession(plan, runEnv, RunSessionOptions{})
+	runSession, err := c.BeginRunSession(plan, runEnv, RunSessionOptions{AllocatedLayout: allocatedLayout})
 	if err != nil {
 		return result, err
 	}
 	result.SessionID = runSession.Layout.ID
 	result.AuditPath = runSession.AuditPath
 	runEnv = runSession.Environment
-	var lifecycleRegistration lifecycle.Registration
-	var lifecycleSupervisorRef lifecycle.ResourceRef
-	var lifecycleTargetRef lifecycle.ResourceRef
-	var lifecycleNetworkRef lifecycle.ResourceRef
-	var workspaceLifecycleRefs runWorkspaceLifecycleRefs
-	if opts.Lifecycle != nil && runEnv.Active && runEnv.Record.Backend == "lima" {
-		observation, observeErr := lifecycleObservationForAttach(
-			ctx, opts.Lifecycle, opts.Backend, runEnv.Record.ID, runEnv.Record.InstanceName,
-		)
-		if observeErr != nil {
-			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
-			return result, observeErr
+	var (
+		owner                  *runsession.Owner
+		lifecycleCleanupErr    error
+		disposalProved         bool
+		lifecycleRegistration  lifecycle.Registration
+		lifecycleSupervisorRef lifecycle.ResourceRef
+		lifecycleTargetRef     lifecycle.ResourceRef
+		lifecycleNetworkRef    lifecycle.ResourceRef
+		workspaceLifecycleRefs runWorkspaceLifecycleRefs
+	)
+	// Install cleanup before any post-materialization validation or ownership
+	// step. Defers run in reverse order: session authority closes first, then a
+	// pre-owner runtime fallback or the durable-owner cleanup path.
+	defer func() {
+		if owner == nil {
+			return
 		}
-		lifecycleRegistration, err = opts.Lifecycle.BeginAttach(ctx, lifecycle.AttachRequest{
-			EnvironmentID: runEnv.Record.ID, InstanceName: runEnv.Record.InstanceName,
-			SessionID: runSession.Layout.ID, Observation: observation,
-		})
-		if err != nil {
-			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
-			return result, err
+		disposition, finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, disposalProved, lifecycleRegistration)
+		result.EnvironmentDisposition = disposition
+		if finishErr != nil {
+			result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
+			if retErr == nil {
+				result.Error = finishErr.Error()
+				retErr = finishErr
+			}
 		}
-		lifecycleSupervisorRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
-			Kind: lifecycle.KindGuestSupervisor, ID: runSession.Layout.ID,
-			OwnerKind: "session", OwnerID: runSession.Layout.ID, State: lifecycle.StatePlanned,
-			Dependencies: []lifecycle.DependencySpec{
-				{Ref: lifecycleRegistration.Root(), StopMode: lifecycle.StopModeDrain},
-				{Ref: lifecycleRegistration.Session(), StopMode: lifecycle.StopModeDrain},
-			},
-			Persistence: lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.CloseCoTerminateWithRoot,
-			PossibleVMDependency: true,
-		})
-		if err != nil {
-			_ = lifecycleRegistration.Finish(context.Background(), nil)
-			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
-			return result, err
+	}()
+	defer func() {
+		if owner != nil || !runEnv.Active {
+			return
 		}
-		lifecycleTargetRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
-			Kind: lifecycle.KindGuestTarget, ID: runSession.Layout.ID,
-			OwnerKind: "session", OwnerID: runSession.Layout.ID, State: lifecycle.StatePlanned,
-			Dependencies: []lifecycle.DependencySpec{{Ref: lifecycleSupervisorRef, StopMode: lifecycle.StopModeDrain}},
-			Persistence:  lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.CloseCoTerminateWithRoot,
-			PossibleVMDependency: true,
-		})
-		if err != nil {
-			_ = lifecycleRegistration.Finish(context.Background(), nil)
-			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
-			return result, err
+		cleanupErr := environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
+		if cleanupErr != nil {
+			result.CleanupError = appendCleanupError(result.CleanupError, cleanupErr)
+			if retErr == nil {
+				result.Error = cleanupErr.Error()
+				retErr = cleanupErr
+			}
 		}
-	}
+	}()
+	defer func() {
+		_, closeErr := c.CloseRunSession(runSession)
+		summary := SummarizeRunBoundary(result.AuditPath)
+		result.BoundarySummary = &summary
+		if closeErr != nil && retErr == nil {
+			result.Error = closeErr.Error()
+			retErr = closeErr
+		}
+		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, closeErr)
+		result.CleanupError = appendCleanupError(result.CleanupError, closeErr)
+	}()
 	if runEnv.Record.Mode == environment.ModeShared {
-		if lifecycleRegistration == nil {
+		if establishment == nil {
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, ErrSharedWorkspaceDaemonOwnerRequired
 		}
 		if opts.PrepareWorkspaceAttachment == nil || opts.ActivateWorkspaceAttachment == nil || opts.ReleaseWorkspaceAttachment == nil {
-			_ = lifecycleRegistration.Finish(context.Background(), nil)
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, ErrSharedWorkspaceDaemonOwnerRequired
 		}
 		if opts.Streams == nil || opts.Streams.Ready == nil {
-			_ = lifecycleRegistration.Finish(context.Background(), nil)
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, ErrSharedWorkspaceReadyBarrierRequired
 		}
-		workspacePlan, planErr := c.PlanRunWorkspaceAttachment(runSession, lifecycleRegistration, WorkspaceAttachPlanOptions{})
+		workspacePlan, planErr := c.PlanRunWorkspaceAttachmentForIncarnation(runSession, preparedIncarnation, WorkspaceAttachPlanOptions{})
 		if planErr != nil {
-			_ = lifecycleRegistration.Finish(context.Background(), nil)
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, planErr
 		}
 		runSession, err = c.ApplyRunWorkspaceAttachment(runSession, workspacePlan)
 		if err != nil {
-			_ = lifecycleRegistration.Finish(context.Background(), nil)
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, err
 		}
 	}
-	var (
-		owner               *runsession.Owner
-		lifecycleCleanupErr error
-		disposalProved      bool
-	)
 	if runEnv.Active {
 		terminalMode := opts.TerminalMode
 		if terminalMode == "" {
@@ -274,31 +326,37 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			_ = environmentStore.ClearSessionRuntime(runEnv.Record.ID, runSession.Layout.ID)
 			return result, err
 		}
-		// Registered before the narrower cleanup defers below so this runs last:
-		// all session authority is gone before the owner and runtime child.
-		defer func() {
-			disposition, finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, disposalProved, lifecycleRegistration)
-			result.EnvironmentDisposition = disposition
-			if finishErr != nil {
-				result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
-				if retErr == nil {
-					result.Error = finishErr.Error()
-					retErr = finishErr
-				}
-			}
-		}()
 	}
-	defer func() {
-		_, closeErr := c.CloseRunSession(runSession)
-		summary := SummarizeRunBoundary(result.AuditPath)
-		result.BoundarySummary = &summary
-		if closeErr != nil && retErr == nil {
-			result.Error = closeErr.Error()
-			retErr = closeErr
+	if establishment != nil {
+		lifecycleRegistration, err = establishment.Promote(ctx)
+		if err != nil {
+			return result, err
 		}
-		lifecycleCleanupErr = errors.Join(lifecycleCleanupErr, closeErr)
-		result.CleanupError = appendCleanupError(result.CleanupError, closeErr)
-	}()
+		establishment = nil
+		lifecycleSupervisorRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
+			Kind: lifecycle.KindGuestSupervisor, ID: runSession.Layout.ID,
+			OwnerKind: "session", OwnerID: runSession.Layout.ID, State: lifecycle.StatePlanned,
+			Dependencies: []lifecycle.DependencySpec{
+				{Ref: lifecycleRegistration.Root(), StopMode: lifecycle.StopModeDrain},
+				{Ref: lifecycleRegistration.Session(), StopMode: lifecycle.StopModeDrain},
+			},
+			Persistence: lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.CloseCoTerminateWithRoot,
+			PossibleVMDependency: true,
+		})
+		if err != nil {
+			return result, err
+		}
+		lifecycleTargetRef, err = lifecycleRegistration.Register(ctx, lifecycle.RegistrationSpec{
+			Kind: lifecycle.KindGuestTarget, ID: runSession.Layout.ID,
+			OwnerKind: "session", OwnerID: runSession.Layout.ID, State: lifecycle.StatePlanned,
+			Dependencies: []lifecycle.DependencySpec{{Ref: lifecycleSupervisorRef, StopMode: lifecycle.StopModeDrain}},
+			Persistence:  lifecycle.PersistenceEphemeral, ClosePolicy: lifecycle.CloseCoTerminateWithRoot,
+			PossibleVMDependency: true,
+		})
+		if err != nil {
+			return result, err
+		}
+	}
 	if runEnv.Record.Mode == environment.ModeShared {
 		workspaceLifecycleRefs, err = registerRunWorkspaceLifecycle(ctx, lifecycleRegistration, runSession.WorkspaceAttachment)
 		if err != nil {

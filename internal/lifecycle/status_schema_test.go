@@ -17,13 +17,16 @@ func TestLifecycleStatusSchemaAcceptsAllActivitiesAndRejectsUnknownFields(t *tes
 	schema := compileLifecycleSchema(t, "../../schemas/lifecycle-status.schema.json")
 	for _, activity := range []Activity{
 		ActivityPinned, ActivityIdleGrace, ActivityIdleEligible, ActivityBlocked,
-		ActivityStopping, ActivityStoppingUnknown, ActivityStopped, ActivityNotApplicable,
+		ActivityStopping, ActivityStoppingUnknown, ActivityEstablishing, ActivityStopped, ActivityNotApplicable,
 	} {
 		status := Status{
 			Schema: StatusSchema, EnvironmentID: "env_schema", StartGeneration: 1,
 			BackendState: "running", BackendObservedAt: time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC),
 			Activity: activity, Reconciliation: "complete",
 			Pins: []ResourceSummary{{Kind: KindRunSession, ID: "ses_schema", State: StateActive}},
+		}
+		if activity == ActivityEstablishing {
+			status.EstablishingSessions = 2
 		}
 		if activity == ActivityNotApplicable {
 			status.BackendState = "not-applicable"

@@ -369,15 +369,15 @@ func reconcileRestartResidue(ctx context.Context, store environment.Store, recor
 					canReconcileOwners = false
 					reasons = appendReason(reasons, "owner-live")
 				case runsession.OwnerStale:
-					if owner.Record.State == runsession.OwnerStateFailed || owner.Record.State == runsession.OwnerStateCleaning {
-						canReconcileOwners = false
-						reasons = appendReason(reasons, "owner-requires-explicit-recovery")
-						continue
-					}
-					if err := proveAbsent(owner.SessionID); err != nil {
-						canReconcileOwners = false
-						reasons = appendReason(reasons, "owner-absence-unproved")
-					}
+					// The owner lock is daemon-held authority. If it is stale, the
+					// previous daemon disappeared without proving the complete
+					// session cleanup sequence, regardless of the last checkpointed
+					// owner state. Exact guest-process absence may classify narrower
+					// residuals below, but it must not erase this crash boundary or
+					// authorize a replacement attach. Explicit stop owns the recovery
+					// path after independently observing the backend stopped.
+					canReconcileOwners = false
+					reasons = appendReason(reasons, "owner-requires-explicit-recovery")
 				case runsession.OwnerUnprovable:
 					canReconcileOwners = false
 					reasons = appendReason(reasons, "owner-record-unprovable")

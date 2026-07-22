@@ -497,7 +497,7 @@ gate2_036_test_restart_reconciliation() {
   }
   gate2_036_stop_daemon
 
-  local real_limactl slow_dir slow_state status_start status_end attach_pid
+  local real_limactl slow_dir slow_state status_start status_end attach_pid cancel_pid cancel_marker
   real_limactl="$(command -v limactl)"
   slow_dir="$GATE2_036_TMP/limactl-slow"
   slow_state="$GATE2_036_TMP/limactl-slow.state"
@@ -508,6 +508,30 @@ gate2_036_test_restart_reconciliation() {
   GATE2_036_STATUS_READY_MS="$(awk -v start="$status_start" -v end="$status_end" 'BEGIN { printf "%.3f", (end-start)*1000 }')"
   awk -v value="$GATE2_036_STATUS_READY_MS" 'BEGIN { exit !(value <= 3000) }'
   gate2_036_wait_lifecycle 'any(.lifecycle[]?; .environmentId == $environmentId and .reconciliation == "pending")' "pending slow reconciliation" 50
+  cancel_marker="$GATE2_036_WORKSPACE/.hideout-gate-control/cancelled-wait-target"
+  rm -f "$cancel_marker"
+  # Invoke the client directly so cancel_pid is the actual client process.
+  # Backgrounding the gate2 shell helper would make it a wrapper PID and a
+  # signal could leave its hideout child connected long enough to launch.
+  env HIDEOUT_STORE_ROOT="$GATE2_036_STORE" LIMA_HOME="$GATE2_036_LIMA_HOME" \
+    HIDEOUT_LINUX_SHIM_PATH="$GATE2_036_BIN/hideout-shim-linux-$GATE2_036_ARCH" \
+    HIDEOUT_LINUX_HOSTFSD_PATH="$GATE2_036_BIN/hideout-hostfsd-linux-$GATE2_036_ARCH" \
+    HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$GATE2_036_BIN/hideout-session-supervisor-linux-$GATE2_036_ARCH" \
+    "$GATE2_036_HIDEOUT" run --profile default --backend lima --network direct \
+      --workspace "$GATE2_036_WORKSPACE" --guest-workspace /workspace -- \
+      sh -eu -c 'touch /workspace/.hideout-gate-control/cancelled-wait-target' \
+      >"$GATE2_036_OUT/logs/cancelled-wait.out" 2>"$GATE2_036_OUT/logs/cancelled-wait.err" &
+  cancel_pid=$!
+  sleep 0.2
+  kill -0 "$cancel_pid" 2>/dev/null || {
+    echo "attach-reservation gate2: cancellation target bypassed pending reconciliation" >&2
+    return 1
+  }
+  kill "$cancel_pid"
+  if wait "$cancel_pid"; then
+    echo "attach-reservation gate2: cancelled reconciliation waiter returned success" >&2
+    return 1
+  fi
   gate2_036_run_target true >"$GATE2_036_OUT/logs/slow-attach.out" 2>"$GATE2_036_OUT/logs/slow-attach.err" &
   attach_pid=$!
   sleep 0.2
@@ -521,6 +545,13 @@ gate2_036_test_restart_reconciliation() {
     return 1
   fi
   gate2_036_wait_lifecycle 'any(.lifecycle[]?; .environmentId == $environmentId and .reconciliation == "complete")' "slow reconciliation completion"
+  [ ! -e "$cancel_marker" ] || {
+    echo "attach-reservation gate2: cancelled waiter launched its target" >&2
+    return 1
+  }
+  gate2_036_lifecycle_status | jq -e --arg environmentId "$GATE2_036_ENV_ID" '
+    all(.lifecycle[]? | select(.environmentId == $environmentId); (.establishingSessions // 0) == 0)
+  ' >/dev/null
   gate2_036_stop_daemon
 
   local fail_dir fail_state retry_start retry_end
@@ -547,6 +578,40 @@ gate2_036_test_restart_reconciliation() {
   second_deadline="$(gate2_036_lifecycle_status | jq -r --arg id "$GATE2_036_ENV_ID" \
     '.lifecycle[] | select(.environmentId == $id) | .idleDeadline')"
   [ -n "$first_deadline" ] && [ "$first_deadline" = "$second_deadline" ]
+}
+
+gate2_040_test_restart_before_owner() {
+	gate2_036_stop_daemon
+	local real_limactl slow_dir slow_state attach_pid marker
+	real_limactl="$(command -v limactl)"
+	slow_dir="$GATE2_036_TMP/limactl-restart-before-owner"
+	slow_state="$GATE2_036_TMP/limactl-restart-before-owner.state"
+	marker="$GATE2_036_WORKSPACE/.hideout-gate-control/restart-before-owner-target"
+	rm -f "$marker"
+	gate2_036_make_limactl_wrapper "$slow_dir" slow-once "$real_limactl" "$slow_state"
+	gate2_036_start_daemon "$slow_dir" restart-before-owner
+	gate2_036_wait_lifecycle 'any(.lifecycle[]?; .environmentId == $environmentId and .reconciliation == "pending")' "restart-before-owner pending reconciliation" 50
+	gate2_036_run_target sh -eu -c 'touch /workspace/.hideout-gate-control/restart-before-owner-target' \
+	  >"$GATE2_036_OUT/logs/restart-before-owner.out" 2>"$GATE2_036_OUT/logs/restart-before-owner.err" &
+	attach_pid=$!
+	sleep 0.2
+	kill -0 "$attach_pid" 2>/dev/null || {
+	  echo "attach-reservation gate2: pre-owner run bypassed reconciliation" >&2
+	  return 1
+	}
+	gate2_036_stop_daemon
+	if wait "$attach_pid"; then
+	  echo "attach-reservation gate2: pre-owner run survived daemon restart as success" >&2
+	  return 1
+	fi
+	[ ! -e "$marker" ] || {
+	  echo "attach-reservation gate2: daemon restart launched a pre-owner target" >&2
+	  return 1
+	}
+	gate2_036_start_daemon "" restart-before-owner-recovery
+	gate2_036_wait_lifecycle 'any(.lifecycle[]?; .environmentId == $environmentId and .reconciliation == "complete")' "restart-before-owner recovery"
+	gate2_036_run_target true >"$GATE2_036_OUT/logs/restart-before-owner-recovery-run.out" \
+	  2>"$GATE2_036_OUT/logs/restart-before-owner-recovery-run.err"
 }
 
 gate2_036_test_stop_unknown() {
@@ -696,6 +761,7 @@ gate2_resource_lifecycle_run() {
 
   gate2_036_stage restart-and-ambiguous-stop
   gate2_036_test_restart_reconciliation
+	gate2_040_test_restart_before_owner
   gate2_036_wait_final_stop
   gate2_036_test_stop_unknown
 
@@ -731,7 +797,9 @@ gate2_resource_lifecycle_run() {
        guestDiskRetained:$prefixChecks,hostHandoffIndependent:$prefixChecks,
        newBootGenerationObserved:true,profileCacheRetained:$prefixChecks,reconciliationRetry:true,
        restartFreshGraceAtMostOnce:true,restartNoInheritedAuthority:$prefixChecks,
-       retainedOverlayPreserved:true,siblingSessionPreserved:true,
+	   retainedOverlayPreserved:true,siblingSessionPreserved:true,
+	   attachWaitsForReconciliation:true,cancellationBeforeOwnerClean:true,
+	   restartBeforeOwnerClean:true,restartAfterOwnerFailClosed:$prefixChecks,
        slowProbeDoesNotBlockStatus:true,stopUnknownBlocksAttach:true},
      nonClaims:{guestRootContainment:"not-claimed",hostAppTermination:"not-owned"}}
   ' >"$out/result.json"

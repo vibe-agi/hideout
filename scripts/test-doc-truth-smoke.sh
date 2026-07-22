@@ -149,7 +149,8 @@ done < <(jq -r '
     or .featureId == "032-community-host-app-recipes"
     or .featureId == "034-concurrent-run-sessions"
     or .featureId == "035-shared-default-vm-cross-workspace"
-    or .featureId == "036-resource-lifecycle-final-session-stop")
+	  or .featureId == "036-resource-lifecycle-final-session-stop"
+	  or .featureId == "040-lifecycle-attach-reservation")
   | .proofId
 ' "$registry_json")
 
@@ -183,7 +184,7 @@ scan_files() {
   {
     printf '%s\n' README.md README.zh-CN.md
     find docs -maxdepth 1 -type f -name '*.md' | sort
-    find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions specs/035-shared-default-vm-cross-workspace specs/036-resource-lifecycle-final-session-stop \
+	find specs/021-ui-e2e-proof specs/022-alpha-first-run-e2e specs/023-hostfs-decision-e2e specs/024-doctor-package-recovery-e2e specs/025-documentation-truth-gate specs/029-hostfs-discoverable-namespace specs/030-host-capability-projection specs/031-supported-cli-runtime specs/032-community-host-app-recipes specs/034-concurrent-run-sessions specs/035-shared-default-vm-cross-workspace specs/036-resource-lifecycle-final-session-stop specs/040-lifecycle-attach-reservation \
       -type f -name '*.md' | sort
   } | grep -v '^\.' | sort -u
 }
@@ -839,6 +840,24 @@ write_manifest() {
           prerequisites: [{name: "claim-boundaries", status: "available"}, {name: "overclaim-fixtures", status: "available"}],
           artifacts: ($claimArtifacts[0] + $overclaimArtifacts[0]),
           redactionStatus: "passed"
+		},
+		{
+		  proofId: "040.attach-reservation.docs.claim-boundary",
+		  featureId: "040-lifecycle-attach-reservation",
+		  mode: "docs",
+		  evidenceClass: "documentation-truth-gate",
+		  status: "passed",
+		  commandSummary: "validate attach-reservation ordering, recovery, evidence refusal, and non-claim boundaries",
+		  coveredClaims: [
+		    {claimId: "040.FR-012", source: "spec", description: "Existing lifecycle behavior remains scoped outside establishment ordering", scope: "docs"},
+		    {claimId: "040.FR-013", source: "spec", description: "Establishment observability preserves the control-material redaction boundary", scope: "docs"},
+		    {claimId: "040.FR-014", source: "spec", description: "Attach reservation adds no CLI, configuration, manifest, authority, or fallback", scope: "docs"},
+		    {claimId: "040.FR-015", source: "spec", description: "Mutation and negative evidence remains required", scope: "docs"},
+		    {claimId: "040.SC-006", source: "spec", description: "Only exact real Lima evidence can promote the backend claim", scope: "docs"}
+		  ],
+		  prerequisites: [{name: "claim-boundaries", status: "available"}],
+		  artifacts: $claimArtifacts[0],
+		  redactionStatus: "passed"
         }
       ]
     }' >"$manifest"
@@ -854,10 +873,11 @@ validate_manifest() {
       "025.docs.cross-doc-consistency",
       "025.docs.overclaim-scan",
       "029.hostfs-visibility.docs.claim-boundary",
-      "034.concurrent-sessions.docs.claim-boundary"
+	  "034.concurrent-sessions.docs.claim-boundary",
+	  "040.attach-reservation.docs.claim-boundary"
     ] | sort) and
     all(.proofs[];
-      (.featureId == "025-documentation-truth-gate" or .featureId == "029-hostfs-discoverable-namespace" or .featureId == "034-concurrent-run-sessions") and
+	  (.featureId == "025-documentation-truth-gate" or .featureId == "029-hostfs-discoverable-namespace" or .featureId == "034-concurrent-run-sessions" or .featureId == "040-lifecycle-attach-reservation") and
       .status == "passed" and .redactionStatus == "passed"
     )
   ' "$manifest" >"$out/logs/evidence-content.out"

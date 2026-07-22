@@ -139,6 +139,18 @@ orphaned ownership, failed cleanup, or a changed boot identity blocks automatic
 stop. This lifecycle mechanism does not strengthen the ordinary-target or
 guest-root isolation boundary.
 
+Run establishment is ordered before reconciliation can classify session
+runtime. An opaque session ID is allocated without filesystem state; a
+daemon-local reservation waits for older reconciliation without holding the
+environment transition lock, then excludes new reconciliation and destructive
+mutation. Runtime publication follows record/backend revalidation, durable
+owner creation precedes atomic promotion, and cancellation is session-scoped.
+The reservation is not durable authority: daemon restart discards it and the
+replacement coordinator judges residue only from independently observable
+owner/backend/provider facts. Unknown ownership or incarnation remains a stable
+blocker. Establishment status and events reveal a count and bounded reason
+codes, not reservation IDs or control-plane material.
+
 Under promoted 035 on macOS arm64 Lima, sessions from different workspaces
 share one guest kernel. Each ordinary target receives a private mount/PID
 namespace, private

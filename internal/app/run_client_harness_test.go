@@ -255,14 +255,44 @@ func (appTestLifecycleRegistrar) ActiveAttachObservation(_ context.Context, envi
 	}, true
 }
 
+func (appTestLifecycleRegistrar) ReserveAttach(_ context.Context, req lifecycle.EstablishmentRequest) (lifecycle.EstablishmentReservation, error) {
+	return &appTestLifecycleReservation{request: req}, nil
+}
+
 func (appTestLifecycleRegistrar) BeginAttach(_ context.Context, req lifecycle.AttachRequest) (lifecycle.Registration, error) {
+	return appTestLifecycleRegistrationFor(req), nil
+}
+
+type appTestLifecycleReservation struct {
+	request      lifecycle.EstablishmentRequest
+	registration *appTestLifecycleRegistration
+}
+
+func (r *appTestLifecycleReservation) Prepare(_ context.Context, req lifecycle.AttachRequest) (lifecycle.EnvironmentRef, error) {
+	if req.EnvironmentID != r.request.EnvironmentID || req.SessionID != r.request.SessionID {
+		return lifecycle.EnvironmentRef{}, errors.New("test lifecycle preparation does not match reservation")
+	}
+	r.registration = appTestLifecycleRegistrationFor(req)
+	return r.registration.Incarnation(), nil
+}
+
+func (r *appTestLifecycleReservation) Promote(context.Context) (lifecycle.Registration, error) {
+	if r.registration == nil {
+		return nil, errors.New("test lifecycle reservation was not prepared")
+	}
+	return r.registration, nil
+}
+
+func (*appTestLifecycleReservation) Abort(context.Context, error) error { return nil }
+
+func appTestLifecycleRegistrationFor(req lifecycle.AttachRequest) *appTestLifecycleRegistration {
 	return &appTestLifecycleRegistration{
 		incarnation: lifecycle.EnvironmentRef{
 			EnvironmentID: req.EnvironmentID, StartGeneration: 1, InstanceName: req.InstanceName,
 		},
 		root:    lifecycle.ResourceRef{Kind: lifecycle.KindBackendIncarnation, ID: req.EnvironmentID, Generation: 1},
 		session: lifecycle.ResourceRef{Kind: lifecycle.KindRunSession, ID: req.SessionID, Generation: 1},
-	}, nil
+	}
 }
 
 type appTestLifecycleRegistration struct {

@@ -1719,7 +1719,7 @@ attach, release, drain, grace, stop, shutdown, restart, generation fencing,
 failed cleanup, and corrupt/partial journal states. A lifecycle backend factory
 alone must not enable side effects in an alternate daemon composition.
 
-### Real macOS Arm64 Lima Gate 2
+### 040 Real macOS Arm64 Lima Gate 2
 
 ```sh
 HIDEOUT_036_SHORT_TMPDIR=/tmp \
@@ -1765,3 +1765,66 @@ summary cannot satisfy the claim. Documentation must retain the non-claims:
 automatic stop does not clean/delete retained state, terminate independent host
 apps, preserve detached run bridges, provide guest-root containment, or guess
 through unknown ownership/backend state.
+
+## Gate 040: Lifecycle Attach Reservation
+
+Status: **Implemented and promoted from clean real macOS arm64 Lima evidence,
+in addition to passing local mechanics, model, mutation, randomized-schedule,
+cancellation, restart, schema, and redaction evidence.**
+
+### Gate 0, Model, Mutation, And Race Lanes
+
+```sh
+go test -count=1 ./internal/session ./internal/lifecycle ./internal/manager ./internal/daemon
+go test -race -count=1 ./internal/lifecycle ./internal/manager ./internal/daemon
+scripts/test-lifecycle-smoke.sh \
+  --out .hideout-release-evidence/040-attach-reservation-gate0
+```
+
+The local lane emits `040.attach-reservation.gate0.mechanics` and
+`040.attach-reservation.gate0.model`. It must prove allocation without runtime
+publication, reconciliation-first waiting, reservation-first exclusion,
+record/backend revalidation, durable owner before promotion, atomic promotion,
+session-scoped cancellation, restart without reservation re-adoption, redacted
+status/events, and at least 1,000 deterministic seeded schedules. TLC checks
+`formal/AttachReservation.tla`; temporarily allowing reconciliation to start
+with a held reservation must reproduce `EstablishingRuntimeIntact` failure.
+The clean local Gate 0 manifest for candidate
+`3555c9a9aa83c885c3c8ee29f1d015ee10c1fe73` has SHA-256
+`a0e9dadba70a89ce52e8d5255380ade950ce8e4d8ccb5e7ad96a9cdc21d94d6b`.
+
+### Real macOS Arm64 Lima Gate 2
+
+```sh
+HIDEOUT_036_SHORT_TMPDIR=/tmp \
+  scripts/test-lifecycle-lima-e2e.sh --all --require-real --feature-040 \
+  --samples 30 --warmups 3 --iterations 100 \
+  --out .hideout-release-evidence/040-attach-reservation-real-gate2
+```
+
+The real lane emits `040.attach-reservation.real-gate2.lifecycle` and
+`040.attach-reservation.real-gate2.performance`. It requires the exact clean
+candidate and runtime identity, reconciliation-first and reservation-first
+orders, cancellation before owner publication, restart before owner, existing
+post-owner restart fail-closed recovery, sibling preservation, unknown-stop
+refusal, 30 measured warm samples, nearest-rank p95 at most 2.0 seconds, and at
+least 95% of samples within 2.0 seconds.
+
+The promoted proof is bound to clean candidate commit
+`3555c9a9aa83c885c3c8ee29f1d015ee10c1fe73`, exact pre-040 baseline
+`322c3c6cc9561eea21d4ed20ab78172429654c54`, and runtime
+`developer-standard/2026.07.0` artifact SHA-256
+`79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134`.
+All 24 lifecycle checks and 100 attach/stop races passed. All 30 measured warm
+samples were within two seconds; candidate median/p95 were 413.921/538.581 ms
+against a 408.800 ms baseline median. The evidence manifest SHA-256 is
+`5394bfbd78804b5c2d1861406861584a5573e25ec7a58edb4f044c2b40fccefb`.
+
+### 040 Evidence Refusal
+
+`040.attach-reservation.real-gate2.not-run`, dirty-source evidence, a reduced
+probe, native/local behavior, the pre-040 036 result, or command success without
+the registered lifecycle/performance evidence classes cannot satisfy the real
+claim. Gate 040 adds no CLI, configuration, manifest field, guest authority, or
+fallback path; it does not strengthen shared-VM isolation or guest-root
+containment.

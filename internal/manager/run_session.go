@@ -20,7 +20,8 @@ import (
 )
 
 type RunSessionOptions struct {
-	ExplainOnly bool
+	ExplainOnly     bool
+	AllocatedLayout *session.Layout
 }
 
 type RunAuditOptions struct {
@@ -150,9 +151,22 @@ func (c Core) BeginRunSession(plan RunPlan, runEnv RunEnvironment, opts RunSessi
 	if err != nil {
 		return RunSession{}, fmt.Errorf("build session configuration snapshot: %w", err)
 	}
-	layout, err := session.New(c.Store.Root)
-	if err != nil {
-		return RunSession{}, err
+	var layout session.Layout
+	if opts.AllocatedLayout != nil {
+		layout = *opts.AllocatedLayout
+		if layout.Root != c.Store.Root {
+			return RunSession{}, errors.New("allocated session layout does not belong to the manager store")
+		}
+		if !opts.ExplainOnly {
+			if err := session.Prepare(layout); err != nil {
+				return RunSession{}, err
+			}
+		}
+	} else {
+		layout, err = session.New(c.Store.Root)
+		if err != nil {
+			return RunSession{}, err
+		}
 	}
 	out := RunSession{
 		Plan:              plan,
@@ -220,6 +234,16 @@ func (c Core) BeginRunSession(plan RunPlan, runEnv RunEnvironment, opts RunSessi
 	}
 	out.Env = buildRunSessionEnv(out, gitSafeDirectories)
 	return out, nil
+}
+
+// AllocateRunSession reserves only an opaque session identity. It does not
+// publish a global or environment-local runtime directory; BeginRunSession
+// materializes the supplied layout after lifecycle admission succeeds.
+func (c Core) AllocateRunSession() (session.Layout, error) {
+	if c.Store.Root == "" {
+		return session.Layout{}, errors.New("manager store root is required")
+	}
+	return session.Allocate(c.Store.Root)
 }
 
 func snapshotSessionPolicyScripts(profileDir, runtimeDir string, refs []profile.ScriptRef, dryRun bool) ([]profile.ScriptRef, []environment.SessionSourceIdentity, error) {

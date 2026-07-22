@@ -175,13 +175,23 @@ func (c Core) PlanRunWorkspaceAttachment(runSession RunSession, registration lif
 	if registration == nil {
 		return WorkspaceAttachPlan{}, errors.New("shared workspace attach requires daemon lifecycle registration")
 	}
+	return c.PlanRunWorkspaceAttachmentForIncarnation(runSession, registration.Incarnation(), opts)
+}
+
+// PlanRunWorkspaceAttachmentForIncarnation derives the immutable shared
+// workspace authority after establishment preparation and before promotion.
+// The prepared incarnation is metadata only; provider authority is still
+// created later, after the durable session owner exists.
+func (c Core) PlanRunWorkspaceAttachmentForIncarnation(runSession RunSession, incarnation lifecycle.EnvironmentRef, opts WorkspaceAttachPlanOptions) (WorkspaceAttachPlan, error) {
+	if c.Store.Root == "" {
+		return WorkspaceAttachPlan{}, errors.New("manager store root is required")
+	}
 	if !runSession.Environment.Active || runSession.Environment.Record.Mode != environment.ModeShared {
 		return WorkspaceAttachPlan{}, errors.New("workspace portal attachment requires a shared environment")
 	}
 	if runSession.Layout.ID == "" || runSession.Plan.GuestWorkspace != workspaceattach.LogicalWorkspaceRoot {
 		return WorkspaceAttachPlan{}, errors.New("workspace attachment session or logical root is invalid")
 	}
-	incarnation := registration.Incarnation()
 	if err := incarnation.Validate(incarnation.BootID != ""); err != nil {
 		return WorkspaceAttachPlan{}, err
 	}

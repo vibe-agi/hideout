@@ -54,6 +54,60 @@ func TestReconcileReplacementDaemonStartsFreshFullGrace(t *testing.T) {
 	}
 }
 
+func TestRestartDropsUnpromotedReservationAndUsesOnlyFreshFacts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	firstClock := &testClock{now: time.Date(2026, 7, 16, 5, 0, 0, 0, time.UTC)}
+	first := coordinatorForSharedRoot(t, root, "daemon-first", firstClock)
+	reservation, err := first.ReserveAttach(context.Background(), EstablishmentRequest{
+		EnvironmentID: "env-test", SessionID: "ses-unpromoted",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testAttachRequest(backend.LifecycleRunning, testBootID)
+	request.SessionID = "ses-unpromoted"
+	if _, err := reservation.Prepare(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.store.Load("env-test"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unpromoted reservation became durable: %v", err)
+	}
+	// Simulate process loss: no reservation cleanup code is allowed to create
+	// durable authority on behalf of the interrupted process.
+	first.mu.Lock()
+	first.closed = true
+	first.mu.Unlock()
+
+	secondClock := &testClock{now: firstClock.now.Add(time.Second)}
+	second := coordinatorForSharedRoot(t, root, "daemon-second", secondClock)
+	if statuses := second.Snapshot(); len(statuses) != 0 {
+		t.Fatalf("replacement coordinator re-adopted provisional state: %+v", statuses)
+	}
+	if err := second.Reconcile(context.Background(), ReconcileInput{
+		EnvironmentID: "env-test", InstanceName: "hideout-test",
+		Observation: backend.LifecycleObservation{
+			State: backend.LifecycleRunning, InstanceName: "hideout-test", BootID: testBootID, ObservedAt: secondClock.now,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := second.store.Load("env-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range journal.Resources {
+		if resource.Ref.ID == "ses-unpromoted" {
+			t.Fatalf("replacement reconciliation adopted reservation identity: %+v", resource)
+		}
+	}
+	if journal.Reconciliation.State != "blocked" || journal.Reconciliation.ReasonCode != "backend-incarnation-changed" || journal.IdleDeadline != nil {
+		t.Fatalf("replacement did not produce the stable first-discovery blocker: %+v", journal)
+	}
+}
+
 func TestRestartTreatsPreCheckpointPlannedGraphConservatively(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
@@ -123,7 +177,7 @@ func TestRestartTreatsPreCheckpointPlannedGraphConservatively(t *testing.T) {
 		t.Fatalf("replacement reconciliation started=%t err=%v", started, err)
 	}
 	if err := second.Reconcile(context.Background(), ReconcileInput{
-		EnvironmentID: "env-test", InstanceName: "hideout-test", OwnerSessionIDs: []string{"ses-one"},
+		EnvironmentID: "env-test", InstanceName: "hideout-test", OwnerSessionIDs: []string{"ses-one"}, AdditionalUnproved: true,
 		Observation: backend.LifecycleObservation{
 			State: backend.LifecycleRunning, InstanceName: "hideout-test", BootID: testBootID, ObservedAt: secondClock.now,
 		},

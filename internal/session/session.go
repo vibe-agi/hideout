@@ -33,17 +33,38 @@ type CleanupResult struct {
 }
 
 func New(root string) (Layout, error) {
+	layout, err := Allocate(root)
+	if err != nil {
+		return Layout{}, err
+	}
+	if err := Prepare(layout); err != nil {
+		return Layout{}, err
+	}
+	return layout, nil
+}
+
+// Allocate returns a fresh opaque session layout without publishing any
+// filesystem state. Callers that need to order session publication with
+// lifecycle coordination must call Prepare only after admission succeeds.
+func Allocate(root string) (Layout, error) {
+	if strings.TrimSpace(root) == "" {
+		return Layout{}, errors.New("session root is required")
+	}
 	id, err := newID()
 	if err != nil {
 		return Layout{}, err
 	}
+	return layoutForID(root, id), nil
+}
+
+func layoutForID(root, id string) Layout {
 	dir := filepath.Join(root, "sessions", id)
 	brokerSock := filepath.Join(dir, "broker.sock")
 	if len(brokerSock) > 100 {
 		brokerSock = filepath.Join(shortSocketDir(), "hideout-"+id+".sock")
 	}
 	hostFSReadDir := filepath.Join(dir, "hostfs-read")
-	layout := Layout{
+	return Layout{
 		Root:                   root,
 		ID:                     id,
 		Dir:                    dir,
@@ -58,16 +79,31 @@ func New(root string) (Layout, error) {
 		HostFSReadStatePath:    filepath.Join(hostFSReadDir, "state.json"),
 		HostFSReadGrantsPath:   filepath.Join(hostFSReadDir, "grants.json"),
 	}
-	if err := os.MkdirAll(layout.TmpDir, 0o700); err != nil {
-		return Layout{}, err
+}
+
+// Prepare publishes a previously allocated layout exactly once. Refusing an
+// existing directory prevents a retry from joining state whose ownership
+// cannot be proved.
+func Prepare(layout Layout) error {
+	if strings.TrimSpace(layout.Root) == "" || !ValidID(layout.ID) || layout != layoutForID(layout.Root, layout.ID) {
+		return errors.New("session layout is invalid")
 	}
-	if err := os.MkdirAll(layout.ShimDir, 0o700); err != nil {
-		return Layout{}, err
+	if err := os.MkdirAll(filepath.Dir(layout.Dir), 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(layout.HostFSReadDir, 0o700); err != nil {
-		return Layout{}, err
+	if err := os.Mkdir(layout.Dir, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return errors.New("session layout already exists")
+		}
+		return err
 	}
-	return layout, nil
+	for _, path := range []string{layout.TmpDir, layout.ShimDir, layout.HostFSReadDir} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			_ = os.RemoveAll(layout.Dir)
+			return err
+		}
+	}
+	return nil
 }
 
 func CleanupEphemeral(root, sessionID string, dryRun bool) (CleanupResult, error) {

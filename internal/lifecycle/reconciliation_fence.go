@@ -34,7 +34,7 @@ func (c *Coordinator) BeginReconciliation(ctx context.Context, environmentID str
 		state.journal.Reconciliation.State == "complete" {
 		return false, nil
 	}
-	if len(state.handles) != 0 || state.mutation ||
+	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation ||
 		attemptBlocksReconciliation(state.journal.StopAttempt, c.daemonID) || state.stopCancel != nil {
 		return false, errors.New("lifecycle reconciliation is blocked by environment activity")
 	}

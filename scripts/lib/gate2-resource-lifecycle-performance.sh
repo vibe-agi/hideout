@@ -70,6 +70,18 @@ gate2_036_build_tree() {
 
 gate2_036_command_env() {
   local store="$1" lima_home="$2" bin="$3" arch="$4"
+	if [ "${GATE2_036_CLEAN_TARGET_ENV:-0}" = "1" ]; then
+		env -i \
+			HOME="$HOME" USER="${USER:-hideout}" LOGNAME="${LOGNAME:-${USER:-hideout}}" \
+			SHELL="${SHELL:-/bin/sh}" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+			LANG="${LANG:-C.UTF-8}" \
+			HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+			HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch" \
+			HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch" \
+			HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch" \
+			"${@:5}"
+		return
+	fi
 	env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
 		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch" \
     HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch" \
@@ -170,6 +182,11 @@ gate2_036_run_performance() (
   baseline_lima_home="$(mktemp -d "$short_tmp/h36plb.XXXXXX")"
   candidate_values="$out/logs/performance-candidate-ms.txt"
   baseline_values="$out/logs/performance-baseline-ms.txt"
+	# The pre-036 supervisor rejected inherited empty environment values. Use a
+	# small deterministic non-empty host environment for both trees so the
+	# comparison measures attach behavior rather than the invoking shell.
+	GATE2_036_CLEAN_TARGET_ENV=1
+	export GATE2_036_CLEAN_TARGET_ENV
   : >"$candidate_values"
   : >"$baseline_values"
   GATE2_036_ANCHOR_PID=""
@@ -258,6 +275,9 @@ gate2_036_run_performance() (
   [ "$(gate2_036_fixture_digest "$workspace")" = "$fixture_digest" ]
 
   candidate_median="$(gate2_036_percentile "$candidate_values" 50)"
+	candidate_p95="$(gate2_036_percentile "$candidate_values" 95)"
+	candidate_within_two_seconds="$(awk '$1 <= 2000 {count++} END {print count+0}' "$candidate_values")"
+	candidate_sample_count="$(wc -l <"$candidate_values" | tr -d ' ')"
   baseline_median="$(gate2_036_percentile "$baseline_values" 50)"
   observed_delta="$(awk -v candidate="$candidate_median" -v baseline="$baseline_median" 'BEGIN { printf "%.4f", candidate-baseline }')"
   allowed_delta="$(awk -v baseline="$baseline_median" 'BEGIN { value=baseline*0.05; if (value<10) value=10; printf "%.4f", value }')"
@@ -265,6 +285,11 @@ gate2_036_run_performance() (
     echo "resource-lifecycle performance: median regression ${observed_delta}ms exceeds ${allowed_delta}ms" >&2
     return 1
   }
+	awk -v p95="$candidate_p95" -v within="$candidate_within_two_seconds" -v count="$candidate_sample_count" \
+	  'BEGIN { exit !(p95 <= 2000 && within*100 >= count*95) }' || {
+	  echo "attach-reservation performance: p95=${candidate_p95}ms within-2s=${candidate_within_two_seconds}/${candidate_sample_count}" >&2
+	  return 1
+	}
 
   candidate_record="$(find "$candidate_store/environments" -name environment.json -type f -print -quit)"
   baseline_record="$(find "$baseline_store/environments" -name environment.json -type f -print -quit)"
@@ -289,7 +314,9 @@ gate2_036_run_performance() (
     --arg fixtureSHA256 "$fixture_digest" --argjson samples "$samples" --argjson warmups "$warmups" \
     --argjson candidateSamples "$(gate2_036_values_json "$candidate_values")" \
     --argjson baselineSamples "$(gate2_036_values_json "$baseline_values")" \
-    --argjson candidateMedianMs "$candidate_median" --argjson baselineMedianMs "$baseline_median" \
+	--argjson candidateMedianMs "$candidate_median" --argjson candidateP95Ms "$candidate_p95" \
+	--argjson candidateWithinTwoSeconds "$candidate_within_two_seconds" --argjson candidateSampleCount "$candidate_sample_count" \
+	--argjson baselineMedianMs "$baseline_median" \
     --argjson observedDeltaMs "$observed_delta" --argjson allowedDeltaMs "$allowed_delta" '
     {schema:"hideout.lifecycle-performance/v1",status:"passed",generatedAt:$generatedAt,
      candidate:{commit:$candidateCommit,dirty:$candidateDirty},baseline:{commit:$baselineCommit,dirty:false},
@@ -298,7 +325,8 @@ gate2_036_run_performance() (
        buildCommit:$runtimeBuildCommit,buildDirty:false},
      methodology:{command:"hideout run -- git status --short",samples:$samples,warmups:$warmups,
        fixtureSHA256:$fixtureSHA256,sampleOrder:"paired-alternating-ab-ba"},candidateSamplesMs:$candidateSamples,
-     baselineSamplesMs:$baselineSamples,candidateMedianMs:$candidateMedianMs,
+	 baselineSamplesMs:$baselineSamples,candidateMedianMs:$candidateMedianMs,candidateP95Ms:$candidateP95Ms,
+	 candidateWithinTwoSeconds:$candidateWithinTwoSeconds,candidateSampleCount:$candidateSampleCount,
      baselineMedianMs:$baselineMedianMs,observedDeltaMs:$observedDeltaMs,allowedDeltaMs:$allowedDeltaMs}
   ' >"$out/logs/performance.json"
 

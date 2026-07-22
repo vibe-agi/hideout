@@ -115,6 +115,155 @@ func TestCoordinatorRandomizedConcurrentReplay(t *testing.T) {
 	}
 }
 
+func TestAttachReservationRandomizedSchedules(t *testing.T) {
+	seed := lifecycleReplaySeed(t) ^ 0x40a77ac
+	t.Logf("attach reservation replay seed=%d schedules=1000", seed)
+	random := rand.New(rand.NewSource(seed))
+	coordinator, clock := newTestCoordinator(t, false, nil)
+	done := make(chan error, 1)
+	go func() {
+		for schedule := 0; schedule < 1000; schedule++ {
+			if err := runAttachReservationSchedule(coordinator, clock, random.Int63(), schedule); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("1,000 attach reservation schedules exceeded the deadlock bound")
+	}
+}
+
+func runAttachReservationSchedule(coordinator *Coordinator, clock *testClock, seed int64, schedule int) error {
+	random := rand.New(rand.NewSource(seed))
+	const environmentID = "env-random-reservation"
+	cleanup := func() error {
+		if err := coordinator.ForgetEnvironment(environmentID); err != nil {
+			return fmt.Errorf("schedule=%d cleanup: %w", schedule, err)
+		}
+		return nil
+	}
+	requestFor := func(sessionID string) AttachRequest {
+		return AttachRequest{
+			EnvironmentID: environmentID, InstanceName: "hideout-random-reservation", SessionID: sessionID,
+			Observation: backend.LifecycleObservation{
+				State: backend.LifecycleRunning, InstanceName: "hideout-random-reservation",
+				BootID: testBootID, ObservedAt: replayClockNow(clock),
+			},
+		}
+	}
+	reserve := func(sessionID string) (EstablishmentReservation, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		return coordinator.ReserveAttach(ctx, EstablishmentRequest{EnvironmentID: environmentID, SessionID: sessionID})
+	}
+
+	switch random.Intn(5) {
+	case 0: // Reservation wins over reconciliation.
+		reservation, err := reserve("ses-random-one")
+		if err != nil {
+			return fmt.Errorf("schedule=%d reserve-first: %w", schedule, err)
+		}
+		if started, err := coordinator.BeginReconciliation(context.Background(), environmentID); err == nil || started {
+			return fmt.Errorf("schedule=%d reconciliation crossed reservation: started=%t err=%v", schedule, started, err)
+		}
+		if err := reservation.Abort(context.Background(), nil); err != nil {
+			return fmt.Errorf("schedule=%d abort: %w", schedule, err)
+		}
+	case 1: // Reservation wins over destructive mutation.
+		reservation, err := reserve("ses-random-one")
+		if err != nil {
+			return fmt.Errorf("schedule=%d reserve-before-mutation: %w", schedule, err)
+		}
+		mutated := false
+		err = coordinator.RunDestructiveMutation(context.Background(), environmentID, func(context.Context) error {
+			mutated = true
+			return nil
+		})
+		if !errors.Is(err, ErrMutationBlockedByActivity) || mutated {
+			return fmt.Errorf("schedule=%d mutation crossed reservation: mutated=%t err=%v", schedule, mutated, err)
+		}
+		if err := reservation.Abort(context.Background(), nil); err != nil {
+			return fmt.Errorf("schedule=%d abort: %w", schedule, err)
+		}
+	case 2: // Mutation completes before reservation admission.
+		if err := coordinator.RunDestructiveMutation(context.Background(), environmentID, func(context.Context) error { return nil }); err != nil {
+			return fmt.Errorf("schedule=%d mutation-first: %w", schedule, err)
+		}
+		reservation, err := reserve("ses-random-one")
+		if err != nil {
+			return fmt.Errorf("schedule=%d reserve-after-mutation: %w", schedule, err)
+		}
+		if err := reservation.Abort(context.Background(), nil); err != nil {
+			return fmt.Errorf("schedule=%d abort: %w", schedule, err)
+		}
+	case 3: // Reconciliation wins and a waiting caller cancels.
+		started, err := coordinator.BeginReconciliation(context.Background(), environmentID)
+		if err != nil || !started {
+			return fmt.Errorf("schedule=%d begin reconciliation: started=%t err=%v", schedule, started, err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := coordinator.ReserveAttach(ctx, EstablishmentRequest{EnvironmentID: environmentID, SessionID: "ses-random-one"}); !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("schedule=%d cancelled reserve: %v", schedule, err)
+		}
+		if err := coordinator.Reconcile(context.Background(), ReconcileInput{
+			EnvironmentID: environmentID, InstanceName: "hideout-random-reservation",
+			Observation: backend.LifecycleObservation{
+				State: backend.LifecycleAbsent, InstanceName: "hideout-random-reservation", ObservedAt: replayClockNow(clock),
+			},
+		}); err != nil {
+			return fmt.Errorf("schedule=%d finish reconciliation: %w", schedule, err)
+		}
+	case 4: // Compatible siblings prepare, then promote/abort independently.
+		first, err := reserve("ses-random-one")
+		if err != nil {
+			return fmt.Errorf("schedule=%d first reserve: %w", schedule, err)
+		}
+		second, err := reserve("ses-random-two")
+		if err != nil {
+			return fmt.Errorf("schedule=%d second reserve: %w", schedule, err)
+		}
+		if _, err := first.Prepare(context.Background(), requestFor("ses-random-one")); err != nil {
+			return fmt.Errorf("schedule=%d first prepare: %w", schedule, err)
+		}
+		if _, err := second.Prepare(context.Background(), requestFor("ses-random-two")); err != nil {
+			return fmt.Errorf("schedule=%d second prepare: %w", schedule, err)
+		}
+		var promoted, aborted EstablishmentReservation
+		if random.Intn(2) == 0 {
+			promoted, aborted = first, second
+		} else {
+			promoted, aborted = second, first
+		}
+		registration, err := promoted.Promote(context.Background())
+		if err != nil {
+			return fmt.Errorf("schedule=%d promote: %w", schedule, err)
+		}
+		if err := aborted.Abort(context.Background(), context.Canceled); err != nil {
+			return fmt.Errorf("schedule=%d sibling abort: %w", schedule, err)
+		}
+		if err := registration.Finish(context.Background(), nil); err != nil {
+			return fmt.Errorf("schedule=%d finish: %w", schedule, err)
+		}
+	}
+
+	coordinator.mu.Lock()
+	state := coordinator.environments[environmentID]
+	invalid := state != nil && (len(state.establishing) != 0 || len(state.handles) != 0 || state.mutation || state.reconciling || state.stopCancel != nil)
+	coordinator.mu.Unlock()
+	if invalid {
+		return fmt.Errorf("schedule=%d retained conflicting lifecycle activity", schedule)
+	}
+	return cleanup()
+}
+
 func runConcurrentReplay(t *testing.T, seed int64) {
 	t.Helper()
 	random := rand.New(rand.NewSource(seed))

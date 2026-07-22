@@ -141,6 +141,9 @@ func (c *Coordinator) scheduleIfIdleLocked(environmentID string, state *registry
 	if c.closing || c.closed {
 		return ErrCoordinatorClosed
 	}
+	if len(state.establishing) != 0 {
+		return c.persistLocked(state)
+	}
 	if state.blocked || state.journal.Incarnation == nil || state.journal.Incarnation.BootID == "" {
 		return c.persistLocked(state)
 	}
@@ -208,7 +211,7 @@ func (c *Coordinator) cancelDeadlineForAttachLocked(state *registryEnvironment) 
 func (c *Coordinator) expire(environmentID string, incarnation EnvironmentRef, sequence uint64) {
 	c.mu.Lock()
 	state, ok := c.environments[environmentID]
-	if !ok || c.closing || c.closed || state.mutation || state.journal.IdleDeadline == nil || state.journal.IdleDeadline.Generation != sequence ||
+	if !ok || c.closing || c.closed || state.mutation || len(state.establishing) != 0 || state.journal.IdleDeadline == nil || state.journal.IdleDeadline.Generation != sequence ||
 		!state.journal.IdleDeadline.Incarnation.Equal(incarnation) || len(state.handles) != 0 {
 		c.mu.Unlock()
 		return
@@ -368,7 +371,7 @@ func (c *Coordinator) StopExplicit(ctx context.Context, environmentID string) (S
 		c.mu.Unlock()
 		return status, ErrReconciliationInFlight
 	}
-	if len(state.handles) != 0 {
+	if len(state.handles) != 0 || len(state.establishing) != 0 {
 		status := c.statusLocked(environmentID, state)
 		c.mu.Unlock()
 		return status, errors.New("lifecycle explicit stop is blocked by active sessions")
@@ -566,7 +569,7 @@ func (c *Coordinator) ForgetEnvironment(environmentID string) error {
 	if state.reconciling {
 		return ErrReconciliationInFlight
 	}
-	if len(state.handles) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
+	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
 		return errors.New("lifecycle metadata cannot be forgotten while environment activity is in flight")
 	}
 	if state.timer != nil {
@@ -611,7 +614,7 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		c.mu.Unlock()
 		return ErrReconciliationInFlight
 	}
-	if len(state.handles) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
+	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
 		c.mu.Unlock()
 		return ErrMutationBlockedByActivity
 	}
@@ -712,7 +715,13 @@ func (c *Coordinator) statusLocked(environmentID string, state *registryEnvironm
 	if state.journal.StopAttempt != nil {
 		stopState = state.journal.StopAttempt.State
 	}
-	return BuildStatus(environmentID, state.journal.StartGeneration, observation, state.journal.Resources, state.journal.Facts, deadline, state.journal.Reconciliation, stopState)
+	status := BuildStatus(environmentID, state.journal.StartGeneration, observation, state.journal.Resources, state.journal.Facts, deadline, state.journal.Reconciliation, stopState)
+	status.EstablishingSessions = len(state.establishing)
+	if status.EstablishingSessions != 0 {
+		status.Activity = ActivityEstablishing
+		status.ReasonCode = "attach-establishment-in-progress"
+	}
+	return status
 }
 
 func currentIncarnationObservation(state *registryEnvironment) (backend.LifecycleObservation, error) {
@@ -748,6 +757,7 @@ func (c *Coordinator) Close() error {
 	for _, state := range c.environments {
 		environmentID := state.journal.EnvironmentID
 		generation := state.journal.StartGeneration
+		state.establishing = map[string]*establishment{}
 		deferred := state.journal.Incarnation != nil && state.journal.Incarnation.BootID != ""
 		if state.timer != nil {
 			state.timer.Stop()
@@ -762,6 +772,10 @@ func (c *Coordinator) Close() error {
 			state.blocked = true
 			state.journal.Reconciliation = blockedReconciliation(c.daemonID, "daemon-shutdown", c.nowUTC())
 			c.finishReconciliationLocked(state)
+		}
+		if state.journal.StartGeneration == 0 {
+			delete(c.environments, environmentID)
+			continue
 		}
 		result = errors.Join(result, c.persistNowLocked(state))
 		if deferred {

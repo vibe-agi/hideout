@@ -23,6 +23,14 @@ if [ "${1:-}" = "--quick" ]; then
   exit 0
 fi
 
+go build ./...
+go vet ./...
+unformatted="$(gofmt -l cmd internal test)"
+if [ -n "$unformatted" ]; then
+  echo "gate0: gofmt required for:" >&2
+  echo "$unformatted" >&2
+  exit 1
+fi
 go test -count=1 ./...
 scripts/test-formal-models.sh
 scripts/test-install-smoke.sh

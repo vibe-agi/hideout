@@ -19,6 +19,7 @@ const (
 	ActivityBlocked         Activity = "blocked-unproved"
 	ActivityStopping        Activity = "stopping"
 	ActivityStoppingUnknown Activity = "stopping-unknown"
+	ActivityEstablishing    Activity = "establishing"
 	ActivityStopped         Activity = "stopped"
 	ActivityNotApplicable   Activity = "not-applicable"
 )
@@ -30,20 +31,21 @@ type ResourceSummary struct {
 }
 
 type Status struct {
-	Schema            string            `json:"schema"`
-	EnvironmentID     string            `json:"environmentId"`
-	StartGeneration   uint64            `json:"startGeneration,omitempty"`
-	BackendState      string            `json:"backendState"`
-	BackendObservedAt time.Time         `json:"backendObservedAt"`
-	Activity          Activity          `json:"activity"`
-	IdleDeadline      *time.Time        `json:"idleDeadline,omitempty"`
-	ReasonCode        string            `json:"reasonCode,omitempty"`
-	Reconciliation    string            `json:"reconciliation"`
-	Pins              []ResourceSummary `json:"pins,omitempty"`
-	Drains            []ResourceSummary `json:"drains,omitempty"`
-	Retained          []ResourceSummary `json:"retained,omitempty"`
-	Handoffs          []ResourceSummary `json:"handoffs,omitempty"`
-	Orphans           []ResourceSummary `json:"orphans,omitempty"`
+	Schema               string            `json:"schema"`
+	EnvironmentID        string            `json:"environmentId"`
+	StartGeneration      uint64            `json:"startGeneration,omitempty"`
+	BackendState         string            `json:"backendState"`
+	BackendObservedAt    time.Time         `json:"backendObservedAt"`
+	Activity             Activity          `json:"activity"`
+	IdleDeadline         *time.Time        `json:"idleDeadline,omitempty"`
+	ReasonCode           string            `json:"reasonCode,omitempty"`
+	Reconciliation       string            `json:"reconciliation"`
+	Pins                 []ResourceSummary `json:"pins,omitempty"`
+	Drains               []ResourceSummary `json:"drains,omitempty"`
+	Retained             []ResourceSummary `json:"retained,omitempty"`
+	Handoffs             []ResourceSummary `json:"handoffs,omitempty"`
+	Orphans              []ResourceSummary `json:"orphans,omitempty"`
+	EstablishingSessions int               `json:"establishingSessions,omitempty"`
 }
 
 func BuildStatus(environmentID string, generation uint64, observation backend.LifecycleObservation, resources []Resource, facts []Fact, deadline *time.Time, reconciliation Reconciliation, stopState string) Status {

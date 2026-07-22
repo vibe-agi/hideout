@@ -6,6 +6,8 @@ cd "$root"
 
 mode="all"
 out=""
+proof_040_gate0_mechanics="040.attach-reservation.gate0.mechanics"
+proof_040_gate0_model="040.attach-reservation.gate0.model"
 
 usage() {
   cat <<'USAGE'
@@ -73,10 +75,15 @@ run_surfaces() {
     -run '^TestDaemon(LifecycleStopEndpointUsesCoordinator|ShutdownCancelsDeferredAutomaticStop)$'
 }
 
+run_formal() {
+	 run_logged formal "$root/scripts/test-formal-models.sh"
+}
+
 case "$mode" in
   all)
     run_core
     run_surfaces
+	  run_formal
     ;;
   core) run_core ;;
   surfaces) run_surfaces ;;
@@ -93,6 +100,8 @@ if [ -n "$out" ]; then
   generated="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   local_evidence="$out/reports/lifecycle-local.json"
   model_evidence="$out/reports/lifecycle-model.json"
+	attach_evidence="$out/reports/attach-reservation-local.json"
+	attach_model_evidence="$out/reports/attach-reservation-model.json"
   registry="$out/reports/proof-registry.json"
   manifest="$out/product-hardening-evidence.json"
 
@@ -105,22 +114,64 @@ if [ -n "$out" ]; then
        shutdownBounded:true,statusSurfaceParity:true,stopObservationAuthority:true}}
   ' >"$local_evidence"
   go run ./cmd/hideout-lifecycle-model --commit "$commit" --dirty="$dirty" >"$model_evidence"
+	jq -n --arg generatedAt "$generated" --arg commit "$commit" --argjson dirty "$dirty" '
+	  {schema:"hideout.attach-reservation-local-evidence/v1",status:"passed",generatedAt:$generatedAt,
+	   commit:$commit,dirty:$dirty,randomizedSchedules:1000,
+	   checks:{reservationBeforeRuntime:true,reconciliationWaitCancellable:true,
+	     reservationBlocksMutation:true,recordAndBackendRevalidated:true,
+	     durableOwnerBeforePromotion:true,atomicPromotion:true,sessionScopedAbort:true,
+	     restartUsesDurableFactsOnly:true,redaction:true}}
+	' >"$attach_evidence"
+	read -r attach_generated attach_distinct < <(
+	  awk '/formal-models: checking AttachReservation/{seen=1; next} seen && /states generated/{print $1, $4; exit}' "$logs/formal.out"
+	)
+	attach_depth="$(awk '/formal-models: checking AttachReservation/{seen=1; next} seen && /depth of the complete state graph/{gsub(/\./, "", $NF); print $NF; exit}' "$logs/formal.out")"
+	if [[ ! "$attach_generated" =~ ^[0-9]+$ || ! "$attach_distinct" =~ ^[0-9]+$ || ! "$attach_depth" =~ ^[0-9]+$ ]]; then
+	  echo "lifecycle smoke: AttachReservation TLC statistics are unavailable" >&2
+	  exit 1
+	fi
+	jq -n --arg generatedAt "$generated" --arg commit "$commit" --argjson dirty "$dirty" \
+	  --argjson statesGenerated "$attach_generated" --argjson distinctStates "$attach_distinct" --argjson depth "$attach_depth" '
+	  {schema:"hideout.attach-reservation-model-evidence/v1",status:"passed",generatedAt:$generatedAt,
+	   commit:$commit,dirty:$dirty,model:"formal/AttachReservation.tla",
+	   statesGenerated:$statesGenerated,distinctStates:$distinctStates,depth:$depth,
+	   invariants:["TypeOK","EstablishingRuntimeIntact","EstablishedIsDurable",
+	     "ReservationBlocksReconcile","WaitersHoldNoLock","LockHolderIsEstablishing","OwnerImpliesRuntime"]}
+	' >"$attach_model_evidence"
+	jq '.randomizedSchedules = 999' "$attach_evidence" >"$logs/040-negative-randomized-schedules.json"
+	if jq -e '.status == "passed" and .randomizedSchedules >= 1000 and
+	  .checks.reservationBeforeRuntime and .checks.durableOwnerBeforePromotion and
+	  .checks.atomicPromotion and .checks.restartUsesDurableFactsOnly and .checks.redaction' \
+	  "$logs/040-negative-randomized-schedules.json" >/dev/null; then
+	  echo "lifecycle smoke: under-counted 040 randomized-schedule fixture was accepted" >&2
+	  exit 1
+	fi
+	jq -e '.status == "passed" and .randomizedSchedules >= 1000 and
+	  .checks.reservationBeforeRuntime and .checks.durableOwnerBeforePromotion and
+	  .checks.atomicPromotion and .checks.restartUsesDurableFactsOnly and .checks.redaction' \
+	  "$attach_evidence" >/dev/null
 
   go run ./cmd/hideout support proof-registry --json >"$registry"
+  for proof_id in "$proof_040_gate0_mechanics" "$proof_040_gate0_model"; do
+    jq -e --arg id "$proof_id" '.requirements[] | select(.proofId == $id)' "$registry" >/dev/null || {
+      echo "lifecycle smoke: 040 proof is not registered: $proof_id" >&2
+      exit 1
+    }
+  done
   proof_json() {
-    local proof_id="$1" artifact_path="$2" class="$3" summary="$4" claims sha
+	local proof_id="$1" artifact_path="$2" class="$3" summary="$4" feature_id="$5" claims sha
     claims="$(jq -c --arg id "$proof_id" '
       [.requirements[] | select(.proofId == $id) | .claimIds[] |
-       {claimId:.,source:"spec",description:("036 registered contract " + .),scope:"resource-lifecycle"}]
+	   {claimId:.,source:"spec",description:("registered contract " + .),scope:"resource-lifecycle"}]
     ' "$registry")"
     [ "$(jq 'length' <<<"$claims")" -gt 0 ] || {
       echo "lifecycle smoke: proof is not registered: $proof_id" >&2
       return 1
     }
     sha="$(shasum -a 256 "$out/$artifact_path" | awk '{print $1}')"
-    jq -n --arg proofId "$proof_id" --arg class "$class" --arg summary "$summary" \
+	jq -n --arg proofId "$proof_id" --arg class "$class" --arg summary "$summary" --arg featureId "$feature_id" \
       --arg path "$artifact_path" --arg sha "$sha" --argjson claims "$claims" '
-      {proofId:$proofId,featureId:"036-resource-lifecycle-final-session-stop",mode:"local-fast",
+	  {proofId:$proofId,featureId:$featureId,mode:"local-fast",
        evidenceClass:$class,status:"passed",commandSummary:$summary,coveredClaims:$claims,
        prerequisites:[{name:"local-go-toolchain",status:"available"}],
        artifacts:[{kind:"manifest",path:$path,sha256:$sha,redactionStatus:"passed",
@@ -130,9 +181,17 @@ if [ -n "$out" ]; then
   proofs="$out/reports/proofs.json"
   jq -s '.' \
     <(proof_json '036.lifecycle.gate0.mechanics' 'reports/lifecycle-local.json' \
-      'resource-lifecycle-local-gate0' 'validated lifecycle providers, serialization, status, retry, shutdown, schemas, and redaction') \
+	  'resource-lifecycle-local-gate0' 'validated lifecycle providers, serialization, status, retry, shutdown, schemas, and redaction' \
+	  '036-resource-lifecycle-final-session-stop') \
     <(proof_json '036.lifecycle.gate0.model-replay' 'reports/lifecycle-model.json' \
-      'resource-lifecycle-model-gate0' 'validated exhaustive two-client/two-incarnation sequences and deterministic persisted race replay') \
+	  'resource-lifecycle-model-gate0' 'validated exhaustive two-client/two-incarnation sequences and deterministic persisted race replay' \
+	  '036-resource-lifecycle-final-session-stop') \
+	<(proof_json "$proof_040_gate0_mechanics" 'reports/attach-reservation-local.json' \
+	  'lifecycle-attach-reservation-local-gate0' 'validated reservation ordering, 1000 schedules, cancellation, restart, and redaction' \
+	  '040-lifecycle-attach-reservation') \
+	<(proof_json "$proof_040_gate0_model" 'reports/attach-reservation-model.json' \
+	  'lifecycle-attach-reservation-model-gate0' 'validated exhaustive reservation, reconciliation, crash, abort, and promotion invariants' \
+	  '040-lifecycle-attach-reservation') \
     >"$proofs"
   jq -n --arg generatedAt "$generated" --arg commit "$commit" --argjson dirty "$dirty" \
     --slurpfile proofs "$proofs" '

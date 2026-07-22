@@ -244,6 +244,19 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"038.FR-024", "038.FR-028", "038.SC-006", "038.SC-011"),
 		req(Feature038, Proof038DocsTruth, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
 			"038.FR-028", "038.SC-013"),
+
+		req(Feature040, Proof040Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"040.FR-001", "040.FR-002", "040.FR-003", "040.FR-004", "040.FR-005", "040.FR-006", "040.FR-007", "040.FR-008", "040.FR-010", "040.FR-011", "040.FR-012", "040.FR-013", "040.FR-014", "040.FR-015", "040.SC-001", "040.SC-002", "040.SC-003", "040.SC-004", "040.SC-007"),
+		req(Feature040, Proof040Gate0Model, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"040.FR-001", "040.FR-002", "040.FR-003", "040.FR-005", "040.FR-006", "040.FR-007", "040.FR-008", "040.FR-009", "040.FR-010", "040.FR-011", "040.SC-001", "040.SC-002", "040.SC-003", "040.SC-004"),
+		runtimeEvidenceClassReq(Feature040, Proof040RealLifecycle, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "attach-reservation-real-gate2",
+			"040.FR-001", "040.FR-002", "040.FR-003", "040.FR-004", "040.FR-005", "040.FR-006", "040.FR-007", "040.FR-008", "040.FR-009", "040.FR-010", "040.FR-011", "040.FR-012", "040.FR-013", "040.SC-001", "040.SC-003", "040.SC-004", "040.SC-006", "040.SC-007"),
+		runtimeEvidenceClassReq(Feature040, Proof040RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "attach-reservation-performance-real-gate2",
+			"040.FR-011", "040.FR-012", "040.SC-005"),
+		req(Feature040, Proof040RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"040.SC-005", "040.SC-006"),
+		req(Feature040, Proof040DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"040.FR-012", "040.FR-013", "040.FR-014", "040.FR-015", "040.SC-006"),
 	}
 	sortRequirements(rows)
 	return rows

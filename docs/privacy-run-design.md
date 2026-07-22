@@ -4321,6 +4321,23 @@ profile cache, audit, decisions, and staged HostFS overlay remain available for
 the next start. A completed host-app launch is an independent handoff and does
 not pin the VM or make Hideout responsible for terminating the host app.
 
+Reusable Lima runs cross one explicit attach-establishment boundary before
+publishing runtime state. Manager first allocates only an opaque session ID,
+then obtains a daemon-local reservation without holding the environment
+transition lock. An older reconciliation may finish while the caller waits;
+once admitted, the reservation blocks new reconciliation, stop, forget, idle
+expiry, and destructive mutation. Manager then takes the transition lock,
+reloads and revalidates the environment record and backend observation,
+materializes the session, derives any shared-workspace attachment from that
+exact prepared incarnation, writes the OS-backed owner record, installs cleanup,
+and atomically promotes the reservation to the normal lifecycle registration.
+Cancellation removes only the caller's runtime and owner state. Reservations
+are never journaled or recovered after daemon restart; replacement
+reconciliation uses only owner, backend, and provider facts and fails closed on
+ambiguity. Status and events expose only a count plus stable establishment
+activity/reason codes, never session IDs, paths, locks, credentials, PIDs, or
+raw target arguments.
+
 CLI interruption is part of the run lifecycle. `SIGINT` and `SIGTERM` must cancel
 the active run context and let Manager perform ordered teardown: command stop,
 PortBridge close, HostFS and network cleanup, audit close, environment finish,

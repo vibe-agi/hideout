@@ -139,6 +139,32 @@ func TestApplyRunWorkspaceLifecycleIsDurableBeforeEffectAndReadyBeforePublicatio
 	}
 }
 
+func TestPlanRunWorkspaceAttachmentAcceptsPreparedIncarnationBeforePromotion(t *testing.T) {
+	workspace := t.TempDir()
+	runSession := workspaceRunSessionFixture(workspace, "ses_workspace_prepared")
+	incarnation := lifecycle.EnvironmentRef{
+		EnvironmentID:   runSession.Environment.Record.ID,
+		StartGeneration: 7,
+		InstanceName:    runSession.Environment.Record.InstanceName,
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (Core{Store: profile.Store{Root: root}}).PlanRunWorkspaceAttachmentForIncarnation(
+		runSession, incarnation, WorkspaceAttachPlanOptions{Now: time.Unix(100, 0)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Attachment.Incarnation != incarnation {
+		t.Fatalf("workspace attachment incarnation=%+v want=%+v", plan.Attachment.Incarnation, incarnation)
+	}
+	if err := plan.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkspaceLifecycleSameRootReleasePreservesSiblingProvider(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {

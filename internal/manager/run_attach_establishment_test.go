@@ -1,0 +1,227 @@
+package manager
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
+	"github.com/vibe-agi/hideout/internal/profile"
+	runsession "github.com/vibe-agi/hideout/internal/session"
+)
+
+type cancellingEstablishmentRegistrar struct {
+	inner *lifecycle.Coordinator
+	stage string
+}
+
+func (r *cancellingEstablishmentRegistrar) ReserveAttach(ctx context.Context, request lifecycle.EstablishmentRequest) (lifecycle.EstablishmentReservation, error) {
+	if r.stage == "reserve" {
+		return nil, context.Canceled
+	}
+	reservation, err := r.inner.ReserveAttach(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &cancellingEstablishmentReservation{inner: reservation, stage: r.stage}, nil
+}
+
+func (*cancellingEstablishmentRegistrar) BeginAttach(context.Context, lifecycle.AttachRequest) (lifecycle.Registration, error) {
+	return nil, errors.New("legacy BeginAttach invoked")
+}
+
+type cancellingEstablishmentReservation struct {
+	inner lifecycle.EstablishmentReservation
+	stage string
+}
+
+func (r *cancellingEstablishmentReservation) Prepare(ctx context.Context, request lifecycle.AttachRequest) (lifecycle.EnvironmentRef, error) {
+	if r.stage == "prepare" {
+		return lifecycle.EnvironmentRef{}, context.Canceled
+	}
+	return r.inner.Prepare(ctx, request)
+}
+
+func (r *cancellingEstablishmentReservation) Promote(ctx context.Context) (lifecycle.Registration, error) {
+	if r.stage == "promote" {
+		return nil, context.Canceled
+	}
+	registration, err := r.inner.Promote(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if r.stage == "post-promote" {
+		return &cancelAfterPromotionRegistration{Registration: registration}, nil
+	}
+	return registration, nil
+}
+
+func (r *cancellingEstablishmentReservation) Abort(ctx context.Context, cause error) error {
+	return r.inner.Abort(ctx, cause)
+}
+
+type cancelAfterPromotionRegistration struct {
+	lifecycle.Registration
+	failed bool
+}
+
+func (r *cancelAfterPromotionRegistration) Register(ctx context.Context, spec lifecycle.RegistrationSpec) (lifecycle.ResourceRef, error) {
+	if !r.failed {
+		r.failed = true
+		return lifecycle.ResourceRef{}, context.Canceled
+	}
+	return r.Registration.Register(ctx, spec)
+}
+
+func TestApplyRunCancellationCleansEveryEstablishmentBoundary(t *testing.T) {
+	for _, stage := range []string{"reserve", "prepare", "promote", "post-promote"} {
+		t.Run(stage, func(t *testing.T) {
+			setFakeLinuxShim(t)
+			setFakeLinuxWorkspacePortal(t)
+			root := t.TempDir()
+			if err := os.Chmod(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			store := profile.Store{Root: root}
+			if err := store.Save(profile.Default("cancel-" + stage)); err != nil {
+				t.Fatal(err)
+			}
+			core := New(store)
+			plan, err := core.PlanRun(RunPlanOptions{
+				ProfileName: "cancel-" + stage, Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			journalStore := lifecycle.JournalStore{Root: root}
+			coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+				Store: journalStore, DaemonID: "daemon-cancel-" + stage, IdleGrace: time.Hour,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake := &lifecycleApplyBackend{
+				applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}, journal: journalStore,
+				bootID: "01234567-89ab-cdef-0123-456789abcdef",
+			}
+			result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+				Backend: fake, RequestedBackend: "lima", Environment: RunEnvironmentOptions{Create: true},
+				Lifecycle:                   &cancellingEstablishmentRegistrar{inner: coordinator, stage: stage},
+				PrepareWorkspaceAttachment:  func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+				ActivateWorkspaceAttachment: func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+				ReleaseWorkspaceAttachment:  func(context.Context) error { return nil },
+				Streams:                     &backend.RunStreams{Ready: func(backend.SessionReadyProof) error { return nil }},
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("ApplyRun error=%v", err)
+			}
+			assertCancelledEstablishmentClean(t, root, result.SessionID, coordinator)
+			if fake.targetRuns != 0 {
+				t.Fatalf("cancelled establishment launched %d targets", fake.targetRuns)
+			}
+		})
+	}
+}
+
+func TestApplyRunCancelledReconciliationWaitPublishesNoRuntime(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("cancel-wait")); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "cancel-wait", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnv, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: lifecycle.JournalStore{Root: root}, DaemonID: "daemon-cancel-wait", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := coordinator.BeginReconciliation(context.Background(), runEnv.Record.ID)
+	if err != nil || !started {
+		t.Fatalf("BeginReconciliation started=%t err=%v", started, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	type outcome struct {
+		result RunResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, runErr := core.ApplyRun(ctx, plan, ApplyRunOptions{
+			Backend:          &lifecycleApplyBackend{applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}},
+			RequestedBackend: "lima", Lifecycle: coordinator,
+		})
+		done <- outcome{result: result, err: runErr}
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("ApplyRun error=%v", got.err)
+		}
+		assertCancelledEstablishmentClean(t, root, got.result.SessionID, coordinator)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled reconciliation wait did not return")
+	}
+}
+
+func assertCancelledEstablishmentClean(t *testing.T, root, sessionID string, coordinator *lifecycle.Coordinator) {
+	t.Helper()
+	if sessionID == "" {
+		t.Fatal("cancelled establishment omitted allocated session identity")
+	}
+	if _, err := os.Stat(filepath.Join(root, "sessions", sessionID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled establishment retained global session runtime: %v", err)
+	}
+	environmentStore := environment.Store{Root: root}
+	records, err := environmentStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if _, err := os.Stat(environmentStore.RuntimeSessionDir(record.ID, sessionID)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("cancelled establishment retained environment runtime for %s: %v", record.ID, err)
+		}
+		owners, err := runsession.ListOwners(environmentStore.OwnerRoot(record.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, owner := range owners {
+			if owner.SessionID == sessionID {
+				t.Fatalf("cancelled establishment retained owner: %+v", owner)
+			}
+		}
+	}
+	for _, status := range coordinator.Snapshot() {
+		if status.EstablishingSessions != 0 {
+			t.Fatalf("cancelled establishment retained lifecycle authority: %+v", status)
+		}
+		for _, resources := range [][]lifecycle.ResourceSummary{status.Pins, status.Drains, status.Retained, status.Handoffs, status.Orphans} {
+			for _, resource := range resources {
+				if resource.ID == sessionID {
+					t.Fatalf("cancelled establishment retained lifecycle session resource: %+v", status)
+				}
+			}
+		}
+	}
+}

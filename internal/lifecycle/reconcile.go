@@ -41,7 +41,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, input ReconcileInput) error
 		return err
 	}
 	if !state.reconciling {
-		if len(state.handles) != 0 || state.mutation ||
+		if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation ||
 			attemptBlocksReconciliation(state.journal.StopAttempt, c.daemonID) || state.stopCancel != nil {
 			return errors.New("lifecycle reconciliation is blocked by environment activity")
 		}
@@ -118,12 +118,23 @@ func (c *Coordinator) Reconcile(ctx context.Context, input ReconcileInput) error
 	}
 
 	incarnation := *state.journal.Incarnation
-	if !input.AdditionalUnproved && len(input.OwnerSessionIDs) == 0 {
-		// Every provider fact supplied by the restart reconciler is absent. Old
-		// daemon-owned live-graph rows are discovery metadata, not authority, and
-		// must not become permanent orphans after their real providers are proved
-		// gone.
+	if !input.AdditionalUnproved {
+		// Every provider residual except the explicitly identified stale owner
+		// records has been proved absent. Old daemon-owned live-graph rows are
+		// discovery metadata, not authority, so retain only catalog-approved
+		// session orphans for explicit recovery instead of converting already-
+		// disproved providers into permanent blockers.
 		state.journal.Resources = []Resource{newRootResource(incarnation, c.daemonID, now)}
+		appendOwnerOrphans(state, input.OwnerSessionIDs, incarnation, c.daemonID, now)
+		if len(input.OwnerSessionIDs) != 0 {
+			state.blocked = true
+			state.journal.Reconciliation = blockedReconciliation(c.daemonID, "owner-requires-explicit-recovery", now)
+			if err := c.persistLocked(state); err != nil {
+				return err
+			}
+			c.emitLocked(Event{EnvironmentID: input.EnvironmentID, Generation: state.journal.StartGeneration, Kind: "reconciliation-blocked", ReasonCode: "owner-requires-explicit-recovery", At: now})
+			return nil
+		}
 		state.blocked = false
 		state.journal.Reconciliation = Reconciliation{DaemonInstanceID: c.daemonID, State: "complete", ObservedAt: now}
 		c.emitLocked(Event{EnvironmentID: input.EnvironmentID, Generation: state.journal.StartGeneration, Kind: "reconciliation-completed", At: now})

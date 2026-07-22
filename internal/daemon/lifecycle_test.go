@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -378,7 +377,7 @@ func TestDaemonBlocksRunningEnvironmentWithoutLifecycleJournal(t *testing.T) {
 	}
 }
 
-func TestDaemonRestartProvesStaleOwnerAndActivationAbsent(t *testing.T) {
+func TestDaemonRestartRetainsStaleRunningOwnerForExplicitRecovery(t *testing.T) {
 	store, record := daemonLifecycleEnvironment(t)
 	if err := (lifecycle.JournalStore{Root: store.Root}).Remove(record.ID); err != nil {
 		t.Fatal(err)
@@ -461,22 +460,19 @@ func TestDaemonRestartProvesStaleOwnerAndActivationAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Stop(context.Background())
-	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleGrace)
+	status := waitForLifecycleReason(t, d, record.ID, "owner-requires-explicit-recovery")
+	if status.Reconciliation != "blocked" || status.Activity != lifecycle.ActivityBlocked || status.IdleDeadline != nil {
+		t.Fatalf("stale running owner did not keep restart fail closed: %+v", status)
+	}
+	if len(status.Orphans) != 1 || status.Orphans[0].Kind != lifecycle.KindRunSession || status.Orphans[0].ID != sessionID {
+		t.Fatalf("proved-absent provider rows survived stale-owner classification: %+v", status.Orphans)
+	}
 	owners, err := runsession.ListOwners(environmentStore.OwnerRoot(record.ID))
-	if err != nil || len(owners) != 0 {
+	if err != nil || len(owners) != 1 || owners[0].SessionID != sessionID || owners[0].Status != runsession.OwnerStale {
 		t.Fatalf("owners=%+v err=%v", owners, err)
 	}
-	if _, err := os.Stat(environmentStore.RuntimeSessionDir(record.ID, sessionID)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale session runtime remains: %v", err)
-	}
-	if _, err := backend.LoadActivationReceipt(environmentStore.RuntimeDir(record.ID)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale activation receipt remains: %v", err)
-	}
-	provider.mu.Lock()
-	proved := append([]string(nil), provider.proved...)
-	provider.mu.Unlock()
-	if !slices.Contains(proved, sessionID) {
-		t.Fatalf("exact session absence was not probed: %v", proved)
+	if _, err := os.Stat(environmentStore.RuntimeSessionDir(record.ID, sessionID)); err != nil {
+		t.Fatalf("stale session runtime was removed before explicit recovery: %v", err)
 	}
 }
 

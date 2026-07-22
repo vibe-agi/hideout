@@ -1,10 +1,54 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestAllocateHasNoFilesystemSideEffectsUntilPrepare(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	layout, err := Allocate(root)
+	if err != nil {
+		t.Fatalf("Allocate: %v", err)
+	}
+	if !ValidID(layout.ID) || layout.Root != root || layout.Dir != filepath.Join(root, "sessions", layout.ID) {
+		t.Fatalf("unexpected allocated layout: %+v", layout)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("allocation published filesystem state: %v", err)
+	}
+
+	if err := Prepare(layout); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	for _, path := range []string{layout.TmpDir, layout.ShimDir, layout.HostFSReadDir} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat prepared path %s: %v", path, err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("prepared path %s mode=%v", path, info.Mode())
+		}
+	}
+}
+
+func TestPrepareRejectsInvalidOrAlreadyMaterializedLayout(t *testing.T) {
+	if err := Prepare(Layout{}); err == nil {
+		t.Fatal("empty layout should fail closed")
+	}
+	layout, err := Allocate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Prepare(layout); err != nil {
+		t.Fatalf("first Prepare: %v", err)
+	}
+	if err := Prepare(layout); err == nil {
+		t.Fatal("second Prepare should refuse an existing layout")
+	}
+}
 
 func TestNewCreatesPrivateHostFSReadStateLayout(t *testing.T) {
 	layout, err := New(t.TempDir())

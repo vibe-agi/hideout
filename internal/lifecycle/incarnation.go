@@ -143,7 +143,7 @@ func (c *Coordinator) loadEnvironmentLocked(environmentID string) (*registryEnvi
 		return nil, journalError("load", err)
 	}
 	state := &registryEnvironment{
-		journal: journal, handles: map[string]bool{}, committed: map[string]bool{}, closing: map[string]bool{},
+		journal: journal, handles: map[string]bool{}, establishing: map[string]*establishment{}, committed: map[string]bool{}, closing: map[string]bool{},
 		resourceUsers: map[string]map[string]bool{}, resourceOrder: map[string][]ResourceRef{},
 		terminal: map[string]ResourceState{}, loaded: true,
 	}
