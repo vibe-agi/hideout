@@ -1906,3 +1906,72 @@ the exact package SHA-256 is
 `c68b0c4eb9c07970527e40f106032684a16727bd9671de56fc174d156771885b`.
 The focused Portal probe, integrated Lima Gate 2, and full Gate 0 also passed on
 the same source candidate.
+
+## Gate 042: Disposable Orphan Recovery
+
+Status: **Implemented; clean exact-package real macOS arm64 Lima promotion is
+pending.** Reduced real probes are diagnostic evidence only.
+
+### 042 Gate 0, Model, Mutation, And Race Lanes
+
+```sh
+scripts/test-disposable-recovery-smoke.sh
+go test -race -count=1 ./internal/lifecycle ./internal/manager ./internal/daemon
+scripts/test-gate0.sh
+```
+
+Gate 0 proves canonical disposable identity, strict intent schema and
+forward-only phases, ordinary-finalizer/restart protocol sharing, stable
+two-sample absence, record-last convergence, intent-only recovery, bounded
+startup workers, redacted status/audit, target-failure disposition, and
+`--rm --ephemeral` semantics. At least 100 seeded crash/interleaving schedules
+must converge to exact removal or a stable cleanup-required outcome without
+touching a sibling.
+
+TLC checks `formal/DisposableRecovery.tla` across authorization, every durable
+cut, absence proof, metadata ordering, and blocked outcomes. The mutation lane
+must turn red when disposable authorization, live-owner refusal, exact
+record/instance matching, the second absence sample, or journal-before-record
+ordering is removed. The strict evidence judge rejects unknown fields, dirty
+identity, any missing/false closed check, fewer than 30 ordinary runs, nonzero
+unauthorized destructive calls, residue, threshold violations, and absent
+redaction proof. Gate 0 establishes protocol mechanics, not real Lima cleanup.
+
+### Clean Product macOS Arm64 Lima Gate 2
+
+```sh
+scripts/test-disposable-recovery-lima-e2e.sh --require-real \
+  --runs 30 --checkpoints 4 \
+  --out .hideout-release-evidence/042-disposable-orphan-recovery-real-gate2
+scripts/test-gate2-lima.sh
+```
+
+The feature producer builds or consumes one verified package from an exact
+clean source commit, uses its bound `developer-standard` runtime, and requires
+Darwin/arm64, Lima, and an aarch64 guest. Thirty ordinary disposable runs must
+include successful target execution, exact target exit 23 with proved removal,
+and `--rm --ephemeral`; every run must leave zero exact Lima instance,
+environment record, runtime/owner/identity directory, gateway receipt,
+lifecycle journal, or coordinator status.
+
+The producer forces actual daemon process death and restart at four ordered
+durable cuts: after intent, after stable absence/backend cleanup, during
+metadata cleaning, and after journal removal before record removal. Before
+restart it retains the expected residue shape; after restart it requires exact
+stable absence and zero residue. It also carries the 100 local schedules and
+the non-disposable, live/unprovable-owner, identity mismatch, unknown
+observation, unstable-absence, malformed-intent, status-only, and legacy
+journal-only refusal proofs. Authorized destructive calls must match the
+ordinary plus crash inventory; unauthorized destructive calls must be zero.
+Daemon status p95 must remain at most 10 seconds and recovery p95 at most 60
+seconds, with no timeout.
+
+`042.disposable-recovery.real-gate2.recovery` is satisfied only by the strict
+closed artifact and retained `hideout.product-hardening-evidence/v1` manifest
+whose source, package, runtime, platform, artifact digest, and redaction facts
+all pass the production evaluator. `--probe` never emits product proof.
+`042.disposable-recovery.real-gate2.not-run`, native/local execution, dirty
+source, fewer runs/checkpoints, command success without inventory observation,
+or an edited passed summary cannot satisfy promotion. Gate 042 adds no generic
+orphan deletion, non-disposable recovery, new CLI/configuration, target
+authority, workspace copy, backend fallback, or isolation claim.

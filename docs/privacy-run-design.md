@@ -4805,3 +4805,53 @@ Portal and may establish support through clean product evidence. Named or
 dedicated environments retain static virtiofs workspace presentation and remain
 an explicit non-claim until a separate topology/lifecycle design and real gate
 prove otherwise.
+
+## Disposable Orphan Recovery (042)
+
+`hideout run --rm` is durable, exact cleanup authorization for one dedicated
+environment; it is not a name convention or a general orphan policy. Before
+destructive work, Manager holds the environment transition boundary, reloads a
+validated `Disposable=true` record, proves that no live or unprovable owner
+remains, and persists a disposal intent binding the record digest, backend,
+instance name, and recovery generation. A generated `rm-*` name, error status,
+missing record, backend inventory row, or ordinary lifecycle orphan never
+creates this authority.
+
+Ordinary run finalization and daemon-restart recovery use the same forward-only
+protocol:
+
+1. persist the exact `planned` intent before backend cleanup;
+2. use only Manager's typed provider to clean the exact running or stopped
+   instance, or proceed idempotently when that instance is already absent;
+3. require two consecutive bounded exact-instance absence observations before
+   persisting `backend-absent`;
+4. close only that environment's gateway and runtime/owner/activation/service
+   authority, then persist `metadata-cleaning`;
+5. remove the lifecycle journal/coordinator identity, including only bounded
+   private write-temporary files produced by that journal store; and
+6. remove the environment record last.
+
+Restart resumes from the durable forward phase rather than replaying an earlier
+destructive step. If an instance appears after an absence phase was persisted,
+recovery blocks without deleting it. A crash can therefore retain a
+classifiable record/intent for retry, a disposable record after journal
+removal, or complete absence; the protocol does not deliberately create an
+unclassifiable record-absent journal identity. Historical journal-only residue
+without a valid exact disposal intent remains blocked for explicit recovery.
+
+Recovery is daemon-owned, cancellable, serialized with attach/stop/clean/idle
+expiry for the same environment, and bounded to four concurrent startup
+workers so status remains available. Success means the exact backend instance,
+environment record, runtime/owner authority, lifecycle journal, and coordinator
+status are all absent. Anything less is `cleanup-required` with a stable
+redacted reason. Target exit status remains independent: a target failure still
+surfaces after proved disposal. `--rm --ephemeral` composes environment disposal
+with session-local identity cleanup; the guest-visible public identity metadata
+is projected through the existing read-only machine view without exposing the
+profile root.
+
+This feature adds no CLI or configuration, target capability, workspace copy,
+backend fallback, implicit environment selection, generic garbage collector,
+non-disposable crash recovery, or guest-root/shared-VM isolation claim. Native
+and local model tests establish mechanics only. Product support requires the
+clean exact-package macOS arm64 Lima Gate 042 proof described in the test plan.

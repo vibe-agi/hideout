@@ -717,3 +717,51 @@ unknown-bit test, flag-removal mutation, exact-root negatives, disjoint repeated
 execution, checkout effects, integrated no-copy product lanes, strict redacted
 evidence, and an explicit `staticVirtiofs: not-claimed` field. Shared projects
 still share one guest kernel and receive no VM wall or guest-root containment.
+
+## Disposable Destruction And Crash Recovery (042)
+
+The primary 042 threat is an automatic-cleanup false positive: treating an
+ordinary environment, a live run, a similarly named instance, corrupt
+metadata, or ambiguous backend state as disposable could destroy user state.
+The only originating authority is a validated durable `Disposable=true`
+environment created by the operator's explicit `--rm`. The disposal intent is
+historical coordination evidence derived while that exact record is locked; it
+cannot broaden authority and cannot be inferred from a name, status, missing
+record, orphan report, journal presence, or backend inventory.
+
+Before a destructive provider call, Manager must hold daemon singleton and
+environment transition authority, revalidate the canonical record digest and
+exact instance identity, reject any live or unprovable owner, and durably write
+the bounded intent. Unknown or mismatched observation, malformed or changed
+metadata, unstable absence, cancellation, or cleanup failure retains a
+classifiable blocked/cleanup-required outcome. Two consecutive exact-instance
+absence observations are required; backend command success is not absence
+proof. If an instance reappears after `backend-absent` or
+`metadata-cleaning`, recovery makes zero new destructive calls.
+
+Record-last ordering limits crash ambiguity. Runtime and gateway cleanup starts
+only after stable backend absence; journal/coordinator identity is removed
+before the environment record. Journal removal may converge only the store's
+bounded, private, regular `.journal-<digits>` write temporaries. Unknown,
+symlinked, non-private, or oversized entries block removal so lifecycle cleanup
+cannot become directory-sweeping authority. Historical journal-only identities
+without a trustworthy exact disposal intent remain explicit-recovery cases.
+
+Public status, events, audit, run results, and retained product evidence may
+show environment ID, source, phase, generation, stable reason, proof counts,
+and removed booleans. They must not expose instance names, record digests,
+owner/session IDs, filesystem paths, lock or PID details, daemon endpoints,
+backend command lines, target arguments, workspace content, or credentials.
+
+Required non-claims:
+
+- 042 is not automatic cleanup for reusable environments or unknown backend
+  orphans, and it is not a bulk garbage collector or adoption mechanism.
+- A durable intent does not authorize cleanup beyond its exact record digest
+  and backend instance.
+- Native, simulated, dirty, reduced, `not-run`, or hand-edited evidence does
+  not establish real disposable recovery.
+- Recovery does not strengthen workspace, HostFS, network, target identity,
+  shared-kernel, guest-root, or backend isolation.
+- `--ephemeral` identity cleanup remains session-local and orthogonal to
+  `--rm` environment disposal.

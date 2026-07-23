@@ -129,8 +129,8 @@
 - [X] T030 [P] Model authorization, crash cuts, stable absence, record-last convergence, and blocked outcomes in `formal/DisposableRecovery.tla` and `formal/DisposableRecovery.cfg`
 - [X] T031 [P] Add local protocol/model/evidence mechanics to `scripts/test-disposable-recovery-smoke.sh`, `scripts/test-formal-models.sh`, and `scripts/test-gate0.sh`
 - [X] T032 Implement the strict clean exact-package real recovery producer with 30 ordinary runs and forced restart checkpoints in `scripts/test-disposable-recovery-lima-e2e.sh`
-- [ ] T033 [P] Document protocol authority, failure behavior, and non-claims in `docs/privacy-run-design.md` and `docs/threat-model.md`
-- [ ] T034 [P] Document Gate 0, mutations, real Gate 2, aggregate regression, and artifact requirements in `docs/privacy-run-test-plan.md`
+- [X] T033 [P] Document protocol authority, failure behavior, and non-claims in `docs/privacy-run-design.md` and `docs/threat-model.md`
+- [X] T034 [P] Document Gate 0, mutations, real Gate 2, aggregate regression, and artifact requirements in `docs/privacy-run-test-plan.md`
 - [ ] T035 [P] Update `docs/STATUS.md`, `docs/claim-boundaries.md`, and narrow the resolved `--rm` phase-2 entry in `docs/DEBT.md` only after clean real evidence passes
 - [ ] T036 Record exact commands, mutation-red outputs, false-green fixtures, model results, real artifacts, hashes, and remaining non-claims in `specs/042-disposable-orphan-recovery/adversarial-report.md`
 - [ ] T037 Run targeted tests, race tests, 100+ schedules, model checking, markdown/doc truth, full Gate 0, clean feature Gate 2, and aggregate Lima Gate 2; retain exact-commit artifacts and hashes
