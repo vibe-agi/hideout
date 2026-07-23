@@ -74,8 +74,20 @@ func TestStoreSaveMaterializesProfile(t *testing.T) {
 	if got := string(data); got == "" || !strings.Contains(got, "developer@example.com") {
 		t.Fatalf("git config did not contain profile email: %q", got)
 	}
-	if _, err := os.Stat(filepath.Join(store.ProfileDir("test"), "identity.json")); err != nil {
+	identityPath := filepath.Join(store.ProfileDir("test"), "identity.json")
+	if _, err := os.Stat(identityPath); err != nil {
 		t.Fatalf("identity metadata missing: %v", err)
+	}
+	identityData, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	machineIdentityData, err := os.ReadFile(filepath.Join(store.ProfileDir("test"), "machine", "identity.json"))
+	if err != nil {
+		t.Fatalf("read-only guest identity metadata missing: %v", err)
+	}
+	if string(machineIdentityData) != string(identityData) {
+		t.Fatal("guest identity metadata diverged from the canonical profile metadata")
 	}
 	for link, target := range map[string]string{
 		filepath.Join(store.ProfileDir("test"), "home", ".config"):         filepath.Join(store.ProfileDir("test"), "config"),

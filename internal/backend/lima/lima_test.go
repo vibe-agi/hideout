@@ -111,6 +111,9 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 		!strings.Contains(cfg.Provision[0].Script, "/etc/machine-id") {
 		t.Fatalf("provision should set guest machine-id from profile identity state: %s", cfg.Provision[0].Script)
 	}
+	if !strings.Contains(cfg.Provision[0].Script, "ln -s machine/identity.json /hideout/profile/identity.json") {
+		t.Fatalf("provision should expose only the projected identity metadata: %s", cfg.Provision[0].Script)
+	}
 	wantMounts := []mount{
 		{Location: spec.Workspace.HostRoot, MountPoint: spec.Workspace.GuestRoot, Writable: true},
 		{Location: filepath.Join(spec.Machine.ProfileDir, "home"), MountPoint: GuestProfileDir + "/home", Writable: true},

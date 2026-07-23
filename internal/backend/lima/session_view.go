@@ -134,6 +134,7 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 	script.WriteString("mount --make-rprivate /\n")
 	script.WriteString("mount --bind \"$1\" /hideout/session\n")
 	script.WriteString("mount --make-private /hideout/session\n")
+	script.WriteString("if [ -r /hideout/profile/machine/identity.json ]; then ln -s machine/identity.json /hideout/profile/identity.json 2>/dev/null || [ \"$(readlink /hideout/profile/identity.json 2>/dev/null)\" = machine/identity.json ]; fi\n")
 	if len(spec.RequiredRuntimePaths) > 0 {
 		condition := sessionRuntimeReadyCondition(spec.RequiredRuntimePaths)
 		script.WriteString("attempt=0\n")

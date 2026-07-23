@@ -1034,6 +1034,10 @@ set -eu
 target_user=%s
 	mkdir -p /hideout/profile/home /hideout/profile/config /hideout/profile/cache /hideout/profile/data /hideout/profile/browser /hideout/profile/machine /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap /hideout/hostfs
 chown %s:%s /hideout /hideout/hostfs /hideout/session/tmp /hideout/session/shims /hideout/session/network /hideout/session/bootstrap 2>/dev/null || true
+if [ -r /hideout/profile/machine/identity.json ]; then
+  ln -s machine/identity.json /hideout/profile/identity.json 2>/dev/null ||
+    [ "$(readlink /hideout/profile/identity.json 2>/dev/null)" = machine/identity.json ]
+fi
 target_home=$(getent passwd "$target_user" 2>/dev/null | awk -F: '{print $6}' || true)
 if [ -n "$target_home" ] && [ -r "$target_home/.ssh/authorized_keys" ]; then
   mkdir -p /root/.ssh

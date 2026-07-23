@@ -1508,7 +1508,14 @@ func MaterializeIdentityState(dir string, p Profile) error {
 	if err := materializeHomeXDGLinks(filepath.Join(dir, "home")); err != nil {
 		return err
 	}
-	return writeIdentityMetadata(filepath.Join(dir, "identity.json"), p.Metadata)
+	if err := writeIdentityMetadata(filepath.Join(dir, "identity.json"), p.Metadata); err != nil {
+		return err
+	}
+	// Lima mounts the machine projection read-only instead of exposing the
+	// complete profile root. Keep the same bounded public identity metadata in
+	// that projection so the guest can publish /hideout/profile/identity.json
+	// without widening host filesystem visibility.
+	return writeIdentityMetadata(filepath.Join(dir, "machine", "identity.json"), p.Metadata)
 }
 
 func materializeHomeXDGLinks(home string) error {

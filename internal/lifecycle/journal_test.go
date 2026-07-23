@@ -59,6 +59,81 @@ func TestJournalRejectsSymlinkedEnvironmentDirectory(t *testing.T) {
 	}
 }
 
+func TestJournalRemoveConvergesOnlySafeStaleWriteTemps(t *testing.T) {
+	t.Run("already absent", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Chmod(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := (JournalStore{Root: root}).Remove("env_test"); err != nil {
+			t.Fatalf("idempotent remove: %v", err)
+		}
+	})
+
+	t.Run("safe private temp", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Chmod(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		store := JournalStore{Root: root}
+		journal := validJournal(t)
+		if err := store.Write(journal); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(root, journalDirName, journal.EnvironmentID)
+		if err := os.WriteFile(filepath.Join(dir, ".journal-458593872"), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Remove(journal.EnvironmentID); err != nil {
+			t.Fatalf("remove with stale private temp: %v", err)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("lifecycle identity survived removal: %v", err)
+		}
+	})
+
+	for name, create := range map[string]func(*testing.T, string){
+		"unknown entry": func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "foreign"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"non-private temp": func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, ".journal-123"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"symlink temp": func(t *testing.T, dir string) {
+			if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, ".journal-123")); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Chmod(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			store := JournalStore{Root: root}
+			journal := validJournal(t)
+			if err := store.Write(journal); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(root, journalDirName, journal.EnvironmentID)
+			create(t, dir)
+			if err := store.Remove(journal.EnvironmentID); err == nil {
+				t.Fatal("unsafe lifecycle directory entry was removed")
+			}
+			if _, err := os.Lstat(dir); err != nil {
+				t.Fatalf("failed removal changed lifecycle identity: %v", err)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, journalFileName)); err != nil {
+				t.Fatalf("failed removal discarded the durable journal: %v", err)
+			}
+		})
+	}
+}
+
 func TestJournalRejectsTerminalAndOversizedResourceSets(t *testing.T) {
 	journal := validJournal(t)
 	journal.Resources[0].State = StateReleased

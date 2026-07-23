@@ -119,6 +119,12 @@ func (c Core) recoverDisposableEnvironmentLocked(
 	case backend.LifecycleAbsent:
 		// An already-absent exact instance proceeds directly to stable proof.
 	case backend.LifecycleRunning, backend.LifecycleStopped:
+		if intent.State != lifecycle.DisposalStatePlanned {
+			return c.blockDisposableRecovery(
+				ctx, outcome, identity, "backend-absence-unproved",
+				fmt.Errorf("backend instance reappeared after durable %s proof", intent.State),
+			)
+		}
 		outcome.BackendCleanupInvoked = true
 		if err := provider.Cleanup(ctx, &backend.Session{
 			EnvironmentID: identity.EnvironmentID,
@@ -138,10 +144,13 @@ func (c Core) recoverDisposableEnvironmentLocked(
 	if err != nil {
 		return c.blockDisposableRecovery(ctx, outcome, identity, "backend-absence-unproved", err)
 	}
-	if err := c.LifecycleDisposals.AdvanceDisposal(
-		ctx, identity.EnvironmentID, identity.Digest, lifecycle.DisposalStateBackendAbsent,
-	); err != nil {
-		return c.blockDisposableRecovery(ctx, outcome, identity, "backend-absence-checkpoint-failed", err)
+	if intent.State == lifecycle.DisposalStatePlanned {
+		if err := c.LifecycleDisposals.AdvanceDisposal(
+			ctx, identity.EnvironmentID, identity.Digest, lifecycle.DisposalStateBackendAbsent,
+		); err != nil {
+			return c.blockDisposableRecovery(ctx, outcome, identity, "backend-absence-checkpoint-failed", err)
+		}
+		intent.State = lifecycle.DisposalStateBackendAbsent
 	}
 	outcome.LastPhase = lifecycle.DisposalStateBackendAbsent
 
@@ -162,10 +171,13 @@ func (c Core) recoverDisposableEnvironmentLocked(
 	if err := c.closeDisposableGateway(record.ID); err != nil {
 		return c.blockDisposableRecovery(ctx, outcome, identity, "gateway-cleanup-failed", err)
 	}
-	if err := c.LifecycleDisposals.AdvanceDisposal(
-		ctx, identity.EnvironmentID, identity.Digest, lifecycle.DisposalStateMetadataCleaning,
-	); err != nil {
-		return c.blockDisposableRecovery(ctx, outcome, identity, "metadata-checkpoint-failed", err)
+	if intent.State == lifecycle.DisposalStateBackendAbsent {
+		if err := c.LifecycleDisposals.AdvanceDisposal(
+			ctx, identity.EnvironmentID, identity.Digest, lifecycle.DisposalStateMetadataCleaning,
+		); err != nil {
+			return c.blockDisposableRecovery(ctx, outcome, identity, "metadata-checkpoint-failed", err)
+		}
+		intent.State = lifecycle.DisposalStateMetadataCleaning
 	}
 	outcome.LastPhase = lifecycle.DisposalStateMetadataCleaning
 	if err := c.LifecycleDisposals.CompleteDisposalMetadata(ctx, identity.EnvironmentID, identity.Digest); err != nil {

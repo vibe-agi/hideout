@@ -409,6 +409,8 @@ func TestBuildSessionViewCommandValidatesAndPreservesStructuredTarget(t *testing
 	for _, required := range []string{
 		"mount --make-rprivate /",
 		"mount --bind \"$1\" /hideout/session",
+		"ln -s machine/identity.json /hideout/profile/identity.json",
+		"readlink /hideout/profile/identity.json",
 		"session runtime files did not become visible",
 		"'test' '-x' '/hideout/session/bootstrap/bootstrap.sh'",
 		"'test' '-x' '/hideout/session/network/bootstrap.sh'",
@@ -421,6 +423,9 @@ func TestBuildSessionViewCommandValidatesAndPreservesStructuredTarget(t *testing
 		if !strings.Contains(script, required) {
 			t.Fatalf("script missing %q:\n%s", required, script)
 		}
+	}
+	if strings.Contains(script, "rm -f /hideout/profile/identity.json") {
+		t.Fatalf("concurrent session identity projection must not remove a sibling's link:\n%s", script)
 	}
 	if out, err := exec.Command("sh", "-n", "-c", script).CombinedOutput(); err != nil {
 		t.Fatalf("session view shell syntax: %v\n%s", err, out)

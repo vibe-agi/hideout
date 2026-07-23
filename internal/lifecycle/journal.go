@@ -224,7 +224,11 @@ func (s JournalStore) Remove(environmentID string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-	} else if err := os.Remove(path); err != nil {
+	}
+	if err := removeStaleJournalTemps(dir); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	// A removed environment must not leave an empty lifecycle identity behind;
@@ -233,6 +237,61 @@ func (s JournalStore) Remove(environmentID string) error {
 		return fmt.Errorf("remove lifecycle environment directory: %w", err)
 	}
 	return syncDir(filepath.Dir(dir))
+}
+
+// removeStaleJournalTemps converges only the bounded private temporary files
+// that JournalStore.Write itself can leave when the process dies between
+// CreateTemp and Rename. Unknown entries remain fail-closed: lifecycle removal
+// must never turn a directory shape into broader deletion authority.
+func removeStaleJournalTemps(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name() == journalFileName {
+			continue
+		}
+		if !validStaleJournalTempName(entry.Name()) {
+			return fmt.Errorf("lifecycle journal directory contains unexpected entry %q", entry.Name())
+		}
+		path := filepath.Join(dir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > maxJournalBytes {
+			return errors.New("stale lifecycle journal temporary file is unsafe")
+		}
+		paths = append(paths, path)
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validStaleJournalTempName(name string) bool {
+	const prefix = ".journal-"
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, prefix)
+	if len(suffix) == 0 || len(suffix) > 20 {
+		return false
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (j Journal) Validate() error {

@@ -118,6 +118,66 @@ func TestRecoverDisposableEnvironmentSkipsDeleteWhenAlreadyAbsent(t *testing.T) 
 	}
 }
 
+func TestRecoverDisposableEnvironmentResumesDurableForwardPhases(t *testing.T) {
+	for _, phase := range []string{
+		lifecycle.DisposalStateBackendAbsent,
+		lifecycle.DisposalStateMetadataCleaning,
+	} {
+		t.Run(phase, func(t *testing.T) {
+			core, envStore, record, journalStore := disposableRecoveryFixture(t)
+			seedDisposableRecoveryPhase(t, &core, record, journalStore, phase)
+			provider := &disposableRecoveryBackend{observations: []backend.LifecycleObservation{
+				{State: backend.LifecycleAbsent},
+				{State: backend.LifecycleAbsent},
+				{State: backend.LifecycleAbsent},
+			}}
+			outcome, err := core.RecoverDisposableEnvironment(context.Background(), DisposableRecoveryRequest{
+				EnvironmentID: record.ID, Source: DisposableRecoverySourceRestart, Provider: provider,
+			})
+			if err != nil {
+				t.Fatalf("resume %s: %v", phase, err)
+			}
+			if outcome.Status != DisposableRecoveryRemoved || provider.cleanupCalls != 0 ||
+				outcome.BackendCleanupInvoked || outcome.AbsenceObservations != 2 {
+				t.Fatalf("resume %s outcome=%+v cleanupCalls=%d", phase, outcome, provider.cleanupCalls)
+			}
+			if _, err := envStore.Load(record.ID); err == nil {
+				t.Fatalf("resume %s retained record: %v", phase, err)
+			}
+			if _, err := journalStore.Load(record.ID); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("resume %s retained journal: %v", phase, err)
+			}
+		})
+	}
+}
+
+func TestRecoverDisposableEnvironmentDoesNotDeleteInstanceReappearingAfterAbsenceProof(t *testing.T) {
+	for _, phase := range []string{
+		lifecycle.DisposalStateBackendAbsent,
+		lifecycle.DisposalStateMetadataCleaning,
+	} {
+		t.Run(phase, func(t *testing.T) {
+			core, envStore, record, journalStore := disposableRecoveryFixture(t)
+			seedDisposableRecoveryPhase(t, &core, record, journalStore, phase)
+			provider := &disposableRecoveryBackend{observations: []backend.LifecycleObservation{{
+				State: backend.LifecycleRunning, BootID: "01234567-89ab-cdef-0123-456789abcdef",
+			}}}
+			outcome, err := core.RecoverDisposableEnvironment(context.Background(), DisposableRecoveryRequest{
+				EnvironmentID: record.ID, Source: DisposableRecoverySourceRestart, Provider: provider,
+			})
+			if err == nil || outcome.ReasonCode != lifecycle.DisposalReasonBackendAbsenceUnproved {
+				t.Fatalf("reappeared %s instance outcome=%+v err=%v", phase, outcome, err)
+			}
+			if provider.cleanupCalls != 0 || outcome.BackendCleanupInvoked || outcome.RecordRemoved {
+				t.Fatalf("reappeared %s instance was destructively handled: outcome=%+v calls=%d", phase, outcome, provider.cleanupCalls)
+			}
+			if _, err := envStore.Load(record.ID); err != nil {
+				t.Fatalf("reappeared %s instance lost record: %v", phase, err)
+			}
+		})
+	}
+}
+
 func TestRecoverDisposableEnvironmentRetainsBlockedIntentOnCleanupOrProofFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -337,4 +397,53 @@ func disposableRecoveryFixture(t *testing.T) (Core, environment.Store, environme
 	}
 	core.LifecycleDisposals = coordinator
 	return core, envStore, record, journalStore
+}
+
+func seedDisposableRecoveryPhase(
+	t *testing.T,
+	core *Core,
+	record environment.Record,
+	journalStore lifecycle.JournalStore,
+	phase string,
+) {
+	t.Helper()
+	identity, err := environment.NewDisposableIdentity(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, ok := core.LifecycleDisposals.(*lifecycle.Coordinator)
+	if !ok {
+		t.Fatal("fixture lifecycle coordinator has unexpected type")
+	}
+	if _, err := coordinator.BeginDisposal(context.Background(), lifecycle.DisposalRequest{
+		EnvironmentID: identity.EnvironmentID, Backend: identity.Backend,
+		InstanceName: identity.InstanceName, RecordDigest: identity.Digest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.AdvanceDisposal(
+		context.Background(), identity.EnvironmentID, identity.Digest,
+		lifecycle.DisposalStateBackendAbsent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if phase == lifecycle.DisposalStateMetadataCleaning {
+		if err := coordinator.AdvanceDisposal(
+			context.Background(), identity.EnvironmentID, identity.Digest,
+			lifecycle.DisposalStateMetadataCleaning,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-disposable-resumed-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resumed.Close() })
+	core.LifecycleDisposals = resumed
 }
