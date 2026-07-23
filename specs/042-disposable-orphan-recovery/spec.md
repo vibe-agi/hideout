@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-23
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "Continue overall Hideout convergence by finishing
 proof-gated crash recovery for `--rm` disposable environments, eliminating

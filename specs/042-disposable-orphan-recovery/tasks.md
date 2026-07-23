@@ -134,7 +134,7 @@
 - [X] T035 [P] Update `docs/STATUS.md`, `docs/claim-boundaries.md`, and narrow the resolved `--rm` phase-2 entry in `docs/DEBT.md` only after clean real evidence passes
 - [X] T036 Record exact commands, mutation-red outputs, false-green fixtures, model results, real artifacts, hashes, and remaining non-claims in `specs/042-disposable-orphan-recovery/adversarial-report.md`
 - [X] T037 Run targeted tests, race tests, 100+ schedules, model checking, markdown/doc truth, full Gate 0, clean feature Gate 2, and aggregate Lima Gate 2; retain exact-commit artifacts and hashes
-- [ ] T038 Review every FR/SC/acceptance scenario against code and evidence, run convergence/consistency analysis, append any missing work, and mark completed tasks in `specs/042-disposable-orphan-recovery/tasks.md`
+- [X] T038 Review every FR/SC/acceptance scenario against code and evidence, run convergence/consistency analysis, append any missing work, and mark completed tasks in `specs/042-disposable-orphan-recovery/tasks.md`
 
 ---
 
@@ -197,3 +197,8 @@ Task: add daemon restart worker tests in internal/daemon/disposable_recovery_tes
 - Lifecycle metadata coordinates but never executes backend authority.
 - Historical untrusted journal-only residue remains an explicit non-claim.
 - Commit after coherent protocol, integration, and promotion batches.
+
+## Phase 8: Convergence
+
+- [X] T039 Record implementation-red mutation proofs for disposable authorization, `rm-*` non-authorization, live-owner refusal, exact record/instance matching, record-last metadata convergence, and cleanup-failure disposition in `specs/042-disposable-orphan-recovery/adversarial-report.md` per FR-023, SC-007, and the observability/evidence contract (partial)
+- [X] T040 Align the implemented/promoted state and retained evidence facts in `specs/042-disposable-orphan-recovery/spec.md`, `docs/privacy-run-test-plan.md`, and `specs/042-disposable-orphan-recovery/adversarial-report.md` per the plan status/docs decision and Constitution Development Workflow (partial)

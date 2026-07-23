@@ -82,8 +82,25 @@ the two-observation requirement returns the test to green. This establishes
 that the positive recovery result depends on the stable-absence judge rather
 than only cleanup callback success or one transient inventory sample.
 
-Further model, randomized-schedule, and real-backend evidence will be appended
-as the corresponding tasks complete.
+### Implementation-red authorization and convergence mutations
+
+The remaining implementation boundaries were each weakened independently,
+exercised through the narrow corresponding test, and restored before the next
+mutation:
+
+| Temporary implementation mutation | Negative fixture and observed red result |
+| --- | --- |
+| Ignore the record's `Disposable` bit | `RefusesUnauthorizedOrUnprovedMatrix/non-disposable` failed with `unauthorized recovery succeeded` and a `removed` outcome. |
+| Treat an `rm-*` name as authority | `RefusesUnauthorizedOrUnprovedMatrix/name-only` failed with `unauthorized recovery succeeded` and a `removed` outcome. |
+| Ignore a live session owner | `RefusesUnauthorizedOrUnprovedMatrix/live-owner` failed with `unauthorized recovery succeeded` and a `removed` outcome. |
+| Skip the durable intent's backend, instance, and record-digest match | `RefusesUnauthorizedOrUnprovedMatrix/durable-identity-mismatch` failed with `unauthorized recovery succeeded` and a `removed` outcome. |
+| Remove the environment record before lifecycle metadata | `TestApplyRunDisposableLifecycleProtocolRemovesJournalBeforeRecord` failed with `record-last ordering was not observed`; both ordering observations were false. |
+| Label a backend cleanup failure as `removed` | `RetainsBlockedIntentOnCleanupOrProofFailure/cleanup_failure` failed with `Status:removed`, `ReasonCode:backend-cleanup-failed`, and the record and journal still retained. |
+
+Every restored narrow fixture passed. Together with the stable-absence and TLA+
+mutations, these implementation-red results cover every destructive
+authorization, proof, ordering, and disposition assertion required by the
+closed 042 evidence contract.
 
 ### Closed authority and zero-call matrix
 

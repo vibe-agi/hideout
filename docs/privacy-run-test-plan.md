@@ -1909,8 +1909,8 @@ the same source candidate.
 
 ## Gate 042: Disposable Orphan Recovery
 
-Status: **Implemented; clean exact-package real macOS arm64 Lima promotion is
-pending.** Reduced real probes are diagnostic evidence only.
+Status: **Promoted with clean exact-package real macOS arm64 Lima evidence.**
+Reduced real probes remain diagnostic evidence only.
 
 ### 042 Gate 0, Model, Mutation, And Race Lanes
 
@@ -1975,3 +1975,17 @@ source, fewer runs/checkpoints, command success without inventory observation,
 or an edited passed summary cannot satisfy promotion. Gate 042 adds no generic
 orphan deletion, non-disposable recovery, new CLI/configuration, target
 authority, workspace copy, backend fallback, or isolation claim.
+
+The retained clean candidate is
+`666cfa827646bbc6b0d3d9a86b4f5091b83b5dd3`, with exact package SHA-256
+`9f5ba6d168471dbbc1bd6fbdf85809483e4bc1ec1685cd5860427f75ad8d78cd`
+and runtime `developer-standard/2026.07.0`. Thirty ordinary runs, four actual
+daemon kill/restart cuts, 100 local schedules, and all 24 closed checks passed.
+The evaluator observed 34 authorized destructive calls, zero unauthorized
+calls, zero retained residue, zero timeouts, daemon status p95 `74.320 ms`, and
+recovery p95 `498.989 ms`. The product manifest SHA-256 is
+`fc1cabf8eb645433145b72ade45175821c3097792900729c1e9c9231e3dccd16`;
+the recovery artifact SHA-256 is
+`22b708b4560a6ab454c357f4a99f12a921877f758a01774da09cbe1c543e241f`;
+and the bound runtime artifact SHA-256 is
+`79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134`.
