@@ -111,6 +111,31 @@ assert_disposable_inventory_unchanged() {
   fi
 }
 
+disposal_audit_count() {
+  local decision="$1"
+  local disposition="$2"
+  local audit="$store/logs/environment-audit.jsonl"
+  if [ ! -f "$audit" ]; then
+    printf '0\n'
+    return
+  fi
+  jq -s --arg decision "$decision" --arg disposition "$disposition" '
+    [.[] | select(.action == "env.dispose" and .decision == $decision and
+      .details.disposition == $disposition)] | length
+  ' "$audit"
+}
+
+assert_removed_audit_increment() {
+  local before="$1"
+  local lane="$2"
+  local after
+  after="$(disposal_audit_count allow removed)"
+  if [ "$after" -ne $((before + 1)) ]; then
+    echo "gate2: $lane did not add exactly one audited removed disposition (before=$before after=$after)" >&2
+    return 1
+  fi
+}
+
 wait_for_hostfs_read_decision() {
   local path="$1"
   local output="$2"
@@ -1337,6 +1362,7 @@ fi
 # record, lifecycle journal, and exact Lima instance.
 echo "gate2: running --rm --ephemeral convergence smoke"
 snapshot_disposable_inventory "before-rm-ephemeral"
+rm_ephemeral_audit_before="$(disposal_audit_count allow removed)"
 if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
   --backend lima --workspace "$workspace" --rm --ephemeral -- sh -eu -c '
 identity_root=$(dirname "$HOME")
@@ -1349,7 +1375,7 @@ printf "rm_ephemeral_ok=yes\n"
   exit 1
 fi
 grep -q 'rm_ephemeral_ok=yes' "$tmp/env-rm-ephemeral.out"
-grep -q 'Hideout disposable environment removed' "$tmp/env-rm-ephemeral.err"
+assert_removed_audit_increment "$rm_ephemeral_audit_before" "--rm --ephemeral"
 if grep -Eq 'run again: hideout run --env|disposable cleanup required' "$tmp/env-rm-ephemeral.err"; then
   echo "gate2: --rm --ephemeral advertised retained state" >&2
   cat "$tmp/env-rm-ephemeral.err" >&2
@@ -1370,6 +1396,8 @@ printf 'rm_ephemeral_convergence=passed\n'
 # restored before the CLI returns the target failure.
 echo "gate2: running failed-target --rm convergence smoke"
 snapshot_disposable_inventory "before-rm-target-failure"
+rm_target_audit_before="$(disposal_audit_count allow removed)"
+rm_target_status=0
 if with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
   --backend lima --workspace "$workspace" --rm -- sh -c '
 printf "rm_target_started=yes\n"
@@ -1377,9 +1405,16 @@ exit 23
 ' >"$tmp/env-rm-target-failure.out" 2>"$tmp/env-rm-target-failure.err"; then
   echo "gate2: failed --rm target unexpectedly succeeded" >&2
   exit 1
+else
+  rm_target_status=$?
+fi
+if [ "$rm_target_status" -ne 23 ]; then
+  echo "gate2: failed --rm target returned $rm_target_status, want 23" >&2
+  cat "$tmp/env-rm-target-failure.out" "$tmp/env-rm-target-failure.err" >&2
+  exit 1
 fi
 grep -q 'rm_target_started=yes' "$tmp/env-rm-target-failure.out"
-grep -q 'Hideout disposable environment removed' "$tmp/env-rm-target-failure.err"
+assert_removed_audit_increment "$rm_target_audit_before" "failed-target --rm"
 if grep -Eq 'run again: hideout run --env|disposable cleanup required' "$tmp/env-rm-target-failure.err"; then
   echo "gate2: failed-target --rm advertised retained state" >&2
   cat "$tmp/env-rm-target-failure.err" >&2
