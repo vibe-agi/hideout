@@ -69,6 +69,39 @@ func TestPreCommitCancellationIsTypedAndBoundedWithoutTargetGrace(t *testing.T) 
 	}
 }
 
+func TestProjectionReadinessRunFailuresClassifyTimeoutAndIdentityDrift(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status backend.ProjectionReadinessStatus
+		reason backend.ProjectionReadinessReason
+	}{
+		{
+			name:   "two second visibility timeout",
+			err:    errors.New("session runtime files did not become visible before deadline"),
+			status: backend.ProjectionReadinessTimedOut, reason: backend.ProjectionReadinessTimeout,
+		},
+		{
+			name:   "boot identity drift",
+			err:    errors.New("guest boot identity changed before isolated target start"),
+			status: backend.ProjectionReadinessRefused, reason: backend.ProjectionReadinessIdentityDrift,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := projectionReadySessionFixture()
+			err := classifyProjectionReadinessRunError(context.Background(), session, test.err)
+			var readiness *backend.ProjectionReadinessError
+			if !errors.As(err, &readiness) || !errors.Is(err, test.err) {
+				t.Fatalf("classified error=%T %v", err, err)
+			}
+			if readiness.Status != test.status || readiness.ReasonCode != test.reason ||
+				!strings.Contains(readiness.Hint, "retry") {
+				t.Fatalf("disposition=%+v", readiness)
+			}
+		})
+	}
+}
+
 func projectionReadySessionFixture() *backend.Session {
 	snapshot := "sha256:" + strings.Repeat("c", 64)
 	session := &backend.Session{

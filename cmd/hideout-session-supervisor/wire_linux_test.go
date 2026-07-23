@@ -5,9 +5,12 @@ package main
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 )
 
@@ -121,6 +124,84 @@ func TestSessionWireWritesReadySeparatedDataAndTypedCompletion(t *testing.T) {
 		if frame.Type != wantType {
 			t.Fatalf("frame %d type=%s want %s", index, frame.Type, wantType)
 		}
+	}
+}
+
+func TestSessionWireReportsExactProjectionReadinessOrTypedRefusal(t *testing.T) {
+	root, expectation := projectionReadinessFixture(t)
+	start := &sessionwire.SupervisorStart{
+		Protocol: sessionwire.SupervisorProtocol, SessionID: "ses_ready",
+		TargetUser: "developer", GuestWork: "/workspace", Argv: []string{"code", "."},
+		Terminal:       sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalNone},
+		ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef",
+		SessionSource:  "/hideout/runtime/sessions/ses_ready",
+		ProjectionReadiness: &sessionwire.SupervisorProjectionReadinessExpectation{
+			EnvironmentID: expectation.EnvironmentID, SessionSnapshotID: expectation.SessionSnapshotID,
+			CatalogDigest: expectation.CatalogDigest, ExpectedEntries: expectation.ExpectedEntries,
+			TargetProjected: true,
+		},
+	}
+	writeStart := func(t *testing.T) bytes.Buffer {
+		t.Helper()
+		var input bytes.Buffer
+		writer := sessionwire.NewWriter(&input, sessionwire.DaemonToSupervisor)
+		if err := writer.WriteControl(sessionwire.TypeSupervisorStart, start); err != nil {
+			t.Fatal(err)
+		}
+		return input
+	}
+
+	input := writeStart(t)
+	var output bytes.Buffer
+	wire := newSessionWire(&input, &output)
+	wire.sessionRoot = root
+	if _, err := wire.ReadStart(); err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.WriteReady(); err != nil {
+		t.Fatal(err)
+	}
+	reader := sessionwire.NewReader(&output, sessionwire.SupervisorToDaemon)
+	frame, err := reader.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := sessionwire.DecodeControl(frame.Type, frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, ok := control.(*sessionwire.SupervisorReady)
+	if !ok || ready.ProjectionReadiness == nil ||
+		ready.ProjectionReadiness.CatalogDigest != expectation.CatalogDigest ||
+		ready.ProjectionReadiness.ObservedEntries != expectation.ExpectedEntries {
+		t.Fatalf("ready=%+v", control)
+	}
+
+	if err := os.Remove(filepath.Join(root, backend.ProjectionReadinessManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	input = writeStart(t)
+	output.Reset()
+	wire = newSessionWire(&input, &output)
+	wire.sessionRoot = root
+	if _, err := wire.ReadStart(); err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.WriteReady(); err == nil {
+		t.Fatal("missing readiness manifest reported ready")
+	}
+	reader = sessionwire.NewReader(&output, sessionwire.SupervisorToDaemon)
+	frame, err = reader.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err = sessionwire.DecodeControl(frame.Type, frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusal, ok := control.(*sessionwire.Error)
+	if !ok || refusal.Code != string(backend.ProjectionReadinessManifestMissing) {
+		t.Fatalf("refusal=%+v", control)
 	}
 }
 

@@ -18,12 +18,14 @@ type sessionWire struct {
 	sessionID           string
 	terminal            sessionwire.TerminalDescriptor
 	projectionReadiness *projectionReadinessSpec
+	sessionRoot         string
 }
 
 func newSessionWire(reader io.Reader, writer io.Writer) *sessionWire {
 	return &sessionWire{
-		reader: sessionwire.NewReader(reader, sessionwire.DaemonToSupervisor),
-		writer: sessionwire.NewWriter(writer, sessionwire.SupervisorToDaemon),
+		reader:      sessionwire.NewReader(reader, sessionwire.DaemonToSupervisor),
+		writer:      sessionwire.NewWriter(writer, sessionwire.SupervisorToDaemon),
+		sessionRoot: "/hideout/session",
 	}
 }
 
@@ -144,7 +146,7 @@ func (w *sessionWire) WriteReady() error {
 		Terminal:  w.terminal,
 	}
 	if w.projectionReadiness != nil {
-		observation, err := observeProjectionReadiness("/hideout/session", w.sessionID, *w.projectionReadiness)
+		observation, err := observeProjectionReadiness(w.sessionRoot, w.sessionID, *w.projectionReadiness)
 		if err != nil {
 			reason := readinessReason(err)
 			if reason == "" {

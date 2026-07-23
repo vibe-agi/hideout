@@ -93,6 +93,81 @@ func TestObserveProjectionReadinessRejectsDigestAndIdentityDrift(t *testing.T) {
 	}
 }
 
+func TestObserveProjectionReadinessClassifiesMissingInvalidAndForeignState(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(t *testing.T, root string, expectation *projectionReadinessSpec)
+		reason backend.ProjectionReadinessReason
+	}{
+		{
+			name: "missing manifest",
+			mutate: func(t *testing.T, root string, _ *projectionReadinessSpec) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(root, backend.ProjectionReadinessManifestFile)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			reason: backend.ProjectionReadinessManifestMissing,
+		},
+		{
+			name: "missing entry",
+			mutate: func(t *testing.T, root string, _ *projectionReadinessSpec) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(root, "shims", "hideout-shim")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			reason: backend.ProjectionReadinessEntryMissing,
+		},
+		{
+			name: "non executable entry",
+			mutate: func(t *testing.T, root string, _ *projectionReadinessSpec) {
+				t.Helper()
+				if err := os.Chmod(filepath.Join(root, "shims", "hideout-shim"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			reason: backend.ProjectionReadinessEntryInvalid,
+		},
+		{
+			name: "foreign environment",
+			mutate: func(_ *testing.T, _ string, expectation *projectionReadinessSpec) {
+				expectation.EnvironmentID = "env_foreign"
+			},
+			reason: backend.ProjectionReadinessIdentityDrift,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, expectation := projectionReadinessFixture(t)
+			test.mutate(t, root, &expectation)
+			_, err := observeProjectionReadiness(root, "ses_ready", expectation)
+			if got := readinessReason(err); got != string(test.reason) {
+				t.Fatalf("reason=%q want=%q err=%v", got, test.reason, err)
+			}
+		})
+	}
+
+	root, expectation := projectionReadinessFixture(t)
+	if _, err := observeProjectionReadiness(root, "ses_foreign", expectation); readinessReason(err) != string(backend.ProjectionReadinessIdentityDrift) {
+		t.Fatalf("foreign session reason=%q err=%v", readinessReason(err), err)
+	}
+
+	foreignRoot, foreignExpectation := projectionReadinessFixture(t)
+	foreignExpectation.TargetProjected = true
+	if expectation.CatalogDigest != foreignExpectation.CatalogDigest {
+		t.Fatal("identical fixture unexpectedly changed catalog identity")
+	}
+	if err := os.WriteFile(
+		filepath.Join(foreignRoot, "shims", "hideout-shim"),
+		[]byte("foreign-dispatcher"), 0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := observeProjectionReadiness(foreignRoot, "ses_ready", foreignExpectation); readinessReason(err) != string(backend.ProjectionReadinessDigestMismatch) {
+		t.Fatalf("foreign bytes reason=%q err=%v", readinessReason(err), err)
+	}
+}
+
 func projectionReadinessFixture(t *testing.T) (string, projectionReadinessSpec) {
 	t.Helper()
 	root := t.TempDir()

@@ -170,8 +170,10 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 		t.Fatal(err)
 	}
 	targetSideEffect := false
+	targetAttempts := 0
 	fake := newRuntimeLimaApplyBackend()
 	fake.runFunc = func(session *backend.Session) error {
+		targetAttempts++
 		if err := session.PrivilegeStatusSink(privilege.Status{Status: privilege.StatusEnforced}); err != nil {
 			return err
 		}
@@ -194,6 +196,9 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 	}
 	if targetSideEffect {
 		t.Fatal("missing exact command reached target side effect")
+	}
+	if targetAttempts != 1 {
+		t.Fatalf("missing exact command was retried %d times", targetAttempts)
 	}
 }
 

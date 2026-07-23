@@ -64,9 +64,9 @@ Ordinary non-projected commands retain their existing lookup behavior.
 ### Tests For User Story 1
 
 - [X] T008 [P] [US1] Write failing tests that the final built-in plus enabled external registry is snapshotted and that the readiness manifest is written only after every exact shim in `internal/manager/run_dataplane_host_app_test.go` and `internal/manager/projection_readiness_test.go`
-- [ ] T009 [P] [US1] Write failing tests that Lima `Prepare` preserves the Manager expectation instead of reconstructing a profile-only catalog in `internal/backend/lima/lima_test.go`
+- [X] T009 [P] [US1] Write failing tests that Lima `Prepare` preserves the Manager expectation instead of reconstructing a profile-only catalog in `internal/backend/lima/lima_test.go`
 - [ ] T010 [P] [US1] Write failing exact-session-view tests for missing/late files, regular non-symlink executables, wrong digest, foreign manifest, identity drift, two-second timeout, and disjoint catalogs in `internal/backend/lima/session_view_test.go` and `internal/backend/lima/activation_concurrent_test.go`
-- [ ] T011 [P] [US1] Write failing strict wire and Linux supervisor tests for manifest decoding, complete entry hashing, catalog digest/count reporting, and refusal before commit in `internal/sessionwire/control_test.go`, `cmd/hideout-session-supervisor/model_test.go`, and `cmd/hideout-session-supervisor/wire_linux_test.go`
+- [X] T011 [P] [US1] Write failing strict wire and Linux supervisor tests for manifest decoding, complete entry hashing, catalog digest/count reporting, and refusal before commit in `internal/sessionwire/control_test.go`, `cmd/hideout-session-supervisor/model_test.go`, and `cmd/hideout-session-supervisor/wire_linux_test.go`
 - [ ] T012 [P] [US1] Write failing stream tests for authenticated proof comparison, zero commit/output on mismatch, immediate pre-commit cancellation, and unchanged post-commit cancellation in `internal/backend/lima/session_stream_test.go`
 - [ ] T013 [P] [US1] Write failing Manager and daemon lifecycle tests proving no lifecycle activation or `Started` frame precedes matching readiness, while ordinary guest commands retain command-not-found semantics in `internal/manager/run_lifecycle_test.go` and `internal/daemon/session_server_test.go`
 - [ ] T014 [P] [US1] Write failing fresh/warm/concurrent data-plane tests for exact session catalog isolation and no ambient fallback in `internal/manager/projection_readiness_test.go` and `internal/manager/concurrent_run_test.go`
@@ -80,7 +80,7 @@ Ordinary non-projected commands retain their existing lookup behavior.
 - [X] T019 [US1] Extend authenticated `SupervisorReady` and `SessionReadyProof` with readiness status, catalog digest, counts, and bounded duration while preserving strict unknown-field/frame validation in `internal/sessionwire/control.go` and `internal/backend/backend.go`
 - [X] T020 [US1] Validate the ready catalog before `SupervisorCommit`, close the owning SSH session immediately on pre-commit cancellation, and keep existing graceful post-commit termination in `internal/backend/lima/session_stream.go`
 - [X] T021 [US1] Gate Manager workspace/lifecycle activation and daemon `Started` publication on the matching proof, and emit one typed redacted readiness disposition in `internal/manager/run_lifecycle_effects.go`, `internal/manager/run_service.go`, and `internal/daemon/session_server.go`
-- [ ] T022 [US1] Run and record red-then-green mutations for omitted catalog entry, early manifest, accepted symlink/digest mismatch, foreign ready digest, skipped lifecycle gate, and target retry in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T022 [US1] Run and record red-then-green mutations for omitted catalog entry, early manifest, accepted symlink/digest mismatch, foreign ready digest, skipped lifecycle gate, and target retry in `specs/043-projection-readiness-proof/adversarial-report.md`
 
 **Checkpoint**: User Story 1 is independently green under focused tests and
 race tests; no real-backend promotion is claimed yet.
