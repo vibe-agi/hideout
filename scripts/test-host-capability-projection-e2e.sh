@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/strict-projection-evidence.sh"
 
 mode="local-fast"
 require_real=0
@@ -110,51 +111,43 @@ if [ "$mode" = "local-fast" ]; then
       "030.FR-013 030.FR-017") >"$proofs_file"
 else
   log="logs/real-gate2.out"
-  retained_gate2_log=""
+  strict_root=""
+  strict_tmp=""
+  reason=""
   if [ -n "$gate2_evidence" ]; then
-    . scripts/lib/retained-gate2-evidence.sh
-    if ! retained_gate2_log="$(resolve_retained_gate2_log "$gate2_evidence" "$(git_commit)")"; then
-      reason="retained Gate 2 evidence is invalid: $gate2_evidence"
+    if ! strict_root="$(strict_projection_evidence_root "$gate2_evidence")" ||
+      ! validate_strict_projection_evidence "$strict_root"; then
+      strict_root=""
+      reason="retained Gate 2 evidence is not strict 043 exact-package evidence: $gate2_evidence"
     fi
-  fi
-  if [ -n "$gate2_evidence" ] && [ -z "$retained_gate2_log" ]; then
-    printf '%s\n' "$reason" >"$out/$log"
-    if [ "$require_real" = "1" ]; then echo "projection-e2e: $reason" >&2; exit 1; fi
-    notrun_artifact="$(artifact_json "$log" "030 real Gate 2 not-run reason")"
-    jq -s '.' <(proof_json "030.projection.real-gate2.not-run" not-run real-gate projection-real-gate \
-      "projection real Gate 2 was not run" "$notrun_artifact" "$reason" "030.SC-008") >"$proofs_file"
-  elif [ -z "$gate2_evidence" ] && { ! command -v limactl >/dev/null 2>&1 || ! command -v go >/dev/null 2>&1; }; then
+  elif ! command -v limactl >/dev/null 2>&1 || ! command -v go >/dev/null 2>&1; then
     reason="real Lima prerequisites unavailable"
+  else
+    strict_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-projection-e2e-strict.XXXXXX")"
+    if ! scripts/test-projection-readiness-lima-e2e.sh --require-real \
+      --out "$strict_tmp/evidence" >"$out/logs/strict-producer.out" 2>"$out/logs/strict-producer.err"; then
+      cat "$out/logs/strict-producer.out" "$out/logs/strict-producer.err" >&2
+      find "$strict_tmp" -depth -delete 2>/dev/null || true
+      exit 1
+    fi
+    strict_root="$strict_tmp/evidence"
+  fi
+  if [ -z "$strict_root" ]; then
     printf '%s\n' "$reason" >"$out/$log"
     if [ "$require_real" = "1" ]; then echo "projection-e2e: $reason" >&2; exit 1; fi
     notrun_artifact="$(artifact_json "$log" "030 real Gate 2 not-run reason")"
     jq -s '.' <(proof_json "030.projection.real-gate2.not-run" not-run real-gate projection-real-gate \
       "projection real Gate 2 was not run" "$notrun_artifact" "$reason" "030.SC-008") >"$proofs_file"
   else
-    if [ -n "$retained_gate2_log" ]; then
-      cp "$retained_gate2_log" "$out/$log"
-      : >"$out/logs/real-gate2.err"
-    else
-      if ! HIDEOUT_GATE2_REQUIRE_PROJECTION=1 scripts/test-gate2-lima.sh >"$out/$log" 2>"$out/logs/real-gate2.err"; then
-        cat "$out/$log" "$out/logs/real-gate2.err" >&2
-        exit 1
-      fi
+    copy_strict_projection_feature "$strict_root" "$out" "030-host-capability-projection"
+    printf 'strict_projection_readiness=passed\n' >"$out/$log"
+    : >"$out/logs/real-gate2.err"
+    validate_public_logs
+    if [ -n "$strict_tmp" ]; then
+      find "$strict_tmp" -depth -delete 2>/dev/null || true
     fi
-    grep -q '^gate2: passed$' "$out/$log"
-    for marker in projection_code_open projection_privacy_three_channel projection_trusted_grant; do
-      grep -q "^${marker}=passed$" "$out/$log"
-    done
-    real_artifact="$(artifact_json "$log" "030 real macOS arm64 Lima projection log")"
-    jq -s '.' \
-      <(proof_json "030.projection.real-gate2.code-open" passed real-gate projection-code-open \
-        "real guest code shim opened the mapped host resource in safe mode" "$real_artifact" "real backend proof" \
-        "030.SC-001 030.SC-002 030.SC-004") \
-      <(proof_json "030.projection.real-gate2.privacy-three-channel" passed real-gate projection-alias-privacy \
-        "alias identity, Git, and mount metadata probes passed with preserve control" "$real_artifact" "real backend proof" \
-        "030.FR-014 030.FR-015 030.FR-016 030.SC-005") \
-      <(proof_json "030.projection.real-gate2.trusted-grant" passed real-gate projection-trusted-grant \
-        "same-session trusted decision approve and revoke lifecycle passed" "$real_artifact" "real backend proof" \
-        "030.FR-010 030.FR-012 030.SC-006") >"$proofs_file"
+    echo "projection-e2e: passed mode=$mode evidence=$manifest"
+    exit 0
   fi
 fi
 

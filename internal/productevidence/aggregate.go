@@ -33,11 +33,15 @@ var Required036ProofIDs = RequiredProofIDsForFeature(Feature036)
 
 var Required038ProofIDs = RequiredProofIDsForFeature(Feature038)
 
+var Required039ProofIDs = RequiredProofIDsForFeature(Feature039)
+
 var Required040ProofIDs = RequiredProofIDsForFeature(Feature040)
 
 var Required041ProofIDs = RequiredProofIDsForFeature(Feature041)
 
 var Required042ProofIDs = RequiredProofIDsForFeature(Feature042)
+
+var Required043ProofIDs = RequiredProofIDsForFeature(Feature043)
 
 type Aggregate struct {
 	Proofs       map[string]ProofEntry

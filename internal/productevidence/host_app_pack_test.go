@@ -1,8 +1,6 @@
 package productevidence
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,24 +17,43 @@ func TestHostAppRealGateRejectsLocalNativeSelfTestAndNotRunProofs(t *testing.T) 
 	if requirement.ProofID == "" {
 		t.Fatal("032 external real-gate requirement is missing")
 	}
+	fixture := newProjectionReadinessFixture(t, false)
 	root := t.TempDir()
-	artifact := []byte("external real gate fixture")
-	if err := os.WriteFile(filepath.Join(root, "gate.log"), artifact, 0o600); err != nil {
-		t.Fatal(err)
+	for path, data := range fixture.artifacts {
+		fullPath := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	sum := sha256.Sum256(artifact)
 	base := evalProof(requirement)
-	base.Artifacts = []ArtifactRef{{Kind: "log", Path: "gate.log", SHA256: hex.EncodeToString(sum[:]), RedactionStatus: RedactionPassed}}
+	base.Artifacts = append([]ArtifactRef(nil), fixture.refs...)
 	base.Mode = "real-gate"
-	base.EvidenceClass = "host-app-pack-external-real-gate2"
+	base.EvidenceClass = "projection-readiness-real-gate2"
+	runtime := fixture.evidence.Runtime
+	base.Runtime = &runtime
+	manifest := func(proof ProofEntry) Manifest {
+		value := NewManifest(fixture.evidence.Commit, false)
+		pkg := fixture.expectedPackage
+		value.PackageIdentity = &pkg
+		value.Proofs = []ProofEntry{proof}
+		return value
+	}
+	options := EvaluationOptions{
+		Requirements: []ProofRequirement{requirement}, Target: RequiredForReleaseCandidate,
+		ArtifactRoot: root, ExpectedCommit: fixture.evidence.Commit,
+		ExpectedPackage: &fixture.expectedPackage, ExpectedRuntime: &fixture.expectedRuntime,
+	}
 
 	cases := []struct {
 		name   string
 		mutate func(*ProofEntry)
 		want   string
 	}{
-		{name: "local-fast", mutate: func(p *ProofEntry) { p.Mode = "local-fast" }, want: EvalProofShapeMismatch},
-		{name: "native-unit", mutate: func(p *ProofEntry) { p.Mode = "unit" }, want: EvalProofShapeMismatch},
+		{name: "local-fast", mutate: func(p *ProofEntry) { p.Mode = "local-fast" }, want: EvalRuntimeMismatch},
+		{name: "native-unit", mutate: func(p *ProofEntry) { p.Mode = "unit" }, want: EvalRuntimeMismatch},
 		{name: "package-self-test", mutate: func(p *ProofEntry) { p.EvidenceClass = "package-self-test" }, want: EvalProofShapeMismatch},
 		{name: "not-run", mutate: func(p *ProofEntry) {
 			p.Status = StatusNotRun
@@ -48,9 +65,7 @@ func TestHostAppRealGateRejectsLocalNativeSelfTestAndNotRunProofs(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			proof := base
 			tc.mutate(&proof)
-			report, err := EvaluateManifest(evalManifestWithProofs(proof), EvaluationOptions{
-				Requirements: []ProofRequirement{requirement}, Target: RequiredForReleaseCandidate, ArtifactRoot: root,
-			})
+			report, err := EvaluateManifest(manifest(proof), options)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -59,9 +74,7 @@ func TestHostAppRealGateRejectsLocalNativeSelfTestAndNotRunProofs(t *testing.T) 
 			}
 		})
 	}
-	report, err := EvaluateManifest(evalManifestWithProofs(base), EvaluationOptions{
-		Requirements: []ProofRequirement{requirement}, Target: RequiredForReleaseCandidate, ArtifactRoot: root,
-	})
+	report, err := EvaluateManifest(manifest(base), options)
 	if err != nil || !report.Satisfied() {
 		t.Fatalf("correctly shaped real proof failed: report=%+v err=%v", report.Results, err)
 	}

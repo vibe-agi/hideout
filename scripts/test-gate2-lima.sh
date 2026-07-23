@@ -585,6 +585,37 @@ if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
 fi
 
 run_projection_gate2
+if [ -n "${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" ]; then
+  projection_capture="$HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR"
+  test -f "$projection_capture/readiness-samples.tsv"
+  test -f "$projection_capture/runtime-binding.json"
+  awk -F '\t' \
+    -v fresh="${HIDEOUT_PROJECTION_READINESS_FRESH:-10}" \
+    -v warm="${HIDEOUT_PROJECTION_READINESS_WARM:-30}" '
+    NR == 1 {
+      expected = "lane\tindex\tduration_ms\tfirst_target\toperator_retries\ttarget_retries\tfallbacks\ttimeouts\tunauthorized_host_effects\tcross_session_access"
+      if ($0 != expected) exit 1
+      next
+    }
+    $1 == "fresh" { fresh_count++; if ($2 != fresh_count || $4 != "projected") exit 1 }
+    $1 == "warm" { warm_count++; if ($2 != warm_count || $4 != "projected") exit 1 }
+    $1 == "cancellation" { cancel_count++; if ($2 != 1 || $4 != "none") exit 1 }
+    {
+      for (i = 5; i <= 10; i++) if ($i != 0) exit 1
+    }
+    END {
+      if (fresh_count != fresh || warm_count != warm || cancel_count != 1) exit 1
+    }
+  ' "$projection_capture/readiness-samples.tsv"
+  jq -e '
+    .schema == "hideout.runtime-evidence-binding/v1" and
+    .hostOS == "darwin" and .hostArch == "arm64" and .guestArch == "aarch64" and
+    .buildDirty == false and
+    (.artifactSHA256 | test("^[a-f0-9]{64}$")) and
+    (.buildCommit | test("^[a-f0-9]{12,40}$"))
+  ' "$projection_capture/runtime-binding.json" >/dev/null
+  echo "projection_readiness_capture_contract=passed"
+fi
 
 echo "gate2: running hostfs grant smoke"
 if ! with_timeout "$GATE_TIMEOUT" env \

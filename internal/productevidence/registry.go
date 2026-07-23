@@ -59,6 +59,8 @@ const (
 	ArtifactValidatorSharedWorkspacePerformanceV1 = "shared-workspace-performance/v1"
 	ArtifactValidatorWorkspaceExecutableV1        = "workspace-executable/v1"
 	ArtifactValidatorDisposableRecoveryV1         = "disposable-recovery/v1"
+	ArtifactValidatorProjectionReadinessV1        = "projection-readiness/v1"
+	ArtifactValidatorProjectionPrivacyV1          = "projection-privacy/v1"
 )
 
 var validRequirementLayers = []string{
@@ -104,6 +106,8 @@ var validArtifactValidators = []string{
 	ArtifactValidatorSharedWorkspacePerformanceV1,
 	ArtifactValidatorWorkspaceExecutableV1,
 	ArtifactValidatorDisposableRecoveryV1,
+	ArtifactValidatorProjectionReadinessV1,
+	ArtifactValidatorProjectionPrivacyV1,
 }
 
 type ProofRequirement struct {
@@ -173,9 +177,9 @@ func ProductHardeningRequirements() []ProofRequirement {
 
 		req(Feature030, Proof030Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "030.FR-001", "030.FR-002", "030.FR-003", "030.FR-004", "030.FR-005", "030.FR-006", "030.FR-007", "030.FR-008", "030.FR-009", "030.FR-011", "030.FR-018", "030.FR-019"),
 		req(Feature030, Proof030DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "030.FR-013", "030.FR-017"),
-		req(Feature030, Proof030RealGate2CodeOpen, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "030.SC-001", "030.SC-002", "030.SC-004"),
-		req(Feature030, Proof030RealGate2PrivacyChannels, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "030.FR-014", "030.FR-015", "030.FR-016", "030.SC-005"),
-		req(Feature030, Proof030RealGate2TrustedGrant, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "030.FR-010", "030.FR-012", "030.SC-006"),
+		runtimeEvidenceClassValidatorReq(Feature030, Proof030RealGate2CodeOpen, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-readiness-real-gate2", ArtifactValidatorProjectionReadinessV1, "030.SC-001", "030.SC-002", "030.SC-004"),
+		runtimeEvidenceClassValidatorReq(Feature030, Proof030RealGate2PrivacyChannels, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-privacy-real-gate3", ArtifactValidatorProjectionPrivacyV1, "030.FR-014", "030.FR-015", "030.FR-016", "030.SC-005"),
+		runtimeEvidenceClassValidatorReq(Feature030, Proof030RealGate2TrustedGrant, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-readiness-real-gate2", ArtifactValidatorProjectionReadinessV1, "030.FR-010", "030.FR-012", "030.SC-006"),
 		req(Feature030, Proof030RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "030.SC-008"),
 
 		req(Feature031, Proof031Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "031.FR-001", "031.FR-002", "031.FR-003", "031.FR-004", "031.FR-005", "031.FR-006", "031.FR-010", "031.SC-002", "031.SC-013"),
@@ -190,7 +194,7 @@ func ProductHardeningRequirements() []ProofRequirement {
 		req(Feature032, Proof032Gate0Lifecycle, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "032.FR-001", "032.FR-002", "032.FR-003", "032.FR-004", "032.FR-005", "032.FR-006", "032.FR-007", "032.FR-008", "032.FR-009", "032.FR-025", "032.FR-026", "032.FR-027", "032.FR-031", "032.FR-032"),
 		req(Feature032, Proof032Gate0Binding, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "032.FR-010", "032.FR-011", "032.FR-018", "032.FR-019", "032.FR-020", "032.FR-021", "032.FR-022", "032.FR-023", "032.FR-024", "032.FR-028", "032.FR-029"),
 		req(Feature032, Proof032Gate0IdentitySafety, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "032.FR-012", "032.FR-013", "032.FR-014", "032.FR-015", "032.FR-016", "032.FR-017", "032.FR-030"),
-		evidenceClassReq(Feature032, Proof032RealGate2External, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "host-app-pack-external-real-gate2", "032.FR-033", "032.SC-001", "032.SC-002", "032.SC-003", "032.SC-004", "032.SC-005", "032.SC-006", "032.SC-007", "032.SC-008", "032.SC-009", "032.SC-010", "032.SC-011", "032.SC-012", "032.SC-013", "032.SC-014"),
+		runtimeEvidenceClassValidatorReq(Feature032, Proof032RealGate2External, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-readiness-real-gate2", ArtifactValidatorProjectionReadinessV1, "032.FR-033", "032.SC-001", "032.SC-002", "032.SC-003", "032.SC-004", "032.SC-005", "032.SC-006", "032.SC-007", "032.SC-008", "032.SC-009", "032.SC-010", "032.SC-011", "032.SC-012", "032.SC-013", "032.SC-014"),
 
 		req(Feature033, Proof033PackageIdentity, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-001", "033.FR-003", "033.FR-005", "033.FR-006"),
 		req(Feature033, Proof033SigningNotarization, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "033.FR-010", "033.FR-011", "033.SC-003"),
@@ -249,6 +253,12 @@ func ProductHardeningRequirements() []ProofRequirement {
 		req(Feature038, Proof038DocsTruth, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
 			"038.FR-028", "038.SC-013"),
 
+		runtimeEvidenceClassValidatorReq(Feature039, Proof039RealPersistentGrant, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-readiness-real-gate2", ArtifactValidatorProjectionReadinessV1,
+			"039.FR-001", "039.FR-002", "039.FR-003", "039.FR-004", "039.FR-005", "039.FR-006", "039.FR-007", "039.FR-008", "039.FR-009", "039.FR-010", "039.FR-011",
+			"039.SC-001", "039.SC-002", "039.SC-003", "039.SC-004", "039.SC-005", "039.SC-006"),
+		req(Feature039, Proof039RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"039.SC-001", "039.SC-002", "039.SC-003"),
+
 		req(Feature040, Proof040Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
 			"040.FR-001", "040.FR-002", "040.FR-003", "040.FR-004", "040.FR-005", "040.FR-006", "040.FR-007", "040.FR-008", "040.FR-010", "040.FR-011", "040.FR-012", "040.FR-013", "040.FR-014", "040.FR-015", "040.SC-001", "040.SC-002", "040.SC-003", "040.SC-004", "040.SC-007"),
 		req(Feature040, Proof040Gate0Model, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
@@ -288,6 +298,17 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"042.SC-001", "042.SC-003", "042.SC-005"),
 		req(Feature042, Proof042DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
 			"042.FR-001", "042.FR-018", "042.FR-020", "042.FR-023", "042.FR-024", "042.SC-007", "042.SC-008"),
+
+		req(Feature043, Proof043Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"043.FR-001", "043.FR-002", "043.FR-003", "043.FR-004", "043.FR-005", "043.FR-006", "043.FR-007", "043.FR-008", "043.FR-009", "043.FR-010", "043.FR-011", "043.FR-012", "043.FR-013", "043.FR-014", "043.FR-015", "043.FR-016", "043.FR-017", "043.FR-018", "043.FR-024", "043.FR-025"),
+		runtimeEvidenceClassValidatorReq(Feature043, Proof043RealReadiness, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-readiness-real-gate2", ArtifactValidatorProjectionReadinessV1,
+			"043.FR-019", "043.FR-020", "043.FR-021", "043.FR-023", "043.SC-001", "043.SC-002", "043.SC-003", "043.SC-004", "043.SC-007", "043.SC-008"),
+		runtimeEvidenceClassValidatorReq(Feature043, Proof043RealPrivacy, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "projection-privacy-real-gate3", ArtifactValidatorProjectionPrivacyV1,
+			"043.FR-022"),
+		req(Feature043, Proof043RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"043.FR-023", "043.SC-007"),
+		req(Feature043, Proof043DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"043.FR-026", "043.SC-009"),
 	}
 	sortRequirements(rows)
 	return rows

@@ -101,8 +101,10 @@ jq -e '
   ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7) and
   ([.requirements[] | select(.featureId == "035-shared-default-vm-cross-workspace")] | length == 5) and
   ([.requirements[] | select(.featureId == "038-zero-friction-setup")] | length == 8) and
+  ([.requirements[] | select(.featureId == "039-trusted-host-app-grant")] | length == 2) and
   ([.requirements[] | select(.featureId == "041-workspace-executable-support")] | length == 4) and
-  ([.requirements[] | select(.featureId == "042-disposable-orphan-recovery")] | length == 5)
+  ([.requirements[] | select(.featureId == "042-disposable-orphan-recovery")] | length == 5) and
+  ([.requirements[] | select(.featureId == "043-projection-readiness-proof")] | length == 5)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -263,6 +265,11 @@ scripts/test-adapter-pack-smoke.sh
 # inspection schemas, inert built-in recipe and Core safety-profile data, and
 # artifact-backed proof ownership. Setup smoke grants no runtime authority.
 scripts/test-host-app-pack-smoke.sh
+
+# Projection readiness evidence judge (043): one exact-candidate positive
+# fixture plus mandatory forged marker, package, sample, p95, external-pack,
+# and persistent-grant false-green refusals. This does not claim a real gate.
+scripts/test-projection-readiness-smoke.sh
 
 # Guest privilege separation and risk audit (Lima proof added by 009 polish):
 # status schema/classifier and no guest-root containment overclaim.

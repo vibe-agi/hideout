@@ -132,19 +132,19 @@ altered-artifact, or `not-run` fixtures fail for the intended reason.
 
 ### Tests For User Story 3
 
-- [ ] T034 [P] [US3] Write failing semantic evaluator tests for closed check maps, 10 fresh and 30 warm raw samples, nearest-rank p95, cancellation bound, zero retries/fallback/effects, artifact digests, redaction, and every mandatory false-green fixture in `internal/productevidence/projection_readiness_test.go`
-- [ ] T035 [P] [US3] Write failing proof-registry tests for new 043 and 039 proofs plus strengthened 030/032 exact source/package/runtime requirements in `internal/productevidence/registry_test.go`
-- [ ] T036 [P] [US3] Write failing release-readiness fixture tests for valid 043/039 semantic evidence and missing, mismatched, dirty, or `not-run` variants in `internal/releasecompat/readiness_test.go` and `internal/releasecompat/readiness_schema_test.go`
-- [ ] T037 [P] [US3] Add shell-level false-green smoke fixtures for forged marker-only, wrong package, reduced samples, edited p95, and missing external/grant flows in `scripts/test-projection-readiness-smoke.sh`
+- [X] T034 [P] [US3] Write failing semantic evaluator tests for closed check maps, 10 fresh and 30 warm raw samples, nearest-rank p95, cancellation bound, zero retries/fallback/effects, artifact digests, redaction, and every mandatory false-green fixture in `internal/productevidence/projection_readiness_test.go`
+- [X] T035 [P] [US3] Write failing proof-registry tests for new 043 and 039 proofs plus strengthened 030/032 exact source/package/runtime requirements in `internal/productevidence/registry_test.go`
+- [X] T036 [P] [US3] Write failing release-readiness fixture tests for valid 043/039 semantic evidence and missing, mismatched, dirty, or `not-run` variants in `internal/releasecompat/readiness_test.go` and `internal/releasecompat/readiness_schema_test.go`
+- [X] T037 [P] [US3] Add shell-level false-green smoke fixtures for forged marker-only, wrong package, reduced samples, edited p95, and missing external/grant flows in `scripts/test-projection-readiness-smoke.sh`
 
 ### Implementation For User Story 3
 
-- [ ] T038 [US3] Implement strict projection readiness/sample/flow/privacy artifact decoders, recomputation, inventory hashing, and redaction validation in `internal/productevidence/projection_readiness.go`
-- [ ] T039 [US3] Register 043 readiness and 039 persistent-grant proof IDs, require exact candidate package/runtime semantics, and strengthen reused 030/032 proof policies in `internal/productevidence/registry.go`
-- [ ] T040 [US3] Extend release compatibility matrices and semantic fixture builders for the 043/039 proof requirements in `internal/releasecompat/matrix.go` and `internal/releasecompat/readiness_test.go`
-- [ ] T041 [US3] Implement the strict smoke producer/evaluator wrapper and add it to Gate 0 in `scripts/test-projection-readiness-smoke.sh` and `scripts/test-gate0.sh`
-- [ ] T042 [US3] Implement the clean exact-package real producer for fresh, warm, concurrent, built-in, external-pack, durable-grant, no-fallback, and artifact-retention lanes in `scripts/test-projection-readiness-lima-e2e.sh` and `scripts/lib/gate2-projection.sh`
-- [ ] T043 [US3] Require the strict 043 proof marker/artifacts from aggregate Gate 2 while retaining the existing 030/032/039 regression flows in `scripts/test-gate2-lima.sh`, `scripts/test-host-capability-projection-e2e.sh`, and `scripts/test-host-app-pack-e2e.sh`
+- [X] T038 [US3] Implement strict projection readiness/sample/flow/privacy artifact decoders, recomputation, inventory hashing, and redaction validation in `internal/productevidence/projection_readiness.go`
+- [X] T039 [US3] Register 043 readiness and 039 persistent-grant proof IDs, require exact candidate package/runtime semantics, and strengthen reused 030/032 proof policies in `internal/productevidence/registry.go`
+- [X] T040 [US3] Extend release compatibility matrices and semantic fixture builders for the 043/039 proof requirements in `internal/releasecompat/matrix.go` and `internal/releasecompat/readiness_test.go`
+- [X] T041 [US3] Implement the strict smoke producer/evaluator wrapper and add it to Gate 0 in `scripts/test-projection-readiness-smoke.sh` and `scripts/test-gate0.sh`
+- [X] T042 [US3] Implement the clean exact-package real producer for fresh, warm, concurrent, built-in, external-pack, durable-grant, no-fallback, and artifact-retention lanes in `scripts/test-projection-readiness-lima-e2e.sh` and `scripts/lib/gate2-projection.sh`
+- [X] T043 [US3] Require the strict 043 proof marker/artifacts from aggregate Gate 2 while retaining the existing 030/032/039 regression flows in `scripts/test-gate2-lima.sh`, `scripts/test-host-capability-projection-e2e.sh`, and `scripts/test-host-app-pack-e2e.sh`
 - [ ] T044 [US3] Build one clean exact package and retain evaluator-passing 10-fresh/30-warm/concurrent Gate 2 evidence under `.hideout-release-evidence/043-projection-readiness-real-gate2` using `scripts/test-projection-readiness-lima-e2e.sh`
 - [ ] T045 [US3] Run matching clean Gate 3 when prerequisites exist and either retain `artifacts/projection-privacy-gate3.json` or explicitly retain privacy as unpromoted in `specs/043-projection-readiness-proof/adversarial-report.md`
 

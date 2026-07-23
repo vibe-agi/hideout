@@ -398,6 +398,130 @@ func TestReleaseCandidateRejectsMissing034PerformanceProof(t *testing.T) {
 	t.Fatal("readiness omitted product-hardening-evidence result")
 }
 
+func TestReleaseCandidateRequiresProjectionReadinessProofSet(t *testing.T) {
+	cases := []struct {
+		name            string
+		mutate          func(*productevidence.Manifest)
+		wantReady       bool
+		wantSummaryPart string
+	}{
+		{name: "complete exact proof set", wantReady: true},
+		{
+			name: "missing 043 readiness",
+			mutate: func(manifest *productevidence.Manifest) {
+				removeProductProof(manifest, productevidence.Proof043RealReadiness)
+			},
+			wantSummaryPart: productevidence.Proof043RealReadiness,
+		},
+		{
+			name: "missing 039 persistent grant",
+			mutate: func(manifest *productevidence.Manifest) {
+				removeProductProof(manifest, productevidence.Proof039RealPersistentGrant)
+			},
+			wantSummaryPart: productevidence.Proof039RealPersistentGrant,
+		},
+		{
+			name: "043 readiness not run",
+			mutate: func(manifest *productevidence.Manifest) {
+				proof := findProductProof(t, manifest, productevidence.Proof043RealReadiness)
+				proof.Status = productevidence.StatusNotRun
+				proof.RedactionStatus = productevidence.RedactionNotRun
+				proof.NotRunReason = "real projection gate unavailable"
+			},
+		},
+		{
+			name: "dirty product evidence",
+			mutate: func(manifest *productevidence.Manifest) {
+				manifest.Dirty = true
+			},
+		},
+		{
+			name: "043 runtime mismatch",
+			mutate: func(manifest *productevidence.Manifest) {
+				proof := findProductProof(t, manifest, productevidence.Proof043RealReadiness)
+				proof.Runtime.Revision = "other"
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			binding := runtimeBindingFixture()
+			gate2Binding := binding
+			gate3Binding := binding
+			gate3Binding.EnvironmentID = "env_20260711t000000z1111111111111111111"
+			gate2 := filepath.Join(dir, "gate2.json")
+			gate3 := filepath.Join(dir, "gate3.json")
+			product := filepath.Join(dir, "runtime-product.json")
+			writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", gate2Binding)
+			writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", gate3Binding)
+			writeRuntimeProductEvidence(t, product, packageIdentityFixture().SourceCommit, binding)
+			if tc.mutate != nil {
+				manifest, err := productevidence.ReadFile(product)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc.mutate(&manifest)
+				if err := productevidence.WriteFile(product, manifest); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			expected := runtimeExpectationFixture()
+			trustedPackage := packageIdentityFixture()
+			ready, err := BuildReadiness(ReadinessOptions{
+				Mode: "release-candidate", Commit: "caller-controlled", LocalPassed: true,
+				Gate2Evidence: gate2, Gate3Evidence: gate3, ProductEvidence: []string{product},
+				Runtime: &expected, Package: &trustedPackage,
+				SigningObservationSHA256:      strings.Repeat("d", 64),
+				NotarizationObservationSHA256: strings.Repeat("e", 64),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ready.ReleaseReady != tc.wantReady {
+				t.Fatalf("releaseReady=%v want %v readiness=%+v", ready.ReleaseReady, tc.wantReady, ready)
+			}
+			if tc.wantReady {
+				return
+			}
+			for _, command := range ready.Commands {
+				if command.Name != "product-hardening-evidence" {
+					continue
+				}
+				if command.Status != "failed" {
+					t.Fatalf("projection evidence failure was not enforced: %+v", command)
+				}
+				if tc.wantSummaryPart != "" && !strings.Contains(command.Summary, tc.wantSummaryPart) {
+					t.Fatalf("failure summary %q does not mention %q", command.Summary, tc.wantSummaryPart)
+				}
+				return
+			}
+			t.Fatal("readiness omitted product-hardening-evidence result")
+		})
+	}
+}
+
+func findProductProof(t *testing.T, manifest *productevidence.Manifest, proofID string) *productevidence.ProofEntry {
+	t.Helper()
+	for i := range manifest.Proofs {
+		if manifest.Proofs[i].ProofID == proofID {
+			return &manifest.Proofs[i]
+		}
+	}
+	t.Fatalf("fixture missing proof %s", proofID)
+	return nil
+}
+
+func removeProductProof(manifest *productevidence.Manifest, proofID string) {
+	for i := range manifest.Proofs {
+		if manifest.Proofs[i].ProofID == proofID {
+			manifest.Proofs = append(manifest.Proofs[:i], manifest.Proofs[i+1:]...)
+			return
+		}
+	}
+}
+
 func TestRuntimeReadinessRejectsAbsentStaleNativeAndFailedEvidence(t *testing.T) {
 	expected := runtimeExpectationFixture()
 	packageIdentity := packageIdentityFixture()
@@ -944,6 +1068,9 @@ func writeRequirementArtifacts(t *testing.T, root string, req productevidence.Pr
 	case productevidence.ArtifactValidatorSharedWorkspaceBehaviorV1,
 		productevidence.ArtifactValidatorSharedWorkspacePerformanceV1:
 		artifacts = sharedWorkspaceSemanticArtifacts(t, req.ArtifactValidator, commit, binding, packageIdentity)
+	case productevidence.ArtifactValidatorProjectionReadinessV1,
+		productevidence.ArtifactValidatorProjectionPrivacyV1:
+		artifacts = projectionReadinessSemanticArtifacts(t, commit, binding, packageIdentity)
 	default:
 		rel := filepath.Join("artifacts", req.ProofID+".log")
 		data := []byte("runtime proof\n")
@@ -970,7 +1097,9 @@ func writeRequirementArtifacts(t *testing.T, root string, req productevidence.Pr
 		sum := sha256.Sum256(data)
 		kind := "log"
 		if (req.ArtifactValidator == productevidence.ArtifactValidatorSharedWorkspaceBehaviorV1 ||
-			req.ArtifactValidator == productevidence.ArtifactValidatorSharedWorkspacePerformanceV1) &&
+			req.ArtifactValidator == productevidence.ArtifactValidatorSharedWorkspacePerformanceV1 ||
+			req.ArtifactValidator == productevidence.ArtifactValidatorProjectionReadinessV1 ||
+			req.ArtifactValidator == productevidence.ArtifactValidatorProjectionPrivacyV1) &&
 			!strings.HasSuffix(rel, ".values") && !strings.HasSuffix(rel, ".tsv") {
 			kind = "manifest"
 		}
@@ -981,6 +1110,111 @@ func writeRequirementArtifacts(t *testing.T, root string, req productevidence.Pr
 		})
 	}
 	return refs
+}
+
+func projectionReadinessSemanticArtifacts(
+	t *testing.T,
+	commit string,
+	binding productevidence.RuntimeBinding,
+	packageIdentity productevidence.PackageIdentity,
+) map[string][]byte {
+	t.Helper()
+	readinessChecks := trueMap([]string{
+		"readiness.catalog", "readiness.manifest", "readiness.dispatcher",
+		"readiness.entryProperties", "readiness.exactSessionView", "readiness.readyCommitProof",
+		"refusal.staleCatalog", "refusal.identityDrift", "refusal.bootDrift",
+		"refusal.timeout", "refusal.cancellation", "refusal.symlink", "refusal.type",
+		"refusal.digest", "refusal.zeroTarget", "refusal.zeroEffect", "refusal.zeroFallback",
+		"concurrency.disjointCatalogs", "concurrency.ordinaryCommandCompatibility",
+		"redaction.applicationIdentityClass", "redaction.publicArtifactScan",
+	})
+	flowChecks := trueMap([]string{
+		"projection030.safeHostEffect", "projection030.taskSuppression",
+		"projection030.aliasChannels", "projection030.preservePositiveControl",
+		"projection030.runBoundGrant", "projection030.runBoundRevoke",
+		"external032.oldSessionImmutable", "external032.workspaceResource",
+		"external032.authorizedHostFS", "external032.unsafeIdentityDenied",
+		"external032.disableNoFallback", "external032.revokeNoFallback",
+		"persistent039.initialRefusal", "persistent039.hostGrant",
+		"persistent039.separateRunReuse", "persistent039.revoke",
+		"persistent039.laterRefusal",
+	})
+	privacyChecks := trueMap([]string{
+		"guestWorkspaceAlias", "proxyEnvAbsent", "dnsMediated",
+		"connectedSubnetBlocked", "httpsRequest", "privilegeSeparation",
+		"publicEvidenceRedacted",
+	})
+	var samples strings.Builder
+	samples.WriteString("lane\tindex\tduration_ms\tfirst_target\toperator_retries\ttarget_retries\tfallbacks\ttimeouts\tunauthorized_host_effects\tcross_session_access\n")
+	for index := 1; index <= 10; index++ {
+		fmt.Fprintf(&samples, "fresh\t%d\t%d\tprojected\t0\t0\t0\t0\t0\t0\n", index, 100+index-1)
+	}
+	for index := 1; index <= 30; index++ {
+		fmt.Fprintf(&samples, "warm\t%d\t%d\tprojected\t0\t0\t0\t0\t0\t0\n", index, 50+index-1)
+	}
+	samples.WriteString("cancellation\t1\t100\tnone\t0\t0\t0\t0\t0\t0\n")
+	artifacts := map[string][]byte{
+		"artifacts/readiness-samples.tsv": []byte(samples.String()),
+		"artifacts/projection-flows.json": fixtureJSON(t, map[string]any{
+			"schema": "hideout.projection-flows-real-gate2/v1",
+			"status": "passed", "checks": flowChecks,
+		}),
+		"artifacts/package-manifest.json": fixtureJSON(t, map[string]any{
+			"schema":          "hideout.projection-package-manifest/v1",
+			"packageIdentity": packageIdentity,
+		}),
+		"artifacts/runtime-manifest.json": fixtureJSON(t, map[string]any{
+			"schema":  "hideout.projection-runtime-manifest/v1",
+			"runtime": binding,
+		}),
+		"artifacts/projection-privacy-gate3.json": fixtureJSON(t, map[string]any{
+			"schema": "hideout.projection-privacy-real-gate3/v1",
+			"status": "passed", "generatedAt": "2026-07-23T12:00:00Z",
+			"commit": commit, "dirty": false, "packageIdentity": packageIdentity,
+			"runtime": binding, "checks": privacyChecks,
+		}),
+	}
+	artifacts["artifacts/projection-readiness.json"] = fixtureJSON(t, map[string]any{
+		"schema": "hideout.projection-readiness-real-gate2/v1",
+		"status": "passed", "generatedAt": "2026-07-23T12:00:00Z",
+		"commit": commit, "dirty": false, "packageIdentity": packageIdentity,
+		"runtime": binding,
+		"platform": map[string]any{
+			"hostOS": "darwin", "hostArch": "arm64", "guestArch": "aarch64",
+			"backend": "lima", "applicationIdentityClass": "bundle-id+designated-requirement",
+		},
+		"methodology": map[string]any{
+			"minimumFreshSamples": 10, "minimumWarmSamples": 30,
+			"minimumConcurrentPairs": 1, "p95Method": "nearest-rank",
+			"readinessThresholdMs": 2000, "cancellationThresholdMs": 2000,
+		},
+		"readiness": map[string]any{
+			"freshSamples": 10, "warmSamples": 30, "concurrentPairs": 1,
+			"freshP95Ms": 109, "warmP95Ms": 78, "cancellationMaxMs": 100,
+			"operatorRetries": 0, "targetRetries": 0, "fallbacks": 0, "timeouts": 0,
+			"unauthorizedHostEffects": 0, "crossSessionAccess": 0,
+		},
+		"checks": readinessChecks,
+		"artifacts": map[string]any{
+			"samples":         fixtureDigest("artifacts/readiness-samples.tsv", artifacts["artifacts/readiness-samples.tsv"]),
+			"flows":           fixtureDigest("artifacts/projection-flows.json", artifacts["artifacts/projection-flows.json"]),
+			"packageManifest": fixtureDigest("artifacts/package-manifest.json", artifacts["artifacts/package-manifest.json"]),
+			"runtimeManifest": fixtureDigest("artifacts/runtime-manifest.json", artifacts["artifacts/runtime-manifest.json"]),
+		},
+		"privacy": map[string]any{
+			"status": "promoted",
+			"artifact": fixtureDigest(
+				"artifacts/projection-privacy-gate3.json",
+				artifacts["artifacts/projection-privacy-gate3.json"],
+			),
+		},
+		"nonClaims": []string{
+			"guest-root-out-of-scope",
+			"native-is-not-real-evidence",
+			"readiness-is-not-authority",
+		},
+	})
+	return artifacts
 }
 
 func sharedWorkspaceSemanticArtifacts(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding, packageIdentity productevidence.PackageIdentity) map[string][]byte {

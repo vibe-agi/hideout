@@ -177,6 +177,14 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 			return err
 		}
 		return validateDisposableRecoveryArtifact(data, expectedCommit)
+	case ArtifactValidatorProjectionReadinessV1:
+		return validateProjectionReadinessArtifact(
+			refs, artifacts, expectedCommit, expectedPackage, expectedRuntime, false,
+		)
+	case ArtifactValidatorProjectionPrivacyV1:
+		return validateProjectionReadinessArtifact(
+			refs, artifacts, expectedCommit, expectedPackage, expectedRuntime, true,
+		)
 	default:
 		return fmt.Errorf("unsupported artifact validator %q", validator)
 	}

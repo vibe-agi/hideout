@@ -172,7 +172,10 @@ func TestHostAppPackProofRegistryRequiresArtifactBackedRealEvidence(t *testing.T
 	}
 	real := seen[Proof032RealGate2External]
 	if real.Layer != LayerRealGate || real.RequiredFor != RequiredForReleaseCandidate ||
-		real.RequiredMode != "real-gate" || real.RequiredEvidenceClass != "host-app-pack-external-real-gate2" {
+		real.RequiredMode != "real-gate" || real.RequiredEvidenceClass != "projection-readiness-real-gate2" ||
+		real.FreshnessPolicy != FreshnessSameCommitAndPackage ||
+		real.RuntimePolicy != RuntimePolicyExactReal ||
+		real.ArtifactValidator != ArtifactValidatorProjectionReadinessV1 {
 		t.Fatalf("032 real proof cannot satisfy release requirements: %+v", real)
 	}
 }
@@ -237,12 +240,80 @@ func TestProofRegistryCovers030WithoutLettingNotRunSatisfyRelease(t *testing.T) 
 		}
 	}
 	for _, proofID := range []string{Proof030RealGate2CodeOpen, Proof030RealGate2PrivacyChannels, Proof030RealGate2TrustedGrant} {
-		if seen[proofID].RequiredFor != RequiredForReleaseCandidate || seen[proofID].ArtifactPolicy == ArtifactPolicyNone {
+		requirement := seen[proofID]
+		if requirement.RequiredFor != RequiredForReleaseCandidate ||
+			requirement.ArtifactPolicy == ArtifactPolicyNone ||
+			requirement.FreshnessPolicy != FreshnessSameCommitAndPackage ||
+			requirement.RuntimePolicy != RuntimePolicyExactReal ||
+			requirement.ArtifactValidator == ArtifactValidatorNone {
 			t.Fatalf("030 real proof %s must be an artifact-backed release requirement: %+v", proofID, seen[proofID])
 		}
 	}
 	if seen[Proof030RealGate2NotRun].RequiredFor != RequiredForSupportingOnly {
 		t.Fatal("030 not-run evidence must never satisfy release readiness")
+	}
+}
+
+func TestProofRegistryCovers039And043WithExactSemanticEvidence(t *testing.T) {
+	tests := []struct {
+		feature string
+		want    []string
+		real    map[string]string
+		notRun  string
+	}{
+		{
+			feature: Feature039,
+			want:    []string{Proof039RealPersistentGrant, Proof039RealGate2NotRun},
+			real: map[string]string{
+				Proof039RealPersistentGrant: ArtifactValidatorProjectionReadinessV1,
+			},
+			notRun: Proof039RealGate2NotRun,
+		},
+		{
+			feature: Feature043,
+			want: []string{
+				Proof043Gate0Mechanics, Proof043RealReadiness, Proof043RealPrivacy,
+				Proof043RealGate2NotRun, Proof043DocsClaimBoundary,
+			},
+			real: map[string]string{
+				Proof043RealReadiness: ArtifactValidatorProjectionReadinessV1,
+				Proof043RealPrivacy:   ArtifactValidatorProjectionPrivacyV1,
+			},
+			notRun: Proof043RealGate2NotRun,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.feature, func(t *testing.T) {
+			requirements := RequirementsForFeature(test.feature)
+			if len(requirements) != len(test.want) {
+				t.Fatalf("requirements=%d want %d", len(requirements), len(test.want))
+			}
+			seen := map[string]ProofRequirement{}
+			for _, requirement := range requirements {
+				seen[requirement.ProofID] = requirement
+			}
+			for _, proofID := range test.want {
+				if _, ok := seen[proofID]; !ok {
+					t.Fatalf("proof %s is not registered", proofID)
+				}
+			}
+			for proofID, validator := range test.real {
+				requirement := seen[proofID]
+				if requirement.Layer != LayerRealGate ||
+					requirement.RequiredFor != RequiredForReleaseCandidate ||
+					requirement.FreshnessPolicy != FreshnessSameCommitAndPackage ||
+					requirement.RuntimePolicy != RuntimePolicyExactReal ||
+					requirement.RequiredMode != "real-gate" ||
+					requirement.RequiredEvidenceClass == "" ||
+					requirement.ArtifactValidator != validator {
+					t.Fatalf("real proof %s is not exact: %+v", proofID, requirement)
+				}
+			}
+			if requirement := seen[test.notRun]; requirement.RequiredFor != RequiredForSupportingOnly ||
+				requirement.RuntimePolicy != RuntimePolicyNone {
+				t.Fatalf("not-run proof can satisfy release: %+v", requirement)
+			}
+		})
 	}
 }
 

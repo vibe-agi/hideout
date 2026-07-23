@@ -23,14 +23,41 @@ func TestBuiltinMatrixValidatesRequiredRows(t *testing.T) {
 		"feature/host-capability-projection",
 		"feature/supported-cli-runtime",
 		"feature/community-host-app-recipes",
+		"feature/trusted-host-app-grants",
 		"feature/concurrent-run-sessions",
 		"feature/shared-default-vm-cross-workspace",
+		"feature/projection-readiness",
 		"release/public-alpha-package",
 		"release/developer-id-notarization",
 		"gate/release-candidate",
 	} {
 		if _, ok := FindEntry(matrix, subject); !ok {
 			t.Fatalf("missing subject %s", subject)
+		}
+	}
+}
+
+func TestBuiltinMatrixBindsProjectionClaimsToExactProofs(t *testing.T) {
+	matrix := BuiltinMatrix()
+	for _, want := range []struct {
+		subject string
+		proofID string
+	}{
+		{subject: "feature/trusted-host-app-grants", proofID: "039.trusted-host-app-grant.real-gate2.persistent"},
+		{subject: "feature/projection-readiness", proofID: "043.projection-readiness.real-gate2.readiness"},
+	} {
+		entry, ok := FindEntry(matrix, want.subject)
+		if !ok {
+			t.Fatalf("missing subject %s", want.subject)
+		}
+		if entry.Level != LevelGateRequired {
+			t.Fatalf("%s level=%s", want.subject, entry.Level)
+		}
+		if len(entry.RequiredGates) != 1 || entry.RequiredGates[0] != "gate2-lima" {
+			t.Fatalf("%s gates=%v", want.subject, entry.RequiredGates)
+		}
+		if len(entry.Evidence) != 1 || entry.Evidence[0] != want.proofID {
+			t.Fatalf("%s evidence=%v want %s", want.subject, entry.Evidence, want.proofID)
 		}
 	}
 }

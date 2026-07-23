@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/strict-projection-evidence.sh"
 
 mode="local-fast"
 require_real=0
@@ -33,8 +34,12 @@ log="$out/logs/host-app-pack-e2e.out"
 err_log="$out/logs/host-app-pack-e2e.err"
 raw_real_log=""
 raw_real_err=""
+strict_tmp=""
 cleanup() {
   rm -f "${raw_real_log:-}" "${raw_real_err:-}"
+  if [ -n "${strict_tmp:-}" ] && [ -d "$strict_tmp" ]; then
+    find "$strict_tmp" -depth -delete 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
@@ -134,11 +139,12 @@ if [ "$mode" = "local-fast" ]; then
 fi
 
 reason=""
-retained_gate2_log=""
+strict_root=""
 if [ -n "$gate2_evidence" ]; then
-  . scripts/lib/retained-gate2-evidence.sh
-  if ! retained_gate2_log="$(resolve_retained_gate2_log "$gate2_evidence" "$(git_commit)")"; then
-    reason="retained Gate 2 evidence is invalid: $gate2_evidence"
+  if ! strict_root="$(strict_projection_evidence_root "$gate2_evidence")" ||
+    ! validate_strict_projection_evidence "$strict_root"; then
+    strict_root=""
+    reason="retained Gate 2 evidence is not strict 043 exact-package evidence: $gate2_evidence"
   fi
 elif [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
   reason="real Gate 2 requires a macOS arm64 host"
@@ -158,46 +164,19 @@ if [ -n "$reason" ]; then
   exit 0
 fi
 
-raw_real_log="$(mktemp "${TMPDIR:-/tmp}/hideout-host-app-pack-gate2.raw.XXXXXX")"
-raw_real_err="$(mktemp "${TMPDIR:-/tmp}/hideout-host-app-pack-gate2.err.XXXXXX")"
-if [ -n "$retained_gate2_log" ]; then
-  cp "$retained_gate2_log" "$raw_real_log"
-  : >"$raw_real_err"
-else
-  if ! HIDEOUT_GATE2_REQUIRE_PROJECTION=1 \
-    HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external" \
-    scripts/test-gate2-lima.sh >"$raw_real_log" 2>"$raw_real_err"; then
-    echo "host-app-pack-e2e: real Gate 2 failed; showing bounded diagnostic tails" >&2
-    tail -n 160 "$raw_real_log" >&2
-    tail -n 160 "$raw_real_err" >&2
+if [ -z "$strict_root" ]; then
+  strict_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-host-app-pack-strict.XXXXXX")"
+  if ! scripts/test-projection-readiness-lima-e2e.sh --require-real \
+    --out "$strict_tmp/evidence" >"$out/logs/strict-producer.out" 2>"$out/logs/strict-producer.err"; then
+    echo "host-app-pack-e2e: strict projection producer failed" >&2
+    tail -n 160 "$out/logs/strict-producer.out" >&2
+    tail -n 160 "$out/logs/strict-producer.err" >&2
     exit 1
   fi
+  strict_root="$strict_tmp/evidence"
 fi
-required_markers=(
-  projection_code_open \
-  projection_hostfs_authorized \
-  projection_trusted_grant \
-  host_app_external_old_session_immutable \
-  host_app_external_workspace \
-  host_app_external_hostfs \
-  host_app_external_unsafe_identity_denied \
-  host_app_external_disable_no_fallback \
-  host_app_external_revoke_no_fallback \
-  host_app_external_gate2
-)
-for marker in "${required_markers[@]}"; do
-  grep -q "^${marker}=passed$" "$raw_real_log"
-done
-grep -q '^gate2: passed$' "$raw_real_log"
-{
-  printf 'real_backend=macos-arm64-lima\n'
-  printf 'host_effect_provider=core-verified-host-application\n'
-  for marker in "${required_markers[@]}"; do
-    printf '%s=passed\n' "$marker"
-  done
-  printf 'gate2=passed\n'
-} >"$log"
+copy_strict_projection_feature "$strict_root" "$out" "032-community-host-app-recipes"
+printf 'strict_projection_readiness=passed\n' >"$log"
 : >"$err_log"
 validate_public_log
-write_manifest passed "external pack exercised generic provider; evidence records current dirty state honestly" "host-app-pack-external-real-gate2"
 echo "host-app-pack-e2e: passed mode=real-gate2 status=passed evidence=$manifest"

@@ -189,6 +189,10 @@ run_projection_gate2() {
   # when the gate's isolated LIMA_HOME itself has a long temporary prefix.
   local profile_name="g2p"
   local control_profile="g2pc"
+  local projection_runtime_args=()
+  if [ -n "${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" ]; then
+    projection_runtime_args=(--runtime "${HIDEOUT_PROJECTION_RUNTIME_FAMILY:-developer-standard}")
+  fi
   projection_workspace="$(mktemp -d "$HOME/hideout-gate2-projection.XXXXXX")"
   projection_control_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-control.XXXXXX")"
   projection_trusted_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-trusted.XXXXXX")"
@@ -214,6 +218,7 @@ run_projection_gate2() {
     "$hideout" init --no-input --profile "$profile_name" \
       --template privacy --backend lima --network tun2socks \
       --proxy-secret projection-proxy --mediated-resolver 1.1.1.1 \
+      "${projection_runtime_args[@]}" \
       >"$tmp/projection-init.out" 2>"$tmp/projection-init.err"; then
     echo "gate2: projection privacy profile init failed" >&2
     cat "$tmp/projection-init.out" "$tmp/projection-init.err" >&2
@@ -319,6 +324,233 @@ printf "projection_proxy_secret_absent=yes\n"
   if [ -n "${HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK:-}" ]; then
     run_projection_external_pack "$profile_name" "$HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK"
   fi
+  if [ -n "${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" ]; then
+    run_projection_readiness_samples "$profile_name"
+  fi
+}
+
+projection_environment_record() {
+  local environment_name="$1"
+  local record
+  while IFS= read -r record; do
+    if jq -e --arg name "$environment_name" '.name == $name' "$record" >/dev/null 2>&1; then
+      printf '%s\n' "$record"
+      return 0
+    fi
+  done < <(find "$store/environments" -name environment.json -type f 2>/dev/null | sort)
+  return 1
+}
+
+projection_audit_inventory() {
+  find "$store/sessions" -name audit.jsonl -type f 2>/dev/null | LC_ALL=C sort
+}
+
+projection_new_audit() {
+  local before="$1" after="$2" output="$3"
+  projection_audit_inventory >"$after"
+  comm -13 "$before" "$after" >"$output"
+  if [ "$(wc -l <"$output" | tr -d ' ')" != "1" ]; then
+    echo "gate2: projection readiness run did not produce exactly one session audit" >&2
+    cat "$output" >&2
+    return 1
+  fi
+  sed -n '1p' "$output"
+}
+
+projection_measure_ready_session() {
+  local lane="$1" index="$2" environment_name="$3" workspace_path="$4" samples="$5"
+  local before="$tmp/projection-readiness-$lane-$index.before"
+  local after="$tmp/projection-readiness-$lane-$index.after"
+  local delta="$tmp/projection-readiness-$lane-$index.delta"
+  local output="$tmp/projection-readiness-$lane-$index.out"
+  local error_output="$tmp/projection-readiness-$lane-$index.err"
+  local audit duration
+  projection_audit_inventory >"$before"
+  if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" run --env "$environment_name" --profile "$6" --backend lima \
+      --network tun2socks --proxy-secret projection-proxy --workspace "$workspace_path" -- \
+      code -n . >"$output" 2>"$error_output"; then
+    echo "gate2: projection readiness $lane sample $index failed on its first target" >&2
+    cat "$output" "$error_output" >&2
+    return 1
+  fi
+  audit="$(projection_new_audit "$before" "$after" "$delta")"
+  if ! jq -s -e '
+    ([.[] | select(.action == "projection.readiness" and .decision == "allow" and
+      .details.status == "ready" and .details.targetProjected == true and
+      .details.expectedEntries > 0 and
+      .details.observedEntries == .details.expectedEntries)] | length) == 1 and
+    ([.[] | select(.action == "host.app.open-resource" and
+      .details.outcome == "launched")] | length) == 1
+  ' "$audit" >/dev/null; then
+    echo "gate2: projection readiness $lane sample $index lacks one exact ready/host-effect pair" >&2
+    cat "$audit" >&2
+    return 1
+  fi
+  duration="$(jq -s -er '
+    [.[] | select(.action == "projection.readiness" and .decision == "allow")] |
+    .[0].details.durationMs
+  ' "$audit")"
+  case "$duration" in
+    ''|*[!0-9]*) echo "gate2: projection readiness duration is invalid" >&2; return 1 ;;
+  esac
+  printf '%s\t%s\t%s\tprojected\t0\t0\t0\t0\t0\t0\n' \
+    "$lane" "$index" "$duration" >>"$samples"
+  projection_stop_safe_app
+}
+
+projection_measure_cancellation() {
+  local profile_name="$1" environment_name="$2" workspace_path="$3" samples="$4"
+  local before="$tmp/projection-readiness-cancellation.before"
+  local after="$tmp/projection-readiness-cancellation.after"
+  local delta="$tmp/projection-readiness-cancellation.delta"
+  local output="$tmp/projection-readiness-cancellation.out"
+  local error_output="$tmp/projection-readiness-cancellation.err"
+  local run_pid="" audit="" duration="" i
+  projection_audit_inventory >"$before"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" run --env "$environment_name" --profile "$profile_name" --backend lima \
+      --network tun2socks --proxy-secret projection-proxy --workspace "$workspace_path" -- \
+      code -n . >"$output" 2>"$error_output" &
+  run_pid=$!
+  for i in $(seq 1 500); do
+    projection_audit_inventory >"$after"
+    comm -13 "$before" "$after" >"$delta"
+    if [ -s "$delta" ]; then
+      break
+    fi
+    if ! kill -0 "$run_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.01
+  done
+  if [ "$(wc -l <"$delta" | tr -d ' ')" != "1" ]; then
+    echo "gate2: cancellation sample did not create exactly one session before target commit" >&2
+    kill "$run_pid" 2>/dev/null || true
+    wait "$run_pid" 2>/dev/null || true
+    return 1
+  fi
+  audit="$(sed -n '1p' "$delta")"
+  kill -TERM "$run_pid" 2>/dev/null || true
+  wait "$run_pid" 2>/dev/null || true
+  for i in $(seq 1 500); do
+    if jq -s -e 'any(.[]; .action == "projection.readiness" and .decision == "deny" and
+      .details.reasonCode == "projection.readiness.cancelled")' "$audit" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.01
+  done
+  if ! jq -s -e '
+    ([.[] | select(.action == "projection.readiness" and .decision == "deny" and
+      .details.reasonCode == "projection.readiness.cancelled" and
+      .details.targetProjected == true)] | length) == 1 and
+    ([.[] | select(.action == "host.app.open-resource" and
+      .details.outcome == "launched")] | length) == 0
+  ' "$audit" >/dev/null; then
+    echo "gate2: cancellation sample did not cancel before projected target commit" >&2
+    cat "$audit" >&2
+    return 1
+  fi
+  duration="$(jq -s -er '
+    [.[] | select(.action == "projection.readiness" and .decision == "deny")] |
+    .[0].details.durationMs
+  ' "$audit")"
+  case "$duration" in
+    ''|*[!0-9]*) echo "gate2: projection cancellation duration is invalid" >&2; return 1 ;;
+  esac
+  printf 'cancellation\t1\t%s\tnone\t0\t0\t0\t0\t0\t0\n' "$duration" >>"$samples"
+}
+
+run_projection_readiness_samples() {
+  local profile_name="$1"
+  local capture="$HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR"
+  local fresh="${HIDEOUT_PROJECTION_READINESS_FRESH:-10}"
+  local warm="${HIDEOUT_PROJECTION_READINESS_WARM:-30}"
+  local samples="$capture/readiness-samples.tsv"
+  local work
+  local runtime_fingerprint="" warm_record="" runtime_build_commit
+  local i environment_name workspace_path record fingerprint
+  runtime_build_commit="${HIDEOUT_PROJECTION_RUNTIME_BUILD_COMMIT:-}"
+  case "$fresh:$warm" in *[!0-9:]*|'') echo "gate2: projection readiness sample counts are invalid" >&2; return 2 ;; esac
+  case "$runtime_build_commit" in ''|*[!a-f0-9]*) echo "gate2: projection runtime build commit is invalid" >&2; return 2 ;; esac
+  [ "${#runtime_build_commit}" -ge 12 ] && [ "${#runtime_build_commit}" -le 40 ] || {
+    echo "gate2: projection runtime build commit length is invalid" >&2
+    return 2
+  }
+  [ "$fresh" -ge 1 ] && [ "$warm" -ge 1 ] || {
+    echo "gate2: projection readiness sample counts must be positive" >&2
+    return 2
+  }
+  mkdir -p "$capture"
+  work="$(mktemp -d "$HOME/hideout-gate2-projection-readiness.XXXXXX")"
+  printf 'lane\tindex\tduration_ms\tfirst_target\toperator_retries\ttarget_retries\tfallbacks\ttimeouts\tunauthorized_host_effects\tcross_session_access\n' >"$samples"
+
+  echo "gate2: running $fresh fresh projection readiness samples"
+  for i in $(seq 1 "$fresh"); do
+    environment_name="g2f$i"
+    workspace_path="$work/fresh-$i"
+    mkdir -p "$workspace_path"
+    HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+      "$hideout" env create "$environment_name" --profile "$profile_name" --backend lima \
+        --workspace "$workspace_path" >"$tmp/projection-fresh-$i-create.out"
+    projection_measure_ready_session fresh "$i" "$environment_name" "$workspace_path" "$samples" "$profile_name"
+    record="$(projection_environment_record "$environment_name")"
+    fingerprint="$(jq -cer '[.runtime.family,.runtime.revision,.runtime.artifactSHA256,
+      .runtime.hostOS,.runtime.hostArch,.runtime.guestArch]' "$record")"
+    if [ -z "$runtime_fingerprint" ]; then
+      runtime_fingerprint="$fingerprint"
+    elif [ "$fingerprint" != "$runtime_fingerprint" ]; then
+      echo "gate2: fresh projection samples used different runtime artifacts" >&2
+      return 1
+    fi
+    HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+      "$hideout" env remove "$environment_name" --force >/dev/null
+  done
+
+  echo "gate2: running $warm warm projection readiness samples"
+  environment_name="g2warm"
+  workspace_path="$work/warm"
+  mkdir -p "$workspace_path"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" env create "$environment_name" --profile "$profile_name" --backend lima \
+      --workspace "$workspace_path" >"$tmp/projection-warm-create.out"
+  for i in $(seq 1 "$warm"); do
+    projection_measure_ready_session warm "$i" "$environment_name" "$workspace_path" "$samples" "$profile_name"
+  done
+  warm_record="$(projection_environment_record "$environment_name")"
+  fingerprint="$(jq -cer '[.runtime.family,.runtime.revision,.runtime.artifactSHA256,
+    .runtime.hostOS,.runtime.hostArch,.runtime.guestArch]' "$warm_record")"
+  if [ "$fingerprint" != "$runtime_fingerprint" ]; then
+    echo "gate2: warm projection samples did not use the fresh-sample runtime" >&2
+    return 1
+  fi
+  jq -n --arg buildCommit "$runtime_build_commit" --slurpfile record "$warm_record" '{
+    schema:"hideout.runtime-evidence-binding/v1",
+    family:$record[0].runtime.family,
+    revision:$record[0].runtime.revision,
+    artifactSHA256:$record[0].runtime.artifactSHA256,
+    environmentId:$record[0].id,
+    hostOS:$record[0].runtime.hostOS,
+    hostArch:$record[0].runtime.hostArch,
+    guestArch:$record[0].runtime.guestArch,
+    buildCommit:$buildCommit,
+    buildDirty:false
+  }' >"$capture/runtime-binding.json"
+
+  echo "gate2: running pre-commit projection cancellation sample"
+  environment_name="g2cancel"
+  workspace_path="$work/cancellation"
+  mkdir -p "$workspace_path"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" env create "$environment_name" --profile "$profile_name" --backend lima \
+      --workspace "$workspace_path" >"$tmp/projection-cancellation-create.out"
+  projection_measure_cancellation "$profile_name" "$environment_name" "$workspace_path" "$samples"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" env remove "$environment_name" --force >/dev/null 2>&1 || true
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" env remove g2warm --force >/dev/null
+  rm -rf "$work"
+  printf 'projection_readiness_samples=passed\n'
 }
 
 # run_projection_persistent_grant_lifecycle proves the 039 durable grant path
@@ -799,6 +1031,7 @@ if command -v hcode >/dev/null 2>&1; then exit 91; fi
 while [ ! -f external-install.signal ]; do sleep 0.1; done
 if command -v hcode >/dev/null 2>&1; then exit 92; fi
 : > external-old-after.ready
+while [ ! -f external-concurrent-done.signal ]; do sleep 0.1; done
 ' >"$tmp/external-old-session.out" 2>"$tmp/external-old-session.err"
   ) &
   projection_run_pid=$!
@@ -807,9 +1040,19 @@ if command -v hcode >/dev/null 2>&1; then exit 92; fi
     >"$tmp/external-add.out" 2>"$tmp/external-add.err"
   : >"$projection_external_workspace/external-install.signal"
   wait_for_file "$projection_external_workspace/external-old-after.ready" "external old-session immutability"
+  if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" run --profile "$profile_name" --backend lima --network tun2socks \
+      --proxy-secret projection-proxy --workspace "$projection_external_workspace" -- \
+      hcode -n . >"$tmp/external-concurrent.out" 2>"$tmp/external-concurrent.err"; then
+    echo "gate2: external concurrent disjoint-catalog session failed" >&2
+    cat "$tmp/external-concurrent.out" "$tmp/external-concurrent.err" >&2
+    return 1
+  fi
+  : >"$projection_external_workspace/external-concurrent-done.signal"
   wait "$projection_run_pid"
   projection_run_pid=""
   printf 'host_app_external_old_session_immutable=passed\n'
+  printf 'projection_concurrent_disjoint_catalogs=passed\n'
 
 	local revision_id external_audit external_event
   revision_id="$(HIDEOUT_STORE_ROOT="$store" "$hideout" app list --json | jq -er '.hostAppPacks[] | select(.packId == "test.external-vscode") | .activeRevisionId')"
