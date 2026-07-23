@@ -98,9 +98,9 @@ test or explicit still-open debt disposition for each.
    catalog, **When** it reaches the broker, **Then** the request is refused and
    its name cannot be presented as a validated command in audit.
 2. **Given** newly created privacy, hardened, development, and debug profiles,
-   **When** their workspace presentation is inspected, **Then** privacy and
-   hardened use the neutral alias while development and debug preserve their
-   documented posture.
+   **When** their workspace presentation is inspected, **Then** every template
+   directly proves its current neutral alias posture rather than inheriting an
+   untested default.
 3. **Given** an existing environment and a profile workspace-path change,
    **When** a later run is planned, **Then** the environment reports drift and
    requires explicit recreation rather than silently remapping.
@@ -231,9 +231,8 @@ rejected.
   guest-supplied request field.
 - **FR-011**: Requests for unregistered, disabled, revoked, foreign, malformed,
   or stale projected commands MUST remain fail-closed with zero host effect.
-- **FR-012**: Newly created privacy and hardened profiles MUST directly prove
-  neutral workspace alias defaults; development and debug profiles MUST
-  directly prove their documented path posture.
+- **FR-012**: Newly created privacy, hardened, development, and debug profiles
+  MUST each directly prove the current neutral workspace alias default.
 - **FR-013**: Changing workspace path presentation for an existing environment
   MUST directly prove a recreate-required drift result and zero silent remap.
 - **FR-014**: Public capability-descriptor and open-resource-intent contracts
