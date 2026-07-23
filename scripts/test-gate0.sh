@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Several app tests intentionally launch bounded helper processes. Unbounded
+# package-level parallelism can starve those helpers on high-core hosts and
+# turn their product timeouts into scheduler-load flakes. Keep enough package
+# concurrency for useful throughput while making Gate 0 deterministic.
+go_test_parallelism="${HIDEOUT_GATE0_GO_TEST_PARALLELISM:-4}"
+
 # --quick is the inner-loop tier: vet, format, cached tests, lint, schema
 # syntax. It allows Go test caching so only changed packages re-run, and it
 # proves nothing about smokes, evidence, or packaging. Full gate0 (no flag)
@@ -16,7 +22,7 @@ if [ "${1:-}" = "--quick" ]; then
     echo "$unformatted" >&2
     exit 1
   fi
-  go test ./...
+  go test -p "$go_test_parallelism" ./...
   markdownlint-cli2 'docs/*.md'
   jq empty schemas/*.json
   echo "gate0 --quick passed; run the full gate before commit"
@@ -31,7 +37,7 @@ if [ -n "$unformatted" ]; then
   echo "$unformatted" >&2
   exit 1
 fi
-go test -count=1 ./...
+go test -p "$go_test_parallelism" -count=1 ./...
 scripts/test-formal-models.sh
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh

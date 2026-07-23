@@ -149,9 +149,11 @@ done < <(jq -r '
     or .featureId == "032-community-host-app-recipes"
     or .featureId == "034-concurrent-run-sessions"
     or .featureId == "035-shared-default-vm-cross-workspace"
-	  or .featureId == "036-resource-lifecycle-final-session-stop"
-	  or .featureId == "040-lifecycle-attach-reservation"
-	  or .featureId == "041-workspace-executable-support")
+    or .featureId == "036-resource-lifecycle-final-session-stop"
+    or .featureId == "039-trusted-host-app-grant"
+    or .featureId == "040-lifecycle-attach-reservation"
+    or .featureId == "041-workspace-executable-support"
+    or .featureId == "043-projection-readiness-proof")
   | .proofId
 ' "$registry_json")
 
@@ -575,7 +577,9 @@ validate_cross_docs() {
   grep -q 'English README' README.zh-CN.md
   grep -q 'canonical' README.zh-CN.md
   grep -q 'Status: Implemented' docs/host-app-recipes.md
-  grep -q 'a570514909514cd79d39493d58ec69e923bca39aa5f4ec31305181b68b536f83' docs/claim-boundaries.md
+  grep -q '.hideout-release-evidence/043-projection-readiness-real-gate2/' docs/claim-boundaries.md
+  grep -q '043.projection-readiness.real-gate2.readiness' docs/claim-boundaries.md
+  grep -q 'privacy.*not-promoted' docs/claim-boundaries.md
   grep -q 'Community Host-App Recipes' docs/README.md
   grep -q '032.host-app-pack.real-gate2.external' docs/claim-boundaries.md
   grep -q '034.concurrent-sessions.docs.claim-boundary' docs/claim-boundaries.md
@@ -623,7 +627,8 @@ validate_cross_docs() {
     scripts/test-hostfs-visibility-e2e.sh \
     scripts/test-doctor-package-recovery-e2e.sh \
     scripts/test-host-app-pack-smoke.sh \
-    scripts/test-concurrent-sessions-smoke.sh
+    scripts/test-concurrent-sessions-smoke.sh \
+    scripts/test-projection-readiness-smoke.sh
   do
     grep -q "$script" docs/privacy-run-test-plan.md
     grep -q "$script" scripts/test-gate0.sh

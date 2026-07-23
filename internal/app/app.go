@@ -4280,7 +4280,7 @@ func checkBrokerOpen(ctx context.Context, endpoint broker.Endpoint, req broker.R
 	deadline := time.Now().Add(5 * time.Second)
 	var resp broker.Response
 	for {
-		reqCtx, reqCancel := context.WithTimeout(ctx, time.Second)
+		reqCtx, reqCancel := context.WithDeadline(ctx, deadline)
 		resp = broker.ClientOpenEndpoint(reqCtx, endpoint, req)
 		reqCancel()
 		if resp.Status != "broker-unavailable" || time.Now().After(deadline) {

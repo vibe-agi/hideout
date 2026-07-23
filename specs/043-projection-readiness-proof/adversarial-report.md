@@ -98,27 +98,27 @@ packages.
 
 | False-green input | Expected rejection | Result |
 | --- | --- | --- |
-| Dirty source | Clean provenance required | Pending |
-| Wrong source/package digest | Exact candidate mismatch | Pending |
-| Wrong runtime artifact/build | Exact runtime mismatch | Pending |
-| Marker-only/reduced evidence | Semantic artifact required | Pending |
-| Nine fresh or 29 warm samples | Minimum sample inventory | Pending |
-| Edited summary or p95 | Recomputed raw samples disagree | Pending |
-| Missing/extra/false check | Closed check map violation | Pending |
-| Retry/fallback/timeout/effect nonzero | Fail-closed invariant violation | Pending |
-| Missing/altered artifact | Digest inventory mismatch | Pending |
-| Unknown JSON field | Strict decoder rejection | Pending |
-| `not-run` privacy record | Cannot promote privacy | Pending |
+| Dirty source | Clean provenance required | Rejected by production evaluator fixture |
+| Wrong source/package digest | Exact candidate mismatch | Rejected by package/source binding fixtures |
+| Wrong runtime artifact/build | Exact runtime mismatch | Rejected by runtime binding fixtures |
+| Marker-only/reduced evidence | Semantic artifact required | Rejected by Go and shell marker-only fixtures |
+| Nine fresh or 29 warm samples | Minimum sample inventory | Rejected after raw inventory recomputation |
+| Edited summary or p95 | Recomputed raw samples disagree | Rejected by edited-p95 fixtures |
+| Missing/extra/false check | Closed check map violation | Rejected by strict closed-map fixtures |
+| Retry/fallback/timeout/effect nonzero | Fail-closed invariant violation | Rejected independently for every nonzero counter |
+| Missing/altered artifact | Digest inventory mismatch | Rejected by missing and changed artifact fixtures |
+| Unknown JSON field | Strict decoder rejection | Rejected by strict schema/decoder fixtures |
+| `not-run` privacy record | Cannot promote privacy | Rejected for privacy promotion; Gate 2 records `not-promoted` |
 
 ## Real-Gate Evidence
 
 | Proof family | Required evidence | Status |
 | --- | --- | --- |
-| 043 first-attempt readiness | Clean exact-package Gate 2, 10 fresh, 30 warm, concurrent | Pending |
-| 030 built-in projection | Same candidate, semantic built-in flow artifact | Pending |
-| 032 external pack | Same candidate, semantic external-pack artifact | Pending |
-| 039 persistent grant | Same candidate, separate-run reuse/revoke artifact | Pending |
-| Alias privacy | Matching clean Gate 3 artifact | Pending; remains unpromoted without Gate 3 |
+| 043 first-attempt readiness | Clean exact-package Gate 2, 10 fresh, 30 warm, concurrent | Passed; strict readiness artifact retained |
+| 030 built-in projection | Same candidate, semantic built-in flow artifact | Passed as `030.projection.real-gate2.code-open` and `.trusted-grant` |
+| 032 external pack | Same candidate, semantic external-pack artifact | Passed as `032.host-app-pack.real-gate2.external` |
+| 039 persistent grant | Same candidate, separate-run reuse/revoke artifact | Passed as `039.trusted-host-app-grant.real-gate2.persistent` |
+| Alias privacy | Matching clean Gate 3 artifact | Not promoted; matching Gate 3 was not run |
 
 ## Findings And Restorations
 
@@ -150,5 +150,98 @@ go test -count=1 ./internal/backend ./internal/sessionwire \
   ./internal/manager ./internal/daemon ./internal/productevidence
 ```
 
-Result: passed. Implementation mutations and real-backend evidence remain
-pending and are not implied by this mechanical regression.
+Result: passed.
+
+Race and full regression commands:
+
+```sh
+go test -race -count=1 ./internal/backend/lima ./internal/manager \
+  ./internal/app ./internal/audit ./internal/productevidence \
+  ./internal/releasecompat
+go test -count=1 ./...
+scripts/test-projection-readiness-smoke.sh
+```
+
+Result: passed. The race run exposed one test-harness `io.Pipe` ownership race;
+the harness was corrected and the complete race selection then passed.
+
+The adversarial real probe and final local gate exposed and restored nine
+integration or evidence-harness defects:
+
+1. runtime-only shared-machine verification incorrectly required workspace
+   roots;
+2. generic shared transport metadata leaked into machine verification as a
+   partial workspace attachment;
+3. the daemon stream harness and audit schema omitted the new readiness
+   observation;
+4. the cancellation sampler terminated before proving the guest was blocked at
+   the pre-commit readiness boundary;
+5. a missing `limactl` shell binding masked cancellation diagnostics;
+6. failed-gate cleanup captured the daemon before `hideout clean`, although
+   `clean` could start a replacement daemon;
+7. the isolation-evidence smoke still treated a legacy log-only 031 envelope as
+   sufficient for the strengthened 032 real proof;
+8. doctor gave each broker request only one second of its five-second total
+   budget, so loaded runs disconnected and retried already-admitted work; and
+9. unbounded Go package parallelism on a high-core host starved bounded helper
+   processes and converted product timeouts into scheduler-load flakes.
+
+Each defect received a focused regression or a real-probe assertion before the
+restored suite passed.
+
+Clean exact-package command:
+
+```sh
+scripts/test-projection-readiness-lima-e2e.sh --require-real \
+  --fresh 10 --warm 30 \
+  --out .hideout-release-evidence/043-projection-readiness-real-gate2
+```
+
+Result: passed on real macOS arm64 Lima. The qualifying clean run bound commit
+`74ba7e61d2c7ac3c662e691be6e9ee0f82bf64a0`, the verified package, runtime
+`developer-standard@2026.07.0`, Darwin arm64 host, and Linux aarch64 guest.
+The canonical retained directory is regenerated from the final clean
+convergence commit so its manifest remains the exact source of candidate
+identity.
+
+The retained raw inventory contains 10 fresh samples, 30 warm samples, one
+concurrent pair, and one pre-commit cancellation sample. Independently
+recomputed nearest-rank results were fresh p95 27 ms and warm p95 14 ms;
+cancellation was 0 ms. Operator retries, target retries, ambient fallbacks,
+timeouts, unauthorized host effects, and cross-session access were all zero.
+The production evidence evaluator accepted all five required 030/032/039/043
+proof entries and every retained artifact digest.
+
+No matching clean Gate 3 was produced. The Gate 2 artifact therefore records
+`privacy.status=not-promoted`; this feature promotes first-attempt readiness and
+the direct projection/pack/grant flows, not clean alias privacy.
+
+## Final Local Convergence
+
+Commands:
+
+```sh
+scripts/test-gate0.sh
+markdownlint-cli2 'specs/043-projection-readiness-proof/**/*.md'
+scripts/test-doc-truth-smoke.sh
+git diff --check
+```
+
+Result: passed on 2026-07-23. Gate 0 ran Go tests with bounded package
+parallelism, all seven formal models, install/package contracts, every product
+smoke, strict 032/043 false-green fixtures, HostFS, daemon/PTY, lifecycle,
+first-run, UI, doctor/recovery, release hardening, and documentation truth.
+
+The first full-gate attempt correctly rejected the stale log-only 032 fixture;
+that input is now an expected negative case. Two subsequent unbounded-package
+runs exposed the broker request-budget and helper-scheduling flakes described
+above. After the request-budget regression and bounded Gate 0 concurrency were
+added, the complete gate passed from the beginning without a retry.
+
+All FR-001 through FR-026, SC-001 through SC-009, three user-story acceptance
+sets, listed edge cases, and the specification checklist now map to a named
+unit/race/mutation/schema/smoke/real-evidence result. The only conditional
+result is clean alias privacy: FR-022 and the third US3 scenario explicitly
+permit it to remain unpromoted when no matching Gate 3 artifact exists, and
+the retained artifact plus product docs record that exact state. No additional
+043 implementation task remains.

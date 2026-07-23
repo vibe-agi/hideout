@@ -145,8 +145,8 @@ altered-artifact, or `not-run` fixtures fail for the intended reason.
 - [X] T041 [US3] Implement the strict smoke producer/evaluator wrapper and add it to Gate 0 in `scripts/test-projection-readiness-smoke.sh` and `scripts/test-gate0.sh`
 - [X] T042 [US3] Implement the clean exact-package real producer for fresh, warm, concurrent, built-in, external-pack, durable-grant, no-fallback, and artifact-retention lanes in `scripts/test-projection-readiness-lima-e2e.sh` and `scripts/lib/gate2-projection.sh`
 - [X] T043 [US3] Require the strict 043 proof marker/artifacts from aggregate Gate 2 while retaining the existing 030/032/039 regression flows in `scripts/test-gate2-lima.sh`, `scripts/test-host-capability-projection-e2e.sh`, and `scripts/test-host-app-pack-e2e.sh`
-- [ ] T044 [US3] Build one clean exact package and retain evaluator-passing 10-fresh/30-warm/concurrent Gate 2 evidence under `.hideout-release-evidence/043-projection-readiness-real-gate2` using `scripts/test-projection-readiness-lima-e2e.sh`
-- [ ] T045 [US3] Run matching clean Gate 3 when prerequisites exist and either retain `artifacts/projection-privacy-gate3.json` or explicitly retain privacy as unpromoted in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T044 [US3] Build one clean exact package and retain evaluator-passing 10-fresh/30-warm/concurrent Gate 2 evidence under `.hideout-release-evidence/043-projection-readiness-real-gate2` using `scripts/test-projection-readiness-lima-e2e.sh`
+- [X] T045 [US3] Run matching clean Gate 3 when prerequisites exist and either retain `artifacts/projection-privacy-gate3.json` or explicitly retain privacy as unpromoted in `specs/043-projection-readiness-proof/adversarial-report.md`
 
 **Checkpoint**: Mechanical readiness, 032 external pack, and 039 durable grant
 are promoted only if their strict artifacts pass. Alias privacy is promoted
@@ -159,11 +159,11 @@ only when the matching clean Gate 3 artifact also passes.
 **Purpose**: Complete mutation evidence, local gates, product truth, and
 cross-artifact convergence without overstating unavailable real evidence.
 
-- [ ] T046 [P] Run focused Go tests, Linux supervisor tests, race suites, schema tests, and shell syntax checks from `specs/043-projection-readiness-proof/quickstart.md` and record results in `specs/043-projection-readiness-proof/adversarial-report.md`
-- [ ] T047 Complete the implementation-mutation and judge-negative-fixture matrices with exact commands, observed red failures, restored-green results, and retained limitations in `specs/043-projection-readiness-proof/adversarial-report.md`
-- [ ] T048 Run full `scripts/test-gate0.sh`, Markdown lint, docs-truth smoke, and `git diff --check`, then record exact results in `specs/043-projection-readiness-proof/adversarial-report.md`
-- [ ] T049 [P] Update only evidence-supported status, claim, design, test-plan, subsystem, threat-model, 039 proof, and remaining-debt statements in `docs/STATUS.md`, `docs/claim-boundaries.md`, `docs/privacy-run-design.md`, `docs/privacy-run-test-plan.md`, `docs/host-capability-projection.md`, `docs/host-app-recipes.md`, `docs/threat-model.md`, `docs/DEBT.md`, and `specs/039-host-app-persistent-grants/spec.md`
-- [ ] T050 Reconcile every FR, SC, acceptance scenario, and checklist item with implementation/evidence; append any real remaining work before marking 043 implemented in `specs/043-projection-readiness-proof/spec.md` and `specs/043-projection-readiness-proof/tasks.md`
+- [X] T046 [P] Run focused Go tests, Linux supervisor tests, race suites, schema tests, and shell syntax checks from `specs/043-projection-readiness-proof/quickstart.md` and record results in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T047 Complete the implementation-mutation and judge-negative-fixture matrices with exact commands, observed red failures, restored-green results, and retained limitations in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T048 Run full `scripts/test-gate0.sh`, Markdown lint, docs-truth smoke, and `git diff --check`, then record exact results in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T049 [P] Update only evidence-supported status, claim, design, test-plan, subsystem, threat-model, 039 proof, and remaining-debt statements in `docs/STATUS.md`, `docs/claim-boundaries.md`, `docs/privacy-run-design.md`, `docs/privacy-run-test-plan.md`, `docs/host-capability-projection.md`, `docs/host-app-recipes.md`, `docs/threat-model.md`, `docs/DEBT.md`, and `specs/039-trusted-host-app-grant/spec.md`
+- [X] T050 Reconcile every FR, SC, acceptance scenario, and checklist item with implementation/evidence; append any real remaining work before marking 043 implemented in `specs/043-projection-readiness-proof/spec.md` and `specs/043-projection-readiness-proof/tasks.md`
 
 ---
 

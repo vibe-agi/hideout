@@ -4,9 +4,9 @@
 
 > **Status: Implemented.** The 032 v1 lifecycle is covered by its three
 > artifact-backed Gate 0 proofs and an external-pack real macOS arm64 Lima Gate
-> 2 proof. The retained receipt records commit `644e6b53daaa`, `dirty=true`, and
-> manifest SHA-256 `a570514909514cd79d39493d58ec69e923bca39aa5f4ec31305181b68b536f83`;
-> it is private-alpha evidence, not clean release provenance.
+> 2 proof. The clean exact-package receipt is retained with the 043 readiness
+> and 030/039 flow artifacts under
+> `.hideout-release-evidence/043-projection-readiness-real-gate2/`.
 
 Community host-app recipes let an operator project a familiar command into a
 guest while Core performs one existing, typed host effect:
@@ -211,8 +211,8 @@ The registered 032 proof IDs are:
 These IDs back the current v1 claim. The first three are artifact-backed Gate 0
 proofs. The final proof records an externally installed pack reaching the
 existing generic host-app effect in real macOS arm64 Lima while proving scope,
-HostFS authority, lifecycle, no fallback, and redaction. The retained manifest
-is under `.hideout-release-evidence/host-app-pack-20260712T033608Z-644e6b53daaa/`
-in the validating worktree. Native runs, local-only fixtures, embedded recipes,
-static source inspection, package self-tests, and `not-run` records still cannot
-satisfy that real Gate 2 proof.
+HostFS authority, lifecycle, no fallback, and redaction. Its clean exact-package
+manifest and flow artifact are retained under
+`.hideout-release-evidence/043-projection-readiness-real-gate2/`. Native runs,
+local-only fixtures, embedded recipes, static source inspection, package
+self-tests, and `not-run` records still cannot satisfy that real Gate 2 proof.

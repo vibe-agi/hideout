@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-20
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "Make trusted-host-app usable for one-shot commands
 like `code .` by persisting an operator-granted trust as profile+workspace
@@ -27,6 +27,13 @@ A throwaway spike on real Lima (2026-07-20) proved the fix: authorize trusted
 host app as durable operator policy scoped to a profile and workspace — the same
 shape as a HostFS profile grant — so a later one-shot `code .` reuses it with no
 per-run approval. Safe mode is unchanged and remains the default.
+
+Clean promotion evidence was added by feature 043 on 2026-07-23. The strict
+exact-package macOS arm64 Lima Gate 2 proved initial refusal, host grant,
+separate-run reuse, revoke, and later refusal as
+`039.trusted-host-app-grant.real-gate2.persistent`. The canonical artifact is
+retained under
+`.hideout-release-evidence/043-projection-readiness-real-gate2/`.
 
 ## User Scenarios & Testing *(mandatory)*
 

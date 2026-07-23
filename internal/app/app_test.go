@@ -5536,6 +5536,41 @@ func TestDoctorReportsLimaHostFSDPresentWhenHostFSGrantsActive(t *testing.T) {
 	}
 }
 
+func TestCheckBrokerOpenAllowsBoundedSlowResponse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	served := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			served <- acceptErr
+			return
+		}
+		defer conn.Close()
+		var req broker.Request
+		if decodeErr := json.NewDecoder(conn).Decode(&req); decodeErr != nil {
+			served <- decodeErr
+			return
+		}
+		time.Sleep(1200 * time.Millisecond)
+		served <- json.NewEncoder(conn).Encode(broker.Response{
+			ID: req.ID, Decision: "allow", Status: "ok",
+		})
+	}()
+
+	resp := checkBrokerOpen(context.Background(), broker.TCPEndpoint(listener.Addr().String()), broker.Request{ID: "req_slow"})
+	if resp.Status != "ok" || resp.ID != "req_slow" {
+		t.Fatalf("slow bounded broker response was lost: %+v", resp)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDoctorReportsBrokenLimaMount(t *testing.T) {
 	home := t.TempDir()
 	fakeBin := t.TempDir()

@@ -517,10 +517,14 @@ claim requires real-backend proof across all three channels (identity
 environment, workspace namespace, mount metadata) with a per-channel detector
 self-test and a preserve-mode positive control.
 
-Real macOS arm64 Lima Gate 2 and Gate 3 validated these scoped claims on
-2026-07-11 at commit `644e6b53daaa`; the worktree was dirty, so the receipt is
-real-backend engineering evidence rather than clean release provenance. See
-`docs/host-capability-projection.md` for the bounded proof ids and digests.
+Feature 043's clean exact-package macOS arm64 Lima Gate 2 authenticates the
+complete projected-command catalog before target commit and re-proves the
+built-in, external-pack, and persistent-grant flows. It does not add command or
+host authority: readiness failure, drift, timeout, or cancellation stops before
+target and host effect. A matching clean Gate 3 was not produced, so the
+candidate's alias privacy status remains `not-promoted`; the older dirty Gate 3
+is engineering evidence only. See `docs/host-capability-projection.md` for the
+bounded proof IDs and non-claims.
 
 Required non-claims:
 
@@ -541,9 +545,8 @@ Required non-claims:
 
 032 expands the package supply-chain and app-selection attack surface around
 the existing provider. The controls below are implemented and covered by 032
-Gate 0 plus external-pack real macOS arm64 Lima Gate 2 evidence. The current
-receipt is dirty private-alpha evidence and does not establish clean release
-provenance or marketplace review.
+Gate 0 plus clean exact-package external-pack real macOS arm64 Lima Gate 2
+evidence retained with 043. This does not establish marketplace review.
 
 Threats and required controls:
 

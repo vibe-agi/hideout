@@ -678,8 +678,9 @@ guest.exec
 `host.app.open-resource` is an implemented capability with mode-dependent risk.
 Its safe facet opens a validated workspace resource through a registered,
 signature-checked host application recipe with provider-specific safeguards.
-Its trusted facet is high-authority and requires a visible, run-scoped operator
-grant. Neither facet means the resource itself is safe. A workspace file or
+Its trusted facet is high-authority and requires either a visible run-scoped
+operator decision or the durable, revocable profile+workspace grant added by
+039. Neither facet means the resource itself is safe. A workspace file or
 directory can be an execution payload for the host application, for example
 through editor workspace tasks, project settings, extensions, file
 associations, or other application-specific open hooks. Core must not guess
@@ -688,10 +689,12 @@ automatic execution where the target application supports it; providers that
 cannot do so remain higher-risk and fail closed without explicit policy and a
 typed decision path.
 
-This implemented capability statement covers the built-in 030 projection and
-the 032 community-pack lifecycle around that capability. The 032 external-pack
-claim additionally depends on its retained real macOS arm64 Lima Gate 2 proof;
-package lifecycle code, schemas, or local tests alone do not establish it.
+This implemented capability statement covers the built-in 030 projection, the
+039 durable grant, and the 032 community-pack lifecycle around that capability.
+Feature 043 adds an authenticated complete-catalog readiness barrier before
+target commit. The 030/032/039 real claims depend on their distinct proofs in
+the retained clean exact-package macOS arm64 Lima Gate 2; package lifecycle
+code, schemas, or local tests alone do not establish them.
 
 `network.connect` in Phase 1 means session network setup and route verification.
 It is not a per-socket firewall, per-request audit system, or packet policy
@@ -3051,11 +3054,11 @@ reauthorization. Discover-only `see*` visibility cannot open content. The
 recipe, guest intent, decision preview, response, and public evidence never
 receive the resolved host path.
 
-032 is implemented with all three artifact-backed Gate 0 proofs and the
-external-pack real macOS arm64 Lima Gate 2 proof. The current receipt is from a
-dirty private-alpha tree, not clean release provenance. Native, local-only,
-embedded, static-source, package-self-test, or `not-run` evidence cannot replace
-the real host-effect gate. The lifecycle guide is
+032 is implemented with all three artifact-backed Gate 0 proofs and a clean
+exact-package external-pack real macOS arm64 Lima Gate 2 proof retained under
+`.hideout-release-evidence/043-projection-readiness-real-gate2/`. Native,
+local-only, embedded, static-source, package-self-test, or `not-run` evidence
+cannot replace the real host-effect gate. The lifecycle guide is
 [host-app-recipes.md](host-app-recipes.md).
 
 Normal commands run inside the guest boundary by default:

@@ -548,31 +548,42 @@ reuse inference, or the separate 022 privacy lane cannot satisfy these claims.
 
 #### Required Gate 2 Step: Host Capability Projection
 
-`scripts/test-gate2-lima.sh` includes the 030 projection lane. The evidence
-wrapper is:
+Gate 0 runs `scripts/test-projection-readiness-smoke.sh` for strict schemas,
+mechanics, evaluator negative fixtures, and false-green shell fixtures. It
+cannot establish guest visibility or a host effect.
+
+`scripts/test-gate2-lima.sh` requires the strict 043 projection-readiness lane,
+which retains the 030 built-in, 032 external-pack, and 039 persistent-grant
+proofs from one clean exact package. The evidence wrapper is:
 
 ```bash
-scripts/test-host-capability-projection-e2e.sh --real-gate2 --require-real --out <dir>
+scripts/test-projection-readiness-lima-e2e.sh --require-real \
+  --fresh 10 --warm 30 --out <dir>
 ```
 
-The lane creates a real privacy profile and a preserve-mode control, builds the
-current tree's Linux shim (never an ambient PATH helper), and proves:
+The lane installs the verified package and fixed Linux helpers, creates fresh
+and warm exact session catalogs, and proves:
 
-- alias workspace, synthetic identity/Git, and guest mount metadata contain no
-  synthesized host username/home; each detector first matches an injected leak;
-- preserve mode exposes the host path as a positive control;
+- 10 fresh and 30 warm projected first targets complete without retry;
+- concurrent disjoint catalogs remain session-local;
+- the complete manifest, executable type/digest, ready/commit proof, timeout,
+  cancellation, and identity/catalog drift boundaries fail closed;
 - guest `code -g` reaches the explicit `host.app.open-resource` route and opens
   a code-signed host VS Code bundle with a run-scoped safe user-data directory;
 - a folder-open task marker stays absent, extensions are disabled, automatic
   tasks are off, and Workspace Trust is not disabled;
-- trusted mode refuses before approval, succeeds after claim/approve in the same
-  live session, and refuses after revoke.
+- an external pack passes exact authority/lifecycle/no-fallback checks; and
+- persistent trusted mode refuses, succeeds in a separate run after a host
+  grant, and refuses again after revoke.
 
-Required markers are `projection_privacy_three_channel=passed`,
-`projection_code_open=passed`, and `projection_trusted_grant=passed`. Local
-fixtures cannot satisfy these proof ids. The 2026-07-11 receipt is documented in
-`docs/host-capability-projection.md`; it records `dirty=true` and is not clean
-release provenance.
+The strict evaluator requires
+`043.projection-readiness.real-gate2.readiness`,
+`030.projection.real-gate2.code-open`,
+`030.projection.real-gate2.trusted-grant`,
+`032.host-app-pack.real-gate2.external`, and
+`039.trusted-host-app-grant.real-gate2.persistent`. Local, dirty, reduced,
+marker-only, package-mismatched, or `not-run` fixtures cannot satisfy them.
+Alias privacy remains a separate matching clean Gate 3 promotion.
 
 #### Optional Gate 2 Step: Lima Real-Run Reference Smoke
 
@@ -1429,9 +1440,8 @@ freshness requirement.
 
 ## Gate 032: Community Host-App Recipes
 
-Status: **Implemented.** The three artifact-backed Gate 0 proofs and the
-external-pack real macOS arm64 Lima Gate 2 proof are current. Their retained
-real receipt records `dirty=true`, so they are not clean release provenance.
+Status: **Implemented.** The three artifact-backed Gate 0 proofs and a clean
+exact-package external-pack real macOS arm64 Lima Gate 2 proof are current.
 
 ### Gate 0 Topology
 
@@ -1492,9 +1502,9 @@ proves all of the following:
 The real proof requires an external pack, a real Lima guest, the real supported
 host app, and observed host effect. Native runs, local-fast tests, embedded-only
 recipes, static source checks, package self-tests, and `not-run` records are
-false-green fixtures and cannot satisfy it. The current retained real manifest
-has SHA-256 `a570514909514cd79d39493d58ec69e923bca39aa5f4ec31305181b68b536f83`
-at commit `644e6b53daaa` with `dirty=true`.
+false-green fixtures and cannot satisfy it. The clean exact-package proof is
+retained with the 043 readiness and 030/039 flow artifacts under
+`.hideout-release-evidence/043-projection-readiness-real-gate2/`.
 
 ## Gate 034: Concurrent Run Sessions
 

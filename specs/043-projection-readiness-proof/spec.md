@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-23
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "Continue overall Hideout convergence by making projected host-app commands available on the first fresh environment run without a retry, closing the remaining 030 projection verification debt, and replacing dirty development receipts with clean exact-package real evidence for the built-in projection, external host-app pack, and persistent trusted grant paths."
 
@@ -36,6 +36,13 @@ Three convergence gaps remain:
 
 This feature closes those gaps without adding commands, configuration,
 capabilities, application providers, or host authority.
+
+Implementation outcome (2026-07-23): the complete session catalog is now
+authenticated before commit; all four historical 030 observations have direct
+mutation-sensitive proofs; and a clean exact-package macOS arm64 Lima Gate 2
+passed 10 fresh plus 30 warm first attempts, concurrency, built-in projection,
+external pack, and persistent grant/revoke. Matching clean Gate 3 evidence was
+not produced, so alias privacy remains explicitly unpromoted.
 
 ## User Scenarios & Testing *(mandatory)*
 

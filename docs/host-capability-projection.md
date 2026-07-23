@@ -16,8 +16,9 @@ typed brokered routes rather than by weakening isolation.
 
 The built-in 030 `code` projection and the 032 community recipe lifecycle are
 implemented. The latter adds local and exact-commit intake plus lifecycle
-management without adding a new Core host effect. Both current receipts come
-from dirty private-alpha trees and are not clean release provenance.
+management without adding a new Core host effect. Feature 043 retains one clean
+exact-package Gate 2 covering first-attempt readiness and the distinct
+030/032/039 real flows. Clean alias privacy still requires a matching Gate 3.
 
 ## Layers
 
@@ -192,17 +193,21 @@ preserve-mode positive control. Gate 3 re-verified alias mode together with
 proxy-env absence, DoH forward resolution, connected-subnet DNS blocking, and
 enforced privilege separation.
 
-The 2026-07-11 evidence is tied to commit `644e6b53daaa` with `dirty=true`:
-the Gate 2 public log digest is
-`cd85203a292bfb62d4f31b7a0486ebca1be7738ff9fd5e2dd3a602a619a340a8`,
-and the Gate 3 public log digest is
-`4586fb3d68d34cc3c9a0204880976a7356987a920596bd39748f56fd10dedf97`.
-This is real backend validation, but not clean release provenance. A future
-`not-run` record remains honest supporting evidence and does not satisfy the
-guest-visible or privacy claims.
+Feature 043 now retains clean exact-package Gate 2 evidence under
+`.hideout-release-evidence/043-projection-readiness-real-gate2/`. The strict
+production evaluator accepts the complete-catalog first-attempt readiness,
+built-in safe projection, external pack, and durable grant/revoke artifacts.
+The raw run passed 10 fresh and 30 warm first attempts, one concurrent
+disjoint-catalog pair, and pre-commit cancellation with zero retry, fallback,
+timeout, unauthorized host effect, or cross-session access.
 
-Those 030 receipts do not validate 032. Community recipe completion separately
-requires artifact-backed `032.host-app-pack.gate0.*` evidence and
-`032.host-app-pack.real-gate2.external` from an externally installed pack.
-Native, local-only, embedded, package-self-test, static-source, and `not-run`
-evidence cannot replace that real Gate 2 proof.
+No matching clean Gate 3 was produced. The retained 043 artifact therefore
+records `privacy.status=not-promoted`. The older 2026-07-11 dirty Gate 3 remains
+useful real-backend engineering evidence, but it is not clean privacy
+provenance and cannot be substituted into the newer candidate.
+
+030 evidence does not validate 032 by implication. Community recipe completion
+separately requires artifact-backed `032.host-app-pack.gate0.*` evidence and
+`032.host-app-pack.real-gate2.external` from an externally installed pack; the
+043 clean Gate 2 contains that distinct proof. Native, local-only, embedded,
+package-self-test, static-source, and `not-run` evidence cannot replace it.
