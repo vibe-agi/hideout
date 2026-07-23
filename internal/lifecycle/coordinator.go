@@ -583,6 +583,222 @@ func (c *Coordinator) ForgetEnvironment(environmentID string) error {
 	return nil
 }
 
+// BeginDisposal serializes one exact disposable identity with attach and stop,
+// then persists authorization before Manager may perform backend cleanup.
+// Repeating it after a daemon restart resumes the last durable forward phase.
+func (c *Coordinator) BeginDisposal(ctx context.Context, request DisposalRequest) (DisposalIntent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := request.validate(); err != nil {
+		return DisposalIntent{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return DisposalIntent{}, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing || c.closed {
+		return DisposalIntent{}, ErrCoordinatorClosed
+	}
+	state, err := c.loadEnvironmentLocked(request.EnvironmentID)
+	if err != nil {
+		return DisposalIntent{}, err
+	}
+	if state.reconciling {
+		return DisposalIntent{}, ErrReconciliationInFlight
+	}
+	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation ||
+		attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
+		return DisposalIntent{}, ErrMutationBlockedByActivity
+	}
+	if state.journal.StartGeneration == 0 {
+		generation := request.Generation
+		if generation == 0 {
+			generation = 1
+		}
+		state.journal = newJournal(request.EnvironmentID, c.daemonID, generation, c.nowUTC())
+		state.journal.Reconciliation = blockedReconciliation(c.daemonID, "disposal-in-progress", c.nowUTC())
+	} else if request.Generation != 0 && request.Generation != state.journal.StartGeneration {
+		return DisposalIntent{}, errors.New("lifecycle disposal request generation mismatch")
+	}
+
+	now := c.nowUTC()
+	if state.journal.Disposal == nil {
+		state.journal.Disposal = &DisposalIntent{
+			Schema: DisposalIntentSchema, Authority: DisposalAuthorityRunRM,
+			Backend: request.Backend, InstanceName: request.InstanceName,
+			RecordDigest: request.RecordDigest, Generation: state.journal.StartGeneration,
+			State: DisposalStatePlanned, RequestedAt: now, UpdatedAt: now,
+		}
+	} else {
+		intent := state.journal.Disposal
+		if intent.Backend != request.Backend || intent.InstanceName != request.InstanceName ||
+			intent.RecordDigest != request.RecordDigest || intent.Generation != state.journal.StartGeneration {
+			return DisposalIntent{}, errors.New("lifecycle disposal intent identity mismatch")
+		}
+		if intent.State == DisposalStateBlocked {
+			if err := ValidateDisposalTransition(intent.State, DisposalStatePlanned); err != nil {
+				return DisposalIntent{}, err
+			}
+			intent.State = DisposalStatePlanned
+			intent.ReasonCode = ""
+			intent.UpdatedAt = now
+		}
+	}
+	if err := c.cancelDeadlineLocked(state); err != nil {
+		return DisposalIntent{}, err
+	}
+	state.mutation = true
+	state.blocked = true
+	state.journal.Reconciliation = blockedReconciliation(c.daemonID, "disposal-in-progress", now)
+	if err := c.persistLocked(state); err != nil {
+		state.mutation = false
+		return DisposalIntent{}, err
+	}
+	c.emitLocked(Event{
+		EnvironmentID: request.EnvironmentID, Generation: state.journal.StartGeneration,
+		Kind: "disposal-started", At: now,
+	})
+	return *state.journal.Disposal, nil
+}
+
+// AdvanceDisposal persists one forward proof boundary. It never invokes or
+// assumes a backend operation.
+func (c *Coordinator) AdvanceDisposal(ctx context.Context, environmentID, recordDigest, nextState string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, intent, err := c.activeDisposalLocked(environmentID, recordDigest)
+	if err != nil {
+		return err
+	}
+	if nextState == DisposalStateBlocked {
+		return errors.New("blocked disposal requires a reason")
+	}
+	if err := ValidateDisposalTransition(intent.State, nextState); err != nil {
+		return err
+	}
+	intent.State = nextState
+	intent.ReasonCode = ""
+	intent.UpdatedAt = c.nowUTC()
+	state.journal.Reconciliation = blockedReconciliation(c.daemonID, "disposal-in-progress", c.nowUTC())
+	if err := c.persistLocked(state); err != nil {
+		return err
+	}
+	c.emitLocked(Event{
+		EnvironmentID: environmentID, Generation: state.journal.StartGeneration,
+		Kind: "disposal-progressed", ReasonCode: nextState, At: c.nowUTC(),
+	})
+	return nil
+}
+
+// BlockDisposal records a bounded fail-closed outcome and releases the
+// daemon-local mutation slot so a later revalidated retry can resume.
+func (c *Coordinator) BlockDisposal(ctx context.Context, environmentID, recordDigest, reasonCode string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !validDisposalReasonCode(reasonCode) {
+		return errors.New("lifecycle disposal block reason is invalid")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, intent, err := c.disposalLocked(environmentID, recordDigest)
+	if err != nil {
+		return err
+	}
+	if err := ValidateDisposalTransition(intent.State, DisposalStateBlocked); err != nil {
+		return err
+	}
+	intent.State = DisposalStateBlocked
+	intent.ReasonCode = reasonCode
+	intent.UpdatedAt = c.nowUTC()
+	state.mutation = false
+	state.blocked = true
+	state.journal.Reconciliation = blockedReconciliation(c.daemonID, reasonCode, c.nowUTC())
+	persistErr := c.persistLocked(state)
+	c.emitLocked(Event{
+		EnvironmentID: environmentID, Generation: state.journal.StartGeneration,
+		Kind: "disposal-blocked", ReasonCode: reasonCode, At: c.nowUTC(),
+	})
+	return persistErr
+}
+
+// CompleteDisposalMetadata removes only the journal/coordinator identity after
+// Manager has persisted the metadata-cleaning boundary. Manager still owns the
+// record-last removal that follows.
+func (c *Coordinator) CompleteDisposalMetadata(ctx context.Context, environmentID, recordDigest string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state, intent, err := c.activeDisposalLocked(environmentID, recordDigest)
+	if err != nil {
+		return err
+	}
+	if intent.State != DisposalStateMetadataCleaning {
+		return errors.New("lifecycle disposal metadata is not ready for completion")
+	}
+	if state.timer != nil {
+		state.timer.Stop()
+		state.timer = nil
+	}
+	if err := c.store.Remove(environmentID); err != nil {
+		state.mutation = false
+		state.blocked = true
+		state.journal.Reconciliation = blockedReconciliation(c.daemonID, "journal-removal-failed", c.nowUTC())
+		return errors.Join(err, c.persistLocked(state))
+	}
+	delete(c.environments, environmentID)
+	c.emitLocked(Event{
+		EnvironmentID: environmentID, Generation: intent.Generation,
+		Kind: "disposal-metadata-removed", At: c.nowUTC(),
+	})
+	return nil
+}
+
+func (c *Coordinator) activeDisposalLocked(environmentID, recordDigest string) (*registryEnvironment, *DisposalIntent, error) {
+	state, intent, err := c.disposalLocked(environmentID, recordDigest)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !state.mutation {
+		return nil, nil, errors.New("lifecycle disposal mutation is not active")
+	}
+	return state, intent, nil
+}
+
+func (c *Coordinator) disposalLocked(environmentID, recordDigest string) (*registryEnvironment, *DisposalIntent, error) {
+	if c.closing || c.closed {
+		return nil, nil, ErrCoordinatorClosed
+	}
+	if !idPattern.MatchString(environmentID) || !lowerHex(recordDigest, 64) {
+		return nil, nil, errors.New("lifecycle disposal lease identity is invalid")
+	}
+	state, err := c.loadEnvironmentLocked(environmentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if state.journal.Disposal == nil || state.journal.Disposal.RecordDigest != recordDigest {
+		return nil, nil, errors.New("lifecycle disposal lease identity mismatch")
+	}
+	return state, state.journal.Disposal, nil
+}
+
 // RunDestructiveMutation serializes an explicit Manager-owned destructive
 // environment operation with attach, idle stop, and explicit stop. Lifecycle
 // never performs the mutation itself. It records blocked discovery truth before
@@ -716,6 +932,10 @@ func (c *Coordinator) statusLocked(environmentID string, state *registryEnvironm
 		stopState = state.journal.StopAttempt.State
 	}
 	status := BuildStatus(environmentID, state.journal.StartGeneration, observation, state.journal.Resources, state.journal.Facts, deadline, state.journal.Reconciliation, stopState)
+	if state.journal.Disposal != nil {
+		status.DisposalPhase = state.journal.Disposal.State
+		status.DisposalReasonCode = state.journal.Disposal.ReasonCode
+	}
 	status.EstablishingSessions = len(state.establishing)
 	if status.EstablishingSessions != 0 {
 		status.Activity = ActivityEstablishing

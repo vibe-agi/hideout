@@ -253,6 +253,7 @@ func Start(opts Options) (*Daemon, error) {
 		}
 	}
 	core.LifecycleResources = lifecycleCoordinator
+	core.LifecycleDisposals = lifecycleCoordinator
 	publishBackground := func(id, op, status string) {
 		bus.publishBackground(id, op, status)
 		_, _ = core.CreateNotice(decision.Notice{
@@ -346,6 +347,7 @@ func Start(opts Options) (*Daemon, error) {
 	go func() { _ = d.server.Serve(ln) }()
 	go func() { _ = d.sessionServer.serve(sessionListener) }()
 	d.startLifecycleReconciliation(lifecycleRecords)
+	d.startMissingDisposableRecovery(missingLifecycleRecords)
 	return d, nil
 }
 

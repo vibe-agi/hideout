@@ -16,6 +16,25 @@
     "idleDeadline": { "type": "string", "format": "date-time" },
     "reasonCode": { "type": "string", "maxLength": 128 },
     "reconciliation": { "type": "string", "maxLength": 32 },
+    "disposalPhase": { "enum": ["planned", "backend-absent", "metadata-cleaning", "blocked"] },
+    "disposalReasonCode": {
+      "enum": [
+        "record-retention-failed",
+        "backend-observation-unproved",
+        "backend-cleanup-failed",
+        "backend-absence-unproved",
+        "backend-absence-checkpoint-failed",
+        "owner-metadata-unprovable",
+        "owner-metadata-cleanup-failed",
+        "runtime-cleanup-failed",
+        "gateway-cleanup-failed",
+        "metadata-checkpoint-failed",
+        "journal-removal-failed",
+        "backend-provider-unavailable",
+        "missing-record-backend-not-absent",
+        "missing-record-intent-state-invalid"
+      ]
+    },
     "pins": { "$ref": "#/$defs/resources" },
     "drains": { "$ref": "#/$defs/resources" },
     "retained": { "$ref": "#/$defs/resources", "description": "Bounded historical classification facts; not an authoritative current retained-data inventory." },

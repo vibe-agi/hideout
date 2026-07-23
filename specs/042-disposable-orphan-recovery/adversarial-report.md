@@ -66,5 +66,50 @@ automatically recoverable.
 
 ## Evidence Log
 
-Implementation, mutation, model, randomized-schedule, and real-backend evidence
-will be appended here as the corresponding tasks complete.
+### Stable-absence mutation
+
+The stable absence loop was temporarily weakened from two observations to one
+and the exact transient-absence test was run:
+
+```text
+go test -count=1 \
+  -run 'TestRecoverDisposableEnvironmentRetainsBlockedIntentOnCleanupOrProofFailure/transient_absence' \
+  -v ./internal/manager
+```
+
+The mutation failed red with `unproved recovery returned success`. Restoring
+the two-observation requirement returns the test to green. This establishes
+that the positive recovery result depends on the stable-absence judge rather
+than only cleanup callback success or one transient inventory sample.
+
+Further model, randomized-schedule, and real-backend evidence will be appended
+as the corresponding tasks complete.
+
+### Closed authority and zero-call matrix
+
+The Manager recovery matrix independently removed or contradicted each proof
+and asserted both retained records and zero typed cleanup calls:
+
+```text
+go test -count=1 \
+  -run 'TestRecoverDisposableEnvironmentRefusesUnauthorizedOrUnprovedMatrix' \
+  -v ./internal/manager
+```
+
+The passing cases are:
+
+- non-disposable record;
+- `rm-*` name without the disposable bit;
+- error status without the disposable bit;
+- live session owner;
+- structurally unprovable owner;
+- unknown backend observation;
+- observation for a foreign instance;
+- durable intent/current-record digest mismatch.
+
+Daemon tests separately prove that valid intent-only residue invokes no backend
+cleanup and converges only after two exact absent observations. The existing
+legacy journal-only test remains blocked with
+`environment-record-unavailable`. Public lifecycle status exposes only the
+closed disposal phase/reason fields; record digest and instance identity are
+absent, and an injected unregistered `cap_*` reason is rejected.

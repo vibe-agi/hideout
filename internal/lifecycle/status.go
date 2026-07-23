@@ -40,6 +40,8 @@ type Status struct {
 	IdleDeadline         *time.Time        `json:"idleDeadline,omitempty"`
 	ReasonCode           string            `json:"reasonCode,omitempty"`
 	Reconciliation       string            `json:"reconciliation"`
+	DisposalPhase        string            `json:"disposalPhase,omitempty"`
+	DisposalReasonCode   string            `json:"disposalReasonCode,omitempty"`
 	Pins                 []ResourceSummary `json:"pins,omitempty"`
 	Drains               []ResourceSummary `json:"drains,omitempty"`
 	Retained             []ResourceSummary `json:"retained,omitempty"`

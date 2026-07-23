@@ -42,6 +42,9 @@ type Core struct {
 	// dynamic session resources in the daemon-owned lifecycle journal without
 	// granting Manager or the journal any capability authority.
 	LifecycleResources lifecycle.SessionResourceRegistrar
+	// LifecycleDisposals coordinates durable --rm destruction intent. It owns no
+	// backend capability; Manager supplies and executes the typed provider.
+	LifecycleDisposals lifecycle.DisposalCoordinator
 	// RuntimeResolver is a test seam. Production Core construction leaves it nil
 	// and therefore resolves only the package-embedded catalog.
 	RuntimeResolver            func(runtimecatalog.Selection) (runtimecatalog.Resolution, error)
@@ -61,6 +64,9 @@ type Core struct {
 	// NetworkGateways owns host-loopback, per-environment egress selectors. Core
 	// keeps only the registry pointer; guest routing remains backend-controlled.
 	NetworkGateways *network.GatewayRegistry
+	// disposableGatewayCloser is a focused test seam. Production disposal uses
+	// NetworkGateways directly.
+	disposableGatewayCloser func(string) error
 }
 
 const EnvironmentSummarySchema = "hideout.environment-summary/v1"

@@ -31,6 +31,10 @@ func TestLifecycleStatusSchemaAcceptsAllActivitiesAndRejectsUnknownFields(t *tes
 		if activity == ActivityNotApplicable {
 			status.BackendState = "not-applicable"
 		}
+		if activity == ActivityBlocked {
+			status.DisposalPhase = DisposalStateBlocked
+			status.DisposalReasonCode = DisposalReasonBackendObservationUnproved
+		}
 		if err := validateLifecycleJSON(schema, status); err != nil {
 			t.Fatalf("activity %s: %v", activity, err)
 		}

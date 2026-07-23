@@ -68,6 +68,9 @@ func (d *Daemon) launchLifecycleReconciliation(record environment.Record) {
 			return
 		}
 		d.reconcileLifecycleRecord(d.lifecycleCtx, record)
+		if d.lifecycleCtx.Err() == nil && record.Disposable {
+			d.recoverDisposableRecord(d.lifecycleCtx, record)
+		}
 	}()
 }
 

@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,7 +16,39 @@ const (
 	DisposalStateBackendAbsent    = "backend-absent"
 	DisposalStateMetadataCleaning = "metadata-cleaning"
 	DisposalStateBlocked          = "blocked"
+
+	DisposalReasonRecordRetentionFailed       = "record-retention-failed"
+	DisposalReasonBackendObservationUnproved  = "backend-observation-unproved"
+	DisposalReasonBackendCleanupFailed        = "backend-cleanup-failed"
+	DisposalReasonBackendAbsenceUnproved      = "backend-absence-unproved"
+	DisposalReasonBackendCheckpointFailed     = "backend-absence-checkpoint-failed"
+	DisposalReasonOwnerMetadataUnproved       = "owner-metadata-unprovable"
+	DisposalReasonOwnerMetadataCleanupFailed  = "owner-metadata-cleanup-failed"
+	DisposalReasonRuntimeCleanupFailed        = "runtime-cleanup-failed"
+	DisposalReasonGatewayCleanupFailed        = "gateway-cleanup-failed"
+	DisposalReasonMetadataCheckpointFailed    = "metadata-checkpoint-failed"
+	DisposalReasonJournalRemovalFailed        = "journal-removal-failed"
+	DisposalReasonBackendProviderUnavailable  = "backend-provider-unavailable"
+	DisposalReasonMissingRecordBackendPresent = "missing-record-backend-not-absent"
+	DisposalReasonMissingRecordStateInvalid   = "missing-record-intent-state-invalid"
 )
+
+var disposalReasonCodes = []string{
+	DisposalReasonRecordRetentionFailed,
+	DisposalReasonBackendObservationUnproved,
+	DisposalReasonBackendCleanupFailed,
+	DisposalReasonBackendAbsenceUnproved,
+	DisposalReasonBackendCheckpointFailed,
+	DisposalReasonOwnerMetadataUnproved,
+	DisposalReasonOwnerMetadataCleanupFailed,
+	DisposalReasonRuntimeCleanupFailed,
+	DisposalReasonGatewayCleanupFailed,
+	DisposalReasonMetadataCheckpointFailed,
+	DisposalReasonJournalRemovalFailed,
+	DisposalReasonBackendProviderUnavailable,
+	DisposalReasonMissingRecordBackendPresent,
+	DisposalReasonMissingRecordStateInvalid,
+}
 
 // DisposalIntent is durable coordination evidence. It binds previously
 // validated --rm authority to one exact record digest and backend instance; it
@@ -31,6 +64,27 @@ type DisposalIntent struct {
 	RequestedAt  time.Time `json:"requestedAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	ReasonCode   string    `json:"reasonCode,omitempty"`
+}
+
+// DisposalRequest carries only immutable identity proof. It deliberately has
+// no backend handle or callback: lifecycle coordinates destructive admission,
+// while Manager remains the cleanup authority.
+type DisposalRequest struct {
+	EnvironmentID string
+	Backend       string
+	InstanceName  string
+	RecordDigest  string
+	Generation    uint64
+}
+
+// DisposalCoordinator is the narrow lifecycle protocol injected into Manager.
+// Completion removes lifecycle metadata only; the environment record remains
+// Manager-owned and is removed last.
+type DisposalCoordinator interface {
+	BeginDisposal(context.Context, DisposalRequest) (DisposalIntent, error)
+	AdvanceDisposal(context.Context, string, string, string) error
+	BlockDisposal(context.Context, string, string, string) error
+	CompleteDisposalMetadata(context.Context, string, string) error
 }
 
 func (intent DisposalIntent) Validate(journalGeneration uint64) error {
@@ -57,7 +111,7 @@ func (intent DisposalIntent) Validate(journalGeneration uint64) error {
 			return errors.New("active lifecycle disposal intent cannot carry a reason")
 		}
 	case DisposalStateBlocked:
-		if !idPattern.MatchString(intent.ReasonCode) {
+		if !validDisposalReasonCode(intent.ReasonCode) {
 			return errors.New("blocked lifecycle disposal intent requires a reason")
 		}
 	default:
@@ -108,4 +162,23 @@ func lowerHex(value string, length int) bool {
 func isUTC(value time.Time) bool {
 	_, offset := value.Zone()
 	return offset == 0
+}
+
+func validDisposalReasonCode(value string) bool {
+	for _, candidate := range disposalReasonCodes {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func (request DisposalRequest) validate() error {
+	if !idPattern.MatchString(request.EnvironmentID) ||
+		!idPattern.MatchString(request.Backend) ||
+		!idPattern.MatchString(request.InstanceName) ||
+		!lowerHex(request.RecordDigest, 64) {
+		return errors.New("lifecycle disposal request identity is invalid")
+	}
+	return nil
 }

@@ -1,12 +1,16 @@
 package lifecycle
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/backend"
 )
 
 func TestDisposalIntentValidationAndTransitionsAreClosed(t *testing.T) {
@@ -127,4 +131,190 @@ func validDisposalIntent(generation uint64, now time.Time) *DisposalIntent {
 		RecordDigest: strings.Repeat("a", 64), Generation: generation,
 		State: DisposalStatePlanned, RequestedAt: now, UpdatedAt: now,
 	}
+}
+
+func TestCoordinatorDisposalPersistsResumesAndCompletesEveryCrashCut(t *testing.T) {
+	root := privateLifecycleRoot(t)
+	now := time.Date(2026, 7, 23, 2, 0, 0, 0, time.UTC)
+	request := testDisposalRequest()
+
+	coordinator := disposalCoordinatorAt(t, root, "daemon-one", now)
+	intent, err := coordinator.BeginDisposal(context.Background(), request)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if intent.State != DisposalStatePlanned || intent.Generation != 1 {
+		t.Fatalf("planned intent=%+v", intent)
+	}
+	assertStoredDisposalState(t, root, request.EnvironmentID, DisposalStatePlanned)
+	if _, err := coordinator.BeginDisposal(context.Background(), request); !errors.Is(err, ErrMutationBlockedByActivity) {
+		t.Fatalf("parallel disposal error=%v", err)
+	}
+	if _, err := coordinator.BeginAttach(context.Background(), AttachRequest{
+		EnvironmentID: request.EnvironmentID, InstanceName: request.InstanceName, SessionID: "ses-blocked",
+		Observation: backend.LifecycleObservation{
+			State: backend.LifecycleRunning, InstanceName: request.InstanceName,
+			BootID: testBootID, ObservedAt: now,
+		},
+	}); !errors.Is(err, ErrAttachBlocked) {
+		t.Fatalf("attach during disposal error=%v", err)
+	}
+
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	coordinator = disposalCoordinatorAt(t, root, "daemon-two", now.Add(time.Second))
+	intent, err = coordinator.BeginDisposal(context.Background(), request)
+	if err != nil || intent.State != DisposalStatePlanned {
+		t.Fatalf("resume planned intent=%+v err=%v", intent, err)
+	}
+	if err := coordinator.AdvanceDisposal(context.Background(), request.EnvironmentID, request.RecordDigest, DisposalStateBackendAbsent); err != nil {
+		t.Fatalf("advance backend absent: %v", err)
+	}
+	assertStoredDisposalState(t, root, request.EnvironmentID, DisposalStateBackendAbsent)
+
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	coordinator = disposalCoordinatorAt(t, root, "daemon-three", now.Add(2*time.Second))
+	intent, err = coordinator.BeginDisposal(context.Background(), request)
+	if err != nil || intent.State != DisposalStateBackendAbsent {
+		t.Fatalf("resume backend-absent intent=%+v err=%v", intent, err)
+	}
+	if err := coordinator.AdvanceDisposal(context.Background(), request.EnvironmentID, request.RecordDigest, DisposalStateMetadataCleaning); err != nil {
+		t.Fatalf("advance metadata cleaning: %v", err)
+	}
+	assertStoredDisposalState(t, root, request.EnvironmentID, DisposalStateMetadataCleaning)
+
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+	coordinator = disposalCoordinatorAt(t, root, "daemon-four", now.Add(3*time.Second))
+	intent, err = coordinator.BeginDisposal(context.Background(), request)
+	if err != nil || intent.State != DisposalStateMetadataCleaning {
+		t.Fatalf("resume metadata-cleaning intent=%+v err=%v", intent, err)
+	}
+	if err := coordinator.CompleteDisposalMetadata(context.Background(), request.EnvironmentID, request.RecordDigest); err != nil {
+		t.Fatalf("complete metadata: %v", err)
+	}
+	if _, err := (JournalStore{Root: root}).Load(request.EnvironmentID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("journal survived complete disposal: %v", err)
+	}
+}
+
+func TestCoordinatorDisposalFailsClosedAndBlockedIntentCanBeRevalidated(t *testing.T) {
+	root := privateLifecycleRoot(t)
+	now := time.Date(2026, 7, 23, 3, 0, 0, 0, time.UTC)
+	coordinator := disposalCoordinatorAt(t, root, "daemon-one", now)
+	request := testDisposalRequest()
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := coordinator.BeginDisposal(cancelled, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled begin error=%v", err)
+	}
+	if _, err := (JournalStore{Root: root}).Load(request.EnvironmentID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled begin persisted journal: %v", err)
+	}
+
+	if _, err := coordinator.BeginDisposal(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.BlockDisposal(context.Background(), request.EnvironmentID, request.RecordDigest, DisposalReasonOwnerMetadataUnproved); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	journal := assertStoredDisposalState(t, root, request.EnvironmentID, DisposalStateBlocked)
+	if journal.Disposal.ReasonCode != DisposalReasonOwnerMetadataUnproved {
+		t.Fatalf("block reason=%q", journal.Disposal.ReasonCode)
+	}
+	statuses := coordinator.Snapshot()
+	if len(statuses) != 1 || statuses[0].DisposalPhase != DisposalStateBlocked ||
+		statuses[0].DisposalReasonCode != DisposalReasonOwnerMetadataUnproved {
+		t.Fatalf("disposal status=%+v", statuses)
+	}
+	statusData, err := json.Marshal(statuses[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(statusData), request.RecordDigest) ||
+		strings.Contains(string(statusData), request.InstanceName) {
+		t.Fatalf("public disposal status leaked durable identity: %s", statusData)
+	}
+	if err := coordinator.BlockDisposal(context.Background(), request.EnvironmentID, request.RecordDigest, "cap_0123456789abcdef"); err == nil {
+		t.Fatal("unregistered disposal reason code was accepted")
+	}
+
+	mismatch := request
+	mismatch.RecordDigest = strings.Repeat("b", 64)
+	if _, err := coordinator.BeginDisposal(context.Background(), mismatch); err == nil {
+		t.Fatal("mismatched record digest resumed durable authority")
+	}
+	assertStoredDisposalState(t, root, request.EnvironmentID, DisposalStateBlocked)
+
+	intent, err := coordinator.BeginDisposal(context.Background(), request)
+	if err != nil || intent.State != DisposalStatePlanned || intent.ReasonCode != "" {
+		t.Fatalf("revalidated intent=%+v err=%v", intent, err)
+	}
+	if err := coordinator.AdvanceDisposal(context.Background(), request.EnvironmentID, mismatch.RecordDigest, DisposalStateBackendAbsent); err == nil {
+		t.Fatal("mismatched lease advanced disposal")
+	}
+	if err := coordinator.AdvanceDisposal(context.Background(), request.EnvironmentID, request.RecordDigest, DisposalStateMetadataCleaning); err == nil {
+		t.Fatal("skipped backend-absent transition")
+	}
+}
+
+func TestCoordinatorDisposalAdmissionRejectsActiveHandle(t *testing.T) {
+	coordinator, _ := newTestCoordinator(t, false, nil)
+	registration, err := coordinator.BeginAttach(context.Background(), testAttachRequest(backend.LifecycleRunning, testBootID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testDisposalRequest()
+	request.EnvironmentID = registration.Incarnation().EnvironmentID
+	request.InstanceName = registration.Incarnation().InstanceName
+	request.Generation = registration.Incarnation().StartGeneration
+	if _, err := coordinator.BeginDisposal(context.Background(), request); !errors.Is(err, ErrMutationBlockedByActivity) {
+		t.Fatalf("active handle admission error=%v", err)
+	}
+}
+
+func privateLifecycleRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func disposalCoordinatorAt(t *testing.T, root, daemonID string, now time.Time) *Coordinator {
+	t.Helper()
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Store: JournalStore{Root: root}, DaemonID: daemonID,
+		IdleGrace: DefaultIdleGrace, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coordinator
+}
+
+func testDisposalRequest() DisposalRequest {
+	return DisposalRequest{
+		EnvironmentID: "env-disposable", Backend: "lima",
+		InstanceName: "hideout-default-env-disposable",
+		RecordDigest: strings.Repeat("a", 64), Generation: 1,
+	}
+}
+
+func assertStoredDisposalState(t *testing.T, root, environmentID, state string) Journal {
+	t.Helper()
+	journal, err := (JournalStore{Root: root}).Load(environmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.Disposal == nil || journal.Disposal.State != state {
+		t.Fatalf("journal disposal=%+v want state %q", journal.Disposal, state)
+	}
+	return journal
 }

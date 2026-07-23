@@ -48,16 +48,16 @@
 
 ### Tests For User Story 1
 
-- [ ] T009 [P] [US1] Add failing coordinator tests for intent creation, resume, serialization, cancellation, and every durable crash cut in `internal/lifecycle/disposal_test.go`
-- [ ] T010 [P] [US1] Add failing Manager tests for stale-owner cleanup, typed backend deletion, two-sample exact absence, gateway/runtime cleanup, and retained failure state in `internal/manager/disposable_recovery_test.go`
-- [ ] T011 [P] [US1] Add failing daemon restart tests for bounded worker recovery, early status availability, shutdown interruption, and multiple candidates in `internal/daemon/disposable_recovery_test.go`
+- [X] T009 [P] [US1] Add failing coordinator tests for intent creation, resume, serialization, cancellation, and every durable crash cut in `internal/lifecycle/disposal_test.go`
+- [X] T010 [P] [US1] Add failing Manager tests for stale-owner cleanup, typed backend deletion, two-sample exact absence, gateway/runtime cleanup, and retained failure state in `internal/manager/disposable_recovery_test.go`
+- [X] T011 [P] [US1] Add failing daemon restart tests for bounded worker recovery, early status availability, shutdown interruption, and multiple candidates in `internal/daemon/disposable_recovery_test.go`
 
 ### Implementation For User Story 1
 
-- [ ] T012 [US1] Implement the coordinator-owned disposal admission/resume protocol and mutation exclusion in `internal/lifecycle/disposal.go` and `internal/lifecycle/coordinator.go`
-- [ ] T013 [US1] Implement the Manager-owned recovery proof and cleanup transaction in `internal/manager/disposable_recovery.go`
-- [ ] T014 [US1] Implement bounded daemon startup recovery workers and lifecycle reconciliation handoff in `internal/daemon/disposable_recovery.go`, `internal/daemon/daemon.go`, and `internal/daemon/lifecycle.go`
-- [ ] T015 [US1] Record a mutation that disables durable intent or stable absence and prove the US1 tests fail, then restore it and document the result in `specs/042-disposable-orphan-recovery/adversarial-report.md`
+- [X] T012 [US1] Implement the coordinator-owned disposal admission/resume protocol and mutation exclusion in `internal/lifecycle/disposal.go` and `internal/lifecycle/coordinator.go`
+- [X] T013 [US1] Implement the Manager-owned recovery proof and cleanup transaction in `internal/manager/disposable_recovery.go`
+- [X] T014 [US1] Implement bounded daemon startup recovery workers and lifecycle reconciliation handoff in `internal/daemon/disposable_recovery.go`, `internal/daemon/daemon.go`, and `internal/daemon/lifecycle.go`
+- [X] T015 [US1] Record a mutation that disables durable intent or stable absence and prove the US1 tests fail, then restore it and document the result in `specs/042-disposable-orphan-recovery/adversarial-report.md`
 
 **Checkpoint**: Authorized crash residue recovers; interrupted work remains resumable and daemon control surfaces stay available.
 
@@ -71,15 +71,15 @@
 
 ### Tests For User Story 2
 
-- [ ] T016 [P] [US2] Add the non-disposable/name-only/status-only/live-owner/unprovable-owner/unknown/mismatch negative matrix in `internal/manager/disposable_recovery_test.go`
-- [ ] T017 [P] [US2] Add missing-record valid-intent and historical journal-only refusal tests in `internal/daemon/disposable_recovery_test.go`
-- [ ] T018 [P] [US2] Add lifecycle status/event/audit redaction and closed reason-code tests in `internal/lifecycle/status_schema_test.go` and `internal/daemon/disposable_recovery_test.go`
+- [X] T016 [P] [US2] Add the non-disposable/name-only/status-only/live-owner/unprovable-owner/unknown/mismatch negative matrix in `internal/manager/disposable_recovery_test.go`
+- [X] T017 [P] [US2] Add missing-record valid-intent and historical journal-only refusal tests in `internal/daemon/disposable_recovery_test.go`
+- [X] T018 [P] [US2] Add lifecycle status/event/audit redaction and closed reason-code tests in `internal/lifecycle/status_schema_test.go` and `internal/daemon/disposable_recovery_test.go`
 
 ### Implementation For User Story 2
 
-- [ ] T019 [US2] Enforce closed authorization, owner, identity, observation, and historical-residue judgments in `internal/manager/disposable_recovery.go` and `internal/daemon/disposable_recovery.go`
-- [ ] T020 [US2] Expose bounded disposal phase/outcome through lifecycle status and daemon audit/events in `internal/lifecycle/status.go`, `internal/daemon/lifecycle.go`, and `internal/daemon/audit.go`
-- [ ] T021 [US2] Add evidence-judge negative mutation results and zero-destructive-call identities to `specs/042-disposable-orphan-recovery/adversarial-report.md`
+- [X] T019 [US2] Enforce closed authorization, owner, identity, observation, and historical-residue judgments in `internal/manager/disposable_recovery.go` and `internal/daemon/disposable_recovery.go`
+- [X] T020 [US2] Expose bounded disposal phase/outcome through lifecycle status and daemon audit/events in `internal/lifecycle/status.go`, `internal/daemon/lifecycle.go`, and `internal/daemon/audit.go`
+- [X] T021 [US2] Add evidence-judge negative mutation results and zero-destructive-call identities to `specs/042-disposable-orphan-recovery/adversarial-report.md`
 
 **Checkpoint**: The feature remains disposable-only; ordinary or ambiguous resources retain report/block/explicit-recovery semantics.
 

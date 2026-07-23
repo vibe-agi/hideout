@@ -159,7 +159,24 @@
         "state": { "enum": ["planned", "backend-absent", "metadata-cleaning", "blocked"] },
         "requestedAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
-        "reasonCode": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" }
+        "reasonCode": {
+          "enum": [
+            "record-retention-failed",
+            "backend-observation-unproved",
+            "backend-cleanup-failed",
+            "backend-absence-unproved",
+            "backend-absence-checkpoint-failed",
+            "owner-metadata-unprovable",
+            "owner-metadata-cleanup-failed",
+            "runtime-cleanup-failed",
+            "gateway-cleanup-failed",
+            "metadata-checkpoint-failed",
+            "journal-removal-failed",
+            "backend-provider-unavailable",
+            "missing-record-backend-not-absent",
+            "missing-record-intent-state-invalid"
+          ]
+        }
       }
     },
 	"resourceKind": {
