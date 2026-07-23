@@ -3,6 +3,8 @@ package productevidence
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -108,6 +110,56 @@ func TestDisposableRecoveryValidatorRejectsFalseGreenArtifacts(t *testing.T) {
 	data = append(data[:len(data)-1], []byte(`,"unexpected":true}`)...)
 	if err := validateDisposableRecoveryArtifact(data, valid.Commit); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("unknown-field error=%v", err)
+	}
+}
+
+func TestRetainedDisposableRecoveryEvidencePassesProductionEvaluator(t *testing.T) {
+	root := strings.TrimSpace(os.Getenv("HIDEOUT_042_EVIDENCE_DIR"))
+	if root == "" {
+		t.Skip("set HIDEOUT_042_EVIDENCE_DIR to validate retained real Gate 2 evidence")
+	}
+	manifest, err := ReadFile(filepath.Join(root, "product-hardening-evidence.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.PackageIdentity == nil {
+		t.Fatal("retained 042 evidence has no package identity")
+	}
+	var proof *ProofEntry
+	for index := range manifest.Proofs {
+		if manifest.Proofs[index].ProofID == Proof042RealRecovery {
+			proof = &manifest.Proofs[index]
+			break
+		}
+	}
+	if proof == nil || proof.Runtime == nil {
+		t.Fatal("retained 042 evidence has no runtime-bound real proof")
+	}
+	requirements := []ProofRequirement{}
+	for _, requirement := range RequirementsForFeature(Feature042) {
+		if requirement.ProofID == Proof042RealRecovery {
+			requirements = append(requirements, requirement)
+		}
+	}
+	report, err := EvaluateManifest(manifest, EvaluationOptions{
+		Requirements:    requirements,
+		Target:          RequiredForReleaseCandidate,
+		ExpectedCommit:  manifest.Commit,
+		ExpectedPackage: manifest.PackageIdentity,
+		ArtifactRoots:   map[string]string{Proof042RealRecovery: root},
+		ExpectedRuntime: &RuntimeExpectation{
+			Family: proof.Runtime.Family, Revision: proof.Runtime.Revision,
+			ArtifactSHA256: proof.Runtime.ArtifactSHA256,
+			HostOS:         proof.Runtime.HostOS, HostArch: proof.Runtime.HostArch,
+			GuestArch: proof.Runtime.GuestArch, BuildCommit: proof.Runtime.BuildCommit,
+			RequireClean: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := report.RequireSatisfied(); err != nil {
+		t.Fatalf("retained 042 evidence did not satisfy production evaluation: %v\n%+v", err, report.Results)
 	}
 }
 
