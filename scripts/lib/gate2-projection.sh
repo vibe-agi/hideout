@@ -465,7 +465,7 @@ projection_measure_cancellation() {
     sleep 0.01
   done
   for i in $(seq 1 200); do
-    if LIMA_HOME="$lima_home" "$limactl" shell --tty=false --workdir / "$instance_name" -- \
+    if LIMA_HOME="$lima_home" limactl shell --tty=false --workdir / "$instance_name" -- \
       sh -c "pgrep -f '[h]ideout-session-supervisor' >/dev/null" >/dev/null 2>&1; then
       supervisor_waiting=true
       break

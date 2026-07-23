@@ -209,7 +209,8 @@ do
 done
 
 echo "projection readiness e2e: running exact-package aggregate Gate 2"
-if ! HIDEOUT_RELEASE_BINARY="$candidate" \
+set +e
+HIDEOUT_RELEASE_BINARY="$candidate" \
   HIDEOUT_LINUX_SHIM_PATH="$helper_bin/hideout-shim-linux-$arch" \
   HIDEOUT_LINUX_HOSTFSD_PATH="$helper_bin/hideout-hostfsd-linux-$arch" \
   HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$helper_bin/hideout-session-supervisor-linux-$arch" \
@@ -223,7 +224,10 @@ if ! HIDEOUT_RELEASE_BINARY="$candidate" \
   HIDEOUT_PROJECTION_READINESS_WARM="$warm" \
   HIDEOUT_PROJECTION_RUNTIME_FAMILY="$runtime_family" \
   HIDEOUT_PROJECTION_RUNTIME_BUILD_COMMIT="$runtime_build_commit" \
-  scripts/test-gate2-lima.sh >"$raw_gate2" 2>"$raw_gate2_err"; then
+  scripts/test-gate2-lima.sh >"$raw_gate2" 2>"$raw_gate2_err"
+gate2_status=$?
+set -e
+if [ "$gate2_status" -ne 0 ]; then
   echo "projection readiness e2e: aggregate Gate 2 failed; showing bounded tails" >&2
   tail -n 200 "$raw_gate2" >&2
   tail -n 200 "$raw_gate2_err" >&2
@@ -249,6 +253,8 @@ required_markers=(
 for marker in "${required_markers[@]}"; do
   grep -q "^${marker}=passed$" "$raw_gate2" || {
     echo "projection readiness e2e: aggregate Gate 2 omitted $marker" >&2
+    tail -n 200 "$raw_gate2" >&2
+    tail -n 200 "$raw_gate2_err" >&2
     exit 1
   }
 done

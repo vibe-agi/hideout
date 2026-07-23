@@ -297,6 +297,16 @@ cleanup_lima_instances() {
   done < <(LIMA_HOME="$lima_home" limactl list --quiet 2>/dev/null || true)
 }
 cleanup() {
+	local daemon_pids="" daemon_pid="" daemon_alive=false cleanup_try
+	if [ -n "${hideout:-}" ]; then
+		daemon_pids="$(/bin/ps -Ao pid=,command= 2>/dev/null | awk -v want="$hideout __daemon-serve" '
+			{
+				pid = $1
+				sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", $0)
+				if ($0 == want) print pid
+			}
+		')"
+	fi
 	if [ -n "${projection_proxy_pid:-}" ] && kill -0 "$projection_proxy_pid" 2>/dev/null; then
 		kill "$projection_proxy_pid" 2>/dev/null || true
 		wait "$projection_proxy_pid" 2>/dev/null || true
@@ -327,6 +337,32 @@ cleanup() {
 			HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" daemon stop >/dev/null 2>&1 || true
 			HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
 		fi
+		for cleanup_try in $(seq 1 50); do
+			daemon_alive=false
+			for daemon_pid in $daemon_pids; do
+				if kill -0 "$daemon_pid" 2>/dev/null; then
+					daemon_alive=true
+				fi
+			done
+			[ "$daemon_alive" = false ] && break
+			sleep 0.1
+		done
+		for daemon_pid in $daemon_pids; do
+			kill -0 "$daemon_pid" 2>/dev/null && kill -TERM "$daemon_pid" 2>/dev/null || true
+		done
+		for cleanup_try in $(seq 1 50); do
+			daemon_alive=false
+			for daemon_pid in $daemon_pids; do
+				if kill -0 "$daemon_pid" 2>/dev/null; then
+					daemon_alive=true
+				fi
+			done
+			[ "$daemon_alive" = false ] && break
+			sleep 0.1
+		done
+		for daemon_pid in $daemon_pids; do
+			kill -0 "$daemon_pid" 2>/dev/null && kill -KILL "$daemon_pid" 2>/dev/null || true
+		done
 		cleanup_lima_instances
 		rm -rf "${hostfs_root:-}" "${hostfs_visibility_root:-}"
 		rm -rf "${projection_workspace:-}" "${projection_control_workspace:-}" "${projection_trusted_workspace:-}" "${projection_external_workspace:-}" "${projection_readiness_workspace:-}"
