@@ -1,6 +1,7 @@
 package hostcap
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -106,48 +107,58 @@ func Validate() error {
 			return fmt.Errorf("descriptor %q: duplicate id", d.ID)
 		}
 		seen[d.ID] = true
-		if !validRiskClass(d.RiskClass) {
-			return fmt.Errorf("descriptor %q: unknown riskClass %q", d.ID, d.RiskClass)
+		if err := validateCapabilityDescriptor(d); err != nil {
+			return err
 		}
-		if !validResultPolicy(d.ResultPolicy) {
-			return fmt.Errorf("descriptor %q: unknown resultPolicy %q", d.ID, d.ResultPolicy)
+	}
+	return nil
+}
+
+func validateCapabilityDescriptor(d CapabilityDescriptor) error {
+	if d.ID == "" {
+		return errors.New("descriptor id is required")
+	}
+	if !validRiskClass(d.RiskClass) {
+		return fmt.Errorf("descriptor %q: unknown riskClass %q", d.ID, d.RiskClass)
+	}
+	if !validResultPolicy(d.ResultPolicy) {
+		return fmt.Errorf("descriptor %q: unknown resultPolicy %q", d.ID, d.ResultPolicy)
+	}
+	if !validResidualPolicy(d.ResidualPolicy) {
+		return fmt.Errorf("descriptor %q: unknown residualPolicy %q", d.ID, d.ResidualPolicy)
+	}
+	if d.ResultPolicy == ResultNone && d.ResidualPolicy == ResidualManaged {
+		return fmt.Errorf("descriptor %q: result-none cannot leave a managed residual", d.ID)
+	}
+	if d.ResidualPolicy == ResidualExternalUnmanaged && d.ResultPolicy != ResultNone {
+		return fmt.Errorf("descriptor %q: external-unmanaged handoff must be result-none", d.ID)
+	}
+	if !validDecisionPolicy(d.DecisionPolicy) {
+		return fmt.Errorf("descriptor %q: unknown decisionPolicy %q", d.ID, d.DecisionPolicy)
+	}
+	if !validLifecyclePolicy(d.LifecyclePolicy) {
+		return fmt.Errorf("descriptor %q: unknown lifecyclePolicy %q", d.ID, d.LifecyclePolicy)
+	}
+	if !validStatus(d.Status) {
+		return fmt.Errorf("descriptor %q: unknown status %q", d.ID, d.Status)
+	}
+	if d.IntentSchema == "" {
+		return fmt.Errorf("descriptor %q: intentSchema is required", d.ID)
+	}
+	if !knownProviders[d.ProviderRef] {
+		return fmt.Errorf("descriptor %q: unresolved providerRef %q", d.ID, d.ProviderRef)
+	}
+	for _, k := range d.ResourceKinds {
+		if !validResourceKind(k) {
+			return fmt.Errorf("descriptor %q: unknown resourceKind %q", d.ID, k)
 		}
-		if !validResidualPolicy(d.ResidualPolicy) {
-			return fmt.Errorf("descriptor %q: unknown residualPolicy %q", d.ID, d.ResidualPolicy)
-		}
-		if d.ResultPolicy == ResultNone && d.ResidualPolicy == ResidualManaged {
-			return fmt.Errorf("descriptor %q: result-none cannot leave a managed residual", d.ID)
-		}
-		if d.ResidualPolicy == ResidualExternalUnmanaged && d.ResultPolicy != ResultNone {
-			return fmt.Errorf("descriptor %q: external-unmanaged handoff must be result-none", d.ID)
-		}
-		if !validDecisionPolicy(d.DecisionPolicy) {
-			return fmt.Errorf("descriptor %q: unknown decisionPolicy %q", d.ID, d.DecisionPolicy)
-		}
-		if !validLifecyclePolicy(d.LifecyclePolicy) {
-			return fmt.Errorf("descriptor %q: unknown lifecyclePolicy %q", d.ID, d.LifecyclePolicy)
-		}
-		if !validStatus(d.Status) {
-			return fmt.Errorf("descriptor %q: unknown status %q", d.ID, d.Status)
-		}
-		if d.IntentSchema == "" {
-			return fmt.Errorf("descriptor %q: intentSchema is required", d.ID)
-		}
-		if !knownProviders[d.ProviderRef] {
-			return fmt.Errorf("descriptor %q: unresolved providerRef %q", d.ID, d.ProviderRef)
-		}
-		for _, k := range d.ResourceKinds {
-			if !validResourceKind(k) {
-				return fmt.Errorf("descriptor %q: unknown resourceKind %q", d.ID, k)
-			}
-		}
-		if len(d.Platforms) == 0 {
-			return fmt.Errorf("descriptor %q: at least one platform is required", d.ID)
-		}
-		for _, p := range d.Platforms {
-			if !validPlatform(p) {
-				return fmt.Errorf("descriptor %q: unknown platform %q", d.ID, p)
-			}
+	}
+	if len(d.Platforms) == 0 {
+		return fmt.Errorf("descriptor %q: at least one platform is required", d.ID)
+	}
+	for _, p := range d.Platforms {
+		if !validPlatform(p) {
+			return fmt.Errorf("descriptor %q: unknown platform %q", d.ID, p)
 		}
 	}
 	return nil

@@ -5,7 +5,7 @@
   "description": "Static, Core-owned description of one host capability in the projection registry. The registry is not runtime-extensible; this schema documents the descriptor shape.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "riskClass", "intentSchema", "resultPolicy", "providerRef", "decisionPolicy", "lifecyclePolicy", "platforms", "status"],
+  "required": ["id", "riskClass", "intentSchema", "resourceKinds", "resultPolicy", "residualPolicy", "providerRef", "decisionPolicy", "lifecyclePolicy", "platforms", "status"],
   "properties": {
     "id": {
       "type": "string",
@@ -22,6 +22,11 @@
       "type": "string",
       "enum": ["none", "bounded-typed", "stream", "lease"],
       "description": "Host->guest result channel type. host.app.open-resource is none (fire-and-forget)."
+    },
+    "residualPolicy": {
+      "type": "string",
+      "enum": ["none", "external-unmanaged", "managed"],
+      "description": "Effect ownership after the response. external-unmanaged is a handoff, not a managed Hideout resource."
     },
     "providerRef": { "type": "string" },
     "decisionPolicy": { "type": "string", "enum": ["default-allow-audited", "operator-grant"] },

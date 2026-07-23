@@ -63,7 +63,7 @@ Ordinary non-projected commands retain their existing lookup behavior.
 
 ### Tests For User Story 1
 
-- [ ] T008 [P] [US1] Write failing tests that the final built-in plus enabled external registry is snapshotted and that the readiness manifest is written only after every exact shim in `internal/manager/run_dataplane_host_app_test.go` and `internal/manager/projection_readiness_test.go`
+- [X] T008 [P] [US1] Write failing tests that the final built-in plus enabled external registry is snapshotted and that the readiness manifest is written only after every exact shim in `internal/manager/run_dataplane_host_app_test.go` and `internal/manager/projection_readiness_test.go`
 - [ ] T009 [P] [US1] Write failing tests that Lima `Prepare` preserves the Manager expectation instead of reconstructing a profile-only catalog in `internal/backend/lima/lima_test.go`
 - [ ] T010 [P] [US1] Write failing exact-session-view tests for missing/late files, regular non-symlink executables, wrong digest, foreign manifest, identity drift, two-second timeout, and disjoint catalogs in `internal/backend/lima/session_view_test.go` and `internal/backend/lima/activation_concurrent_test.go`
 - [ ] T011 [P] [US1] Write failing strict wire and Linux supervisor tests for manifest decoding, complete entry hashing, catalog digest/count reporting, and refusal before commit in `internal/sessionwire/control_test.go`, `cmd/hideout-session-supervisor/model_test.go`, and `cmd/hideout-session-supervisor/wire_linux_test.go`
@@ -100,20 +100,20 @@ item names its direct current proof or remains explicitly deferred.
 
 ### Tests For User Story 2
 
-- [ ] T023 [P] [US2] Add a deliberately inconsistent fixture where bindings resolve `code` but the exact command registry does not, and require broker denial plus unvalidated audit classification in `internal/broker/hostapp_test.go`
-- [ ] T024 [P] [US2] Add direct table assertions that newly created privacy, hardened, development, and debug templates each use neutral alias workspace presentation in `internal/profiletemplate/template_test.go`
-- [ ] T025 [P] [US2] Strengthen the existing alias-to-preserve pathMode flip proof to assert recreate impact, machine/session identity drift, and zero silent remap in `internal/manager/run_environment_mode_test.go` and `internal/manager/run_apply_test.go`
-- [ ] T026 [P] [US2] Add strict tests that actual marshalled `CapabilityDescriptor` and open-resource intent values satisfy their public schemas while unknown, missing, incompatible, or trailing fields fail in `internal/hostcap/registry_test.go`
-- [ ] T027 [P] [US2] Add stale-plan tests that change built-in/external command ownership after review and require apply/readiness refusal instead of ambient catalog substitution in `internal/manager/run_apply_test.go` and `internal/manager/run_dataplane_host_app_test.go`
+- [X] T023 [P] [US2] Add a deliberately inconsistent fixture where bindings resolve `code` but the exact command registry does not, and require broker denial plus unvalidated audit classification in `internal/broker/hostapp_test.go`
+- [X] T024 [P] [US2] Add direct table assertions that newly created privacy, hardened, development, and debug templates each use neutral alias workspace presentation in `internal/profiletemplate/template_test.go`
+- [X] T025 [P] [US2] Strengthen the existing alias-to-preserve pathMode flip proof to assert recreate impact, machine/session identity drift, and zero silent remap in `internal/manager/run_environment_mode_test.go` and `internal/manager/run_apply_test.go`
+- [X] T026 [P] [US2] Add strict tests that actual marshalled `CapabilityDescriptor` and open-resource intent values satisfy their public schemas while unknown, missing, incompatible, or trailing fields fail in `internal/hostcap/registry_test.go`
+- [X] T027 [P] [US2] Add stale-plan tests that change built-in/external command ownership after review and require apply/readiness refusal instead of ambient catalog substitution in `internal/manager/run_apply_test.go` and `internal/manager/run_dataplane_host_app_test.go`
 
 ### Implementation For User Story 2
 
-- [ ] T028 [US2] Preserve exact command-registry lookup before binding/provider admission and derive audit command classification only from the validated registry result in `internal/broker/hostapp.go`
-- [ ] T029 [US2] Add stable lower-camel JSON tags to `CapabilityDescriptor`, align `residualPolicy` and required fields in `schemas/capability-descriptor.schema.json`, and keep strict decoding in `internal/hostcap/descriptor.go`
+- [X] T028 [US2] Preserve exact command-registry lookup before binding/provider admission and derive audit command classification only from the validated registry result in `internal/broker/hostapp.go`
+- [X] T029 [US2] Add stable lower-camel JSON tags to `CapabilityDescriptor`, align `residualPolicy` and required fields in `schemas/capability-descriptor.schema.json`, and keep strict decoding in `internal/hostcap/descriptor.go`
 - [X] T030 [US2] Bind the complete projection catalog digest into reviewed run truth, recompile and compare it at apply, and refuse stale external-pack ownership in `internal/manager/run_plan.go`, `internal/manager/run_apply.go`, and `internal/manager/run_service.go`
-- [ ] T031 [US2] Record named current proofs for broker registration, four-template alias defaults, pathMode recreation, descriptor parity, and unbound-intent schema in `specs/043-projection-readiness-proof/adversarial-report.md`
-- [ ] T032 [US2] Run and record red-then-green mutations for skipped broker lookup, one non-alias template, removed pathMode recreate identity, omitted descriptor field/tag, permissive unknown fields, and skipped catalog-drift comparison in `specs/043-projection-readiness-proof/adversarial-report.md`
-- [ ] T033 [US2] Narrow or close the four-item 030 acceptance ledger row item by item without deleting unresolved triggers in `docs/DEBT.md`
+- [X] T031 [US2] Record named current proofs for broker registration, four-template alias defaults, pathMode recreation, descriptor parity, and unbound-intent schema in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T032 [US2] Run and record red-then-green mutations for skipped broker lookup, one non-alias template, removed pathMode recreate identity, omitted descriptor field/tag, permissive unknown fields, and skipped catalog-drift comparison in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T033 [US2] Narrow or close the four-item 030 acceptance ledger row item by item without deleting unresolved triggers in `docs/DEBT.md`
 
 **Checkpoint**: User Story 2 is green with direct mutation-sensitive proofs for
 all historical observations and no readiness-derived authority expansion.

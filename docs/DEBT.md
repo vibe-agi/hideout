@@ -28,7 +28,6 @@ Rules:
 | Per-project HostFS grant carrier: `hostfs.Rule` has no workspace/project binding; `allow/deny --for-this-project`, `--once`, and default-ask semantics need a design ruling | Before per-project grants are promised in docs or the shared-default-VM trust story depends on them | 2026-07-19 review (this ledger's creating slice) |
 | Marketplace day-1 triad: signing, revocation, namespace protection | Marketplace/public pack registry launch day | policy-config-supply-chain Trust Model |
 | Tier2 imperative environment recipes remain forbidden pending an independent trust design | Before ecosystem-shared imperative environment builds are accepted | ecosystem principles |
-| 030 gap re-verify: broker did not validate projection command-name registration (audit field spoofable, not privilege); privacy/hardened default-alias had no unit assertion; pathMode-flip drift test missing; schema-struct parity test missing | Re-verify against current code before the next projection slice; observations date to 2026-07-11 and may be partially fixed | 030 acceptance gap list |
 
 ## Distribution and runtime
 

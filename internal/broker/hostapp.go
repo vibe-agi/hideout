@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/hideout/internal/cmdgrammar"
-	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/hostcap"
 	"github.com/vibe-agi/hideout/internal/hostcap/appopen"
@@ -109,8 +108,7 @@ func (s *Server) handleHostAppOpen(ctx context.Context, req Request, resp Respon
 		s.emit(req, resp, nil)
 		return resp
 	}
-	registration, ok := s.CommandRegistry.LookupExact(req.Command)
-	if !ok || registration.Action != cmdproxy.ActionHostAppOpenResource {
+	if _, ok := s.validatedProjectionCommand(req); !ok {
 		return s.hostAppRefused(req, resp, hostcap.CodeCommandUnbound, "projected command is not registered for this run")
 	}
 	rawIntent, err := json.Marshal(req.Args["intent"])

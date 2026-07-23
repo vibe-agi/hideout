@@ -130,6 +130,8 @@ func TestUnboundIntentRejectsForgedRelativeMetadataAndResourceBounds(t *testing.
 		schemaReject bool
 	}{
 		{`{"resources":[{"guestPath":"/workspace/a","relativePath":"../../host"}]}`, true},
+		{`{"windowMode":"reuse"}`, true},
+		{`{"resources":"not-an-array"}`, true},
 		{`{"resources":[{"guestPath":"/workspace/a"},{"guestPath":"/workspace/b"}]}`, true},
 		// JSON Schema bounds structure; Go owns canonical path semantics.
 		{`{"resources":[{"guestPath":"/workspace/../host"}]}`, false},
@@ -146,6 +148,13 @@ func TestUnboundIntentRejectsForgedRelativeMetadataAndResourceBounds(t *testing.
 		if err := schema.Validate(value); (err != nil) != fixture.schemaReject {
 			t.Fatalf("schema rejection mismatch for forged intent: %s err=%v", raw, err)
 		}
+	}
+	trailing := `{"resources":[{"guestPath":"/workspace/a"}]} {}`
+	if _, err := DecodeUnboundOpenResourceIntent([]byte(trailing)); hostcap.CodeOf(err) != hostcap.CodeIntentInvalid {
+		t.Fatalf("trailing intent passed strict decode: %v", err)
+	}
+	if _, err := jsonschema.UnmarshalJSON(strings.NewReader(trailing)); err == nil {
+		t.Fatal("schema JSON parser accepted a trailing intent document")
 	}
 }
 

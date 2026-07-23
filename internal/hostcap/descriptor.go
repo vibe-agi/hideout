@@ -1,6 +1,14 @@
 package hostcap
 
-import "runtime"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"runtime"
+)
+
+const maxCapabilityDescriptorBytes = 16 << 10
 
 // Recovery codes emitted by the projection layer. They follow the
 // internal/recovery domain.subject.detail convention and are mirrored there.
@@ -116,17 +124,59 @@ func CurrentPlatform() Platform {
 // capability. The registry of descriptors is the authority surface; it is not
 // runtime-extensible.
 type CapabilityDescriptor struct {
-	ID              string
-	RiskClass       RiskClass
-	IntentSchema    string
-	ResourceKinds   []ResourceKind
-	ResultPolicy    ResultPolicy
-	ResidualPolicy  ResidualPolicy
-	ProviderRef     string
-	DecisionPolicy  DecisionPolicy
-	LifecyclePolicy LifecyclePolicy
-	Platforms       []Platform
-	Status          Status
+	ID              string          `json:"id"`
+	RiskClass       RiskClass       `json:"riskClass"`
+	IntentSchema    string          `json:"intentSchema"`
+	ResourceKinds   []ResourceKind  `json:"resourceKinds"`
+	ResultPolicy    ResultPolicy    `json:"resultPolicy"`
+	ResidualPolicy  ResidualPolicy  `json:"residualPolicy"`
+	ProviderRef     string          `json:"providerRef"`
+	DecisionPolicy  DecisionPolicy  `json:"decisionPolicy"`
+	LifecyclePolicy LifecyclePolicy `json:"lifecyclePolicy"`
+	Platforms       []Platform      `json:"platforms"`
+	Status          Status          `json:"status"`
+}
+
+// DecodeCapabilityDescriptor strictly decodes the public descriptor contract.
+// Descriptors remain package-owned and non-extensible; decoding does not
+// register or grant a capability.
+func DecodeCapabilityDescriptor(raw []byte) (CapabilityDescriptor, error) {
+	if len(raw) == 0 || len(raw) > maxCapabilityDescriptorBytes {
+		return CapabilityDescriptor{}, errors.New("capability descriptor exceeds its bound")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var descriptor CapabilityDescriptor
+	if err := decoder.Decode(&descriptor); err != nil {
+		return CapabilityDescriptor{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return CapabilityDescriptor{}, errors.New("capability descriptor contains multiple JSON values")
+		}
+		return CapabilityDescriptor{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return CapabilityDescriptor{}, err
+	}
+	for _, required := range []string{
+		"id", "riskClass", "intentSchema", "resourceKinds", "resultPolicy",
+		"residualPolicy", "providerRef", "decisionPolicy", "lifecyclePolicy",
+		"platforms", "status",
+	} {
+		if _, ok := fields[required]; !ok {
+			return CapabilityDescriptor{}, errors.New("capability descriptor is missing required field " + required)
+		}
+	}
+	if descriptor.ResourceKinds == nil || descriptor.Platforms == nil {
+		return CapabilityDescriptor{}, errors.New("capability descriptor array fields must not be null")
+	}
+	if err := validateCapabilityDescriptor(descriptor); err != nil {
+		return CapabilityDescriptor{}, err
+	}
+	return descriptor, nil
 }
 
 func validRiskClass(r RiskClass) bool {

@@ -55,6 +55,23 @@ func TestCatalogInvariants(t *testing.T) {
 	}
 }
 
+func TestEveryNewTemplateUsesNeutralAliasWorkspacePresentation(t *testing.T) {
+	for _, templateID := range []string{Privacy, Hardened, Dev, Debug} {
+		t.Run(templateID, func(t *testing.T) {
+			rendered, err := Render(validRequest(templateID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rendered.Profile.Workspace.PathMode != profile.WorkspacePathModeAlias {
+				t.Fatalf(
+					"template %s pathMode=%q want %q",
+					templateID, rendered.Profile.Workspace.PathMode, profile.WorkspacePathModeAlias,
+				)
+			}
+		})
+	}
+}
+
 func TestRequestValidation(t *testing.T) {
 	_, err := Render(Request{
 		NoInput: true,

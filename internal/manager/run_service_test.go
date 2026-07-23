@@ -11,6 +11,8 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/hostapppack"
+	"github.com/vibe-agi/hideout/internal/hostcap"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
@@ -180,6 +182,55 @@ func TestRunServiceApplyRejectsProjectionCatalogDrift(t *testing.T) {
 	})
 	if !errors.Is(err, ErrRunPlanStale) {
 		t.Fatalf("projection catalog drift error=%v", err)
+	}
+}
+
+func TestRunServiceApplyRejectsExternalProjectionCatalogDrift(t *testing.T) {
+	root := t.TempDir()
+	store := profile.Store{Root: filepath.Join(root, "store")}
+	workspace := t.TempDir()
+	p := profile.Default("external-projection-drift")
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	core := Core{Store: store, HostAppPlatform: hostcap.PlatformDarwin}
+	configureManagerHostAppIdentity(t, &core, root)
+	service := RunService{Core: core}
+	req := RunServiceRequest{
+		Version: RunServiceRequestVersion, ProfileName: p.Name, Backend: "native",
+		Workspace: workspace, Command: []string{"true"},
+		Terminal: TerminalDescriptor{Mode: runsession.TerminalNone},
+	}
+	prepared, err := service.Prepare(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packDir := writeManagerHostAppPack(t, root, "community.review-drift", "review-editor")
+	addPlan, err := core.PlanHostAppPack(HostAppPackOptions{
+		Operation: "add", SourceKind: hostapppack.SourceLocal,
+		SourcePath: packDir, ProfileName: p.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.ApplyHostAppPack(addPlan); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.Prepare(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Plan.ProjectionCatalogDigest == prepared.Plan.ProjectionCatalogDigest {
+		t.Fatal("enabled external pack did not change reviewed projection truth")
+	}
+	fake := &applyRunFakeBackend{name: "native"}
+	_, err = service.Apply(context.Background(), prepared, req, RunServiceDependencies{Backend: fake})
+	if !errors.Is(err, ErrRunPlanStale) {
+		t.Fatalf("external projection catalog drift error=%v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("stale external ownership reached backend authority: %v", fake.calls)
 	}
 }
 

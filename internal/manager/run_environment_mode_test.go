@@ -58,6 +58,47 @@ func TestPromotedSharedSelectionRejectsPreserveWithExecutableGuidance(t *testing
 	}
 }
 
+func TestDedicatedPathModeFlipRequiresRecreateAndNeverSilentlyRemaps(t *testing.T) {
+	aliasProfile := runtimeConfigurationTestProfile("path-mode-drift")
+	aliasProfile.Workspace.PathMode = profile.WorkspacePathModeAlias
+	preserveProfile := aliasProfile
+	preserveProfile.Workspace.PathMode = profile.WorkspacePathModePreserve
+
+	aliasConfiguration, err := RuntimeConfigurationForProfile(aliasProfile, "lima", environment.ModeDedicated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preserveConfiguration, err := RuntimeConfigurationForProfile(preserveProfile, "lima", environment.ModeDedicated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliasConfiguration.Machine.StaticWorkspace == nil ||
+		aliasConfiguration.Machine.StaticWorkspace.PathMode != profile.WorkspacePathModeAlias {
+		t.Fatalf("alias path mode was silently remapped: %+v", aliasConfiguration.Machine.StaticWorkspace)
+	}
+	if preserveConfiguration.Machine.StaticWorkspace == nil ||
+		preserveConfiguration.Machine.StaticWorkspace.PathMode != profile.WorkspacePathModePreserve {
+		t.Fatalf("preserve path mode was silently remapped: %+v", preserveConfiguration.Machine.StaticWorkspace)
+	}
+	if aliasConfiguration.Layers.MachineID == preserveConfiguration.Layers.MachineID {
+		t.Fatal("pathMode flip did not change machine identity")
+	}
+	if aliasConfiguration.Layers.SessionID == preserveConfiguration.Layers.SessionID {
+		t.Fatal("pathMode flip did not change session identity")
+	}
+	changes := environment.CompareConfigurations(aliasConfiguration, preserveConfiguration)
+	if got := environment.RequiredImpact(changes); got != environment.ImpactRecreate {
+		t.Fatalf("pathMode flip impact=%q want=%q changes=%+v", got, environment.ImpactRecreate, changes)
+	}
+	layers := map[string]bool{}
+	for _, change := range changes {
+		layers[change.Layer] = true
+	}
+	if !layers["machine"] || !layers["session"] {
+		t.Fatalf("pathMode flip changed layers=%v want machine+session", layers)
+	}
+}
+
 func TestNamedEnvironmentIsDedicatedAndRejectsAnotherProject(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)

@@ -1,8 +1,15 @@
 package hostcap
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestRegistryValidates(t *testing.T) {
@@ -104,6 +111,112 @@ func TestRegistryHasNoRuntimeRegistrationAPI(t *testing.T) {
 	if b[0].ID == "mutated" {
 		t.Fatal("Registry() must return a copy; internal state was mutated")
 	}
+}
+
+func TestPublicCapabilityDescriptorsMatchStrictSchemaAndDecoder(t *testing.T) {
+	schema := loadCapabilityDescriptorSchema(t)
+	for _, descriptor := range Registry() {
+		raw, err := json.Marshal(descriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(value); err != nil {
+			t.Fatalf("descriptor %s failed public schema: %v\n%s", descriptor.ID, err, raw)
+		}
+		decoded, err := DecodeCapabilityDescriptor(raw)
+		if err != nil {
+			t.Fatalf("descriptor %s failed strict decode: %v\n%s", descriptor.ID, err, raw)
+		}
+		if decoded.ID != descriptor.ID || !strings.Contains(string(raw), `"residualPolicy"`) ||
+			strings.Contains(string(raw), `"ResidualPolicy"`) {
+			t.Fatalf("descriptor %s public shape drifted: %s", descriptor.ID, raw)
+		}
+	}
+
+	base, err := json.Marshal(Registry()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(base, &document); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := map[string][]byte{}
+	withUnknown := cloneJSONDocument(t, document)
+	withUnknown["unexpected"] = true
+	fixtures["unknown"] = mustJSON(t, withUnknown)
+	missing := cloneJSONDocument(t, document)
+	delete(missing, "residualPolicy")
+	fixtures["missing"] = mustJSON(t, missing)
+	incompatible := cloneJSONDocument(t, document)
+	incompatible["residualPolicy"] = 7
+	fixtures["incompatible"] = mustJSON(t, incompatible)
+	fixtures["trailing"] = append(append([]byte(nil), base...), []byte("\n{}")...)
+
+	for name, raw := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeCapabilityDescriptor(raw); err == nil {
+				t.Fatalf("strict decoder accepted %s descriptor: %s", name, raw)
+			}
+			value, parseErr := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+			if name == "trailing" {
+				if parseErr == nil {
+					t.Fatalf("schema JSON parser accepted trailing descriptor: %s", raw)
+				}
+				return
+			}
+			if parseErr != nil {
+				t.Fatalf("fixture %s is not JSON: %v", name, parseErr)
+			}
+			if err := schema.Validate(value); err == nil {
+				t.Fatalf("public schema accepted %s descriptor: %s", name, raw)
+			}
+		})
+	}
+}
+
+func loadCapabilityDescriptorSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "capability-descriptor.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("capability-descriptor.schema.json", document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("capability-descriptor.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+func cloneJSONDocument(t *testing.T, value map[string]any) map[string]any {
+	t.Helper()
+	raw := mustJSON(t, value)
+	var clone map[string]any
+	if err := json.Unmarshal(raw, &clone); err != nil {
+		t.Fatal(err)
+	}
+	return clone
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func TestErrorTypedCode(t *testing.T) {

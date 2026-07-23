@@ -209,6 +209,50 @@ func TestProjectionDisabledFailsClosed(t *testing.T) {
 	assertNoHostPath(t, resp, hostRoot)
 }
 
+func TestProjectionBindingCannotSubstituteForExactCommandRegistration(t *testing.T) {
+	hostRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hostRoot, "a.go"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launcher := &recordingLauncher{}
+	projection, digest := projectionConfig(t, launcher)
+	server, auditPath := newProjectionServer(t, hostRoot, projection, digest)
+	unrelated, err := cmdproxy.NewRegistry([]cmdproxy.Registration{{
+		Name: "editor", Action: cmdproxy.ActionHostAppOpenResource,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.CommandRegistry = unrelated
+
+	resp := server.Handle(context.Background(), projectionRequest(codeIntent("/workspace/a.go"), digest))
+	if resp.Status != "denied" || resp.Data["code"] != hostcap.CodeCommandUnbound {
+		t.Fatalf("binding substituted for missing command registration: %+v", resp)
+	}
+	if len(launcher.argv) != 0 {
+		t.Fatalf("unregistered request reached host launcher: %v", launcher.argv)
+	}
+	raw, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event audit.Event
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(raw))), &event); err != nil {
+		t.Fatalf("decode audit: %v\n%s", err, raw)
+	}
+	if event.Action != "broker.request" ||
+		event.Details["commandValidation"] != "unvalidated" ||
+		event.Details["requestedCommand"] != "code" {
+		t.Fatalf("unregistered request was classified as a validated command: %+v", event)
+	}
+	if _, ok := event.Details["command"]; ok {
+		t.Fatalf("unregistered request retained validated command field: %+v", event.Details)
+	}
+	if _, ok := event.Details["capability"]; ok {
+		t.Fatalf("unregistered request retained validated capability field: %+v", event.Details)
+	}
+}
+
 func TestProjectionLifecycleRevocationFailsBeforeHostEffect(t *testing.T) {
 	hostRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(hostRoot, "a.go"), []byte("x"), 0o600); err != nil {

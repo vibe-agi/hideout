@@ -1,14 +1,108 @@
 package manager
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/hostcap"
+	"github.com/vibe-agi/hideout/internal/profile"
 )
+
+func TestFinalBuiltinAndExternalRegistrySnapshotsOnlyCompleteCatalog(t *testing.T) {
+	root := t.TempDir()
+	store := profile.Store{Root: filepath.Join(root, "store")}
+	if _, err := store.LoadOrInit("projection-catalog"); err != nil {
+		t.Fatal(err)
+	}
+	core := Core{Store: store, HostAppPlatform: hostcap.PlatformDarwin}
+	configureManagerHostAppIdentity(t, &core, root)
+	packDir := writeManagerHostAppPack(t, root, "community.catalog", "catalog-editor")
+	plan, err := core.PlanHostAppPack(HostAppPackOptions{
+		Operation: "add", SourceKind: hostapppack.SourceLocal,
+		SourcePath: packDir, ProfileName: "projection-catalog",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.ApplyHostAppPack(plan); err != nil {
+		t.Fatal(err)
+	}
+	runtimeProfile, err := store.Load("projection-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := cmdproxy.RegistryFromProfile(runtimeProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, registrations, err := core.CompileHostAppCatalog(
+		"projection-catalog", "ses_catalog", []string{t.TempDir()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err = cmdproxy.WithProjection(registry, registrations...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	materialize := func(runtimeRoot, omitted string) error {
+		shimDir := filepath.Join(runtimeRoot, "shims")
+		if err := os.MkdirAll(shimDir, 0o700); err != nil {
+			return err
+		}
+		names := append([]string{"hideout-shim"}, registry.ShimNames()...)
+		for _, name := range names {
+			if name == omitted {
+				continue
+			}
+			if err := os.WriteFile(filepath.Join(shimDir, name), []byte("shim-"+name), 0o700); err != nil {
+				return err
+			}
+		}
+		_, err := MaterializeProjectionReadiness(
+			runtimeRoot, "ses_catalog", "env_catalog",
+			"sha256:"+strings.Repeat("c", 64), []string{"catalog-editor"}, registry,
+		)
+		return err
+	}
+
+	complete := t.TempDir()
+	if err := materialize(complete, ""); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadProjectionReadinessManifest(
+		filepath.Join(complete, backend.ProjectionReadinessManifestFile),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, entry := range manifest.Entries {
+		names[entry.Name] = true
+	}
+	for _, want := range []string{"hideout-shim", "code", "catalog-editor"} {
+		if !names[want] {
+			t.Fatalf("final readiness catalog omitted %q: %v", want, names)
+		}
+	}
+
+	incomplete := t.TempDir()
+	if err := materialize(incomplete, "catalog-editor"); err == nil {
+		t.Fatal("incomplete external projection published readiness")
+	}
+	if _, err := os.Lstat(filepath.Join(incomplete, backend.ProjectionReadinessManifestFile)); !os.IsNotExist(err) {
+		t.Fatalf("incomplete external projection left readiness marker: %v", err)
+	}
+}
 
 func TestCompileRunProjectionGrantsKeepsMixedBindingAccessIndependent(t *testing.T) {
 	core, profileRecord, runSession, _ := projectionGrantFixture(t)

@@ -1131,14 +1131,27 @@ func (s *Server) prepareAuditDetails(req Request, resp Response, details map[str
 		details["error"] = resp.Stderr
 	}
 	details["requestId"] = req.ID
-	if req.Action != "" && auditEventAction(req) != req.Action {
+	if req.Action != "" && s.auditEventAction(req) != req.Action {
 		details["requestedAction"] = req.Action
 	}
 	if req.Subject != "" {
 		details["subject"] = req.Subject
 	}
 	if req.Command != "" {
-		details["command"] = req.Command
+		if req.Action == cmdproxy.ActionHostAppOpenResource {
+			if registration, ok := s.validatedProjectionCommand(req); ok {
+				details["command"] = registration.Name
+				details["commandValidation"] = "validated"
+				delete(details, "requestedCommand")
+			} else {
+				delete(details, "command")
+				delete(details, "capability")
+				details["requestedCommand"] = req.Command
+				details["commandValidation"] = "unvalidated"
+			}
+		} else {
+			details["command"] = req.Command
+		}
 	}
 	// Projection requests are audited from the validated structured intent.
 	// Raw guest argv can contain user data or host-looking bait and must never
@@ -1308,7 +1321,7 @@ func (s *Server) emitAuditRedactionFailure(req Request, resp Response, err error
 		"auditRedactionError":  err.Error(),
 		"auditRedactionStatus": "failed-closed",
 	}
-	if req.Action != "" && auditEventAction(req) != req.Action {
+	if req.Action != "" && s.auditEventAction(req) != req.Action {
 		details["requestedAction"] = req.Action
 	}
 	if req.Subject != "" {
@@ -1332,23 +1345,37 @@ func (s *Server) emitPrepared(req Request, resp Response, details map[string]any
 		Session:  s.SessionID,
 		Profile:  s.Profile,
 		Backend:  s.Backend,
-		Action:   auditEventAction(req),
+		Action:   s.auditEventAction(req),
 		Decision: resp.Decision,
 		Details:  details,
 	})
 }
 
-func auditEventAction(req Request) string {
+func (s *Server) auditEventAction(req Request) string {
 	if req.Action == "host.open" {
 		return req.Action
 	}
 	if req.Action == cmdproxy.ActionHostAppOpenResource {
-		return "host.app.open-resource"
+		if _, ok := s.validatedProjectionCommand(req); ok {
+			return "host.app.open-resource"
+		}
+		return "broker.request"
 	}
 	if isHostFSAction(req.Action) {
 		return req.Action
 	}
 	return "broker.request"
+}
+
+func (s *Server) validatedProjectionCommand(req Request) (cmdproxy.Registration, bool) {
+	if req.Action != cmdproxy.ActionHostAppOpenResource {
+		return cmdproxy.Registration{}, false
+	}
+	registration, ok := s.CommandRegistry.LookupExact(req.Command)
+	if !ok || registration.Action != cmdproxy.ActionHostAppOpenResource {
+		return cmdproxy.Registration{}, false
+	}
+	return registration, true
 }
 
 func ClientOpen(ctx context.Context, socket string, req Request) Response {
