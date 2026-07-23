@@ -469,6 +469,9 @@ func TestBuildSessionViewCommandRejectsUnsafeInputs(t *testing.T) {
 }
 
 func TestSessionRuntimePrerequisitesDescribeExactSessionFiles(t *testing.T) {
+	if deadline := time.Duration(sessionRuntimeReadyAttempts) * sessionRuntimeReadyDelay; deadline != backend.MaxProjectionReadinessDeadline {
+		t.Fatalf("session readiness visibility deadline=%s want %s", deadline, backend.MaxProjectionReadinessDeadline)
+	}
 	session := &backend.Session{
 		NetworkBootstrapGuestPath: GuestSessionDir + "/network/bootstrap.sh",
 		NetworkCleanupGuestPath:   GuestSessionDir + "/network/cleanup.sh",

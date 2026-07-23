@@ -164,15 +164,14 @@ func TestProjectionReadinessCatalogsRemainSessionLocal(t *testing.T) {
 		sessionID string
 		command   string
 		contents  string
+		root      string
 	}
 	fixtures := []sessionFixture{
-		{sessionID: "ses_alpha", command: "code", contents: "alpha-code"},
-		{sessionID: "ses_beta", command: "editor", contents: "beta-editor"},
+		{sessionID: "ses_alpha", command: "code", contents: "alpha-code", root: t.TempDir()},
+		{sessionID: "ses_beta", command: "editor", contents: "beta-editor", root: t.TempDir()},
 	}
-	expectations := make([]*backend.ProjectionReadinessExpectation, 0, len(fixtures))
 	for _, fixture := range fixtures {
-		root := t.TempDir()
-		shimDir := filepath.Join(root, "shims")
+		shimDir := filepath.Join(fixture.root, "shims")
 		if err := os.Mkdir(shimDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -184,20 +183,36 @@ func TestProjectionReadinessCatalogsRemainSessionLocal(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		registry, err := cmdproxy.NewRegistry([]cmdproxy.Registration{{
-			Name: fixture.command, Action: cmdproxy.ActionHostOpen,
-		}})
-		if err != nil {
-			t.Fatal(err)
+	}
+	type materializeResult struct {
+		index       int
+		expectation *backend.ProjectionReadinessExpectation
+		err         error
+	}
+	results := make(chan materializeResult, len(fixtures))
+	for index, fixture := range fixtures {
+		go func(index int, fixture sessionFixture) {
+			registry, err := cmdproxy.NewRegistry([]cmdproxy.Registration{{
+				Name: fixture.command, Action: cmdproxy.ActionHostOpen,
+			}})
+			if err != nil {
+				results <- materializeResult{index: index, err: err}
+				return
+			}
+			expectation, err := MaterializeProjectionReadiness(
+				fixture.root, fixture.sessionID, "env_ready", "sha256:"+strings.Repeat("c", 64),
+				[]string{fixture.command}, registry,
+			)
+			results <- materializeResult{index: index, expectation: expectation, err: err}
+		}(index, fixture)
+	}
+	expectations := make([]*backend.ProjectionReadinessExpectation, len(fixtures))
+	for range fixtures {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
 		}
-		expectation, err := MaterializeProjectionReadiness(
-			root, fixture.sessionID, "env_ready", "sha256:"+strings.Repeat("c", 64),
-			[]string{fixture.command}, registry,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		expectations = append(expectations, expectation)
+		expectations[result.index] = result.expectation
 	}
 	if expectations[0].Manifest.CatalogDigest == expectations[1].Manifest.CatalogDigest {
 		t.Fatal("session-local catalogs with different identities and bytes shared a digest")
@@ -212,6 +227,35 @@ func TestProjectionReadinessCatalogsRemainSessionLocal(t *testing.T) {
 				t.Fatalf("session %s inherited foreign projection %q", fixtures[index].sessionID, foreign)
 			}
 		}
+	}
+
+	ambientDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ambientDir, "ambient-editor"), []byte("ambient"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", ambientDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	missingRoot := t.TempDir()
+	missingShimDir := filepath.Join(missingRoot, "shims")
+	if err := os.Mkdir(missingShimDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(missingShimDir, "hideout-shim"), []byte("dispatcher"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := cmdproxy.NewRegistry([]cmdproxy.Registration{{
+		Name: "ambient-editor", Action: cmdproxy.ActionHostOpen,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MaterializeProjectionReadiness(
+		missingRoot, "ses_ambient", "env_ready", "sha256:"+strings.Repeat("c", 64),
+		[]string{"ambient-editor"}, registry,
+	); err == nil {
+		t.Fatal("ambient PATH executable substituted for a missing session projection")
+	}
+	if _, err := os.Lstat(filepath.Join(missingRoot, backend.ProjectionReadinessManifestFile)); !os.IsNotExist(err) {
+		t.Fatalf("ambient fallback attempt published readiness: %v", err)
 	}
 }
 

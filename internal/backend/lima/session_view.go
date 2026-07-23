@@ -34,7 +34,7 @@ const (
 	sessionGuardianRoot            = "/run/hideout/session-guardians"
 	sessionGuardianBeat            = 250 * time.Millisecond
 	sessionRuntimeReadyAttempts    = 100
-	sessionRuntimeReadyDelay       = "0.02"
+	sessionRuntimeReadyDelay       = 20 * time.Millisecond
 	maxSessionRuntimePrerequisites = 16
 )
 
@@ -142,7 +142,7 @@ func BuildSessionViewCommand(spec SessionViewSpec) ([]string, error) {
 		fmt.Fprintf(&script, "if %s; then break; fi\n", condition)
 		script.WriteString("attempt=$((attempt + 1))\n")
 		fmt.Fprintf(&script, "[ \"$attempt\" -lt %d ] || { echo 'hideout: session runtime files did not become visible' >&2; exit 127; }\n", sessionRuntimeReadyAttempts)
-		fmt.Fprintf(&script, "sleep %s\n", sessionRuntimeReadyDelay)
+		fmt.Fprintf(&script, "sleep %.3f\n", sessionRuntimeReadyDelay.Seconds())
 		script.WriteString("done\n")
 	}
 	if portalWorkspace {

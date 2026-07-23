@@ -201,6 +201,7 @@ func (b Backend) runSupervisorProtocol(
 	cancelSent := false
 	var cancelTimer <-chan time.Time
 	ctxDone := ctx.Done()
+	var sshWaitErr error
 	cancelForProtocolError := func(failure error) {
 		if failure == nil {
 			return
@@ -225,6 +226,30 @@ func (b Backend) runSupervisorProtocol(
 	controls := streams.Controls
 
 	for {
+		if wait == nil && frames == nil {
+			_ = stdin.Close()
+			<-stderrDone
+			if completion == nil {
+				failure := protocolErr
+				if failure == nil && sshWaitErr != nil {
+					failure = fmt.Errorf("wait for supervisor: %w", sshWaitErr)
+				}
+				if failure == nil {
+					failure = errors.New("guest supervisor exited without completion")
+				}
+				if text := strings.TrimSpace(stderrCapture.String()); text != "" {
+					failure = fmt.Errorf("%w: %s", failure, text)
+				}
+				return failure
+			}
+			if protocolErr != nil {
+				return protocolErr
+			}
+			if cancelSent && ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return completionError(*completion)
+		}
 		select {
 		case result, ok := <-frames:
 			if !ok {
@@ -373,31 +398,8 @@ func (b Backend) runSupervisorProtocol(
 			_ = sshSession.Close()
 			return errors.Join(ctx.Err(), errors.New("guest supervisor did not stop within the cancellation bound"))
 
-		case waitErr := <-wait:
-			_ = stdin.Close()
-			<-stderrDone
-			if completion == nil {
-				failure := protocolErr
-				if failure == nil {
-					if waitErr != nil {
-						failure = fmt.Errorf("wait for supervisor: %w", waitErr)
-					}
-				}
-				if failure == nil {
-					failure = errors.New("guest supervisor exited without completion")
-				}
-				if text := strings.TrimSpace(stderrCapture.String()); text != "" {
-					failure = fmt.Errorf("%w: %s", failure, text)
-				}
-				return failure
-			}
-			if protocolErr != nil {
-				return protocolErr
-			}
-			if cancelSent && ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return completionError(*completion)
+		case sshWaitErr = <-wait:
+			wait = nil
 		}
 	}
 }
