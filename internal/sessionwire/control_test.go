@@ -64,6 +64,52 @@ func TestSupervisorStartRejectsUnsafeEnvironmentValues(t *testing.T) {
 	}
 }
 
+func TestSupervisorProjectionReadinessRoundTripIsStrict(t *testing.T) {
+	t.Parallel()
+	start := &SupervisorStart{
+		Protocol: SupervisorProtocol, SessionID: "ses_projection_wire", TargetUser: "developer",
+		GuestWork: "/workspace", Argv: []string{"code", "."},
+		Terminal: TerminalDescriptor{Mode: TerminalNone}, ExpectedBootID: "boot-id-test",
+		SessionSource: "/hideout/runtime/sessions/ses_projection_wire",
+		ProjectionReadiness: &SupervisorProjectionReadinessExpectation{
+			EnvironmentID: "env_projection", SessionSnapshotID: "sha256:" + strings.Repeat("a", 64),
+			CatalogDigest: "sha256:" + strings.Repeat("b", 64), ExpectedEntries: 3, TargetProjected: true,
+		},
+	}
+	payload, err := MarshalControl(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeControl(TypeSupervisorStart, payload); err != nil {
+		t.Fatal(err)
+	}
+	ready := &SupervisorReady{
+		Protocol: SupervisorProtocol, SessionID: start.SessionID, Terminal: start.Terminal,
+		ProjectionReadiness: &SupervisorProjectionReadinessReady{
+			Status: "ready", EnvironmentID: "env_projection",
+			SessionSnapshotID: "sha256:" + strings.Repeat("a", 64),
+			CatalogDigest:     "sha256:" + strings.Repeat("b", 64),
+			ExpectedEntries:   3, ObservedEntries: 3, DurationMillis: 17, TargetProjected: true,
+		},
+	}
+	payload, err = MarshalControl(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeControl(TypeSupervisorReady, payload); err != nil {
+		t.Fatal(err)
+	}
+	ready.ProjectionReadiness.ObservedEntries = 2
+	if _, err := MarshalControl(ready); !errors.Is(err, ErrInvalidControl) {
+		t.Fatalf("incomplete readiness error=%v", err)
+	}
+	ready.ProjectionReadiness.ObservedEntries = 3
+	ready.ProjectionReadiness.DurationMillis = 2001
+	if _, err := MarshalControl(ready); !errors.Is(err, ErrInvalidControl) {
+		t.Fatalf("unbounded readiness error=%v", err)
+	}
+}
+
 func TestStrictControlRejectsUnknownAndTrailingJSON(t *testing.T) {
 	t.Parallel()
 

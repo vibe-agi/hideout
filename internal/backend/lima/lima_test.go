@@ -421,6 +421,52 @@ func TestPrepareUsesProfileCommandProxyShims(t *testing.T) {
 	}
 }
 
+func TestPrepareUsesManagerProjectionReadinessCatalog(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Machine.EnvironmentID = "env_ready"
+	spec.ProjectionReadiness = &backend.ProjectionReadinessExpectation{
+		ManifestRelativePath: backend.ProjectionReadinessManifestFile,
+		Deadline:             backend.MaxProjectionReadinessDeadline,
+		TargetProjected:      true,
+		Manifest: backend.ProjectionReadinessManifest{
+			Schema: backend.ProjectionReadinessManifestSchema, SessionID: spec.SessionID,
+			EnvironmentID: "env_ready", SessionSnapshotID: "sha256:" + strings.Repeat("c", 64),
+			CatalogDigest: "sha256:" + strings.Repeat("d", 64),
+			Entries: []backend.ProjectionReadinessEntry{
+				{Name: "code", RelativePath: "code", SHA256: "sha256:" + strings.Repeat("1", 64), Kind: backend.ProjectionEntryCommand},
+				{Name: "hideout-shim", RelativePath: "hideout-shim", SHA256: "sha256:" + strings.Repeat("2", 64), Kind: backend.ProjectionEntryDispatcher},
+			},
+		},
+	}
+	catalogDigest, err := backend.ProjectionReadinessCatalogDigest(spec.ProjectionReadiness.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.ProjectionReadiness.Manifest.CatalogDigest = catalogDigest
+	delete(spec.Machine.Profile.CommandProxy.Commands, "xdg-open")
+	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if session.ProjectionReadiness == spec.ProjectionReadiness {
+		t.Fatal("prepared session retained mutable Manager expectation storage")
+	}
+	if session.ProjectionReadiness == nil || session.ProjectionReadiness.Manifest.CatalogDigest != spec.ProjectionReadiness.Manifest.CatalogDigest {
+		t.Fatalf("prepared readiness=%+v", session.ProjectionReadiness)
+	}
+	bootstrap, err := os.ReadFile(session.BootstrapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(bootstrap, []byte("/hideout/session/shims/code")) {
+		t.Fatalf("bootstrap omitted Manager-added projection:\n%s", bootstrap)
+	}
+	if bytes.Contains(bootstrap, []byte("/hideout/session/shims/xdg-open")) {
+		t.Fatalf("bootstrap substituted the profile-only registry:\n%s", bootstrap)
+	}
+}
+
 func TestPrepareDoesNotProvisionToolsFromLegacyFields(t *testing.T) {
 	root := t.TempDir()
 	spec := testRunSpec(root)

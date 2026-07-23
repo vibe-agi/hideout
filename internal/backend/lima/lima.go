@@ -173,11 +173,26 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	configPath := filepath.Join(spec.SessionDir, "lima.yaml")
 	bootstrapPath := filepath.Join(spec.SessionDir, "bootstrap", "bootstrap.sh")
 	manifestPath := filepath.Join(spec.SessionDir, "guest-bootstrap.json")
-	registry, err := cmdproxy.RegistryFromProfile(spec.Machine.Profile)
-	if err != nil {
-		return nil, err
+	var commandProxyShims []string
+	if spec.ProjectionReadiness != nil {
+		if err := spec.ProjectionReadiness.Validate(); err != nil {
+			return nil, err
+		}
+		if spec.ProjectionReadiness.Manifest.SessionID != spec.SessionID ||
+			spec.ProjectionReadiness.Manifest.EnvironmentID != spec.Machine.EnvironmentID {
+			return nil, errors.New("projection readiness expectation does not match the Lima run")
+		}
+		commandProxyShims = make([]string, 0, len(spec.ProjectionReadiness.Manifest.Entries))
+		for _, entry := range spec.ProjectionReadiness.Manifest.Entries {
+			commandProxyShims = append(commandProxyShims, entry.Name)
+		}
+	} else {
+		registry, err := cmdproxy.RegistryFromProfile(spec.Machine.Profile)
+		if err != nil {
+			return nil, err
+		}
+		commandProxyShims = append([]string{"hideout-shim"}, registry.ShimNames()...)
 	}
-	commandProxyShims := append([]string{"hideout-shim"}, registry.ShimNames()...)
 	if err := WriteBootstrap(bootstrapPath, commandProxyShims); err != nil {
 		return nil, err
 	}
@@ -245,6 +260,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		RuntimeResultSink:         spec.RuntimeResultSink,
 		RuntimeCompletionSink:     spec.RuntimeCompletionSink,
 		RuntimePresentation:       cloneRuntimePresentation(spec.Machine.Runtime),
+		ProjectionReadiness:       backend.CloneProjectionReadinessExpectation(spec.ProjectionReadiness),
 	}, nil
 }
 

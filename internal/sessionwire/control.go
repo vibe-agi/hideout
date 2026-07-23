@@ -338,15 +338,43 @@ func validateCompletionSignal(name string) error {
 }
 
 type SupervisorStart struct {
-	Protocol       string             `json:"protocol"`
-	SessionID      string             `json:"sessionId"`
-	TargetUser     string             `json:"targetUser"`
-	GuestWork      string             `json:"guestWork"`
-	Argv           []string           `json:"argv"`
-	Env            map[string]string  `json:"env,omitempty"`
-	Terminal       TerminalDescriptor `json:"terminal"`
-	ExpectedBootID string             `json:"expectedBootId"`
-	SessionSource  string             `json:"sessionSource"`
+	Protocol            string                                    `json:"protocol"`
+	SessionID           string                                    `json:"sessionId"`
+	TargetUser          string                                    `json:"targetUser"`
+	GuestWork           string                                    `json:"guestWork"`
+	Argv                []string                                  `json:"argv"`
+	Env                 map[string]string                         `json:"env,omitempty"`
+	Terminal            TerminalDescriptor                        `json:"terminal"`
+	ExpectedBootID      string                                    `json:"expectedBootId"`
+	SessionSource       string                                    `json:"sessionSource"`
+	ProjectionReadiness *SupervisorProjectionReadinessExpectation `json:"projectionReadiness,omitempty"`
+}
+
+type SupervisorProjectionReadinessExpectation struct {
+	EnvironmentID     string `json:"environmentId"`
+	SessionSnapshotID string `json:"sessionSnapshotId"`
+	CatalogDigest     string `json:"catalogDigest"`
+	ExpectedEntries   int    `json:"expectedEntries"`
+	TargetProjected   bool   `json:"targetProjected"`
+}
+
+func (p *SupervisorProjectionReadinessExpectation) Validate() error {
+	if p == nil {
+		return errors.New("supervisor projection readiness expectation is nil")
+	}
+	if err := requireID(p.EnvironmentID, "projection environment id"); err != nil {
+		return err
+	}
+	if err := requirePrefixedSHA256(p.SessionSnapshotID, "projection session snapshot id"); err != nil {
+		return err
+	}
+	if err := requirePrefixedSHA256(p.CatalogDigest, "projection catalog digest"); err != nil {
+		return err
+	}
+	if p.ExpectedEntries <= 0 || p.ExpectedEntries > 129 {
+		return errors.New("projection readiness expected entry count is invalid")
+	}
+	return nil
 }
 
 func (s *SupervisorStart) Validate() error {
@@ -394,13 +422,51 @@ func (s *SupervisorStart) Validate() error {
 	if s.SessionSource != wantSource {
 		return fmt.Errorf("session source must be %q", wantSource)
 	}
+	if s.ProjectionReadiness != nil {
+		if err := s.ProjectionReadiness.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 type SupervisorReady struct {
-	Protocol  string             `json:"protocol"`
-	SessionID string             `json:"sessionId"`
-	Terminal  TerminalDescriptor `json:"terminal"`
+	Protocol            string                              `json:"protocol"`
+	SessionID           string                              `json:"sessionId"`
+	Terminal            TerminalDescriptor                  `json:"terminal"`
+	ProjectionReadiness *SupervisorProjectionReadinessReady `json:"projectionReadiness,omitempty"`
+}
+
+type SupervisorProjectionReadinessReady struct {
+	Status            string `json:"status"`
+	EnvironmentID     string `json:"environmentId"`
+	SessionSnapshotID string `json:"sessionSnapshotId"`
+	CatalogDigest     string `json:"catalogDigest"`
+	ExpectedEntries   int    `json:"expectedEntries"`
+	ObservedEntries   int    `json:"observedEntries"`
+	DurationMillis    int64  `json:"durationMs"`
+	TargetProjected   bool   `json:"targetProjected"`
+}
+
+func (p *SupervisorProjectionReadinessReady) Validate() error {
+	if p == nil {
+		return errors.New("supervisor projection readiness result is nil")
+	}
+	if p.Status != "ready" {
+		return errors.New("supervisor may report only ready projection status")
+	}
+	expectation := SupervisorProjectionReadinessExpectation{
+		EnvironmentID: p.EnvironmentID, SessionSnapshotID: p.SessionSnapshotID,
+		CatalogDigest: p.CatalogDigest, ExpectedEntries: p.ExpectedEntries,
+		TargetProjected: p.TargetProjected,
+	}
+	if err := expectation.Validate(); err != nil {
+		return err
+	}
+	if p.ObservedEntries != p.ExpectedEntries || p.DurationMillis < 0 || p.DurationMillis > 2000 {
+		return errors.New("supervisor projection readiness observation is incomplete or unbounded")
+	}
+	return nil
 }
 
 func (r *SupervisorReady) Validate() error {
@@ -413,7 +479,13 @@ func (r *SupervisorReady) Validate() error {
 	if err := requireSessionID(r.SessionID); err != nil {
 		return err
 	}
-	return r.Terminal.Validate()
+	if err := r.Terminal.Validate(); err != nil {
+		return err
+	}
+	if r.ProjectionReadiness != nil {
+		return r.ProjectionReadiness.Validate()
+	}
+	return nil
 }
 
 type emptyControl struct{}
@@ -556,6 +628,13 @@ func requireSHA256(value, name string) error {
 		return fmt.Errorf("%s must be a lowercase SHA-256", name)
 	}
 	return nil
+}
+
+func requirePrefixedSHA256(value, name string) error {
+	if !strings.HasPrefix(value, "sha256:") {
+		return fmt.Errorf("%s must use the sha256 prefix", name)
+	}
+	return requireSHA256(strings.TrimPrefix(value, "sha256:"), name)
 }
 
 func requireOpaque(value, name string, limit int) error {

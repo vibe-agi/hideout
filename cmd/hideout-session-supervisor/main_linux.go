@@ -83,6 +83,9 @@ func verifySupervisorContext(spec startSpec) error {
 	if !view.IsDir() {
 		return errors.New("fixed session view is not a directory")
 	}
+	if spec.ProjectionReadiness == nil {
+		return errors.New("fixed session supervisor requires projection readiness")
+	}
 	return nil
 }
 

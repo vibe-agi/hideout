@@ -51,6 +51,7 @@ type RunDataPlaneOptions struct {
 
 type RunDataPlane struct {
 	Registry             cmdproxy.Registry
+	ProjectionReadiness  *backend.ProjectionReadinessExpectation
 	HostFSPolicy         hostfs.EffectivePolicy
 	HostFSEnabled        bool
 	HostFSGrafts         []string
@@ -137,6 +138,14 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	if err != nil {
 		return RunDataPlane{}, err
 	}
+	projectionCatalogDigest, err := BuildProjectionCatalogReviewDigest(registry)
+	if err != nil {
+		return RunDataPlane{}, err
+	}
+	if runSession.Plan.ProjectionCatalogDigest == "" ||
+		projectionCatalogDigest != runSession.Plan.ProjectionCatalogDigest {
+		return RunDataPlane{}, ErrRunPlanStale
+	}
 	if err := MaterializeCommandProxyShims(runSession.RuntimeShimDir, runSession.Plan.Backend, registry, runNetwork.Plan); err != nil {
 		return RunDataPlane{}, err
 	}
@@ -149,6 +158,24 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		runSession.WorkspaceAttachment.Transport == workspaceattach.SelectedTransport,
 	); err != nil {
 		return RunDataPlane{}, err
+	}
+	var projectionReadiness *backend.ProjectionReadinessExpectation
+	if runSession.Plan.Backend == "lima" && runSession.Environment.Active {
+		environmentID := runSession.Environment.Record.ID
+		if environmentID == "" {
+			return RunDataPlane{}, errors.New("Lima projection readiness requires an environment identity")
+		}
+		projectionReadiness, err = MaterializeProjectionReadiness(
+			runSession.RuntimeSessionDir,
+			runSession.Layout.ID,
+			environmentID,
+			runSession.SessionSnapshotID,
+			runSession.Plan.Command,
+			registry,
+		)
+		if err != nil {
+			return RunDataPlane{}, err
+		}
 	}
 	grantBindings, requiredGrantBindings := compileRunProjectionGrants(runSession, workspaceAuthority, hostAppBindings.Bindings())
 	projectionGrantIDs := []string{}
@@ -391,6 +418,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	lifecycleRefs := lifecycleTracker.transfer()
 	return RunDataPlane{
 		Registry:             registry,
+		ProjectionReadiness:  projectionReadiness,
 		HostFSPolicy:         hostFSPolicy,
 		HostFSEnabled:        hostFSEnabled,
 		HostFSGrafts:         HostFSGrafts(hostFSPolicy),

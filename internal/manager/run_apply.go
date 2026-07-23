@@ -479,6 +479,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	// Manager owns the immutable policy/configuration snapshot. Bind it after
 	// backend preparation so no backend implementation can omit or rewrite it.
 	session.SessionSnapshotID = runSession.SessionSnapshotID
+	session.ProjectionReadiness = backend.CloneProjectionReadinessExpectation(runSpec.ProjectionReadiness)
 	if runEnv.Active && runEnv.Record.Disposable && runEnv.Record.Backend == "lima" &&
 		opts.Lifecycle != nil && c.LifecycleDisposals != nil {
 		if provider, ok := opts.Backend.(EnvironmentLifecycleBackend); ok {
@@ -640,10 +641,16 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		transitionLock = nil
 	}
 	previewCtx, cancelPreview := context.WithCancel(ctx)
-	previewEvents := startRunPreviews(previewCtx, runSession, dataPlane, opener)
+	var previewEvents <-chan []audit.Event
+	startPreviews := func() {
+		if previewEvents == nil {
+			previewEvents = startRunPreviews(previewCtx, runSession, dataPlane, opener)
+		}
+	}
 	var runErr error
-	deferSharedReady := lifecycleRegistration != nil && runEnv.Record.Mode == environment.ModeShared
-	if lifecycleRegistration != nil && !deferSharedReady {
+	projectionReadyPublished := false
+	deferStreamReady := lifecycleRegistration != nil && opts.Streams != nil
+	if lifecycleRegistration != nil && !deferStreamReady {
 		if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleSupervisorRef); err != nil {
 			cancelPreview()
 			return result, err
@@ -659,18 +666,30 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			runErr = errors.New("backend does not support daemon run streams")
 		} else {
 			streams := *opts.Streams
-			if deferSharedReady {
-				downstreamReady := streams.Ready
-				readyActivated := false
-				streams.Ready = func(proof backend.SessionReadyProof) error {
-					if readyActivated {
-						return errors.New("shared workspace ready barrier was entered more than once")
-					}
-					if err := proof.ValidateSession(session, true); err != nil {
+			downstreamReady := streams.Ready
+			readyActivated := false
+			streams.Ready = func(proof backend.SessionReadyProof) error {
+				if readyActivated {
+					return errors.New("session ready barrier was entered more than once")
+				}
+				requireAuthenticated := runEnv.Active && plan.Backend == "lima"
+				if err := proof.ValidateSession(session, requireAuthenticated); err != nil {
+					return err
+				}
+				if session.ProjectionReadiness != nil {
+					if err := runSession.Audit.Emit(audit.Event{
+						Session: runSession.Layout.ID, Profile: plan.ProfileName, Backend: plan.Backend,
+						Action: "projection.readiness", Decision: "allow",
+						Details: projectionReadinessReadyDetails(proof),
+					}); err != nil {
 						return err
 					}
-					if err := activateLifecycleResource(ctx, lifecycleRegistration, workspaceLifecycleRefs.View); err != nil {
-						return err
+				}
+				if lifecycleRegistration != nil {
+					if runEnv.Record.Mode == environment.ModeShared {
+						if err := activateLifecycleResource(ctx, lifecycleRegistration, workspaceLifecycleRefs.View); err != nil {
+							return err
+						}
 					}
 					if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleSupervisorRef); err != nil {
 						return err
@@ -678,27 +697,44 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 					if err := activateLifecycleResource(ctx, lifecycleRegistration, lifecycleTargetRef); err != nil {
 						return err
 					}
-					runSession.WorkspaceAttachment.State = workspaceattach.AttachmentReady
+					if runEnv.Record.Mode == environment.ModeShared {
+						runSession.WorkspaceAttachment.State = workspaceattach.AttachmentReady
+					}
+				}
+				if downstreamReady != nil {
 					if err := downstreamReady(proof); err != nil {
 						return err
 					}
-					readyActivated = true
-					return nil
 				}
-				runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, streams)
-			} else {
-				runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, streams)
+				startPreviews()
+				readyActivated = true
+				projectionReadyPublished = true
+				return nil
 			}
+			runErr = streamRunner.RunWithStreams(ctx, session, plan.Command, dataPlane.Env, streams)
 		}
 	} else {
+		startPreviews()
 		runErr = opts.Backend.Run(ctx, session, plan.Command, dataPlane.Env)
+	}
+	if session.ProjectionReadiness != nil && !projectionReadyPublished {
+		var readinessErr *backend.ProjectionReadinessError
+		if errors.As(runErr, &readinessErr) {
+			_ = runSession.Audit.Emit(audit.Event{
+				Session: runSession.Layout.ID, Profile: plan.ProfileName, Backend: plan.Backend,
+				Action: "projection.readiness", Decision: "deny",
+				Details: projectionReadinessFailureDetails(session.ProjectionReadiness, readinessErr),
+			})
+		}
 	}
 	runErr = runtimeRunError(runEnv, runErr)
 	cancelPreview()
 	var previewAuditErr error
-	for _, event := range <-previewEvents {
-		if err := runSession.Audit.Emit(event); err != nil && previewAuditErr == nil {
-			previewAuditErr = err
+	if previewEvents != nil {
+		for _, event := range <-previewEvents {
+			if err := runSession.Audit.Emit(event); err != nil && previewAuditErr == nil {
+				previewAuditErr = err
+			}
 		}
 	}
 	decision := "allow"
@@ -1018,6 +1054,7 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 		HostFSGrafts:              append([]string(nil), dataPlane.HostFSGrafts...),
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), dataPlane.PortBridges...),
 		AuditPath:                 runSession.AuditPath,
+		ProjectionReadiness:       backend.CloneProjectionReadinessExpectation(dataPlane.ProjectionReadiness),
 		NetworkPrivilegedSetup:    runNetwork.Plan.Mode == netpolicy.ModeTun2Socks,
 		PrivilegedSetupRequired:   runNetwork.Plan.Mode == netpolicy.ModeTun2Socks || dataPlane.HostFSEnabled,
 		PrivilegeStatusSink: func(status privilege.Status) error {

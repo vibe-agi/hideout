@@ -35,15 +35,16 @@ type terminalSpec struct {
 }
 
 type startSpec struct {
-	Protocol       string
-	SessionID      string
-	TargetUser     string
-	GuestWork      string
-	Argv           []string
-	Env            []string
-	Terminal       terminalSpec
-	ExpectedBootID string
-	SessionSource  string
+	Protocol            string
+	SessionID           string
+	TargetUser          string
+	GuestWork           string
+	Argv                []string
+	Env                 []string
+	Terminal            terminalSpec
+	ExpectedBootID      string
+	SessionSource       string
+	ProjectionReadiness *projectionReadinessSpec
 }
 
 type targetCompletion struct {
@@ -69,6 +70,11 @@ func validateStart(spec startSpec, expectedProtocol string) error {
 	wantSource := "/hideout/runtime/sessions/" + spec.SessionID
 	if spec.SessionSource != wantSource {
 		return errors.New("session source does not match the fixed session runtime child")
+	}
+	if spec.ProjectionReadiness != nil {
+		if err := spec.ProjectionReadiness.validate(); err != nil {
+			return err
+		}
 	}
 	if !bootIDPattern.MatchString(spec.ExpectedBootID) {
 		return errors.New("expected guest boot identity is invalid")

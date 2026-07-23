@@ -328,6 +328,13 @@ func writePortalWorkspaceCleanup(script *strings.Builder, spec SessionViewSpec) 
 func sessionRuntimeReadyCondition(paths []string) string {
 	checks := make([]string, 0, len(paths))
 	for _, requiredPath := range paths {
+		if path.Base(requiredPath) == backend.ProjectionReadinessManifestFile {
+			checks = append(checks,
+				shellJoin([]string{"test", "-f", requiredPath})+" && "+
+					shellJoin([]string{"test", "!", "-L", requiredPath}),
+			)
+			continue
+		}
 		checks = append(checks, shellJoin([]string{"test", "-x", requiredPath}))
 	}
 	return strings.Join(checks, " && ")
@@ -350,6 +357,9 @@ func sessionRuntimePrerequisites(session *backend.Session, supervisor bool) []st
 	}
 	if supervisor {
 		paths = append(paths, GuestSessionSupervisorPath)
+	}
+	if session != nil && session.ProjectionReadiness != nil {
+		paths = append(paths, GuestSessionDir+"/"+backend.ProjectionReadinessManifestFile)
 	}
 	return paths
 }

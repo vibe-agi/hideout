@@ -83,6 +83,7 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 		HostFSGrafts:         session.HostFSGrafts,
 		ExpectedBootID:       session.ExpectedBootID,
 		SessionSupervisor:    true,
+		RequiredRuntimePaths: sessionRuntimePrerequisites(session, true),
 		Workspace:            session.Workspace,
 	})
 	if err != nil {
@@ -109,6 +110,7 @@ func (b Backend) runIsolatedSupervisor(ctx context.Context, session *backend.Ses
 		return nil
 	}
 	runErr := b.runSupervisorProtocol(ctx, session, client, viewCommand, command, env, streams, onReady)
+	runErr = classifyProjectionReadinessRunError(ctx, session, runErr)
 	if runErr != nil {
 		runErr = fmt.Errorf("supervisor protocol: %w", runErr)
 	}
@@ -252,6 +254,9 @@ func (b Backend) runSupervisorProtocol(
 				if streams.Ready == nil {
 					return errors.New("daemon stream is missing the ready callback")
 				}
+				if err := applySupervisorProjectionReadiness(prepared, reported.ProjectionReadiness); err != nil {
+					return err
+				}
 				if onReady != nil {
 					if err := onReady(); err != nil {
 						return fmt.Errorf("record supervisor setup readiness: %w", err)
@@ -281,7 +286,15 @@ func (b Backend) runSupervisorProtocol(
 					return fmt.Errorf("decode supervisor error: %w", decodeErr)
 				}
 				reported := control.(*sessionwire.Error)
-				cancelForProtocolError(fmt.Errorf("guest supervisor error: %s", reported.Summary))
+				if status, reason, ok := projectionReadinessDisposition(reported.Code); ok {
+					cancelForProtocolError(&backend.ProjectionReadinessError{
+						Status: status, ReasonCode: reason,
+						Hint: "projection readiness was refused before target start; retry after checking the session",
+						Err:  fmt.Errorf("guest supervisor readiness refusal: %s", reported.Summary),
+					})
+				} else {
+					cancelForProtocolError(fmt.Errorf("guest supervisor error: %s", reported.Summary))
+				}
 			case sessionwire.TypeCompletion:
 				control, decodeErr := sessionwire.DecodeControl(result.frame.Type, result.frame.Payload)
 				if decodeErr != nil {
@@ -343,6 +356,11 @@ func (b Backend) runSupervisorProtocol(
 			}
 
 		case <-ctxDone:
+			if !ready && completion == nil {
+				_ = sshSession.Signal(ssh.SIGKILL)
+				_ = sshSession.Close()
+				return preCommitCancellationError(ctx)
+			}
 			if !cancelSent && completion == nil {
 				_ = writer.Write(sessionwire.TypeCancel, nil)
 				cancelSent = true
@@ -384,6 +402,107 @@ func (b Backend) runSupervisorProtocol(
 	}
 }
 
+func applySupervisorProjectionReadiness(
+	prepared *backend.Session,
+	readyProjection *sessionwire.SupervisorProjectionReadinessReady,
+) error {
+	if prepared == nil {
+		return errors.New("guest supervisor projection readiness requires a prepared session")
+	}
+	if prepared.ProjectionReadiness == nil {
+		if readyProjection != nil {
+			return errors.New("guest supervisor reported unexpected projection readiness")
+		}
+		return nil
+	}
+	if readyProjection == nil {
+		return errors.New("guest supervisor omitted projection readiness")
+	}
+	if readyProjection.EnvironmentID != prepared.ProjectionReadiness.Manifest.EnvironmentID ||
+		readyProjection.SessionSnapshotID != prepared.ProjectionReadiness.Manifest.SessionSnapshotID {
+		return errors.New("guest supervisor projection readiness identity drift")
+	}
+	observation := backend.ProjectionReadinessObservation{
+		Status:          backend.ProjectionReadinessStatus(readyProjection.Status),
+		CatalogDigest:   readyProjection.CatalogDigest,
+		ExpectedEntries: readyProjection.ExpectedEntries,
+		ObservedEntries: readyProjection.ObservedEntries,
+		DurationMillis:  readyProjection.DurationMillis,
+		TargetProjected: readyProjection.TargetProjected,
+	}
+	if err := observation.Validate(prepared.ProjectionReadiness); err != nil {
+		return fmt.Errorf("validate guest projection readiness: %w", err)
+	}
+	prepared.ProjectionReadinessObservation = &observation
+	return nil
+}
+
+func preCommitCancellationError(ctx context.Context) error {
+	var cause error
+	if ctx != nil {
+		cause = ctx.Err()
+	}
+	if cause == nil {
+		cause = context.Canceled
+	}
+	return &backend.ProjectionReadinessError{
+		Status:     backend.ProjectionReadinessCancelled,
+		ReasonCode: backend.ProjectionReadinessCancellation,
+		Hint:       "run cancelled before target start; retry when the session is ready",
+		Err:        cause,
+	}
+}
+
+func projectionReadinessDisposition(code string) (backend.ProjectionReadinessStatus, backend.ProjectionReadinessReason, bool) {
+	reason := backend.ProjectionReadinessReason(code)
+	switch reason {
+	case backend.ProjectionReadinessManifestMissing,
+		backend.ProjectionReadinessCatalogDrift,
+		backend.ProjectionReadinessIdentityDrift,
+		backend.ProjectionReadinessEntryMissing,
+		backend.ProjectionReadinessEntryInvalid,
+		backend.ProjectionReadinessDigestMismatch:
+		return backend.ProjectionReadinessRefused, reason, true
+	case backend.ProjectionReadinessTimeout:
+		return backend.ProjectionReadinessTimedOut, reason, true
+	case backend.ProjectionReadinessCancellation:
+		return backend.ProjectionReadinessCancelled, reason, true
+	default:
+		return "", "", false
+	}
+}
+
+func classifyProjectionReadinessRunError(ctx context.Context, session *backend.Session, err error) error {
+	if err == nil || session == nil || session.ProjectionReadiness == nil ||
+		session.ProjectionReadinessObservation != nil {
+		return err
+	}
+	var typed *backend.ProjectionReadinessError
+	if errors.As(err, &typed) {
+		return err
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return preCommitCancellationError(ctx)
+	}
+	text := err.Error()
+	switch {
+	case strings.Contains(text, "session runtime files did not become visible"):
+		return &backend.ProjectionReadinessError{
+			Status: backend.ProjectionReadinessTimedOut, ReasonCode: backend.ProjectionReadinessTimeout,
+			Hint: "session projection did not become visible within two seconds; retry after checking the environment",
+			Err:  err,
+		}
+	case strings.Contains(text, "guest boot identity changed"):
+		return &backend.ProjectionReadinessError{
+			Status: backend.ProjectionReadinessRefused, ReasonCode: backend.ProjectionReadinessIdentityDrift,
+			Hint: "environment identity changed before target start; retry with the current environment",
+			Err:  err,
+		}
+	default:
+		return err
+	}
+}
+
 func supervisorStartControl(prepared *backend.Session, command, env []string, streams backend.RunStreams) (*sessionwire.SupervisorStart, error) {
 	terminal := sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalNone}
 	if streams.Terminal {
@@ -406,6 +525,16 @@ func supervisorStartControl(prepared *backend.Session, command, env []string, st
 		Argv: append([]string(nil), command...), Env: values, Terminal: terminal,
 		ExpectedBootID: prepared.ExpectedBootID,
 		SessionSource:  GuestRuntimeDir + "/sessions/" + prepared.ID,
+	}
+	if prepared.ProjectionReadiness != nil {
+		expectation := prepared.ProjectionReadiness
+		start.ProjectionReadiness = &sessionwire.SupervisorProjectionReadinessExpectation{
+			EnvironmentID:     expectation.Manifest.EnvironmentID,
+			SessionSnapshotID: expectation.Manifest.SessionSnapshotID,
+			CatalogDigest:     expectation.Manifest.CatalogDigest,
+			ExpectedEntries:   len(expectation.Manifest.Entries),
+			TargetProjected:   expectation.TargetProjected,
+		}
 	}
 	if start.TargetUser == "" {
 		start.TargetUser = "developer"

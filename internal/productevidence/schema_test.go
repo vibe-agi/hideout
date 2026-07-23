@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/vibe-agi/hideout/internal/backend"
 )
 
 func TestManifestMatchesSchema(t *testing.T) {
@@ -93,9 +95,46 @@ func TestDocsTruthEvidenceMatchesSchema(t *testing.T) {
 	}
 }
 
+func TestProjectionReadinessManifestMatchesStrictSchema(t *testing.T) {
+	schema := compileSchemaFile(t, "projection-readiness.schema.json")
+	manifest := backend.ProjectionReadinessManifest{
+		Schema: backend.ProjectionReadinessManifestSchema, SessionID: "ses_ready", EnvironmentID: "env_ready",
+		SessionSnapshotID: "sha256:" + strings.Repeat("c", 64),
+		CatalogDigest:     "sha256:" + strings.Repeat("d", 64),
+		Entries: []backend.ProjectionReadinessEntry{
+			{Name: "hideout-shim", RelativePath: "hideout-shim", SHA256: "sha256:" + strings.Repeat("2", 64), Kind: backend.ProjectionEntryDispatcher},
+		},
+	}
+	if err := validateJSON(schema, manifest); err != nil {
+		t.Fatalf("valid projection readiness manifest failed schema validation: %v", err)
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unknown map[string]any
+	if err := json.Unmarshal(data, &unknown); err != nil {
+		t.Fatal(err)
+	}
+	unknown["hostPath"] = "/private/should-not-appear"
+	if err := validateJSON(schema, unknown); err == nil {
+		t.Fatal("projection readiness schema accepted an unknown private path field")
+	}
+	delete(unknown, "hostPath")
+	delete(unknown, "catalogDigest")
+	if err := validateJSON(schema, unknown); err == nil {
+		t.Fatal("projection readiness schema accepted a missing catalog digest")
+	}
+}
+
 func compileProductEvidenceSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "product-hardening-evidence.schema.json"))
+	return compileSchemaFile(t, "product-hardening-evidence.schema.json")
+}
+
+func compileSchemaFile(t *testing.T, name string) *jsonschema.Schema {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", name))
 	if err != nil {
 		t.Fatal(err)
 	}

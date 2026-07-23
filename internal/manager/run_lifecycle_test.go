@@ -67,6 +67,13 @@ func (b *lifecycleApplyBackend) Activate(_ context.Context, session *backend.Ses
 }
 
 func (b *lifecycleApplyBackend) RunWithStreams(ctx context.Context, session *backend.Session, command []string, env []string, streams backend.RunStreams) error {
+	if expectation := session.ProjectionReadiness; expectation != nil {
+		session.ProjectionReadinessObservation = &backend.ProjectionReadinessObservation{
+			Status: backend.ProjectionReadinessReady, CatalogDigest: expectation.Manifest.CatalogDigest,
+			ExpectedEntries: len(expectation.Manifest.Entries), ObservedEntries: len(expectation.Manifest.Entries),
+			TargetProjected: expectation.TargetProjected,
+		}
+	}
 	proof, err := backend.ReadyProofForSession(session, backend.SessionReadyAuthenticatedSupervisor)
 	if err != nil {
 		return err

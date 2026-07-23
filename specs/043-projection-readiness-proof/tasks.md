@@ -27,8 +27,8 @@ authority closure, and clean promotion evidence can be validated separately.
 **Purpose**: Preserve the known-green baseline and create the required
 adversarial ledger before changing the readiness boundary.
 
-- [ ] T001 Run the focused baseline from `specs/043-projection-readiness-proof/quickstart.md` and record exact commands and the known first-run/schema gaps in `specs/043-projection-readiness-proof/adversarial-report.md`
-- [ ] T002 [P] Add the four-item 030 starting disposition table, mutation inventory, judge-negative-fixture inventory, and real-gate evidence placeholders to `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T001 Run the focused baseline from `specs/043-projection-readiness-proof/quickstart.md` and record exact commands and the known first-run/schema gaps in `specs/043-projection-readiness-proof/adversarial-report.md`
+- [X] T002 [P] Add the four-item 030 starting disposition table, mutation inventory, judge-negative-fixture inventory, and real-gate evidence placeholders to `specs/043-projection-readiness-proof/adversarial-report.md`
 
 ---
 
@@ -40,11 +40,11 @@ types used by every user story.
 **CRITICAL**: No user story implementation begins until these types,
 canonicalization rules, and schemas are green.
 
-- [ ] T003 [P] Write failing strict validation and session-match tests for `ProjectionReadinessExpectation`, `ProjectionReadinessObservation`, and extended `SessionReadyProof` values in `internal/backend/backend_test.go`
-- [ ] T004 [P] Write failing canonical ordering, duplicate/path rejection, digest stability, strict manifest decoding, and catalog-size-bound tests in `internal/manager/projection_readiness_test.go`
-- [ ] T005 Implement backend-neutral readiness expectation, disposition, typed reason, clone, validation, and ready-proof comparison fields in `internal/backend/backend.go`
-- [ ] T006 Implement Manager-owned catalog snapshot, entry digest, canonical catalog digest, strict manifest codec, and bounded catalog construction in `internal/manager/projection_readiness.go`
-- [ ] T007 [P] Add the strict public readiness manifest/evidence contract and valid/unknown-field fixtures in `schemas/projection-readiness.schema.json` and `internal/productevidence/schema_test.go`
+- [X] T003 [P] Write failing strict validation and session-match tests for `ProjectionReadinessExpectation`, `ProjectionReadinessObservation`, and extended `SessionReadyProof` values in `internal/backend/backend_test.go`
+- [X] T004 [P] Write failing canonical ordering, duplicate/path rejection, digest stability, strict manifest decoding, and catalog-size-bound tests in `internal/manager/projection_readiness_test.go`
+- [X] T005 Implement backend-neutral readiness expectation, disposition, typed reason, clone, validation, and ready-proof comparison fields in `internal/backend/backend.go`
+- [X] T006 Implement Manager-owned catalog snapshot, entry digest, canonical catalog digest, strict manifest codec, and bounded catalog construction in `internal/manager/projection_readiness.go`
+- [X] T007 [P] Add the strict public readiness manifest/evidence contract and valid/unknown-field fixtures in `schemas/projection-readiness.schema.json` and `internal/productevidence/schema_test.go`
 
 **Checkpoint**: One complete final registry can be represented, hashed, decoded,
 and compared without granting authority or depending on Lima.
@@ -73,13 +73,13 @@ Ordinary non-projected commands retain their existing lookup behavior.
 
 ### Implementation For User Story 1
 
-- [ ] T015 [US1] Build the final catalog from `RunDataPlane.Registry`, materialize dispatcher and shims, and atomically write the strict session manifest last in `internal/manager/run_dataplane.go` and `internal/manager/projection_readiness.go`
-- [ ] T016 [US1] Carry and rebind the immutable Manager expectation through `RunSpec`, `Backend.Prepare`, and returned `Session`, and use its complete shim names for bootstrap in `internal/backend/backend.go`, `internal/backend/lima/lima.go`, and `internal/manager/run_session.go`
-- [ ] T017 [US1] Extend the exact Lima session-view prerequisite barrier to the readiness manifest and fixed supervisor without adding a global command probe or target retry in `internal/backend/lima/session_view.go`
-- [ ] T018 [US1] Strictly decode the bound manifest and validate every dispatcher/command file as regular, non-symlink, executable, and digest-matched before reporting ready in `cmd/hideout-session-supervisor/model.go`, `cmd/hideout-session-supervisor/main_linux.go`, and `cmd/hideout-session-supervisor/wire_linux.go`
-- [ ] T019 [US1] Extend authenticated `SupervisorReady` and `SessionReadyProof` with readiness status, catalog digest, counts, and bounded duration while preserving strict unknown-field/frame validation in `internal/sessionwire/control.go` and `internal/backend/backend.go`
-- [ ] T020 [US1] Validate the ready catalog before `SupervisorCommit`, close the owning SSH session immediately on pre-commit cancellation, and keep existing graceful post-commit termination in `internal/backend/lima/session_stream.go`
-- [ ] T021 [US1] Gate Manager workspace/lifecycle activation and daemon `Started` publication on the matching proof, and emit one typed redacted readiness disposition in `internal/manager/run_lifecycle_effects.go`, `internal/manager/run_service.go`, and `internal/daemon/session_server.go`
+- [X] T015 [US1] Build the final catalog from `RunDataPlane.Registry`, materialize dispatcher and shims, and atomically write the strict session manifest last in `internal/manager/run_dataplane.go` and `internal/manager/projection_readiness.go`
+- [X] T016 [US1] Carry and rebind the immutable Manager expectation through `RunSpec`, `Backend.Prepare`, and returned `Session`, and use its complete shim names for bootstrap in `internal/backend/backend.go`, `internal/backend/lima/lima.go`, and `internal/manager/run_session.go`
+- [X] T017 [US1] Extend the exact Lima session-view prerequisite barrier to the readiness manifest and fixed supervisor without adding a global command probe or target retry in `internal/backend/lima/session_view.go`
+- [X] T018 [US1] Strictly decode the bound manifest and validate every dispatcher/command file as regular, non-symlink, executable, and digest-matched before reporting ready in `cmd/hideout-session-supervisor/model.go`, `cmd/hideout-session-supervisor/main_linux.go`, and `cmd/hideout-session-supervisor/wire_linux.go`
+- [X] T019 [US1] Extend authenticated `SupervisorReady` and `SessionReadyProof` with readiness status, catalog digest, counts, and bounded duration while preserving strict unknown-field/frame validation in `internal/sessionwire/control.go` and `internal/backend/backend.go`
+- [X] T020 [US1] Validate the ready catalog before `SupervisorCommit`, close the owning SSH session immediately on pre-commit cancellation, and keep existing graceful post-commit termination in `internal/backend/lima/session_stream.go`
+- [X] T021 [US1] Gate Manager workspace/lifecycle activation and daemon `Started` publication on the matching proof, and emit one typed redacted readiness disposition in `internal/manager/run_lifecycle_effects.go`, `internal/manager/run_service.go`, and `internal/daemon/session_server.go`
 - [ ] T022 [US1] Run and record red-then-green mutations for omitted catalog entry, early manifest, accepted symlink/digest mismatch, foreign ready digest, skipped lifecycle gate, and target retry in `specs/043-projection-readiness-proof/adversarial-report.md`
 
 **Checkpoint**: User Story 1 is independently green under focused tests and
@@ -110,7 +110,7 @@ item names its direct current proof or remains explicitly deferred.
 
 - [ ] T028 [US2] Preserve exact command-registry lookup before binding/provider admission and derive audit command classification only from the validated registry result in `internal/broker/hostapp.go`
 - [ ] T029 [US2] Add stable lower-camel JSON tags to `CapabilityDescriptor`, align `residualPolicy` and required fields in `schemas/capability-descriptor.schema.json`, and keep strict decoding in `internal/hostcap/descriptor.go`
-- [ ] T030 [US2] Bind the complete projection catalog digest into reviewed run truth, recompile and compare it at apply, and refuse stale external-pack ownership in `internal/manager/run_plan.go`, `internal/manager/run_apply.go`, and `internal/manager/run_service.go`
+- [X] T030 [US2] Bind the complete projection catalog digest into reviewed run truth, recompile and compare it at apply, and refuse stale external-pack ownership in `internal/manager/run_plan.go`, `internal/manager/run_apply.go`, and `internal/manager/run_service.go`
 - [ ] T031 [US2] Record named current proofs for broker registration, four-template alias defaults, pathMode recreation, descriptor parity, and unbound-intent schema in `specs/043-projection-readiness-proof/adversarial-report.md`
 - [ ] T032 [US2] Run and record red-then-green mutations for skipped broker lookup, one non-alias template, removed pathMode recreate identity, omitted descriptor field/tag, permissive unknown fields, and skipped catalog-drift comparison in `specs/043-projection-readiness-proof/adversarial-report.md`
 - [ ] T033 [US2] Narrow or close the four-item 030 acceptance ledger row item by item without deleting unresolved triggers in `docs/DEBT.md`

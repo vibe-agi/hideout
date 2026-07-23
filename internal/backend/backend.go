@@ -2,6 +2,9 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -143,6 +147,7 @@ type RunSpec struct {
 	RuntimeInstanceExpected   *RuntimeInstanceExpectation
 	RuntimeResultSink         func(RuntimeObservationReport) error
 	RuntimeCompletionSink     func(error) error
+	ProjectionReadiness       *ProjectionReadinessExpectation
 }
 
 type PrivilegedSetupEvent struct {
@@ -154,52 +159,54 @@ type PrivilegedSetupEvent struct {
 }
 
 type Session struct {
-	ID                        string
-	EnvironmentID             string
-	SessionSnapshotID         string
-	Backend                   string
-	HostWork                  string
-	GuestWork                 string
-	Workspace                 WorkspaceAttachmentSpec
-	GuestHome                 string
-	Env                       []string
-	ShimDir                   string
-	ProfileDir                string
-	IdentityMode              string
-	IdentityRoot              string
-	SessionDir                string
-	RuntimeRoot               string
-	SessionIsolationRequired  bool
-	TargetUser                string
-	ConfigPath                string
-	BootstrapPath             string
-	ToolManifestPath          string
-	NetworkBootstrapPath      string
-	NetworkBootstrapGuestPath string
-	NetworkCleanupPath        string
-	NetworkCleanupGuestPath   string
-	HostFSEnabled             bool
-	HostFSGrafts              []string
-	PortBridges               []PortBridgeEndpoint
-	InstanceName              string
-	PreserveInstance          bool
-	Broker                    broker.Endpoint
-	NetworkPrivilegedSetup    bool
-	PrivilegedSetupRequired   bool
-	PrivilegeStatus           *privilege.Status
-	PrivilegeStatusSink       func(privilege.Status) error
-	PrivilegedSetupEventSink  func(PrivilegedSetupEvent) error
-	RuntimeContract           *RuntimeContract
-	RuntimeInstanceExpected   *RuntimeInstanceExpectation
-	RuntimeResultSink         func(RuntimeObservationReport) error
-	RuntimeCompletionSink     func(error) error
-	RuntimePresentation       *RuntimePresentation
-	ActivationOwnerID         string
-	ExpectedBootID            string
-	RunAttempted              bool
-	RuntimeReady              bool
-	IsolationRunStarted       bool
-	IsolationCleanupProved    bool
+	ID                             string
+	EnvironmentID                  string
+	SessionSnapshotID              string
+	Backend                        string
+	HostWork                       string
+	GuestWork                      string
+	Workspace                      WorkspaceAttachmentSpec
+	GuestHome                      string
+	Env                            []string
+	ShimDir                        string
+	ProfileDir                     string
+	IdentityMode                   string
+	IdentityRoot                   string
+	SessionDir                     string
+	RuntimeRoot                    string
+	SessionIsolationRequired       bool
+	TargetUser                     string
+	ConfigPath                     string
+	BootstrapPath                  string
+	ToolManifestPath               string
+	NetworkBootstrapPath           string
+	NetworkBootstrapGuestPath      string
+	NetworkCleanupPath             string
+	NetworkCleanupGuestPath        string
+	HostFSEnabled                  bool
+	HostFSGrafts                   []string
+	PortBridges                    []PortBridgeEndpoint
+	InstanceName                   string
+	PreserveInstance               bool
+	Broker                         broker.Endpoint
+	NetworkPrivilegedSetup         bool
+	PrivilegedSetupRequired        bool
+	PrivilegeStatus                *privilege.Status
+	PrivilegeStatusSink            func(privilege.Status) error
+	PrivilegedSetupEventSink       func(PrivilegedSetupEvent) error
+	RuntimeContract                *RuntimeContract
+	RuntimeInstanceExpected        *RuntimeInstanceExpectation
+	RuntimeResultSink              func(RuntimeObservationReport) error
+	RuntimeCompletionSink          func(error) error
+	RuntimePresentation            *RuntimePresentation
+	ProjectionReadiness            *ProjectionReadinessExpectation
+	ProjectionReadinessObservation *ProjectionReadinessObservation
+	ActivationOwnerID              string
+	ExpectedBootID                 string
+	RunAttempted                   bool
+	RuntimeReady                   bool
+	IsolationRunStarted            bool
+	IsolationCleanupProved         bool
 }
 
 type PortBridgeEndpoint struct {
@@ -272,16 +279,288 @@ const (
 	SessionReadyNativeHarness           SessionReadySource = "native-harness"
 )
 
+const (
+	ProjectionReadinessManifestSchema = "hideout.projection-readiness/v1"
+	ProjectionReadinessManifestFile   = "projection-readiness.json"
+	MaxProjectionReadinessEntries     = 129
+	MaxProjectionReadinessEntryBytes  = 32 << 20
+	MaxProjectionReadinessDeadline    = 2 * time.Second
+)
+
+type ProjectionReadinessEntryKind string
+
+const (
+	ProjectionEntryDispatcher ProjectionReadinessEntryKind = "dispatcher"
+	ProjectionEntryCommand    ProjectionReadinessEntryKind = "command"
+)
+
+type ProjectionReadinessEntry struct {
+	Name         string                       `json:"name"`
+	RelativePath string                       `json:"relativePath"`
+	SHA256       string                       `json:"sha256"`
+	Kind         ProjectionReadinessEntryKind `json:"kind"`
+}
+
+type ProjectionReadinessManifest struct {
+	Schema            string                     `json:"schema"`
+	SessionID         string                     `json:"sessionId"`
+	EnvironmentID     string                     `json:"environmentId"`
+	SessionSnapshotID string                     `json:"sessionSnapshotId"`
+	CatalogDigest     string                     `json:"catalogDigest"`
+	Entries           []ProjectionReadinessEntry `json:"entries"`
+}
+
+type projectionReadinessCatalogPayload struct {
+	Schema            string                     `json:"schema"`
+	SessionID         string                     `json:"sessionId"`
+	EnvironmentID     string                     `json:"environmentId"`
+	SessionSnapshotID string                     `json:"sessionSnapshotId"`
+	Entries           []ProjectionReadinessEntry `json:"entries"`
+}
+
+func ProjectionReadinessCatalogDigest(manifest ProjectionReadinessManifest) (string, error) {
+	canonical, err := json.Marshal(projectionReadinessCatalogPayload{
+		Schema: manifest.Schema, SessionID: manifest.SessionID,
+		EnvironmentID: manifest.EnvironmentID, SessionSnapshotID: manifest.SessionSnapshotID,
+		Entries: manifest.Entries,
+	})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func (manifest ProjectionReadinessManifest) ValidateCatalogDigest() error {
+	actual, err := ProjectionReadinessCatalogDigest(manifest)
+	if err != nil {
+		return err
+	}
+	if actual != manifest.CatalogDigest {
+		return errors.New("projection readiness catalog digest mismatch")
+	}
+	return nil
+}
+
+func (manifest ProjectionReadinessManifest) Validate() error {
+	if manifest.Schema != ProjectionReadinessManifestSchema {
+		return fmt.Errorf("unsupported projection readiness schema %q", manifest.Schema)
+	}
+	if strings.TrimSpace(manifest.SessionID) == "" || strings.TrimSpace(manifest.SessionID) != manifest.SessionID ||
+		strings.TrimSpace(manifest.EnvironmentID) == "" || strings.TrimSpace(manifest.EnvironmentID) != manifest.EnvironmentID {
+		return errors.New("projection readiness session and environment identities are required")
+	}
+	if !environment.ValidConfigurationID(manifest.SessionSnapshotID) {
+		return errors.New("projection readiness session snapshot identity is invalid")
+	}
+	if !validProjectionSHA256(manifest.CatalogDigest) {
+		return errors.New("projection readiness catalog digest is invalid")
+	}
+	if len(manifest.Entries) == 0 || len(manifest.Entries) > MaxProjectionReadinessEntries {
+		return fmt.Errorf("projection readiness entries must contain 1-%d values", MaxProjectionReadinessEntries)
+	}
+	dispatchers := 0
+	previous := ""
+	for _, entry := range manifest.Entries {
+		if err := entry.Validate(); err != nil {
+			return err
+		}
+		if previous != "" && entry.RelativePath <= previous {
+			return errors.New("projection readiness entries must be sorted and unique")
+		}
+		previous = entry.RelativePath
+		if entry.Kind == ProjectionEntryDispatcher {
+			dispatchers++
+		}
+	}
+	if dispatchers != 1 {
+		return errors.New("projection readiness catalog requires exactly one dispatcher")
+	}
+	return nil
+}
+
+func (entry ProjectionReadinessEntry) Validate() error {
+	if strings.TrimSpace(entry.Name) == "" || strings.TrimSpace(entry.Name) != entry.Name ||
+		filepath.Base(entry.Name) != entry.Name || strings.ContainsAny(entry.Name, "/\\\x00\r\n") ||
+		entry.RelativePath != entry.Name {
+		return errors.New("projection readiness entry requires one exact basename")
+	}
+	if !validProjectionSHA256(entry.SHA256) {
+		return fmt.Errorf("projection readiness entry %q digest is invalid", entry.Name)
+	}
+	switch entry.Kind {
+	case ProjectionEntryDispatcher:
+		if entry.Name != "hideout-shim" {
+			return errors.New("projection readiness dispatcher identity is invalid")
+		}
+	case ProjectionEntryCommand:
+		if entry.Name == "hideout-shim" {
+			return errors.New("projection readiness command uses the reserved dispatcher name")
+		}
+	default:
+		return fmt.Errorf("projection readiness entry %q kind is invalid", entry.Name)
+	}
+	return nil
+}
+
+type ProjectionReadinessExpectation struct {
+	Manifest             ProjectionReadinessManifest `json:"manifest"`
+	ManifestRelativePath string                      `json:"manifestRelativePath"`
+	TargetProjected      bool                        `json:"targetProjected"`
+	Deadline             time.Duration               `json:"-"`
+}
+
+func (expectation ProjectionReadinessExpectation) Validate() error {
+	if expectation.ManifestRelativePath != ProjectionReadinessManifestFile {
+		return errors.New("projection readiness manifest path is invalid")
+	}
+	if expectation.Deadline <= 0 || expectation.Deadline > MaxProjectionReadinessDeadline {
+		return errors.New("projection readiness deadline is invalid")
+	}
+	if err := expectation.Manifest.Validate(); err != nil {
+		return err
+	}
+	return expectation.Manifest.ValidateCatalogDigest()
+}
+
+func CloneProjectionReadinessExpectation(value *ProjectionReadinessExpectation) *ProjectionReadinessExpectation {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	out.Manifest.Entries = append([]ProjectionReadinessEntry(nil), value.Manifest.Entries...)
+	return &out
+}
+
+type ProjectionReadinessStatus string
+
+const (
+	ProjectionReadinessReady     ProjectionReadinessStatus = "ready"
+	ProjectionReadinessRefused   ProjectionReadinessStatus = "refused"
+	ProjectionReadinessTimedOut  ProjectionReadinessStatus = "timed-out"
+	ProjectionReadinessCancelled ProjectionReadinessStatus = "cancelled"
+)
+
+type ProjectionReadinessReason string
+
+const (
+	ProjectionReadinessManifestMissing ProjectionReadinessReason = "projection.readiness.manifest-missing"
+	ProjectionReadinessTimeout         ProjectionReadinessReason = "projection.readiness.timeout"
+	ProjectionReadinessCancellation    ProjectionReadinessReason = "projection.readiness.cancelled"
+	ProjectionReadinessCatalogDrift    ProjectionReadinessReason = "projection.readiness.catalog-drift"
+	ProjectionReadinessIdentityDrift   ProjectionReadinessReason = "projection.readiness.identity-drift"
+	ProjectionReadinessEntryMissing    ProjectionReadinessReason = "projection.readiness.entry-missing"
+	ProjectionReadinessEntryInvalid    ProjectionReadinessReason = "projection.readiness.entry-invalid"
+	ProjectionReadinessDigestMismatch  ProjectionReadinessReason = "projection.readiness.entry-digest-mismatch"
+)
+
+type ProjectionReadinessObservation struct {
+	Status          ProjectionReadinessStatus `json:"status"`
+	ReasonCode      ProjectionReadinessReason `json:"reasonCode,omitempty"`
+	CatalogDigest   string                    `json:"catalogDigest"`
+	ExpectedEntries int                       `json:"expectedEntries"`
+	ObservedEntries int                       `json:"observedEntries"`
+	DurationMillis  int64                     `json:"durationMs"`
+	TargetProjected bool                      `json:"targetProjected"`
+}
+
+type ProjectionReadinessError struct {
+	Status     ProjectionReadinessStatus
+	ReasonCode ProjectionReadinessReason
+	Hint       string
+	Err        error
+}
+
+func (e *ProjectionReadinessError) Error() string {
+	if e == nil {
+		return "projection readiness failed"
+	}
+	summary := string(e.ReasonCode)
+	if e.Hint != "" {
+		summary += ": " + e.Hint
+	}
+	return summary
+}
+
+func (e *ProjectionReadinessError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (observation ProjectionReadinessObservation) Validate(expectation *ProjectionReadinessExpectation) error {
+	if expectation == nil {
+		return errors.New("projection readiness observation requires an expectation")
+	}
+	if err := expectation.Validate(); err != nil {
+		return err
+	}
+	if !validProjectionSHA256(observation.CatalogDigest) {
+		return errors.New("projection readiness observation catalog digest is invalid")
+	}
+	if observation.ExpectedEntries != len(expectation.Manifest.Entries) ||
+		observation.ObservedEntries < 0 || observation.ObservedEntries > observation.ExpectedEntries ||
+		observation.DurationMillis < 0 ||
+		time.Duration(observation.DurationMillis)*time.Millisecond > expectation.Deadline ||
+		observation.TargetProjected != expectation.TargetProjected {
+		return errors.New("projection readiness observation does not match the expectation")
+	}
+	switch observation.Status {
+	case ProjectionReadinessReady:
+		if observation.ReasonCode != "" ||
+			observation.CatalogDigest != expectation.Manifest.CatalogDigest ||
+			observation.ObservedEntries != observation.ExpectedEntries {
+			return errors.New("ready projection observation is incomplete or mismatched")
+		}
+	case ProjectionReadinessRefused, ProjectionReadinessTimedOut, ProjectionReadinessCancelled:
+		if !validProjectionReadinessReason(observation.ReasonCode) {
+			return errors.New("failed projection readiness observation requires a stable reason")
+		}
+	default:
+		return errors.New("projection readiness observation status is invalid")
+	}
+	return nil
+}
+
+func validProjectionReadinessReason(value ProjectionReadinessReason) bool {
+	switch value {
+	case ProjectionReadinessManifestMissing, ProjectionReadinessTimeout,
+		ProjectionReadinessCancellation, ProjectionReadinessCatalogDrift,
+		ProjectionReadinessIdentityDrift, ProjectionReadinessEntryMissing,
+		ProjectionReadinessEntryInvalid, ProjectionReadinessDigestMismatch:
+		return true
+	default:
+		return false
+	}
+}
+
+func validProjectionSHA256(value string) bool {
+	raw := strings.TrimPrefix(value, "sha256:")
+	if len(raw) != 64 || len(value) != len("sha256:")+64 {
+		return false
+	}
+	_, err := hex.DecodeString(raw)
+	return err == nil && strings.ToLower(raw) == raw
+}
+
 // SessionReadyProof is emitted only after a concrete execution supervisor has
 // proved its session and incarnation identity, and before the target is
 // authorized to start. It carries no workspace root or control credential.
 type SessionReadyProof struct {
-	SessionID         string
-	EnvironmentID     string
-	SessionSnapshotID string
-	InstanceName      string
-	BootID            string
-	Source            SessionReadySource
+	SessionID                 string
+	EnvironmentID             string
+	SessionSnapshotID         string
+	InstanceName              string
+	BootID                    string
+	Source                    SessionReadySource
+	ProjectionStatus          ProjectionReadinessStatus
+	ProjectionReasonCode      ProjectionReadinessReason
+	ProjectionCatalogDigest   string
+	ProjectionExpectedEntries int
+	ProjectionObservedEntries int
+	ProjectionDurationMillis  int64
+	ProjectionTargetProjected bool
 }
 
 func ReadyProofForSession(session *Session, source SessionReadySource) (SessionReadyProof, error) {
@@ -292,6 +571,22 @@ func ReadyProofForSession(session *Session, source SessionReadySource) (SessionR
 		SessionID: session.ID, EnvironmentID: session.EnvironmentID,
 		SessionSnapshotID: session.SessionSnapshotID,
 		InstanceName:      session.InstanceName, BootID: session.ExpectedBootID, Source: source,
+	}
+	if session.ProjectionReadiness != nil {
+		if session.ProjectionReadinessObservation == nil {
+			return SessionReadyProof{}, errors.New("ready proof requires a projection readiness observation")
+		}
+		if err := session.ProjectionReadinessObservation.Validate(session.ProjectionReadiness); err != nil {
+			return SessionReadyProof{}, err
+		}
+		observation := session.ProjectionReadinessObservation
+		proof.ProjectionStatus = observation.Status
+		proof.ProjectionReasonCode = observation.ReasonCode
+		proof.ProjectionCatalogDigest = observation.CatalogDigest
+		proof.ProjectionExpectedEntries = observation.ExpectedEntries
+		proof.ProjectionObservedEntries = observation.ObservedEntries
+		proof.ProjectionDurationMillis = observation.DurationMillis
+		proof.ProjectionTargetProjected = observation.TargetProjected
 	}
 	if err := proof.Validate(); err != nil {
 		return SessionReadyProof{}, err
@@ -316,6 +611,20 @@ func (proof SessionReadyProof) Validate() error {
 	default:
 		return errors.New("session ready proof source is invalid")
 	}
+	if proof.ProjectionStatus != "" {
+		if proof.ProjectionStatus != ProjectionReadinessReady || proof.ProjectionReasonCode != "" ||
+			!validProjectionSHA256(proof.ProjectionCatalogDigest) ||
+			proof.ProjectionExpectedEntries <= 0 ||
+			proof.ProjectionObservedEntries != proof.ProjectionExpectedEntries ||
+			proof.ProjectionDurationMillis < 0 ||
+			time.Duration(proof.ProjectionDurationMillis)*time.Millisecond > MaxProjectionReadinessDeadline {
+			return errors.New("session ready projection proof is invalid")
+		}
+	} else if proof.ProjectionReasonCode != "" || proof.ProjectionCatalogDigest != "" ||
+		proof.ProjectionExpectedEntries != 0 || proof.ProjectionObservedEntries != 0 ||
+		proof.ProjectionDurationMillis != 0 || proof.ProjectionTargetProjected {
+		return errors.New("session ready proof carries incomplete projection readiness")
+	}
 	return nil
 }
 
@@ -329,6 +638,26 @@ func (proof SessionReadyProof) ValidateSession(session *Session, requireAuthenti
 	}
 	if requireAuthenticated && proof.Source != SessionReadyAuthenticatedSupervisor {
 		return errors.New("shared workspace activation requires authenticated guest supervisor proof")
+	}
+	if session.ProjectionReadiness != nil {
+		if session.ProjectionReadinessObservation == nil {
+			return errors.New("prepared session has no projection readiness observation")
+		}
+		if err := session.ProjectionReadinessObservation.Validate(session.ProjectionReadiness); err != nil {
+			return err
+		}
+		observation := session.ProjectionReadinessObservation
+		if proof.ProjectionStatus != observation.Status ||
+			proof.ProjectionReasonCode != observation.ReasonCode ||
+			proof.ProjectionCatalogDigest != observation.CatalogDigest ||
+			proof.ProjectionExpectedEntries != observation.ExpectedEntries ||
+			proof.ProjectionObservedEntries != observation.ObservedEntries ||
+			proof.ProjectionDurationMillis != observation.DurationMillis ||
+			proof.ProjectionTargetProjected != observation.TargetProjected {
+			return errors.New("session ready proof does not match projection readiness")
+		}
+	} else if proof.ProjectionStatus != "" {
+		return errors.New("session ready proof carries unexpected projection readiness")
 	}
 	return nil
 }

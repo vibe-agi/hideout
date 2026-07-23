@@ -8,14 +8,16 @@ import (
 	"io"
 	"slices"
 
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 )
 
 type sessionWire struct {
-	reader    *sessionwire.Reader
-	writer    *sessionwire.Writer
-	sessionID string
-	terminal  sessionwire.TerminalDescriptor
+	reader              *sessionwire.Reader
+	writer              *sessionwire.Writer
+	sessionID           string
+	terminal            sessionwire.TerminalDescriptor
+	projectionReadiness *projectionReadinessSpec
 }
 
 func newSessionWire(reader io.Reader, writer io.Writer) *sessionWire {
@@ -52,6 +54,15 @@ func (w *sessionWire) ReadStart() (startSpec, error) {
 	}
 	w.sessionID = start.SessionID
 	w.terminal = start.Terminal
+	if start.ProjectionReadiness != nil {
+		w.projectionReadiness = &projectionReadinessSpec{
+			EnvironmentID:     start.ProjectionReadiness.EnvironmentID,
+			SessionSnapshotID: start.ProjectionReadiness.SessionSnapshotID,
+			CatalogDigest:     start.ProjectionReadiness.CatalogDigest,
+			ExpectedEntries:   start.ProjectionReadiness.ExpectedEntries,
+			TargetProjected:   start.ProjectionReadiness.TargetProjected,
+		}
+	}
 	return startSpec{
 		Protocol:   start.Protocol,
 		SessionID:  start.SessionID,
@@ -65,8 +76,9 @@ func (w *sessionWire) ReadStart() (startSpec, error) {
 			Columns: start.Terminal.Columns,
 			Term:    start.Terminal.Term,
 		},
-		ExpectedBootID: start.ExpectedBootID,
-		SessionSource:  start.SessionSource,
+		ExpectedBootID:      start.ExpectedBootID,
+		SessionSource:       start.SessionSource,
+		ProjectionReadiness: w.projectionReadiness,
 	}, nil
 }
 
@@ -126,11 +138,33 @@ func (w *sessionWire) ReadControl() (supervisorControl, error) {
 }
 
 func (w *sessionWire) WriteReady() error {
-	return w.writer.WriteControl(sessionwire.TypeSupervisorReady, &sessionwire.SupervisorReady{
+	ready := &sessionwire.SupervisorReady{
 		Protocol:  sessionwire.SupervisorProtocol,
 		SessionID: w.sessionID,
 		Terminal:  w.terminal,
-	})
+	}
+	if w.projectionReadiness != nil {
+		observation, err := observeProjectionReadiness("/hideout/session", w.sessionID, *w.projectionReadiness)
+		if err != nil {
+			reason := readinessReason(err)
+			if reason == "" {
+				reason = string(backend.ProjectionReadinessEntryInvalid)
+			}
+			_ = w.WriteError(reason, boundedSummary(err))
+			return err
+		}
+		ready.ProjectionReadiness = &sessionwire.SupervisorProjectionReadinessReady{
+			Status:            "ready",
+			EnvironmentID:     w.projectionReadiness.EnvironmentID,
+			SessionSnapshotID: w.projectionReadiness.SessionSnapshotID,
+			CatalogDigest:     observation.CatalogDigest,
+			ExpectedEntries:   observation.ExpectedEntries,
+			ObservedEntries:   observation.ObservedEntries,
+			DurationMillis:    observation.DurationMillis,
+			TargetProjected:   observation.TargetProjected,
+		}
+	}
+	return w.writer.WriteControl(sessionwire.TypeSupervisorReady, ready)
 }
 
 func (w *sessionWire) WriteOutput(kind outputKind, payload []byte) error {

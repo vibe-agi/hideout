@@ -392,6 +392,7 @@ func TestBuildSessionViewCommandValidatesAndPreservesStructuredTarget(t *testing
 		RequiredRuntimePaths: []string{
 			GuestBootstrapPath,
 			GuestSessionDir + "/network/bootstrap.sh",
+			GuestSessionDir + "/" + backend.ProjectionReadinessManifestFile,
 		},
 	}
 	command, err := BuildSessionViewCommand(spec)
@@ -414,6 +415,8 @@ func TestBuildSessionViewCommandValidatesAndPreservesStructuredTarget(t *testing
 		"session runtime files did not become visible",
 		"'test' '-x' '/hideout/session/bootstrap/bootstrap.sh'",
 		"'test' '-x' '/hideout/session/network/bootstrap.sh'",
+		"'test' '-f' '/hideout/session/projection-readiness.json'",
+		"'test' '!' '-L' '/hideout/session/projection-readiness.json'",
 		"hideout-runtime-private /hideout/runtime",
 		"--reuid=developer",
 		"env' '-i'",
@@ -470,6 +473,7 @@ func TestSessionRuntimePrerequisitesDescribeExactSessionFiles(t *testing.T) {
 		NetworkBootstrapGuestPath: GuestSessionDir + "/network/bootstrap.sh",
 		NetworkCleanupGuestPath:   GuestSessionDir + "/network/cleanup.sh",
 		HostFSEnabled:             true,
+		ProjectionReadiness:       &backend.ProjectionReadinessExpectation{},
 	}
 	got := sessionRuntimePrerequisites(session, true)
 	want := []string{
@@ -478,6 +482,7 @@ func TestSessionRuntimePrerequisitesDescribeExactSessionFiles(t *testing.T) {
 		GuestSessionDir + "/network/cleanup.sh",
 		GuestSessionDir + "/shims/hideout-hostfsd",
 		GuestSessionSupervisorPath,
+		GuestSessionDir + "/" + backend.ProjectionReadinessManifestFile,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtime prerequisites=%q want=%q", got, want)

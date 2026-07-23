@@ -144,6 +144,45 @@ func TestRunServiceApplyRejectsProfileDriftAndStaleConfirmation(t *testing.T) {
 	}
 }
 
+func TestRunServiceApplyRejectsProjectionCatalogDrift(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	workspace := t.TempDir()
+	p := profile.Default("projection-drift")
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	service := RunService{Core: core}
+	req := RunServiceRequest{
+		Version: RunServiceRequestVersion, ProfileName: p.Name, Backend: "native",
+		Workspace: workspace, Command: []string{"true"},
+		Terminal: TerminalDescriptor{Mode: runsession.TerminalNone},
+	}
+	prepared, err := service.Prepare(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Plan.ProjectionCatalogDigest == "" {
+		t.Fatal("review omitted the projection catalog digest")
+	}
+	if err := core.SetProjectionHostAppMode(p.Name, ProjectionHostAppModeTrusted); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.Prepare(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Plan.ProjectionCatalogDigest == prepared.Plan.ProjectionCatalogDigest {
+		t.Fatal("host-app catalog change did not change reviewed plan truth")
+	}
+	_, err = service.Apply(context.Background(), prepared, req, RunServiceDependencies{
+		Backend: &applyRunFakeBackend{name: "native"},
+	})
+	if !errors.Is(err, ErrRunPlanStale) {
+		t.Fatalf("projection catalog drift error=%v", err)
+	}
+}
+
 func TestRunServiceConfirmationDenialFailsBeforeTargetAuthority(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	service := RunService{Core: New(store)}

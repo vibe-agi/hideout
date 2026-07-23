@@ -32,19 +32,20 @@ type RunPlanOptions struct {
 }
 
 type RunPlan struct {
-	Version        string          `json:"version"`
-	ProfileName    string          `json:"profile"`
-	Backend        string          `json:"backend"`
-	Workspace      string          `json:"workspace"`
-	GuestWorkspace string          `json:"guestWorkspace"`
-	WorkspaceMode  string          `json:"workspaceMode"`
-	PathMode       string          `json:"pathMode"`
-	NetworkMode    string          `json:"networkMode"`
-	ProxySecretRef string          `json:"proxySecretRef,omitempty"`
-	Ephemeral      bool            `json:"ephemeral"`
-	Command        []string        `json:"command"`
-	Profile        profile.Profile `json:"-"`
-	RuntimeProfile profile.Profile `json:"-"`
+	Version                 string          `json:"version"`
+	ProfileName             string          `json:"profile"`
+	Backend                 string          `json:"backend"`
+	Workspace               string          `json:"workspace"`
+	GuestWorkspace          string          `json:"guestWorkspace"`
+	WorkspaceMode           string          `json:"workspaceMode"`
+	PathMode                string          `json:"pathMode"`
+	NetworkMode             string          `json:"networkMode"`
+	ProxySecretRef          string          `json:"proxySecretRef,omitempty"`
+	Ephemeral               bool            `json:"ephemeral"`
+	Command                 []string        `json:"command"`
+	ProjectionCatalogDigest string          `json:"projectionCatalogDigest"`
+	Profile                 profile.Profile `json:"-"`
+	RuntimeProfile          profile.Profile `json:"-"`
 }
 
 func (c Core) PlanRun(opts RunPlanOptions) (RunPlan, error) {
@@ -99,20 +100,27 @@ func (c Core) PlanRun(opts RunPlanOptions) (RunPlan, error) {
 	if backendName != "native" && backendName != "lima" {
 		return RunPlan{}, fmt.Errorf("backend %q is not implemented yet", backendName)
 	}
+	projectionCatalogDigest, err := c.projectionCatalogReviewDigest(
+		p.Name, hostWorkspace, runtimeProfile,
+	)
+	if err != nil {
+		return RunPlan{}, err
+	}
 	return RunPlan{
-		Version:        RunPlanVersion,
-		ProfileName:    p.Name,
-		Backend:        backendName,
-		Workspace:      hostWorkspace,
-		GuestWorkspace: guestWorkspace,
-		WorkspaceMode:  runtimeProfile.Workspace.Mode,
-		PathMode:       runtimeProfile.Workspace.PathMode,
-		NetworkMode:    runtimeProfile.Network.Mode,
-		ProxySecretRef: runtimeProfile.Network.ProxySecretRef,
-		Ephemeral:      opts.Ephemeral,
-		Command:        append([]string(nil), opts.Command...),
-		Profile:        p,
-		RuntimeProfile: runtimeProfile,
+		Version:                 RunPlanVersion,
+		ProfileName:             p.Name,
+		Backend:                 backendName,
+		Workspace:               hostWorkspace,
+		GuestWorkspace:          guestWorkspace,
+		WorkspaceMode:           runtimeProfile.Workspace.Mode,
+		PathMode:                runtimeProfile.Workspace.PathMode,
+		NetworkMode:             runtimeProfile.Network.Mode,
+		ProxySecretRef:          runtimeProfile.Network.ProxySecretRef,
+		Ephemeral:               opts.Ephemeral,
+		Command:                 append([]string(nil), opts.Command...),
+		ProjectionCatalogDigest: projectionCatalogDigest,
+		Profile:                 p,
+		RuntimeProfile:          runtimeProfile,
 	}, nil
 }
 
