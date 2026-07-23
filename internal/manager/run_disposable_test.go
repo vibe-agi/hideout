@@ -361,3 +361,80 @@ func TestApplyRunDisposableLifecycleProtocolRetainsClassifiableStateWhenJournalR
 		t.Fatalf("retained journal=%+v err=%v", journal, err)
 	}
 }
+
+func TestApplyRunDisposableLifecycleProtocolPreservesTargetAndCleanupResults(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		targetErr       error
+		cleanupErr      error
+		wantDisposition string
+		wantRecord      bool
+	}{
+		{
+			name:            "target failure still removes",
+			targetErr:       errors.New("managed target exploded"),
+			wantDisposition: DisposableRecoveryRemoved,
+		},
+		{
+			name:            "target failure remains primary when cleanup is required",
+			targetErr:       errors.New("managed target exploded"),
+			cleanupErr:      errors.New("managed cleanup exploded"),
+			wantDisposition: DisposableRecoveryCleanupRequired,
+			wantRecord:      true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setFakeLinuxShim(t)
+			root := t.TempDir()
+			if err := os.Chmod(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			store := profile.Store{Root: root}
+			core := New(store)
+			plan, err := core.PlanRun(RunPlanOptions{
+				ProfileName: "default", Backend: "lima", Workspace: t.TempDir(), Command: []string{"tool"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			journalStore := lifecycle.JournalStore{Root: root}
+			coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+				Store: journalStore, DaemonID: "daemon-disposable-result", IdleGrace: time.Hour,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			core.LifecycleDisposals = coordinator
+			provider := &disposableLifecycleApplyBackend{lifecycleApplyBackend: &lifecycleApplyBackend{
+				applyRunFakeBackend: &applyRunFakeBackend{
+					name: "lima", runErr: test.targetErr, cleanupErr: test.cleanupErr,
+				},
+				journal: journalStore, bootID: "01234567-89ab-cdef-0123-456789abcdef",
+			}}
+			result, runErr := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+				Backend: provider, RequestedBackend: "lima",
+				Environment: RunEnvironmentOptions{RemoveAfterRun: true, Create: true},
+				Lifecycle:   coordinator,
+			})
+			if !errors.Is(runErr, test.targetErr) || result.Error != test.targetErr.Error() {
+				t.Fatalf("target result changed: result=%+v err=%v", result, runErr)
+			}
+			if result.EnvironmentDisposition != test.wantDisposition {
+				t.Fatalf("result=%+v", result)
+			}
+			if test.cleanupErr == nil && result.CleanupError != "" {
+				t.Fatalf("clean disposal reported cleanup error: %+v", result)
+			}
+			if test.cleanupErr != nil && !strings.Contains(result.CleanupError, test.cleanupErr.Error()) {
+				t.Fatalf("cleanup result was lost: %+v", result)
+			}
+			_, recordErr := (environment.Store{Root: root}).Load(result.EnvironmentID)
+			if test.wantRecord && recordErr != nil {
+				t.Fatalf("cleanup-required record missing: %v", recordErr)
+			}
+			if !test.wantRecord && recordErr == nil {
+				t.Fatalf("removed disposal retained record: %v", recordErr)
+			}
+		})
+	}
+}

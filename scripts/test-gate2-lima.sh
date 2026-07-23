@@ -74,6 +74,43 @@ wait_for_file() {
   return 1
 }
 
+snapshot_disposable_inventory() {
+  local label="$1"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env list >"$tmp/$label-env-list.out"
+  awk -F'\t' 'NR > 1 { print $1 "\t" $15 }' "$tmp/$label-env-list.out" |
+    sort >"$tmp/$label-environments.txt"
+  LIMA_HOME="$lima_home" limactl list 2>/dev/null |
+    awk 'NR > 1 { print $1 }' |
+    sort >"$tmp/$label-lima-instances.txt"
+  if [ -d "$store/lifecycle" ]; then
+    for lifecycle_dir in "$store/lifecycle"/*; do
+      [ -d "$lifecycle_dir" ] || continue
+      basename "$lifecycle_dir"
+    done | sort >"$tmp/$label-lifecycle-identities.txt"
+  else
+    : >"$tmp/$label-lifecycle-identities.txt"
+  fi
+}
+
+assert_disposable_inventory_unchanged() {
+  local before="$1"
+  local after="$2"
+  local lane="$3"
+  local kind
+  for kind in environments lima-instances lifecycle-identities; do
+    if ! cmp -s "$tmp/$before-$kind.txt" "$tmp/$after-$kind.txt"; then
+      echo "gate2: $lane changed $kind inventory" >&2
+      diff "$tmp/$before-$kind.txt" "$tmp/$after-$kind.txt" >&2 || true
+      return 1
+    fi
+  done
+  if awk -F'\t' 'NR > 1 && $1 ~ /^rm-/ { found = 1 } END { exit found ? 0 : 1 }' "$tmp/$after-env-list.out"; then
+    echo "gate2: $lane retained a disposable environment record" >&2
+    cat "$tmp/$after-env-list.out" >&2
+    return 1
+  fi
+}
+
 wait_for_hostfs_read_decision() {
   local path="$1"
   local output="$2"
@@ -1294,6 +1331,64 @@ if ! cmp -s "$tmp/lima-instances-before-rm.txt" "$tmp/lima-instances-after-rm.tx
   diff "$tmp/lima-instances-before-rm.txt" "$tmp/lima-instances-after-rm.txt" >&2 || true
   exit 1
 fi
+
+# --rm and --ephemeral are orthogonal: the target sees the session-local
+# identity while finalization removes that identity, its dedicated environment
+# record, lifecycle journal, and exact Lima instance.
+echo "gate2: running --rm --ephemeral convergence smoke"
+snapshot_disposable_inventory "before-rm-ephemeral"
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
+  --backend lima --workspace "$workspace" --rm --ephemeral -- sh -eu -c '
+identity_root=$(dirname "$HOME")
+test -f "$identity_root/identity.json"
+test -f "$identity_root/machine/machine-id"
+printf "rm_ephemeral_ok=yes\n"
+' >"$tmp/env-rm-ephemeral.out" 2>"$tmp/env-rm-ephemeral.err"; then
+  echo "gate2: --rm --ephemeral run failed" >&2
+  cat "$tmp/env-rm-ephemeral.out" "$tmp/env-rm-ephemeral.err" >&2
+  exit 1
+fi
+grep -q 'rm_ephemeral_ok=yes' "$tmp/env-rm-ephemeral.out"
+grep -q 'Hideout disposable environment removed' "$tmp/env-rm-ephemeral.err"
+if grep -Eq 'run again: hideout run --env|disposable cleanup required' "$tmp/env-rm-ephemeral.err"; then
+  echo "gate2: --rm --ephemeral advertised retained state" >&2
+  cat "$tmp/env-rm-ephemeral.err" >&2
+  exit 1
+fi
+snapshot_disposable_inventory "after-rm-ephemeral"
+assert_disposable_inventory_unchanged "before-rm-ephemeral" "after-rm-ephemeral" "--rm --ephemeral"
+identity_residue="$(find "$store/sessions" -type d -name identity -print 2>/dev/null || true)"
+if [ -n "$identity_residue" ]; then
+  echo "gate2: --rm --ephemeral retained session identity state" >&2
+  printf '%s\n' "$identity_residue" >&2
+  exit 1
+fi
+printf 'rm_ephemeral_convergence=passed\n'
+
+# A target failure remains the command result, but does not cancel authorized
+# disposable cleanup. The same exact record/journal/instance inventory must be
+# restored before the CLI returns the target failure.
+echo "gate2: running failed-target --rm convergence smoke"
+snapshot_disposable_inventory "before-rm-target-failure"
+if with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
+  --backend lima --workspace "$workspace" --rm -- sh -c '
+printf "rm_target_started=yes\n"
+exit 23
+' >"$tmp/env-rm-target-failure.out" 2>"$tmp/env-rm-target-failure.err"; then
+  echo "gate2: failed --rm target unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'rm_target_started=yes' "$tmp/env-rm-target-failure.out"
+grep -q 'Hideout disposable environment removed' "$tmp/env-rm-target-failure.err"
+if grep -Eq 'run again: hideout run --env|disposable cleanup required' "$tmp/env-rm-target-failure.err"; then
+  echo "gate2: failed-target --rm advertised retained state" >&2
+  cat "$tmp/env-rm-target-failure.err" >&2
+  exit 1
+fi
+snapshot_disposable_inventory "after-rm-target-failure"
+assert_disposable_inventory_unchanged \
+  "before-rm-target-failure" "after-rm-target-failure" "failed-target --rm"
+printf 'rm_target_failure_convergence=passed\n'
 
 # clean by name removes the named environment record and any remaining backend
 # instance. The preceding recreate leaves it ready, so do not apply the

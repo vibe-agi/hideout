@@ -114,9 +114,9 @@
 
 ### Tests And Implementation For User Story 4
 
-- [ ] T027 [P] [US4] Add local product-path tests for successful target, failed target, cleanup-required, and `--rm --ephemeral` in `internal/manager/run_disposable_test.go` and `internal/manager/run_service_test.go`
-- [ ] T028 [US4] Preserve result/disposition and session-local identity cleanup while using the shared protocol in `internal/manager/run_apply.go`, `run_environment.go`, and `run_session.go`
-- [ ] T029 [US4] Add the real `--rm --ephemeral` and target-failure lanes without weakening existing inventory assertions in `scripts/test-gate2-lima.sh`
+- [X] T027 [P] [US4] Add local product-path tests for successful target, failed target, cleanup-required, and `--rm --ephemeral` in `internal/manager/run_disposable_test.go` and `internal/manager/run_service_test.go`
+- [X] T028 [US4] Preserve result/disposition and session-local identity cleanup while using the shared protocol in `internal/manager/run_apply.go`, `run_environment.go`, and `run_session.go`
+- [X] T029 [US4] Add the real `--rm --ephemeral` and target-failure lanes without weakening existing inventory assertions in `scripts/test-gate2-lima.sh`
 
 **Checkpoint**: Recovery completes the existing `--rm` contract without redefining target, workspace, network, HostFS, or identity authority.
 

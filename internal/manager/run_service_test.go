@@ -3,9 +3,16 @@ package manager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/vibe-agi/hideout/internal/backend"
+	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
 	runsession "github.com/vibe-agi/hideout/internal/session"
 )
@@ -183,6 +190,81 @@ func TestRunServiceEphemeralIdentityRemainsBoundAcrossRevalidation(t *testing.T)
 	}
 	if fake.spec.Machine.Profile.Metadata["identityId"] != identityID {
 		t.Fatalf("applied identity=%q want reviewed %q", fake.spec.Machine.Profile.Metadata["identityId"], identityID)
+	}
+}
+
+func TestRunServiceRemoveAndEphemeralCleanIndependentEnvironmentAndIdentity(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-disposable-ephemeral", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	core.LifecycleDisposals = coordinator
+	service := RunService{Core: core}
+	request := RunServiceRequest{
+		Version: RunServiceRequestVersion, ProfileName: "default", Backend: "lima",
+		Workspace: t.TempDir(), Command: []string{"tool"},
+		Ephemeral: true, RemoveEnvironment: true,
+	}
+	prepared, err := service.Prepare(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Review.RequiresConfirmation {
+		request.Confirmation = &RunConfirmation{
+			PlanVersion: prepared.Review.PlanVersion,
+			PlanDigest:  prepared.Review.PlanDigest,
+			Accepted:    true,
+		}
+	}
+	identityObserved := false
+	provider := &disposableLifecycleApplyBackend{lifecycleApplyBackend: &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{
+			name: "lima",
+			runFunc: func(session *backend.Session) error {
+				if _, err := os.Stat(filepath.Join(session.IdentityRoot, "identity.json")); err != nil {
+					return fmt.Errorf("ephemeral identity was not materialized for target: %w", err)
+				}
+				identityObserved = true
+				return nil
+			},
+		},
+		journal: journalStore, bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}}
+	result, err := service.Apply(context.Background(), prepared, request, RunServiceDependencies{
+		Backend: provider, Lifecycle: coordinator,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !identityObserved || provider.runSession.IdentityMode != "ephemeral" {
+		t.Fatalf("ephemeral target identity was not used: session=%+v", provider.runSession)
+	}
+	wantIdentityRoot := filepath.Join(root, "sessions", result.SessionID, "identity")
+	if provider.runSession.IdentityRoot != wantIdentityRoot {
+		t.Fatalf("identity root=%q want %q", provider.runSession.IdentityRoot, wantIdentityRoot)
+	}
+	if _, err := os.Stat(wantIdentityRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral identity survived session cleanup: %v", err)
+	}
+	if result.EnvironmentDisposition != DisposableRecoveryRemoved ||
+		result.EnvironmentID == "" || result.EnvironmentName == "" {
+		t.Fatalf("disposable result identity/disposition changed: %+v", result)
+	}
+	if _, err := (environment.Store{Root: root}).Load(result.EnvironmentID); err == nil {
+		t.Fatalf("disposable environment survived: %v", err)
+	}
+	if _, err := journalStore.Load(result.EnvironmentID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disposable lifecycle identity survived: %v", err)
 	}
 }
 
