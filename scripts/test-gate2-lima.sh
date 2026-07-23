@@ -283,6 +283,7 @@ projection_workspace=""
 projection_control_workspace=""
 projection_trusted_workspace=""
 projection_external_workspace=""
+projection_readiness_workspace=""
 cleanup_lima_instances() {
   if [ -z "${lima_home:-}" ] || [ ! -d "$lima_home" ]; then
     return
@@ -323,11 +324,12 @@ cleanup() {
 		echo "gate2: retained diagnostic Lima home: ${lima_home:-unset}" >&2
 	else
 		if [ -x "${hideout:-}" ]; then
+			HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" daemon stop >/dev/null 2>&1 || true
 			HIDEOUT_STORE_ROOT="${store:-}" LIMA_HOME="${lima_home:-}" "$hideout" clean >/dev/null 2>&1 || true
 		fi
 		cleanup_lima_instances
 		rm -rf "${hostfs_root:-}" "${hostfs_visibility_root:-}"
-		rm -rf "${projection_workspace:-}" "${projection_control_workspace:-}" "${projection_trusted_workspace:-}" "${projection_external_workspace:-}"
+		rm -rf "${projection_workspace:-}" "${projection_control_workspace:-}" "${projection_trusted_workspace:-}" "${projection_external_workspace:-}" "${projection_readiness_workspace:-}"
 		rm -rf "$tmp"
 		rm -rf "${lima_home:-}"
 	fi

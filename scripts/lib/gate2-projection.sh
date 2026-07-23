@@ -534,6 +534,7 @@ run_projection_readiness_samples() {
   }
   mkdir -p "$capture"
   work="$(mktemp -d "$HOME/hideout-gate2-projection-readiness.XXXXXX")"
+  projection_readiness_workspace="$work"
   printf 'lane\tindex\tduration_ms\tfirst_target\toperator_retries\ttarget_retries\tfallbacks\ttimeouts\tunauthorized_host_effects\tcross_session_access\n' >"$samples"
 
   echo "gate2: running $fresh fresh projection readiness samples"
@@ -601,6 +602,7 @@ run_projection_readiness_samples() {
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" env remove g2warm --force >/dev/null
   rm -rf "$work"
+  projection_readiness_workspace=""
   printf 'projection_readiness_samples=passed\n'
 }
 
