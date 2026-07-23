@@ -407,6 +407,11 @@ projection_measure_cancellation() {
   local output="$tmp/projection-readiness-cancellation.out"
   local error_output="$tmp/projection-readiness-cancellation.err"
   local run_pid="" audit="" duration="" i
+  local environment_record="" environment_id="" instance_name="" session_id="" manifest_path=""
+  local manifest_removed=false supervisor_waiting=false
+  environment_record="$(projection_environment_record "$environment_name")"
+  environment_id="$(jq -er '.id' "$environment_record")"
+  instance_name="$(jq -er '.instanceName' "$environment_record")"
   projection_audit_inventory >"$before"
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" run --env "$environment_name" --profile "$profile_name" --backend lima \
@@ -431,6 +436,52 @@ projection_measure_cancellation() {
     return 1
   fi
   audit="$(sed -n '1p' "$delta")"
+  session_id="$(basename "$(dirname "$audit")")"
+  manifest_path="$store/environments/$environment_id/runtime/sessions/$session_id/projection-readiness.json"
+  for i in $(seq 1 500); do
+    if [ -f "$manifest_path" ] && [ ! -L "$manifest_path" ]; then
+      rm -f -- "$manifest_path"
+      manifest_removed=true
+      break
+    fi
+    if ! kill -0 "$run_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.01
+  done
+  if [ "$manifest_removed" != true ]; then
+    echo "gate2: cancellation sample could not remove the exact readiness manifest" >&2
+    kill "$run_pid" 2>/dev/null || true
+    wait "$run_pid" 2>/dev/null || true
+    return 1
+  fi
+  for i in $(seq 1 6000); do
+    if jq -s -e 'any(.[]; .action == "guest.privilege.status")' "$audit" >/dev/null 2>&1; then
+      break
+    fi
+    if ! kill -0 "$run_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.01
+  done
+  for i in $(seq 1 200); do
+    if LIMA_HOME="$lima_home" "$limactl" shell --tty=false --workdir / "$instance_name" -- \
+      sh -c "pgrep -f '[h]ideout-session-supervisor' >/dev/null" >/dev/null 2>&1; then
+      supervisor_waiting=true
+      break
+    fi
+    if ! kill -0 "$run_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.01
+  done
+  if [ "$supervisor_waiting" != true ]; then
+    echo "gate2: cancellation sample did not enter the guest readiness wait" >&2
+    kill "$run_pid" 2>/dev/null || true
+    wait "$run_pid" 2>/dev/null || true
+    cat "$audit" >&2
+    return 1
+  fi
   kill -TERM "$run_pid" 2>/dev/null || true
   wait "$run_pid" 2>/dev/null || true
   for i in $(seq 1 500); do
