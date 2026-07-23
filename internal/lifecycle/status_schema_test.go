@@ -59,6 +59,7 @@ func TestLifecycleJournalSchemaIsStrictAtNestedBoundaries(t *testing.T) {
 			Incarnation: incarnation, DaemonInstanceID: "daemon_0123456789abcdef01234567",
 			ScheduledAt: now, Deadline: now.Add(15 * time.Second), Generation: 1,
 		},
+		Disposal:       validDisposalIntent(1, now),
 		Reconciliation: Reconciliation{DaemonInstanceID: "daemon_0123456789abcdef01234567", State: "complete", ObservedAt: now},
 		UpdatedAt:      now,
 	}
@@ -75,6 +76,11 @@ func TestLifecycleJournalSchemaIsStrictAtNestedBoundaries(t *testing.T) {
 	resources[0].(map[string]any)["rawHandle"] = "fd=9"
 	if err := validateLifecycleJSON(schema, mutated); err == nil {
 		t.Fatal("journal schema accepted an unknown nested resource field")
+	}
+	_ = json.Unmarshal(data, &mutated)
+	mutated["disposal"].(map[string]any)["rawHandle"] = "instance-control"
+	if err := validateLifecycleJSON(schema, mutated); err == nil {
+		t.Fatal("journal schema accepted an unknown nested disposal field")
 	}
 }
 

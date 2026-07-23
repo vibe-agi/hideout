@@ -98,6 +98,9 @@ func TestJournalRejectsCrossGenerationAndMalformedStopMetadata(t *testing.T) {
 				Observation: &backendObservationSnapshot{State: "unknown"},
 			}
 		},
+		"disposal-generation": func(journal *Journal) {
+			journal.Disposal = validDisposalIntent(journal.StartGeneration+1, journal.UpdatedAt)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			journal := validJournal(t)

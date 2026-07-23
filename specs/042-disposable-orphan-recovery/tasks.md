@@ -20,8 +20,8 @@
 
 **Purpose**: Freeze the measured residue and exact authority boundary before changing cleanup.
 
-- [ ] T001 Record the current normal-return journal residue, report-only crash orphan behavior, and rejected authorization shortcuts in `specs/042-disposable-orphan-recovery/adversarial-report.md`
-- [ ] T002 Confirm the journal-first intent/record-last ordering and historical-residue non-claim across `specs/042-disposable-orphan-recovery/spec.md`, `research.md`, `data-model.md`, and `contracts/disposal-protocol.md`
+- [X] T001 Record the current normal-return journal residue, report-only crash orphan behavior, and rejected authorization shortcuts in `specs/042-disposable-orphan-recovery/adversarial-report.md`
+- [X] T002 Confirm the journal-first intent/record-last ordering and historical-residue non-claim across `specs/042-disposable-orphan-recovery/spec.md`, `research.md`, `data-model.md`, and `contracts/disposal-protocol.md`
 
 ---
 
@@ -31,12 +31,12 @@
 
 **Checkpoint**: Intent cannot be forged from a name/status, unknown journal fields fail, and false-green 042 evidence is rejected.
 
-- [ ] T003 [P] Add failing canonical disposable-identity digest and mutation tests in `internal/environment/disposable_test.go`
-- [ ] T004 [P] Add failing strict disposal-intent journal/schema/state-transition tests in `internal/lifecycle/disposal_test.go`, `internal/lifecycle/journal_test.go`, and `schemas/lifecycle-journal.schema.json`
-- [ ] T005 [P] Add 042 proof registry coverage and false-green artifact fixtures for dirty identity, missing checks, unauthorized destruction, residue, undersampling, timeout, and unknown fields in `internal/productevidence/disposable_recovery_test.go`
-- [ ] T006 Implement the versioned canonical disposable identity projection/digest in `internal/environment/disposable.go`
-- [ ] T007 Implement strict optional disposal intent validation and JSON schema support in `internal/lifecycle/disposal.go`, `internal/lifecycle/journal.go`, and `schemas/lifecycle-journal.schema.json`
-- [ ] T008 Implement 042 proof IDs, strict real artifact validator, aggregate requirements, and registry entries in `internal/productevidence/disposable_recovery.go`, `aggregate.go`, and `registry.go`
+- [X] T003 [P] Add failing canonical disposable-identity digest and mutation tests in `internal/environment/disposable_test.go`
+- [X] T004 [P] Add failing strict disposal-intent journal/schema/state-transition tests in `internal/lifecycle/disposal_test.go`, `internal/lifecycle/journal_test.go`, and `schemas/lifecycle-journal.schema.json`
+- [X] T005 [P] Add 042 proof registry coverage and false-green artifact fixtures for dirty identity, missing checks, unauthorized destruction, residue, undersampling, timeout, and unknown fields in `internal/productevidence/disposable_recovery_test.go`
+- [X] T006 Implement the versioned canonical disposable identity projection/digest in `internal/environment/disposable.go`
+- [X] T007 Implement strict optional disposal intent validation and JSON schema support in `internal/lifecycle/disposal.go`, `internal/lifecycle/journal.go`, and `schemas/lifecycle-journal.schema.json`
+- [X] T008 Implement 042 proof IDs, strict real artifact validator, aggregate requirements, and registry entries in `internal/productevidence/disposable_recovery.go`, `aggregate.go`, and `registry.go`
 
 ---
 

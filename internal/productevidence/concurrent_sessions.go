@@ -171,6 +171,12 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 			return err
 		}
 		return validateWorkspaceExecutableArtifact(data, expectedCommit)
+	case ArtifactValidatorDisposableRecoveryV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateDisposableRecoveryArtifact(data, expectedCommit)
 	default:
 		return fmt.Errorf("unsupported artifact validator %q", validator)
 	}

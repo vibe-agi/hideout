@@ -33,6 +33,7 @@
         "observedAt": { "type": "string", "format": "date-time" }
       }
     },
+    "disposal": { "$ref": "#/$defs/disposalIntent" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },
   "$defs": {
@@ -132,6 +133,33 @@
         "state": { "enum": ["planned", "draining", "invoked", "observing", "committed", "unknown", "failed"] },
         "startedAt": { "type": "string", "format": "date-time" },
         "observation": { "$ref": "#/$defs/observation" }
+      }
+    },
+    "disposalIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "authority",
+        "backend",
+        "instanceName",
+        "recordDigest",
+        "generation",
+        "state",
+        "requestedAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "schema": { "const": "hideout.disposal-intent/v1" },
+        "authority": { "const": "run-rm" },
+        "backend": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+        "instanceName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+        "recordDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "state": { "enum": ["planned", "backend-absent", "metadata-cleaning", "blocked"] },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "reasonCode": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" }
       }
     },
 	"resourceKind": {

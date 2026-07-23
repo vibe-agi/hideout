@@ -58,6 +58,7 @@ const (
 	ArtifactValidatorSharedWorkspaceBehaviorV1    = "shared-workspace-behavior/v1"
 	ArtifactValidatorSharedWorkspacePerformanceV1 = "shared-workspace-performance/v1"
 	ArtifactValidatorWorkspaceExecutableV1        = "workspace-executable/v1"
+	ArtifactValidatorDisposableRecoveryV1         = "disposable-recovery/v1"
 )
 
 var validRequirementLayers = []string{
@@ -102,6 +103,7 @@ var validArtifactValidators = []string{
 	ArtifactValidatorSharedWorkspaceBehaviorV1,
 	ArtifactValidatorSharedWorkspacePerformanceV1,
 	ArtifactValidatorWorkspaceExecutableV1,
+	ArtifactValidatorDisposableRecoveryV1,
 }
 
 type ProofRequirement struct {
@@ -268,6 +270,24 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"041.SC-002", "041.SC-003", "041.SC-004", "041.SC-005", "041.SC-006"),
 		req(Feature041, Proof041DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
 			"041.FR-010", "041.FR-011", "041.FR-013", "041.FR-014", "041.FR-016", "041.SC-007"),
+
+		req(Feature042, Proof042Gate0Mechanics, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"042.FR-001", "042.FR-002", "042.FR-003", "042.FR-004", "042.FR-005", "042.FR-006", "042.FR-007", "042.FR-008",
+			"042.FR-009", "042.FR-010", "042.FR-011", "042.FR-012", "042.FR-013", "042.FR-014", "042.FR-015", "042.FR-016",
+			"042.FR-017", "042.FR-018", "042.FR-019", "042.FR-020", "042.FR-021", "042.FR-022", "042.FR-023", "042.FR-024",
+			"042.SC-002", "042.SC-003", "042.SC-004", "042.SC-006", "042.SC-007", "042.SC-008"),
+		validatorReq(Feature042, Proof042Gate0Model, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, ArtifactValidatorLifecycleModelV1,
+			"042.FR-003", "042.FR-006", "042.FR-007", "042.FR-009", "042.FR-010", "042.FR-011", "042.FR-017",
+			"042.SC-002", "042.SC-003", "042.SC-006"),
+		runtimeEvidenceClassValidatorReq(Feature042, Proof042RealRecovery, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "disposable-recovery-real-gate2", ArtifactValidatorDisposableRecoveryV1,
+			"042.FR-001", "042.FR-002", "042.FR-003", "042.FR-004", "042.FR-005", "042.FR-006", "042.FR-007", "042.FR-008",
+			"042.FR-009", "042.FR-010", "042.FR-011", "042.FR-012", "042.FR-013", "042.FR-014", "042.FR-015", "042.FR-016",
+			"042.FR-017", "042.FR-018", "042.FR-019", "042.FR-020", "042.FR-021", "042.FR-022", "042.FR-023", "042.FR-024",
+			"042.SC-001", "042.SC-002", "042.SC-003", "042.SC-004", "042.SC-005", "042.SC-006", "042.SC-007", "042.SC-008"),
+		req(Feature042, Proof042RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"042.SC-001", "042.SC-003", "042.SC-005"),
+		req(Feature042, Proof042DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"042.FR-001", "042.FR-018", "042.FR-020", "042.FR-023", "042.FR-024", "042.SC-007", "042.SC-008"),
 	}
 	sortRequirements(rows)
 	return rows

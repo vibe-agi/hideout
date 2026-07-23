@@ -77,6 +77,7 @@ type Journal struct {
 	Facts           []Fact          `json:"facts,omitempty"`
 	IdleDeadline    *IdleDeadline   `json:"idleDeadline,omitempty"`
 	StopAttempt     *StopAttempt    `json:"stopAttempt,omitempty"`
+	Disposal        *DisposalIntent `json:"disposal,omitempty"`
 	Reconciliation  Reconciliation  `json:"reconciliation"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
 }
@@ -307,6 +308,11 @@ func (j Journal) Validate() error {
 				(observation.State == "unknown" && observation.ReasonCode == "") {
 				return errors.New("lifecycle stop observation is invalid")
 			}
+		}
+	}
+	if j.Disposal != nil {
+		if err := j.Disposal.Validate(j.StartGeneration); err != nil {
+			return err
 		}
 	}
 	if !containsString([]string{"pending", "complete", "blocked"}, j.Reconciliation.State) || !idPattern.MatchString(j.Reconciliation.DaemonInstanceID) || j.Reconciliation.ObservedAt.IsZero() ||
