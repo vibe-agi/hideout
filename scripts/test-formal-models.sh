@@ -62,6 +62,7 @@ models=(
   RequestWorkflow
   StopObservation
   AttachReservation
+  DisposableRecovery
 )
 
 cd "$ROOT"

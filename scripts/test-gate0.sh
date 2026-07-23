@@ -101,7 +101,8 @@ jq -e '
   ([.requirements[] | select(.featureId == "033-public-alpha-release-channel")] | length == 7) and
   ([.requirements[] | select(.featureId == "035-shared-default-vm-cross-workspace")] | length == 5) and
   ([.requirements[] | select(.featureId == "038-zero-friction-setup")] | length == 8) and
-  ([.requirements[] | select(.featureId == "041-workspace-executable-support")] | length == 4)
+  ([.requirements[] | select(.featureId == "041-workspace-executable-support")] | length == 4) and
+  ([.requirements[] | select(.featureId == "042-disposable-orphan-recovery")] | length == 5)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -239,6 +240,11 @@ scripts/test-shared-workspace-smoke.sh
 # Linux arm64 compile contract, strict evidence judge, and proof registration.
 # Direct execution support still requires the clean packaged real Lima gate.
 scripts/test-workspace-executable-smoke.sh
+
+# Disposable orphan recovery (042): exact authority, durable intent, stable
+# absence, record-last convergence, restart replay, strict evidence judge, and
+# the dedicated TLC model. This local lane makes no real Lima recovery claim.
+scripts/test-disposable-recovery-smoke.sh
 
 # Daemon live operations console (no Lima): typed seed/event contracts and
 # payload-driven UI proof. Initially a skeleton smoke, expanded by 007.

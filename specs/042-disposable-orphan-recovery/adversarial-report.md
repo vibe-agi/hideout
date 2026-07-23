@@ -138,3 +138,19 @@ observed the record marker after journal removal before deleting it last.
 Separate restart-shape cases cover record+intent, record-only, valid
 intent-only, and legacy journal-only. Coordinator startup never manufactures
 authority for the legacy shape.
+
+### Formal authorization and convergence model
+
+`formal/DisposableRecovery.tla` models trusted-record admission, persisted
+intent, exact owner/identity authority, bounded false absence observations,
+every durable crash cut, blocked outcomes, metadata convergence, and
+record-last deletion. With `MaxFalse=3`, TLC completed the restored model with
+`1629 states generated`, `731 distinct states`, depth `19`, and no invariant
+violations.
+
+The `~lastSampleFalse` guard was then removed temporarily. TLC failed red on
+`StableAbsenceBeforeMetadata` after two false absent samples against a backend
+that remained present, producing a five-state counterexample. Restoring the
+guard returned the full model to green. The model is part of
+`scripts/test-formal-models.sh`, and the feature smoke requires at least 1,000
+generated states, 500 distinct states, and depth 10.
