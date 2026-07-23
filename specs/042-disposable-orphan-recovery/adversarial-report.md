@@ -300,3 +300,70 @@ unable to satisfy the registered real requirement.
 - The proof is macOS arm64 Lima specific and establishes no native isolation,
   shared-VM wall, guest-root containment, workspace filtering/DLP, or general
   backend support.
+
+## Full-Gate Convergence
+
+The first full Gate 0 run at clean commit
+`b2a2d131b6956717e109dfc4613e4aa3ef983aec` passed all production packages
+except `internal/releasecompat`. Registering
+`disposable-recovery/v1` had updated the production evidence evaluator, but the
+release-readiness test builder that synthesizes every registered semantic
+artifact did not yet know how to construct 042 evidence. Its failures were
+explicitly `unknown semantic validator "disposable-recovery/v1"`, so 042 could
+not silently enter release-candidate aggregation.
+
+`418b1766092a6f2bf5191f77004e49f9d5581f1d` added the closed 24-check,
+sample/timing/destructive-call/residue/non-claim fixture to that cross-feature
+builder. The exact clean command then passed:
+
+```text
+scripts/test-gate0.sh
+```
+
+The passing run covered:
+
+- all Go packages and end-to-end test packages;
+- seven TLA+ models, including DisposableRecovery at 1629 generated states,
+  731 distinct states, and depth 19;
+- installation, package, standalone-install, and runtime catalog contracts;
+- all 24 documentation files through markdownlint;
+- documentation truth and release hardening;
+- daemon/session/PTY, concurrent session, shared workspace, 041 executable,
+  042 recovery, lifecycle, live-console, decision, adapter, host-app,
+  privilege, HostFS, onboarding, doctor, first-run, and UI Gate 0 lanes.
+
+The first aggregate Lima run at that commit reached the new
+`--rm --ephemeral` lane and then exited at a direct text grep. The environment
+had been removed, but the aggregate expected the optional human line
+`Hideout disposable environment removed`. Default quiet runs without a
+Boundary Summary intentionally suppress successful summaries; only
+`cleanup-required` must always speak. The strict 042 producer already judged
+the authoritative structured `env.dispose` audit and inventory, exposing the
+aggregate assertion as a false negative rather than a product failure.
+
+`ebb1db151e0ff6ef834e74732e4f036e1786acfb` changed both new aggregate
+disposable lanes to require exactly one additional audited `allow/removed`
+disposition plus unchanged record/journal/Lima/runtime/identity inventory. It
+also strengthened the failed-target lane from “any nonzero” to exact exit 23.
+The exact clean command then passed end to end:
+
+```text
+scripts/test-gate2-lima.sh
+```
+
+The aggregate pass included doctor, real workspace/environment/Git execution,
+projection privacy channels, safe/trusted/persistent host-app grants,
+HostFS-backed projection, discoverable namespace, live read decisions, write
+overlay, no-host-fallback, ephemeral identity, named lifecycle, ordinary
+`--rm`, `--rm --ephemeral`, and failed-target `--rm`. Its final output was:
+
+```text
+rm_ephemeral_convergence=passed
+rm_target_failure_convergence=passed
+gate2: passed
+```
+
+`bash -n` and `git diff --check` passed for the aggregate correction. The local
+environment did not provide `shellcheck`; the repository's full Gate 0 shell
+and behavior checks plus the successful real aggregate run are the retained
+verification for that script.
