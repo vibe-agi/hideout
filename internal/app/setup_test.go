@@ -202,19 +202,23 @@ func TestConfirmSetupStopsOnContextCancellation(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()
+	promptReader, promptWriter := io.Pipe()
+	defer promptReader.Close()
+	defer promptWriter.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	var stdout bytes.Buffer
-	a := app{stdout: &stdout}
+	a := app{stdout: promptWriter}
 	done := make(chan error, 1)
 	go func() {
 		_, err := a.confirmSetup(ctx, bufio.NewReader(reader))
 		done <- err
 	}()
-	for deadline := time.Now().Add(time.Second); !strings.Contains(stdout.String(), "[y/N]"); {
-		if time.Now().After(deadline) {
-			t.Fatal("confirmation prompt did not appear")
-		}
-		time.Sleep(time.Millisecond)
+	const prompt = "Set up this configuration? [y/N]: "
+	observed := make([]byte, len(prompt))
+	if _, err := io.ReadFull(promptReader, observed); err != nil {
+		t.Fatalf("read confirmation prompt: %v", err)
+	}
+	if string(observed) != prompt {
+		t.Fatalf("confirmation prompt = %q", observed)
 	}
 	cancel()
 	select {

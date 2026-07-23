@@ -13,7 +13,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-func TestHostAppLifecycleActionsAreAcceptedByAuditSchema(t *testing.T) {
+func TestFeatureActionsAreAcceptedByAuditSchema(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "schemas", "audit-event.schema.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +32,7 @@ func TestHostAppLifecycleActionsAreAcceptedByAuditSchema(t *testing.T) {
 	}
 
 	actions := []string{
+		"projection.readiness",
 		"host.app.install",
 		"host.app.validate",
 		"host.app.test",

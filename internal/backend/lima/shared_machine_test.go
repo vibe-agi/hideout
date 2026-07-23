@@ -78,6 +78,70 @@ func TestSharedPrepareKeepsWorkspaceOutOfRetainedLimaYAML(t *testing.T) {
 	}
 }
 
+func TestSharedRuntimeVerificationPrepareRequiresNoWorkspaceAuthority(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Machine.Mode = environment.ModeShared
+	spec.Machine.EnvironmentID = "env_shared"
+	spec.Machine.RuntimeRoot = filepath.Join(root, "environment-runtime")
+	spec.Workspace = backend.WorkspaceAttachmentSpec{}
+	spec.Command = nil
+	spec.RuntimeContract = &backend.RuntimeContract{ID: "runtime-v1"}
+	spec.RuntimeInstanceExpected = &backend.RuntimeInstanceExpectation{}
+
+	session, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.HostWork != "" || session.GuestWork != "/" ||
+		session.Workspace != (backend.WorkspaceAttachmentSpec{}) {
+		t.Fatalf("runtime verification gained workspace authority: %+v", session)
+	}
+	data, err := os.ReadFile(session.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("/workspace")) {
+		t.Fatalf("shared runtime verification config contains workspace authority:\n%s", data)
+	}
+}
+
+func TestSharedPrepareWithoutRuntimeVerificationRequiresWorkspacePortal(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Machine.Mode = environment.ModeShared
+	spec.Machine.EnvironmentID = "env_shared"
+	spec.Machine.RuntimeRoot = filepath.Join(root, "environment-runtime")
+	spec.Workspace = backend.WorkspaceAttachmentSpec{}
+	spec.Command = nil
+
+	if _, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec); err == nil {
+		t.Fatal("shared Prepare accepted an empty workspace without runtime verification authority")
+	}
+}
+
+func TestSharedRuntimeVerificationPrepareRejectsWorkspaceAuthority(t *testing.T) {
+	root := t.TempDir()
+	spec := testRunSpec(root)
+	spec.Machine.Mode = environment.ModeShared
+	spec.Machine.EnvironmentID = "env_shared"
+	spec.Machine.RuntimeRoot = filepath.Join(root, "environment-runtime")
+	spec.Workspace = backend.WorkspaceAttachmentSpec{
+		HostRoot: filepath.Join(root, "project"), GuestRoot: "/workspace", Transport: backend.WorkspaceTransportPortal,
+		Portal: &backend.WorkspacePortalBinding{
+			PhysicalGuestRoot: "/hideout/workspaces/wrk_fixture",
+			Endpoint:          "host.lima.internal:43127", CredentialGuestPath: "/hideout/session/workspace/credential.bin",
+		},
+	}
+	spec.Command = nil
+	spec.RuntimeContract = &backend.RuntimeContract{ID: "runtime-v1"}
+	spec.RuntimeInstanceExpected = &backend.RuntimeInstanceExpectation{}
+
+	if _, err := (Backend{Runner: fakeRunner{lookPath: "/opt/homebrew/bin/limactl"}}).Prepare(context.Background(), spec); err == nil {
+		t.Fatal("shared runtime verification accepted workspace attachment authority")
+	}
+}
+
 func TestWorkspaceBoundConfigRetainsExactStaticMapping(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")

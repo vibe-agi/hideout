@@ -152,8 +152,22 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 	if err := spec.Machine.Validate(); err != nil {
 		return nil, err
 	}
-	if err := spec.Workspace.Validate(spec.Machine.Mode); err != nil {
-		return nil, err
+	runtimeOnlySharedVerification := spec.Machine.Mode == environment.ModeShared &&
+		len(spec.Command) == 0 &&
+		spec.RuntimeContract != nil &&
+		spec.RuntimeInstanceExpected != nil
+	guestWork := spec.Workspace.GuestRoot
+	if runtimeOnlySharedVerification {
+		// Machine-scoped verification probes only the running guest at "/".
+		// Reject any project facts so this exception cannot mint attachment authority.
+		if spec.Workspace != (backend.WorkspaceAttachmentSpec{}) {
+			return nil, errors.New("shared runtime verification cannot carry workspace attachment authority")
+		}
+		guestWork = "/"
+	} else {
+		if err := spec.Workspace.Validate(spec.Machine.Mode); err != nil {
+			return nil, err
+		}
 	}
 	if spec.SessionDir == "" {
 		return nil, errors.New("session directory is required")
@@ -226,7 +240,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		EnvironmentID:             spec.Machine.EnvironmentID,
 		Backend:                   b.Name(),
 		HostWork:                  spec.Workspace.HostRoot,
-		GuestWork:                 spec.Workspace.GuestRoot,
+		GuestWork:                 guestWork,
 		Workspace:                 spec.Workspace,
 		GuestHome:                 GuestProfileDir + "/home",
 		Env:                       append([]string(nil), spec.Env...),
