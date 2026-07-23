@@ -266,6 +266,11 @@ func (c Core) ApplyRuntimeVerify(ctx context.Context, plan RuntimeVerifyPlan, be
 		return result, fmt.Errorf("invalidate prior runtime verification: %w", err)
 	}
 	spec := c.runSpec(runSession, runEnv, RunDataPlane{Env: append([]string(nil), runSession.Env.Env...)}, RunNetwork{})
+	if record.Mode == environment.ModeShared {
+		// Machine-scoped verification has no project authority. Do not let the
+		// generic shared-run transport marker look like a partial attachment.
+		spec.Workspace = backend.WorkspaceAttachmentSpec{}
+	}
 	if err := c.attachRuntimeVerification(&spec, runSession, runEnv, be.Name(), runtimeVerificationMachineAuthority); err != nil {
 		return result, err
 	}

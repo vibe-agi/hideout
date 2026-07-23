@@ -183,6 +183,34 @@ func TestRuntimeVerifyPlanApplyUsesProbeOnlyAndReplacesReceipt(t *testing.T) {
 	}
 }
 
+func TestSharedRuntimeVerifyCarriesNoWorkspaceAttachmentAuthority(t *testing.T) {
+	core, record := runtimeVerifySharedCoreFixture(t)
+	plan, err := core.PlanRuntimeVerify(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &applyRunFakeBackend{name: "lima"}
+	fake.verifyFunc = func(session *backend.Session) error {
+		if fake.spec.Workspace != (backend.WorkspaceAttachmentSpec{}) {
+			return fmt.Errorf("machine verification carried workspace authority: %+v", fake.spec.Workspace)
+		}
+		if len(fake.spec.Command) != 0 {
+			return fmt.Errorf("machine verification carried a target command: %v", fake.spec.Command)
+		}
+		if err := session.PrivilegeStatusSink(privilege.Status{Status: privilege.StatusEnforced}); err != nil {
+			return err
+		}
+		return session.RuntimeResultSink(runtimePassingReport(session))
+	}
+	result, err := core.ApplyRuntimeVerify(context.Background(), plan, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status.Status != runtimeverify.StatusPreviewReady {
+		t.Fatalf("shared runtime verification result=%+v", result)
+	}
+}
+
 func TestRuntimeVerifyCancellationInvalidatesHistoricalSuccess(t *testing.T) {
 	core, record := runtimeVerifyCoreFixture(t)
 	plan, err := core.PlanRuntimeVerify(record.Name)
@@ -537,6 +565,32 @@ func runtimeVerifyCoreFixture(t *testing.T) (Core, environment.Record) {
 			PackageInventorySHA256: expected.PackageInventorySHA256,
 			BootID:                 "01234567-89ab-cdef-0123-456789abcdef",
 		}, nil
+	}
+	return core, record
+}
+
+func runtimeVerifySharedCoreFixture(t *testing.T) (Core, environment.Record) {
+	t.Helper()
+	core, _ := runtimeVerifyCoreFixture(t)
+	p, err := core.Store.Load("runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := automaticRunEnvironmentSpecForPlatform(
+		p, "lima", t.TempDir(), "/workspace", "darwin", "arm64",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envStore := environment.Store{Root: core.Store.Root}
+	record, err := envStore.Create(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.InstanceName = "hideout-runtime-shared-test"
+	record.Status = "stopped"
+	if err := envStore.Save(record); err != nil {
+		t.Fatal(err)
 	}
 	return core, record
 }
