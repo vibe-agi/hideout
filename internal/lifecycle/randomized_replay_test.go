@@ -140,6 +140,115 @@ func TestAttachReservationRandomizedSchedules(t *testing.T) {
 	}
 }
 
+func TestDisposableRecoveryRandomizedCrashReplay(t *testing.T) {
+	seed := lifecycleReplaySeed(t) ^ 0x42d15a05
+	t.Logf("disposable recovery replay seed=%d schedules=100", seed)
+	random := rand.New(rand.NewSource(seed))
+	completed := 0
+	for schedule := 0; schedule < 100; schedule++ {
+		runDisposableRecoveryReplay(t, random.Int63(), schedule)
+		completed++
+	}
+	t.Logf("disposable recovery invariant count: complete=%d residual-journals=0", completed)
+}
+
+func runDisposableRecoveryReplay(t *testing.T, seed int64, schedule int) {
+	t.Helper()
+	random := rand.New(rand.NewSource(seed))
+	root := privateLifecycleRoot(t)
+	recordMarker := filepath.Join(root, "environment-record-marker")
+	request := testDisposalRequest()
+	if err := os.WriteFile(recordMarker, []byte(request.RecordDigest), 0o600); err != nil {
+		t.Fatalf("schedule=%d seed=%d create record marker: %v", schedule, seed, err)
+	}
+	now := time.Date(2026, 7, 23, 5, 0, 0, 0, time.UTC)
+	restarts := 0
+	restart := func(coordinator *Coordinator) *Coordinator {
+		if coordinator != nil {
+			if err := coordinator.Close(); err != nil {
+				t.Fatalf("schedule=%d seed=%d close: %v", schedule, seed, err)
+			}
+		}
+		restarts++
+		now = now.Add(time.Second)
+		return disposalCoordinatorAt(
+			t, root, fmt.Sprintf("daemon-disposal-replay-%d", restarts), now,
+		)
+	}
+
+	coordinator := restart(nil)
+	intent, err := coordinator.BeginDisposal(context.Background(), request)
+	if err != nil {
+		t.Fatalf("schedule=%d seed=%d begin: %v", schedule, seed, err)
+	}
+	blockBudget := random.Intn(4)
+	for step := 0; step < 32; step++ {
+		if blockBudget > 0 && random.Intn(5) == 0 {
+			if err := coordinator.BlockDisposal(
+				context.Background(), request.EnvironmentID, request.RecordDigest,
+				DisposalReasonOwnerMetadataUnproved,
+			); err != nil {
+				t.Fatalf("schedule=%d seed=%d block: %v", schedule, seed, err)
+			}
+			blockBudget--
+			coordinator = restart(coordinator)
+			intent, err = coordinator.BeginDisposal(context.Background(), request)
+			if err != nil || intent.State != DisposalStatePlanned {
+				t.Fatalf("schedule=%d seed=%d revalidate: intent=%+v err=%v", schedule, seed, intent, err)
+			}
+		}
+
+		switch intent.State {
+		case DisposalStatePlanned:
+			err = coordinator.AdvanceDisposal(
+				context.Background(), request.EnvironmentID, request.RecordDigest,
+				DisposalStateBackendAbsent,
+			)
+			intent.State = DisposalStateBackendAbsent
+		case DisposalStateBackendAbsent:
+			err = coordinator.AdvanceDisposal(
+				context.Background(), request.EnvironmentID, request.RecordDigest,
+				DisposalStateMetadataCleaning,
+			)
+			intent.State = DisposalStateMetadataCleaning
+		case DisposalStateMetadataCleaning:
+			if _, statErr := os.Stat(recordMarker); statErr != nil {
+				t.Fatalf("schedule=%d seed=%d record disappeared before journal removal: %v", schedule, seed, statErr)
+			}
+			err = coordinator.CompleteDisposalMetadata(
+				context.Background(), request.EnvironmentID, request.RecordDigest,
+			)
+			if err != nil {
+				t.Fatalf("schedule=%d seed=%d complete metadata: %v", schedule, seed, err)
+			}
+			if _, loadErr := (JournalStore{Root: root}).Load(request.EnvironmentID); !errors.Is(loadErr, os.ErrNotExist) {
+				t.Fatalf("schedule=%d seed=%d residual journal: %v", schedule, seed, loadErr)
+			}
+			if _, statErr := os.Stat(recordMarker); statErr != nil {
+				t.Fatalf("schedule=%d seed=%d journal removal was not record-last: %v", schedule, seed, statErr)
+			}
+			if removeErr := os.Remove(recordMarker); removeErr != nil {
+				t.Fatalf("schedule=%d seed=%d remove record last: %v", schedule, seed, removeErr)
+			}
+			return
+		default:
+			t.Fatalf("schedule=%d seed=%d unexpected state %q", schedule, seed, intent.State)
+		}
+		if err != nil {
+			t.Fatalf("schedule=%d seed=%d advance %q: %v", schedule, seed, intent.State, err)
+		}
+
+		if random.Intn(2) == 0 {
+			coordinator = restart(coordinator)
+			intent, err = coordinator.BeginDisposal(context.Background(), request)
+			if err != nil {
+				t.Fatalf("schedule=%d seed=%d resume: %v", schedule, seed, err)
+			}
+		}
+	}
+	t.Fatalf("schedule=%d seed=%d exceeded replay step bound", schedule, seed)
+}
+
 func runAttachReservationSchedule(coordinator *Coordinator, clock *testClock, seed int64, schedule int) error {
 	random := rand.New(rand.NewSource(seed))
 	const environmentID = "env-random-reservation"

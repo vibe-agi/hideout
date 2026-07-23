@@ -223,6 +223,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		lifecycleTargetRef     lifecycle.ResourceRef
 		lifecycleNetworkRef    lifecycle.ResourceRef
 		workspaceLifecycleRefs runWorkspaceLifecycleRefs
+		disposableProvider     EnvironmentLifecycleBackend
 	)
 	// Install cleanup before any post-materialization validation or ownership
 	// step. Defers run in reverse order: session authority closes first, then a
@@ -231,7 +232,10 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		if owner == nil {
 			return
 		}
-		disposition, finishErr := c.finishConcurrentRunEnvironment(ctx, &transitionLock, runEnv, owner, runSession.Layout.ID, lifecycleCleanupErr, disposalProved, lifecycleRegistration)
+		disposition, finishErr := c.finishConcurrentRunEnvironment(
+			ctx, &transitionLock, runEnv, owner, runSession.Layout.ID,
+			lifecycleCleanupErr, disposalProved, disposableProvider, lifecycleRegistration,
+		)
 		result.EnvironmentDisposition = disposition
 		if finishErr != nil {
 			result.CleanupError = appendCleanupError(result.CleanupError, finishErr)
@@ -475,11 +479,23 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	// Manager owns the immutable policy/configuration snapshot. Bind it after
 	// backend preparation so no backend implementation can omit or rewrite it.
 	session.SessionSnapshotID = runSession.SessionSnapshotID
+	if runEnv.Active && runEnv.Record.Disposable && runEnv.Record.Backend == "lima" &&
+		opts.Lifecycle != nil && c.LifecycleDisposals != nil {
+		if provider, ok := opts.Backend.(EnvironmentLifecycleBackend); ok {
+			disposableProvider = provider
+		}
+	}
 	result.EnvironmentID = session.EnvironmentID
 	result.EnvironmentName = runEnv.Record.Name
 	result.InstanceName = session.InstanceName
 	result.PreserveInstance = session.PreserveInstance
 	defer func() {
+		if disposableProvider != nil {
+			// The shared disposal transaction runs after data-plane, owner, and
+			// lifecycle-handle cleanup. It persists intent before invoking this
+			// exact provider's Cleanup method.
+			return
+		}
 		cleanupErr := opts.Backend.Cleanup(ctx, session)
 		decision := "allow"
 		details := map[string]any{

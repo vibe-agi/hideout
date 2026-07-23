@@ -93,14 +93,14 @@
 
 ### Tests For User Story 3
 
-- [ ] T022 [P] [US3] Add failing ordinary-finalizer tests proving journal removal, record-last ordering, and cleanup-required recovery after each metadata failure in `internal/manager/run_disposable_test.go`
-- [ ] T023 [P] [US3] Add coordinator restart/randomized replay tests covering record+intent, record-only, valid intent-only, and legacy journal-only shapes in `internal/lifecycle/randomized_replay_test.go` and `internal/lifecycle/disposal_test.go`
+- [X] T022 [P] [US3] Add failing ordinary-finalizer tests proving journal removal, record-last ordering, and cleanup-required recovery after each metadata failure in `internal/manager/run_disposable_test.go`
+- [X] T023 [P] [US3] Add coordinator restart/randomized replay tests covering record+intent, record-only, valid intent-only, and legacy journal-only shapes in `internal/lifecycle/randomized_replay_test.go` and `internal/lifecycle/disposal_test.go`
 
 ### Implementation For User Story 3
 
-- [ ] T024 [US3] Route `finishConcurrentRunEnvironment` and `disposeFinishedEnvironment` through the shared lifecycle disposal protocol in `internal/manager/run_environment.go` and `internal/manager/disposable_recovery.go`
-- [ ] T025 [US3] Implement record-last journal/coordinator removal and classifiable retry behavior in `internal/lifecycle/disposal.go` and `internal/manager/disposable_recovery.go`
-- [ ] T026 [US3] Run at least 100 seeded crash/interleaving schedules and retain invariant counts in `internal/lifecycle/randomized_replay_test.go` and `specs/042-disposable-orphan-recovery/adversarial-report.md`
+- [X] T024 [US3] Route `finishConcurrentRunEnvironment` and `disposeFinishedEnvironment` through the shared lifecycle disposal protocol in `internal/manager/run_environment.go` and `internal/manager/disposable_recovery.go`
+- [X] T025 [US3] Implement record-last journal/coordinator removal and classifiable retry behavior in `internal/lifecycle/disposal.go` and `internal/manager/disposable_recovery.go`
+- [X] T026 [US3] Run at least 100 seeded crash/interleaving schedules and retain invariant counts in `internal/lifecycle/randomized_replay_test.go` and `specs/042-disposable-orphan-recovery/adversarial-report.md`
 
 **Checkpoint**: Successful disposal leaves no environment or lifecycle identity; every interrupted shape is safe to retry or explicitly blocked.
 

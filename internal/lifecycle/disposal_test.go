@@ -278,6 +278,73 @@ func TestCoordinatorDisposalAdmissionRejectsActiveHandle(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDisposalRestartShapesDoNotInferAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		recordPresent bool
+		intentPresent bool
+		admitRequest  bool
+	}{
+		{name: "record-and-intent", recordPresent: true, intentPresent: true, admitRequest: true},
+		{name: "record-only", recordPresent: true, admitRequest: true},
+		{name: "valid-intent-only", intentPresent: true, admitRequest: true},
+		{name: "legacy-journal-only"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := privateLifecycleRoot(t)
+			now := time.Date(2026, 7, 23, 4, 0, 0, 0, time.UTC)
+			request := testDisposalRequest()
+			store := JournalStore{Root: root}
+			journal := newJournal(request.EnvironmentID, "daemon-before-restart", request.Generation, now)
+			if test.intentPresent {
+				journal.Disposal = &DisposalIntent{
+					Schema: DisposalIntentSchema, Authority: DisposalAuthorityRunRM,
+					Backend: request.Backend, InstanceName: request.InstanceName,
+					RecordDigest: request.RecordDigest, Generation: request.Generation,
+					State: DisposalStatePlanned, RequestedAt: now, UpdatedAt: now,
+				}
+				journal.Reconciliation = blockedReconciliation(
+					"daemon-before-restart", "disposal-in-progress", now,
+				)
+			}
+			if err := store.Write(journal); err != nil {
+				t.Fatal(err)
+			}
+			recordMarker := filepath.Join(root, "environment-record-marker")
+			if test.recordPresent {
+				if err := os.WriteFile(recordMarker, []byte(request.RecordDigest), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			coordinator := disposalCoordinatorAt(t, root, "daemon-after-restart", now.Add(time.Second))
+			if test.admitRequest {
+				intent, err := coordinator.BeginDisposal(context.Background(), request)
+				if err != nil || intent.RecordDigest != request.RecordDigest {
+					t.Fatalf("admit exact externally validated request: intent=%+v err=%v", intent, err)
+				}
+				if test.recordPresent {
+					if _, err := os.Stat(recordMarker); err != nil {
+						t.Fatalf("lifecycle admission changed the Manager-owned record: %v", err)
+					}
+				}
+				return
+			}
+
+			// A historical journal without a trusted disposable record or
+			// intent stays unchanged. Coordinator startup never manufactures
+			// destructive authority from the journal shape alone.
+			loaded, err := store.Load(request.EnvironmentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Disposal != nil {
+				t.Fatalf("legacy journal gained disposal authority: %+v", loaded.Disposal)
+			}
+		})
+	}
+}
+
 func privateLifecycleRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

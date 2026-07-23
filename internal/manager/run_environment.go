@@ -338,7 +338,17 @@ func (c Core) FinishRunEnvironment(runEnv RunEnvironment, cleanupErr error) (Run
 	return runEnv, cleanupErr
 }
 
-func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environment.Lock, runEnv RunEnvironment, owner *session.Owner, sessionID string, cleanupErr error, disposalProved bool, lifecycleRegistration ...lifecycle.Registration) (disposition string, retErr error) {
+func (c Core) finishConcurrentRunEnvironment(
+	_ context.Context,
+	held **environment.Lock,
+	runEnv RunEnvironment,
+	owner *session.Owner,
+	sessionID string,
+	cleanupErr error,
+	disposalProved bool,
+	disposableProvider EnvironmentLifecycleBackend,
+	lifecycleRegistration ...lifecycle.Registration,
+) (disposition string, retErr error) {
 	if !runEnv.Active || owner == nil {
 		return "", cleanupErr
 	}
@@ -441,6 +451,14 @@ func (c Core) finishConcurrentRunEnvironment(_ context.Context, held **environme
 	}
 	rec.LastEndedAt = time.Now().UTC()
 	if rec.Disposable {
+		if disposableProvider != nil && c.LifecycleDisposals != nil {
+			recoveryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			outcome, recoveryErr := c.recoverDisposableEnvironmentLocked(
+				recoveryCtx, store, rec, DisposableRecoverySourceOrdinary, disposableProvider,
+			)
+			return outcome.Status, errors.Join(finalErr, recoveryErr)
+		}
 		return c.disposeFinishedEnvironment(store, rec, disposalProved && ownersProvedIdle && siblingLive == 0, finalErr)
 	}
 	if siblingLive > 0 {

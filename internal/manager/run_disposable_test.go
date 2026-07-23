@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
 
@@ -186,5 +188,176 @@ func TestDisposableCleanupProvedRequiresLimaObservation(t *testing.T) {
 	}
 	if !disposableCleanupProved(noObservationBackend{}, nativeRecord) {
 		t.Fatal("a non-VM backend proves by its clean cleanup return")
+	}
+}
+
+type disposableLifecycleApplyBackend struct {
+	*lifecycleApplyBackend
+	running bool
+}
+
+type observingDisposalCoordinator struct {
+	lifecycle.DisposalCoordinator
+	environmentStore               environment.Store
+	journalStore                   lifecycle.JournalStore
+	failComplete                   bool
+	recordPresentAtJournalRemoval  bool
+	journalGoneBeforeRecordRemoval bool
+}
+
+func (coordinator *observingDisposalCoordinator) CompleteDisposalMetadata(ctx context.Context, environmentID, digest string) error {
+	if _, err := coordinator.environmentStore.Load(environmentID); err == nil {
+		coordinator.recordPresentAtJournalRemoval = true
+	}
+	if coordinator.failComplete {
+		return errors.New("injected journal removal failure")
+	}
+	if err := coordinator.DisposalCoordinator.CompleteDisposalMetadata(ctx, environmentID, digest); err != nil {
+		return err
+	}
+	_, journalErr := coordinator.journalStore.Load(environmentID)
+	_, recordErr := coordinator.environmentStore.Load(environmentID)
+	coordinator.journalGoneBeforeRecordRemoval = errors.Is(journalErr, os.ErrNotExist) && recordErr == nil
+	return nil
+}
+
+func (provider *disposableLifecycleApplyBackend) ObserveLifecycle(_ context.Context, instanceName string) backend.LifecycleObservation {
+	state := backend.LifecycleAbsent
+	bootID := ""
+	if provider.running {
+		state = backend.LifecycleRunning
+		bootID = provider.bootID
+	}
+	return backend.LifecycleObservation{
+		State: state, InstanceName: instanceName, BootID: bootID, ObservedAt: time.Now().UTC(),
+	}
+}
+
+func (provider *disposableLifecycleApplyBackend) Activate(ctx context.Context, session *backend.Session, env []string) error {
+	if err := provider.lifecycleApplyBackend.Activate(ctx, session, env); err != nil {
+		return err
+	}
+	provider.running = true
+	return nil
+}
+
+func (provider *disposableLifecycleApplyBackend) Cleanup(ctx context.Context, session *backend.Session) error {
+	err := provider.applyRunFakeBackend.Cleanup(ctx, session)
+	if err == nil {
+		provider.running = false
+	}
+	return err
+}
+
+func TestApplyRunDisposableLifecycleProtocolRemovesJournalBeforeRecord(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default", Backend: "lima", Workspace: t.TempDir(), Command: []string{"tool"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-disposable-finalizer", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observingCoordinator := &observingDisposalCoordinator{
+		DisposalCoordinator: coordinator,
+		environmentStore:    environment.Store{Root: root},
+		journalStore:        journalStore,
+	}
+	core.LifecycleDisposals = observingCoordinator
+	provider := &disposableLifecycleApplyBackend{lifecycleApplyBackend: &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"},
+		journal:             journalStore, bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend: provider, RequestedBackend: "lima",
+		Environment: RunEnvironmentOptions{RemoveAfterRun: true, Create: true},
+		Lifecycle:   coordinator,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRun: %v", err)
+	}
+	if result.EnvironmentDisposition != DisposableRecoveryRemoved {
+		t.Fatalf("result=%+v", result)
+	}
+	if !slices.Contains(provider.calls, "cleanup") || provider.running {
+		t.Fatalf("provider calls=%v running=%v", provider.calls, provider.running)
+	}
+	if _, err := (environment.Store{Root: root}).Load(result.EnvironmentID); err == nil {
+		t.Fatal("ordinary disposable finalizer retained environment record")
+	}
+	if _, err := journalStore.Load(result.EnvironmentID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ordinary disposable finalizer retained lifecycle journal: %v", err)
+	}
+	if !observingCoordinator.recordPresentAtJournalRemoval ||
+		!observingCoordinator.journalGoneBeforeRecordRemoval {
+		t.Fatalf("record-last ordering was not observed: %+v", observingCoordinator)
+	}
+}
+
+func TestApplyRunDisposableLifecycleProtocolRetainsClassifiableStateWhenJournalRemovalFails(t *testing.T) {
+	setFakeLinuxShim(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "default", Backend: "lima", Workspace: t.TempDir(), Command: []string{"tool"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-disposable-failure", IdleGrace: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observingCoordinator := &observingDisposalCoordinator{
+		DisposalCoordinator: coordinator,
+		environmentStore:    environment.Store{Root: root},
+		journalStore:        journalStore,
+		failComplete:        true,
+	}
+	core.LifecycleDisposals = observingCoordinator
+	provider := &disposableLifecycleApplyBackend{lifecycleApplyBackend: &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"},
+		journal:             journalStore, bootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}}
+	result, err := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+		Backend: provider, RequestedBackend: "lima",
+		Environment: RunEnvironmentOptions{RemoveAfterRun: true, Create: true},
+		Lifecycle:   coordinator,
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected journal removal failure") {
+		t.Fatalf("error=%v result=%+v", err, result)
+	}
+	if result.EnvironmentDisposition != DisposableRecoveryCleanupRequired ||
+		!observingCoordinator.recordPresentAtJournalRemoval {
+		t.Fatalf("result=%+v observer=%+v", result, observingCoordinator)
+	}
+	retained, err := (environment.Store{Root: root}).Load(result.EnvironmentID)
+	if err != nil || !retained.Disposable || retained.Status != environment.StatusError {
+		t.Fatalf("retained record=%+v err=%v", retained, err)
+	}
+	journal, err := journalStore.Load(result.EnvironmentID)
+	if err != nil || journal.Disposal == nil ||
+		journal.Disposal.State != lifecycle.DisposalStateBlocked ||
+		journal.Disposal.ReasonCode != lifecycle.DisposalReasonJournalRemovalFailed {
+		t.Fatalf("retained journal=%+v err=%v", journal, err)
 	}
 }

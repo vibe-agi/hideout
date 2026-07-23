@@ -113,3 +113,28 @@ legacy journal-only test remains blocked with
 `environment-record-unavailable`. Public lifecycle status exposes only the
 closed disposal phase/reason fields; record digest and instance identity are
 absent, and an injected unregistered `cap_*` reason is rejected.
+
+### Record-last convergence and randomized replay
+
+The ordinary managed-Lima `--rm` finalizer now enters the same durable disposal
+transaction as startup recovery. An observing test proves that the environment
+record is still present when lifecycle metadata is removed, and that the
+journal is absent before Manager removes the record. An injected journal
+removal failure leaves both a disposable error record and a blocked intent with
+the closed `journal-removal-failed` reason.
+
+The deterministic randomized replay lane used seed `1089767348` and completed
+100 schedules spanning restart cuts at every forward phase plus bounded blocked
+revalidation:
+
+```text
+go test -count=1 \
+  -run 'TestCoordinatorDisposalRestartShapes|TestDisposableRecoveryRandomizedCrashReplay' \
+  -v ./internal/lifecycle
+```
+
+Invariant counts: `complete=100`, `residual-journals=0`, and every schedule
+observed the record marker after journal removal before deleting it last.
+Separate restart-shape cases cover record+intent, record-only, valid
+intent-only, and legacy journal-only. Coordinator startup never manufactures
+authority for the legacy shape.

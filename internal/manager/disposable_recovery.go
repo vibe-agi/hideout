@@ -77,6 +77,19 @@ func (c Core) RecoverDisposableEnvironment(ctx context.Context, request Disposab
 	if err != nil {
 		return outcome, err
 	}
+	return c.recoverDisposableEnvironmentLocked(ctx, store, record, request.Source, request.Provider)
+}
+
+func (c Core) recoverDisposableEnvironmentLocked(
+	ctx context.Context,
+	store environment.Store,
+	record environment.Record,
+	source string,
+	provider EnvironmentLifecycleBackend,
+) (DisposableRecoveryOutcome, error) {
+	outcome := DisposableRecoveryOutcome{
+		EnvironmentID: record.ID, Source: source, Status: DisposableRecoveryInterrupted,
+	}
 	identity, err := environment.NewDisposableIdentity(record)
 	if err != nil {
 		return outcome, err
@@ -98,7 +111,7 @@ func (c Core) RecoverDisposableEnvironment(ctx context.Context, request Disposab
 		return c.blockDisposableRecovery(ctx, outcome, identity, "record-retention-failed", err)
 	}
 
-	observation := request.Provider.ObserveLifecycle(ctx, identity.InstanceName)
+	observation := provider.ObserveLifecycle(ctx, identity.InstanceName)
 	if err := validateLifecycleObservationForInstance(observation, identity.InstanceName); err != nil {
 		return c.blockDisposableRecovery(ctx, outcome, identity, "backend-observation-unproved", err)
 	}
@@ -107,7 +120,7 @@ func (c Core) RecoverDisposableEnvironment(ctx context.Context, request Disposab
 		// An already-absent exact instance proceeds directly to stable proof.
 	case backend.LifecycleRunning, backend.LifecycleStopped:
 		outcome.BackendCleanupInvoked = true
-		if err := request.Provider.Cleanup(ctx, &backend.Session{
+		if err := provider.Cleanup(ctx, &backend.Session{
 			EnvironmentID: identity.EnvironmentID,
 			Backend:       identity.Backend,
 			InstanceName:  identity.InstanceName,
@@ -121,7 +134,7 @@ func (c Core) RecoverDisposableEnvironment(ctx context.Context, request Disposab
 		)
 	}
 
-	outcome.AbsenceObservations, err = observeDisposableAbsenceTwice(ctx, request.Provider, identity.InstanceName)
+	outcome.AbsenceObservations, err = observeDisposableAbsenceTwice(ctx, provider, identity.InstanceName)
 	if err != nil {
 		return c.blockDisposableRecovery(ctx, outcome, identity, "backend-absence-unproved", err)
 	}
@@ -169,7 +182,7 @@ func (c Core) RecoverDisposableEnvironment(ctx context.Context, request Disposab
 	outcome.CompletedAt = time.Now().UTC()
 	c.emitEnvironmentAudit("env.dispose", "allow", map[string]any{
 		"environmentId": record.ID, "environmentName": record.Name,
-		"instance": record.InstanceName, "source": request.Source,
+		"instance": record.InstanceName, "source": source,
 		"disposition": DisposableRecoveryRemoved,
 	})
 	return outcome, nil
