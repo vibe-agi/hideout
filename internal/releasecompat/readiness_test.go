@@ -1375,6 +1375,40 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 			"samples": 30, "warmFirstOutputP95Ms": 800, "medianRegressionRatio": 1.02,
 			"nonClaims": map[string]any{"staticVirtiofs": "not-claimed"},
 		}
+	case productevidence.ArtifactValidatorDisposableRecoveryV1:
+		checks := map[string]bool{}
+		for _, name := range []string{
+			"boundedWorkers", "crashAfterBackendCleanup", "crashAfterIntent",
+			"crashAfterJournalRemoval", "crashAfterStableAbsence", "ephemeralIdentity",
+			"exactInstance", "gatewayCleared", "historicalJournalRefused",
+			"identityMismatchRefused", "journalCleared", "liveOwnerRefused",
+			"nameOnlyRefused", "nonDisposableRefused", "ordinaryFinalizer",
+			"recordCleared", "runtimeCleared", "shutdownInterrupted",
+			"stableAbsenceTwice", "startupStatusAvailable", "statusOnlyRefused",
+			"targetFailure", "unprovableOwnerRefused", "zeroUnauthorizedCleanupCalls",
+		} {
+			checks[name] = true
+		}
+		value = map[string]any{
+			"schema": "hideout.disposable-recovery-gate2/v1", "status": "passed",
+			"commit": commit, "dirty": false, "backend": "lima",
+			"hostOS": "darwin", "hostArch": "arm64", "guestArch": "aarch64",
+			"checks": checks,
+			"samples": map[string]any{
+				"ordinaryRuns": 30, "crashSchedules": 100, "restartCheckpoints": 4,
+			},
+			"timing": map[string]any{
+				"startupStatusP95Ms": 100, "recoveryP95Ms": 500, "recoveryTimeouts": 0,
+			},
+			"destructiveCalls": map[string]any{"authorized": 34, "unauthorized": 0},
+			"residue": map[string]any{
+				"environmentRecords": 0, "lifecycleJournals": 0, "backendInstances": 0,
+				"gateways": 0, "runtimeReceipts": 0, "ownerRecords": 0,
+			},
+			"nonClaims": map[string]any{
+				"historicalJournalOnly": "not-auto-recovered", "ordinaryOrphans": "report-only",
+			},
+		}
 	default:
 		t.Fatalf("unknown semantic validator %q", validator)
 	}
