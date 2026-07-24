@@ -41,11 +41,32 @@ grep -q 'never changes a requested privacy profile to direct' "$doc"
 grep -q '^hideout setup$' README.md
 grep -q '^hideout setup$' README.zh-CN.md
 
+# Published-tap parity compares the source formula with an official
+# vibe-agi/homebrew-tap checkout. The tap location comes from
+# HIDEOUT_TAP_FORMULA, falling back to a sibling ../homebrew-tap checkout.
+# Without a tap checkout the parity slice records not-run locally, while
+# HIDEOUT_REQUIRE_TAP_PARITY=1 (the CI posture) fails closed instead of
+# skipping: a skipped parity check is not parity proof.
 source_formula="packaging/homebrew/hideout.rb"
-tap_formula="/Users/null/Code/github/vibe-agi/homebrew-tap/Formula/hideout.rb"
 test -f "$source_formula"
-test -f "$tap_formula"
-for formula in "$source_formula" "$tap_formula"; do
+tap_formula="${HIDEOUT_TAP_FORMULA:-}"
+if [ -z "$tap_formula" ] && [ -f "$ROOT/../homebrew-tap/Formula/hideout.rb" ]; then
+  tap_formula="$ROOT/../homebrew-tap/Formula/hideout.rb"
+fi
+formulas=("$source_formula")
+if [ -n "$tap_formula" ]; then
+  if [ ! -f "$tap_formula" ]; then
+    echo "first-run-docs-smoke: tap formula is missing at $tap_formula" >&2
+    exit 1
+  fi
+  formulas+=("$tap_formula")
+elif [ "${HIDEOUT_REQUIRE_TAP_PARITY:-0}" = "1" ]; then
+  echo "first-run-docs-smoke: tap parity is required but no official tap formula was found; set HIDEOUT_TAP_FORMULA or check out vibe-agi/homebrew-tap next to this repository" >&2
+  exit 1
+else
+  echo "first-run-docs-smoke: tap parity not-run (no official tap checkout; source-formula checks still enforced)" >&2
+fi
+for formula in "${formulas[@]}"; do
   grep -q 'hideout setup' "$formula"
   if grep -q 'hideout init --template dev' "$formula"; then
     echo "first-run-docs-smoke: formula still teaches long default init" >&2
@@ -60,11 +81,13 @@ for formula in "$source_formula" "$tap_formula"; do
     grep -q "$helper" "$formula"
   done
 done
-if ! diff -u \
-    <(sed -n '/^  def caveats$/,/^  end$/p' "$source_formula") \
-    <(sed -n '/^  def caveats$/,/^  end$/p' "$tap_formula"); then
-  echo "first-run-docs-smoke: source and published formula caveats drifted" >&2
-  exit 1
+if [ -n "$tap_formula" ]; then
+  if ! diff -u \
+      <(sed -n '/^  def caveats$/,/^  end$/p' "$source_formula") \
+      <(sed -n '/^  def caveats$/,/^  end$/p' "$tap_formula"); then
+    echo "first-run-docs-smoke: source and published formula caveats drifted" >&2
+    exit 1
+  fi
 fi
 
 # The rendered agent example must stay synchronized with the pinned fixture:
