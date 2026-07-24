@@ -41,8 +41,13 @@ grep -q 'never changes a requested privacy profile to direct' "$doc"
 grep -q '^hideout setup$' README.md
 grep -q '^hideout setup$' README.zh-CN.md
 
-# Published-tap parity compares the source formula with an official
-# vibe-agi/homebrew-tap checkout. The tap location comes from
+# Published-tap parity anchors the official vibe-agi/homebrew-tap checkout to
+# the release inventory: the tap must distribute exactly the current public
+# release (tag and artifact digest). The tap legitimately trails the source
+# formula between releases and updates only when a release publishes, so
+# teaching-surface checks run against the source formula alone; comparing the
+# tap's caveats/helpers needs a release-time formula copy in-tree, tracked in
+# docs/DEBT.md for the next publication. The tap location comes from
 # HIDEOUT_TAP_FORMULA, falling back to a sibling ../homebrew-tap checkout.
 # Without a tap checkout the parity slice records not-run locally, while
 # HIDEOUT_REQUIRE_TAP_PARITY=1 (the CI posture) fails closed instead of
@@ -53,42 +58,44 @@ tap_formula="${HIDEOUT_TAP_FORMULA:-}"
 if [ -z "$tap_formula" ] && [ -f "$ROOT/../homebrew-tap/Formula/hideout.rb" ]; then
   tap_formula="$ROOT/../homebrew-tap/Formula/hideout.rb"
 fi
-formulas=("$source_formula")
 if [ -n "$tap_formula" ]; then
   if [ ! -f "$tap_formula" ]; then
     echo "first-run-docs-smoke: tap formula is missing at $tap_formula" >&2
     exit 1
   fi
-  formulas+=("$tap_formula")
+  release_tag="$(jq -r '.current.tag // empty' releases/current.json)"
+  release_sha="$(jq -r '.current.package.artifactSHA256 // empty' releases/current.json)"
+  if [ -z "$release_tag" ] || [ -z "$release_sha" ]; then
+    echo "first-run-docs-smoke: release inventory is missing the tag or artifact digest" >&2
+    exit 1
+  fi
+  if ! grep -q "releases/download/$release_tag/" "$tap_formula"; then
+    echo "first-run-docs-smoke: official tap does not distribute the current public release $release_tag" >&2
+    exit 1
+  fi
+  if ! grep -q "sha256 \"$release_sha\"" "$tap_formula"; then
+    echo "first-run-docs-smoke: official tap sha256 does not match the published artifact digest" >&2
+    exit 1
+  fi
 elif [ "${HIDEOUT_REQUIRE_TAP_PARITY:-0}" = "1" ]; then
   echo "first-run-docs-smoke: tap parity is required but no official tap formula was found; set HIDEOUT_TAP_FORMULA or check out vibe-agi/homebrew-tap next to this repository" >&2
   exit 1
 else
   echo "first-run-docs-smoke: tap parity not-run (no official tap checkout; source-formula checks still enforced)" >&2
 fi
-for formula in "${formulas[@]}"; do
-  grep -q 'hideout setup' "$formula"
-  if grep -q 'hideout init --template dev' "$formula"; then
-    echo "first-run-docs-smoke: formula still teaches long default init" >&2
-    exit 1
-  fi
-  for helper in \
-    hideout-dns-stub-linux-arm64 \
-    hideout-hostfsd-linux-arm64 \
-    hideout-session-supervisor-linux-arm64 \
-    hideout-workspace-portal-linux-arm64 \
-    hideout-shim-linux-arm64; do
-    grep -q "$helper" "$formula"
-  done
-done
-if [ -n "$tap_formula" ]; then
-  if ! diff -u \
-      <(sed -n '/^  def caveats$/,/^  end$/p' "$source_formula") \
-      <(sed -n '/^  def caveats$/,/^  end$/p' "$tap_formula"); then
-    echo "first-run-docs-smoke: source and published formula caveats drifted" >&2
-    exit 1
-  fi
+grep -q 'hideout setup' "$source_formula"
+if grep -q 'hideout init --template dev' "$source_formula"; then
+  echo "first-run-docs-smoke: source formula still teaches long default init" >&2
+  exit 1
 fi
+for helper in \
+  hideout-dns-stub-linux-arm64 \
+  hideout-hostfsd-linux-arm64 \
+  hideout-session-supervisor-linux-arm64 \
+  hideout-workspace-portal-linux-arm64 \
+  hideout-shim-linux-arm64; do
+  grep -q "$helper" "$source_formula"
+done
 
 # The rendered agent example must stay synchronized with the pinned fixture:
 # bumping the fixture version without updating user-facing text fails here.
