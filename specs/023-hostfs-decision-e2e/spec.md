@@ -1,10 +1,12 @@
 # Feature Specification: HostFS And Decision E2E
 
+<!-- markdownlint-disable MD013 -->
+
 **Feature Branch**: `023-hostfs-decision-e2e`
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented as local product-hardening evidence (real HostFS claims stay gate-bound) — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Continue product hardening without expanding
 authority: prove HostFS write overlay and decision center semantics end to end,

@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement .tmp/017-020-internal-hardening-plan.md. 018 makes hideout doctor useful for real troubleshooting: deep and feature-scoped diagnostics report observed facts, candidate causes, and next actions without pretending to determine root cause or replace real gates."
 

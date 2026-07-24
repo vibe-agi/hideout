@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-06
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "004 = Isolation Boundary Evidence & DNS Leak Closure. In privacy mode, Hideout must prove that guest network identity is mediated by the configured privacy path, including DNS resolution, and must produce repeatable Lima gate evidence for isolation-sensitive behavior without silently falling back to direct, native, or ambient host paths."
 

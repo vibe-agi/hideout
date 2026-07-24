@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement 008 from `.tmp/008-010-plan.md`: upgrade command proxy into a local, profile-scoped command capability adapter runtime. Deterministic JavaScript adapters may classify command intent, explain risk, deny, simulate, rewrite non-privileged guest commands, or propose Go Core-owned capabilities. Root-sensitive commands are the first built-in adapter, but this feature must not claim to block root escalation by itself; 009 owns privilege separation and 010 owns HostFS write apply."
 

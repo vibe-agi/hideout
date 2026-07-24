@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Draft
+**Status**: Implemented as a local adapter-pack lifecycle (no public marketplace trust) — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement 011 from `.tmp/011-016-plan.md`: turn the 008 command adapter runtime into a local, testable, digest-locked adapter pack lifecycle. Support local path and exact-commit git sources, a store-wide registry with profile enable bindings, mandatory tests before enable, Core-owned validation as the primary safety gate, built-in adapter metadata, install/upgrade/disable/revoke evidence, and no public marketplace or extra JavaScript authority."
 

@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement the 027 portion of `.tmp/026-028-internal-hardening-plan.md`: add practical drift guards for Manager routes, daemon endpoints, WebUI/TUI action routes, live-event producers, and live-console reducers without adding new authority or UI features."
 

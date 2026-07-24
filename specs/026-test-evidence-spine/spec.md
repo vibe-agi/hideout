@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement the 026 portion of `.tmp/026-028-internal-hardening-plan.md`: create a practical shared test and evidence spine so product-hardening, real-gate, and release-candidate proof handling is trustworthy without broad test-framework rewrites."
 

@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement 012 from `.tmp/011-016-plan.md`: create one local operator center for actionable decisions and informational notices. Migrate HostFS write decisions onto the common model, add adapter capability proposals and share/leaving-machine export confirmations, keep pure local export synchronous, separate notices from approvals, support CLI/TUI/WebUI claim/resolve/watch flows, enforce timeout default-deny for actionable decisions, and preserve typed Manager/Core authority."
 

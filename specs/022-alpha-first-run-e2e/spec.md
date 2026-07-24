@@ -1,8 +1,10 @@
 # Feature Specification: Alpha First-Run E2E
 
+<!-- markdownlint-disable MD013 -->
+
 **Feature Branch**: `022-alpha-first-run-e2e`
 **Created**: 2026-07-09
-**Status**: Draft
+**Status**: Implemented (retained privacy-lane evidence) — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 **Input**: User description: "Prove the canonical alpha first-run path works
 from package install to first successful run, using the package artifact and
 docs path a real operator would follow. Avoid install/init collisions by

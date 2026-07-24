@@ -1,8 +1,10 @@
 # Feature Specification: Public Alpha Release Channel
 
+<!-- markdownlint-disable MD013 -->
+
 **Feature Branch**: `033-public-alpha-release-channel`
 **Created**: 2026-07-13
-**Status**: Draft
+**Status**: Implemented for v0.1.0-alpha.1 — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 **Input**: Publish one independently verifiable, supervised public alpha for
 macOS arm64 without expanding Hideout's authority or overstating product
 maturity.

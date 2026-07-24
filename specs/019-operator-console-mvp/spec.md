@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Continue .tmp/017-020-internal-hardening-plan.md. 019 makes existing local control-plane capabilities easier to operate from TUI/WebUI: decisions, notices, doctor findings, package/support status, environments/background work, and HostFS write approvals. It must not add new authority."
 

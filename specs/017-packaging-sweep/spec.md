@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement .tmp/017-020-internal-hardening-plan.md. Start with 017 Packaging Sweep: make install, upgrade, verify, and uninstall boringly reliable without adding new authority or new security claims."
 

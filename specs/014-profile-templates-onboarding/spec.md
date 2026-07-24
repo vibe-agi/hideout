@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Follow .tmp/011-016-plan.md using speckit-* skills; complete and commit one feature at a time. 014 ships curated profile templates and onboarding so first-run setup chooses an honest isolation posture."
 

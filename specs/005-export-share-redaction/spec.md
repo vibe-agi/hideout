@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-07
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Export/share redaction boundary — a safety valve for taking Hideout evidence off the local machine."
 

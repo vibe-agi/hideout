@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented as local product-hardening evidence — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Keep hardening existing product usability: prove
 doctor and package recovery diagnose realistic broken states, repair only safe

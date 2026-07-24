@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement the 028 portion of `.tmp/026-028-internal-hardening-plan.md`: give selected high-value fail-closed and degraded host-visible outcomes stable codes, reasons, hints, and next actions without changing authority or promising a full error-model rewrite."
 

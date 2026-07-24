@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-06
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Unified named environments + declared base image。环境统一为唯一模型：一切环境皆命名，env create/list/inspect/recreate/remove + `run --env <name>`；不带 --env 的 run 解析到从 (profile, workspace) 确定性派生的自动命名环境，与显式命名环境同一套生命周期与语义；MRU 指纹选择机制删除。每个环境都有声明的 base image（env create --image 显式 > profile environment.baseImage 默认，default profile 显式携带内置模板引用，lima.go 硬编码删除）；image 以 ref+digest 固化进环境身份，Lima 从声明生成 images 条目并校验 digest，拉取失败 fail closed。所有环境的配置在创建时固化，任何漂移（image digest / expectedCommands / backendConfigVersion / workspace）一律 fail closed 并给 env recreate 指引——不再静默派生新环境。workspace 在 create 时 pin（SameFile 判定+危险根检查），HostFS 规则被 workspace 遮蔽时告警；default 为保留名（留给 004 共享环境）；顶层 hideout list 删除，env list 是唯一清单命令；存量环境记录不迁移，版本跳变后提示 clean 重建。不做：共享 default 环境、动态挂载、daemon、镜像构建/缓存/凭据管理、生态 image 分享接入面、onboarding。"
 

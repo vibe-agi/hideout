@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: Draft
+**Status**: Implemented as local UI E2E evidence (not release readiness) — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Continue `.tmp/021-025-product-hardening-plan.md`. 021 proves the current WebUI and TUI operator console from a user-visible perspective: a real browser opens the served WebUI, observes live console state, performs one low-risk action round-trip, and records proof; a real terminal/PTY observes `hideout tui` output from daemon events; both proofs write stable evidence entries that 022-025 can consume. No UI redesign, no new authority, no product browser-control capability."
 

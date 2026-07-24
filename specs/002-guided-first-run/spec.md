@@ -4,7 +4,7 @@
 
 **Feature Branch**: `002-guided-first-run`  
 **Created**: 2026-07-05  
-**Status**: Draft  
+**Status**: Implemented (tool-model cleanup landed; first-run guidance has since moved to 020/038) — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)  
 **Input**: User description: "002：Tool model cleanup。清 npm/provider/preset 旧面，落 expectedCommands，让当前代码和新文档不打架。"
 
 ## Current Status Context

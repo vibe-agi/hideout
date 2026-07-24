@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement 010 from `.tmp/008-010-plan.md`: add HostFS write overlay so guest writes to workspace-external host paths are staged, reviewed, explicitly approved, conflict-checked, and audited before any host mutation. Support create, replace, append, truncate, mkdir, delete, rename, chmod, and constrained chown. Approval may be resolved from local CLI/TUI/WebUI/Manager surfaces with timeout default deny. Keep JavaScript proposal-only and keep actual apply in Go-owned Manager/Core."
 

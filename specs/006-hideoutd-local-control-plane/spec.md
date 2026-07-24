@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-07
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "006 = hideoutd local control-plane daemon. Hideout should provide a per-user local daemon that serves the existing typed Manager API over a guest-unreachable local transport, emits live operation/audit/environment event streams to CLI/TUI/WebUI clients under the existing local redaction rules, and owns background cleanup/status for long-running typed operations — failing closed after restart for resources it cannot prove belong to an active session, without adding new target authority, raw host execution, raw profile writes, or public network exposure."
 

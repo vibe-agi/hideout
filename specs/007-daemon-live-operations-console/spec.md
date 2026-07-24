@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Draft
+**Status**: Implemented — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "007 should follow 006 by finishing the product UI slice that 006 deliberately deferred: WebUI and TUI surfaces should use the daemon event stream as real live state, not merely as a trigger to re-fetch. After one initial seed, panels should update from typed event payloads with zero steady-state overview polling, and the feature should add end-to-end user-visible proof for both browser WebUI and terminal TUI. This is not a UI framework migration; those choices belong in plan."
 

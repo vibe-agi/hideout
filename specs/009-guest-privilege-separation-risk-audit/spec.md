@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Draft
+**Status**: Implemented for Lima — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 
 **Input**: User description: "Implement 009 from `.tmp/008-010-plan.md`: separate target execution from Hideout privileged guest setup where possible, make target execution non-root by default, report enforced/degraded/unknown guest privilege separation status, and audit passwordless sudo risk without overclaiming guest-root containment."
 

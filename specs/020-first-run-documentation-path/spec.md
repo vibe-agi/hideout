@@ -4,7 +4,7 @@
 
 **Feature Branch**: `020-first-run-documentation-path`
 **Created**: 2026-07-09
-**Status**: Draft
+**Status**: Implemented as documentation plus local package E2E coverage — the exact claim surface and non-claims live in [docs/STATUS.md](../../docs/STATUS.md)
 **Input**: `.tmp/017-020-internal-hardening-plan.md`
 
 ## Clarifications
