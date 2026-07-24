@@ -544,8 +544,22 @@ setup_local_fast() {
     echo "first-run-e2e: setup left runtime-scale artifacts in the store" >&2
     exit 1
   fi
-  run_logged setup-doctor env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor
-  grep -q 'profile: ok default' "$logs/setup-doctor.out"
+  # Doctor fails closed on machines without the Lima prerequisite (the CI
+  # runner has no limactl); this lane asserts that setup registered the
+  # default profile, not that every prerequisite is installed. Any required
+  # error other than the missing-lima prerequisite is a real regression.
+  env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor \
+    >"$logs/setup-doctor.out" 2>"$logs/setup-doctor.err" || true
+  if ! grep -q 'profile: ok default' "$logs/setup-doctor.out"; then
+    echo "first-run-e2e: setup profile did not register with doctor:" >&2
+    tail -30 "$logs/setup-doctor.out" "$logs/setup-doctor.err" >&2 || true
+    exit 1
+  fi
+  if grep -E '^[a-z-]+: error' "$logs/setup-doctor.out" | grep -qv '^backend: error lima unavailable'; then
+    echo "first-run-e2e: setup doctor reported a non-prerequisite error:" >&2
+    grep -E '^[a-z-]+: error' "$logs/setup-doctor.out" >&2 || true
+    exit 1
+  fi
   run_logged setup-parity-tests go test \
     ./internal/operatorintent ./internal/manager ./internal/app \
     -run 'Test(ParseNaturalOperatorIntents|ParseRejectsAmbiguous|SetupRejectsEveryArgument|InitServiceSetup|InitServiceRejectsSetupOverrides|InitCommandUsesOnlyDaemon|SetupFreshReview)'
