@@ -117,19 +117,26 @@ func TestSupervisorProtocolRejectsForeignReadinessBeforeCommitOrOutput(t *testin
 		reader *sessionwire.Reader,
 		writer *sessionwire.Writer,
 	) error {
+		// Deliver the observed frames on every return path: the client fails
+		// closed on the foreign proof and may drop the connection while this
+		// handler is still writing, and the test consumes daemonFrames before
+		// it checks the server result.
+		var observed []sessionwire.Type
+		defer func() { daemonFrames <- observed }()
 		if _, err := readSupervisorStartForTest(reader); err != nil {
 			return err
 		}
 		foreign := supervisorReadyForTest(session)
 		foreign.ProjectionReadiness.CatalogDigest = "sha256:" + strings.Repeat("e", 64)
 		if err := writer.WriteControl(sessionwire.TypeSupervisorReady, foreign); err != nil {
-			return err
+			// The rejecting client may close the channel before this write
+			// lands; the early close is the behavior under test, not a
+			// server failure.
+			return nil
 		}
 		if err := writer.Write(sessionwire.TypeStdout, []byte("must-not-leak")); err != nil {
-			return err
+			return nil
 		}
-		var observed []sessionwire.Type
-		defer func() { daemonFrames <- observed }()
 		for {
 			frame, err := reader.ReadFrame()
 			if err != nil {
@@ -189,12 +196,12 @@ func TestSupervisorProtocolPreCommitCancellationClosesImmediately(t *testing.T) 
 		reader *sessionwire.Reader,
 		_ *sessionwire.Writer,
 	) error {
+		var observed []sessionwire.Type
+		defer func() { daemonFrames <- observed }()
 		if _, err := readSupervisorStartForTest(reader); err != nil {
 			return err
 		}
 		close(startSeen)
-		var observed []sessionwire.Type
-		defer func() { daemonFrames <- observed }()
 		for {
 			frame, err := reader.ReadFrame()
 			if err != nil {
@@ -264,11 +271,11 @@ func TestSupervisorProtocolPostCommitCancellationKeepsGracefulProtocol(t *testin
 		if _, err := readSupervisorStartForTest(reader); err != nil {
 			return err
 		}
+		var observed []sessionwire.Type
+		defer func() { daemonFrames <- observed }()
 		if err := writer.WriteControl(sessionwire.TypeSupervisorReady, supervisorReadyForTest(session)); err != nil {
 			return err
 		}
-		var observed []sessionwire.Type
-		defer func() { daemonFrames <- observed }()
 		for {
 			frame, err := reader.ReadFrame()
 			if err != nil {
