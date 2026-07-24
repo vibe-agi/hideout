@@ -23,6 +23,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          # The concurrent-sessions and lifecycle e2e lanes verify their
+          # performance baseline against a pinned full commit; a shallow
+          # checkout cannot resolve it.
+          fetch-depth: 0
 
       - name: Check out the official Homebrew tap for parity proof
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
