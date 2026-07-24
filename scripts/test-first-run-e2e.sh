@@ -327,7 +327,11 @@ validate_evidence() {
 run_logged() {
   local name="$1"
   shift
-  "$@" >"$logs/$name.out" 2>"$logs/$name.err"
+  if ! "$@" >"$logs/$name.out" 2>"$logs/$name.err"; then
+    echo "first-run-e2e: step $name failed:" >&2
+    tail -20 "$logs/$name.out" "$logs/$name.err" >&2 || true
+    exit 1
+  fi
 }
 
 wait_environment_status() {
@@ -382,8 +386,15 @@ install_skip_init() {
   local prefix="$2"
   local store="$3"
   run_logged install "$package_root/install.sh" --prefix "$prefix" --store "$store" --skip-init
-  grep -q 'init skipped' "$logs/install.out"
-  test -x "$prefix/bin/hideout"
+  if ! grep -q 'init skipped' "$logs/install.out"; then
+    echo "first-run-e2e: installer did not report init skipped:" >&2
+    tail -20 "$logs/install.out" >&2 || true
+    exit 1
+  fi
+  if [ ! -x "$prefix/bin/hideout" ]; then
+    echo "first-run-e2e: installed hideout binary is missing or not executable at $prefix/bin/hideout" >&2
+    exit 1
+  fi
   if [ -e "$store/profiles/default/profile.json" ]; then
     echo "first-run-e2e: --skip-init created default profile" >&2
     exit 1
@@ -417,7 +428,11 @@ local_fast() {
     --network direct \
     --no-input
   grep -q 'Hideout init' "$logs/init.out"
-  test -f "$store/profiles/default/profile.json"
+  if [ ! -f "$store/profiles/default/profile.json" ]; then
+    echo "first-run-e2e: setup did not create the default profile:" >&2
+    tail -40 "$logs/setup-pty.out" >&2 || true
+    exit 1
+  fi
 
   run_logged doctor-after-init env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor --backend native --workspace "$workspace"
   grep -q 'profile: ok default' "$logs/doctor-after-init.out"
@@ -487,9 +502,13 @@ setup_local_fast() {
   install_skip_init "$package_root" "$prefix" "$store"
   hideout="$prefix/bin/hideout"
   manifest_package_identity_path="$reports/setup-package-identity.json"
-  "$hideout" support release package-identity \
+  if ! "$hideout" support release package-identity \
     --archive "$tmp/hideout.tar.gz" --out "$manifest_package_identity_path" \
-    >"$logs/setup-package-identity.out" 2>"$logs/setup-package-identity.err"
+    >"$logs/setup-package-identity.out" 2>"$logs/setup-package-identity.err"; then
+    echo "first-run-e2e: setup package-identity failed:" >&2
+    tail -20 "$logs/setup-package-identity.out" "$logs/setup-package-identity.err" >&2 || true
+    exit 1
+  fi
   cleanup_daemon_binary="$hideout"
   cleanup_daemon_store="$store"
   cleanup_daemon_store_owned=1
@@ -505,7 +524,11 @@ setup_local_fast() {
     go run ./test/e2e/setuppty \
       --hideout "$hideout" --store "$store" --out "$logs/setup-pty.out"
 
-  test -f "$store/profiles/default/profile.json"
+  if [ ! -f "$store/profiles/default/profile.json" ]; then
+    echo "first-run-e2e: setup did not create the default profile:" >&2
+    tail -40 "$logs/setup-pty.out" >&2 || true
+    exit 1
+  fi
   if [ -e "$marker" ]; then
     echo "first-run-e2e: setup invoked limactl" >&2
     exit 1
@@ -794,9 +817,13 @@ setup_real_backend() {
   install_skip_init "$package_root" "$prefix" "$store"
   hideout="$prefix/bin/hideout"
   manifest_package_identity_path="$reports/setup-package-identity.json"
-  "$hideout" support release package-identity \
+  if ! "$hideout" support release package-identity \
     --archive "$tmp/hideout.tar.gz" --out "$manifest_package_identity_path" \
-    >"$logs/setup-package-identity.out" 2>"$logs/setup-package-identity.err"
+    >"$logs/setup-package-identity.out" 2>"$logs/setup-package-identity.err"; then
+    echo "first-run-e2e: setup package-identity failed:" >&2
+    tail -20 "$logs/setup-package-identity.out" "$logs/setup-package-identity.err" >&2 || true
+    exit 1
+  fi
   cleanup_daemon_binary="$hideout"
   cleanup_daemon_store="$store"
   cleanup_daemon_store_owned=1
