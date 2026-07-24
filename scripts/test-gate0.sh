@@ -341,12 +341,18 @@ scripts/test-release-hardening-smoke.sh
 # public release.
 scripts/test-public-alpha-release.sh --contract-only
 public_alpha_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-public-alpha-gate0.XXXXXX")"
-scripts/package-local.sh \
-  --out "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" >/dev/null
-scripts/test-public-alpha-clean-install.sh \
+if ! scripts/package-local.sh \
+  --out "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" >/dev/null; then
+  echo "gate0: public-alpha package build failed" >&2
+  exit 1
+fi
+if ! scripts/test-public-alpha-clean-install.sh \
   --package "$public_alpha_tmp/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz" \
-  --out "$public_alpha_tmp/clean-install.json" >/dev/null
-jq -e '
+  --out "$public_alpha_tmp/clean-install.json" >/dev/null; then
+  echo "gate0: public-alpha clean install failed" >&2
+  exit 1
+fi
+if ! jq -e '
   .schema == "hideout.public-alpha-clean-install/v1" and
   .install.status == "passed" and
   .install.sourceCheckoutUsed == false and
@@ -355,7 +361,11 @@ jq -e '
   .install.doctorLight == "prerequisite-missing" and
   .prerequisites.lima.status == "missing" and
   .realLima.status == "not-run"
-' "$public_alpha_tmp/clean-install.json" >/dev/null
+' "$public_alpha_tmp/clean-install.json" >/dev/null; then
+  echo "gate0: public-alpha clean-install evidence mismatch:" >&2
+  cat "$public_alpha_tmp/clean-install.json" >&2 || true
+  exit 1
+fi
 rm -rf "$public_alpha_tmp"
 
 # First-run alpha path (020): package install docs, privacy/Lima default,
