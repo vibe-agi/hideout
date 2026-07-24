@@ -201,6 +201,14 @@ func TestRunBridgeLifecycleIsPlannedBeforeProviderAuthority(t *testing.T) {
 
 func lifecycleDataPlaneFixture(t *testing.T, backendName string) (Core, RunSession, RunNetwork) {
 	t.Helper()
+	if backendName == "lima" {
+		// Pin every guest helper to test-owned fakes; without them helper
+		// resolution falls through to the operator's real store or PATH and
+		// the fixture only works on a machine with a hideout installation.
+		setFakeLinuxShim(t)
+		setFakeLinuxWorkspacePortal(t)
+		setFakeLinuxSessionSupervisor(t)
+	}
 	store := profile.Store{Root: t.TempDir()}
 	core := New(store)
 	plan, err := core.PlanRun(RunPlanOptions{

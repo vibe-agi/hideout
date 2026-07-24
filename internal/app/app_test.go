@@ -7027,6 +7027,14 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HIDEOUT_LINUX_TUN2SOCKS_PATH", linuxTun2Socks)
+	// Pin the privacy DNS stub helper too; without it resolution falls through
+	// to the operator's real store or PATH and the test only passes on a
+	// machine with a hideout installation.
+	linuxDNSStub := filepath.Join(fakeBin, "hideout-dns-stub-linux")
+	if err := os.WriteFile(linuxDNSStub, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HIDEOUT_LINUX_DNS_STUB_PATH", linuxDNSStub)
 	installAppTestLinuxSessionHelpers(t, fakeBin)
 
 	var out, errOut bytes.Buffer

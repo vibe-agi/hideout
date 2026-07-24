@@ -18,6 +18,7 @@ import (
 func TestApplyRunWorkspaceLifecycleIsDurableBeforeEffectAndReadyBeforePublication(t *testing.T) {
 	setFakeLinuxShim(t)
 	setFakeLinuxWorkspacePortal(t)
+	setFakeLinuxSessionSupervisor(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)

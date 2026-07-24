@@ -216,6 +216,7 @@ func (r *establishmentOrderingReservation) Abort(ctx context.Context, cause erro
 func TestApplyRunEstablishmentOrdersReservationLockRuntimeOwnerAndPromotion(t *testing.T) {
 	setFakeLinuxShim(t)
 	setFakeLinuxWorkspacePortal(t)
+	setFakeLinuxSessionSupervisor(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -335,6 +336,7 @@ func TestApplyRunMapsOwnerBlockedReservationToExistingRecoveryCode(t *testing.T)
 func TestApplyRunRegistersLifecycleBeforeBackendAuthority(t *testing.T) {
 	setFakeLinuxShim(t)
 	setFakeLinuxWorkspacePortal(t)
+	setFakeLinuxSessionSupervisor(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -400,6 +402,7 @@ func TestApplyRunRegistersLifecycleBeforeBackendAuthority(t *testing.T) {
 func TestApplyRunSharedReadyBarrierActivatesBeforeCommitAndPreventsTargetOnRejection(t *testing.T) {
 	setFakeLinuxShim(t)
 	setFakeLinuxWorkspacePortal(t)
+	setFakeLinuxSessionSupervisor(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
@@ -487,6 +490,7 @@ func TestApplyRunSharedReadyBarrierActivatesBeforeCommitAndPreventsTargetOnRejec
 func TestApplyRunPlansEnvironmentNetworkBeforeProviderStart(t *testing.T) {
 	setFakeLinuxShim(t)
 	setFakeLinuxWorkspacePortal(t)
+	setFakeLinuxSessionSupervisor(t)
 	dnsStub := filepath.Join(t.TempDir(), "hideout-dns-stub-linux")
 	if err := os.WriteFile(dnsStub, []byte("dns-stub"), 0o700); err != nil {
 		t.Fatal(err)

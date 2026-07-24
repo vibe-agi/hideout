@@ -152,6 +152,22 @@ func setFakeLinuxWorkspacePortal(t *testing.T) {
 	t.Setenv(helperbin.LinuxWorkspacePortalPathEnvironment, path)
 }
 
+// setFakeLinuxSessionSupervisor pins the manifest-verified supervisor helper
+// to a test-owned fake. Without it, helper resolution falls through to the
+// operator's default store (~/.hideout), so a test passes on a machine with a
+// real installation and fails on a fresh checkout.
+func setFakeLinuxSessionSupervisor(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), helperbin.LinuxSessionSupervisorCommand+"-linux-"+runtime.GOARCH)
+	if err := os.WriteFile(path, []byte("fake linux session supervisor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := helperbin.WriteStoreHelperManifest(path, helperbin.LinuxSessionSupervisorCommand, runtime.GOARCH); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, path)
+}
+
 func TestCorePlanRunOwnsProfileBackendAndWorkspace(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	workspace := t.TempDir()

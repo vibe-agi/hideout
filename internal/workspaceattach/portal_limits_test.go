@@ -70,10 +70,21 @@ func TestPortalSaturationDoesNotStarveSiblingOrTeardown(t *testing.T) {
 	}
 	slowDone := make(chan error, 1)
 	go func() {
-		_, err := first.ProbeEcho(context.Background(), append([]byte{200, 0, 0, 0}, []byte("slow")...))
+		_, err := first.ProbeEcho(context.Background(), append([]byte{220, 5, 0, 0}, []byte("slow")...))
 		slowDone <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	// The overload assertion is meaningful only once the slow request holds
+	// the session's single in-flight slot. A fixed sleep races goroutine
+	// scheduling on slow runners, and probing for overload would contend for
+	// the very slot the slow request needs (rejecting it instead). The
+	// admission snapshot is a contention-free observation of that condition.
+	occupancyDeadline := time.Now().Add(3 * time.Second)
+	for server.admission.Snapshot().InFlight == 0 {
+		if time.Now().After(occupancyDeadline) {
+			t.Fatal("slow request never became in-flight")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if _, err := first.ProbeEcho(context.Background(), append([]byte{1, 0, 0, 0}, []byte("overload")...)); !errors.Is(err, ErrPortalOverloaded) {
 		t.Fatalf("same-session overload error = %v", err)
 	}
