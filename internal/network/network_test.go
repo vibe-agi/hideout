@@ -285,6 +285,15 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	if !strings.Contains(string(bootstrap), "nameserver 127.0.0.1") {
 		t.Fatalf("bootstrap missing guest resolver override to the stub: %s", bootstrap)
 	}
+	// The privileged setup identity runs with a restrictive umask, so a shell
+	// redirect creates a root-only 0600 resolver config that the non-root
+	// target cannot read: every process in the guest resolves names through
+	// this file, and a target that inspects its own resolver posture must see
+	// the stub. The file holds only the loopback stub address, so an explicit
+	// world-readable mode discloses nothing.
+	if !strings.Contains(string(bootstrap), "chmod 0644 /etc/resolv.conf") {
+		t.Fatalf("bootstrap leaves the guest resolver config unreadable by the target: %s", bootstrap)
+	}
 	if !strings.Contains(string(bootstrap), `iptables -I OUTPUT 1 -p "$proto" --dport 53 -d "$ns" -j DROP`) {
 		t.Fatalf("bootstrap missing connected-subnet resolver block: %s", bootstrap)
 	}
