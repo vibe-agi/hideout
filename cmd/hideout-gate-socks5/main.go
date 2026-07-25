@@ -26,6 +26,12 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "hideout-gate-socks5:", err)
 		return 1
 	}
+	// The gate captures this stream. Without it a failed privacy forward proof
+	// cannot distinguish a guest that never reached the proxy from a CONNECT
+	// the proxy refused.
+	server.Trace = func(line string) {
+		fmt.Fprintln(os.Stderr, "hideout-gate-socks5:", line)
+	}
 	if *useEnvHTTPProxy {
 		upstream := os.Getenv("HTTPS_PROXY")
 		if upstream == "" {

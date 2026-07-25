@@ -38,9 +38,20 @@ type Server struct {
 	// gates use it to chain through an operator's HTTP CONNECT proxy when the
 	// host cannot reach public resolver IPs directly.
 	DialContext func(context.Context, string, string) (net.Conn, error)
+	// Trace, when set, receives one line per connection event. Every failure
+	// path in handleConn returns silently, so without it a gate cannot tell a
+	// guest that never reached the proxy from one whose CONNECT was refused.
+	Trace func(string)
 
 	mu      sync.Mutex
 	targets []string
+}
+
+func (s *Server) trace(format string, args ...any) {
+	if s.Trace == nil {
+		return
+	}
+	s.Trace(fmt.Sprintf(format, args...))
 }
 
 func Listen(address string) (*Server, error) {
@@ -118,13 +129,16 @@ func (s *Server) recordTarget(addr string) {
 
 func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 	defer client.Close()
+	s.trace("accepted from %s", client.RemoteAddr())
 	_ = client.SetDeadline(time.Now().Add(handshakeTimeout))
 	reader := bufio.NewReader(client)
 	if err := negotiateMethod(reader, client); err != nil {
+		s.trace("method negotiation failed: %v", err)
 		return
 	}
 	cmd, targetAddr, err := readRequest(reader, client)
 	if err != nil {
+		s.trace("request read failed: %v", err)
 		return
 	}
 	if cmd == cmdUDPAssociate {
@@ -141,11 +155,14 @@ func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 		dialer := net.Dialer{Timeout: connectTimeout}
 		dialContext = dialer.DialContext
 	}
+	s.trace("connect %s", targetAddr)
 	target, err := dialContext(ctx, "tcp", targetAddr)
 	if err != nil {
+		s.trace("connect %s failed: %v", targetAddr, err)
 		_ = writeReply(client, replyGeneral)
 		return
 	}
+	s.trace("connect %s established", targetAddr)
 	defer target.Close()
 	if err := writeReply(client, replySuccess); err != nil {
 		return
