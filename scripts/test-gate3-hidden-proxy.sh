@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/gate-result.sh"
+. "$ROOT/scripts/lib/daemon-temp.sh"
 . "$ROOT/scripts/lib/lima-temp.sh"
 . "$ROOT/scripts/lib/runtime-product-evidence.sh"
 
@@ -176,7 +177,10 @@ require_command jq
 
 validate_operator_proxy_url
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate3.XXXXXX")"
+# The store lives below this root and owns two Unix sockets. macOS.s default
+# TMPDIR is long enough to exceed sockaddr_un once the daemon filenames are
+# appended, so use the repository.s short daemon-safe temporary root.
+tmp="$(hideout_mktemp_daemon_store)"
 proxy_pid=""
 cleanup() {
   if [ "${HIDEOUT_GATE3_KEEP_TMP:-0}" = "1" ]; then
@@ -193,7 +197,7 @@ cleanup() {
   rm -rf "$tmp"
   rm -rf "${lima_home:-}"
 }
-trap cleanup EXIT
+trap 'cleanup; gate_require_completion gate3' EXIT
 
 bin="$tmp/bin"
 store="$tmp/store"
@@ -203,6 +207,47 @@ lima_home="$(hideout_mktemp_lima_home)"
 export LIMA_HOME="$lima_home"
 workspace="$tmp/workspace"
 mkdir -p "$bin" "$store" "$workspace"
+# The daemon requires a private store root (lifecycle journal inventory,
+# internal/lifecycle/journal.go requirePrivateDir). mkdir leaves group/other
+# bits, so make the store 0700 to match how real `hideout setup` creates it.
+chmod 0700 "$store"
+
+# The guest session supervisor and Workspace Portal are wire-protocol peers of
+# the host build under test. Neither has a build-linux CLI, so without an
+# explicit build the gate inherits whatever an earlier install-local.sh left on
+# PATH and would prove a stale guest binary's behavior (observed 2026-07-24: a
+# supervisor predating 043 rejected the projectionReadiness control field).
+prepare_linux_session_supervisor() {
+  if [ -n "${HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH:-}" ]; then
+    if [ ! -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ]; then
+      echo "gate3: HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH is not executable: $HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" >&2
+      exit 126
+    fi
+    return
+  fi
+  local arch
+  arch="$(go env GOARCH)"
+  HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
+  export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH
+  go -C "$ROOT" run ./internal/helperbin/cmd/build-session-supervisor \
+    --out "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
+}
+
+prepare_linux_workspace_portal() {
+  if [ -n "${HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH:-}" ]; then
+    if [ ! -x "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" ]; then
+      echo "gate3: HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH is not executable: $HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" >&2
+      exit 126
+    fi
+    return
+  fi
+  local arch
+  arch="$(go env GOARCH)"
+  HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
+  export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH
+  go -C "$ROOT" run ./internal/helperbin/cmd/build-workspace-portal \
+    --out "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
+}
 
 prepare_linux_dns_stub() {
   if [ -n "${HIDEOUT_LINUX_DNS_STUB_PATH:-}" ]; then
@@ -259,6 +304,8 @@ fi
 prepare_linux_shim
 prepare_linux_tun2socks
 prepare_linux_dns_stub
+prepare_linux_session_supervisor
+prepare_linux_workspace_portal
 if [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
   start_local_proxy
 else
@@ -289,7 +336,7 @@ chmod 0700 "$gate_dns_query"
 HIDEOUT_STORE_ROOT="$store" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" \
   "$hideout" init --no-input --profile "$profile_name" --template privacy --backend lima \
   --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver" \
-  "${runtime_init_args[@]}" \
+  ${runtime_init_args[@]+"${runtime_init_args[@]}"} \
   >"$tmp/init.out" 2>"$tmp/init.err"
 
 echo "gate3: checking doctor hidden proxy plan"
@@ -313,7 +360,16 @@ printf "proxy_env_absent=yes\n"
 # DNS mediation: the guest resolver is the DoH stub; connected-subnet resolvers
 # are blocked. Confirm the resolver is the stub, then resolve+fetch (DNS now goes
 # over DoH through the privacy path).
-grep -q "^nameserver 127.0.0.1" /etc/resolv.conf || { echo "guest resolver not pointed at DNS stub" >&2; exit 44; }
+grep -q "^nameserver 127.0.0.1" /etc/resolv.conf || {
+  # The target must be able to read the resolver config: every process in the
+  # guest resolves names through it. Report what the target actually observes
+  # so an unreadable file is distinguishable from a wrong nameserver.
+  echo "guest resolver not pointed at DNS stub" >&2
+  ls -l /etc/resolv.conf >&2 2>&1 || true
+  readlink /etc/resolv.conf >&2 2>&1 || true
+  cat /etc/resolv.conf >&2 2>&1 || echo "target cannot read /etc/resolv.conf" >&2
+  exit 44
+}
 printf "dns_mediated=yes\n"
 # Reverse proof (mandatory): every real upstream (connected-subnet) resolver
 # captured before the override must now be unreachable — a direct query to it
@@ -523,4 +579,5 @@ if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
   echo "runtime_evidence=$runtime_evidence_out/product-hardening-evidence.json"
 fi
 
+gate_completed=1
 echo "gate3: passed"

@@ -207,6 +207,43 @@ prepare_linux_shim() {
   "$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
 }
 
+# The guest session supervisor and Workspace Portal are wire-protocol peers of
+# the host build under test. Neither has a build-linux CLI, so without an
+# explicit build the gate inherits whatever an earlier install-local.sh left on
+# PATH and would prove a stale guest binary's behavior (observed 2026-07-24: a
+# supervisor predating 043 rejected the projectionReadiness control field).
+prepare_linux_session_supervisor() {
+  if [ -n "${HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH:-}" ]; then
+    if [ ! -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ]; then
+      echo "gate2: HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH is not executable: $HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" >&2
+      exit 126
+    fi
+    return
+  fi
+  local arch
+  arch="$(go env GOARCH)"
+  HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
+  export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH
+  go -C "$ROOT" run ./internal/helperbin/cmd/build-session-supervisor \
+    --out "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
+}
+
+prepare_linux_workspace_portal() {
+  if [ -n "${HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH:-}" ]; then
+    if [ ! -x "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" ]; then
+      echo "gate2: HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH is not executable: $HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" >&2
+      exit 126
+    fi
+    return
+  fi
+  local arch
+  arch="$(go env GOARCH)"
+  HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
+  export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH
+  go -C "$ROOT" run ./internal/helperbin/cmd/build-workspace-portal \
+    --out "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
+}
+
 prepare_linux_hostfsd() {
   if [ -n "${HIDEOUT_LINUX_HOSTFSD_PATH:-}" ]; then
     if [ ! -x "$HIDEOUT_LINUX_HOSTFSD_PATH" ]; then
@@ -368,7 +405,7 @@ cleanup() {
 		rm -rf "${lima_home:-}"
 	fi
 }
-trap cleanup EXIT
+trap 'cleanup; gate_require_completion gate2' EXIT
 
 bin="$tmp/bin"
 store="$tmp/store"
@@ -395,6 +432,8 @@ else
 fi
 prepare_linux_shim
 prepare_linux_hostfsd
+prepare_linux_session_supervisor
+prepare_linux_workspace_portal
 
 if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
   echo "gate2: selecting immutable runtime $GATE2_RUNTIME_FAMILY"
@@ -1507,4 +1546,5 @@ fi
 if [ "$GATE2_RUNTIME_MODE" = "1" ]; then
   echo "runtime_package_tool_provisioning_check=passed"
 fi
+gate_completed=1
 echo "gate2: passed"

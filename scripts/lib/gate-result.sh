@@ -18,6 +18,24 @@
 # A not-run result requires a non-empty reason. Native MUST NOT appear as the
 # backend for a passed isolation claim.
 
+# gate_require_completion <gate-name>
+#
+# Fail-closed exit guard, called from a gate's EXIT trap after cleanup. The
+# macOS system shell is bash 3.2, which delivers exit status 0 for a `set -u`
+# unbound-variable death when an EXIT trap is installed (verified 2026-07-24:
+# explicit exit, set -e command failure, and normal exit all propagate; only
+# the unbound-variable path is clobbered, and the trap itself observes $? = 0).
+# A crashed gate therefore reports success to its caller unless completion is
+# proved independently. Each gate sets gate_completed=1 immediately before its
+# final success line; the absence of that proof is a failure.
+gate_require_completion() {
+  local name="${1:-gate}"
+  if [ "${gate_completed:-0}" != "1" ]; then
+    echo "$name: FAILED — run ended without reaching its success line" >&2
+    exit 1
+  fi
+}
+
 gate_sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'

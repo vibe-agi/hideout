@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/gate-result.sh"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -273,7 +274,7 @@ cleanup() {
   cleanup_real_gate4_browser "$tmp" || true
   remove_gate4_tmp "$tmp" || true
 }
-trap cleanup EXIT
+trap 'cleanup; gate_require_completion gate4' EXIT
 
 bin="$tmp/bin"
 home="$tmp/home"
@@ -371,4 +372,5 @@ grep -q '"command":"xdg-open"' "$audit"
 cleanup_real_gate4_browser "$tmp"
 remove_gate4_tmp "$tmp"
 trap - EXIT
+gate_completed=1
 echo "gate4: passed"
