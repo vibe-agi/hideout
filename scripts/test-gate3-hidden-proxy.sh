@@ -343,6 +343,48 @@ echo "gate3: checking doctor hidden proxy plan"
 HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" HIDEOUT_SECRET_DEFAULT_PROXY="$HIDEOUT_SECRET_DEFAULT_PROXY" HIDEOUT_LINUX_TUN2SOCKS_PATH="$HIDEOUT_LINUX_TUN2SOCKS_PATH" HIDEOUT_LINUX_DNS_STUB_PATH="$HIDEOUT_LINUX_DNS_STUB_PATH" \
   "$hideout" doctor --profile "$profile_name" --backend lima --workspace "$workspace" --network tun2socks --proxy-secret default-proxy --mediated-resolver "$mediated_resolver"
 
+# Reverse-proof input, captured independently by the gate. The privacy run's
+# own resolvers.before lives beside proxy.url in a 0700 session directory the
+# non-root target must not traverse, and evidence the subject reports about
+# itself is weaker than evidence the gate captured before the change. A
+# direct-network run records what the guest really resolves through, including
+# the systemd-resolved upstreams that /etc/resolv.conf hides behind 127.0.0.53.
+# The capture runs in its own dedicated environment: the privacy claim under
+# test must be established on an environment this gate has not already put
+# through a different network posture.
+echo "gate3: capturing connected-subnet resolvers from a direct-network run"
+captured_resolvers="$workspace/gate3-resolvers.captured"
+rm -f "$captured_resolvers"
+capture_env="g3capture"
+if ! HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" env create "$capture_env" \
+  --profile "$profile_name" --backend lima --workspace "$workspace" >"$tmp/capture-env.out" 2>"$tmp/capture-env.err"; then
+  echo "gate3: could not create the capture environment" >&2
+  cat "$tmp/capture-env.out" "$tmp/capture-env.err" >&2
+  exit 1
+fi
+if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+  "$hideout" run --env "$capture_env" --profile "$profile_name" --backend lima --workspace "$workspace" --network direct -- sh -eu -c '
+{
+  grep -E "^[[:space:]]*nameserver" /etc/resolv.conf 2>/dev/null |
+    while read -r _kw ns _rest; do printf "%s\n" "$ns"; done
+  if command -v resolvectl >/dev/null 2>&1; then
+    resolvectl status 2>/dev/null |
+      sed -n -E "s/^[[:space:]]*DNS Servers:[[:space:]]*//p" | tr " " "\n"
+  fi
+} | sed -E "/^[[:space:]]*$/d" | sort -u > gate3-resolvers.captured
+printf "captured_resolvers=%s\n" "$(wc -l < gate3-resolvers.captured | tr -d " ")"
+' >"$tmp/capture.out" 2>"$tmp/capture.err"; then
+  echo "gate3: direct-network resolver capture failed" >&2
+  cat "$tmp/capture.out" "$tmp/capture.err" >&2
+  exit 1
+fi
+grep -q "^captured_resolvers=" "$tmp/capture.out"
+if ! grep -qvE "^(127\.|::1|[[:space:]]*$)" "$captured_resolvers" 2>/dev/null; then
+  echo "gate3: no connected-subnet resolver was captured; the reverse proof would be vacuous" >&2
+  cat "$captured_resolvers" >&2 2>/dev/null || true
+  exit 1
+fi
+
 echo "gate3: running hidden proxy env and route smoke"
 stdout="$tmp/run.out"
 stderr="$tmp/run.err"
@@ -376,13 +418,13 @@ printf "dns_mediated=yes\n"
 # must fail. This proves the leak is blocked and the check is not theater. Not
 # being able to run the check (no captured resolvers, no query tool) fails
 # closed rather than silently passing.
-[ -r /hideout/session/network/resolvers.before ] || { echo "reverse proof: resolvers.before is missing" >&2; exit 46; }
+[ -r ./gate3-resolvers.captured ] || { echo "reverse proof: gate-captured resolver list is missing" >&2; exit 46; }
 query_resolver() {
   if [ -x ./hideout-gate-dns-query ]; then ./hideout-gate-dns-query --query "$1" --timeout 3s >/dev/null 2>&1
   else return 2; fi
 }
 blocked_any=no
-for ns in $(cat /hideout/session/network/resolvers.before); do
+for ns in $(cat ./gate3-resolvers.captured); do
   case "$ns" in 127.*|::1|"") continue ;; esac
   rc=0
   query_resolver "$ns" || rc=$?
