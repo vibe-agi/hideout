@@ -11,7 +11,6 @@ cd "$ROOT"
 mode="local-fast"
 require_real=0
 out="${HIDEOUT_034_EVIDENCE_DIR:-$ROOT/.hideout-release-evidence/034-concurrent-sessions}"
-baseline_commit="2f0cddebc5b0215989b04e1f94955e84f1926929"
 samples=30
 warmups=3
 
@@ -22,7 +21,6 @@ Usage: scripts/test-concurrent-sessions-e2e.sh [options]
   --local-fast                 run mechanics-only evidence (default)
   --real-gate2                 run real macOS arm64 Lima isolation/performance
   --require-real               fail instead of emitting supporting not-run evidence
-  --baseline-commit <commit>   exact pre-034 comparison commit
   --samples <n>                measured samples (real gate requires at least 30)
   --warmups <n>                excluded warm-up samples
   --out <dir>                  evidence output directory
@@ -34,7 +32,6 @@ while [ "$#" -gt 0 ]; do
     --local-fast) mode="local-fast"; shift ;;
     --real-gate2) mode="real-gate2"; shift ;;
     --require-real) require_real=1; shift ;;
-    --baseline-commit) baseline_commit="${2:-}"; shift 2 ;;
     --samples) samples="${2:-}"; shift 2 ;;
     --warmups) warmups="${2:-}"; shift 2 ;;
     --out) out="${2:-}"; shift 2 ;;
@@ -49,12 +46,6 @@ if [ "$mode" = "real-gate2" ] && [ "$samples" -lt 30 ]; then
   echo "concurrent-sessions e2e: real evidence requires at least 30 samples" >&2
   exit 2
 fi
-if ! printf '%s' "$baseline_commit" | grep -Eq '^[0-9a-f]{40}$' ||
-  ! git cat-file -e "$baseline_commit^{commit}" 2>/dev/null; then
-  echo "concurrent-sessions e2e: baseline commit must be an available full commit" >&2
-  exit 2
-fi
-
 mkdir -p "$out/logs" "$out/reports"
 out="$(cd "$out" && pwd -P)"
 manifest="$out/product-hardening-evidence.json"
@@ -167,7 +158,7 @@ else
         concurrent-sessions-not-run 'real Gate 2 was not run' "$notrun_artifact" "$reason") \
       >"$proofs"
   else
-    gate2_concurrent_sessions_run "$ROOT" "$out" "$baseline_commit" "$samples" "$warmups"
+    gate2_concurrent_sessions_run "$ROOT" "$out" "$samples" "$warmups"
     performance="$out/logs/performance.json"
     environment_id="$(jq -r '.candidate.environmentId' "$performance")"
     runtime="$(jq -c --arg environmentId "$environment_id" '
@@ -177,7 +168,7 @@ else
        guestArch:"aarch64",buildCommit:.runtime.buildCommit,buildDirty:.runtime.buildDirty}
     ' "$performance")"
     isolation_artifact="$(artifact_json result.json '034 real ordinary-target isolation gate result')"
-    performance_artifact="$(artifact_json logs/performance.json '034 30-sample baseline performance comparison')"
+    performance_artifact="$(artifact_json logs/performance.json '034 30-sample warm first-target-byte performance')"
     jq -s '.' \
       <(proof_json '034.concurrent-sessions.real-gate2.isolation' passed real-gate \
         concurrent-sessions-real-gate2 \
@@ -185,8 +176,8 @@ else
         "$isolation_artifact" 'real macOS arm64 Lima evidence' "$runtime") \
       <(proof_json '034.concurrent-sessions.real-gate2.performance' passed real-gate \
         concurrent-sessions-performance-real-gate2 \
-        'validated warm attach and static-workspace performance against pre-034 baseline' \
-        "$performance_artifact" 'same host, workspace fixture, and runtime digest' "$runtime") \
+        'validated warm host invocation to first target byte against the 034 absolute threshold' \
+        "$performance_artifact" 'same host, representative workspace fixture, and runtime digest' "$runtime") \
       >"$proofs"
   fi
 fi

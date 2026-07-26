@@ -50,7 +50,7 @@ const (
 
 	ArtifactValidatorNone                         = ""
 	ArtifactValidatorConcurrentIsolationV1        = "concurrent-sessions-isolation/v1"
-	ArtifactValidatorConcurrentPerformanceV1      = "concurrent-sessions-performance/v1"
+	ArtifactValidatorConcurrentPerformanceV2      = "concurrent-sessions-performance/v2"
 	ArtifactValidatorLifecycleLocalV1             = "resource-lifecycle-local/v1"
 	ArtifactValidatorLifecycleModelV1             = "resource-lifecycle-model/v1"
 	ArtifactValidatorLifecycleRealV1              = "resource-lifecycle-real/v1"
@@ -97,7 +97,7 @@ var validRuntimePolicies = []string{RuntimePolicyNone, RuntimePolicyExactReal}
 var validArtifactValidators = []string{
 	ArtifactValidatorNone,
 	ArtifactValidatorConcurrentIsolationV1,
-	ArtifactValidatorConcurrentPerformanceV1,
+	ArtifactValidatorConcurrentPerformanceV2,
 	ArtifactValidatorLifecycleLocalV1,
 	ArtifactValidatorLifecycleModelV1,
 	ArtifactValidatorLifecycleRealV1,
@@ -208,7 +208,7 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"034.FR-001", "034.FR-002", "034.FR-003", "034.FR-004", "034.FR-005", "034.FR-006", "034.FR-007", "034.FR-010", "034.FR-011", "034.FR-012", "034.FR-014", "034.FR-015", "034.FR-016", "034.FR-019", "034.FR-020", "034.FR-021", "034.FR-022", "034.FR-023", "034.FR-025", "034.SC-015"),
 		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealIsolation, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-real-gate2", ArtifactValidatorConcurrentIsolationV1,
 			"034.FR-007", "034.FR-008", "034.FR-010", "034.FR-011", "034.FR-012", "034.FR-013", "034.FR-014", "034.FR-015", "034.FR-016", "034.FR-017", "034.FR-018", "034.FR-019", "034.FR-020", "034.FR-021", "034.FR-022", "034.SC-001", "034.SC-002", "034.SC-003", "034.SC-005", "034.SC-006", "034.SC-007", "034.SC-008", "034.SC-009", "034.SC-010", "034.SC-011", "034.SC-012", "034.SC-013"),
-		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-performance-real-gate2", ArtifactValidatorConcurrentPerformanceV1, "034.FR-009", "034.SC-004"),
+		runtimeEvidenceClassValidatorReq(Feature034, Proof034RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "concurrent-sessions-performance-real-gate2", ArtifactValidatorConcurrentPerformanceV2, "034.FR-009", "034.SC-004"),
 		req(Feature034, Proof034RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "034.SC-001", "034.SC-012"),
 		req(Feature034, Proof034DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "034.FR-017", "034.FR-024", "034.SC-014"),
 

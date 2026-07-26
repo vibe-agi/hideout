@@ -64,10 +64,10 @@ func TestConcurrentPerformanceSemanticValidatorRecomputesStatisticsAndIdentity(t
 		t.Fatalf("tampered statistics accepted: %v", err)
 	}
 	valid = concurrentPerformanceFixture(expected)
-	valid.Baseline.Commit = valid.Candidate.Commit
+	valid.Methodology.CandidateSampling = "inner-workload-only"
 	data, _ = json.Marshal(valid)
-	if err := validateConcurrentPerformanceArtifact(data, runtimePackageCommitFixture, &expected); err == nil || !strings.Contains(err.Error(), "different") {
-		t.Fatalf("self-comparison baseline accepted: %v", err)
+	if err := validateConcurrentPerformanceArtifact(data, runtimePackageCommitFixture, &expected); err == nil || !strings.Contains(err.Error(), "sampling boundary") {
+		t.Fatalf("misrepresented sampling boundary accepted: %v", err)
 	}
 }
 
@@ -121,15 +121,12 @@ func concurrentIsolationFixture() concurrentIsolationEvidence {
 
 func concurrentPerformanceFixture(expected RuntimeExpectation) concurrentPerformanceEvidence {
 	var evidence concurrentPerformanceEvidence
-	evidence.Schema = "hideout.concurrent-sessions-performance/v1"
+	evidence.Schema = "hideout.concurrent-sessions-performance/v2"
 	evidence.Status = "passed"
 	evidence.GeneratedAt = "2026-07-16T12:00:00Z"
 	evidence.Candidate.Commit = runtimePackageCommitFixture
 	evidence.Candidate.EnvironmentID = "env_candidate"
 	evidence.Candidate.Instance = "candidate"
-	evidence.Baseline.Commit = strings.Repeat("b", 40)
-	evidence.Baseline.EnvironmentID = "env_baseline"
-	evidence.Baseline.Instance = "baseline"
 	evidence.Host.OS = "darwin"
 	evidence.Host.Arch = "arm64"
 	evidence.Runtime.Family = expected.Family
@@ -139,19 +136,13 @@ func concurrentPerformanceFixture(expected RuntimeExpectation) concurrentPerform
 	evidence.Methodology.Samples = 30
 	evidence.Methodology.Warmups = 3
 	evidence.Methodology.ReadyThresholdMS = 2000
-	evidence.Methodology.FixtureRatioThreshold = 1.25
 	evidence.Methodology.FixtureSHA256 = strings.Repeat("c", 64)
+	evidence.Methodology.CandidateSampling = "per-run-host-invocation-to-first-target-byte"
+	evidence.Methodology.MeasurementClock = "host-monotonic-observed-first-byte"
 	for range 30 {
 		evidence.WarmAttach.SamplesMS = append(evidence.WarmAttach.SamplesMS, 100)
-		evidence.WorkspaceFixture.CandidateSamplesMS = append(evidence.WorkspaceFixture.CandidateSamplesMS, 10)
-		evidence.WorkspaceFixture.BaselineSamplesMS = append(evidence.WorkspaceFixture.BaselineSamplesMS, 8)
 	}
 	evidence.WarmAttach.MedianMS = 100
 	evidence.WarmAttach.P95MS = 100
-	evidence.WorkspaceFixture.CandidateMedianMS = 10
-	evidence.WorkspaceFixture.CandidateP95MS = 10
-	evidence.WorkspaceFixture.BaselineMedianMS = 8
-	evidence.WorkspaceFixture.BaselineP95MS = 8
-	evidence.WorkspaceFixture.P95Ratio = 1.25
 	return evidence
 }

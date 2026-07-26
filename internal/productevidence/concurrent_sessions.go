@@ -81,12 +81,6 @@ type concurrentPerformanceEvidence struct {
 		EnvironmentID string `json:"environmentId"`
 		Instance      string `json:"instance"`
 	} `json:"candidate"`
-	Baseline struct {
-		Commit        string `json:"commit"`
-		Dirty         bool   `json:"dirty"`
-		EnvironmentID string `json:"environmentId"`
-		Instance      string `json:"instance"`
-	} `json:"baseline"`
 	Host struct {
 		OS   string `json:"os"`
 		Arch string `json:"arch"`
@@ -99,26 +93,18 @@ type concurrentPerformanceEvidence struct {
 		BuildDirty     bool   `json:"buildDirty"`
 	} `json:"runtime"`
 	Methodology struct {
-		Samples               int     `json:"samples"`
-		Warmups               int     `json:"warmups"`
-		ReadyThresholdMS      float64 `json:"readyThresholdMs"`
-		FixtureRatioThreshold float64 `json:"fixtureRatioThreshold"`
-		FixtureSHA256         string  `json:"fixtureSHA256"`
+		Samples           int     `json:"samples"`
+		Warmups           int     `json:"warmups"`
+		ReadyThresholdMS  float64 `json:"readyThresholdMs"`
+		FixtureSHA256     string  `json:"fixtureSHA256"`
+		CandidateSampling string  `json:"candidateSampling"`
+		MeasurementClock  string  `json:"measurementClock"`
 	} `json:"methodology"`
 	WarmAttach struct {
 		SamplesMS []float64 `json:"samplesMs"`
 		MedianMS  float64   `json:"medianMs"`
 		P95MS     float64   `json:"p95Ms"`
 	} `json:"warmAttach"`
-	WorkspaceFixture struct {
-		CandidateSamplesMS []float64 `json:"candidateSamplesMs"`
-		BaselineSamplesMS  []float64 `json:"baselineSamplesMs"`
-		CandidateMedianMS  float64   `json:"candidateMedianMs"`
-		CandidateP95MS     float64   `json:"candidateP95Ms"`
-		BaselineMedianMS   float64   `json:"baselineMedianMs"`
-		BaselineP95MS      float64   `json:"baselineP95Ms"`
-		P95Ratio           float64   `json:"p95Ratio"`
-	} `json:"workspaceFixture"`
 }
 
 func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts map[string][]byte, expectedCommit string, expectedPackage *PackageIdentity, expectedRuntime *RuntimeExpectation) error {
@@ -131,7 +117,7 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 			return err
 		}
 		return validateConcurrentIsolationArtifact(data, expectedCommit)
-	case ArtifactValidatorConcurrentPerformanceV1:
+	case ArtifactValidatorConcurrentPerformanceV2:
 		data, err := singleJSONArtifact(refs, artifacts)
 		if err != nil {
 			return err
@@ -237,17 +223,18 @@ func validateConcurrentPerformanceArtifact(data []byte, expectedCommit string, e
 	if err := decodeStrictEvidence(data, &evidence); err != nil {
 		return fmt.Errorf("concurrent performance evidence: %w", err)
 	}
-	if evidence.Schema != "hideout.concurrent-sessions-performance/v1" || evidence.Status != "passed" || evidence.Host.OS != "darwin" || evidence.Host.Arch != "arm64" {
+	if evidence.Schema != "hideout.concurrent-sessions-performance/v2" || evidence.Status != "passed" || evidence.Host.OS != "darwin" || evidence.Host.Arch != "arm64" {
 		return errors.New("concurrent performance evidence identity or platform is invalid")
 	}
 	if !IsCanonicalCommit(evidence.Candidate.Commit) || evidence.Candidate.Dirty || (expectedCommit != "" && evidence.Candidate.Commit != expectedCommit) {
 		return errors.New("concurrent performance candidate identity is invalid")
 	}
-	if !IsCanonicalCommit(evidence.Baseline.Commit) || evidence.Baseline.Dirty || evidence.Baseline.Commit == evidence.Candidate.Commit {
-		return errors.New("concurrent performance baseline must be a different clean canonical commit")
-	}
-	if evidence.Methodology.Samples < 30 || evidence.Methodology.Warmups < 1 || evidence.Methodology.ReadyThresholdMS != 2000 || evidence.Methodology.FixtureRatioThreshold != 1.25 || len(evidence.Methodology.FixtureSHA256) != 64 {
+	if evidence.Methodology.Samples < 30 || evidence.Methodology.Warmups < 1 || evidence.Methodology.ReadyThresholdMS != 2000 || len(evidence.Methodology.FixtureSHA256) != 64 {
 		return errors.New("concurrent performance methodology is invalid")
+	}
+	if evidence.Methodology.CandidateSampling != "per-run-host-invocation-to-first-target-byte" ||
+		evidence.Methodology.MeasurementClock != "host-monotonic-observed-first-byte" {
+		return errors.New("concurrent performance sampling boundary is invalid")
 	}
 	if !lowerHex(evidence.Methodology.FixtureSHA256) {
 		return errors.New("concurrent performance fixture digest is invalid")
@@ -255,36 +242,22 @@ func validateConcurrentPerformanceArtifact(data []byte, expectedCommit string, e
 	if expectedRuntime == nil || evidence.Runtime.Family != expectedRuntime.Family || evidence.Runtime.Revision != expectedRuntime.Revision || evidence.Runtime.ArtifactSHA256 != expectedRuntime.ArtifactSHA256 || evidence.Runtime.BuildCommit != expectedRuntime.BuildCommit || evidence.Runtime.BuildDirty {
 		return errors.New("concurrent performance runtime identity is invalid")
 	}
-	if len(evidence.WarmAttach.SamplesMS) != evidence.Methodology.Samples || len(evidence.WorkspaceFixture.CandidateSamplesMS) != evidence.Methodology.Samples || len(evidence.WorkspaceFixture.BaselineSamplesMS) != evidence.Methodology.Samples {
+	if len(evidence.WarmAttach.SamplesMS) != evidence.Methodology.Samples {
 		return errors.New("concurrent performance sample count does not match methodology")
 	}
 	readyMedian, readyP95, err := recomputeEvidenceStats(evidence.WarmAttach.SamplesMS)
 	if err != nil {
 		return err
 	}
-	candidateMedian, candidateP95, err := recomputeEvidenceStats(evidence.WorkspaceFixture.CandidateSamplesMS)
-	if err != nil {
-		return err
-	}
-	baselineMedian, baselineP95, err := recomputeEvidenceStats(evidence.WorkspaceFixture.BaselineSamplesMS)
-	if err != nil || baselineP95 <= 0 {
-		return errors.New("concurrent performance baseline samples are invalid")
-	}
-	ratio := candidateP95 / baselineP95
 	for name, pair := range map[string][2]float64{
-		"warm median":      {readyMedian, evidence.WarmAttach.MedianMS},
-		"warm p95":         {readyP95, evidence.WarmAttach.P95MS},
-		"candidate median": {candidateMedian, evidence.WorkspaceFixture.CandidateMedianMS},
-		"candidate p95":    {candidateP95, evidence.WorkspaceFixture.CandidateP95MS},
-		"baseline median":  {baselineMedian, evidence.WorkspaceFixture.BaselineMedianMS},
-		"baseline p95":     {baselineP95, evidence.WorkspaceFixture.BaselineP95MS},
-		"p95 ratio":        {ratio, evidence.WorkspaceFixture.P95Ratio},
+		"warm median": {readyMedian, evidence.WarmAttach.MedianMS},
+		"warm p95":    {readyP95, evidence.WarmAttach.P95MS},
 	} {
 		if !approximatelyEqual(pair[0], pair[1]) {
 			return fmt.Errorf("concurrent performance %s is not derived from samples", name)
 		}
 	}
-	if readyP95 > evidence.Methodology.ReadyThresholdMS || ratio > evidence.Methodology.FixtureRatioThreshold {
+	if readyP95 > evidence.Methodology.ReadyThresholdMS {
 		return errors.New("concurrent performance thresholds did not pass")
 	}
 	return nil

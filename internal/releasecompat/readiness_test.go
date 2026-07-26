@@ -1551,22 +1551,22 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 			"artifacts": map[string]any{"sessionPTYEvidenceSHA256": strings.Repeat("d", 64)},
 			"nonClaims": map[string]any{"guestRootContainment": "not-claimed"},
 		}
-	case productevidence.ArtifactValidatorConcurrentPerformanceV1:
+	case productevidence.ArtifactValidatorConcurrentPerformanceV2:
 		warm := make([]float64, 30)
-		candidate := make([]float64, 30)
-		baseline := make([]float64, 30)
 		for i := range warm {
-			warm[i], candidate[i], baseline[i] = 100, 10, 8
+			warm[i] = 100
 		}
 		value = map[string]any{
-			"schema": "hideout.concurrent-sessions-performance/v1", "status": "passed", "generatedAt": "2026-07-16T12:00:00Z",
-			"candidate":        map[string]any{"commit": commit, "dirty": false, "environmentId": binding.EnvironmentID, "instance": "candidate"},
-			"baseline":         map[string]any{"commit": strings.Repeat("b", 40), "dirty": false, "environmentId": "env_baseline", "instance": "baseline"},
-			"host":             map[string]any{"os": "darwin", "arch": "arm64"},
-			"runtime":          map[string]any{"family": binding.Family, "revision": binding.Revision, "artifactSHA256": binding.ArtifactSHA256, "buildCommit": binding.BuildCommit, "buildDirty": false},
-			"methodology":      map[string]any{"samples": 30, "warmups": 3, "readyThresholdMs": 2000, "fixtureRatioThreshold": 1.25, "fixtureSHA256": strings.Repeat("c", 64)},
-			"warmAttach":       map[string]any{"samplesMs": warm, "medianMs": 100, "p95Ms": 100},
-			"workspaceFixture": map[string]any{"candidateSamplesMs": candidate, "baselineSamplesMs": baseline, "candidateMedianMs": 10, "candidateP95Ms": 10, "baselineMedianMs": 8, "baselineP95Ms": 8, "p95Ratio": 1.25},
+			"schema": "hideout.concurrent-sessions-performance/v2", "status": "passed", "generatedAt": "2026-07-16T12:00:00Z",
+			"candidate": map[string]any{"commit": commit, "dirty": false, "environmentId": binding.EnvironmentID, "instance": "candidate"},
+			"host":      map[string]any{"os": "darwin", "arch": "arm64"},
+			"runtime":   map[string]any{"family": binding.Family, "revision": binding.Revision, "artifactSHA256": binding.ArtifactSHA256, "buildCommit": binding.BuildCommit, "buildDirty": false},
+			"methodology": map[string]any{
+				"samples": 30, "warmups": 3, "readyThresholdMs": 2000,
+				"fixtureSHA256": strings.Repeat("c", 64), "candidateSampling": "per-run-host-invocation-to-first-target-byte",
+				"measurementClock": "host-monotonic-observed-first-byte",
+			},
+			"warmAttach": map[string]any{"samplesMs": warm, "medianMs": 100, "p95Ms": 100},
 		}
 	case productevidence.ArtifactValidatorLifecycleLocalV1:
 		checks := map[string]bool{}

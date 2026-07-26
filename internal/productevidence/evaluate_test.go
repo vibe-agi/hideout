@@ -337,7 +337,7 @@ func TestEvaluate034RejectsFalseRealGateEvidence(t *testing.T) {
 			switch requirement.ArtifactValidator {
 			case ArtifactValidatorConcurrentIsolationV1:
 				data, marshalErr = json.Marshal(concurrentIsolationFixture())
-			case ArtifactValidatorConcurrentPerformanceV1:
+			case ArtifactValidatorConcurrentPerformanceV2:
 				data, marshalErr = json.Marshal(concurrentPerformanceFixture(expected))
 			default:
 				t.Fatalf("unexpected 034 validator %q", requirement.ArtifactValidator)

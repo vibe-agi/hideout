@@ -189,7 +189,6 @@ scripts/test-projection-readiness-lima-e2e.sh --require-real \
   --package "$package" --out "$out/projection-readiness-gate2"
 
 scripts/test-concurrent-sessions-e2e.sh --real-gate2 --require-real \
-  --baseline-commit 2f0cddebc5b0215989b04e1f94955e84f1926929 \
   --out "$out/concurrent-sessions-gate2"
 product_evidence+=("$out/concurrent-sessions-gate2/product-hardening-evidence.json")
 

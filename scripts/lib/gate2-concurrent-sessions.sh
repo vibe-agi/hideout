@@ -42,7 +42,7 @@ gate2_034_dirty() {
 }
 
 gate2_concurrent_sessions_run() {
-  local root="$1" out="$2" baseline_commit="$3" samples="$4" warmups="$5"
+  local root="$1" out="$2" samples="$3" warmups="$4"
   gate2_034_require go
   gate2_034_require jq
   gate2_034_require limactl
@@ -117,8 +117,6 @@ gate2_concurrent_sessions_run() {
 	GATE2_034_CLEANUP_SECOND_PID=""
 	GATE2_034_CLEANUP_THIRD_PID=""
   GATE2_034_CLEANUP_ROOT="$root"
-  GATE2_034_CLEANUP_BASELINE_WORKTREE=""
-  GATE2_034_CLEANUP_BASELINE_STORE=""
   gate2_034_cleanup() {
 		touch "$GATE2_034_CLEANUP_WORKSPACE/a.release" \
 			"$GATE2_034_CLEANUP_WORKSPACE/b.probe" \
@@ -142,10 +140,6 @@ gate2_concurrent_sessions_run() {
         [ -n "$cleanup_instance" ] || continue
         LIMA_HOME="$GATE2_034_CLEANUP_LIMA_HOME" limactl delete --force --tty=false "$cleanup_instance" >/dev/null 2>&1 || true
       done < <(LIMA_HOME="$GATE2_034_CLEANUP_LIMA_HOME" limactl list --quiet 2>/dev/null || true)
-      if [ -n "$GATE2_034_CLEANUP_BASELINE_WORKTREE" ]; then
-        git -C "$GATE2_034_CLEANUP_ROOT" worktree remove --force \
-          "$GATE2_034_CLEANUP_BASELINE_WORKTREE" >/dev/null 2>&1 || true
-      fi
       rm -rf "$GATE2_034_CLEANUP_TMP" "$GATE2_034_CLEANUP_STORE" \
         "$GATE2_034_CLEANUP_LIMA_HOME" "$GATE2_034_CLEANUP_HOSTFS_ROOT"
     fi
@@ -378,8 +372,8 @@ ROOTSH
   LIMA_HOME="$lima_home" limactl list --json | jq -s -e --arg name "$instance" \
     'any(.[]; .name == $name and .status == "Stopped")' >/dev/null
 
-	  gate2_034_run_performance "$root" "$out" "$tmp" "$lima_home" "$workspace" \
-	    "$hideout" "$store" "$profile" "$baseline_commit" "$samples" "$warmups" "$arch"
+	  gate2_034_run_performance "$root" "$out" "$lima_home" "$workspace" \
+	    "$hideout" "$store" "$profile" "$samples" "$warmups" "$arch"
 
 	local session_pty_evidence session_pty_sha256
 	session_pty_evidence="$out/logs/session-pty.json"

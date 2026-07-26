@@ -1554,7 +1554,6 @@ Run:
 scripts/test-concurrent-sessions-e2e.sh \
   --real-gate2 \
   --require-real \
-  --baseline-commit 2f0cddebc5b0215989b04e1f94955e84f1926929 \
   --samples 30 \
   --out .hideout-release-evidence/034-concurrent-sessions
 ```
@@ -1579,20 +1578,18 @@ The retained `result.json` is not accepted because it merely exists or says
 commit identity, all 26 named checks set to true, no extra or missing check,
 `guestRootContainment=not-claimed`, and the retained `session-pty.json` digest.
 
-The performance lane builds the exact pre-034 commit in a detached worktree and
-the candidate separately. Both use the same host, runtime artifact digest,
-static workspace fixture, sample count, and warm-up count. With one candidate
-owner live, at least 30 measured second-owner starts record host invocation to
-the target's first `READY` line. Both binaries separately run a timed Git status
-plus package-metadata scan inside the same fixture. Evidence records exact
-commits, dirty state, host, runtime binding, environment/instance identities,
-raw samples, median, and nearest-rank p95. Acceptance requires candidate ready
-p95 at most 2.0 seconds and candidate filesystem p95 at most 1.25 times the
-baseline p95. The semantic evaluator independently requires at least 30
-samples, a different clean canonical baseline commit, the exact runtime
-binding, the unchanged fixture digest, and recomputes every reported median,
-p95, and ratio from the retained arrays. A self-comparison or edited summary
-therefore cannot satisfy the performance proof.
+The performance lane keeps one candidate owner live and measures at least 30
+independent second-owner invocations against a representative attached
+workspace. A host monotonic clock starts before the CLI invocation and stops
+only after the target's first `READY` line is observable; acceptance requires
+nearest-rank p95 at most 2.0 seconds. Evidence records the exact clean commit,
+host, runtime binding, environment/instance identity, fixture digest, raw
+samples, median, p95, and the named measurement boundary. The semantic
+evaluator independently requires the exact v2 boundary and runtime identity,
+at least 30 samples, and recomputes the reported statistics from the retained
+array. Workspace filesystem Git/package performance is deliberately not
+re-judged here: feature 035 owns the mandatory same-VM alternating paired
+Portal/static-VirtioFS gate and its metric-specific thresholds.
 
 ### 034 Evidence Refusal
 

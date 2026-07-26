@@ -38,14 +38,13 @@ if [ -n "$evidence_dir" ]; then
     .nonClaims.guestRootContainment == "not-claimed"
   ' "$isolation" >/dev/null
   jq -e '
-    .schema == "hideout.concurrent-sessions-performance/v1" and .status == "passed" and
-    .candidate.commit != .baseline.commit and .candidate.dirty == false and .baseline.dirty == false and
+    .schema == "hideout.concurrent-sessions-performance/v2" and .status == "passed" and
+    .candidate.dirty == false and
     .methodology.samples >= 30 and .methodology.fixtureSHA256 != null and
+    .methodology.candidateSampling == "per-run-host-invocation-to-first-target-byte" and
+    .methodology.measurementClock == "host-monotonic-observed-first-byte" and
     (.warmAttach.samplesMs | length) == .methodology.samples and
-    (.workspaceFixture.candidateSamplesMs | length) == .methodology.samples and
-    (.workspaceFixture.baselineSamplesMs | length) == .methodology.samples and
-    .warmAttach.p95Ms <= .methodology.readyThresholdMs and
-    .workspaceFixture.p95Ratio <= .methodology.fixtureRatioThreshold
+    .warmAttach.p95Ms <= .methodology.readyThresholdMs
   ' "$performance" >/dev/null
 elif [ "$require_real" -eq 1 ]; then
   echo "concurrent quickstart: --require-real requires --evidence-dir" >&2
