@@ -42,6 +42,7 @@ LIMA_HOME="$(hideout_mktemp_lima_home)"
 export LIMA_HOME
 workspace="$workdir/workspace"
 mkdir -p "$HIDEOUT_STORE_ROOT" "$workspace"
+chmod 0700 "$HIDEOUT_STORE_ROOT"
 
 bin="$workdir/hideout"
 if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then

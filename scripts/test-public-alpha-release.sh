@@ -213,6 +213,7 @@ grep -F '.schema == "hideout.public-alpha-validation-context/v1" and' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'public_alpha_cleanup_root "$work" "$out/cleanup-report.json"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'umask 077' scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'export HIDEOUT_LIMA_SHORT_TMPDIR="$work"' \
@@ -223,6 +224,22 @@ grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'hideout_seed_verified_runtime_cache' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
+grep -F 'umask 077' scripts/test-runtime-lima.sh >/dev/null
+grep -F 'chmod 0700 "$HIDEOUT_STORE_ROOT"' scripts/test-env-image.sh >/dev/null
+grep -F 'chmod 0700 "$drift_store"' scripts/test-runtime-lima.sh >/dev/null
+if grep -F 'projection_runtime_args' scripts/lib/gate2-projection.sh >/dev/null; then
+  echo "public-alpha-release: Gate 2 projection retained a Bash 3.2-unsafe optional array" >&2
+  exit 1
+fi
+grep -F 'set -- --runtime "${HIDEOUT_PROJECTION_RUNTIME_FAMILY:-developer-standard}"' \
+  scripts/lib/gate2-projection.sh >/dev/null
+grep -F '"$@"' scripts/lib/gate2-projection.sh >/dev/null
+grep -F 'local proxy_args=(--listen 127.0.0.1:0 --url-host 127.0.0.1)' \
+  scripts/lib/gate2-projection.sh >/dev/null
+if grep -F -- '--url-host host.lima.internal' scripts/lib/gate2-projection.sh >/dev/null; then
+  echo "public-alpha-release: Gate 2 projection bypasses the host gateway proxy contract" >&2
+  exit 1
+fi
 grep -F 'chmod 0700 "$store" "$home" "$lima_home"' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
 grep -F 'clean_install_tmp_parent="${HIDEOUT_LIMA_SHORT_TMPDIR:-/tmp}"' \

@@ -4,6 +4,7 @@
 # retained artifact, then runs the complete Gate 2 without package/tool
 # provisioning. Hideout's required Go-owned Lima system bootstrap still runs.
 set -euo pipefail
+umask 077
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
@@ -121,6 +122,7 @@ drift_store="$tmp/drift-store"
 drift_lima_home="$(hideout_mktemp_lima_home)"
 drift_workspace="$tmp/drift-workspace"
 mkdir -p "$drift_store" "$drift_workspace"
+chmod 0700 "$drift_store"
 if ! HIDEOUT_STORE_ROOT="$drift_store" LIMA_HOME="$drift_lima_home" "$hideout" init \
   --profile runtime-drift --template dev --backend lima --network direct \
   --runtime "$family" --no-input >"$tmp/drift-init.out" 2>"$tmp/drift-init.err"; then

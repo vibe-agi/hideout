@@ -106,7 +106,10 @@ projection_prepare_privacy_network() {
   fi
 
   local proxy_bin="$bin/hideout-gate-socks5"
-  local proxy_args=(--listen 127.0.0.1:0 --url-host host.lima.internal)
+  # The secret is consumed by Hideout's host gateway, not by the guest.
+  # Advertise the host listener exactly as the gateway contract requires; the
+  # gateway publishes its own guest-reachable endpoint separately.
+  local proxy_args=(--listen 127.0.0.1:0 --url-host 127.0.0.1)
   go build -o "$proxy_bin" ./cmd/hideout-gate-socks5
   case "${HTTPS_PROXY:-${HTTP_PROXY:-}}" in
     http://*) proxy_args+=(--use-env-http-proxy) ;;
@@ -189,9 +192,12 @@ run_projection_gate2() {
   # when the gate's isolated LIMA_HOME itself has a long temporary prefix.
   local profile_name="g2p"
   local control_profile="g2pc"
-  local projection_runtime_args=()
+  # Bash 3.2 treats an empty local array expansion as unbound under `set -u`.
+  # Function positional parameters are zero-argument safe on every supported
+  # shell, so use them for this optional exact-runtime suffix.
+  set --
   if [ -n "${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" ]; then
-    projection_runtime_args=(--runtime "${HIDEOUT_PROJECTION_RUNTIME_FAMILY:-developer-standard}")
+    set -- --runtime "${HIDEOUT_PROJECTION_RUNTIME_FAMILY:-developer-standard}"
   fi
   projection_workspace="$(mktemp -d "$HOME/hideout-gate2-projection.XXXXXX")"
   projection_control_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-control.XXXXXX")"
@@ -218,7 +224,7 @@ run_projection_gate2() {
     "$hideout" init --no-input --profile "$profile_name" \
       --template privacy --backend lima --network tun2socks \
       --proxy-secret projection-proxy --mediated-resolver 1.1.1.1 \
-      "${projection_runtime_args[@]}" \
+      "$@" \
       >"$tmp/projection-init.out" 2>"$tmp/projection-init.err"; then
     echo "gate2: projection privacy profile init failed" >&2
     cat "$tmp/projection-init.out" "$tmp/projection-init.err" >&2

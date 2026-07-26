@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Candidate evidence, daemon tokens, backend control sockets, and temporary
+# stores must not inherit a release operator's permissive ambient umask. Child
+# real gates inherit this boundary as well.
+umask 077
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
