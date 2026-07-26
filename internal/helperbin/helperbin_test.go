@@ -69,6 +69,113 @@ func TestResolveLinuxWorkspacePortalRequiresExactManifestIdentity(t *testing.T) 
 	}
 }
 
+func TestResolveLinuxTun2SocksUsesVerifiedPackageHelper(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "bin", "hideout")
+	helper := filepath.Join(root, "bin", "tun2socks-linux-arm64")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("hideout"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("tun2socks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTun2SocksManifest(helper, "arm64", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
+		Executable: binary, GOARCH: "arm64",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedHelper, err := filepath.EvalSymlinks(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != resolvedHelper || got.Source != Tun2SocksSourcePackage ||
+		!got.Manifest.PackageOwned ||
+		got.Manifest.UpstreamModule != Tun2SocksUpstreamModule ||
+		got.Manifest.UpstreamVersion != Tun2SocksUpstreamVersion ||
+		got.Manifest.License != Tun2SocksLicense {
+		t.Fatalf("unexpected package helper resolution: %+v", got)
+	}
+}
+
+func TestResolveLinuxTun2SocksInvalidOverrideFailsWithoutFallback(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "bin", "hideout")
+	helper := filepath.Join(root, "bin", "tun2socks-linux-arm64")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("hideout"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("packaged"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTun2SocksManifest(helper, "arm64", true); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := filepath.Join(root, "invalid-override")
+	if err := os.Mkdir(invalid, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
+		Executable: binary, GOARCH: "arm64", Override: invalid,
+	}); err == nil || got.Path != "" {
+		t.Fatalf("invalid explicit override fell through: resolution=%+v err=%v", got, err)
+	}
+}
+
+func TestResolveLinuxTun2SocksIgnoresAmbientPathAndRejectsDigestDrift(t *testing.T) {
+	pathDir := t.TempDir()
+	ambient := filepath.Join(pathDir, "tun2socks-linux-arm64")
+	if err := os.WriteFile(ambient, []byte("ambient"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+	got, err := ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
+		Executable: filepath.Join(t.TempDir(), "bin", "hideout"),
+		GOARCH:     "arm64",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "" {
+		t.Fatalf("ambient PATH broadened helper resolution: %+v", got)
+	}
+
+	store := t.TempDir()
+	helper := DefaultLinuxTun2SocksPath(store, "arm64")
+	if err := os.MkdirAll(filepath.Dir(helper), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("store-helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTun2SocksManifest(helper, "arm64", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("changed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
+		Executable: filepath.Join(t.TempDir(), "bin", "hideout"),
+		StoreRoot:  store, GOARCH: "arm64",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "" {
+		t.Fatalf("digest-drifted store helper resolved: %+v", got)
+	}
+}
+
 func TestStoreHelperManifestCurrent(t *testing.T) {
 	root := t.TempDir()
 	path := DefaultLinuxShimPath(root, "unitarch")

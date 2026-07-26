@@ -56,6 +56,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `helper/linux-dns-stub` | supported | Gate 3 hidden proxy |
 | `helper/linux-session-supervisor` | supported | Gate 0 package smoke and 034 real Lima Gate 2 |
 | `helper/linux-workspace-portal` | supported | Gate 0 package smoke and 035 real Lima Gate 2 |
+| `helper/linux-tun2socks-v2.6.0` | supported | Package checksum/provenance and exact-package Gate 3 |
 
 ## Feature And Gate Support
 
@@ -68,6 +69,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `feature/adapter-pack-lifecycle` | supported | Gate 0 |
 | `feature/decision-center` | supported | Gate 0 |
 | `feature/doctor` | supported | Gate 0 |
+| `feature/support-report` | supported | Gate 0 bounded redaction and safe-write fixtures |
 | `feature/hostfs-discoverable-namespace` | gate-required | Gate 2 Lima |
 | `feature/host-capability-projection` | gate-required | Gate 2 Lima |
 | `feature/supported-cli-runtime` | gate-required | Gate 2 and Gate 3 |
@@ -77,7 +79,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `feature/zero-friction-setup` | gate-required | 038 packaged PTY plus real macOS arm64 Lima first-run and agent evidence |
 | `release/public-alpha-package` | gate-required | Gate 0, Gate 2, Gate 3, anonymous receipt |
 | `release/developer-id-notarization` | gate-required | Developer ID and accepted notarization |
-| `gate/release-candidate` | gate-required | Gate 2 and Gate 3 real evidence |
+| `gate/release-candidate` | gate-required | Clean pushed package, Gate 2, Gate 3, fully executed UI, signing, notarization, and aggregate readiness |
 
 ## Schema And ABI Support
 
@@ -113,13 +115,24 @@ Local-fast readiness is development evidence only:
 scripts/test-release-readiness.sh --local-fast --out /tmp/hideout-readiness.json
 ```
 
-Release-candidate readiness requires real Gate 2 and Gate 3 evidence:
+Release-candidate readiness requires the exact archive, independent signing and
+notarization observations, every registered product-evidence manifest, and real
+Gate 2 and Gate 3 evidence:
 
 ```bash
 HIDEOUT_GATE2_EVIDENCE=/path/to/gate2.json \
 HIDEOUT_GATE3_EVIDENCE=/path/to/gate3.json \
-  scripts/test-release-readiness.sh --release-candidate --out /tmp/hideout-rc.json
+  scripts/test-release-readiness.sh --release-candidate \
+    --package-artifact /path/to/hideout-vX.Y.Z-darwin-arm64.tar.gz \
+    --signing-observation /path/to/signing.json \
+    --notarization-observation /path/to/notarization.json \
+    --product-evidence /path/to/product-hardening.json \
+    --out /tmp/hideout-rc.json
 ```
 
-If the real gate evidence is missing, release-candidate mode fails closed and
-records the missing gates in a redacted `hideout.release-readiness/v1` artifact.
+Repeat `--product-evidence` for every retained manifest. The canonical
+`scripts/test-public-alpha-candidate.sh` orchestration supplies that complete
+set and additionally requires `scripts/test-ui-e2e.sh --all
+--require-executed`. A dirty checkout, package commit not equal to `HEAD`,
+commit not reachable from `origin/master`, changed archive bytes, missing
+observation, UI `not-run`, or failed/missing gate fails closed.

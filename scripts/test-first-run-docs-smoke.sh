@@ -22,7 +22,8 @@ grep -q -- '--network tun2socks' "$doc"
 grep -q -- '--mediated-resolver 1.1.1.1' "$doc"
 grep -q 'hideout connect through default-proxy using 1.1.1.1' "$doc"
 grep -q 'hideout show connection' "$doc"
-grep -q 'hideout doctor --profile default --backend lima --level deep' "$doc"
+grep -q '^hideout doctor$' "$doc"
+grep -q 'hideout doctor --verbose' "$doc"
 grep -q 'hideout run -- pwd' "$doc"
 grep -q 'hideout hostfs write status' "$doc"
 grep -q 'hideout decision list' "$doc"
@@ -93,7 +94,8 @@ for helper in \
   hideout-hostfsd-linux-arm64 \
   hideout-session-supervisor-linux-arm64 \
   hideout-workspace-portal-linux-arm64 \
-  hideout-shim-linux-arm64; do
+  hideout-shim-linux-arm64 \
+  tun2socks-linux-arm64; do
   grep -q "$helper" "$source_formula"
 done
 

@@ -156,11 +156,14 @@ func writeSetupSuccess(w io.Writer, _ manager.InitApplyResult) {
 func writeSetupNextSteps(w io.Writer) {
 	fmt.Fprintln(w, "Next:")
 	fmt.Fprintln(w, "  hideout doctor")
-	fmt.Fprintln(w, "  cd /path/to/project && hideout run -- git status --short")
+	fmt.Fprintln(w, "  cd /path/to/project")
+	fmt.Fprintln(w, "  hideout run -- git status --short")
+	fmt.Fprintln(w, "More:")
 	fmt.Fprintln(w, "  hideout run -- code .")
 	fmt.Fprintln(w, "  hideout run -- sh -lc 'npm install --global --prefix \"$HOME/.local\" @openai/codex@0.144.1'")
 	fmt.Fprintln(w, "  hideout run -- codex --version")
-	fmt.Fprintln(w, "  Privacy later: hideout connect through <proxy-secret> using <resolver>")
+	fmt.Fprintln(w, "Privacy later:")
+	fmt.Fprintln(w, "  hideout connect through <proxy-secret> using <resolver>")
 }
 
 func formatSetupBytes(value int64) string {

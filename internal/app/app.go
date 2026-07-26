@@ -71,6 +71,7 @@ type app struct {
 	ensureDaemon          func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error)
 	sessionClient         func(context.Context, daemon.SessionClientOptions) (daemon.SessionClientResult, error)
 	daemonExecutable      func() (string, error)
+	supportExecutable     func() string
 	initPrepare           func(context.Context, profile.Store, manager.InitServiceRequest) (manager.PreparedInit, error)
 	initApply             func(context.Context, profile.Store, manager.PreparedInit, *manager.InitConfirmation) (manager.InitApplyResult, error)
 	terminalInteractive   func() bool
@@ -86,7 +87,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	a := app{stdout: stdout, stderr: stderr, stdin: os.Stdin}
 	if err := a.run(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			a.usage()
+			a.allUsage()
 			return 0
 		}
 		if !silentTargetExit(err) {
@@ -99,8 +100,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 
 func (a app) run(args []string) error {
 	if len(args) == 0 {
-		a.usage()
-		return nil
+		return a.helpCommand(nil)
 	}
 	switch args[0] {
 	case daemon.InternalDaemonServeCommand:
@@ -108,10 +108,24 @@ func (a app) run(args []string) error {
 	case "init":
 		return a.initCommand(args[1:])
 	case "run":
+		if containsCommandHelpToken(args[1:]) {
+			a.runUsage("run")
+			return nil
+		}
 		return a.runCommand(args[1:], false)
-	case "setup", "show", "connect", "allow", "deny":
+	case "setup":
+		if containsHelpToken(args[1:]) {
+			a.setupUsage()
+			return nil
+		}
+		return a.operatorIntent(args)
+	case "show", "connect", "allow", "deny":
 		return a.operatorIntent(args)
 	case "explain":
+		if containsCommandHelpToken(args[1:]) {
+			a.runUsage("explain")
+			return nil
+		}
 		return a.runCommand(args[1:], true)
 	case "doctor":
 		return a.doctor(args[1:])
@@ -160,89 +174,14 @@ func (a app) run(args []string) error {
 	case "package":
 		return a.packageCommand(args[1:])
 	case "help", "-h", "--help":
-		a.usage()
-		return nil
+		return a.helpCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
 func (a app) usage() {
-	fmt.Fprintln(a.stdout, "Usage:")
-	fmt.Fprintln(a.stdout, "  hideout setup")
-	fmt.Fprintln(a.stdout, "  hideout init --template privacy --profile <name> --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input")
-	fmt.Fprintln(a.stdout, "  hideout doctor")
-	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
-	fmt.Fprintln(a.stdout, "  hideout show connection [for profile <name>]")
-	fmt.Fprintln(a.stdout, "  hideout connect directly [for profile <name>]")
-	fmt.Fprintln(a.stdout, "  hideout connect through <proxy-secret> [using <resolver>] [for profile <name>]")
-	fmt.Fprintln(a.stdout, "  hideout allow read|write|all <path> [--for-profile <name>]")
-	fmt.Fprintln(a.stdout, "  hideout deny read|write|all <path> [--for-profile <name>]")
-	fmt.Fprintln(a.stdout, "  hideout allow host-app <command> [--for-profile <name>]   (trust a host app to open this project natively)")
-	fmt.Fprintln(a.stdout, "  hideout deny host-app <command> [--for-profile <name>]")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "First run:")
-	fmt.Fprintln(a.stdout, "  hideout setup")
-	fmt.Fprintln(a.stdout, "  # automation/advanced: hideout init [flags] --no-input")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Run and explain:")
-	fmt.Fprintln(a.stdout, "  hideout run [flags] -- <command> [args...]")
-	fmt.Fprintln(a.stdout, "  hideout run --explain [flags] -- <command> [args...]")
-	fmt.Fprintln(a.stdout, "  hideout adapter-pack <install|list|inspect|test|enable|disable|upgrade|revoke>")
-	fmt.Fprintln(a.stdout, "  hideout app <init|add|list|inspect|validate|test|enable>")
-	fmt.Fprintln(a.stdout, "  hideout explain [flags] -- <command> [args...]")
-	fmt.Fprintln(a.stdout, "  hideout run --preview 127.0.0.1:<guest-port> -- <command>")
-	fmt.Fprintln(a.stdout, "  hideout run --fs read:/path --fs dir:/path -- <command>")
-	fmt.Fprintln(a.stdout, "  hideout run --no-fs read:/path --no-profile-fs -- <command>")
-	fmt.Fprintln(a.stdout, "  hideout run --verbose -- <command>  # print Hideout control-plane progress and summary")
-	fmt.Fprintln(a.stdout, "  hideout env list | hideout env inspect <name>")
-	fmt.Fprintln(a.stdout, "  hideout session list | hideout session inspect <session-id>")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Profile and HostFS:")
-	fmt.Fprintln(a.stdout, "  hideout profile init <name>")
-	fmt.Fprintln(a.stdout, "  hideout profile clone <source> <name>")
-	fmt.Fprintln(a.stdout, "  hideout profile rotate-identity <name>")
-	fmt.Fprintln(a.stdout, "  hideout profile reset <name>")
-	fmt.Fprintln(a.stdout, "  hideout profile path <name>")
-	fmt.Fprintln(a.stdout, "  hideout profile workspace-path-mode <name> [alias|preserve]")
-	fmt.Fprintln(a.stdout, "  hideout profile fs <name> list")
-	fmt.Fprintln(a.stdout, "  hideout profile fs <name> add --fs <kind:/path> [--reason <text>]")
-	fmt.Fprintln(a.stdout, "  hideout profile fs <name> deny --no-fs <kind:/path> [--reason <text>]")
-	fmt.Fprintln(a.stdout, "  hideout profile fs <name> remove <rule-id>")
-	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> list")
-	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> add-open <command>")
-	fmt.Fprintln(a.stdout, "  hideout profile command-proxy <name> remove <command>")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Inspect and manage:")
-	fmt.Fprintln(a.stdout, "  hideout env create|inspect|list|recreate|remove")
-	fmt.Fprintln(a.stdout, "  hideout runtime list|inspect|verify")
-	fmt.Fprintln(a.stdout, "  hideout stop [--dry-run] [--idle <duration>] [--verbose] [environment-id...]")
-	fmt.Fprintln(a.stdout, "  hideout clean [--dry-run] [--stopped] [--idle <duration>] [--verbose] [environment-id...]")
-	fmt.Fprintln(a.stdout, "  hideout cleanup [--session <id>] [--dry-run]")
-	fmt.Fprintln(a.stdout, "  hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]")
-	fmt.Fprintln(a.stdout, "  hideout audit export --source audit|bundle|boundary-summary|doctor-report --out <path> [--redact <selector>] [--acknowledge-full-fidelity]")
-	fmt.Fprintln(a.stdout, "  hideout hostfs write status|plan|claim|apply|discard")
-	fmt.Fprintln(a.stdout, "  hideout decision list|inspect|claim|approve|deny|reopen|watch")
-	fmt.Fprintln(a.stdout, "  hideout notice list|inspect|ack")
-	fmt.Fprintln(a.stdout, "  hideout support matrix [--json]")
-	fmt.Fprintln(a.stdout, "  hideout version")
-	fmt.Fprintln(a.stdout, "  hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]")
-	fmt.Fprintln(a.stdout, "  hideout tui [--profile <name>] [--interval 2s]  # interval is daemon-less fallback only")
-	fmt.Fprintln(a.stdout, "  hideout tui --once [--profile <name>]  # script/smoke mode")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Advanced and developer:")
-	fmt.Fprintln(a.stdout, "  hideout run --allow-unsafe-workspace -- <command>  # explicit high-risk workspace mount")
-	fmt.Fprintln(a.stdout, "  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only")
-	fmt.Fprintln(a.stdout, "  hideout package install|verify|uninstall")
-	fmt.Fprintln(a.stdout, "  hideout shim build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
-	fmt.Fprintln(a.stdout, "  hideout hostfsd build-linux [--out <path>] [--goarch <arch>] [--source <repo>]")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Lab probes:")
-	fmt.Fprintln(a.stdout, "  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>")
-	fmt.Fprintln(a.stdout, "  hideout lab portbridge guest-to-host --enable-lab --target 127.0.0.1:<port>")
-	fmt.Fprintln(a.stdout, "  hideout lab portbridge host-to-guest --enable-lab --guest-target 127.0.0.1:<port>")
-	fmt.Fprintln(a.stdout, "  hideout lab browser-control --enable-lab --profile <name>")
-	fmt.Fprintln(a.stdout, "  hideout lab preview-open --enable-lab --guest-url http://127.0.0.1:<port>")
+	a.primaryUsage()
 }
 
 func (a app) version(args []string) error {
@@ -286,9 +225,10 @@ func (a app) version(args []string) error {
 func (a app) supportUsage() {
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  hideout support matrix [--json]")
+	fmt.Fprintln(a.stdout, "  hideout support report --out <path> [--profile <name>] [--backend auto|lima] [--workspace <path>] [--overwrite]")
 	fmt.Fprintln(a.stdout, "  hideout support proof-registry --json")
 	fmt.Fprintln(a.stdout, "  hideout support recovery-codes --json")
-	fmt.Fprintln(a.stdout, "  hideout support readiness --mode local-fast|release-candidate [--out <path>] [--gate2-evidence <path>] [--gate3-evidence <path>] [--product-evidence <path>] [--runtime-family <id>] [--package-root <path>]")
+	fmt.Fprintln(a.stdout, "  hideout support readiness --mode local-fast|release-candidate [--out <path>] [--gate2-evidence <path>] [--gate3-evidence <path>] [--product-evidence <path>] [--runtime-family <id>] [--package-artifact <tar.gz>] [--signing-observation <json>] [--notarization-observation <json>]")
 	fmt.Fprintln(a.stdout, "  hideout support release validate --manifest <path> --asset-root <dir>")
 	fmt.Fprintln(a.stdout, "  hideout support release package-identity --archive <path> --out <path>")
 	fmt.Fprintln(a.stdout, "  hideout support release observe-package-verification --package-root <dir> --package-identity <path> --out <path>")
@@ -311,6 +251,8 @@ func (a app) supportCommand(args []string) error {
 	switch args[0] {
 	case "matrix":
 		return a.supportMatrix(args[1:])
+	case "report":
+		return a.supportReport(args[1:])
 	case "proof-registry":
 		return a.supportProofRegistry(args[1:])
 	case "recovery-codes":
@@ -1176,6 +1118,7 @@ func (a app) doctorUsage() {
 	fmt.Fprintln(a.stdout, "  --backend <name>          backend to diagnose (default: auto)")
 	fmt.Fprintln(a.stdout, "  --format <human|json>     output format (default: human)")
 	fmt.Fprintln(a.stdout, "  --level <light|deep>      diagnostic depth (default: light)")
+	fmt.Fprintln(a.stdout, "  --verbose                 render every human-readable finding")
 	fmt.Fprintln(a.stdout, "  --feature <name>          include a feature diagnostic; may be repeated")
 	fmt.Fprintln(a.stdout, "  --network <mode>          direct or tun2socks")
 	fmt.Fprintln(a.stdout, "  --proxy-secret <ref>      proxy secret ref for tun2socks")
@@ -1195,6 +1138,18 @@ func isHelpToken(value string) bool {
 
 func containsHelpToken(values []string) bool {
 	return slices.ContainsFunc(values, isHelpToken)
+}
+
+func containsCommandHelpToken(values []string) bool {
+	for _, value := range values {
+		if value == "--" {
+			return false
+		}
+		if isHelpToken(value) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a app) profileUsage() {
@@ -1284,7 +1239,13 @@ func (a app) packageUsage() {
 	fmt.Fprintln(a.stdout, "  hideout package verify <package-root-or-install-prefix>")
 	fmt.Fprintln(a.stdout, "  hideout package install <package-root> --prefix <dir> [--store <dir>] [--backend native|lima|auto] [--network direct|tun2socks] [--proxy-secret <ref>] [--mediated-resolver <ip>] [--skip-init]")
 	fmt.Fprintln(a.stdout, "  hideout package repair --prefix <dir> [--dry-run]")
-	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge]")
+	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run]")
+	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] --purge --dry-run")
+	fmt.Fprintln(a.stdout, "  hideout package uninstall --prefix <dir> [--store <dir>] --purge --confirm-purge <exact-store>")
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "Homebrew users: use brew upgrade/reinstall/uninstall; do not repair or remove Cellar files directly.")
+	fmt.Fprintln(a.stdout, "Standalone users: verify first; repair removes only proven obsolete package files.")
+	fmt.Fprintln(a.stdout, "Normal uninstall preserves durable state. Purge requires an exact store confirmation.")
 }
 
 func (a app) packageCommand(args []string) error {
@@ -1308,10 +1269,10 @@ func (a app) packageCommand(args []string) error {
 		fmt.Fprintf(a.stdout, "package: ok mode=%s root=%s files=%d\n", result.Mode, result.Root, result.Files)
 		for _, prereq := range result.Prerequisites {
 			code := ""
-			if prereq.Status != packagekit.PrerequisiteAvailable && !prereq.PackageOwned {
+			if prereq.Status != packagekit.PrerequisiteAvailable {
 				code = " code=" + recovery.CodePackagePrerequisiteMissing
 			}
-			fmt.Fprintf(a.stdout, "external-prerequisite name=%s status=%s packageOwned=%t%s hint=%s\n", prereq.Name, prereq.Status, prereq.PackageOwned, code, prereq.Hint)
+			fmt.Fprintf(a.stdout, "package-prerequisite name=%s status=%s packageOwned=%t source=%s%s hint=%s\n", prereq.Name, prereq.Status, prereq.PackageOwned, prereq.Source, code, prereq.Hint)
 		}
 		return nil
 	case "install":
@@ -1524,10 +1485,11 @@ func (a app) packageUninstall(args []string) error {
 		return nil
 	}
 	opts := struct {
-		prefix string
-		store  string
-		dryRun bool
-		purge  bool
+		prefix       string
+		store        string
+		dryRun       bool
+		purge        bool
+		confirmPurge string
 	}{}
 	fs := flag.NewFlagSet("package uninstall", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1535,17 +1497,19 @@ func (a app) packageUninstall(args []string) error {
 	fs.StringVar(&opts.store, "store", "", "durable store root")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print uninstall plan without removing files")
 	fs.BoolVar(&opts.purge, "purge", false, "remove durable store state")
+	fs.StringVar(&opts.confirmPurge, "confirm-purge", "", "exact durable store path confirming purge")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || opts.prefix == "" {
-		return errors.New("usage: hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge]")
+		return errors.New("usage: hideout package uninstall --prefix <dir> [--store <dir>] [--dry-run] [--purge] [--confirm-purge <exact-store>]")
 	}
 	result, err := packagekit.Uninstall(packagekit.UninstallOptions{
-		Prefix: opts.prefix,
-		Store:  opts.store,
-		DryRun: opts.dryRun,
-		Purge:  opts.purge,
+		Prefix:            opts.prefix,
+		Store:             opts.store,
+		DryRun:            opts.dryRun,
+		Purge:             opts.purge,
+		ConfirmPurgeStore: opts.confirmPurge,
 	})
 	if err != nil {
 		return err
@@ -1560,6 +1524,9 @@ func (a app) packageUninstall(args []string) error {
 	}
 	if result.Purge {
 		fmt.Fprintf(a.stdout, "purge store=%s\n", result.StoreRoot)
+		if result.DryRun {
+			fmt.Fprintf(a.stdout, "confirm with: hideout package uninstall --prefix %s --store %s --purge --confirm-purge %s\n", result.Prefix, result.StoreRoot, result.StoreRoot)
+		}
 	}
 	return nil
 }
@@ -2916,10 +2883,15 @@ func (a app) doctor(args []string) error {
 		builder.Add(name, name, status, message)
 	}
 	renderReport := func(evidencePath string) error {
+		report := builder.Report()
 		if opts.format == "json" {
-			return doctorpkg.WriteJSON(a.stdout, builder.Report())
+			return doctorpkg.WriteJSON(a.stdout, report)
 		}
-		doctorpkg.WriteHuman(a.stdout, builder.Report())
+		if opts.verbose || opts.level == doctorpkg.LevelDeep || len(opts.features) > 0 {
+			doctorpkg.WriteHuman(a.stdout, report)
+		} else {
+			doctorpkg.WriteReadiness(a.stdout, doctorpkg.ProjectReadiness(report))
+		}
 		if evidencePath != "" && humanOutput {
 			fmt.Fprintf(a.stdout, "doctor-evidence: ok %s\n", evidencePath)
 		}
@@ -3613,11 +3585,11 @@ func doctorPackagingDiagnosticForExecutable(executable string) packagingDoctorDi
 	}
 	var prerequisiteSummaries []string
 	for _, prereq := range packagekit.ExternalPrerequisites() {
-		prerequisiteSummaries = append(prerequisiteSummaries, fmt.Sprintf("external-prerequisite %s=%s packageOwned=%t", prereq.Name, prereq.Status, prereq.PackageOwned))
-		result.ObservedFacts = append(result.ObservedFacts, fmt.Sprintf("external-prerequisite name=%s status=%s packageOwned=%t", prereq.Name, prereq.Status, prereq.PackageOwned))
-		if prereq.Status != packagekit.PrerequisiteAvailable && !prereq.PackageOwned {
+		prerequisiteSummaries = append(prerequisiteSummaries, fmt.Sprintf("package-prerequisite %s=%s packageOwned=%t source=%s", prereq.Name, prereq.Status, prereq.PackageOwned, prereq.Source))
+		result.ObservedFacts = append(result.ObservedFacts, fmt.Sprintf("package-prerequisite name=%s status=%s packageOwned=%t source=%s", prereq.Name, prereq.Status, prereq.PackageOwned, prereq.Source))
+		if prereq.Status != packagekit.PrerequisiteAvailable {
 			result.Status = doctorpkg.StatusWarn
-			result.CandidateCauses = append(result.CandidateCauses, fmt.Sprintf("external prerequisite %s is %s", prereq.Name, prereq.Status))
+			result.CandidateCauses = append(result.CandidateCauses, fmt.Sprintf("package prerequisite %s is %s", prereq.Name, prereq.Status))
 			if result.RecoveryCode == "" {
 				result.RecoveryCode = recovery.CodePackagePrerequisiteMissing
 			}
@@ -3699,6 +3671,7 @@ type doctorOptions struct {
 	workspace        string
 	guestWorkspace   string
 	ephemeral        bool
+	verbose          bool
 	fix              bool
 	dryRun           bool
 	apply            bool
@@ -3723,6 +3696,7 @@ func parseDoctorOptions(args []string) (doctorOptions, error) {
 	fs.StringVar(&opts.guestWorkspace, "guest-workspace", "", "guest workspace")
 	registerToolSupplyFlags(fs, &opts.tools)
 	fs.BoolVar(&opts.ephemeral, "ephemeral", false, "diagnose session-local identity state")
+	fs.BoolVar(&opts.verbose, "verbose", false, "render every human-readable finding")
 	fs.BoolVar(&opts.fix, "fix", false, "apply safe initialization repairs")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "print fix plan without applying")
 	fs.BoolVar(&opts.apply, "apply", false, "apply safe initialization repairs")

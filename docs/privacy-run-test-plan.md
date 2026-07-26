@@ -64,17 +64,21 @@ HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> \
   scripts/test-phase1.sh --release-candidate
 
 # Same release-candidate proof through the dedicated dogfood entrypoint.
-HIDEOUT_LINUX_TUN2SOCKS_PATH=/path/to/tun2socks-linux-arm64 \
 HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> \
   scripts/test-release-dogfood.sh
 
 # Release-hardening readiness artifact. Local-fast is development evidence,
-# not release evidence; release-candidate mode requires real Gate 2/Gate 3
-# evidence paths.
+# not release evidence; candidate mode also requires every registered product
+# evidence manifest (repeat --product-evidence as needed).
 scripts/test-release-readiness.sh --local-fast --out /tmp/hideout-readiness.json
 HIDEOUT_GATE2_EVIDENCE=/path/to/gate2.json \
 HIDEOUT_GATE3_EVIDENCE=/path/to/gate3.json \
-  scripts/test-release-readiness.sh --release-candidate --out /tmp/hideout-rc.json
+  scripts/test-release-readiness.sh --release-candidate \
+    --package-artifact /path/to/hideout-vX.Y.Z-darwin-arm64.tar.gz \
+    --signing-observation /path/to/signing.json \
+    --notarization-observation /path/to/notarization.json \
+    --product-evidence /path/to/product-hardening.json \
+    --out /tmp/hideout-rc.json
 
 # Include command-level capability probe smoke after product gates.
 scripts/test-phase1.sh --quick --probes
@@ -699,12 +703,12 @@ network traffic but not readable by JavaScript or the target process env.
 Prerequisites:
 
 - Lima backend;
-- guest-side `tun2socks`; optional `HIDEOUT_LINUX_TUN2SOCKS_PATH` points to an
-  executable Linux `tun2socks`; if absent, the gate script uses
-  `tun2socks-linux-<goarch>`/`tun2socks-linux` from `PATH` or builds a temporary
-  Linux `tun2socks` from `github.com/xjasonlyu/tun2socks/v2@v2.6.0` in an
-  isolated temporary module for development only. Exact-package release
-  evidence requires an explicit executable `HIDEOUT_LINUX_TUN2SOCKS_PATH`;
+- the exact package-owned Linux `tun2socks` v2.6.0 helper for release evidence.
+  Gate 3 verifies its package inventory, target, pinned-module provenance,
+  upstream MIT license, and digest, ignores ambient `PATH`, and forbids
+  `HIDEOUT_LINUX_TUN2SOCKS_PATH` in release mode. Source-development Gate 3 may
+  use an explicit override or its isolated pinned temporary build, but that
+  evidence cannot satisfy a package candidate;
 - a test proxy endpoint; if `HIDEOUT_SECRET_DEFAULT_PROXY` is omitted, the gate
   script starts a temporary host-local SOCKS5 proxy at
   `socks5://127.0.0.1:<port>`; the host gateway consumes this URL and exposes
@@ -1286,9 +1290,10 @@ Required checks:
   incompatible migration fails before mutation, uninstall dry-run removes
   nothing, uninstall without purge preserves durable state, and `--purge` is
   required for durable state deletion;
-- package smoke proves `tun2socks` remains an external prerequisite in this
-  release line: diagnostics may report it as missing or undiscoverable, but
-  package verification does not claim checksum coverage for it;
+- package smoke proves the v2.6.0 Linux `tun2socks` helper, provenance manifest,
+  and upstream license are package-owned and checksum-covered; missing,
+  damaged, wrong-target, explicit release override, and ambient-`PATH`
+  substitutions fail closed;
 - the existing TUI (`hideout tui --once`) and WebUI (`hideout ui --print-url`)
   render smokes remain in the package smoke as later MVP-ordered checks after
   the unpack, checksum, and init plus doctor proof;
@@ -1397,6 +1402,10 @@ The following must never be copied into normal diagnostic exports:
 
 Phase 1 is releasable only when:
 
+- `scripts/test-ordinary-user-release.sh --release-candidate` binds the exact
+  package to clean-install, real Gate 2 first result, real Gate 3 privacy,
+  fully executed UI, signing, notarization, support/report, lifecycle, and docs
+  evidence;
 - `scripts/test-phase1.sh --release-candidate` passes on a macOS developer
   machine with Lima, a real supported browser launcher, and an operator-supplied
   proxy in `HIDEOUT_SECRET_DEFAULT_PROXY`;
@@ -1409,7 +1418,7 @@ Phase 1 is releasable only when:
 - Gate 2 passes on macOS with Lima;
 - Gate 3 passes with the auto-started test proxy in normal required automation;
 - Gate 3 passes in strict operator proxy mode during
-  `scripts/test-phase1.sh --release-candidate`;
+  `scripts/test-phase1.sh --release-candidate`, using the package-owned helper;
 - Gate 4 passes in dry-run automation, and passes once with a real supported
   isolated browser launcher for the external URL case;
 - all Capability Probe code remains unreachable from default `hideout run`;

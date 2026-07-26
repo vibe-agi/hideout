@@ -20,7 +20,10 @@
     "command": {
       "enum": [
         "hideout-shim",
-        "hideout-hostfsd"
+        "hideout-hostfsd",
+        "hideout-session-supervisor",
+        "hideout-workspace-portal",
+        "tun2socks"
       ]
     },
     "targetOS": {
@@ -45,6 +48,25 @@
     "builtAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "upstreamModule": {
+      "type": "string",
+      "minLength": 1
+    },
+    "upstreamVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1
+    },
+    "buildMode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "packageOwned": {
+      "type": "boolean"
     }
   },
   "additionalProperties": false

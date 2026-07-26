@@ -97,17 +97,72 @@ prepare_linux_shim() {
   "$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$ROOT" >/dev/null
 }
 
+validate_release_tun2socks() {
+  if [ -z "${HIDEOUT_RELEASE_BINARY:-}" ] || [ ! -x "$HIDEOUT_RELEASE_BINARY" ]; then
+    echo "gate3: package-helper verification requires executable HIDEOUT_RELEASE_BINARY" >&2
+    return 126
+  fi
+  if [ -n "${HIDEOUT_LINUX_TUN2SOCKS_PATH:-}" ]; then
+    echo "gate3: release evidence forbids HIDEOUT_LINUX_TUN2SOCKS_PATH; the exact package helper is required" >&2
+    return 126
+  fi
+
+  local release_arch release_bin_dir release_root release_helper release_manifest
+  local release_license expected_sha observed_sha
+  release_arch="$(go env GOARCH)"
+  release_bin_dir="$(CDPATH= cd -- "$(dirname "$HIDEOUT_RELEASE_BINARY")" && pwd -P)"
+  release_root="$(dirname "$release_bin_dir")"
+  release_helper="$release_bin_dir/tun2socks-linux-$release_arch"
+  release_manifest="$release_helper.manifest.json"
+  release_license="$release_root/third_party/tun2socks/LICENSE"
+  if [ ! -x "$release_helper" ] || [ -L "$release_helper" ] ||
+    [ ! -f "$release_manifest" ] || [ -L "$release_manifest" ] ||
+    [ ! -f "$release_license" ] || [ -L "$release_license" ]; then
+    echo "gate3: release package is missing its tun2socks helper, manifest, or license" >&2
+    return 126
+  fi
+  if ! jq -e --arg arch "$release_arch" --arg artifact "$(basename "$release_helper")" '
+      .version == "hideout.helper-manifest/v1" and
+      .command == "tun2socks" and
+      .targetOS == "linux" and
+      .targetArch == $arch and
+      .artifact == $artifact and
+      .upstreamModule == "github.com/xjasonlyu/tun2socks/v2" and
+      .upstreamVersion == "v2.6.0" and
+      .license == "MIT" and
+      .buildMode == "source-built-pinned-module" and
+      .packageOwned == true
+    ' "$release_manifest" >/dev/null; then
+    echo "gate3: release package tun2socks provenance is invalid" >&2
+    return 126
+  fi
+  expected_sha="$(jq -er '.sha256' "$release_manifest")"
+  observed_sha="$(gate_sha256_file "$release_helper")"
+  if [ "$expected_sha" != "$observed_sha" ]; then
+    echo "gate3: release package tun2socks digest mismatch" >&2
+    return 126
+  fi
+
+  echo "tun2socks_source=package-owned"
+  echo "tun2socks_upstream_module=github.com/xjasonlyu/tun2socks/v2"
+  echo "tun2socks_upstream_version=v2.6.0"
+  echo "tun2socks_artifact_sha256=$observed_sha"
+}
+
 prepare_linux_tun2socks() {
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    validate_release_tun2socks
+    HIDEOUT_LINUX_TUN2SOCKS_PATH=""
+    export HIDEOUT_LINUX_TUN2SOCKS_PATH
+    echo "gate3: using package-owned tun2socks helper"
+    return
+  fi
   if [ -n "${HIDEOUT_LINUX_TUN2SOCKS_PATH:-}" ]; then
     if [ ! -x "$HIDEOUT_LINUX_TUN2SOCKS_PATH" ]; then
       echo "gate3: HIDEOUT_LINUX_TUN2SOCKS_PATH is not executable: $HIDEOUT_LINUX_TUN2SOCKS_PATH" >&2
       exit 126
     fi
     return
-  fi
-  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
-    echo "gate3: release evidence requires operator-supplied HIDEOUT_LINUX_TUN2SOCKS_PATH" >&2
-    exit 126
   fi
 
   local arch
@@ -208,8 +263,15 @@ if [ "${1:-}" = "--preflight-only" ]; then
 fi
 
 require_command go
-require_command limactl
 require_command jq
+
+if [ "${1:-}" = "--verify-package-helper-only" ]; then
+  validate_release_tun2socks
+  echo "gate3: package-owned tun2socks verification passed"
+  exit 0
+fi
+
+require_command limactl
 
 validate_operator_proxy_url
 

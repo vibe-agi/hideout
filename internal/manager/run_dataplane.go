@@ -746,10 +746,15 @@ func materializeLimaShims(dir string, registry cmdproxy.Registry, netPlan netpol
 		}
 	}
 	if netPlan.Mode == netpolicy.ModeTun2Socks {
-		if source := ResolveLinuxTun2SocksPath(); source != "" {
-			if err := copyExecutable(source, filepath.Join(dir, "tun2socks")); err != nil {
-				return err
-			}
+		resolution, err := resolveLinuxTun2Socks()
+		if err != nil {
+			return err
+		}
+		if resolution.Path == "" {
+			return errors.New("tun2socks privacy mode requires a verified package helper or valid explicit development override")
+		}
+		if err := copyExecutable(resolution.Path, filepath.Join(dir, "tun2socks")); err != nil {
+			return err
 		}
 		// The DoH DNS stub mediates guest DNS over the privacy path when a
 		// mediated resolver is declared. Best-effort like tun2socks: the guest
@@ -847,7 +852,23 @@ func ResolveLinuxShimPath() string {
 }
 
 func ResolveLinuxTun2SocksPath() string {
-	return helperbin.ResolveLinuxTun2SocksPath(runtime.GOARCH)
+	resolution, err := resolveLinuxTun2Socks()
+	if err != nil {
+		return ""
+	}
+	return resolution.Path
+}
+
+func resolveLinuxTun2Socks() (helperbin.Tun2SocksResolution, error) {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return helperbin.Tun2SocksResolution{}, err
+	}
+	return helperbin.ResolveLinuxTun2Socks(helperbin.Tun2SocksResolveOptions{
+		StoreRoot: store.Root,
+		GOARCH:    runtime.GOARCH,
+		Override:  os.Getenv(helperbin.LinuxTun2SocksPathEnvironment),
+	})
 }
 
 func ResolveLinuxDNSStubPath() string {

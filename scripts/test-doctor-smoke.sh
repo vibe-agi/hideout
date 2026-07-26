@@ -78,7 +78,7 @@ jq -e '
   ([.codes[] | select(.code == "init.proxy-secret.missing")] | length) == 1
 ' "$tmp/recovery-codes.json" >/dev/null
 
-run_hideout doctor --backend native --workspace "$tmp/workspace" >"$tmp/doctor-human.out"
+run_hideout doctor --backend native --workspace "$tmp/workspace" --verbose >"$tmp/doctor-human.out"
 grep -q 'Hideout doctor' "$tmp/doctor-human.out"
 grep -q 'store: ok writable' "$tmp/doctor-human.out"
 grep -q 'backend: warn native is weak isolation' "$tmp/doctor-human.out"
@@ -108,7 +108,7 @@ jq -e '
 ' "$tmp/doctor-deep.json" >/dev/null
 run_hideout doctor --backend native --workspace "$tmp/workspace" --feature packaging --format json >"$tmp/doctor-packaging.json"
 jq -e '
-  ([.findings[] | select(.checkId == "feature-packaging" and .code == "package.prerequisite.missing" and (.details.observedFacts | tostring | contains("external-prerequisite")) and (.nextActions | tostring | contains("hideout package repair")))] | length) == 1
+  ([.findings[] | select(.checkId == "feature-packaging" and .code == "package.prerequisite.missing" and (.details.observedFacts | tostring | contains("package-prerequisite")) and (.details.observedFacts | tostring | contains("packageOwned=true")) and (.nextActions | tostring | contains("hideout package repair")))] | length) == 1
 ' "$tmp/doctor-packaging.json" >/dev/null
 run_hideout doctor --backend native --workspace "$tmp/workspace" --feature decisions --format json >"$tmp/doctor-decisions.json"
 jq -e '

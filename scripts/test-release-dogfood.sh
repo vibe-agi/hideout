@@ -11,7 +11,6 @@ Usage:
 
 Environment:
   HIDEOUT_SECRET_DEFAULT_PROXY   Required operator-controlled proxy URL.
-  HIDEOUT_LINUX_TUN2SOCKS_PATH   Required executable Linux tun2socks helper.
   HIDEOUT_RUNTIME_BUILD_PROVENANCE
                                  Required exact runtime build-provenance JSON.
   HIDEOUT_RELEASE_RUNTIME_FAMILY Optional runtime family (default developer-standard).
@@ -41,16 +40,11 @@ if [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
   cat >&2 <<'MSG'
 release-dogfood: HIDEOUT_SECRET_DEFAULT_PROXY is required.
 Set it to an operator-controlled proxy, for example:
-  HIDEOUT_LINUX_TUN2SOCKS_PATH=/path/to/tun2socks-linux-arm64 \
-    HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> scripts/test-release-dogfood.sh
+  HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> scripts/test-release-dogfood.sh
 MSG
   exit 2
 fi
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-0}" != "1" ]; then
-  if [ ! -x "${HIDEOUT_LINUX_TUN2SOCKS_PATH:-}" ]; then
-    echo "release-dogfood: executable HIDEOUT_LINUX_TUN2SOCKS_PATH is required" >&2
-    exit 2
-  fi
   if [ -z "${HIDEOUT_RUNTIME_BUILD_PROVENANCE:-}" ] || [ ! -f "$HIDEOUT_RUNTIME_BUILD_PROVENANCE" ]; then
     echo "release-dogfood: HIDEOUT_RUNTIME_BUILD_PROVENANCE must name the exact candidate build provenance" >&2
     exit 2
@@ -144,6 +138,8 @@ artifact_hideout_commit=""
 artifact_hideout_built_at=""
 artifact_hideout_go=""
 artifact_hideout_platform=""
+artifact_extract=""
+package_identity_path="$evidence_dir/package-identity.json"
 proxy_scheme_value="$(proxy_scheme)"
 go_version="$(first_line_or_missing go version)"
 limactl_version="$(first_line_or_missing limactl --version)"
@@ -272,6 +268,7 @@ build_release_artifact() {
   artifact_sha256="$(sha256_file "$artifact_path")"
   artifact_bytes="$(file_size_bytes "$artifact_path")"
   collect_artifact_hideout_version
+  prepare_release_artifact_inputs
 }
 
 collect_artifact_hideout_version() {
@@ -294,6 +291,33 @@ collect_artifact_hideout_version() {
     exit 1
   fi
 }
+
+prepare_release_artifact_inputs() {
+  local arch
+  artifact_extract="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-dogfood-package.XXXXXX")"
+  tar -xzf "$artifact_path" -C "$artifact_extract"
+  arch="$(go env GOARCH)"
+  export HIDEOUT_RELEASE_BINARY="$artifact_extract/hideout/bin/hideout"
+  export HIDEOUT_LINUX_SHIM_PATH="$artifact_extract/hideout/bin/hideout-shim-linux-$arch"
+  export HIDEOUT_LINUX_HOSTFSD_PATH="$artifact_extract/hideout/bin/hideout-hostfsd-linux-$arch"
+  export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$artifact_extract/hideout/bin/hideout-session-supervisor-linux-$arch"
+  export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$artifact_extract/hideout/bin/hideout-workspace-portal-linux-$arch"
+  export HIDEOUT_LINUX_DNS_STUB_PATH="$artifact_extract/hideout/bin/hideout-dns-stub-linux-$arch"
+  unset HIDEOUT_LINUX_TUN2SOCKS_PATH
+
+  "$HIDEOUT_RELEASE_BINARY" package verify "$artifact_extract/hideout" >/dev/null
+  "$HIDEOUT_RELEASE_BINARY" support release package-identity \
+    --archive "$artifact_path" --out "$package_identity_path" >/dev/null
+  export HIDEOUT_RUNTIME_PACKAGE_IDENTITY="$package_identity_path"
+}
+
+cleanup_release_artifact_inputs() {
+  if [ -n "$artifact_extract" ] && [ -d "$artifact_extract" ]; then
+    rm -rf "$artifact_extract"
+  fi
+}
+
+trap cleanup_release_artifact_inputs EXIT
 
 write_manifest() {
   local status="$1"

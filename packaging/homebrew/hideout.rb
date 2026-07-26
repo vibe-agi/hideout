@@ -17,7 +17,8 @@ class Hideout < Formula
              "bin/hideout-hostfsd-linux-arm64",
              "bin/hideout-session-supervisor-linux-arm64",
              "bin/hideout-workspace-portal-linux-arm64",
-             "bin/hideout-shim-linux-arm64"
+             "bin/hideout-shim-linux-arm64",
+             "bin/tun2socks-linux-arm64"
 
   def install
     package_root = buildpath
@@ -39,11 +40,17 @@ class Hideout < Formula
       default configuration with:
 
         hideout setup
+        hideout doctor
+        cd /path/to/project
+        hideout run -- git status --short
 
       Setup does not start a VM or download the runtime. First run downloads
       the retained developer runtime separately; expect
       approximately 1 GB. Hideout user state remains under ~/.hideout and is
-      preserved by brew upgrade and brew uninstall.
+      preserved by brew upgrade and brew uninstall. To inspect or remove that
+      durable state separately, run:
+
+        hideout help uninstall
     EOS
   end
 

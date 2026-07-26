@@ -325,6 +325,9 @@ func TestRepairAndUninstallRejectSymlinkedObsoleteAncestors(t *testing.T) {
 				if _, err := Uninstall(UninstallOptions{Prefix: prefix}); err == nil || !strings.Contains(err.Error(), "symbolic link") {
 					t.Fatalf("uninstall did not reject symlinked ancestor: %v", err)
 				}
+				if _, err := os.Stat(filepath.Join(prefix, "bin", "hideout")); err != nil {
+					t.Fatalf("rejected uninstall partially removed active package files: %v", err)
+				}
 			}
 			if got, err := os.ReadFile(victim); err != nil || string(got) != "outside\n" {
 				t.Fatalf("outside file changed: data=%q err=%v", got, err)
@@ -361,17 +364,17 @@ func TestUpgradeRejectsPreviousPackageSchemaBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestExternalPrerequisiteStatusDoesNotClaimPackageOwnership(t *testing.T) {
+func TestPrivacyHelperPrerequisiteIsPackageOwnedAndFailClosed(t *testing.T) {
 	var found bool
 	for _, prereq := range ExternalPrerequisites() {
 		if prereq.Name != "tun2socks" {
 			continue
 		}
 		found = true
-		if prereq.PackageOwned {
-			t.Fatalf("tun2socks must be external, got %+v", prereq)
+		if !prereq.PackageOwned {
+			t.Fatalf("tun2socks must be package-owned, got %+v", prereq)
 		}
-		if prereq.Status == "" || strings.Contains(prereq.Hint, "checksum") {
+		if prereq.Status == "" || !strings.Contains(prereq.Hint, "package") {
 			t.Fatalf("unexpected prerequisite status: %+v", prereq)
 		}
 	}
@@ -468,7 +471,13 @@ func TestUninstallDryRunPreserveAndPurge(t *testing.T) {
 	if _, err := Install(InstallOptions{PackageRoot: root, Prefix: prefix, StoreRoot: store}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Uninstall(UninstallOptions{Prefix: prefix, Purge: true}); err != nil {
+	if _, err := Uninstall(UninstallOptions{Prefix: prefix, Purge: true}); err == nil || !strings.Contains(err.Error(), "confirm-purge") {
+		t.Fatalf("purge without exact store confirmation was accepted: %v", err)
+	}
+	if _, err := os.Stat(store); err != nil {
+		t.Fatalf("unconfirmed purge changed store: %v", err)
+	}
+	if _, err := Uninstall(UninstallOptions{Prefix: prefix, Purge: true, ConfirmPurgeStore: store}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(store); !os.IsNotExist(err) {
@@ -498,12 +507,14 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH:         {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", executable: true, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", executable: false, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", executable: false, data: "readme zh\n"},
 		"LICENSE":                              {kind: "doc", executable: false, data: "license\n"},
 		"THIRD_PARTY_NOTICES.md":               {kind: "doc", executable: false, data: "notices\n"},
 		"SECURITY.md":                          {kind: "doc", executable: false, data: "security\n"},
+		"third_party/tun2socks/LICENSE":        {kind: "doc", executable: false, data: "MIT license\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", executable: false, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", executable: false, data: "{}\n"},
 		"docs/README.md":                       {kind: "doc", executable: false, data: "docs\n"},
@@ -528,6 +539,23 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 			data       string
 		}{kind: "helper-manifest", data: string(helperManifest) + "\n"}
 	}
+	tunBinaryRel := "bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH
+	tunSum := sha256.Sum256([]byte(files[tunBinaryRel].data))
+	tunManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxTun2SocksCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH, Artifact: filepath.Base(tunBinaryRel),
+		SHA256: hex.EncodeToString(tunSum[:]), Builder: "unit-test", BuiltAt: "2026-07-09T00:00:00Z",
+		UpstreamModule: helperbin.Tun2SocksUpstreamModule, UpstreamVersion: helperbin.Tun2SocksUpstreamVersion,
+		License: helperbin.Tun2SocksLicense, BuildMode: helperbin.Tun2SocksBuildMode, PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[tunBinaryRel+".manifest.json"] = struct {
+		kind       string
+		executable bool
+		data       string
+	}{kind: "helper-manifest", data: string(tunManifest) + "\n"}
 	for rel, data := range overrides {
 		spec := files[rel]
 		spec.data = data
@@ -558,9 +586,10 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 				"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
 				"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH,
 				"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
+				"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH,
 			},
 			Entrypoints: []string{"install.sh", "README.md", "README.zh-CN.md"},
-			Directories: []string{"schemas", "docs", "packaging", "runtime"},
+			Directories: []string{"schemas", "docs", "packaging", "runtime", "third_party"},
 		},
 		Migration: Migration{
 			InstallStateSchema:   InstallStateSchema,

@@ -19,14 +19,15 @@ It does not create new security claims; current claims and non-claims remain in
 ## Install And Verify
 
 Install the signed package and Lima dependency from the official Homebrew tap,
-then review and create the supported default configuration:
+then review the supported default configuration, check readiness, and run one
+useful project command:
 
 ```bash
 brew install vibe-agi/tap/hideout
-hideout version
-hideout package verify "$(brew --prefix hideout)"
 hideout setup
 hideout doctor
+cd /path/to/project
+hideout run -- git status --short
 ```
 
 The formula validates the archive SHA-256, macOS signature, and package
@@ -39,12 +40,37 @@ the runtime. Automation and advanced profiles continue to use explicit
 inspectable standalone installer, manual download, custom prefixes, repair,
 and uninstall.
 
+The first run may download the separately retained runtime. Hideout names its
+exact revision and declared size before a potentially long start and prints a
+bounded heartbeat while waiting; it never invents byte or percentage progress.
+To inspect package and binary identity explicitly:
+
+```bash
+hideout version
+hideout package verify "$(brew --prefix hideout)"
+```
+
 For non-interactive automation, spell out the same fixed choices:
 
 ```bash
 hideout init --template dev --profile default --backend lima \
   --network direct --runtime developer-standard --no-input
 ```
+
+The default help stays on this first-result path:
+
+```bash
+hideout help
+hideout help setup
+hideout help doctor
+hideout help privacy
+```
+
+Use `hideout help --all` only when you need the complete advanced and
+developer command index. Asking for help is read-only: it does not create a
+profile, start a VM, or download a runtime. The short help repeats the supported
+macOS arm64 prerelease boundary and warns that direct networking does not hide
+your network origin.
 
 Homebrew users should repair a damaged keg through Homebrew:
 
@@ -60,17 +86,36 @@ hideout package repair --prefix "$HOME/.local" --dry-run
 hideout package repair --prefix "$HOME/.local"
 ```
 
-If `tun2socks` is missing, install it as an external prerequisite. The alpha
-package verifies Hideout-owned helpers, but does not checksum an external
-`tun2socks` binary.
+The package owns and checksums its Linux `tun2socks` privacy helper. If package
+verification reports that helper missing or damaged, reinstall the Homebrew
+package or run the standalone package repair flow; do not satisfy the check
+with an unrelated `tun2socks` found on `PATH`.
 
 ## Direct First Success
 
-Start with a dedicated Lima profile that has the fewest external prerequisites:
+Start with the default Lima profile, which has the fewest external
+prerequisites:
 
 ```bash
-hideout doctor --profile default --backend lima --level deep
+hideout doctor
 ```
+
+The default view answers whether Hideout is ready and shows only actionable
+findings. Use `hideout doctor --verbose` for every observed check or
+`hideout doctor --format json` for automation and evidence.
+
+To prepare one shareable diagnostic artifact without composing audit exports:
+
+```bash
+hideout support report --out ./hideout-support.json
+```
+
+This is a local-only collection; it does not upload anything. It records
+bounded product/support/package/readiness/recovery facts, excludes raw audit
+events and workspace contents, validates that protected secrets, proxy values,
+tokens, machine IDs, and raw host-user paths are absent, then writes at most
+1 MiB with mode `0600`. It refuses an existing file unless you explicitly add
+`--overwrite`. Always inspect the JSON before sharing it in an issue.
 
 Move into a dedicated workspace and run one command as the synthetic non-root
 target:
@@ -152,10 +197,10 @@ hideout init \
 hideout doctor --profile privacy --backend lima --level deep
 ```
 
-This path expects `tun2socks`, a proxy secret, and a mediated resolver. If those
-are unavailable, `doctor` should report observed facts and next actions. Real
-network privacy proof still requires Gate 3 evidence; local doctor output is not
-a replacement for that gate.
+The installed package supplies `tun2socks`; the user still supplies a proxy
+secret reference and a mediated resolver. If those are unavailable, `doctor`
+reports observed facts and next actions. Real network privacy proof still
+requires Gate 3 evidence; local doctor output is not a replacement for that gate.
 
 Hideout never changes a requested privacy profile to direct networking when a
 proxy, mediated resolver, or other privacy prerequisite is missing.
@@ -367,8 +412,9 @@ Common failure hints:
 
 - missing helper: run `hideout package verify "$HOME/.local"` and inspect the
   named helper.
-- missing `tun2socks` (`package.prerequisite.missing`): install or expose the
-  external prerequisite, then rerun `doctor --feature packaging`.
+- missing or damaged `tun2socks` (`package.prerequisite.missing`): reinstall
+  the Homebrew package, or run `hideout package repair --prefix <dir>` for a
+  standalone installation, then rerun `doctor --feature packaging`.
 - native backend warning: switch to Lima for isolation evidence.
 - hardened native refusal: use a non-native backend with enforced-capable
   privilege separation, or create an explicit degraded fallback profile.

@@ -20,10 +20,22 @@ license text and copyright notices.
 The complete, machine-resolved dependency graph is recorded by `go.mod` and
 `go.sum`. Indirect dependencies retain their respective upstream licenses.
 
+The package also contains a separately built Linux guest-network helper with
+its own isolated dependency graph:
+
+| Component | Version | License | Build graph |
+| --- | --- | --- | --- |
+| `github.com/xjasonlyu/tun2socks/v2` | `v2.6.0` | MIT | `tools/tun2socks-build/go.mod` and `go.sum` |
+
+The upstream license is redistributed at
+`third_party/tun2socks/LICENSE`. The helper manifest records its module,
+version, target, build mode, package ownership, and artifact SHA-256.
+
 The separately downloaded `developer-standard` runtime image is not embedded
 in the Hideout product archive. Its pinned base image, source inputs, package
 inventory, and review status are recorded under `runtime/developer-standard/`
 and in `internal/runtimecatalog/catalog.json`.
 
-Hideout may invoke operator-installed tools such as Lima, Git, and
-`tun2socks`; those tools are not redistributed in the product archive.
+Hideout may invoke operator-installed tools such as Lima and Git; those tools
+are not redistributed in the product archive. The Linux guest `tun2socks`
+helper is redistributed as the attributed package-owned component above.

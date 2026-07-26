@@ -456,7 +456,7 @@ func TestInitNoInputCreatesTemplateProfileAndFailsOnCollision(t *testing.T) {
 
 func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := Main([]string{"help"}, &out, &errOut)
+	code := Main([]string{"help", "--all"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("help exit=%d stderr=%s", code, errOut.String())
 	}
@@ -1121,13 +1121,12 @@ func TestPackageVerifyAcceptsValidPackage(t *testing.T) {
 	if !strings.Contains(out.String(), "package: ok mode=artifact root=") {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "external-prerequisite name=tun2socks") ||
-		!strings.Contains(out.String(), "packageOwned=false") {
-		t.Fatalf("verify did not report external prerequisite honestly: %s", out.String())
+	if !strings.Contains(out.String(), "package-prerequisite name=tun2socks") ||
+		!strings.Contains(out.String(), "packageOwned=true") {
+		t.Fatalf("verify did not report package-owned privacy helper honestly: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "status=missing") ||
-		!strings.Contains(out.String(), "code="+recovery.CodePackagePrerequisiteMissing) {
-		t.Fatalf("verify did not attach missing prerequisite recovery code: %s", out.String())
+	if !strings.Contains(out.String(), "status=available") {
+		t.Fatalf("verify did not report package helper availability: %s", out.String())
 	}
 }
 
@@ -1357,7 +1356,7 @@ func TestPackageInstallReportsObsoleteRecoveryCode(t *testing.T) {
 	}
 }
 
-func TestDoctorPackagingFeatureReportsExternalPrerequisite(t *testing.T) {
+func TestDoctorPackagingFeatureReportsPackagePrivacyHelper(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", t.TempDir())
@@ -1366,12 +1365,9 @@ func TestDoctorPackagingFeatureReportsExternalPrerequisite(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("doctor exit=%d stderr=%s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "external-prerequisite tun2socks=") ||
-		!strings.Contains(out.String(), "packageOwned=false") {
-		t.Fatalf("doctor packaging diagnostic missing external prerequisite:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), recovery.CodePackagePrerequisiteMissing) {
-		t.Fatalf("doctor packaging diagnostic missing recovery code:\n%s", out.String())
+	if !strings.Contains(out.String(), "package-prerequisite tun2socks=") ||
+		!strings.Contains(out.String(), "packageOwned=true") {
+		t.Fatalf("doctor packaging diagnostic missing package privacy helper:\n%s", out.String())
 	}
 }
 
@@ -1431,7 +1427,8 @@ func TestDoctorDeepFeatureDiagnosticsAddStructuredFindings(t *testing.T) {
 		t.Fatalf("dns finding should include gate marker and next action: %+v", dns)
 	}
 	packaging := seen["feature-packaging"]
-	if !strings.Contains(fmt.Sprint(packaging.Details["observedFacts"]), "external-prerequisite") ||
+	if !strings.Contains(fmt.Sprint(packaging.Details["observedFacts"]), "package-prerequisite") ||
+		!strings.Contains(fmt.Sprint(packaging.Details["observedFacts"]), "packageOwned=true") ||
 		!strings.Contains(strings.Join(packaging.NextActions, "\n"), "hideout package repair") {
 		t.Fatalf("packaging finding missing 017 facts/guidance: %+v", packaging)
 	}
@@ -1745,12 +1742,14 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH:         {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", mode: 0o755, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", mode: 0o644, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", mode: 0o644, data: "readme zh\n"},
 		"LICENSE":                              {kind: "doc", mode: 0o644, data: "license\n"},
 		"THIRD_PARTY_NOTICES.md":               {kind: "doc", mode: 0o644, data: "notices\n"},
 		"SECURITY.md":                          {kind: "doc", mode: 0o644, data: "security\n"},
+		"third_party/tun2socks/LICENSE":        {kind: "doc", mode: 0o644, data: "MIT license\n"},
 		"runtime/catalog.json":                 {kind: "runtime-catalog", mode: 0o644, data: "{}\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
@@ -1772,6 +1771,23 @@ func writeTestPackageRoot(t *testing.T) string {
 			data string
 		}{kind: "helper-manifest", mode: 0o644, data: string(helperManifest) + "\n"}
 	}
+	tunBinaryRel := "bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH
+	tunSum := sha256.Sum256([]byte(files[tunBinaryRel].data))
+	tunManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxTun2SocksCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH, Artifact: filepath.Base(tunBinaryRel),
+		SHA256: hex.EncodeToString(tunSum[:]), Builder: "unit-test", BuiltAt: "2026-01-01T00:00:00Z",
+		UpstreamModule: helperbin.Tun2SocksUpstreamModule, UpstreamVersion: helperbin.Tun2SocksUpstreamVersion,
+		License: helperbin.Tun2SocksLicense, BuildMode: helperbin.Tun2SocksBuildMode, PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[tunBinaryRel+".manifest.json"] = struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{kind: "helper-manifest", mode: 0o644, data: string(tunManifest) + "\n"}
 	manifest := packagekit.Manifest{Schema: packagekit.ArtifactSchema}
 	manifest.BuiltAt = "2026-01-01T00:00:00Z"
 	manifest.Release = packagekit.ReleaseInfo{ProductVersion: "0.1.0-alpha.1", Channel: "developer-preview", Tag: "v0.1.0-alpha.1"}
@@ -1790,9 +1806,10 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
+		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH,
 	}
 	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
-	manifest.Layout.Directories = []string{"schemas", "docs", "packaging", "runtime"}
+	manifest.Layout.Directories = []string{"schemas", "docs", "packaging", "runtime", "third_party"}
 	manifest.Migration.InstallStateSchema = packagekit.InstallStateSchema
 	manifest.Migration.FromInstalledSchemas = []string{packagekit.InstallStateSchema}
 	manifest.Migration.MinimumPackageSchema = packagekit.ArtifactSchema
@@ -5024,7 +5041,7 @@ func TestDoctorReportsCoreChecks(t *testing.T) {
 	t.Setenv("HOME", home)
 	setSafeBrowserPathForAppTest(t)
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
@@ -5137,7 +5154,7 @@ func TestDoctorRejectsGenericBrowserPath(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_BROWSER_PATH", filepath.Join(t.TempDir(), "open"))
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected generic browser path to fail doctor; stdout=%s", out.String())
 	}
@@ -5160,7 +5177,7 @@ func TestDoctorRejectsBrowserPathSymlinkToGenericOpener(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_BROWSER_PATH", browserPath)
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected generic browser symlink to fail doctor; stdout=%s", out.String())
 	}
@@ -5177,7 +5194,7 @@ func TestDoctorRejectsUnsupportedBrowserApp(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_BROWSER_APP", "Safari")
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected unsupported browser app to fail doctor; stdout=%s", out.String())
 	}
@@ -5236,6 +5253,7 @@ func TestDoctorUsesAliasWorkspaceMapping(t *testing.T) {
 		"--profile", "alias-workspace",
 		"--backend", "native",
 		"--workspace", workspace,
+		"--verbose",
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
@@ -5268,6 +5286,7 @@ func TestDoctorEphemeralUsesSessionForkIdentity(t *testing.T) {
 		"--profile", "ephemeral-doctor",
 		"--backend", "native",
 		"--ephemeral",
+		"--verbose",
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
@@ -5308,7 +5327,7 @@ func TestDoctorBadProxySecretFailsNetworkCheck(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("HIDEOUT_SECRET_DEFAULT_PROXY", "socks4://user:pass@127.0.0.1:1080")
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--network", "tun2socks", "--proxy-secret", "default-proxy"}, &out, &errOut)
+	code := Main([]string{"doctor", "--network", "tun2socks", "--proxy-secret", "default-proxy", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for bad proxy secret; stdout=%s", out.String())
 	}
@@ -5343,7 +5362,7 @@ func TestDoctorReportsMissingLima(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", "")
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "lima"}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "lima", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail when limactl is missing; stdout=%s", out.String())
 	}
@@ -5383,7 +5402,7 @@ esac
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "lima", "--workspace", workspace}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "lima", "--workspace", workspace, "--verbose"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
@@ -5426,7 +5445,7 @@ esac
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "lima", "--workspace", workspace}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "lima", "--workspace", workspace, "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for invalid Lima YAML; stdout=%s", out.String())
 	}
@@ -5445,7 +5464,7 @@ func TestDoctorReportsMissingLimaCommandProxyShim(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "lima"}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "lima", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail when linux shim is missing; stdout=%s", out.String())
 	}
@@ -5486,7 +5505,7 @@ func TestDoctorReportsMissingLimaHostFSDWhenHostFSGrantsActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "hostfs-doctor", "--backend", "lima", "--workspace", workspace}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "hostfs-doctor", "--backend", "lima", "--workspace", workspace, "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail when HostFS grant needs missing hostfsd; stdout=%s", out.String())
 	}
@@ -5527,7 +5546,7 @@ func TestDoctorReportsLimaHostFSDPresentWhenHostFSGrantsActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "hostfs-doctor-ok", "--backend", "lima", "--workspace", workspace}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "hostfs-doctor-ok", "--backend", "lima", "--workspace", workspace, "--verbose"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
@@ -5584,7 +5603,7 @@ func TestDoctorReportsBrokenLimaMount(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--backend", "lima", "--workspace", badWorkspace}, &out, &errOut)
+	code := Main([]string{"doctor", "--backend", "lima", "--workspace", badWorkspace, "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for broken mount; stdout=%s", out.String())
 	}
@@ -5611,7 +5630,7 @@ func TestDoctorInvalidProfileReportsProfileError(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "bad"}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "bad", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for invalid profile; stdout=%s", out.String())
 	}
@@ -5630,7 +5649,7 @@ func TestDoctorRequiresNetworkConnectCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "no-network", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "no-network", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail without network.connect capability; stdout=%s", out.String())
 	}
@@ -5657,7 +5676,7 @@ func TestDoctorReportsPolicyScriptFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "scripted"}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "scripted", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for policy script; stdout=%s", out.String())
 	}
@@ -5687,7 +5706,7 @@ func TestDoctorRejectsCommandScriptProposalMismatchedToBrokerRequest(t *testing.
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "scripted-mismatch", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "scripted-mismatch", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for mismatched policy script proposal; stdout=%s", out.String())
 	}
@@ -5721,7 +5740,7 @@ func TestDoctorPolicyScriptContextIncludesCommandTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "scripted-ok", "--backend", "native"}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "scripted-ok", "--backend", "native", "--verbose"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("doctor exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
@@ -5786,7 +5805,7 @@ func TestDoctorReportsAuditRedactionScriptFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	code := Main([]string{"doctor", "--profile", "bad-redaction"}, &out, &errOut)
+	code := Main([]string{"doctor", "--profile", "bad-redaction", "--verbose"}, &out, &errOut)
 	if code == 0 {
 		t.Fatalf("expected doctor to fail for audit redaction script; stdout=%s", out.String())
 	}
@@ -7026,6 +7045,9 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	if err := os.WriteFile(linuxTun2Socks, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := helperbin.WriteTun2SocksManifest(linuxTun2Socks, runtime.GOARCH, false); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HIDEOUT_LINUX_TUN2SOCKS_PATH", linuxTun2Socks)
 	// Pin the privacy DNS stub helper too; without it resolution falls through
 	// to the operator's real store or PATH and the test only passes on a
@@ -8036,6 +8058,9 @@ func TestMaterializeLimaShimsCopiesTun2SocksForTunMode(t *testing.T) {
 	}
 	tun2socks := filepath.Join(t.TempDir(), "tun2socks-linux")
 	if err := os.WriteFile(tun2socks, []byte("fake linux tun2socks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := helperbin.WriteTun2SocksManifest(tun2socks, runtime.GOARCH, false); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HIDEOUT_LINUX_SHIM_PATH", shim)

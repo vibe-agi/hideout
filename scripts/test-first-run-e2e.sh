@@ -434,7 +434,8 @@ local_fast() {
     exit 1
   fi
 
-  run_logged doctor-after-init env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor --backend native --workspace "$workspace"
+  run_logged doctor-after-init env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor \
+    --backend native --workspace "$workspace" --verbose
   grep -q 'profile: ok default' "$logs/doctor-after-init.out"
 
   run_logged run env HIDEOUT_STORE_ROOT="$store" "$hideout" run \
@@ -548,7 +549,7 @@ setup_local_fast() {
   # runner has no limactl); this lane asserts that setup registered the
   # default profile, not that every prerequisite is installed. Any required
   # error other than the missing-lima prerequisite is a real regression.
-  env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor \
+  env HIDEOUT_STORE_ROOT="$store" "$hideout" doctor --verbose \
     >"$logs/setup-doctor.out" 2>"$logs/setup-doctor.err" || true
   if ! grep -q 'profile: ok default' "$logs/setup-doctor.out"; then
     echo "first-run-e2e: setup profile did not register with doctor:" >&2
@@ -844,6 +845,19 @@ setup_real_backend() {
 
   go run ./test/e2e/setuppty \
     --hideout "$hideout" --store "$store" --out "$logs/setup-real-pty.out"
+  for expected in \
+    "developer-standard 2026.07.0" \
+    "declared download" \
+    "does not hide your network origin" \
+    "hideout doctor" \
+    "hideout run -- git status --short"; do
+    if ! grep -Fq "$expected" "$logs/setup-real-pty.out"; then
+      echo "first-run-e2e: setup transcript is missing ordinary-user fact: $expected" >&2
+      exit 1
+    fi
+  done
+  run_logged setup-progress-tests go test ./internal/backend/lima \
+    -run TestStartupProgressIsQuietForFastStartAndVisibleForSlowStart
 
   run_logged setup-real-first env HIDEOUT_STORE_ROOT="$store" "$hideout" run \
     --workspace "$workspace" --verbose -- sh -c '

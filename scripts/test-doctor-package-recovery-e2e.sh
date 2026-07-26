@@ -134,11 +134,30 @@ validate_artifacts() {
     .durableStatePreserved == true and
     .unrelatedFilePreserved == true
   ' "$out/reports/package/package-repair-summary.json" >/dev/null
+  jq -e '
+    .priorVersionUpgrade == true and
+    .packageHelperAdded == true and
+    .durableStatePreservedOnUpgrade == true and
+    .unrelatedFilePreservedOnUpgrade == true and
+    .homebrewGuidance == true and
+    .normalUninstallPreservedState == true and
+    .purgeDryRunPreservedState == true and
+    .purgeRequiredExactStoreConfirmation == true and
+    .destructiveScopeRejectedBeforeMutation == true and
+    .unrelatedFilePreservedOnUninstall == true
+  ' "$out/reports/package/package-lifecycle-summary.json" >/dev/null
 
   grep -q 'package repair --prefix' "$out/reports/package/package-stale-verify.err"
   grep -q 'package: repair dry-run' "$out/reports/package/package-repair-dry.out"
   grep -q 'removed share/hideout/README.zh-CN.md' "$out/reports/package/package-repair.out"
   grep -q 'package: ok mode=installed' "$out/reports/package/package-repaired-verify.out"
+  grep -q 'path must stay inside root' "$out/reports/package/package-scope-uninstall.err"
+  grep -q 'package: uninstall dry-run' "$out/reports/package/package-uninstall-purge-dry.out"
+  grep -q 'confirm-purge' "$out/reports/package/package-uninstall-purge-unconfirmed.err"
+  grep -q 'durableState=preserved' "$out/reports/package/package-uninstall.out"
+  grep -q 'durableState=purged' "$out/reports/package/package-uninstall-purge.out"
+  grep -q 'brew upgrade vibe-agi/tap/hideout' "$out/reports/package/package-help-update.out"
+  grep -q 'brew uninstall vibe-agi/tap/hideout' "$out/reports/package/package-help-uninstall.out"
 
   jq -e '
     .level == "deep" and
@@ -217,12 +236,20 @@ write_manifest() {
 	guidance_artifacts="$(mktemp)"
 	redaction_artifacts="$(mktemp)"
 
-	artifact_array \
+  artifact_array \
     <(artifact_obj "event-summary" "reports/package/package-repair-summary.json" "package stale verify/dry-run/apply/verify summary") \
+    <(artifact_obj "event-summary" "reports/package/package-lifecycle-summary.json" "upgrade, uninstall, purge, and destructive-scope summary") \
     <(artifact_obj "log" "reports/package/package-stale-verify.err" "package verify stale failure") \
     <(artifact_obj "log" "reports/package/package-repair-dry.out" "package repair dry-run output") \
     <(artifact_obj "log" "reports/package/package-repair.out" "package repair apply output") \
-    <(artifact_obj "log" "reports/package/package-repaired-verify.out" "package verify after repair") >"$package_artifacts"
+    <(artifact_obj "log" "reports/package/package-repaired-verify.out" "package verify after repair") \
+    <(artifact_obj "log" "reports/package/package-scope-uninstall.err" "out-of-root uninstall scope rejection before mutation") \
+    <(artifact_obj "log" "reports/package/package-uninstall-purge-dry.out" "purge preview with exact confirmation command") \
+    <(artifact_obj "log" "reports/package/package-uninstall-purge-unconfirmed.err" "unconfirmed purge rejection") \
+    <(artifact_obj "log" "reports/package/package-uninstall.out" "normal uninstall preserves durable state") \
+    <(artifact_obj "log" "reports/package/package-uninstall-purge.out" "explicit confirmed purge output") \
+    <(artifact_obj "log" "reports/package/package-help-update.out" "Homebrew and standalone update guidance") \
+    <(artifact_obj "log" "reports/package/package-help-uninstall.out" "Homebrew and standalone removal guidance") >"$package_artifacts"
   artifact_array \
     <(artifact_obj "event-summary" "reports/recovery/recovery-summary.json" "doctor safe repair summary") \
     <(artifact_obj "log" "reports/doctor/fix-dry.out" "doctor fix dry-run output") \
@@ -263,6 +290,9 @@ write_manifest() {
           coveredClaims: [
             {claimId: "024.FR-002", source: "spec", description: "Package verify detects obsolete package-owned leftovers", scope: "package"},
             {claimId: "024.FR-005", source: "spec", description: "Package repair preserves durable state and unrelated files", scope: "package"},
+            {claimId: "044.FR-025", source: "spec", description: "Provider-owned update and uninstall guidance is explicit", scope: "package"},
+            {claimId: "044.FR-026", source: "spec", description: "Prior package upgrade adds required helpers without losing state", scope: "package"},
+            {claimId: "044.FR-027", source: "spec", description: "Uninstall and purge validate complete destructive scope before mutation", scope: "package"},
             {claimId: "024.FR-012", source: "spec", description: "Local recovery evidence is not release readiness", scope: "boundary"}
           ],
           prerequisites: [{name: "package-smoke", status: "available", reason: $packageSource}],

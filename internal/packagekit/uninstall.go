@@ -9,10 +9,11 @@ import (
 )
 
 type UninstallOptions struct {
-	Prefix string
-	Store  string
-	DryRun bool
-	Purge  bool
+	Prefix            string
+	Store             string
+	DryRun            bool
+	Purge             bool
+	ConfirmPurgeStore string
 }
 
 type UninstallResult struct {
@@ -46,6 +47,20 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 			store = cleaned
 		}
 	}
+	if opts.Purge {
+		if store == "" {
+			return UninstallResult{}, fmt.Errorf("purge requires a durable store path")
+		}
+		if !opts.DryRun {
+			confirmed, err := CleanRoot(opts.ConfirmPurgeStore, "confirmed purge store")
+			if err != nil {
+				return UninstallResult{}, fmt.Errorf("purge requires the exact store path in --confirm-purge: %w", err)
+			}
+			if confirmed != store {
+				return UninstallResult{}, fmt.Errorf("purge confirmation does not match durable store: confirmed=%s store=%s", confirmed, store)
+			}
+		}
+	}
 	files := make([]string, 0, len(state.Files)+1)
 	for _, file := range state.Files {
 		files = append(files, file.Path)
@@ -70,14 +85,30 @@ func Uninstall(opts UninstallOptions) (UninstallResult, error) {
 	if opts.Purge {
 		result.DurableAction = "purged"
 	}
-	if opts.DryRun {
-		return result, nil
-	}
 	root, err := os.OpenRoot(prefix)
 	if err != nil {
 		return result, fmt.Errorf("open install prefix: %w", err)
 	}
 	defer root.Close()
+	// Validate the complete destructive scope before removing the first file.
+	// A corrupt or adversarial installed-state manifest must never turn a
+	// rejected uninstall into a partial uninstall.
+	for _, rel := range files {
+		if _, err := rootedPackagePath(root, rel); err != nil && !os.IsNotExist(err) {
+			return result, fmt.Errorf("validate uninstall file %s: %w", rel, err)
+		}
+	}
+	for _, rel := range dirs {
+		if rel == "" || rel == "." || rel == "bin" {
+			continue
+		}
+		if _, err := rootedPackagePath(root, rel); err != nil && !os.IsNotExist(err) {
+			return result, fmt.Errorf("validate uninstall directory %s: %w", rel, err)
+		}
+	}
+	if opts.DryRun {
+		return result, nil
+	}
 	for _, rel := range files {
 		joined, err := rootedPackagePath(root, rel)
 		if err != nil {

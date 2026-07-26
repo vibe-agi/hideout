@@ -52,7 +52,8 @@ TCB:
 - HostFS host service and guest FUSE/shim protocol when HostFS is enabled;
 - backend adapter code that prepares the sandbox boundary;
 - the selected backend runtime, such as Lima, for its isolation claims;
-- `tun2socks` and route setup helpers when network privacy is enabled.
+- the package-owned, digest/provenance-verified `tun2socks` binary and route
+  setup helpers when network privacy is enabled.
 
 Not in TCB:
 

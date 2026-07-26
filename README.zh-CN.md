@@ -35,13 +35,35 @@ VS Code** 打开,则是单独的 opt-in（trusted 模式,通过 `hideout allow h
 ```bash
 brew install vibe-agi/tap/hideout
 hideout setup
+hideout doctor
 ```
+
+如需排查问题，可先生成一个有大小上限的本地报告，并在分享前自行检查：
+
+```bash
+hideout support report --out ./hideout-support.json
+```
+
+该命令不会上传任何内容。报告默认排除原始审计事件、工作区内容、secret/
+代理值、控制面 token、machine ID 和原始宿主用户路径；文件最大 1 MiB，
+权限为 `0600`。
 
 Formula 会校验不可变归档的 checksum、macOS 代码签名和 Hideout 包清单。安装过程
 不会启动 VM 或创建 profile；交互式 `setup` 会先展示固定的默认配置，确认后只写入
 配置，仍不会启动 VM 或下载 runtime。可审阅的 standalone
 installer、手动下载、修复和卸载流程仍见
 [Distribution And Bootstrap](docs/distribution-bootstrap.md)。
+
+Homebrew 负责包的升级和卸载：
+
+```bash
+brew upgrade vibe-agi/tap/hideout
+brew uninstall vibe-agi/tap/hideout
+```
+
+这两个操作都会保留 `~/.hideout` 下的持久数据。若要另行删除这些数据，请先运行
+`hideout help uninstall`；standalone 卸载和 purge 都要求明确的包路径，purge
+还必须用完整 store 路径再次确认。
 
 ## 试一下
 

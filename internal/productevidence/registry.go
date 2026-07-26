@@ -309,6 +309,25 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"043.FR-023", "043.SC-007"),
 		req(Feature043, Proof043DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
 			"043.FR-026", "043.SC-009"),
+
+		req(Feature044, Proof044Gate0Journeys, LayerGate0, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"044.FR-002", "044.FR-003", "044.FR-005", "044.FR-006", "044.FR-007", "044.FR-008", "044.FR-009", "044.FR-010",
+			"044.FR-011", "044.FR-012", "044.FR-013", "044.FR-014", "044.FR-015", "044.FR-016", "044.FR-017", "044.FR-018",
+			"044.FR-019", "044.FR-020", "044.FR-021", "044.FR-025", "044.FR-026", "044.FR-027", "044.FR-029", "044.FR-034",
+			"044.FR-035", "044.SC-003", "044.SC-004", "044.SC-005", "044.SC-006", "044.SC-007", "044.SC-009", "044.SC-010",
+			"044.SC-012"),
+		runtimeReq(Feature044, Proof044RealGate2FirstRun, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"044.FR-001", "044.FR-002", "044.FR-004", "044.FR-028", "044.FR-030", "044.SC-001", "044.SC-002", "044.SC-011", "044.SC-014"),
+		runtimeReq(Feature044, Proof044RealGate3Privacy, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"044.FR-019", "044.FR-021", "044.FR-022", "044.FR-023", "044.FR-024", "044.FR-028", "044.FR-030", "044.SC-008", "044.SC-009", "044.SC-011"),
+		req(Feature044, Proof044PackageUI, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"044.FR-030", "044.SC-011"),
+		req(Feature044, Proof044ReleaseCandidate, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"044.FR-028", "044.FR-030", "044.FR-031", "044.FR-033", "044.SC-011", "044.SC-014"),
+		req(Feature044, Proof044DocsTruth, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone,
+			"044.FR-001", "044.FR-024", "044.FR-025", "044.FR-027", "044.FR-032", "044.FR-033", "044.SC-013"),
+		req(Feature044, Proof044PublicReceipt, LayerReleaseCandidate, RequiredForPublicRelease, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"044.FR-031", "044.FR-032", "044.SC-011", "044.SC-013"),
 	}
 	sortRequirements(rows)
 	return rows

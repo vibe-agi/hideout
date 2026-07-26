@@ -64,6 +64,59 @@ with_timeout() {
   return "$status"
 }
 
+check_help_inventory() {
+  local help_file="$1"
+  local required
+  for required in \
+    "First run:" \
+    "Run and explain:" \
+    "Profile and HostFS:" \
+    "Inspect and manage:" \
+    "Advanced and developer:" \
+    "Lab probes:" \
+    "hideout adapter-pack <install|list|inspect|test|enable|disable|upgrade|revoke>" \
+    "hideout shim build-linux" \
+    "hideout lab portbridge loopback"; do
+    if ! grep -Fq "$required" "$help_file"; then
+      echo "operator-cli: expanded help missing required inventory entry: $required" >&2
+      return 1
+    fi
+  done
+}
+
+check_help_contract() {
+  local primary="$tmp/help-primary.out"
+  local expanded="$tmp/help-expanded.out"
+  local dropped="$tmp/help-expanded-missing-command.out"
+  local unknown_err="$tmp/help-unknown.err"
+
+  "$hideout" help >"$primary"
+  grep -Fq "hideout run -- git status --short" "$primary"
+  grep -Fq "hideout help --all" "$primary"
+  if grep -Fq "hideout lab portbridge" "$primary"; then
+    echo "operator-cli: primary help exposed lab inventory" >&2
+    exit 1
+  fi
+
+  "$hideout" help --all >"$expanded"
+  check_help_inventory "$expanded"
+
+  # Fire the inventory judge against a deliberately incomplete fixture so a
+  # broken or accidentally permissive judge cannot make this gate green.
+  grep -Fv "hideout shim build-linux" "$expanded" >"$dropped"
+  if check_help_inventory "$dropped" >/dev/null 2>&1; then
+    echo "operator-cli: incomplete-help negative fixture unexpectedly passed" >&2
+    exit 1
+  fi
+
+  "$hideout" setup --help >/dev/null
+  if "$hideout" help unknown-topic >"$tmp/help-unknown.out" 2>"$unknown_err"; then
+    echo "operator-cli: unknown help topic unexpectedly succeeded" >&2
+    exit 1
+  fi
+  grep -Fq "hideout help --all" "$unknown_err"
+}
+
 prepare_linux_shim() {
   if [ -n "${HIDEOUT_LINUX_SHIM_PATH:-}" ]; then
     if [ ! -x "$HIDEOUT_LINUX_SHIM_PATH" ]; then
@@ -274,6 +327,8 @@ fi
 
 hideout="$bin/hideout"
 go build -o "$hideout" ./cmd/hideout
+echo "operator-cli: checking concise and complete help"
+check_help_contract
 prepare_linux_shim
 prepare_linux_hostfsd
 operator_env_flags

@@ -27,8 +27,8 @@ Usage: scripts/test-public-alpha-candidate.sh \
 Runs the exact packaged binary through clean install and the real Gate 2/3
 lanes, evaluates all registered release-candidate proofs, assembles the exact
 four public assets, and optionally replaces the assets of an existing private
-draft. It never publishes a release. Gate 3 also requires an executable
-operator-supplied HIDEOUT_LINUX_TUN2SOCKS_PATH.
+draft. It never publishes a release. Gate 3 uses the manifest-verified
+package-owned Linux tun2socks helper.
 USAGE
 }
 
@@ -73,11 +73,6 @@ done
   echo "public-alpha-candidate: HIDEOUT_SECRET_DEFAULT_PROXY is required for real Gate 3" >&2
   exit 2
 }
-[ -x "${HIDEOUT_LINUX_TUN2SOCKS_PATH:-}" ] || {
-  echo "public-alpha-candidate: executable HIDEOUT_LINUX_TUN2SOCKS_PATH is required for real Gate 3" >&2
-  exit 2
-}
-
 source_commit="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   echo "public-alpha-candidate: exact source checkout must be clean" >&2
@@ -159,6 +154,7 @@ export HIDEOUT_LINUX_HOSTFSD_PATH="$work/package/hideout/bin/hideout-hostfsd-lin
 export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$work/package/hideout/bin/hideout-session-supervisor-linux-$arch"
 export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$work/package/hideout/bin/hideout-workspace-portal-linux-$arch"
 export HIDEOUT_LINUX_DNS_STUB_PATH="$work/package/hideout/bin/hideout-dns-stub-linux-$arch"
+unset HIDEOUT_LINUX_TUN2SOCKS_PATH
 export HIDEOUT_RUNTIME_PACKAGE_IDENTITY="$out/package-identity.json"
 export HIDEOUT_RELEASE_EVIDENCE_DIR="$out/phase1"
 export HIDEOUT_RUNTIME_EVIDENCE_OUT="$out/runtime-gate2"
@@ -218,6 +214,26 @@ gate3="$out/phase1/gates/gate3-hidden-proxy.json"
   exit 1
 }
 jq -e '.result == "passed" and .backend == "lima"' "$gate2" "$gate3" >/dev/null
+
+ui_evidence_dir="$out/ui-e2e"
+scripts/test-ui-e2e.sh --all --require-executed --out "$ui_evidence_dir"
+
+ordinary_evidence_dir="$out/ordinary-user"
+mkdir -p "$ordinary_evidence_dir"
+scripts/test-ordinary-user-release.sh --release-candidate \
+  --package-root "$work/package/hideout" \
+  --package-artifact "$package" \
+  --gate2-evidence "$gate2" \
+  --gate3-evidence "$gate3" \
+  --gate3-log "$out/phase1.out" \
+  --gate2-product-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
+  --gate3-product-evidence "$out/runtime-gate3/product-hardening-evidence.json" \
+  --ui-evidence "$ui_evidence_dir/product-hardening-evidence.json" \
+  --clean-install "$out/clean-install.json" \
+  --signing-observation "$signing" \
+  --notarization-observation "$notarization" \
+  --out "$ordinary_evidence_dir/product-hardening-evidence.json"
+product_evidence+=("$ordinary_evidence_dir/product-hardening-evidence.json")
 
 docs_candidate_raw="$work/docs-candidate.raw"
 scripts/test-doc-truth-smoke.sh >"$docs_candidate_raw"

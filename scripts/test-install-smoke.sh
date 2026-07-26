@@ -50,9 +50,19 @@ grep -Eq '^builtAt: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$t
 grep -q "^platform: $(go env GOOS)/$(go env GOARCH)$" "$tmp/version.out"
 
 HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/doctor.out"
-grep -q 'store: ok writable' "$tmp/doctor.out"
-grep -q 'profile: ok default' "$tmp/doctor.out"
-grep -q 'manager: ok' "$tmp/doctor.out"
+grep -q '^Hideout doctor: Needs attention$' "$tmp/doctor.out"
+grep -q '^Profile: default$' "$tmp/doctor.out"
+grep -q '^Isolation: native development harness; no VM isolation$' "$tmp/doctor.out"
+grep -q '^Details: hideout doctor --verbose$' "$tmp/doctor.out"
+if grep -q 'manager: ok' "$tmp/doctor.out"; then
+  echo "install-smoke: default doctor unexpectedly rendered detailed findings" >&2
+  exit 1
+fi
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" doctor --backend native \
+  --workspace "$workspace" --verbose >"$tmp/doctor-verbose.out"
+grep -q 'store: ok writable' "$tmp/doctor-verbose.out"
+grep -q 'profile: ok default' "$tmp/doctor-verbose.out"
+grep -q 'manager: ok' "$tmp/doctor-verbose.out"
 
 if HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" init --no-input --profile default --template dev --backend native --network direct >"$tmp/init2.out" 2>"$tmp/init2.err"; then
   echo "install-smoke: second template init unexpectedly succeeded" >&2

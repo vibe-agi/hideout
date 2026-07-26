@@ -244,7 +244,7 @@ grep -F 'HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$work/package/hideout/bin/hideout-
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'gate_require_completion public-alpha-candidate' \
   scripts/test-public-alpha-candidate.sh >/dev/null
-grep -F 'executable HIDEOUT_LINUX_TUN2SOCKS_PATH is required for real Gate 3' \
+grep -F 'package-owned Linux tun2socks helper' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh; do
   grep -F 'release evidence requires the packaged Linux Workspace Portal' "$gate" >/dev/null
@@ -254,8 +254,12 @@ grep -F 'release evidence requires the packaged Linux hostfsd' \
   scripts/test-gate2-lima.sh >/dev/null
 grep -F 'release evidence requires the packaged Linux DNS stub' \
   scripts/test-gate3-hidden-proxy.sh >/dev/null
-grep -F 'release evidence requires operator-supplied HIDEOUT_LINUX_TUN2SOCKS_PATH' \
+grep -F 'gate3: using package-owned tun2socks helper' \
   scripts/test-gate3-hidden-proxy.sh >/dev/null
+grep -F 'scripts/test-ordinary-user-release.sh --release-candidate' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'scripts/test-ui-e2e.sh --all --require-executed' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F -- '--url-host 127.0.0.1' scripts/test-gate3-hidden-proxy.sh >/dev/null
 grep -F -- '--map-connect "$mediated_resolver:443=cloudflare-dns.com:443"' \
   scripts/test-gate3-hidden-proxy.sh >/dev/null

@@ -26,7 +26,13 @@ copy_artifacts() {
     package-repaired-verify.out \
     package-uninstall-dry.out \
     package-uninstall.out \
+    package-uninstall-purge-dry.out \
+    package-uninstall-purge-unconfirmed.err \
     package-uninstall-purge.out \
+    package-scope-uninstall.err \
+    package-lifecycle-summary.json \
+    package-help-update.out \
+    package-help-uninstall.out \
     package-installed-doctor-packaging.json
   do
     if [ -f "$tmp/$rel" ]; then
@@ -82,6 +88,7 @@ for path in \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
   "$prefix/bin/hideout-session-supervisor-linux-$arch" \
   "$prefix/bin/hideout-workspace-portal-linux-$arch" \
+  "$prefix/bin/tun2socks-linux-$arch" \
   "$prefix/install.sh" \
   "$prefix/package-manifest.json" \
   "$prefix/README.md" \
@@ -89,6 +96,7 @@ for path in \
   "$prefix/LICENSE" \
   "$prefix/THIRD_PARTY_NOTICES.md" \
   "$prefix/SECURITY.md" \
+  "$prefix/third_party/tun2socks/LICENSE" \
   "$prefix/schemas/package-manifest.schema.json" \
   "$prefix/schemas/release-dogfood.schema.json" \
   "$prefix/schemas/runtime-catalog.schema.json" \
@@ -122,6 +130,39 @@ test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-workspace-portal-linux-$arch.manifest.json"
+test -f "$prefix/bin/tun2socks-linux-$arch.manifest.json"
+jq -e --arg arch "$arch" '
+  .version == "hideout.helper-manifest/v1" and
+  .command == "tun2socks" and
+  .targetOS == "linux" and
+  .targetArch == $arch and
+  .upstreamModule == "github.com/xjasonlyu/tun2socks/v2" and
+  .upstreamVersion == "v2.6.0" and
+  .license == "MIT" and
+  .buildMode == "source-built-pinned-module" and
+  .packageOwned == true
+' "$prefix/bin/tun2socks-linux-$arch.manifest.json" >/dev/null
+
+ambient_bin="$tmp/ambient-helper"
+mkdir -p "$ambient_bin"
+printf '#!/bin/sh\nexit 99\n' >"$ambient_bin/tun2socks-linux-$arch"
+chmod 0700 "$ambient_bin/tun2socks-linux-$arch"
+PATH="$ambient_bin:$PATH" HIDEOUT_RELEASE_BINARY="$prefix/bin/hideout" \
+  scripts/test-gate3-hidden-proxy.sh --verify-package-helper-only \
+  >"$tmp/package-tun2socks-gate3.out"
+grep -q '^tun2socks_source=package-owned$' "$tmp/package-tun2socks-gate3.out"
+grep -q '^tun2socks_upstream_version=v2.6.0$' "$tmp/package-tun2socks-gate3.out"
+grep -Eq '^tun2socks_artifact_sha256=[a-f0-9]{64}$' "$tmp/package-tun2socks-gate3.out"
+if HIDEOUT_RELEASE_BINARY="$prefix/bin/hideout" \
+  HIDEOUT_LINUX_TUN2SOCKS_PATH="$ambient_bin/tun2socks-linux-$arch" \
+  scripts/test-gate3-hidden-proxy.sh --verify-package-helper-only \
+  >"$tmp/package-tun2socks-override.out" 2>"$tmp/package-tun2socks-override.err"; then
+  echo "package-smoke: release Gate 3 accepted an explicit tun2socks override" >&2
+  exit 1
+fi
+grep -q 'release evidence forbids HIDEOUT_LINUX_TUN2SOCKS_PATH' \
+  "$tmp/package-tun2socks-override.err"
+
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$prefix/package-manifest.json"
 for manifest in \
   "$prefix/host-app/recipes/builtin-vscode.json" \
@@ -152,6 +193,7 @@ jq -e \
     (.layout.binaries | index("bin/hideout-shim-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-workspace-portal-linux-" + $host_arch)) and
+    (.layout.binaries | index("bin/tun2socks-linux-" + $host_arch)) and
     (.layout.entrypoints | index("install.sh")) and
     (.layout.entrypoints | index("README.md")) and
     (.layout.entrypoints | index("README.zh-CN.md")) and
@@ -161,6 +203,7 @@ jq -e \
     (.layout.directories | index("examples")) and
     (.layout.directories | index("packaging")) and
     (.layout.directories | index("runtime")) and
+    (.layout.directories | index("third_party")) and
     .runtime.family == "developer-standard" and
     (.runtime.catalogFileSHA256 | test("^[a-f0-9]{64}$")) and
     (.runtime.artifactSHA256 | test("^[a-f0-9]{64}$")) and
@@ -174,11 +217,14 @@ jq -e \
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-session-supervisor-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-workspace-portal-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/tun2socks-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/tun2socks-linux-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "install.sh" and .kind == "installer" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "THIRD_PARTY_NOTICES.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "SECURITY.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "third_party/tun2socks/LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/runtime-catalog.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
@@ -261,7 +307,7 @@ test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
 test -f "$store/profiles/default/profile.json"
 
-HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/doctor.out"
+HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" doctor --backend native --workspace "$workspace" --verbose >"$tmp/doctor.out"
 grep -q 'store: ok writable' "$tmp/doctor.out"
 grep -q 'profile: ok default' "$tmp/doctor.out"
 grep -q 'manager: ok' "$tmp/doctor.out"
@@ -310,6 +356,50 @@ if [ -e "$tmp/broken-helper-install/bin/hideout" ]; then
   exit 1
 fi
 
+broken_missing_tun2socks="$tmp/package-missing-tun2socks"
+cp -R "$prefix" "$broken_missing_tun2socks"
+rm -f "$broken_missing_tun2socks/bin/tun2socks-linux-$arch"
+if "$broken_missing_tun2socks/install.sh" --prefix "$tmp/broken-tun2socks-install" --store "$tmp/broken-tun2socks-store" --skip-init >"$tmp/broken-tun2socks.out" 2>"$tmp/broken-tun2socks.err"; then
+  echo "package-smoke: installer accepted package missing tun2socks" >&2
+  exit 1
+fi
+grep -q 'bin/tun2socks-linux' "$tmp/broken-tun2socks.err"
+if [ -e "$tmp/broken-tun2socks-install/bin/hideout" ]; then
+  echo "package-smoke: missing-tun2socks package copied binaries before failing" >&2
+  exit 1
+fi
+
+broken_tun2socks_digest="$tmp/package-bad-tun2socks-digest"
+cp -R "$prefix" "$broken_tun2socks_digest"
+printf '\ncorrupt-for-smoke\n' >>"$broken_tun2socks_digest/bin/tun2socks-linux-$arch"
+if HIDEOUT_RELEASE_BINARY="$broken_tun2socks_digest/bin/hideout" \
+  scripts/test-gate3-hidden-proxy.sh --verify-package-helper-only \
+  >"$tmp/broken-tun2socks-gate3.out" 2>"$tmp/broken-tun2socks-gate3.err"; then
+  echo "package-smoke: Gate 3 accepted tun2socks digest drift" >&2
+  exit 1
+fi
+grep -q 'release package tun2socks digest mismatch' "$tmp/broken-tun2socks-gate3.err"
+if "$broken_tun2socks_digest/install.sh" --prefix "$tmp/broken-tun2socks-digest-install" --store "$tmp/broken-tun2socks-digest-store" --skip-init >"$tmp/broken-tun2socks-digest.out" 2>"$tmp/broken-tun2socks-digest.err"; then
+  echo "package-smoke: installer accepted tun2socks digest drift" >&2
+  exit 1
+fi
+grep -q 'package checksum mismatch for bin/tun2socks-linux' "$tmp/broken-tun2socks-digest.err"
+
+broken_tun2socks_target="$tmp/package-wrong-tun2socks-target"
+cp -R "$prefix" "$broken_tun2socks_target"
+jq '.targetArch = "wrong-arch"' \
+  "$broken_tun2socks_target/bin/tun2socks-linux-$arch.manifest.json" \
+  >"$tmp/wrong-target-manifest.json"
+cp "$tmp/wrong-target-manifest.json" \
+  "$broken_tun2socks_target/bin/tun2socks-linux-$arch.manifest.json"
+if HIDEOUT_RELEASE_BINARY="$broken_tun2socks_target/bin/hideout" \
+  scripts/test-gate3-hidden-proxy.sh --verify-package-helper-only \
+  >"$tmp/wrong-target-gate3.out" 2>"$tmp/wrong-target-gate3.err"; then
+  echo "package-smoke: Gate 3 accepted wrong-target tun2socks provenance" >&2
+  exit 1
+fi
+grep -q 'release package tun2socks provenance is invalid' "$tmp/wrong-target-gate3.err"
+
 broken_missing_manifest="$tmp/package-missing-manifest"
 cp -R "$prefix" "$broken_missing_manifest"
 rm -f "$broken_missing_manifest/package-manifest.json"
@@ -347,6 +437,9 @@ test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$installed_prefix/bin/hideout-workspace-portal-linux-$arch"
+test -x "$installed_prefix/bin/tun2socks-linux-$arch"
+test -f "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
+test -f "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
 test -f "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_prefix/share/hideout/schemas/package-manifest.schema.json"
 test -f "$installed_prefix/share/hideout/schemas/runtime-catalog.schema.json"
@@ -364,28 +457,62 @@ cmp runtime/developer-standard/sources.lock.json "$installed_prefix/share/hideou
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$installed_prefix/share/hideout/package-manifest.json"
 "$installed_prefix/bin/hideout" package verify "$installed_prefix" >"$tmp/package-installed-verify.out"
 grep -q 'package: ok mode=installed' "$tmp/package-installed-verify.out"
-grep -q 'external-prerequisite name=tun2socks' "$tmp/package-installed-verify.out"
-grep -q 'packageOwned=false' "$tmp/package-installed-verify.out"
+grep -q 'package-prerequisite name=tun2socks status=available' "$tmp/package-installed-verify.out"
+grep -q 'packageOwned=true' "$tmp/package-installed-verify.out"
 grep -q "\"installPrefix\": \"$installed_prefix_real\"" "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_store/install-state.json"
 test -f "$installed_store/profiles/default/profile.json"
-HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" >"$tmp/package-installed-doctor.out"
+HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" --verbose >"$tmp/package-installed-doctor.out"
 grep -q 'store: ok writable' "$tmp/package-installed-doctor.out"
 grep -q 'profile: ok default' "$tmp/package-installed-doctor.out"
 HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" doctor --backend native --workspace "$workspace" --feature packaging --format json >"$tmp/package-installed-doctor-packaging.json"
-grep -q 'external-prerequisite tun2socks=' "$tmp/package-installed-doctor-packaging.json"
-grep -q 'packageOwned=false' "$tmp/package-installed-doctor-packaging.json"
+grep -q 'package-prerequisite tun2socks=available' "$tmp/package-installed-doctor-packaging.json"
+grep -q 'packageOwned=true' "$tmp/package-installed-doctor-packaging.json"
 HIDEOUT_STORE_ROOT="$installed_store" "$installed_prefix/bin/hideout" daemon stop >"$tmp/package-installed-daemon-stop.out"
 
 durable_fixture="$installed_store/evidence/keep.json"
 mkdir -p "$(dirname "$durable_fixture")"
 printf '{"keep":true}\n' >"$durable_fixture"
+upgrade_unrelated="$installed_prefix/bin/operator-before-upgrade"
+printf 'operator-owned-before-upgrade\n' >"$upgrade_unrelated"
 before_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
+
+# Model the last supported package line before tun2socks became package-owned.
+# The installed-state schema is still supported, but the old inventory has no
+# helper, helper manifest, or redistributed license. The candidate upgrade
+# must add all three without touching durable or unrelated files.
+installed_state="$installed_prefix/share/hideout/package-manifest.json"
+jq --arg arch "$arch" '
+  .package.release.productVersion = "0.1.0-alpha.0" |
+  .package.release.channel = "alpha" |
+  .package.release.tag = "v0.1.0-alpha.0" |
+  .files |= map(select(
+    .path != ("bin/tun2socks-linux-" + $arch) and
+    .path != ("bin/tun2socks-linux-" + $arch + ".manifest.json") and
+    .path != "share/hideout/third_party/tun2socks/LICENSE"
+  ))
+' "$installed_state" >"$tmp/prior-install-state.json"
+cp "$tmp/prior-install-state.json" "$installed_state"
+rm -f \
+  "$installed_prefix/bin/tun2socks-linux-$arch" \
+  "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json" \
+  "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
+
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-upgrade.out"
 grep -q 'package: upgrade' "$tmp/package-upgrade.out"
 test -f "$durable_fixture"
+test -f "$upgrade_unrelated"
+test -x "$installed_prefix/bin/tun2socks-linux-$arch"
+test -f "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
+test -f "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
 after_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
 test "$before_upgrade_sha" = "$after_upgrade_sha"
+"$installed_prefix/bin/hideout" help update >"$tmp/package-help-update.out"
+"$installed_prefix/bin/hideout" help uninstall >"$tmp/package-help-uninstall.out"
+grep -q 'brew upgrade vibe-agi/tap/hideout' "$tmp/package-help-update.out"
+grep -q 'brew uninstall vibe-agi/tap/hideout' "$tmp/package-help-uninstall.out"
+grep -q 'Normal upgrade and uninstall preserve durable state' "$tmp/package-help-uninstall.out"
+grep -q -- '--confirm-purge <exact-store>' "$tmp/package-help-uninstall.out"
 
 stale_upgrade="$tmp/package-stale-upgrade"
 cp -R "$prefix" "$stale_upgrade"
@@ -450,23 +577,85 @@ fi
 grep -q 'outside migration range' "$tmp/package-bad-upgrade.err"
 test "$after_upgrade_sha" = "$(sha256_file "$installed_prefix/bin/hideout")"
 
+# A poisoned installed-state path must be rejected before the first
+# package-owned file is removed. This proves whole-scope validation, not merely
+# that an out-of-root victim survives.
+scope_prefix="$tmp/package-scope-installed"
+scope_store="$tmp/package-scope-store"
+"$prefix/install.sh" --prefix "$scope_prefix" --store "$scope_store" --skip-init \
+  >"$tmp/package-scope-install.out"
+scope_outside="$tmp/scope-outside.txt"
+printf 'outside-must-survive\n' >"$scope_outside"
+scope_state="$scope_prefix/share/hideout/package-manifest.json"
+jq '
+  .obsoleteFiles += [{
+    "path": "../scope-outside.txt",
+    "kind": "doc",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "executable": false,
+    "reason": "adversarial scope fixture"
+  }]
+' "$scope_state" >"$tmp/package-scope-state.json"
+cp "$tmp/package-scope-state.json" "$scope_state"
+if "$scope_prefix/bin/hideout" package uninstall --prefix "$scope_prefix" \
+  >"$tmp/package-scope-uninstall.out" 2>"$tmp/package-scope-uninstall.err"; then
+  echo "package-smoke: uninstall accepted an out-of-root installed-state path" >&2
+  exit 1
+fi
+grep -q 'path must stay inside root' "$tmp/package-scope-uninstall.err"
+test -x "$scope_prefix/bin/hideout"
+grep -q '^outside-must-survive$' "$scope_outside"
+
 unrelated_installed="$installed_prefix/bin/not-hideout"
 printf 'operator-owned\n' >"$unrelated_installed"
 "$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" --dry-run >"$tmp/package-uninstall-dry.out"
 grep -q 'package: uninstall dry-run' "$tmp/package-uninstall-dry.out"
 grep -q 'remove bin/hideout' "$tmp/package-uninstall-dry.out"
+grep -q "remove bin/tun2socks-linux-$arch" "$tmp/package-uninstall-dry.out"
 test -x "$installed_prefix/bin/hideout"
 test -f "$durable_fixture"
 "$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" >"$tmp/package-uninstall.out"
 grep -q 'durableState=preserved' "$tmp/package-uninstall.out"
 test ! -e "$installed_prefix/bin/hideout"
+test ! -e "$installed_prefix/bin/tun2socks-linux-$arch"
+test ! -e "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
 test -f "$unrelated_installed"
 test -f "$durable_fixture"
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-reinstall-for-purge.out"
-"$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" --purge >"$tmp/package-uninstall-purge.out"
+"$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" --purge --dry-run \
+  >"$tmp/package-uninstall-purge-dry.out"
+grep -q 'package: uninstall dry-run' "$tmp/package-uninstall-purge-dry.out"
+grep -q "purge store=$installed_store_real" "$tmp/package-uninstall-purge-dry.out"
+grep -q -- "--confirm-purge $installed_store_real" "$tmp/package-uninstall-purge-dry.out"
+test -x "$installed_prefix/bin/hideout"
+test -f "$durable_fixture"
+if "$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" --purge \
+  >"$tmp/package-uninstall-purge-unconfirmed.out" 2>"$tmp/package-uninstall-purge-unconfirmed.err"; then
+  echo "package-smoke: purge without exact store confirmation succeeded" >&2
+  exit 1
+fi
+grep -q 'confirm-purge' "$tmp/package-uninstall-purge-unconfirmed.err"
+test -x "$installed_prefix/bin/hideout"
+test -f "$durable_fixture"
+"$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" \
+  --purge --confirm-purge "$installed_store_real" >"$tmp/package-uninstall-purge.out"
 grep -q 'durableState=purged' "$tmp/package-uninstall-purge.out"
 grep -q "purge store=$installed_store_real" "$tmp/package-uninstall-purge.out"
 test ! -e "$installed_store"
+cat >"$tmp/package-lifecycle-summary.json" <<JSON
+{
+  "priorVersionUpgrade": true,
+  "packageHelperAdded": true,
+  "durableStatePreservedOnUpgrade": true,
+  "unrelatedFilePreservedOnUpgrade": true,
+  "homebrewGuidance": true,
+  "normalUninstallPreservedState": true,
+  "purgeDryRunPreservedState": true,
+  "purgeRequiredExactStoreConfirmation": true,
+  "destructiveScopeRejectedBeforeMutation": true,
+  "unrelatedFilePreservedOnUninstall": true
+}
+JSON
 
 default_installed_prefix="$tmp/package-default-installed"
 default_installed_store="$tmp/package-default-store"
@@ -477,14 +666,15 @@ test -x "$default_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
+test -x "$default_installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$default_installed_store/install-state.json"
 test -f "$default_installed_store/profiles/default/profile.json"
 grep -q 'backend: lima' "$tmp/package-default-install.out"
 if command -v limactl >/dev/null 2>&1; then
-  HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --workspace "$workspace" >"$tmp/package-default-doctor.out"
+  HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --workspace "$workspace" --verbose >"$tmp/package-default-doctor.out"
   grep -q 'backend: ok lima available' "$tmp/package-default-doctor.out"
 else
-  if HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --workspace "$workspace" >"$tmp/package-default-doctor.out" 2>"$tmp/package-default-doctor.err"; then
+  if HIDEOUT_STORE_ROOT="$default_installed_store" "$default_installed_prefix/bin/hideout" doctor --workspace "$workspace" --verbose >"$tmp/package-default-doctor.out" 2>"$tmp/package-default-doctor.err"; then
     echo "package-smoke: default doctor succeeded without limactl" >&2
     cat "$tmp/package-default-doctor.out" >&2
     exit 1
@@ -506,6 +696,7 @@ test -x "$skip_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
+test -x "$skip_installed_prefix/bin/tun2socks-linux-$arch"
 HIDEOUT_STORE_ROOT="$skip_installed_store" "$skip_installed_prefix/bin/hideout" help >"$tmp/package-help.out"
 grep -q 'hideout setup' "$tmp/package-help.out"
 if [ -e "$skip_installed_store/install-state.json" ] || [ -e "$skip_installed_store/profiles/default/profile.json" ]; then

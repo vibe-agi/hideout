@@ -39,7 +39,19 @@ The public alpha supports Apple Silicon Macs. Homebrew installs Hideout and its
 ```bash
 brew install vibe-agi/tap/hideout
 hideout setup
+hideout doctor
 ```
+
+If you need help diagnosing a problem, create one bounded local report and
+inspect it before sharing:
+
+```bash
+hideout support report --out ./hideout-support.json
+```
+
+The command does not upload anything. It excludes raw audit events, workspace
+content, secret/proxy values, control-plane tokens, machine IDs, and raw
+host-user paths; the output is capped at 1 MiB and written with mode `0600`.
 
 The formula verifies the immutable archive checksum, macOS code signature, and
 Hideout package manifest. Installation does not start a VM or create a profile;
@@ -47,6 +59,18 @@ the interactive `setup` review creates the supported default configuration but
 still does not start a VM or download the runtime. The inspectable standalone installer, manual
 download, repair, and uninstall paths remain documented in
 [Distribution And Bootstrap](docs/distribution-bootstrap.md).
+
+Homebrew owns package updates and removal:
+
+```bash
+brew upgrade vibe-agi/tap/hideout
+brew uninstall vibe-agi/tap/hideout
+```
+
+Both operations preserve durable Hideout state under `~/.hideout`. Use
+`hideout help uninstall` before removing that state separately; standalone
+uninstall and purge require explicit package paths and an exact store
+confirmation.
 
 ## Try It
 

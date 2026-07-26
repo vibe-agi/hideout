@@ -88,6 +88,52 @@ After a manual install, run the same setup used by the Homebrew path:
 hideout setup
 ```
 
+## Update, Repair, And Remove
+
+The installation provider owns package files. Homebrew users update, repair, or
+remove the formula through Homebrew rather than mutating its Cellar prefix:
+
+```bash
+brew upgrade vibe-agi/tap/hideout
+brew reinstall vibe-agi/tap/hideout
+brew uninstall vibe-agi/tap/hideout
+```
+
+Those operations preserve the durable store at `~/.hideout`. The standalone
+bootstrap may be rerun to install the current published package over a
+compatible prior package. Verify before repair or removal:
+
+```bash
+hideout package verify "$HOME/.local"
+hideout package repair --prefix "$HOME/.local" --dry-run
+hideout package repair --prefix "$HOME/.local"
+hideout package uninstall --prefix "$HOME/.local" --dry-run
+hideout package uninstall --prefix "$HOME/.local"
+```
+
+Standalone repair removes only checksum-bound obsolete package-owned files.
+Normal standalone uninstall removes package-owned files and reports the
+preserved durable store; it does not remove unrelated prefix files. To remove
+the durable store too, first preview the exact scope, then repeat the reported
+store path as confirmation:
+
+```bash
+hideout package uninstall \
+  --prefix "$HOME/.local" \
+  --store "$HOME/.hideout" \
+  --purge \
+  --dry-run
+hideout package uninstall \
+  --prefix "$HOME/.local" \
+  --store "$HOME/.hideout" \
+  --purge \
+  --confirm-purge "$HOME/.hideout"
+```
+
+The purge confirmation must resolve to the exact recorded store. The complete
+file and directory scope is validated before the first deletion; an invalid or
+out-of-root installed-state entry fails before a partial uninstall.
+
 ## Problem
 
 Hideout is more than one binary. A working installation may need:
@@ -141,11 +187,12 @@ schemas
 default profile templates
 ```
 
-The first public-alpha package does not own or checksum `limactl` or
-`tun2socks`. They are explicit host prerequisites: Lima is required for the
-supported VM path, while `tun2socks` is required only for the privacy-network
-path. `hideout package verify` and `doctor` report missing external
-prerequisites without pretending they were packaged.
+The package does not own or checksum `limactl`; Lima remains an explicit host
+prerequisite for the supported VM path. The package does own the guest Linux
+`tun2socks` privacy helper and verifies its artifact digest, pinned upstream
+version, target, build mode, package ownership, and redistributed license.
+`hideout package verify` and `doctor` distinguish the package-owned helper from
+the remaining host prerequisite.
 
 Optional artifacts:
 
@@ -255,8 +302,26 @@ hideout tui
 
 ## Doctor Fix Flow
 
-`doctor` explains. `doctor --fix --dry-run` builds an InitPlan preview;
-`doctor --fix --apply` remediates safe missing pieces.
+Plain `hideout doctor` gives the ordinary user a concise `Ready`,
+`Needs attention`, or `Blocked` answer, the effective isolation/network
+boundary, and safe next commands. It deliberately omits passing internal
+checks and source-tree gate instructions. Use:
+
+```bash
+hideout doctor --verbose
+```
+
+to inspect every human-readable finding, or:
+
+```bash
+hideout doctor --format json
+```
+
+for the complete stable machine-readable report. Selecting `--level deep` or a
+specific `--feature` also opts into detailed human output.
+
+Doctor explains but does not silently repair. `doctor --fix --dry-run` builds
+an InitPlan preview; `doctor --fix --apply` remediates safe missing pieces.
 
 Safe fixes:
 
@@ -538,8 +603,8 @@ Release candidate should verify:
   the immutable GitHub Release manifest as package identity truth;
 - add richer `doctor --fix --dry-run|--apply` remediation coverage for backend
   prerequisites and helper repair beyond source-tree builds;
-- revisit whether a future package owns `tun2socks`; the first alpha keeps it
-  as an explicitly checked external prerequisite.
+- automate rebuilding and review of the pinned `tun2socks` helper when its
+  upstream version changes.
 
 ### Later
 
@@ -549,5 +614,5 @@ Release candidate should verify:
 
 ## Open Questions
 
-- Should a later package own and checksum `tun2socks`, or keep it as an
-  independently managed privacy prerequisite?
+- Which release cadence should trigger review of a newer pinned `tun2socks`
+  version?

@@ -110,7 +110,8 @@ jq -e '
   ([.requirements[] | select(.featureId == "039-trusted-host-app-grant")] | length == 2) and
   ([.requirements[] | select(.featureId == "041-workspace-executable-support")] | length == 4) and
   ([.requirements[] | select(.featureId == "042-disposable-orphan-recovery")] | length == 5) and
-  ([.requirements[] | select(.featureId == "043-projection-readiness-proof")] | length == 5)
+  ([.requirements[] | select(.featureId == "043-projection-readiness-proof")] | length == 5) and
+  ([.requirements[] | select(.featureId == "044-ordinary-user-release")] | length == 7)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 
@@ -321,6 +322,18 @@ scripts/test-doctor-smoke.sh
 recovery_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-recovery-gate0.XXXXXX")"
 scripts/test-doctor-package-recovery-e2e.sh --local-fast --out "$recovery_tmp"
 rm -rf "$recovery_tmp"
+
+# Ordinary-user release convergence (044): targeted help, doctor, support,
+# package-helper, upgrade, repair, uninstall, purge, redaction, docs, mutation,
+# and negative-fixture evidence. This local lane cannot satisfy real Gate 2/3,
+# required UI execution, signing/notarization, or public receipt requirements.
+ordinary_user_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ordinary-user-gate0.XXXXXX")"
+scripts/test-ordinary-user-release.sh --local-fast \
+  --out "$ordinary_user_tmp/product-hardening-evidence.json"
+go run ./internal/productevidence/cmd/validate-044 \
+  --target targeted-completion "$ordinary_user_tmp/product-hardening-evidence.json" >/dev/null
+rm -rf "$ordinary_user_tmp"
+scripts/test-release-readiness.sh --negative-fixtures
 
 # Documentation truth gate (025): claim-boundary registry, known-overclaim scan,
 # curated command examples, localized README canonicality, and Gate 0/docs

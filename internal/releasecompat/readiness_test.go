@@ -641,6 +641,48 @@ func TestReleaseCandidateRequiresEveryReleaseProofPackageAndArtifactDigest(t *te
 	}
 }
 
+func TestReleaseCandidateRequires044OrdinaryUserUIProof(t *testing.T) {
+	dir := t.TempDir()
+	binding := runtimeBindingFixture()
+	expected := runtimeExpectationFixture()
+	packageIdentity := packageIdentityFixture()
+	gate2 := filepath.Join(dir, "gate2.json")
+	gate3 := filepath.Join(dir, "gate3.json")
+	product := filepath.Join(dir, "runtime-product.json")
+	writeRuntimeGateEvidence(t, gate2, "gate2-lima", "lima", binding)
+	writeRuntimeGateEvidence(t, gate3, "gate3-hidden-proxy", "lima", binding)
+	writeRuntimeProductEvidence(t, product, packageIdentity.SourceCommit, binding)
+
+	manifest, err := productevidence.ReadFile(product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered := manifest.Proofs[:0]
+	for _, proof := range manifest.Proofs {
+		if proof.ProofID != productevidence.Proof044PackageUI {
+			filtered = append(filtered, proof)
+		}
+	}
+	manifest.Proofs = filtered
+	if err := productevidence.WriteFile(product, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := BuildReadiness(ReadinessOptions{
+		Mode: "release-candidate", LocalPassed: true,
+		Gate2Evidence: gate2, Gate3Evidence: gate3,
+		ProductEvidence: []string{product}, Runtime: &expected, Package: &packageIdentity,
+		SigningObservationSHA256: strings.Repeat("d", 64), NotarizationObservationSHA256: strings.Repeat("e", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.ReleaseReady || ready.Commands[1].Status != "failed" ||
+		!strings.Contains(ready.Commands[1].Summary, productevidence.Proof044PackageUI) {
+		t.Fatalf("missing 044 UI proof was not authoritative: %+v", ready)
+	}
+}
+
 func firstFeatureProof(manifest *productevidence.Manifest, featureID string) int {
 	for i, proof := range manifest.Proofs {
 		if proof.FeatureID == featureID {

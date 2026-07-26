@@ -1,0 +1,165 @@
+# Acceptance And Adversarial Report: Ordinary User Release
+
+<!-- markdownlint-disable MD013 -->
+
+**Feature**: `044-ordinary-user-release`
+
+**Candidate status**: Not frozen
+
+**Overall status**: In progress
+
+This is the authoritative requirement-to-evidence and adversarial ledger for
+the implementation batch. A task is not complete merely because a test is
+green: new assertions must have an observed red mutation, new judges must fire
+on a negative fixture, and public claims must bind to one retained candidate.
+
+## Candidate Identity
+
+| Field | Value | Evidence |
+| --- | --- | --- |
+| Version | not frozen | pending release decision |
+| Source commit | not frozen | pending clean public commit |
+| Source clean | not proved | pending candidate freeze |
+| Source public/pushed | not proved | pending push and CI |
+| Package SHA-256 | not built | pending retained package |
+| Manifest SHA-256 | not built | pending retained package |
+| Signing | not run | protected release workflow |
+| Notarization | not run | protected release workflow |
+| Anonymous download | not run | public release |
+| Publication receipt | not run | public release |
+
+## Fresh-Eyes Findings
+
+| ID | Finding | Baseline evidence | Resolution | Status |
+| --- | --- | --- | --- | --- |
+| F-001 | Top-level help mixes the primary journey with advanced build and laboratory commands. | `hideout help` at pre-044 HEAD | concise primary help plus explicit `help --all` inventory | resolved-local |
+| F-002 | `hideout setup --help` is parsed as an invalid setup invocation and exits non-zero. | pre-044 CLI observation | setup help is intercepted before operator-intent parsing and is read-only | resolved-local |
+| F-003 | Default doctor renders every passing subsystem and maintainer gate guidance rather than a short user answer. | pre-044 light/deep doctor observation | pure readiness projection; detailed/JSON modes retain all findings | resolved-local |
+| F-004 | No single bounded support-report command exists; users must compose doctor/export surfaces themselves. | pre-044 support command inventory | `hideout support report --out <path>` with strict schema, bounded redaction, and safe local write | resolved-local |
+| F-005 | Privacy networking requires an operator-installed guest `tun2socks` helper even though it executes inside the product boundary. | `docs/DEBT.md` and package smoke | pinned v2.6.0 package helper, exact upstream license, package/Gate 3 verification, no ambient fallback | resolved-local |
+| F-006 | Package lifecycle is implemented but ordinary-user update/uninstall guidance is split across caveats and long-form docs. | help and distribution docs | provider-specific help, preserved-state wording, purge preview/exact-store confirmation, and whole-scope prevalidation | resolved-local |
+| F-007 | The release-readiness shell still passed an extracted package root, which cannot prove the outer archive digest accepted by the current readiness model. | `scripts/test-release-readiness.sh` review; `support readiness` rejected the extracted-root identity | release mode now requires the exact archive plus signing/notarization observations and validates clean `HEAD` reachability from `origin/master` | resolved-local |
+| F-008 | The older release-dogfood entrypoint still required a maintainer-supplied `HIDEOUT_LINUX_TUN2SOCKS_PATH`, contradicting the package-owned helper journey. | release-dogfood usage and preflight | dogfood now extracts its own retained artifact, verifies it, exports all package-owned helpers, forbids the tun2socks override through release Gate 3, and binds runtime evidence to the archive identity | resolved-local |
+| F-009 | Install and first-run smokes still asserted internal detailed findings from default doctor, contradicting the new concise default and causing the first full Gate 0 run to fail after all Go tests and formal models passed. | `scripts/test-install-smoke.sh` exited at `store: ok writable`; first-run used the same stale shape | smokes now assert the concise default surface and separately use `--verbose` for full finding parity; focused first-run lanes and full Gate 0 pass | resolved-local |
+
+## Requirement Evidence
+
+Evidence values are `missing`, `contradicted`, `weak`, `passed-local`,
+`passed-real`, or `passed-public`.
+
+| Requirement group | Required evidence | Current evidence | Status |
+| --- | --- | --- | --- |
+| FR-001–FR-004 first result | exact-package install/setup/real Lima run | existing 038 evidence predates candidate | weak |
+| FR-005–FR-007 help | CLI contract, zero-write checks, inventory mutation | focused CLI tests, operator-smoke judge, mutation M-002 | passed-local |
+| FR-008–FR-013 doctor/recovery | summary unit/CLI tests, mutation, full-report parity | focused projection/CLI tests and existing typed fix tests | passed-local |
+| FR-014–FR-018 support report | schema, redaction, safe-write, size, negative fixtures | strict schema/unit/CLI tests and local-fast adversarial runner | passed-local |
+| FR-019–FR-024 privacy helper | package/helper manifests, license, resolver proof, Gate 3 | package smoke and focused resolution tests pass; exact-package real Gate 3 still pending | passed-local |
+| FR-025–FR-027 lifecycle | exact-candidate upgrade/repair/uninstall/purge | local prior-version/helper-addition, repair, uninstall, purge, scope, and guidance proof passes; exact candidate pending | passed-local |
+| FR-028–FR-035 release | aggregate, real gates, UI, signing, notarization, receipt | none for 044 candidate | missing |
+
+## Requirement And Success-Criterion Audit
+
+This audit distinguishes implemented local behavior from evidence that can only
+exist after freezing or publishing one exact candidate.
+
+| IDs | Authoritative evidence reviewed | Result |
+| --- | --- | --- |
+| FR-001–FR-004 | audience/docs, package install, setup PTY, first-run local and retained pre-044 real evidence | passed-local; new exact candidate pending |
+| FR-005–FR-007 | help unit/CLI inventory, contextual zero-write checks, M-002/N-001 | passed-local |
+| FR-008–FR-013 | doctor projection/full-report tests, repair tasks, M-003/N-002, install and first-run smokes | passed-local |
+| FR-014–FR-018 | support-report schema/model/write/CLI tests and injected-secret local aggregate | passed-local |
+| FR-019–FR-024 | pinned helper module/license/manifests, resolver/package tests, package-only Gate 3 verification, M-005/N-005 | passed-local; exact-package real Gate 3 pending |
+| FR-025–FR-027 | Homebrew/standalone help, upgrade/repair/uninstall/purge fixtures, scope mutation M-006 | passed-local |
+| FR-028 | exact package ordinary-user journey | runner and rejection contract passed-local; exact clean candidate run pending |
+| FR-029 | mutation and negative-fixture discipline | M-001–M-008 and N-001–N-007 passed-local |
+| FR-030 | candidate coverage aggregation | registry, candidate runner, Gate 0 and readiness integration passed-local; candidate artifact pending |
+| FR-031 | dirty/private/unpushed/rebuilt/stale/signing/notary/download rejection | N-007 plus readiness/releasechannel judges passed-local |
+| FR-032–FR-035 | docs truth, prerelease workflow contracts, debt review, adversarial ledger | passed-local; receipt-derived public rendering pending |
+| SC-001–SC-002 | supported-Mac first useful result and time bound | pending new exact-package Gate 2 measurements |
+| SC-003–SC-004 | primary/contextual help bounds and coverage | passed-local |
+| SC-005–SC-006 | concise healthy/blocked doctor and runnable safe actions | passed-local |
+| SC-007 | one bounded schema-valid support artifact with zero injected protected material | passed-local |
+| SC-008 | clean-host exact package verification plus real privacy gate | package verification passed-local; clean exact-package Gate 3 pending |
+| SC-009 | helper removal/change/replacement/non-executable failure | passed-local; exact-package Gate 3 positive pending |
+| SC-010 | durable/unrelated state preservation through upgrade and normal uninstall | passed-local |
+| SC-011 | one exact package across all acceptance, gates, UI, signing, and notary | pending candidate freeze |
+| SC-012 | all new mutations and judge negative fixtures | passed-local |
+| SC-013 | English/Chinese docs, help, package guidance, support matrix, release notes | passed-local before publication; receipt rendering pending |
+| SC-014 | candidate-created resource cleanup | local fixtures passed; exact-candidate cleanup inventory pending |
+
+## Mutation Proofs
+
+| ID | Assertion | Mutation | Red observation | Restored green | Status |
+| --- | --- | --- | --- | --- | --- |
+| M-001 | Primary next command is exact | Changed `git status --short` to `git status` in `writeSetupNextSteps` | `TestSetupNextStepsKeepsOrdinaryJourneyFirst` failed and printed the changed journey | Restored exact command; focused setup tests passed | passed-local |
+| M-002 | Help inventory is complete | Removed the `hideout shim build-linux` entry from expanded help | `TestExpandedHelpRetainsCompleteCommandInventory` failed and named the missing entry | Restored entry; focused help tests passed | passed-local |
+| M-003 | Doctor summary reflects readiness state | Changed the attention label from `Needs attention` to `Ready` | `TestDoctorDefaultIsConciseAndDetailedModesRetainFindings` failed and showed the false-ready output | Restored label; focused doctor tests passed | passed-local |
+| M-004 | Support redaction rejects protected material | Removed proxy-value matching from the final redaction validator | `TestValidateRejectsOversizeAndProtectedMaterial/proxy` failed because the injected credentialed SOCKS URL was accepted | Restored the proxy validator; support-report package and local-fast acceptance passed | passed-local |
+| M-005 | Package helper digest is enforced | Removed the manifest-digest comparison from `Tun2SocksHelperCurrent` | `TestResolveLinuxTun2SocksIgnoresAmbientPathAndRejectsDigestDrift` failed because the drifted store helper resolved | Restored comparison; focused resolver tests and package smoke passed | passed-local |
+| M-006 | Rejected uninstall performs no partial deletion | Disabled whole-file-scope prevalidation before the deletion loop | `TestRepairAndUninstallRejectSymlinkedObsoleteAncestors/uninstall` failed because `bin/hideout` had already been removed before the poisoned path was rejected | Restored full prevalidation; focused package tests and recovery E2E passed | passed-local |
+| M-007 | Release aggregate rejects mismatched candidate identity | Removed the package-commit-to-checkout-`HEAD` comparison from `validate_release_candidate_source` | `scripts/test-release-readiness.sh --negative-fixtures` failed with `stale package commit fixture unexpectedly passed` | Restored the comparison; the complete negative suite passed | passed-local |
+| M-008 | Registry requires every 044 proof | Removed the public-receipt registry row | `TestOrdinaryUserReleaseRegistryCoversTargetedRealAndPublicProofs` failed with `requirements=6 want=7` | Restored row; `go test ./internal/productevidence` passed | passed-local |
+
+## Negative Fixtures
+
+| ID | Judge | Fixture | Observed result | Status |
+| --- | --- | --- | --- | --- |
+| N-001 | Help contextual routing | unknown topic plus an expanded-help fixture with the shim entry removed | CLI rejects the unknown topic with `help --all`; the operator-smoke inventory judge rejects the incomplete fixture | passed-local |
+| N-002 | Doctor ordinary-action filter | warning whose sole next action is `scripts/test-gate3-hidden-proxy.sh` | projection remained ready, omitted the finding, and rendered no `scripts/test-*` text; mixed safe/maintainer fixture retained only `hideout daemon start` | passed-local |
+| N-003 | Support output validator | symlink, overwrite, unsafe parent, oversize | every fixture was rejected before a final file was retained; atomic success mode is `0600` | passed-local |
+| N-004 | Support redaction validator | injected capability/UI token, credentialed proxy, secret backing name, home/workspace path, machine ID, workspace sentinel, and oversize body | unit validators rejected direct injections; the local-fast real CLI report contained none of the injected values or workspace content | passed-local |
+| N-005 | Helper provenance validator | missing, digest-damaged, wrong target, invalid release override, invalid development override, and ambient `PATH` helper | installer and Gate 3 validator rejected missing/damaged/wrong-target package helpers; release Gate 3 rejected the override; Go resolver rejected the invalid development override without falling through and ignored ambient `PATH` | passed-local |
+| N-006 | Package lifecycle scope | prior install without package helper, unrelated prefix/store files, poisoned out-of-root obsolete path, purge without confirmation | candidate added helper/license while preserving state; repair and uninstall preserved unrelated/durable files; poisoned scope failed before deleting `bin/hideout`; unconfirmed purge failed with store intact | passed-local |
+| N-007 | Release candidate validator | dirty checkout, unpushed commit, stale package commit, changed package bytes, stale product digest, missing/failed Gate 2 or Gate 3, native gate substitution, missing 044 UI, invalid signing/notarization, and anonymous-download digest drift | `scripts/test-release-readiness.sh --negative-fixtures` rejected every source fixture and ran the focused releasecompat, releasechannel, and productevidence judges; M-007 proved the stale-commit fixture fires | passed-local |
+
+## Verification Commands
+
+Commands are added only after they have actually run. Planned commands live in
+`quickstart.md`; this section records observations rather than intentions.
+
+| Command | Candidate identity | Result | Artifact |
+| --- | --- | --- | --- |
+| pending | not frozen | not run | none |
+| `go test ./internal/productevidence` | pre-candidate working tree | passed | local test output, 2026-07-26 |
+| `scripts/test-ordinary-user-release.sh --local-fast --out /tmp/hideout-044-scaffold.json` | pre-candidate working tree | scaffold passed | `/tmp/hideout-044-scaffold.json` |
+| `go test ./internal/app -run 'Test(PrimaryHelp\|ExpandedHelp\|ContextualHelp\|HelpRejects\|UsageGroups\|SetupRejectsEveryNonHelpArgument)' -count=1` | pre-candidate working tree | passed after observed M-002 red mutation | local test output, 2026-07-26 |
+| `go test ./internal/doctor ./internal/app -run 'Test(ReadinessSummary\|DoctorDefaultIsConcise\|DoctorJSONRemainsComplete\|DoctorConciseBlocked)' -count=1` | pre-candidate working tree | passed after observed M-003 red mutation | local test output, 2026-07-26 |
+| `go test ./internal/supportreport ./internal/app -count=1` | pre-candidate working tree | passed after observed M-004 red mutation | local test output, 2026-07-26 |
+| `scripts/test-ordinary-user-release.sh --local-fast --out /tmp/hideout-044-local-fast.json` | pre-candidate working tree | passed with real CLI redaction/safe-write fixtures | `/tmp/hideout-044-local-fast.json` |
+| `go test ./internal/helperbin ./internal/packagekit ./internal/supportreport ./internal/manager ./internal/app` | pre-candidate working tree | passed after replacing the stale external-prerequisite assertion | local test output, 2026-07-26 |
+| `scripts/test-package-smoke.sh` | pre-candidate working tree | passed with package-owned helper, license, ambient-path, override, digest, target, install, repair, and uninstall assertions | local test output, 2026-07-26 |
+| `cmp third_party/tun2socks/LICENSE <v2.6.0-module>/LICENSE` plus readonly module identity check | pinned `github.com/xjasonlyu/tun2socks/v2@v2.6.0` | exact upstream MIT license matched; module and sums remained pinned | local review output, 2026-07-26 |
+| `scripts/test-doctor-package-recovery-e2e.sh --local-fast --out /tmp/hideout-044-recovery-2` | pre-candidate working tree | passed with lifecycle scope, preserved-state, exact purge confirmation, repair, doctor, schema, and redaction evidence | `/tmp/hideout-044-recovery-2/product-hardening-evidence.json` |
+| `scripts/test-ordinary-user-release.sh --local-fast --out /tmp/hideout-044-aggregate.json` | pre-candidate working tree | passed complete targeted 044 aggregation and `validate-044 --target targeted-completion` | `/tmp/hideout-044-aggregate.json` plus sibling artifacts |
+| `scripts/test-release-readiness.sh --negative-fixtures` | source-fixture repositories plus unit release identities | passed after observed M-007 failure; rejected dirty/private/stale/rebuilt/missing-gate/UI/signing/notarization/download fixtures | transient test roots removed |
+| `HIDEOUT_PHASE1_PRINT_PLAN=1 ... scripts/test-release-dogfood.sh` | pre-candidate package `28db82a36da2089a835472ec025c6023129212ef` | passed package-owned helper extraction/verification and release-candidate plan without external tun2socks path | transient `/tmp/hideout-044-dogfood-plan`, removed after review |
+| `scripts/test-doc-truth-smoke.sh --out /tmp/hideout-044-doc-truth` | pre-candidate working tree | passed after ordinary-user, helper-supply, candidate, and public-boundary convergence | transient docs evidence |
+| `go test ./internal/app ./internal/productevidence ./internal/releasecompat ./internal/releasechannel -count=1` | pre-candidate working tree | passed, including readiness-level refusal of missing 044 UI proof | local test output, 2026-07-26 |
+| `go test -race ./internal/supportreport ./internal/helperbin ./internal/packagekit ./internal/productevidence ./internal/releasecompat -count=1` | pre-candidate working tree | passed | local race-test output, 2026-07-26 |
+| `scripts/test-install-smoke.sh` plus both local first-run lanes | pre-candidate working tree | passed after F-009 concise/detailed doctor convergence | transient package/evidence roots |
+| `scripts/test-gate0.sh` | pre-candidate working tree | passed complete static, unit, formal-model, package, product-smoke, docs, mutation, negative-fixture, first-run, and local UI battery | local console observation, 2026-07-26 |
+
+## Cleanup Inventory
+
+| Resource class | Created | Removed/accounted | Status |
+| --- | --- | --- | --- |
+| Test sessions | 0 | 0 | pending |
+| Test environments | 0 | 0 | pending |
+| Temporary stores | 0 | 0 | pending |
+| Package prefixes | 0 | 0 | pending |
+| Support reports | local-fast and unit-test temporary files | test temp roots removed; no user-store report residue | passed-local |
+| Retained release evidence | local aggregate and docs/dogfood plan fixtures only | development fixtures removed or confined to `/tmp`; no candidate/public evidence claimed | passed-local |
+
+## Completion Audit
+
+044 may be marked implemented only when:
+
+- every task is checked with linked evidence;
+- every functional requirement and success criterion is passed at its required
+  local, real, or public scope;
+- all mutation and negative-fixture rows are green;
+- exact-package Gate 2, Gate 3, and required UI evidence pass;
+- the clean commit is public and CI is green;
+- signing, notarization, anonymous download, and publication receipt validate;
+- documentation and release inventory are rendered from the receipt; and
+- cleanup has no unaccounted residue.

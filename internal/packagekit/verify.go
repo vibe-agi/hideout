@@ -64,7 +64,7 @@ func Verify(root string) (VerifyResult, error) {
 		if err := VerifyArtifact(cleanRoot, manifest); err != nil {
 			return VerifyResult{}, err
 		}
-		return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files), Prerequisites: ExternalPrerequisites()}, nil
+		return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files), Prerequisites: ExternalPrerequisites(cleanRoot)}, nil
 	}
 	statePath := filepath.Join(cleanRoot, filepath.FromSlash(InstalledManifest))
 	state, err := LoadInstallState(statePath)
@@ -74,7 +74,7 @@ func Verify(root string) (VerifyResult, error) {
 	if err := VerifyInstalled(cleanRoot, state); err != nil {
 		return VerifyResult{}, err
 	}
-	return VerifyResult{Root: cleanRoot, Mode: "installed", Files: len(state.Files), Prerequisites: ExternalPrerequisites()}, nil
+	return VerifyResult{Root: cleanRoot, Mode: "installed", Files: len(state.Files), Prerequisites: ExternalPrerequisites(cleanRoot)}, nil
 }
 
 // VerifyDistribution validates a package artifact independently of the host
@@ -98,7 +98,7 @@ func VerifyDistribution(root string) (VerifyResult, error) {
 	if err := VerifyArtifact(cleanRoot, manifest); err != nil {
 		return VerifyResult{}, err
 	}
-	return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files), Prerequisites: ExternalPrerequisites()}, nil
+	return VerifyResult{Root: cleanRoot, Mode: "artifact", Files: len(manifest.Files), Prerequisites: ExternalPrerequisites(cleanRoot)}, nil
 }
 
 func LoadManifest(path string) (Manifest, error) {
@@ -241,6 +241,35 @@ func verifyRequiredLinuxSessionHelpers(root, guestArch string, files []File) err
 		if !helperbin.StoreHelperCurrent(binaryPath, command, guestArch) {
 			return fmt.Errorf("package Linux helper identity is invalid for %q", binaryRel)
 		}
+	}
+	tunBinaryRel := "bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + guestArch
+	tunManifestRel := tunBinaryRel + ".manifest.json"
+	tunBinary, binaryOK := indexed[tunBinaryRel]
+	tunManifest, manifestOK := indexed[tunManifestRel]
+	if !binaryOK || tunBinary.Kind != "linux-helper" || !tunBinary.Executable {
+		return fmt.Errorf("package requires executable Linux helper %q", tunBinaryRel)
+	}
+	if !manifestOK || tunManifest.Kind != "helper-manifest" || tunManifest.Executable {
+		return fmt.Errorf("package requires helper manifest %q", tunManifestRel)
+	}
+	tunPath, err := JoinRelative(root, tunBinaryRel)
+	if err != nil {
+		return err
+	}
+	if _, ok := helperbin.Tun2SocksHelperCurrent(tunPath, guestArch, true); !ok {
+		return fmt.Errorf("package Linux helper identity is invalid for %q", tunBinaryRel)
+	}
+	licenseFound := false
+	for _, rel := range []string{
+		"third_party/tun2socks/LICENSE",
+		"share/hideout/third_party/tun2socks/LICENSE",
+	} {
+		if file, ok := indexed[rel]; ok && file.Kind == "doc" && !file.Executable {
+			licenseFound = true
+		}
+	}
+	if !licenseFound {
+		return errors.New("package requires third-party tun2socks license")
 	}
 	return nil
 }

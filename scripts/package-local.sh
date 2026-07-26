@@ -122,6 +122,27 @@ verify_linux_helper() {
   fi
 }
 
+verify_tun2socks_helper() {
+  local root="$1" arch="$2"
+  verify_linux_helper "$root" "$arch" "tun2socks"
+  local manifest="$root/bin/tun2socks-linux-$arch.manifest.json"
+  if ! jq -e '
+    .upstreamModule == "github.com/xjasonlyu/tun2socks/v2" and
+    .upstreamVersion == "v2.6.0" and
+    .license == "MIT" and
+    .buildMode == "source-built-pinned-module" and
+    .packageOwned == true
+  ' "$manifest" >/dev/null; then
+    echo "package-local: tun2socks provenance manifest is invalid: $manifest" >&2
+    return 1
+  fi
+  if [ ! -f "$root/third_party/tun2socks/LICENSE" ] ||
+    [ -L "$root/third_party/tun2socks/LICENSE" ]; then
+    echo "package-local: tun2socks upstream license is missing" >&2
+    return 1
+  fi
+}
+
 absolute_path() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
@@ -137,7 +158,7 @@ package_kind() {
     install.sh) echo installer ;;
     README.md|README.zh-CN.md) echo entrypoint ;;
     schemas/*) echo schema ;;
-    LICENSE|THIRD_PARTY_NOTICES.md|SECURITY.md|docs/*) echo doc ;;
+    LICENSE|THIRD_PARTY_NOTICES.md|SECURITY.md|docs/*|third_party/*) echo doc ;;
     host-app/*) echo host-app-core-data ;;
     examples/*) echo host-app-example ;;
     packaging/*) echo packaging ;;
@@ -200,6 +221,9 @@ stage_package() {
   for file in README.md README.zh-CN.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md; do
     install -m 0644 "$source/$file" "$prefix/$file"
   done
+  mkdir -p "$prefix/third_party/tun2socks"
+  install -m 0644 "$source/third_party/tun2socks/LICENSE" \
+    "$prefix/third_party/tun2socks/LICENSE"
   cp -R "$source/schemas" "$prefix/schemas"
   cp -R "$source/docs" "$prefix/docs"
   mkdir -p "$prefix/host-app" "$prefix/examples" "$prefix/packaging" "$prefix/runtime"
@@ -228,6 +252,7 @@ finalize_package() {
   guest_arch="$(jq -er '.guestArch' "$metadata")"
   verify_linux_helper "$prefix" "$guest_arch" "hideout-session-supervisor"
   verify_linux_helper "$prefix" "$guest_arch" "hideout-workspace-portal"
+  verify_tun2socks_helper "$prefix" "$guest_arch"
 
   local files_ndjson="$root/.files.ndjson"
   : >"$files_ndjson"
@@ -257,7 +282,7 @@ finalize_package() {
       layout:{root:"hideout",
         binaries:([$files[0][] | select(.kind == "binary" or .kind == "linux-helper") | .path] | sort),
         entrypoints:["install.sh","README.md","README.zh-CN.md"],
-        directories:["schemas","docs","host-app","examples","packaging","runtime"]},
+        directories:["schemas","docs","host-app","examples","packaging","runtime","third_party"]},
       files:$files[0],
       migration:{installStateSchema:"hideout.package-install-state/v1",
         fromInstalledSchemas:["hideout.package-install-state/v1"],

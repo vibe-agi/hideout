@@ -87,6 +87,36 @@ func TestSetupFreshReviewConfirmAndApply(t *testing.T) {
 	}
 }
 
+func TestSetupNextStepsKeepsOrdinaryJourneyFirst(t *testing.T) {
+	var output bytes.Buffer
+	writeSetupNextSteps(&output)
+	got := output.String()
+	ordered := []string{
+		"Next:",
+		"hideout doctor",
+		"cd /path/to/project",
+		"hideout run -- git status --short",
+		"More:",
+		"hideout run -- code .",
+		"Privacy later:",
+	}
+	last := -1
+	for _, want := range ordered {
+		index := strings.Index(got, want)
+		if index < 0 {
+			t.Fatalf("next steps missing %q:\n%s", want, got)
+		}
+		if index <= last {
+			t.Fatalf("next steps are out of order at %q:\n%s", want, got)
+		}
+		last = index
+	}
+	firstResult := strings.Index(got, "hideout run -- git status --short")
+	if firstResult < 0 || strings.Count(got[:firstResult], "hideout ") != 1 {
+		t.Fatalf("first result requires more than setup + doctor before run:\n%s", got)
+	}
+}
+
 func TestSetupCancelAndNonTerminalPerformNoApply(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -256,7 +286,7 @@ func TestSetupReadySendsNoApply(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsEveryArgument(t *testing.T) {
+func TestSetupRejectsEveryNonHelpArgument(t *testing.T) {
 	for _, args := range [][]string{{"setup", "--yes"}, {"setup", "--force"}, {"setup", "extra"}} {
 		var stdout bytes.Buffer
 		a := app{stdin: strings.NewReader("yes\n"), stdout: &stdout, stderr: new(bytes.Buffer)}

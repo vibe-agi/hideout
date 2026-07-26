@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/support-report.schema.json",
+  "title": "Hideout Shareable Support Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "product",
+    "support",
+    "package",
+    "doctor",
+    "recovery",
+    "collection",
+    "redaction",
+    "provenance"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.support-report/v1" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "commit", "buildTime", "hostOS", "hostArch"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "minLength": 1 },
+        "buildTime": { "type": "string", "minLength": 1 },
+        "hostOS": { "type": "string", "minLength": 1 },
+        "hostArch": { "type": "string", "minLength": 1 }
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "version", "platform", "backend"],
+      "properties": {
+        "schema": { "const": "hideout.support-matrix/v1" },
+        "version": { "type": "string", "minLength": 1 },
+        "platform": { "$ref": "#/$defs/supportEntry" },
+        "backend": { "$ref": "#/$defs/supportEntry" }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["applicability", "verification"],
+      "properties": {
+        "applicability": { "enum": ["installed", "not-applicable"] },
+        "verification": { "enum": ["passed", "failed", "not-applicable"] },
+        "schema": { "type": "string" },
+        "productVersion": { "type": "string" },
+        "sourceCommit": { "type": "string" },
+        "target": { "type": "string" },
+        "fileCount": { "type": "integer", "minimum": 0 },
+        "finding": { "type": "string" }
+      }
+    },
+    "doctor": { "$ref": "#/$defs/doctorReport" },
+    "recovery": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "nextActions"],
+        "properties": {
+          "code": { "type": "string", "minLength": 3 },
+          "nextActions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "support", "package", "doctor", "recovery"],
+      "properties": {
+        "product": { "$ref": "#/$defs/collectionStatus" },
+        "support": { "$ref": "#/$defs/collectionStatus" },
+        "package": { "$ref": "#/$defs/collectionStatus" },
+        "doctor": { "$ref": "#/$defs/collectionStatus" },
+        "recovery": { "$ref": "#/$defs/collectionStatus" }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "excludedDataClasses"],
+      "properties": {
+        "mode": { "const": "shareable-support" },
+        "excludedDataClasses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "delivery", "uploaded", "maxBytes"],
+      "properties": {
+        "command": { "const": "hideout support report --out <path>" },
+        "delivery": { "const": "local-file-only" },
+        "uploaded": { "const": false },
+        "maxBytes": { "const": 1048576 }
+      }
+    }
+  },
+  "$defs": {
+    "supportEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "level"],
+      "properties": {
+        "subject": { "type": "string", "minLength": 1 },
+        "level": {
+          "enum": ["first-class", "supported", "degraded", "unsupported", "gate-required"]
+        }
+      }
+    },
+    "collectionStatus": {
+      "enum": ["collected", "not-applicable", "failed"]
+    },
+    "doctorReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "generatedAt",
+        "profile",
+        "backend",
+        "level",
+        "summary",
+        "findings",
+        "redaction"
+      ],
+      "properties": {
+        "schema": { "const": "hideout.doctor-report/v1" },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "profile": { "type": "string" },
+        "backend": { "type": "string" },
+        "level": { "enum": ["light", "deep"] },
+        "features": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pass", "warn", "error", "skipped", "unsupported", "failed", "exitCode"],
+          "properties": {
+            "pass": { "type": "integer", "minimum": 0 },
+            "warn": { "type": "integer", "minimum": 0 },
+            "error": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "unsupported": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "boolean" },
+            "exitCode": { "type": "integer" }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["checkId", "category", "status", "severity", "required", "summary"],
+            "properties": {
+              "checkId": { "type": "string" },
+              "category": { "type": "string" },
+              "status": { "enum": ["pass", "warn", "error", "skipped", "unsupported"] },
+              "severity": { "enum": ["info", "warning", "error"] },
+              "required": { "type": "boolean" },
+              "code": { "type": "string" },
+              "reason": { "type": "string" },
+              "hint": { "type": "string" },
+              "summary": { "type": "string" },
+              "details": { "type": "object" },
+              "nextActions": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+        "redaction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "type": "string" }
+          }
+        },
+        "evidence": { "type": "string" }
+      }
+    }
+  }
+}

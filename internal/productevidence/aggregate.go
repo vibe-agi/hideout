@@ -43,6 +43,8 @@ var Required042ProofIDs = RequiredProofIDsForFeature(Feature042)
 
 var Required043ProofIDs = RequiredProofIDsForFeature(Feature043)
 
+var Required044ProofIDs = RequiredProofIDsForFeature(Feature044)
+
 type Aggregate struct {
 	Proofs       map[string]ProofEntry
 	Claims       map[string][]ProofEntry
@@ -161,6 +163,18 @@ func Require025Complete(manifest Manifest) error {
 
 func Require042Complete(manifest Manifest) error {
 	return requireFeatureComplete(manifest, Feature042, RequiredForTargetedCompletion)
+}
+
+func Require044TargetedComplete(manifest Manifest) error {
+	return requireFeatureComplete(manifest, Feature044, RequiredForTargetedCompletion)
+}
+
+func Require044ReleaseComplete(manifest Manifest) error {
+	return requireFeatureComplete(manifest, Feature044, RequiredForReleaseCandidate)
+}
+
+func Require044PublicComplete(manifest Manifest) error {
+	return requireFeatureComplete(manifest, Feature044, RequiredForPublicRelease)
 }
 
 func requireFeatureComplete(manifest Manifest, featureID, target string) error {

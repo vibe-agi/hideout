@@ -128,6 +128,7 @@ type ExternalPrerequisiteStatus struct {
 	Name         string
 	Status       string
 	PackageOwned bool
+	Source       string
 	Hint         string
 }
 
