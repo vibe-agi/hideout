@@ -47,6 +47,83 @@ func TestEnvironmentGatewayRequiresAuthenticationAndForwardsDirect(t *testing.T)
 		_ = connection.Close()
 		t.Fatal("gateway accepted an invalid credential")
 	}
+	observation, ok := registry.Observation("env_gateway")
+	if !ok {
+		t.Fatal("gateway observation is unavailable")
+	}
+	want := GatewayObservation{
+		Accepted: 2, Authenticated: 1, AuthenticationFailed: 1,
+		RequestParsed: 1, UpstreamDialStarted: 1, UpstreamConnected: 1,
+	}
+	if observation != want {
+		t.Fatalf("gateway observation=%+v want=%+v", observation, want)
+	}
+}
+
+func TestEnvironmentGatewayObservationDistinguishesRouteAndDialFailures(t *testing.T) {
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+
+	missingBinding, missingChange, err := registry.Stage("env_missingroute", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection, dialErr := dialGateway(missingBinding, "127.0.0.1:1"); dialErr == nil {
+		_ = connection.Close()
+		t.Fatal("gateway without an active route accepted a connection")
+	}
+	if err := missingChange.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	missing, ok := registry.Observation("env_missingroute")
+	if !ok || missing.Accepted != 1 || missing.Authenticated != 1 ||
+		missing.RequestParsed != 1 || missing.RouteMissing != 1 ||
+		missing.UpstreamDialStarted != 0 {
+		t.Fatalf("missing-route observation=%+v available=%t", missing, ok)
+	}
+
+	dialBinding, dialChange, err := registry.Stage("env_dialfailure", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dialChange.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dialChange.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	unavailable, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailableAddress := unavailable.Addr().String()
+	if err := unavailable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if connection, dialErr := dialGateway(dialBinding, unavailableAddress); dialErr == nil {
+		_ = connection.Close()
+		t.Fatal("gateway connected to a closed target port")
+	}
+	failed, ok := registry.Observation("env_dialfailure")
+	if !ok || failed.Accepted != 1 || failed.Authenticated != 1 ||
+		failed.RequestParsed != 1 || failed.UpstreamDialStarted != 1 ||
+		failed.UpstreamDialFailed != 1 || failed.UpstreamConnected != 0 {
+		t.Fatalf("dial-failure observation=%+v available=%t", failed, ok)
+	}
+}
+
+func TestGatewayObservationSinceDoesNotUnderflow(t *testing.T) {
+	current := GatewayObservation{
+		Accepted: 3, Authenticated: 2, UpstreamConnected: 1,
+	}
+	previous := GatewayObservation{
+		Accepted: 1, Authenticated: 4, UpstreamConnected: 1,
+	}
+	got := current.Since(previous)
+	want := GatewayObservation{Accepted: 2, Authenticated: 2}
+	if got != want {
+		t.Fatalf("observation delta=%+v want=%+v", got, want)
+	}
 }
 
 func TestEnvironmentGatewayRollbackRestoresPreviousRoute(t *testing.T) {
@@ -216,6 +293,15 @@ func TestEnvironmentGatewayBindingUsesGuestHostWithoutLeakingUpstream(t *testing
 	}
 	if parsed.Hostname() != "host.lima.internal" || parsed.User == nil || strings.Contains(value, "operator") || strings.Contains(value, "secret") {
 		t.Fatalf("unexpected guest binding %q", value)
+	}
+}
+
+func TestEnvironmentGatewayRejectsGuestAliasAsHostUpstream(t *testing.T) {
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+	_, _, err := registry.Stage("env_guestalias", "socks5://host.lima.internal:7890")
+	if err == nil || !strings.Contains(err.Error(), "use 127.0.0.1") {
+		t.Fatalf("guest-alias upstream error=%v", err)
 	}
 }
 

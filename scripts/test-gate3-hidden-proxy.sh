@@ -57,6 +57,26 @@ latest_audit_log() {
   ls -t "${logs[@]}" 2>/dev/null | head -n 1
 }
 
+print_gateway_diagnostics() {
+  echo "gate3: redacted gateway observation" >&2
+  local logs=("$store"/sessions/*/audit.jsonl)
+  if [ -e "${logs[0]}" ]; then
+    jq -s -c '
+      (map(select(.action == "network.gateway.observe")) | last) //
+      {"action":"network.gateway.observe","decision":"error","details":{"available":false}}
+    ' "${logs[@]}" >&2 2>/dev/null || echo '{"details":{"available":false}}' >&2
+  else
+    echo '{"details":{"available":false}}' >&2
+  fi
+  if [ -n "$proxy_pid" ] && [ -f "$tmp/proxy.log" ]; then
+    printf 'gate3: local proxy stage counts accepted=%s connect_started=%s connect_established=%s connect_failed=%s\n' \
+      "$(grep -c 'hideout-gate-socks5: accepted$' "$tmp/proxy.log" 2>/dev/null || true)" \
+      "$(grep -c 'hideout-gate-socks5: connect_started$' "$tmp/proxy.log" 2>/dev/null || true)" \
+      "$(grep -c 'hideout-gate-socks5: connect_established$' "$tmp/proxy.log" 2>/dev/null || true)" \
+      "$(grep -c 'hideout-gate-socks5: connect_failed$' "$tmp/proxy.log" 2>/dev/null || true)" >&2
+  fi
+}
+
 prepare_linux_shim() {
   if [ -n "${HIDEOUT_LINUX_SHIM_PATH:-}" ]; then
     if [ ! -x "$HIDEOUT_LINUX_SHIM_PATH" ]; then
@@ -64,6 +84,10 @@ prepare_linux_shim() {
       exit 126
     fi
     return
+  fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate3: release evidence requires the packaged Linux shim" >&2
+    exit 126
   fi
 
   local arch
@@ -80,6 +104,10 @@ prepare_linux_tun2socks() {
       exit 126
     fi
     return
+  fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate3: release evidence requires operator-supplied HIDEOUT_LINUX_TUN2SOCKS_PATH" >&2
+    exit 126
   fi
 
   local arch
@@ -112,7 +140,15 @@ prepare_linux_tun2socks() {
 
 start_local_proxy() {
   local proxy_bin="$bin/hideout-gate-socks5"
-  local proxy_args=(--listen 127.0.0.1:0 --url-host host.lima.internal)
+  # The product's per-environment gateway consumes the operator proxy URL on
+  # the host. Publish this host-local fixture as loopback; host.lima.internal
+  # was only correct before the gateway moved proxy consumption out of the
+  # guest and would make the host dial its Lima-facing address instead.
+  local proxy_args=(
+    --listen 127.0.0.1:0
+    --url-host 127.0.0.1
+    --map-connect "$mediated_resolver:443=cloudflare-dns.com:443"
+  )
   go build -o "$proxy_bin" ./cmd/hideout-gate-socks5
   case "${HTTPS_PROXY:-${HTTP_PROXY:-}}" in
     http://*) proxy_args+=(--use-env-http-proxy) ;;
@@ -225,6 +261,10 @@ prepare_linux_session_supervisor() {
     fi
     return
   fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate3: release evidence requires the packaged Linux session supervisor" >&2
+    exit 126
+  fi
   local arch
   arch="$(go env GOARCH)"
   HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
@@ -241,6 +281,10 @@ prepare_linux_workspace_portal() {
     fi
     return
   fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate3: release evidence requires the packaged Linux Workspace Portal" >&2
+    exit 126
+  fi
   local arch
   arch="$(go env GOARCH)"
   HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
@@ -256,6 +300,10 @@ prepare_linux_dns_stub() {
       exit 126
     fi
     return
+  fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate3: release evidence requires the packaged Linux DNS stub" >&2
+    exit 126
   fi
   local arch
   arch="$(go env GOARCH)"
@@ -306,7 +354,12 @@ prepare_linux_tun2socks
 prepare_linux_dns_stub
 prepare_linux_session_supervisor
 prepare_linux_workspace_portal
+mediated_resolver="${HIDEOUT_GATE3_MEDIATED_RESOLVER:-1.1.1.1}"
 if [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
+  if [ "$mediated_resolver" != "1.1.1.1" ]; then
+    echo "gate3: the local fixture supports mediated resolver 1.1.1.1; provide an operator proxy for a custom resolver" >&2
+    exit 2
+  fi
   start_local_proxy
 else
   echo "gate3: using HIDEOUT_SECRET_DEFAULT_PROXY from environment"
@@ -317,8 +370,11 @@ fi
 # (HTTPS) to the mediated resolver over the TUN and the SOCKS CONNECT proxy. The
 # mediated resolver is a DoH server reached by IP; it defaults to a public one
 # and the operator may override it. The gate proves the closure end to end: the
-# guest resolves and fetches through the mediated path while the leak is blocked.
-mediated_resolver="${HIDEOUT_GATE3_MEDIATED_RESOLVER:-1.1.1.1}"
+# guest resolves and performs HTTPS through the mediated path while the leak is
+# blocked. The local fixture maps Cloudflare's anycast IP to its hostname only
+# for host-side dialing, because some developer hosts permit named egress while
+# denying raw public-IP connects; guest-visible destination and TLS identity
+# remain 1.1.1.1.
 echo "gate3: using mediated DoH resolver $mediated_resolver"
 # Keep the profile-derived instance name below macOS UNIX_PATH_MAX while the
 # isolated LIMA_HOME also lives below a temporary path.
@@ -379,9 +435,20 @@ printf "captured_resolvers=%s\n" "$(wc -l < gate3-resolvers.captured | tr -d " "
   exit 1
 fi
 grep -q "^captured_resolvers=" "$tmp/capture.out"
-if ! grep -qvE "^(127\.|::1|[[:space:]]*$)" "$captured_resolvers" 2>/dev/null; then
+captured_resolver_args=()
+while IFS= read -r resolver; do
+  case "$resolver" in
+    ""|127.*|::1) continue ;;
+  esac
+  if [ "${#resolver}" -gt 64 ] || [[ "$resolver" == *[!0-9A-Fa-f:.]* ]]; then
+    echo "gate3: captured resolver is not a bounded IP literal" >&2
+    exit 1
+  fi
+  captured_resolver_args+=("$resolver")
+done <"$captured_resolvers"
+rm -f "$captured_resolvers"
+if [ "${#captured_resolver_args[@]}" -eq 0 ]; then
   echo "gate3: no connected-subnet resolver was captured; the reverse proof would be vacuous" >&2
-  cat "$captured_resolvers" >&2 2>/dev/null || true
   exit 1
 fi
 
@@ -413,19 +480,20 @@ grep -q "^nameserver 127.0.0.1" /etc/resolv.conf || {
   exit 44
 }
 printf "dns_mediated=yes\n"
+mediated_resolver="$1"
+shift
 # Reverse proof (mandatory): every real upstream (connected-subnet) resolver
 # captured before the override must now be unreachable — a direct query to it
-# must fail. This proves the leak is blocked and the check is not theater. Not
-# being able to run the check (no captured resolvers, no query tool) fails
-# closed rather than silently passing.
-[ -r ./gate3-resolvers.captured ] || { echo "reverse proof: gate-captured resolver list is missing" >&2; exit 46; }
+# must fail. The host gate passes its independently captured values as fixed
+# command arguments rather than sourcing them from target-writable workspace
+# state. Not being able to run the check fails closed rather than silently
+# passing.
 query_resolver() {
   if [ -x ./hideout-gate-dns-query ]; then ./hideout-gate-dns-query --query "$1" --timeout 3s >/dev/null 2>&1
   else return 2; fi
 }
 blocked_any=no
-for ns in $(cat ./gate3-resolvers.captured); do
-  case "$ns" in 127.*|::1|"") continue ;; esac
+for ns in "$@"; do
   rc=0
   query_resolver "$ns" || rc=$?
   if [ "$rc" -eq 2 ]; then echo "reverse proof: Go-owned DNS query fixture is unavailable" >&2; exit 46; fi
@@ -434,8 +502,20 @@ for ns in $(cat ./gate3-resolvers.captured); do
 done
 [ "$blocked_any" = yes ] || { echo "reverse proof: no connected-subnet resolver was captured to verify closure" >&2; exit 46; }
 printf "connected_subnet_blocked=yes\n"
+if [ -x ./hideout-gate-dns-query ]; then
+  if ! ./hideout-gate-dns-query --query 127.0.0.1 --timeout 20s >/dev/null 2>&1; then
+    echo "forward proof: mediated DNS query failed" >&2
+    exit 47
+  fi
+  printf "dns_forward=ok\n"
+else
+  echo "forward proof: Go-owned DNS query fixture is unavailable" >&2
+  exit 46
+fi
 if command -v curl >/dev/null 2>&1; then
-  if ! curl -fsS --max-time 30 https://example.com/ >/dev/null; then
+  http_status=""
+  if ! http_status=$(curl -sS --max-time 30 -o /dev/null -w "%{http_code}" "https://${mediated_resolver}/dns-query") ||
+     [ "$http_status" = "000" ]; then
     echo "forward proof: DNS/HTTPS request failed" >&2
     echo "--- dns-stub.log ---" >&2
     tail -n 80 /hideout/session/network/dns-stub.log >&2 2>/dev/null || true
@@ -449,20 +529,18 @@ if command -v curl >/dev/null 2>&1; then
     curl -sS --max-time 15 -o /dev/null -w "status=%{http_code}\n" https://1.1.1.1/dns-query >&2 || true
     exit 47
   fi
-  printf "https_request=ok\n"
-elif command -v wget >/dev/null 2>&1; then
-  wget -q -T 30 -O /dev/null https://example.com/
-  printf "https_request=ok\n"
+  printf "https_request=ok status=%s\n" "$http_status"
 else
-  echo "guest requires curl or wget for gate3 route proof" >&2
+  echo "guest requires curl for the bounded HTTPS route proof" >&2
   exit 127
 fi
-' >"$stdout" 2>"$stderr"; then
+' gate3-reverse-proof "$mediated_resolver" "${captured_resolver_args[@]}" >"$stdout" 2>"$stderr"; then
   echo "gate3: hidden proxy env and route smoke failed" >&2
   echo "gate3: stdout" >&2
   cat "$stdout" >&2
   echo "gate3: stderr" >&2
   cat "$stderr" >&2
+  print_gateway_diagnostics
   exit 1
 fi
 
@@ -474,7 +552,8 @@ grep -qh 'Hideout boundary:' "$stdout" "$stderr" 2>/dev/null && echo "Boundary S
 grep -q 'proxy_env_absent=yes' "$stdout"
 grep -q 'dns_mediated=yes' "$stdout"
 grep -q 'connected_subnet_blocked=yes' "$stdout"
-grep -q 'https_request=ok' "$stdout"
+grep -q 'dns_forward=ok' "$stdout"
+grep -q 'https_request=ok status=' "$stdout"
 grep -q 'guest_workspace=/workspace' "$stdout"
 echo "projection_alias_gate3=passed"
 
@@ -565,8 +644,30 @@ if ! jq -s -e '
   echo "gate3: privileged network setup evidence missing from session audits" >&2
   exit 1
 fi
+if ! jq -s -e '
+  any(.[];
+    .action == "network.gateway.observe" and
+    .decision == "allow" and
+    .details.scope == "environment-window" and
+    .details.available == true and
+    .details.accepted > 0 and
+    .details.authenticated > 0 and
+    .details.requestParsed > 0 and
+    .details.upstreamDialStarted > 0 and
+    .details.upstreamConnected > 0)
+' "${audit_logs[@]}" >/dev/null; then
+  echo "gate3: redacted gateway forward-path evidence missing from session audits" >&2
+  print_gateway_diagnostics
+  exit 1
+fi
+if [ -n "$proxy_pid" ] && ! grep -q 'hideout-gate-socks5: connect_established$' "$tmp/proxy.log"; then
+  echo "gate3: local proxy received no established CONNECT" >&2
+  print_gateway_diagnostics
+  exit 1
+fi
 echo "privilege_status=enforced"
 echo "privileged_setup=network"
+echo "gateway_forward_path=passed"
 
 if grep -R --fixed-strings "$HIDEOUT_SECRET_DEFAULT_PROXY" "$store" >/dev/null 2>&1; then
   echo "gate3: proxy secret leaked into store artifacts" >&2

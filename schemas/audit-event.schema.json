@@ -29,6 +29,7 @@
         "hostfs.policy",
         "command.start",
         "network.setup",
+        "network.gateway.observe",
         "runtime.verify",
         "projection.readiness",
         "guest.privilege.status",

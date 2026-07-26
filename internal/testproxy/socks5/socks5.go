@@ -129,16 +129,16 @@ func (s *Server) recordTarget(addr string) {
 
 func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 	defer client.Close()
-	s.trace("accepted from %s", client.RemoteAddr())
+	s.trace("accepted")
 	_ = client.SetDeadline(time.Now().Add(handshakeTimeout))
 	reader := bufio.NewReader(client)
 	if err := negotiateMethod(reader, client); err != nil {
-		s.trace("method negotiation failed: %v", err)
+		s.trace("method_negotiation_failed")
 		return
 	}
 	cmd, targetAddr, err := readRequest(reader, client)
 	if err != nil {
-		s.trace("request read failed: %v", err)
+		s.trace("request_read_failed")
 		return
 	}
 	if cmd == cmdUDPAssociate {
@@ -155,14 +155,14 @@ func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 		dialer := net.Dialer{Timeout: connectTimeout}
 		dialContext = dialer.DialContext
 	}
-	s.trace("connect %s", targetAddr)
+	s.trace("connect_started")
 	target, err := dialContext(ctx, "tcp", targetAddr)
 	if err != nil {
-		s.trace("connect %s failed: %v", targetAddr, err)
+		s.trace("connect_failed")
 		_ = writeReply(client, replyGeneral)
 		return
 	}
-	s.trace("connect %s established", targetAddr)
+	s.trace("connect_established")
 	defer target.Close()
 	if err := writeReply(client, replySuccess); err != nil {
 		return

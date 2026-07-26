@@ -92,12 +92,20 @@ acknowledgment flow is required in WebUI or TUI.
 Tun2socks mode must satisfy:
 
 - proxy secret is resolved by Hideout setup;
+- the operator proxy URL is consumed by a host-side per-environment gateway;
 - proxy URL is written to a session-only file with restrictive permissions;
 - target env does not contain proxy credentials;
 - guest default route points to the TUN device after setup;
 - proxy endpoint route bypasses the TUN device to avoid loops;
 - DNS behavior is defined and verified for the backend;
 - failure to verify routes fails closed before the target command runs.
+
+A proxy running on the same host is configured with its host-loopback URL
+(`127.0.0.1`), while a remote proxy keeps its normal remote hostname. The
+operator URL is never handed to the guest. Hideout instead gives privileged
+guest setup a separate authenticated gateway endpoint at
+`host.lima.internal`; its generated credentials remain control-plane material
+and do not enter target env or public evidence.
 
 ## DNS Policy
 
@@ -139,8 +147,9 @@ connected-subnet-only environment (fail closed). A target that gains guest root
 bypass; that is a recorded non-claim in [threat-model.md](threat-model.md).
 
 This closure is validated on real Lima: Gate 3 proves it end to end — the guest
-resolves a name through the mediated DoH path and fetches over HTTPS while the
-connected-subnet leak is blocked and the proxy secret stays hidden. For Lima,
+resolves a name through the mediated DoH path (`dns_forward=ok`) and completes
+an HTTPS request (`https_request=ok`) while the connected-subnet leak is blocked
+and the proxy secret stays hidden. For Lima,
 the privileged route/DNS bootstrap runs through Hideout's root-control setup
 identity, not through target-user passwordless sudo; Gate 3 also asserts
 `privilege_status=enforced` and `privileged_setup=network` so DNS closure is tied
@@ -171,6 +180,14 @@ reason
 ```
 
 Audit must not include proxy credentials.
+
+Privacy runs also emit `network.gateway.observe`, a redacted set of
+protocol-stage counters (`accepted`, authentication, request parsing, route
+selection, upstream dial, and upstream connection). It contains no address,
+destination, credential, URL, or raw error. Its scope is explicitly
+`environment-window`: concurrent sessions share an environment gateway, so
+the counters diagnose which hop was reached but do not claim exact per-session
+attribution.
 
 ## Secret Handling
 

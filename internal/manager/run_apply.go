@@ -435,6 +435,30 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			retErr = rollbackErr
 		}
 	}()
+	defer func() {
+		if runNetwork.Plan.Mode != netpolicy.ModeTun2Socks || runNetwork.Gateway == nil {
+			return
+		}
+		observation, available := runNetwork.gatewayObservation()
+		details := gatewayObservationDetails(observation, available)
+		if retErr == nil {
+			details["runStatus"] = "completed"
+		} else {
+			details["runStatus"] = "failed"
+		}
+		decision := "allow"
+		if !available {
+			decision = "error"
+		}
+		_ = runSession.Audit.Emit(audit.Event{
+			Session:  runSession.Layout.ID,
+			Profile:  plan.ProfileName,
+			Backend:  plan.Backend,
+			Action:   "network.gateway.observe",
+			Decision: decision,
+			Details:  details,
+		})
+	}()
 	if netErr != nil {
 		return result, netErr
 	}

@@ -291,8 +291,12 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	// this file, and a target that inspects its own resolver posture must see
 	// the stub. The file holds only the loopback stub address, so an explicit
 	// world-readable mode discloses nothing.
-	if !strings.Contains(string(bootstrap), "chmod 0644 /etc/resolv.conf") {
+	if !strings.Contains(string(bootstrap), "chmod 0644 /etc/resolv.conf") ||
+		!strings.Contains(string(bootstrap), "guest resolver permissions could not be established") {
 		t.Fatalf("bootstrap leaves the guest resolver config unreadable by the target: %s", bootstrap)
+	}
+	if strings.Contains(string(bootstrap), "chmod 0644 /etc/resolv.conf 2>/dev/null || true") {
+		t.Fatalf("bootstrap ignores a resolver permission failure: %s", bootstrap)
 	}
 	if !strings.Contains(string(bootstrap), `iptables -I OUTPUT 1 -p "$proto" --dport 53 -d "$ns" -j DROP`) {
 		t.Fatalf("bootstrap missing connected-subnet resolver block: %s", bootstrap)

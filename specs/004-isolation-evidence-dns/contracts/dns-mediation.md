@@ -76,9 +76,10 @@ the real resolver path end to end rather than a controlled listener's counters:
 The observable proof is the DoH end-to-end resolution plus a reverse block check
 (the guest-local DoH stub replaced the earlier controlled-listener design):
 
-- Forward: the guest resolver is the DoH stub (`dns_mediated=yes`) and a
-  target-style resolution + HTTPS fetch succeeds through the mediated DoH path
-  (`https_request=ok`) — DNS traversed the privacy path.
+- Forward: the guest resolver is the DoH stub (`dns_mediated=yes`), a
+  target-style query succeeds through the mediated DoH path
+  (`dns_forward=ok`), and a separate HTTPS request completes through that path
+  (`https_request=ok`).
 - Reverse: every real upstream (connected-subnet) resolver captured before the
   override is unreachable — a direct query to it fails (`connected_subnet_blocked=yes`).
 - Not theater: because the reverse check fails the gate if a connected-subnet

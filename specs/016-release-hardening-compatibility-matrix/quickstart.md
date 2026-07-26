@@ -119,7 +119,8 @@ Validates: FR-013, FR-014, FR-015, SC-002, SC-006, SC-008.
 ## 9. Release Dogfood Compatibility
 
 ```bash
-HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890 \
+HIDEOUT_LINUX_TUN2SOCKS_PATH=/path/to/tun2socks-linux-arm64 \
+HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:7890 \
   scripts/test-release-dogfood.sh
 ```
 

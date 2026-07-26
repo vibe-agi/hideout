@@ -918,7 +918,7 @@ func writeDNSMediationSetup(b *strings.Builder, mediatedResolver string) {
 	// cannot read. Every process in the guest resolves names through this file
 	// and a target inspecting its own resolver posture must see the stub, so
 	// set the mode explicitly. The content is only the loopback stub address.
-	b.WriteString("chmod 0644 /etc/resolv.conf 2>/dev/null || true\n")
+	b.WriteString("chmod 0644 /etc/resolv.conf 2>/dev/null || { echo 'hideout: guest resolver permissions could not be established' >&2; exit 127; }\n")
 	b.WriteString("if command -v resolvectl >/dev/null 2>&1; then\n")
 	b.WriteString("  default_link=$(ip route show default | awk '{for (i=1;i<=NF;i++) if ($i==\"dev\") print $(i+1); exit}')\n")
 	fmt.Fprintf(b, "  [ -n \"$default_link\" ] && resolvectl dns \"$default_link\" %s >/dev/null 2>&1 || true\n", dnsStubIP)

@@ -36,7 +36,8 @@ connected-subnet resolvers are blackholed. Two further real-Lima findings were
 fixed along the way: the guest uses systemd-resolved (`127.0.0.53`), so a
 loopback REDIRECT could not un-NAT connected-UDP replies (switched to a resolver
 override); and Lima installs a `LIMADNS` nat chain. Gate 3 now passes end to end
-on real Lima (`proxy_env_absent=yes`, `dns_mediated=yes`, `https_request=ok`),
+on real Lima (`proxy_env_absent=yes`, `dns_mediated=yes`, `dns_forward=ok`,
+`https_request=ok`),
 so both the leak closure and the working mediated DNS are validated. A SOCKS5
 UDP ASSOCIATE relay was also added to the test proxy but is not on the DoH path.
 

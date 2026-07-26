@@ -19,3 +19,6 @@ All notable product changes will be recorded here.
 - Establish Apache-2.0 licensing, private vulnerability reporting, canonical
   package identity, signed/notarized release evidence, and anonymous download
   verification.
+- Make privacy-network setup fail closed when guest resolver permissions cannot
+  be established, add redacted gateway-stage diagnostics, and repair the
+  development Gate 3 host-proxy/DoH fixture without widening product listeners.

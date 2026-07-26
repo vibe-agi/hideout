@@ -38,6 +38,10 @@ type RunNetwork struct {
 	Gateway                  *netpolicy.GatewayRegistry
 	GatewayChange            *netpolicy.GatewayChange
 
+	gatewayEnvironmentID       string
+	gatewayObservationBaseline netpolicy.GatewayObservation
+	gatewayObservationReady    bool
+
 	// materializeSpec, when non-nil, defers bootstrap materialization on the
 	// reuse/gateway path. Healthy reuse leaves the shared guest network
 	// untouched, so it never needs the per-session secret or bootstrap scripts
@@ -184,6 +188,9 @@ func (c Core) prepareEnvironmentNetworkService(runSession RunSession, spec netpo
 		GuestServiceDir: guestServiceDir, ServiceStatePath: statePath,
 		Gateway: registry, GatewayChange: gatewayChange,
 	}
+	runNetwork.gatewayEnvironmentID = runSession.Environment.Record.ID
+	runNetwork.gatewayObservationBaseline, runNetwork.gatewayObservationReady =
+		registry.Observation(runNetwork.gatewayEnvironmentID)
 	state, err := netpolicy.LoadServiceState(statePath)
 	if err == nil {
 		if state.Status != netpolicy.ServiceReady {
@@ -277,6 +284,34 @@ func (c Core) prepareEnvironmentNetworkService(runSession RunSession, spec netpo
 	}
 	rollbackGateway = false
 	return runNetwork, nil
+}
+
+func (runNetwork RunNetwork) gatewayObservation() (netpolicy.GatewayObservation, bool) {
+	if runNetwork.Gateway == nil || !runNetwork.gatewayObservationReady ||
+		strings.TrimSpace(runNetwork.gatewayEnvironmentID) == "" {
+		return netpolicy.GatewayObservation{}, false
+	}
+	current, ok := runNetwork.Gateway.Observation(runNetwork.gatewayEnvironmentID)
+	if !ok {
+		return netpolicy.GatewayObservation{}, false
+	}
+	return current.Since(runNetwork.gatewayObservationBaseline), true
+}
+
+func gatewayObservationDetails(observation netpolicy.GatewayObservation, available bool) map[string]any {
+	return map[string]any{
+		"scope":                "environment-window",
+		"available":            available,
+		"accepted":             observation.Accepted,
+		"authenticated":        observation.Authenticated,
+		"authenticationFailed": observation.AuthenticationFailed,
+		"requestParsed":        observation.RequestParsed,
+		"requestRejected":      observation.RequestRejected,
+		"routeMissing":         observation.RouteMissing,
+		"upstreamDialStarted":  observation.UpstreamDialStarted,
+		"upstreamDialFailed":   observation.UpstreamDialFailed,
+		"upstreamConnected":    observation.UpstreamConnected,
+	}
 }
 
 func previousNetworkServicePlan(state netpolicy.ServiceState, serviceDir, guestServiceDir string) netpolicy.Plan {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,6 +36,8 @@ func TestProxyConnectsToTCPServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trace := make(chan string, 8)
+	proxy.Trace = func(event string) { trace <- event }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -100,6 +103,19 @@ func TestProxyConnectsToTCPServer(t *testing.T) {
 	wantTarget := net.JoinHostPort(host, portText)
 	if targets[0] != wantTarget {
 		t.Fatalf("Targets()[0]=%q, want %q", targets[0], wantTarget)
+	}
+	for _, want := range []string{"accepted", "connect_started", "connect_established"} {
+		select {
+		case got := <-trace:
+			if got != want {
+				t.Fatalf("Trace event=%q, want %q", got, want)
+			}
+			if strings.Contains(got, wantTarget) {
+				t.Fatalf("Trace event leaked target %q: %q", wantTarget, got)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("Trace did not emit %q", want)
+		}
 	}
 }
 

@@ -240,6 +240,25 @@ grep -F 'emit_retained_gate2_result "$retained_gate2_output"' \
   scripts/test-phase1.sh >/dev/null
 grep -F 'HIDEOUT_RELEASE_BINARY is not executable' \
   scripts/test-env-image.sh >/dev/null
+grep -F 'HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$work/package/hideout/bin/hideout-workspace-portal-linux-$arch"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'gate_require_completion public-alpha-candidate' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'executable HIDEOUT_LINUX_TUN2SOCKS_PATH is required for real Gate 3' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh; do
+  grep -F 'release evidence requires the packaged Linux Workspace Portal' "$gate" >/dev/null
+  grep -F 'release evidence requires the packaged Linux shim' "$gate" >/dev/null
+done
+grep -F 'release evidence requires the packaged Linux hostfsd' \
+  scripts/test-gate2-lima.sh >/dev/null
+grep -F 'release evidence requires the packaged Linux DNS stub' \
+  scripts/test-gate3-hidden-proxy.sh >/dev/null
+grep -F 'release evidence requires operator-supplied HIDEOUT_LINUX_TUN2SOCKS_PATH' \
+  scripts/test-gate3-hidden-proxy.sh >/dev/null
+grep -F -- '--url-host 127.0.0.1' scripts/test-gate3-hidden-proxy.sh >/dev/null
+grep -F -- '--map-connect "$mediated_resolver:443=cloudflare-dns.com:443"' \
+  scripts/test-gate3-hidden-proxy.sh >/dev/null
 for gate in scripts/test-gate2-lima.sh scripts/test-gate3-hidden-proxy.sh \
   scripts/test-runtime-lima.sh scripts/test-env-image.sh scripts/test-dogfood-cli-smoke.sh; do
   grep -F 'hideout_mktemp_lima_home' "$gate" >/dev/null

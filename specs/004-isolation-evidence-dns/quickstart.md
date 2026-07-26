@@ -44,8 +44,9 @@ HIDEOUT_GATE3_MEDIATED_RESOLVER=1.1.1.1 \
 ```
 
 Expected: the forward proof holds — the guest resolver is the DoH stub
-(`dns_mediated=yes`) and a target-style resolution plus HTTPS fetch succeed
-through the mediated DoH path (`https_request=ok`) — and the mandatory reverse
+(`dns_mediated=yes`), a target-style query succeeds through the mediated DoH
+path (`dns_forward=ok`), and HTTPS completes through that path
+(`https_request=ok`) — and the mandatory reverse
 proof holds (`connected_subnet_blocked=yes`: every captured connected-subnet
 resolver is unreachable after the block). If the reverse check cannot run (no
 captured resolvers, no query tool), the gate fails closed. Privacy-mode failure
@@ -54,7 +55,8 @@ does not fall back to direct.
 ## 4. Isolation Evidence Artifact (real Lima gates)
 
 ```bash
-HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
+HIDEOUT_LINUX_TUN2SOCKS_PATH=/path/to/tun2socks-linux-arm64 \
+HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> \
 HIDEOUT_ENV_IMAGE_URL='https://<distributor>/<image>.img#sha256:<digest>' \
   scripts/test-release-dogfood.sh
 ```

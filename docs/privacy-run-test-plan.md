@@ -60,11 +60,12 @@ scripts/test-phase1.sh --lima
 scripts/test-phase1.sh --proxy
 
 # Release-candidate gates: real browser, operator proxy, and probes.
-HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
+HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> \
   scripts/test-phase1.sh --release-candidate
 
 # Same release-candidate proof through the dedicated dogfood entrypoint.
-HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
+HIDEOUT_LINUX_TUN2SOCKS_PATH=/path/to/tun2socks-linux-arm64 \
+HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> \
   scripts/test-release-dogfood.sh
 
 # Release-hardening readiness artifact. Local-fast is development evidence,
@@ -702,10 +703,12 @@ Prerequisites:
   executable Linux `tun2socks`; if absent, the gate script uses
   `tun2socks-linux-<goarch>`/`tun2socks-linux` from `PATH` or builds a temporary
   Linux `tun2socks` from `github.com/xjasonlyu/tun2socks/v2@v2.6.0` in an
-  isolated temporary module;
+  isolated temporary module for development only. Exact-package release
+  evidence requires an explicit executable `HIDEOUT_LINUX_TUN2SOCKS_PATH`;
 - a test proxy endpoint; if `HIDEOUT_SECRET_DEFAULT_PROXY` is omitted, the gate
-  script starts a temporary host-local SOCKS5 proxy and exposes it to the guest
-  as `socks5://host.lima.internal:<port>`;
+  script starts a temporary host-local SOCKS5 proxy at
+  `socks5://127.0.0.1:<port>`; the host gateway consumes this URL and exposes
+  only its separate authenticated endpoint to the guest;
 - `network.proxySecretRef` configured;
 - optional `HIDEOUT_LINUX_SHIM_PATH` points to an executable Linux
   `hideout-shim`; if absent, the gate script builds a temporary Linux shim for
@@ -776,15 +779,19 @@ Required checks:
 
 Gate 3 verifies the DNS closure end to end on real Lima: with privacy mode it
 confirms the guest resolver is the DoH stub (`dns_mediated=yes`), resolves a name
-through the mediated DoH path and fetches over HTTPS (`https_request=ok`), and
-that the connected-subnet resolver is blocked, while the proxy secret stays
-hidden. The same run requires `guest_workspace=/workspace` and emits
+through that stub and the mediated DoH path (`dns_forward=ok`), completes a
+separate HTTPS request through the same endpoint (`https_request=ok`), and
+proves that the connected-subnet resolver is blocked while the proxy secret
+stays hidden. The same run requires `guest_workspace=/workspace` and emits
 `projection_alias_gate3=passed`, so adding projection does not regress the DNS,
 network, or privilege boundary. It requires `HIDEOUT_GATE3_MEDIATED_RESOLVER` (a
-DoH server IP, default `1.1.1.1`). The self-contained SOCKS fixture may chain
-its host-side egress through `HTTPS_PROXY` via HTTP CONNECT when the host cannot
-reach public resolver IPs directly; that host proxy value never enters the
-target environment. The DNS closure and its architecture are owned by
+DoH server IP, default `1.1.1.1`). For developer-host portability, the
+self-contained fixture may map that exact Cloudflare anycast destination to
+`cloudflare-dns.com` for host-side dialing, and may chain through `HTTPS_PROXY`
+via HTTP CONNECT. The guest-visible destination and TLS identity remain
+`1.1.1.1`; host proxy values never enter the target environment. A release
+candidate still requires the operator-supplied proxy path. The DNS closure and
+its architecture are owned by
 [network-privacy-architecture.md](network-privacy-architecture.md). The residual
 A3 guest-root routing bypass remains a non-claim in
 [threat-model.md](threat-model.md). Since 009, the same gate also asserts the

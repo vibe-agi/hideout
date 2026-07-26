@@ -60,7 +60,7 @@ When validating privacy mode, provide an operator proxy and run the same smoke
 with privacy network mode enabled:
 
 ```bash
-HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> \
+HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> \
 HIDEOUT_LIMA_REAL_RUN_NETWORK=privacy \
   scripts/test-lima-real-run.sh
 ```

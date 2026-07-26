@@ -139,7 +139,7 @@ binary at all. See [Open In A Host Editor](#open-in-a-host-editor).
 Create a separate privacy profile only when its prerequisites are available:
 
 ```bash
-export HIDEOUT_SECRET_PROXY_URL=socks5://host.lima.internal:7890
+export HIDEOUT_SECRET_PROXY_URL=socks5://127.0.0.1:7890
 hideout init \
   --template privacy \
   --profile privacy \
@@ -170,14 +170,17 @@ to have exited; this prevents one session from silently changing a sibling's
 network boundary:
 
 ```bash
-export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:7890
+export HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:7890
 hideout connect through default-proxy using 1.1.1.1
 hideout show connection
 hideout run -- true
 ```
 
 The proxy URL remains in the host environment; the profile stores only
-`default-proxy`. Changing the upstream behind an existing proxy generation is
+`default-proxy`. A proxy running on this Mac should use its host-loopback
+address (`127.0.0.1`), because Hideout's host gateway—not the guest—consumes
+the URL. A remote operator proxy keeps its normal remote hostname. Changing
+the upstream behind an existing proxy generation is
 online: accepted TCP connections may finish on the previous route while new
 connections use the new route. Mediated DNS can also switch online. Switching
 between direct and proxy posture is environment-wide and waits for exclusive

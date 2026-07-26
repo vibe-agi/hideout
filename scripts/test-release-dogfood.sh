@@ -11,6 +11,7 @@ Usage:
 
 Environment:
   HIDEOUT_SECRET_DEFAULT_PROXY   Required operator-controlled proxy URL.
+  HIDEOUT_LINUX_TUN2SOCKS_PATH   Required executable Linux tun2socks helper.
   HIDEOUT_RUNTIME_BUILD_PROVENANCE
                                  Required exact runtime build-provenance JSON.
   HIDEOUT_RELEASE_RUNTIME_FAMILY Optional runtime family (default developer-standard).
@@ -40,12 +41,16 @@ if [ -z "${HIDEOUT_SECRET_DEFAULT_PROXY:-}" ]; then
   cat >&2 <<'MSG'
 release-dogfood: HIDEOUT_SECRET_DEFAULT_PROXY is required.
 Set it to an operator-controlled proxy, for example:
-  HIDEOUT_SECRET_DEFAULT_PROXY=socks5://host.lima.internal:<port> scripts/test-release-dogfood.sh
+  HIDEOUT_LINUX_TUN2SOCKS_PATH=/path/to/tun2socks-linux-arm64 \
+    HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:<port> scripts/test-release-dogfood.sh
 MSG
   exit 2
 fi
-
 if [ "${HIDEOUT_PHASE1_PRINT_PLAN:-0}" != "1" ]; then
+  if [ ! -x "${HIDEOUT_LINUX_TUN2SOCKS_PATH:-}" ]; then
+    echo "release-dogfood: executable HIDEOUT_LINUX_TUN2SOCKS_PATH is required" >&2
+    exit 2
+  fi
   if [ -z "${HIDEOUT_RUNTIME_BUILD_PROVENANCE:-}" ] || [ ! -f "$HIDEOUT_RUNTIME_BUILD_PROVENANCE" ]; then
     echo "release-dogfood: HIDEOUT_RUNTIME_BUILD_PROVENANCE must name the exact candidate build provenance" >&2
     exit 2

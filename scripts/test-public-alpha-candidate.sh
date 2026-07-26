@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
+. "$ROOT/scripts/lib/gate-result.sh"
 
 tag=""
 package=""
@@ -26,7 +27,8 @@ Usage: scripts/test-public-alpha-candidate.sh \
 Runs the exact packaged binary through clean install and the real Gate 2/3
 lanes, evaluates all registered release-candidate proofs, assembles the exact
 four public assets, and optionally replaces the assets of an existing private
-draft. It never publishes a release.
+draft. It never publishes a release. Gate 3 also requires an executable
+operator-supplied HIDEOUT_LINUX_TUN2SOCKS_PATH.
 USAGE
 }
 
@@ -71,6 +73,10 @@ done
   echo "public-alpha-candidate: HIDEOUT_SECRET_DEFAULT_PROXY is required for real Gate 3" >&2
   exit 2
 }
+[ -x "${HIDEOUT_LINUX_TUN2SOCKS_PATH:-}" ] || {
+  echo "public-alpha-candidate: executable HIDEOUT_LINUX_TUN2SOCKS_PATH is required for real Gate 3" >&2
+  exit 2
+}
 
 source_commit="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
@@ -89,6 +95,7 @@ mkdir -p "$candidate_tmp"
 export TMPDIR="$candidate_tmp"
 export HIDEOUT_LIMA_SHORT_TMPDIR="$work"
 cleanup_complete=0
+gate_completed=0
 
 perform_cleanup() {
   [ "$cleanup_complete" -eq 0 ] || return 0
@@ -105,6 +112,9 @@ cleanup_on_exit() {
   if ! perform_cleanup; then
     exit_status=1
   fi
+  if [ "$gate_completed" != "1" ]; then
+    gate_require_completion public-alpha-candidate
+  fi
   exit "$exit_status"
 }
 trap cleanup_on_exit EXIT
@@ -117,7 +127,6 @@ tar -xzf "$package" -C "$work/package"
 "$hideout" support release package-identity --archive "$package" \
   --out "$out/package-identity.json" >/dev/null
 package_sha="$(jq -r '.artifactSHA256' "$out/package-identity.json")"
-. "$ROOT/scripts/lib/gate-result.sh"
 validate_retained_gate0_candidate "$candidate_observation" "$source_commit" "$package_sha"
 jq -e --arg tag "$tag" --arg version "$version" '
   .tag == $tag and .version == $version
@@ -148,6 +157,7 @@ export HIDEOUT_RELEASE_BINARY="$hideout"
 export HIDEOUT_LINUX_SHIM_PATH="$work/package/hideout/bin/hideout-shim-linux-$arch"
 export HIDEOUT_LINUX_HOSTFSD_PATH="$work/package/hideout/bin/hideout-hostfsd-linux-$arch"
 export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$work/package/hideout/bin/hideout-session-supervisor-linux-$arch"
+export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$work/package/hideout/bin/hideout-workspace-portal-linux-$arch"
 export HIDEOUT_LINUX_DNS_STUB_PATH="$work/package/hideout/bin/hideout-dns-stub-linux-$arch"
 export HIDEOUT_RUNTIME_PACKAGE_IDENTITY="$out/package-identity.json"
 export HIDEOUT_RELEASE_EVIDENCE_DIR="$out/phase1"
@@ -409,6 +419,7 @@ done | LC_ALL=C sort -k2 >SHA256SUMS)
 # remove that complete resource domain before any optional draft upload.
 perform_cleanup
 trap - EXIT
+trap 'gate_require_completion public-alpha-candidate' EXIT
 
 release_id=""
 if [ "$upload" -eq 1 ]; then
@@ -432,4 +443,5 @@ jq -n --arg tag "$tag" --arg version "$version" --arg commit "$source_commit" \
       evidenceSHA256:$evidenceSHA,releaseManifestSHA256:$releaseSHA}}' \
   >"$out/promotion-request.json"
 
+gate_completed=1
 echo "public-alpha-candidate: candidate assets ready; publication not performed"

@@ -199,6 +199,10 @@ prepare_linux_shim() {
     fi
     return
   fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate2: release evidence requires the packaged Linux shim" >&2
+    exit 126
+  fi
 
   local arch
   arch="$(go env GOARCH)"
@@ -220,6 +224,10 @@ prepare_linux_session_supervisor() {
     fi
     return
   fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate2: release evidence requires the packaged Linux session supervisor" >&2
+    exit 126
+  fi
   local arch
   arch="$(go env GOARCH)"
   HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
@@ -236,6 +244,10 @@ prepare_linux_workspace_portal() {
     fi
     return
   fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate2: release evidence requires the packaged Linux Workspace Portal" >&2
+    exit 126
+  fi
   local arch
   arch="$(go env GOARCH)"
   HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
@@ -251,6 +263,10 @@ prepare_linux_hostfsd() {
       exit 126
     fi
     return
+  fi
+  if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+    echo "gate2: release evidence requires the packaged Linux hostfsd" >&2
+    exit 126
   fi
 
   local arch

@@ -58,12 +58,62 @@ type gatewayRoute struct {
 	dial        func(context.Context, string, string) (net.Conn, error)
 }
 
+// GatewayObservation is a redacted, monotonic view of one environment
+// gateway's traffic. It deliberately contains only protocol-stage counters:
+// destinations, proxy addresses, credentials, URLs, and raw errors never enter
+// the observation.
+type GatewayObservation struct {
+	Accepted             uint64
+	Authenticated        uint64
+	AuthenticationFailed uint64
+	RequestParsed        uint64
+	RequestRejected      uint64
+	RouteMissing         uint64
+	UpstreamDialStarted  uint64
+	UpstreamDialFailed   uint64
+	UpstreamConnected    uint64
+}
+
+// Since returns the non-negative counter delta from an earlier observation.
+// A registry replacement or counter reset therefore cannot underflow into a
+// misleadingly large diagnostic value.
+func (current GatewayObservation) Since(previous GatewayObservation) GatewayObservation {
+	return GatewayObservation{
+		Accepted:             counterDelta(current.Accepted, previous.Accepted),
+		Authenticated:        counterDelta(current.Authenticated, previous.Authenticated),
+		AuthenticationFailed: counterDelta(current.AuthenticationFailed, previous.AuthenticationFailed),
+		RequestParsed:        counterDelta(current.RequestParsed, previous.RequestParsed),
+		RequestRejected:      counterDelta(current.RequestRejected, previous.RequestRejected),
+		RouteMissing:         counterDelta(current.RouteMissing, previous.RouteMissing),
+		UpstreamDialStarted:  counterDelta(current.UpstreamDialStarted, previous.UpstreamDialStarted),
+		UpstreamDialFailed:   counterDelta(current.UpstreamDialFailed, previous.UpstreamDialFailed),
+		UpstreamConnected:    counterDelta(current.UpstreamConnected, previous.UpstreamConnected),
+	}
+}
+
+func counterDelta(current, previous uint64) uint64 {
+	if current < previous {
+		return current
+	}
+	return current - previous
+}
+
 type gatewayEntry struct {
 	id       string
 	listener net.Listener
 	username string
 	password string
 	route    atomic.Pointer[gatewayRoute]
+
+	accepted             atomic.Uint64
+	authenticated        atomic.Uint64
+	authenticationFailed atomic.Uint64
+	requestParsed        atomic.Uint64
+	requestRejected      atomic.Uint64
+	routeMissing         atomic.Uint64
+	upstreamDialStarted  atomic.Uint64
+	upstreamDialFailed   atomic.Uint64
+	upstreamConnected    atomic.Uint64
 
 	switchMu sync.Mutex
 	connMu   sync.Mutex
@@ -231,6 +281,35 @@ func (registry *GatewayRegistry) Close() error {
 	return result
 }
 
+// Observation returns a redacted counter snapshot without blocking gateway
+// traffic. The boolean is false when the environment has no live gateway.
+func (registry *GatewayRegistry) Observation(environmentID string) (GatewayObservation, bool) {
+	if registry == nil {
+		return GatewayObservation{}, false
+	}
+	registry.mu.Lock()
+	entry := registry.entries[environmentID]
+	registry.mu.Unlock()
+	if entry == nil {
+		return GatewayObservation{}, false
+	}
+	return entry.observation(), true
+}
+
+func (entry *gatewayEntry) observation() GatewayObservation {
+	return GatewayObservation{
+		Accepted:             entry.accepted.Load(),
+		Authenticated:        entry.authenticated.Load(),
+		AuthenticationFailed: entry.authenticationFailed.Load(),
+		RequestParsed:        entry.requestParsed.Load(),
+		RequestRejected:      entry.requestRejected.Load(),
+		RouteMissing:         entry.routeMissing.Load(),
+		UpstreamDialStarted:  entry.upstreamDialStarted.Load(),
+		UpstreamDialFailed:   entry.upstreamDialFailed.Load(),
+		UpstreamConnected:    entry.upstreamConnected.Load(),
+	}
+}
+
 func (registry *GatewayRegistry) entry(environmentID string) (*gatewayEntry, error) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -283,6 +362,9 @@ func buildGatewayRoute(upstream string) (*gatewayRoute, error) {
 		return nil, err
 	}
 	parsed, _ := url.Parse(upstream)
+	if strings.EqualFold(parsed.Hostname(), "host.lima.internal") {
+		return nil, errors.New("proxy URL is consumed by the host gateway; use 127.0.0.1 for a proxy running on this host")
+	}
 	fingerprint := sha256.Sum256([]byte(upstream))
 	route := &gatewayRoute{fingerprint: hex.EncodeToString(fingerprint[:])}
 	switch parsed.Scheme {
@@ -307,6 +389,7 @@ func (entry *gatewayEntry) serve() {
 				continue
 			}
 		}
+		entry.accepted.Add(1)
 		entry.track(connection, true)
 		route := entry.route.Load()
 		go func(route *gatewayRoute) {
@@ -321,28 +404,37 @@ func (entry *gatewayEntry) handle(client net.Conn, route *gatewayRoute) {
 	_ = client.SetDeadline(time.Now().Add(gatewayHandshakeTimeout))
 	reader := bufio.NewReader(client)
 	if err := authenticateGatewayClient(reader, client, entry.username, entry.password); err != nil {
+		entry.authenticationFailed.Add(1)
 		return
 	}
+	entry.authenticated.Add(1)
 	command, target, err := readSOCKSRequest(reader)
 	if err != nil {
+		entry.requestRejected.Add(1)
 		_ = writeSOCKSReply(client, 0x01)
 		return
 	}
+	entry.requestParsed.Add(1)
 	if command != 0x01 {
+		entry.requestRejected.Add(1)
 		_ = writeSOCKSReply(client, 0x07)
 		return
 	}
 	if route == nil || route.dial == nil {
+		entry.routeMissing.Add(1)
 		_ = writeSOCKSReply(client, 0x01)
 		return
 	}
+	entry.upstreamDialStarted.Add(1)
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayConnectTimeout)
 	upstream, err := route.dial(ctx, "tcp", target)
 	cancel()
 	if err != nil {
+		entry.upstreamDialFailed.Add(1)
 		_ = writeSOCKSReply(client, 0x01)
 		return
 	}
+	entry.upstreamConnected.Add(1)
 	defer upstream.Close()
 	if err := writeSOCKSReply(client, 0x00); err != nil {
 		return
