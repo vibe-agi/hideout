@@ -759,6 +759,8 @@ if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
     echo "runtime_agent_privacy=passed"
     echo "privilege_status=enforced"
     echo "privileged_setup=network"
+    echo "projection_alias_gate3=passed"
+    echo "gateway_forward_path=passed"
     cat "$tmp/runtime-markers.out"
     echo "gate3: passed"
   } >"$runtime_evidence_out/logs/runtime-gate3.out"

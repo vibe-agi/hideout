@@ -23,6 +23,19 @@ for marker in guest_workspace=/workspace proxy_env_absent=yes dns_mediated=yes \
   privileged_setup=network projection_alias_gate3=passed gateway_forward_path=passed; do
   grep -F "$marker" scripts/promote-projection-privacy.sh >/dev/null
 done
+runtime_gate3_builder="$(
+  awk '
+    /if \[ "\$GATE3_RUNTIME_MODE" = "1" \]; then/ { capture = 1 }
+    capture { print }
+    capture && /} >"\$runtime_evidence_out\/logs\/runtime-gate3.out"/ { exit }
+  ' scripts/test-gate3-hidden-proxy.sh
+)"
+for marker in projection_alias_gate3=passed gateway_forward_path=passed; do
+  grep -F "echo \"$marker\"" <<<"$runtime_gate3_builder" >/dev/null || {
+    echo "projection-readiness-smoke: Gate 3 public runtime log omits marker: $marker" >&2
+    exit 1
+  }
+done
 
 echo "projection-readiness-smoke: exact candidate fixture"
 go test -count=1 ./internal/productevidence \
