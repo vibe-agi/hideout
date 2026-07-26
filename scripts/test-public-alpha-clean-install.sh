@@ -40,7 +40,15 @@ for command in jq tar shasum; do
   command -v "$command" >/dev/null 2>&1 || { echo "public-alpha-clean-install: missing $command" >&2; exit 127; }
 done
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-public-alpha-install.XXXXXX")"
+clean_install_tmp_parent="${TMPDIR:-/tmp}"
+if [ "$real_lima" -eq 1 ]; then
+  # The store contains the authenticated daemon socket. On macOS the normal
+  # per-user TMPDIR prefix can make that socket exceed UNIX_PATH_MAX even when
+  # LIMA_HOME itself is short. Keep the whole real-Lima fixture under the same
+  # caller-controlled short root used by the backend gates.
+  clean_install_tmp_parent="${HIDEOUT_LIMA_SHORT_TMPDIR:-/tmp}"
+fi
+tmp="$(mktemp -d "$clean_install_tmp_parent/hci.XXXXXX")"
 store="$tmp/store"
 prefix="$tmp/prefix"
 home="$tmp/home"
@@ -55,6 +63,12 @@ fi
 tool_bin="$tmp/tools"
 workspace="$tmp/workspace"
 mkdir -p "$store" "$prefix" "$home" "$lima_home" "$tool_bin" "$workspace"
+# The lifecycle journal correctly rejects a store that is readable or writable
+# by group/other. Do not let the release operator's ambient umask decide the
+# authority boundary of this clean-install fixture. HOME and LIMA_HOME can
+# also retain tokens or backend control state, so keep all three private before
+# invoking the package installer or daemon.
+chmod 0700 "$store" "$home" "$lima_home"
 cleanup() {
   if [ -x "$prefix/bin/hideout" ]; then
     HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \

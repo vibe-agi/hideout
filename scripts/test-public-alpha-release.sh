@@ -223,6 +223,12 @@ grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'hideout_seed_verified_runtime_cache' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
+grep -F 'chmod 0700 "$store" "$home" "$lima_home"' \
+  scripts/test-public-alpha-clean-install.sh >/dev/null
+grep -F 'clean_install_tmp_parent="${HIDEOUT_LIMA_SHORT_TMPDIR:-/tmp}"' \
+  scripts/test-public-alpha-clean-install.sh >/dev/null
+grep -F 'tmp="$(mktemp -d "$clean_install_tmp_parent/hci.XXXXXX")"' \
+  scripts/test-public-alpha-clean-install.sh >/dev/null
 for consumer in test-hostfs-visibility-e2e.sh; do
   grep -F "$consumer --real-gate2 --require-real" \
     scripts/test-public-alpha-candidate.sh >/dev/null
