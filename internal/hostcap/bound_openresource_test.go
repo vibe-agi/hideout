@@ -152,7 +152,7 @@ func openProfileIDEModeTestBinding(t *testing.T, binding OpenResourceBinding, gr
 		Resources: []UnboundResource{{GuestPath: "/workspace/main.go"}},
 	}, BoundOpenContext{
 		SessionID: "session", Profile: "privacy", RunID: "run", WorkspaceID: testWorkspaceAuthorityID, Command: binding.Commands[0],
-		SafeStateBase: t.TempDir(), Platform: PlatformDarwin,
+		SafeStateBase: shortHostAppStateBase(t), Platform: PlatformDarwin,
 		Resources: fakeBoundResolver{resource: ResolvedResource{
 			Ref:         ResourceRef{Kind: KindWorkspace, GuestPath: "/workspace/main.go", RelativePath: "main.go"},
 			HostPath:    "/host/workspace/main.go",

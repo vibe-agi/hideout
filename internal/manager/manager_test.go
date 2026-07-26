@@ -1087,9 +1087,9 @@ func TestCoreStartRunDataPlaneOwnsBrokerShimsHostFSAndSessionStartAudit(t *testi
 	if dataPlane.Broker == nil || dataPlane.BrokerGuestEndpoint.Network != broker.EndpointUnix {
 		t.Fatalf("broker endpoint mismatch: %+v", dataPlane)
 	}
-	wantSafeDataDir := filepath.Join(runSession.ProfileDir, "host-app", "state")
+	wantSafeDataDir := filepath.Join(core.Store.Root, "ha")
 	if dataPlane.Broker.HostApp == nil || dataPlane.Broker.HostApp.SafeUserDataDir != wantSafeDataDir || strings.HasPrefix(wantSafeDataDir, runSession.Layout.Dir+string(filepath.Separator)) {
-		t.Fatalf("safe host-app state must be profile-owned, not orphaned session state: hostApp=%+v", dataPlane.Broker.HostApp)
+		t.Fatalf("safe host-app state must be compact store-owned state, not orphaned session state: hostApp=%+v", dataPlane.Broker.HostApp)
 	}
 	info, err := os.Stat(wantSafeDataDir)
 	if err != nil || info.Mode().Perm() != 0o700 {

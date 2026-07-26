@@ -48,19 +48,20 @@ const (
 	RuntimePolicyNone      = "none"
 	RuntimePolicyExactReal = "exact-real"
 
-	ArtifactValidatorNone                         = ""
-	ArtifactValidatorConcurrentIsolationV1        = "concurrent-sessions-isolation/v1"
-	ArtifactValidatorConcurrentPerformanceV2      = "concurrent-sessions-performance/v2"
-	ArtifactValidatorLifecycleLocalV1             = "resource-lifecycle-local/v1"
-	ArtifactValidatorLifecycleModelV1             = "resource-lifecycle-model/v1"
-	ArtifactValidatorLifecycleRealV1              = "resource-lifecycle-real/v1"
-	ArtifactValidatorLifecyclePerformanceV1       = "resource-lifecycle-performance/v1"
-	ArtifactValidatorSharedWorkspaceBehaviorV1    = "shared-workspace-behavior/v1"
-	ArtifactValidatorSharedWorkspacePerformanceV1 = "shared-workspace-performance/v1"
-	ArtifactValidatorWorkspaceExecutableV1        = "workspace-executable/v1"
-	ArtifactValidatorDisposableRecoveryV1         = "disposable-recovery/v1"
-	ArtifactValidatorProjectionReadinessV1        = "projection-readiness/v1"
-	ArtifactValidatorProjectionPrivacyV1          = "projection-privacy/v1"
+	ArtifactValidatorNone                           = ""
+	ArtifactValidatorConcurrentIsolationV1          = "concurrent-sessions-isolation/v1"
+	ArtifactValidatorConcurrentPerformanceV2        = "concurrent-sessions-performance/v2"
+	ArtifactValidatorLifecycleLocalV1               = "resource-lifecycle-local/v1"
+	ArtifactValidatorLifecycleModelV1               = "resource-lifecycle-model/v1"
+	ArtifactValidatorLifecycleRealV1                = "resource-lifecycle-real/v1"
+	ArtifactValidatorLifecyclePerformanceV1         = "resource-lifecycle-performance/v1"
+	ArtifactValidatorAttachReservationPerformanceV1 = "attach-reservation-performance/v1"
+	ArtifactValidatorSharedWorkspaceBehaviorV1      = "shared-workspace-behavior/v1"
+	ArtifactValidatorSharedWorkspacePerformanceV1   = "shared-workspace-performance/v1"
+	ArtifactValidatorWorkspaceExecutableV1          = "workspace-executable/v1"
+	ArtifactValidatorDisposableRecoveryV1           = "disposable-recovery/v1"
+	ArtifactValidatorProjectionReadinessV1          = "projection-readiness/v1"
+	ArtifactValidatorProjectionPrivacyV1            = "projection-privacy/v1"
 )
 
 var validRequirementLayers = []string{
@@ -102,6 +103,7 @@ var validArtifactValidators = []string{
 	ArtifactValidatorLifecycleModelV1,
 	ArtifactValidatorLifecycleRealV1,
 	ArtifactValidatorLifecyclePerformanceV1,
+	ArtifactValidatorAttachReservationPerformanceV1,
 	ArtifactValidatorSharedWorkspaceBehaviorV1,
 	ArtifactValidatorSharedWorkspacePerformanceV1,
 	ArtifactValidatorWorkspaceExecutableV1,
@@ -231,7 +233,7 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"036.FR-005", "036.FR-006", "036.FR-010", "036.FR-011", "036.FR-012", "036.FR-013", "036.FR-015", "036.FR-017", "036.FR-020", "036.FR-023", "036.FR-028", "036.SC-001", "036.SC-009", "036.SC-016"),
 		runtimeEvidenceClassValidatorReq(Feature036, Proof036RealLifecycle, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "resource-lifecycle-real-gate2", ArtifactValidatorLifecycleRealV1,
 			"036.FR-002", "036.FR-005", "036.FR-006", "036.FR-007", "036.FR-008", "036.FR-009", "036.FR-010", "036.FR-011", "036.FR-012", "036.FR-013", "036.FR-014", "036.FR-015", "036.FR-017", "036.FR-018", "036.FR-019", "036.FR-022", "036.FR-023", "036.FR-024", "036.FR-025", "036.FR-026", "036.FR-027", "036.FR-028", "036.FR-029", "036.FR-030", "036.SC-002", "036.SC-003", "036.SC-004", "036.SC-005", "036.SC-006", "036.SC-007", "036.SC-008", "036.SC-009", "036.SC-011", "036.SC-012", "036.SC-014", "036.SC-015", "036.SC-016", "036.SC-017", "036.SC-019", "036.SC-020"),
-		runtimeEvidenceClassValidatorReq(Feature036, Proof036RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "resource-lifecycle-performance-real-gate2", ArtifactValidatorLifecyclePerformanceV1,
+		runtimeEvidenceClassValidatorReq(Feature036, Proof036RealPerformance, LayerRealGate, RequiredForSupportingOnly, FreshnessNone, ArtifactPolicyExistsAndDigestIfSupplied, "resource-lifecycle-performance-real-gate2", ArtifactValidatorLifecyclePerformanceV1,
 			"036.SC-010"),
 		req(Feature036, Proof036RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied, "036.SC-002", "036.SC-003"),
 		req(Feature036, Proof036DocsClaimBoundary, LayerProductHardening, RequiredForTargetedCompletion, FreshnessSameCommit, ArtifactPolicyNone, "036.FR-003", "036.FR-008", "036.FR-014", "036.FR-019", "036.FR-021", "036.FR-024"),
@@ -265,7 +267,7 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"040.FR-001", "040.FR-002", "040.FR-003", "040.FR-005", "040.FR-006", "040.FR-007", "040.FR-008", "040.FR-009", "040.FR-010", "040.FR-011", "040.SC-001", "040.SC-002", "040.SC-003", "040.SC-004"),
 		runtimeEvidenceClassReq(Feature040, Proof040RealLifecycle, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "attach-reservation-real-gate2",
 			"040.FR-001", "040.FR-002", "040.FR-003", "040.FR-004", "040.FR-005", "040.FR-006", "040.FR-007", "040.FR-008", "040.FR-009", "040.FR-010", "040.FR-011", "040.FR-012", "040.FR-013", "040.SC-001", "040.SC-003", "040.SC-004", "040.SC-006", "040.SC-007"),
-		runtimeEvidenceClassReq(Feature040, Proof040RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "attach-reservation-performance-real-gate2",
+		runtimeEvidenceClassValidatorReq(Feature040, Proof040RealPerformance, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied, "attach-reservation-performance-real-gate2", ArtifactValidatorAttachReservationPerformanceV1,
 			"040.FR-011", "040.FR-012", "040.SC-005"),
 		req(Feature040, Proof040RealGate2NotRun, LayerRealGate, RequiredForSupportingOnly, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
 			"040.SC-005", "040.SC-006"),

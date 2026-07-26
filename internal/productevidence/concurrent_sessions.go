@@ -147,6 +147,12 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 			return err
 		}
 		return validateLifecyclePerformanceArtifact(data, expectedCommit, expectedRuntime)
+	case ArtifactValidatorAttachReservationPerformanceV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateAttachReservationPerformanceArtifact(data, expectedCommit, expectedRuntime)
 	case ArtifactValidatorSharedWorkspaceBehaviorV1:
 		return validateSharedWorkspaceBehaviorArtifact(refs, artifacts, expectedCommit, expectedPackage, expectedRuntime)
 	case ArtifactValidatorSharedWorkspacePerformanceV1:

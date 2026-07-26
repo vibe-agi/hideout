@@ -194,10 +194,11 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		}
 		projectionGrantIDs = append(projectionGrantIDs, grantDecision.ID)
 	}
-	// Keep safe host-app state under profile-owned storage so session cleanup cannot
-	// delete it while the detached GUI is alive, but isolate each run so an
-	// operator trust choice cannot silently carry into a later run.
-	safeUserDataDir := filepath.Join(runSession.ProfileDir, "host-app", "state")
+	// Keep safe host-app state in a compact store-owned root so session cleanup
+	// cannot delete it while the detached GUI is alive and GUI-local Unix sockets
+	// retain enough path budget on Darwin. Session IDs are store-global and the
+	// qualified state root also binds the exact app, so every run remains isolated.
+	safeUserDataDir := filepath.Join(c.Store.Root, "ha")
 	if err := prepareProjectionSafeDataDir(safeUserDataDir); err != nil {
 		return RunDataPlane{}, err
 	}

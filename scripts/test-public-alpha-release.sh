@@ -218,6 +218,35 @@ grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'export HIDEOUT_LIMA_SHORT_TMPDIR="$work"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'local root="${HIDEOUT_036_SHORT_TMPDIR:-/tmp}"' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null
+if grep -F 'local root="${HIDEOUT_036_SHORT_TMPDIR:-${TMPDIR:-/tmp}}"' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null; then
+  echo "public-alpha-release: Gate 2 lifecycle short root regressed to ambient TMPDIR" >&2
+  exit 1
+fi
+grep -F 'hideout-036-performance-candidate-workspace.XXXXXX' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null
+grep -F 'hideout-036-performance-baseline-workspace.XXXXXX' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null
+grep -F '[ "$(gate2_036_fixture_digest "$baseline_workspace")" = "$fixture_digest" ]' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null
+if grep -F 'hideout-036-performance-workspace.XXXXXX' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null; then
+  echo "public-alpha-release: Gate 2 lifecycle candidate and baseline share one physical workspace" >&2
+  exit 1
+fi
+grep -F 'baseline_commit="322c3c6cc9561eea21d4ed20ab78172429654c54"' \
+  scripts/test-lifecycle-lima-e2e.sh >/dev/null
+grep -F 'schema:"hideout.attach-reservation-performance/v1"' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null
+grep -F 'workspaceIsolation:"separate-physical-fixtures"' \
+  scripts/lib/gate2-resource-lifecycle-performance.sh >/dev/null
+if grep -F "<(proof_json '036.lifecycle.real-gate2.performance'" \
+  scripts/test-lifecycle-lima-e2e.sh >/dev/null; then
+  echo "public-alpha-release: current candidate reclaims the historical 036 feature-regression proof" >&2
+  exit 1
+fi
 grep -F 'HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install.sh' \

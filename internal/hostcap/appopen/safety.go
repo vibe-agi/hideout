@@ -55,6 +55,8 @@ type IsolatedStateSpec struct {
 	Kind                 string `json:"kind"`
 	ArgumentFlag         string `json:"argumentFlag"`
 	SettingsRelativePath string `json:"settingsRelativePath"`
+	LocalIPCSuffix       string `json:"localIpcSuffix,omitempty"`
+	MaxLocalIPCPathBytes int    `json:"maxLocalIpcPathBytes,omitempty"`
 }
 
 // LaunchSyntaxProfile is the exact package-declared syntax a reviewed app
@@ -171,6 +173,9 @@ func BuildSafeEffect(spec LaunchSpec, req OpenRequest, profile SafetyProfile, id
 	if err != nil {
 		return SafeEffect{}, err
 	}
+	if err := validateLocalIPCStatePath(profile.IsolatedState, stateRoot); err != nil {
+		return SafeEffect{}, err
+	}
 	coreSpec := spec
 	coreSpec.SafeIsolationFlags = append([]string(nil), profile.RequiredArgv...)
 	coreSpec.IsolatedDataDirFlag = profile.IsolatedState.ArgumentFlag
@@ -225,6 +230,9 @@ func ValidateSafetyEffect(profile SafetyProfile, identity SafetyIdentity, effect
 	}
 	if effect.LaunchRequest.SafeUserDataDir != effect.StateRoot {
 		return errors.New("appopen: safe launch request points at different state")
+	}
+	if err := validateLocalIPCStatePath(profile.IsolatedState, effect.StateRoot); err != nil {
+		return err
 	}
 	expectedSpec := effect.LaunchSpec
 	expectedSpec.SafeIsolationFlags = append([]string(nil), profile.RequiredArgv...)
@@ -318,7 +326,9 @@ func ValidateSafetyProfile(profile SafetyProfile) error {
 	if profile.IsolatedState.Kind != IsolatedStateQualifiedAppRun || strings.TrimSpace(profile.IsolatedState.ArgumentFlag) == "" {
 		return errors.New("appopen: safety profile lacks qualified app/run isolation")
 	}
-	if boundedSafetyText(profile.IsolatedState.Kind) != nil || boundedSafetyText(profile.IsolatedState.SettingsRelativePath) != nil {
+	if boundedSafetyText(profile.IsolatedState.Kind) != nil ||
+		boundedSafetyText(profile.IsolatedState.SettingsRelativePath) != nil ||
+		boundedSafetyText(profile.IsolatedState.LocalIPCSuffix) != nil {
 		return errors.New("appopen: isolated state declaration exceeds its bound")
 	}
 	if !validSafetyFlag(profile.IsolatedState.ArgumentFlag) || slices.Contains(profile.ForbiddenArgv, profile.IsolatedState.ArgumentFlag) {
@@ -327,6 +337,19 @@ func ValidateSafetyProfile(profile SafetyProfile) error {
 	cleanSettingsPath := filepath.Clean(filepath.FromSlash(profile.IsolatedState.SettingsRelativePath))
 	if cleanSettingsPath == "." || cleanSettingsPath == ".." || filepath.IsAbs(cleanSettingsPath) || strings.HasPrefix(cleanSettingsPath, ".."+string(filepath.Separator)) || filepath.ToSlash(cleanSettingsPath) != profile.IsolatedState.SettingsRelativePath {
 		return errors.New("appopen: safety settings path must remain under the isolated state root")
+	}
+	if (profile.IsolatedState.LocalIPCSuffix == "") != (profile.IsolatedState.MaxLocalIPCPathBytes == 0) {
+		return errors.New("appopen: local IPC path contract is incomplete")
+	}
+	if profile.IsolatedState.LocalIPCSuffix != "" {
+		suffix := filepath.Clean(filepath.FromSlash(profile.IsolatedState.LocalIPCSuffix))
+		if suffix == "." || suffix == ".." || filepath.IsAbs(suffix) ||
+			strings.HasPrefix(suffix, ".."+string(filepath.Separator)) ||
+			filepath.ToSlash(suffix) != profile.IsolatedState.LocalIPCSuffix ||
+			profile.IsolatedState.MaxLocalIPCPathBytes <= 0 ||
+			profile.IsolatedState.MaxLocalIPCPathBytes > 4096 {
+			return errors.New("appopen: local IPC path contract is invalid")
+		}
 	}
 	if hasDuplicate(profile.RequiredArgv) || hasDuplicate(profile.ForbiddenArgv) || hasDuplicate(profile.AllowedSettings) {
 		return errors.New("appopen: duplicate safety profile item")
@@ -364,6 +387,21 @@ func ValidateSafetyProfile(profile SafetyProfile) error {
 	}
 	if !slices.Equal(profile.Verification, []string{VerificationCombinedEffectV1}) {
 		return errors.New("appopen: unsupported safety verification contract")
+	}
+	return nil
+}
+
+func validateLocalIPCStatePath(spec IsolatedStateSpec, stateRoot string) error {
+	if spec.LocalIPCSuffix == "" && spec.MaxLocalIPCPathBytes == 0 {
+		return nil
+	}
+	socketPath := filepath.Join(stateRoot, filepath.FromSlash(spec.LocalIPCSuffix))
+	if len(socketPath) > spec.MaxLocalIPCPathBytes {
+		return fmt.Errorf(
+			"appopen: isolated state path is too long for host application IPC (%d bytes, maximum %d); use a shorter Hideout store path",
+			len(socketPath),
+			spec.MaxLocalIPCPathBytes,
+		)
 	}
 	return nil
 }

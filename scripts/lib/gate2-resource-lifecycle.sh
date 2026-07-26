@@ -299,7 +299,7 @@ gate2_036_run_host_handoff() {
     return 2
   }
   GATE2_036_HOST_APP_MAIN="$bundle/Contents/MacOS/Code"
-  GATE2_036_HOST_APP_STATE="$GATE2_036_STORE/profiles/default/host-app/state"
+  GATE2_036_HOST_APP_STATE="$GATE2_036_STORE/ha"
   mkdir -p "$GATE2_036_WORKSPACE/src"
   printf 'package main\n' >"$GATE2_036_WORKSPACE/src/main.go"
   gate2_036_run_env "$GATE2_036_HIDEOUT" profile host-app-mode default safe \

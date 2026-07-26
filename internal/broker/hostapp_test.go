@@ -131,6 +131,20 @@ func codeIntent(guestPath string) map[string]any {
 	}
 }
 
+func shortProjectionStateDir(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("/tmp", "hideout-broker-state.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove short projection state: %v", err)
+		}
+	})
+	return root
+}
+
 func projectionConfig(t *testing.T, launcher appopen.Launcher) (*hostcap.ProjectionConfig, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "Applications")
@@ -170,7 +184,7 @@ func projectionConfig(t *testing.T, launcher appopen.Launcher) (*hostcap.Project
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := t.TempDir()
+	state := shortProjectionStateDir(t)
 	return &hostcap.ProjectionConfig{
 		Platform: hostcap.PlatformDarwin, SafeUserDataDir: state,
 		Launcher: launcher, Bindings: catalog, RunID: "run_1", WorkspaceID: "wrk_broker_projection_fixture",

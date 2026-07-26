@@ -36,7 +36,7 @@ func TestProjectionResolvesSafeApplicationIdentityOnlyOnFirstCommandUse(t *testi
 		}
 	}}
 	projection := &ProjectionConfig{
-		Platform: PlatformDarwin, SafeUserDataDir: t.TempDir(), Bindings: catalog, Launcher: launcher, RunID: "run_1", WorkspaceID: testWorkspaceAuthorityID,
+		Platform: PlatformDarwin, SafeUserDataDir: shortHostAppStateBase(t), Bindings: catalog, Launcher: launcher, RunID: "run_1", WorkspaceID: testWorkspaceAuthorityID,
 		ValidateLifecycle: func(OpenResourceBinding) error { return nil },
 		ResolveIdentity: func(binding OpenResourceBinding) (OpenResourceBinding, error) {
 			identityChecks++

@@ -184,7 +184,7 @@ func TestSafeStateIsSeparatedByQualifiedAppAndRun(t *testing.T) {
 }
 
 func TestQualifiedRunStateRootLeavesDarwinLocalIPCSocketBudget(t *testing.T) {
-	base := "/Users/operator/.hideout/profiles/default/host-app/state"
+	base := "/Users/operator/.hideout/ha"
 	root, err := QualifiedRunStateRoot(base, "builtin.vscode/rev_0123456789abcdef/vscode", "ses_20260716T113520Z_a4aedc3b131e8ca5d51b")
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +192,24 @@ func TestQualifiedRunStateRootLeavesDarwinLocalIPCSocketBudget(t *testing.T) {
 	const maxDarwinUnixSocketPath = 103
 	if socket := filepath.Join(root, "1.12-main.sock"); len(socket) > maxDarwinUnixSocketPath {
 		t.Fatalf("qualified state leaves no Darwin IPC budget: len(%q)=%d", socket, len(socket))
+	}
+}
+
+func TestSafeEffectRejectsOverlongLocalIPCPathBeforeLaunch(t *testing.T) {
+	profile := testSafetyProfile()
+	profile.IsolatedState.LocalIPCSuffix = "1.12-main.sock"
+	profile.IsolatedState.MaxLocalIPCPathBytes = 103
+	req := OpenRequest{
+		BinaryPath:      "/Applications/Editor.app/Contents/MacOS/Editor",
+		Mode:            ModeSafe,
+		HostTarget:      "/Users/operator/workspace/a.go",
+		SafeUserDataDir: "/" + strings.Repeat("long-store/", 12),
+		QualifiedAppRef: "community.editor/editor",
+		RunID:           "run-123",
+	}
+	if _, err := BuildSafeEffect(testSafeLaunchSpec(), req, profile, testSafetyIdentity()); err == nil ||
+		!strings.Contains(err.Error(), "too long for host application IPC") {
+		t.Fatalf("overlong local IPC path error=%v", err)
 	}
 }
 

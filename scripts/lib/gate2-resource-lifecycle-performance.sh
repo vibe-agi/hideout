@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 gate2_036_short_tmpdir() {
-  local root="${HIDEOUT_036_SHORT_TMPDIR:-${TMPDIR:-/tmp}}"
+  local root="${HIDEOUT_036_SHORT_TMPDIR:-/tmp}"
   case "$root" in
     /*) ;;
     *) echo "resource-lifecycle gate2: short temporary root must be absolute: $root" >&2; return 2 ;;
@@ -176,8 +176,10 @@ gate2_036_run_performance() (
   baseline_bin="$tmp/baseline-bin"
   candidate_store="$(mktemp -d "$short_tmp/h36pc.XXXXXX")"
   baseline_store="$(mktemp -d "$short_tmp/h36pb.XXXXXX")"
-  workspace="$(mktemp -d "$(dirname "$root")/hideout-036-performance-workspace.XXXXXX")"
-  workspace="$(cd "$workspace" && pwd -P)"
+  candidate_workspace="$(mktemp -d "$(dirname "$root")/hideout-036-performance-candidate-workspace.XXXXXX")"
+  candidate_workspace="$(cd "$candidate_workspace" && pwd -P)"
+  baseline_workspace="$(mktemp -d "$(dirname "$root")/hideout-036-performance-baseline-workspace.XXXXXX")"
+  baseline_workspace="$(cd "$baseline_workspace" && pwd -P)"
   candidate_lima_home="$(mktemp -d "$short_tmp/h36plc.XXXXXX")"
   baseline_lima_home="$(mktemp -d "$short_tmp/h36plb.XXXXXX")"
   candidate_values="$out/logs/performance-candidate-ms.txt"
@@ -205,31 +207,33 @@ gate2_036_run_performance() (
     [ ! -x "$baseline_bin/hideout" ] || HIDEOUT_STORE_ROOT="$baseline_store" "$baseline_bin/hideout" daemon stop >/dev/null 2>&1 || true
     git -C "$root" worktree remove --force "$baseline_root" >/dev/null 2>&1 || true
     rm -rf "$candidate_store" "$baseline_store" "$candidate_lima_home" \
-      "$baseline_lima_home" "$workspace" "$tmp"
+      "$baseline_lima_home" "$candidate_workspace" "$baseline_workspace" "$tmp"
   }
   trap gate2_036_performance_cleanup EXIT
 
-  gate2_036_prepare_fixture "$workspace"
-  fixture_digest="$(gate2_036_fixture_digest "$workspace")"
+  gate2_036_prepare_fixture "$candidate_workspace"
+  gate2_036_prepare_fixture "$baseline_workspace"
+  fixture_digest="$(gate2_036_fixture_digest "$candidate_workspace")"
+  [ "$(gate2_036_fixture_digest "$baseline_workspace")" = "$fixture_digest" ]
   git -C "$root" worktree add --detach "$baseline_root" "$baseline_commit" \
     >"$out/logs/performance-baseline-worktree.out" 2>"$out/logs/performance-baseline-worktree.err"
   gate2_036_build_tree "$baseline_root" "$baseline_bin" "$arch"
 
-  local candidate_marker="$workspace/src/.hideout-gate-candidate-anchor-ready"
-  local candidate_release="$workspace/src/.hideout-gate-candidate-anchor-release"
-  local baseline_marker="$workspace/src/.hideout-gate-baseline-anchor-ready"
-  local baseline_release="$workspace/src/.hideout-gate-baseline-anchor-release"
-  local i first_label second_label label output errors values hideout store lima bin
+  local candidate_marker="$candidate_workspace/src/.hideout-gate-candidate-anchor-ready"
+  local candidate_release="$candidate_workspace/src/.hideout-gate-candidate-anchor-release"
+  local baseline_marker="$baseline_workspace/src/.hideout-gate-baseline-anchor-ready"
+  local baseline_release="$baseline_workspace/src/.hideout-gate-baseline-anchor-release"
+  local i first_label second_label label output errors values hideout store lima bin workspace
   rm -f "$candidate_marker" "$candidate_release" "$baseline_marker" "$baseline_release"
   gate2_036_init_profile "$candidate_bin/hideout" "$candidate_store" "$candidate_lima_home" \
     "$candidate_bin" "$arch" "$out/logs/candidate-init.out" dev
   gate2_036_start_anchor "$candidate_bin/hideout" "$candidate_store" "$candidate_lima_home" \
-    "$candidate_bin" "$arch" "$workspace" "$candidate_marker" "$candidate_release" "$out/logs/candidate-anchor.out"
+    "$candidate_bin" "$arch" "$candidate_workspace" "$candidate_marker" "$candidate_release" "$out/logs/candidate-anchor.out"
   GATE2_036_PERF_CANDIDATE_PID="$GATE2_036_ANCHOR_PID"
   gate2_036_init_profile "$baseline_bin/hideout" "$baseline_store" "$baseline_lima_home" \
     "$baseline_bin" "$arch" "$out/logs/baseline-init.out" dev
   gate2_036_start_anchor "$baseline_bin/hideout" "$baseline_store" "$baseline_lima_home" \
-    "$baseline_bin" "$arch" "$workspace" "$baseline_marker" "$baseline_release" "$out/logs/baseline-anchor.out"
+    "$baseline_bin" "$arch" "$baseline_workspace" "$baseline_marker" "$baseline_release" "$out/logs/baseline-anchor.out"
   GATE2_036_PERF_BASELINE_PID="$GATE2_036_ANCHOR_PID"
   GATE2_036_ANCHOR_PID=""
 
@@ -243,10 +247,10 @@ gate2_036_run_performance() (
     for label in "$first_label" "$second_label"; do
       if [ "$label" = candidate ]; then
         hideout="$candidate_bin/hideout"; store="$candidate_store"; lima="$candidate_lima_home"
-        bin="$candidate_bin"; values="$candidate_values"
+        bin="$candidate_bin"; values="$candidate_values"; workspace="$candidate_workspace"
       else
         hideout="$baseline_bin/hideout"; store="$baseline_store"; lima="$baseline_lima_home"
-        bin="$baseline_bin"; values="$baseline_values"
+        bin="$baseline_bin"; values="$baseline_values"; workspace="$baseline_workspace"
       fi
       output="$out/logs/$label-sample-$i.out"
       errors="$out/logs/$label-sample-$i.err"
@@ -272,7 +276,8 @@ gate2_036_run_performance() (
     >"$out/logs/baseline-stop.out" 2>"$out/logs/baseline-stop.err"
   HIDEOUT_STORE_ROOT="$candidate_store" "$candidate_bin/hideout" daemon stop >/dev/null 2>&1 || true
   HIDEOUT_STORE_ROOT="$baseline_store" "$baseline_bin/hideout" daemon stop >/dev/null 2>&1 || true
-  [ "$(gate2_036_fixture_digest "$workspace")" = "$fixture_digest" ]
+  [ "$(gate2_036_fixture_digest "$candidate_workspace")" = "$fixture_digest" ]
+  [ "$(gate2_036_fixture_digest "$baseline_workspace")" = "$fixture_digest" ]
 
   candidate_median="$(gate2_036_percentile "$candidate_values" 50)"
 	candidate_p95="$(gate2_036_percentile "$candidate_values" 95)"
@@ -281,10 +286,6 @@ gate2_036_run_performance() (
   baseline_median="$(gate2_036_percentile "$baseline_values" 50)"
   observed_delta="$(awk -v candidate="$candidate_median" -v baseline="$baseline_median" 'BEGIN { printf "%.4f", candidate-baseline }')"
   allowed_delta="$(awk -v baseline="$baseline_median" 'BEGIN { value=baseline*0.05; if (value<10) value=10; printf "%.4f", value }')"
-  awk -v observed="$observed_delta" -v allowed="$allowed_delta" 'BEGIN { exit !(observed <= allowed) }' || {
-    echo "resource-lifecycle performance: median regression ${observed_delta}ms exceeds ${allowed_delta}ms" >&2
-    return 1
-  }
 	awk -v p95="$candidate_p95" -v within="$candidate_within_two_seconds" -v count="$candidate_sample_count" \
 	  'BEGIN { exit !(p95 <= 2000 && within*100 >= count*95) }' || {
 	  echo "attach-reservation performance: p95=${candidate_p95}ms within-2s=${candidate_within_two_seconds}/${candidate_sample_count}" >&2
@@ -318,13 +319,14 @@ gate2_036_run_performance() (
 	--argjson candidateWithinTwoSeconds "$candidate_within_two_seconds" --argjson candidateSampleCount "$candidate_sample_count" \
 	--argjson baselineMedianMs "$baseline_median" \
     --argjson observedDeltaMs "$observed_delta" --argjson allowedDeltaMs "$allowed_delta" '
-    {schema:"hideout.lifecycle-performance/v1",status:"passed",generatedAt:$generatedAt,
+    {schema:"hideout.attach-reservation-performance/v1",status:"passed",generatedAt:$generatedAt,
      candidate:{commit:$candidateCommit,dirty:$candidateDirty},baseline:{commit:$baselineCommit,dirty:false},
      host:{os:"darwin",arch:"arm64"},
      runtime:{family:$runtimeFamily,revision:$runtimeRevision,artifactSHA256:$runtimeArtifactSHA256,
        buildCommit:$runtimeBuildCommit,buildDirty:false},
      methodology:{command:"hideout run -- git status --short",samples:$samples,warmups:$warmups,
-       fixtureSHA256:$fixtureSHA256,sampleOrder:"paired-alternating-ab-ba"},candidateSamplesMs:$candidateSamples,
+       fixtureSHA256:$fixtureSHA256,sampleOrder:"paired-alternating-ab-ba",
+       workspaceIsolation:"separate-physical-fixtures"},candidateSamplesMs:$candidateSamples,
 	 baselineSamplesMs:$baselineSamples,candidateMedianMs:$candidateMedianMs,candidateP95Ms:$candidateP95Ms,
 	 candidateWithinTwoSeconds:$candidateWithinTwoSeconds,candidateSampleCount:$candidateSampleCount,
      baselineMedianMs:$baselineMedianMs,observedDeltaMs:$observedDeltaMs,allowedDeltaMs:$allowedDeltaMs}

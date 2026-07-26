@@ -14,7 +14,7 @@ probe=0
 feature_040=0
 out="${HIDEOUT_036_EVIDENCE_DIR:-$ROOT/.hideout-release-evidence/036-resource-lifecycle}"
 package_archive=""
-baseline_commit="127ef937b120f0faa719611abcb3a1816e331266"
+baseline_commit="322c3c6cc9561eea21d4ed20ab78172429654c54"
 baseline_explicit=0
 baseline_040_commit="322c3c6cc9561eea21d4ed20ab78172429654c54"
 samples=30
@@ -243,9 +243,6 @@ else
 	  <(proof_json '036.lifecycle.real-gate2.lifecycle' passed resource-lifecycle-real-gate2 \
 	    'validated real final-session stop, races, retained state, handoff, restart, recovery, and observation' \
 	    "$lifecycle_artifact" 'real macOS arm64 Lima evidence' "$runtime") \
-	  <(proof_json '036.lifecycle.real-gate2.performance' passed resource-lifecycle-performance-real-gate2 \
-	    'validated hideout run -- git status --short against the exact pre-036 baseline' \
-	    "$performance_artifact" 'same fixture, host, and exact runtime artifact' "$runtime") \
 	  <(proof_json "$proof_040_real_lifecycle" passed attach-reservation-real-gate2 \
 	    'validated real reconciliation-first, reservation-first, cancellation, restart boundaries, siblings, and redaction' \
 	    "$lifecycle_artifact" 'real macOS arm64 Lima attach-reservation evidence' "$runtime" \

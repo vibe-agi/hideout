@@ -3,6 +3,7 @@ package hostcap
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,16 @@ import (
 )
 
 const testWorkspaceAuthorityID = "wrk_test_session_authority"
+
+func shortHostAppStateBase(t *testing.T) string {
+	t.Helper()
+	path, err := os.MkdirTemp("/tmp", "hideout-hostapp-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(path) })
+	return path
+}
 
 type fakeBoundResolver struct {
 	resource      ResolvedResource
@@ -121,7 +132,7 @@ func TestOpenBoundResourceUsesOneGenericPathForTwoRecipes(t *testing.T) {
 				t.Fatal(err)
 			}
 			launcher := &fakeLauncher{}
-			base := t.TempDir()
+			base := shortHostAppStateBase(t)
 			result, err := OpenBoundResource(context.Background(), binding, BoundOpenRequest{
 				Resources: []UnboundResource{{GuestPath: "/workspace/src/main.go"}},
 				Location:  &Location{Line: 12, Column: 3}, WindowMode: WindowReuse,

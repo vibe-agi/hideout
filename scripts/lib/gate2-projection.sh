@@ -205,7 +205,7 @@ run_projection_gate2() {
   projection_grant_workspace="$(mktemp -d "$HOME/hideout-gate2-projection-grant.XXXXXX")"
   # 032 isolates safe state by qualified app and run beneath this Core-owned
   # base. Match the base, then discover the exact materialized settings file.
-  projection_safe_data_dir="$store/profiles/$profile_name/host-app/state"
+  projection_safe_data_dir="$store/ha"
 
   projection_prepare_privacy_network
 

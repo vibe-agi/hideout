@@ -1760,12 +1760,13 @@ non-destructive stop after the final pin/drain and 15-second grace. Unknown
 inventory, orphaned ownership, failed cleanup, and boot change must never
 publish stopped or cross into automatic stop.
 
-The performance sub-lane builds the exact pre-036 commit and candidate in
-separate trees, then alternates at least 30 paired samples of the literal
-user-visible command `hideout run -- git status --short` on the same host,
-runtime artifact, and fixture. Candidate median overhead may exceed baseline by
-at most 5% or 10 ms, whichever is larger. Raw arrays, fixture digest, runtime
-identity, clean commit identities, and recomputed medians are retained.
+The historical 036 performance sub-lane built the exact pre-036 commit and
+036 candidate in separate trees, then alternated at least 30 paired samples of
+the literal user-visible command `hideout run -- git status --short` on the
+same host, runtime artifact, and fixture. Candidate median overhead could
+exceed baseline by at most 5% or 10 ms, whichever was larger. Raw arrays,
+fixture digest, runtime identity, clean commit identities, and recomputed
+medians were retained.
 
 The promoted proof is bound to commit
 `0fe099f20e354d5d52187d9c8d5406a367d19d52`, runtime
@@ -1779,12 +1780,14 @@ against 271.180 ms for pre-036 commit
 
 ### 036 Evidence Refusal
 
-`036.lifecycle.real-gate2.lifecycle` and
-`036.lifecycle.real-gate2.performance` require real-gate evidence, clean exact
-commit/runtime binding, the registered evidence classes, and digest-verified
-artifacts. `036.lifecycle.real-gate2.not-run`, native, local-fast, a reduced
-probe, command success without backend observation, or an edited `passed`
-summary cannot satisfy the claim. Documentation must retain the non-claims:
+`036.lifecycle.real-gate2.lifecycle` remains fresh exact-package release
+evidence. `036.lifecycle.real-gate2.performance` is validator-backed supporting
+historical evidence for the feature-specific registry-migration delta proved
+at `0fe099f`; later Portal, attach-reservation, and projection-readiness costs
+are owned by their current 035, 040, and 043 gates rather than reassigned to
+036. `036.lifecycle.real-gate2.not-run`, native, local-fast, a reduced probe,
+command success without backend observation, or an edited `passed` summary
+cannot satisfy the lifecycle claim. Documentation must retain the non-claims:
 automatic stop does not clean/delete retained state, terminate independent host
 apps, preserve detached run bridges, provide guest-root containment, or guess
 through unknown ownership/backend state.

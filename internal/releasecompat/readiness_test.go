@@ -1568,6 +1568,39 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 			},
 			"warmAttach": map[string]any{"samplesMs": warm, "medianMs": 100, "p95Ms": 100},
 		}
+	case productevidence.ArtifactValidatorAttachReservationPerformanceV1:
+		candidate := make([]float64, 30)
+		baseline := make([]float64, 30)
+		for index := range candidate {
+			candidate[index], baseline[index] = 500, 200
+		}
+		value = map[string]any{
+			"schema": "hideout.attach-reservation-performance/v1", "status": "passed",
+			"generatedAt": "2026-07-26T00:00:00Z",
+			"candidate":   map[string]any{"commit": commit, "dirty": false},
+			"baseline": map[string]any{
+				"commit": "322c3c6cc9561eea21d4ed20ab78172429654c54", "dirty": false,
+			},
+			"host": map[string]any{"os": "darwin", "arch": "arm64"},
+			"runtime": map[string]any{
+				"family": binding.Family, "revision": binding.Revision, "artifactSHA256": binding.ArtifactSHA256,
+				"buildCommit": binding.BuildCommit, "buildDirty": false,
+			},
+			"methodology": map[string]any{
+				"command": "hideout run -- git status --short", "samples": 30, "warmups": 3,
+				"fixtureSHA256": strings.Repeat("c", 64), "sampleOrder": "paired-alternating-ab-ba",
+				"workspaceIsolation": "separate-physical-fixtures",
+			},
+			"candidateSamplesMs":        candidate,
+			"baselineSamplesMs":         baseline,
+			"candidateMedianMs":         500,
+			"candidateP95Ms":            500,
+			"candidateWithinTwoSeconds": 30,
+			"candidateSampleCount":      30,
+			"baselineMedianMs":          200,
+			"observedDeltaMs":           300,
+			"allowedDeltaMs":            10,
+		}
 	case productevidence.ArtifactValidatorLifecycleLocalV1:
 		checks := map[string]bool{}
 		for _, name := range []string{

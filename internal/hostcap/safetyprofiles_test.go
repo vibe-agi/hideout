@@ -20,6 +20,9 @@ func TestCoreSafetyProfileCatalogLoadsStrictReviewedData(t *testing.T) {
 	if err != nil || profile.ID != "vscode-family-v1" {
 		t.Fatalf("reviewed profile unavailable: %+v err=%v", profile, err)
 	}
+	if profile.IsolatedState.LocalIPCSuffix != "1.12-main.sock" || profile.IsolatedState.MaxLocalIPCPathBytes != 103 {
+		t.Fatalf("reviewed VS Code local IPC contract is missing: %+v", profile.IsolatedState)
+	}
 
 	profiles[0].RequiredArgv[0] = "--forged"
 	again := CoreSafetyProfiles()

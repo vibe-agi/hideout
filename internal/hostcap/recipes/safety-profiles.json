@@ -37,7 +37,9 @@
       "isolatedState": {
         "kind": "qualified-app-run-directory",
         "argumentFlag": "--user-data-dir",
-        "settingsRelativePath": "User/settings.json"
+        "settingsRelativePath": "User/settings.json",
+        "localIpcSuffix": "1.12-main.sock",
+        "maxLocalIpcPathBytes": 103
       },
       "allowedSettings": [
         "security.workspace.trust.enabled",
