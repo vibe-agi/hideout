@@ -34,7 +34,35 @@ if [ -n "$evidence_dir" ]; then
   jq -e '
     .schema == "hideout.concurrent-sessions-gate2/v1" and .status == "passed" and
     .backend == "lima" and .host == "macos-arm64" and
-    ([.checks[]] | length == 16 and all) and
+    (.checks | keys) == [
+      "daemonCrashClientsUnblocked",
+      "daemonCrashTargetsReaped",
+      "daemonCrashTerminalRestored",
+      "distinctMountNamespaces",
+      "distinctPidNamespaces",
+      "distinctSessionIds",
+      "explicitRecovery",
+      "explicitStopStoppedVm",
+      "forcedInterruptionTargetGone",
+      "fullscreenFixture",
+      "guestRootPositiveControl",
+      "hostfsOverlaySessionLocal",
+      "interruptExitExact",
+      "lastSessionPreservedVm",
+      "nonRootTargets",
+      "ownerReconciled",
+      "postRecoveryRun",
+      "privateProc",
+      "realPTYInitialSize",
+      "realPTYResize",
+      "restartStaleOwnerFailedClosed",
+      "siblingPidHidden",
+      "siblingRuntimeHidden",
+      "siblingSurvivedInterruption",
+      "stopRefusedWithLiveOwners",
+      "threeSameWorkspaceOwners"
+    ] and
+    ([.checks[]] | all) and
     .nonClaims.guestRootContainment == "not-claimed"
   ' "$isolation" >/dev/null
   jq -e '
