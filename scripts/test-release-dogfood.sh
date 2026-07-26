@@ -173,8 +173,17 @@ count_gate4_browser_processes() {
     '
 }
 
+gate4_temp_roots() {
+  printf '%s\n' "${TMPDIR:-/tmp}" "${HIDEOUT_GATE4_SHORT_TMPDIR:-/tmp}" |
+    awk 'length && !seen[$0]++'
+}
+
 count_gate4_temp_dirs() {
-  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'hideout-gate4.*' -print 2>/dev/null |
+  while IFS= read -r root; do
+    [ -d "$root" ] || continue
+    find "$root" -maxdepth 1 -type d -name 'hideout-gate4.*' -print 2>/dev/null
+  done < <(gate4_temp_roots) |
+    LC_ALL=C sort -u |
     awk 'NF {count++} END {print count+0}'
 }
 
@@ -237,7 +246,10 @@ post_run_cleanup() {
   fi
 
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'hideout-gate4.*' -exec rm -rf {} + >/dev/null 2>&1 || true
+    while IFS= read -r root; do
+      [ -d "$root" ] || continue
+      find "$root" -maxdepth 1 -type d -name 'hideout-gate4.*' -exec rm -rf {} + >/dev/null 2>&1 || true
+    done < <(gate4_temp_roots)
     browser_count="$(count_gate4_browser_processes)"
     temp_count="$(count_gate4_temp_dirs)"
     if [ "$browser_count" = "0" ] && [ "$temp_count" = "0" ]; then

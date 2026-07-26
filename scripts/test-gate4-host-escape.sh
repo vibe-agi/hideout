@@ -14,6 +14,27 @@ require_command() {
 
 gate4_real_browser_path=""
 gate4_browser_wrapper=""
+gate4_tmp_root=""
+
+resolve_gate4_tmp_root() {
+  local selected="${HIDEOUT_GATE4_SHORT_TMPDIR:-}"
+  if [ -z "$selected" ]; then
+    case "$(uname -s)" in
+      Darwin) selected="/tmp" ;;
+      *) selected="${TMPDIR:-/tmp}" ;;
+    esac
+  fi
+  case "$selected" in
+    /*) ;;
+    *) echo "gate4: temporary root must be absolute: $selected" >&2; return 2 ;;
+  esac
+  [ "$selected" != "/" ] || {
+    echo "gate4: refusing filesystem root as temporary root" >&2
+    return 2
+  }
+  mkdir -p "$selected"
+  (CDPATH= cd -- "$selected" && pwd -P)
+}
 
 validate_browser_path() {
   local launcher="$1"
@@ -232,7 +253,7 @@ write_gate4_browser_wrapper() {
 
 cleanup_stale_gate4_state() {
   kill_gate4_browsers "/hideout-gate4."
-  find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'hideout-gate4.*' -exec rm -rf {} + >/dev/null 2>&1 || true
+  find "$gate4_tmp_root" -maxdepth 1 -type d -name 'hideout-gate4.*' -exec rm -rf {} + >/dev/null 2>&1 || true
 }
 
 run_hideout_dry() {
@@ -258,7 +279,11 @@ expect_open_denied() {
     echo "gate4: denied open unexpectedly succeeded: $target" >&2
     exit 1
   fi
-  grep -q "$want" "$err"
+  if ! grep -q "$want" "$err"; then
+    echo "gate4: denied open did not report expected reason: $want" >&2
+    cat "$err" >&2
+    exit 1
+  fi
   audit="$(latest_audit)"
   grep -q '"action":"host.open"' "$audit"
   grep -q '"decision":"deny"' "$audit"
@@ -267,9 +292,10 @@ expect_open_denied() {
 require_command go
 require_command jq
 preflight_real_browser_launcher
+gate4_tmp_root="$(resolve_gate4_tmp_root)"
 cleanup_stale_gate4_state
 
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-gate4.XXXXXX")"
+tmp="$(mktemp -d "$gate4_tmp_root/hideout-gate4.XXXXXX")"
 cleanup() {
   cleanup_real_gate4_browser "$tmp" || true
   remove_gate4_tmp "$tmp" || true
@@ -279,6 +305,7 @@ trap 'cleanup; gate_require_completion gate4' EXIT
 bin="$tmp/bin"
 home="$tmp/home"
 workspace="$tmp/workspace"
+guest_workspace="/workspace"
 mkdir -p "$bin" "$home" "$workspace"
 if [ "${HIDEOUT_GATE4_REAL_BROWSER:-}" = "1" ]; then
   write_gate4_browser_wrapper
@@ -347,12 +374,12 @@ expect_open_denied "outside-workspace" "/etc/passwd" 'outside workspace'
 echo "gate4: verifying unsafe file target denial"
 ln -s /etc/passwd "$workspace/link-out"
 mkfifo "$workspace/pipe"
-expect_open_denied "symlink-escape" "$workspace/link-out" 'resolves outside workspace'
-expect_open_denied "special-file" "$workspace/pipe" 'not a regular file or directory'
-expect_open_denied "remote-file-url" "file://remote-host$workspace/doc.txt" 'file URL host "remote-host" is denied'
-expect_open_denied "query-file-url" "file://localhost$workspace/doc.txt?download=1" 'must not include query or fragment'
-expect_open_denied "fragment-file-url" "file://localhost$workspace/doc.txt#fragment" 'must not include query or fragment'
-expect_open_denied "encoded-file-url" "file://localhost$workspace/src%2f..%2fsecret.txt" 'encoded path separators'
+expect_open_denied "symlink-escape" "$guest_workspace/link-out" 'resolves outside workspace'
+expect_open_denied "special-file" "$guest_workspace/pipe" 'not a regular file or directory'
+expect_open_denied "remote-file-url" "file://remote-host$guest_workspace/doc.txt" 'file URL host "remote-host" is denied'
+expect_open_denied "query-file-url" "file://localhost$guest_workspace/doc.txt?download=1" 'must not include query or fragment'
+expect_open_denied "fragment-file-url" "file://localhost$guest_workspace/doc.txt#fragment" 'must not include query or fragment'
+expect_open_denied "encoded-file-url" "file://localhost$guest_workspace/src%2f..%2fsecret.txt" 'encoded path separators'
 
 echo "gate4: verifying disabled command proxy direct shim invocation denial"
 HOME="$home" "$hideout" profile init open-only >/dev/null

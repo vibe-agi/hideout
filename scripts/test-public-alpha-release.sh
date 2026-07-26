@@ -329,6 +329,27 @@ grep -F 'release evidence requires the packaged Linux DNS stub' \
   scripts/test-gate3-hidden-proxy.sh >/dev/null
 grep -F 'gate3: using package-owned tun2socks helper' \
   scripts/test-gate3-hidden-proxy.sh >/dev/null
+grep -F 'hideout="$HIDEOUT_RELEASE_BINARY"' \
+  scripts/test-gate3-hidden-proxy.sh >/dev/null
+if grep -F 'cp "$HIDEOUT_RELEASE_BINARY" "$hideout"' \
+  scripts/test-gate3-hidden-proxy.sh >/dev/null; then
+  echo "public-alpha-release: release Gate 3 must preserve package helper adjacency" >&2
+  exit 1
+fi
+grep -F 'HIDEOUT_GATE4_SHORT_TMPDIR' \
+  scripts/test-gate4-host-escape.sh >/dev/null
+grep -F 'guest_workspace="/workspace"' \
+  scripts/test-gate4-host-escape.sh >/dev/null
+grep -F 'expect_open_denied "symlink-escape" "$guest_workspace/link-out" '\''resolves outside workspace'\''' \
+  scripts/test-gate4-host-escape.sh >/dev/null
+grep -F 'expect_open_denied "special-file" "$guest_workspace/pipe" '\''not a regular file or directory'\''' \
+  scripts/test-gate4-host-escape.sh >/dev/null
+if grep -F 'expect_open_denied "symlink-escape" "$workspace/link-out"' \
+  scripts/test-gate4-host-escape.sh >/dev/null; then
+  echo "public-alpha-release: Gate 4 unsafe-file fixtures must use guest-visible paths" >&2
+  exit 1
+fi
+grep -F 'gate4_temp_roots' scripts/test-release-dogfood.sh >/dev/null
 grep -F 'scripts/test-ordinary-user-release.sh --release-candidate' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'scripts/test-ui-e2e.sh --all --require-executed' \

@@ -376,12 +376,16 @@ prepare_linux_dns_stub() {
   export HIDEOUT_LINUX_DNS_STUB_PATH
 }
 
-hideout="$bin/hideout"
 if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
   [ -x "$HIDEOUT_RELEASE_BINARY" ] || { echo "gate3: HIDEOUT_RELEASE_BINARY is not executable" >&2; exit 126; }
-  cp "$HIDEOUT_RELEASE_BINARY" "$hideout"
-  chmod 0700 "$hideout"
+  # Keep the exact package executable beside its manifest-verified helper.
+  # Copying only the main binary into the gate's temporary bin directory
+  # severs that package identity: runtime resolution intentionally discovers
+  # tun2socks relative to os.Executable and then revalidates its manifest and
+  # digest before use.
+  hideout="$HIDEOUT_RELEASE_BINARY"
 else
+  hideout="$bin/hideout"
   go build -o "$hideout" ./cmd/hideout
 fi
 if [ "$GATE3_RUNTIME_MODE" = "1" ]; then
