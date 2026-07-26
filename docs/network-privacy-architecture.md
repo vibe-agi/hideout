@@ -189,6 +189,13 @@ destination, credential, URL, or raw error. Its scope is explicitly
 the counters diagnose which hop was reached but do not claim exact per-session
 attribution.
 
+Each run also emits `broker.transport.observe` after its broker is drained. It
+contains only session-window counters for accepts, request parsing, response
+writes, and close races. It contains no endpoint, request, command, target,
+credential, URL, or raw error, so support can distinguish "never reached the
+broker" from parse/write failure without expanding the audit disclosure
+boundary.
+
 ## Secret Handling
 
 Proxy secrets are SecretRef values. They must not appear in:

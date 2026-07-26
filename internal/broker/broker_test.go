@@ -3673,6 +3673,13 @@ func TestTCPClientOpenEndpoint(t *testing.T) {
 	if len(opener.urls) != 1 || opener.urls[0] != "https://example.com" {
 		t.Fatalf("opener did not see URL: %+v", opener.urls)
 	}
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.TransportObservation(); got.Accepted != 1 || got.RequestParsed != 1 ||
+		got.RequestParseFailed != 0 || got.ResponseWritten != 1 || got.ResponseWriteFailed != 0 {
+		t.Fatalf("transport observation=%+v", got)
+	}
 }
 
 func TestServerCloseWaitsForInFlightHandlers(t *testing.T) {
@@ -3928,6 +3935,13 @@ func TestEndpointRejectsUnknownTopLevelBrokerRequestField(t *testing.T) {
 	}
 	if len(opener.urls) != 0 || len(opener.files) != 0 {
 		t.Fatalf("unknown top-level field should not reach opener: urls=%v files=%v", opener.urls, opener.files)
+	}
+	if err := server.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.TransportObservation(); got.Accepted != 1 || got.RequestParsed != 0 ||
+		got.RequestParseFailed != 1 || got.ResponseWritten != 1 || got.ResponseWriteFailed != 0 {
+		t.Fatalf("transport observation=%+v", got)
 	}
 }
 

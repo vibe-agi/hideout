@@ -587,6 +587,19 @@ func (c Core) CloseRunDataPlane(dataPlane RunDataPlane) error {
 		if err := dataPlane.Broker.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close run broker: %w", err))
 		}
+		if dataPlane.audit != nil {
+			observation := dataPlane.Broker.TransportObservation()
+			if err := dataPlane.audit.Emit(audit.Event{
+				Session:  dataPlane.auditSession,
+				Profile:  dataPlane.auditProfile,
+				Backend:  dataPlane.auditBackend,
+				Action:   "broker.transport.observe",
+				Decision: "allow",
+				Details:  brokerTransportObservationDetails(observation),
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("emit run broker transport observation: %w", err))
+			}
+		}
 	}
 	if dataPlane.hostFSReadOwner != nil {
 		if err := dataPlane.hostFSReadOwner.Close(); err != nil {
@@ -608,6 +621,18 @@ func (c Core) CloseRunDataPlane(dataPlane RunDataPlane) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func brokerTransportObservationDetails(observation broker.TransportObservation) map[string]any {
+	return map[string]any{
+		"scope":               "session-window",
+		"accepted":            observation.Accepted,
+		"rejectedAfterClose":  observation.RejectedAfterClose,
+		"requestParsed":       observation.RequestParsed,
+		"requestParseFailed":  observation.RequestParseFailed,
+		"responseWritten":     observation.ResponseWritten,
+		"responseWriteFailed": observation.ResponseWriteFailed,
+	}
 }
 
 func BrokerEndpointForBackend(backendName string, layout session.Layout) broker.Endpoint {

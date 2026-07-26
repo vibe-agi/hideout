@@ -707,10 +707,39 @@ func TestEnvironmentNetworkReuseVerificationChecksCurrentBootAndRuntimeHealth(t 
 	joined := strings.Join(runner.command, " ")
 	for _, required := range []string{
 		"/proc/sys/kernel/random/boot_id", "ip link show dev hideout0", "ip route show default",
-		"tun2socks.pid", "dns-stub.pid", "nameserver 127\\.0\\.0\\.1", session.ExpectedBootID,
+		`network_dir="$service_dir/network"`, `"$network_dir/tun2socks.pid"`,
+		`"$network_dir/dns-stub.pid"`, `"$network_dir"/local-bypass-*-route.after`,
+		`ip route get "$route_host"`, `*' dev hideout0'|*' dev hideout0 '*`,
+		`[ "$bypass_count" -gt 0 ]`, "nameserver 127\\.0\\.0\\.1", session.ExpectedBootID,
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("network verification missing %q: %s", required, joined)
+		}
+	}
+}
+
+func TestEnvironmentNetworkDNSReconfigureSeparatesHelperAndStateDirectories(t *testing.T) {
+	runner := &sessionViewSetupRunner{}
+	b := Backend{SetupRunner: runner, ControlStdout: io.Discard, ControlStderr: io.Discard}
+	session := &backend.Session{
+		ID: "ses_20260716T120000Z_0123456789abcdef", InstanceName: "hideout-test",
+		ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef",
+	}
+	if err := b.ReconfigureEnvironmentNetworkDNS(
+		context.Background(), session, "/hideout/runtime/services/network", "1.1.1.1", "9.9.9.9", nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.command, " ")
+	for _, required := range []string{
+		`network_dir="$service_dir/network"`,
+		`helper="$service_dir/hideout-dns-stub"`,
+		`pid_file="$network_dir/dns-stub.pid"`,
+		`"$network_dir/dns-stub.log"`,
+		`"$network_dir/mediated-resolver"`,
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("DNS reconfiguration missing %q: %s", required, joined)
 		}
 	}
 }

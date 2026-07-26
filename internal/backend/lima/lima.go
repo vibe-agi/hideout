@@ -446,13 +446,27 @@ func (b Backend) VerifyEnvironmentNetwork(ctx context.Context, session *backend.
 	script := `set -eu
 expected_boot=$1
 service_dir=$2
+network_dir="$service_dir/network"
 test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
 ip link show dev hideout0 >/dev/null 2>&1
 ip route show default | grep -Eq '(^|[[:space:]])dev hideout0([[:space:]]|$)'
-test -r "$service_dir/tun2socks.pid"
-kill -0 "$(cat "$service_dir/tun2socks.pid")" 2>/dev/null
-test -r "$service_dir/dns-stub.pid"
-kill -0 "$(cat "$service_dir/dns-stub.pid")" 2>/dev/null
+test -r "$network_dir/tun2socks.pid"
+kill -0 "$(cat "$network_dir/tun2socks.pid")" 2>/dev/null
+test -r "$network_dir/dns-stub.pid"
+kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null
+bypass_count=0
+for route_file in "$network_dir"/local-bypass-*-route.after; do
+  [ -f "$route_file" ] || continue
+  route_host=$(awk 'NR == 1 { print $1 }' "$route_file")
+  [ -n "$route_host" ]
+  current_route=$(ip route get "$route_host" 2>/dev/null | head -n 1 || true)
+  [ -n "$current_route" ]
+  case "$current_route" in
+    *' dev hideout0'|*' dev hideout0 '* ) exit 127 ;;
+  esac
+  bypass_count=$((bypass_count + 1))
+done
+[ "$bypass_count" -gt 0 ]
 grep -q '^nameserver 127\.0\.0\.1\([[:space:]]\|$\)' /etc/resolv.conf
 `
 	return b.runSetupCommand(
@@ -468,6 +482,7 @@ func (b Backend) VerifyDirectEnvironmentNetwork(ctx context.Context, session *ba
 	script := `set -eu
 expected_boot=$1
 service_dir=$2
+network_dir="$service_dir/network"
 test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
 if ip link show dev hideout0 >/dev/null 2>&1; then
   echo 'hideout: stale privacy TUN remains while direct network is selected' >&2
@@ -478,7 +493,7 @@ default_route=$(ip route show default | head -n 1 || true)
 case "$default_route" in
   *' dev hideout0'|*' dev hideout0 '* ) echo 'hideout: direct network still routes through hideout0' >&2; exit 127 ;;
 esac
-if [ -r "$service_dir/dns-stub.pid" ] && kill -0 "$(cat "$service_dir/dns-stub.pid")" 2>/dev/null; then
+if [ -r "$network_dir/dns-stub.pid" ] && kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null; then
   echo 'hideout: stale privacy DNS service remains while direct network is selected' >&2
   exit 127
 fi
@@ -502,11 +517,12 @@ func (b Backend) ReconfigureEnvironmentNetworkDNS(ctx context.Context, session *
 	}
 	script := `set -eu
 service_dir=$1
+network_dir="$service_dir/network"
 old_resolver=$2
 new_resolver=$3
 helper="$service_dir/hideout-dns-stub"
-pid_file="$service_dir/dns-stub.pid"
-rollback_marker="$service_dir/dns-switch-rollback-proved"
+pid_file="$network_dir/dns-stub.pid"
+rollback_marker="$network_dir/dns-switch-rollback-proved"
 rm -f "$rollback_marker"
 test -x "$helper"
 test -r "$pid_file"
@@ -520,7 +536,7 @@ if kill -0 "$old_pid" 2>/dev/null; then
 fi
 start_stub() {
   resolver=$1
-  "$helper" --listen 127.0.0.1:53 --doh-server "$resolver" > "$service_dir/dns-stub.log" 2>&1 &
+  "$helper" --listen 127.0.0.1:53 --doh-server "$resolver" > "$network_dir/dns-stub.log" 2>&1 &
   candidate_pid=$!
   sleep 0.2
   kill -0 "$candidate_pid" 2>/dev/null
@@ -528,13 +544,13 @@ start_stub() {
 if start_stub "$new_resolver"; then
   printf '%s\n' "$candidate_pid" > "$pid_file.tmp"
   mv "$pid_file.tmp" "$pid_file"
-  printf '%s\n' "$new_resolver" > "$service_dir/mediated-resolver"
+  printf '%s\n' "$new_resolver" > "$network_dir/mediated-resolver"
   exit 0
 fi
 if start_stub "$old_resolver"; then
   printf '%s\n' "$candidate_pid" > "$pid_file.tmp"
   mv "$pid_file.tmp" "$pid_file"
-  printf '%s\n' "$old_resolver" > "$service_dir/mediated-resolver"
+  printf '%s\n' "$old_resolver" > "$network_dir/mediated-resolver"
   : > "$rollback_marker"
 fi
 echo 'hideout: replacement DNS service failed; previous resolver restart was attempted' >&2
@@ -549,12 +565,13 @@ exit 127
 	}
 	verifyRollback := `set -eu
 service_dir=$1
+network_dir="$service_dir/network"
 old_resolver=$2
-test -f "$service_dir/dns-switch-rollback-proved"
-test "$(cat "$service_dir/mediated-resolver")" = "$old_resolver"
-test -r "$service_dir/dns-stub.pid"
-kill -0 "$(cat "$service_dir/dns-stub.pid")" 2>/dev/null
-rm -f "$service_dir/dns-switch-rollback-proved"
+test -f "$network_dir/dns-switch-rollback-proved"
+test "$(cat "$network_dir/mediated-resolver")" = "$old_resolver"
+test -r "$network_dir/dns-stub.pid"
+kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null
+rm -f "$network_dir/dns-switch-rollback-proved"
 `
 	rollbackErr := b.runSetupCommand(
 		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),

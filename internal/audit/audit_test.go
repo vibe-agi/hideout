@@ -33,6 +33,7 @@ func TestFeatureActionsAreAcceptedByAuditSchema(t *testing.T) {
 
 	actions := []string{
 		"projection.readiness",
+		"broker.transport.observe",
 		"host.app.install",
 		"host.app.validate",
 		"host.app.test",

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
@@ -154,6 +155,25 @@ type Server struct {
 	handlers       sync.WaitGroup
 	hostFSAuditMu  sync.Mutex
 	hostFSAudit    *hostFSDiscoveryAudit
+	transport      transportCounters
+}
+
+type TransportObservation struct {
+	Accepted            uint64
+	RejectedAfterClose  uint64
+	RequestParsed       uint64
+	RequestParseFailed  uint64
+	ResponseWritten     uint64
+	ResponseWriteFailed uint64
+}
+
+type transportCounters struct {
+	accepted            atomic.Uint64
+	rejectedAfterClose  atomic.Uint64
+	requestParsed       atomic.Uint64
+	requestParseFailed  atomic.Uint64
+	responseWritten     atomic.Uint64
+	responseWriteFailed atomic.Uint64
 }
 
 func NewToken() (string, error) {
@@ -237,8 +257,10 @@ func (s *Server) serve() {
 		if err != nil {
 			return
 		}
+		s.transport.accepted.Add(1)
 		s.mu.Lock()
 		if s.closed {
+			s.transport.rejectedAfterClose.Add(1)
 			s.mu.Unlock()
 			_ = conn.Close()
 			return
@@ -258,15 +280,39 @@ func (s *Server) handle(conn net.Conn) {
 	var req Request
 	reader := bufio.NewReader(conn)
 	if err := decodeRequest(reader, &req); err != nil {
-		_ = json.NewEncoder(conn).Encode(Response{Decision: string(policy.Deny), Status: "bad-request", ExitCode: 2, Stderr: "malformed broker request"})
+		s.transport.requestParseFailed.Add(1)
+		if err := json.NewEncoder(conn).Encode(Response{Decision: string(policy.Deny), Status: "bad-request", ExitCode: 2, Stderr: "malformed broker request"}); err != nil {
+			s.transport.responseWriteFailed.Add(1)
+		} else {
+			s.transport.responseWritten.Add(1)
+		}
 		return
 	}
+	s.transport.requestParsed.Add(1)
 	requestTimeout := serverRequestTimeout(req)
 	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	resp := s.Handle(ctx, req)
-	_ = json.NewEncoder(conn).Encode(resp)
+	if err := json.NewEncoder(conn).Encode(resp); err != nil {
+		s.transport.responseWriteFailed.Add(1)
+	} else {
+		s.transport.responseWritten.Add(1)
+	}
+}
+
+func (s *Server) TransportObservation() TransportObservation {
+	if s == nil {
+		return TransportObservation{}
+	}
+	return TransportObservation{
+		Accepted:            s.transport.accepted.Load(),
+		RejectedAfterClose:  s.transport.rejectedAfterClose.Load(),
+		RequestParsed:       s.transport.requestParsed.Load(),
+		RequestParseFailed:  s.transport.requestParseFailed.Load(),
+		ResponseWritten:     s.transport.responseWritten.Load(),
+		ResponseWriteFailed: s.transport.responseWriteFailed.Load(),
+	}
 }
 
 func serverRequestTimeout(req Request) time.Duration {

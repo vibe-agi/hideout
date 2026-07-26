@@ -236,6 +236,14 @@ run_projection_gate2() {
     cat "$tmp/projection-control-init.out" "$tmp/projection-control-init.err" >&2
     return 1
   fi
+  if [ "${HIDEOUT_GATE2_PROJECTION_READINESS_ONLY:-0}" = "1" ]; then
+    if [ -z "${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" ]; then
+      echo "gate2: readiness-only diagnostics require a capture directory" >&2
+      return 2
+    fi
+    run_projection_readiness_samples "$profile_name"
+    return
+  fi
   # Profiles default to privacy-preserving alias workspace paths. This is the
   # positive control that must EXPOSE the host path to prove the detector works,
   # so opt it into preserve explicitly.
@@ -351,6 +359,29 @@ projection_audit_inventory() {
   find "$store/sessions" -name audit.jsonl -type f 2>/dev/null | LC_ALL=C sort
 }
 
+projection_retain_readiness_failure() {
+  local lane="$1" index="$2" before="$3" after="$4" delta="$5" output="$6" error_output="$7"
+  local capture="${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" destination audit
+  [ -n "$capture" ] || return 0
+  destination="$capture/failure-$lane-$index"
+  mkdir -p "$destination"
+  chmod 700 "$destination"
+  projection_audit_inventory >"$after"
+  comm -13 "$before" "$after" >"$delta"
+  for artifact in "$before" "$after" "$delta" "$output" "$error_output"; do
+    [ -f "$artifact" ] || continue
+    cp "$artifact" "$destination/$(basename "$artifact")"
+    chmod 600 "$destination/$(basename "$artifact")"
+  done
+  if [ "$(wc -l <"$delta" | tr -d ' ')" = "1" ]; then
+    audit="$(sed -n '1p' "$delta")"
+    if [ -f "$audit" ] && [ ! -L "$audit" ]; then
+      cp "$audit" "$destination/session-audit.jsonl"
+      chmod 600 "$destination/session-audit.jsonl"
+    fi
+  fi
+}
+
 projection_new_audit() {
   local before="$1" after="$2" output="$3"
   projection_audit_inventory >"$after"
@@ -363,6 +394,22 @@ projection_new_audit() {
   sed -n '1p' "$output"
 }
 
+projection_force_network_self_heal() {
+  local lane="$1" index="$2" environment_name="$3"
+  local selected="${HIDEOUT_PROJECTION_FORCE_NETWORK_SELF_HEAL_SAMPLE:-}"
+  local record instance
+  [ -n "$selected" ] || return 0
+  [ "$lane" = "warm" ] && [ "$index" = "$selected" ] || return 0
+  record="$(projection_environment_record "$environment_name")"
+  instance="$(jq -er '.instanceName' "$record")"
+  if ! LIMA_HOME="$lima_home" limactl shell --tty=false --workdir / "$instance" -- \
+    sh -eu -c 'test -r /hideout/runtime/services/network/network/tun2socks.pid
+rm -f /hideout/runtime/services/network/network/tun2socks.pid'; then
+    echo "gate2: could not inject the requested network self-heal sample" >&2
+    return 1
+  fi
+}
+
 projection_measure_ready_session() {
   local lane="$1" index="$2" environment_name="$3" workspace_path="$4" samples="$5"
   local before="$tmp/projection-readiness-$lane-$index.before"
@@ -370,26 +417,41 @@ projection_measure_ready_session() {
   local delta="$tmp/projection-readiness-$lane-$index.delta"
   local output="$tmp/projection-readiness-$lane-$index.out"
   local error_output="$tmp/projection-readiness-$lane-$index.err"
-  local audit duration
+  local audit duration expected_verify_failures=0
+  if [ "$lane" = "warm" ] &&
+    [ "$index" = "${HIDEOUT_PROJECTION_FORCE_NETWORK_SELF_HEAL_SAMPLE:-}" ]; then
+    expected_verify_failures=3
+  fi
   projection_audit_inventory >"$before"
+  projection_force_network_self_heal "$lane" "$index" "$environment_name"
   if ! with_timeout "$GATE_TIMEOUT" env HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     "$hideout" run --env "$environment_name" --profile "$6" --backend lima \
       --network tun2socks --proxy-secret projection-proxy --workspace "$workspace_path" -- \
       code -n . >"$output" 2>"$error_output"; then
+    projection_retain_readiness_failure \
+      "$lane" "$index" "$before" "$after" "$delta" "$output" "$error_output"
     echo "gate2: projection readiness $lane sample $index failed on its first target" >&2
     cat "$output" "$error_output" >&2
     return 1
   fi
   audit="$(projection_new_audit "$before" "$after" "$delta")"
-  if ! jq -s -e '
+  if ! jq -s -e --argjson expectedVerifyFailures "$expected_verify_failures" '
     ([.[] | select(.action == "projection.readiness" and .decision == "allow" and
       .details.status == "ready" and .details.targetProjected == true and
       .details.expectedEntries > 0 and
       .details.observedEntries == .details.expectedEntries)] | length) == 1 and
     ([.[] | select(.action == "host.app.open-resource" and
-      .details.outcome == "launched")] | length) == 1
+      .details.outcome == "launched")] | length) == 1 and
+    ([.[] | select(.action == "hideout.privileged_setup" and
+      .decision == "error" and .details.category == "network" and
+      .details.status == "failed")] | length) == $expectedVerifyFailures and
+    ([.[] | select(.action == "broker.transport.observe" and
+      .decision == "allow" and .details.scope == "session-window" and
+      .details.accepted >= 1 and .details.requestParsed >= 1 and
+      .details.requestParseFailed == 0 and .details.responseWritten >= 1 and
+      .details.responseWriteFailed == 0)] | length) == 1
   ' "$audit" >/dev/null; then
-    echo "gate2: projection readiness $lane sample $index lacks one exact ready/host-effect pair" >&2
+    echo "gate2: projection readiness $lane sample $index lacks the exact ready/host-effect/transport proof" >&2
     cat "$audit" >&2
     return 1
   fi

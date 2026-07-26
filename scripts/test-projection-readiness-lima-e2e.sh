@@ -228,6 +228,13 @@ HIDEOUT_RELEASE_BINARY="$candidate" \
 gate2_status=$?
 set -e
 if [ "$gate2_status" -ne 0 ]; then
+  cp "$raw_gate2" "$out/logs/aggregate-gate2.failed.out"
+  cp "$raw_gate2_err" "$out/logs/aggregate-gate2.failed.err"
+  chmod 600 "$out/logs/aggregate-gate2.failed.out" "$out/logs/aggregate-gate2.failed.err"
+  if [ -d "$capture" ]; then
+    cp -R "$capture" "$out/logs/failed-capture"
+    chmod -R go-rwx "$out/logs/failed-capture"
+  fi
   echo "projection readiness e2e: aggregate Gate 2 failed; showing bounded tails" >&2
   tail -n 200 "$raw_gate2" >&2
   tail -n 200 "$raw_gate2_err" >&2
@@ -250,6 +257,9 @@ required_markers=(
   projection_concurrent_disjoint_catalogs
   projection_readiness_samples
 )
+if [ "${HIDEOUT_GATE2_PROJECTION_READINESS_ONLY:-0}" = "1" ]; then
+  required_markers=(projection_readiness_samples)
+fi
 for marker in "${required_markers[@]}"; do
   grep -q "^${marker}=passed$" "$raw_gate2" || {
     echo "projection readiness e2e: aggregate Gate 2 omitted $marker" >&2

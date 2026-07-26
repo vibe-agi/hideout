@@ -39,6 +39,7 @@
         "session.start",
         "session.end",
         "session.cleanup",
+        "broker.transport.observe",
         "broker.request",
         "host.open",
         "host.app.install",

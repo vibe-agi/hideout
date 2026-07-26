@@ -707,6 +707,11 @@ if [ -n "${HIDEOUT_PROJECTION_READINESS_CAPTURE_DIR:-}" ]; then
   ' "$projection_capture/runtime-binding.json" >/dev/null
   echo "projection_readiness_capture_contract=passed"
 fi
+if [ "${HIDEOUT_GATE2_PROJECTION_READINESS_ONLY:-0}" = "1" ]; then
+  gate_completed=1
+  echo "gate2: passed"
+  exit 0
+fi
 
 echo "gate2: running hostfs grant smoke"
 if ! with_timeout "$GATE_TIMEOUT" env \
