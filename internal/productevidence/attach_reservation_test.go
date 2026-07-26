@@ -27,6 +27,7 @@ func TestProofRegistryCovers040WithoutLettingNotRunSatisfyRealClaims(t *testing.
 	for _, proofID := range []string{Proof040RealLifecycle, Proof040RealPerformance} {
 		requirement := seen[proofID]
 		if requirement.Layer != LayerRealGate || requirement.RequiredFor != RequiredForReleaseCandidate ||
+			requirement.FreshnessPolicy != FreshnessSameCommitAndPackage ||
 			requirement.RuntimePolicy != RuntimePolicyExactReal || requirement.ArtifactPolicy == ArtifactPolicyNone ||
 			requirement.RequiredEvidenceClass == "" {
 			t.Fatalf("040 real proof %s has weak scope: %+v", proofID, requirement)

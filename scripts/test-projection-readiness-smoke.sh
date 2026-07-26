@@ -10,15 +10,23 @@ cd "$ROOT"
 
 echo "projection-readiness-smoke: real producer and aggregate capture syntax"
 bash -n scripts/test-projection-readiness-lima-e2e.sh \
+  scripts/promote-projection-privacy.sh \
   scripts/lib/gate2-projection.sh scripts/lib/strict-projection-evidence.sh \
   scripts/test-gate2-lima.sh scripts/test-host-capability-projection-e2e.sh \
   scripts/test-host-app-pack-e2e.sh
 scripts/test-projection-readiness-lima-e2e.sh --help |
   grep -q -- '--fresh <n>'
+scripts/promote-projection-privacy.sh --help |
+  grep -F -- '--gate3-result <gate3-hidden-proxy.json>' >/dev/null
+for marker in guest_workspace=/workspace proxy_env_absent=yes dns_mediated=yes \
+  connected_subnet_blocked=yes https_request=ok privilege_status=enforced \
+  privileged_setup=network projection_alias_gate3=passed gateway_forward_path=passed; do
+  grep -F "$marker" scripts/promote-projection-privacy.sh >/dev/null
+done
 
 echo "projection-readiness-smoke: exact candidate fixture"
 go test -count=1 ./internal/productevidence \
-  -run '^TestProjectionReadinessValidatorAcceptsDerivedExactCandidate$'
+  -run '^TestProjection(ReadinessValidatorAcceptsDerivedExactCandidate|PrivacyValidatorRequiresMatchingPassedGate3)$'
 
 echo "projection-readiness-smoke: mandatory false-green fixtures"
 smoke_output="$(mktemp "${TMPDIR:-/tmp}/hideout-projection-readiness-smoke.XXXXXX")"

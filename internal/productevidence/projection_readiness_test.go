@@ -26,6 +26,12 @@ func TestProjectionPrivacyValidatorRequiresMatchingPassedGate3(t *testing.T) {
 	}
 	var privacy projectionPrivacyEvidence
 	mustDecodeProjectionFixture(t, fixture.artifacts["artifacts/projection-privacy-gate3.json"], &privacy)
+	privacy.Runtime.EnvironmentID = "env_privacy"
+	fixture.artifacts["artifacts/projection-privacy-gate3.json"] = mustProjectionJSON(t, privacy)
+	fixture.refresh(t)
+	if err := fixture.validate(true); err != nil {
+		t.Fatalf("independent Gate 3 environment with the same runtime artifact rejected: %v", err)
+	}
 	privacy.Checks["dnsMediated"] = false
 	fixture.artifacts["artifacts/projection-privacy-gate3.json"] = mustProjectionJSON(t, privacy)
 	fixture.refresh(t)

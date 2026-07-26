@@ -215,6 +215,8 @@ signing, notarization, anonymous download, and publication receipt.
 
 - [x] T051 [US7] Complete local-fast and release-candidate evidence generation, schema validation, redaction, cleanup inventory, and required-journey rejection in `scripts/test-ordinary-user-release.sh`
 - [x] T052 [US7] Add the 044 runner to Gate 0 and release-candidate orchestration in `scripts/test-gate0.sh` and `scripts/test-public-alpha-candidate.sh`
+- [x] T065 [US7] Make the public candidate orchestrator generate 035/036/038/040/041/042 and strict 043 evidence from the same exact package instead of relying on manually supplied prerequisite manifests
+- [x] T066 [US7] Add fail-closed 030/043 privacy promotion from matching exact-package Gate 2 and Gate 3 evidence, including independent-environment runtime matching and the production semantic judge
 - [x] T053 [US7] Add stale digest, dirty tree, private/unpushed commit, rebuilt bytes, missing UI, failed/not-run Gate 2/3, signing, notarization, and anonymous-download negative fixtures in `scripts/test-release-readiness.sh`
 - [x] T054 [US7] Run and record all new assertion mutations, judge negative fixtures, fresh-eyes findings, and exact commands/artifacts in `specs/044-ordinary-user-release/acceptance.md`
 

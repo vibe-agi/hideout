@@ -13,6 +13,7 @@ require_real=0
 probe=0
 feature_040=0
 out="${HIDEOUT_036_EVIDENCE_DIR:-$ROOT/.hideout-release-evidence/036-resource-lifecycle}"
+package_archive=""
 baseline_commit="127ef937b120f0faa719611abcb3a1816e331266"
 baseline_explicit=0
 baseline_040_commit="322c3c6cc9561eea21d4ed20ab78172429654c54"
@@ -31,6 +32,7 @@ Usage: scripts/test-lifecycle-lima-e2e.sh [options]
   --real-gate2 | --all         run the real macOS arm64 Lima lifecycle gate
   --require-real               fail rather than emit supporting not-run evidence
   --feature-040                emit only 040 proof using the exact pre-040 baseline
+  --package <tar.gz>           reuse and bind the exact candidate package
   --baseline-commit <commit>   exact feature comparison commit
   --samples <n>                measured samples (real evidence requires at least 30)
   --warmups <n>                excluded warm-up samples (real evidence requires at least 3)
@@ -46,6 +48,7 @@ while [ "$#" -gt 0 ]; do
     --real-gate2|--all) mode="real-gate2"; shift ;;
     --require-real) require_real=1; shift ;;
     --feature-040) feature_040=1; shift ;;
+    --package) package_archive="${2:-}"; shift 2 ;;
     --baseline-commit) baseline_commit="${2:-}"; baseline_explicit=1; shift 2 ;;
     --samples) samples="${2:-}"; shift 2 ;;
     --warmups) warmups="${2:-}"; shift 2 ;;
@@ -79,6 +82,10 @@ fi
 if ! printf '%s' "$baseline_commit" | grep -Eq '^[0-9a-f]{40}$' ||
   ! git cat-file -e "$baseline_commit^{commit}" 2>/dev/null; then
   echo "resource-lifecycle e2e: baseline commit must be an available full commit" >&2
+  exit 2
+fi
+if [ -n "$package_archive" ] && [ ! -f "$package_archive" ]; then
+  echo "resource-lifecycle e2e: package archive does not exist" >&2
   exit 2
 fi
 
@@ -137,12 +144,13 @@ proof_json() {
 }
 
 write_manifest() {
-  local proofs="$1"
+  local proofs="$1" package_identity="${GATE2_036_PACKAGE_IDENTITY:-null}"
   jq -n --arg generatedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     --arg commit "$(git rev-parse HEAD)" --argjson dirty "$(git_dirty)" \
-    --slurpfile proofs "$proofs" '
+    --argjson packageIdentity "$package_identity" --slurpfile proofs "$proofs" '
     {version:"hideout.product-hardening-evidence/v1",generatedAt:$generatedAt,
-     commit:$commit,dirty:$dirty,proofs:$proofs[0]}' >"$manifest"
+     commit:$commit,dirty:$dirty,proofs:$proofs[0]} +
+     (if $packageIdentity == null then {} else {packageIdentity:$packageIdentity} end)' >"$manifest"
   go run ./cmd/hideout-schema-validate schemas/product-hardening-evidence.schema.json "$manifest" \
     >"$out/logs/evidence-schema.out" 2>"$out/logs/evidence-schema.err"
 }
@@ -198,7 +206,7 @@ if [ -n "$missing" ]; then
   exit 0
 fi
 
-gate2_resource_lifecycle_run "$ROOT" "$out" "$baseline_commit" "$samples" "$warmups" "$races"
+gate2_resource_lifecycle_run "$ROOT" "$out" "$baseline_commit" "$samples" "$warmups" "$races" "$package_archive"
 if [ "$probe" = "1" ]; then
   echo "resource-lifecycle e2e: probe passed; no product proof was emitted"
   exit 0

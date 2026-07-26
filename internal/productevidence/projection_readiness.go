@@ -523,8 +523,7 @@ func validateProjectionPrivacy(
 	if evidence.Schema != "hideout.projection-privacy-real-gate3/v1" || evidence.Status != "passed" ||
 		evidence.Commit != parent.Commit || evidence.Dirty || evidence.GeneratedAt == "" ||
 		packageStale(&evidence.Package, &parent.Package) ||
-		!evidence.Runtime.SameArtifactBuild(parent.Runtime) ||
-		evidence.Runtime.EnvironmentID != parent.Runtime.EnvironmentID {
+		!evidence.Runtime.SameArtifactBuild(parent.Runtime) {
 		return errors.New("projection privacy identity does not match the readiness candidate")
 	}
 	if err := validateSharedWorkspacePackageAndRuntime(

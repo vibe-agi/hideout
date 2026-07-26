@@ -95,7 +95,6 @@ HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:1080 \
     --signing-observation /path/to/signing.json \
     --notarization-observation /path/to/notarization.json \
     --candidate-observation /path/to/candidate.json \
-    --product-evidence /path/to/prerequisite-evidence.json \
     --out /path/to/retained-candidate
 ```
 
@@ -103,6 +102,7 @@ Expected:
 
 - direct first run, lifecycle, projection, required UI path, and privacy
   forwarding use the same package digest;
+- all registered release-candidate proof producers run from this command;
 - Gate 3 does not build or discover an ambient helper;
 - all required evidence is passed, never `not-run`.
 

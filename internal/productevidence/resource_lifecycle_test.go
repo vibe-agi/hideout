@@ -33,6 +33,7 @@ func TestProofRegistryCovers036WithStrictRealAndSupportingNotRunEvidence(t *test
 	for _, proofID := range []string{Proof036RealLifecycle, Proof036RealPerformance} {
 		requirement := seen[proofID]
 		if requirement.Layer != LayerRealGate || requirement.RequiredFor != RequiredForReleaseCandidate ||
+			requirement.FreshnessPolicy != FreshnessSameCommitAndPackage ||
 			requirement.RuntimePolicy != RuntimePolicyExactReal || requirement.ArtifactPolicy == ArtifactPolicyNone ||
 			requirement.RequiredEvidenceClass == "" || requirement.ArtifactValidator == "" {
 			t.Fatalf("036 real proof %s has weak scope: %+v", proofID, requirement)

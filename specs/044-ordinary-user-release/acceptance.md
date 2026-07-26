@@ -41,6 +41,8 @@ on a negative fixture, and public claims must bind to one retained candidate.
 | F-007 | The release-readiness shell still passed an extracted package root, which cannot prove the outer archive digest accepted by the current readiness model. | `scripts/test-release-readiness.sh` review; `support readiness` rejected the extracted-root identity | release mode now requires the exact archive plus signing/notarization observations and validates clean `HEAD` reachability from `origin/master` | resolved-local |
 | F-008 | The older release-dogfood entrypoint still required a maintainer-supplied `HIDEOUT_LINUX_TUN2SOCKS_PATH`, contradicting the package-owned helper journey. | release-dogfood usage and preflight | dogfood now extracts its own retained artifact, verifies it, exports all package-owned helpers, forbids the tun2socks override through release Gate 3, and binds runtime evidence to the archive identity | resolved-local |
 | F-009 | Install and first-run smokes still asserted internal detailed findings from default doctor, contradicting the new concise default and causing the first full Gate 0 run to fail after all Go tests and formal models passed. | `scripts/test-install-smoke.sh` exited at `store: ok writable`; first-run used the same stale shape | smokes now assert the concise default surface and separately use `--verbose` for full finding parity; focused first-run lanes and full Gate 0 pass | resolved-local |
+| F-010 | The public candidate orchestrator accepted manually supplied prerequisite evidence and did not itself run the 035/036/038/040/041/042 release requirements, allowing stale or separately built evidence to reach readiness. | release registry compared with every manifest appended by `scripts/test-public-alpha-candidate.sh` | candidate orchestration now runs every missing real producer against the exact archive; 036/040 freshness and manifests also bind the exact package | resolved-local |
+| F-011 | Gate 3 emitted the required privacy markers and runtime evidence, but no producer promoted them into the registered 030/043 privacy proofs, so complete release readiness was unreachable. | registry, 043 semantic evaluator, Gate 3 output, and candidate orchestration review | strict promotion joins independently executed Gate 2/3 only on matching source/package/runtime artifact, derives the fixed privacy artifact, and passes the production 043 evaluator | resolved-local |
 
 ## Requirement Evidence
 
@@ -72,7 +74,7 @@ exist after freezing or publishing one exact candidate.
 | FR-025–FR-027 | Homebrew/standalone help, upgrade/repair/uninstall/purge fixtures, scope mutation M-006 | passed-local |
 | FR-028 | exact package ordinary-user journey | runner and rejection contract passed-local; exact clean candidate run pending |
 | FR-029 | mutation and negative-fixture discipline | M-001–M-008 and N-001–N-007 passed-local |
-| FR-030 | candidate coverage aggregation | registry, candidate runner, Gate 0 and readiness integration passed-local; candidate artifact pending |
+| FR-030 | candidate coverage aggregation | registry, automatic all-proof candidate runner, Gate 0 and readiness integration passed-local; candidate artifact pending |
 | FR-031 | dirty/private/unpushed/rebuilt/stale/signing/notary/download rejection | N-007 plus readiness/releasechannel judges passed-local |
 | FR-032–FR-035 | docs truth, prerelease workflow contracts, debt review, adversarial ledger | passed-local; receipt-derived public rendering pending |
 | SC-001–SC-002 | supported-Mac first useful result and time bound | pending new exact-package Gate 2 measurements |
@@ -138,6 +140,9 @@ Commands are added only after they have actually run. Planned commands live in
 | `go test -race ./internal/supportreport ./internal/helperbin ./internal/packagekit ./internal/productevidence ./internal/releasecompat -count=1` | pre-candidate working tree | passed | local race-test output, 2026-07-26 |
 | `scripts/test-install-smoke.sh` plus both local first-run lanes | pre-candidate working tree | passed after F-009 concise/detailed doctor convergence | transient package/evidence roots |
 | `scripts/test-gate0.sh` | pre-candidate working tree | passed complete static, unit, formal-model, package, product-smoke, docs, mutation, negative-fixture, first-run, and local UI battery | local console observation, 2026-07-26 |
+| `scripts/test-public-alpha-release.sh --no-publish` plus `scripts/test-projection-readiness-smoke.sh` | pre-candidate working tree after F-010/F-011 | passed automatic producer wiring, privacy promotion contract, semantic false-green fixtures, and no-publish authority checks | local test output, 2026-07-26 |
+| synthetic matching Gate 2/Gate 3 promotion with distinct environment IDs | retained historical clean 043 fixture plus generated Gate 3 fixture | `validate-043` accepted all seven 030/032/039/043 proofs; mismatched checks remain covered by the Go semantic negative suite | transient `/tmp/hideout-privacy-promote.*`, removed |
+| `scripts/test-gate0.sh` | pre-candidate working tree after F-010/F-011 | passed complete Gate 0 including the new privacy promotion, exact-package lifecycle registry, release contract, docs truth, first-run, and UI checks | local console observation, 2026-07-26 |
 
 ## Cleanup Inventory
 

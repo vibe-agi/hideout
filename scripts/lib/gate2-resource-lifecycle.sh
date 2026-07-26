@@ -643,8 +643,9 @@ gate2_036_test_stop_unknown() {
 }
 
 gate2_resource_lifecycle_run() {
-  local root="$1" out="$2" baseline_commit="$3" samples="$4" warmups="$5" races="$6" short_tmp
-  for tool in go jq limactl shasum perl python3 git comm; do gate2_036_require "$tool"; done
+  local root="$1" out="$2" baseline_commit="$3" samples="$4" warmups="$5" races="$6"
+  local package_archive="${7:-}" short_tmp package_root
+  for tool in go jq limactl shasum perl python3 git comm tar; do gate2_036_require "$tool"; done
   [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || {
     echo "resource-lifecycle gate2: real evidence requires macOS arm64" >&2
     return 2
@@ -675,6 +676,7 @@ gate2_resource_lifecycle_run() {
   GATE2_036_OVERLAY_SHA=""
   GATE2_036_RETAINED_AUDIT=""
   GATE2_036_RETAINED_AUDIT_SHA=""
+  GATE2_036_PACKAGE_IDENTITY="null"
   mkdir -p "$GATE2_036_OUT/logs" "$GATE2_036_WORKSPACE/.hideout-gate-control"
   gate2_036_cleanup() {
     touch "$GATE2_036_WORKSPACE/.hideout-gate-control/anchor-release" \
@@ -698,7 +700,26 @@ gate2_resource_lifecycle_run() {
   trap gate2_036_cleanup EXIT
 
   gate2_036_stage build-candidate
-  gate2_036_build_tree "$root" "$GATE2_036_BIN" "$GATE2_036_ARCH"
+  if [ -n "$package_archive" ]; then
+    package_archive="$(cd "$(dirname "$package_archive")" && pwd -P)/$(basename "$package_archive")"
+    package_root="$GATE2_036_TMP/package"
+    mkdir -p "$package_root"
+    tar -xzf "$package_archive" -C "$package_root"
+    [ -x "$package_root/hideout/bin/hideout" ] || {
+      echo "resource-lifecycle gate2: package hideout binary is missing" >&2
+      return 1
+    }
+    "$package_root/hideout/bin/hideout" package verify "$package_root/hideout" \
+      >"$GATE2_036_OUT/logs/package-verify.out" 2>"$GATE2_036_OUT/logs/package-verify.err"
+    "$package_root/hideout/bin/hideout" support release package-identity \
+      --archive "$package_archive" --out "$GATE2_036_OUT/reports/package-identity.json" \
+      >"$GATE2_036_OUT/logs/package-identity.out" 2>"$GATE2_036_OUT/logs/package-identity.err"
+    GATE2_036_PACKAGE_IDENTITY="$(jq -ce . "$GATE2_036_OUT/reports/package-identity.json")"
+    GATE2_036_BIN="$package_root/hideout/bin"
+    GATE2_036_HIDEOUT="$GATE2_036_BIN/hideout"
+  else
+    gate2_036_build_tree "$root" "$GATE2_036_BIN" "$GATE2_036_ARCH"
+  fi
   gate2_036_stage initialize-real-environment
   gate2_036_init_profile "$GATE2_036_HIDEOUT" "$GATE2_036_STORE" "$GATE2_036_LIMA_HOME" \
     "$GATE2_036_BIN" "$GATE2_036_ARCH" "$GATE2_036_OUT/logs/init.out"

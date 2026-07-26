@@ -21,14 +21,14 @@ Usage: scripts/test-public-alpha-candidate.sh \
   --tag <vSemVer> --package <tar.gz> \
   --signing-observation <json> --notarization-observation <json> \
   --candidate-observation <candidate.json> \
-  --product-evidence <json> [--product-evidence <json> ...] \
+  [--product-evidence <additional.json> ...] \
   --out <dir> [--upload-draft]
 
 Runs the exact packaged binary through clean install and the real Gate 2/3
-lanes, evaluates all registered release-candidate proofs, assembles the exact
-four public assets, and optionally replaces the assets of an existing private
-draft. It never publishes a release. Gate 3 uses the manifest-verified
-package-owned Linux tun2socks helper.
+lanes, generates every registered release-candidate proof from that package,
+assembles the exact four public assets, and optionally replaces the assets of
+an existing private draft. It never publishes a release. Gate 3 uses the
+manifest-verified package-owned Linux tun2socks helper.
 USAGE
 }
 
@@ -173,27 +173,41 @@ if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   exit 1
 fi
 
-# Reuse the one retained real Gate 2 run for every feature-level proof. Each
-# consumer independently verifies the same-commit envelope, artifact digest,
-# and its own required markers; no local or hand-written evidence is promoted.
+# Reuse the retained aggregate Gate 2 run where its semantic envelope is the
+# registered proof source. Feature gates with stronger methodology or artifact
+# contracts run independently against the same exact archive below.
 scripts/test-hostfs-visibility-e2e.sh --real-gate2 --require-real \
   --gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
   --out "$out/hostfs-visibility-gate2"
 product_evidence+=("$out/hostfs-visibility-gate2/product-hardening-evidence.json")
-scripts/test-host-capability-projection-e2e.sh --real-gate2 --require-real \
-  --gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
-  --out "$out/projection-gate2"
-product_evidence+=("$out/projection-gate2/product-hardening-evidence.json")
-scripts/test-host-app-pack-e2e.sh --real-gate2 --require-real \
-  --gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json" \
-  --out "$out/host-app-pack-gate2"
-product_evidence+=("$out/host-app-pack-gate2/product-hardening-evidence.json")
-unset HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK
+
+scripts/test-projection-readiness-lima-e2e.sh --require-real \
+  --package "$package" --out "$out/projection-readiness-gate2"
 
 scripts/test-concurrent-sessions-e2e.sh --real-gate2 --require-real \
   --baseline-commit 2f0cddebc5b0215989b04e1f94955e84f1926929 \
   --out "$out/concurrent-sessions-gate2"
 product_evidence+=("$out/concurrent-sessions-gate2/product-hardening-evidence.json")
+
+scripts/test-shared-workspace-lima-e2e.sh --real-gate2 --require-real \
+  --package "$package" --out "$out/shared-workspace-gate2"
+product_evidence+=("$out/shared-workspace-gate2/product-hardening-evidence.json")
+
+scripts/test-lifecycle-lima-e2e.sh --all --require-real \
+  --package "$package" --out "$out/lifecycle-gate2"
+product_evidence+=("$out/lifecycle-gate2/product-hardening-evidence.json")
+
+scripts/test-first-run-e2e.sh --setup-real-backend --require-real \
+  --package "$package" --out "$out/setup-first-run-gate2"
+product_evidence+=("$out/setup-first-run-gate2/product-hardening-evidence.json")
+
+scripts/test-workspace-executable-lima-e2e.sh --require-real \
+  --package "$package" --out "$out/workspace-executable-gate2"
+product_evidence+=("$out/workspace-executable-gate2/product-hardening-evidence.json")
+
+scripts/test-disposable-recovery-lima-e2e.sh --require-real \
+  --package "$package" --out "$out/disposable-recovery-gate2"
+product_evidence+=("$out/disposable-recovery-gate2/product-hardening-evidence.json")
 
 export HIDEOUT_RUNTIME_EVIDENCE_OUT="$out/runtime-gate3"
 HIDEOUT_PHASE1_RETAINED_GATE0_CANDIDATE="$candidate_observation" \
@@ -214,6 +228,14 @@ gate3="$out/phase1/gates/gate3-hidden-proxy.json"
   exit 1
 }
 jq -e '.result == "passed" and .backend == "lima"' "$gate2" "$gate3" >/dev/null
+
+scripts/promote-projection-privacy.sh \
+  --gate2-evidence "$out/projection-readiness-gate2/product-hardening-evidence.json" \
+  --gate3-evidence "$out/runtime-gate3/product-hardening-evidence.json" \
+  --gate3-result "$gate3" \
+  --out "$out/projection-privacy-promoted"
+product_evidence+=("$out/projection-privacy-promoted/product-hardening-evidence.json")
+unset HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK
 
 ui_evidence_dir="$out/ui-e2e"
 scripts/test-ui-e2e.sh --all --require-executed --out "$ui_evidence_dir"

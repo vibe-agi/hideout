@@ -223,12 +223,28 @@ grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'hideout_seed_verified_runtime_cache' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
-for consumer in test-hostfs-visibility-e2e.sh test-host-capability-projection-e2e.sh \
-  test-host-app-pack-e2e.sh; do
+for consumer in test-hostfs-visibility-e2e.sh; do
   grep -F "$consumer --real-gate2 --require-real" \
     scripts/test-public-alpha-candidate.sh >/dev/null
 done
 grep -F -- '--gate2-evidence "$out/runtime-gate2/product-hardening-evidence.json"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+for consumer in test-projection-readiness-lima-e2e.sh \
+  test-shared-workspace-lima-e2e.sh test-lifecycle-lima-e2e.sh \
+  test-first-run-e2e.sh test-workspace-executable-lima-e2e.sh \
+  test-disposable-recovery-lima-e2e.sh; do
+  grep -F "$consumer" scripts/test-public-alpha-candidate.sh >/dev/null
+done
+for package_binding in \
+  '--package "$package" --out "$out/projection-readiness-gate2"' \
+  '--package "$package" --out "$out/shared-workspace-gate2"' \
+  '--package "$package" --out "$out/lifecycle-gate2"' \
+  '--package "$package" --out "$out/setup-first-run-gate2"' \
+  '--package "$package" --out "$out/workspace-executable-gate2"' \
+  '--package "$package" --out "$out/disposable-recovery-gate2"'; do
+  grep -F -- "$package_binding" scripts/test-public-alpha-candidate.sh >/dev/null
+done
+grep -F 'scripts/promote-projection-privacy.sh' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'HIDEOUT_PHASE1_RETAINED_GATE2_OUTPUT="$out/runtime-gate2/logs/gate2.out"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
