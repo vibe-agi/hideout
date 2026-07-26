@@ -253,6 +253,11 @@ grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'hideout_seed_verified_runtime_cache' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
+grep -F 'ln -s "$1" "$path"' scripts/test-runtime-lima.sh >/dev/null
+if grep -F 'echo hideout-runtime-drift' scripts/test-runtime-lima.sh >/dev/null; then
+  echo "public-alpha-release: runtime drift fixture regressed to an executable chmod mutation" >&2
+  exit 1
+fi
 grep -F 'umask 077' scripts/test-runtime-lima.sh >/dev/null
 grep -F 'chmod 0700 "$HIDEOUT_STORE_ROOT"' scripts/test-env-image.sh >/dev/null
 grep -F 'chmod 0700 "$drift_store"' scripts/test-runtime-lima.sh >/dev/null

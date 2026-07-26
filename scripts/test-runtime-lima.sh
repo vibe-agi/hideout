@@ -184,7 +184,12 @@ if [ -z "$baseline_id" ] || [ -z "$baseline_command" ]; then
 fi
 if ! HIDEOUT_STORE_ROOT="$drift_store" LIMA_HOME="$drift_lima_home" "$hideout" run \
   --profile runtime-drift --env runtime-drift --workspace "$drift_workspace" -- \
-  sh -eu -c 'mkdir -p "$HOME/.local/bin"; printf "%s\n" "#!/bin/sh" "echo hideout-runtime-drift" >"$HOME/.local/bin/$1"; chmod 0700 "$HOME/.local/bin/$1"' sh "$baseline_command" \
+  sh -eu -c '
+    path="$HOME/.local/bin/$2"
+    rm -f "$path"
+    ln -s "$1" "$path"
+    [ "$(readlink "$path")" = "$1" ]
+  ' sh "$durable_tool" "$baseline_command" \
   >"$tmp/drift-mutate.out" 2>"$tmp/drift-mutate.err"; then
   echo "runtime-lima: drift mutation failed" >&2
   cat "$tmp/drift-mutate.out" "$tmp/drift-mutate.err" >&2
