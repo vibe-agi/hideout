@@ -103,10 +103,7 @@ func (b Backend) runPTYStreams(ctx context.Context, session *backend.Session, pa
 	outputDone := make(chan error, 1)
 	go func() {
 		_, copyErr := io.Copy(writerOrDiscard(streams.PTY), ptmx)
-		if errors.Is(copyErr, syscall.EIO) || errors.Is(copyErr, io.ErrClosedPipe) {
-			copyErr = nil
-		}
-		outputDone <- copyErr
+		outputDone <- normalizePTYCopyError(copyErr)
 	}()
 	if streams.Stdin != nil {
 		go func() { _, _ = io.Copy(ptmx, streams.Stdin) }()
@@ -121,6 +118,13 @@ func (b Backend) runPTYStreams(ctx context.Context, session *backend.Session, pa
 		return ctx.Err()
 	}
 	return errors.Join(waitErr, outputErr)
+}
+
+func normalizePTYCopyError(err error) error {
+	if errors.Is(err, syscall.EIO) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 func notifyNativeReady(streams backend.RunStreams, session *backend.Session) error {

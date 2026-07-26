@@ -110,6 +110,18 @@ func TestRunWithStreamsAllocatesPTYWithInitialSize(t *testing.T) {
 	}
 }
 
+func TestNormalizePTYCopyErrorAcceptsDeliberateClose(t *testing.T) {
+	err := &os.PathError{Op: "read", Path: "/dev/ptmx", Err: os.ErrClosed}
+	if got := normalizePTYCopyError(err); got != nil {
+		t.Fatalf("deliberate PTY close error=%v", got)
+	}
+
+	unexpected := errors.New("unexpected PTY read failure")
+	if got := normalizePTYCopyError(unexpected); !errors.Is(got, unexpected) {
+		t.Fatalf("unexpected PTY error was not preserved: %v", got)
+	}
+}
+
 func testNativeEnv() []string {
 	return []string{
 		"PATH=" + os.Getenv("PATH"),
