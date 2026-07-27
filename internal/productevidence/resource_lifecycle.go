@@ -38,10 +38,12 @@ var requiredLifecycleLocalChecks = []string{
 
 var requiredLifecycleRealChecks = []string{
 	"attachStopRaceSafe",
+	"attachWaitsForReconciliation",
 	"auditEvidenceRetained",
 	"automaticStopNonDestructive",
 	"bootIdentityObserved",
 	"bridgePinsEnvironment",
+	"cancellationBeforeOwnerClean",
 	"exactObservedStop",
 	"explicitStaleRecovery",
 	"finalSessionStops",
@@ -50,6 +52,8 @@ var requiredLifecycleRealChecks = []string{
 	"newBootGenerationObserved",
 	"profileCacheRetained",
 	"reconciliationRetry",
+	"restartAfterOwnerFailClosed",
+	"restartBeforeOwnerClean",
 	"restartFreshGraceAtMostOnce",
 	"restartNoInheritedAuthority",
 	"retainedOverlayPreserved",

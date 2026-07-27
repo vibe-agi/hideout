@@ -98,6 +98,12 @@ func TestLifecycleRealValidatorRejectsFalseGreenChecksAndBounds(t *testing.T) {
 		t.Fatalf("failed real check accepted: %v", err)
 	}
 	real = lifecycleRealFixture()
+	delete(real.Checks, "attachWaitsForReconciliation")
+	data, _ = json.Marshal(real)
+	if err := validateLifecycleRealArtifact(data, runtimePackageCommitFixture); err == nil || !strings.Contains(err.Error(), "inventory") {
+		t.Fatalf("lifecycle evidence without the attach-reservation expansion was accepted: %v", err)
+	}
+	real = lifecycleRealFixture()
 	real.Metrics.AttachStopRaces = 99
 	data, _ = json.Marshal(real)
 	if err := validateLifecycleRealArtifact(data, runtimePackageCommitFixture); err == nil || !strings.Contains(err.Error(), "metrics") {

@@ -1632,10 +1632,12 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 	case productevidence.ArtifactValidatorLifecycleRealV1:
 		checks := map[string]bool{}
 		for _, name := range []string{
-			"attachStopRaceSafe", "auditEvidenceRetained", "automaticStopNonDestructive", "bootIdentityObserved",
-			"bridgePinsEnvironment", "exactObservedStop", "explicitStaleRecovery", "finalSessionStops",
+			"attachStopRaceSafe", "attachWaitsForReconciliation", "auditEvidenceRetained",
+			"automaticStopNonDestructive", "bootIdentityObserved", "bridgePinsEnvironment",
+			"cancellationBeforeOwnerClean", "exactObservedStop", "explicitStaleRecovery", "finalSessionStops",
 			"guestDiskRetained", "hostHandoffIndependent", "newBootGenerationObserved", "profileCacheRetained",
-			"reconciliationRetry", "restartFreshGraceAtMostOnce", "restartNoInheritedAuthority",
+			"reconciliationRetry", "restartAfterOwnerFailClosed", "restartBeforeOwnerClean",
+			"restartFreshGraceAtMostOnce", "restartNoInheritedAuthority",
 			"retainedOverlayPreserved", "runBridgeClosed", "siblingSessionPreserved",
 			"slowProbeDoesNotBlockStatus", "stopUnknownBlocksAttach",
 		} {
