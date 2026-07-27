@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -264,6 +265,17 @@ func (c Core) hostAppRunIdentityRevalidator(runSession RunSession, authority run
 	}
 }
 
+func (c Core) hostAppRunIdentityRevalidatorContext(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.ContextIdentityRevalidator {
+	initialRoots = append([]string(nil), initialRoots...)
+	return func(ctx context.Context, expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
+		roots, err := c.hostAppRunIdentityRoots(runSession, authority, policy, initialRoots)
+		if err != nil {
+			return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "launch-time application overlap boundary is invalid"}
+		}
+		return c.hostAppRevalidatorContext(roots)(ctx, expectation, previous)
+	}
+}
+
 func (c Core) hostAppRunBindingIdentityResolver(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.BindingIdentityResolver {
 	initialRoots = append([]string(nil), initialRoots...)
 	return func(binding hostcap.OpenResourceBinding) (hostcap.OpenResourceBinding, error) {
@@ -272,6 +284,17 @@ func (c Core) hostAppRunBindingIdentityResolver(runSession RunSession, authority
 			return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "on-demand application overlap boundary is unavailable"}
 		}
 		return c.resolveDeferredHostAppBinding(runSession.Plan.ProfileName, binding, roots)
+	}
+}
+
+func (c Core) hostAppRunBindingIdentityResolverContext(runSession RunSession, authority runSessionWorkspaceAuthority, policy hostfs.EffectivePolicy, initialRoots []string) hostcap.ContextBindingIdentityResolver {
+	initialRoots = append([]string(nil), initialRoots...)
+	return func(ctx context.Context, binding hostcap.OpenResourceBinding) (hostcap.OpenResourceBinding, error) {
+		roots, err := c.hostAppRunIdentityRoots(runSession, authority, policy, initialRoots)
+		if err != nil {
+			return binding, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "on-demand application overlap boundary is unavailable"}
+		}
+		return c.resolveDeferredHostAppBindingContext(ctx, runSession.Plan.ProfileName, binding, roots)
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 const DefaultIdleGrace = 15 * time.Second
 
 const coordinatorCloseWait = 3 * time.Second
+const stopTransactionTimeout = 35 * time.Second
+const automaticStopAttachWaitLimit = stopTransactionTimeout + time.Second
 
 // The durable planned graph is the crash-recovery envelope. Routine state
 // transitions are coalesced outside the latency-sensitive one-shot command
@@ -268,8 +270,9 @@ func (c *Coordinator) expire(environmentID string, incarnation EnvironmentRef, s
 	}
 	state.journal.StopAttempt.State = "invoked"
 	_ = c.persistLocked(state)
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), stopTransactionTimeout)
 	state.stopCancel = cancel
+	state.stopDone = make(chan struct{})
 	c.stopWG.Add(1)
 	c.mu.Unlock()
 
@@ -324,6 +327,15 @@ func (c *Coordinator) commitStopResult(environmentID, attemptID string, incarnat
 		c.emitLocked(Event{EnvironmentID: environmentID, Generation: incarnation.StartGeneration, Kind: "stop-unknown", ReasonCode: boundedReason(reason), At: now})
 	}
 	_ = c.persistLocked(state)
+	c.finishStopLocked(state)
+}
+
+func (c *Coordinator) finishStopLocked(state *registryEnvironment) {
+	if state.stopDone == nil {
+		return
+	}
+	close(state.stopDone)
+	state.stopDone = nil
 }
 
 func resourcesAfterRootStop(resources []Resource, cleanupUnproved bool, now time.Time) []Resource {
@@ -446,8 +458,9 @@ func (c *Coordinator) StopExplicit(ctx context.Context, environmentID string) (S
 		c.mu.Unlock()
 		return status, errors.New("lifecycle stop authority is unavailable")
 	}
-	stopCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	stopCtx, cancel := context.WithTimeout(ctx, stopTransactionTimeout)
 	state.stopCancel = cancel
+	state.stopDone = make(chan struct{})
 	c.stopWG.Add(1)
 	c.mu.Unlock()
 
@@ -987,6 +1000,7 @@ func (c *Coordinator) Close() error {
 			cancels = append(cancels, state.stopCancel)
 			state.stopCancel = nil
 		}
+		c.finishStopLocked(state)
 		state.journal.IdleDeadline = nil
 		if state.reconciling {
 			state.blocked = true

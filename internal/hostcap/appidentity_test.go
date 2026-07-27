@@ -1,6 +1,7 @@
 package hostcap
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -68,6 +69,23 @@ func TestResolveApplicationIdentityUsesBasenameAndAllowedRoot(t *testing.T) {
 	bad.BundleName = "/Applications/Test App.app"
 	if _, err := ResolveApplicationIdentity(bad, testIdentityOptions(root)); CodeOf(err) != CodeAppIdentityDrift {
 		t.Fatalf("absolute package path should fail closed, got %v", err)
+	}
+}
+
+func TestResolveApplicationIdentityContextCancelsHostTrustObservation(t *testing.T) {
+	root := t.TempDir()
+	makeTestBundle(t, root, "Test App.app", "v1")
+	opts := testIdentityOptions(root)
+	opts.ObserveSigning = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	opts.ObserveSigningContext = func(observed context.Context, _ string) (SigningObservation, error) {
+		cancel()
+		<-observed.Done()
+		return SigningObservation{}, observed.Err()
+	}
+	_, err := ResolveApplicationIdentityContext(ctx, testIdentityExpectation(), opts)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("identity cancellation was not preserved: %v", err)
 	}
 }
 

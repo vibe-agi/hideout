@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,13 +16,76 @@ import (
 )
 
 func TestBrokerRequestTimeoutIsExtendedOnlyForBoundedHostAppIdentityWork(t *testing.T) {
-	if got := brokerRequestTimeout(cmdproxy.ActionHostAppOpenResource); got != 20*time.Second {
+	if got := brokerRequestTimeout(cmdproxy.ActionHostAppOpenResource); got != 75*time.Second {
 		t.Fatalf("host-app timeout=%s", got)
 	}
 	for _, action := range []string{"", cmdproxy.ActionHostOpen, cmdproxy.ActionCommandAdapter} {
 		if got := brokerRequestTimeout(action); got != 5*time.Second {
 			t.Fatalf("action %q timeout=%s", action, got)
 		}
+	}
+}
+
+func TestWaitForHostBridgeRetriesOnlyAuthenticatedNoEffectProbe(t *testing.T) {
+	calls := 0
+	open := func(_ context.Context, _ broker.Endpoint, req broker.Request) broker.Response {
+		calls++
+		if req.Action != broker.ActionReadinessProbe || req.Command != "" || len(req.Argv) != 0 || len(req.Args) != 0 {
+			t.Fatalf("readiness attempt carried effect authority: %+v", req)
+		}
+		if calls < 3 {
+			return broker.Response{ID: req.ID, Status: "broker-unavailable", ExitCode: 69}
+		}
+		return broker.Response{ID: req.ID, Decision: "allow", Status: "ok"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForHostBridge(ctx, broker.TCPEndpoint("127.0.0.1:1"), "ses_test", "cap_test", open); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("readiness attempts=%d want 3", calls)
+	}
+}
+
+func TestWaitForHostBridgeFailsClosedWithoutRetryingBrokerRefusal(t *testing.T) {
+	calls := 0
+	open := func(_ context.Context, _ broker.Endpoint, req broker.Request) broker.Response {
+		calls++
+		return broker.Response{ID: req.ID, Decision: "deny", Status: "denied", ExitCode: 126}
+	}
+	err := waitForHostBridge(context.Background(), broker.TCPEndpoint("127.0.0.1:1"), "ses_test", "cap_test", open)
+	if !errors.Is(err, errHostBridgeRefused) || calls != 1 {
+		t.Fatalf("readiness refusal err=%v calls=%d", err, calls)
+	}
+}
+
+func TestWaitForHostBridgeCancellationNeverAttemptsAnEffect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	err := waitForHostBridge(ctx, broker.TCPEndpoint("127.0.0.1:1"), "ses_test", "cap_test",
+		func(context.Context, broker.Endpoint, broker.Request) broker.Response {
+			calls++
+			return broker.Response{}
+		},
+	)
+	if !errors.Is(err, errHostBridgeUnavailable) || calls != 0 {
+		t.Fatalf("cancelled readiness err=%v calls=%d", err, calls)
+	}
+}
+
+func TestHostAppTransportLossNeverClaimsTheEffectWasAbsent(t *testing.T) {
+	resp := broker.Response{Status: "broker-unavailable", ExitCode: 69, Stderr: "EOF"}
+	if !hostAppResponseLost(cmdproxy.ActionHostAppOpenResource, resp) {
+		t.Fatal("host-app transport loss was not classified")
+	}
+	if hostAppResponseLost(cmdproxy.ActionHostOpen, resp) {
+		t.Fatal("ordinary host-open response was reclassified as a projected host-app effect")
+	}
+	message := errHostAppResponseLost.Error()
+	if strings.Contains(message, "EOF") || !strings.Contains(message, "may already be open") || !strings.Contains(message, "before retrying") {
+		t.Fatalf("ambiguous-effect guidance is unsafe or unstable: %q", message)
 	}
 }
 

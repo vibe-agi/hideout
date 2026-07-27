@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -1237,6 +1238,10 @@ func hostAppBindingOwner(packID, revisionID, bindingID string) string {
 }
 
 func (c Core) resolveManifestIdentities(manifest hostapppack.Manifest, revisionID string, bindings []hostapppack.BindingSpec, access string, forbidden []string) (map[string]hostcap.ObservedApplicationIdentity, string, string, error) {
+	return c.resolveManifestIdentitiesContext(context.Background(), manifest, revisionID, bindings, access, forbidden)
+}
+
+func (c Core) resolveManifestIdentitiesContext(ctx context.Context, manifest hostapppack.Manifest, revisionID string, bindings []hostapppack.BindingSpec, access string, forbidden []string) (map[string]hostcap.ObservedApplicationIdentity, string, string, error) {
 	apps := map[string]hostapppack.AppSpec{}
 	for _, app := range manifest.Apps {
 		apps[app.ID] = app
@@ -1247,7 +1252,7 @@ func (c Core) resolveManifestIdentities(manifest hostapppack.Manifest, revisionI
 		app := apps[binding.AppID]
 		if _, ok := identities[app.ID]; !ok {
 			expectation := applicationExpectation(manifest.ID, revisionID, app)
-			identity, err := c.resolveHostAppIdentity(expectation, forbidden)
+			identity, err := c.resolveHostAppIdentityContext(ctx, expectation, forbidden)
 			if err != nil {
 				return nil, "", "", err
 			}
@@ -1331,6 +1336,10 @@ func classifyHostAppIdentityError(err error) error {
 }
 
 func (c Core) resolveHostAppIdentity(expectation hostcap.ApplicationExpectation, forbidden []string) (hostcap.ObservedApplicationIdentity, error) {
+	return c.resolveHostAppIdentityContext(context.Background(), expectation, forbidden)
+}
+
+func (c Core) resolveHostAppIdentityContext(ctx context.Context, expectation hostcap.ApplicationExpectation, forbidden []string) (hostcap.ObservedApplicationIdentity, error) {
 	if c.HostAppIdentityResolver != nil {
 		return c.HostAppIdentityResolver(expectation, append([]string(nil), forbidden...))
 	}
@@ -1341,7 +1350,10 @@ func (c Core) resolveHostAppIdentity(expectation hostcap.ApplicationExpectation,
 	if err != nil {
 		return hostcap.ObservedApplicationIdentity{}, err
 	}
-	return hostcap.ResolveApplicationIdentity(expectation, hostcap.ApplicationIdentityOptions{Roots: hostcap.CoreApplicationRoots(home), ForbiddenRoots: forbidden, OperatorUID: uint32(os.Getuid()), ObserveSigning: hostcap.ObserveDarwinSigningIdentity})
+	return hostcap.ResolveApplicationIdentityContext(ctx, expectation, hostcap.ApplicationIdentityOptions{
+		Roots: hostcap.CoreApplicationRoots(home), ForbiddenRoots: forbidden, OperatorUID: uint32(os.Getuid()),
+		ObserveSigningContext: hostcap.ObserveDarwinSigningIdentityContext,
+	})
 }
 
 func (c Core) hostAppPlatform() hostcap.Platform {
@@ -1357,6 +1369,24 @@ func (c Core) hostAppRevalidator(forbidden []string) hostcap.IdentityRevalidator
 	}
 	return func(expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
 		current, err := c.resolveHostAppIdentity(expectation, forbidden)
+		if err != nil {
+			return hostcap.ObservedApplicationIdentity{}, err
+		}
+		if current.IdentityDigest() != previous.IdentityDigest() || current.QualifiedAppRef != previous.QualifiedAppRef {
+			return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "host application identity changed before launch"}
+		}
+		return current, nil
+	}
+}
+
+func (c Core) hostAppRevalidatorContext(forbidden []string) hostcap.ContextIdentityRevalidator {
+	if c.HostAppIdentityRevalidator != nil {
+		return func(_ context.Context, expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
+			return c.HostAppIdentityRevalidator(expectation, previous)
+		}
+	}
+	return func(ctx context.Context, expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
+		current, err := c.resolveHostAppIdentityContext(ctx, expectation, forbidden)
 		if err != nil {
 			return hostcap.ObservedApplicationIdentity{}, err
 		}

@@ -78,7 +78,9 @@ type FactSpec struct {
 
 // Registrar is the narrow interface injected into Manager. The daemon owns
 // the implementation; Manager remains the authority that creates and closes
-// the represented effects.
+// the represented effects. ReserveAttach may wait for an already-invoked
+// automatic stop to reach a proved result; callers must collect their backend
+// observation only after the reservation returns.
 type Registrar interface {
 	ReserveAttach(context.Context, EstablishmentRequest) (EstablishmentReservation, error)
 	BeginAttach(context.Context, AttachRequest) (Registration, error)
@@ -436,6 +438,7 @@ type registryEnvironment struct {
 	terminal      map[string]ResourceState
 	timer         timerHandle
 	stopCancel    context.CancelFunc
+	stopDone      chan struct{}
 	deadlineSeq   uint64
 	checkpoint    timerHandle
 	checkpointSeq uint64
@@ -480,10 +483,14 @@ func committedHandleCount(state *registryEnvironment) int {
 }
 
 func (c *Coordinator) BeginAttach(ctx context.Context, request AttachRequest) (Registration, error) {
-	reservation, err := c.ReserveAttach(ctx, EstablishmentRequest{
+	// The one-shot compatibility API receives its backend observation before
+	// serialization. It must fail fast rather than wait across a stop and then
+	// consume stale liveness evidence. Two-phase callers reserve first and
+	// observe only after the reservation has fenced automatic stop.
+	reservation, err := c.reserveAttach(ctx, EstablishmentRequest{
 		EnvironmentID: request.EnvironmentID,
 		SessionID:     request.SessionID,
-	})
+	}, false)
 	if err != nil {
 		return nil, err
 	}

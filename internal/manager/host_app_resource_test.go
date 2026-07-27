@@ -344,7 +344,7 @@ func TestStartRunDataPlaneBindsCompleteForbiddenRootsIntoInitialAndFinalIdentity
 		}
 	}
 	checksBeforeCode := len(identityRootChecks)
-	resolved, err := dataPlane.Broker.HostApp.ResolveIdentity(binding)
+	resolved, err := dataPlane.Broker.HostApp.ResolveIdentityContext(context.Background(), binding)
 	if err != nil {
 		t.Fatalf("on-demand production identity resolution: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestStartRunDataPlaneBindsCompleteForbiddenRootsIntoInitialAndFinalIdentity
 	}
 	checksBeforeFinal := len(identityRootChecks)
 	activeRoots = append(activeRoots, finalActiveRoot)
-	current, err := dataPlane.Broker.HostApp.RevalidateIdentity(resolved.Application, resolved.ObservedIdentity)
+	current, err := dataPlane.Broker.HostApp.RevalidateIdentityContext(context.Background(), resolved.Application, resolved.ObservedIdentity)
 	if err != nil || current.IdentityDigest() != resolved.ObservedIdentity.IdentityDigest() {
 		t.Fatalf("production final identity revalidation: identity=%+v err=%v", current, err)
 	}

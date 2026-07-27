@@ -217,6 +217,9 @@ signing, notarization, anonymous download, and publication receipt.
 - [x] T052 [US7] Add the 044 runner to Gate 0 and release-candidate orchestration in `scripts/test-gate0.sh` and `scripts/test-public-alpha-candidate.sh`
 - [x] T065 [US7] Make the public candidate orchestrator generate 035/036/038/040/041/042 and strict 043 evidence from the same exact package instead of relying on manually supplied prerequisite manifests
 - [x] T066 [US7] Add fail-closed 030/043 privacy promotion from matching exact-package Gate 2 and Gate 3 evidence, including independent-environment runtime matching and the production semantic judge
+- [x] T067 [US7] Reproduce the intermittent exact-candidate Gate 2 failure as an automatic-stop/attach race; add a bounded two-phase wait with fresh post-stop observation, cancellation/unknown-result fences, one-shot stale-observation protection, lifecycle/Manager race tests, and a full real-Lima diagnostic
+- [x] T068 [US7] Close the residual host-app ambiguity with an authenticated no-effect broker readiness probe, probe-only bounded retry, context-bound total macOS identity budget, nested operation/response/client deadlines, a post-guard cancellation fence, stable may-have-opened guidance, and deterministic red/green tests
+- [x] T069 [US7] Require exact readiness/effect alternation and healthy two-message broker transport counters in real Gate 2; pass two full source runs plus one package-shaped full run with 1 fresh and 30 warm readiness samples
 - [x] T053 [US7] Add stale digest, dirty tree, private/unpushed commit, rebuilt bytes, missing UI, failed/not-run Gate 2/3, signing, notarization, and anonymous-download negative fixtures in `scripts/test-release-readiness.sh`
 - [x] T054 [US7] Run and record all new assertion mutations, judge negative fixtures, fresh-eyes findings, and exact commands/artifacts in `specs/044-ordinary-user-release/acceptance.md`
 

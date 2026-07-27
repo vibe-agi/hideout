@@ -148,6 +148,224 @@ func TestEstablishmentWaitHonorsCancellation(t *testing.T) {
 	coordinator.mu.Unlock()
 }
 
+func TestEstablishmentWaitsForAutomaticStopBeforeReserving(t *testing.T) {
+	stopEntered := make(chan StopRequest, 1)
+	releaseStop := make(chan struct{})
+	coordinator, clock := newTestCoordinator(t, true, func(_ context.Context, request StopRequest) (StopResult, error) {
+		stopEntered <- request
+		<-releaseStop
+		return StopResult{Observation: backend.LifecycleObservation{
+			State: backend.LifecycleStopped, InstanceName: request.Incarnation.InstanceName,
+			ObservedAt: time.Now().UTC(),
+		}}, nil
+	})
+	var (
+		eventsMu sync.Mutex
+		events   []Event
+	)
+	waitingEntered := make(chan struct{}, 1)
+	coordinator.publish = func(event Event) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+		if event.Kind == "attach-establishment-waiting" && event.ReasonCode == "automatic-stop-pending" {
+			select {
+			case waitingEntered <- struct{}{}:
+			default:
+			}
+		}
+	}
+	registration := prepareIdleRegistration(t, coordinator)
+	stoppingIncarnation := registration.Incarnation()
+	if err := registration.Finish(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	stopFinished := make(chan struct{})
+	go func() {
+		clock.advance(DefaultIdleGrace)
+		close(stopFinished)
+	}()
+	request := <-stopEntered
+	if !request.Incarnation.Equal(stoppingIncarnation) {
+		t.Fatalf("automatic stop targeted %+v, want %+v", request.Incarnation, stoppingIncarnation)
+	}
+
+	type result struct {
+		reservation EstablishmentReservation
+		err         error
+	}
+	reserved := make(chan result, 1)
+	go func() {
+		reservation, err := coordinator.ReserveAttach(context.Background(), EstablishmentRequest{
+			EnvironmentID: "env-test", SessionID: "ses-after-stop",
+		})
+		reserved <- result{reservation: reservation, err: err}
+	}()
+	select {
+	case <-waitingEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reservation did not enter automatic stop wait")
+	}
+	select {
+	case got := <-reserved:
+		t.Fatalf("reservation crossed automatic stop: %+v", got)
+	default:
+	}
+
+	close(releaseStop)
+	<-stopFinished
+	var got result
+	select {
+	case got = <-reserved:
+	case <-time.After(time.Second):
+		t.Fatal("reservation did not resume after automatic stop")
+	}
+	if got.err != nil || got.reservation == nil {
+		t.Fatalf("reservation after automatic stop=%T err=%v", got.reservation, got.err)
+	}
+	coordinator.mu.Lock()
+	state := coordinator.environments["env-test"]
+	stopCommitted := state.journal.StopAttempt != nil && state.journal.StopAttempt.State == "committed"
+	incarnationCleared := state.journal.Incarnation == nil
+	reservationActive := state.establishing["ses-after-stop"] != nil
+	coordinator.mu.Unlock()
+	if !stopCommitted || !incarnationCleared || !reservationActive {
+		t.Fatalf("post-stop reservation state committed=%t incarnationCleared=%t active=%t", stopCommitted, incarnationCleared, reservationActive)
+	}
+	if err := got.reservation.Abort(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	eventsMu.Lock()
+	waiting := 0
+	for _, event := range events {
+		if event.Kind == "attach-establishment-waiting" && event.ReasonCode == "automatic-stop-pending" {
+			waiting++
+		}
+	}
+	eventsMu.Unlock()
+	if waiting != 1 {
+		t.Fatalf("automatic stop waiting events=%d", waiting)
+	}
+}
+
+func TestEstablishmentAutomaticStopWaitHonorsCancellation(t *testing.T) {
+	stopEntered := make(chan struct{}, 1)
+	releaseStop := make(chan struct{})
+	waiting := make(chan struct{}, 1)
+	coordinator, clock := newTestCoordinator(t, true, func(_ context.Context, request StopRequest) (StopResult, error) {
+		stopEntered <- struct{}{}
+		<-releaseStop
+		return StopResult{Observation: backend.LifecycleObservation{
+			State: backend.LifecycleStopped, InstanceName: request.Incarnation.InstanceName,
+			ObservedAt: time.Now().UTC(),
+		}}, nil
+	})
+	coordinator.publish = func(event Event) {
+		if event.Kind == "attach-establishment-waiting" && event.ReasonCode == "automatic-stop-pending" {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		}
+	}
+	registration := prepareIdleRegistration(t, coordinator)
+	if err := registration.Finish(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	stopFinished := make(chan struct{})
+	go func() {
+		clock.advance(DefaultIdleGrace)
+		close(stopFinished)
+	}()
+	<-stopEntered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reserved := make(chan error, 1)
+	go func() {
+		_, err := coordinator.ReserveAttach(ctx, EstablishmentRequest{
+			EnvironmentID: "env-test", SessionID: "ses-cancelled",
+		})
+		reserved <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("reservation did not enter automatic stop wait")
+	}
+	cancel()
+	select {
+	case err := <-reserved:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled automatic stop wait error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled automatic stop wait did not return")
+	}
+	coordinator.mu.Lock()
+	establishing := len(coordinator.environments["env-test"].establishing)
+	coordinator.mu.Unlock()
+	if establishing != 0 {
+		t.Fatalf("cancelled automatic stop wait published %d reservations", establishing)
+	}
+	close(releaseStop)
+	<-stopFinished
+}
+
+func TestEstablishmentAutomaticStopWaitFailsClosedOnUnknownResult(t *testing.T) {
+	stopEntered := make(chan struct{}, 1)
+	releaseStop := make(chan struct{})
+	waiting := make(chan struct{}, 1)
+	coordinator, clock := newTestCoordinator(t, true, func(_ context.Context, request StopRequest) (StopResult, error) {
+		stopEntered <- struct{}{}
+		<-releaseStop
+		return StopResult{Observation: backend.LifecycleObservation{
+			State: backend.LifecycleUnknown, InstanceName: request.Incarnation.InstanceName,
+			ObservedAt: time.Now().UTC(), ReasonCode: "inventory-timeout",
+		}}, errors.New("inventory timed out")
+	})
+	coordinator.publish = func(event Event) {
+		if event.Kind == "attach-establishment-waiting" && event.ReasonCode == "automatic-stop-pending" {
+			select {
+			case waiting <- struct{}{}:
+			default:
+			}
+		}
+	}
+	registration := prepareIdleRegistration(t, coordinator)
+	if err := registration.Finish(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	stopFinished := make(chan struct{})
+	go func() {
+		clock.advance(DefaultIdleGrace)
+		close(stopFinished)
+	}()
+	<-stopEntered
+	reserved := make(chan error, 1)
+	go func() {
+		_, err := coordinator.ReserveAttach(context.Background(), EstablishmentRequest{
+			EnvironmentID: "env-test", SessionID: "ses-after-unknown",
+		})
+		reserved <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("reservation did not enter automatic stop wait")
+	}
+	close(releaseStop)
+	<-stopFinished
+	select {
+	case err := <-reserved:
+		if !errors.Is(err, ErrAttachBlocked) || errors.Is(err, ErrStopInFlight) {
+			t.Fatalf("unknown automatic stop result error=%T %v", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reservation did not classify unknown automatic stop result")
+	}
+}
+
 func TestEstablishmentBlocksNewReconciliationUntilAbort(t *testing.T) {
 	coordinator, _ := newTestCoordinator(t, false, nil)
 	reservation, err := coordinator.ReserveAttach(context.Background(), EstablishmentRequest{EnvironmentID: "env-test", SessionID: "ses-one"})

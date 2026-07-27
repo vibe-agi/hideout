@@ -8,6 +8,7 @@ import (
 )
 
 type BindingIdentityResolver func(OpenResourceBinding) (OpenResourceBinding, error)
+type ContextBindingIdentityResolver func(context.Context, OpenResourceBinding) (OpenResourceBinding, error)
 
 // HandoffLifecycleBegin records a prospective host-app handoff before the
 // launcher receives authority. The returned completion function is called
@@ -19,21 +20,23 @@ type HandoffLifecycleBegin func(command string) (complete func(launched bool) er
 // (it owns the host-path mapping); the manager supplies everything else.
 // A nil ProjectionConfig means projection is disabled for the run.
 type ProjectionConfig struct {
-	Platform           Platform
-	SafeUserDataDir    string
-	Grants             GrantChecker
-	Launcher           appopen.Launcher
-	Deduper            Deduper
-	Bindings           BindingCatalog
-	RunID              string
-	WorkspaceID        string
-	GrantScopeBase     GrantScope
-	ResolveIdentity    BindingIdentityResolver
-	RevalidateIdentity IdentityRevalidator
-	ValidateLifecycle  func(OpenResourceBinding) error
-	BeginHandoff       HandoffLifecycleBegin
-	identityMu         sync.Mutex
-	resolvedIdentities map[string]OpenResourceBinding
+	Platform                  Platform
+	SafeUserDataDir           string
+	Grants                    GrantChecker
+	Launcher                  appopen.Launcher
+	Deduper                   Deduper
+	Bindings                  BindingCatalog
+	RunID                     string
+	WorkspaceID               string
+	GrantScopeBase            GrantScope
+	ResolveIdentity           BindingIdentityResolver
+	ResolveIdentityContext    ContextBindingIdentityResolver
+	RevalidateIdentity        IdentityRevalidator
+	RevalidateIdentityContext ContextIdentityRevalidator
+	ValidateLifecycle         func(OpenResourceBinding) error
+	BeginHandoff              HandoffLifecycleBegin
+	identityMu                sync.Mutex
+	resolvedIdentities        map[string]OpenResourceBinding
 }
 
 // OpenCommand is the 032 production entry point. Command and binding digest
@@ -57,7 +60,7 @@ func (c *ProjectionConfig) OpenCommand(ctx context.Context, command, bindingDige
 		return OpenResult{}, binding, &Error{Code: CodeCommandUnbound, Reason: "projected command binding is no longer active"}
 	}
 	if binding.IdentityDeferred {
-		resolved, resolveErr := c.resolveBindingIdentity(binding)
+		resolved, resolveErr := c.resolveBindingIdentity(ctx, binding)
 		if resolveErr != nil {
 			if CodeOf(resolveErr) != "" {
 				return OpenResult{}, binding, resolveErr
@@ -78,7 +81,8 @@ func (c *ProjectionConfig) OpenCommand(ctx context.Context, command, bindingDige
 		SessionID: sessionID, Profile: profile, RunID: c.RunID, WorkspaceID: c.WorkspaceID, Command: command, SafeStateBase: c.SafeUserDataDir,
 		Platform: c.Platform, Resources: resolver,
 		GrantScopeBase: c.GrantScopeBase, Grants: c.Grants, Launcher: c.Launcher, Deduper: c.Deduper, RevalidateIdentity: c.RevalidateIdentity,
-		ValidateLifecycle: c.ValidateLifecycle,
+		RevalidateIdentityContext: c.RevalidateIdentityContext,
+		ValidateLifecycle:         c.ValidateLifecycle,
 	})
 	launched := err == nil && result.Outcome == outcomeLaunched && !result.Suppressed
 	if lifecycleErr := complete(launched); lifecycleErr != nil {
@@ -90,16 +94,22 @@ func (c *ProjectionConfig) OpenCommand(ctx context.Context, command, bindingDige
 	return result, binding, err
 }
 
-func (c *ProjectionConfig) resolveBindingIdentity(binding OpenResourceBinding) (OpenResourceBinding, error) {
+func (c *ProjectionConfig) resolveBindingIdentity(ctx context.Context, binding OpenResourceBinding) (OpenResourceBinding, error) {
 	c.identityMu.Lock()
 	defer c.identityMu.Unlock()
 	if resolved, ok := c.resolvedIdentities[binding.BindingDigest]; ok {
 		return cloneOpenResourceBinding(resolved), nil
 	}
-	if c.ResolveIdentity == nil {
+	if c.ResolveIdentity == nil && c.ResolveIdentityContext == nil {
 		return binding, &Error{Code: CodeProviderUnavailable, Reason: "on-demand host application identity resolution is unavailable"}
 	}
-	resolved, err := c.ResolveIdentity(cloneOpenResourceBinding(binding))
+	var resolved OpenResourceBinding
+	var err error
+	if c.ResolveIdentityContext != nil {
+		resolved, err = c.ResolveIdentityContext(ctx, cloneOpenResourceBinding(binding))
+	} else {
+		resolved, err = c.ResolveIdentity(cloneOpenResourceBinding(binding))
+	}
 	if err != nil {
 		return binding, err
 	}

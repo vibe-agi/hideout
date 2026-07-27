@@ -148,10 +148,33 @@ latest_projection_audit() {
   printf '%s\n' "$found"
 }
 
+projection_assert_host_effect_preflight() {
+  local audit_path="$1"
+  jq -s -e '
+    [.[] | select(
+      .action == "broker.readiness" or
+      .action == "host.app.open-resource"
+    )] as $events |
+    ($events | length) > 0 and
+    (($events | length) % 2) == 0 and
+    all(
+      range(0; ($events | length); 2);
+      $events[.].action == "broker.readiness" and
+      $events[.].decision == "allow" and
+      $events[.].details.status == "ok" and
+      $events[. + 1].action == "host.app.open-resource"
+    )
+  ' "$audit_path" >/dev/null
+}
+
 last_host_app_event() {
   local audit_path="$1"
   local pack_id="$2"
   local mode="${3:-}"
+  projection_assert_host_effect_preflight "$audit_path" || {
+    echo "gate2: host-app effect lacked an immediately preceding authenticated readiness probe" >&2
+    return 1
+  }
   jq -c --arg pack "$pack_id" --arg mode "$mode" '
     select(
       .action == "host.app.open-resource" and
@@ -442,13 +465,15 @@ projection_measure_ready_session() {
       .details.observedEntries == .details.expectedEntries)] | length) == 1 and
     ([.[] | select(.action == "host.app.open-resource" and
       .details.outcome == "launched")] | length) == 1 and
+    ([.[] | select(.action == "broker.readiness" and
+      .decision == "allow" and .details.status == "ok")] | length) == 1 and
     ([.[] | select(.action == "hideout.privileged_setup" and
       .decision == "error" and .details.category == "network" and
       .details.status == "failed")] | length) == $expectedVerifyFailures and
     ([.[] | select(.action == "broker.transport.observe" and
       .decision == "allow" and .details.scope == "session-window" and
-      .details.accepted >= 1 and .details.requestParsed >= 1 and
-      .details.requestParseFailed == 0 and .details.responseWritten >= 1 and
+      .details.accepted >= 2 and .details.requestParsed >= 2 and
+      .details.requestParseFailed == 0 and .details.responseWritten >= 2 and
       .details.responseWriteFailed == 0)] | length) == 1
   ' "$audit" >/dev/null; then
     echo "gate2: projection readiness $lane sample $index lacks the exact ready/host-effect/transport proof" >&2

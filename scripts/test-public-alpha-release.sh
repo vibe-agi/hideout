@@ -274,6 +274,14 @@ if grep -F -- '--url-host host.lima.internal' scripts/lib/gate2-projection.sh >/
   echo "public-alpha-release: Gate 2 projection bypasses the host gateway proxy contract" >&2
   exit 1
 fi
+grep -F 'projection_assert_host_effect_preflight' \
+  scripts/lib/gate2-projection.sh >/dev/null
+grep -F '.action == "broker.readiness"' \
+  scripts/lib/gate2-projection.sh >/dev/null
+grep -F '.details.accepted >= 2' \
+  scripts/lib/gate2-projection.sh >/dev/null
+grep -F '.details.responseWritten >= 2' \
+  scripts/lib/gate2-projection.sh >/dev/null
 grep -F 'chmod 0700 "$store" "$home" "$lima_home"' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
 grep -F 'clean_install_tmp_parent="${HIDEOUT_LIMA_SHORT_TMPDIR:-/tmp}"' \

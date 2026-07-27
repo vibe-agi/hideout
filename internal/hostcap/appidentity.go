@@ -1,6 +1,7 @@
 package hostcap
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -76,6 +77,7 @@ type SigningObservation struct {
 }
 
 type SigningObserver func(bundlePath string) (SigningObservation, error)
+type ContextSigningObserver func(context.Context, string) (SigningObservation, error)
 
 type AppVerification string
 
@@ -110,7 +112,11 @@ type ApplicationIdentityOptions struct {
 	ForbiddenRoots []string
 	OperatorUID    uint32
 	ObserveSigning SigningObserver
-	DigestLimits   BundleTreeLimits
+	// ObserveSigningContext is preferred for launch-boundary work because it
+	// lets broker cancellation terminate host trust subprocesses. The legacy
+	// observer remains for offline inspection and compatibility.
+	ObserveSigningContext ContextSigningObserver
+	DigestLimits          BundleTreeLimits
 }
 
 // ObservedApplicationIdentity includes host-local paths needed by the launch
@@ -149,10 +155,17 @@ func (i ObservedApplicationIdentity) SafetyIdentity(platform Platform) appopen.S
 }
 
 func ResolveApplicationIdentity(expectation ApplicationExpectation, opts ApplicationIdentityOptions) (ObservedApplicationIdentity, error) {
+	return ResolveApplicationIdentityContext(context.Background(), expectation, opts)
+}
+
+func ResolveApplicationIdentityContext(ctx context.Context, expectation ApplicationExpectation, opts ApplicationIdentityOptions) (ObservedApplicationIdentity, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := validateApplicationExpectation(expectation); err != nil {
 		return ObservedApplicationIdentity{}, identityError(err.Error())
 	}
-	if len(opts.Roots) == 0 || opts.ObserveSigning == nil {
+	if len(opts.Roots) == 0 || (opts.ObserveSigning == nil && opts.ObserveSigningContext == nil) {
 		return ObservedApplicationIdentity{}, identityError("application roots and a Core signing observer are required")
 	}
 	if opts.DigestLimits == (BundleTreeLimits{}) {
@@ -172,6 +185,9 @@ func ResolveApplicationIdentity(expectation ApplicationExpectation, opts Applica
 	}
 	var candidates []candidateIdentity
 	for _, configuredRoot := range opts.Roots {
+		if err := ctx.Err(); err != nil {
+			return ObservedApplicationIdentity{}, err
+		}
 		if _, err := os.Lstat(configuredRoot.Path); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
@@ -232,8 +248,16 @@ func ResolveApplicationIdentity(expectation ApplicationExpectation, opts Applica
 	if err != nil {
 		return ObservedApplicationIdentity{}, identityError("application executable identity could not be measured")
 	}
-	signing, err := opts.ObserveSigning(selected.bundlePath)
+	var signing SigningObservation
+	if opts.ObserveSigningContext != nil {
+		signing, err = opts.ObserveSigningContext(ctx, selected.bundlePath)
+	} else {
+		signing, err = opts.ObserveSigning(selected.bundlePath)
+	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return ObservedApplicationIdentity{}, err
+		}
 		return ObservedApplicationIdentity{}, identityError("Core could not observe a valid application identity")
 	}
 	if err := ValidateSigningExpectations(signing, IdentityExpectations{BundleID: expectation.ExpectedBundleID, TeamID: expectation.ExpectedTeamID}); err != nil {

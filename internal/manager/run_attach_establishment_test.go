@@ -185,6 +185,141 @@ func TestApplyRunCancelledReconciliationWaitPublishesNoRuntime(t *testing.T) {
 	}
 }
 
+func TestApplyRunWaitsForAutomaticStopBeforeFreshObservationAndTarget(t *testing.T) {
+	setFakeLinuxShim(t)
+	setFakeLinuxWorkspacePortal(t)
+	setFakeLinuxSessionSupervisor(t)
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := profile.Store{Root: root}
+	if err := store.Save(profile.Default("wait-automatic-stop")); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: "wait-automatic-stop", Backend: "lima", Workspace: t.TempDir(), Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnv, err := core.SelectRunEnvironment(plan, RunEnvironmentOptions{Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopEntered := make(chan lifecycle.StopRequest, 4)
+	releaseStop := make(chan struct{})
+	waitingEntered := make(chan struct{}, 1)
+	journalStore := lifecycle.JournalStore{Root: root}
+	coordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
+		Store: journalStore, DaemonID: "daemon-wait-automatic-stop", IdleGrace: time.Millisecond,
+		Enabled: true,
+		Stop: func(_ context.Context, request lifecycle.StopRequest) (lifecycle.StopResult, error) {
+			stopEntered <- request
+			<-releaseStop
+			return lifecycle.StopResult{Observation: backend.LifecycleObservation{
+				State: backend.LifecycleStopped, InstanceName: request.Incarnation.InstanceName,
+				ObservedAt: time.Now().UTC(),
+			}}, nil
+		},
+		Publish: func(event lifecycle.Event) {
+			if event.Kind == "attach-establishment-waiting" && event.ReasonCode == "automatic-stop-pending" {
+				select {
+				case waitingEntered <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := coordinator.BeginAttach(context.Background(), lifecycle.AttachRequest{
+		EnvironmentID: runEnv.Record.ID, InstanceName: runEnv.Record.InstanceName, SessionID: "ses-prior",
+		Observation: backend.LifecycleObservation{
+			State: backend.LifecycleRunning, InstanceName: runEnv.Record.InstanceName,
+			BootID: "11111111-2222-3333-4444-555555555555", ObservedAt: time.Now().UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorGeneration := prior.Incarnation().StartGeneration
+	if err := prior.Finish(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var stopping lifecycle.StopRequest
+	select {
+	case stopping = <-stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("automatic stop did not enter backend callback")
+	}
+	if stopping.Incarnation.StartGeneration != priorGeneration {
+		t.Fatalf("automatic stop generation=%d want %d", stopping.Incarnation.StartGeneration, priorGeneration)
+	}
+
+	targetReached := make(chan struct{}, 1)
+	fake := &lifecycleApplyBackend{
+		applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}, journal: journalStore,
+		bootID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		beforeReady: func(*backend.Session) error {
+			targetReached <- struct{}{}
+			return nil
+		},
+	}
+	type outcome struct {
+		result RunResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, runErr := core.ApplyRun(context.Background(), plan, ApplyRunOptions{
+			Backend: fake, RequestedBackend: "lima", Lifecycle: coordinator,
+			PrepareWorkspaceAttachment:  func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+			ActivateWorkspaceAttachment: func(runSession *RunSession) error { return runSession.WorkspaceAttachment.Validate() },
+			ReleaseWorkspaceAttachment:  func(context.Context) error { return nil },
+			Streams:                     &backend.RunStreams{Ready: func(backend.SessionReadyProof) error { return nil }},
+		})
+		done <- outcome{result: result, err: runErr}
+	}()
+	select {
+	case <-waitingEntered:
+	case got := <-done:
+		t.Fatalf("run returned before entering automatic stop wait: err=%v result=%+v", got.err, got.result)
+	case <-time.After(time.Second):
+		t.Fatal("run did not enter automatic stop wait")
+	}
+	select {
+	case <-targetReached:
+		t.Fatal("target launched before automatic stop completed")
+	case got := <-done:
+		t.Fatalf("run returned before automatic stop completed: err=%v result=%+v", got.err, got.result)
+	default:
+	}
+
+	close(releaseStop)
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not resume after automatic stop")
+	}
+	if got.err != nil {
+		t.Fatalf("ApplyRun after automatic stop: %v", got.err)
+	}
+	if fake.targetRuns != 1 {
+		t.Fatalf("target runs=%d want 1", fake.targetRuns)
+	}
+	statuses := coordinator.Snapshot()
+	if len(statuses) != 1 || statuses[0].StartGeneration <= priorGeneration {
+		t.Fatalf("fresh run reused stopped generation: prior=%d statuses=%+v", priorGeneration, statuses)
+	}
+	if err := coordinator.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertCancelledEstablishmentClean(t *testing.T, root, sessionID string, coordinator *lifecycle.Coordinator) {
 	t.Helper()
 	if sessionID == "" {

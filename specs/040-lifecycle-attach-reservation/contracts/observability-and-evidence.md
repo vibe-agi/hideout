@@ -29,7 +29,8 @@ The lifecycle producer may emit the following bounded kinds:
 
 | Kind | Meaning | Public reason |
 | ------ | --------- | --------------- |
-| `attach-establishment-waiting` | An earlier reconcile owns the fence | `reconciliation-in-progress` |
+| `attach-establishment-waiting` | An earlier reconcile owns the fence | `reconciliation-pending` |
+| `attach-establishment-waiting` | An invoked automatic stop owns the fence | `automatic-stop-pending` |
 | `attach-establishment-reserved` | Reservation inserted | `attach-establishment-in-progress` |
 | `attach-establishment-prepared` | Backend incarnation validated | `attach-establishment-in-progress` |
 | `attach-establishment-promoted` | Registration replaced reservation | empty or `owner-established` |
@@ -43,7 +44,8 @@ do not add a route or client action.
 Public errors/status select from existing lifecycle errors plus bounded
 establishment reasons:
 
-- `reconciliation-in-progress`
+- `reconciliation-pending`
+- `automatic-stop-pending`
 - `destructive-mutation-in-progress`
 - `stop-in-progress`
 - `backend-observation-unproved`

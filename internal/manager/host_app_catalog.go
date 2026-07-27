@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -174,6 +175,10 @@ func manifestSafetyProfile(manifest hostapppack.Manifest, bindings []hostapppack
 }
 
 func (c Core) resolveDeferredHostAppBinding(profileName string, binding hostcap.OpenResourceBinding, forbiddenRoots []string) (hostcap.OpenResourceBinding, error) {
+	return c.resolveDeferredHostAppBindingContext(context.Background(), profileName, binding, forbiddenRoots)
+}
+
+func (c Core) resolveDeferredHostAppBindingContext(ctx context.Context, profileName string, binding hostcap.OpenResourceBinding, forbiddenRoots []string) (hostcap.OpenResourceBinding, error) {
 	if !binding.IdentityDeferred {
 		return binding, nil
 	}
@@ -195,7 +200,7 @@ func (c Core) resolveDeferredHostAppBinding(profileName string, binding hostcap.
 	if err != nil {
 		return binding, err
 	}
-	identities, safetyID, safetyVersion, err := c.resolveManifestIdentities(source.manifest, source.revision.RevisionID, selected, binding.Access, forbiddenRoots)
+	identities, safetyID, safetyVersion, err := c.resolveManifestIdentitiesContext(ctx, source.manifest, source.revision.RevisionID, selected, binding.Access, forbiddenRoots)
 	if err != nil {
 		return binding, err
 	}

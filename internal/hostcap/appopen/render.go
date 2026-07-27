@@ -160,6 +160,12 @@ func (ExecLauncher) Run(ctx context.Context, argv []string, guard LaunchGuard) e
 			return err
 		}
 	}
+	// The guard may perform bounded host identity/trust work. Re-check the
+	// request after it returns so a timed-out broker request can never launch a
+	// delayed host effect.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Launch is a handoff to a host GUI process. The broker request context must
 	// not kill the application after a successful response, but the child still
 	// needs to be reaped when it exits.

@@ -33,9 +33,9 @@ func TestExecDarwinIdentityCommandBoundsOutput(t *testing.T) {
 	}
 }
 
-func TestDarwinIdentityProductionBudgetAllowsGatekeeperSerialization(t *testing.T) {
-	if darwinIdentityCommandTimeout < 30*time.Second {
-		t.Fatalf("production identity timeout=%s, want at least 30s for serialized Gatekeeper assessment", darwinIdentityCommandTimeout)
+func TestDarwinIdentityProductionOperationBudgetAllowsGatekeeperSerialization(t *testing.T) {
+	if darwinIdentityOperationTimeout < 30*time.Second {
+		t.Fatalf("production identity timeout=%s, want at least 30s for serialized Gatekeeper assessment", darwinIdentityOperationTimeout)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestDarwinTrustCacheSkipsOnlyUnchangedFreshSystemAssessment(t *testing.T) {
 	}
 }
 
-func TestObserveDarwinSigningIdentityUsesIndependentPerStepBudgets(t *testing.T) {
+func TestObserveDarwinSigningIdentityUsesOneBoundedOperationBudget(t *testing.T) {
 	runner := func(ctx context.Context, executable string, args ...string) ([]byte, error) {
 		select {
 		case <-time.After(45 * time.Millisecond):
@@ -145,12 +145,13 @@ func TestObserveDarwinSigningIdentityUsesIndependentPerStepBudgets(t *testing.T)
 			return nil, errors.New("unexpected command")
 		}
 	}
-	facts, err := observeDarwinSigningIdentityWithTimeout("/Applications/Test.app", runner, 100*time.Millisecond)
-	if err != nil {
-		t.Fatalf("independent command budgets were consumed cumulatively: %v", err)
+	started := time.Now()
+	_, err := observeDarwinSigningIdentityWithTimeout("/Applications/Test.app", runner, 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("cumulative identity work escaped the operation budget: %v", err)
 	}
-	if !facts.Trusted {
-		t.Fatalf("trust observation did not complete: %+v", facts)
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("identity operation exceeded its bounded deadline: %s", elapsed)
 	}
 }
 

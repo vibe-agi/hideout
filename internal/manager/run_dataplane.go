@@ -203,19 +203,19 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		return RunDataPlane{}, err
 	}
 	hostAppProjection := &hostcap.ProjectionConfig{
-		Platform:           hostcap.CurrentPlatform(),
-		SafeUserDataDir:    safeUserDataDir,
-		Grants:             runProjectionGrantChecker{storeRoot: c.Store.Root, bindings: grantBindings},
-		Launcher:           appopen.ExecLauncher{},
-		Deduper:            newProjectionDeduper(),
-		Bindings:           hostAppBindings,
-		RunID:              runSession.Layout.ID,
-		WorkspaceID:        workspaceAuthority.WorkspaceID,
-		GrantScopeBase:     projectionGrantScopeBase(runSession, workspaceAuthority),
-		ResolveIdentity:    c.hostAppRunBindingIdentityResolver(runSession, workspaceAuthority, hostFSPolicy, hostAppForbiddenRoots),
-		RevalidateIdentity: c.hostAppRunIdentityRevalidator(runSession, workspaceAuthority, hostFSPolicy, hostAppForbiddenRoots),
-		ValidateLifecycle:  hostAppLifecycle,
-		BeginHandoff:       lifecycleEffects.beginHandoff,
+		Platform:                  hostcap.CurrentPlatform(),
+		SafeUserDataDir:           safeUserDataDir,
+		Grants:                    runProjectionGrantChecker{storeRoot: c.Store.Root, bindings: grantBindings},
+		Launcher:                  appopen.ExecLauncher{},
+		Deduper:                   newProjectionDeduper(),
+		Bindings:                  hostAppBindings,
+		RunID:                     runSession.Layout.ID,
+		WorkspaceID:               workspaceAuthority.WorkspaceID,
+		GrantScopeBase:            projectionGrantScopeBase(runSession, workspaceAuthority),
+		ResolveIdentityContext:    c.hostAppRunBindingIdentityResolverContext(runSession, workspaceAuthority, hostFSPolicy, hostAppForbiddenRoots),
+		RevalidateIdentityContext: c.hostAppRunIdentityRevalidatorContext(runSession, workspaceAuthority, hostFSPolicy, hostAppForbiddenRoots),
+		ValidateLifecycle:         hostAppLifecycle,
+		BeginHandoff:              lifecycleEffects.beginHandoff,
 	}
 	adapters, err := cmdadapter.CompileWithResolver(runSession.Plan.RuntimeProfile, runSession.ProfileDir, adapterpack.RuntimeResolver{Store: adapterpack.NewStore(c.Store.Root)})
 	if err != nil {

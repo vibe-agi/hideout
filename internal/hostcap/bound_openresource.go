@@ -48,22 +48,24 @@ type ResourceResolver interface {
 }
 
 type IdentityRevalidator func(ApplicationExpectation, ObservedApplicationIdentity) (ObservedApplicationIdentity, error)
+type ContextIdentityRevalidator func(context.Context, ApplicationExpectation, ObservedApplicationIdentity) (ObservedApplicationIdentity, error)
 
 type BoundOpenContext struct {
-	SessionID          string
-	Profile            string
-	RunID              string
-	WorkspaceID        string
-	Command            string
-	SafeStateBase      string
-	Platform           Platform
-	Resources          ResourceResolver
-	GrantScopeBase     GrantScope
-	Grants             GrantChecker
-	Launcher           appopen.Launcher
-	Deduper            Deduper
-	RevalidateIdentity IdentityRevalidator
-	ValidateLifecycle  func(OpenResourceBinding) error
+	SessionID                 string
+	Profile                   string
+	RunID                     string
+	WorkspaceID               string
+	Command                   string
+	SafeStateBase             string
+	Platform                  Platform
+	Resources                 ResourceResolver
+	GrantScopeBase            GrantScope
+	Grants                    GrantChecker
+	Launcher                  appopen.Launcher
+	Deduper                   Deduper
+	RevalidateIdentity        IdentityRevalidator
+	RevalidateIdentityContext ContextIdentityRevalidator
+	ValidateLifecycle         func(OpenResourceBinding) error
 }
 
 // OpenBoundResource executes only authority already present in binding. There
@@ -158,7 +160,7 @@ func OpenBoundResource(ctx context.Context, binding OpenResourceBinding, request
 		release()
 		return OpenResult{}, preserveCode(err, CodePathNoHostMapping, "resource mapping changed before launch")
 	}
-	if oc.RevalidateIdentity == nil {
+	if oc.RevalidateIdentity == nil && oc.RevalidateIdentityContext == nil {
 		release()
 		return OpenResult{}, &Error{Code: CodeAppIdentityDrift, Reason: "launch-time app identity revalidation is unavailable"}
 	}
@@ -177,7 +179,13 @@ func OpenBoundResource(ctx context.Context, binding OpenResourceBinding, request
 		if err := oc.Resources.RevalidateResource(resource); err != nil {
 			return preserveCode(err, CodePathNoHostMapping, "resource mapping changed at host launch boundary")
 		}
-		latest, err := oc.RevalidateIdentity(binding.Application, identity)
+		var latest ObservedApplicationIdentity
+		var err error
+		if oc.RevalidateIdentityContext != nil {
+			latest, err = oc.RevalidateIdentityContext(ctx, binding.Application, identity)
+		} else {
+			latest, err = oc.RevalidateIdentity(binding.Application, identity)
+		}
 		if err != nil || latest.IdentityDigest() != identity.IdentityDigest() || latest.ExecutablePath != argv[0] {
 			return &Error{Code: CodeAppIdentityDrift, Reason: "host application identity changed at launch boundary"}
 		}

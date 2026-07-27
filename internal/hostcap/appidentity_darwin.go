@@ -17,9 +17,10 @@ const (
 	maxDarwinIdentityCommandOutput = 256 << 10
 	// Gatekeeper serializes some spctl assessments. Under concurrent Lima and
 	// GUI startup load a valid notarized app can exceed ten seconds even though
-	// the same assessment completes immediately afterward. Keep the operation
-	// bounded, but leave enough time for the host trust service to answer.
-	darwinIdentityCommandTimeout = 30 * time.Second
+	// the same assessment completes immediately afterward. Keep the complete
+	// identity observation bounded, but leave enough time for the host trust
+	// service to answer.
+	darwinIdentityOperationTimeout = 30 * time.Second
 	// System policy assessment is materially slower than signature integrity
 	// verification. Cache only a successful assessment for the exact observed
 	// bundle path and signing facts; codesign verify/display still run on every
@@ -92,11 +93,18 @@ func execDarwinIdentityCommand(ctx context.Context, executable string, args ...s
 // service and then reads signing facts. It never accepts a caller-supplied
 // requirement as an authentication anchor.
 func ObserveDarwinSigningIdentity(bundlePath string) (SigningObservation, error) {
-	return observeDarwinSigningIdentityCached(bundlePath, execDarwinIdentityCommand, darwinIdentityCommandTimeout, processDarwinTrustCache, time.Now().UTC())
+	return ObserveDarwinSigningIdentityContext(context.Background(), bundlePath)
+}
+
+// ObserveDarwinSigningIdentityContext binds every codesign and Gatekeeper step
+// to one caller-cancellable operation budget. A slow trust service therefore
+// cannot outlive the broker request and cross the host-effect boundary later.
+func ObserveDarwinSigningIdentityContext(ctx context.Context, bundlePath string) (SigningObservation, error) {
+	return observeDarwinSigningIdentityCachedContext(ctx, bundlePath, execDarwinIdentityCommand, darwinIdentityOperationTimeout, processDarwinTrustCache, time.Now().UTC())
 }
 
 func observeDarwinSigningIdentity(bundlePath string, run darwinIdentityCommandRunner) (SigningObservation, error) {
-	return observeDarwinSigningIdentityWithTimeout(bundlePath, run, darwinIdentityCommandTimeout)
+	return observeDarwinSigningIdentityWithTimeout(bundlePath, run, darwinIdentityOperationTimeout)
 }
 
 func observeDarwinSigningIdentityWithTimeout(bundlePath string, run darwinIdentityCommandRunner, timeout time.Duration) (SigningObservation, error) {
@@ -104,12 +112,24 @@ func observeDarwinSigningIdentityWithTimeout(bundlePath string, run darwinIdenti
 }
 
 func observeDarwinSigningIdentityCached(bundlePath string, run darwinIdentityCommandRunner, timeout time.Duration, cache *darwinTrustCache, now time.Time) (SigningObservation, error) {
+	return observeDarwinSigningIdentityCachedContext(context.Background(), bundlePath, run, timeout, cache, now)
+}
+
+func observeDarwinSigningIdentityCachedContext(parent context.Context, bundlePath string, run darwinIdentityCommandRunner, timeout time.Duration, cache *darwinTrustCache, now time.Time) (SigningObservation, error) {
 	if run == nil {
 		return SigningObservation{}, errors.New("darwin identity command runner is unavailable")
 	}
-	if output, err := runDarwinIdentityStep(run, timeout, "/usr/bin/codesign", "--verify", "--strict", "--all-architectures", bundlePath); err != nil {
+	if timeout <= 0 {
+		return SigningObservation{}, errors.New("darwin identity command timeout must be positive")
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	if output, err := runDarwinIdentityStep(ctx, run, "/usr/bin/codesign", "--verify", "--strict", "--all-architectures", bundlePath); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return SigningObservation{}, errors.New("codesign verification timed out")
+			return SigningObservation{}, fmt.Errorf("codesign verification timed out: %w", context.DeadlineExceeded)
 		}
 		if errors.Is(err, errDarwinIdentityOutputLimit) {
 			return SigningObservation{}, err
@@ -120,10 +140,10 @@ func observeDarwinSigningIdentityCached(bundlePath string, run darwinIdentityCom
 		}
 		return SigningObservation{}, fmt.Errorf("codesign verification failed: %w", err)
 	}
-	output, err := runDarwinIdentityStep(run, timeout, "/usr/bin/codesign", "--display", "--verbose=4", bundlePath)
+	output, err := runDarwinIdentityStep(ctx, run, "/usr/bin/codesign", "--display", "--verbose=4", bundlePath)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return SigningObservation{}, errors.New("codesign identity observation timed out")
+			return SigningObservation{}, fmt.Errorf("codesign identity observation timed out: %w", context.DeadlineExceeded)
 		}
 		return SigningObservation{}, fmt.Errorf("codesign identity observation failed: %w", err)
 	}
@@ -137,14 +157,14 @@ func observeDarwinSigningIdentityCached(bundlePath string, run darwinIdentityCom
 		facts.TrustAnchor = "macos-system-policy"
 		return facts, nil
 	}
-	if _, trustErr := runDarwinIdentityStep(run, timeout, "/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", bundlePath); trustErr == nil {
+	if _, trustErr := runDarwinIdentityStep(ctx, run, "/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", bundlePath); trustErr == nil {
 		facts.Trusted = true
 		facts.TrustAnchor = "macos-system-policy"
 		if cache != nil {
 			cache.remember(trustKey, now)
 		}
 	} else if errors.Is(trustErr, context.DeadlineExceeded) {
-		return SigningObservation{}, errors.New("macOS system trust assessment timed out")
+		return SigningObservation{}, fmt.Errorf("macOS system trust assessment timed out: %w", context.DeadlineExceeded)
 	}
 	return facts, nil
 }
@@ -175,12 +195,10 @@ func (c *darwinTrustCache) remember(key string, now time.Time) {
 	c.entries[key] = now.Add(darwinTrustCacheTTL)
 }
 
-func runDarwinIdentityStep(run darwinIdentityCommandRunner, timeout time.Duration, executable string, args ...string) ([]byte, error) {
-	if timeout <= 0 {
-		return nil, errors.New("darwin identity command timeout must be positive")
+func runDarwinIdentityStep(ctx context.Context, run darwinIdentityCommandRunner, executable string, args ...string) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("darwin identity command context is required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 	output, err := run(ctx, executable, args...)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		return output, context.DeadlineExceeded

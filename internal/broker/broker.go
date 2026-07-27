@@ -46,8 +46,17 @@ const (
 const (
 	clientOpenDefaultTimeout    = 5 * time.Second
 	serverRequestDefaultTimeout = 5 * time.Second
-	hostAppOpenRequestTimeout   = 20 * time.Second
+	hostAppOpenOperationTimeout = 65 * time.Second
+	hostAppOpenResponseTimeout  = 70 * time.Second
+	// HostAppOpenRequestTimeout is the client-side outer budget. The nested
+	// operation/response/client deadlines leave five seconds at each boundary:
+	// at most two 30-second identity observations plus Core work, then response
+	// encoding, then transport delivery. A client cannot abandon a request while
+	// Core still has launch authority.
+	HostAppOpenRequestTimeout = 75 * time.Second
 )
+
+const ActionReadinessProbe = "broker.readiness"
 
 type Endpoint struct {
 	Network string `json:"network"`
@@ -291,7 +300,7 @@ func (s *Server) handle(conn net.Conn) {
 	s.transport.requestParsed.Add(1)
 	requestTimeout := serverRequestTimeout(req)
 	_ = conn.SetDeadline(time.Now().Add(requestTimeout))
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), serverOperationTimeout(req))
 	defer cancel()
 	resp := s.Handle(ctx, req)
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {
@@ -317,7 +326,14 @@ func (s *Server) TransportObservation() TransportObservation {
 
 func serverRequestTimeout(req Request) time.Duration {
 	if req.Action == cmdproxy.ActionHostAppOpenResource {
-		return hostAppOpenRequestTimeout
+		return hostAppOpenResponseTimeout
+	}
+	return serverRequestDefaultTimeout
+}
+
+func serverOperationTimeout(req Request) time.Duration {
+	if req.Action == cmdproxy.ActionHostAppOpenResource {
+		return hostAppOpenOperationTimeout
 	}
 	return serverRequestDefaultTimeout
 }
@@ -349,6 +365,20 @@ func (s *Server) Handle(ctx context.Context, req Request) Response {
 	if !sessionOK || !tokenOK {
 		resp.Stderr = "broker authorization failed"
 		s.emit(req, resp, nil)
+		return resp
+	}
+	if req.Action == ActionReadinessProbe {
+		if req.Subject != "" || req.Command != "" || len(req.Argv) != 0 || req.Route != "" || len(req.Args) != 0 {
+			resp.Status = "bad-request"
+			resp.ExitCode = 2
+			resp.Stderr = "broker readiness request must not carry effect fields"
+			s.emit(req, resp, nil)
+			return resp
+		}
+		resp.Decision = string(policy.Allow)
+		resp.Status = "ok"
+		resp.ExitCode = 0
+		s.emit(req, resp, map[string]any{"scope": "session"})
 		return resp
 	}
 	if !s.CommandRegistry.Empty() && req.Command != "" && (req.Action == cmdproxy.ActionHostOpen || req.Action == cmdproxy.ActionCommandAdapter || req.Action == cmdproxy.ActionHostAppOpenResource) {
@@ -1398,6 +1428,9 @@ func (s *Server) emitPrepared(req Request, resp Response, details map[string]any
 }
 
 func (s *Server) auditEventAction(req Request) string {
+	if req.Action == ActionReadinessProbe {
+		return ActionReadinessProbe
+	}
 	if req.Action == "host.open" {
 		return req.Action
 	}

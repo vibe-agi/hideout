@@ -17,6 +17,18 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 )
 
+const (
+	hostBridgeReadinessBudget         = 2 * time.Second
+	hostBridgeReadinessAttemptTimeout = 250 * time.Millisecond
+	hostBridgeReadinessRetryDelay     = 50 * time.Millisecond
+)
+
+var (
+	errHostBridgeUnavailable = errors.New("host bridge is not ready; no host application was opened; retry the command")
+	errHostBridgeRefused     = errors.New("host bridge readiness was refused; no host application was opened")
+	errHostAppResponseLost   = errors.New("host application response was lost; the application may already be open, so check before retrying")
+)
+
 func main() {
 	os.Exit(run())
 }
@@ -48,6 +60,17 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "hideout-shim: broker environment is missing")
 		return 69
 	}
+	if normalized.Action == cmdproxy.ActionHostAppOpenResource {
+		readinessCtx, cancelReadiness := context.WithTimeout(context.Background(), hostBridgeReadinessBudget)
+		readinessErr := waitForHostBridge(
+			readinessCtx, endpoint, sessionID, token, broker.ClientOpenEndpoint,
+		)
+		cancelReadiness()
+		if readinessErr != nil {
+			fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", readinessErr)
+			return 69
+		}
+	}
 	requestID, err := broker.NewRequestID()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hideout-shim: request id generation failed")
@@ -66,6 +89,10 @@ func run() int {
 		Action:          normalized.Action,
 		Args:            normalized.Payload,
 	})
+	if hostAppResponseLost(normalized.Action, resp) {
+		fmt.Fprintf(os.Stderr, "hideout-shim: %v\n", errHostAppResponseLost)
+		return 69
+	}
 	if resp.Status == "rewrite-guest" {
 		return runRewrite(resp)
 	}
@@ -78,11 +105,51 @@ func run() int {
 	return resp.ExitCode
 }
 
+func hostAppResponseLost(action string, resp broker.Response) bool {
+	return action == cmdproxy.ActionHostAppOpenResource && resp.Status == "broker-unavailable"
+}
+
 func brokerRequestTimeout(action string) time.Duration {
 	if action == cmdproxy.ActionHostAppOpenResource {
-		return 20 * time.Second
+		return broker.HostAppOpenRequestTimeout
 	}
 	return 5 * time.Second
+}
+
+type brokerOpenEndpointFunc func(context.Context, broker.Endpoint, broker.Request) broker.Response
+
+func waitForHostBridge(ctx context.Context, endpoint broker.Endpoint, sessionID, token string, open brokerOpenEndpointFunc) error {
+	if ctx == nil || open == nil {
+		return errHostBridgeUnavailable
+	}
+	for {
+		if ctx.Err() != nil {
+			return errHostBridgeUnavailable
+		}
+		requestID, err := broker.NewRequestID()
+		if err != nil {
+			return errHostBridgeUnavailable
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, hostBridgeReadinessAttemptTimeout)
+		resp := open(attemptCtx, endpoint, broker.Request{
+			ID: requestID, SessionID: sessionID, CapabilityToken: token,
+			Action: broker.ActionReadinessProbe,
+		})
+		cancel()
+		if resp.ID == requestID && resp.Decision == "allow" && resp.Status == "ok" && resp.ExitCode == 0 {
+			return nil
+		}
+		if resp.ID == requestID && resp.Status != "broker-unavailable" {
+			return errHostBridgeRefused
+		}
+		timer := time.NewTimer(hostBridgeReadinessRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errHostBridgeUnavailable
+		case <-timer.C:
+		}
+	}
 }
 
 func runRewrite(resp broker.Response) int {

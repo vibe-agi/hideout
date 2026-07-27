@@ -2,6 +2,7 @@ package appopen
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -130,4 +131,19 @@ func TestExecLauncherHandoffSurvivesBrokerContextCancellation(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("host GUI handoff was killed with the broker request context")
+}
+
+func TestExecLauncherRefusesEffectWhenGuardConsumesRequestDeadline(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "must-not-launch")
+	ctx, cancel := context.WithCancel(context.Background())
+	err := (ExecLauncher{}).Run(ctx, []string{"/usr/bin/touch", marker}, func() error {
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("launcher error=%v want context cancellation", err)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("host effect crossed the cancelled launch guard: %v", statErr)
+	}
 }

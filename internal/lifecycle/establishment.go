@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 )
@@ -30,6 +31,10 @@ type establishment struct {
 }
 
 func (c *Coordinator) ReserveAttach(ctx context.Context, request EstablishmentRequest) (EstablishmentReservation, error) {
+	return c.reserveAttach(ctx, request, true)
+}
+
+func (c *Coordinator) reserveAttach(ctx context.Context, request EstablishmentRequest, shouldWaitForAutomaticStop bool) (EstablishmentReservation, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -39,7 +44,7 @@ func (c *Coordinator) ReserveAttach(ctx context.Context, request EstablishmentRe
 	if !idPattern.MatchString(request.EnvironmentID) || !idPattern.MatchString(request.SessionID) {
 		return nil, errors.New("lifecycle establishment identity is invalid")
 	}
-	waitingEmitted := false
+	waitingReason := ""
 	for {
 		c.mu.Lock()
 		if c.closing || c.closed {
@@ -52,7 +57,7 @@ func (c *Coordinator) ReserveAttach(ctx context.Context, request EstablishmentRe
 			return nil, err
 		}
 		if state.reconciling {
-			if !waitingEmitted {
+			if waitingReason != "reconciliation-pending" {
 				c.emitLocked(Event{
 					EnvironmentID: request.EnvironmentID,
 					Generation:    state.journal.StartGeneration,
@@ -60,7 +65,7 @@ func (c *Coordinator) ReserveAttach(ctx context.Context, request EstablishmentRe
 					ReasonCode:    "reconciliation-pending",
 					At:            c.nowUTC(),
 				})
-				waitingEmitted = true
+				waitingReason = "reconciliation-pending"
 			}
 			done := state.reconcileDone
 			c.mu.Unlock()
@@ -75,6 +80,29 @@ func (c *Coordinator) ReserveAttach(ctx context.Context, request EstablishmentRe
 			reasonCode := state.journal.Reconciliation.ReasonCode
 			c.mu.Unlock()
 			return nil, &AttachBlockedError{ReasonCode: reasonCode}
+		}
+		if state.stopDone != nil && state.journal.StopAttempt != nil &&
+			state.journal.StopAttempt.Mode == "automatic" {
+			if !shouldWaitForAutomaticStop {
+				c.mu.Unlock()
+				return nil, ErrStopInFlight
+			}
+			if waitingReason != "automatic-stop-pending" {
+				c.emitLocked(Event{
+					EnvironmentID: request.EnvironmentID,
+					Generation:    state.journal.StartGeneration,
+					Kind:          "attach-establishment-waiting",
+					ReasonCode:    "automatic-stop-pending",
+					At:            c.nowUTC(),
+				})
+				waitingReason = "automatic-stop-pending"
+			}
+			done := state.stopDone
+			c.mu.Unlock()
+			if err := waitForAutomaticStop(ctx, done); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
 			c.mu.Unlock()
@@ -105,6 +133,19 @@ func (c *Coordinator) ReserveAttach(ctx context.Context, request EstablishmentRe
 		})
 		c.mu.Unlock()
 		return reservation, nil
+	}
+}
+
+func waitForAutomaticStop(ctx context.Context, done <-chan struct{}) error {
+	timer := time.NewTimer(automaticStopAttachWaitLimit)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	case <-timer.C:
+		return ErrStopInFlight
 	}
 }
 

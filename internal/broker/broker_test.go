@@ -24,13 +24,57 @@ import (
 )
 
 func TestServerRequestTimeoutIsExtendedOnlyForHostAppOpen(t *testing.T) {
-	if got := serverRequestTimeout(Request{Action: cmdproxy.ActionHostAppOpenResource}); got != 20*time.Second {
+	if got := serverRequestTimeout(Request{Action: cmdproxy.ActionHostAppOpenResource}); got != 70*time.Second {
 		t.Fatalf("host-app timeout=%s", got)
+	}
+	if got := serverOperationTimeout(Request{Action: cmdproxy.ActionHostAppOpenResource}); got != 65*time.Second {
+		t.Fatalf("host-app operation timeout=%s", got)
 	}
 	for _, action := range []string{"", cmdproxy.ActionHostOpen, cmdproxy.ActionCommandAdapter} {
 		if got := serverRequestTimeout(Request{Action: action}); got != 5*time.Second {
 			t.Fatalf("action %q timeout=%s", action, got)
 		}
+		if got := serverOperationTimeout(Request{Action: action}); got != 5*time.Second {
+			t.Fatalf("action %q operation timeout=%s", action, got)
+		}
+	}
+}
+
+func TestReadinessProbeRequiresExactSessionAuthorityAndPerformsNoHostEffect(t *testing.T) {
+	opener := &recordingOpener{}
+	server := Server{SessionID: "ses_1", Token: "cap_good", Opener: opener}
+	valid := Request{
+		ID: "req_ready", SessionID: "ses_1", CapabilityToken: "cap_good",
+		Action: ActionReadinessProbe,
+	}
+	if resp := server.Handle(context.Background(), valid); resp.ExitCode != 0 || resp.Status != "ok" || resp.Decision != string(policy.Allow) {
+		t.Fatalf("readiness response=%+v", resp)
+	}
+	bad := valid
+	bad.ID = "req_bad"
+	bad.CapabilityToken = "cap_bad"
+	if resp := server.Handle(context.Background(), bad); resp.ExitCode == 0 {
+		t.Fatalf("unauthorized readiness probe passed: %+v", resp)
+	}
+	for name, mutate := range map[string]func(*Request){
+		"subject": func(req *Request) { req.Subject = "effect-subject" },
+		"command": func(req *Request) { req.Command = "code" },
+		"argv":    func(req *Request) { req.Argv = []string{"code", "."} },
+		"route":   func(req *Request) { req.Route = string(policy.HostBroker) },
+		"args":    func(req *Request) { req.Args = map[string]any{"target": "file.txt"} },
+	} {
+		t.Run("rejects_"+name, func(t *testing.T) {
+			contaminated := valid
+			contaminated.ID = "req_contaminated_" + name
+			mutate(&contaminated)
+			resp := server.Handle(context.Background(), contaminated)
+			if resp.ExitCode == 0 || resp.Status != "bad-request" {
+				t.Fatalf("effect-bearing readiness probe passed: %+v", resp)
+			}
+		})
+	}
+	if len(opener.urls) != 0 || len(opener.files) != 0 {
+		t.Fatalf("readiness probe reached a host effect: %+v %+v", opener.urls, opener.files)
 	}
 }
 
