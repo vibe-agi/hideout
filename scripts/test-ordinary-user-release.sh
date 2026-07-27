@@ -137,7 +137,11 @@ for required in \
   }
 done
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ordinary-user-release.XXXXXX")"
+# Release-candidate orchestration already owns a short TMPDIR, but setuppty
+# appends "-interrupt/daemon/hideoutd.sock" below this fixture. Keep the leaf
+# deliberately short so the full Unix socket path remains below macOS
+# UNIX_PATH_MAX even after that suffix is added.
+work="$(mktemp -d "${TMPDIR:-/tmp}/hou.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 if [ -z "$out" ]; then
   retained="$(mktemp -d "${TMPDIR:-/tmp}/hideout-ordinary-user-evidence.XXXXXX")"
@@ -409,7 +413,7 @@ if [ "$mode" = "release-candidate" ]; then
 
   # Exercise setup and installed UI/package lifecycle with a PATH that contains
   # neither Go nor an ambient tun2socks helper.
-  setup_store="$work/setup-store"
+  setup_store="$work/s"
   setup_transcript="$work/setup-transcript.out"
   setuppty="$work/setuppty"
   go build -trimpath -o "$setuppty" ./test/e2e/setuppty

@@ -362,6 +362,15 @@ grep -F 'scripts/test-ordinary-user-release.sh --release-candidate' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'scripts/test-ui-e2e.sh --all --require-executed' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'work="$(mktemp -d "${TMPDIR:-/tmp}/hou.XXXXXX")"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+grep -F 'setup_store="$work/s"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+if grep -F 'hideout-ordinary-user-release.XXXXXX' \
+  scripts/test-ordinary-user-release.sh >/dev/null; then
+  echo "public-alpha-release: ordinary-user setup fixture must preserve the short daemon socket path" >&2
+  exit 1
+fi
 grep -F -- '--url-host 127.0.0.1' scripts/test-gate3-hidden-proxy.sh >/dev/null
 grep -F -- '--map-connect "$mediated_resolver:443=cloudflare-dns.com:443"' \
   scripts/test-gate3-hidden-proxy.sh >/dev/null
