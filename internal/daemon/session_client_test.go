@@ -149,6 +149,28 @@ func TestRunSessionClientRenewsAcrossCredentialRotation(t *testing.T) {
 	}
 }
 
+func TestSessionLeaseTimerHonorsRenewalObservedBeforeExpiryHandling(t *testing.T) {
+	deadline := newSessionLeaseDeadline(time.Millisecond)
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+	<-timer.C
+
+	deadline.renew(50 * time.Millisecond)
+	if !resetSessionLeaseTimer(timer, deadline) {
+		t.Fatal("renewed deadline was treated as expired")
+	}
+	select {
+	case <-timer.C:
+		t.Fatal("renewed lease expired at the old deadline")
+	case <-time.After(10 * time.Millisecond):
+	}
+	select {
+	case <-timer.C:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("renewed lease timer did not expire")
+	}
+}
+
 func TestRunSessionClientRenewsBeforeDelayedStart(t *testing.T) {
 	server, token, fake, _ := newTestSessionServer(t, false)
 	server.leaseDuration = 80 * time.Millisecond

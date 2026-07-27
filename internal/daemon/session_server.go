@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -157,9 +158,10 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 	controls := make(chan backend.RunControl, sessionStreamQueueDepth)
 	inputErr := make(chan error, 1)
 	leaseReset := make(chan struct{}, 1)
+	leaseDeadline := newSessionLeaseDeadline(s.lease())
 	go pumpSessionStdin(runCtx, stdinWriter, stdinQueue)
-	go s.watchSessionLease(runCtx, cancelRun, leaseReset)
-	go s.readSessionInput(runCtx, cancelRun, reader, generation, stdinQueue, controls, stdinWriter, leaseReset, inputErr)
+	go s.watchSessionLease(runCtx, cancelRun, leaseDeadline, leaseReset)
+	go s.readSessionInput(runCtx, cancelRun, reader, generation, stdinQueue, controls, stdinWriter, leaseDeadline, leaseReset, inputErr)
 
 	var readyMu sync.Mutex
 	ready := false
@@ -341,6 +343,7 @@ func (s *sessionServer) readSessionInput(
 	stdinQueue chan<- []byte,
 	controls chan<- backend.RunControl,
 	stdinWriter *io.PipeWriter,
+	leaseDeadline *sessionLeaseDeadline,
 	leaseReset chan<- struct{},
 	errOut chan<- error,
 ) {
@@ -425,6 +428,7 @@ func (s *sessionServer) readSessionInput(
 				return
 			}
 			acceptedGeneration = generation
+			leaseDeadline.renew(s.lease())
 			select {
 			case leaseReset <- struct{}{}:
 			default:
@@ -469,24 +473,70 @@ func sendRunControl(ctx context.Context, controls chan<- backend.RunControl, con
 	}
 }
 
-func (s *sessionServer) watchSessionLease(ctx context.Context, cancel context.CancelFunc, reset <-chan struct{}) {
-	timer := time.NewTimer(s.lease())
+type sessionLeaseDeadline struct {
+	value atomic.Pointer[time.Time]
+}
+
+func newSessionLeaseDeadline(duration time.Duration) *sessionLeaseDeadline {
+	deadline := &sessionLeaseDeadline{}
+	deadline.renew(duration)
+	return deadline
+}
+
+func (d *sessionLeaseDeadline) renew(duration time.Duration) {
+	value := time.Now().Add(duration)
+	d.value.Store(&value)
+}
+
+func (d *sessionLeaseDeadline) remaining() time.Duration {
+	value := d.value.Load()
+	if value == nil {
+		return 0
+	}
+	return time.Until(*value)
+}
+
+func resetSessionLeaseTimer(timer *time.Timer, deadline *sessionLeaseDeadline) bool {
+	remaining := deadline.remaining()
+	if remaining <= 0 {
+		return false
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(remaining)
+	return true
+}
+
+func (s *sessionServer) watchSessionLease(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	deadline *sessionLeaseDeadline,
+	reset <-chan struct{},
+) {
+	timer := time.NewTimer(deadline.remaining())
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+			// A validated renewal may have extended the authoritative deadline
+			// while both the coalesced wakeup and the old timer were ready. Re-read
+			// the deadline before expiring instead of relying on select ordering.
+			if resetSessionLeaseTimer(timer, deadline) {
+				continue
+			}
 			cancel()
 			return
 		case <-reset:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
+			if !resetSessionLeaseTimer(timer, deadline) {
+				cancel()
+				return
 			}
-			timer.Reset(s.lease())
 		}
 	}
 }
