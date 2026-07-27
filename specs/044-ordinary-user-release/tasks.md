@@ -226,6 +226,7 @@ signing, notarization, anonymous download, and publication receipt.
 - [x] T073 [US7] Remove the disposable metadata-checkpoint observer race by freezing the daemon before watcher-owned evidence writes, retaining the durable post-stop assertion, and adding a release-contract line-order guard
 - [x] T074 [US7] Require explicit commit/package/runtime/artifact trust anchors for 044 release completion and pass every retained Gate 2/3, TUI, and WebUI public surface through the exact package-owned redaction boundary
 - [x] T075 [US7] Synchronize strict 036 lifecycle semantic validation with the four 040 attach-reservation checks emitted by the shared real-Gate producer, and replay readiness against retained exact-candidate evidence
+- [x] T076 [US7] Replace the cancellation-wait regression's scheduler sleep with an explicit ReserveAttach entry barrier while preserving the post-cancel two-second return contract
 - [x] T053 [US7] Add stale digest, dirty tree, private/unpushed commit, rebuilt bytes, missing UI, failed/not-run Gate 2/3, signing, notarization, and anonymous-download negative fixtures in `scripts/test-release-readiness.sh`
 - [x] T054 [US7] Run and record all new assertion mutations, judge negative fixtures, fresh-eyes findings, and exact commands/artifacts in `specs/044-ordinary-user-release/acceptance.md`
 

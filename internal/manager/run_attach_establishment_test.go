@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,21 @@ import (
 type cancellingEstablishmentRegistrar struct {
 	inner *lifecycle.Coordinator
 	stage string
+}
+
+type signallingEstablishmentRegistrar struct {
+	inner   lifecycle.Registrar
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (r *signallingEstablishmentRegistrar) ReserveAttach(ctx context.Context, request lifecycle.EstablishmentRequest) (lifecycle.EstablishmentReservation, error) {
+	r.once.Do(func() { close(r.entered) })
+	return r.inner.ReserveAttach(ctx, request)
+}
+
+func (r *signallingEstablishmentRegistrar) BeginAttach(ctx context.Context, request lifecycle.AttachRequest) (lifecycle.Registration, error) {
+	return r.inner.BeginAttach(ctx, request)
 }
 
 func (r *cancellingEstablishmentRegistrar) ReserveAttach(ctx context.Context, request lifecycle.EstablishmentRequest) (lifecycle.EstablishmentReservation, error) {
@@ -165,14 +181,20 @@ func TestApplyRunCancelledReconciliationWaitPublishesNoRuntime(t *testing.T) {
 		err    error
 	}
 	done := make(chan outcome, 1)
+	reserveEntered := make(chan struct{})
+	registrar := &signallingEstablishmentRegistrar{inner: coordinator, entered: reserveEntered}
 	go func() {
 		result, runErr := core.ApplyRun(ctx, plan, ApplyRunOptions{
 			Backend:          &lifecycleApplyBackend{applyRunFakeBackend: &applyRunFakeBackend{name: "lima"}},
-			RequestedBackend: "lima", Lifecycle: coordinator,
+			RequestedBackend: "lima", Lifecycle: registrar,
 		})
 		done <- outcome{result: result, err: runErr}
 	}()
-	time.Sleep(25 * time.Millisecond)
+	select {
+	case <-reserveEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ApplyRun did not enter the reconciliation wait")
+	}
 	cancel()
 	select {
 	case got := <-done:
