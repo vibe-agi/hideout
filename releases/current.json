@@ -1,22 +1,22 @@
 {
   "schema": "hideout.published-release-inventory/v1",
-  "generatedAt": "2026-07-15T04:12:18Z",
+  "generatedAt": "2026-07-27T16:28:22Z",
   "current": {
-    "version": "0.1.0-alpha.1",
-    "tag": "v0.1.0-alpha.1",
+    "version": "0.1.0-alpha.2",
+    "tag": "v0.1.0-alpha.2",
     "maturity": "public-supervised-alpha",
     "platform": "darwin/arm64",
     "backend": "lima",
     "package": {
       "name": "hideout",
-      "productVersion": "0.1.0-alpha.1",
-      "sourceCommit": "fc56288138d320d93032e528788b6ac3f3f81634",
-      "artifactSHA256": "9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4",
+      "productVersion": "0.1.0-alpha.2",
+      "sourceCommit": "9f8f9d81ca7178ccf1e91c6e5a50cf29b3c3b8a5",
+      "artifactSHA256": "464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76",
       "hostOS": "darwin",
       "hostArch": "arm64"
     },
-    "releaseURL": "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1",
-    "receiptSHA256": "460dee78d079ae420d2c9560033467ce889a8c4d99d2937defefaad9517dff0b",
+    "releaseURL": "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2",
+    "receiptSHA256": "ca9ef61a9dc9d1e4096126e3c9b2c2e84a6d9c57c93070c8590b3fa5560671c6",
     "supportMatrix": "2026-07-alpha",
     "nonClaims": [
       "guest-root-containment",
@@ -28,7 +28,10 @@
       "public-alpha-maturity",
       "runtime-freshness",
       "privacy-prerequisites",
-      "ui-maturity"
+      "ui-maturity",
+      "cross-workspace-shared-vm",
+      "automatic-stop-cleanup",
+      "terminal-emulator-hardening"
     ]
   }
 }

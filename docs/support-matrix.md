@@ -17,9 +17,9 @@ The Go source in `internal/releasecompat` is authoritative. This Markdown file
 exists so operators can inspect the early-alpha contract without reading code.
 
 <!-- hideout-public-release:start -->
-Current published package: [v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1), public supervised alpha for
+Current published package: [v0.1.0-alpha.2](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2), public supervised alpha for
 `darwin/arm64` with `backend/lima`. The release package SHA-256 is
-`9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`; `releases/current.json` is the machine-readable source.
+`464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76`; `releases/current.json` is the machine-readable source.
 <!-- hideout-public-release:end -->
 
 Supported macOS installation uses the official Homebrew tap:

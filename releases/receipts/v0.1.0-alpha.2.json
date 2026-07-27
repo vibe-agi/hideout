@@ -1,0 +1,48 @@
+{
+  "schema": "hideout.publication-receipt/v1",
+  "status": "public-verified",
+  "observedAt": "2026-07-27T16:28:22Z",
+  "version": "0.1.0-alpha.2",
+  "tag": "v0.1.0-alpha.2",
+  "sourceCommit": "9f8f9d81ca7178ccf1e91c6e5a50cf29b3c3b8a5",
+  "releaseId": 359952220,
+  "url": "https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2",
+  "prerelease": true,
+  "immutable": true,
+  "package": {
+    "name": "hideout",
+    "productVersion": "0.1.0-alpha.2",
+    "sourceCommit": "9f8f9d81ca7178ccf1e91c6e5a50cf29b3c3b8a5",
+    "artifactSHA256": "464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76",
+    "hostOS": "darwin",
+    "hostArch": "arm64"
+  },
+  "evidenceSHA256": "c09c4472a174e2f4ded13137402ab6910350ba670207d1d8a49febd4745d352a",
+  "assets": [
+    {
+      "name": "SHA256SUMS",
+      "bytes": 316,
+      "apiSHA256": "53b7fb403cf7507f7fb3f6e90093588ca104c411abe07a44453966a46f3025a6",
+      "downloadSHA256": "53b7fb403cf7507f7fb3f6e90093588ca104c411abe07a44453966a46f3025a6"
+    },
+    {
+      "name": "hideout-v0.1.0-alpha.2-darwin-arm64.tar.gz",
+      "bytes": 61394127,
+      "apiSHA256": "464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76",
+      "downloadSHA256": "464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76"
+    },
+    {
+      "name": "hideout-v0.1.0-alpha.2-evidence.tar.gz",
+      "bytes": 69010,
+      "apiSHA256": "c09c4472a174e2f4ded13137402ab6910350ba670207d1d8a49febd4745d352a",
+      "downloadSHA256": "c09c4472a174e2f4ded13137402ab6910350ba670207d1d8a49febd4745d352a"
+    },
+    {
+      "name": "hideout-v0.1.0-alpha.2-release.json",
+      "bytes": 2685,
+      "apiSHA256": "2c0cdee3d77ffd7238f2e7b356b765d288a28fc967cf60ec5c68578711e3b337",
+      "downloadSHA256": "2c0cdee3d77ffd7238f2e7b356b765d288a28fc967cf60ec5c68578711e3b337"
+    }
+  ],
+  "proofStatus": "satisfied"
+}
