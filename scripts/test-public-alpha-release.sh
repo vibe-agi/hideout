@@ -370,11 +370,29 @@ grep -F 'package_ui_raw="$work/package-ui.raw"' \
   scripts/test-ordinary-user-release.sh >/dev/null
 grep -F 'redact-public-evidence --input "$package_ui_raw"' \
   scripts/test-ordinary-user-release.sh >/dev/null
+grep -F -- '--input "$gate2_evidence" --out "$gate2_public"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+grep -F -- '--input "$gate3_evidence" --out "$gate3_public"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+grep -F -- '--input "$gate3_log" --out "$gate3_public_log"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+grep -F -- '--input "$work/package-tui.out" --out "$tui_public"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
 grep -F 'rm -f "$package_ui_raw"' \
   scripts/test-ordinary-user-release.sh >/dev/null
 if grep -F '"$installed_prefix/bin/hideout" ui --print-url >"$work/package-ui.out"' \
     scripts/test-ordinary-user-release.sh >/dev/null; then
   echo "public-alpha-release: raw WebUI operator token must not enter retained evidence" >&2
+  exit 1
+fi
+if grep -F 'retain_artifact "$gate3_log" gate3.out' \
+    scripts/test-ordinary-user-release.sh >/dev/null; then
+  echo "public-alpha-release: raw Gate 3 log must not enter retained evidence" >&2
+  exit 1
+fi
+if grep -E 'retain_artifact "\$(gate2_evidence|gate3_evidence)"|retain_artifact "\$work/package-tui\.out"' \
+    scripts/test-ordinary-user-release.sh >/dev/null; then
+  echo "public-alpha-release: raw gate or TUI artifact must not enter retained evidence" >&2
   exit 1
 fi
 disposal_stop_line="$(grep -n 'os.kill(daemon_pid, signal.SIGSTOP)' \

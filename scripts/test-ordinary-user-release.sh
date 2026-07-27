@@ -496,12 +496,28 @@ if [ "$mode" = "release-candidate" ]; then
     exit 1
   fi
 
-  gate2_rel="$(retain_artifact "$gate2_evidence" gate2.json)"
-  gate3_rel="$(retain_artifact "$gate3_evidence" gate3.json)"
-  gate3_log_rel="$(retain_artifact "$gate3_log" gate3.out)"
+  gate2_public="$work/gate2-public.json"
+  gate3_public="$work/gate3-public.json"
+  gate3_public_log="$work/gate3-public.out"
+  tui_public="$work/package-tui-public.out"
+  "$support_bin" support release redact-public-evidence \
+    --input "$gate2_evidence" --out "$gate2_public" \
+    >"$work/gate2-public-redaction.json"
+  "$support_bin" support release redact-public-evidence \
+    --input "$gate3_evidence" --out "$gate3_public" \
+    >"$work/gate3-summary-public-redaction.json"
+  "$support_bin" support release redact-public-evidence \
+    --input "$gate3_log" --out "$gate3_public_log" \
+    >"$work/gate3-log-public-redaction.json"
+  "$support_bin" support release redact-public-evidence \
+    --input "$work/package-tui.out" --out "$tui_public" \
+    >"$work/package-tui-public-redaction.json"
+  gate2_rel="$(retain_artifact "$gate2_public" gate2.json)"
+  gate3_rel="$(retain_artifact "$gate3_public" gate3.json)"
+  gate3_log_rel="$(retain_artifact "$gate3_public_log" gate3.out)"
   clean_install_rel="$(retain_artifact "$clean_install" clean-install.json)"
   ui_rel="$(retain_artifact "$ui_evidence" ui-evidence.json)"
-  tui_rel="$(retain_artifact "$work/package-tui.out" package-tui.out)"
+  tui_rel="$(retain_artifact "$tui_public" package-tui.out)"
   webui_rel="$(retain_artifact "$work/package-ui.out" package-ui.out)"
   signing_rel="$(retain_artifact "$signing_observation" signing-observation.json)"
   notarization_rel="$(retain_artifact "$notarization_observation" notarization-observation.json)"

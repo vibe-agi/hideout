@@ -224,6 +224,7 @@ signing, notarization, anonymous download, and publication receipt.
 - [x] T071 [US7] Reproduce orphan-daemon audit growth after runtime deletion; bind credential rotation to the original runtime-directory identity, self-stop on loss/replacement, back off transient failures, and add deterministic fault-injection tests
 - [x] T072 [US7] Prevent the exact-package WebUI operator token from entering retained public evidence by exercising the package-owned redaction boundary, deleting the raw URL after daemon shutdown, and adding a release-contract regression guard
 - [x] T073 [US7] Remove the disposable metadata-checkpoint observer race by freezing the daemon before watcher-owned evidence writes, retaining the durable post-stop assertion, and adding a release-contract line-order guard
+- [x] T074 [US7] Require explicit commit/package/runtime/artifact trust anchors for 044 release completion and pass every retained Gate 2/3, TUI, and WebUI public surface through the exact package-owned redaction boundary
 - [x] T053 [US7] Add stale digest, dirty tree, private/unpushed commit, rebuilt bytes, missing UI, failed/not-run Gate 2/3, signing, notarization, and anonymous-download negative fixtures in `scripts/test-release-readiness.sh`
 - [x] T054 [US7] Run and record all new assertion mutations, judge negative fixtures, fresh-eyes findings, and exact commands/artifacts in `specs/044-ordinary-user-release/acceptance.md`
 

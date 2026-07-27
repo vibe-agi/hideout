@@ -61,7 +61,7 @@ func TestRequire044ReleaseCompleteRejectsMissingRealPrivacyProof(t *testing.T) {
 		}
 	}
 	manifest := aggregateTestManifest(t, filtered...)
-	err := Require044ReleaseComplete(manifest)
+	err := Require044ReleaseComplete(manifest, EvaluationOptions{})
 	if err == nil || !strings.Contains(err.Error(), Proof044RealGate3Privacy) {
 		t.Fatalf("missing privacy proof error=%v", err)
 	}
@@ -76,7 +76,7 @@ func TestRequire044ReleaseCompleteRejectsMissingUIProof(t *testing.T) {
 		}
 	}
 	manifest := aggregateTestManifest(t, filtered...)
-	err := Require044ReleaseComplete(manifest)
+	err := Require044ReleaseComplete(manifest, EvaluationOptions{})
 	if err == nil || !strings.Contains(err.Error(), Proof044PackageUI) {
 		t.Fatalf("missing UI proof error=%v", err)
 	}
@@ -91,7 +91,7 @@ func TestRequire044PublicCompleteRejectsMissingReceipt(t *testing.T) {
 		}
 	}
 	manifest := aggregateTestManifest(t, filtered...)
-	err := Require044PublicComplete(manifest)
+	err := Require044PublicComplete(manifest, EvaluationOptions{})
 	if err == nil || !strings.Contains(err.Error(), Proof044PublicReceipt) {
 		t.Fatalf("missing public receipt proof error=%v", err)
 	}

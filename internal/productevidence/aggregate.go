@@ -169,12 +169,24 @@ func Require044TargetedComplete(manifest Manifest) error {
 	return requireFeatureComplete(manifest, Feature044, RequiredForTargetedCompletion)
 }
 
-func Require044ReleaseComplete(manifest Manifest) error {
-	return requireFeatureComplete(manifest, Feature044, RequiredForReleaseCandidate)
+func Require044ReleaseComplete(manifest Manifest, opts EvaluationOptions) error {
+	opts.Requirements = RequirementsForFeature(Feature044)
+	opts.Target = RequiredForReleaseCandidate
+	report, err := EvaluateManifest(manifest, opts)
+	if err != nil {
+		return err
+	}
+	return report.RequireSatisfied()
 }
 
-func Require044PublicComplete(manifest Manifest) error {
-	return requireFeatureComplete(manifest, Feature044, RequiredForPublicRelease)
+func Require044PublicComplete(manifest Manifest, opts EvaluationOptions) error {
+	opts.Requirements = RequirementsForFeature(Feature044)
+	opts.Target = RequiredForPublicRelease
+	report, err := EvaluateManifest(manifest, opts)
+	if err != nil {
+		return err
+	}
+	return report.RequireSatisfied()
 }
 
 func requireFeatureComplete(manifest Manifest, featureID, target string) error {
