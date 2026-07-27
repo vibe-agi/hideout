@@ -1,0 +1,22 @@
+{
+  "schema": "hideout.public-alpha-promotion-request/v1",
+  "tag": "v0.1.0-alpha.2",
+  "version": "0.1.0-alpha.2",
+  "sourceCommit": "9f8f9d81ca7178ccf1e91c6e5a50cf29b3c3b8a5",
+  "releaseId": 359952220,
+  "cleanup": {
+    "schema": "hideout.public-alpha-cleanup/v1",
+    "status": "passed",
+    "candidatePathProcessesTerminated": 0,
+    "candidatePathProcessesRetained": 0,
+    "candidateLimaProcessesRetained": 0,
+    "candidateBrowserProcessesRetained": 0,
+    "candidateTemporaryRootsRetained": 0,
+    "candidateSecretBearingStateRetained": 0
+  },
+  "assets": {
+    "packageSHA256": "464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76",
+    "evidenceSHA256": "c09c4472a174e2f4ded13137402ab6910350ba670207d1d8a49febd4745d352a",
+    "releaseManifestSHA256": "2c0cdee3d77ffd7238f2e7b356b765d288a28fc967cf60ec5c68578711e3b337"
+  }
+}
