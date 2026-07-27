@@ -5,6 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/gate-result.sh"
 . "$ROOT/scripts/lib/release-candidate-source.sh"
+. "$ROOT/scripts/lib/release-runtime-path.sh"
 
 usage() {
   cat <<'USAGE'
@@ -414,12 +415,13 @@ if [ "$mode" = "release-candidate" ]; then
   go build -trimpath -o "$setuppty" ./test/e2e/setuppty
   runtime_bin="$work/runtime-bin"
   mkdir -p "$runtime_bin"
+  release_install_go_tripwire "$runtime_bin"
   if command -v limactl >/dev/null 2>&1; then
     ln -s "$(command -v limactl)" "$runtime_bin/limactl"
   fi
   runtime_path="$runtime_bin:/usr/bin:/bin:/usr/sbin:/sbin"
-  if PATH="$runtime_path" command -v go >/dev/null 2>&1; then
-    echo "ordinary-user-release: sanitized package PATH still contains Go" >&2
+  if [ "$(PATH="$runtime_path" command -v go)" != "$runtime_bin/go" ]; then
+    echo "ordinary-user-release: Go tripwire does not own the sanitized package PATH" >&2
     exit 1
   fi
   (
@@ -465,6 +467,10 @@ if [ "$mode" = "release-candidate" ]; then
     echo "ordinary-user-release: normal exact-package uninstall removed durable state" >&2
     exit 1
   }
+  if release_go_tripwire_invoked "$runtime_bin"; then
+    echo "ordinary-user-release: exact-package journey invoked ambient Go" >&2
+    exit 1
+  fi
 
   gate2_rel="$(retain_artifact "$gate2_evidence" gate2.json)"
   gate3_rel="$(retain_artifact "$gate3_evidence" gate3.json)"

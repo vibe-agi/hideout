@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/release-candidate-source.sh"
+. "$ROOT/scripts/lib/release-runtime-path.sh"
 
 usage() {
   cat <<'USAGE'
@@ -117,6 +118,18 @@ run_negative_fixtures() {
 
   fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-source-fixtures.XXXXXX")"
   trap 'rm -rf "$fixture_root"' RETURN
+  tripwire_bin="$fixture_root/tripwire-bin"
+  release_install_go_tripwire "$tripwire_bin"
+  [ "$(PATH="$tripwire_bin:/usr/bin:/bin:/usr/sbin:/sbin" command -v go)" = "$tripwire_bin/go" ]
+  if PATH="$tripwire_bin:/usr/bin:/bin:/usr/sbin:/sbin" go >/dev/null 2>&1; then
+    echo "release-readiness: Go tripwire unexpectedly succeeded" >&2
+    return 1
+  fi
+  release_go_tripwire_invoked "$tripwire_bin" || {
+    echo "release-readiness: Go tripwire invocation was not retained" >&2
+    return 1
+  }
+
   printf '{"source":{"dirty":false}}\n' >"$fixture_root/clean-manifest.json"
   printf '{"source":{"dirty":true}}\n' >"$fixture_root/dirty-manifest.json"
   printf '{"source":{"dirty":"false"}}\n' >"$fixture_root/invalid-manifest.json"
