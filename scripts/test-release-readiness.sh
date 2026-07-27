@@ -117,6 +117,21 @@ run_negative_fixtures() {
 
   fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-source-fixtures.XXXXXX")"
   trap 'rm -rf "$fixture_root"' RETURN
+  printf '{"source":{"dirty":false}}\n' >"$fixture_root/clean-manifest.json"
+  printf '{"source":{"dirty":true}}\n' >"$fixture_root/dirty-manifest.json"
+  printf '{"source":{"dirty":"false"}}\n' >"$fixture_root/invalid-manifest.json"
+  printf '{"source":{}}\n' >"$fixture_root/missing-manifest.json"
+  [ "$(release_candidate_manifest_dirty "$fixture_root/clean-manifest.json")" = "false" ]
+  [ "$(release_candidate_manifest_dirty "$fixture_root/dirty-manifest.json")" = "true" ]
+  if release_candidate_manifest_dirty "$fixture_root/invalid-manifest.json" >/dev/null 2>&1; then
+    echo "release-readiness: non-boolean package source.dirty was accepted" >&2
+    return 1
+  fi
+  if release_candidate_manifest_dirty "$fixture_root/missing-manifest.json" >/dev/null 2>&1; then
+    echo "release-readiness: missing package source.dirty was accepted" >&2
+    return 1
+  fi
+
   remote="$fixture_root/origin.git"
   repository="$fixture_root/candidate"
   git init --bare "$remote" >/dev/null

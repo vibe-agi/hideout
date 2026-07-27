@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/gate-result.sh"
+. "$ROOT/scripts/lib/release-candidate-source.sh"
 
 usage() {
   cat <<'USAGE'
@@ -336,7 +337,7 @@ package_json="null"
 if [ "$mode" = "release-candidate" ]; then
   package_manifest="$package_root/package-manifest.json"
   candidate_commit="$(jq -er '.source.commit' "$package_manifest")"
-  candidate_dirty="$(jq -er '.source.dirty' "$package_manifest")"
+  candidate_dirty="$(release_candidate_manifest_dirty "$package_manifest")"
   candidate_version="$(jq -er '.release.productVersion' "$package_manifest")"
   candidate_os="$(jq -er '.target.hostOS' "$package_manifest")"
   candidate_arch="$(jq -er '.target.hostArch' "$package_manifest")"

@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 
+# Read a boolean package provenance field without treating the required clean
+# value, false, as jq's command failure status.
+release_candidate_manifest_dirty() {
+  local manifest="$1"
+
+  jq -er '
+    .source.dirty |
+    if type == "boolean" then tostring
+    else error("package manifest source.dirty must be boolean")
+    end
+  ' "$manifest"
+}
+
 # Validate that one exact source commit is both the clean checkout being tested
 # and already reachable from the public release branch. This helper performs no
 # fetch: callers must decide when remote state is fresh enough for promotion.
