@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,6 +254,34 @@ func TestCredentialManagerFailedRewriteDoesNotAdvanceState(t *testing.T) {
 	}
 	if m.Generation() != 1 || m.Token() != token || !m.Validate(token) {
 		t.Fatal("failed rewrite changed in-memory credential state")
+	}
+}
+
+func TestCredentialManagerRejectsReplacedRuntimeDirectory(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "daemon")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m, err := newCredentialManager(dir, time.Hour, time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := m.Token()
+	if err := os.Rename(dir, dir+".replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Rotate(); !errors.Is(err, errCredentialRuntimeUnavailable) {
+		t.Fatalf("rotation over replaced runtime directory error=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, tokenName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement runtime directory received a token: %v", err)
+	}
+	if m.Generation() != 1 || m.Token() != token {
+		t.Fatal("rejected runtime directory replacement changed credential state")
 	}
 }
 

@@ -24,6 +24,11 @@ import (
 const (
 	lockName  = "daemon.lock"
 	auditName = "daemon-audit.jsonl"
+
+	credentialRuntimeCheckInterval   = time.Second
+	credentialRotationRetryMin       = time.Second
+	credentialRotationRetryMax       = time.Minute
+	credentialRuntimeShutdownTimeout = 10 * time.Second
 )
 
 // errAlreadyRunning is returned when a live daemon already serves the store.
@@ -585,18 +590,59 @@ func (d *Daemon) startHostFSWriteTimeoutWorker() {
 func (d *Daemon) startCredentialRotation() {
 	go func() {
 		defer close(d.credentialDone)
+		var retryDelay time.Duration
+		var retryAt time.Time
 		for {
-			wait := time.Until(d.credentials.RotateAt())
+			nextAttempt := d.credentials.RotateAt()
+			if !retryAt.IsZero() {
+				nextAttempt = retryAt
+			}
+			wait := time.Until(nextAttempt)
+			if wait > credentialRuntimeCheckInterval {
+				wait = credentialRuntimeCheckInterval
+			}
 			if wait < time.Millisecond {
 				wait = time.Millisecond
 			}
 			timer := time.NewTimer(wait)
 			select {
 			case <-timer.C:
+				if !d.credentials.runtimeDirectoryAvailable() {
+					d.audit.record("daemon.credential.rotate", "deny", map[string]any{
+						"reason": "credential runtime directory unavailable",
+					})
+					d.stopAfterCredentialRuntimeLoss()
+					return
+				}
+				if !retryAt.IsZero() && time.Now().Before(retryAt) {
+					continue
+				}
 				if rotated, err := d.credentials.RotateIfDue(); err != nil {
-					d.audit.record("daemon.credential.rotate", "deny", map[string]any{"reason": "credential rotation failed"})
+					reason := "credential rotation failed"
+					if errors.Is(err, errCredentialRuntimeUnavailable) {
+						reason = "credential runtime directory unavailable"
+					}
+					d.audit.record("daemon.credential.rotate", "deny", map[string]any{"reason": reason})
+					if errors.Is(err, errCredentialRuntimeUnavailable) {
+						d.stopAfterCredentialRuntimeLoss()
+						return
+					}
+					if retryDelay == 0 {
+						retryDelay = credentialRotationRetryMin
+					} else {
+						retryDelay *= 2
+						if retryDelay > credentialRotationRetryMax {
+							retryDelay = credentialRotationRetryMax
+						}
+					}
+					retryAt = time.Now().Add(retryDelay)
 				} else if rotated {
+					retryDelay = 0
+					retryAt = time.Time{}
 					d.audit.record("daemon.credential.rotate", "allow", map[string]any{"generation": d.credentials.Generation()})
+				} else {
+					retryDelay = 0
+					retryAt = time.Time{}
 				}
 			case <-d.credentialStop:
 				if !timer.Stop() {
@@ -608,5 +654,15 @@ func (d *Daemon) startCredentialRotation() {
 				return
 			}
 		}
+	}()
+}
+
+// stopAfterCredentialRuntimeLoss leaves the rotation worker before Stop waits
+// for credentialDone, avoiding a self-deadlock during ordered shutdown.
+func (d *Daemon) stopAfterCredentialRuntimeLoss() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), credentialRuntimeShutdownTimeout)
+		defer cancel()
+		_ = d.Stop(ctx)
 	}()
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // T007: single-instance lifecycle — start, status, second start refused, ordered
@@ -109,4 +111,58 @@ func TestDaemonStopClosesProcessScopedBackendResourcesOnce(t *testing.T) {
 	if closed != 1 {
 		t.Fatalf("backend shutdown calls=%d want 1", closed)
 	}
+}
+
+func TestDaemonStopsWhenCredentialRuntimeDirectoryDisappears(t *testing.T) {
+	store := testStore(t)
+	d, err := Start(Options{Store: store, TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+	if err := os.RemoveAll(d.RuntimeDir()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-d.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop after its credential runtime directory disappeared")
+	}
+}
+
+func TestDaemonBacksOffTransientCredentialRotationFailure(t *testing.T) {
+	store := testStore(t)
+	d, err := Start(Options{Store: store, TTL: 25 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+	tokenPath := filepath.Join(d.RuntimeDir(), tokenName)
+	if err := os.Remove(tokenPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(tokenPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	auditPath := filepath.Join(d.RuntimeDir(), auditName)
+	deadline := time.Now().Add(time.Second)
+	for credentialRotationAuditCount(t, auditPath) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("credential rotation failure was not audited")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := credentialRotationAuditCount(t, auditPath); got != 1 {
+		t.Fatalf("credential rotation failures=%d want=1 during initial retry backoff", got)
+	}
+}
+
+func credentialRotationAuditCount(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(data), `"action":"daemon.credential.rotate"`)
 }

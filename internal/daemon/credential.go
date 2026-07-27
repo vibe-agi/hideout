@@ -4,11 +4,14 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/manager"
 )
+
+var errCredentialRuntimeUnavailable = errors.New("daemon credential runtime directory is unavailable")
 
 // credentialManager owns the rotating daemon operator credential. Only the
 // current raw token is retained so it can be returned to local daemon wiring;
@@ -16,10 +19,11 @@ import (
 type credentialManager struct {
 	mu sync.RWMutex
 
-	runtimeDir string
-	ttl        time.Duration
-	grace      time.Duration
-	now        func() time.Time
+	runtimeDir     string
+	runtimeDirInfo os.FileInfo
+	ttl            time.Duration
+	grace          time.Duration
+	now            func() time.Time
 
 	currentToken string
 	currentHash  [sha256.Size]byte
@@ -54,17 +58,22 @@ func newCredentialManager(runtimeDir string, ttl, grace time.Duration, now func(
 	if err != nil {
 		return nil, err
 	}
+	runtimeDirInfo, err := os.Lstat(runtimeDir)
+	if err != nil || !runtimeDirInfo.IsDir() {
+		return nil, errCredentialRuntimeUnavailable
+	}
 	issuedAt := now().UTC()
 	return &credentialManager{
-		runtimeDir:   runtimeDir,
-		ttl:          ttl,
-		grace:        grace,
-		now:          now,
-		currentToken: token,
-		currentHash:  sha256.Sum256([]byte(token)),
-		issuedAt:     issuedAt,
-		rotateAt:     issuedAt.Add(ttl),
-		generation:   1,
+		runtimeDir:     runtimeDir,
+		runtimeDirInfo: runtimeDirInfo,
+		ttl:            ttl,
+		grace:          grace,
+		now:            now,
+		currentToken:   token,
+		currentHash:    sha256.Sum256([]byte(token)),
+		issuedAt:       issuedAt,
+		rotateAt:       issuedAt.Add(ttl),
+		generation:     1,
 	}, nil
 }
 
@@ -112,7 +121,15 @@ func (m *credentialManager) RotateIfDue() (bool, error) {
 	return err == nil, err
 }
 
+func (m *credentialManager) runtimeDirectoryAvailable() bool {
+	runtimeDirInfo, err := os.Lstat(m.runtimeDir)
+	return err == nil && runtimeDirInfo.IsDir() && os.SameFile(m.runtimeDirInfo, runtimeDirInfo)
+}
+
 func (m *credentialManager) rotateLocked(now time.Time) (string, error) {
+	if !m.runtimeDirectoryAvailable() {
+		return "", errCredentialRuntimeUnavailable
+	}
 	token, err := manager.NewUIToken()
 	if err != nil {
 		return "", err
