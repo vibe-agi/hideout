@@ -19,3 +19,9 @@ release_go_tripwire_invoked() {
 
   [ -e "$bin_dir/go.invoked" ]
 }
+
+release_clear_go_tripwire() {
+  local bin_dir="$1"
+
+  rm -f "$bin_dir/go.invoked"
+}

@@ -420,10 +420,15 @@ if [ "$mode" = "release-candidate" ]; then
     ln -s "$(command -v limactl)" "$runtime_bin/limactl"
   fi
   runtime_path="$runtime_bin:/usr/bin:/bin:/usr/sbin:/sbin"
-  if [ "$(PATH="$runtime_path" command -v go)" != "$runtime_bin/go" ]; then
+  if env PATH="$runtime_path" go >/dev/null 2>&1; then
+    echo "ordinary-user-release: Go tripwire unexpectedly succeeded" >&2
+    exit 1
+  fi
+  if ! release_go_tripwire_invoked "$runtime_bin"; then
     echo "ordinary-user-release: Go tripwire does not own the sanitized package PATH" >&2
     exit 1
   fi
+  release_clear_go_tripwire "$runtime_bin"
   (
     cd "$work"
     env PATH="$runtime_path" "$setuppty" \

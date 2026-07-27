@@ -120,8 +120,7 @@ run_negative_fixtures() {
   trap 'rm -rf "$fixture_root"' RETURN
   tripwire_bin="$fixture_root/tripwire-bin"
   release_install_go_tripwire "$tripwire_bin"
-  [ "$(PATH="$tripwire_bin:/usr/bin:/bin:/usr/sbin:/sbin" command -v go)" = "$tripwire_bin/go" ]
-  if PATH="$tripwire_bin:/usr/bin:/bin:/usr/sbin:/sbin" go >/dev/null 2>&1; then
+  if env PATH="$tripwire_bin:/usr/bin:/bin:/usr/sbin:/sbin" go >/dev/null 2>&1; then
     echo "release-readiness: Go tripwire unexpectedly succeeded" >&2
     return 1
   fi
@@ -129,6 +128,11 @@ run_negative_fixtures() {
     echo "release-readiness: Go tripwire invocation was not retained" >&2
     return 1
   }
+  release_clear_go_tripwire "$tripwire_bin"
+  if release_go_tripwire_invoked "$tripwire_bin"; then
+    echo "release-readiness: Go tripwire invocation was not cleared" >&2
+    return 1
+  fi
 
   printf '{"source":{"dirty":false}}\n' >"$fixture_root/clean-manifest.json"
   printf '{"source":{"dirty":true}}\n' >"$fixture_root/dirty-manifest.json"
