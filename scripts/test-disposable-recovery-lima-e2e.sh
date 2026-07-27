@@ -453,10 +453,14 @@ while time.monotonic() < deadline:
                 time.sleep(0.001)
         if not matched:
             continue
+        # Freeze the product before the watcher performs any of its own file
+        # writes. In particular, metadata-cleaning is followed immediately by
+        # journal removal; writing the snapshot first can let the product move
+        # past the exact durable checkpoint that was just observed.
+        os.kill(daemon_pid, signal.SIGSTOP)
         with open(snapshot, "w", encoding="utf-8") as handle:
             json.dump(record, handle, separators=(",", ":"))
             handle.write("\n")
-        os.kill(daemon_pid, signal.SIGSTOP)
         with open(marker, "w", encoding="utf-8") as handle:
             json.dump({
                 "environmentId": environment_id,

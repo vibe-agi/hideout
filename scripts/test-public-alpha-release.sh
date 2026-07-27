@@ -377,6 +377,15 @@ if grep -F '"$installed_prefix/bin/hideout" ui --print-url >"$work/package-ui.ou
   echo "public-alpha-release: raw WebUI operator token must not enter retained evidence" >&2
   exit 1
 fi
+disposal_stop_line="$(grep -n 'os.kill(daemon_pid, signal.SIGSTOP)' \
+  scripts/test-disposable-recovery-lima-e2e.sh | cut -d: -f1)"
+disposal_snapshot_line="$(grep -n 'with open(snapshot, "w", encoding="utf-8")' \
+  scripts/test-disposable-recovery-lima-e2e.sh | cut -d: -f1)"
+if [ -z "$disposal_stop_line" ] || [ -z "$disposal_snapshot_line" ] ||
+    [ "$disposal_stop_line" -ge "$disposal_snapshot_line" ]; then
+  echo "public-alpha-release: disposable checkpoint watcher must freeze before retaining evidence" >&2
+  exit 1
+fi
 if grep -F 'hideout-ordinary-user-release.XXXXXX' \
   scripts/test-ordinary-user-release.sh >/dev/null; then
   echo "public-alpha-release: ordinary-user setup fixture must preserve the short daemon socket path" >&2
