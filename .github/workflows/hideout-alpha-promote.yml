@@ -370,6 +370,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add releases/current.json "releases/receipts/${PUBLIC_ALPHA_TAG}.json" \
+            "releases/formulas/${PUBLIC_ALPHA_TAG}.rb" packaging/homebrew/hideout.rb \
             README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md
           git commit -m "docs: publish ${PUBLIC_ALPHA_TAG} verified release truth"
           gh auth setup-git

@@ -1,5 +1,3 @@
-# Release-synchronized source copy. The published formula lives at:
-# https://github.com/vibe-agi/homebrew-tap/blob/main/Formula/hideout.rb
 class Hideout < Formula
   desc "Run AI agents and untrusted CLIs in a local VM"
   homepage "https://github.com/vibe-agi/hideout"

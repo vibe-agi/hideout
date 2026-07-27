@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-26
 
-**Status**: Draft
+**Status**: Implemented
 
 **Input**: User description: "建立一个‘普通用户发布收口’版本"
 

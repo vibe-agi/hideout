@@ -43,18 +43,24 @@ grep -q '^hideout setup$' README.md
 grep -q '^hideout setup$' README.zh-CN.md
 
 # Published-tap parity anchors the official vibe-agi/homebrew-tap checkout to
-# the release inventory: the tap must distribute exactly the current public
-# release (tag and artifact digest). The tap legitimately trails the source
-# formula between releases and updates only when a release publishes, so
-# teaching-surface checks run against the source formula alone; comparing the
-# tap's caveats/helpers needs a release-time formula copy in-tree, tracked in
-# docs/DEBT.md for the next publication. The tap location comes from
-# HIDEOUT_TAP_FORMULA, falling back to a sibling ../homebrew-tap checkout.
-# Without a tap checkout the parity slice records not-run locally, while
-# HIDEOUT_REQUIRE_TAP_PARITY=1 (the CI posture) fails closed instead of
+# the receipt-rendered release formula snapshot. The snapshot proves the
+# release identity and the complete teaching/helper surface without comparing
+# the evolving next-candidate formula to an older public tap. The tap location
+# comes from HIDEOUT_TAP_FORMULA, falling back to a sibling ../homebrew-tap
+# checkout. Without a tap checkout the parity slice records not-run locally,
+# while HIDEOUT_REQUIRE_TAP_PARITY=1 (the CI posture) fails closed instead of
 # skipping: a skipped parity check is not parity proof.
 source_formula="packaging/homebrew/hideout.rb"
 test -f "$source_formula"
+release_tag="$(jq -er '.current.tag' releases/current.json)"
+release_version="$(jq -er '.current.version' releases/current.json)"
+release_sha="$(jq -er '.current.package.artifactSHA256' releases/current.json)"
+test "$release_tag" = "v$release_version"
+formula_snapshot="releases/formulas/${release_tag}.rb"
+test -f "$formula_snapshot"
+grep -Fq "releases/download/$release_tag/hideout-$release_tag-darwin-arm64.tar.gz" "$formula_snapshot"
+grep -Fq "sha256 \"$release_sha\"" "$formula_snapshot"
+cmp <(tail -n +3 "$source_formula") "$formula_snapshot"
 tap_formula="${HIDEOUT_TAP_FORMULA:-}"
 if [ -z "$tap_formula" ] && [ -f "$ROOT/../homebrew-tap/Formula/hideout.rb" ]; then
   tap_formula="$ROOT/../homebrew-tap/Formula/hideout.rb"
@@ -64,18 +70,8 @@ if [ -n "$tap_formula" ]; then
     echo "first-run-docs-smoke: tap formula is missing at $tap_formula" >&2
     exit 1
   fi
-  release_tag="$(jq -r '.current.tag // empty' releases/current.json)"
-  release_sha="$(jq -r '.current.package.artifactSHA256 // empty' releases/current.json)"
-  if [ -z "$release_tag" ] || [ -z "$release_sha" ]; then
-    echo "first-run-docs-smoke: release inventory is missing the tag or artifact digest" >&2
-    exit 1
-  fi
-  if ! grep -q "releases/download/$release_tag/" "$tap_formula"; then
-    echo "first-run-docs-smoke: official tap does not distribute the current public release $release_tag" >&2
-    exit 1
-  fi
-  if ! grep -q "sha256 \"$release_sha\"" "$tap_formula"; then
-    echo "first-run-docs-smoke: official tap sha256 does not match the published artifact digest" >&2
+  if ! cmp "$formula_snapshot" "$tap_formula" >/dev/null 2>&1; then
+    echo "first-run-docs-smoke: official tap differs from the receipt-rendered formula snapshot for $release_tag" >&2
     exit 1
   fi
 elif [ "${HIDEOUT_REQUIRE_TAP_PARITY:-0}" = "1" ]; then

@@ -9,8 +9,10 @@ on:
       - .github/workflows/hideout-alpha-public-truth.yml
       - releases/current.json
       - releases/receipts/**
+      - releases/formulas/**
       - README.md
       - README.zh-CN.md
+      - packaging/homebrew/hideout.rb
       - install.sh
       - docs/STATUS.md
       - docs/distribution-bootstrap.md

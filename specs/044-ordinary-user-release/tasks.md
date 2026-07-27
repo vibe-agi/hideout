@@ -235,10 +235,10 @@ signing, notarization, anonymous download, and publication receipt.
 - [x] T055 [US7] Integrate 044 registered proofs into release readiness and public evidence aggregation in `internal/releasecompat/readiness.go` and `internal/productevidence/ordinary_user_release.go`
 - [x] T056 [US7] Update required ordinary-user gates and exact-package commands in `docs/privacy-run-test-plan.md` and `docs/support-matrix.md`
 - [x] T057 [US7] Update implementation status, claims/non-claims, and deferred ledger after evidence exists in `docs/STATUS.md`, `docs/claim-boundaries.md`, `docs/threat-model.md`, and `docs/DEBT.md`
-- [ ] T058 [US7] Run Gate 0, clean exact-package Gate 2, clean exact-package Gate 3, required UI E2E, and release-readiness; record retained evidence paths and identities in `specs/044-ordinary-user-release/acceptance.md`
-- [ ] T059 [US7] Push the clean candidate commit and require public CI success before signing in `specs/044-ordinary-user-release/acceptance.md`
-- [ ] T060 [US7] Sign, notarize, anonymously verify, and publish the retained candidate through the existing 033 workflow; validate the publication receipt in `specs/044-ordinary-user-release/acceptance.md`
-- [ ] T061 [US7] Render the validated receipt into `releases/current.json`, `CHANGELOG.md`, `README.md`, `README.zh-CN.md`, `docs/STATUS.md`, `docs/support-matrix.md`, and `packaging/homebrew/hideout.rb`
+- [x] T058 [US7] Run Gate 0, clean exact-package Gate 2, clean exact-package Gate 3, required UI E2E, and release-readiness; record retained evidence paths and identities in `specs/044-ordinary-user-release/acceptance.md`
+- [x] T059 [US7] Push the clean candidate commit and require public CI success before signing in `specs/044-ordinary-user-release/acceptance.md`
+- [x] T060 [US7] Sign, notarize, anonymously verify, and publish the retained candidate through the existing 033 workflow; validate the publication receipt in `specs/044-ordinary-user-release/acceptance.md`
+- [x] T061 [US7] Render the validated receipt into `releases/current.json`, `CHANGELOG.md`, `README.md`, `README.zh-CN.md`, `docs/STATUS.md`, `docs/support-matrix.md`, and `packaging/homebrew/hideout.rb`
 
 **Checkpoint**: The public download is the exact candidate that passed every
 ordinary-user and security gate.
@@ -249,7 +249,7 @@ ordinary-user and security gate.
 
 - [x] T062 Run `gofmt`, shell syntax checks, schema validation, focused unit/race tests, and docs truth across all changed files
 - [x] T063 Audit every 044 functional requirement and success criterion against authoritative code, test, package, gate, signature, notarization, download, cleanup, and receipt evidence in `specs/044-ordinary-user-release/acceptance.md`
-- [ ] T064 Mark `specs/044-ordinary-user-release/spec.md` implemented and close all tasks only after T063 finds no missing, contradictory, weak, or indirect evidence
+- [x] T064 Mark `specs/044-ordinary-user-release/spec.md` implemented and close all tasks only after T063 finds no missing, contradictory, weak, or indirect evidence
 
 ---
 

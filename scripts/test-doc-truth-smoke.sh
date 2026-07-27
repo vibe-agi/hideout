@@ -610,6 +610,21 @@ validate_cross_docs() {
       echo "doc-truth-smoke: checked receipt does not prove immutable anonymous bytes" >&2
       exit 1
     fi
+    formula="$doc_root/packaging/homebrew/hideout.rb"
+    formula_snapshot="$doc_root/releases/formulas/$tag.rb"
+    if [ ! -f "$formula" ] || [ ! -f "$formula_snapshot" ]; then
+      echo "doc-truth-smoke: receipt-rendered Homebrew formula or snapshot is missing" >&2
+      exit 1
+    fi
+    if ! grep -Fq "releases/download/$tag/hideout-$tag-darwin-arm64.tar.gz" "$formula" ||
+       ! grep -Fq "sha256 \"$digest\"" "$formula"; then
+      echo "doc-truth-smoke: Homebrew source formula does not match the published inventory" >&2
+      exit 1
+    fi
+    if ! cmp <(tail -n +3 "$formula") "$formula_snapshot" >/dev/null; then
+      echo "doc-truth-smoke: release-time Homebrew formula snapshot drifted" >&2
+      exit 1
+    fi
     for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
       block="$(sed -n '/<!-- hideout-public-release:start -->/,/<!-- hideout-public-release:end -->/p' "$doc_root/$file")"
       grep -F "$tag" <<<"$block" >/dev/null

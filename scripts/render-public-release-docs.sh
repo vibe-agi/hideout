@@ -21,6 +21,7 @@ done
 jq -e '
   .schema == "hideout.published-release-inventory/v1" and
   .current != null and
+  .current.tag == ("v" + .current.version) and
   .current.maturity == "public-supervised-alpha" and
   .current.platform == "darwin/arm64" and
   .current.backend == "lima" and
@@ -102,4 +103,39 @@ replace_block docs/STATUS.md "$tmp/status"
 replace_block docs/support-matrix.md "$tmp/support"
 replace_block CHANGELOG.md "$tmp/changelog"
 
-echo "render-public-release-docs: rendered $tag"
+formula="packaging/homebrew/hideout.rb"
+[ -f "$formula" ] || {
+  echo "render-public-release-docs: missing Homebrew source formula" >&2
+  exit 1
+}
+formula_url="https://github.com/vibe-agi/hideout/releases/download/${tag}/hideout-${tag}-darwin-arm64.tar.gz"
+awk -v url="$formula_url" -v sha="$package_sha" '
+  /^  url "/ {
+    urls++
+    print "  url \"" url "\""
+    next
+  }
+  /^  sha256 "/ {
+    shas++
+    print "  sha256 \"" sha "\""
+    next
+  }
+  { print }
+  END {
+    if (urls != 1 || shas != 1) exit 1
+  }
+' "$formula" >"$tmp/formula"
+mv "$tmp/formula" "$formula"
+grep -Fqx "  url \"$formula_url\"" "$formula"
+grep -Fqx "  sha256 \"$package_sha\"" "$formula"
+if command -v ruby >/dev/null 2>&1; then
+  ruby -c "$formula" >/dev/null
+fi
+
+formula_snapshot="releases/formulas/${tag}.rb"
+mkdir -p "$(dirname "$formula_snapshot")"
+tail -n +3 "$formula" >"$tmp/formula-snapshot"
+mv "$tmp/formula-snapshot" "$formula_snapshot"
+cmp <(tail -n +3 "$formula") "$formula_snapshot"
+
+echo "render-public-release-docs: rendered $tag and $formula_snapshot"

@@ -139,8 +139,12 @@ test -f packaging/homebrew/hideout.rb
 if command -v ruby >/dev/null 2>&1; then
   ruby -c packaging/homebrew/hideout.rb >/dev/null
 fi
-grep -q 'url "https://github.com/vibe-agi/hideout/releases/download/v0.1.0-alpha.1/' packaging/homebrew/hideout.rb
-grep -q 'sha256 "9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4"' packaging/homebrew/hideout.rb
+published_tag="$(jq -er '.current.tag' releases/current.json)"
+published_version="$(jq -er '.current.version' releases/current.json)"
+published_sha="$(jq -er '.current.package.artifactSHA256' releases/current.json)"
+test "$published_tag" = "v$published_version"
+grep -Fq "url \"https://github.com/vibe-agi/hideout/releases/download/$published_tag/hideout-$published_tag-darwin-arm64.tar.gz\"" packaging/homebrew/hideout.rb
+grep -Fq "sha256 \"$published_sha\"" packaging/homebrew/hideout.rb
 grep -q 'depends_on "lima"' packaging/homebrew/hideout.rb
 grep -q 'skip_clean "bin/hideout-dns-stub-linux-arm64"' packaging/homebrew/hideout.rb
 grep -q 'system "/usr/bin/codesign", "--verify", "--strict"' packaging/homebrew/hideout.rb

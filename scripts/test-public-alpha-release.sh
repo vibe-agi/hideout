@@ -205,6 +205,8 @@ grep -F 'diff -u <(printf' .github/workflows/hideout-alpha-promote.yml >/dev/nul
 grep -F 'api_digest' .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F '.cleanup.status == "passed"' .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'License: Apache-2.0 for Hideout' .github/workflows/hideout-alpha-promote.yml >/dev/null
+grep -F 'packaging/homebrew/hideout.rb' .github/workflows/hideout-alpha-promote.yml >/dev/null
+grep -F 'releases/formulas/${PUBLIC_ALPHA_TAG}.rb' .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'notes=$(cat "$PUBLIC_ALPHA_ROOT/validated/release-notes.md")' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
 test "$(grep -Fc '>"$PROMOTION_ROOT/validated/context.json"' \
@@ -728,9 +730,11 @@ if [ -n "$before_releases" ]; then
 fi
 
 docs_root="$tmp/docs-root"
-mkdir -p "$docs_root/docs" "$docs_root/releases/receipts"
+mkdir -p "$docs_root/docs" "$docs_root/packaging/homebrew" \
+  "$docs_root/releases/formulas" "$docs_root/releases/receipts"
 cp README.md README.zh-CN.md CHANGELOG.md "$docs_root/"
 cp docs/STATUS.md docs/support-matrix.md "$docs_root/docs/"
+cp packaging/homebrew/hideout.rb "$docs_root/packaging/homebrew/"
 jq -n --slurpfile package "$tmp/package-identity.json" \
   --arg observedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
   --arg commit "$(jq -r '.sourceCommit' "$tmp/package-identity.json")" '
@@ -767,6 +771,19 @@ for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHAN
   grep -F "v0.1.0-dev.0" "$docs_root/$file" >/dev/null
   grep -F 'https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-dev.0' "$docs_root/$file" >/dev/null
 done
+formula="$docs_root/packaging/homebrew/hideout.rb"
+formula_snapshot="$docs_root/releases/formulas/v0.1.0-dev.0.rb"
+grep -F 'releases/download/v0.1.0-dev.0/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz' "$formula" >/dev/null
+grep -F "sha256 \"$(jq -r '.artifactSHA256' "$tmp/package-identity.json")\"" "$formula" >/dev/null
+cmp <(tail -n +3 "$formula") "$formula_snapshot"
+formula_drift_root="$tmp/formula-drift-root"
+cp -R "$docs_root" "$formula_drift_root"
+printf '# injected teaching-surface drift\n' >>"$formula_drift_root/releases/formulas/v0.1.0-dev.0.rb"
+if HIDEOUT_DOC_ROOT="$formula_drift_root" scripts/test-doc-truth-smoke.sh \
+    --out "$tmp/formula-drift-evidence" >/dev/null 2>&1; then
+  echo "public-alpha-release: formula snapshot drift fixture passed" >&2
+  exit 1
+fi
 public_truth="$tmp/public-truth"
 HIDEOUT_DOC_ROOT="$docs_root" scripts/test-doc-truth-smoke.sh --out "$public_truth" \
   --public-receipt "$docs_root/releases/receipts/v0.1.0-dev.0.json" >/dev/null
