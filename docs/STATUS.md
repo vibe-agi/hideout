@@ -7,9 +7,9 @@ design documents; this file prevents implementation status from drifting across
 many subsystem specs.
 
 <!-- hideout-public-release:start -->
-Current release state: public supervised alpha `v0.1.0-alpha.1` for macOS arm64 with
+Current release state: public supervised alpha `v0.1.0-alpha.2` for macOS arm64 with
 the Lima backend. Source-of-truth identity and receipt digest are in
-`releases/current.json`; see the [public release](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1).
+`releases/current.json`; see the [public release](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2).
 
 This status does not add GA, automatic-update, Linux-package, workspace-DLP,
 guest-root-containment, or marketplace-trust claims. Real isolation claims

@@ -150,10 +150,10 @@ execution.
 ## Current Release
 
 <!-- hideout-public-release:start -->
-Current release: [Hideout v0.1.0-alpha.1](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1) for macOS arm64. This is a
+Current release: [Hideout v0.1.0-alpha.2](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2) for macOS arm64. This is a
 public supervised alpha, not a GA or Linux-package claim.
 
-Package SHA-256: `9a35bbb70b298456dd7e001a1c22825cdff180309306e8a27271e995a81473b4`. The release page includes checksums,
+Package SHA-256: `464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76`. The release page includes checksums,
 the machine-readable release manifest, and bounded verification evidence.
 <!-- hideout-public-release:end -->
 
