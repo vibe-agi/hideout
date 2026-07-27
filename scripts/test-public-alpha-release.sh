@@ -366,6 +366,17 @@ grep -F 'work="$(mktemp -d "${TMPDIR:-/tmp}/hou.XXXXXX")"' \
   scripts/test-ordinary-user-release.sh >/dev/null
 grep -F 'setup_store="$work/s"' \
   scripts/test-ordinary-user-release.sh >/dev/null
+grep -F 'package_ui_raw="$work/package-ui.raw"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+grep -F 'redact-public-evidence --input "$package_ui_raw"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+grep -F 'rm -f "$package_ui_raw"' \
+  scripts/test-ordinary-user-release.sh >/dev/null
+if grep -F '"$installed_prefix/bin/hideout" ui --print-url >"$work/package-ui.out"' \
+    scripts/test-ordinary-user-release.sh >/dev/null; then
+  echo "public-alpha-release: raw WebUI operator token must not enter retained evidence" >&2
+  exit 1
+fi
 if grep -F 'hideout-ordinary-user-release.XXXXXX' \
   scripts/test-ordinary-user-release.sh >/dev/null; then
   echo "public-alpha-release: ordinary-user setup fixture must preserve the short daemon socket path" >&2

@@ -464,10 +464,25 @@ if [ "$mode" = "release-candidate" ]; then
     >"$work/installed-verify.out"
   HIDEOUT_STORE_ROOT="$setup_store" PATH="$runtime_path" \
     "$installed_prefix/bin/hideout" tui --once >"$work/package-tui.out"
+  package_ui_raw="$work/package-ui.raw"
   HIDEOUT_STORE_ROOT="$setup_store" PATH="$runtime_path" \
-    "$installed_prefix/bin/hideout" ui --print-url >"$work/package-ui.out"
+    "$installed_prefix/bin/hideout" ui --print-url >"$package_ui_raw"
   HIDEOUT_STORE_ROOT="$setup_store" PATH="$runtime_path" \
     "$installed_prefix/bin/hideout" daemon stop >/dev/null
+  grep -Eq '^Hideout UI: http://127\.0\.0\.1:[0-9]+/#token=ui_[A-Za-z0-9]{12,}$' \
+    "$package_ui_raw" || {
+    echo "ordinary-user-release: exact-package WebUI launch URL is missing its operator token" >&2
+    exit 1
+  }
+  PATH="$runtime_path" "$installed_prefix/bin/hideout" support release \
+    redact-public-evidence --input "$package_ui_raw" \
+    --out "$work/package-ui.out" >"$work/package-ui-redaction.json"
+  rm -f "$package_ui_raw"
+  grep -Eq '^Hideout UI: http://127\.0\.0\.1:[0-9]+/#token=REDACTED$' \
+    "$work/package-ui.out" || {
+    echo "ordinary-user-release: retained WebUI launch surface is not redacted" >&2
+    exit 1
+  }
   lifecycle_keep="$installed_store/keep.txt"
   printf 'preserve\n' >"$lifecycle_keep"
   "$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" \
