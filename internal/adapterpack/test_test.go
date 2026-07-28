@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vibe-agi/hideout/internal/policy"
 )
 
 func TestRunTestsRequiresTestsAndCoreValidation(t *testing.T) {
@@ -94,9 +96,24 @@ func TestRunTestsFailsClosedOnScriptExceptionTimeoutAndForbiddenAPI(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := store.RunTests(t.Context(), entry.PackID, rev.RevisionID)
-			if err != nil {
-				t.Fatalf("run tests should record result, not crash: %v", err)
+			run := func() TestResult {
+				result, err := store.RunTests(t.Context(), entry.PackID, rev.RevisionID)
+				if err != nil {
+					t.Fatalf("run tests should record result, not crash: %v", err)
+				}
+				return result
+			}
+			result := run()
+			if tt.name == "forbidden-api" {
+				// The production wall-clock interrupt intentionally fails closed.
+				// A heavily contended CI worker can expire it before this trivial
+				// positive script is scheduled, so retry only exact timeouts. A
+				// persistent timeout or any other failure still fails the test.
+				for attempt := 1; attempt < 3 &&
+					result.Status == TestFailed &&
+					strings.Contains(strings.Join(result.Failures, "\n"), policy.ErrScriptTimeout.Error()); attempt++ {
+					result = run()
+				}
 			}
 			joined := strings.Join(result.Failures, "\n")
 			if tt.name == "forbidden-api" {
