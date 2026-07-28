@@ -125,10 +125,10 @@ supervisor 拥有目标 PTY 和进程树。这个角色目前由同一个已安�
 ## 当前版本
 
 <!-- hideout-public-release:start -->
-当前版本：[Hideout v0.1.0-alpha.2](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2)，支持 macOS arm64。这是需要有人监督的
+当前版本：[Hideout v0.1.0-alpha.3](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.3)，支持 macOS arm64。这是需要有人监督的
 公开 alpha，不是 GA 或 Linux 安装包承诺。
 
-安装包 SHA-256：`464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76`。Release 页面同时提供 checksum、机器可读
+安装包 SHA-256：`61807ce60d7a037139713cffe475f492ee8e60cced56674ba3f0be0580e65050`。Release 页面同时提供 checksum、机器可读
 release manifest 和有界验证证据。
 <!-- hideout-public-release:end -->
 

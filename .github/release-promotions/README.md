@@ -5,8 +5,8 @@ is not a public release, and source documentation must not claim that a public
 package exists until a validated publication receipt updates
 `releases/current.json` through review.
 
-`releases/current.json` currently identifies `v0.1.0-alpha.2`. The candidate
-workflow defaults to the next sequential identity, `v0.1.0-alpha.3`; changing
+`releases/current.json` currently identifies `v0.1.0-alpha.3`. The candidate
+workflow defaults to the next sequential identity, `v0.1.0-alpha.4`; changing
 that input is an explicit release decision and never rewrites published history.
 
 ## Environments
