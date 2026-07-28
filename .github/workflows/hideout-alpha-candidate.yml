@@ -6,7 +6,7 @@ on:
       version:
         description: Exact prerelease version without the v prefix
         required: true
-        default: 0.1.0-alpha.3
+        default: 0.1.0-alpha.4
         type: string
       source_commit:
         description: Full source commit; defaults to the triggering commit

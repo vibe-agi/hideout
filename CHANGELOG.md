@@ -3,16 +3,23 @@
 All notable product changes will be recorded here.
 
 <!-- hideout-public-release:start -->
-## 0.1.0-alpha.2
+## 0.1.0-alpha.3
 
 - Publish the public supervised macOS arm64 alpha package at
-  [v0.1.0-alpha.2](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2).
+  [v0.1.0-alpha.3](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.3).
 - Bind package, runtime, signing, notarization, Gate 2, Gate 3, and anonymous
   download evidence to one immutable release identity.
 - Keep automatic updates, Linux packages, GA stability, workspace DLP,
   guest-root containment, and marketplace trust outside this release claim.
 
 ## Published history
+
+### 0.1.0-alpha.2
+
+<!-- markdownlint-disable-next-line MD013 -->
+- [v0.1.0-alpha.2](https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.2) is an immutable earlier
+  supervised alpha.
+- Package SHA-256: `464cf3e96108621c1dc92aef794e83de92c5385086620771da5b47bf86693a76`.
 
 ### 0.1.0-alpha.1
 
