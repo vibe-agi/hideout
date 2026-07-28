@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -44,6 +45,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/packagekit"
+	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/recovery"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
@@ -8241,6 +8243,25 @@ func TestCheckBrokerUsesTCPForLima(t *testing.T) {
 	}
 	if strings.Contains(got, "tcp://") || strings.Contains(got, "unix://") {
 		t.Fatalf("broker check leaked raw endpoint address:\n%s", got)
+	}
+}
+
+func TestDoctorBrokerProbeTargetDoesNotDependOnDNS(t *testing.T) {
+	evaluator := policy.NewEvaluator(profile.Default("default"))
+	resolveCalls := 0
+	evaluator.ResolveHost = func(string) ([]netip.Addr, error) {
+		resolveCalls++
+		return nil, errors.New("DNS is intentionally unavailable")
+	}
+	proposal, err := evaluator.EvaluateOpen(doctorBrokerProbeTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("doctor broker target made %d DNS request(s)", resolveCalls)
+	}
+	if proposal.Decision != policy.Allow || proposal.Route != policy.HostBroker {
+		t.Fatalf("doctor broker target did not retain the allowed host-broker path: %+v", proposal)
 	}
 }
 

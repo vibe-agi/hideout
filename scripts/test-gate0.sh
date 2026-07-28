@@ -38,6 +38,7 @@ if [ -n "$unformatted" ]; then
   exit 1
 fi
 go test -p "$go_test_parallelism" -count=1 ./...
+scripts/test-vulnerability-gate.sh --self-test --source
 scripts/test-formal-models.sh
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh

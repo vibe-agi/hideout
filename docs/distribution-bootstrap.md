@@ -69,7 +69,7 @@ sh /tmp/hideout-install.sh
 The equivalent manual package path is:
 
 ```bash
-version=0.1.0-alpha.1
+version=0.1.0-alpha.2
 package="hideout-v${version}-darwin-arm64.tar.gz"
 base="https://github.com/vibe-agi/hideout/releases/download/v${version}"
 curl -fLO "$base/$package"
@@ -581,7 +581,7 @@ Release candidate should verify:
   private draft; `test-public-alpha-candidate.sh` binds that package to clean
   install and real Gate 2/Gate 3 evidence; and `hideout-alpha-promote.yml`
   requires protected approval plus anonymous redownload before a public receipt;
-- `v0.1.0-alpha.1` has passed that workflow and is the current public supervised
+- `v0.1.0-alpha.2` has passed that workflow and is the current public supervised
   alpha named by `releases/current.json`;
 - root `install.sh` provides the stable standalone bootstrap and is covered by
   a local exact-package install test that does not redownload the retained

@@ -69,6 +69,80 @@ candidate_release_block_is_neutral() {
   ! grep -E 'github\.com/vibe-agi/hideout/releases/(tag|download)/v[0-9]' <<<"$1" >/dev/null
 }
 
+release_identity_files() {
+  printf '%s\n' \
+    README.md \
+    README.zh-CN.md \
+    docs/STATUS.md \
+    docs/distribution-bootstrap.md \
+    docs/support-matrix.md \
+    CHANGELOG.md \
+    packaging/homebrew/hideout.rb
+}
+
+validate_release_doc_identity() {
+  local checked_root="$1" checked_inventory="$2"
+  local current_version current_tag current_url file block line lower token normalized
+  current_version="$(jq -er '.current.version' "$checked_inventory")" || return 1
+  current_tag="$(jq -er '.current.tag' "$checked_inventory")" || return 1
+  current_url="$(jq -er '.current.releaseURL' "$checked_inventory")" || return 1
+  test "$current_tag" = "v$current_version" || return 1
+
+  for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do
+    block="$(sed -n '/<!-- hideout-public-release:start -->/,/<!-- hideout-public-release:end -->/p' "$checked_root/$file")"
+    grep -F "$current_tag" <<<"$block" >/dev/null || return 1
+    grep -F "$current_url" <<<"$block" >/dev/null || return 1
+  done
+
+  while IFS= read -r file; do
+    test -f "$checked_root/$file" || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+      lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+      case "$lower" in
+        *current\ release*|*current\ published*|*currently\ published*|*current\ public*|*当前版本*|*当前发布*)
+          while IFS= read -r token; do
+            test -n "$token" || continue
+            normalized="${token#v}"
+            case "$normalized" in
+              "$current_version"|"$current_version"-darwin-arm64.tar.gz) ;;
+              *)
+                echo "doc-truth-smoke: stale current-release identity $token in $file" >&2
+                return 1
+                ;;
+            esac
+          done < <(
+            grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*' \
+              <<<"$line" || true
+          )
+          ;;
+      esac
+    done <"$checked_root/$file"
+  done < <(release_identity_files)
+
+  local release_ref receipt expected_receipt_url
+  while IFS= read -r release_ref; do
+    test -n "$release_ref" || continue
+    token="${release_ref##*/}"
+    receipt="$checked_root/releases/receipts/$token.json"
+    test -f "$receipt" || {
+      echo "doc-truth-smoke: release link has no retained receipt: $token" >&2
+      return 1
+    }
+    expected_receipt_url="https://github.com/vibe-agi/hideout/releases/tag/$token"
+    jq -e --arg tag "$token" --arg url "$expected_receipt_url" '
+      .schema == "hideout.publication-receipt/v1" and
+      .status == "public-verified" and .immutable == true and
+      .tag == $tag and .version == ($tag | ltrimstr("v")) and .url == $url
+    ' "$receipt" >/dev/null || return 1
+  done < <(
+    while IFS= read -r file; do
+      grep -Eho \
+        'github\.com/vibe-agi/hideout/releases/(tag|download)/v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*' \
+        "$checked_root/$file" || true
+    done < <(release_identity_files) | LC_ALL=C sort -u
+  )
+}
+
 validate_public_receipt_binding() {
   local checked_inventory="$1" checked_receipt="$2"
   go run ./cmd/hideout-schema-validate schemas/publication-receipt.schema.json \
@@ -630,6 +704,10 @@ validate_cross_docs() {
       grep -F "$tag" <<<"$block" >/dev/null
       grep -F "$url" <<<"$block" >/dev/null
     done
+    if ! validate_release_doc_identity "$doc_root" "$inventory"; then
+      echo "doc-truth-smoke: canonical documentation release identity drifted" >&2
+      exit 1
+    fi
     grep -F "$digest" "$doc_root/README.md" >/dev/null
     grep -F "$digest" "$doc_root/README.zh-CN.md" >/dev/null
     test "$tag" = "v$version"
@@ -653,6 +731,9 @@ validate_cross_docs() {
 
 validate_release_doc_negative_fixtures() {
   local candidate_status="passed" receipt_status="not-applicable-candidate"
+  local marker_external_status="not-applicable-candidate"
+  local unknown_history_status="not-applicable-candidate"
+  local known_history_status="not-applicable-candidate"
   local false_public_block='https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-alpha.1'
   if candidate_release_block_is_neutral "$false_public_block"; then
     echo "doc-truth-smoke: candidate-publication negative fixture was accepted" >&2
@@ -672,8 +753,103 @@ validate_release_doc_negative_fixtures() {
     receipt_status="passed"
     rm -f "$mutated_receipt" "$mutated_inventory"
   fi
-  jq -n --arg candidate "$candidate_status" --arg receipt "$receipt_status" \
-    '{candidatePublicationClaim:$candidate,anonymousReceiptDigestMismatch:$receipt,status:"passed"}' \
+
+  if jq -e '.current != null' "$inventory" >/dev/null; then
+    local fixture_root current_tag foreign_tag foreign_url known_tag known_url
+    current_tag="$(jq -er '.current.tag' "$inventory")"
+    foreign_tag="$(
+      find "$doc_root/releases/receipts" -maxdepth 1 -type f -name 'v*.json' |
+        LC_ALL=C sort |
+        while IFS= read -r receipt; do
+          tag="$(jq -er '.tag' "$receipt")"
+          if [ "$tag" != "$current_tag" ]; then
+            printf '%s\n' "$tag"
+            break
+          fi
+        done
+    )"
+    if [ -z "$foreign_tag" ]; then
+      foreign_tag="v9.9.9-alpha.9"
+    fi
+    foreign_url="https://github.com/vibe-agi/hideout/releases/tag/$foreign_tag"
+
+    fixture_root="$out/reports/release-marker-external-fixture"
+    mkdir -p "$fixture_root/docs" "$fixture_root/packaging/homebrew" "$fixture_root/releases"
+    cp "$doc_root/README.md" "$doc_root/README.zh-CN.md" "$doc_root/CHANGELOG.md" "$fixture_root/"
+    cp "$doc_root/docs/STATUS.md" "$doc_root/docs/distribution-bootstrap.md" \
+      "$doc_root/docs/support-matrix.md" "$fixture_root/docs/"
+    cp "$doc_root/packaging/homebrew/hideout.rb" "$fixture_root/packaging/homebrew/"
+    cp -R "$doc_root/releases/receipts" "$fixture_root/releases/receipts"
+    cp "$inventory" "$fixture_root/releases/current.json"
+    printf '\nCurrent release: [%s](%s).\n' "$foreign_tag" "$foreign_url" \
+      >>"$fixture_root/README.md"
+    if validate_release_doc_identity "$fixture_root" "$fixture_root/releases/current.json" \
+      >/dev/null 2>&1; then
+      echo "doc-truth-smoke: marker-external current-release drift fixture was accepted" >&2
+      exit 1
+    fi
+    marker_external_status="passed"
+    rm -rf "$fixture_root"
+
+    fixture_root="$out/reports/release-unknown-history-fixture"
+    mkdir -p "$fixture_root/docs" "$fixture_root/packaging/homebrew" "$fixture_root/releases"
+    cp "$doc_root/README.md" "$doc_root/README.zh-CN.md" "$doc_root/CHANGELOG.md" "$fixture_root/"
+    cp "$doc_root/docs/STATUS.md" "$doc_root/docs/distribution-bootstrap.md" \
+      "$doc_root/docs/support-matrix.md" "$fixture_root/docs/"
+    cp "$doc_root/packaging/homebrew/hideout.rb" "$fixture_root/packaging/homebrew/"
+    cp -R "$doc_root/releases/receipts" "$fixture_root/releases/receipts"
+    cp "$inventory" "$fixture_root/releases/current.json"
+    printf '\nHistorical release: [v9.9.9-alpha.9](https://github.com/vibe-agi/hideout/releases/tag/v9.9.9-alpha.9).\n' \
+      >>"$fixture_root/CHANGELOG.md"
+    if validate_release_doc_identity "$fixture_root" "$fixture_root/releases/current.json" \
+      >/dev/null 2>&1; then
+      echo "doc-truth-smoke: unreceipted historical release fixture was accepted" >&2
+      exit 1
+    fi
+    unknown_history_status="passed"
+    rm -rf "$fixture_root"
+
+    known_tag="$(
+      find "$doc_root/releases/receipts" -maxdepth 1 -type f -name 'v*.json' |
+        LC_ALL=C sort |
+        while IFS= read -r receipt; do
+          tag="$(jq -er '.tag' "$receipt")"
+          if [ "$tag" != "$current_tag" ]; then
+            printf '%s\n' "$tag"
+            break
+          fi
+        done
+    )"
+    if [ -n "$known_tag" ]; then
+      known_url="https://github.com/vibe-agi/hideout/releases/tag/$known_tag"
+      fixture_root="$out/reports/release-known-history-fixture"
+      mkdir -p "$fixture_root/docs" "$fixture_root/packaging/homebrew" "$fixture_root/releases"
+      cp "$doc_root/README.md" "$doc_root/README.zh-CN.md" "$doc_root/CHANGELOG.md" "$fixture_root/"
+      cp "$doc_root/docs/STATUS.md" "$doc_root/docs/distribution-bootstrap.md" \
+        "$doc_root/docs/support-matrix.md" "$fixture_root/docs/"
+      cp "$doc_root/packaging/homebrew/hideout.rb" "$fixture_root/packaging/homebrew/"
+      cp -R "$doc_root/releases/receipts" "$fixture_root/releases/receipts"
+      cp "$inventory" "$fixture_root/releases/current.json"
+      printf '\nHistorical release: [%s](%s).\n' "$known_tag" "$known_url" \
+        >>"$fixture_root/CHANGELOG.md"
+      if ! validate_release_doc_identity "$fixture_root" "$fixture_root/releases/current.json" \
+        >/dev/null 2>&1; then
+        echo "doc-truth-smoke: retained historical release was rejected" >&2
+        exit 1
+      fi
+      known_history_status="passed"
+      rm -rf "$fixture_root"
+    fi
+  fi
+  jq -n \
+    --arg candidate "$candidate_status" --arg receipt "$receipt_status" \
+    --arg markerExternal "$marker_external_status" \
+    --arg unknownHistory "$unknown_history_status" \
+    --arg knownHistory "$known_history_status" \
+    '{candidatePublicationClaim:$candidate,anonymousReceiptDigestMismatch:$receipt,
+      markerExternalCurrentDrift:$markerExternal,
+      unreceiptedHistoricalRelease:$unknownHistory,
+      retainedHistoricalRelease:$knownHistory,status:"passed"}' \
     >"$out/reports/release-doc-negative-fixtures.json"
 }
 

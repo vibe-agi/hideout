@@ -12,7 +12,7 @@ grep -F '"$package_root/install.sh" --prefix "$prefix" --store "$store" --skip-i
 
 package="${HIDEOUT_TEST_RELEASE_PACKAGE:-}"
 if [ -z "$package" ]; then
-  candidate="$ROOT/.hideout-release-evidence/033-public-alpha/final2-fc56288138d320d93032e528788b6ac3f3f81634/hideout-v0.1.0-alpha.1-darwin-arm64.tar.gz"
+  candidate="$ROOT/.hideout-release-evidence/044-alpha2-exact-candidate-9f8f9d8/public-anonymous/hideout-v0.1.0-alpha.2-darwin-arm64.tar.gz"
   if [ -f "$candidate" ]; then
     package="$candidate"
   fi
@@ -35,10 +35,10 @@ HIDEOUT_INSTALL_PACKAGE_FILE="$package" \
   >"$tmp/install.out"
 
 "$tmp/prefix/bin/hideout" version >"$tmp/version.out"
-grep -Fx 'hideout 0.1.0-alpha.1' "$tmp/version.out" >/dev/null
+grep -Fx 'hideout 0.1.0-alpha.2' "$tmp/version.out" >/dev/null
 "$tmp/prefix/bin/hideout" package verify "$tmp/prefix" >/dev/null
 test ! -e "$tmp/store/profiles/default/profile.json"
-grep -F "Hideout 0.1.0-alpha.1 installed at $tmp/prefix/bin/hideout" "$tmp/install.out" >/dev/null
+grep -F "Hideout 0.1.0-alpha.2 installed at $tmp/prefix/bin/hideout" "$tmp/install.out" >/dev/null
 grep -F "$tmp/prefix/bin/hideout setup" "$tmp/install.out" >/dev/null
 
 jq '.current.package.artifactSHA256 = ("0" * 64)' releases/current.json >"$tmp/bad-current.json"

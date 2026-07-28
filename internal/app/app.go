@@ -4185,6 +4185,11 @@ func checkNetwork(p profile.Profile, backendName string, layout session.Layout, 
 	report("network", status, fmt.Sprintf("mode=%s engine=%s runtimeVerify=%t localBypass=%s reason=%s", plan.Mode, plan.Engine, plan.RuntimeVerify, explainList(plan.LocalBypassHosts), plan.Reason))
 }
 
+// doctorBrokerProbeTarget is an RFC 5737 documentation address. The doctor
+// broker check exercises only the local transport and policy path, so it must
+// not make its result depend on external DNS or perform a real host open.
+const doctorBrokerProbeTarget = "https://192.0.2.1"
+
 func checkBroker(storeRoot string, p profile.Profile, backendName string, layout session.Layout, hostRoot, guestRoot, profileDir string, report func(string, string, string)) {
 	token, err := broker.NewToken()
 	if err != nil {
@@ -4234,10 +4239,10 @@ func checkBroker(storeRoot string, p profile.Profile, backendName string, layout
 		CapabilityToken: token,
 		Subject:         "command:open",
 		Command:         "open",
-		Argv:            []string{"open", "https://example.com"},
+		Argv:            []string{"open", doctorBrokerProbeTarget},
 		Route:           "host-broker",
 		Action:          "host.open",
-		Args:            map[string]any{"target": "https://example.com"},
+		Args:            map[string]any{"target": doctorBrokerProbeTarget},
 	})
 	if resp.Status == "broker-unavailable" {
 		report("broker", "error", resp.Stderr)

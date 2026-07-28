@@ -2,6 +2,7 @@ package helperbin
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,6 +133,161 @@ func TestResolveLinuxTun2SocksInvalidOverrideFailsWithoutFallback(t *testing.T) 
 	}
 }
 
+func TestResolveLinuxTun2SocksPackagedDamageNeverFallsBackToStore(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(t *testing.T, helper string)
+	}{
+		{
+			name: "missing",
+			prepare: func(t *testing.T, helper string) {
+				t.Helper()
+			},
+		},
+		{
+			name: "digest-mismatch",
+			prepare: func(t *testing.T, helper string) {
+				t.Helper()
+				if err := os.WriteFile(helper, []byte("packaged"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := WriteTun2SocksManifest(helper, "arm64", true); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(helper, []byte("replaced"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "wrong-target",
+			prepare: func(t *testing.T, helper string) {
+				t.Helper()
+				if err := os.WriteFile(helper, []byte("packaged"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := WriteTun2SocksManifest(helper, "amd64", true); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			packageRoot := t.TempDir()
+			binary := filepath.Join(packageRoot, "bin", "hideout")
+			packagedHelper := filepath.Join(packageRoot, "bin", "tun2socks-linux-arm64")
+			if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(binary, []byte("hideout"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(packageRoot, "package-manifest.json"), []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			test.prepare(t, packagedHelper)
+
+			store := t.TempDir()
+			storeHelper := DefaultLinuxTun2SocksPath(store, "arm64")
+			if err := os.MkdirAll(filepath.Dir(storeHelper), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(storeHelper, []byte("store-helper"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteTun2SocksManifest(storeHelper, "arm64", false); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
+				Executable: binary,
+				StoreRoot:  store,
+				GOARCH:     "arm64",
+			})
+			if !errors.Is(err, ErrPackagedTun2SocksUnavailable) || got.Path != "" {
+				t.Fatalf("packaged %s helper fell through to store: resolution=%+v err=%v", test.name, got, err)
+			}
+		})
+	}
+}
+
+func TestResolveLinuxTun2SocksStoreRequiresExplicitDevelopmentPermission(t *testing.T) {
+	store := t.TempDir()
+	helper := DefaultLinuxTun2SocksPath(store, "arm64")
+	if err := os.MkdirAll(filepath.Dir(helper), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("store-helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTun2SocksManifest(helper, "arm64", false); err != nil {
+		t.Fatal(err)
+	}
+	opts := Tun2SocksResolveOptions{
+		Executable: filepath.Join(t.TempDir(), "bin", "hideout"),
+		StoreRoot:  store,
+		GOARCH:     "arm64",
+	}
+	got, err := ResolveLinuxTun2Socks(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "" {
+		t.Fatalf("store helper resolved without explicit development permission: %+v", got)
+	}
+
+	opts.AllowStore = true
+	got, err = ResolveLinuxTun2Socks(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != helper || got.Source != Tun2SocksSourceStore || got.Manifest.PackageOwned {
+		t.Fatalf("explicitly permitted development store helper did not resolve: %+v", got)
+	}
+}
+
+func TestCopyVerifiedExecutableRejectsReplacementAfterResolution(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "bin", "hideout")
+	helper := filepath.Join(root, "bin", "tun2socks-linux-arm64")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("hideout"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package-manifest.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("verified-helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTun2SocksManifest(helper, "arm64", true); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
+		Executable: binary,
+		GOARCH:     "arm64",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.ExpectedSHA256 == "" || resolution.ExpectedSHA256 != resolution.Manifest.SHA256 {
+		t.Fatalf("resolution did not retain verified digest: %+v", resolution)
+	}
+
+	if err := os.WriteFile(helper, []byte("replacement-after-resolution"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "tun2socks")
+	if err := CopyVerifiedExecutable(resolution.Path, dst, resolution.ExpectedSHA256); err == nil {
+		t.Fatal("copy accepted helper bytes replaced after resolution")
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed verified copy left destination behind: %v", err)
+	}
+}
+
 func TestResolveLinuxTun2SocksIgnoresAmbientPathAndRejectsDigestDrift(t *testing.T) {
 	pathDir := t.TempDir()
 	ambient := filepath.Join(pathDir, "tun2socks-linux-arm64")
@@ -167,6 +323,7 @@ func TestResolveLinuxTun2SocksIgnoresAmbientPathAndRejectsDigestDrift(t *testing
 	got, err = ResolveLinuxTun2Socks(Tun2SocksResolveOptions{
 		Executable: filepath.Join(t.TempDir(), "bin", "hideout"),
 		StoreRoot:  store, GOARCH: "arm64",
+		AllowStore: true,
 	})
 	if err != nil {
 		t.Fatal(err)

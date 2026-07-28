@@ -779,7 +779,11 @@ func materializeLimaShims(dir string, registry cmdproxy.Registry, netPlan netpol
 		if resolution.Path == "" {
 			return errors.New("tun2socks privacy mode requires a verified package helper or valid explicit development override")
 		}
-		if err := copyExecutable(resolution.Path, filepath.Join(dir, "tun2socks")); err != nil {
+		if err := helperbin.CopyVerifiedExecutable(
+			resolution.Path,
+			filepath.Join(dir, "tun2socks"),
+			resolution.ExpectedSHA256,
+		); err != nil {
 			return err
 		}
 		// The DoH DNS stub mediates guest DNS over the privacy path when a

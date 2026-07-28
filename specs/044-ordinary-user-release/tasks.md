@@ -347,3 +347,16 @@ Task: T035 helper provenance tests in internal/helperbin/helperbin_test.go
   validated receipt exists.
 - Do not mark 044 implemented from local-fast, native, dirty, or `not-run`
   evidence.
+
+---
+
+## Phase 11: Convergence
+
+- [x] T077 [US5] Reject implicit store-helper fallback when a packaged executable has a missing, damaged, or incompatible privacy helper, preserve only explicit development override/source-mode behavior, and add resolver/package/Manager negative tests per Constitution I, FR-022, FR-023, and SC-009 (contradicts)
+- [x] T078 [US5] Bind privacy-helper verification and materialization to the same opened bytes and expected digest, add a deterministic replacement-race regression test, and record the mutation proof per Constitution I/II, FR-019, FR-023, and SC-012 (partial)
+- [x] T079 [US7] Make the daemon main Unix listener retain its bound inode, disable automatic unlink, remove only its owned socket, and add a runtime-directory replacement test proving delayed cleanup preserves a successor listener per Constitution V and the stale-daemon edge case (partial)
+- [x] T080 [US7] Pin a patched Go toolchain and dependency set, add source and final-binary `govulncheck` release gates with a firing vulnerable-fixture check, and record exact toolchain identity in candidate evidence per Constitution IV, FR-030, FR-031, SC-011, and SC-012 (partial)
+- [x] T081 [US7] Render candidate-bound, publication-neutral version and package identity into every canonical document included in the exact archive before signing, then reject an extracted archive whose README, localized README, status, first-run guide, distribution guide, support matrix, changelog, caveats, or release notes describe another candidate per FR-032 and SC-013 (contradicts)
+- [x] T082 [US7] Synchronize current release history, manual-install guidance, candidate defaults, status, changelog, and promotion notes; extend documentation truth with marker-external and historical negative fixtures; and record the adversarial observations in `specs/044-ordinary-user-release/acceptance.md` per FR-029, FR-032, SC-012, and SC-013 (contradicts)
+- [x] T083 [US2] Make the doctor broker health probe independent of external DNS while retaining the real local TCP/policy path, and add a resolver-poison regression test per Constitution I, FR-008, SC-005, and SC-012 (partial)
+- [x] T084 [US7] Upgrade every fixable root/helper module advisory, make the vulnerability gate reject imported-package findings and all unexpected module-only findings from structured scanner output, and permit the sole no-fix `openpgp` record only while its exact affected packages remain unimported per Constitution IV, FR-030, FR-031, SC-011, and SC-012 (partial)

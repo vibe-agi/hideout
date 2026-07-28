@@ -6,7 +6,7 @@ on:
       version:
         description: Exact prerelease version without the v prefix
         required: true
-        default: 0.1.0-alpha.1
+        default: 0.1.0-alpha.3
         type: string
       source_commit:
         description: Full source commit; defaults to the triggering commit
@@ -164,6 +164,8 @@ jobs:
           scripts/package-local.sh --finalize "$stage" --out "$package" \
             --signing-mode developer-id-observed >/dev/null
           "$stage/hideout/bin/hideout" package verify "$stage/hideout" >/dev/null
+          scripts/test-package-docs.sh --package-root "$stage/hideout" --self-test
+          scripts/test-vulnerability-gate.sh --package-root "$stage/hideout"
           "$stage/hideout/bin/hideout" support release package-identity \
             --archive "$package" --out "$HIDEOUT_ALPHA_ROOT/output/package-identity.json" >/dev/null
           jq -e --arg version "$HIDEOUT_ALPHA_VERSION" --arg commit "$HIDEOUT_ALPHA_COMMIT" '
@@ -233,13 +235,20 @@ jobs:
           scripts/test-gate0.sh
           output="$HIDEOUT_ALPHA_ROOT/output"
           package="hideout-v${HIDEOUT_ALPHA_VERSION}-darwin-arm64.tar.gz"
+          go_version="$(
+            "$HIDEOUT_ALPHA_ROOT/stage/hideout/bin/hideout" version --json |
+              jq -er '.goVersion'
+          )"
+          test "$go_version" = "go$(awk '$1 == "go" { print $2; exit }' go.mod)"
           jq -n \
             --arg version "$HIDEOUT_ALPHA_VERSION" --arg tag "$HIDEOUT_ALPHA_TAG" \
             --arg commit "$HIDEOUT_ALPHA_COMMIT" --arg run "$GITHUB_RUN_ID" \
+            --arg goVersion "$go_version" \
             --arg packageSHA "$(shasum -a 256 "$output/$package" | awk '{print $1}')" \
             '{schema:"hideout.public-alpha-candidate/v1",version:$version,tag:$tag,
               sourceCommit:$commit,sourceDirty:false,workflowRunId:($run|tonumber),
-              publicationStatus:"draft-only",packageSHA256:$packageSHA}' \
+              publicationStatus:"draft-only",packageSHA256:$packageSHA,
+              goVersion:$goVersion}' \
             >"$output/candidate.json"
           (cd "$output" && for file in "$package" package-identity.json signing-observation.json notarization-observation.json candidate.json; do
             printf '%s  %s\n' "$(shasum -a 256 "$file" | awk '{print $1}')" "$file"

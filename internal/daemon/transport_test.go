@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // T008: placement accepts a private runtime dir under the store.
@@ -57,4 +59,50 @@ func TestTransportSocketIsLocalUnderRuntimeDir(t *testing.T) {
 	if info.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("primary transport is not a unix socket: %v", info.Mode())
 	}
+}
+
+func TestMainSocketClosePreservesReplacementListener(t *testing.T) {
+	store := testStore(t)
+	original, path, err := listenSocket(store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDir := runtimeDir(store.Root)
+	if err := os.Rename(originalDir, originalDir+".replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(originalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unixListener, ok := replacement.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
+	}
+	t.Cleanup(func() {
+		_ = replacement.Close()
+		_ = os.Remove(path)
+	})
+	replacementInfo, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("old listener removed replacement socket: %v", err)
+	}
+	if !os.SameFile(replacementInfo, current) {
+		t.Fatal("replacement socket identity changed when old listener closed")
+	}
+	connection, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatalf("replacement listener became unreachable: %v", err)
+	}
+	_ = connection.Close()
 }

@@ -299,16 +299,22 @@ validate_retained_gate0_candidate() {
   local candidate="${1:-}"
   local commit="${2:-}"
   local package_sha="${3:-}"
+  local required_go_version module_file
+  module_file="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)/go.mod"
+  required_go_version="go$(awk '$1 == "go" { print $2; exit }' "$module_file")"
   if [ -z "$candidate" ] || [ ! -f "$candidate" ] ||
     ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' ||
-    ! printf '%s' "$package_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+    ! printf '%s' "$package_sha" | grep -Eq '^[0-9a-f]{64}$' ||
+    ! printf '%s' "$required_go_version" | grep -Eq '^go[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "validate_retained_gate0_candidate: candidate, full commit, and package digest are required" >&2
     return 2
   fi
-  if ! jq -e --arg commit "$commit" --arg packageSHA "$package_sha" '
+  if ! jq -e --arg commit "$commit" --arg packageSHA "$package_sha" \
+    --arg goVersion "$required_go_version" '
     .schema == "hideout.public-alpha-candidate/v1" and
     .sourceCommit == $commit and .sourceDirty == false and
     .packageSHA256 == $packageSHA and
+    .goVersion == $goVersion and
     (.workflowRunId | type == "number" and . > 0 and floor == .) and
     .publicationStatus == "draft-only"
   ' "$candidate" >/dev/null; then

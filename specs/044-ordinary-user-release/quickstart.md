@@ -49,12 +49,13 @@ Expected:
 
 ```bash
 scripts/package-local.sh \
-  --out /tmp/hideout-v0.1.0-alpha.2-darwin-arm64.tar.gz \
-  --version 0.1.0-alpha.2 \
-  --channel alpha \
-  --tag v0.1.0-alpha.2 \
+  --out /tmp/hideout-v0.1.0-alpha.3-darwin-arm64.tar.gz \
+  --version 0.1.0-alpha.3 \
+  --channel developer-preview \
+  --tag v0.1.0-alpha.3 \
   --signing-mode developer-preview-unsigned
 scripts/test-package-smoke.sh
+scripts/test-vulnerability-gate.sh --self-test --source
 ```
 
 Expected:
@@ -63,7 +64,13 @@ Expected:
   manifest;
 - third-party notices and upstream license are present;
 - removing or modifying the helper makes verification fail;
-- source/development override behavior remains explicitly labeled.
+- source/development override behavior remains explicitly labeled;
+- generated archive docs name one candidate/archive without predicting a public
+  URL or digest;
+- the pinned Go 1.25.12 source scan has no imported-package or fixable module
+  findings, the vulnerable fixture fires, and the sole no-fix `openpgp`
+  database record is accepted only while its affected packages remain
+  unimported.
 
 The unsigned package is local evidence only and cannot satisfy public release
 readiness.
@@ -90,8 +97,8 @@ executed UI E2E, the ordinary-user release lane, and aggregate readiness:
 ```bash
 HIDEOUT_SECRET_DEFAULT_PROXY=socks5://127.0.0.1:1080 \
   scripts/test-public-alpha-candidate.sh \
-    --tag v0.1.0-alpha.2 \
-    --package /path/to/hideout-v0.1.0-alpha.2-darwin-arm64.tar.gz \
+    --tag v0.1.0-alpha.3 \
+    --package /path/to/hideout-v0.1.0-alpha.3-darwin-arm64.tar.gz \
     --signing-observation /path/to/signing.json \
     --notarization-observation /path/to/notarization.json \
     --candidate-observation /path/to/candidate.json \

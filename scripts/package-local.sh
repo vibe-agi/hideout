@@ -156,7 +156,7 @@ package_kind() {
     bin/*.manifest.json) echo helper-manifest ;;
     bin/*-linux-*) echo linux-helper ;;
     install.sh) echo installer ;;
-    README.md|README.zh-CN.md) echo entrypoint ;;
+    README.md|README.zh-CN.md|CHANGELOG.md|RELEASE_NOTES.md) echo entrypoint ;;
     schemas/*) echo schema ;;
     LICENSE|THIRD_PARTY_NOTICES.md|SECURITY.md|docs/*|third_party/*) echo doc ;;
     host-app/*) echo host-app-core-data ;;
@@ -171,7 +171,7 @@ package_kind() {
 
 write_metadata() {
   local root="$1"
-  local commit dirty built_at host_os host_arch guest_arch catalog_sha runtime_revision runtime_artifact
+  local commit dirty built_at host_os host_arch guest_arch archive_name catalog_sha runtime_revision runtime_artifact
   commit="$(git -C "$source" rev-parse HEAD 2>/dev/null || printf 'unknown')"
   dirty=false
   if git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
@@ -182,6 +182,7 @@ write_metadata() {
   host_os="$(go env GOOS)"
   host_arch="$(go env GOARCH)"
   guest_arch="$host_arch"
+  archive_name="hideout-v$version-$host_os-$host_arch.tar.gz"
   catalog_sha="$(sha256_file "$root/hideout/runtime/catalog.json")"
   runtime_revision="$(jq -er --arg os "$host_os" --arg arch "$host_arch" '
     .families[] | select(.id == "developer-standard") | .currentRevision
@@ -197,18 +198,20 @@ write_metadata() {
     --arg commit "$commit" --argjson dirty "$dirty" --arg builtAt "$built_at" \
     --arg workflow "$workflow" --arg ref "$ref" --arg signingMode "$signing_mode" \
     --arg hostOS "$host_os" --arg hostArch "$host_arch" --arg guestArch "$guest_arch" \
+    --arg archiveName "$archive_name" \
     --arg runtimeRevision "$runtime_revision" --arg catalogSHA256 "$catalog_sha" \
     --arg runtimeArtifactSHA256 "$runtime_artifact" \
     '{version:$version,channel:$channel,tag:$tag,repository:$repository,
       commit:$commit,dirty:$dirty,builtAt:$builtAt,workflow:$workflow,ref:$ref,
       signingMode:$signingMode,hostOS:$hostOS,hostArch:$hostArch,guestArch:$guestArch,
+      archiveName:$archiveName,
       runtimeFamily:"developer-standard",runtimeRevision:$runtimeRevision,
       catalogSHA256:$catalogSHA256,runtimeArtifactSHA256:$runtimeArtifactSHA256}' \
     >"$root/.package-build.json"
 }
 
 stage_package() {
-  local root="$1" prefix="$1/hideout"
+  local root="$1" prefix="$1/hideout" archive_name
   if [ -e "$root" ]; then
     echo "package-local: stage path already exists: $root" >&2
     exit 1
@@ -218,7 +221,7 @@ stage_package() {
     --prefix "$prefix" --store "$root/.store" --source "$source" --skip-init >/dev/null
   rm -rf "$root/.store"
   install -m 0755 "$source/packaging/install-package.sh" "$prefix/install.sh"
-  for file in README.md README.zh-CN.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md; do
+  for file in README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md; do
     install -m 0644 "$source/$file" "$prefix/$file"
   done
   mkdir -p "$prefix/third_party/tun2socks"
@@ -233,6 +236,10 @@ stage_package() {
   install -m 0644 "$source/internal/runtimecatalog/catalog.json" "$prefix/runtime/catalog.json"
   install -m 0644 "$source/internal/runtimecatalog/contract.json" "$prefix/runtime/contract.json"
   cp -R "$source/runtime/developer-standard" "$prefix/runtime/developer-standard"
+  archive_name="hideout-v$version-$(go env GOOS)-$(go env GOARCH).tar.gz"
+  "$source/scripts/render-package-release-docs.sh" \
+    --package-root "$prefix" --version "$version" --tag "$tag" \
+    --channel "$channel" --archive "$archive_name" >/dev/null
   write_metadata "$root"
   printf '%s\n' "$root"
 }
@@ -245,6 +252,11 @@ finalize_package() {
   fi
   if [ -e "$prefix/package-manifest.json" ]; then
     echo "package-local: staged package is already finalized" >&2
+    exit 1
+  fi
+  if [ "$(jq -er '.channel' "$metadata")" = "alpha" ] &&
+    [ "$(basename "$archive")" != "$(jq -er '.archiveName' "$metadata")" ]; then
+    echo "package-local: alpha archive name does not match staged candidate identity" >&2
     exit 1
   fi
 
@@ -281,7 +293,7 @@ finalize_package() {
       signingSummary:{mode:$m.signingMode},
       layout:{root:"hideout",
         binaries:([$files[0][] | select(.kind == "binary" or .kind == "linux-helper") | .path] | sort),
-        entrypoints:["install.sh","README.md","README.zh-CN.md"],
+        entrypoints:["install.sh","README.md","README.zh-CN.md","CHANGELOG.md","RELEASE_NOTES.md"],
         directories:["schemas","docs","host-app","examples","packaging","runtime","third_party"]},
       files:$files[0],
       migration:{installStateSchema:"hideout.package-install-state/v1",

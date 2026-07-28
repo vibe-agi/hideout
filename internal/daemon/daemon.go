@@ -174,7 +174,6 @@ func Start(opts Options) (*Daemon, error) {
 	sessionListener, err := ListenSession(opts.Store.Root)
 	if err != nil {
 		_ = ln.Close()
-		_ = os.Remove(sock)
 		_ = al.close()
 		releaseLock(lockFile, filepath.Join(dir, lockName))
 		return nil, err
@@ -183,7 +182,6 @@ func Start(opts Options) (*Daemon, error) {
 	if err != nil {
 		_ = sessionListener.Close()
 		_ = ln.Close()
-		_ = os.Remove(sock)
 		_ = al.close()
 		releaseLock(lockFile, filepath.Join(dir, lockName))
 		return nil, err
@@ -221,7 +219,6 @@ func Start(opts Options) (*Daemon, error) {
 	if err != nil {
 		_ = sessionListener.Close()
 		_ = ln.Close()
-		_ = os.Remove(sock)
 		_ = al.close()
 		releaseLock(lockFile, filepath.Join(dir, lockName))
 		return nil, err
@@ -231,7 +228,6 @@ func Start(opts Options) (*Daemon, error) {
 			_ = lifecycleCoordinator.Close()
 			_ = sessionListener.Close()
 			_ = ln.Close()
-			_ = os.Remove(sock)
 			_ = al.close()
 			releaseLock(lockFile, filepath.Join(dir, lockName))
 			return nil, err
@@ -242,7 +238,6 @@ func Start(opts Options) (*Daemon, error) {
 			_ = lifecycleCoordinator.Close()
 			_ = sessionListener.Close()
 			_ = ln.Close()
-			_ = os.Remove(sock)
 			_ = al.close()
 			releaseLock(lockFile, filepath.Join(dir, lockName))
 			return nil, err
@@ -251,7 +246,6 @@ func Start(opts Options) (*Daemon, error) {
 			_ = lifecycleCoordinator.Close()
 			_ = sessionListener.Close()
 			_ = ln.Close()
-			_ = os.Remove(sock)
 			_ = al.close()
 			releaseLock(lockFile, filepath.Join(dir, lockName))
 			return nil, err
@@ -556,9 +550,11 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.server != nil {
 		stopErr = errors.Join(stopErr, d.server.Shutdown(ctx))
 	}
+	if d.ln != nil {
+		stopErr = errors.Join(stopErr, d.ln.Close())
+	}
 	d.audit.record("daemon.stop", "allow", map[string]any{"socket": d.socket})
 	_ = d.audit.close()
-	_ = os.Remove(d.socket)
 	releaseLock(d.lockFile, filepath.Join(d.runtimeDir, lockName))
 
 	d.mu.Lock()

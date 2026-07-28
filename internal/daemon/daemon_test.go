@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +129,56 @@ func TestDaemonStopsWhenCredentialRuntimeDirectoryDisappears(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("daemon did not stop after its credential runtime directory disappeared")
 	}
+}
+
+func TestDaemonRuntimeReplacementPreservesSuccessorSocket(t *testing.T) {
+	store := testStore(t)
+	d, err := Start(Options{Store: store, TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+
+	runtimePath := d.RuntimeDir()
+	if err := os.Rename(runtimePath, runtimePath+".replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runtimePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := net.Listen("unix", d.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unixListener, ok := replacement.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
+	}
+	t.Cleanup(func() {
+		_ = replacement.Close()
+		_ = os.Remove(d.Socket())
+	})
+	replacementInfo, err := os.Lstat(d.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-d.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop after its runtime directory was replaced")
+	}
+	current, err := os.Lstat(d.Socket())
+	if err != nil {
+		t.Fatalf("old daemon removed successor socket: %v", err)
+	}
+	if !os.SameFile(replacementInfo, current) {
+		t.Fatal("successor socket identity changed during old daemon shutdown")
+	}
+	connection, err := net.DialTimeout("unix", d.Socket(), time.Second)
+	if err != nil {
+		t.Fatalf("successor socket became unreachable: %v", err)
+	}
+	_ = connection.Close()
 }
 
 func TestDaemonBacksOffTransientCredentialRotationFailure(t *testing.T) {

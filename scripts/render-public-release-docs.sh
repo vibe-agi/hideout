@@ -89,13 +89,43 @@ EOF
 cat >"$tmp/changelog" <<EOF
 ## ${version}
 
-- Publish the first public supervised macOS arm64 alpha package at
+- Publish the public supervised macOS arm64 alpha package at
   [${tag}](${release_url}).
 - Bind package, runtime, signing, notarization, Gate 2, Gate 3, and anonymous
   download evidence to one immutable release identity.
 - Keep automatic updates, Linux packages, GA stability, workspace DLP,
   guest-root containment, and marketplace trust outside this release claim.
 EOF
+
+history_count=0
+while IFS= read -r receipt; do
+  receipt_tag="$(jq -er '.tag' "$receipt")"
+  if [ "$receipt_tag" = "$tag" ]; then
+    continue
+  fi
+  jq -e '
+    .schema == "hideout.publication-receipt/v1" and
+    .status == "public-verified" and .immutable == true and
+    .tag == ("v" + .version) and
+    (.package.artifactSHA256 | test("^[0-9a-f]{64}$"))
+  ' "$receipt" >/dev/null
+  if [ "$history_count" -eq 0 ]; then
+    printf '\n## Published history\n' >>"$tmp/changelog"
+  fi
+  receipt_version="$(jq -er '.version' "$receipt")"
+  receipt_url="$(jq -er '.url' "$receipt")"
+  receipt_sha="$(jq -er '.package.artifactSHA256' "$receipt")"
+  cat >>"$tmp/changelog" <<EOF
+
+### ${receipt_version}
+
+<!-- markdownlint-disable-next-line MD013 -->
+- [${receipt_tag}](${receipt_url}) is an immutable earlier
+  supervised alpha.
+- Package SHA-256: \`${receipt_sha}\`.
+EOF
+  history_count=$((history_count + 1))
+done < <(find releases/receipts -maxdepth 1 -type f -name 'v*.json' | LC_ALL=C sort -r)
 
 replace_block README.md "$tmp/readme-en"
 replace_block README.zh-CN.md "$tmp/readme-zh"

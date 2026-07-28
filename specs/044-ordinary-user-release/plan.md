@@ -27,7 +27,7 @@ host authority and no fallback from privacy to direct networking.
 
 ## Technical Context
 
-**Language/Version**: Go 1.25.0; Bash compatible with macOS Bash 3.2 for release
+**Language/Version**: Go 1.25.12; Bash compatible with macOS Bash 3.2 for release
 and gate scripts; JSON Schema for persisted/shareable contracts
 
 **Primary Dependencies**: Existing Go standard library and repository modules;

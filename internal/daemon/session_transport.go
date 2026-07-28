@@ -100,34 +100,47 @@ func ListenSession(storeRoot string) (*SessionListener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon: bind session socket: %w", err)
 	}
-	if unixListener, ok := ln.(*net.UnixListener); ok {
-		unixListener.SetUnlinkOnClose(false)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	unixListener, ok := ln.(*net.UnixListener)
+	if !ok {
 		_ = ln.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("daemon: secure session socket: %w", err)
+		return nil, errors.New("daemon: unix session listener has an unexpected implementation")
 	}
+	unixListener.SetUnlinkOnClose(false)
 	info, err := os.Lstat(path)
 	if err != nil {
 		_ = ln.Close()
-		_ = os.Remove(path)
 		return nil, fmt.Errorf("daemon: inspect session socket: %w", err)
 	}
-	if info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 {
-		_ = ln.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("daemon: session transport path is not a unix socket: %s", path)
-	}
-
 	keepLock = false
-	return &SessionListener{
+	owned := &SessionListener{
 		Listener: ln,
 		path:     path,
 		bound:    info,
 		lockFile: lockFile,
 		lockPath: lockPath,
-	}, nil
+	}
+	if info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 {
+		pathErr := fmt.Errorf("daemon: session transport path is not a unix socket: %s", path)
+		return nil, errors.Join(pathErr, owned.Close())
+	}
+	if err := proveSocketPathOwnership(unixListener, path, info); err != nil {
+		return nil, errors.Join(err, owned.Close())
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = owned.Close()
+		return nil, fmt.Errorf("daemon: secure session socket: %w", err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		_ = owned.Close()
+		return nil, fmt.Errorf("daemon: inspect secured session socket: %w", err)
+	}
+	if current.Mode()&os.ModeSocket == 0 || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, current) {
+		_ = owned.Close()
+		return nil, fmt.Errorf("daemon: session transport path changed while securing: %s", path)
+	}
+	return owned, nil
 }
 
 // Socket returns the listener's stable filesystem path.

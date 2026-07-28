@@ -61,6 +61,17 @@ mkdir -p "$workspace" "$tmp/install"
 scripts/package-local.sh --stage "$stage" >"$tmp/package-stage.out"
 test ! -e "$stage/hideout/package-manifest.json"
 staged_hideout_sha="$(sha256_file "$stage/hideout/bin/hideout")"
+cp "$stage/.package-build.json" "$tmp/package-build-original.json"
+jq '.channel = "alpha"' "$stage/.package-build.json" >"$tmp/package-build-alpha.json"
+mv "$tmp/package-build-alpha.json" "$stage/.package-build.json"
+if scripts/package-local.sh --finalize "$stage" --out "$tmp/wrong-alpha-name.tar.gz" \
+  >"$tmp/wrong-alpha-name.out" 2>"$tmp/wrong-alpha-name.err"; then
+  echo "package-smoke: mismatched alpha archive name was accepted" >&2
+  exit 1
+fi
+grep -Fq 'alpha archive name does not match staged candidate identity' \
+  "$tmp/wrong-alpha-name.err"
+mv "$tmp/package-build-original.json" "$stage/.package-build.json"
 scripts/package-local.sh --finalize "$stage" --out "$pkg" >"$tmp/package.out"
 test -f "$pkg"
 test "$staged_hideout_sha" = "$(sha256_file "$stage/hideout/bin/hideout")"
@@ -72,6 +83,7 @@ grep -q 'Alpha package lifecycle' docs/STATUS.md
 tar -xzf "$pkg" -C "$tmp/install"
 prefix="$tmp/install/hideout"
 arch="$(go env GOARCH)"
+scripts/test-package-docs.sh --package-root "$prefix" --self-test
 
 manifest_relative_path() {
   case "$1" in
@@ -93,6 +105,8 @@ for path in \
   "$prefix/package-manifest.json" \
   "$prefix/README.md" \
   "$prefix/README.zh-CN.md" \
+  "$prefix/CHANGELOG.md" \
+  "$prefix/RELEASE_NOTES.md" \
   "$prefix/LICENSE" \
   "$prefix/THIRD_PARTY_NOTICES.md" \
   "$prefix/SECURITY.md" \

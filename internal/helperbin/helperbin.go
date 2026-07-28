@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,8 @@ const (
 	LinuxWorkspacePortalCommand           = "hideout-workspace-portal"
 	LinuxWorkspacePortalPathEnvironment   = "HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH"
 )
+
+var ErrPackagedTun2SocksUnavailable = errors.New("packaged tun2socks helper is unavailable")
 
 type BuildOptions struct {
 	Out     string
@@ -60,12 +63,14 @@ type Tun2SocksResolveOptions struct {
 	StoreRoot  string
 	GOARCH     string
 	Override   string
+	AllowStore bool
 }
 
 type Tun2SocksResolution struct {
-	Path     string
-	Source   string
-	Manifest Manifest
+	Path           string
+	Source         string
+	ExpectedSHA256 string
+	Manifest       Manifest
 }
 
 func DefaultLinuxShimPath(storeRoot, goarch string) string {
@@ -175,12 +180,13 @@ func ResolveLinuxTun2Socks(opts Tun2SocksResolveOptions) (Tun2SocksResolution, e
 	}
 	if strings.TrimSpace(opts.Override) != "" {
 		path := opts.Override
-		if err := validateExplicitTun2Socks(path, goarch); err != nil {
+		digest, err := validateExplicitTun2Socks(path, goarch)
+		if err != nil {
 			return Tun2SocksResolution{}, fmt.Errorf("invalid explicit %s: %w", LinuxTun2SocksPathEnvironment, err)
 		}
 		manifest, _ := ReadManifest(ManifestPath(path))
 		return Tun2SocksResolution{
-			Path: path, Source: Tun2SocksSourceOverride, Manifest: manifest,
+			Path: path, Source: Tun2SocksSourceOverride, ExpectedSHA256: digest, Manifest: manifest,
 		}, nil
 	}
 	executable := strings.TrimSpace(opts.Executable)
@@ -194,19 +200,36 @@ func ResolveLinuxTun2Socks(opts Tun2SocksResolveOptions) (Tun2SocksResolution, e
 		candidate := filepath.Join(filepath.Dir(executable), LinuxTun2SocksCommand+"-linux-"+goarch)
 		if manifest, ok := Tun2SocksHelperCurrent(candidate, goarch, true); ok {
 			return Tun2SocksResolution{
-				Path: candidate, Source: Tun2SocksSourcePackage, Manifest: manifest,
+				Path: candidate, Source: Tun2SocksSourcePackage, ExpectedSHA256: manifest.SHA256, Manifest: manifest,
 			}, nil
 		}
+		if packagedExecutable(executable) {
+			return Tun2SocksResolution{}, fmt.Errorf("%w: %s", ErrPackagedTun2SocksUnavailable, candidate)
+		}
 	}
-	if strings.TrimSpace(opts.StoreRoot) != "" {
+	if opts.AllowStore && strings.TrimSpace(opts.StoreRoot) != "" {
 		candidate := DefaultLinuxTun2SocksPath(opts.StoreRoot, goarch)
 		if manifest, ok := Tun2SocksHelperCurrent(candidate, goarch, false); ok {
 			return Tun2SocksResolution{
-				Path: candidate, Source: Tun2SocksSourceStore, Manifest: manifest,
+				Path: candidate, Source: Tun2SocksSourceStore, ExpectedSHA256: manifest.SHA256, Manifest: manifest,
 			}, nil
 		}
 	}
 	return Tun2SocksResolution{}, nil
+}
+
+func packagedExecutable(executable string) bool {
+	binDir := filepath.Dir(executable)
+	for _, marker := range []string{
+		filepath.Join(binDir, "..", "package-manifest.json"),
+		filepath.Join(binDir, "..", "share", "hideout", "package-manifest.json"),
+	} {
+		_, err := os.Lstat(filepath.Clean(marker))
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveLinuxDNSStubPath locates the prebuilt guest DNS stub (DoH resolver)
@@ -554,38 +577,120 @@ func Tun2SocksHelperCurrent(binaryPath, goarch string, requirePackageOwned bool)
 	return manifest, true
 }
 
-func validateExplicitTun2Socks(path, goarch string) error {
+func validateExplicitTun2Socks(path, goarch string) (string, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return errors.New("path must be clean and absolute")
+		return "", errors.New("path must be clean and absolute")
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return errors.New("path must be a non-symlink regular file")
+		return "", errors.New("path must be a non-symlink regular file")
 	}
 	if info.Mode()&0o111 == 0 {
-		return errors.New("path must be executable")
+		return "", errors.New("path must be executable")
 	}
-	if _, ok := Tun2SocksHelperCurrent(path, goarch, false); ok {
-		return nil
+	if manifest, ok := Tun2SocksHelperCurrent(path, goarch, false); ok {
+		return manifest.SHA256, nil
 	}
-	file, err := elf.Open(path)
+	file, err := os.Open(path)
 	if err != nil {
-		return errors.New("path is neither a matching helper manifest nor a Linux ELF executable")
+		return "", errors.New("path is neither a matching helper manifest nor a Linux ELF executable")
 	}
 	defer file.Close()
-	wantMachine := elf.EM_NONE
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !os.SameFile(info, openedInfo) {
+		return "", errors.New("path changed while validating the explicit helper")
+	}
+	elfFile, err := elf.NewFile(file)
+	if err != nil {
+		return "", errors.New("path is neither a matching helper manifest nor a Linux ELF executable")
+	}
+	defer elfFile.Close()
+	wantMachine := elf.Machine(elf.EM_NONE)
 	switch goarch {
 	case "arm64":
 		wantMachine = elf.EM_AARCH64
 	case "amd64":
 		wantMachine = elf.EM_X86_64
 	}
-	if file.Machine != wantMachine {
-		return fmt.Errorf("Linux ELF target is %s, want %s", file.Machine, wantMachine)
+	if elfFile.Machine != wantMachine {
+		return "", fmt.Errorf("Linux ELF target is %s, want %s", elfFile.Machine, wantMachine)
 	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func CopyVerifiedExecutable(src, dst, expectedSHA256 string) error {
+	expectedSHA256 = strings.ToLower(strings.TrimSpace(expectedSHA256))
+	decoded, err := hex.DecodeString(expectedSHA256)
+	if err != nil || len(decoded) != sha256.Size {
+		return errors.New("verified executable requires a valid SHA-256 digest")
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return errors.New("verified executable source must be a non-symlink executable regular file")
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	openedInfo, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, openedInfo) {
+		return errors.New("verified executable source changed while opening")
+	}
+
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dst)+".verified-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hash), in); err != nil {
+		return err
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if actual != expectedSHA256 {
+		return fmt.Errorf("verified executable digest mismatch: expected %s got %s", expectedSHA256, actual)
+	}
+	if err := tmp.Chmod(0o700); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		return err
+	}
+	keep = true
 	return nil
 }
 

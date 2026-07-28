@@ -151,12 +151,21 @@ grep -F '"$package_root/install.sh" --prefix "$prefix" --store "$store" --skip-i
     exit 1
   fi
 
-  jq -n --arg commit "$commit" --arg packageSHA "$artifact" '
+  jq -n --arg commit "$commit" --arg packageSHA "$artifact" \
+    --arg goVersion "go$(awk '$1 == "go" { print $2; exit }' go.mod)" '
     {schema:"hideout.public-alpha-candidate/v1",version:"0.1.0-alpha.1",
      tag:"v0.1.0-alpha.1",sourceCommit:$commit,sourceDirty:false,
-     workflowRunId:123,publicationStatus:"draft-only",packageSHA256:$packageSHA}
+     workflowRunId:123,publicationStatus:"draft-only",packageSHA256:$packageSHA,
+     goVersion:$goVersion}
   ' >"$retained_fixture/candidate.json"
   validate_retained_gate0_candidate "$retained_fixture/candidate.json" "$commit" "$artifact"
+  jq 'del(.goVersion)' "$retained_fixture/candidate.json" \
+    >"$retained_fixture/candidate-missing-go-version.json"
+  if validate_retained_gate0_candidate "$retained_fixture/candidate-missing-go-version.json" \
+    "$commit" "$artifact" >/dev/null 2>&1; then
+    echo "public-alpha-release: Gate 0 receipt without toolchain identity was accepted" >&2
+    exit 1
+  fi
   if validate_retained_gate0_candidate "$retained_fixture/candidate.json" "$commit" \
     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" >/dev/null 2>&1; then
     echo "public-alpha-release: Gate 0 receipt was reused for another package" >&2
@@ -733,7 +742,7 @@ docs_root="$tmp/docs-root"
 mkdir -p "$docs_root/docs" "$docs_root/packaging/homebrew" \
   "$docs_root/releases/formulas" "$docs_root/releases/receipts"
 cp README.md README.zh-CN.md CHANGELOG.md "$docs_root/"
-cp docs/STATUS.md docs/support-matrix.md "$docs_root/docs/"
+cp docs/STATUS.md docs/distribution-bootstrap.md docs/support-matrix.md "$docs_root/docs/"
 cp packaging/homebrew/hideout.rb "$docs_root/packaging/homebrew/"
 jq -n --slurpfile package "$tmp/package-identity.json" \
   --arg observedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \

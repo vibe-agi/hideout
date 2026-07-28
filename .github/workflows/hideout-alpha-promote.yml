@@ -166,7 +166,7 @@ jobs:
           - Notarization: accepted online; tar.gz does not claim a stapled ticket
           - License: Apache-2.0 for Hideout; third-party terms remain in \`THIRD_PARTY_NOTICES.md\`
 
-          The retained runtime is downloaded separately on first use and is approximately 1 GB. Start with the direct Lima quickstart, then review the separate privacy-network and safe \`code .\` walkthrough. This first public package has no prior public package migration; N-1 migration proof begins with the second alpha.
+          The retained runtime is downloaded separately on first use and is approximately 1 GB. Start with the direct Lima quickstart, then review the separate privacy-network and safe \`code .\` walkthrough. Package migration, removed package-owned files, preservation, and support changes are candidate-bound and must agree with the package manifest, candidate changelog, and retained upgrade evidence; this text does not assume the candidate is the first public package.
 
           Install, verify, recover, and report issues using the [public distribution guide](https://github.com/${GITHUB_REPOSITORY}/blob/${PROMOTION_COMMIT}/docs/distribution-bootstrap.md), [first-run guide](https://github.com/${GITHUB_REPOSITORY}/blob/${PROMOTION_COMMIT}/docs/first-run-alpha.md), [issue form](https://github.com/${GITHUB_REPOSITORY}/issues/new/choose), and [private security reporting](https://github.com/${GITHUB_REPOSITORY}/security/advisories/new).
 
