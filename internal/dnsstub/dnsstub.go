@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	maxMessage    = 65535
-	dohTimeout    = 15 * time.Second
-	readDeadline  = 30 * time.Second
-	maxDoHReplyKB = 64 << 10
+	maxMessage         = 65535
+	dohTimeout         = 15 * time.Second
+	readDeadline       = 30 * time.Second
+	maxDoHReplyKB      = 64 << 10
+	listenPairAttempts = 16
 )
 
 // Server forwards DNS queries to a DoH endpoint over HTTPS.
@@ -48,18 +49,8 @@ func Listen(address, dohServerIP, tlsServerName string) (*Server, error) {
 	if net.ParseIP(dohServerIP) == nil {
 		return nil, fmt.Errorf("doh server %q is not an IP literal", dohServerIP)
 	}
-	tcpLn, err := net.Listen("tcp", address)
+	udpConn, tcpLn, err := listenPair(address)
 	if err != nil {
-		return nil, err
-	}
-	tcpAddr, ok := tcpLn.Addr().(*net.TCPAddr)
-	if !ok {
-		_ = tcpLn.Close()
-		return nil, errors.New("dns stub listener is not TCP")
-	}
-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port})
-	if err != nil {
-		_ = tcpLn.Close()
 		return nil, err
 	}
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -76,6 +67,54 @@ func Listen(address, dohServerIP, tlsServerName string) (*Server, error) {
 			Transport: &http.Transport{TLSClientConfig: tlsConf, ForceAttemptHTTP2: true},
 		},
 	}, nil
+}
+
+func listenPair(address string) (*net.UDPConn, net.Listener, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port != "0" {
+		return listenPairExact(address)
+	}
+	udpAddress, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return nil, nil, err
+	}
+	var lastErr error
+	for range listenPairAttempts {
+		udpConn, err := net.ListenUDP("udp", udpAddress)
+		if err != nil {
+			return nil, nil, err
+		}
+		selected, ok := udpConn.LocalAddr().(*net.UDPAddr)
+		if !ok {
+			_ = udpConn.Close()
+			return nil, nil, errors.New("dns stub listener is not UDP")
+		}
+		tcpLn, err := net.Listen("tcp", selected.String())
+		if err == nil {
+			return udpConn, tcpLn, nil
+		}
+		lastErr = err
+		_ = udpConn.Close()
+	}
+	return nil, nil, fmt.Errorf("bind DNS TCP/UDP listener pair: %w", lastErr)
+}
+
+func listenPairExact(address string) (*net.UDPConn, net.Listener, error) {
+	tcpLn, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, nil, err
+	}
+	tcpAddr, ok := tcpLn.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = tcpLn.Close()
+		return nil, nil, errors.New("dns stub listener is not TCP")
+	}
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port})
+	if err != nil {
+		_ = tcpLn.Close()
+		return nil, nil, err
+	}
+	return udpConn, tcpLn, nil
 }
 
 // Addr returns the TCP listen address (shared with UDP).
