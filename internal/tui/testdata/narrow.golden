@@ -1,0 +1,13 @@
+Hideout · default · LIVE
+ses_alpha · claude · running
+proxy · DNS 1.1.1.1
+coverage 2 available · file Partial · dns Partial
+risk HIGH · wrote outside workspace
+next inspect file activity
+
+Activity (Enter for details)
+> file write · 3 events
+
+[1] Overview [2] Activity [3] Config
+[4] Operations [5] Help
+j/k select · Enter inspect · e env · ? keys · q quit

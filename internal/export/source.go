@@ -28,6 +28,8 @@ func readSource(req Request) (sourceData, error) {
 			notice = "0 records matched"
 		}
 		return sourceData{Body: events, RecordCount: len(events), Notice: notice}, nil
+	case SourceActivity:
+		return readActivitySource(req.Activity)
 	case SourceBundle:
 		return readBundleSource(req.BundlePath)
 	case SourceBoundarySummary:
@@ -37,6 +39,36 @@ func readSource(req Request) (sourceData, error) {
 	default:
 		return sourceData{}, fmt.Errorf("unsupported export source %q", req.Source)
 	}
+}
+
+func readActivitySource(value any) (sourceData, error) {
+	if value == nil {
+		return sourceData{}, errors.New("activity export source is required")
+	}
+	body, err := normalizeMap(value)
+	if err != nil {
+		return sourceData{}, fmt.Errorf("read activity export source: %w", err)
+	}
+	schema, _ := body["schema"].(string)
+	if schema != "hideout.activity-export.v1" {
+		return sourceData{}, fmt.Errorf(
+			"activity export schema %q is not supported",
+			schema,
+		)
+	}
+	records, ok := body["records"].([]any)
+	if !ok {
+		return sourceData{}, errors.New(
+			"activity export source records must be an array",
+		)
+	}
+	notice := ""
+	if len(records) == 0 {
+		notice = "0 records matched"
+	}
+	return sourceData{
+		Body: body, RecordCount: len(records), Notice: notice,
+	}, nil
 }
 
 func readDoctorReportSource(path string) (sourceData, error) {

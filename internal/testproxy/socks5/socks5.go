@@ -3,25 +3,31 @@ package socks5
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
 )
 
 const (
-	version5        = 0x05
-	methodNoAuth    = 0x00
-	methodNone      = 0xff
-	cmdConnect      = 0x01
-	cmdUDPAssociate = 0x03
-	atypIPv4        = 0x01
-	atypDomain      = 0x03
-	atypIPv6        = 0x04
+	version5               = 0x05
+	methodNoAuth           = 0x00
+	methodUsernamePassword = 0x02
+	methodNone             = 0xff
+	authVersion            = 0x01
+	authSuccess            = 0x00
+	authFailure            = 0x01
+	cmdConnect             = 0x01
+	cmdUDPAssociate        = 0x03
+	atypIPv4               = 0x01
+	atypDomain             = 0x03
+	atypIPv6               = 0x04
 
 	replySuccess     = 0x00
 	replyGeneral     = 0x01
@@ -34,6 +40,11 @@ const (
 
 type Server struct {
 	Listener net.Listener
+	// Username and Password enable RFC 1929 username/password authentication
+	// when both are non-empty. They are intentionally held only in memory by
+	// gate fixtures and never included in trace output.
+	Username string
+	Password string
 	// DialContext optionally supplies the fixture's host-side egress. Production
 	// gates use it to chain through an operator's HTTP CONNECT proxy when the
 	// host cannot reach public resolver IPs directly.
@@ -74,18 +85,32 @@ func (s *Server) URL(host string) (string, error) {
 	if !ok || addr == nil {
 		return "", errors.New("socks5 listener is not TCP")
 	}
+	authenticated, err := s.authenticated()
+	if err != nil {
+		return "", err
+	}
 	if host == "" {
 		host = addr.IP.String()
 		if host == "" || addr.IP.IsUnspecified() {
 			host = "127.0.0.1"
 		}
 	}
-	return "socks5://" + net.JoinHostPort(host, strconv.Itoa(addr.Port)), nil
+	proxyURL := &url.URL{
+		Scheme: "socks5",
+		Host:   net.JoinHostPort(host, strconv.Itoa(addr.Port)),
+	}
+	if authenticated {
+		proxyURL.User = url.UserPassword(s.Username, s.Password)
+	}
+	return proxyURL.String(), nil
 }
 
 func (s *Server) Serve(ctx context.Context) error {
 	if s == nil || s.Listener == nil {
 		return errors.New("socks5 listener is required")
+	}
+	if _, err := s.authenticated(); err != nil {
+		return err
 	}
 	var once sync.Once
 	closeListener := func() {
@@ -132,7 +157,7 @@ func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 	s.trace("accepted")
 	_ = client.SetDeadline(time.Now().Add(handshakeTimeout))
 	reader := bufio.NewReader(client)
-	if err := negotiateMethod(reader, client); err != nil {
+	if err := s.negotiateMethod(reader, client); err != nil {
 		s.trace("method_negotiation_failed")
 		return
 	}
@@ -171,7 +196,19 @@ func (s *Server) handleConn(ctx context.Context, client net.Conn) {
 	copyBoth(client, reader, target)
 }
 
-func negotiateMethod(reader *bufio.Reader, client net.Conn) error {
+func (s *Server) authenticated() (bool, error) {
+	usernameSet := s.Username != ""
+	passwordSet := s.Password != ""
+	if usernameSet != passwordSet {
+		return false, errors.New("socks5 username and password must both be set")
+	}
+	if len(s.Username) > 255 || len(s.Password) > 255 {
+		return false, errors.New("socks5 username and password must not exceed 255 bytes")
+	}
+	return usernameSet, nil
+}
+
+func (s *Server) negotiateMethod(reader *bufio.Reader, client net.Conn) error {
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(reader, header); err != nil {
 		return err
@@ -183,14 +220,74 @@ func negotiateMethod(reader *bufio.Reader, client net.Conn) error {
 	if _, err := io.ReadFull(reader, methods); err != nil {
 		return err
 	}
+	authenticated, err := s.authenticated()
+	if err != nil {
+		return err
+	}
 	for _, method := range methods {
-		if method == methodNoAuth {
+		if authenticated && method == methodUsernamePassword {
+			if _, err := client.Write([]byte{version5, methodUsernamePassword}); err != nil {
+				return err
+			}
+			return authenticateUsernamePassword(
+				reader,
+				client,
+				s.Username,
+				s.Password,
+			)
+		}
+		if !authenticated && method == methodNoAuth {
 			_, err := client.Write([]byte{version5, methodNoAuth})
 			return err
 		}
 	}
 	_, _ = client.Write([]byte{version5, methodNone})
 	return errors.New("no supported auth method")
+}
+
+func authenticateUsernamePassword(
+	reader *bufio.Reader,
+	client net.Conn,
+	username string,
+	password string,
+) error {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return err
+	}
+	if header[0] != authVersion || header[1] == 0 {
+		_, _ = client.Write([]byte{authVersion, authFailure})
+		return errors.New("invalid socks5 username/password request")
+	}
+	providedUsername := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(reader, providedUsername); err != nil {
+		return err
+	}
+	passwordLength, err := reader.ReadByte()
+	if err != nil || passwordLength == 0 {
+		_, _ = client.Write([]byte{authVersion, authFailure})
+		return errors.New("invalid socks5 username/password request")
+	}
+	providedPassword := make([]byte, int(passwordLength))
+	if _, err := io.ReadFull(reader, providedPassword); err != nil {
+		return err
+	}
+	usernameMatches := subtle.ConstantTimeCompare(
+		providedUsername,
+		[]byte(username),
+	)
+	passwordMatches := subtle.ConstantTimeCompare(
+		providedPassword,
+		[]byte(password),
+	)
+	if usernameMatches != 1 || passwordMatches != 1 {
+		_, _ = client.Write([]byte{authVersion, authFailure})
+		return errors.New("socks5 username/password authentication failed")
+	}
+	if _, err := client.Write([]byte{authVersion, authSuccess}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func readRequest(reader *bufio.Reader, client net.Conn) (byte, string, error) {

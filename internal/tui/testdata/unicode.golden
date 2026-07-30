@@ -1,0 +1,14 @@
+┌ Hideout · default · LIVE · ses_alpha · 12:00:00
+│ COMMAND claude
+│ CONNECTION proxy · DNS 1.1.1.1
+│ STATE running
+│ COVERAGE process Available · file Partial · network Available · dns Partial
+│ RISK HIGH · wrote outside workspace
+│ NEXT inspect file activity
+├ Activity · Details
+│ file write · 3 events · exact attribution
+│ session ses_alpha · profile default
+│ coverage file Partial (fanotify-fallback)
+├ [1] Overview [2] Activity [3] Config [4] Operations [5] Help
+│ j/k select · Enter inspect · e environments · ? keys · q quit
+└

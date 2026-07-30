@@ -33,19 +33,27 @@ type PublicEvidenceReview struct {
 // release evidence can leave the machine. ReviewPublicEvidence independently
 // verifies the resulting bytes so producers cannot self-declare success.
 func RedactPublicEvidence(data []byte) ([]byte, PublicEvidenceReview, error) {
-	text := audit.RedactString(string(data))
-	for _, pattern := range publicEvidenceEscapedLocalPathPatterns {
-		text = pattern.ReplaceAllString(text, `${1}<redacted:local-path>`)
-	}
-	for _, pattern := range publicEvidenceLocalPathPatterns {
-		text = pattern.ReplaceAllString(text, `${1}<redacted:local-path>`)
-	}
+	text := RedactLocalPaths(audit.RedactString(string(data)))
 	redacted := []byte(text)
 	review, err := ReviewPublicEvidence(redacted)
 	if err != nil {
 		return nil, PublicEvidenceReview{}, err
 	}
 	return redacted, review, nil
+}
+
+// RedactLocalPaths applies the public-evidence host path policy to one text
+// value. It is intentionally narrower than "all absolute paths": stable guest
+// paths remain useful, while host user/home and temporary roots are removed.
+func RedactLocalPaths(value string) string {
+	text := value
+	for _, pattern := range publicEvidenceEscapedLocalPathPatterns {
+		text = pattern.ReplaceAllString(text, `${1}<redacted:local-path>`)
+	}
+	for _, pattern := range publicEvidenceLocalPathPatterns {
+		text = pattern.ReplaceAllString(text, `${1}<redacted:local-path>`)
+	}
+	return text
 }
 
 func ReviewPublicEvidence(data []byte) (PublicEvidenceReview, error) {

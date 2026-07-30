@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
+	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	runsession "github.com/vibe-agi/hideout/internal/session"
 )
 
@@ -107,8 +108,10 @@ type RunServiceDependencies struct {
 	PrepareWorkspaceAttachment  func(*RunSession) error
 	ActivateWorkspaceAttachment func(*RunSession) error
 	ReleaseWorkspaceAttachment  func(context.Context) error
+	NetworkRuntimes             EnvironmentNetworkRuntimeRegistrar
 	Streams                     *backend.RunStreams
 	Lifecycle                   lifecycle.Registrar
+	NetworkResolver             netpolicy.SecretResolver
 }
 
 type RunServiceBackendFactory func(RunServiceRequest, RunPlan) (backend.Backend, error)
@@ -214,10 +217,12 @@ func (s RunService) Apply(ctx context.Context, prepared PreparedRun, req RunServ
 		OpenTargets:                 append([]RunOpenTargetOwner(nil), effective.OpenTargets...),
 		EndpointCandidates:          append([]RunEndpointCandidate(nil), effective.EndpointCandidates...),
 		EndpointExposures:           append([]RunEndpointExposureRequest(nil), effective.EndpointExposures...),
+		Network:                     RunNetworkOptions{Resolver: deps.NetworkResolver},
 		OpenerForSession:            deps.OpenerForSession,
 		PrepareWorkspaceAttachment:  deps.PrepareWorkspaceAttachment,
 		ActivateWorkspaceAttachment: deps.ActivateWorkspaceAttachment,
 		ReleaseWorkspaceAttachment:  deps.ReleaseWorkspaceAttachment,
+		NetworkRuntimes:             deps.NetworkRuntimes,
 		TerminalMode:                effective.Terminal.Mode,
 		Streams:                     deps.Streams,
 		Lifecycle:                   deps.Lifecycle,

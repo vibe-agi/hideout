@@ -148,6 +148,7 @@ type RunSpec struct {
 	RuntimeResultSink         func(RuntimeObservationReport) error
 	RuntimeCompletionSink     func(error) error
 	ProjectionReadiness       *ProjectionReadinessExpectation
+	ObserverHelperDigest      string
 }
 
 type PrivilegedSetupEvent struct {
@@ -201,6 +202,8 @@ type Session struct {
 	RuntimePresentation            *RuntimePresentation
 	ProjectionReadiness            *ProjectionReadinessExpectation
 	ProjectionReadinessObservation *ProjectionReadinessObservation
+	ObserverHelperDigest           string
+	Activity                       *ActivityPreparation
 	ActivationOwnerID              string
 	ExpectedBootID                 string
 	RunAttempted                   bool
@@ -270,6 +273,7 @@ type RunStreams struct {
 	PTY      io.Writer
 	Controls <-chan RunControl
 	Ready    func(SessionReadyProof) error
+	Activity *ActivityStreams
 }
 
 type SessionReadySource string
@@ -691,6 +695,15 @@ type EnvironmentNetworkServiceController interface {
 
 type EnvironmentNetworkDNSController interface {
 	ReconfigureEnvironmentNetworkDNS(ctx context.Context, session *Session, workdir, oldResolver, newResolver string, env []string) error
+}
+
+// EnvironmentNetworkDNSVerifier proves the exact resolver generation selected
+// by a live DNS reconfiguration. EnvironmentNetworkServiceController verifies
+// the broader TUN and local-stub posture; this narrower proof prevents a live
+// transaction from accepting a healthy stub that still targets the old
+// resolver.
+type EnvironmentNetworkDNSVerifier interface {
+	VerifyEnvironmentNetworkDNS(ctx context.Context, session *Session, workdir, resolver string, env []string) error
 }
 
 // EnvironmentServiceReconfigureError reports a failed live change and whether

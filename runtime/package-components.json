@@ -1,0 +1,59 @@
+{
+  "schema": "hideout.package-components/v1",
+  "components": [
+    {
+      "id": "linux-observer",
+      "kind": "linux-helper",
+      "artifactTemplate": "bin/hideout-observer-linux-{linuxGuestArch}",
+      "manifestTemplate": "bin/hideout-observer-linux-{linuxGuestArch}.manifest.json",
+      "license": "Apache-2.0",
+      "sourceLicense": "Apache-2.0 OR GPL-2.0-only",
+      "kernelProgramLicense": "GPL",
+      "licenseText": "LICENSES/GPL-2.0-only.txt",
+      "buildMode": "embedded-core-bpf",
+      "packageOwned": true
+    },
+    {
+      "id": "browser-console",
+      "kind": "embedded-assets",
+      "container": "bin/hideout",
+      "manifest": "runtime/browser-console.assets.json",
+      "license": "Apache-2.0",
+      "packageOwned": true,
+      "assets": [
+        {
+          "path": "index.html",
+          "mediaType": "text/html; charset=utf-8"
+        },
+        {
+          "path": "style.css",
+          "mediaType": "text/css; charset=utf-8"
+        },
+        {
+          "path": "state.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "client.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "activity.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "config.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "presentation.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        },
+        {
+          "path": "app.js",
+          "mediaType": "text/javascript; charset=utf-8"
+        }
+      ]
+    }
+  ]
+}

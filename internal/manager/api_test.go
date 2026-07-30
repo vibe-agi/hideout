@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1311,6 +1312,48 @@ func TestAPIRunApplyUsesManagerApplyRun(t *testing.T) {
 	}
 }
 
+func TestAPIRunApplyPropagatesConfiguredSecretResolver(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	profileValue := profile.Default("api-managed-network")
+	profileValue.Network.Mode = network.ModeTun2Socks
+	profileValue.Network.ProxySecretRef = "local-proxy"
+	profileValue.Network.MediatedResolver = "1.1.1.1"
+	if err := store.Save(profileValue); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("api managed resolver reached")
+	resolver := &runServiceSecretResolverFixture{err: sentinel}
+	api := API{
+		Core: Core{Store: store}, Token: "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+		RunBackend: func(RunAPIRequest, RunPlan) (backend.Backend, error) {
+			return &applyRunFakeBackend{name: "native"}, nil
+		},
+		RunSecretResolver: resolver,
+	}
+	req := newAPIJSONRequest(
+		http.MethodPost,
+		"/api/v1/run/apply",
+		RunAPIRequest{
+			ProfileName: profileValue.Name, Backend: "native",
+			AllowWeakIsolation: true, Workspace: t.TempDir(),
+			Command: []string{"true"},
+		},
+	)
+	req.Header.Set("Authorization", "Bearer ui_token")
+	resp := httptest.NewRecorder()
+	api.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if len(resolver.refs) != 1 || resolver.refs[0] != "local-proxy" {
+		t.Fatalf("resolved refs=%v body=%s", resolver.refs, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), sentinel.Error()) {
+		t.Fatalf("run apply did not report resolver result: %s", resp.Body.String())
+	}
+}
+
 func TestAPIRunApplyUsesConfiguredLifecycleRegistrar(t *testing.T) {
 	setFakeLinuxShim(t)
 	root := t.TempDir()
@@ -2107,13 +2150,4 @@ func decisionNoticeFixture() decision.Notice {
 		Preview:  decision.Preview{Summary: "target can passwordless sudo"},
 		AuditRef: "audit:privilege",
 	}
-}
-
-func containsStringForAPITest(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

@@ -67,6 +67,9 @@ type Core struct {
 	// disposableGatewayCloser is a focused test seam. Production disposal uses
 	// NetworkGateways directly.
 	disposableGatewayCloser func(string) error
+	// DecisionNow is a deterministic clock seam for bounded claim leases. It is
+	// nil in production, where Manager uses the current UTC time.
+	DecisionNow func() time.Time
 }
 
 const EnvironmentSummarySchema = "hideout.environment-summary/v1"
@@ -907,14 +910,6 @@ func ScopeOverview(in Overview, profileName string) Overview {
 	in.Sessions = sessions
 	in.Network.ProfileDefaults = network
 	return in
-}
-
-func readAuditEvents(path string, filter AuditEventFilter) ([]audit.Event, error) {
-	groups, err := readAuditEventGroups(path, []AuditEventFilter{filter})
-	if len(groups) == 0 {
-		return nil, err
-	}
-	return groups[0], err
 }
 
 func readAuditEventGroups(path string, filters []AuditEventFilter) ([][]audit.Event, error) {

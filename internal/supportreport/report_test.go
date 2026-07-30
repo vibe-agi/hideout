@@ -58,6 +58,30 @@ func TestValidateRejectsOversizeAndProtectedMaterial(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresActivityEvidenceAndIdentityExclusions(t *testing.T) {
+	for _, missing := range []string{
+		"activity-record",
+		"activity-local-path",
+		"activity-command-argv",
+		"activity-domain",
+		"activity-ip",
+	} {
+		t.Run(missing, func(t *testing.T) {
+			report := testReport(t)
+			var kept []string
+			for _, class := range report.Redaction.ExcludedDataClasses {
+				if class != missing {
+					kept = append(kept, class)
+				}
+			}
+			report.Redaction.ExcludedDataClasses = kept
+			if _, err := MarshalValidated(report, nil); err == nil {
+				t.Fatalf("support report accepted missing %q exclusion", missing)
+			}
+		})
+	}
+}
+
 func TestRecoveryProjectionIsUniqueAndOmitsMaintainerActions(t *testing.T) {
 	entries := RecoveryEntries()
 	seen := map[string]bool{}
@@ -103,11 +127,8 @@ func testReport(t *testing.T) Report {
 			Doctor: "collected", Recovery: "collected",
 		},
 		Redaction: Redaction{
-			Mode: "shareable-support",
-			ExcludedDataClasses: []string{
-				"raw-audit", "workspace-content", "secret-backing", "proxy-value",
-				"control-plane-token", "machine-id", "raw-host-path",
-			},
+			Mode:                "shareable-support",
+			ExcludedDataClasses: shareableExcludedDataClasses(),
 		},
 		Provenance: Provenance{
 			Command:  "hideout support report --out <path>",

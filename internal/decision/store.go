@@ -3,6 +3,7 @@ package decision
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,11 @@ import (
 	"github.com/vibe-agi/hideout/internal/audit"
 )
 
-const defaultLease = time.Minute
+const (
+	DefaultClaimLease = time.Minute
+	MinClaimLease     = 5 * time.Second
+	MaxClaimLease     = 5 * time.Minute
+)
 
 type Store struct {
 	root string
@@ -130,6 +135,13 @@ func (s *Store) Decisions(filter ListFilter) ([]Decision, error) {
 }
 
 func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimResponse, Decision, error) {
+	return s.ClaimDecisionWithOptions(id, ClaimOptions{
+		Surface: surface,
+		Lease:   lease,
+	})
+}
+
+func (s *Store) ClaimDecisionWithOptions(id string, opts ClaimOptions) (ClaimResponse, Decision, error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return ClaimResponse{}, Decision{}, err
@@ -138,12 +150,27 @@ func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimRes
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
-	if lease <= 0 {
-		lease = defaultLease
+	if opts.Lease <= 0 {
+		opts.Lease = DefaultClaimLease
+	}
+	if opts.Lease < MinClaimLease || opts.Lease > MaxClaimLease {
+		return ClaimResponse{}, Decision{}, fmt.Errorf(
+			"decision claim lease must be between %s and %s",
+			MinClaimLease,
+			MaxClaimLease,
+		)
 	}
 	d, err := s.decisionLocked(id)
 	if err != nil {
 		return ClaimResponse{}, Decision{}, err
+	}
+	if opts.ExpectedRevision > 0 && d.Revision != opts.ExpectedRevision {
+		return ClaimResponse{}, RedactDecision(d), fmt.Errorf(
+			"decision %s revision changed: expected %d, current %d",
+			d.ID,
+			opts.ExpectedRevision,
+			d.Revision,
+		)
 	}
 	if expiredDecision(d, now) {
 		if err := s.timeoutDecisionLocked(&d, now); err != nil {
@@ -151,25 +178,47 @@ func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimRes
 		}
 		return ClaimResponse{}, RedactDecision(d), fmt.Errorf("decision %s timed out", d.ID)
 	}
-	if d.State != StatePending {
-		if d.State == StateClaimed && d.Claim != nil && now.After(d.Claim.ExpiresAt) {
-			// Stale claim can be replaced while the decision is otherwise unresolved.
-		} else {
-			return ClaimResponse{}, RedactDecision(d), fmt.Errorf("decision %s is %s", d.ID, d.State)
+	takeover := false
+	switch {
+	case d.State == StatePending:
+		if opts.TakeoverExpired {
+			return ClaimResponse{}, RedactDecision(d), fmt.Errorf(
+				"decision %s has no expired claim to take over",
+				d.ID,
+			)
 		}
+	case d.State == StateClaimed && d.Claim != nil && !now.Before(d.Claim.ExpiresAt):
+		if !opts.TakeoverExpired {
+			return ClaimResponse{}, RedactDecision(d), fmt.Errorf(
+				"decision %s claim lease expired; retry with explicit takeover and expected revision %d",
+				d.ID,
+				d.Revision,
+			)
+		}
+		if opts.ExpectedRevision <= 0 {
+			return ClaimResponse{}, RedactDecision(d), fmt.Errorf(
+				"decision %s expired-claim takeover requires expectedRevision",
+				d.ID,
+			)
+		}
+		takeover = true
+	default:
+		return ClaimResponse{}, RedactDecision(d), fmt.Errorf("decision %s is %s", d.ID, d.State)
 	}
 	token, err := newClaimToken()
 	if err != nil {
 		return ClaimResponse{}, Decision{}, err
 	}
-	if strings.TrimSpace(surface) == "" {
+	surface := strings.TrimSpace(opts.Surface)
+	if surface == "" {
 		surface = "manager-client"
 	}
 	d.State = StateClaimed
 	d.Claim = &Claim{
 		Surface:   surface,
+		Operator:  strings.TrimSpace(opts.Operator),
 		ClaimedAt: now,
-		ExpiresAt: now.Add(lease),
+		ExpiresAt: now.Add(opts.Lease),
 		TokenHash: HashClaimToken(token),
 	}
 	d.Revision++
@@ -182,9 +231,130 @@ func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimRes
 		DecisionID:     d.ID,
 		State:          d.State,
 		ClaimToken:     token,
+		Surface:        d.Claim.Surface,
+		ClaimedAt:      d.Claim.ClaimedAt,
 		ClaimExpiresAt: d.Claim.ExpiresAt,
+		LeaseSeconds:   int64(opts.Lease / time.Second),
+		Takeover:       takeover,
 		Revision:       d.Revision,
 	}, RedactDecision(d), nil
+}
+
+func (s *Store) ReleaseDecisionClaim(id, token string, expectedRevision int, reason string) (ClaimRelease, Decision, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return ClaimRelease{}, Decision{}, err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now().UTC()
+	d, err := s.decisionLocked(id)
+	if err != nil {
+		return ClaimRelease{}, Decision{}, err
+	}
+	if expiredDecision(d, now) {
+		if err := s.timeoutDecisionLocked(&d, now); err != nil {
+			return ClaimRelease{}, Decision{}, err
+		}
+		return ClaimRelease{}, RedactDecision(d), fmt.Errorf("decision %s timed out", d.ID)
+	}
+	if expectedRevision > 0 && d.Revision != expectedRevision {
+		return ClaimRelease{}, RedactDecision(d), fmt.Errorf(
+			"decision %s revision changed: expected %d, current %d",
+			d.ID,
+			expectedRevision,
+			d.Revision,
+		)
+	}
+	if err := validateClaimToken(d, token); err != nil {
+		return ClaimRelease{}, RedactDecision(d), err
+	}
+	previous := *d.Claim
+	d.State = StatePending
+	d.Claim = nil
+	d.Revision++
+	d.UpdatedAt = now
+	if err := ValidateDecision(d); err != nil {
+		return ClaimRelease{}, RedactDecision(d), err
+	}
+	if err := s.writeJSONAtomic(s.decisionPath(d.ID), d); err != nil {
+		return ClaimRelease{}, Decision{}, err
+	}
+	release := claimRelease(d, previous, now, reason, !now.Before(previous.ExpiresAt))
+	return release, RedactDecision(d), nil
+}
+
+func (s *Store) ReleaseExpiredClaims(now time.Time) ([]ReleasedClaim, error) {
+	unlock, err := s.lockFile()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if now.IsZero() {
+		now = s.now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	entries, err := os.ReadDir(s.decisionsDir())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []ReleasedClaim{}, nil
+		}
+		return nil, err
+	}
+	out := make([]ReleasedClaim, 0)
+	for _, entry := range entries {
+		if !committedJSONEntry(entry) {
+			continue
+		}
+		var d Decision
+		path := filepath.Join(s.decisionsDir(), entry.Name())
+		if err := readJSON(path, &d); err != nil {
+			return out, err
+		}
+		if d.State != StateClaimed || d.Claim == nil ||
+			now.Before(d.Claim.ExpiresAt) || expiredDecision(d, now) {
+			continue
+		}
+		previous := *d.Claim
+		d.State = StatePending
+		d.Claim = nil
+		d.Revision++
+		d.UpdatedAt = now
+		if err := ValidateDecision(d); err != nil {
+			return out, err
+		}
+		if err := s.writeJSONAtomic(path, d); err != nil {
+			return out, err
+		}
+		out = append(out, ReleasedClaim{
+			Release:  claimRelease(d, previous, now, "claim lease expired", true),
+			Decision: RedactDecision(d),
+		})
+	}
+	return out, nil
+}
+
+func claimRelease(d Decision, previous Claim, releasedAt time.Time, reason string, expired bool) ClaimRelease {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "client released claim"
+	}
+	return ClaimRelease{
+		Version:           DecisionReleaseVersion,
+		DecisionID:        d.ID,
+		State:             d.State,
+		Reason:            audit.RedactString(reason),
+		ReleasedAt:        releasedAt,
+		PreviousSurface:   audit.RedactString(previous.Surface),
+		PreviousClaimedAt: previous.ClaimedAt,
+		PreviousExpiresAt: previous.ExpiresAt,
+		Expired:           expired,
+		Revision:          d.Revision,
+	}
 }
 
 func (s *Store) ResolveDecision(id, token, state, decision, reason string, providerResult map[string]any) (Resolution, Decision, error) {
@@ -715,16 +885,25 @@ func expiredDecision(d Decision, now time.Time) bool {
 }
 
 func validateClaim(d Decision, token string, now time.Time) error {
+	if err := validateClaimToken(d, token); err != nil {
+		return err
+	}
+	if !now.Before(d.Claim.ExpiresAt) {
+		return errors.New("claimToken expired")
+	}
+	return nil
+}
+
+func validateClaimToken(d Decision, token string) error {
 	if d.State != StateClaimed || d.Claim == nil {
 		return errors.New("decision is not claimed")
 	}
 	if strings.TrimSpace(token) == "" {
 		return errors.New("claimToken is required")
 	}
-	if now.After(d.Claim.ExpiresAt) {
-		return errors.New("claimToken expired")
-	}
-	if HashClaimToken(token) != d.Claim.TokenHash {
+	got := []byte(HashClaimToken(token))
+	want := []byte(d.Claim.TokenHash)
+	if len(got) != len(want) || subtle.ConstantTimeCompare(got, want) != 1 {
 		return errors.New("claimToken is invalid")
 	}
 	return nil

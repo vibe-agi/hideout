@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -126,6 +127,100 @@ func TestFreshProxyRecordsNoTargets(t *testing.T) {
 	}
 	if got := proxy.Targets(); len(got) != 0 {
 		t.Fatalf("fresh proxy Targets()=%v, want none", got)
+	}
+}
+
+func TestAuthenticatedProxyRequiresMatchingCredentials(t *testing.T) {
+	proxy, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Username = "gate-user"
+	proxy.Password = "gate-password"
+	proxyURL, err := proxy.URL("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.User == nil || parsed.User.Username() != proxy.Username {
+		t.Fatalf("URL user=%v, want configured username", parsed.User)
+	}
+	if password, ok := parsed.User.Password(); !ok || password != proxy.Password {
+		t.Fatal("URL did not carry the configured password")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = proxy.Serve(ctx) }()
+
+	assertAuthentication := func(
+		t *testing.T,
+		username string,
+		password string,
+		wantStatus byte,
+	) {
+		t.Helper()
+		conn, err := net.DialTimeout(
+			"tcp",
+			proxy.Addr().String(),
+			5*time.Second,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Write(
+			[]byte{version5, 2, methodNoAuth, methodUsernamePassword},
+		); err != nil {
+			t.Fatal(err)
+		}
+		method := make([]byte, 2)
+		if _, err := io.ReadFull(conn, method); err != nil {
+			t.Fatal(err)
+		}
+		if method[0] != version5 || method[1] != methodUsernamePassword {
+			t.Fatalf("method response=%v, want username/password", method)
+		}
+		request := []byte{authVersion, byte(len(username))}
+		request = append(request, username...)
+		request = append(request, byte(len(password)))
+		request = append(request, password...)
+		if _, err := conn.Write(request); err != nil {
+			t.Fatal(err)
+		}
+		response := make([]byte, 2)
+		if _, err := io.ReadFull(conn, response); err != nil {
+			t.Fatal(err)
+		}
+		if response[0] != authVersion || response[1] != wantStatus {
+			t.Fatalf("auth response=%v, want status %d", response, wantStatus)
+		}
+	}
+
+	assertAuthentication(
+		t,
+		proxy.Username,
+		proxy.Password,
+		authSuccess,
+	)
+	assertAuthentication(t, proxy.Username, "wrong-password", authFailure)
+}
+
+func TestProxyRejectsIncompleteAuthenticationConfiguration(t *testing.T) {
+	proxy, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Listener.Close()
+	proxy.Username = "user-without-password"
+	if _, err := proxy.URL("127.0.0.1"); err == nil {
+		t.Fatal("URL accepted incomplete authentication configuration")
+	}
+	if err := proxy.Serve(context.Background()); err == nil {
+		t.Fatal("Serve accepted incomplete authentication configuration")
 	}
 }
 

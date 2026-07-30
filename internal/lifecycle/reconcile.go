@@ -41,12 +41,36 @@ func (c *Coordinator) Reconcile(ctx context.Context, input ReconcileInput) error
 		return err
 	}
 	if !state.reconciling {
+		request, requestErr := c.normalizeMutationRequest(MutationRequest{
+			Keys: []string{EnvironmentMutationKey(input.EnvironmentID)},
+			Owner: MutationOwner{
+				Kind: MutationOwnerReconcile, ID: c.daemonID,
+				Phase:     MutationPhaseReconciling,
+				Recovery:  "wait for lifecycle reconciliation to finish, then retry",
+				StartedAt: c.nowUTC(),
+			},
+		})
+		if requestErr != nil {
+			return requestErr
+		}
+		lease, claimErr := c.claimMutationKeysLocked(request)
+		if claimErr != nil {
+			return claimErr
+		}
 		if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation ||
 			attemptBlocksReconciliation(state.journal.StopAttempt, c.daemonID) || state.stopCancel != nil {
-			return errors.New("lifecycle reconciliation is blocked by environment activity")
+			lease.releaseLocked()
+			conflictErr := c.environmentConflictLocked(
+				input.EnvironmentID,
+				state,
+				request.Owner,
+				ErrMutationBlockedByActivity,
+			)
+			return conflictErr
 		}
 		state.reconciling = true
 		state.reconcileDone = make(chan struct{})
+		state.reconcileLease = lease
 	}
 	defer c.finishReconciliationLocked(state)
 	if state.timer != nil {

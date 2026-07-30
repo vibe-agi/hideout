@@ -9,8 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/sessionwire"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
@@ -45,6 +48,11 @@ type sessionWorker struct {
 	workspaceCleanupOnce sync.Once
 	workspaceCleanupErr  error
 	notifyWorkspace      func()
+	activity             *activityService
+	activitySessionID    string
+	activityRequired     bool
+	networkRuntime       *manager.EnvironmentNetworkRuntimeRegistration
+	networkTransition    chan struct{}
 }
 
 type sessionStart struct {
@@ -55,6 +63,127 @@ type sessionStart struct {
 	TerminalMode      string
 	SessionSnapshotID string
 	CommandClass      string
+}
+
+func (w *sessionWorker) activityStreams() *backend.ActivityStreams {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	w.activityRequired = true
+	w.mu.Unlock()
+	return &backend.ActivityStreams{
+		Prepare: w.prepareActivity,
+		BoundaryReady: func(ready *sessionwire.SupervisorActivityReady) error {
+			if ready == nil {
+				return errActivityBoundaryNotReady
+			}
+			w.mu.Lock()
+			service, sessionID := w.activity, w.activitySessionID
+			finished := w.finished
+			w.mu.Unlock()
+			if finished {
+				return errActivitySessionClosed
+			}
+			if service == nil || sessionID == "" ||
+				ready.Boundary.SessionID != sessionID {
+				return sessionwire.ErrObserverIdentity
+			}
+			return service.RegisterBoundary(sessionID, ready)
+		},
+		Observe: func(envelope sessionwire.ObservationEnvelope) error {
+			w.mu.Lock()
+			service, sessionID := w.activity, w.activitySessionID
+			finished := w.finished
+			w.mu.Unlock()
+			if finished {
+				return errActivitySessionClosed
+			}
+			if service == nil || sessionID == "" {
+				return errors.New("daemon activity session is not prepared")
+			}
+			return service.Ingest(sessionID, envelope)
+		},
+		ObserveBatch: func(envelopes []sessionwire.ObservationEnvelope) error {
+			w.mu.Lock()
+			service, sessionID := w.activity, w.activitySessionID
+			finished := w.finished
+			w.mu.Unlock()
+			if finished {
+				return errActivitySessionClosed
+			}
+			if service == nil || sessionID == "" {
+				return errors.New("daemon activity session is not prepared")
+			}
+			return service.IngestBatch(sessionID, envelopes)
+		},
+		ObserverClosed: func(cause error) error {
+			w.mu.Lock()
+			service, sessionID := w.activity, w.activitySessionID
+			w.mu.Unlock()
+			if service == nil || sessionID == "" {
+				return nil
+			}
+			return service.ObserverExited(sessionID, cause)
+		},
+		SessionClosed: func(
+			completion *sessionwire.SupervisorActivityCompletion,
+			cause error,
+		) error {
+			w.mu.Lock()
+			service, sessionID := w.activity, w.activitySessionID
+			w.mu.Unlock()
+			if service == nil || sessionID == "" {
+				return nil
+			}
+			return service.SessionExited(sessionID, completion, cause)
+		},
+	}
+}
+
+func (w *sessionWorker) prepareActivity(
+	preparation backend.ActivityPreparation,
+) (sessionwire.SupervisorActivityExpectation, error) {
+	if w == nil {
+		return sessionwire.SupervisorActivityExpectation{},
+			errors.New("daemon session worker is required")
+	}
+	w.mu.Lock()
+	if w.finished {
+		w.mu.Unlock()
+		return sessionwire.SupervisorActivityExpectation{}, errActivitySessionClosed
+	}
+	if w.activity == nil || !w.activityRequired {
+		w.mu.Unlock()
+		return sessionwire.SupervisorActivityExpectation{},
+			errors.New("daemon activity service is unavailable")
+	}
+	if w.activitySessionID != "" {
+		w.mu.Unlock()
+		return sessionwire.SupervisorActivityExpectation{},
+			errors.New("daemon activity session was prepared more than once")
+	}
+	service := w.activity
+	w.mu.Unlock()
+
+	expectation, err := service.Prepare(preparation)
+	if err != nil {
+		return sessionwire.SupervisorActivityExpectation{}, err
+	}
+	w.mu.Lock()
+	if w.finished || w.activitySessionID != "" {
+		w.mu.Unlock()
+		expectation.ObserverStreamToken.Destroy()
+		_ = service.SessionExited(
+			preparation.SessionID,
+			nil,
+			errActivitySessionClosed,
+		)
+		return sessionwire.SupervisorActivityExpectation{}, errActivitySessionClosed
+	}
+	w.activitySessionID = preparation.SessionID
+	w.mu.Unlock()
+	return expectation, nil
 }
 
 func (w *sessionWorker) prepareWorkspaceAttachment(ctx context.Context, factory workspaceattach.ProviderFactory, runSession *manager.RunSession) error {
@@ -249,6 +378,9 @@ type sessionRegistry struct {
 	stopping              bool
 	now                   func() time.Time
 	publishWorkspaceViews func([]manager.WorkspaceViewSnapshot)
+	activity              *activityService
+	activityCleanup       *manager.ActivityCleanupService
+	networkTransition     chan struct{}
 }
 
 func newSessionRegistry(capacity int, now func() time.Time) *sessionRegistry {
@@ -258,7 +390,13 @@ func newSessionRegistry(capacity int, now func() time.Time) *sessionRegistry {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &sessionRegistry{workers: map[string]*sessionWorker{}, capacity: capacity, now: now}
+	networkTransition := make(chan struct{}, 1)
+	networkTransition <- struct{}{}
+	return &sessionRegistry{
+		workers: map[string]*sessionWorker{}, capacity: capacity, now: now,
+		activity:          newActivityService(now),
+		networkTransition: networkTransition,
+	}
 }
 
 func (r *sessionRegistry) register(connectionID string, cancel context.CancelFunc) (*sessionWorker, error) {
@@ -279,6 +417,7 @@ func (r *sessionRegistry) register(connectionID string, cancel context.CancelFun
 	w := &sessionWorker{
 		connectionID: connectionID, cancel: cancel, done: make(chan struct{}),
 		startedAt: r.now().UTC(), state: "preparing", notifyWorkspace: r.notifyWorkspaceViews,
+		activity: r.activity, networkTransition: r.networkTransition,
 	}
 	r.workers[connectionID] = w
 	return w, nil
@@ -297,9 +436,24 @@ func (w *sessionWorker) markStarted(start sessionStart) error {
 		w.mu.Unlock()
 		return errors.New("daemon session worker already started")
 	}
+	if w.activityRequired &&
+		(w.activity == nil ||
+			w.activitySessionID != start.SessionID ||
+			!w.activity.BoundaryReady(start.SessionID)) {
+		w.mu.Unlock()
+		return errActivityBoundaryNotReady
+	}
 	if w.attachment.ID != "" && (w.attachment.SessionID != start.SessionID || w.attachment.EnvironmentID != start.EnvironmentID) {
 		w.mu.Unlock()
 		return errors.New("backend ready identity does not match daemon-owned workspace attachment")
+	}
+	if w.networkRuntime != nil &&
+		(w.networkRuntime.SessionID != start.SessionID ||
+			w.networkRuntime.EnvironmentID != start.EnvironmentID) {
+		w.mu.Unlock()
+		return errors.New(
+			"backend ready identity does not match daemon-owned network runtime",
+		)
 	}
 	if w.attachment.ID != "" {
 		w.attachment.State = workspaceattach.AttachmentReady
@@ -317,12 +471,122 @@ func (w *sessionWorker) markStarted(start sessionStart) error {
 	return nil
 }
 
+func (w *sessionWorker) RegisterEnvironmentNetworkRuntime(
+	registration manager.EnvironmentNetworkRuntimeRegistration,
+) (func(), error) {
+	if w == nil || registration.Validate() != nil ||
+		w.networkTransition == nil {
+		return nil, manager.ErrEnvironmentNetworkRuntimeUnavailable
+	}
+	stored := registration
+	w.mu.Lock()
+	if w.finished || w.networkRuntime != nil ||
+		(w.sessionID != "" &&
+			(w.sessionID != registration.SessionID ||
+				w.environmentID != registration.EnvironmentID)) ||
+		(w.attachment.ID != "" &&
+			(w.attachment.SessionID != registration.SessionID ||
+				w.attachment.EnvironmentID !=
+					registration.EnvironmentID)) {
+		w.mu.Unlock()
+		return nil, manager.ErrEnvironmentNetworkRuntimeUnavailable
+	}
+	w.networkRuntime = &stored
+	w.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-w.networkTransition
+			w.mu.Lock()
+			if w.networkRuntime == &stored {
+				w.networkRuntime = nil
+			}
+			w.mu.Unlock()
+			w.networkTransition <- struct{}{}
+		})
+	}, nil
+}
+
+type sessionNetworkRuntimeLease struct {
+	registration manager.EnvironmentNetworkRuntimeRegistration
+	release      chan struct{}
+	once         sync.Once
+}
+
+func (lease *sessionNetworkRuntimeLease) EnvironmentID() string {
+	if lease == nil {
+		return ""
+	}
+	return lease.registration.EnvironmentID
+}
+
+func (lease *sessionNetworkRuntimeLease) SessionID() string {
+	if lease == nil {
+		return ""
+	}
+	return lease.registration.SessionID
+}
+
+func (lease *sessionNetworkRuntimeLease) BootID() string {
+	if lease == nil {
+		return ""
+	}
+	return lease.registration.BootID
+}
+
+func (lease *sessionNetworkRuntimeLease) ReconfigureDNS(
+	ctx context.Context,
+	oldResolver string,
+	newResolver string,
+) error {
+	if lease == nil ||
+		lease.registration.ReconfigureDNS == nil {
+		return manager.ErrEnvironmentNetworkRuntimeUnavailable
+	}
+	return lease.registration.ReconfigureDNS(
+		ctx,
+		oldResolver,
+		newResolver,
+	)
+}
+
+func (lease *sessionNetworkRuntimeLease) VerifyDNS(
+	ctx context.Context,
+	resolver string,
+) error {
+	if lease == nil || lease.registration.VerifyDNS == nil {
+		return manager.ErrEnvironmentNetworkRuntimeUnavailable
+	}
+	return lease.registration.VerifyDNS(ctx, resolver)
+}
+
+func (lease *sessionNetworkRuntimeLease) Release() {
+	if lease == nil || lease.release == nil {
+		return
+	}
+	lease.once.Do(func() {
+		lease.release <- struct{}{}
+	})
+}
+
 func (r *sessionRegistry) setWorkspacePublisher(publish func([]manager.WorkspaceViewSnapshot)) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	r.publishWorkspaceViews = publish
+	r.mu.Unlock()
+}
+
+func (r *sessionRegistry) setActivityCleanup(
+	cleanup *manager.ActivityCleanupService,
+) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.activityCleanup = cleanup
 	r.mu.Unlock()
 }
 
@@ -345,6 +609,7 @@ func (r *sessionRegistry) finish(connectionID, cleanupError string) {
 	r.mu.Lock()
 	w := r.workers[connectionID]
 	delete(r.workers, connectionID)
+	activityCleanup := r.activityCleanup
 	r.mu.Unlock()
 	if w == nil {
 		return
@@ -355,6 +620,41 @@ func (r *sessionRegistry) finish(connectionID, cleanupError string) {
 		return
 	}
 	w.finished = true
+	activity, activitySessionID := w.activity, w.activitySessionID
+	w.mu.Unlock()
+	if activity != nil && activitySessionID != "" {
+		if err := activity.SessionExited(
+			activitySessionID,
+			nil,
+			errors.New("daemon session worker exited"),
+		); err != nil {
+			if cleanupError == "" {
+				cleanupError = err.Error()
+			} else {
+				cleanupError += "; " + err.Error()
+			}
+		}
+		if cleanupError == "" && activityCleanup != nil {
+			if snapshot, exists := activity.Snapshot(activitySessionID); exists &&
+				snapshot.Owner.Kind ==
+					workloadtypes.OwnerDisposableSession {
+				plan, err := activityCleanup.PlanSession(
+					context.Background(),
+					activitySessionID,
+					manager.ActivityCleanupDisposableTerminal,
+				)
+				if err == nil {
+					_, err = activityCleanup.Apply(
+						context.Background(), plan,
+					)
+				}
+				if err != nil {
+					cleanupError = err.Error()
+				}
+			}
+		}
+	}
+	w.mu.Lock()
 	w.cleanupError = cleanupError
 	if cleanupError != "" {
 		w.state = "failed"
@@ -432,6 +732,130 @@ func (r *sessionRegistry) snapshots() []sessionSnapshot {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ConnectionID < out[j].ConnectionID })
 	return out
+}
+
+func (r *sessionRegistry) NetworkTransitionSessions(
+	ctx context.Context,
+	environmentID string,
+) ([]manager.NetworkTransitionSession, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if !environment.ValidID(environmentID) {
+		return nil, manager.ErrInvalidNetworkTransition
+	}
+	snapshots := r.snapshots()
+	out := make([]manager.NetworkTransitionSession, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot.EnvironmentID != environmentID {
+			continue
+		}
+		if snapshot.SessionID == "" {
+			return nil, errors.New(
+				"active environment session identity is unproved",
+			)
+		}
+		out = append(out, manager.NetworkTransitionSession{
+			ID:     snapshot.SessionID,
+			Status: manager.NetworkSessionLive,
+			Phase:  snapshot.State,
+		})
+	}
+	sort.Slice(out, func(left, right int) bool {
+		return out[left].ID < out[right].ID
+	})
+	return out, nil
+}
+
+func (r *sessionRegistry) EnvironmentNetworkRuntimeAvailable(
+	ctx context.Context,
+	environmentID string,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil || !environment.ValidID(environmentID) {
+		return manager.ErrEnvironmentNetworkRuntimeUnavailable
+	}
+	r.mu.Lock()
+	workers := make([]*sessionWorker, 0, len(r.workers))
+	for _, worker := range r.workers {
+		workers = append(workers, worker)
+	}
+	r.mu.Unlock()
+	for _, worker := range workers {
+		worker.mu.Lock()
+		available := !worker.finished &&
+			worker.state == "running" &&
+			worker.networkRuntime != nil &&
+			worker.networkRuntime.EnvironmentID == environmentID
+		worker.mu.Unlock()
+		if available {
+			return nil
+		}
+	}
+	return manager.ErrEnvironmentNetworkRuntimeUnavailable
+}
+
+func (r *sessionRegistry) AcquireEnvironmentNetworkRuntime(
+	ctx context.Context,
+	environmentID string,
+) (manager.EnvironmentNetworkRuntimeLease, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if r == nil || !environment.ValidID(environmentID) ||
+		r.networkTransition == nil {
+		return nil, manager.ErrEnvironmentNetworkRuntimeUnavailable
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.networkTransition:
+	}
+	release := true
+	defer func() {
+		if release {
+			r.networkTransition <- struct{}{}
+		}
+	}()
+
+	r.mu.Lock()
+	workers := make([]*sessionWorker, 0, len(r.workers))
+	for _, worker := range r.workers {
+		workers = append(workers, worker)
+	}
+	r.mu.Unlock()
+	sort.Slice(workers, func(left, right int) bool {
+		return workers[left].connectionID <
+			workers[right].connectionID
+	})
+	for _, worker := range workers {
+		worker.mu.Lock()
+		if worker.finished ||
+			worker.state != "running" ||
+			worker.networkRuntime == nil ||
+			worker.networkRuntime.EnvironmentID != environmentID {
+			worker.mu.Unlock()
+			continue
+		}
+		registration := *worker.networkRuntime
+		worker.mu.Unlock()
+		if registration.Validate() != nil {
+			continue
+		}
+		release = false
+		return &sessionNetworkRuntimeLease{
+			registration: registration,
+			release:      r.networkTransition,
+		}, nil
+	}
+	return nil, manager.ErrEnvironmentNetworkRuntimeUnavailable
 }
 
 func (r *sessionRegistry) workspaceViewSnapshots() []manager.WorkspaceViewSnapshot {

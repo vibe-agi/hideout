@@ -37,6 +37,8 @@ const (
 	cleanupTimeout        = 30 * time.Second
 	startupNoticeDelay    = time.Second
 	startupNoticeInterval = 30 * time.Second
+	darwinUnixPathMax     = 104
+	limaSSHSocketProbe    = "ssh.sock.1234567890123456"
 )
 
 var errRuntimeNotReady = errors.New("lima instance did not become ready; skipped guest cleanup")
@@ -275,6 +277,7 @@ func (b Backend) Prepare(_ context.Context, spec backend.RunSpec) (*backend.Sess
 		RuntimeCompletionSink:     spec.RuntimeCompletionSink,
 		RuntimePresentation:       cloneRuntimePresentation(spec.Machine.Runtime),
 		ProjectionReadiness:       backend.CloneProjectionReadinessExpectation(spec.ProjectionReadiness),
+		ObserverHelperDigest:      spec.ObserverHelperDigest,
 	}, nil
 }
 
@@ -512,17 +515,24 @@ func (b Backend) StopEnvironmentNetwork(ctx context.Context, session *backend.Se
 }
 
 func (b Backend) ReconfigureEnvironmentNetworkDNS(ctx context.Context, session *backend.Session, workdir, oldResolver, newResolver string, env []string) error {
-	if session == nil || path.Clean(workdir) != workdir || !path.IsAbs(workdir) || net.ParseIP(oldResolver) == nil || net.ParseIP(newResolver) == nil {
-		return errors.New("environment DNS reconfiguration requires a running service and IP-literal resolvers")
+	if session == nil ||
+		!sessionViewBootPattern.MatchString(session.ExpectedBootID) ||
+		path.Clean(workdir) != workdir ||
+		!path.IsAbs(workdir) ||
+		net.ParseIP(oldResolver) == nil ||
+		net.ParseIP(newResolver) == nil {
+		return errors.New("environment DNS reconfiguration requires a current boot identity, running service, and IP-literal resolvers")
 	}
 	script := `set -eu
-service_dir=$1
+expected_boot=$1
+service_dir=$2
 network_dir="$service_dir/network"
-old_resolver=$2
-new_resolver=$3
+old_resolver=$3
+new_resolver=$4
 helper="$service_dir/hideout-dns-stub"
 pid_file="$network_dir/dns-stub.pid"
 rollback_marker="$network_dir/dns-switch-rollback-proved"
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
 rm -f "$rollback_marker"
 test -x "$helper"
 test -r "$pid_file"
@@ -558,15 +568,20 @@ exit 127
 	`
 	reconfigureErr := b.runSetupCommand(
 		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),
-		[]string{"sh", "-c", script, "hideout-network-dns-reconfigure", workdir, oldResolver, newResolver}, nil,
+		[]string{
+			"sh", "-c", script, "hideout-network-dns-reconfigure",
+			session.ExpectedBootID, workdir, oldResolver, newResolver,
+		}, nil,
 	)
 	if reconfigureErr == nil {
 		return nil
 	}
 	verifyRollback := `set -eu
-service_dir=$1
+expected_boot=$1
+service_dir=$2
 network_dir="$service_dir/network"
-old_resolver=$2
+old_resolver=$3
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
 test -f "$network_dir/dns-switch-rollback-proved"
 test "$(cat "$network_dir/mediated-resolver")" = "$old_resolver"
 test -r "$network_dir/dns-stub.pid"
@@ -575,12 +590,57 @@ rm -f "$network_dir/dns-switch-rollback-proved"
 `
 	rollbackErr := b.runSetupCommand(
 		ctx, session, setupCategoryNetwork, "/", SetupEnv(env),
-		[]string{"sh", "-c", verifyRollback, "hideout-network-dns-rollback-verify", workdir, oldResolver}, nil,
+		[]string{
+			"sh", "-c", verifyRollback,
+			"hideout-network-dns-rollback-verify",
+			session.ExpectedBootID, workdir, oldResolver,
+		}, nil,
 	)
 	return backend.EnvironmentServiceReconfigureError{
 		Operation: "reconfigure environment DNS", RollbackProved: rollbackErr == nil,
 		Cause: errors.Join(reconfigureErr, rollbackErr),
 	}
+}
+
+func (b Backend) VerifyEnvironmentNetworkDNS(
+	ctx context.Context,
+	session *backend.Session,
+	workdir string,
+	resolver string,
+	env []string,
+) error {
+	if session == nil ||
+		!sessionViewBootPattern.MatchString(session.ExpectedBootID) ||
+		path.Clean(workdir) != workdir ||
+		!path.IsAbs(workdir) ||
+		net.ParseIP(resolver) == nil {
+		return errors.New(
+			"environment DNS verification requires a current boot identity, running service, and IP-literal resolver",
+		)
+	}
+	script := `set -eu
+expected_boot=$1
+service_dir=$2
+resolver=$3
+network_dir="$service_dir/network"
+test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
+test -r "$network_dir/mediated-resolver"
+test "$(cat "$network_dir/mediated-resolver")" = "$resolver"
+test -r "$network_dir/dns-stub.pid"
+kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null
+`
+	return b.runSetupCommand(
+		ctx,
+		session,
+		setupCategoryNetwork,
+		"/",
+		SetupEnv(env),
+		[]string{
+			"sh", "-c", script, "hideout-network-dns-verify",
+			session.ExpectedBootID, workdir, resolver,
+		},
+		nil,
+	)
 }
 
 func (b Backend) terminalBridgeAvailable(ctx context.Context, runner CommandRunner, hostEnv []string, session *backend.Session, env []string) bool {
@@ -662,6 +722,9 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 	session.Env = append([]string(nil), env...)
 	runner := b.runner()
 	hostEnv := HostCommandEnv(os.Environ())
+	if err := validateLimaStartSocketPath(hostEnv, session.InstanceName); err != nil {
+		return nil, nil, err
+	}
 	if session.RuntimeContract != nil {
 		if session.RuntimeInstanceExpected == nil {
 			return nil, nil, errors.New("runtime observation requires an instance expectation")
@@ -899,6 +962,43 @@ func (b Backend) StopInstance(ctx context.Context, instanceName string) error {
 	// boundary, so use Lima's force path and let Manager independently prove the
 	// resulting terminal state before it commits the transition.
 	return b.runner().Run(stopCtx, b.limactl(), []string{"stop", "--force", instanceName}, HostCommandEnv(os.Environ()), nil, b.controlStdout(), b.controlStderr())
+}
+
+func validateLimaStartSocketPath(hostEnv []string, instanceName string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	root := strings.TrimSpace(backend.EnvValue(hostEnv, "LIMA_HOME"))
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve Lima home for Unix-socket validation: %w", err)
+		}
+		root = filepath.Join(home, ".lima")
+	}
+	if absolute, err := filepath.Abs(root); err == nil {
+		root = absolute
+	}
+	if physical, err := filepath.EvalSymlinks(root); err == nil {
+		root = physical
+	}
+	return validateLimaUnixSocketPath(root, instanceName, darwinUnixPathMax)
+}
+
+func validateLimaUnixSocketPath(limaHome, instanceName string, pathMax int) error {
+	if strings.TrimSpace(limaHome) == "" || strings.TrimSpace(instanceName) == "" || pathMax <= 0 {
+		return errors.New("Lima Unix-socket path validation requires a home, instance, and positive limit")
+	}
+	socketPath := filepath.Join(filepath.Clean(limaHome), instanceName, limaSSHSocketProbe)
+	socketBytes := len([]byte(socketPath))
+	if socketBytes < pathMax {
+		return nil
+	}
+	return fmt.Errorf(
+		"Lima runtime path is too long for the managed instance (%d-byte socket path; macOS requires less than %d): set LIMA_HOME to a shorter absolute directory, run `hideout daemon stop`, and retry",
+		socketBytes,
+		pathMax,
+	)
 }
 
 func cleanupGuestEnv(env []string) []string {

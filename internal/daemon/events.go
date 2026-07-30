@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/liveconsole"
 	"github.com/vibe-agi/hideout/internal/manager"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
@@ -17,13 +19,19 @@ import (
 type Event = liveconsole.Event
 
 type subscriber struct {
-	ch   chan Event
-	done chan struct{}
-	once sync.Once
-	seq  int
+	ch     chan Event
+	done   chan struct{}
+	once   sync.Once
+	seq    int
+	reason string
 }
 
-func (s *subscriber) terminate() { s.once.Do(func() { close(s.done) }) }
+func (s *subscriber) terminate(reason string) {
+	s.once.Do(func() {
+		s.reason = reason
+		close(s.done)
+	})
+}
 
 // eventBus is the daemon-owned live fan-out. It derives events from operation
 // lifecycle (via manager.EventObserver) and the daemon audit tail, applies the
@@ -35,10 +43,21 @@ type eventBus struct {
 	subs   map[*subscriber]struct{}
 	seq    int
 	closed bool
+
+	instanceID           string
+	credentialGeneration func() uint64
 }
 
 func newEventBus() *eventBus {
 	return &eventBus{subs: map[*subscriber]struct{}{}}
+}
+
+func newEventBusV2(instanceID string, credentialGeneration func() uint64) *eventBus {
+	return &eventBus{
+		subs:                 map[*subscriber]struct{}{},
+		instanceID:           instanceID,
+		credentialGeneration: credentialGeneration,
+	}
 }
 
 // OperationEvent implements manager.EventObserver.
@@ -245,7 +264,11 @@ func (b *eventBus) publish(ev Event) {
 		return
 	}
 	b.seq++
-	if ev.Version == "" {
+	if b.v2EnabledLocked() {
+		ev.Version = liveconsole.EventVersionV2
+		ev.InstanceID = b.instanceID
+		ev.CredentialGeneration = b.credentialGeneration()
+	} else if ev.Version == "" {
 		ev.Version = liveconsole.EventVersion
 	}
 	ev.Seq = b.seq
@@ -258,7 +281,7 @@ func (b *eventBus) publish(ev Event) {
 			s.seq = ev.Seq
 		default:
 			delete(b.subs, s)
-			s.terminate()
+			s.terminate("subscriber-overflow")
 		}
 	}
 }
@@ -266,6 +289,17 @@ func (b *eventBus) publish(ev Event) {
 func (b *eventBus) terminalEvent(s *subscriber, reason string) Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.v2EnabledLocked() {
+		return Event{
+			Version:              liveconsole.EventVersionV2,
+			InstanceID:           b.instanceID,
+			CredentialGeneration: b.credentialGeneration(),
+			Kind:                 liveconsole.KindTerminal,
+			Seq:                  0,
+			Entity:               liveconsole.EntityRef{Kind: "stream"},
+			Payload:              liveconsole.EventPayload{Reason: reason},
+		}
+	}
 	seq := 1
 	if s != nil && s.seq > 0 {
 		seq = s.seq + 1
@@ -284,7 +318,7 @@ func (b *eventBus) subscribe(buffer int) *subscriber {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
-		s.terminate()
+		s.terminate("stream-closed")
 		return s
 	}
 	b.subs[s] = struct{}{}
@@ -296,7 +330,7 @@ func (b *eventBus) unsubscribe(s *subscriber) {
 	b.mu.Lock()
 	delete(b.subs, s)
 	b.mu.Unlock()
-	s.terminate()
+	s.terminate("client-disconnected")
 }
 
 // closeAll terminates every subscriber and stops the bus (daemon shutdown).
@@ -314,8 +348,141 @@ func (b *eventBus) closeAll() {
 	}
 	b.mu.Unlock()
 	for _, s := range subs {
-		s.terminate()
+		s.terminate("daemon-stopping")
 	}
+}
+
+func (b *eventBus) v2EnabledLocked() bool {
+	return b.instanceID != "" && b.credentialGeneration != nil && b.credentialGeneration() > 0
+}
+
+// Projection publishers are the bounded v2 event boundary. They accept only
+// Manager/liveconsole projections and validate the complete event before it is
+// assigned a global sequence. Detailed activity records never travel here.
+func (b *eventBus) publishProfileProjection(projection manager.ProfileProjection) error {
+	copy := projection
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindProfile,
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindProfile, ID: projection.Profile, Profile: projection.Profile,
+		},
+		Payload: liveconsole.EventPayload{ProfileProjection: &copy},
+	})
+}
+
+func (b *eventBus) publishTransitionProjection(projection liveconsole.TransitionProjection) error {
+	copy := projection
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindTransition,
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindTransition, ID: projection.Transition.OperationID,
+			Profile: projection.Profile,
+		},
+		Payload: liveconsole.EventPayload{TransitionProjection: &copy},
+	})
+}
+
+func (b *eventBus) publishOperationProjection(operation manager.Operation) error {
+	copy := operation
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindOperation,
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindOperation, ID: operation.ID,
+		},
+		Payload: liveconsole.EventPayload{OperationProjection: &copy},
+	})
+}
+
+func (b *eventBus) publishActivityProjection(
+	profileName, sessionID string,
+	projection liveconsole.ActivityProjectionDelta,
+) error {
+	copy := projection
+	copy.Profile = profileName
+	copy.Session = sessionID
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindActivity, Phase: "appended",
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindActivity, Profile: profileName, Session: sessionID,
+		},
+		Payload: liveconsole.EventPayload{ActivityProjection: &copy},
+	})
+}
+
+func (b *eventBus) publishCoverageProjection(
+	profileName, sessionID string,
+	coverage []workloadtypes.CoverageInterval,
+) error {
+	if len(coverage) == 0 || len(coverage) > 64 {
+		return errors.New("coverage projection must contain between 1 and 64 intervals")
+	}
+	copy := append([]workloadtypes.CoverageInterval(nil), coverage...)
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindCoverage,
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindCoverage, Profile: profileName, Session: sessionID,
+		},
+		Payload: liveconsole.EventPayload{CoverageProjection: copy},
+	})
+}
+
+func (b *eventBus) publishRiskProjection(
+	profileName, sessionID string,
+	finding liveconsole.RiskFinding,
+) error {
+	copy := finding
+	copy.EvidenceRefs = append([]string(nil), finding.EvidenceRefs...)
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindRisk,
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindRisk, ID: finding.ID, Profile: profileName, Session: sessionID,
+		},
+		Payload: liveconsole.EventPayload{RiskProjection: &copy},
+	})
+}
+
+func (b *eventBus) publishCapabilityProjection(capability liveconsole.CapabilityProjection) error {
+	copy := capability
+	copy.ActionRefs = append([]string(nil), capability.ActionRefs...)
+	return b.publishProjection(Event{
+		Kind: liveconsole.KindCapability,
+		Entity: liveconsole.EntityRef{
+			Kind: liveconsole.KindCapability, ID: capability.ID,
+		},
+		Payload: liveconsole.EventPayload{CapabilityProjection: &copy},
+	})
+}
+
+func (b *eventBus) publishProjection(event Event) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return errors.New("event bus is closed")
+	}
+	if !b.v2EnabledLocked() {
+		return errors.New("event v2 identity is unavailable")
+	}
+	event.Version = liveconsole.EventVersionV2
+	event.InstanceID = b.instanceID
+	event.CredentialGeneration = b.credentialGeneration()
+	event.Seq = b.seq + 1
+	if event.Entity.Kind == "" {
+		event.Entity.Kind = event.Kind
+	}
+	if err := liveconsole.ValidateEvent(event); err != nil {
+		return fmt.Errorf("invalid event v2 projection: %w", err)
+	}
+	b.seq = event.Seq
+	for subscriber := range b.subs {
+		select {
+		case subscriber.ch <- event:
+			subscriber.seq = event.Seq
+		default:
+			delete(b.subs, subscriber)
+			subscriber.terminate("subscriber-overflow")
+		}
+	}
+	return nil
 }
 
 func environmentPayload(details map[string]any, phase string) liveconsole.EventPayload {
@@ -453,6 +620,11 @@ func decisionPayload(details map[string]any, phase string) liveconsole.EventPayl
 		Backend:        stringValue(details, "backend"),
 		DefaultOutcome: stringValue(details, "defaultOutcome"),
 		Reason:         stringValue(details, "reason"),
+		ClaimSurface:   stringValue(details, "claimSurface"),
+		ClaimOperator:  stringValue(details, "claimOperator"),
+		ClaimedAt:      timeValue(details, "claimedAt"),
+		ClaimExpiresAt: timeValue(details, "claimExpiresAt"),
+		Revision:       intValue(details, "revision"),
 		Preview:        details["preview"],
 	}
 	if payload.Status == "" {

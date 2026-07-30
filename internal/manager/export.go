@@ -25,6 +25,9 @@ type ExportOptions struct {
 	BundlePath              string
 	DoctorReportPath        string
 	From                    string
+	Activity                json.RawMessage
+	PathPolicy              exportboundary.PathPolicy
+	PreRedactionStages      []exportboundary.RedactionStage
 	Out                     string
 	Redact                  []string
 	PolicyProfile           string
@@ -34,6 +37,7 @@ type ExportOptions struct {
 	ShareDecisionID         string
 	ShareApproved           bool
 	Commit                  string
+	CreatedAt               time.Time
 }
 
 func (c Core) PlanExport(opts ExportOptions) (exportboundary.Plan, error) {
@@ -82,7 +86,7 @@ func (c Core) ApplyExport(plan exportboundary.Plan, opts ExportOptions) (result 
 	if err != nil {
 		return result, err
 	}
-	result, err = exportboundary.Apply(req)
+	result, err = exportboundary.ApplyPlan(req, plan)
 	return result, err
 }
 
@@ -249,10 +253,16 @@ func (c Core) exportRequest(opts ExportOptions) (exportboundary.Request, error) 
 		source = exportboundary.SourceAudit
 	}
 	req := exportboundary.Request{
-		Source:                  source,
-		BundlePath:              opts.BundlePath,
-		BoundaryAuditPath:       opts.From,
-		DoctorReportPath:        opts.DoctorReportPath,
+		Source:            source,
+		BundlePath:        opts.BundlePath,
+		BoundaryAuditPath: opts.From,
+		DoctorReportPath:  opts.DoctorReportPath,
+		Activity:          opts.Activity,
+		PathPolicy:        opts.PathPolicy,
+		PreRedactionStages: append(
+			[]exportboundary.RedactionStage(nil),
+			opts.PreRedactionStages...,
+		),
 		Out:                     opts.Out,
 		StoreRoot:               c.Store.Root,
 		ProfileName:             opts.Profile,
@@ -261,6 +271,10 @@ func (c Core) exportRequest(opts ExportOptions) (exportboundary.Request, error) 
 		AcknowledgeFullFidelity: opts.AcknowledgeFullFidelity,
 		InteractiveConfirmed:    opts.InteractiveConfirmed,
 		Commit:                  opts.Commit,
+	}
+	if !opts.CreatedAt.IsZero() {
+		createdAt := opts.CreatedAt.Round(0).UTC()
+		req.Now = func() time.Time { return createdAt }
 	}
 	switch source {
 	case exportboundary.SourceAudit:
@@ -275,6 +289,12 @@ func (c Core) exportRequest(opts ExportOptions) (exportboundary.Request, error) 
 			return exportboundary.Request{}, err
 		}
 		req.AuditEvents = exportAuditEvents(events)
+	case exportboundary.SourceActivity:
+		if len(opts.Activity) == 0 {
+			return exportboundary.Request{}, errors.New(
+				"activity export source is required",
+			)
+		}
 	case exportboundary.SourceBoundarySummary:
 		if opts.From == "" {
 			return exportboundary.Request{}, errors.New("--from is required for boundary-summary export")

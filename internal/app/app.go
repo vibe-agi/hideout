@@ -33,6 +33,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/cmdadapter"
 	"github.com/vibe-agi/hideout/internal/cmdproxy"
 	"github.com/vibe-agi/hideout/internal/daemon"
+	uiwebassets "github.com/vibe-agi/hideout/internal/daemon/uiweb_assets"
 	"github.com/vibe-agi/hideout/internal/decision"
 	doctorpkg "github.com/vibe-agi/hideout/internal/doctor"
 	"github.com/vibe-agi/hideout/internal/environment"
@@ -63,18 +64,23 @@ import (
 )
 
 type app struct {
-	stdout                io.Writer
-	stderr                io.Writer
-	stdin                 io.Reader
-	backendFactory        func(string, runOptions) backend.Backend
-	sessionIsolationProbe func(context.Context, string) error
-	ensureDaemon          func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error)
-	sessionClient         func(context.Context, daemon.SessionClientOptions) (daemon.SessionClientResult, error)
-	daemonExecutable      func() (string, error)
-	supportExecutable     func() string
-	initPrepare           func(context.Context, profile.Store, manager.InitServiceRequest) (manager.PreparedInit, error)
-	initApply             func(context.Context, profile.Store, manager.PreparedInit, *manager.InitConfirmation) (manager.InitApplyResult, error)
-	terminalInteractive   func() bool
+	stdout                 io.Writer
+	stderr                 io.Writer
+	stdin                  io.Reader
+	backendFactory         func(string, runOptions) backend.Backend
+	sessionIsolationProbe  func(context.Context, string) error
+	ensureDaemon           func(context.Context, daemon.EnsureStartedOptions) (daemon.Status, error)
+	sessionClient          func(context.Context, daemon.SessionClientOptions) (daemon.SessionClientResult, error)
+	daemonExecutable       func() (string, error)
+	supportExecutable      func() string
+	initPrepare            func(context.Context, profile.Store, manager.InitServiceRequest) (manager.PreparedInit, error)
+	initApply              func(context.Context, profile.Store, manager.PreparedInit, *manager.InitConfirmation) (manager.InitApplyResult, error)
+	terminalInteractive    func() bool
+	activityProvider       func(string) manager.ActivityProvider
+	activitySnapshot       func(context.Context, string, manager.OperatorSnapshotQuery) (manager.OperatorSnapshot, error)
+	secretClient           secretCommandClient
+	secretReadPassword     func() ([]byte, error)
+	configurationAuthority func(manager.Core) configurationCommandAuthority
 }
 
 var (
@@ -91,7 +97,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 		if !silentTargetExit(err) {
-			fmt.Fprintln(stderr, "hideout:", err)
+			writeErrorGuidance(stderr, err, defaultCommandCatalog())
 		}
 		return errorExitCode(err)
 	}
@@ -99,89 +105,36 @@ func Main(args []string, stdout, stderr io.Writer) int {
 }
 
 func (a app) run(args []string) error {
+	return a.runWithCatalog(args, defaultCommandCatalog())
+}
+
+func (a app) runWithCatalog(args []string, catalog commandCatalog) error {
 	if len(args) == 0 {
 		return a.helpCommand(nil)
 	}
-	switch args[0] {
-	case daemon.InternalDaemonServeCommand:
-		return a.daemonServe(args[1:])
-	case "init":
-		return a.initCommand(args[1:])
-	case "run":
-		if containsCommandHelpToken(args[1:]) {
-			a.runUsage("run")
-			return nil
-		}
-		return a.runCommand(args[1:], false)
-	case "setup":
-		if containsHelpToken(args[1:]) {
-			a.setupUsage()
-			return nil
-		}
-		return a.operatorIntent(args)
-	case "show", "connect", "allow", "deny":
-		return a.operatorIntent(args)
-	case "explain":
-		if containsCommandHelpToken(args[1:]) {
-			a.runUsage("explain")
-			return nil
-		}
-		return a.runCommand(args[1:], true)
-	case "doctor":
-		return a.doctor(args[1:])
-	case "support":
-		return a.supportCommand(args[1:])
-	case "profile":
-		return a.profile(args[1:])
-	case "env":
-		return a.envCommand(args[1:])
-	case "session":
-		return a.sessionCommand(args[1:])
-	case "runtime":
-		return a.runtimeCommand(args[1:])
-	case "stop":
-		return a.stopEnvironments(args[1:])
-	case "clean":
-		return a.cleanEnvironments(args[1:])
-	case "cleanup":
-		return a.cleanup(args[1:])
-	case "audit":
-		return a.auditCommand(args[1:])
-	case "adapter-pack":
-		return a.adapterPackCommand(args[1:])
-	case "app":
-		return a.hostAppCommand(args[1:])
-	case "decision":
-		return a.decisionCommand(args[1:])
-	case "notice":
-		return a.noticeCommand(args[1:])
-	case "ui":
-		return a.ui(args[1:])
-	case "daemon":
-		return a.daemonCommand(args[1:])
-	case "tui":
-		return a.tui(args[1:])
-	case "version", "--version", "-v":
-		return a.version(args[1:])
-	case "lab":
-		return a.lab(args[1:])
-	case "shim":
-		return a.shim(args[1:])
-	case "hostfsd":
-		return a.hostfsd(args[1:])
-	case "hostfs":
-		return a.hostfsCommand(args[1:])
-	case "package":
-		return a.packageCommand(args[1:])
-	case "help", "-h", "--help":
-		return a.helpCommand(args[1:])
-	default:
-		return fmt.Errorf("unknown command %q", args[0])
+	if err := validateCommandCatalog(catalog); err != nil {
+		return fmt.Errorf("invalid command catalog: %w", err)
 	}
-}
-
-func (a app) usage() {
-	a.primaryUsage()
+	entry, ok := catalog.lookup(args[0])
+	if !ok {
+		return &unknownCommandError{token: args[0]}
+	}
+	commandArgs := args[1:]
+	if entry.spec.Name != "help" &&
+		!entry.spec.Hidden &&
+		containsCommandHelpToken(commandArgs) &&
+		(!entry.delegateHelp ||
+			len(commandArgs) == 1 && isHelpToken(commandArgs[0])) {
+		a.contextualUsage(entry.spec)
+		return nil
+	}
+	if err := entry.handler(a, commandArgs); err != nil {
+		return &commandRouteError{
+			command: entry.spec.Name,
+			cause:   err,
+		}
+	}
+	return nil
 }
 
 func (a app) version(args []string) error {
@@ -780,7 +733,7 @@ func (a app) supportReadiness(args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected support readiness argument %q", fs.Arg(0))
 	}
-	localPassed := true
+	var localPassed bool
 	switch *localStatus {
 	case "passed":
 		localPassed = true
@@ -1254,6 +1207,23 @@ func (a app) packageCommand(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "embedded-assets":
+		if len(args) != 1 {
+			return errors.New("usage: hideout package embedded-assets")
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve package asset container: %w", err)
+		}
+		containerSHA256, err := packagekit.FileSHA256(executable)
+		if err != nil {
+			return fmt.Errorf("hash package asset container: %w", err)
+		}
+		manifest, err := uiwebassets.EmbeddedManifest(containerSHA256)
+		if err != nil {
+			return fmt.Errorf("inventory embedded browser assets: %w", err)
+		}
+		return writeIndentedJSON(a.stdout, manifest)
 	case "verify":
 		if len(args) == 2 && isHelpToken(args[1]) {
 			a.packageUsage()
@@ -2063,6 +2033,36 @@ func (a app) writeRunResultSummary(result manager.RunResult) {
 			fmt.Fprintf(a.stderr, "    non-claim: %s\n", visibility.NonClaim)
 		}
 	}
+	if observation := result.BoundarySummary.ActivityObservation; observation != nil {
+		fmt.Fprintf(
+			a.stderr,
+			"  activity: scope=%s owner=%s localPaths=%s\n",
+			observation.Scope,
+			observation.OwnerBinding,
+			observation.LocalPathVisibility,
+		)
+		maxAge := fmt.Sprintf("%ds", observation.RetentionMaxAgeSeconds)
+		if observation.RetentionMaxAgeSeconds == 0 {
+			maxAge = "owner-lifecycle"
+		}
+		fmt.Fprintf(
+			a.stderr,
+			"    retention: maxBytes=%d maxAge=%s lifecycle=%s\n",
+			observation.RetentionMaxBytes,
+			maxAge,
+			observation.RetentionLifecycle,
+		)
+		fmt.Fprintf(
+			a.stderr,
+			"    not captured: %s\n",
+			strings.Join(observation.ExcludedData, ","),
+		)
+		fmt.Fprintf(
+			a.stderr,
+			"    coverage non-claim: %s\n",
+			observation.CoverageNonClaim,
+		)
+	}
 	for _, capability := range result.BoundarySummary.Capabilities {
 		fmt.Fprintf(a.stderr, "  %s: allowed=%d denied=%d", capability.Capability, capability.Allowed, capability.Denied)
 		if capability.Capability == "hostfs" || capability.Unsupported > 0 {
@@ -2097,17 +2097,6 @@ func cleanupAuditDetails(result session.CleanupResult) map[string]any {
 	return manager.CleanupAuditDetails(result)
 }
 
-func cleanupAuditType(path string) string {
-	return manager.CleanupAuditType(path)
-}
-
-func presence(value string) string {
-	if value == "" {
-		return "absent"
-	}
-	return "present"
-}
-
 func doctorGuestPrivilegeMessage(ctx context.Context, store profile.Store, profileName string) string {
 	overview, err := manager.New(store).Overview(ctx)
 	if err != nil {
@@ -2138,14 +2127,6 @@ func selectRunEnvironment(store environment.Store, p profile.Profile, backendNam
 	})
 }
 
-func runEnvironmentSpec(p profile.Profile, backendName string, opts runOptions) environment.Spec {
-	return manager.RunEnvironmentSpec(p, backendName, opts.workspace, opts.guestWorkspace)
-}
-
-func validateEnvironmentRecord(rec environment.Record, spec environment.Spec) error {
-	return manager.ValidateEnvironmentRecord(rec, spec)
-}
-
 func resolveBackendName(name string) string {
 	return manager.ResolveBackendName(name)
 }
@@ -2168,10 +2149,6 @@ func localBypassHostsForBackend(backendName string) []string {
 
 func brokerEndpointForBackend(backendName string, layout session.Layout) broker.Endpoint {
 	return manager.BrokerEndpointForBackend(backendName, layout)
-}
-
-func brokerEndpointForGuest(backendName string, listen broker.Endpoint) (broker.Endpoint, error) {
-	return manager.BrokerEndpointForGuest(backendName, listen)
 }
 
 func brokerEndpointForDoctorClient(endpoint broker.Endpoint) broker.Endpoint {
@@ -2256,10 +2233,6 @@ func hostOpener(profileDir string, stdout, stderr io.Writer) hostopen.Opener {
 		Stdout:            stdout,
 		Stderr:            stderr,
 	}
-}
-
-func writeBrokerEndpoint(path string, endpoint broker.Endpoint) error {
-	return manager.WriteBrokerEndpoint(path, endpoint)
 }
 
 func parseRunOptions(args []string, explainOnly bool) (runOptions, error) {
@@ -2660,10 +2633,6 @@ func resolveLinuxShimPath() string {
 	return manager.ResolveLinuxShimPath()
 }
 
-func resolveLinuxTun2SocksPath() string {
-	return manager.ResolveLinuxTun2SocksPath()
-}
-
 func resolveLinuxHostFSDPath() string {
 	return manager.ResolveLinuxHostFSDPath()
 }
@@ -3055,6 +3024,8 @@ func (a app) addDoctorFeatureDiagnostics(req doctorpkg.Request, store profile.St
 	decisionStatus, decisionErr := core.DecisionStatus()
 	for _, feature := range features {
 		switch feature {
+		case "activity":
+			a.addDoctorActivityDiagnostic(req, store, p, builder)
 		case "adapters":
 			enabled := countEnabledAdapters(p)
 			packs := 0
@@ -4539,7 +4510,7 @@ func (a app) profileNetwork(store profile.Store, args []string) error {
 		fmt.Fprintf(a.stdout, " resolver=%s", result.Network.MediatedResolver)
 	}
 	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "active reusable environments apply this service generation on the next eligible attach. Proxy-upstream and DNS changes are online; direct/proxy posture changes wait for active sibling sessions to exit. No VM recreate or restart is required.")
+	writeProfileNetworkTransitionOutcome(a.stdout, result)
 	return nil
 }
 
@@ -4588,47 +4559,93 @@ func (a app) operatorIntent(args []string) error {
 		}
 		return writeNaturalConnection(a.stdout, state)
 	case operatorintent.Connect:
-		store, err := profile.DefaultStore()
-		if err != nil {
-			return err
-		}
-		core := manager.New(store)
-		opts := manager.ProfileNetworkOptions{ProfileName: value.ProfileName}
-		switch value.Connection {
-		case operatorintent.ConnectionDirect:
-			opts.Mode = profile.NetworkModeDirect
-		case operatorintent.ConnectionProxy:
-			opts.Mode = profile.NetworkModeTun2Socks
-			opts.ProxySecretRef = value.ProxyName
-			opts.MediatedResolver = value.Resolver
-		default:
-			return fmt.Errorf("unsupported connection intent %q", value.Connection)
-		}
-		result, err := planAndApplyProfileNetwork(core, opts)
-		if err != nil {
-			return err
-		}
-		if result.Applied {
-			fmt.Fprint(a.stdout, "Updated: ")
-		} else {
-			fmt.Fprint(a.stdout, "Already set: ")
-		}
-		if err := writeNaturalConnection(a.stdout, result.Network); err != nil {
-			return err
-		}
-		fmt.Fprintln(a.stdout, "Existing sessions are unchanged; the next eligible attach applies this connection without recreating the VM.")
-		return nil
+		return a.applyNaturalConnectionIntent(value, false)
 	default:
 		return fmt.Errorf("operator intent %q is not mapped yet", intent.Kind())
 	}
 }
 
-func planAndApplyProfileNetwork(core manager.Core, opts manager.ProfileNetworkOptions) (manager.ProfileNetworkResult, error) {
-	plan, err := core.PlanProfileNetwork(opts)
-	if err != nil {
-		return manager.ProfileNetworkResult{}, err
+func writeProfileNetworkTransitionOutcome(
+	w io.Writer,
+	result manager.ProfileNetworkResult,
+) {
+	environments, live := liveProfileNetworkEnvironments(
+		result.Operation,
+	)
+	if live {
+		fmt.Fprintf(
+			w,
+			"Effective: New connections in %d active eligible environment(s) now use the proved route; already accepted connections retain their prior route.\n",
+			environments,
+		)
+		fmt.Fprintln(
+			w,
+			"Transition: live-complete; daemon, VM, and active session processes were not restarted. Guest posture or resolver work, when present, remains pending-next-attach.",
+		)
+		fmt.Fprintf(
+			w,
+			"Evidence: operation %s\n",
+			result.Operation.ID,
+		)
+		return
 	}
-	return core.ApplyProfileNetwork(plan)
+	fmt.Fprintln(
+		w,
+		"Effective: Existing sessions are unchanged; existing connections are unchanged.",
+	)
+	fmt.Fprintln(
+		w,
+		"Transition: pending-next-attach; the next eligible attach applies this connection without recreating the VM.",
+	)
+	fmt.Fprintln(
+		w,
+		"Scope: a proxy-upstream route can move online when an eligible live gateway exists; direct/proxy posture changes wait for active sibling sessions to exit. No VM recreate or restart is required.",
+	)
+	if result.Operation != nil {
+		fmt.Fprintf(
+			w,
+			"Evidence: operation %s records the reviewed Desired change; Effective remains pending proof.\n",
+			result.Operation.ID,
+		)
+	}
+}
+
+func liveProfileNetworkEnvironments(
+	operation *manager.Operation,
+) (int, bool) {
+	if operation == nil ||
+		operation.Phase != manager.OperationSucceeded {
+		return 0, false
+	}
+	environments := map[string]struct{}{}
+	for _, effect := range operation.Effects {
+		if effect.Provider != "manager.network" ||
+			effect.Status != manager.EffectSucceeded ||
+			len(effect.Evidence) == 0 {
+			continue
+		}
+		parts := strings.Split(effect.ID, ".")
+		if len(parts) >= 3 && parts[0] == "network" &&
+			strings.HasPrefix(parts[1], "env_") {
+			environments[parts[1]] = struct{}{}
+		}
+	}
+	return len(environments), len(environments) != 0
+}
+
+func planAndApplyProfileNetwork(core manager.Core, opts manager.ProfileNetworkOptions) (manager.ProfileNetworkResult, error) {
+	if client, _, _, err := daemon.DialClient(core.Store.Root); err == nil {
+		client.CloseIdleConnections()
+		return newTUIConfigurationClient(
+			core.Store.Root,
+		).ApplyProfileNetwork(
+			context.Background(),
+			opts,
+		)
+	}
+	return (manager.LegacyProfileTransactionAdapter{
+		Core: core,
+	}).ApplyNetwork(context.Background(), opts)
 }
 
 func writeNaturalConnection(w io.Writer, state manager.ProfileNetworkState) error {
@@ -5122,18 +5139,22 @@ func writeProfileEnv(w io.Writer, p profile.Profile) error {
 }
 
 func (a app) profileEnvSet(store profile.Store, name, key, value string) error {
-	p, err := store.LoadOrInit(name)
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyEnvironment(context.Background(), manager.ProfileEnvOptions{
+		ProfileName: name,
+		Operation:   "set",
+		Name:        key,
+		Value:       value,
+	})
 	if err != nil {
 		return err
 	}
-	if p.Env.Public == nil {
-		p.Env.Public = map[string]string{}
-	}
-	p.Env.Public[key] = value
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env.public", Name: key})
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{
+		Profile: result.Plan.Profile,
+		Kind:    "env.public",
+		Name:    result.Plan.Name,
+	})
 }
 
 func (a app) profileEnvUnset(store profile.Store, name, key string) error {
@@ -5141,15 +5162,22 @@ func (a app) profileEnvUnset(store profile.Store, name, key string) error {
 	if key == "" {
 		return errors.New("env key is required")
 	}
-	p, err := store.LoadOrInit(name)
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyEnvironment(context.Background(), manager.ProfileEnvOptions{
+		ProfileName: name,
+		Operation:   "unset",
+		Name:        key,
+	})
 	if err != nil {
 		return err
 	}
-	delete(p.Env.Public, key)
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env.public", Name: key, Removed: true})
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{
+		Profile: result.Plan.Profile,
+		Kind:    "env.public",
+		Name:    result.Plan.Name,
+		Removed: true,
+	})
 }
 
 func (a app) profileEnvListAdd(store profile.Store, name, kind, value string) error {
@@ -5157,22 +5185,25 @@ func (a app) profileEnvListAdd(store profile.Store, name, kind, value string) er
 	if value == "" {
 		return errors.New("env key or pattern is required")
 	}
-	p, err := store.LoadOrInit(name)
+	if kind != "inherit" && kind != "deny" {
+		return fmt.Errorf("unsupported env list kind %q", kind)
+	}
+	operation := kind
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyEnvironment(context.Background(), manager.ProfileEnvOptions{
+		ProfileName: name,
+		Operation:   operation,
+		Name:        value,
+	})
 	if err != nil {
 		return err
 	}
-	switch kind {
-	case "inherit":
-		p.Env.Inherit = appendIfMissing(p.Env.Inherit, value)
-	case "deny":
-		p.Env.Deny = appendIfMissing(p.Env.Deny, value)
-	default:
-		return fmt.Errorf("unsupported env list kind %q", kind)
-	}
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env." + kind, Name: value})
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{
+		Profile: result.Plan.Profile,
+		Kind:    "env." + kind,
+		Name:    result.Plan.Name,
+	})
 }
 
 func (a app) profileEnvListRemove(store profile.Store, name, kind, value string) error {
@@ -5180,22 +5211,26 @@ func (a app) profileEnvListRemove(store profile.Store, name, kind, value string)
 	if value == "" {
 		return errors.New("env key or pattern is required")
 	}
-	p, err := store.LoadOrInit(name)
+	if kind != "inherit" && kind != "deny" {
+		return fmt.Errorf("unsupported env list kind %q", kind)
+	}
+	operation := "un" + kind
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyEnvironment(context.Background(), manager.ProfileEnvOptions{
+		ProfileName: name,
+		Operation:   operation,
+		Name:        value,
+	})
 	if err != nil {
 		return err
 	}
-	switch kind {
-	case "inherit":
-		p.Env.Inherit = removeString(p.Env.Inherit, value)
-	case "deny":
-		p.Env.Deny = removeString(p.Env.Deny, value)
-	default:
-		return fmt.Errorf("unsupported env list kind %q", kind)
-	}
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	return writeJSONLine(a.stdout, profileEnvChangeOutput{Profile: p.Name, Kind: "env." + kind, Name: value, Removed: true})
+	return writeJSONLine(a.stdout, profileEnvChangeOutput{
+		Profile: result.Plan.Profile,
+		Kind:    "env." + kind,
+		Name:    result.Plan.Name,
+		Removed: true,
+	})
 }
 
 func (a app) profileTools(store profile.Store, args []string) error {
@@ -5353,7 +5388,9 @@ func (a app) profileCommandAdapter(store profile.Store, args []string) error {
 	}
 	name := args[0]
 	command := args[1]
-	core := manager.New(store)
+	adapter := manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}
 	switch command {
 	case "list":
 		if len(args) != 2 {
@@ -5369,11 +5406,10 @@ func (a app) profileCommandAdapter(store profile.Store, args []string) error {
 		if err != nil {
 			return err
 		}
-		plan, err := core.PlanCommandAdapter(opts)
-		if err != nil {
-			return err
-		}
-		result, err := core.ApplyCommandAdapter(plan)
+		result, err := adapter.ApplyCommandAdapter(
+			context.Background(),
+			opts,
+		)
 		if err != nil {
 			return err
 		}
@@ -5388,16 +5424,15 @@ func (a app) profileCommandAdapter(store profile.Store, args []string) error {
 		if fs.NArg() != 0 {
 			return fmt.Errorf("unexpected command-adapter argument %q", fs.Arg(0))
 		}
-		plan, err := core.PlanCommandAdapter(manager.CommandAdapterOptions{
-			ProfileName: name,
-			Operation:   "add-builtin-root-sensitive",
-			AdapterID:   *id,
-			Builtin:     cmdadapter.BuiltinRootSensitiveKey,
-		})
-		if err != nil {
-			return err
-		}
-		result, err := core.ApplyCommandAdapter(plan)
+		result, err := adapter.ApplyCommandAdapter(
+			context.Background(),
+			manager.CommandAdapterOptions{
+				ProfileName: name,
+				Operation:   "add-builtin-root-sensitive",
+				AdapterID:   *id,
+				Builtin:     cmdadapter.BuiltinRootSensitiveKey,
+			},
+		)
 		if err != nil {
 			return err
 		}
@@ -5406,15 +5441,14 @@ func (a app) profileCommandAdapter(store profile.Store, args []string) error {
 		if len(args) != 3 {
 			return fmt.Errorf("usage: hideout profile command-adapter <name> %s <id>", command)
 		}
-		plan, err := core.PlanCommandAdapter(manager.CommandAdapterOptions{
-			ProfileName: name,
-			Operation:   command,
-			AdapterID:   args[2],
-		})
-		if err != nil {
-			return err
-		}
-		result, err := core.ApplyCommandAdapter(plan)
+		result, err := adapter.ApplyCommandAdapter(
+			context.Background(),
+			manager.CommandAdapterOptions{
+				ProfileName: name,
+				Operation:   command,
+				AdapterID:   args[2],
+			},
+		)
 		if err != nil {
 			return err
 		}
@@ -5724,34 +5758,24 @@ func (a app) profileCommandProxyAddOpen(store profile.Store, name, commandName s
 	if commandName == "" {
 		return errors.New("command is required")
 	}
-	next := profile.CommandProxyCommand{
-		Route:      cmdproxy.RouteHostBroker,
-		Action:     cmdproxy.ActionHostOpen,
-		ArgvSchema: cmdproxy.ArgvSchemaOpenV1,
-	}
-	if err := validateProfileCommandProxyCommandName(commandName, next); err != nil {
-		return err
-	}
-	p, err := store.LoadOrInit(name)
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyCommandProxy(context.Background(), manager.CommandProxyOptions{
+		ProfileName: name,
+		Operation:   "add-open",
+		Command:     commandName,
+	})
 	if err != nil {
 		return err
 	}
-	if p.CommandProxy.Commands == nil {
-		p.CommandProxy.Commands = map[string]profile.CommandProxyCommand{}
-	}
-	previous, exists := p.CommandProxy.Commands[commandName]
-	p.CommandProxy.Commands[commandName] = next
-	if err := store.Save(p); err != nil {
-		return err
-	}
 	return writeJSONLine(a.stdout, profileCommandProxyChangeOutput{
-		Profile:    p.Name,
-		Command:    commandName,
-		Route:      next.Route,
-		Action:     next.Action,
-		ArgvSchema: next.ArgvSchema,
-		Added:      !exists,
-		Updated:    exists && previous != next,
+		Profile:    result.Plan.Profile,
+		Command:    result.Plan.Command,
+		Route:      result.Plan.Route,
+		Action:     result.Plan.Action,
+		ArgvSchema: result.Plan.ArgvSchema,
+		Added:      result.Applied && !result.Plan.Exists,
+		Updated:    result.Applied && result.Plan.Exists,
 	})
 }
 
@@ -5763,33 +5787,21 @@ func (a app) profileCommandProxyRemove(store profile.Store, name, commandName st
 	if commandName == "open" {
 		return errors.New("command-proxy open is required and cannot be removed")
 	}
-	if err := validateProfileCommandProxyCommandName(commandName, profile.CommandProxyCommand{
-		Route:      cmdproxy.RouteHostBroker,
-		Action:     cmdproxy.ActionHostOpen,
-		ArgvSchema: cmdproxy.ArgvSchemaOpenV1,
-	}); err != nil {
-		return err
-	}
-	p, err := store.LoadOrInit(name)
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyCommandProxy(context.Background(), manager.CommandProxyOptions{
+		ProfileName: name,
+		Operation:   "remove",
+		Command:     commandName,
+	})
 	if err != nil {
 		return err
 	}
-	_, exists := p.CommandProxy.Commands[commandName]
-	delete(p.CommandProxy.Commands, commandName)
-	if err := store.Save(p); err != nil {
-		return err
-	}
 	return writeJSONLine(a.stdout, profileCommandProxyChangeOutput{
-		Profile: p.Name,
-		Command: commandName,
-		Removed: exists,
+		Profile: result.Plan.Profile,
+		Command: result.Plan.Command,
+		Removed: result.Applied,
 	})
-}
-
-func validateProfileCommandProxyCommandName(commandName string, command profile.CommandProxyCommand) error {
-	probe := profile.Default("__command_proxy_validation__")
-	probe.CommandProxy.Commands[commandName] = command
-	return probe.Validate()
 }
 
 func (a app) profileFS(store profile.Store, args []string) error {
@@ -5926,41 +5938,31 @@ func (a app) profileFSAdd(store profile.Store, name string, args []string, deny 
 	if err != nil {
 		return err
 	}
-	p, err := store.LoadOrInit(name)
-	if err != nil {
-		return err
-	}
-	flagName := "--fs"
+	operation := "add"
 	reasonPrefix := "profile HostFS allow"
 	if deny {
-		flagName = "--no-fs"
+		operation = "deny"
 		reasonPrefix = "profile HostFS deny"
 	}
-	rule, err := parseHostFSRuleFlag(hostFSFlagInput{
-		flagName: flagName,
-		value:    opts.ruleValue,
-		reason:   opts.reason,
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyHostFS(context.Background(), manager.ProfileHostFSOptions{
+		ProfileName: name,
+		Operation:   operation,
+		Rule:        opts.ruleValue,
+		Reason:      opts.reason,
 	})
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	rule.ID, err = hostfs.NewRuleID(p.HostFS)
-	if err != nil {
-		return err
+	if result.Plan.PlannedRule == nil {
+		return errors.New("profile HostFS transaction omitted its planned rule")
 	}
-	rule.CreatedAt = &now
-	rule.Reason = opts.reason
-	if deny {
-		p.HostFS.Deny = append(p.HostFS.Deny, rule)
-	} else {
-		p.HostFS.Grants = append(p.HostFS.Grants, rule)
-	}
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	item := profileFSRuleOutputFromRule(rule, deny)
-	item.Profile = p.Name
+	item := profileFSRuleOutputFromSummary(
+		*result.Plan.PlannedRule,
+		deny,
+	)
+	item.Profile = result.Plan.Profile
 	item.Reason = strings.TrimSpace(item.Reason)
 	item.Kind = reasonPrefix
 	return writeJSONLine(a.stdout, item)
@@ -5970,23 +5972,26 @@ func (a app) profileFSRemove(store profile.Store, name, ruleID string) error {
 	if strings.TrimSpace(ruleID) == "" {
 		return errors.New("rule-id is required")
 	}
-	p, err := store.LoadOrInit(name)
+	result, err := (manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}).ApplyHostFS(context.Background(), manager.ProfileHostFSOptions{
+		ProfileName: name,
+		Operation:   "remove",
+		RuleID:      ruleID,
+	})
 	if err != nil {
 		return err
 	}
-	var removed *profileFSRuleOutput
-	p.HostFS.Grants, removed = removeHostFSRule(p.HostFS.Grants, ruleID, false)
-	if removed == nil {
-		p.HostFS.Deny, removed = removeHostFSRule(p.HostFS.Deny, ruleID, true)
+	if result.Plan.RemovedRule == nil {
+		return errors.New("profile HostFS transaction omitted its removed rule")
 	}
-	if removed == nil {
-		return fmt.Errorf("profile HostFS rule %q not found", ruleID)
-	}
-	if err := store.Save(p); err != nil {
-		return err
-	}
-	removed.Profile = p.Name
-	removed.Removed = true
+	deny := result.Plan.RemovedRule.Effect == "deny"
+	removed := profileFSRuleOutputFromSummary(
+		*result.Plan.RemovedRule,
+		deny,
+	)
+	removed.Profile = result.Plan.Profile
+	removed.Removed = result.Applied
 	return writeJSONLine(a.stdout, removed)
 }
 
@@ -6047,17 +6052,25 @@ func profileFSRuleOutputFromRule(rule hostfs.Rule, deny bool) profileFSRuleOutpu
 	}
 }
 
-func removeHostFSRule(rules []hostfs.Rule, id string, deny bool) ([]hostfs.Rule, *profileFSRuleOutput) {
-	for i, rule := range rules {
-		if rule.ID != id {
-			continue
-		}
-		removed := profileFSRuleOutputFromRule(rule, deny)
-		out := append([]hostfs.Rule(nil), rules[:i]...)
-		out = append(out, rules[i+1:]...)
-		return out, &removed
+func profileFSRuleOutputFromSummary(
+	rule manager.ProfileHostFSRuleSummary,
+	deny bool,
+) profileFSRuleOutput {
+	kind := "profile HostFS allow"
+	if deny {
+		kind = "profile HostFS deny"
 	}
-	return rules, nil
+	return profileFSRuleOutput{
+		ID:        rule.ID,
+		Kind:      kind,
+		Effect:    rule.Effect,
+		HostPath:  rule.HostPath,
+		Ops:       append([]hostfs.Op(nil), rule.Ops...),
+		Overlay:   rule.Overlay,
+		Scope:     rule.Scope,
+		Reason:    rule.Reason,
+		CreatedAt: rule.CreatedAt,
+	}
 }
 
 func writeJSONLine(w io.Writer, value any) error {
@@ -6394,16 +6407,25 @@ func (a app) hostfsWriteClaim(core manager.Core, args []string) error {
 	fs := flag.NewFlagSet("hostfs write claim", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	surface := fs.String("surface", "cli", "claiming surface")
+	lease := fs.Duration("lease", time.Minute, "bounded claim lease (5s to 5m)")
+	expectedRevision := fs.Int("revision", 0, "expected current decision revision (required for takeover)")
+	takeover := fs.Bool("takeover", false, "take over an expired claim at the exact revision")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: hideout hostfs write claim [--surface cli|tui|webui] <decision-id>")
+		return errors.New("usage: hideout hostfs write claim [--surface cli|tui|webui] [--lease 5s..5m] [--takeover --revision <n>] <decision-id>")
+	}
+	if *lease%time.Second != 0 {
+		return errors.New("--lease must be a whole number of seconds")
 	}
 	claim, err := core.ClaimHostFSWrite(manager.HostFSWriteClaimRequest{
-		DecisionID:      fs.Arg(0),
-		ExpectedVersion: manager.HostFSWritePlanVersion,
-		Surface:         *surface,
+		DecisionID:       fs.Arg(0),
+		ExpectedVersion:  manager.HostFSWritePlanVersion,
+		Surface:          *surface,
+		ExpectedRevision: *expectedRevision,
+		LeaseSeconds:     int64(*lease / time.Second),
+		Takeover:         *takeover,
 	})
 	if err != nil {
 		return codedHostFSWriteError(err)
@@ -6472,7 +6494,7 @@ func codedHostFSWriteError(err error) error {
 
 func (a app) decisionCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hideout decision list|inspect|claim|approve|deny|reopen|revoke|watch")
+		return errors.New("usage: hideout decision list|inspect|claim|release|approve|deny|reopen|revoke|watch")
 	}
 	store, err := profile.DefaultStore()
 	if err != nil {
@@ -6486,6 +6508,8 @@ func (a app) decisionCommand(args []string) error {
 		return a.decisionInspect(core, args[1:])
 	case "claim":
 		return a.decisionClaim(core, args[1:])
+	case "release":
+		return a.decisionRelease(core, args[1:])
 	case "approve":
 		return a.decisionResolve(core, args[1:], true)
 	case "deny":
@@ -6585,21 +6609,55 @@ func (a app) decisionClaim(core manager.Core, args []string) error {
 	fs := flag.NewFlagSet("decision claim", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	surface := fs.String("surface", "cli", "claiming surface")
+	lease := fs.Duration("lease", time.Minute, "bounded claim lease (5s to 5m)")
+	expectedRevision := fs.Int("revision", 0, "expected current decision revision (required for takeover)")
+	takeover := fs.Bool("takeover", false, "take over an expired claim at the exact revision")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: hideout decision claim [--surface cli|tui|webui] <decision-id>")
+		return errors.New("usage: hideout decision claim [--surface cli|tui|webui] [--lease 5s..5m] [--takeover --revision <n>] <decision-id>")
+	}
+	if *lease%time.Second != 0 {
+		return errors.New("--lease must be a whole number of seconds")
 	}
 	claim, err := core.ClaimDecision(manager.DecisionClaimRequest{
-		DecisionID:      fs.Arg(0),
-		ExpectedVersion: "hideout.decision/v1",
-		Surface:         *surface,
+		DecisionID:       fs.Arg(0),
+		ExpectedVersion:  "hideout.decision/v1",
+		Surface:          *surface,
+		ExpectedRevision: *expectedRevision,
+		LeaseSeconds:     int64(*lease / time.Second),
+		Takeover:         *takeover,
 	})
 	if err != nil {
 		return codedDecisionError(err)
 	}
 	return writeIndentedJSON(a.stdout, claim)
+}
+
+func (a app) decisionRelease(core manager.Core, args []string) error {
+	fs := flag.NewFlagSet("decision release", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	claimToken := fs.String("claim-token", "", "claim token returned by claim")
+	expectedRevision := fs.Int("revision", 0, "expected claimed decision revision")
+	reason := fs.String("reason", "deciding client closed", "release reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: hideout decision release --claim-token <token> [--revision <n>] [--reason <text>] <decision-id>")
+	}
+	release, err := core.ReleaseDecisionClaim(manager.DecisionReleaseRequest{
+		DecisionID:       fs.Arg(0),
+		ExpectedVersion:  "hideout.decision/v1",
+		ExpectedRevision: *expectedRevision,
+		ClaimToken:       *claimToken,
+		Reason:           *reason,
+	})
+	if err != nil {
+		return codedDecisionError(err)
+	}
+	return writeIndentedJSON(a.stdout, release)
 }
 
 func (a app) decisionResolve(core manager.Core, args []string, approve bool) error {
@@ -7298,6 +7356,31 @@ func (a app) envDestructive(args []string, verb string) error {
 }
 
 func (a app) mutateEnvironmentViaDaemon(store profile.Store, environmentID, operation string, force bool) (environment.Record, error) {
+	if operation == "remove" {
+		record, err := (environment.Store{Root: store.Root}).Load(
+			environmentID,
+		)
+		if err != nil {
+			return environment.Record{}, err
+		}
+		result, err := a.applyEnvironmentActionViaDaemon(
+			store,
+			manager.EnvironmentActionDelete,
+			manager.EnvironmentActionAPIRequest{
+				IDs: []string{environmentID}, Force: force,
+			},
+		)
+		if err != nil {
+			return environment.Record{}, err
+		}
+		if len(result.Applied) != 1 ||
+			result.Applied[0].ID != environmentID {
+			return environment.Record{}, errors.New(
+				"daemon environment delete omitted the exact environment",
+			)
+		}
+		return record, nil
+	}
 	executableFn := a.daemonExecutable
 	if executableFn == nil {
 		executableFn = os.Executable
@@ -7555,36 +7638,16 @@ func (a app) stopEnvironmentsViaDaemon(store profile.Store, plan manager.Environ
 	if len(plan.Targets) == 0 {
 		return nil, nil
 	}
-	executableFn := a.daemonExecutable
-	if executableFn == nil {
-		executableFn = os.Executable
-	}
-	executable, err := executableFn()
-	if err != nil {
-		return nil, fmt.Errorf("resolve hideout executable: %w", err)
-	}
-	ensure := a.ensureDaemon
-	if ensure == nil {
-		ensure = daemon.EnsureStarted
-	}
-	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
-		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
-	}); err != nil {
-		return nil, fmt.Errorf("serialized environment stop requires hideoutd: %w", err)
-	}
-	applied := make([]manager.EnvironmentActionTarget, 0, len(plan.Targets))
+	ids := make([]string, 0, len(plan.Targets))
 	for _, target := range plan.Targets {
-		data, err := json.Marshal(map[string]string{"environmentId": target.ID})
-		if err != nil {
-			return applied, err
-		}
-		if _, err := a.daemonRequest(store.Root, http.MethodPost, "/daemon/lifecycle/stop", strings.NewReader(string(data))); err != nil {
-			return applied, err
-		}
-		target.Status = "stopped"
-		applied = append(applied, target)
+		ids = append(ids, target.ID)
 	}
-	return applied, nil
+	result, err := a.applyEnvironmentActionViaDaemon(
+		store,
+		manager.EnvironmentActionStop,
+		manager.EnvironmentActionAPIRequest{IDs: ids},
+	)
+	return result.Applied, err
 }
 
 func partitionEnvironmentLifecyclePlan(plan manager.EnvironmentActionPlan) (manager.EnvironmentActionPlan, manager.EnvironmentActionPlan) {
@@ -7685,13 +7748,32 @@ func (a app) cleanEnvironmentsViaDaemon(store profile.Store, plan manager.Enviro
 	if len(plan.Targets) == 0 {
 		return manager.EnvironmentActionResult{Plan: plan}, nil
 	}
+	ids := make([]string, 0, len(plan.Targets))
+	for _, target := range plan.Targets {
+		ids = append(ids, target.ID)
+	}
+	return a.applyEnvironmentActionViaDaemon(
+		store,
+		manager.EnvironmentActionClean,
+		manager.EnvironmentActionAPIRequest{
+			IDs: ids, StoppedOnly: stoppedOnly,
+		},
+	)
+}
+
+func (a app) applyEnvironmentActionViaDaemon(
+	store profile.Store,
+	action string,
+	request manager.EnvironmentActionAPIRequest,
+) (manager.EnvironmentActionResult, error) {
 	executableFn := a.daemonExecutable
 	if executableFn == nil {
 		executableFn = os.Executable
 	}
 	executable, err := executableFn()
 	if err != nil {
-		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("resolve hideout executable: %w", err)
+		return manager.EnvironmentActionResult{},
+			fmt.Errorf("resolve hideout executable: %w", err)
 	}
 	ensure := a.ensureDaemon
 	if ensure == nil {
@@ -7700,17 +7782,32 @@ func (a app) cleanEnvironmentsViaDaemon(store profile.Store, plan manager.Enviro
 	if _, err := ensure(context.Background(), daemon.EnsureStartedOptions{
 		Store: store, Executable: executable, BuildID: daemonBuildID(), Diagnostics: a.stderr,
 	}); err != nil {
-		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("serialized environment clean requires hideoutd: %w", err)
+		return manager.EnvironmentActionResult{}, fmt.Errorf(
+			"serialized environment %s requires hideoutd: %w",
+			action,
+			err,
+		)
 	}
-	ids := make([]string, 0, len(plan.Targets))
-	for _, target := range plan.Targets {
-		ids = append(ids, target.ID)
+	plan, err := a.planEnvironmentActionViaDaemon(
+		store.Root, action, request,
+	)
+	if err != nil {
+		return manager.EnvironmentActionResult{}, err
 	}
-	payload, err := json.Marshal(manager.EnvironmentActionAPIRequest{IDs: ids, StoppedOnly: stoppedOnly})
+	request.OperationID = plan.OperationID
+	request.PlanDigest = plan.PlanDigest
+	request.Confirmed = true
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return manager.EnvironmentActionResult{Plan: plan}, err
 	}
-	data, err := a.daemonRequest(store.Root, http.MethodPost, "/api/v1/environment/clean/apply", bytes.NewReader(payload))
+	resource := "environment/" + action + "/apply"
+	data, err := a.daemonRequest(
+		store.Root,
+		http.MethodPost,
+		"/api/v1/"+resource,
+		bytes.NewReader(payload),
+	)
 	if err != nil {
 		return manager.EnvironmentActionResult{Plan: plan}, err
 	}
@@ -7719,12 +7816,131 @@ func (a app) cleanEnvironmentsViaDaemon(store profile.Store, plan manager.Enviro
 		Errors []string                        `json:"errors"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf("decode daemon environment clean response: %w", err)
+		return manager.EnvironmentActionResult{Plan: plan}, fmt.Errorf(
+			"decode daemon environment %s response: %w",
+			action,
+			err,
+		)
 	}
 	if len(response.Errors) != 0 {
 		return response.Data, errors.New(strings.Join(response.Errors, "; "))
 	}
+	if !daemonEnvironmentActionResultMatches(
+		response.Data,
+		plan,
+		action,
+	) {
+		return response.Data, errors.New(
+			"daemon environment action result does not match the reviewed operation",
+		)
+	}
 	return response.Data, nil
+}
+
+func (a app) planEnvironmentActionViaDaemon(
+	storeRoot string,
+	action string,
+	request manager.EnvironmentActionAPIRequest,
+) (manager.EnvironmentActionPlan, error) {
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return manager.EnvironmentActionPlan{}, err
+	}
+	resource := "environment/" + action + "/plan"
+	data, err := a.daemonRequest(
+		storeRoot,
+		http.MethodPost,
+		"/api/v1/"+resource,
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return manager.EnvironmentActionPlan{}, err
+	}
+	var response struct {
+		Data   manager.EnvironmentActionPlan `json:"data"`
+		Errors []string                      `json:"errors"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return manager.EnvironmentActionPlan{}, fmt.Errorf(
+			"decode daemon environment %s plan: %w",
+			action,
+			err,
+		)
+	}
+	if len(response.Errors) != 0 {
+		return response.Data, errors.New(
+			strings.Join(response.Errors, "; "),
+		)
+	}
+	if !daemonEnvironmentActionPlanMatches(
+		response.Data,
+		request,
+		action,
+	) {
+		return response.Data, errors.New(
+			"daemon environment action plan does not match the exact request",
+		)
+	}
+	return response.Data, nil
+}
+
+func daemonEnvironmentActionPlanMatches(
+	plan manager.EnvironmentActionPlan,
+	request manager.EnvironmentActionAPIRequest,
+	action string,
+) bool {
+	if plan.Action != action ||
+		len(plan.OperationID) < len("op_")+8 ||
+		!strings.HasPrefix(plan.OperationID, "op_") ||
+		len(plan.PlanDigest) != len("sha256:")+64 ||
+		!strings.HasPrefix(plan.PlanDigest, "sha256:") ||
+		len(plan.RequestedIDs) != len(request.IDs) ||
+		plan.Filter != (manager.EnvironmentActionFilter{
+			StoppedOnly: request.StoppedOnly,
+			Idle:        request.Idle,
+		}) ||
+		plan.Force != request.Force ||
+		plan.Total != len(plan.Targets)+len(plan.Skipped) {
+		return false
+	}
+	expected := append([]string(nil), request.IDs...)
+	actual := append([]string(nil), plan.RequestedIDs...)
+	slices.Sort(expected)
+	slices.Sort(actual)
+	if !slices.Equal(expected, actual) {
+		return false
+	}
+	seen := make(map[string]bool, len(expected))
+	for _, target := range append(
+		append(
+			[]manager.EnvironmentActionTarget(nil),
+			plan.Targets...,
+		),
+		plan.Skipped...,
+	) {
+		if seen[target.ID] || !slices.Contains(expected, target.ID) {
+			return false
+		}
+		seen[target.ID] = true
+	}
+	return len(seen) == len(expected)
+}
+
+func daemonEnvironmentActionResultMatches(
+	result manager.EnvironmentActionResult,
+	plan manager.EnvironmentActionPlan,
+	action string,
+) bool {
+	return result.Plan.OperationID == plan.OperationID &&
+		result.Plan.PlanDigest == plan.PlanDigest &&
+		result.Plan.Action == action &&
+		result.Operation != nil &&
+		result.Operation.Validate() == nil &&
+		result.Operation.ID == plan.OperationID &&
+		result.Operation.Kind == "environment."+action &&
+		result.Operation.Owner.Kind == "environment" &&
+		result.Operation.PlanDigest == plan.PlanDigest &&
+		result.Operation.Phase == manager.OperationSucceeded
 }
 
 func parseIdleDuration(value string) (time.Duration, bool, error) {
@@ -7807,10 +8023,11 @@ func (a app) ui(args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	server, err := manager.StartLocalServer(ctx, manager.LocalServerOptions{
-		Core:       manager.New(store),
-		Addr:       opts.listen,
-		TTL:        opts.ttl,
-		RunBackend: a.runAPIBackend,
+		Core:        manager.New(store),
+		Addr:        opts.listen,
+		TTL:         opts.ttl,
+		RunBackend:  a.runAPIBackend,
+		HelpCatalog: defaultOperatorHelpCatalog(),
 		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
 			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
 		},
@@ -7972,8 +8189,8 @@ func (a app) daemonStatus(args []string) error {
 		return err
 	}
 	if !*human {
-		a.stdout.Write(body)
-		return nil
+		_, err := a.stdout.Write(body)
+		return err
 	}
 	var status daemon.Status
 	if err := json.Unmarshal(body, &status); err != nil {
@@ -8112,13 +8329,6 @@ func (a app) runAPIBackend(req manager.RunAPIRequest, plan manager.RunPlan) (bac
 	return a.backend(plan.Backend, opts), nil
 }
 
-func (a app) runServiceBackend(req manager.RunServiceRequest, plan manager.RunPlan) (backend.Backend, error) {
-	opts := runOptions{
-		backendName: plan.Backend, allowWeakIsolation: req.AllowWeakIsolation,
-	}
-	return a.backend(plan.Backend, opts), nil
-}
-
 func (a app) environmentLifecycleBackend(record environment.Record) (manager.EnvironmentLifecycleBackend, error) {
 	provider := a.backend(record.Backend, runOptions{backendName: record.Backend})
 	lifecycleBackend, ok := provider.(manager.EnvironmentLifecycleBackend)
@@ -8162,6 +8372,7 @@ func (a app) daemonOptions(store profile.Store, ttl time.Duration) daemon.Option
 		LifecycleAutomaticStop: true,
 		WorkspaceProviders:     lima.NewWorkspaceProviderFactory(),
 		BackendShutdown:        sshClients.Close,
+		HelpCatalog:            defaultOperatorHelpCatalog(),
 		RunOpener: func(_ manager.RunAPIRequest, _ manager.RunPlan, runSession manager.RunSession) broker.Opener {
 			return hostOpener(runSession.IdentityDir, a.stdout, a.stderr)
 		},
@@ -8176,6 +8387,7 @@ type tuiOptions struct {
 	once        bool
 	interval    time.Duration
 	profileName string
+	sessionID   string
 }
 
 const tuiDashboardRowLimit = 10
@@ -8187,11 +8399,16 @@ func parseTUIOptions(args []string) (tuiOptions, error) {
 	fs.BoolVar(&opts.once, "once", false, "render the terminal dashboard once and exit")
 	fs.DurationVar(&opts.interval, "interval", opts.interval, "daemon-less fallback refresh interval")
 	fs.StringVar(&opts.profileName, "profile", "", "filter dashboard and audit rows to one profile")
+	fs.StringVar(&opts.sessionID, "session", "", "select one active or retained session")
+	jsonOutput := fs.Bool("json", false, "unsupported; use Manager API query routes")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
+	if *jsonOutput {
+		return opts, errors.New("hideout tui does not support --json; use Manager API or explicit activity commands for structured output")
+	}
 	if fs.NArg() != 0 {
-		return opts, errors.New("usage: hideout tui [--profile <name>] [--interval 2s] | hideout tui --once [--profile <name>]")
+		return opts, errors.New("usage: hideout tui [--profile <name>] [--session <id>] [--interval 2s] | hideout tui --once [--profile <name>] [--session <id>]")
 	}
 	if opts.interval <= 0 {
 		return opts, errors.New("--interval must be positive")
@@ -8205,6 +8422,12 @@ func parseTUIOptions(args []string) (tuiOptions, error) {
 			return opts, err
 		}
 	}
+	if err := (manager.OperatorSnapshotQuery{
+		Profile: opts.profileName, Session: opts.sessionID,
+		ActivityLimit: manager.DefaultOperatorActivityLimit,
+	}).Validate(); err != nil {
+		return opts, err
+	}
 	return opts, nil
 }
 
@@ -8213,37 +8436,10 @@ func (a app) tui(args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := profile.DefaultStore()
-	if err != nil {
-		return err
+	if opts.watch && !a.isInteractiveTerminal() {
+		return errors.New("hideout tui requires an interactive terminal; use hideout tui --once for plain non-interactive output")
 	}
-	core := manager.New(store)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	renderSnapshot := func(clear bool) error {
-		state, snapshotErr := buildTUILiveState(ctx, core, opts.profileName, liveconsole.HealthDaemonless)
-		if clear {
-			fmt.Fprint(a.stdout, "\033[H\033[2J")
-		}
-		writeTUIDashboard(a.stdout, state.Overview, state.AuditTail, state.DeniedAuditTail, snapshotErr, opts.profileName)
-		return nil
-	}
-	if !opts.watch {
-		return renderSnapshot(false)
-	}
-	if ch, err := daemon.SubscribeEvents(ctx, store.Root); err == nil {
-		state, seedErr := buildTUILiveState(ctx, core, opts.profileName, liveconsole.HealthLive)
-		renderLive := func(state liveconsole.State) error {
-			if seedErr != nil {
-				state.StreamHealth = liveconsole.StreamHealth{State: liveconsole.HealthStale, Reason: seedErr.Error()}
-			}
-			fmt.Fprint(a.stdout, "\033[H\033[2J")
-			writeTUILiveDashboard(a.stdout, state, seedErr, opts.profileName)
-			return nil
-		}
-		return watchLiveDashboard(ctx, ch, opts.interval, &state, renderLive, func() error { return renderSnapshot(true) })
-	}
-	return watchDashboard(ctx, nil, opts.interval, func() error { return renderSnapshot(true) })
+	return a.runTUICommand(opts)
 }
 
 func buildTUILiveState(ctx context.Context, core manager.Core, profileName, health string) (liveconsole.State, error) {
@@ -8300,7 +8496,14 @@ func buildTUILiveState(ctx context.Context, core manager.Core, profileName, heal
 			Session:        audit.RedactString(row.Source.Session),
 			Backend:        audit.RedactString(row.Source.Backend),
 			Reason:         audit.RedactString(reason),
+			Revision:       row.Revision,
 		})
+		if row.Claim != nil {
+			decisionRows[len(decisionRows)-1].ClaimSurface = audit.RedactString(row.Claim.Surface)
+			decisionRows[len(decisionRows)-1].ClaimOperator = audit.RedactString(row.Claim.Operator)
+			decisionRows[len(decisionRows)-1].ClaimedAt = row.Claim.ClaimedAt
+			decisionRows[len(decisionRows)-1].ClaimExpiresAt = row.Claim.ExpiresAt
+		}
 	}
 	noticeRows := make([]liveconsole.NoticeRow, 0, len(notices))
 	for _, row := range notices {
@@ -8640,6 +8843,13 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	}
 	for _, row := range state.Decisions {
 		fmt.Fprintf(w, "  - %s  kind=%s  status=%s  default=%s  profile=%s  session=%s\n", dash(row.ID), dash(row.Kind), dash(row.Status), dash(row.DefaultOutcome), dash(row.Profile), dash(row.Session))
+		if row.Status == decision.StateClaimed {
+			expires := "-"
+			if !row.ClaimExpiresAt.IsZero() {
+				expires = row.ClaimExpiresAt.UTC().Format(time.RFC3339)
+			}
+			fmt.Fprintf(w, "    lease surface=%s operator=%s expires=%s revision=%d\n", dash(row.ClaimSurface), dash(row.ClaimOperator), expires, row.Revision)
+		}
 		if row.Reason != "" {
 			fmt.Fprintf(w, "    reason=%s\n", row.Reason)
 		}
@@ -8673,57 +8883,6 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 	for _, row := range state.CleanupOutcomes {
 		fmt.Fprintf(w, "  - status=%s  sessions=%d  removed=%s  secrets=%s\n", dash(row.Status), row.Sessions, listForTUI(row.Removed), dash(row.SecretState))
 	}
-}
-
-func filterOverviewForTUI(overview manager.Overview, profileName string) manager.Overview {
-	if profileName == "" {
-		return overview
-	}
-	overview.Profiles = filterProfilesForTUI(overview.Profiles, profileName)
-	overview.Environments = filterEnvironmentsForTUI(overview.Environments, profileName)
-	overview.Sessions = filterSessionsForTUI(overview.Sessions, profileName)
-	overview.Network.ProfileDefaults = filterNetworkProfilesForTUI(overview.Network.ProfileDefaults, profileName)
-	return overview
-}
-
-func filterProfilesForTUI(values []manager.ProfileSummary, profileName string) []manager.ProfileSummary {
-	out := values[:0]
-	for _, value := range values {
-		if value.Name == profileName {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func filterEnvironmentsForTUI(values []manager.EnvironmentSummary, profileName string) []manager.EnvironmentSummary {
-	out := values[:0]
-	for _, value := range values {
-		if value.Profile == profileName {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func filterSessionsForTUI(values []manager.SessionSummary, profileName string) []manager.SessionSummary {
-	out := values[:0]
-	for _, value := range values {
-		if value.Profile == profileName {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func filterNetworkProfilesForTUI(values []manager.ProfileNetworkSummary, profileName string) []manager.ProfileNetworkSummary {
-	out := values[:0]
-	for _, value := range values {
-		if value.Profile == profileName {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 func visibleEnvironmentsForTUI(environments []manager.EnvironmentSummary) []manager.EnvironmentSummary {

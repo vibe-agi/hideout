@@ -1,12 +1,18 @@
 package export
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
+)
+
+var ErrReviewedPlanMismatch = errors.New(
+	"reviewed export plan no longer matches the export request",
 )
 
 func BuildPlan(req Request) (Plan, error) {
@@ -53,6 +59,42 @@ func Apply(req Request) (Result, error) {
 		_ = emitFailureMetaAudit(req, err.Error())
 		return Result{}, err
 	}
+	return applyBuiltPlan(req, plan)
+}
+
+// ApplyPlan writes only an artifact that still matches the reviewed plan.
+// CreatedAt is presentation metadata and is excluded from the comparison; the
+// source, body, count, redaction stages, selectors, and decision remain bound.
+func ApplyPlan(req Request, reviewed Plan) (Result, error) {
+	if err := validateRequest(req, true); err != nil {
+		_ = emitFailureMetaAudit(req, err.Error())
+		return Result{}, err
+	}
+	current, err := BuildPlan(req)
+	if err != nil {
+		_ = emitFailureMetaAudit(req, err.Error())
+		return Result{}, err
+	}
+	if current.Review.DecisionRequired {
+		err := errors.New(
+			"user data is present; choose --redact or --acknowledge-full-fidelity",
+		)
+		_ = emitFailureMetaAudit(req, err.Error())
+		return Result{}, err
+	}
+	matches, err := reviewedPlansMatch(reviewed, current)
+	if err != nil {
+		_ = emitFailureMetaAudit(req, err.Error())
+		return Result{}, err
+	}
+	if !matches {
+		_ = emitFailureMetaAudit(req, ErrReviewedPlanMismatch.Error())
+		return Result{}, ErrReviewedPlanMismatch
+	}
+	return applyBuiltPlan(req, current)
+}
+
+func applyBuiltPlan(req Request, plan Plan) (Result, error) {
 	if err := writeArtifact(req.Out, plan.Artifact); err != nil {
 		_ = emitFailureMetaAudit(req, err.Error())
 		return Result{}, err
@@ -69,9 +111,31 @@ func Apply(req Request) (Result, error) {
 	}, nil
 }
 
+func reviewedPlansMatch(left, right Plan) (bool, error) {
+	type authority struct {
+		Artifact Artifact `json:"artifact"`
+		Review   Review   `json:"review"`
+	}
+	normalize := func(plan Plan) ([]byte, error) {
+		artifact := plan.Artifact
+		artifact.Provenance.CreatedAt = time.Time{}
+		return json.Marshal(authority{Artifact: artifact, Review: plan.Review})
+	}
+	leftData, err := normalize(left)
+	if err != nil {
+		return false, err
+	}
+	rightData, err := normalize(right)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(leftData, rightData), nil
+}
+
 func validateRequest(req Request, requireOut bool) error {
 	switch req.Source {
-	case SourceAudit, SourceBundle, SourceBoundarySummary, SourceDoctorReport:
+	case SourceAudit, SourceActivity, SourceBundle, SourceBoundarySummary,
+		SourceDoctorReport:
 	default:
 		return fmt.Errorf("unsupported export source %q", req.Source)
 	}
@@ -91,6 +155,23 @@ func validateRequest(req Request, requireOut bool) error {
 	}
 	if req.Source == SourceDoctorReport && req.DoctorReportPath == "" {
 		return errors.New("--doctor-report is required for doctor-report export")
+	}
+	if req.Source == SourceActivity {
+		if req.Activity == nil {
+			return errors.New("activity export source is required")
+		}
+		switch req.PathPolicy {
+		case PathPolicyRedactHost:
+		case PathPolicyPreserve:
+			if !req.AcknowledgeFullFidelity &&
+				!req.InteractiveConfirmed {
+				return errors.New(
+					"preserving host paths requires explicit full-fidelity acknowledgement",
+				)
+			}
+		default:
+			return errors.New("activity export path policy is required")
+		}
 	}
 	return nil
 }

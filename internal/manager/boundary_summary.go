@@ -14,13 +14,14 @@ import (
 const BoundarySummaryVersion = "hideout.boundary-summary/v1"
 
 type BoundarySummary struct {
-	Version          string                      `json:"version"`
-	Evidence         string                      `json:"evidence"`
-	AuditPath        string                      `json:"auditPath,omitempty"`
-	Privilege        *BoundaryPrivilegeSummary   `json:"privilege,omitempty"`
-	HostFSVisibility *HostFSVisibilityPosture    `json:"hostfsVisibility,omitempty"`
-	Runtime          *BoundaryRuntimeSummary     `json:"runtime,omitempty"`
-	Capabilities     []BoundaryCapabilitySummary `json:"capabilities"`
+	Version             string                              `json:"version"`
+	Evidence            string                              `json:"evidence"`
+	AuditPath           string                              `json:"auditPath,omitempty"`
+	Privilege           *BoundaryPrivilegeSummary           `json:"privilege,omitempty"`
+	HostFSVisibility    *HostFSVisibilityPosture            `json:"hostfsVisibility,omitempty"`
+	Runtime             *BoundaryRuntimeSummary             `json:"runtime,omitempty"`
+	ActivityObservation *BoundaryActivityObservationSummary `json:"activityObservation,omitempty"`
+	Capabilities        []BoundaryCapabilitySummary         `json:"capabilities"`
 }
 
 type BoundaryRuntimeSummary struct {
@@ -41,6 +42,22 @@ type BoundaryPrivilegeSummary struct {
 	TargetUID string `json:"targetUid,omitempty"`
 	SetupKind string `json:"setupKind,omitempty"`
 	NonClaim  string `json:"nonClaim,omitempty"`
+}
+
+// BoundaryActivityObservationSummary is a shareable contract summary. It
+// deliberately excludes owner IDs, paths, argv, domains, IPs, and individual
+// activity records while retaining the exact ownership and retention rules.
+type BoundaryActivityObservationSummary struct {
+	Scope                  string   `json:"scope"`
+	OwnerKind              string   `json:"ownerKind"`
+	OwnerBinding           string   `json:"ownerBinding"`
+	LocalPathVisibility    string   `json:"localPathVisibility"`
+	ShareablePathTreatment string   `json:"shareablePathTreatment"`
+	ExcludedData           []string `json:"excludedData"`
+	CoverageNonClaim       string   `json:"coverageNonClaim"`
+	RetentionMaxBytes      int64    `json:"retentionMaxBytes"`
+	RetentionMaxAgeSeconds int64    `json:"retentionMaxAgeSeconds"`
+	RetentionLifecycle     string   `json:"retentionLifecycle"`
 }
 
 type BoundaryCapabilitySummary struct {
@@ -95,6 +112,7 @@ type boundarySummaryBuilder struct {
 	privilege        *BoundaryPrivilegeSummary
 	hostFSVisibility *HostFSVisibilityPosture
 	runtime          *BoundaryRuntimeSummary
+	activity         *BoundaryActivityObservationSummary
 	capabilities     map[string]*BoundaryCapabilitySummary
 }
 
@@ -123,6 +141,10 @@ func (b *boundarySummaryBuilder) observe(event audit.Event) {
 				NonClaim:       stringDetail(event.Details, "hostfsVisibilityNonClaim"),
 			}
 		}
+	}
+	if event.Action == "activity.observation.boundary" {
+		b.activity = boundaryActivityObservation(event.Details)
+		return
 	}
 	if event.Action == "guest.privilege.status" {
 		b.privilege = boundaryPrivilege(event.Details)
@@ -204,13 +226,38 @@ func (b *boundarySummaryBuilder) snapshot() BoundarySummary {
 		return capabilities[i].Capability < capabilities[j].Capability
 	})
 	return BoundarySummary{
-		Version:          BoundarySummaryVersion,
-		Evidence:         b.evidence,
-		AuditPath:        b.auditPath,
-		Privilege:        b.privilege,
-		HostFSVisibility: b.hostFSVisibility,
-		Runtime:          b.runtime,
-		Capabilities:     capabilities,
+		Version:             BoundarySummaryVersion,
+		Evidence:            b.evidence,
+		AuditPath:           b.auditPath,
+		Privilege:           b.privilege,
+		HostFSVisibility:    b.hostFSVisibility,
+		Runtime:             b.runtime,
+		ActivityObservation: b.activity,
+		Capabilities:        capabilities,
+	}
+}
+
+func boundaryActivityObservation(
+	details map[string]any,
+) *BoundaryActivityObservationSummary {
+	if details == nil {
+		return nil
+	}
+	scope := stringDetail(details, "scope")
+	if scope == "" {
+		return nil
+	}
+	return &BoundaryActivityObservationSummary{
+		Scope:                  scope,
+		OwnerKind:              stringDetail(details, "ownerKind"),
+		OwnerBinding:           stringDetail(details, "ownerBinding"),
+		LocalPathVisibility:    stringDetail(details, "localPathVisibility"),
+		ShareablePathTreatment: stringDetail(details, "shareablePathTreatment"),
+		ExcludedData:           stringSliceDetail(details, "excludedData"),
+		CoverageNonClaim:       stringDetail(details, "coverageNonClaim"),
+		RetentionMaxBytes:      detailInt64(details, "retentionMaxBytes"),
+		RetentionMaxAgeSeconds: detailInt64(details, "retentionMaxAgeSeconds"),
+		RetentionLifecycle:     stringDetail(details, "retentionLifecycle"),
 	}
 }
 
@@ -218,6 +265,52 @@ func detailInt(details map[string]any, key string) int {
 	value := detailString(details, key)
 	out, _ := strconv.Atoi(value)
 	return out
+}
+
+func detailInt64(details map[string]any, key string) int64 {
+	value, ok := details[key]
+	if !ok || value == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case json.Number:
+		out, _ := typed.Int64()
+		return out
+	case string:
+		out, _ := strconv.ParseInt(typed, 10, 64)
+		return out
+	default:
+		return 0
+	}
+}
+
+func stringSliceDetail(details map[string]any, key string) []string {
+	value, ok := details[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				continue
+			}
+			out = append(out, text)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func boundaryPrivilege(details map[string]any) *BoundaryPrivilegeSummary {

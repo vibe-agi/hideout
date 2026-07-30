@@ -92,6 +92,15 @@ func (m *credentialManager) Generation() uint64 {
 	return m.generation
 }
 
+func (m *credentialManager) redactionToken() (string, uint64) {
+	if m == nil {
+		return "", 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.currentToken, m.generation
+}
+
 // RotateAt returns the deadline at which the current token must be rotated.
 func (m *credentialManager) RotateAt() time.Time {
 	m.mu.RLock()

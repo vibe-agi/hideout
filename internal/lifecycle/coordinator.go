@@ -66,19 +66,21 @@ type CoordinatorOptions struct {
 // Coordinator is the daemon-owned single writer for lifecycle metadata and
 // stop-attempt serialization. It owns no provider or backend authority.
 type Coordinator struct {
-	mu           sync.Mutex
-	store        JournalStore
-	daemonID     string
-	idleGrace    time.Duration
-	now          func() time.Time
-	after        afterFunc
-	stop         StopFunc
-	publish      func(Event)
-	enabled      bool
-	environments map[string]*registryEnvironment
-	stopWG       sync.WaitGroup
-	closing      bool
-	closed       bool
+	mu               sync.Mutex
+	store            JournalStore
+	daemonID         string
+	idleGrace        time.Duration
+	now              func() time.Time
+	after            afterFunc
+	stop             StopFunc
+	publish          func(Event)
+	enabled          bool
+	environments     map[string]*registryEnvironment
+	mutationClaims   map[string]map[uint64]MutationOwner
+	mutationSequence uint64
+	stopWG           sync.WaitGroup
+	closing          bool
+	closed           bool
 }
 
 func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
@@ -104,6 +106,7 @@ func NewCoordinator(options CoordinatorOptions) (*Coordinator, error) {
 		store: options.Store, daemonID: options.DaemonID, idleGrace: grace,
 		now: now, after: after, stop: options.Stop, publish: options.Publish,
 		enabled: options.Enabled, environments: map[string]*registryEnvironment{},
+		mutationClaims: map[string]map[uint64]MutationOwner{},
 	}, nil
 }
 
@@ -249,15 +252,60 @@ func (c *Coordinator) expire(environmentID string, incarnation EnvironmentRef, s
 		c.mu.Unlock()
 		return
 	}
+	attemptID := fmt.Sprintf("stop-%d-%d", incarnation.StartGeneration, sequence)
+	mutationRequest, requestErr := c.normalizeMutationRequest(MutationRequest{
+		Keys: []string{EnvironmentMutationKey(environmentID)},
+		Owner: MutationOwner{
+			Kind: MutationOwnerStop, ID: attemptID,
+			Phase:     MutationPhaseStopping,
+			Recovery:  "wait for stable stop evidence, inspect lifecycle status, then retry",
+			StartedAt: c.nowUTC(),
+		},
+	})
+	if requestErr != nil {
+		state.blocked = true
+		state.journal.Reconciliation = blockedReconciliation(
+			c.daemonID,
+			"lifecycle-mutation-key-invalid",
+			c.nowUTC(),
+		)
+		_ = c.persistLocked(state)
+		c.mu.Unlock()
+		return
+	}
+	lease, claimErr := c.claimMutationKeysLocked(mutationRequest)
+	if claimErr != nil {
+		state.deadlineSeq++
+		retrySequence := state.deadlineSeq
+		now := c.nowUTC()
+		state.journal.IdleDeadline = &IdleDeadline{
+			Incarnation: incarnation, DaemonInstanceID: c.daemonID,
+			ScheduledAt: now, Deadline: now.Add(c.idleGrace),
+			Generation: retrySequence,
+		}
+		state.timer = c.after(c.idleGrace, func() {
+			c.expire(environmentID, incarnation, retrySequence)
+		})
+		c.checkpointLaterLocked(environmentID, state)
+		c.emitLocked(Event{
+			EnvironmentID: environmentID,
+			Generation:    incarnation.StartGeneration,
+			Kind:          "stop-deferred",
+			ReasonCode:    "mutation-in-progress",
+			At:            now,
+		})
+		c.mu.Unlock()
+		return
+	}
 	state.journal.IdleDeadline = nil
 	state.timer = nil
-	attemptID := fmt.Sprintf("stop-%d-%d", incarnation.StartGeneration, sequence)
 	state.journal.StopAttempt = &StopAttempt{
 		ID: attemptID, Incarnation: incarnation, DaemonInstanceID: c.daemonID,
 		Mode: "automatic", State: "planned", StartedAt: c.nowUTC(),
 	}
 	if err := c.persistLocked(state); err != nil {
 		state.blocked = true
+		lease.releaseLocked()
 		c.mu.Unlock()
 		return
 	}
@@ -265,6 +313,7 @@ func (c *Coordinator) expire(environmentID string, incarnation EnvironmentRef, s
 	if !c.enabled || c.stop == nil {
 		state.journal.StopAttempt = nil
 		_ = c.persistLocked(state)
+		lease.releaseLocked()
 		c.mu.Unlock()
 		return
 	}
@@ -279,6 +328,7 @@ func (c *Coordinator) expire(environmentID string, incarnation EnvironmentRef, s
 	result, stopErr := c.stop(ctx, StopRequest{AttemptID: attemptID, Mode: "automatic", Incarnation: incarnation})
 	cancel()
 	c.commitStopResult(environmentID, attemptID, incarnation, result, stopErr)
+	lease.Release()
 	c.stopWG.Done()
 }
 
@@ -378,25 +428,79 @@ func (c *Coordinator) StopExplicit(ctx context.Context, environmentID string) (S
 		c.mu.Unlock()
 		return Status{}, err
 	}
-	if state.reconciling {
+	startedAt := c.nowUTC()
+	attemptID := fmt.Sprintf(
+		"explicit-%d-%d",
+		state.journal.StartGeneration,
+		startedAt.UnixNano(),
+	)
+	mutationRequest, err := c.normalizeMutationRequest(MutationRequest{
+		Keys: []string{EnvironmentMutationKey(environmentID)},
+		Owner: MutationOwner{
+			Kind: MutationOwnerStop, ID: attemptID,
+			Phase:     MutationPhaseStopping,
+			Recovery:  "wait for stable stop evidence, inspect lifecycle status, then retry",
+			StartedAt: startedAt,
+		},
+	})
+	if err != nil {
+		c.mu.Unlock()
+		return Status{}, err
+	}
+	lease, err := c.claimMutationKeysLocked(mutationRequest)
+	if err != nil {
 		status := c.statusLocked(environmentID, state)
 		c.mu.Unlock()
-		return status, ErrReconciliationInFlight
+		return status, err
+	}
+	defer lease.Release()
+	if state.reconciling {
+		status := c.statusLocked(environmentID, state)
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			mutationRequest.Owner,
+			ErrReconciliationInFlight,
+		)
+		c.mu.Unlock()
+		return status, conflictErr
 	}
 	if len(state.handles) != 0 || len(state.establishing) != 0 {
 		status := c.statusLocked(environmentID, state)
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			mutationRequest.Owner,
+			ErrMutationBlockedByActivity,
+		)
 		c.mu.Unlock()
-		return status, errors.New("lifecycle explicit stop is blocked by active sessions")
+		return status, conflictErr
 	}
 	if state.mutation {
 		status := c.statusLocked(environmentID, state)
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			mutationRequest.Owner,
+			ErrStopInFlight,
+		)
 		c.mu.Unlock()
-		return status, ErrStopInFlight
+		return status, conflictErr
 	}
 	if attemptBlocksAttach(state.journal.StopAttempt) {
 		status := c.statusLocked(environmentID, state)
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			mutationRequest.Owner,
+			ErrStopInFlight,
+		)
 		c.mu.Unlock()
-		return status, ErrStopInFlight
+		return status, conflictErr
 	}
 	if state.journal.Incarnation == nil || state.journal.Incarnation.BootID == "" {
 		status := c.statusLocked(environmentID, state)
@@ -441,10 +545,9 @@ func (c *Coordinator) StopExplicit(ctx context.Context, environmentID string) (S
 		return Status{}, err
 	}
 	incarnation := *state.journal.Incarnation
-	attemptID := fmt.Sprintf("explicit-%d-%d", incarnation.StartGeneration, c.nowUTC().UnixNano())
 	state.journal.StopAttempt = &StopAttempt{
 		ID: attemptID, Incarnation: incarnation, DaemonInstanceID: c.daemonID,
-		Mode: "explicit-recovery", State: "invoked", StartedAt: c.nowUTC(),
+		Mode: "explicit-recovery", State: "invoked", StartedAt: startedAt,
 	}
 	if err := c.persistLocked(state); err != nil {
 		c.mu.Unlock()
@@ -579,11 +682,40 @@ func (c *Coordinator) ForgetEnvironment(environmentID string) error {
 			return err
 		}
 	}
+	request, err := c.normalizeMutationRequest(MutationRequest{
+		Keys: []string{EnvironmentMutationKey(environmentID)},
+		Owner: MutationOwner{
+			Kind: MutationOwnerCleanup, ID: c.daemonID,
+			Phase:     MutationPhaseApplying,
+			Recovery:  "wait for lifecycle activity to finish, then retry metadata cleanup",
+			StartedAt: c.nowUTC(),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	lease, err := c.claimMutationKeysLocked(request)
+	if err != nil {
+		return err
+	}
+	defer lease.releaseLocked()
 	if state.reconciling {
-		return ErrReconciliationInFlight
+		lease.releaseLocked()
+		return c.environmentConflictLocked(
+			environmentID,
+			state,
+			request.Owner,
+			ErrReconciliationInFlight,
+		)
 	}
 	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
-		return errors.New("lifecycle metadata cannot be forgotten while environment activity is in flight")
+		lease.releaseLocked()
+		return c.environmentConflictLocked(
+			environmentID,
+			state,
+			request.Owner,
+			ErrMutationBlockedByActivity,
+		)
 	}
 	if state.timer != nil {
 		state.timer.Stop()
@@ -596,7 +728,7 @@ func (c *Coordinator) ForgetEnvironment(environmentID string) error {
 	return nil
 }
 
-// BeginDisposal serializes one exact disposable identity with attach and stop,
+// BeginDisposal serializes one exact removal identity with attach and stop,
 // then persists authorization before Manager may perform backend cleanup.
 // Repeating it after a daemon restart resumes the last durable forward phase.
 func (c *Coordinator) BeginDisposal(ctx context.Context, request DisposalRequest) (DisposalIntent, error) {
@@ -619,12 +751,46 @@ func (c *Coordinator) BeginDisposal(ctx context.Context, request DisposalRequest
 	if err != nil {
 		return DisposalIntent{}, err
 	}
+	claimRequest, err := c.normalizeMutationRequest(MutationRequest{
+		Keys: []string{EnvironmentMutationKey(request.EnvironmentID)},
+		Owner: MutationOwner{
+			Kind: MutationOwnerDisposal, ID: request.authority(),
+			Phase:     MutationPhaseApplying,
+			Recovery:  "inspect the owning disposal operation and retry after it reaches a terminal or blocked phase",
+			StartedAt: c.nowUTC(),
+		},
+	})
+	if err != nil {
+		return DisposalIntent{}, err
+	}
+	lease, err := c.claimMutationKeysLocked(claimRequest)
+	if err != nil {
+		return DisposalIntent{}, err
+	}
+	retainLease := false
+	defer func() {
+		if !retainLease {
+			lease.releaseLocked()
+		}
+	}()
 	if state.reconciling {
-		return DisposalIntent{}, ErrReconciliationInFlight
+		lease.releaseLocked()
+		return DisposalIntent{}, c.environmentConflictLocked(
+			request.EnvironmentID,
+			state,
+			claimRequest.Owner,
+			ErrReconciliationInFlight,
+		)
 	}
 	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation ||
 		attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
-		return DisposalIntent{}, ErrMutationBlockedByActivity
+		lease.releaseLocked()
+		return DisposalIntent{}, c.environmentConflictLocked(
+			request.EnvironmentID,
+			state,
+			claimRequest.Owner,
+			ErrMutationBlockedByActivity,
+		)
 	}
 	if state.journal.StartGeneration == 0 {
 		generation := request.Generation
@@ -638,17 +804,22 @@ func (c *Coordinator) BeginDisposal(ctx context.Context, request DisposalRequest
 	}
 
 	now := c.nowUTC()
+	authority := request.authority()
 	if state.journal.Disposal == nil {
 		state.journal.Disposal = &DisposalIntent{
-			Schema: DisposalIntentSchema, Authority: DisposalAuthorityRunRM,
+			Schema: DisposalIntentSchema, Authority: authority,
 			Backend: request.Backend, InstanceName: request.InstanceName,
-			RecordDigest: request.RecordDigest, Generation: state.journal.StartGeneration,
-			State: DisposalStatePlanned, RequestedAt: now, UpdatedAt: now,
+			RecordDigest: request.RecordDigest, ActivitySessionID: request.ActivitySessionID,
+			Generation: state.journal.StartGeneration,
+			State:      DisposalStatePlanned, RequestedAt: now, UpdatedAt: now,
 		}
 	} else {
 		intent := state.journal.Disposal
-		if intent.Backend != request.Backend || intent.InstanceName != request.InstanceName ||
-			intent.RecordDigest != request.RecordDigest || intent.Generation != state.journal.StartGeneration {
+		if intent.Authority != authority || intent.Backend != request.Backend ||
+			intent.InstanceName != request.InstanceName ||
+			intent.RecordDigest != request.RecordDigest ||
+			intent.ActivitySessionID != request.ActivitySessionID ||
+			intent.Generation != state.journal.StartGeneration {
 			return DisposalIntent{}, errors.New("lifecycle disposal intent identity mismatch")
 		}
 		if intent.State == DisposalStateBlocked {
@@ -661,19 +832,27 @@ func (c *Coordinator) BeginDisposal(ctx context.Context, request DisposalRequest
 		}
 	}
 	if err := c.cancelDeadlineLocked(state); err != nil {
+		lease.releaseLocked()
 		return DisposalIntent{}, err
 	}
 	state.mutation = true
+	ownerCopy := claimRequest.Owner
+	state.mutationOwner = &ownerCopy
+	state.mutationLease = lease
 	state.blocked = true
 	state.journal.Reconciliation = blockedReconciliation(c.daemonID, "disposal-in-progress", now)
 	if err := c.persistLocked(state); err != nil {
 		state.mutation = false
+		state.mutationOwner = nil
+		state.mutationLease = nil
+		lease.releaseLocked()
 		return DisposalIntent{}, err
 	}
 	c.emitLocked(Event{
 		EnvironmentID: request.EnvironmentID, Generation: state.journal.StartGeneration,
 		Kind: "disposal-started", At: now,
 	})
+	retainLease = true
 	return *state.journal.Disposal, nil
 }
 
@@ -737,6 +916,11 @@ func (c *Coordinator) BlockDisposal(ctx context.Context, environmentID, recordDi
 	intent.ReasonCode = reasonCode
 	intent.UpdatedAt = c.nowUTC()
 	state.mutation = false
+	state.mutationOwner = nil
+	if state.mutationLease != nil {
+		state.mutationLease.releaseLocked()
+		state.mutationLease = nil
+	}
 	state.blocked = true
 	state.journal.Reconciliation = blockedReconciliation(c.daemonID, reasonCode, c.nowUTC())
 	persistErr := c.persistLocked(state)
@@ -772,10 +956,20 @@ func (c *Coordinator) CompleteDisposalMetadata(ctx context.Context, environmentI
 	}
 	if err := c.store.Remove(environmentID); err != nil {
 		state.mutation = false
+		state.mutationOwner = nil
+		if state.mutationLease != nil {
+			state.mutationLease.releaseLocked()
+			state.mutationLease = nil
+		}
 		state.blocked = true
 		state.journal.Reconciliation = blockedReconciliation(c.daemonID, "journal-removal-failed", c.nowUTC())
 		return errors.Join(err, c.persistLocked(state))
 	}
+	if state.mutationLease != nil {
+		state.mutationLease.releaseLocked()
+		state.mutationLease = nil
+	}
+	state.mutationOwner = nil
 	delete(c.environments, environmentID)
 	c.emitLocked(Event{
 		EnvironmentID: environmentID, Generation: intent.Generation,
@@ -819,6 +1013,28 @@ func (c *Coordinator) disposalLocked(environmentID, recordDigest string) (*regis
 // an apparently idle environment. Success removes the obsolete lifecycle
 // journal; failure keeps it blocked for explicit recovery.
 func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID string, mutate func(context.Context) error) error {
+	return c.RunDestructiveMutationWithOwner(
+		ctx,
+		environmentID,
+		MutationOwner{
+			Kind:     MutationOwnerCleanup,
+			ID:       c.daemonID,
+			Phase:    MutationPhaseApplying,
+			Recovery: "inspect lifecycle status and retry the cleanup after the blocker finishes",
+		},
+		mutate,
+	)
+}
+
+// RunDestructiveMutationWithOwner is the typed form used by configuration and
+// lifecycle operation ledgers. The owner is visible to every rejected
+// concurrent caller and does not broaden the callback's authority.
+func (c *Coordinator) RunDestructiveMutationWithOwner(
+	ctx context.Context,
+	environmentID string,
+	owner MutationOwner,
+	mutate func(context.Context) error,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -826,6 +1042,13 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		return errors.New("lifecycle destructive mutation is invalid")
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	request, err := c.normalizeMutationRequest(MutationRequest{
+		Keys:  []string{EnvironmentMutationKey(environmentID)},
+		Owner: owner,
+	})
+	if err != nil {
 		return err
 	}
 
@@ -839,19 +1062,41 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		c.mu.Unlock()
 		return err
 	}
-	if state.reconciling {
+	lease, err := c.claimMutationKeysLocked(request)
+	if err != nil {
 		c.mu.Unlock()
-		return ErrReconciliationInFlight
+		return err
+	}
+	defer lease.Release()
+	if state.reconciling {
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			request.Owner,
+			ErrReconciliationInFlight,
+		)
+		c.mu.Unlock()
+		return conflictErr
 	}
 	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			request.Owner,
+			ErrMutationBlockedByActivity,
+		)
 		c.mu.Unlock()
-		return ErrMutationBlockedByActivity
+		return conflictErr
 	}
 	if err := c.cancelDeadlineLocked(state); err != nil {
 		c.mu.Unlock()
 		return err
 	}
 	state.mutation = true
+	ownerCopy := request.Owner
+	state.mutationOwner = &ownerCopy
 	state.blocked = true
 	// A never-attached environment (or one whose journal a prior mutation
 	// removed) has no lifecycle journal: its zero start generation would fail
@@ -862,6 +1107,7 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		state.journal.Reconciliation = blockedReconciliation(c.daemonID, "destructive-mutation-in-progress", c.nowUTC())
 		if err := c.persistLocked(state); err != nil {
 			state.mutation = false
+			state.mutationOwner = nil
 			c.mu.Unlock()
 			return err
 		}
@@ -888,6 +1134,7 @@ func (c *Coordinator) RunDestructiveMutation(ctx context.Context, environmentID 
 		return errors.Join(mutationErr, errors.New("lifecycle destructive mutation lost coordinator state"))
 	}
 	state.mutation = false
+	state.mutationOwner = nil
 	journalless = state.journal.StartGeneration == 0
 	if mutationErr != nil {
 		if journalless {
@@ -1019,6 +1266,7 @@ func (c *Coordinator) Close() error {
 			})
 		}
 	}
+	c.mutationClaims = map[string]map[uint64]MutationOwner{}
 	c.mu.Unlock()
 	for _, cancel := range cancels {
 		cancel()

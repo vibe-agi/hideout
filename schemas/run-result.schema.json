@@ -122,6 +122,70 @@
           },
           "additionalProperties": false
         },
+        "activityObservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "ownerKind",
+            "ownerBinding",
+            "localPathVisibility",
+            "shareablePathTreatment",
+            "excludedData",
+            "coverageNonClaim",
+            "retentionMaxBytes",
+            "retentionMaxAgeSeconds",
+            "retentionLifecycle"
+          ],
+          "properties": {
+            "scope": {
+              "const": "top-level-command-and-descendants"
+            },
+            "ownerKind": {
+              "enum": ["reusable-environment", "disposable-session"]
+            },
+            "ownerBinding": {
+              "const": "exact-environment-or-disposable-session-plus-backend-incarnation"
+            },
+            "localPathVisibility": {
+              "const": "visible-in-authenticated-local-view"
+            },
+            "shareablePathTreatment": {
+              "const": "excluded-from-shareable-support-review-before-export"
+            },
+            "excludedData": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "file-content",
+                  "environment-values",
+                  "keystrokes",
+                  "full-pty",
+                  "packet-payload"
+                ]
+              }
+            },
+            "coverageNonClaim": {
+              "const": "no-events-does-not-prove-no-behavior-without-Available-coverage-for-the-subsystem-and-window"
+            },
+            "retentionMaxBytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 10737418240
+            },
+            "retentionMaxAgeSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31536000
+            },
+            "retentionLifecycle": {
+              "const": "clean-delete-recreate-removes-the-exact-old-owner"
+            }
+          }
+        },
         "capabilities": {
           "type": "array",
           "items": {

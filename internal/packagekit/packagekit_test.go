@@ -94,6 +94,103 @@ func TestPackageVerificationRejectsSelfConsistentOuterManifestWithInvalidPortalI
 	}
 }
 
+func TestPackageVerificationRejectsSelfConsistentOuterManifestWithInvalidObserverIdentity(t *testing.T) {
+	rel := "bin/" + helperbin.LinuxObserverCommand + "-linux-" +
+		runtime.GOARCH + ".manifest.json"
+	root := writeTestArtifact(t, map[string]string{rel: "{}\n"})
+	if _, err := Verify(root); err == nil ||
+		!strings.Contains(err.Error(), "hideout-observer") {
+		t.Fatalf("Verify invalid nested observer identity error=%v", err)
+	}
+}
+
+func TestPackageVerificationRejectsInvalidEmbeddedBrowserManifest(t *testing.T) {
+	root := writeTestArtifact(t, map[string]string{
+		BrowserConsoleManifestPath: "{}\n",
+	})
+	if _, err := Verify(root); err == nil ||
+		!strings.Contains(err.Error(), "embedded asset manifest") {
+		t.Fatalf("Verify invalid embedded asset manifest error=%v", err)
+	}
+}
+
+func TestPackageVerificationRejectsDriftedComponentContract(t *testing.T) {
+	root := writeTestArtifact(t, map[string]string{
+		PackageComponentContractPath: "{}\n",
+	})
+	if _, err := Verify(root); err == nil ||
+		!strings.Contains(err.Error(), "component contract") {
+		t.Fatalf("Verify invalid package component contract error=%v", err)
+	}
+}
+
+func TestPackageVerificationRejectsSelfConsistentWrongBrowserContainerDigest(t *testing.T) {
+	root := writeTestArtifact(t, nil)
+	assetPath := filepath.Join(
+		root,
+		filepath.FromSlash(BrowserConsoleManifestPath),
+	)
+	assetManifest, err := LoadEmbeddedAssetManifest(assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetManifest.ContainerSHA256 = strings.Repeat("f", 64)
+	assetData, err := json.MarshalIndent(assetManifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetData = append(assetData, '\n')
+	if err := os.WriteFile(assetPath, assetData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := readManifest(t, root)
+	assetSHA256 := BytesSHA256(assetData)
+	for index := range manifest.Files {
+		if manifest.Files[index].Path == BrowserConsoleManifestPath {
+			manifest.Files[index].SHA256 = assetSHA256
+		}
+	}
+	manifest.EmbeddedAssets[0].ManifestSHA256 = assetSHA256
+	writeManifest(t, root, manifest)
+	if _, err := Verify(root); err == nil ||
+		!strings.Contains(err.Error(), "container digest mismatch") {
+		t.Fatalf("Verify wrong embedded container digest error=%v", err)
+	}
+}
+
+func TestInstalledPackageVerifiesObserverAndEmbeddedBrowserManifest(t *testing.T) {
+	root := writeTestArtifact(t, nil)
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	store := filepath.Join(t.TempDir(), "store")
+	if _, err := Install(InstallOptions{
+		PackageRoot: root,
+		Prefix:      prefix,
+		StoreRoot:   store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	observer := filepath.Join(
+		prefix,
+		"bin",
+		helperbin.LinuxObserverCommand+"-linux-"+runtime.GOARCH,
+	)
+	if _, ok := helperbin.LinuxObserverHelperCurrent(
+		observer,
+		runtime.GOARCH,
+	); !ok {
+		t.Fatal("installed observer helper identity is not current")
+	}
+	if _, err := os.Stat(filepath.Join(
+		prefix,
+		filepath.FromSlash("share/hideout/"+BrowserConsoleManifestPath),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(prefix); err != nil {
+		t.Fatalf("Verify installed package: %v", err)
+	}
+}
+
 func TestUpgradeRejectsIncompatibleMigrationBeforeMutation(t *testing.T) {
 	first := writeTestArtifact(t, map[string]string{"bin/hideout": "version-a\n"})
 	prefix := filepath.Join(t.TempDir(), "prefix")
@@ -506,12 +603,14 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"bin/hideout-shim-linux-" + runtime.GOARCH:                                    {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH:          {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH:         {kind: "linux-helper", executable: true, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", executable: true, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", executable: false, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", executable: false, data: "readme zh\n"},
 		"LICENSE":                              {kind: "doc", executable: false, data: "license\n"},
+		"LICENSES/GPL-2.0-only.txt":            {kind: "doc", executable: false, data: "GPL-2.0-only\n"},
 		"THIRD_PARTY_NOTICES.md":               {kind: "doc", executable: false, data: "notices\n"},
 		"SECURITY.md":                          {kind: "doc", executable: false, data: "security\n"},
 		"third_party/tun2socks/LICENSE":        {kind: "doc", executable: false, data: "MIT license\n"},
@@ -521,6 +620,27 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		"docs/STATUS.md":                       {kind: "doc", executable: false, data: "status\n"},
 		"runtime/catalog.json":                 {kind: "runtime-catalog", executable: false, data: "{}\n"},
 		"runtime/contract.json":                {kind: "runtime-contract", executable: false, data: "{}\n"},
+	}
+	componentContract, err := json.MarshalIndent(
+		ExpectedPackageComponentContract(),
+		"",
+		"  ",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[PackageComponentContractPath] = struct {
+		kind       string
+		executable bool
+		data       string
+	}{
+		kind: "runtime-contract",
+		data: string(componentContract) + "\n",
+	}
+	for rel, data := range overrides {
+		spec := files[rel]
+		spec.data = data
+		files[rel] = spec
 	}
 	for _, command := range []string{helperbin.LinuxSessionSupervisorCommand, helperbin.LinuxWorkspacePortalCommand} {
 		binaryRel := "bin/" + command + "-linux-" + runtime.GOARCH
@@ -556,11 +676,63 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 		executable bool
 		data       string
 	}{kind: "helper-manifest", data: string(tunManifest) + "\n"}
+	observerBinaryRel := "bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH
+	observerSum := sha256.Sum256([]byte(files[observerBinaryRel].data))
+	observerManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxObserverCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH,
+		Artifact: filepath.Base(observerBinaryRel),
+		SHA256:   hex.EncodeToString(observerSum[:]),
+		Builder:  "go build -trimpath", BuiltAt: "2026-07-09T00:00:00Z",
+		License: helperbin.LinuxObserverLicense, BuildMode: helperbin.LinuxObserverBuildMode,
+		PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[observerBinaryRel+".manifest.json"] = struct {
+		kind       string
+		executable bool
+		data       string
+	}{kind: "helper-manifest", data: string(observerManifest) + "\n"}
 	for rel, data := range overrides {
 		spec := files[rel]
 		spec.data = data
 		files[rel] = spec
 	}
+	embeddedAssets := BrowserConsoleAssets()
+	for index := range embeddedAssets {
+		embeddedAssets[index].SHA256 = BytesSHA256(
+			[]byte("embedded fixture " + embeddedAssets[index].Path + "\n"),
+		)
+	}
+	browserManifest, err := json.MarshalIndent(EmbeddedAssetManifest{
+		Schema:          EmbeddedAssetManifestSchema,
+		ID:              BrowserConsoleAssetID,
+		Container:       BrowserConsoleContainerPath,
+		ContainerSHA256: BytesSHA256([]byte(files["bin/hideout"].data)),
+		License:         BrowserConsoleAssetLicense,
+		Assets:          embeddedAssets,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[BrowserConsoleManifestPath] = struct {
+		kind       string
+		executable bool
+		data       string
+	}{
+		kind: "embedded-asset-manifest",
+		data: string(browserManifest) + "\n",
+	}
+	for rel, data := range overrides {
+		spec := files[rel]
+		spec.data = data
+		files[rel] = spec
+	}
+	browserManifestSHA256 := BytesSHA256(
+		[]byte(files[BrowserConsoleManifestPath].data),
+	)
 	manifest := Manifest{
 		Schema:  ArtifactSchema,
 		BuiltAt: "2026-07-09T00:00:00Z",
@@ -585,12 +757,20 @@ func writeTestArtifact(t *testing.T, overrides map[string]string) string {
 				"bin/hideout-shim-linux-" + runtime.GOARCH,
 				"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
 				"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH,
+				"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH,
 				"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
 				"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH,
 			},
 			Entrypoints: []string{"install.sh", "README.md", "README.zh-CN.md"},
 			Directories: []string{"schemas", "docs", "packaging", "runtime", "third_party"},
 		},
+		EmbeddedAssets: []EmbeddedAssetBinding{{
+			ID:             BrowserConsoleAssetID,
+			Container:      BrowserConsoleContainerPath,
+			Manifest:       BrowserConsoleManifestPath,
+			ManifestSHA256: browserManifestSHA256,
+			License:        BrowserConsoleAssetLicense,
+		}},
 		Migration: Migration{
 			InstallStateSchema:   InstallStateSchema,
 			FromInstalledSchemas: []string{InstallStateSchema},

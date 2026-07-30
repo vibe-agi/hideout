@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+source "$ROOT/scripts/lib/reproducible-package.sh"
 
 usage() {
   cat <<'USAGE'
@@ -87,7 +88,7 @@ shim="$prefix/bin/hideout-shim"
 arch="$(go env GOARCH)"
 build_version="${HIDEOUT_VERSION:-dev}"
 git_commit="$(git -C "$source" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+built_at="$(hideout_build_timestamp)"
 ldflags=(
   "-X" "github.com/vibe-agi/hideout/internal/app.Version=$build_version"
   "-X" "github.com/vibe-agi/hideout/internal/app.Commit=$git_commit"
@@ -95,10 +96,11 @@ ldflags=(
 )
 
 echo "install-local: building hideout into $hideout"
-go build -trimpath -ldflags "${ldflags[*]}" -o "$hideout" ./cmd/hideout
+go -C "$source" build -trimpath -ldflags "${ldflags[*]}" \
+  -o "$hideout" ./cmd/hideout
 
 echo "install-local: building host command shim into $shim"
-go build -trimpath -o "$shim" ./cmd/hideout-shim
+go -C "$source" build -trimpath -o "$shim" ./cmd/hideout-shim
 
 echo "install-local: building linux guest shim for $arch"
 "$hideout" shim build-linux \
@@ -118,6 +120,12 @@ go -C "$source" run ./internal/helperbin/cmd/build-session-supervisor \
   --goarch "$arch" \
   --source "$source" >/dev/null
 
+echo "install-local: building linux workload observer for $arch"
+go -C "$source" run ./internal/helperbin/cmd/build-observer \
+  --out "$prefix/bin/hideout-observer-linux-$arch" \
+  --goarch "$arch" \
+  --source "$source" >/dev/null
+
 echo "install-local: building linux workspace portal for $arch"
 go -C "$source" run ./internal/helperbin/cmd/build-workspace-portal \
   --out "$prefix/bin/hideout-workspace-portal-linux-$arch" \
@@ -132,7 +140,9 @@ go -C "$source" run ./internal/helperbin/cmd/build-tun2socks \
 
 echo "install-local: building linux DoH DNS stub for $arch"
 GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
-  go build -trimpath -o "$prefix/bin/hideout-dns-stub-linux-$arch" ./cmd/hideout-dns-stub >/dev/null
+  go -C "$source" build -trimpath \
+    -o "$prefix/bin/hideout-dns-stub-linux-$arch" \
+    ./cmd/hideout-dns-stub >/dev/null
 
 if [ "$run_init" -eq 1 ]; then
   echo "install-local: running hideout init --no-input"

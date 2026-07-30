@@ -118,6 +118,129 @@ func TestRecoverDisposableEnvironmentSkipsDeleteWhenAlreadyAbsent(t *testing.T) 
 	}
 }
 
+func TestRecoverEnvironmentCleanRetriesAfterActivityFailureWithoutDuplicateBackendCleanup(t *testing.T) {
+	core, envStore, record, journalStore := disposableRecoveryFixture(t)
+	record.Disposable = false
+	if err := envStore.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := environment.NewRemovalIdentity(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &disposableRecoveryBackend{observations: []backend.LifecycleObservation{
+		{State: backend.LifecycleRunning, BootID: "01234567-89ab-cdef-0123-456789abcdef"},
+		{State: backend.LifecycleAbsent},
+		{State: backend.LifecycleAbsent},
+	}}
+	activityCalls := 0
+	request := EnvironmentCleanRecoveryRequest{
+		Identity: identity,
+		Source:   EnvironmentCleanRecoverySourceExplicit,
+		Provider: provider,
+		ActivityCleanup: func(context.Context, environment.Record) error {
+			activityCalls++
+			if activityCalls == 1 {
+				return errors.New("injected activity response loss")
+			}
+			return nil
+		},
+	}
+
+	first, err := core.RecoverEnvironmentClean(context.Background(), request)
+	if err == nil ||
+		first.ReasonCode != lifecycle.DisposalReasonActivityCleanupFailed ||
+		first.RecordRemoved || first.JournalRemoved ||
+		provider.cleanupCalls != 1 || activityCalls != 1 {
+		t.Fatalf(
+			"first recovery=%+v cleanupCalls=%d activityCalls=%d err=%v",
+			first, provider.cleanupCalls, activityCalls, err,
+		)
+	}
+	journal, err := journalStore.Load(record.ID)
+	if err != nil || journal.Disposal == nil ||
+		journal.Disposal.Authority != lifecycle.DisposalAuthorityEnvironmentClean ||
+		journal.Disposal.State != lifecycle.DisposalStateBlocked {
+		t.Fatalf("retained clean intent=%+v err=%v", journal.Disposal, err)
+	}
+
+	second, err := core.RecoverEnvironmentClean(context.Background(), request)
+	if err != nil {
+		t.Fatalf("retry environment clean: %v", err)
+	}
+	if second.Status != DisposableRecoveryRemoved ||
+		!second.ActivityRemoved || !second.RecordRemoved ||
+		!second.JournalRemoved || second.BackendCleanupInvoked ||
+		provider.cleanupCalls != 1 || activityCalls != 2 {
+		t.Fatalf(
+			"second recovery=%+v cleanupCalls=%d activityCalls=%d",
+			second, provider.cleanupCalls, activityCalls,
+		)
+	}
+	if _, err := envStore.Load(record.ID); err == nil {
+		t.Fatal("environment record survived clean recovery")
+	}
+	if _, err := journalStore.Load(record.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clean journal survived recovery: %v", err)
+	}
+}
+
+func TestRecoverEnvironmentCleanRejectsChangedRecordAfterDurableIntent(t *testing.T) {
+	core, envStore, record, _ := disposableRecoveryFixture(t)
+	record.Disposable = false
+	if err := envStore.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := environment.NewRemovalIdentity(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &disposableRecoveryBackend{observations: []backend.LifecycleObservation{
+		{State: backend.LifecycleAbsent},
+		{State: backend.LifecycleAbsent},
+		{State: backend.LifecycleAbsent},
+	}}
+	request := EnvironmentCleanRecoveryRequest{
+		Identity: identity,
+		Source:   EnvironmentCleanRecoverySourceExplicit,
+		Provider: provider,
+		ActivityCleanup: func(context.Context, environment.Record) error {
+			return errors.New("retain durable intent")
+		},
+	}
+	if _, err := core.RecoverEnvironmentClean(context.Background(), request); err == nil {
+		t.Fatal("intent-seeding activity failure was accepted")
+	}
+
+	changed, err := envStore.Load(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed.InstanceName += "-replaced"
+	if err := envStore.Save(changed); err != nil {
+		t.Fatal(err)
+	}
+	changedIdentity, err := environment.NewRemovalIdentity(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Identity = changedIdentity
+	request.ActivityCleanup = func(context.Context, environment.Record) error {
+		return nil
+	}
+	outcome, err := core.RecoverEnvironmentClean(context.Background(), request)
+	if err == nil || outcome.BackendCleanupInvoked ||
+		outcome.RecordRemoved || provider.cleanupCalls != 0 {
+		t.Fatalf(
+			"changed identity escaped durable binding: outcome=%+v calls=%d err=%v",
+			outcome, provider.cleanupCalls, err,
+		)
+	}
+	if _, err := envStore.Load(record.ID); err != nil {
+		t.Fatalf("mismatched record was removed: %v", err)
+	}
+}
+
 func TestRecoverDisposableEnvironmentResumesDurableForwardPhases(t *testing.T) {
 	for _, phase := range []string{
 		lifecycle.DisposalStateBackendAbsent,

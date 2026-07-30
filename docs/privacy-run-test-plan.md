@@ -921,9 +921,10 @@ product forwards, backend fail-closed tests, audit, cleanup, and Boundary
 Summary. Lima SSH tests must also lock the Phase 1 host-key posture: default
 Lima `ssh.config` settings may use an explicit loopback-only unpinned callback,
 but the bridge must not silently accept arbitrary non-loopback SSH endpoints.
-Endpoint observation, project-declared candidates, direct JavaScript endpoint
-entrypoints, OAuth callback automation, and guest-to-host exposure remain out of
-this gate.
+Automatic service-listener discovery (`endpoint.observe`), project-declared
+candidates, direct JavaScript endpoint entrypoints, OAuth callback automation,
+and guest-to-host exposure remain out of this gate. This does not exclude
+Feature 045's bounded workload process-to-IP/port activity evidence.
 
 Commands:
 
@@ -2015,3 +2016,162 @@ the recovery artifact SHA-256 is
 `22b708b4560a6ab454c357f4a99f12a921877f758a01774da09cbe1c543e241f`;
 and the bound runtime artifact SHA-256 is
 `79e5d25bfd05c27b4ee7f2ad085d45c15a63aadbe2ab8d1b4ba2c426e1586134`.
+
+## Gate 045: Operator Observability Console
+
+Status: **implementation gates active; exact release-candidate promotion
+pending.**
+
+Feature 045 is accepted only when one clean source identity, one immutable
+package archive, and one installed candidate satisfy every lane below. Passing
+development evidence from a dirty tree, or a disposable clean implementation
+snapshot that is no longer the main candidate, validates the gate
+implementation but does not satisfy final release acceptance.
+
+### 045 Required order
+
+Run the source and adversarial gates before packaging:
+
+```sh
+HIDEOUT_BPF_CLANG=/opt/homebrew/opt/llvm@19/bin/clang \
+HIDEOUT_BPF_LLVM_STRIP=/opt/homebrew/opt/llvm@19/bin/llvm-strip \
+  scripts/gates/generated.sh
+scripts/mutation/045/run-negative-fixtures.sh
+scripts/gates/release-candidate.sh
+scripts/gates/formal.sh
+scripts/gates/release-candidate-privacy.sh
+scripts/gates/release-candidate-ui.sh
+scripts/gates/release-candidate-performance.sh
+scripts/gates/release-candidate-lima.sh
+```
+
+Then build once and test only those bytes:
+
+```sh
+scripts/release/build-candidate.sh
+scripts/release/test-package-lifecycle.sh
+```
+
+T163 adds `scripts/release/collect-evidence.sh`; until that task lands, final
+evidence collection is a required missing lane. T164 then installs the exact
+archive on this machine and repeats the documented setup, secret, connection,
+run, TUI, WebUI, cleanup, update, and uninstall journeys. T165 proves that no
+remote tag, GitHub Release, Homebrew push, or package publication occurred.
+T171 reruns the complete sequence from the final clean tree and rejects any
+required `stale`, `reduced`, `not-run`, or `unsupported` result.
+
+### Local, mutation, and formal acceptance
+
+The local aggregate must pass unit, race, fuzz/property, schema, generated,
+static, dependency/license/advisory, recovery, and package-component checks.
+Every authority, privacy, attribution, coverage, cleanup, help, UI, and
+recovery claim in `docs/release/045-claim-matrix.md` needs both a positive
+judge and a retained negative fixture that makes that judge fail.
+
+The formal lane reads `formal/inventory.json` and must run exactly 12
+configurations across 10 modules, all 72 inventoried safety invariants, all 18
+liveness properties, and all 12 named Go production-refinement/crash tests.
+The independent verifier rejects a missing result, counterexample, incomplete
+pass set, changed source/log digest, or stale inventory.
+
+### Real Lima workload and recovery acceptance
+
+The macOS arm64 Lima lane must run the real packaged supervisor/observer path,
+not a native or fixture substitute. It proves one cgroup-v2 workload owner for
+the command after `--` and every attributable descendant; concurrent sessions
+must not cross owners. It must observe real process, file-metadata, TCP/UDP
+endpoint, and plaintext DNS facts, retain their execution ancestry, and reject
+PID-only or post-start cgroup substitution.
+
+The same aggregate must exercise online proxy/secret/DNS transition through
+stage, probe, activate, prove, drain, and commit; crash at every durable
+network boundary; retry with the same operation identity; independently probe
+the effective route; inject observer loss; restart the daemon; reject target
+tampering; clean the exact old owner; and preserve an unrelated owner. No
+healthy proxy, DNS, or managed-secret edit may require daemon stop or VM
+recreation.
+
+Runtime coverage acceptance is intentionally asymmetric:
+
+| Subsystem | Healthy supported reference | Required interpretation |
+| --- | --- | --- |
+| Process | `Available` after exact cgroup and observer proof | Empty results can support absence only for a fully Available queried interval. |
+| File | `Partial` | Recorded open/read/write and related metadata is useful; an empty result is not a no-access proof. |
+| Network | `Partial` | Process-to-IP/port evidence is useful; incomplete route attribution prevents a complete route claim. |
+| DNS | `Partial` | Plaintext query correlation is useful; encrypted, cached, literal-IP, shared, or external-resolver cases remain unknown. |
+
+An injected sequence gap or drop must degrade the affected interval and expose
+its reason and loss count. Target exit must close current coverage as
+`Unavailable (target-exited)` without deleting prior evidence. Native or
+unproved backends must report observation `Unavailable`, never silently
+promote fixture evidence.
+
+### UI and operator-journey acceptance
+
+The UI aggregate must cover first-use help and discovery, real PTY rendering,
+the Bubble Tea Overview/Workloads/Activity/Configuration/Operations views,
+keyboard and focus behavior, Enter modals, terminal resize, stale read-only
+reseed, operation recovery, and CLI/TUI/WebUI fact and operation parity.
+
+Configuration editing must emit no Manager apply before explicit confirmation
+and exactly one digest-bound apply afterward. The browser lane must use a real
+headless browser against the authenticated loopback server and check keyboard
+navigation, labels, responsive layout, bounded rows, injection handling,
+credential hygiene, stream gaps, and reconnect/reseed. UI state alone never
+proves a mutation succeeded.
+
+### Privacy, retention, and cleanup acceptance
+
+The privacy lane places distinct canaries in managed-secret input and every
+supported sensitive field, then scans activity segments/indexes, process
+listings, Keychain metadata output, Manager APIs, CLI/TUI/WebUI, daemon logs,
+exports, support reports, and release evidence. It must find zero secret-value
+hits while retaining useful ordinary local paths. Known secret values and
+supported encodings, URI userinfo, authentication fields, sensitive
+argument/query values, and Hideout control tokens are deterministically
+removed. This does not claim heuristic discovery of arbitrary secrets.
+
+The activity store must use private `0700` directories and `0600` files,
+retain no file contents, environment values, keystrokes, full PTY transcript,
+or packet/proxy-auth payloads, and expose any aggregation, loss, truncation,
+repair, quarantine, or pruning in coverage. Default limits are one 8 MiB
+active segment, 256 MiB per exact owner, and 1 GiB globally. Stop preserves
+reusable evidence; clean/delete/recreate removes only the proved old
+incarnation; successful disposable teardown removes only its exact session.
+Ambiguous identity or failed absence proof blocks deletion.
+
+### Performance acceptance
+
+The independently recomputed results must remain within all frozen v1
+ceilings: reference workload median overhead at most 10%, warm attach and
+browser freshness p95 at most 2 seconds, and the documented query/render,
+daemon/TUI memory, observer CPU/RSS, event/drop accounting, and one-active-
+segment quota bounds in `docs/activity-observation.md`. Every measured drop
+must be reflected in degraded coverage; silently improving a latency result by
+discarding evidence is a failure.
+
+### Package and final evidence acceptance
+
+The clean package gate rejects dirty source identity, rebuild drift,
+manifest/tree mismatch, missing or changed files, helper/UI/runtime digest
+drift, and any reachable final-binary advisory. Lifecycle testing must consume
+that exact archive without rebuilding, validate the immutable prior alpha
+download, prove clean install, same-version reinstall, intentionally scoped
+legacy-store discard, old-version upgrade, Keychain migration guidance,
+ordinary uninstall absence, and preservation of durable or unrelated data.
+
+The final evidence manifest must bind source commit and tree, version, package
+and every packaged file digest, helpers, embedded UI assets, runtime, formal
+inventory/results, every required gate, limitations, review resolution, local
+install, and publication absence. A digest, source, timestamp, platform, or
+candidate mismatch fails closed.
+
+### Current evidence versus release acceptance
+
+T151–T157 currently establish passing formal, local/adversarial, real-Lima,
+UI/browser, privacy, and performance behavior for the recorded development
+source identities. T158–T159 additionally proved the clean build and package
+lifecycle judges in a disposable exact-clean implementation snapshot. Those
+runs remain useful implementation evidence, but none is an accepted final
+main-tree release candidate. T163, T164, T165, and T171 remain mandatory
+before this gate may be promoted.

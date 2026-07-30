@@ -19,6 +19,15 @@
         "broker",
         "network",
         "secrets",
+        "secret/plan",
+        "secret/apply",
+        "activity/summary",
+        "activity/events",
+        "activity/executions",
+        "activity/coverage",
+        "activity/risks",
+        "activity/export/plan",
+        "activity/export/apply",
         "audit/events",
         "audit",
         "settings",
@@ -34,6 +43,8 @@
         "environment/stop/apply",
         "environment/clean/plan",
         "environment/clean/apply",
+        "environment/delete/plan",
+        "environment/delete/apply",
         "profile/command-proxy/plan",
         "profile/command-proxy/apply",
         "profile/hostfs/plan",
@@ -42,6 +53,8 @@
         "profile/env/apply",
         "profile/network/plan",
         "profile/network/apply",
+        "profile/transaction/plan",
+        "profile/transaction/apply",
         "evidence/export/plan",
         "evidence/export/apply",
         "hostfs/write/plan",
@@ -52,6 +65,7 @@
         "decisions",
         "decision/inspect",
         "decision/claim",
+        "decision/release",
         "decision/approve",
         "decision/deny",
         "decision/reopen",
@@ -71,7 +85,10 @@
         "runtime/catalog",
         "runtime/status",
         "runtime/verify/plan",
-        "runtime/verify/apply"
+        "runtime/verify/apply",
+        "operator/snapshot",
+        "operation/inspect",
+        "profile/projection"
       ]
     },
     "data": {
@@ -89,6 +106,35 @@
       "items": {
         "type": "string",
         "minLength": 1
+      }
+    },
+    "errorDetails": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+          },
+          "field": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "recovery": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
       }
     }
   },

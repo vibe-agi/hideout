@@ -104,6 +104,126 @@ func TestSessionRegistryCancelEnvironmentTargetsOnlyThatEnvironment(t *testing.T
 	r.finish("conn-c", "")
 }
 
+func TestSessionRegistryLeasesExactLiveDNSRuntimeAgainstTeardown(
+	t *testing.T,
+) {
+	registry := newSessionRegistry(1, nil)
+	worker, err := registry.register("conn-dns", func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var switches [][2]string
+	var verifies []string
+	releaseRuntime, err :=
+		worker.RegisterEnvironmentNetworkRuntime(
+			manager.EnvironmentNetworkRuntimeRegistration{
+				EnvironmentID: "env_dns",
+				SessionID:     "ses_dns",
+				BootID: "01234567-89ab-cdef-0123-" +
+					"456789abcdef",
+				ReconfigureDNS: func(
+					_ context.Context,
+					oldResolver string,
+					newResolver string,
+				) error {
+					switches = append(
+						switches,
+						[2]string{oldResolver, newResolver},
+					)
+					return nil
+				},
+				VerifyDNS: func(
+					_ context.Context,
+					resolver string,
+				) error {
+					verifies = append(verifies, resolver)
+					return nil
+				},
+			},
+		)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.markStarted(sessionStart{
+		SessionID: "ses_dns", EnvironmentID: "env_dns",
+		Profile: "default", Backend: "lima",
+		SessionSnapshotID: testDaemonSessionSnapshotID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.EnvironmentNetworkRuntimeAvailable(
+		context.Background(),
+		"env_dns",
+	); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := registry.AcquireEnvironmentNetworkRuntime(
+		context.Background(),
+		"env_dns",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.EnvironmentID() != "env_dns" ||
+		lease.SessionID() != "ses_dns" ||
+		lease.BootID() !=
+			"01234567-89ab-cdef-0123-456789abcdef" {
+		t.Fatalf("lease identity is not exact: %+v", lease)
+	}
+	if err := lease.VerifyDNS(
+		context.Background(),
+		"1.1.1.1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.ReconfigureDNS(
+		context.Background(),
+		"1.1.1.1",
+		"9.9.9.9",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	releaseStarted := make(chan struct{})
+	releaseDone := make(chan struct{})
+	go func() {
+		close(releaseStarted)
+		releaseRuntime()
+		close(releaseDone)
+	}()
+	<-releaseStarted
+	select {
+	case <-releaseDone:
+		t.Fatal("runtime teardown passed an active mutation lease")
+	default:
+	}
+	lease.Release()
+	select {
+	case <-releaseDone:
+	case <-time.After(time.Second):
+		t.Fatal("runtime teardown did not resume after lease release")
+	}
+	if err := registry.EnvironmentNetworkRuntimeAvailable(
+		context.Background(),
+		"env_dns",
+	); !errors.Is(
+		err,
+		manager.ErrEnvironmentNetworkRuntimeUnavailable,
+	) {
+		t.Fatalf("released runtime availability=%v", err)
+	}
+	if len(verifies) != 1 || verifies[0] != "1.1.1.1" ||
+		len(switches) != 1 ||
+		switches[0] != [2]string{"1.1.1.1", "9.9.9.9"} {
+		t.Fatalf(
+			"runtime calls verifies=%v switches=%v",
+			verifies,
+			switches,
+		)
+	}
+	registry.finish("conn-dns", "")
+}
+
 func TestSessionWorkerSolelyOwnsImmutableWorkspaceAttachment(t *testing.T) {
 	r := newSessionRegistry(1, nil)
 	worker, err := r.register("conn-workspace", func() {})

@@ -3,8 +3,6 @@ package manager
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -311,16 +309,4 @@ func adapterNamesFromPlanProfile(store profile.Store, name string) []string {
 		return nil
 	}
 	return commandAdapterNames(p)
-}
-
-func adapterPathAbs(store profile.Store, profileName, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(store.ProfileDir(profileName), path)
-}
-
-func adapterFileExists(store profile.Store, profileName, path string) bool {
-	_, err := os.Stat(adapterPathAbs(store, profileName, path))
-	return err == nil
 }

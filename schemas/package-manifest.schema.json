@@ -117,11 +117,24 @@
             "host-app-example",
             "runtime-catalog",
             "runtime-contract",
-            "runtime-build"
+            "runtime-build",
+            "embedded-asset-manifest"
           ]
         },
         "sha256": {"$ref": "#/$defs/sha256"},
         "executable": {"type": "boolean"}
+      }
+    },
+    "embeddedAssetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "container", "manifest", "manifestSHA256", "license"],
+      "properties": {
+        "id": {"const": "browser-console"},
+        "container": {"const": "bin/hideout"},
+        "manifest": {"const": "runtime/browser-console.assets.json"},
+        "manifestSHA256": {"$ref": "#/$defs/sha256"},
+        "license": {"const": "Apache-2.0"}
       }
     },
     "obsoleteFile": {
@@ -181,6 +194,7 @@
         "runtime",
         "signingSummary",
         "layout",
+        "embeddedAssets",
         "files",
         "migration"
       ],
@@ -194,6 +208,12 @@
         "runtime": {"$ref": "#/$defs/runtime"},
         "signingSummary": {"$ref": "#/$defs/signingSummary"},
         "layout": {"$ref": "#/$defs/layout"},
+        "embeddedAssets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {"$ref": "#/$defs/embeddedAssetBinding"}
+        },
         "files": {
           "type": "array",
           "minItems": 8,
@@ -203,9 +223,18 @@
             {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "install.sh"}}}},
             {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "README.md"}}}},
             {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "LICENSE"}}}},
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "LICENSES/GPL-2.0-only.txt"}}}},
             {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "THIRD_PARTY_NOTICES.md"}}}},
             {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "SECURITY.md"}}}},
-            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "runtime/catalog.json"}}}}
+            {"contains": {"type": "object", "required": ["path"], "properties": {"path": {"const": "runtime/catalog.json"}}}},
+            {"contains": {"type": "object", "required": ["path", "kind"], "properties": {
+              "path": {"const": "runtime/package-components.json"},
+              "kind": {"const": "runtime-contract"}
+            }}},
+            {"contains": {"type": "object", "required": ["path", "kind"], "properties": {
+              "path": {"const": "runtime/browser-console.assets.json"},
+              "kind": {"const": "embedded-asset-manifest"}
+            }}}
           ]
         },
         "migration": {"$ref": "#/$defs/migration"}

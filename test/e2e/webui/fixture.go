@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -29,18 +30,34 @@ const (
 )
 
 type Fixture struct {
-	StoreRoot         string `json:"storeRoot"`
-	UIURL             string `json:"uiURL"`
-	BaseURL           string `json:"baseURL"`
-	Token             string `json:"token"`
-	NoticeID          string `json:"noticeId"`
-	ControlURL        string `json:"-"`
-	ControlKey        string `json:"-"`
-	EnvironmentID     string `json:"environmentId"`
-	MachineIdentityID string `json:"machineIdentityId"`
+	StoreRoot         string                 `json:"storeRoot"`
+	UIURL             string                 `json:"uiURL"`
+	BaseURL           string                 `json:"baseURL"`
+	Token             string                 `json:"token"`
+	NoticeID          string                 `json:"noticeId"`
+	ControlURL        string                 `json:"-"`
+	ControlKey        string                 `json:"-"`
+	EnvironmentID     string                 `json:"environmentId"`
+	MachineIdentityID string                 `json:"machineIdentityId"`
+	BrowserEvidence   BrowserConsoleEvidence `json:"browserEvidence"`
 
-	daemon        *daemon.Daemon
-	controlServer *httptest.Server
+	daemon         *daemon.Daemon
+	controlServer  *httptest.Server
+	browserCleanup func() error
+}
+
+type BrowserConsoleEvidence struct {
+	SessionID            string `json:"sessionId"`
+	EnvironmentID        string `json:"environmentId"`
+	BackendIncarnationID string `json:"backendIncarnationId"`
+	ExecutionID          string `json:"executionId"`
+	FilePath             string `json:"filePath"`
+	Domain               string `json:"domain"`
+	IP                   string `json:"ip"`
+	RiskID               string `json:"riskId"`
+	From                 string `json:"from"`
+	To                   string `json:"to"`
+	RecordCount          int    `json:"recordCount"`
 }
 
 func StartFixture() (Fixture, error) {
@@ -94,7 +111,11 @@ func StartFixture() (Fixture, error) {
 		_ = os.RemoveAll(root)
 		return Fixture{}, err
 	}
-	d, err := daemon.Start(daemon.Options{Store: store, TTL: 5 * time.Minute})
+	d, err := daemon.Start(daemon.Options{
+		Store:           store,
+		TTL:             5 * time.Minute,
+		CredentialGrace: time.Millisecond,
+	})
 	if err != nil {
 		_ = os.RemoveAll(root)
 		return Fixture{}, err
@@ -120,20 +141,115 @@ func StartFixture() (Fixture, error) {
 			http.Error(w, "fixture authorization failed", http.StatusUnauthorized)
 			return
 		}
-		state := strings.TrimPrefix(r.URL.Path, "/workspace-views/")
-		if err := fixture.PublishWorkspaceViews(state); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/workspace-views/"):
+			state := strings.TrimPrefix(r.URL.Path, "/workspace-views/")
+			if err := fixture.PublishWorkspaceViews(state); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/browser-console/live":
+			if err := fixture.PublishBrowserConsoleLiveRecord(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/browser-console/gap":
+			if err := fixture.PublishBrowserConsoleSequenceGap(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/browser-console/rotate":
+			token, err := fixture.RotateBrowserConsoleCredential()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+		default:
+			http.NotFound(w, r)
 		}
-		w.WriteHeader(http.StatusNoContent)
 	}))
 	fixture.ControlURL = fixture.controlServer.URL
 	return fixture, nil
 }
 
-func (f Fixture) Close() {
+type browserConsoleEvidenceSeeder interface {
+	SeedBrowserConsoleEvidence(string) ([]byte, func() error, error)
+}
+
+type browserConsoleLivePublisher interface {
+	PublishBrowserConsoleLiveRecord() error
+	PublishBrowserConsoleSequenceGap() error
+	RotateBrowserConsoleCredential() (string, error)
+}
+
+func (f *Fixture) SeedBrowserConsoleEvidence() error {
+	if f == nil || f.daemon == nil {
+		return errors.New("browser console fixture daemon is unavailable")
+	}
+	publisher, ok := any(f.daemon).(browserConsoleEvidenceSeeder)
+	if !ok {
+		return errors.New(
+			"browser console evidence requires -tags=hideout_e2e",
+		)
+	}
+	encoded, cleanup, err := publisher.SeedBrowserConsoleEvidence(
+		f.EnvironmentID,
+	)
+	if err != nil {
+		return err
+	}
+	var evidence BrowserConsoleEvidence
+	if err := json.Unmarshal(encoded, &evidence); err != nil {
+		_ = cleanup()
+		return err
+	}
+	f.BrowserEvidence = evidence
+	f.browserCleanup = cleanup
+	return nil
+}
+
+func (f Fixture) PublishBrowserConsoleLiveRecord() error {
+	publisher, ok := any(f.daemon).(browserConsoleLivePublisher)
+	if !ok {
+		return errors.New(
+			"browser console live evidence requires -tags=hideout_e2e",
+		)
+	}
+	return publisher.PublishBrowserConsoleLiveRecord()
+}
+
+func (f Fixture) PublishBrowserConsoleSequenceGap() error {
+	publisher, ok := any(f.daemon).(browserConsoleLivePublisher)
+	if !ok {
+		return errors.New(
+			"browser console gap evidence requires -tags=hideout_e2e",
+		)
+	}
+	return publisher.PublishBrowserConsoleSequenceGap()
+}
+
+func (f Fixture) RotateBrowserConsoleCredential() (string, error) {
+	publisher, ok := any(f.daemon).(browserConsoleLivePublisher)
+	if !ok {
+		return "", errors.New(
+			"browser console credential evidence requires -tags=hideout_e2e",
+		)
+	}
+	return publisher.RotateBrowserConsoleCredential()
+}
+
+func (f *Fixture) Close() {
 	if f.controlServer != nil {
 		f.controlServer.Close()
+	}
+	if f.browserCleanup != nil {
+		_ = f.browserCleanup()
+		f.browserCleanup = nil
 	}
 	if f.daemon != nil {
 		_ = f.daemon.Stop(context.Background())

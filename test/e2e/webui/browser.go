@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,17 +20,32 @@ import (
 )
 
 type BrowserResult struct {
-	PanelsVisible          []string          `json:"panelsVisible"`
-	LiveUpdateObserved     bool              `json:"liveUpdateObserved"`
-	HiddenPollingDetected  bool              `json:"hiddenPollingDetected"`
-	WorkspaceMachineCount  int               `json:"workspaceMachineCount"`
-	WorkspaceViewCount     int               `json:"workspaceViewCount"`
-	WorkspaceRelationSeen  bool              `json:"workspaceRelationSeen"`
-	WorkspaceReleaseSeen   bool              `json:"workspaceReleaseSeen"`
-	WorkspacePrivateHidden bool              `json:"workspacePrivateHidden"`
-	ActionRoundTrip        BrowserAction     `json:"actionRoundTrip"`
-	AuthFailureObserved    bool              `json:"authFailureObserved"`
-	Artifacts              map[string]string `json:"artifacts"`
+	PanelsVisible             []string           `json:"panelsVisible"`
+	LiveUpdateObserved        bool               `json:"liveUpdateObserved"`
+	HiddenPollingDetected     bool               `json:"hiddenPollingDetected"`
+	Activity                  BrowserActivity    `json:"activity"`
+	ActionRoundTrip           BrowserAction      `json:"actionRoundTrip"`
+	AuthFailureObserved       bool               `json:"authFailureObserved"`
+	CredentialRefreshObserved bool               `json:"credentialRefreshObserved"`
+	StaleReadOnlyObserved     bool               `json:"staleReadOnlyObserved"`
+	KeyboardNavigation        bool               `json:"keyboardNavigation"`
+	ResponsiveLayout          bool               `json:"responsiveLayout"`
+	AccessibilityViolations   []string           `json:"accessibilityViolations"`
+	DOMNodeCount              int                `json:"domNodeCount"`
+	MaxMountedRows            int                `json:"maxMountedRows"`
+	Performance               BrowserPerformance `json:"performance"`
+	Artifacts                 map[string]string  `json:"artifacts"`
+}
+
+type BrowserActivity struct {
+	SessionID        string   `json:"sessionId"`
+	RecordCount      int      `json:"recordCount"`
+	FactsMatched     bool     `json:"factsMatched"`
+	ExecutionTree    bool     `json:"executionTree"`
+	GuestIdentity    bool     `json:"guestIdentity"`
+	Correlation      bool     `json:"correlation"`
+	BoundedDOM       bool     `json:"boundedDOM"`
+	FiltersExercised []string `json:"filtersExercised"`
 }
 
 type BrowserAction struct {
@@ -37,6 +54,16 @@ type BrowserAction struct {
 	PayloadValidated    bool   `json:"payloadValidated"`
 	ResponseHandled     bool   `json:"responseHandled"`
 	VisibleStateChanged bool   `json:"visibleStateChanged"`
+	OperationID         string `json:"operationId"`
+	RevisionAdvanced    bool   `json:"revisionAdvanced"`
+	TerminalPhase       string `json:"terminalPhase"`
+}
+
+type BrowserPerformance struct {
+	LoadToLiveMS    float64 `json:"loadToLiveMs"`
+	MaxFilterMS     float64 `json:"maxFilterMs"`
+	LiveUpdateMS    float64 `json:"liveUpdateMs"`
+	ConfigurationMS float64 `json:"configurationMs"`
 }
 
 func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir string) BrowserResult {
@@ -45,7 +72,7 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 		t.Fatal(err)
 	}
 	root := repoRoot(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	resultPath := filepath.Join(outDir, "browser-result.json")
 	script := filepath.Join(root, "test", "e2e", "webui", "proof.mjs")
@@ -54,9 +81,20 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 		"--url", fixture.UIURL,
 		"--base-url", fixture.BaseURL,
 		"--token", fixture.Token,
-		"--notice-id", fixture.NoticeID,
 		"--fixture-url", fixture.ControlURL,
 		"--fixture-key", fixture.ControlKey,
+		"--session-id", fixture.BrowserEvidence.SessionID,
+		"--execution-id", fixture.BrowserEvidence.ExecutionID,
+		"--file-path", fixture.BrowserEvidence.FilePath,
+		"--domain", fixture.BrowserEvidence.Domain,
+		"--ip", fixture.BrowserEvidence.IP,
+		"--risk-id", fixture.BrowserEvidence.RiskID,
+		"--from", fixture.BrowserEvidence.From,
+		"--to", fixture.BrowserEvidence.To,
+		"--record-count", fmt.Sprintf(
+			"%d",
+			fixture.BrowserEvidence.RecordCount,
+		),
 		"--out", outDir,
 	)
 	cmd.Env = append(os.Environ(), "HIDEOUT_UI_E2E_HEADLESS="+envDefault("HIDEOUT_UI_E2E_HEADLESS", "1"))
@@ -78,15 +116,46 @@ func runBrowserProof(t *testing.T, prereq Prerequisites, fixture Fixture, outDir
 	if !result.LiveUpdateObserved {
 		t.Fatalf("browser proof did not observe live update: %+v", result)
 	}
-	if result.WorkspaceMachineCount != 1 || result.WorkspaceViewCount != 2 ||
-		!result.WorkspaceRelationSeen || !result.WorkspaceReleaseSeen || !result.WorkspacePrivateHidden {
-		t.Fatalf("browser workspace-view proof is incomplete: %+v", result)
+	if len(result.PanelsVisible) != 10 ||
+		result.Activity.SessionID != fixture.BrowserEvidence.SessionID ||
+		result.Activity.RecordCount != fixture.BrowserEvidence.RecordCount ||
+		!result.Activity.FactsMatched ||
+		!result.Activity.ExecutionTree ||
+		!result.Activity.GuestIdentity ||
+		!result.Activity.Correlation ||
+		!result.Activity.BoundedDOM ||
+		len(result.Activity.FiltersExercised) != 7 {
+		t.Fatalf("browser activity/parity proof is incomplete: %+v", result)
 	}
-	if !result.AuthFailureObserved {
-		t.Fatalf("browser proof did not observe auth failure: %+v", result)
+	if !result.AuthFailureObserved ||
+		!result.CredentialRefreshObserved ||
+		!result.StaleReadOnlyObserved ||
+		!result.KeyboardNavigation ||
+		!result.ResponsiveLayout ||
+		len(result.AccessibilityViolations) != 0 {
+		t.Fatalf("browser safety/accessibility proof is incomplete: %+v", result)
 	}
-	if result.ActionRoundTrip.Action != "notice.ack" || !result.ActionRoundTrip.RequestObserved || !result.ActionRoundTrip.PayloadValidated || !result.ActionRoundTrip.ResponseHandled || !result.ActionRoundTrip.VisibleStateChanged {
-		t.Fatalf("browser proof did not complete notice ack round trip: %+v", result.ActionRoundTrip)
+	if result.ActionRoundTrip.Action != "profile.transaction.apply" ||
+		!result.ActionRoundTrip.RequestObserved ||
+		!result.ActionRoundTrip.PayloadValidated ||
+		!result.ActionRoundTrip.ResponseHandled ||
+		!result.ActionRoundTrip.VisibleStateChanged ||
+		!result.ActionRoundTrip.RevisionAdvanced ||
+		result.ActionRoundTrip.OperationID == "" ||
+		result.ActionRoundTrip.TerminalPhase != "succeeded" {
+		t.Fatalf(
+			"browser proof did not complete configuration transaction: %+v",
+			result.ActionRoundTrip,
+		)
+	}
+	if result.DOMNodeCount <= 0 || result.DOMNodeCount > 15000 ||
+		result.MaxMountedRows <= 0 || result.MaxMountedRows > 200 ||
+		result.Performance.LoadToLiveMS <= 0 ||
+		result.Performance.LoadToLiveMS > 5000 ||
+		result.Performance.MaxFilterMS > 2000 ||
+		result.Performance.LiveUpdateMS > 3000 ||
+		result.Performance.ConfigurationMS > 5000 {
+		t.Fatalf("browser performance bound failed: %+v", result)
 	}
 	return result
 }
@@ -96,7 +165,6 @@ func writeBrowserProofs(t *testing.T, outDir, artifactPrefix string, result Brow
 	proofs := []productevidence.ProofEntry{
 		browserProof(productevidence.Proof021WebUIBrowserConsole, "021.FR-001", "WebUI opens in a real local browser context", resultArtifacts(t, outDir, artifactPrefix, result)),
 		browserProof(productevidence.Proof021WebUIBrowserLive, "021.FR-003", "A healthy daemon stream event changes visible browser state without hidden polling", resultArtifacts(t, outDir, artifactPrefix, result)),
-		browserProof(productevidence.Proof021WebUIBrowserNoticeAck, "021.FR-004", "Browser notice acknowledgement round trip uses authenticated Manager route and updates visible state", resultArtifacts(t, outDir, artifactPrefix, result)),
 		browserProof(productevidence.Proof021WebUIBrowserAuth, "021.FR-005", "Wrong credentials produce a visible browser refusal", resultArtifacts(t, outDir, artifactPrefix, result)),
 	}
 	path := filepath.Join(outDir, "proofs.jsonl")
@@ -145,20 +213,43 @@ func browserProof(proofID, claimID, description string, artifacts []productevide
 func resultArtifacts(t *testing.T, outDir, artifactPrefix string, result BrowserResult) []productevidence.ArtifactRef {
 	t.Helper()
 	refs := []productevidence.ArtifactRef{}
-	for kind, name := range result.Artifacts {
+	roles := make([]string, 0, len(result.Artifacts))
+	for role := range result.Artifacts {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	for _, role := range roles {
+		name := result.Artifacts[role]
 		path := filepath.Join(outDir, name)
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("missing browser artifact %s: %v", path, err)
 		}
 		refs = append(refs, productevidence.ArtifactRef{
-			Kind:            kind,
+			Kind:            browserArtifactKind(t, role),
 			Path:            filepath.ToSlash(filepath.Join(artifactPrefix, name)),
 			SHA256:          sha256File(t, path),
 			RedactionStatus: productevidence.RedactionPassed,
-			Description:     "WebUI browser proof " + kind,
+			Description:     "WebUI browser proof " + role,
 		})
 	}
 	return refs
+}
+
+func browserArtifactKind(t *testing.T, role string) string {
+	t.Helper()
+	switch role {
+	case "screenshot", "stale-screenshot", "mobile-screenshot":
+		return "screenshot"
+	case "accessibility":
+		return "docs-report"
+	case "performance":
+		return "log"
+	case "event-summary", "log":
+		return role
+	default:
+		t.Fatalf("unsupported browser artifact role %q", role)
+		return ""
+	}
 }
 
 func sha256File(t *testing.T, path string) string {

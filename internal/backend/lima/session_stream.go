@@ -151,7 +151,30 @@ func (b Backend) runSupervisorProtocol(
 	viewCommand, command, env []string,
 	streams backend.RunStreams,
 	onReady func() error,
-) error {
+) (retErr error) {
+	activityExpectation, activityPrepared, err := prepareBackendActivity(prepared, streams)
+	if err != nil {
+		return err
+	}
+	var (
+		observerStream        *limaObserverStream
+		activityCompletion    *sessionwire.SupervisorActivityCompletion
+		activitySessionClosed bool
+	)
+	defer func() {
+		if observerStream != nil {
+			_ = observerStream.Close()
+		}
+		if activityExpectation != nil {
+			activityExpectation.ObserverStreamToken.Destroy()
+		}
+		if activityPrepared && !activitySessionClosed {
+			retErr = errors.Join(
+				retErr,
+				streams.Activity.SessionClosed(activityCompletion, retErr),
+			)
+		}
+	}()
 	sshSession, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("open supervisor ssh session: %w", err)
@@ -176,13 +199,19 @@ func (b Backend) runSupervisorProtocol(
 		close(stderrDone)
 	}()
 
-	commandLine := setupShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, viewCommand)
+	commandLine := rootControlShellCommand("/", []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, viewCommand)
 	if err := sshSession.Start(commandLine); err != nil {
 		return fmt.Errorf("start supervisor ssh session: %w", err)
 	}
 	writer := sessionwire.NewWriter(stdin, sessionwire.DaemonToSupervisor)
 	reader := sessionwire.NewReader(stdout, sessionwire.SupervisorToDaemon)
-	start, err := supervisorStartControl(prepared, command, env, streams)
+	start, err := supervisorStartControl(
+		prepared,
+		command,
+		env,
+		streams,
+		activityExpectation,
+	)
 	if err != nil {
 		return fmt.Errorf("build supervisor start: %w", err)
 	}
@@ -196,6 +225,7 @@ func (b Backend) runSupervisorProtocol(
 	go func() { wait <- sshSession.Wait() }()
 
 	var completion *sessionwire.Completion
+	var activityReady *sessionwire.SupervisorActivityReady
 	var protocolErr error
 	ready := false
 	cancelSent := false
@@ -224,6 +254,7 @@ func (b Backend) runSupervisorProtocol(
 		close(input)
 	}
 	controls := streams.Controls
+	var observerResults <-chan error
 
 	for {
 		if wait == nil && frames == nil {
@@ -282,6 +313,64 @@ func (b Backend) runSupervisorProtocol(
 				if err := applySupervisorProjectionReadiness(prepared, reported.ProjectionReadiness); err != nil {
 					return err
 				}
+				if activityExpectation == nil {
+					if reported.Activity != nil {
+						return errors.New("guest supervisor reported unexpected activity readiness")
+					}
+				} else {
+					if reported.Activity == nil {
+						return errors.New("guest supervisor omitted activity readiness")
+					}
+					if err := reported.Activity.ValidateExpectation(
+						prepared.ID,
+						activityExpectation,
+					); err != nil {
+						return fmt.Errorf("validate supervisor activity readiness: %w", err)
+					}
+					if err := streams.Activity.BoundaryReady(reported.Activity); err != nil {
+						return fmt.Errorf("register daemon activity boundary: %w", err)
+					}
+					activityReady = cloneSupervisorActivityReady(reported.Activity)
+					binding := sessionwire.ObserverBinding{
+						Owner:                activityExpectation.Owner,
+						SessionID:            prepared.ID,
+						EnvironmentID:        prepared.Activity.EnvironmentID,
+						BackendIncarnationID: prepared.Activity.BackendIncarnationID,
+						GuestBootID:          reported.Activity.Boundary.GuestBootID,
+						CgroupID:             reported.Activity.Boundary.CgroupID,
+						ObserverGeneration:   activityExpectation.ObserverGeneration,
+					}
+					opened, openErr := openLimaObserverStream(
+						ctx,
+						client,
+						observerStreamExpectation{
+							Binding:      binding,
+							Token:        activityExpectation.ObserverStreamToken,
+							HelperDigest: activityExpectation.ObserverHelperDigest,
+						},
+					)
+					activityExpectation.ObserverStreamToken.Destroy()
+					if openErr != nil {
+						return fmt.Errorf("open daemon activity stream: %w", openErr)
+					}
+					observerStream = opened
+					if err := validateObserverReadyHello(
+						reported.Activity,
+						opened.Hello(),
+					); err != nil {
+						return err
+					}
+					if err := ingestFirstLimaObservation(
+						ctx,
+						opened,
+						streams.Activity,
+					); err != nil {
+						return fmt.Errorf("ingest initial activity observation: %w", err)
+					}
+					results := make(chan error, 1)
+					observerResults = results
+					go pumpLimaObserverStream(opened, streams.Activity, results)
+				}
 				if onReady != nil {
 					if err := onReady(); err != nil {
 						return fmt.Errorf("record supervisor setup readiness: %w", err)
@@ -332,6 +421,37 @@ func (b Backend) runSupervisorProtocol(
 				if len(value.Result) != 0 {
 					return errors.New("guest supervisor cannot supply a Manager run result")
 				}
+				if activityExpectation == nil {
+					if value.Activity != nil {
+						return errors.New("guest supervisor reported unexpected activity completion")
+					}
+				} else {
+					if value.Activity == nil {
+						return errors.New("guest supervisor omitted activity completion")
+					}
+					if activityReady == nil {
+						return errors.New("guest supervisor activity completion lacks a ready boundary")
+					}
+					if err := value.Activity.ValidateReady(
+						prepared.ID,
+						activityReady,
+					); err != nil {
+						return fmt.Errorf("validate supervisor activity completion: %w", err)
+					}
+					activityCompletion = value.Activity
+					observerResults = nil
+					if observerStream != nil {
+						_ = observerStream.Close()
+						observerStream = nil
+					}
+					if err := streams.Activity.SessionClosed(
+						value.Activity,
+						completionError(*value),
+					); err != nil {
+						return fmt.Errorf("close daemon activity session: %w", err)
+					}
+					activitySessionClosed = true
+				}
 				completion = value
 				input = nil
 				controls = nil
@@ -373,6 +493,22 @@ func (b Backend) runSupervisorProtocol(
 				cancelForProtocolError(fmt.Errorf("write supervisor control: %w", err))
 			}
 
+		case observerErr, ok := <-observerResults:
+			observerResults = nil
+			if !ok || activitySessionClosed {
+				continue
+			}
+			if err := streams.Activity.ObserverClosed(observerErr); err != nil {
+				cancelForProtocolError(fmt.Errorf(
+					"close daemon observer coverage: %w",
+					err,
+				))
+			}
+			if observerStream != nil {
+				_ = observerStream.Close()
+				observerStream = nil
+			}
+
 		case <-heartbeat.C:
 			if ready && completion == nil {
 				if err := writer.Write(sessionwire.TypeHeartbeat, nil); err != nil {
@@ -402,6 +538,181 @@ func (b Backend) runSupervisorProtocol(
 			wait = nil
 		}
 	}
+}
+
+type limaObserverReadResult struct {
+	envelope sessionwire.ObservationEnvelope
+	err      error
+}
+
+func prepareBackendActivity(
+	prepared *backend.Session,
+	streams backend.RunStreams,
+) (*sessionwire.SupervisorActivityExpectation, bool, error) {
+	if prepared == nil {
+		return nil, false, errors.New("activity preparation requires a backend session")
+	}
+	switch {
+	case prepared.Activity == nil && streams.Activity == nil:
+		return nil, false, nil
+	case prepared.Activity == nil:
+		return nil, false, errors.New("daemon activity callbacks lack Manager-bound identity")
+	case streams.Activity == nil:
+		return nil, false, errors.New("Manager-bound activity lacks daemon callbacks")
+	}
+	if err := streams.Activity.Validate(); err != nil {
+		return nil, false, err
+	}
+	if err := prepared.Activity.Validate(); err != nil {
+		return nil, false, err
+	}
+	expectation, err := streams.Activity.Prepare(*prepared.Activity)
+	if err != nil {
+		return nil, false, err
+	}
+	failPrepared := func(cause error) (
+		*sessionwire.SupervisorActivityExpectation,
+		bool,
+		error,
+	) {
+		expectation.ObserverStreamToken.Destroy()
+		return nil, false, errors.Join(
+			cause,
+			streams.Activity.SessionClosed(nil, cause),
+		)
+	}
+	if err := expectation.Validate(prepared.ID); err != nil {
+		return failPrepared(err)
+	}
+	if !expectation.Owner.Equal(prepared.Activity.Owner) ||
+		expectation.ObserverGeneration != prepared.Activity.ObserverGeneration ||
+		expectation.ObserverHelperDigest != prepared.Activity.ObserverHelperDigest {
+		return failPrepared(errors.New(
+			"daemon activity expectation does not match Manager-bound identity",
+		))
+	}
+	return &expectation, true, nil
+}
+
+func ingestFirstLimaObservation(
+	ctx context.Context,
+	stream *limaObserverStream,
+	callbacks *backend.ActivityStreams,
+) error {
+	if stream == nil || callbacks == nil {
+		return errors.New("initial activity ingestion is unavailable")
+	}
+	result := make(chan limaObserverReadResult, 1)
+	go func() {
+		envelope, _, err := stream.Read()
+		result <- limaObserverReadResult{envelope: envelope, err: err}
+	}()
+	timer := time.NewTimer(limaObserverHandshakeTimeout)
+	defer timer.Stop()
+	select {
+	case observed := <-result:
+		if observed.err != nil {
+			return observed.err
+		}
+		return callbacks.Observe(observed.envelope)
+	case <-ctx.Done():
+		_ = stream.Close()
+		return ctx.Err()
+	case <-timer.C:
+		_ = stream.Close()
+		return errors.New("initial observer event exceeded the readiness bound")
+	}
+}
+
+func pumpLimaObserverStream(
+	stream *limaObserverStream,
+	callbacks *backend.ActivityStreams,
+	results chan<- error,
+) {
+	defer close(results)
+	for {
+		envelopes, readErr := stream.ReadBatch(limaObserverBatchEnvelopes)
+		if len(envelopes) != 0 {
+			var observeErr error
+			if callbacks.ObserveBatch != nil {
+				observeErr = callbacks.ObserveBatch(envelopes)
+			} else {
+				for _, envelope := range envelopes {
+					if observeErr = callbacks.Observe(envelope); observeErr != nil {
+						break
+					}
+				}
+			}
+			if observeErr != nil {
+				results <- fmt.Errorf("ingest observer envelope batch: %w", observeErr)
+				return
+			}
+		}
+		if readErr != nil {
+			results <- readErr
+			return
+		}
+	}
+}
+
+func validateObserverReadyHello(
+	ready *sessionwire.SupervisorActivityReady,
+	hello sessionwire.ObserverHello,
+) error {
+	if ready == nil {
+		return errors.New("observer readiness is unavailable")
+	}
+	if err := hello.Validate(); err != nil {
+		return err
+	}
+	expected := make(map[string]sessionwire.SupervisorCoverageSummary, len(ready.Coverage))
+	for _, summary := range ready.Coverage {
+		expected[summary.Subsystem] = summary
+	}
+	actualValues := hello.Capabilities.Coverage()
+	if len(expected) != len(actualValues) {
+		return errors.New("observer hello coverage differs from supervisor readiness")
+	}
+	for _, actual := range actualValues {
+		want, ok := expected[actual.Subsystem]
+		if !ok || want.State != actual.State ||
+			want.Reason != actual.Reason ||
+			want.DroppedEventCount != actual.DroppedEventCount ||
+			!equalObserverEvidence(want.Evidence, actual.Evidence) {
+			return errors.New("observer hello coverage differs from supervisor readiness")
+		}
+	}
+	return nil
+}
+
+func equalObserverEvidence(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneSupervisorActivityReady(
+	ready *sessionwire.SupervisorActivityReady,
+) *sessionwire.SupervisorActivityReady {
+	if ready == nil {
+		return nil
+	}
+	cloned := *ready
+	cloned.Coverage = make([]sessionwire.SupervisorCoverageSummary, len(ready.Coverage))
+	for index := range ready.Coverage {
+		cloned.Coverage[index] = ready.Coverage[index]
+		cloned.Coverage[index].Evidence = append(
+			[]string(nil),
+			ready.Coverage[index].Evidence...,
+		)
+	}
+	return &cloned
 }
 
 func applySupervisorProjectionReadiness(
@@ -505,7 +816,12 @@ func classifyProjectionReadinessRunError(ctx context.Context, session *backend.S
 	}
 }
 
-func supervisorStartControl(prepared *backend.Session, command, env []string, streams backend.RunStreams) (*sessionwire.SupervisorStart, error) {
+func supervisorStartControl(
+	prepared *backend.Session,
+	command, env []string,
+	streams backend.RunStreams,
+	activity *sessionwire.SupervisorActivityExpectation,
+) (*sessionwire.SupervisorStart, error) {
 	terminal := sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalNone}
 	if streams.Terminal {
 		terminal = sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalPTY, Rows: streams.Rows, Columns: streams.Columns, Term: streams.Term}
@@ -527,6 +843,7 @@ func supervisorStartControl(prepared *backend.Session, command, env []string, st
 		Argv: append([]string(nil), command...), Env: values, Terminal: terminal,
 		ExpectedBootID: prepared.ExpectedBootID,
 		SessionSource:  GuestRuntimeDir + "/sessions/" + prepared.ID,
+		Activity:       activity,
 	}
 	if prepared.ProjectionReadiness != nil {
 		expectation := prepared.ProjectionReadiness

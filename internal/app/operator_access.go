@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +13,9 @@ import (
 )
 
 // operatorAccess maps the natural allow/deny grammar onto the existing
-// Manager profile HostFS planner. Parsing carries no authority: every rule
-// still goes through PlanProfileHostFS validation and ApplyProfileHostFS
-// under the profile mutation lock, exactly like the advanced
+// Manager profile HostFS transaction adapter. Parsing carries no authority:
+// every rule still goes through typed validation and a durable plan/apply
+// transaction under the profile mutation lock, exactly like the advanced
 // `hideout profile fs` surface.
 func (a app) operatorAccess(intent operatorintent.Access) error {
 	switch intent.Scope {
@@ -40,7 +41,9 @@ func (a app) operatorAccess(intent operatorintent.Access) error {
 	if err != nil {
 		return err
 	}
-	core := manager.New(store)
+	adapter := manager.LegacyProfileTransactionAdapter{
+		Core: manager.New(store),
+	}
 	operation := "add"
 	effectWord := "allowed"
 	if intent.Effect == operatorintent.AccessDeny {
@@ -52,16 +55,15 @@ func (a app) operatorAccess(intent operatorintent.Access) error {
 		profileName = "default"
 	}
 	for _, selector := range selectors {
-		plan, err := core.PlanProfileHostFS(manager.ProfileHostFSOptions{
-			ProfileName: profileName,
-			Operation:   operation,
-			Rule:        selector,
-			Reason:      "operator natural access command",
-		})
-		if err != nil {
-			return err
-		}
-		result, err := core.ApplyProfileHostFS(plan)
+		result, err := adapter.ApplyHostFS(
+			context.Background(),
+			manager.ProfileHostFSOptions{
+				ProfileName: profileName,
+				Operation:   operation,
+				Rule:        selector,
+				Reason:      "operator natural access command",
+			},
+		)
 		if err != nil {
 			return err
 		}

@@ -29,12 +29,24 @@ func TestDisposalIntentValidationAndTransitionsAreClosed(t *testing.T) {
 	if err := valid.Validate(7); err != nil {
 		t.Fatalf("valid intent rejected: %v", err)
 	}
+	explicitClean := valid
+	explicitClean.Authority = DisposalAuthorityEnvironmentClean
+	explicitClean.ActivitySessionID = "ses-clean"
+	if err := explicitClean.Validate(7); err != nil {
+		t.Fatalf("valid environment-clean intent rejected: %v", err)
+	}
+	explicitDelete := explicitClean
+	explicitDelete.Authority = DisposalAuthorityEnvironmentDelete
+	if err := explicitDelete.Validate(7); err != nil {
+		t.Fatalf("valid environment-delete intent rejected: %v", err)
+	}
 
 	for name, mutate := range map[string]func(*DisposalIntent){
 		"schema":       func(intent *DisposalIntent) { intent.Schema = "hideout.disposal-intent/v2" },
 		"authority":    func(intent *DisposalIntent) { intent.Authority = "name-prefix" },
 		"backend":      func(intent *DisposalIntent) { intent.Backend = "" },
 		"instance":     func(intent *DisposalIntent) { intent.InstanceName = "" },
+		"activity":     func(intent *DisposalIntent) { intent.ActivitySessionID = "bad session" },
 		"digest-case":  func(intent *DisposalIntent) { intent.RecordDigest = strings.Repeat("A", 64) },
 		"digest-short": func(intent *DisposalIntent) { intent.RecordDigest = "abc" },
 		"generation":   func(intent *DisposalIntent) { intent.Generation++ },
@@ -80,6 +92,46 @@ func TestDisposalIntentValidationAndTransitionsAreClosed(t *testing.T) {
 		if err := ValidateDisposalTransition(transition[0], transition[1]); err == nil {
 			t.Errorf("%s -> %s accepted", transition[0], transition[1])
 		}
+	}
+}
+
+func TestCoordinatorDisposalBindsAuthorityAndActivityIdentity(t *testing.T) {
+	root := privateLifecycleRoot(t)
+	coordinator := disposalCoordinatorAt(
+		t, root, "daemon-clean-authority",
+		time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	)
+	request := testDisposalRequest()
+	request.Authority = DisposalAuthorityEnvironmentClean
+	request.ActivitySessionID = "ses-clean"
+	intent, err := coordinator.BeginDisposal(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Authority != request.Authority ||
+		intent.ActivitySessionID != request.ActivitySessionID {
+		t.Fatalf("intent=%+v", intent)
+	}
+	if err := coordinator.BlockDisposal(
+		context.Background(), request.EnvironmentID, request.RecordDigest,
+		DisposalReasonActivityCleanupFailed,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	wrongAuthority := request
+	wrongAuthority.Authority = DisposalAuthorityRunRM
+	if _, err := coordinator.BeginDisposal(
+		context.Background(), wrongAuthority,
+	); err == nil {
+		t.Fatal("different removal authority resumed durable intent")
+	}
+	wrongActivity := request
+	wrongActivity.ActivitySessionID = "ses-other"
+	if _, err := coordinator.BeginDisposal(
+		context.Background(), wrongActivity,
+	); err == nil {
+		t.Fatal("different activity identity resumed durable intent")
 	}
 }
 

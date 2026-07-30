@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -18,11 +20,14 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostapppack"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
+	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 )
 
 const APIVersion = "hideout.manager-api/v1"
+
+const requestBodyTooLargeMessage = "request body exceeds route limit"
 
 type API struct {
 	Core                      Core
@@ -36,9 +41,21 @@ type API struct {
 	RunBackend                RunBackendFactory
 	RunOpener                 RunOpenerFactory
 	RunLifecycle              lifecycle.Registrar
+	LifecycleMutations        lifecycle.MutationCoordinator
 	EnvOperator               EnvironmentOperator
 	EnvironmentStopApply      EnvironmentStopApplyFunc
 	EnvironmentCleanApply     EnvironmentCleanApplyFunc
+	EnvironmentActions        *EnvironmentActionService
+	OperatorSnapshotProvider  OperatorSnapshotProvider
+	ActivityProvider          ActivityProvider
+	SecretProvider            SecretProvider
+	RunSecretResolver         netpolicy.SecretResolver
+	// ProfileTransactions is the daemon-owned configuration authority. Hosting
+	// processes should inject one shared service so planning, apply, legacy
+	// adapters, and startup reconciliation observe the same provider set.
+	// Tests and daemon-less adapters may omit it and receive the historical
+	// Core-backed service.
+	ProfileTransactions *ProfileTransactionService
 }
 
 // EnvironmentStopApplyFunc lets a hosting control plane serialize backend
@@ -58,10 +75,18 @@ type EnvironmentCleanApplyFunc func(context.Context, EnvironmentActionPlan) (Env
 type TokenValidator func(string) bool
 
 type APIResponse struct {
-	Version  string   `json:"version"`
-	Resource string   `json:"resource,omitempty"`
-	Data     any      `json:"data,omitempty"`
-	Errors   []string `json:"errors"`
+	Version      string           `json:"version"`
+	Resource     string           `json:"resource,omitempty"`
+	Data         any              `json:"data,omitempty"`
+	Errors       []string         `json:"errors"`
+	ErrorDetails []APIErrorDetail `json:"errorDetails,omitempty"`
+}
+
+type APIErrorDetail struct {
+	Code     string `json:"code"`
+	Field    string `json:"field,omitempty"`
+	Message  string `json:"message"`
+	Recovery string `json:"recovery,omitempty"`
 }
 
 type RunBackendFactory func(RunAPIRequest, RunPlan) (backend.Backend, error)
@@ -106,6 +131,10 @@ type EnvironmentActionAPIRequest struct {
 	IDs         []string `json:"ids,omitempty"`
 	Idle        string   `json:"idle,omitempty"`
 	StoppedOnly bool     `json:"stoppedOnly,omitempty"`
+	Force       bool     `json:"force,omitempty"`
+	OperationID string   `json:"operationId,omitempty"`
+	PlanDigest  string   `json:"planDigest,omitempty"`
+	Confirmed   bool     `json:"confirmed,omitempty"`
 }
 
 type RuntimeVerifyAPIRequest struct {
@@ -250,6 +279,9 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
 			return
 		}
+		if !prepareManagerRequestBody(w, r, spec) {
+			return
+		}
 		api.servePostResource(w, r, spec, resource)
 		return
 	}
@@ -259,6 +291,10 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := RecognizeManagerResource(http.MethodGet, resource); !ok {
 		writeAPIError(w, http.StatusNotFound, "unknown manager API resource")
+		return
+	}
+	if strings.HasPrefix(resource, "activity/") {
+		api.serveActivityResource(w, r, resource)
 		return
 	}
 	if resource == "audit/events" {
@@ -321,6 +357,22 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		api.serveRuntimeStatus(w, r)
 		return
 	}
+	if resource == "operator/snapshot" {
+		api.serveOperatorSnapshot(w, r)
+		return
+	}
+	if operationID, ok := operationResourceID(resource); ok {
+		api.serveOperationInspect(w, r, operationID)
+		return
+	}
+	if profileName, ok := profileProjectionResourceName(resource); ok {
+		api.serveProfileProjection(w, r, profileName)
+		return
+	}
+	if resource == "secrets" && api.SecretProvider != nil {
+		api.serveSecrets(w, r)
+		return
+	}
 	overview, err := api.Core.Overview(r.Context())
 	if err != nil && overview.Version == "" {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
@@ -345,6 +397,188 @@ func (api API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp.Errors = []string{err.Error()}
 	}
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func operationResourceID(resource string) (string, bool) {
+	segments := strings.Split(resource, "/")
+	if len(segments) != 2 || segments[0] != "operations" {
+		return "", false
+	}
+	return segments[1], true
+}
+
+func profileProjectionResourceName(resource string) (string, bool) {
+	segments := strings.Split(resource, "/")
+	if len(segments) != 3 ||
+		segments[0] != "profiles" ||
+		segments[2] != "projection" {
+		return "", false
+	}
+	return segments[1], true
+}
+
+func (api API) serveOperationInspect(
+	w http.ResponseWriter,
+	_ *http.Request,
+	operationID string,
+) {
+	operation, err := (OperationStore{Root: api.Core.Store.Root}).Load(operationID)
+	switch {
+	case errors.Is(err, ErrInvalidOperation):
+		writeAPIDetailedError(w, http.StatusBadRequest, APIErrorDetail{
+			Code:     "invalid-operation-id",
+			Field:    "operation",
+			Message:  "operation ID is invalid",
+			Recovery: "use the exact operation ID returned by Manager",
+		})
+		return
+	case errors.Is(err, os.ErrNotExist):
+		writeAPIDetailedError(w, http.StatusNotFound, APIErrorDetail{
+			Code:     "operation-not-found",
+			Field:    "operation",
+			Message:  "operation was not found",
+			Recovery: "refresh operation history before retrying",
+		})
+		return
+	case err != nil:
+		writeAPIDetailedError(w, http.StatusInternalServerError, APIErrorDetail{
+			Code:     "operation-inspection-failed",
+			Message:  "operation could not be inspected",
+			Recovery: "inspect daemon status and retry",
+		})
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "operation/inspect",
+		Data:     operation,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveProfileProjection(
+	w http.ResponseWriter,
+	r *http.Request,
+	profileName string,
+) {
+	var (
+		projection ProfileProjection
+		err        error
+	)
+	if api.OperatorSnapshotProvider != nil {
+		var snapshot OperatorSnapshot
+		snapshot, err = api.OperatorSnapshotProvider.Snapshot(
+			r.Context(),
+			OperatorSnapshotQuery{
+				Profile: profileName,
+			},
+		)
+		if err == nil {
+			for _, candidate := range snapshot.Profiles {
+				if candidate.Profile == profileName {
+					projection = candidate
+					break
+				}
+			}
+			if projection.Profile == "" {
+				err = os.ErrNotExist
+			}
+		}
+	} else {
+		projection, err = (ProfileProjectionService{
+			Store: api.Core.Store,
+			Now:   api.Now,
+		}).Load(profileName)
+	}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		writeAPIDetailedError(w, http.StatusNotFound, APIErrorDetail{
+			Code:     "profile-not-found",
+			Field:    "profile",
+			Message:  "profile was not found",
+			Recovery: "refresh profiles and select an existing profile",
+		})
+		return
+	case err != nil:
+		writeAPIDetailedError(w, http.StatusBadRequest, APIErrorDetail{
+			Code:     "invalid-profile",
+			Field:    "profile",
+			Message:  "profile projection could not be loaded",
+			Recovery: "use a valid existing profile name",
+		})
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "profile/projection",
+		Data:     projection,
+		Errors:   []string{},
+	})
+}
+
+func (api API) serveOperatorSnapshot(w http.ResponseWriter, r *http.Request) {
+	query, err := operatorSnapshotQueryFromRequest(r)
+	if err != nil {
+		writeAPIDetailedError(w, http.StatusBadRequest, APIErrorDetail{
+			Code: "invalid-snapshot-query", Field: "query", Message: err.Error(),
+			Recovery: "use optional profile, session, and activityLimit=0..500 query parameters",
+		})
+		return
+	}
+	if api.OperatorSnapshotProvider == nil {
+		writeAPIDetailedError(w, http.StatusServiceUnavailable, APIErrorDetail{
+			Code:     "operator-snapshot-unavailable",
+			Message:  "authoritative operator snapshot provider is unavailable",
+			Recovery: "retry through the running Hideout daemon",
+		})
+		return
+	}
+	snapshot, err := api.OperatorSnapshotProvider.Snapshot(r.Context(), query)
+	if err != nil {
+		writeAPIDetailedError(w, http.StatusServiceUnavailable, APIErrorDetail{
+			Code: "operator-snapshot-unavailable", Message: "authoritative operator snapshot is unavailable",
+			Recovery: "retry after checking hideout daemon status",
+		})
+		return
+	}
+	if err := snapshot.Validate(); err != nil {
+		writeAPIDetailedError(w, http.StatusServiceUnavailable, APIErrorDetail{
+			Code: "operator-snapshot-invalid", Message: "authoritative operator snapshot failed validation",
+			Recovery: "update Hideout and retry",
+		})
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version: APIVersion, Resource: "operator/snapshot", Data: snapshot, Errors: []string{},
+	})
+}
+
+func operatorSnapshotQueryFromRequest(r *http.Request) (OperatorSnapshotQuery, error) {
+	query := OperatorSnapshotQuery{ActivityLimit: DefaultOperatorActivityLimit}
+	values := r.URL.Query()
+	for key, entries := range values {
+		switch key {
+		case "profile", "session", "activityLimit":
+		default:
+			return query, fmt.Errorf("unknown query parameter %q", key)
+		}
+		if len(entries) != 1 {
+			return query, fmt.Errorf("query parameter %q must appear once", key)
+		}
+	}
+	query.Profile = values.Get("profile")
+	query.Session = values.Get("session")
+	if raw := values.Get("activityLimit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return query, errors.New("activityLimit must be an integer between 0 and 500")
+		}
+		query.ActivityLimit = limit
+	}
+	if err := query.Validate(); err != nil {
+		return query, err
+	}
+	return query, nil
 }
 
 func (api API) serveRuntimeCatalog(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +662,7 @@ func (api API) serveRuntimeVerifyApply(w http.ResponseWriter, r *http.Request) {
 
 func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec RouteSpec, resource string) {
 	switch spec.Resource {
-	case "decisions/{id}/claim", "decisions/{id}/approve", "decisions/{id}/deny", "decisions/{id}/reopen", "decisions/{id}/revoke":
+	case "decisions/{id}/claim", "decisions/{id}/release", "decisions/{id}/approve", "decisions/{id}/deny", "decisions/{id}/reopen", "decisions/{id}/revoke":
 		api.serveDecisionMemberPost(w, r, resource)
 		return
 	case "notices/{id}/ack":
@@ -452,6 +686,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec Ro
 		api.serveEnvironmentCleanPlan(w, r)
 	case "environment/clean/apply":
 		api.serveEnvironmentCleanApply(w, r)
+	case "environment/delete/plan":
+		api.serveEnvironmentDeletePlan(w, r)
+	case "environment/delete/apply":
+		api.serveEnvironmentDeleteApply(w, r)
 	case "profile/command-proxy/plan":
 		api.serveCommandProxyPlan(w, r)
 	case "profile/command-proxy/apply":
@@ -468,10 +706,18 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec Ro
 		api.serveProfileNetworkPlan(w, r)
 	case "profile/network/apply":
 		api.serveProfileNetworkApply(w, r)
+	case "profile/transaction/plan":
+		api.serveProfileTransactionPlan(w, r)
+	case "profile/transaction/apply":
+		api.serveProfileTransactionApply(w, r)
 	case "evidence/export/plan":
 		api.serveExportPlan(w, r)
 	case "evidence/export/apply":
 		api.serveExportApply(w, r)
+	case "activity/export/plan":
+		api.serveActivityExportPlan(w, r)
+	case "activity/export/apply":
+		api.serveActivityExportApply(w, r)
 	case "hostfs/write/plan":
 		api.serveHostFSWritePlan(w, r)
 	case "hostfs/write/claim":
@@ -482,6 +728,8 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec Ro
 		api.serveHostFSWriteDiscard(w, r)
 	case "decision/claim":
 		api.serveDecisionClaim(w, r)
+	case "decision/release":
+		api.serveDecisionRelease(w, r)
 	case "decision/approve":
 		api.serveDecisionApprove(w, r)
 	case "decision/deny":
@@ -504,6 +752,10 @@ func (api API) servePostResource(w http.ResponseWriter, r *http.Request, spec Ro
 		api.serveRuntimeVerifyPlan(w, r)
 	case "runtime/verify/apply":
 		api.serveRuntimeVerifyApply(w, r)
+	case "secret/plan":
+		api.serveSecretPlan(w, r)
+	case "secret/apply":
+		api.serveSecretApply(w, r)
 	default:
 		writeAPIError(w, http.StatusInternalServerError, "manager route inventory has no POST handler for "+spec.Resource)
 	}
@@ -599,7 +851,8 @@ func (api API) serveRunApply(w http.ResponseWriter, r *http.Request) {
 	runCtx, cancelRun := api.bindRunCredentialContext(r)
 	defer cancelRun()
 	result, runErr := service.Apply(runCtx, prepared, serviceRequest, RunServiceDependencies{
-		Backend: be, OpenerForSession: api.runOpenerForSession(req, prepared.Plan), Lifecycle: api.RunLifecycle,
+		Backend: be, OpenerForSession: api.runOpenerForSession(req, prepared.Plan),
+		Lifecycle: api.RunLifecycle, NetworkResolver: api.RunSecretResolver,
 	})
 	resp := APIResponse{
 		Version:  APIVersion,
@@ -663,6 +916,98 @@ func (api API) serveExportApply(w http.ResponseWriter, r *http.Request) {
 		resp.Errors = []string{applyErr.Error()}
 	}
 	writeAPIJSON(w, http.StatusOK, resp)
+}
+
+func (api API) serveActivityExportPlan(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeActivityExportAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Draft == nil || req.Plan != nil || req.Confirmed {
+		writeAPIError(
+			w,
+			http.StatusBadRequest,
+			"activity export plan requires draft only",
+		)
+		return
+	}
+	if api.ActivityProvider == nil {
+		writeAPIDetailedError(w, http.StatusServiceUnavailable, APIErrorDetail{
+			Code:     "activity-unavailable",
+			Message:  "the authoritative activity query provider is unavailable",
+			Recovery: "retry through the running Hideout daemon",
+		})
+		return
+	}
+	plan, err := (ActivityExportService{
+		Core: api.Core, Provider: api.ActivityProvider, Now: api.Now,
+	}).Plan(r.Context(), *req.Draft)
+	if err != nil {
+		writeActivityExportError(w, err)
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version: APIVersion, Resource: "activity/export/plan",
+		Data: plan, Errors: []string{},
+	})
+}
+
+func (api API) serveActivityExportApply(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeActivityExportAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Draft != nil || req.Plan == nil {
+		writeAPIError(
+			w,
+			http.StatusBadRequest,
+			"activity export apply requires reviewed plan only",
+		)
+		return
+	}
+	if api.ActivityProvider == nil {
+		writeAPIDetailedError(w, http.StatusServiceUnavailable, APIErrorDetail{
+			Code:     "activity-unavailable",
+			Message:  "the authoritative activity query provider is unavailable",
+			Recovery: "retry through the running Hideout daemon",
+		})
+		return
+	}
+	result, applyErr := (ActivityExportService{
+		Core: api.Core, Provider: api.ActivityProvider, Now: api.Now,
+	}).Apply(r.Context(), ActivityExportApplyRequest{
+		Schema: ActivityExportApplySchema,
+		Plan:   *req.Plan, Confirmed: req.Confirmed,
+	})
+	response := APIResponse{
+		Version: APIVersion, Resource: "activity/export/apply",
+		Data: result, Errors: []string{},
+	}
+	if applyErr != nil {
+		response.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, response)
+}
+
+func writeActivityExportError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrActivityOwnerNotFound),
+		errors.Is(err, ErrActivityQueryInvalid),
+		errors.Is(err, ErrActivityCursorInvalid),
+		errors.Is(err, ErrActivityCursorOwnerMismatch),
+		errors.Is(err, ErrActivityCursorFilterMismatch),
+		errors.Is(err, ErrActivityCursorStale):
+		writeActivityQueryError(w, err)
+	default:
+		writeAPIDetailedError(w, http.StatusBadRequest, APIErrorDetail{
+			Code:     "invalid-activity-export",
+			Field:    "draft",
+			Message:  err.Error(),
+			Recovery: "review the exact owner, bounded filters, local destination, redaction, and path policy",
+		})
+	}
 }
 
 func (api API) serveHostFSWritePlan(w http.ResponseWriter, r *http.Request) {
@@ -831,6 +1176,25 @@ func (api API) serveDecisionClaim(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (api API) serveDecisionRelease(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeDecisionReleaseRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	release, err := api.Core.ReleaseDecisionClaim(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version:  APIVersion,
+		Resource: "decision/release",
+		Data:     release,
+		Errors:   []string{},
+	})
+}
+
 func (api API) serveDecisionApprove(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeDecisionResolveRequest(w, r)
 	if err != nil {
@@ -962,6 +1326,10 @@ func (api API) serveDecisionMemberPost(w http.ResponseWriter, r *http.Request, r
 			writeAPIError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if req.DecisionID != "" && req.DecisionID != parts[0] {
+			writeAPIError(w, http.StatusBadRequest, "decisionId does not match request path")
+			return
+		}
 		if req.DecisionID == "" {
 			req.DecisionID = parts[0]
 		}
@@ -971,6 +1339,25 @@ func (api API) serveDecisionMemberPost(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "decision/claim", Data: claim, Errors: []string{}})
+	case "release":
+		req, err := decodeDecisionReleaseRequest(w, r)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.DecisionID != "" && req.DecisionID != parts[0] {
+			writeAPIError(w, http.StatusBadRequest, "decisionId does not match request path")
+			return
+		}
+		if req.DecisionID == "" {
+			req.DecisionID = parts[0]
+		}
+		release, err := api.Core.ReleaseDecisionClaim(req)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeAPIJSON(w, http.StatusOK, APIResponse{Version: APIVersion, Resource: "decision/release", Data: release, Errors: []string{}})
 	case "approve":
 		req, err := decodeDecisionResolveRequest(w, r)
 		if err != nil {
@@ -1120,7 +1507,7 @@ func (api API) serveAdapterPackApply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan := AdapterPackPlan{}
+	var plan AdapterPackPlan
 	if req.Plan != nil {
 		plan = *req.Plan
 	} else {
@@ -1265,6 +1652,11 @@ func (api API) serveEnvironmentStopPlan(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	plan, err := api.Core.PlanEnvironmentStop(opts)
+	if api.EnvironmentActions != nil {
+		plan, err = api.EnvironmentActions.Prepare(
+			EnvironmentActionStop, opts,
+		)
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1288,18 +1680,28 @@ func (api API) serveEnvironmentStopApply(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanEnvironmentStop(opts)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	apply := api.EnvironmentStopApply
-	if apply == nil {
-		apply = func(ctx context.Context, value EnvironmentActionPlan) (EnvironmentActionResult, error) {
-			return api.Core.ApplyEnvironmentStop(ctx, value, EnvironmentApplyOptions{Operator: api.EnvOperator})
+	var (
+		result   EnvironmentActionResult
+		applyErr error
+	)
+	if api.EnvironmentActions != nil {
+		result, applyErr = api.EnvironmentActions.Apply(
+			r.Context(), EnvironmentActionStop, req,
+		)
+	} else {
+		plan, planErr := api.Core.PlanEnvironmentStop(opts)
+		if planErr != nil {
+			writeAPIError(w, http.StatusBadRequest, planErr.Error())
+			return
 		}
+		apply := api.EnvironmentStopApply
+		if apply == nil {
+			apply = func(ctx context.Context, value EnvironmentActionPlan) (EnvironmentActionResult, error) {
+				return api.Core.ApplyEnvironmentStop(ctx, value, EnvironmentApplyOptions{Operator: api.EnvOperator})
+			}
+		}
+		result, applyErr = apply(r.Context(), plan)
 	}
-	result, applyErr := apply(r.Context(), plan)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "environment/stop/apply",
@@ -1324,6 +1726,11 @@ func (api API) serveEnvironmentCleanPlan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	plan, err := api.Core.PlanEnvironmentClean(opts)
+	if api.EnvironmentActions != nil {
+		plan, err = api.EnvironmentActions.Prepare(
+			EnvironmentActionClean, opts,
+		)
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1347,18 +1754,28 @@ func (api API) serveEnvironmentCleanApply(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanEnvironmentClean(opts)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	apply := api.EnvironmentCleanApply
-	if apply == nil {
-		apply = func(ctx context.Context, value EnvironmentActionPlan) (EnvironmentActionResult, error) {
-			return api.Core.ApplyEnvironmentClean(ctx, value, EnvironmentApplyOptions{Operator: api.EnvOperator})
+	var (
+		result   EnvironmentActionResult
+		applyErr error
+	)
+	if api.EnvironmentActions != nil {
+		result, applyErr = api.EnvironmentActions.Apply(
+			r.Context(), EnvironmentActionClean, req,
+		)
+	} else {
+		plan, planErr := api.Core.PlanEnvironmentClean(opts)
+		if planErr != nil {
+			writeAPIError(w, http.StatusBadRequest, planErr.Error())
+			return
 		}
+		apply := api.EnvironmentCleanApply
+		if apply == nil {
+			apply = func(ctx context.Context, value EnvironmentActionPlan) (EnvironmentActionResult, error) {
+				return api.Core.ApplyEnvironmentClean(ctx, value, EnvironmentApplyOptions{Operator: api.EnvOperator})
+			}
+		}
+		result, applyErr = apply(r.Context(), plan)
 	}
-	result, applyErr := apply(r.Context(), plan)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "environment/clean/apply",
@@ -1371,13 +1788,87 @@ func (api API) serveEnvironmentCleanApply(w http.ResponseWriter, r *http.Request
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func (api API) serveEnvironmentDeletePlan(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	req, err := decodeEnvironmentActionAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts, err := environmentActionOptionsFromAPIRequest(req)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if api.EnvironmentActions == nil {
+		writeAPIError(
+			w,
+			http.StatusServiceUnavailable,
+			"environment delete operation authority is unavailable",
+		)
+		return
+	}
+	plan, err := api.EnvironmentActions.Prepare(
+		EnvironmentActionDelete,
+		opts,
+	)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAPIJSON(w, http.StatusOK, APIResponse{
+		Version: APIVersion, Resource: "environment/delete/plan",
+		Data: plan, Errors: []string{},
+	})
+}
+
+func (api API) serveEnvironmentDeleteApply(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	req, err := decodeEnvironmentActionAPIRequest(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := environmentActionOptionsFromAPIRequest(req); err != nil {
+		writeAPIError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if api.EnvironmentActions == nil {
+		writeAPIError(
+			w,
+			http.StatusServiceUnavailable,
+			"environment delete operation authority is unavailable",
+		)
+		return
+	}
+	result, applyErr := api.EnvironmentActions.Apply(
+		r.Context(),
+		EnvironmentActionDelete,
+		req,
+	)
+	response := APIResponse{
+		Version: APIVersion, Resource: "environment/delete/apply",
+		Data: result, Errors: []string{},
+	}
+	if applyErr != nil {
+		response.Errors = []string{applyErr.Error()}
+	}
+	writeAPIJSON(w, http.StatusOK, response)
+}
+
 func (api API) serveCommandProxyPlan(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeCommandProxyAPIRequest(w, r)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanCommandProxy(commandProxyOptionsFromAPIRequest(req))
+	plan, err := api.legacyProfileTransactions().PlanCommandProxy(
+		commandProxyOptionsFromAPIRequest(req),
+	)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1396,12 +1887,10 @@ func (api API) serveCommandProxyApply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanCommandProxy(commandProxyOptionsFromAPIRequest(req))
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	result, applyErr := api.Core.ApplyCommandProxy(plan)
+	result, applyErr := api.legacyProfileTransactions().ApplyCommandProxy(
+		r.Context(),
+		commandProxyOptionsFromAPIRequest(req),
+	)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "profile/command-proxy/apply",
@@ -1420,7 +1909,9 @@ func (api API) serveProfileHostFSPlan(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanProfileHostFS(profileHostFSOptionsFromAPIRequest(req))
+	plan, err := api.legacyProfileTransactions().PlanHostFS(
+		profileHostFSOptionsFromAPIRequest(req),
+	)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1439,12 +1930,10 @@ func (api API) serveProfileHostFSApply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanProfileHostFS(profileHostFSOptionsFromAPIRequest(req))
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	result, applyErr := api.Core.ApplyProfileHostFS(plan)
+	result, applyErr := api.legacyProfileTransactions().ApplyHostFS(
+		r.Context(),
+		profileHostFSOptionsFromAPIRequest(req),
+	)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "profile/hostfs/apply",
@@ -1463,7 +1952,9 @@ func (api API) serveProfileEnvPlan(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanProfileEnv(profileEnvOptionsFromAPIRequest(req))
+	plan, err := api.legacyProfileTransactions().PlanEnvironment(
+		profileEnvOptionsFromAPIRequest(req),
+	)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1482,12 +1973,10 @@ func (api API) serveProfileEnvApply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanProfileEnv(profileEnvOptionsFromAPIRequest(req))
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	result, applyErr := api.Core.ApplyProfileEnv(plan)
+	result, applyErr := api.legacyProfileTransactions().ApplyEnvironment(
+		r.Context(),
+		profileEnvOptionsFromAPIRequest(req),
+	)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "profile/env/apply",
@@ -1506,7 +1995,9 @@ func (api API) serveProfileNetworkPlan(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanProfileNetwork(profileNetworkOptionsFromAPIRequest(req))
+	plan, err := api.legacyProfileTransactions().PlanNetwork(
+		profileNetworkOptionsFromAPIRequest(req),
+	)
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1525,12 +2016,10 @@ func (api API) serveProfileNetworkApply(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plan, err := api.Core.PlanProfileNetwork(profileNetworkOptionsFromAPIRequest(req))
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	result, applyErr := api.Core.ApplyProfileNetwork(plan)
+	result, applyErr := api.legacyProfileTransactions().ApplyNetwork(
+		r.Context(),
+		profileNetworkOptionsFromAPIRequest(req),
+	)
 	resp := APIResponse{
 		Version:  APIVersion,
 		Resource: "profile/network/apply",
@@ -1584,15 +2073,41 @@ func (api API) serveRunStatus(w http.ResponseWriter, r *http.Request, overview O
 	writeAPIJSON(w, http.StatusOK, resp)
 }
 
+func prepareManagerRequestBody(w http.ResponseWriter, r *http.Request, spec RouteSpec) bool {
+	limit := spec.MaxRequestBodyBytes
+	if limit <= 0 {
+		writeAPIDetailedError(w, http.StatusInternalServerError, APIErrorDetail{
+			Code: "route-contract-invalid", Message: "manager route has no request body limit",
+			Recovery: "update Hideout and retry",
+		})
+		return false
+	}
+	if r.ContentLength > limit {
+		writeAPIError(w, http.StatusRequestEntityTooLarge, requestBodyTooLargeMessage)
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	return true
+}
+
+func managerRequestBodyLimit(r *http.Request) int64 {
+	if r != nil {
+		if spec, ok := RecognizeManagerRoute(r.Method, r.URL.Path); ok && spec.MaxRequestBodyBytes > 0 {
+			return spec.MaxRequestBodyBytes
+		}
+	}
+	return DefaultRequestBodyLimit
+}
+
+func isMaxBytesError(err error) bool {
+	var maxBytesError *http.MaxBytesError
+	return errors.As(err, &maxBytesError)
+}
+
 func decodeRunAPIRequest(w http.ResponseWriter, r *http.Request) (RunAPIRequest, error) {
 	var req RunAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid run request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid run request")
+	if err := decodeStrictJSON(w, r, &req, "invalid run request"); err != nil {
+		return req, err
 	}
 	if len(req.Command) == 0 {
 		return req, errors.New("command is required")
@@ -1613,39 +2128,24 @@ func decodeRuntimeVerifyAPIRequest(w http.ResponseWriter, r *http.Request) (Runt
 
 func decodeInitAPIRequest(w http.ResponseWriter, r *http.Request) (InitAPIRequest, error) {
 	var req InitAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid init request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid init request")
+	if err := decodeStrictJSON(w, r, &req, "invalid init request"); err != nil {
+		return req, err
 	}
 	return req, nil
 }
 
 func decodeEnvironmentActionAPIRequest(w http.ResponseWriter, r *http.Request) (EnvironmentActionAPIRequest, error) {
 	var req EnvironmentActionAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid environment action request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid environment action request")
+	if err := decodeStrictJSON(w, r, &req, "invalid environment action request"); err != nil {
+		return req, err
 	}
 	return req, nil
 }
 
 func decodeCommandProxyAPIRequest(w http.ResponseWriter, r *http.Request) (CommandProxyAPIRequest, error) {
 	var req CommandProxyAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid command-proxy request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid command-proxy request")
+	if err := decodeStrictJSON(w, r, &req, "invalid command-proxy request"); err != nil {
+		return req, err
 	}
 	return req, nil
 }
@@ -1668,13 +2168,8 @@ func decodeHostAppPackAPIRequest(w http.ResponseWriter, r *http.Request) (HostAp
 
 func decodeProfileHostFSAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileHostFSAPIRequest, error) {
 	var req ProfileHostFSAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid profile-hostfs request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid profile-hostfs request")
+	if err := decodeStrictJSON(w, r, &req, "invalid profile-hostfs request"); err != nil {
+		return req, err
 	}
 	return req, nil
 }
@@ -1719,6 +2214,14 @@ func decodeDecisionClaimRequest(w http.ResponseWriter, r *http.Request) (Decisio
 	return req, nil
 }
 
+func decodeDecisionReleaseRequest(w http.ResponseWriter, r *http.Request) (DecisionReleaseRequest, error) {
+	var req DecisionReleaseRequest
+	if err := decodeStrictJSON(w, r, &req, "invalid decision release request"); err != nil {
+		return req, err
+	}
+	return req, nil
+}
+
 func decodeDecisionResolveRequest(w http.ResponseWriter, r *http.Request) (DecisionResolveRequest, error) {
 	var req DecisionResolveRequest
 	if err := decodeStrictJSON(w, r, &req, "invalid decision resolve request"); err != nil {
@@ -1753,13 +2256,8 @@ func decodeNoticeAckRequest(w http.ResponseWriter, r *http.Request) (NoticeAckRe
 
 func decodeProfileEnvAPIRequest(w http.ResponseWriter, r *http.Request) (ProfileEnvAPIRequest, error) {
 	var req ProfileEnvAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid profile-env request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid profile-env request")
+	if err := decodeStrictJSON(w, r, &req, "invalid profile-env request"); err != nil {
+		return req, err
 	}
 	return req, nil
 }
@@ -1773,12 +2271,18 @@ func decodeProfileNetworkAPIRequest(w http.ResponseWriter, r *http.Request) (Pro
 }
 
 func decodeStrictJSON(w http.ResponseWriter, r *http.Request, out any, message string) error {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, managerRequestBodyLimit(r)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
+		if isMaxBytesError(err) {
+			return errors.New(requestBodyTooLargeMessage)
+		}
 		return errors.New(message)
 	}
-	if decoder.Decode(&struct{}{}) == nil {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if isMaxBytesError(err) {
+			return errors.New(requestBodyTooLargeMessage)
+		}
 		return errors.New(message)
 	}
 	return nil
@@ -1786,19 +2290,26 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, out any, message s
 
 func decodeExportAPIRequest(w http.ResponseWriter, r *http.Request) (ExportAPIRequest, error) {
 	var req ExportAPIRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return req, errors.New("invalid export request")
-	}
-	if decoder.Decode(&struct{}{}) == nil {
-		return req, errors.New("invalid export request")
+	if err := decodeStrictJSON(w, r, &req, "invalid export request"); err != nil {
+		return req, err
 	}
 	return req, nil
 }
 
-func runPlanOptionsFromAPIRequest(req RunAPIRequest) RunPlanOptions {
-	return runPlanOptionsFromServiceRequest(runServiceRequestFromAPI(req))
+func decodeActivityExportAPIRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+) (ActivityExportAPIRequest, error) {
+	var req ActivityExportAPIRequest
+	if err := decodeStrictJSON(
+		w,
+		r,
+		&req,
+		"invalid activity export request",
+	); err != nil {
+		return req, err
+	}
+	return req, nil
 }
 
 func runServiceRequestFromAPI(req RunAPIRequest) RunServiceRequest {
@@ -1863,11 +2374,7 @@ func (api API) validCredential(token string) bool {
 }
 
 func commandProxyOptionsFromAPIRequest(req CommandProxyAPIRequest) CommandProxyOptions {
-	return CommandProxyOptions{
-		ProfileName: req.ProfileName,
-		Operation:   req.Operation,
-		Command:     req.Command,
-	}
+	return CommandProxyOptions(req)
 }
 
 func adapterPackOptionsFromAPIRequest(req AdapterPackAPIRequest) AdapterPackOptions {
@@ -1928,21 +2435,11 @@ func profileHostFSOptionsFromAPIRequest(req ProfileHostFSAPIRequest) ProfileHost
 }
 
 func profileEnvOptionsFromAPIRequest(req ProfileEnvAPIRequest) ProfileEnvOptions {
-	return ProfileEnvOptions{
-		ProfileName: req.ProfileName,
-		Operation:   req.Operation,
-		Name:        req.Name,
-		Value:       req.Value,
-	}
+	return ProfileEnvOptions(req)
 }
 
 func profileNetworkOptionsFromAPIRequest(req ProfileNetworkAPIRequest) ProfileNetworkOptions {
-	return ProfileNetworkOptions{
-		ProfileName:      req.ProfileName,
-		Mode:             req.Mode,
-		ProxySecretRef:   req.ProxySecretRef,
-		MediatedResolver: req.MediatedResolver,
-	}
+	return ProfileNetworkOptions(req)
 }
 
 func exportOptionsFromAPIRequest(req ExportAPIRequest) ExportOptions {
@@ -1972,6 +2469,7 @@ func environmentActionOptionsFromAPIRequest(req EnvironmentActionAPIRequest) (En
 	opts := EnvironmentActionOptions{
 		IDs:         append([]string(nil), req.IDs...),
 		StoppedOnly: req.StoppedOnly,
+		Force:       req.Force,
 	}
 	if req.Idle != "" {
 		idle, err := time.ParseDuration(req.Idle)
@@ -2214,10 +2712,78 @@ func defaultString(value, fallback string) string {
 }
 
 func writeAPIError(w http.ResponseWriter, status int, message string) {
+	if message == requestBodyTooLargeMessage {
+		writeAPIDetailedError(w, http.StatusRequestEntityTooLarge, APIErrorDetail{
+			Code: "request-too-large", Field: "body", Message: message,
+			Recovery: "send a smaller request within the route limit",
+		})
+		return
+	}
 	writeAPIJSON(w, status, APIResponse{
 		Version: APIVersion,
 		Errors:  []string{message},
 	})
+}
+
+func writeAPIDetailedError(w http.ResponseWriter, status int, detail APIErrorDetail) {
+	if err := detail.Validate(); err != nil {
+		status = http.StatusInternalServerError
+		detail = APIErrorDetail{
+			Code: "internal-error", Message: "invalid API error detail",
+			Recovery: "update Hideout and retry",
+		}
+	}
+	writeAPIJSON(w, status, APIResponse{
+		Version: APIVersion, Errors: []string{detail.Message},
+		ErrorDetails: []APIErrorDetail{detail},
+	})
+}
+
+func (detail APIErrorDetail) Validate() error {
+	if !stableAPIName(detail.Code) ||
+		(detail.Field != "" && !stableAPIField(detail.Field)) ||
+		!boundedAPIText(detail.Message, 1, 2048) ||
+		(detail.Recovery != "" && !boundedAPIText(detail.Recovery, 1, 2048)) {
+		return errors.New("API error detail is invalid")
+	}
+	return nil
+}
+
+func stableAPIName(value string) bool {
+	if len(value) == 0 || len(value) > 128 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, character := range value[1:] {
+		if character >= 'a' && character <= 'z' ||
+			character >= '0' && character <= '9' ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func stableAPIField(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func boundedAPIText(value string, minimum, maximum int) bool {
+	return len(value) >= minimum && len(value) <= maximum &&
+		strings.TrimSpace(value) == value &&
+		!strings.ContainsRune(value, 0)
 }
 
 func writeAPIMethodNotAllowed(w http.ResponseWriter, methods ...string) {

@@ -4,21 +4,22 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
 const (
@@ -53,9 +54,54 @@ func (binding GatewayBinding) ProxyURL(guestHost string) (string, error) {
 	return u.String(), nil
 }
 
+// GatewayRouteSpec contains the runtime-only material and managed-secret
+// identity needed to prepare one immutable route. UpstreamProxyURL must never
+// be serialized or returned by an observation API.
+type GatewayRouteSpec struct {
+	UpstreamProxyURL string `json:"-"`
+	ProxySecretRef   string `json:"proxySecretRef,omitempty"`
+	SecretGeneration uint64 `json:"secretGeneration,omitempty"`
+}
+
+// GatewayRouteMetadata is the non-secret identity bound to a route. A route
+// generation changes at every activation candidate and at every restoration;
+// the secret generation identifies the managed value used to build a proxy
+// dialer.
+type GatewayRouteMetadata struct {
+	RouteGeneration  uint64 `json:"routeGeneration"`
+	Mode             string `json:"mode"`
+	ProxySecretRef   string `json:"proxySecretRef,omitempty"`
+	SecretGeneration uint64 `json:"secretGeneration,omitempty"`
+}
+
+// GatewayRouteConnectionCount reports how many currently accepted connections
+// remain bound to one immutable route generation.
+type GatewayRouteConnectionCount struct {
+	RouteGeneration  uint64 `json:"routeGeneration"`
+	Mode             string `json:"mode,omitempty"`
+	ProxySecretRef   string `json:"proxySecretRef,omitempty"`
+	SecretGeneration uint64 `json:"secretGeneration,omitempty"`
+	Count            uint64 `json:"count"`
+}
+
+// GatewayRouteObservation exposes only safe route identities. In particular,
+// it contains no upstream address, credential, URL, or derived fingerprint.
+type GatewayRouteObservation struct {
+	ActiveAvailable bool                          `json:"activeAvailable"`
+	Active          GatewayRouteMetadata          `json:"active,omitempty"`
+	Connections     []GatewayRouteConnectionCount `json:"connections,omitempty"`
+}
+
 type gatewayRoute struct {
-	fingerprint string
-	dial        func(context.Context, string, string) (net.Conn, error)
+	metadata GatewayRouteMetadata
+	dial     func(context.Context, string, string) (net.Conn, error)
+}
+
+func (route *gatewayRoute) safeMetadata() GatewayRouteMetadata {
+	if route == nil {
+		return GatewayRouteMetadata{}
+	}
+	return route.metadata
 }
 
 // GatewayObservation is a redacted, monotonic view of one environment
@@ -117,9 +163,12 @@ type gatewayEntry struct {
 
 	switchMu sync.Mutex
 	connMu   sync.Mutex
-	conns    map[net.Conn]struct{}
-	closed   chan struct{}
-	close    sync.Once
+	conns    map[net.Conn]*gatewayRoute
+	// routeGeneration is protected by switchMu and never decreases. Gaps are
+	// permitted when a staged candidate is rolled back before activation.
+	routeGeneration uint64
+	closed          chan struct{}
+	close           sync.Once
 }
 
 // GatewayRegistry owns one authenticated host-loopback SOCKS gateway per
@@ -145,8 +194,49 @@ type GatewayChange struct {
 	entry    *gatewayEntry
 	previous *gatewayRoute
 	next     *gatewayRoute
-	active   atomic.Bool
-	done     atomic.Bool
+
+	mu     sync.Mutex
+	active bool
+	done   bool
+}
+
+// CandidateRoute returns the non-secret identity allocated to the staged
+// route. It is safe to include in transition evidence.
+func (change *GatewayChange) CandidateRoute() GatewayRouteMetadata {
+	if change == nil {
+		return GatewayRouteMetadata{}
+	}
+	return change.next.safeMetadata()
+}
+
+// Probe validates candidate reachability without making the candidate visible
+// to gateway traffic.
+func (change *GatewayChange) Probe(ctx context.Context, target string) error {
+	if change == nil || change.entry == nil || change.next == nil || change.next.dial == nil {
+		return errors.New("environment network gateway candidate is unavailable")
+	}
+	change.mu.Lock()
+	defer change.mu.Unlock()
+	if change.done {
+		return errors.New("environment network gateway change is already resolved")
+	}
+	if change.active {
+		return errors.New("environment network gateway candidate is already active")
+	}
+	if err := validateGatewayProbeTarget(target); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	connection, err := change.next.dial(ctx, "tcp", target)
+	if err != nil {
+		return errors.New("environment network gateway candidate probe failed")
+	}
+	if err := connection.Close(); err != nil {
+		return errors.New("environment network gateway candidate probe cleanup failed")
+	}
+	return nil
 }
 
 // Activate makes the prepared route visible to connections accepted after this
@@ -157,16 +247,18 @@ func (change *GatewayChange) Activate() error {
 	if change == nil || change.entry == nil {
 		return errors.New("environment network gateway change is unavailable")
 	}
-	if change.done.Load() {
+	change.mu.Lock()
+	defer change.mu.Unlock()
+	if change.done {
 		return errors.New("environment network gateway change is already resolved")
 	}
-	if !change.active.CompareAndSwap(false, true) {
+	if change.active {
 		return errors.New("environment network gateway change is already active")
 	}
 	if !change.entry.route.CompareAndSwap(change.previous, change.next) {
-		change.active.Store(false)
 		return errors.New("environment network gateway route changed before activation")
 	}
+	change.active = true
 	return nil
 }
 
@@ -174,9 +266,15 @@ func (change *GatewayChange) Commit() error {
 	if change == nil || change.entry == nil {
 		return errors.New("environment network gateway change is unavailable")
 	}
-	if !change.done.CompareAndSwap(false, true) {
+	change.mu.Lock()
+	defer change.mu.Unlock()
+	if change.done {
 		return errors.New("environment network gateway change is already resolved")
 	}
+	if !change.active {
+		return errors.New("environment network gateway candidate is not active")
+	}
+	change.done = true
 	change.entry.switchMu.Unlock()
 	return nil
 }
@@ -185,25 +283,198 @@ func (change *GatewayChange) Rollback() error {
 	if change == nil || change.entry == nil {
 		return nil
 	}
-	if !change.done.CompareAndSwap(false, true) {
+	change.mu.Lock()
+	defer change.mu.Unlock()
+	if change.done {
 		return nil
 	}
-	if change.active.Load() && !change.entry.route.CompareAndSwap(change.next, change.previous) {
-		change.entry.switchMu.Unlock()
-		return errors.New("environment network gateway route changed during rollback")
+	change.done = true
+	if change.active {
+		restoredGeneration, err := change.entry.nextRouteGeneration()
+		if err != nil {
+			change.entry.switchMu.Unlock()
+			return err
+		}
+		var restored *gatewayRoute
+		if change.previous != nil {
+			value := *change.previous
+			value.metadata.RouteGeneration = restoredGeneration
+			restored = &value
+		}
+		if !change.entry.route.CompareAndSwap(change.next, restored) {
+			change.entry.switchMu.Unlock()
+			return errors.New("environment network gateway route changed during rollback")
+		}
 	}
 	change.entry.switchMu.Unlock()
 	return nil
+}
+
+// CommitGatewayChanges finalizes a complete, already-active set of staged
+// routes. All changes are validated before any transition lock is released, so
+// a malformed member cannot leave only part of the batch committed.
+func CommitGatewayChanges(changes []*GatewayChange) error {
+	if len(changes) == 0 {
+		return errors.New("environment network gateway change batch is empty")
+	}
+	if err := lockGatewayChanges(changes); err != nil {
+		return err
+	}
+	defer unlockGatewayChanges(changes)
+	seen := make(map[*gatewayEntry]struct{}, len(changes))
+	for _, change := range changes {
+		if change == nil || change.entry == nil || change.next == nil ||
+			change.done || !change.active {
+			return errors.New(
+				"environment network gateway change batch is not commit-ready",
+			)
+		}
+		if _, duplicate := seen[change.entry]; duplicate {
+			return errors.New(
+				"environment network gateway change batch contains a duplicate environment",
+			)
+		}
+		seen[change.entry] = struct{}{}
+		if change.entry.route.Load() != change.next {
+			return errors.New(
+				"environment network gateway candidate is no longer active",
+			)
+		}
+	}
+	for _, change := range changes {
+		change.done = true
+	}
+	for _, change := range changes {
+		change.entry.switchMu.Unlock()
+	}
+	return nil
+}
+
+// RollbackGatewayChanges restores every prior route after validating the whole
+// batch. Each environment's transition lock remains held throughout
+// validation, and no fallible operation remains after restoration begins.
+func RollbackGatewayChanges(changes []*GatewayChange) error {
+	if len(changes) == 0 {
+		return errors.New("environment network gateway change batch is empty")
+	}
+	if err := lockGatewayChanges(changes); err != nil {
+		return err
+	}
+	defer unlockGatewayChanges(changes)
+	seen := make(map[*gatewayEntry]struct{}, len(changes))
+	for _, change := range changes {
+		if change == nil || change.entry == nil || change.next == nil ||
+			change.done {
+			return errors.New(
+				"environment network gateway change batch cannot be rolled back",
+			)
+		}
+		if _, duplicate := seen[change.entry]; duplicate {
+			return errors.New(
+				"environment network gateway change batch contains a duplicate environment",
+			)
+		}
+		seen[change.entry] = struct{}{}
+		if change.active {
+			if change.entry.route.Load() != change.next ||
+				change.entry.routeGeneration == ^uint64(0) {
+				return errors.New(
+					"environment network gateway route cannot be restored",
+				)
+			}
+		}
+	}
+	for _, change := range changes {
+		if !change.active {
+			continue
+		}
+		change.entry.routeGeneration++
+		var restored *gatewayRoute
+		if change.previous != nil {
+			value := *change.previous
+			value.metadata.RouteGeneration =
+				change.entry.routeGeneration
+			restored = &value
+		}
+		change.entry.route.Store(restored)
+	}
+	for _, change := range changes {
+		change.done = true
+	}
+	for _, change := range changes {
+		change.entry.switchMu.Unlock()
+	}
+	return nil
+}
+
+func lockGatewayChanges(changes []*GatewayChange) error {
+	seenChanges := make(map[*GatewayChange]struct{}, len(changes))
+	seenEntries := make(map[*gatewayEntry]struct{}, len(changes))
+	for _, change := range changes {
+		if change == nil || change.entry == nil {
+			return errors.New(
+				"environment network gateway change batch contains an unavailable change",
+			)
+		}
+		if _, duplicate := seenChanges[change]; duplicate {
+			return errors.New(
+				"environment network gateway change batch contains a duplicate change",
+			)
+		}
+		if _, duplicate := seenEntries[change.entry]; duplicate {
+			return errors.New(
+				"environment network gateway change batch contains a duplicate environment",
+			)
+		}
+		seenChanges[change] = struct{}{}
+		seenEntries[change.entry] = struct{}{}
+	}
+	for _, change := range changes {
+		change.mu.Lock()
+	}
+	return nil
+}
+
+func unlockGatewayChanges(changes []*GatewayChange) {
+	for index := len(changes) - 1; index >= 0; index-- {
+		changes[index].mu.Unlock()
+	}
 }
 
 // Stage validates and prepares a route while retaining the environment's
 // transition lock. It does not change traffic until GatewayChange.Activate.
 // upstream is empty for direct host egress.
 func (registry *GatewayRegistry) Stage(environmentID, upstream string) (GatewayBinding, *GatewayChange, error) {
+	return registry.stageRoute(
+		environmentID,
+		GatewayRouteSpec{UpstreamProxyURL: upstream},
+		true,
+	)
+}
+
+// StageRoute validates a managed route specification, allocates its monotonic
+// route generation, and retains the environment transition lock. It does not
+// affect newly accepted traffic until Activate succeeds.
+func (registry *GatewayRegistry) StageRoute(
+	environmentID string,
+	spec GatewayRouteSpec,
+) (GatewayBinding, *GatewayChange, error) {
+	return registry.stageRoute(environmentID, spec, false)
+}
+
+func (registry *GatewayRegistry) stageRoute(
+	environmentID string,
+	spec GatewayRouteSpec,
+	allowLegacyProxy bool,
+) (GatewayBinding, *GatewayChange, error) {
 	if registry == nil || !environmentIDPattern.MatchString(environmentID) {
 		return GatewayBinding{}, nil, errors.New("environment network gateway identity is invalid")
 	}
-	route, err := buildGatewayRoute(upstream)
+	mode, err := validateGatewayRouteSpec(spec, allowLegacyProxy)
+	if err != nil {
+		return GatewayBinding{}, nil, err
+	}
+	route, err := buildGatewayRoute(spec.UpstreamProxyURL)
 	if err != nil {
 		return GatewayBinding{}, nil, err
 	}
@@ -220,10 +491,61 @@ func (registry *GatewayRegistry) Stage(environmentID, upstream string) (GatewayB
 		return GatewayBinding{}, nil, errors.New("environment network gateway is closed")
 	default:
 	}
+	generation, err := entry.nextRouteGeneration()
+	if err != nil {
+		entry.switchMu.Unlock()
+		return GatewayBinding{}, nil, err
+	}
+	route.metadata = GatewayRouteMetadata{
+		RouteGeneration:  generation,
+		Mode:             mode,
+		ProxySecretRef:   spec.ProxySecretRef,
+		SecretGeneration: spec.SecretGeneration,
+	}
 	previous := entry.route.Load()
 	return GatewayBinding{
 		ID: entry.id, Address: entry.listener.Addr().String(), Username: entry.username, Password: entry.password,
 	}, &GatewayChange{entry: entry, previous: previous, next: route}, nil
+}
+
+func validateGatewayRouteSpec(spec GatewayRouteSpec, allowLegacyProxy bool) (string, error) {
+	upstream := strings.TrimSpace(spec.UpstreamProxyURL)
+	if upstream == "" {
+		if spec.ProxySecretRef != "" || spec.SecretGeneration != 0 {
+			return "", errors.New("direct gateway route cannot identify a proxy secret")
+		}
+		return ModeDirect, nil
+	}
+	if allowLegacyProxy && spec.ProxySecretRef == "" && spec.SecretGeneration == 0 {
+		return ModeTun2Socks, nil
+	}
+	if err := secrets.ValidateRef(spec.ProxySecretRef); err != nil {
+		return "", fmt.Errorf("managed gateway proxy secret: %w", err)
+	}
+	if spec.SecretGeneration == 0 {
+		return "", errors.New("managed gateway proxy secret generation is required")
+	}
+	return ModeTun2Socks, nil
+}
+
+func validateGatewayProbeTarget(target string) error {
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(target))
+	if err != nil || strings.TrimSpace(host) == "" {
+		return errors.New("environment network gateway probe target is invalid")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("environment network gateway probe target is invalid")
+	}
+	return nil
+}
+
+func (entry *gatewayEntry) nextRouteGeneration() (uint64, error) {
+	if entry.routeGeneration == ^uint64(0) {
+		return 0, errors.New("environment network gateway route generation is exhausted")
+	}
+	entry.routeGeneration++
+	return entry.routeGeneration, nil
 }
 
 func (entry *gatewayEntry) lockTransition() error {
@@ -296,6 +618,69 @@ func (registry *GatewayRegistry) Observation(environmentID string) (GatewayObser
 	return entry.observation(), true
 }
 
+// RouteObservation returns the active route and the route generation captured
+// by each accepted connection. Existing connections deliberately retain their
+// prior generation after activation and rollback.
+func (registry *GatewayRegistry) RouteObservation(
+	environmentID string,
+) (GatewayRouteObservation, bool) {
+	if registry == nil {
+		return GatewayRouteObservation{}, false
+	}
+	registry.mu.Lock()
+	entry := registry.entries[environmentID]
+	registry.mu.Unlock()
+	if entry == nil {
+		return GatewayRouteObservation{}, false
+	}
+	active := entry.route.Load()
+	observation := GatewayRouteObservation{
+		ActiveAvailable: active != nil,
+		Active:          active.safeMetadata(),
+	}
+	entry.connMu.Lock()
+	counts := make(map[GatewayRouteMetadata]uint64)
+	for _, route := range entry.conns {
+		counts[route.safeMetadata()]++
+	}
+	entry.connMu.Unlock()
+	observation.Connections = make(
+		[]GatewayRouteConnectionCount,
+		0,
+		len(counts),
+	)
+	for metadata, count := range counts {
+		observation.Connections = append(
+			observation.Connections,
+			GatewayRouteConnectionCount{
+				RouteGeneration:  metadata.RouteGeneration,
+				Mode:             metadata.Mode,
+				ProxySecretRef:   metadata.ProxySecretRef,
+				SecretGeneration: metadata.SecretGeneration,
+				Count:            count,
+			},
+		)
+	}
+	sort.Slice(
+		observation.Connections,
+		func(i, j int) bool {
+			left := observation.Connections[i]
+			right := observation.Connections[j]
+			if left.RouteGeneration != right.RouteGeneration {
+				return left.RouteGeneration < right.RouteGeneration
+			}
+			if left.Mode != right.Mode {
+				return left.Mode < right.Mode
+			}
+			if left.ProxySecretRef != right.ProxySecretRef {
+				return left.ProxySecretRef < right.ProxySecretRef
+			}
+			return left.SecretGeneration < right.SecretGeneration
+		},
+	)
+	return observation, true
+}
+
 func (entry *gatewayEntry) observation() GatewayObservation {
 	return GatewayObservation{
 		Accepted:             entry.accepted.Load(),
@@ -337,7 +722,7 @@ func (registry *GatewayRegistry) entry(environmentID string) (*gatewayEntry, err
 	}
 	entry := &gatewayEntry{
 		id: id, listener: listener, username: username, password: password,
-		conns: make(map[net.Conn]struct{}), closed: make(chan struct{}),
+		conns: make(map[net.Conn]*gatewayRoute), closed: make(chan struct{}),
 	}
 	registry.entries[environmentID] = entry
 	go entry.serve()
@@ -356,7 +741,7 @@ func buildGatewayRoute(upstream string) (*gatewayRoute, error) {
 	upstream = strings.TrimSpace(upstream)
 	if upstream == "" {
 		dialer := &net.Dialer{Timeout: gatewayConnectTimeout}
-		return &gatewayRoute{fingerprint: "direct", dial: dialer.DialContext}, nil
+		return &gatewayRoute{dial: dialer.DialContext}, nil
 	}
 	if err := validateProxyURL(upstream); err != nil {
 		return nil, err
@@ -365,8 +750,7 @@ func buildGatewayRoute(upstream string) (*gatewayRoute, error) {
 	if strings.EqualFold(parsed.Hostname(), "host.lima.internal") {
 		return nil, errors.New("proxy URL is consumed by the host gateway; use 127.0.0.1 for a proxy running on this host")
 	}
-	fingerprint := sha256.Sum256([]byte(upstream))
-	route := &gatewayRoute{fingerprint: hex.EncodeToString(fingerprint[:])}
+	route := &gatewayRoute{}
 	switch parsed.Scheme {
 	case "socks5", "socks5h":
 		route.dial = socks5UpstreamDialer(parsed)
@@ -390,10 +774,10 @@ func (entry *gatewayEntry) serve() {
 			}
 		}
 		entry.accepted.Add(1)
-		entry.track(connection, true)
 		route := entry.route.Load()
+		entry.track(connection, route, true)
 		go func(route *gatewayRoute) {
-			defer entry.track(connection, false)
+			defer entry.track(connection, nil, false)
 			entry.handle(connection, route)
 		}(route)
 	}
@@ -443,11 +827,15 @@ func (entry *gatewayEntry) handle(client net.Conn, route *gatewayRoute) {
 	copyGatewayConnections(client, reader, upstream)
 }
 
-func (entry *gatewayEntry) track(connection net.Conn, add bool) {
+func (entry *gatewayEntry) track(
+	connection net.Conn,
+	route *gatewayRoute,
+	add bool,
+) {
 	entry.connMu.Lock()
 	defer entry.connMu.Unlock()
 	if add {
-		entry.conns[connection] = struct{}{}
+		entry.conns[connection] = route
 	} else {
 		delete(entry.conns, connection)
 	}

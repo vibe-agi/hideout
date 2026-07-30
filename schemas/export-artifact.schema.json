@@ -15,7 +15,7 @@
       "required": ["source", "createdAt", "redactionStages", "decision"],
       "properties": {
         "source": {
-          "enum": ["audit", "bundle", "boundary-summary", "doctor-report"]
+          "enum": ["audit", "activity", "bundle", "boundary-summary", "doctor-report"]
         },
         "commit": {
           "type": "string",

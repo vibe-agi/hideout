@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	DisposalIntentSchema   = "hideout.disposal-intent/v1"
-	DisposalAuthorityRunRM = "run-rm"
+	DisposalIntentSchema               = "hideout.disposal-intent/v1"
+	DisposalAuthorityRunRM             = "run-rm"
+	DisposalAuthorityEnvironmentClean  = "environment-clean"
+	DisposalAuthorityEnvironmentDelete = "environment-delete"
 
 	DisposalStatePlanned          = "planned"
 	DisposalStateBackendAbsent    = "backend-absent"
@@ -26,7 +28,9 @@ const (
 	DisposalReasonOwnerMetadataCleanupFailed  = "owner-metadata-cleanup-failed"
 	DisposalReasonRuntimeCleanupFailed        = "runtime-cleanup-failed"
 	DisposalReasonGatewayCleanupFailed        = "gateway-cleanup-failed"
+	DisposalReasonActivityCleanupFailed       = "activity-cleanup-failed"
 	DisposalReasonMetadataCheckpointFailed    = "metadata-checkpoint-failed"
+	DisposalReasonRecordRemovalFailed         = "record-removal-failed"
 	DisposalReasonJournalRemovalFailed        = "journal-removal-failed"
 	DisposalReasonBackendProviderUnavailable  = "backend-provider-unavailable"
 	DisposalReasonMissingRecordBackendPresent = "missing-record-backend-not-absent"
@@ -43,38 +47,44 @@ var disposalReasonCodes = []string{
 	DisposalReasonOwnerMetadataCleanupFailed,
 	DisposalReasonRuntimeCleanupFailed,
 	DisposalReasonGatewayCleanupFailed,
+	DisposalReasonActivityCleanupFailed,
 	DisposalReasonMetadataCheckpointFailed,
+	DisposalReasonRecordRemovalFailed,
 	DisposalReasonJournalRemovalFailed,
 	DisposalReasonBackendProviderUnavailable,
 	DisposalReasonMissingRecordBackendPresent,
 	DisposalReasonMissingRecordStateInvalid,
 }
 
-// DisposalIntent is durable coordination evidence. It binds previously
-// validated --rm authority to one exact record digest and backend instance; it
-// does not itself perform or broaden backend cleanup.
+// DisposalIntent is durable coordination evidence. It binds one previously
+// validated removal authority to an exact record digest, backend instance, and
+// optional activity-session identity. It does not itself perform or broaden
+// backend cleanup.
 type DisposalIntent struct {
-	Schema       string    `json:"schema"`
-	Authority    string    `json:"authority"`
-	Backend      string    `json:"backend"`
-	InstanceName string    `json:"instanceName"`
-	RecordDigest string    `json:"recordDigest"`
-	Generation   uint64    `json:"generation"`
-	State        string    `json:"state"`
-	RequestedAt  time.Time `json:"requestedAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	ReasonCode   string    `json:"reasonCode,omitempty"`
+	Schema            string    `json:"schema"`
+	Authority         string    `json:"authority"`
+	Backend           string    `json:"backend"`
+	InstanceName      string    `json:"instanceName"`
+	RecordDigest      string    `json:"recordDigest"`
+	ActivitySessionID string    `json:"activitySessionId,omitempty"`
+	Generation        uint64    `json:"generation"`
+	State             string    `json:"state"`
+	RequestedAt       time.Time `json:"requestedAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+	ReasonCode        string    `json:"reasonCode,omitempty"`
 }
 
 // DisposalRequest carries only immutable identity proof. It deliberately has
 // no backend handle or callback: lifecycle coordinates destructive admission,
 // while Manager remains the cleanup authority.
 type DisposalRequest struct {
-	EnvironmentID string
-	Backend       string
-	InstanceName  string
-	RecordDigest  string
-	Generation    uint64
+	EnvironmentID     string
+	Authority         string
+	Backend           string
+	InstanceName      string
+	RecordDigest      string
+	ActivitySessionID string
+	Generation        uint64
 }
 
 // DisposalCoordinator is the narrow lifecycle protocol injected into Manager.
@@ -88,11 +98,14 @@ type DisposalCoordinator interface {
 }
 
 func (intent DisposalIntent) Validate(journalGeneration uint64) error {
-	if intent.Schema != DisposalIntentSchema || intent.Authority != DisposalAuthorityRunRM {
+	if intent.Schema != DisposalIntentSchema || !validDisposalAuthority(intent.Authority) {
 		return errors.New("lifecycle disposal authority is invalid")
 	}
 	if !idPattern.MatchString(intent.Backend) || !idPattern.MatchString(intent.InstanceName) {
 		return errors.New("lifecycle disposal backend identity is invalid")
+	}
+	if intent.ActivitySessionID != "" && !idPattern.MatchString(intent.ActivitySessionID) {
+		return errors.New("lifecycle disposal activity identity is invalid")
 	}
 	if !lowerHex(intent.RecordDigest, 64) {
 		return errors.New("lifecycle disposal record digest is invalid")
@@ -175,10 +188,25 @@ func validDisposalReasonCode(value string) bool {
 
 func (request DisposalRequest) validate() error {
 	if !idPattern.MatchString(request.EnvironmentID) ||
+		!validDisposalAuthority(request.authority()) ||
 		!idPattern.MatchString(request.Backend) ||
 		!idPattern.MatchString(request.InstanceName) ||
-		!lowerHex(request.RecordDigest, 64) {
+		!lowerHex(request.RecordDigest, 64) ||
+		request.ActivitySessionID != "" && !idPattern.MatchString(request.ActivitySessionID) {
 		return errors.New("lifecycle disposal request identity is invalid")
 	}
 	return nil
+}
+
+func (request DisposalRequest) authority() string {
+	if request.Authority == "" {
+		return DisposalAuthorityRunRM
+	}
+	return request.Authority
+}
+
+func validDisposalAuthority(value string) bool {
+	return value == DisposalAuthorityRunRM ||
+		value == DisposalAuthorityEnvironmentClean ||
+		value == DisposalAuthorityEnvironmentDelete
 }

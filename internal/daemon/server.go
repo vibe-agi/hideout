@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/lifecycle"
 )
 
 // authorizeStream authenticates a stream request via the standard operator token
@@ -36,6 +39,8 @@ const (
 	lifecycleStopPath      = "/daemon/lifecycle/stop"
 	lifecycleMutatePath    = "/daemon/lifecycle/mutate"
 	lifecycleReconcilePath = "/daemon/lifecycle/reconcile"
+
+	daemonControlRequestBodyLimit = 64 << 10
 )
 
 // buildHandler mounts the parity-locked Manager API under /api/v1/ behind an
@@ -81,15 +86,13 @@ func (d *Daemon) serveLifecycleReconcile(w http.ResponseWriter, r *http.Request)
 	var request struct {
 		EnvironmentID string `json:"environmentId"`
 	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if err := decodeDaemonControlRequest(w, r, &request); err != nil {
+		writeDaemonControlRequestError(w, err)
 		return
 	}
 	started, status, err := d.retryLifecycleReconciliation(r.Context(), request.EnvironmentID)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, lifecycleConflictBody(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"started": started, "lifecycle": status})
@@ -109,15 +112,13 @@ func (d *Daemon) serveLifecycleMutation(w http.ResponseWriter, r *http.Request) 
 		Operation     string `json:"operation"`
 		Force         bool   `json:"force,omitempty"`
 	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if err := decodeDaemonControlRequest(w, r, &request); err != nil {
+		writeDaemonControlRequestError(w, err)
 		return
 	}
 	record, err := d.applyEnvironmentMutation(r.Context(), request.EnvironmentID, request.Operation, request.Force)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, lifecycleConflictBody(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"record": record})
@@ -135,18 +136,27 @@ func (d *Daemon) serveLifecycleStop(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		EnvironmentID string `json:"environmentId"`
 	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if err := decodeDaemonControlRequest(w, r, &request); err != nil {
+		writeDaemonControlRequestError(w, err)
 		return
 	}
 	status, err := d.lifecycle.StopExplicit(r.Context(), request.EnvironmentID)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "lifecycle": status})
+		body := lifecycleConflictBody(err)
+		body["lifecycle"] = status
+		writeJSON(w, http.StatusConflict, body)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"lifecycle": status})
+}
+
+func lifecycleConflictBody(err error) map[string]any {
+	body := map[string]any{"error": err.Error()}
+	var conflict *lifecycle.MutationConflictError
+	if errors.As(err, &conflict) {
+		body["blocker"] = conflict
+	}
+	return body
 }
 
 // serveBackground is the product entry for submitting existing typed environment
@@ -165,8 +175,8 @@ func (d *Daemon) serveBackground(w http.ResponseWriter, r *http.Request) {
 		Op  string   `json:"op"`
 		IDs []string `json:"ids"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	if err := decodeDaemonControlRequest(w, r, &req); err != nil {
+		writeDaemonControlRequestError(w, err)
 		return
 	}
 	run, err := d.backgroundRun(req.Op, req.IDs)
@@ -190,6 +200,10 @@ func (d *Daemon) serveEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET required"})
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
@@ -210,7 +224,11 @@ func (d *Daemon) serveEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-sub.done:
-			writeSSE(w, d.bus.terminalEvent(sub, "stream closed"))
+			reason := sub.reason
+			if reason == "" {
+				reason = "stream-closed"
+			}
+			writeSSE(w, d.bus.terminalEvent(sub, reason))
 			flusher.Flush()
 			return
 		case <-ticker.C:
@@ -314,6 +332,48 @@ func (d *Daemon) serveStop(w http.ResponseWriter, r *http.Request) {
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func decodeDaemonControlRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	target any,
+) error {
+	r.Body = http.MaxBytesReader(w, r.Body, daemonControlRequestBodyLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func writeDaemonControlRequestError(
+	w http.ResponseWriter,
+	err error,
+) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeJSON(
+			w,
+			http.StatusRequestEntityTooLarge,
+			map[string]string{"error": "request body exceeds the daemon route limit"},
+		)
+		return
+	}
+	writeJSON(
+		w,
+		http.StatusBadRequest,
+		map[string]string{"error": "invalid request body"},
+	)
 }

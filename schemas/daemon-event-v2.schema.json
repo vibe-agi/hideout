@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/daemon-event-v2.schema.json",
+  "title": "Hideout daemon live event v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "instanceId",
+    "credentialGeneration",
+    "kind",
+    "seq"
+  ],
+  "properties": {
+    "version": { "const": "hideout.daemon-event/v2" },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^daemon_[A-Za-z0-9_-]{1,124}$"
+    },
+    "credentialGeneration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "optional": {
+      "type": "boolean"
+    },
+    "phase": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "profile": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "session": {
+          "type": "string",
+          "maxLength": 128
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 256 },
+        "autoNamed": { "type": "boolean" },
+        "status": { "type": "string", "maxLength": 128 },
+        "profile": { "type": "string", "maxLength": 128 },
+        "backend": { "type": "string", "maxLength": 128 },
+        "workspace": { "type": "string", "maxLength": 4096 },
+        "guestWorkspace": { "type": "string", "maxLength": 4096 },
+        "imageRef": { "type": "string", "maxLength": 4096 },
+        "instanceName": { "type": "string", "maxLength": 256 },
+        "lastSessionId": { "type": "string", "maxLength": 128 },
+        "lastCommand": { "type": "string", "maxLength": 8192 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastStartedAt": { "type": "string", "format": "date-time" },
+        "lastEndedAt": { "type": "string", "format": "date-time" },
+        "networkMode": { "type": "string", "maxLength": 128 },
+        "hasAudit": { "type": "boolean" },
+        "hasEphemeralState": { "type": "boolean" },
+        "op": { "type": "string", "maxLength": 128 },
+        "time": { "type": "string", "format": "date-time" },
+        "session": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 256 },
+        "decision": { "type": "string", "maxLength": 128 },
+        "details": {
+          "type": "object",
+          "maxProperties": 128
+        },
+        "source": { "type": "string", "maxLength": 128 },
+        "artifactPath": { "type": "string", "maxLength": 4096 },
+        "sessions": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "removed": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "type": "string", "maxLength": 1024 }
+        },
+        "secretState": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "maxLength": 1024 },
+        "operationId": { "type": "string", "maxLength": 128 },
+        "decisionId": { "type": "string", "maxLength": 128 },
+        "operation": { "type": "string", "maxLength": 128 },
+        "path": { "type": "string", "maxLength": 4096 },
+        "destinationPath": { "type": "string", "maxLength": 4096 },
+        "privilegeStatus": { "type": "string", "maxLength": 128 },
+        "noticeId": { "type": "string", "maxLength": 128 },
+        "recordKind": { "type": "string", "maxLength": 128 },
+        "severity": { "type": "string", "maxLength": 64 },
+        "acknowledged": { "type": "boolean" },
+        "defaultOutcome": { "type": "string", "maxLength": 128 },
+        "preview": {},
+        "lifecycle": {
+          "type": "object",
+          "maxProperties": 64
+        },
+        "attachmentId": { "type": "string", "maxLength": 128 },
+        "environmentId": { "type": "string", "maxLength": 128 },
+        "workspaceId": { "type": "string", "maxLength": 128 },
+        "workspaceLabel": { "type": "string", "maxLength": 512 },
+        "workspaceTransport": { "type": "string", "maxLength": 128 },
+        "workspaceViewState": { "type": "string", "maxLength": 128 },
+        "workspaceRelations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "maxProperties": 16
+          }
+        },
+        "blockerCode": { "type": "string", "maxLength": 128 },
+        "cleanupStatus": { "type": "string", "maxLength": 128 },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "profile": { "type": "string", "maxLength": 128 },
+            "session": { "type": "string", "maxLength": 128 },
+            "cursor": { "type": "string", "maxLength": 4096 },
+            "counts": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "count"],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+                  },
+                  "count": { "type": "integer", "minimum": 0 }
+                }
+              }
+            },
+            "appended": { "type": "integer", "minimum": 0 },
+            "lastAt": { "type": "string", "format": "date-time" }
+          }
+        },
+        "profileProjection": {
+          "type": "object",
+          "maxProperties": 64
+        },
+        "transitionProjection": {
+          "type": "object",
+          "maxProperties": 32
+        },
+        "operationProjection": {
+          "type": "object",
+          "maxProperties": 32
+        },
+        "activityProjection": {
+          "type": "object",
+          "maxProperties": 16
+        },
+        "coverage": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "maxProperties": 32
+          }
+        },
+        "riskProjection": {
+          "type": "object",
+          "maxProperties": 32
+        },
+        "capabilityProjection": {
+          "type": "object",
+          "maxProperties": 16
+        }
+      }
+    }
+  }
+}

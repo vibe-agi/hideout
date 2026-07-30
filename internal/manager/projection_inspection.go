@@ -363,7 +363,7 @@ func (c Core) hostAppInspectionSources(profileName, packFilter string) ([]hostAp
 			continue
 		}
 		manifestPath := c.hostAppPackStore().SourceDir(entry.ID, revision.RevisionID) + string(os.PathSeparator) + hostapppack.ManifestFileName
-		manifest := hostapppack.Manifest{}
+		var manifest hostapppack.Manifest
 		sourceCode := ""
 		if entry.State == hostapppack.PackInstalled && revision.State == hostapppack.RevisionInstalled {
 			resolvedRevision, resolvedManifest, resolveErr := c.hostAppPackStore().ResolveRevisionManifest(entry.ID, revision.RevisionID)
@@ -602,38 +602,6 @@ func (c Core) hostAppInspectionOutcomes(profileName string) map[string]hostAppIn
 
 func hostAppInspectionOutcomeKey(packID, revisionID, bindingID, command string) string {
 	return strings.Join([]string{packID, revisionID, bindingID, command}, "\x00")
-}
-
-func hostAppInspectionRecovery(inspection hostapppack.Inspection) []string {
-	var codes []string
-	for _, entry := range inspection.Entries {
-		switch entry.Summary.Readiness {
-		case "ready":
-			codes = append(codes, recovery.CodeHostAppNewRunRequired)
-		case "review-required":
-			if entry.Binding.ShadowStatus == "conflict" || entry.Binding.ShadowStatus == "reserved" {
-				codes = append(codes, recovery.CodeHostAppCommandConflict)
-			} else {
-				codes = append(codes, recovery.CodeHostAppPermissionReviewRequired)
-			}
-		case "disabled":
-			if entry.Permissions.Status == "revoked" {
-				codes = append(codes, recovery.CodeHostAppBindingRevoked)
-			} else {
-				codes = append(codes, recovery.CodeHostAppBindingDisabled)
-			}
-		case "unavailable":
-			switch entry.AppIdentity.Verification {
-			case "absent":
-				codes = append(codes, recovery.CodeHostAppAbsent)
-			case "drifted":
-				codes = append(codes, recovery.CodeHostAppIdentityDrift)
-			default:
-				codes = append(codes, recovery.CodeHostAppIdentityInvalid)
-			}
-		}
-	}
-	return sortedUnique(codes)
 }
 
 func (p ProjectionInspection) ObservedFacts() []string {

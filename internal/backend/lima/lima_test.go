@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -1307,6 +1308,55 @@ func TestHostCommandEnvUsesSmallAllowlist(t *testing.T) {
 		if strings.Contains(text, denied) {
 			t.Fatalf("sanitized host env leaked %s: %v", denied, got)
 		}
+	}
+}
+
+func TestValidateLimaUnixSocketPathRejectsBoundaryWithoutExposingPath(t *testing.T) {
+	const instance = "hideout-default-env-0123456789ab"
+	if err := validateLimaUnixSocketPath("/tmp/lima", instance, darwinUnixPathMax); err != nil {
+		t.Fatalf("short Lima home rejected: %v", err)
+	}
+	longHome := filepath.Join("/private/tmp", strings.Repeat("private-local-path-", 8))
+	err := validateLimaUnixSocketPath(longHome, instance, darwinUnixPathMax)
+	if err == nil {
+		t.Fatal("overlong Lima socket path was accepted")
+	}
+	for _, want := range []string{"Lima runtime path is too long", "LIMA_HOME", "hideout daemon stop", "less than 104"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("diagnostic missing %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), longHome) {
+		t.Fatalf("diagnostic exposed the local Lima path: %v", err)
+	}
+	if err := validateLimaUnixSocketPath("", instance, darwinUnixPathMax); err == nil {
+		t.Fatal("empty Lima home was accepted")
+	}
+}
+
+func TestRunRejectsOverlongDarwinLimaSocketPathBeforeLimactl(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin Unix-socket limit")
+	}
+	t.Setenv("LIMA_HOME", filepath.Join(t.TempDir(), strings.Repeat("x", 96)))
+	runner := &recordingRunner{lookPath: "/opt/homebrew/bin/limactl"}
+	session := &backend.Session{
+		ID:           "ses_socket_path",
+		Backend:      "lima",
+		ConfigPath:   "/tmp/lima.yaml",
+		InstanceName: "hideout-default-env-0123456789ab",
+	}
+	err := (Backend{Runner: runner}).Run(
+		context.Background(),
+		session,
+		[]string{"true"},
+		[]string{"PATH=/usr/bin:/bin"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "Lima runtime path is too long") {
+		t.Fatalf("Run error=%v, want actionable socket-path refusal", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("limactl ran before local path validation: %+v", runner.calls)
 	}
 }
 

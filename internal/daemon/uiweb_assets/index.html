@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hideout operator console</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script defer src="/assets/state.js"></script>
+  <script defer src="/assets/client.js"></script>
+  <script defer src="/assets/activity.js"></script>
+  <script defer src="/assets/config.js"></script>
+  <script defer src="/assets/presentation.js"></script>
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#console-main">Skip to console content</a>
+  <div
+    id="consoleAnnouncement"
+    class="sr-only"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  ></div>
+  <div
+    id="hideout-bootstrap"
+    data-expires-at="{{.ExpiresAt}}"
+    data-help-catalog="{{.HelpCatalog}}"
+    hidden
+  ></div>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Private local operator console</p>
+        <h1>Hideout</h1>
+      </div>
+      <div class="health">
+        <span
+          id="connectionState"
+          class="badge seeding"
+          role="status"
+          aria-describedby="connectionReason"
+        >SEEDING</span>
+        <span id="connectionReason" class="muted">Loading authoritative state…</span>
+        <button id="reseed" type="button">Refresh snapshot</button>
+      </div>
+    </header>
+
+    <p id="tabInstructions" class="sr-only">
+      Use Left and Right Arrow, Home, or End to move between console views.
+    </p>
+    <nav
+      class="tabs"
+      role="tablist"
+      aria-label="Console views"
+      aria-describedby="tabInstructions"
+    >
+      <button id="tab-overview" class="tab active" type="button" role="tab" aria-controls="view-overview" aria-selected="true" tabindex="0" data-panel="overview">Overview</button>
+      <button id="tab-timeline" class="tab" type="button" role="tab" aria-controls="view-timeline" aria-selected="false" tabindex="-1" data-panel="timeline">Timeline</button>
+      <button id="tab-executions" class="tab" type="button" role="tab" aria-controls="view-executions" aria-selected="false" tabindex="-1" data-panel="executions">Executions</button>
+      <button id="tab-files" class="tab" type="button" role="tab" aria-controls="view-files" aria-selected="false" tabindex="-1" data-panel="files">Files</button>
+      <button id="tab-network" class="tab" type="button" role="tab" aria-controls="view-network" aria-selected="false" tabindex="-1" data-panel="network">Network &amp; DNS</button>
+      <button id="tab-coverage" class="tab" type="button" role="tab" aria-controls="view-coverage" aria-selected="false" tabindex="-1" data-panel="coverage">Coverage</button>
+      <button id="tab-risks" class="tab" type="button" role="tab" aria-controls="view-risks" aria-selected="false" tabindex="-1" data-panel="risks">Risks</button>
+      <button id="tab-operations" class="tab" type="button" role="tab" aria-controls="view-operations" aria-selected="false" tabindex="-1" data-panel="operations">Operations</button>
+      <button id="tab-config" class="tab" type="button" role="tab" aria-controls="view-config" aria-selected="false" tabindex="-1" data-panel="config">Configuration</button>
+      <button id="tab-help" class="tab" type="button" role="tab" aria-controls="view-help" aria-selected="false" tabindex="-1" data-panel="help">Help</button>
+    </nav>
+
+    <main id="console-main">
+      <section id="staleBanner" class="banner danger" role="alert" hidden>
+        State is stale and all changes are disabled. Refresh an authoritative snapshot.
+      </section>
+
+      <section class="scope">
+        <label class="field compact" for="sessionScope">
+          <span>Workload session</span>
+          <select id="sessionScope">
+            <option value="">No workload selected</option>
+          </select>
+        </label>
+        <div id="retentionSummary" class="muted">Retained range unavailable</div>
+      </section>
+
+      <section class="metrics" aria-label="Current summary">
+        <article><span>Workloads</span><strong id="metricWorkloads">—</strong></article>
+        <article><span>Coverage</span><strong id="metricCoverage">—</strong></article>
+        <article><span>Risks</span><strong id="metricRisks">—</strong></article>
+        <article><span>Operations</span><strong id="metricOperations">—</strong></article>
+      </section>
+
+      <section class="view active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0" data-view="overview">
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Now</p><h2>Operator overview</h2></div>
+            <span id="overviewSequence" class="badge">seq —</span>
+          </div>
+          <div id="overviewBody" class="panel-body" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-timeline" role="tabpanel" aria-labelledby="tab-timeline" tabindex="0" data-view="timeline" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Time</p><h2>Session timeline</h2></div>
+          </div>
+          <form id="activityFilters" class="filter-grid">
+            <label class="field">
+              <span>Kinds</span>
+              <input id="filterKinds" name="kinds" placeholder="file, connection, dns" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Path contains</span>
+              <input id="filterPath" name="path" placeholder="/workspace/src" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Domain contains</span>
+              <input id="filterDomain" name="domain" placeholder="example.com" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Exact IP</span>
+              <input id="filterIP" name="ip" placeholder="1.1.1.1" autocomplete="off">
+            </label>
+            <details class="advanced-filter">
+              <summary>Process, risk, and time filters</summary>
+              <div class="filter-grid nested">
+                <label class="field">
+                  <span>Operations</span>
+                  <input id="filterOperations" name="operations" placeholder="open, write, connect" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>Execution IDs</span>
+                  <input id="filterExecutions" name="executions" placeholder="exec_…" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>Risk IDs or rules</span>
+                  <input id="filterRisks" name="risks" placeholder="risk_… or file.write-outside-workspace" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>From</span>
+                  <input id="filterFrom" name="from" type="datetime-local" step="1">
+                </label>
+                <label class="field">
+                  <span>To</span>
+                  <input id="filterTo" name="to" type="datetime-local" step="1">
+                </label>
+              </div>
+            </details>
+            <div class="filter-actions">
+              <button type="submit">Apply filters</button>
+              <button id="clearActivityFilters" type="button">Clear</button>
+              <span id="activityFilterStatus" class="muted" role="status" aria-live="polite">No filters</span>
+            </div>
+          </form>
+          <div id="timelineBody" class="panel-body history-body" tabindex="0" aria-label="Retained session timeline"></div>
+          <div class="panel-footer">
+            <button id="loadMoreActivity" type="button" hidden>Load next retained page</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-executions" role="tabpanel" aria-labelledby="tab-executions" tabindex="0" data-view="executions" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Process ancestry</p><h2>Execution tree</h2></div>
+          </div>
+          <div id="executionsBody" class="panel-body history-body" tabindex="0" aria-label="Retained execution tree"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-files" role="tabpanel" aria-labelledby="tab-files" tabindex="0" data-view="files" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Metadata only</p><h2>File activity</h2></div>
+          </div>
+          <div id="filesBody" class="panel-body history-body" tabindex="0" aria-label="Retained file metadata activity"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-network" role="tabpanel" aria-labelledby="tab-network" tabindex="0" data-view="network" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Process-attributed</p><h2>Network &amp; DNS</h2></div>
+          </div>
+          <div id="networkBody" class="panel-body history-body" tabindex="0" aria-label="Retained network and DNS activity"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-coverage" role="tabpanel" aria-labelledby="tab-coverage" tabindex="0" data-view="coverage" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Evidence quality</p><h2>Coverage</h2></div>
+          </div>
+          <div id="coverageBody" class="panel-body history-body" tabindex="0" aria-label="Retained coverage intervals"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-risks" role="tabpanel" aria-labelledby="tab-risks" tabindex="0" data-view="risks" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Explainable findings</p><h2>Risks</h2></div>
+          </div>
+          <div id="risksBody" class="panel-body history-body" tabindex="0" aria-label="Retained explainable risks"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-operations" role="tabpanel" aria-labelledby="tab-operations" tabindex="0" data-view="operations" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Durable outcomes</p><h2>Operations</h2></div>
+          </div>
+          <div id="operationsBody" class="panel-body history-body" tabindex="0" aria-label="Durable operation history"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-config" role="tabpanel" aria-labelledby="tab-config" tabindex="0" data-view="config" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Desired vs effective</p><h2>Configuration</h2></div>
+            <span id="configMode" class="badge">read-only</span>
+          </div>
+          <div id="configBody" class="panel-body"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-help" role="tabpanel" aria-labelledby="tab-help" tabindex="0" data-view="help" hidden>
+        <div class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">Task-oriented</p><h2>Help</h2></div>
+          </div>
+          <div class="panel-body">
+            <label class="field" for="helpSearch">
+              <span>Search commands</span>
+              <input id="helpSearch" type="search" aria-label="Search commands" autocomplete="off">
+            </label>
+            <div id="helpBody" class="history-body" tabindex="0" aria-label="Command help results"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="consoleDialog" aria-labelledby="dialogTitle">
+    <form id="dialogForm">
+      <header>
+        <h2 id="dialogTitle" tabindex="-1">Review</h2>
+        <button id="dialogClose" type="button" aria-label="Close dialog">×</button>
+      </header>
+      <div id="dialogBody"></div>
+    </form>
+  </dialog>
+</body>
+</html>

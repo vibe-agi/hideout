@@ -113,6 +113,53 @@ func TestDisposableIdentityRejectsAuthorizationShortcuts(t *testing.T) {
 	}
 }
 
+func TestRemovalIdentityBindsImmutableRecordAndIgnoresRunState(t *testing.T) {
+	record := disposableIdentityRecord(t)
+	record.Disposable = false
+	identity, err := NewRemovalIdentity(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Schema != RemovalIdentitySchema ||
+		identity.EnvironmentID != record.ID ||
+		identity.Backend != record.Backend ||
+		identity.InstanceName != record.InstanceName ||
+		len(identity.Digest) != 64 ||
+		!identity.MatchesRecord(record) {
+		t.Fatalf("removal identity=%+v", identity)
+	}
+
+	mutable := record
+	mutable.Status = StatusError
+	mutable.LastSessionID = "ses_20260729T120000Z_0123456789abcdef"
+	mutable.LastCommand = "false"
+	mutable.LastStartedAt = record.CreatedAt.Add(time.Minute)
+	mutable.LastEndedAt = record.CreatedAt.Add(2 * time.Minute)
+	if !identity.MatchesRecord(mutable) {
+		t.Fatal("mutable run state invalidated removal identity")
+	}
+
+	changed := mutable
+	changed.InstanceName += "-replacement"
+	if identity.MatchesRecord(changed) {
+		t.Fatal("changed backend instance retained removal identity")
+	}
+	changed = mutable
+	changed.BootConfigurationID = "sha256:" + repeatHex("d")
+	if identity.MatchesRecord(changed) {
+		t.Fatal("changed boot configuration retained removal identity")
+	}
+}
+
+func TestRemovalIdentityRequiresValidatedBackendInstance(t *testing.T) {
+	record := disposableIdentityRecord(t)
+	record.Disposable = false
+	record.InstanceName = ""
+	if identity, err := NewRemovalIdentity(record); err == nil {
+		t.Fatalf("missing instance accepted: %+v", identity)
+	}
+}
+
 func disposableIdentityRecord(t *testing.T) Record {
 	t.Helper()
 	return Record{

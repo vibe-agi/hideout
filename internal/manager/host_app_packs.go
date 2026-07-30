@@ -1363,22 +1363,6 @@ func (c Core) hostAppPlatform() hostcap.Platform {
 	return hostcap.CurrentPlatform()
 }
 
-func (c Core) hostAppRevalidator(forbidden []string) hostcap.IdentityRevalidator {
-	if c.HostAppIdentityRevalidator != nil {
-		return c.HostAppIdentityRevalidator
-	}
-	return func(expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {
-		current, err := c.resolveHostAppIdentity(expectation, forbidden)
-		if err != nil {
-			return hostcap.ObservedApplicationIdentity{}, err
-		}
-		if current.IdentityDigest() != previous.IdentityDigest() || current.QualifiedAppRef != previous.QualifiedAppRef {
-			return hostcap.ObservedApplicationIdentity{}, &hostcap.Error{Code: hostcap.CodeAppIdentityDrift, Reason: "host application identity changed before launch"}
-		}
-		return current, nil
-	}
-}
-
 func (c Core) hostAppRevalidatorContext(forbidden []string) hostcap.ContextIdentityRevalidator {
 	if c.HostAppIdentityRevalidator != nil {
 		return func(_ context.Context, expectation hostcap.ApplicationExpectation, previous hostcap.ObservedApplicationIdentity) (hostcap.ObservedApplicationIdentity, error) {

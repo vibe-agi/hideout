@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/observer-frame.schema.json",
+  "title": "Hideout guest workload observer frame",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "owner",
+    "sessionId",
+    "cgroupId",
+    "observerGeneration",
+    "cpu",
+    "sequence",
+    "monotonicNs",
+    "kind",
+    "payload"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.observation.v1" },
+    "owner": {
+      "$ref": "activity-owner.schema.json"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9_-]{1,124}$"
+    },
+    "cgroupId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "observerGeneration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cpu": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "monotonicNs": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "enum": [
+        "process.fork",
+        "process.exec",
+        "process.exit",
+        "process.execution",
+        "file.open",
+        "file.access",
+        "file.read",
+        "file.write",
+        "file.metadata",
+        "file.mmap",
+        "file.create",
+        "file.truncate",
+        "file.rename",
+        "file.unlink",
+        "file.hardlink",
+        "file.symlink",
+        "file.mkdir",
+        "file.rmdir",
+        "network.connect",
+        "network.close",
+        "dns.query",
+        "dns.response",
+        "proxy.target",
+        "coverage.changed",
+        "collector.loss",
+        "collector.heartbeat"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "maxProperties": 64
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "cpu": { "const": 4294967295 }
+        },
+        "required": ["cpu"]
+      },
+      "then": {
+        "properties": {
+          "kind": { "const": "collector.loss" }
+        }
+      }
+    }
+  ]
+}

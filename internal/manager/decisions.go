@@ -1,6 +1,8 @@
 package manager
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -22,9 +24,12 @@ type DecisionListRequest struct {
 }
 
 type DecisionClaimRequest struct {
-	DecisionID      string `json:"decisionId"`
-	ExpectedVersion string `json:"expectedVersion"`
-	Surface         string `json:"surface,omitempty"`
+	DecisionID       string `json:"decisionId"`
+	ExpectedVersion  string `json:"expectedVersion"`
+	Surface          string `json:"surface,omitempty"`
+	ExpectedRevision int    `json:"expectedRevision,omitempty"`
+	LeaseSeconds     int64  `json:"leaseSeconds,omitempty"`
+	Takeover         bool   `json:"takeover,omitempty"`
 }
 
 type DecisionResolveRequest struct {
@@ -58,14 +63,13 @@ func (c Core) decisionStore() (*decision.Store, error) {
 	if c.Store.Root == "" {
 		return nil, errors.New("manager store root is required")
 	}
-	return decision.NewStore(c.Store.Root), nil
+	store := decision.NewStore(c.Store.Root)
+	store.SetNow(c.decisionNow)
+	return store, nil
 }
 
 func (c Core) ListDecisions(req DecisionListRequest) ([]decision.Decision, error) {
-	if err := c.syncHostFSWriteDecisions(); err != nil {
-		return nil, err
-	}
-	if err := c.expireDecisionTimeouts(); err != nil {
+	if err := c.maintainDecisionCenter(); err != nil {
 		return nil, err
 	}
 	store, err := c.decisionStore()
@@ -82,10 +86,7 @@ func (c Core) ListDecisions(req DecisionListRequest) ([]decision.Decision, error
 }
 
 func (c Core) InspectDecision(id string) (decision.Decision, error) {
-	if err := c.syncHostFSWriteDecisions(); err != nil {
-		return decision.Decision{}, err
-	}
-	if err := c.expireDecisionTimeouts(); err != nil {
+	if err := c.maintainDecisionCenter(); err != nil {
 		return decision.Decision{}, err
 	}
 	store, err := c.decisionStore()
@@ -140,9 +141,12 @@ func (c Core) ClaimDecision(req DecisionClaimRequest) (decision.ClaimResponse, e
 	}
 	if d.Kind == decision.KindHostFSWrite {
 		claim, err := c.ClaimHostFSWrite(HostFSWriteClaimRequest{
-			DecisionID:      d.ProviderRef.DecisionID,
-			ExpectedVersion: HostFSWritePlanVersion,
-			Surface:         req.Surface,
+			DecisionID:       d.ProviderRef.DecisionID,
+			ExpectedVersion:  HostFSWritePlanVersion,
+			Surface:          req.Surface,
+			ExpectedRevision: req.ExpectedRevision,
+			LeaseSeconds:     req.LeaseSeconds,
+			Takeover:         req.Takeover,
 		})
 		if err != nil {
 			_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
@@ -154,8 +158,12 @@ func (c Core) ClaimDecision(req DecisionClaimRequest) (decision.ClaimResponse, e
 			DecisionID:     d.ID,
 			State:          decision.StateClaimed,
 			ClaimToken:     claim.ClaimToken,
+			Surface:        claim.Surface,
+			ClaimedAt:      claim.ClaimedAt,
 			ClaimExpiresAt: claim.ClaimExpiresAt,
-			Revision:       d.Revision + 1,
+			LeaseSeconds:   claim.LeaseSeconds,
+			Takeover:       claim.Takeover,
+			Revision:       claim.Revision,
 		}, nil
 	}
 	if d.Kind == decision.KindHostFSRead {
@@ -165,15 +173,37 @@ func (c Core) ClaimDecision(req DecisionClaimRequest) (decision.ClaimResponse, e
 	if err != nil {
 		return decision.ClaimResponse{}, err
 	}
-	claim, updated, err := store.ClaimDecision(req.DecisionID, req.Surface, time.Minute)
+	lease, err := decisionClaimLease(req.LeaseSeconds)
+	if err != nil {
+		return decision.ClaimResponse{}, err
+	}
+	claim, updated, err := store.ClaimDecisionWithOptions(req.DecisionID, decision.ClaimOptions{
+		Surface:          req.Surface,
+		Operator:         decisionClaimOperator,
+		Lease:            lease,
+		ExpectedRevision: req.ExpectedRevision,
+		TakeoverExpired:  req.Takeover,
+	})
 	if err != nil {
 		_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
 		return decision.ClaimResponse{}, err
 	}
-	if err := c.emitDecisionAudit(decision.ActionDecisionClaim, "allow", updated, map[string]any{"surface": req.Surface}); err != nil {
+	action := decision.ActionDecisionClaim
+	phase := "claimed"
+	if claim.Takeover {
+		action = decision.ActionDecisionTakeover
+		phase = "claim-taken-over"
+	}
+	if err := c.emitDecisionAudit(action, "allow", updated, map[string]any{
+		"surface":          claim.Surface,
+		"leaseSeconds":     claim.LeaseSeconds,
+		"claimExpiresAt":   claim.ClaimExpiresAt,
+		"takeover":         claim.Takeover,
+		"expectedRevision": req.ExpectedRevision,
+	}); err != nil {
 		return decision.ClaimResponse{}, err
 	}
-	c.emitDecision(updated, "claimed", "")
+	c.emitDecision(updated, phase, "")
 	return claim, nil
 }
 
@@ -437,10 +467,7 @@ func (c Core) AckNotice(req NoticeAckRequest) (decision.Acknowledgement, error) 
 }
 
 func (c Core) DecisionStatus() (DecisionStatus, error) {
-	if err := c.syncHostFSWriteDecisions(); err != nil {
-		return DecisionStatus{}, err
-	}
-	if err := c.expireDecisionTimeouts(); err != nil {
+	if err := c.maintainDecisionCenter(); err != nil {
 		return DecisionStatus{}, err
 	}
 	store, err := c.decisionStore()
@@ -544,7 +571,24 @@ func (c Core) upsertHostFSWriteDecision(ref hostFSWriteRef) (decision.Decision, 
 			TokenHash: ref.decision.Claim.TokenHash,
 		}
 	}
+	if existing, err := store.RawDecision(d.ID); err == nil &&
+		sameHostFSWriteDecisionProjection(existing, d) {
+		return decision.RedactDecision(existing), nil
+	}
 	return store.CreateOrUpdateDecision(d)
+}
+
+func sameHostFSWriteDecisionProjection(existing, projected decision.Decision) bool {
+	projected.Version = existing.Version
+	projected.CreatedAt = existing.CreatedAt
+	projected.UpdatedAt = existing.UpdatedAt
+	projected.Revision = existing.Revision
+	projected.Preview = decision.RedactPreview(projected.Preview)
+	projected.Risk = audit.RedactDetails(projected.Risk)
+	projected.ProposedAction = audit.RedactDetails(projected.ProposedAction)
+	left, leftErr := json.Marshal(existing)
+	right, rightErr := json.Marshal(projected)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func hostFSDecisionState(state string) string {
@@ -611,6 +655,13 @@ func (c Core) emitDecision(d decision.Decision, phase, reason string) {
 		"defaultOutcome": d.DefaultOutcome,
 		"preview":        d.Preview,
 		"reason":         reason,
+		"revision":       d.Revision,
+	}
+	if d.Claim != nil {
+		details["claimSurface"] = d.Claim.Surface
+		details["claimOperator"] = d.Claim.Operator
+		details["claimedAt"] = d.Claim.ClaimedAt
+		details["claimExpiresAt"] = d.Claim.ExpiresAt
 	}
 	c.emitOperation("decision", phase, details)
 }

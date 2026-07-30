@@ -27,6 +27,9 @@ func TestBrowserProofPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fixture.Close()
+	if err := fixture.SeedBrowserConsoleEvidence(); err != nil {
+		t.Fatal(err)
+	}
 	result := runBrowserProof(t, prereq, fixture, outDir)
 	assertNoControlPlaneMaterial(t, outDir)
 	writeBrowserProofs(t, outDir, artifactPrefix, result)

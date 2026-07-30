@@ -82,7 +82,11 @@ func TestDaemonRecoversDisposableCrashResidueWithoutBlockingStatus(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
 		t.Fatalf("daemon start waited for disposable recovery: %s", elapsed)
 	}
@@ -113,7 +117,11 @@ func TestDaemonBoundsConcurrentDisposableRecoveryWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 	deadline := time.After(3 * time.Second)
 	for provider.maximum.Load() < 4 {
 		select {
@@ -209,7 +217,11 @@ func TestDaemonConvergesValidIntentOnlyResidueOnlyWhenExactInstanceIsAbsent(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		_, loadErr := (lifecycle.JournalStore{Root: store.Root}).Load(record.ID)

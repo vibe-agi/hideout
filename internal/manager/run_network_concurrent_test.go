@@ -37,12 +37,20 @@ func TestDirectNetworkUsesOneReusableEnvironmentService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(firstSession)
+	defer func() {
+		if _, err := core.CloseRunSession(firstSession); err != nil {
+			t.Errorf("close first run session: %v", err)
+		}
+	}()
 	secondSession, err := core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(secondSession)
+	defer func() {
+		if _, err := core.CloseRunSession(secondSession); err != nil {
+			t.Errorf("close second run session: %v", err)
+		}
+	}()
 	first, err := core.PrepareRunNetwork(firstSession, RunNetworkOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +81,78 @@ func TestDirectNetworkUsesOneReusableEnvironmentService(t *testing.T) {
 	}
 }
 
+func TestPrepareEnvironmentNetworkBindsManagedSecretGeneration(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	profileValue := profile.Default("managed-route")
+	profileValue.Network.Mode = network.ModeTun2Socks
+	profileValue.Network.ProxySecretRef = "local-proxy"
+	profileValue.Network.MediatedResolver = "1.1.1.1"
+	if err := store.Save(profileValue); err != nil {
+		t.Fatal(err)
+	}
+	core := New(store)
+	t.Cleanup(func() { _ = core.NetworkGateways.Close() })
+	plan, err := core.PlanRun(RunPlanOptions{
+		ProfileName: profileValue.Name,
+		Backend:     "lima",
+		Workspace:   t.TempDir(),
+		Command:     []string{"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEnvironment, err := core.SelectRunEnvironment(
+		plan,
+		RunEnvironmentOptions{Create: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSession, err := core.BeginRunSession(
+		plan,
+		runEnvironment,
+		RunSessionOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = core.CloseRunSession(runSession) })
+	const upstream = "socks5://managed-user:managed-password@127.0.0.1:7890"
+	runNetwork, err := core.PrepareRunNetwork(
+		runSession,
+		RunNetworkOptions{
+			Resolver: managedNetworkSecretResolverFixture{
+				ref: "local-proxy",
+				resolution: network.SecretResolution{
+					Value:      upstream,
+					Source:     network.SecretSourceManaged,
+					Generation: 11,
+				},
+			},
+			Verified: true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runNetwork.GatewayChange.Rollback() })
+	metadata := runNetwork.GatewayChange.CandidateRoute()
+	if metadata.Mode != network.ModeTun2Socks ||
+		metadata.ProxySecretRef != "local-proxy" ||
+		metadata.SecretGeneration != 11 ||
+		metadata.RouteGeneration == 0 {
+		t.Fatalf("managed route metadata=%+v", metadata)
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), upstream) ||
+		strings.Contains(string(encoded), "managed-password") {
+		t.Fatalf("managed route metadata leaked secret: %s", encoded)
+	}
+}
+
 func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnline(t *testing.T) {
 	store := profile.Store{Root: t.TempDir()}
 	p := profile.Default("privacy")
@@ -95,7 +175,11 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnlin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(firstSession)
+	defer func() {
+		if _, err := core.CloseRunSession(firstSession); err != nil {
+			t.Errorf("close first run session: %v", err)
+		}
+	}()
 	resolver := network.EnvSecretResolver{Env: []string{network.SecretEnvName("shared-proxy") + "=socks5://user:one@127.0.0.1:1080"}}
 	first, err := core.PrepareRunNetwork(firstSession, RunNetworkOptions{Resolver: resolver, Verified: true})
 	if err != nil {
@@ -151,7 +235,11 @@ func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnlin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(secondSession)
+	defer func() {
+		if _, err := core.CloseRunSession(secondSession); err != nil {
+			t.Errorf("close second run session: %v", err)
+		}
+	}()
 	second, err := core.PrepareRunNetwork(secondSession, RunNetworkOptions{Resolver: resolver})
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +338,11 @@ func TestEnvironmentNetworkServiceSwitchesDirectProxyAndDNSWithoutRecreate(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(directSession)
+	defer func() {
+		if _, err := core.CloseRunSession(directSession); err != nil {
+			t.Errorf("close direct run session: %v", err)
+		}
+	}()
 	direct := apply(directSession, nil)
 	if direct.EnvironmentServiceAction != networkServiceStart {
 		t.Fatalf("initial direct action=%q", direct.EnvironmentServiceAction)
@@ -270,10 +362,19 @@ func TestEnvironmentNetworkServiceSwitchesDirectProxyAndDNSWithoutRecreate(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(proxySession)
+	defer func() {
+		if _, err := core.CloseRunSession(proxySession); err != nil {
+			t.Errorf("close proxy run session: %v", err)
+		}
+	}()
 	proxy := apply(proxySession, proxyResolver)
 	if proxySession.Environment.Record.ID != environmentID || proxy.EnvironmentServiceAction != networkServiceEnableProxy || controller.starts != 1 {
 		t.Fatalf("direct-to-proxy recreated or missed live enable: env=%q action=%q controller=%+v", proxySession.Environment.Record.ID, proxy.EnvironmentServiceAction, controller)
+	}
+	proxyRoute, ok := core.NetworkGateways.RouteObservation(environmentID)
+	if !ok || !proxyRoute.ActiveAvailable ||
+		proxyRoute.Active.Mode != network.ModeTun2Socks {
+		t.Fatalf("active proxy route=%+v available=%t", proxyRoute, ok)
 	}
 
 	p.Network.MediatedResolver = "9.9.9.9"
@@ -284,10 +385,26 @@ func TestEnvironmentNetworkServiceSwitchesDirectProxyAndDNSWithoutRecreate(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(dnsSession)
+	defer func() {
+		if _, err := core.CloseRunSession(dnsSession); err != nil {
+			t.Errorf("close DNS run session: %v", err)
+		}
+	}()
 	dns := apply(dnsSession, proxyResolver)
 	if dnsSession.Environment.Record.ID != environmentID || dns.EnvironmentServiceAction != networkServiceDNS || len(controller.dnsSwitches) != 1 || controller.dnsSwitches[0] != [2]string{"1.1.1.1", "9.9.9.9"} {
 		t.Fatalf("DNS switch=%+v controller=%+v", dns, controller)
+	}
+	dnsRoute, ok := core.NetworkGateways.RouteObservation(environmentID)
+	if !ok ||
+		dnsRoute.Active != dns.GatewayChange.CandidateRoute() ||
+		dnsRoute.Active.RouteGeneration <=
+			proxyRoute.Active.RouteGeneration {
+		t.Fatalf(
+			"DNS candidate was not activated: before=%+v after=%+v available=%t",
+			proxyRoute,
+			dnsRoute,
+			ok,
+		)
 	}
 
 	p.Network.Mode = network.ModeDirect
@@ -300,7 +417,11 @@ func TestEnvironmentNetworkServiceSwitchesDirectProxyAndDNSWithoutRecreate(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(finalSession)
+	defer func() {
+		if _, err := core.CloseRunSession(finalSession); err != nil {
+			t.Errorf("close final run session: %v", err)
+		}
+	}()
 	final := apply(finalSession, nil)
 	if finalSession.Environment.Record.ID != environmentID || final.EnvironmentServiceAction != networkServiceDisableProxy || controller.stops != 1 || controller.directVerifies < 2 {
 		t.Fatalf("proxy-to-direct recreated or missed live disable: env=%q action=%q controller=%+v", finalSession.Environment.Record.ID, final.EnvironmentServiceAction, controller)
@@ -868,6 +989,30 @@ type recordingNetworkServiceController struct {
 	verifyErr      error
 	dnsErr         error
 	dnsSwitches    [][2]string
+}
+
+type managedNetworkSecretResolverFixture struct {
+	ref        string
+	resolution network.SecretResolution
+}
+
+func (resolver managedNetworkSecretResolverFixture) Resolve(
+	ref string,
+) (string, error) {
+	resolution, err := resolver.ResolveSecret(ref)
+	return resolution.Value, err
+}
+
+func (resolver managedNetworkSecretResolverFixture) ResolveSecret(
+	ref string,
+) (network.SecretResolution, error) {
+	if ref != resolver.ref {
+		return network.SecretResolution{}, fmt.Errorf(
+			"unexpected secret ref %q",
+			ref,
+		)
+	}
+	return resolver.resolution, nil
 }
 
 func (c *recordingNetworkServiceController) ReconfigureEnvironmentNetworkDNS(_ context.Context, _ *backend.Session, _ string, oldResolver, newResolver string, _ []string) error {

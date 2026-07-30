@@ -1,0 +1,39 @@
+{
+  "schema": "hideout.formal.feature-045-constants/v1",
+  "clients": [
+    "client_a",
+    "client_b"
+  ],
+  "profiles": [
+    "profile_a"
+  ],
+  "values": [
+    "value_a",
+    "value_b"
+  ],
+  "operationIds": [
+    "operation_a",
+    "operation_b"
+  ],
+  "secrets": [
+    "secret_a",
+    "secret_b"
+  ],
+  "connections": [
+    "connection_a",
+    "connection_b"
+  ],
+  "owners": [
+    "reusable_environment",
+    "disposable_session"
+  ],
+  "processes": [
+    "parent",
+    "reused_pid"
+  ],
+  "maxRevision": 2,
+  "maxSecretGeneration": 2,
+  "maxSequence": 2,
+  "maxRecords": 1,
+  "maxRetries": 2
+}

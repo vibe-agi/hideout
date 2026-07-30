@@ -18,6 +18,8 @@ type sessionWire struct {
 	sessionID           string
 	terminal            sessionwire.TerminalDescriptor
 	projectionReadiness *projectionReadinessSpec
+	activityExpectation *sessionwire.SupervisorActivityExpectation
+	activityReady       *sessionwire.SupervisorActivityReady
 	sessionRoot         string
 }
 
@@ -34,6 +36,7 @@ func (w *sessionWire) ReadStart() (startSpec, error) {
 	if err != nil {
 		return startSpec{}, err
 	}
+	defer clear(frame.Payload)
 	if frame.Type != sessionwire.TypeSupervisorStart {
 		return startSpec{}, fmt.Errorf("first frame must be supervisor-start, got %s", frame.Type)
 	}
@@ -65,6 +68,14 @@ func (w *sessionWire) ReadStart() (startSpec, error) {
 			TargetProjected:   start.ProjectionReadiness.TargetProjected,
 		}
 	}
+	var runtimeActivity *sessionwire.SupervisorActivityExpectation
+	if start.Activity != nil {
+		runtimeExpectation := *start.Activity
+		readyExpectation := *start.Activity
+		start.Activity.ObserverStreamToken.Destroy()
+		runtimeActivity = &runtimeExpectation
+		w.activityExpectation = &readyExpectation
+	}
 	return startSpec{
 		Protocol:   start.Protocol,
 		SessionID:  start.SessionID,
@@ -81,6 +92,7 @@ func (w *sessionWire) ReadStart() (startSpec, error) {
 		ExpectedBootID:      start.ExpectedBootID,
 		SessionSource:       start.SessionSource,
 		ProjectionReadiness: w.projectionReadiness,
+		Activity:            runtimeActivity,
 	}, nil
 }
 
@@ -139,7 +151,12 @@ func (w *sessionWire) ReadControl() (supervisorControl, error) {
 	}
 }
 
-func (w *sessionWire) WriteReady() error {
+func (w *sessionWire) WriteReady(activity *sessionwire.SupervisorActivityReady) error {
+	if w.activityExpectation != nil {
+		// ReadStart gives the observer runtime a separate value copy. Keep this
+		// copy only until readiness has been bound to the start authority.
+		defer w.activityExpectation.ObserverStreamToken.Destroy()
+	}
 	ready := &sessionwire.SupervisorReady{
 		Protocol:  sessionwire.SupervisorProtocol,
 		SessionID: w.sessionID,
@@ -165,6 +182,20 @@ func (w *sessionWire) WriteReady() error {
 			DurationMillis:    observation.DurationMillis,
 			TargetProjected:   observation.TargetProjected,
 		}
+	}
+	switch {
+	case w.activityExpectation == nil && activity != nil:
+		return errors.New("supervisor activity readiness was not requested")
+	case w.activityExpectation != nil && activity == nil:
+		return errors.New("supervisor activity readiness is required")
+	case activity != nil:
+		if err := activity.ValidateExpectation(w.sessionID, w.activityExpectation); err != nil {
+			return err
+		}
+		ready.Activity = activity
+		activityCopy := *activity
+		activityCopy.Coverage = append([]sessionwire.SupervisorCoverageSummary(nil), activity.Coverage...)
+		w.activityReady = &activityCopy
 	}
 	return w.writer.WriteControl(sessionwire.TypeSupervisorReady, ready)
 }
@@ -195,13 +226,24 @@ func (w *sessionWire) WriteError(code, summary string) error {
 }
 
 func (w *sessionWire) WriteCompletion(completion targetCompletion) error {
+	if w.activityReady != nil {
+		if completion.Activity == nil {
+			return errors.New("supervisor activity completion is required")
+		}
+		if err := completion.Activity.ValidateReady(w.sessionID, w.activityReady); err != nil {
+			return err
+		}
+	} else if completion.Activity != nil {
+		return errors.New("supervisor activity completion was not registered")
+	}
 	return w.writer.WriteControl(sessionwire.TypeCompletion, &sessionwire.Completion{
 		Kind:             sessionwire.CompletionKind(completion.Kind),
 		ExitCode:         completion.ExitCode,
 		Signal:           completion.Signal,
 		TargetCompleted:  completion.Completed,
-		CleanupCompleted: false,
+		CleanupCompleted: completion.CleanupCompleted,
 		SessionID:        w.sessionID,
 		Summary:          "",
+		Activity:         completion.Activity,
 	})
 }

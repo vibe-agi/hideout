@@ -44,6 +44,7 @@ func TestCanonicalPackageManifestRejectsAbbreviatedOrDirtyPublicSource(t *testin
 		Target:         Target{HostOS: runtime.GOOS, HostArch: runtime.GOARCH, LinuxGuestArch: runtime.GOARCH},
 		Runtime:        RuntimeInfo{Family: "developer-standard", Revision: "2026.07.0", CatalogFileSHA256: testSHA('a'), ArtifactSHA256: testSHA('b')},
 		SigningSummary: SigningSummary{Mode: "developer-id-observed"},
+		EmbeddedAssets: testEmbeddedAssetBindings(),
 		Files:          []File{{Path: "x", Kind: "doc", SHA256: testSHA('c')}},
 		Migration:      Migration{InstallStateSchema: InstallStateSchema, FromInstalledSchemas: []string{InstallStateSchema}, MinimumPackageSchema: ArtifactSchema, MaximumPackageSchema: ArtifactSchema},
 	}
@@ -68,6 +69,7 @@ func TestDistributionManifestValidationDoesNotPretendTargetIsRunnable(t *testing
 		Target:         Target{HostOS: "different-os", HostArch: "different-arch", LinuxGuestArch: "aarch64"},
 		Runtime:        RuntimeInfo{Family: "developer-standard", Revision: "2026.07.0", CatalogFileSHA256: testSHA('a'), ArtifactSHA256: testSHA('b')},
 		SigningSummary: SigningSummary{Mode: "developer-id-observed"},
+		EmbeddedAssets: testEmbeddedAssetBindings(),
 		Files:          []File{{Path: "x", Kind: "doc", SHA256: testSHA('c')}},
 		Migration:      Migration{InstallStateSchema: InstallStateSchema, FromInstalledSchemas: []string{InstallStateSchema}, MinimumPackageSchema: ArtifactSchema, MaximumPackageSchema: ArtifactSchema},
 	}
@@ -77,6 +79,16 @@ func TestDistributionManifestValidationDoesNotPretendTargetIsRunnable(t *testing
 	if err := validateManifest(manifest, false); err != nil {
 		t.Fatalf("distribution validation should inspect another target: %v", err)
 	}
+}
+
+func testEmbeddedAssetBindings() []EmbeddedAssetBinding {
+	return []EmbeddedAssetBinding{{
+		ID:             BrowserConsoleAssetID,
+		Container:      BrowserConsoleContainerPath,
+		Manifest:       BrowserConsoleManifestPath,
+		ManifestSHA256: testSHA('d'),
+		License:        BrowserConsoleAssetLicense,
+	}}
 }
 
 func testSHA(ch byte) string {

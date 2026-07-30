@@ -87,6 +87,7 @@ func (w *Writer) WriteControl(frameType Type, control Control) error {
 	if err != nil {
 		return err
 	}
+	defer clear(payload)
 	return w.Write(frameType, payload)
 }
 

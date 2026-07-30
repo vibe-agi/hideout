@@ -1,0 +1,23 @@
+Hideout — run unfamiliar developer tools inside an inspectable local VM.
+
+Start here:
+  1. hideout setup
+  2. hideout doctor
+  3. cd /path/to/project
+     hideout run -- git status --short
+
+While it runs:
+  hideout tui
+  hideout activity summary
+
+Common tasks:
+  Proxy or DNS:      hideout help connect
+  Stop or delete VM: hideout help stop
+  Browser console:   hideout ui
+
+Find a command:
+  hideout help <command>
+  hideout help search <word>
+  hideout help all  (compatibility alias: hideout help --all)
+
+Boundary: macOS arm64 prerelease; the selected project is writable; direct networking does not hide your network origin.

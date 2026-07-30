@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +74,21 @@ func TestSetupSSHConnectRetriesOnlyHandshakeEOF(t *testing.T) {
 	})
 	if !errors.Is(err, want) || attempts != 1 {
 		t.Fatalf("non-transient result attempts=%d err=%v", attempts, err)
+	}
+}
+
+func TestRootControlShellCommandRestoresCapabilitiesWithoutPreservingEnvironment(t *testing.T) {
+	workdir := "/work dir"
+	env := []string{"PATH=/usr/bin", "VALUE=can't-leak"}
+	command := []string{"/bin/echo", "$(id)"}
+	inner := setupShellCommand(workdir, env, command)
+	got := rootControlShellCommand(workdir, env, command)
+	want := "exec /usr/bin/sudo -n -- /bin/sh -c " + shellQuote(inner)
+	if got != want {
+		t.Fatalf("root control command=%q want %q", got, want)
+	}
+	if strings.Contains(got, "sudo -E") || !strings.Contains(inner, "exec env -i") {
+		t.Fatalf("root control command preserved the SSH environment: %q", got)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/environment"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/secrets"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
 
 const (
@@ -48,6 +49,7 @@ type Profile struct {
 	HostFS           hostfs.Config     `json:"hostfs,omitempty"`
 	CommandProxy     CommandProxy      `json:"commandProxy"`
 	CommandAdapters  CommandAdapters   `json:"commandAdapters,omitempty"`
+	Activity         *ActivityConfig   `json:"activity,omitempty"`
 	Policy           Policy            `json:"policy"`
 	Audit            Audit             `json:"audit"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
@@ -162,6 +164,17 @@ type CommandAdapter struct {
 	PackAdapterID               string   `json:"packAdapterId,omitempty"`
 	PackLockDigest              string   `json:"packLockDigest,omitempty"`
 }
+
+// ActivityConfig is an optional per-profile observation-retention override.
+// A nil value selects the measured product defaults: 256 MiB and exact-owner
+// lifecycle retention. Retention remains bound to exact environment/session
+// owners; this profile setting only selects bounds for future observation
+// owners. An explicit MaxAgeSeconds of zero also means owner lifecycle.
+type ActivityConfig struct {
+	Retention ActivityRetention `json:"retention"`
+}
+
+type ActivityRetention = workloadtypes.ActivityRetentionPolicy
 
 type Policy struct {
 	Engine          string      `json:"engine"`
@@ -905,6 +918,11 @@ func (p Profile) Validate() error {
 	}
 	if err := p.validateCommandAdapters(); err != nil {
 		return err
+	}
+	if p.Activity != nil {
+		if p.Activity.Retention.Validate() != nil {
+			return errors.New("activity retention bounds are invalid")
+		}
 	}
 	if err := validateMetadata(p.Metadata); err != nil {
 		return err
@@ -1720,6 +1738,10 @@ func cloneProfile(p Profile) Profile {
 	if p.Environment.Runtime != nil {
 		runtime := *p.Environment.Runtime
 		p.Environment.Runtime = &runtime
+	}
+	if p.Activity != nil {
+		activity := *p.Activity
+		p.Activity = &activity
 	}
 	p.Env.Public = copyStringMap(p.Env.Public)
 	p.Env.Deny = copyStringSlice(p.Env.Deny)

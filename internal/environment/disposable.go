@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const DisposableIdentitySchema = "hideout.disposable-identity/v1"
+const (
+	DisposableIdentitySchema = "hideout.disposable-identity/v1"
+	RemovalIdentitySchema    = "hideout.environment-removal-identity/v1"
+)
 
 // DisposableIdentity is the immutable, versioned projection persisted by the
 // lifecycle disposal protocol. Mutable run state is deliberately excluded so
@@ -89,5 +92,94 @@ func NewDisposableIdentity(record Record) (DisposableIdentity, error) {
 // projection, not only its digest.
 func (identity DisposableIdentity) MatchesRecord(record Record) bool {
 	current, err := NewDisposableIdentity(record)
+	return err == nil && current == identity
+}
+
+// RemovalIdentity binds an explicitly confirmed environment removal to the
+// complete immutable machine identity. Mutable run status is deliberately not
+// included so the same authorization remains usable across crash recovery.
+type RemovalIdentity struct {
+	Schema        string `json:"schema"`
+	EnvironmentID string `json:"environmentId"`
+	Backend       string `json:"backend"`
+	InstanceName  string `json:"instanceName"`
+	Digest        string `json:"digest"`
+}
+
+type removalIdentityProjection struct {
+	Schema              string             `json:"schema"`
+	RecordVersion       string             `json:"recordVersion"`
+	EnvironmentID       string             `json:"environmentId"`
+	Name                string             `json:"name"`
+	AutoNamed           bool               `json:"autoNamed"`
+	ImageRef            string             `json:"imageRef"`
+	Runtime             *RuntimeProvenance `json:"runtime,omitempty"`
+	Profile             string             `json:"profile"`
+	Backend             string             `json:"backend"`
+	Mode                Mode               `json:"mode"`
+	SharedSlot          string             `json:"sharedSlot,omitempty"`
+	MachineIdentityID   string             `json:"machineIdentityId"`
+	BootConfigurationID string             `json:"bootConfigurationId"`
+	DedicatedWorkspace  string             `json:"dedicatedWorkspace,omitempty"`
+	DedicatedGuestRoot  string             `json:"dedicatedGuestRoot,omitempty"`
+	BoundWorkspace      string             `json:"boundWorkspace,omitempty"`
+	BoundGuestRoot      string             `json:"boundGuestRoot,omitempty"`
+	User                string             `json:"user,omitempty"`
+	Hostname            string             `json:"hostname,omitempty"`
+	InstanceName        string             `json:"instanceName"`
+	Disposable          bool               `json:"disposable"`
+	CreatedAt           time.Time          `json:"createdAt"`
+}
+
+// NewRemovalIdentity computes the canonical identity for an explicit clean or
+// delete. Unlike NewDisposableIdentity, authority comes from the confirmed
+// operator plan rather than the record's Disposable marker.
+func NewRemovalIdentity(record Record) (RemovalIdentity, error) {
+	if err := record.Validate(); err != nil {
+		return RemovalIdentity{}, err
+	}
+	if record.InstanceName == "" {
+		return RemovalIdentity{}, errors.New("environment removal instance identity is required")
+	}
+	projection := removalIdentityProjection{
+		Schema:              RemovalIdentitySchema,
+		RecordVersion:       record.Version,
+		EnvironmentID:       record.ID,
+		Name:                record.Name,
+		AutoNamed:           record.AutoNamed,
+		ImageRef:            record.ImageRef,
+		Runtime:             record.Runtime,
+		Profile:             record.Profile,
+		Backend:             record.Backend,
+		Mode:                record.Mode,
+		SharedSlot:          record.SharedSlot,
+		MachineIdentityID:   record.MachineIdentityID,
+		BootConfigurationID: record.BootConfigurationID,
+		DedicatedWorkspace:  record.DedicatedWorkspace,
+		DedicatedGuestRoot:  record.DedicatedGuestRoot,
+		BoundWorkspace:      record.BoundWorkspace,
+		BoundGuestRoot:      record.BoundGuestRoot,
+		User:                record.User,
+		Hostname:            record.Hostname,
+		InstanceName:        record.InstanceName,
+		Disposable:          record.Disposable,
+		CreatedAt:           record.CreatedAt.UTC(),
+	}
+	data, err := json.Marshal(projection)
+	if err != nil {
+		return RemovalIdentity{}, err
+	}
+	sum := sha256.Sum256(data)
+	return RemovalIdentity{
+		Schema:        RemovalIdentitySchema,
+		EnvironmentID: record.ID,
+		Backend:       record.Backend,
+		InstanceName:  record.InstanceName,
+		Digest:        hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+func (identity RemovalIdentity) MatchesRecord(record Record) bool {
+	current, err := NewRemovalIdentity(record)
 	return err == nil && current == identity
 }

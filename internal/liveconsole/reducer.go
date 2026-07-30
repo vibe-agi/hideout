@@ -15,6 +15,18 @@ func Apply(state *State, ev Event) ApplyResult {
 	if state == nil {
 		return ApplyResult{Status: ResultError, Reason: "nil state"}
 	}
+	if ev.Version == EventVersionV2 {
+		return applyV2(state, ev)
+	}
+	return applyV1(state, ev)
+}
+
+func applyV1(state *State, ev Event) ApplyResult {
+	if state.Version == SeedVersionV2 {
+		reason := "v1 event cannot update a v2 snapshot"
+		markNeedsReseed(state, HealthSchemaMismatch, reason)
+		return ApplyResult{Status: ResultStale, Reason: reason}
+	}
 	if err := ValidateEvent(ev); err != nil {
 		markHealth(state, HealthSchemaMismatch, err.Error())
 		return ApplyResult{Status: ResultStale, Reason: err.Error()}
@@ -101,7 +113,9 @@ func stateContainsEnvironment(state *State, environmentID string) bool {
 
 func markHealth(state *State, health, reason string) {
 	state.StreamHealth = StreamHealth{State: health, Reason: reason}
-	state.Diagnostics = append(state.Diagnostics, reason)
+	if reason != "" {
+		state.Diagnostics = appendCappedDiagnostic(state.Diagnostics, reason)
+	}
 }
 
 func eventMatchesProfile(profileName string, ev Event) bool {
@@ -109,6 +123,15 @@ func eventMatchesProfile(profileName string, ev Event) bool {
 		return true
 	}
 	profile := ev.Payload.Profile
+	if profile == "" && ev.Payload.ProfileProjection != nil {
+		profile = ev.Payload.ProfileProjection.Profile
+	}
+	if profile == "" && ev.Payload.TransitionProjection != nil {
+		profile = ev.Payload.TransitionProjection.Profile
+	}
+	if profile == "" && ev.Payload.ActivityProjection != nil {
+		profile = ev.Payload.ActivityProjection.Profile
+	}
 	if profile == "" {
 		profile = ev.Entity.Profile
 	}
@@ -443,6 +466,11 @@ func upsertDecision(state *State, p EventPayload) {
 		Session:        redactText(p.Session),
 		Backend:        redactText(p.Backend),
 		Reason:         redactText(p.Reason),
+		ClaimSurface:   redactText(p.ClaimSurface),
+		ClaimOperator:  redactText(p.ClaimOperator),
+		ClaimedAt:      p.ClaimedAt,
+		ClaimExpiresAt: p.ClaimExpiresAt,
+		Revision:       p.Revision,
 	}
 	for i := range state.Decisions {
 		if state.Decisions[i].ID == row.ID {

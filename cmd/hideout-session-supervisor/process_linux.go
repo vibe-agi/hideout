@@ -140,11 +140,14 @@ func (w queueWriter) Write(data []byte) (int, error) {
 type waitResult struct {
 	completion targetCompletion
 	err        error
+	cleanupErr error
 }
 
 type targetProcess struct {
 	cmd       *exec.Cmd
 	pid       int
+	cgroup    *sessionCgroup
+	activity  *observerSession
 	pty       *os.File
 	stdin     io.WriteCloser
 	wait      chan waitResult
@@ -154,6 +157,16 @@ type targetProcess struct {
 }
 
 func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
+	return startTargetWithSessionCgroup(spec, wire, sessionCgroupOptions{
+		Root: defaultSessionCgroupRoot, SessionID: spec.SessionID,
+	})
+}
+
+func startTargetWithSessionCgroup(
+	spec startSpec,
+	wire supervisorWire,
+	cgroupOptions sessionCgroupOptions,
+) (*targetProcess, error) {
 	credential, err := credentialForUser(spec.TargetUser)
 	if err != nil {
 		return nil, err
@@ -161,6 +174,42 @@ func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
 	commandPath, err := resolveTargetCommand(spec.Argv[0], spec.GuestWork, spec.Env)
 	if err != nil {
 		return nil, err
+	}
+	if cgroupOptions.Root == "" {
+		cgroupOptions.Root = defaultSessionCgroupRoot
+	}
+	if cgroupOptions.SkipAtomicPlacementForTest &&
+		cgroupOptions.Backend == nil {
+		return nil, errors.New("atomic cgroup placement cannot be disabled for the OS backend")
+	}
+	activity, _ := spec.activityRuntime.(*observerSession)
+	if spec.Activity != nil && activity == nil {
+		return nil, errors.New("observed target is missing its pre-commit activity boundary")
+	}
+	if spec.Activity == nil && activity != nil {
+		return nil, errors.New("target carries an activity boundary without start authority")
+	}
+	var group *sessionCgroup
+	if activity != nil {
+		group = activity.group
+		if group == nil || activity.binding.SessionID != spec.SessionID ||
+			group.ID() != activity.binding.CgroupID {
+			return nil, errors.New("prepared target activity boundary identity changed")
+		}
+	} else {
+		cgroupOptions.SessionID = spec.SessionID
+		group, err = newSessionCgroup(cgroupOptions)
+		if err != nil {
+			return nil, fmt.Errorf("create target session cgroup: %w", err)
+		}
+	}
+	cleanupUnstarted := func() {
+		if activity != nil {
+			_ = activity.Abort(observerShutdownWait)
+			return
+		}
+		_ = group.ProveEmptyAndRemove()
+		_ = group.Close()
 	}
 	cmd := &exec.Cmd{
 		Path: commandPath,
@@ -170,7 +219,10 @@ func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
 	}
 	cmd.WaitDelay = processStopGrace
 	queue := newOutputQueue(wire)
-	process := &targetProcess{cmd: cmd, queue: queue, wait: make(chan waitResult, 1)}
+	process := &targetProcess{
+		cmd: cmd, cgroup: group, activity: activity,
+		queue: queue, wait: make(chan waitResult, 1),
+	}
 
 	if spec.Terminal.Mode == "pty" {
 		cmd.Env = replaceEnv(cmd.Env, "TERM", spec.Terminal.Term)
@@ -179,9 +231,19 @@ func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
 			Setsid:     true,
 			Setctty:    true,
 		}
+		if err := bindTargetSessionCgroup(
+			group,
+			attrs,
+			cgroupOptions.SkipAtomicPlacementForTest,
+		); err != nil {
+			_ = queue.closeAndWait()
+			cleanupUnstarted()
+			return nil, fmt.Errorf("bind PTY target cgroup: %w", err)
+		}
 		master, err := pty.StartWithAttrs(cmd, &pty.Winsize{Rows: spec.Terminal.Rows, Cols: spec.Terminal.Columns}, attrs)
 		if err != nil {
 			_ = queue.closeAndWait()
+			cleanupUnstarted()
 			return nil, fmt.Errorf("start PTY target: %w", err)
 		}
 		process.pty = master
@@ -194,9 +256,19 @@ func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
 			Credential: credential,
 			Setpgid:    true,
 		}
+		if err := bindTargetSessionCgroup(
+			group,
+			cmd.SysProcAttr,
+			cgroupOptions.SkipAtomicPlacementForTest,
+		); err != nil {
+			_ = queue.closeAndWait()
+			cleanupUnstarted()
+			return nil, fmt.Errorf("bind pipe target cgroup: %w", err)
+		}
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			_ = queue.closeAndWait()
+			cleanupUnstarted()
 			return nil, fmt.Errorf("open target stdin: %w", err)
 		}
 		cmd.Stdout = queueWriter{queue: queue, kind: outputStdout}
@@ -204,6 +276,7 @@ func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
 		if err := cmd.Start(); err != nil {
 			_ = stdin.Close()
 			_ = queue.closeAndWait()
+			cleanupUnstarted()
 			return nil, fmt.Errorf("start pipe target: %w", err)
 		}
 		process.stdin = stdin
@@ -216,9 +289,66 @@ func startTarget(spec startSpec, wire supervisorWire) (*targetProcess, error) {
 			_ = process.pty.Close()
 		}
 		process.outputWG.Wait()
-		process.wait <- waitResult{completion: completionFromWait(err), err: err}
+		var observerErr error
+		if activity != nil {
+			observerErr = activity.Stop(observerShutdownWait)
+		}
+		cleanupErr := errors.Join(
+			observerErr,
+			waitForSessionCgroupCleanup(process.cgroup, processStopGrace),
+		)
+		if closeErr := process.cgroup.Close(); closeErr != nil {
+			cleanupErr = errors.Join(cleanupErr, closeErr)
+		}
+		completion := completionFromWait(err)
+		completion.CleanupCompleted = cleanupErr == nil
+		if activity != nil {
+			completion.Activity = activity.Completion(cleanupErr)
+		}
+		process.wait <- waitResult{
+			completion: completion, err: err,
+			cleanupErr: cleanupErr,
+		}
 	}()
 	return process, nil
+}
+
+func bindTargetSessionCgroup(
+	group *sessionCgroup,
+	attributes *syscall.SysProcAttr,
+	skipForTest bool,
+) error {
+	if skipForTest {
+		if group == nil || attributes == nil {
+			return errSessionCgroupIdentity
+		}
+		return nil
+	}
+	return group.BindTarget(attributes)
+}
+
+func waitForSessionCgroupCleanup(
+	group *sessionCgroup,
+	timeout time.Duration,
+) error {
+	if group == nil {
+		return errSessionCgroupIdentity
+	}
+	if timeout <= 0 {
+		timeout = processStopGrace
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		err := group.ProveEmptyAndRemove()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errSessionCgroupNotEmpty) ||
+			!time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (p *targetProcess) copyPTYOutput() {
@@ -295,14 +425,27 @@ func (p *targetProcess) terminateAndWait() waitResult {
 	case result := <-p.wait:
 		return result
 	case <-time.After(processStopGrace):
+		if p.cgroup != nil {
+			_ = p.cgroup.Kill()
+		}
 		_ = p.signal(syscall.SIGKILL)
 		select {
 		case result := <-p.wait:
 			return result
 		case <-time.After(processStopGrace):
+			cleanupErr := errors.New("target process group was not reaped within the bound")
+			completion := targetCompletion{
+				Kind: "protocol-error", ExitCode: 125, Completed: false,
+				CleanupCompleted: false,
+			}
+			if p.activity != nil {
+				_ = p.activity.Stop(observerShutdownWait)
+				completion.Activity = p.activity.Completion(cleanupErr)
+			}
 			return waitResult{
-				completion: targetCompletion{Kind: "protocol-error", ExitCode: 125, Completed: false},
-				err:        errors.New("target process group was not reaped within the bound"),
+				completion: completion,
+				err:        cleanupErr,
+				cleanupErr: cleanupErr,
 			}
 		}
 	}

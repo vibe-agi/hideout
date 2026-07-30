@@ -19,10 +19,18 @@ import (
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/recovery"
 	runsession "github.com/vibe-agi/hideout/internal/session"
 )
 
 const daemonTestBootConfigurationID = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+func stopDaemonForTest(t *testing.T, daemon *Daemon) {
+	t.Helper()
+	if err := daemon.Stop(context.Background()); err != nil {
+		t.Errorf("stop daemon: %v", err)
+	}
+}
 
 type daemonLifecycleBackend struct {
 	mu           sync.Mutex
@@ -108,8 +116,17 @@ func (b *daemonLifecycleBackend) StopInstance(context.Context, string) error {
 	return nil
 }
 
-func (b *daemonLifecycleBackend) Cleanup(context.Context, *backend.Session) error {
+func (b *daemonLifecycleBackend) Cleanup(_ context.Context, session *backend.Session) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.cleanupCalls.Add(1)
+	instanceName := b.observation.InstanceName
+	if session != nil && session.InstanceName != "" {
+		instanceName = session.InstanceName
+	}
+	b.observation = backend.LifecycleObservation{
+		State: backend.LifecycleAbsent, InstanceName: instanceName,
+	}
 	return nil
 }
 
@@ -137,7 +154,7 @@ func TestDaemonServesStatusWhileLifecycleReconciliationIsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
 		t.Fatalf("daemon start waited for backend reconciliation: %s", elapsed)
 	}
@@ -157,8 +174,23 @@ func TestDaemonServesStatusWhileLifecycleReconciliationIsPending(t *testing.T) {
 	if len(status.Lifecycle) != 1 || status.Lifecycle[0].Reconciliation != "pending" || status.Lifecycle[0].ReasonCode != "reconciliation-pending" {
 		t.Fatalf("pending reconciliation is not operator-visible: %+v", status.Lifecycle)
 	}
-	if code, body := daemonPost(t, d, lifecycleStopPath, `{"environmentId":"`+record.ID+`"}`, d.Token()); code != http.StatusConflict || !strings.Contains(string(body), lifecycle.ErrReconciliationInFlight.Error()) {
+	code, body = daemonPost(t, d, lifecycleStopPath, `{"environmentId":"`+record.ID+`"}`, d.Token())
+	if code != http.StatusConflict || !strings.Contains(string(body), lifecycle.ErrReconciliationInFlight.Error()) {
 		t.Fatalf("stop crossed reconciliation fence: code=%d body=%s", code, body)
+	}
+	var conflictResponse struct {
+		Error   string                          `json:"error"`
+		Blocker lifecycle.MutationConflictError `json:"blocker"`
+	}
+	if err := json.Unmarshal(body, &conflictResponse); err != nil {
+		t.Fatal(err)
+	}
+	if conflictResponse.Blocker.Key != lifecycle.EnvironmentMutationKey(record.ID) ||
+		conflictResponse.Blocker.Owner.Kind != lifecycle.MutationOwnerReconcile ||
+		conflictResponse.Blocker.Owner.Phase != lifecycle.MutationPhaseReconciling ||
+		conflictResponse.Blocker.Owner.ID == "" ||
+		conflictResponse.Blocker.Owner.Recovery == "" {
+		t.Fatalf("reconciliation blocker is not operator-visible: %+v", conflictResponse)
 	}
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -195,7 +227,7 @@ func TestDaemonRetriesBlockedLifecycleReconciliationInSameEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleReason(t, d, record.ID, "backend-provider-unavailable")
 	code, body := daemonPost(t, d, lifecycleReconcilePath, `{"environmentId":"`+record.ID+`"}`, d.Token())
 	if code != http.StatusOK {
@@ -232,7 +264,7 @@ func TestDaemonBoundsParallelLifecycleReconciliation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	deadline := time.After(2 * time.Second)
 	for provider.maximum.Load() < 4 {
 		select {
@@ -284,7 +316,7 @@ func TestDaemonClassifiesLifecycleJournalWithoutEnvironmentRecord(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	status := waitForLifecycleReason(t, d, record.ID, "environment-record-unavailable")
 	if status.Reconciliation != "blocked" || status.Activity != lifecycle.ActivityBlocked {
 		t.Fatalf("missing environment journal was not failed closed: %+v", status)
@@ -370,7 +402,7 @@ func TestDaemonBlocksRunningEnvironmentWithoutLifecycleJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	status := waitForLifecycleReason(t, d, record.ID, "backend-incarnation-changed")
 	if status.Reconciliation != "blocked" || status.Activity != lifecycle.ActivityBlocked || status.IdleDeadline != nil {
 		t.Fatalf("running environment without lifecycle proof was not blocked: %+v", status)
@@ -459,7 +491,7 @@ func TestDaemonRestartRetainsStaleRunningOwnerForExplicitRecovery(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	status := waitForLifecycleReason(t, d, record.ID, "owner-requires-explicit-recovery")
 	if status.Reconciliation != "blocked" || status.Activity != lifecycle.ActivityBlocked || status.IdleDeadline != nil {
 		t.Fatalf("stale running owner did not keep restart fail closed: %+v", status)
@@ -503,10 +535,63 @@ func TestDaemonRestartLeavesStaleOwnerOrphaned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	status := waitForLifecycleOrphans(t, d, record.ID)
 	if len(status.Orphans) == 0 {
 		t.Fatalf("stale owner was re-adopted or hidden: %+v", status)
+	}
+}
+
+func TestEnvironmentStopErrorMapsLiveOwnerToStableRecoveryCode(
+	t *testing.T,
+) {
+	store, record := daemonLifecycleEnvironment(t)
+	environmentStore := environment.Store{Root: store.Root}
+	const sessionID = "ses_20260730T150000Z_0123456789abcdef"
+	now := time.Now().UTC()
+	owner, err := runsession.AcquireOwner(
+		environmentStore.OwnerRoot(record.ID),
+		runsession.OwnerRecord{
+			Schema:            runsession.ActiveSessionSchema,
+			SessionID:         sessionID,
+			EnvironmentID:     record.ID,
+			Profile:           "default",
+			Backend:           "lima",
+			WorkspaceID:       "wrk_" + strings.Repeat("a", 64),
+			SessionSnapshotID: "sha256:" + strings.Repeat("b", 64),
+			State:             runsession.OwnerStateRunning,
+			TerminalMode:      runsession.TerminalNone,
+			StartedAt:         now,
+			UpdatedAt:         now,
+			CommandClass:      "bash",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	d := &Daemon{store: store}
+	mapped := d.environmentStopError(
+		record.ID,
+		lifecycle.Status{EstablishingSessions: 2},
+		lifecycle.ErrMutationBlockedByActivity,
+	)
+	var ownerErr *manager.EnvironmentOwnerError
+	if !errors.As(mapped, &ownerErr) ||
+		ownerErr.Code != recovery.CodeEnvironmentActiveSessions ||
+		ownerErr.ActiveOwners != 2 ||
+		manager.EnvironmentRecoveryCode(mapped) !=
+			recovery.CodeEnvironmentActiveSessions ||
+		strings.Contains(mapped.Error(), sessionID) {
+		t.Fatalf("mapped=%T %v owner=%+v", mapped, mapped, ownerErr)
+	}
+	sentinel := errors.New("provider failed")
+	if observed := d.environmentStopError(
+		record.ID,
+		lifecycle.Status{},
+		sentinel,
+	); !errors.Is(observed, sentinel) {
+		t.Fatalf("unrelated error changed: %v", observed)
 	}
 }
 
@@ -555,7 +640,7 @@ func TestLifecycleBackendFactoryAloneDoesNotEnableAutomaticStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleEligible)
 	time.Sleep(80 * time.Millisecond)
 	if calls := provider.stopCalls.Load(); calls != 0 {
@@ -576,7 +661,7 @@ func TestLifecycleAutomaticStopRequiresExplicitReadinessEnable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityStopped)
 	if calls := provider.stopCalls.Load(); calls != 1 {
 		t.Fatalf("explicit readiness enable stop calls=%d want 1", calls)
@@ -630,7 +715,7 @@ func TestDaemonLifecycleStopEndpointUsesCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleGrace)
 	code, body := daemonPost(t, d, lifecycleStopPath, `{"environmentId":"`+record.ID+`"}`, d.Token())
 	if code != http.StatusOK {
@@ -667,7 +752,7 @@ func TestDaemonManagerStopRouteUsesLifecycleCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleGrace)
 	code, body := daemonPost(t, d, "/api/v1/environment/stop/apply", `{"ids":["`+record.ID+`"]}`, d.Token())
 	if code != http.StatusOK || !strings.Contains(string(body), `"errors":[]`) {
@@ -691,7 +776,7 @@ func TestDaemonBackgroundStopUsesLifecycleCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleActivity(t, d, record.ID, lifecycle.ActivityIdleGrace)
 	run, err := d.backgroundRun("environment-stop", []string{record.ID})
 	if err != nil {
@@ -718,7 +803,7 @@ func TestDaemonManagerCleanRouteRemovesLifecycleMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleReconciliation(t, d, record.ID)
 	code, body := daemonPost(t, d, "/api/v1/environment/clean/apply", `{"ids":["`+record.ID+`"]}`, d.Token())
 	if code != http.StatusOK || !strings.Contains(string(body), `"errors":[]`) {
@@ -750,7 +835,7 @@ func TestDaemonBackgroundCleanRemovesLifecycleMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleReconciliation(t, d, record.ID)
 	run, err := d.backgroundRun("environment-clean", []string{record.ID})
 	if err != nil {
@@ -784,7 +869,7 @@ func TestDaemonLifecycleMutationSerializesForceRemoveAndRecreate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer d.Stop(context.Background())
+			defer stopDaemonForTest(t, d)
 			waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancelWait()
 			if err := d.lifecycle.WaitReconciliation(waitCtx, record.ID); err != nil {
@@ -839,7 +924,7 @@ func TestDaemonLifecycleForceMutationWaitsOutLiveSessionActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelWait()
 	if err := d.lifecycle.WaitReconciliation(waitCtx, record.ID); err != nil {
@@ -890,7 +975,7 @@ func TestDaemonLifecycleMutationWithoutForceDoesNotPoisonRunningState(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer stopDaemonForTest(t, d)
 	waitForLifecycleReconciliation(t, d, record.ID)
 	code, _ := daemonPost(t, d, lifecycleMutatePath, `{"environmentId":"`+record.ID+`","operation":"remove"}`, d.Token())
 	if code != http.StatusConflict {

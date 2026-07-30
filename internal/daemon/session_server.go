@@ -25,6 +25,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/broker"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
+	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
@@ -50,6 +51,7 @@ type sessionServer struct {
 	writeTimeout       time.Duration
 	lifecycle          lifecycle.Registrar
 	workspaceProviders workspaceattach.ProviderFactory
+	networkResolver    netpolicy.SecretResolver
 }
 
 func (s *sessionServer) serve(listener net.Listener) error {
@@ -200,6 +202,9 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 			return nil
 		},
 	}
+	if prepared.Plan.Backend == "lima" {
+		streams.Activity = worker.activityStreams()
+	}
 	opener := func(runSession manager.RunSession) broker.Opener {
 		if s.openerFactory == nil {
 			return nil
@@ -224,7 +229,10 @@ func (s *sessionServer) serveConn(conn net.Conn) {
 			return worker.activateWorkspaceAttachment(runCtx, runSession)
 		},
 		ReleaseWorkspaceAttachment: worker.releaseWorkspaceAttachment,
-		Streams:                    streams, Lifecycle: s.lifecycle,
+		NetworkRuntimes:            worker,
+		Streams:                    streams,
+		Lifecycle:                  s.lifecycle,
+		NetworkResolver:            s.networkResolver,
 	})
 	_ = stdinReader.Close()
 	select {

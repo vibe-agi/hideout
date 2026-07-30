@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/operatorhelp"
 )
 
 const DefaultUIListenAddr = "127.0.0.1:0"
@@ -24,6 +27,7 @@ type LocalServerOptions struct {
 	RunBackend  RunBackendFactory
 	RunOpener   RunOpenerFactory
 	EnvOperator EnvironmentOperator
+	HelpCatalog operatorhelp.Catalog
 }
 
 type LocalServer struct {
@@ -84,7 +88,7 @@ func StartLocalServer(ctx context.Context, opts LocalServerOptions) (*LocalServe
 	mux.Handle("/", originGuard{
 		AllowedOrigins: []string{baseURL},
 		Next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			serveUIRoot(w, r, expiresAt)
+			serveUIRootWithCatalog(w, r, expiresAt, opts.HelpCatalog)
 		}),
 	})
 	server := &http.Server{Handler: hostGuard{
@@ -174,10 +178,29 @@ func validateLocalListenAddr(addr string) error {
 // to serve the same WebUI over its loopback UI transport so the existing panels
 // can consume the daemon event stream.
 func ServeUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
-	serveUIRoot(w, r, expiresAt)
+	serveUIRootWithCatalog(
+		w,
+		r,
+		expiresAt,
+		emptyOperatorHelpCatalog(),
+	)
 }
 
-func serveUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
+func ServeUIRootWithCatalog(
+	w http.ResponseWriter,
+	r *http.Request,
+	expiresAt time.Time,
+	catalog operatorhelp.Catalog,
+) {
+	serveUIRootWithCatalog(w, r, expiresAt, catalog)
+}
+
+func serveUIRootWithCatalog(
+	w http.ResponseWriter,
+	r *http.Request,
+	expiresAt time.Time,
+	catalog operatorhelp.Catalog,
+) {
 	setUIRootSecurityHeaders(w.Header())
 	if r.Method != http.MethodGet {
 		writeAPIMethodNotAllowed(w)
@@ -188,7 +211,7 @@ func serveUIRoot(w http.ResponseWriter, r *http.Request, expiresAt time.Time) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(renderUIHTML(expiresAt)))
+	_, _ = w.Write([]byte(renderUIHTMLWithCatalog(expiresAt, catalog)))
 }
 
 func setUIRootSecurityHeaders(header http.Header) {
@@ -200,7 +223,42 @@ func setUIRootSecurityHeaders(header http.Header) {
 }
 
 func renderUIHTML(expiresAt time.Time) string {
-	return strings.ReplaceAll(uiHTML, uiExpiresAtPlaceholder, expiresAt.UTC().Format(time.RFC3339))
+	return renderUIHTMLWithCatalog(
+		expiresAt,
+		emptyOperatorHelpCatalog(),
+	)
+}
+
+func renderUIHTMLWithCatalog(
+	expiresAt time.Time,
+	catalog operatorhelp.Catalog,
+) string {
+	if err := catalog.Validate(); err != nil {
+		catalog = emptyOperatorHelpCatalog()
+	}
+	catalogJSON, err := json.Marshal(catalog)
+	if err != nil {
+		catalogJSON = []byte(
+			`{"schema":"hideout.operator-help.v1","commands":[]}`,
+		)
+	}
+	rendered := strings.ReplaceAll(
+		uiHTML,
+		uiExpiresAtPlaceholder,
+		expiresAt.UTC().Format(time.RFC3339),
+	)
+	return strings.ReplaceAll(
+		rendered,
+		uiHelpCatalogPlaceholder,
+		string(catalogJSON),
+	)
+}
+
+func emptyOperatorHelpCatalog() operatorhelp.Catalog {
+	return operatorhelp.Catalog{
+		Schema:   operatorhelp.CatalogSchema,
+		Commands: []operatorhelp.Command{},
+	}
 }
 
 func (s *LocalServer) Close() error {
@@ -218,6 +276,7 @@ func (s *LocalServer) Wait() error {
 }
 
 const uiExpiresAtPlaceholder = "__HIDEOUT_UI_EXPIRES_AT__"
+const uiHelpCatalogPlaceholder = "__HIDEOUT_HELP_CATALOG__"
 
 const uiHTML = `<!doctype html>
 <html lang="en">
@@ -289,6 +348,9 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 .audit-event pre{margin:7px 0 0;white-space:pre-wrap;overflow:auto;font-size:11px;line-height:1.4;color:#c8d4ce}
 .scope-bar{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin:12px 0 0;color:var(--muted);font-size:12px}
 .scope-bar select{width:auto;min-width:170px}
+.cli-hint{margin:0 0 10px;border:1px solid var(--line);border-radius:7px;background:#101513;padding:9px 11px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.cli-hint code,.rows code{color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.help-search{margin-bottom:10px}
 @media (max-width:900px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.grid{grid-template-columns:1fr}header{align-items:stretch;flex-direction:column}.status-row{justify-content:flex-start}}
 @media (max-width:560px){.shell{padding:14px}.summary{grid-template-columns:1fr}.rows{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.tabs{padding-bottom:8px}.scope-bar{align-items:stretch;flex-direction:column}.scope-bar select{width:100%}}
 </style>
@@ -308,6 +370,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 </header>
 <nav class="tabs" id="tabs" aria-label="Hideout domains">
   <button class="tab active" type="button" data-panel="overview">Overview</button>
+  <button class="tab" type="button" data-panel="help">Help</button>
   <button class="tab" type="button" data-panel="operator-console">Operator Console</button>
   <button class="tab" type="button" data-panel="setup">Setup</button>
   <button class="tab" type="button" data-panel="run">Run</button>
@@ -347,6 +410,7 @@ h3{font-size:13px;margin:0 0 8px;font-weight:680;letter-spacing:0}
 const params = new URLSearchParams(location.hash.slice(1));
 const token = params.get("token") || "";
 const uiTokenExpiresAt = "__HIDEOUT_UI_EXPIRES_AT__";
+const helpCatalog = __HIDEOUT_HELP_CATALOG__;
 if (token && window.history && history.replaceState) {
   history.replaceState(null, document.title, location.pathname + location.search);
 }
@@ -370,6 +434,7 @@ let commandProxyResultHTML = "";
 let hostFSResultHTML = "";
 let profileEnvResultHTML = "";
 let selectedProfile = "";
+let helpSearchQuery = "";
 const panelRowLimit = 50;
 
 function esc(value) {
@@ -442,8 +507,16 @@ function item(title, meta, rowItems, tone) {
 }
 function boundaryRowsFromSummary(summary) {
   const capabilities = Array.isArray(summary && summary.capabilities) ? summary.capabilities : [];
-  if (!capabilities.length) return [["capabilities", "none"]];
-  return capabilities.map(function(capability) {
+  const result = [];
+  const activity = summary && summary.activityObservation;
+  if (activity) {
+    result.push(["activity scope", (activity.scope || "unknown") + " · owner=" + (activity.ownerBinding || "unknown")]);
+    result.push(["activity privacy", "localPaths=" + (activity.localPathVisibility || "unknown") + " · share=" + (activity.shareablePathTreatment || "unknown")]);
+    result.push(["activity retention", "maxBytes=" + (activity.retentionMaxBytes || 0) + " · maxAge=" + (activity.retentionMaxAgeSeconds ? activity.retentionMaxAgeSeconds + "s" : "owner-lifecycle") + " · " + (activity.retentionLifecycle || "")]);
+    result.push(["not captured", Array.isArray(activity.excludedData) ? activity.excludedData.join(", ") : "unknown"]);
+    result.push(["coverage non-claim", activity.coverageNonClaim || "unknown"]);
+  }
+  capabilities.forEach(function(capability) {
     const counts = [
       "allowed=" + (capability.allowed || 0),
       "denied=" + (capability.denied || 0)
@@ -457,8 +530,9 @@ function boundaryRowsFromSummary(summary) {
     if (capability.lifetime) context.push("lifetime=" + capability.lifetime);
     if (capability.closeReason) context.push("closed=" + capability.closeReason);
     if (capability.endpointCategory) context.push("category=" + capability.endpointCategory);
-    return [capability.capability || "capability", counts.concat(context).join(" · ")];
+    result.push([capability.capability || "capability", counts.concat(context).join(" · ")]);
   });
+  return result.length ? result : [["capabilities", "none"]];
 }
 function empty(label) {
   return '<div class="empty">' + esc(redactText(label)) + '</div>';
@@ -644,7 +718,9 @@ function renderPanel() {
   panelTitleEl.textContent = title;
   panelMetaEl.textContent = domainOwner(activePanel) + (selectedProfile ? " · " + selectedProfile : "");
   const renderer = renderers[activePanel] || renderers.overview;
-  panelBodyEl.innerHTML = renderer();
+  const cliHint = activePanel === "help" ? "" : canonicalCLIForPanel(activePanel);
+  panelBodyEl.innerHTML = cliHint + renderer();
+  if (activePanel === "help") bindHelpPanel();
   if (activePanel === "setup") bindSetupPanel();
   if (activePanel === "run") bindRunPanel();
   if (activePanel === "profiles") bindProfileEnvPanel();
@@ -667,6 +743,7 @@ function panelTitle(name) {
 function domainOwner(name) {
   return {
     overview: "manager",
+    help: "command catalog",
     "operator-console": "manager/operator-console",
     setup: "init/tool-supply",
     run: "manager/backend",
@@ -685,6 +762,101 @@ function domainOwner(name) {
     audit: "audit",
     settings: "manager"
   }[name] || "manager";
+}
+const panelCommandIDs = {
+  overview: "tui",
+  "operator-console": "tui",
+  setup: "setup",
+  run: "run",
+  profiles: "profile",
+  environments: "env",
+  sessions: "session",
+  lifecycle: "stop",
+  capabilities: "profile",
+  "hostfs-writes": "hostfs",
+  decisions: "decision",
+  notices: "notice",
+  broker: "audit",
+  network: "connect",
+  backends: "doctor",
+  secrets: "secret",
+  audit: "audit",
+  settings: "daemon"
+};
+function helpCommand(id) {
+  const catalog = typeof helpCatalog === "undefined" ? null : helpCatalog;
+  const commands = catalog && Array.isArray(catalog.commands) ? catalog.commands : [];
+  return commands.find(function(command) {
+    return command && !command.hidden && (command.id === id || command.name === id);
+  }) || null;
+}
+function canonicalCLIForPanel(panel) {
+  const command = helpCommand(panelCommandIDs[panel]);
+  if (!command || !Array.isArray(command.syntax) || !command.syntax.length) return "";
+  return '<div class="cli-hint">Canonical CLI: <code>' + esc(command.syntax[0]) +
+    '</code> · <code>hideout help ' + esc(command.name) + '</code></div>';
+}
+function helpSearchText(command) {
+  return [
+    command.id,
+    command.name,
+    (command.aliases || []).join(" "),
+    (command.searchTerms || []).join(" "),
+    command.taskGroup,
+    command.purpose,
+    command.audience,
+    command.stability,
+    (command.syntax || []).join(" "),
+    (command.effects || []).join(" "),
+    (command.safety || []).join(" "),
+    (command.recovery || []).join(" ")
+  ].join("\n").toLowerCase();
+}
+function renderHelp() {
+  const query = String(helpSearchQuery || "").trim().toLowerCase();
+  const catalog = typeof helpCatalog === "undefined" ? null : helpCatalog;
+  const commands = (catalog && Array.isArray(catalog.commands) ? catalog.commands : []).filter(function(command) {
+    return command && !command.hidden && (!query || helpSearchText(command).includes(query));
+  });
+  const search = '<div class="field help-search"><label for="helpSearch">Search commands</label>' +
+    '<input id="helpSearch" aria-label="Search commands" value="' + esc(helpSearchQuery) +
+    '" placeholder="proxy, files, clean, developer"></div>';
+  if (!commands.length) return search + empty(query ? "No matching commands" : "Command catalog unavailable");
+  const sections = ["stable", "advanced", "lab"].map(function(stability) {
+    const rows = commands.filter(function(command) { return command.stability === stability; });
+    if (!rows.length) return "";
+    return '<h3>' + esc(stability === "lab" ? "Lab · unsupported" : stability) + '</h3><div class="items">' +
+      rows.map(function(command) {
+        return item(
+          command.name,
+          command.taskGroup + " · " + command.audience,
+          [
+            ["purpose", command.purpose],
+            ["CLI", (command.syntax || [])[0]],
+            ["effects", command.effects || []],
+            ["safety", command.safety || []],
+            ["recovery", command.recovery || []],
+            ["details", "hideout help " + command.name]
+          ],
+          stability === "lab" ? "warn" : stability === "stable" ? "ok" : "info"
+        );
+      }).join("") + "</div>";
+  }).join("");
+  return search + sections;
+}
+function bindHelpPanel() {
+  const input = document.getElementById("helpSearch");
+  if (!input) return;
+  input.addEventListener("input", function() {
+    helpSearchQuery = input.value;
+    panelBodyEl.innerHTML = renderHelp();
+    bindHelpPanel();
+    const next = document.getElementById("helpSearch");
+    if (next) {
+      next.focus();
+      next.setSelectionRange(next.value.length, next.value.length);
+    }
+  });
 }
 const renderers = {
   overview: function() {
@@ -752,6 +924,7 @@ const renderers = {
       const details = [["operationId", row.operationId], ["decisionId", row.decisionId], ["operation", row.operation], ["path", row.path], ["destination", row.destinationPath], ["privilege", row.privilegeStatus], ["reason", row.reason]];
       const actions = '<div class="action-row">' +
         '<button class="action secondary" type="button" data-hostfs-write-action="claim" data-decision-id="' + esc(row.decisionId) + '">Claim</button>' +
+        (row.claimToken ? '<button class="action secondary" type="button" data-hostfs-write-action="release" data-decision-id="' + esc(row.decisionId) + '">Release</button>' : '') +
         '<button class="action" type="button" data-hostfs-write-action="apply" data-decision-id="' + esc(row.decisionId) + '">Apply</button>' +
         '<button class="action secondary" type="button" data-hostfs-write-action="discard" data-decision-id="' + esc(row.decisionId) + '">Discard</button>' +
         '</div>';
@@ -762,13 +935,14 @@ const renderers = {
     const rows = overview.decisionRows || [];
     if (!rows.length) return empty("No actionable decisions");
     return '<div class="items">' + rows.map(function(row) {
-      const details = [["kind", row.kind], ["status", row.status], ["defaultOutcome", row.defaultOutcome], ["profile", row.profile], ["session", row.session], ["backend", row.backend], ["reason", row.reason]];
+      const details = [["kind", row.kind], ["status", row.status], ["defaultOutcome", row.defaultOutcome], ["profile", row.profile], ["session", row.session], ["backend", row.backend], ["reason", row.reason], ["claimSurface", row.claimSurface], ["claimOperator", row.claimOperator], ["claimExpiresAt", row.claimExpiresAt], ["revision", row.revision]];
       const tone = row.status === "failed" || row.status === "timed-out" ? "error" : row.status === "pending" || row.status === "claimed" ? "warn" : "ok";
 	      const reopenable = row.kind === "hostfs.read" && (row.status === "denied" || row.status === "timed-out");
 	      const revocable = row.kind === "host-app.open-resource" && row.status === "approved";
 	      const disabled = row.status === "applied" || row.status === "denied" || row.status === "timed-out" || row.status === "failed";
 	      const actions = revocable ? '<div class="action-row"><button class="action secondary" type="button" data-decision-action="revoke" data-decision-id="' + esc(row.id) + '">Revoke</button></div>' : reopenable ? '<div class="action-row"><button class="action secondary" type="button" data-decision-action="reopen" data-decision-id="' + esc(row.id) + '">Reopen</button></div>' : disabled ? "" : '<div class="action-row">' +
         '<button class="action secondary" type="button" data-decision-action="claim" data-decision-id="' + esc(row.id) + '">Claim</button>' +
+        (row.claimToken ? '<button class="action secondary" type="button" data-decision-action="release" data-decision-id="' + esc(row.id) + '">Release</button>' : '') +
         '<button class="action" type="button" data-decision-action="approve" data-decision-id="' + esc(row.id) + '">Approve</button>' +
         '<button class="action secondary" type="button" data-decision-action="deny" data-decision-id="' + esc(row.id) + '">Deny</button>' +
         '</div>';
@@ -932,6 +1106,9 @@ const renderers = {
   settings: function() {
     const s = overview.settings || {};
     return '<div class="items">' + item("Settings", "local manager", [["storeRoot", s.storeRoot], ["apiVersion", "hideout.manager-api/v1"], ["uiToken", "short-lived fragment token"], ["tokenExpiresAt", uiTokenExpiresAt]], "ok") + "</div>";
+  },
+  help: function() {
+    return renderHelp();
   }
 };
 function splitCSV(value) {
@@ -1266,11 +1443,25 @@ function bindHostFSWritePanel() {
       }
       try {
         if (action === "claim") {
-          const response = await apiPost("hostfs/write/claim", {decisionId: decisionId, expectedVersion: "hideout.hostfs-write-plan/v1", surface: "webui"});
+          const response = await apiPost("hostfs/write/claim", {decisionId: decisionId, expectedVersion: "hideout.hostfs-write-plan/v1", surface: "webui", leaseSeconds: 60});
           if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
           row.claimToken = response.data && response.data.claimToken;
           row.status = "claimed";
-          setHostFSWriteStatus("claimed " + decisionId, "ok");
+          row.claimExpiresAt = response.data && response.data.claimExpiresAt;
+          row.revision = response.data && response.data.revision;
+          setHostFSWriteStatus("claimed " + decisionId + " until " + (row.claimExpiresAt || "lease expiry"), "ok");
+          renderPanel();
+          return;
+        }
+        if (action === "release") {
+          if (!row.claimToken) throw new Error("this browser does not own the claim token");
+          const response = await apiPost("decision/release", {decisionId: decisionId, expectedVersion: "hideout.decision/v1", expectedRevision: row.revision || 0, claimToken: row.claimToken, reason: "web decision dialog closed"});
+          if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+          row.claimToken = "";
+          row.status = "pending";
+          row.claimExpiresAt = "";
+          row.revision = response.data && response.data.revision;
+          setHostFSWriteStatus("released " + decisionId, "ok");
           renderPanel();
           return;
         }
@@ -1281,6 +1472,7 @@ function bindHostFSWritePanel() {
         const resource = action === "discard" ? "hostfs/write/discard" : "hostfs/write/apply";
         const response = await apiPost(resource, {decisionId: decisionId, expectedVersion: "hideout.hostfs-write-plan/v1", claimToken: row.claimToken, reason: "operator-denied"});
         if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+        row.claimToken = "";
         row.status = response.data && response.data.status || action;
         setHostFSWriteStatus(action + " " + row.status, "ok");
         renderPanel();
@@ -1306,6 +1498,7 @@ function setDecisionStatus(text, tone) {
 function decisionRouteForAction(action) {
   if (action === "deny") return "decision/deny";
   if (action === "approve") return "decision/approve";
+  if (action === "release") return "decision/release";
   if (action === "reopen") return "decision/reopen";
   if (action === "revoke") return "decision/revoke";
   return "decision/claim";
@@ -1336,12 +1529,32 @@ function bindDecisionPanel() {
           return;
         }
         if (action === "claim") {
-          const response = await apiPost(decisionRouteForAction(action), {decisionId: decisionId, expectedVersion: "hideout.decision/v1", surface: "webui"});
+          const response = await apiPost(decisionRouteForAction(action), {decisionId: decisionId, expectedVersion: "hideout.decision/v1", surface: "webui", leaseSeconds: 60});
           if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
           row.claimToken = response.data && response.data.claimToken;
           row.status = "claimed";
+          row.claimSurface = response.data && response.data.surface;
+          row.claimedAt = response.data && response.data.claimedAt;
+          row.claimExpiresAt = response.data && response.data.claimExpiresAt;
+          row.revision = response.data && response.data.revision;
           updateDecisionSummary();
-          setDecisionStatus("claimed " + decisionId, "ok");
+          setDecisionStatus("claimed " + decisionId + " until " + (row.claimExpiresAt || "lease expiry"), "ok");
+          renderAll();
+          return;
+        }
+        if (action === "release") {
+          if (!row.claimToken) throw new Error("this browser does not own the claim token");
+          const response = await apiPost(decisionRouteForAction(action), {decisionId: decisionId, expectedVersion: "hideout.decision/v1", expectedRevision: row.revision || 0, claimToken: row.claimToken, reason: "web decision dialog closed"});
+          if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+          row.claimToken = "";
+          row.status = "pending";
+          row.claimSurface = "";
+          row.claimOperator = "";
+          row.claimedAt = "";
+          row.claimExpiresAt = "";
+          row.revision = response.data && response.data.revision;
+          updateDecisionSummary();
+          setDecisionStatus("released " + decisionId, "ok");
           renderAll();
           return;
         }
@@ -1352,6 +1565,7 @@ function bindDecisionPanel() {
         const resource = decisionRouteForAction(action);
         const response = await apiPost(resource, {decisionId: decisionId, expectedVersion: "hideout.decision/v1", claimToken: row.claimToken, reason: action === "deny" ? "operator-denied" : "operator-approved"});
         if (response.errors && response.errors.length) throw new Error(response.errors.join("; "));
+        row.claimToken = "";
         row.status = action === "deny" ? "denied" : "applied";
         updateDecisionSummary();
         setDecisionStatus(action + " " + decisionId, "ok");
@@ -1656,7 +1870,12 @@ function decisionRowFromPayload(payload) {
     profile: redactText(payload.profile),
     session: redactText(payload.session),
     backend: redactText(payload.backend),
-    reason: redactText(payload.reason)
+    reason: redactText(payload.reason),
+    claimSurface: redactText(payload.claimSurface),
+    claimOperator: redactText(payload.claimOperator),
+    claimedAt: payload.claimedAt || "",
+    claimExpiresAt: payload.claimExpiresAt || "",
+    revision: Number(payload.revision || 0)
   };
 }
 function noticeRowFromPayload(payload) {
@@ -1807,7 +2026,7 @@ async function seedLiveConsole() {
       overview.decisionRows = Array.isArray(decisionsResp.data) ? decisionsResp.data.map(function(row) {
         const facts = row.preview && row.preview.facts || {};
         const reason = row.kind === "hostfs.read" && facts.untrustedReason ? "untrusted target input: " + redactText(facts.untrustedReason) : row.preview && redactText(row.preview.summary);
-        return {id: redactText(row.id), kind: redactText(row.kind), status: redactText(row.state || row.status), defaultOutcome: redactText(row.defaultOutcome), profile: row.source && redactText(row.source.profile), session: row.source && redactText(row.source.session), backend: row.source && redactText(row.source.backend), reason: reason};
+        return {id: redactText(row.id), kind: redactText(row.kind), status: redactText(row.state || row.status), defaultOutcome: redactText(row.defaultOutcome), profile: row.source && redactText(row.source.profile), session: row.source && redactText(row.source.session), backend: row.source && redactText(row.source.backend), reason: reason, claimSurface: row.claim && redactText(row.claim.surface), claimOperator: row.claim && redactText(row.claim.operator), claimedAt: row.claim && row.claim.claimedAt, claimExpiresAt: row.claim && row.claim.expiresAt, revision: Number(row.revision || 0)};
       }) : [];
       updateDecisionSummary();
     } catch {
@@ -1839,7 +2058,31 @@ async function seedLiveConsole() {
     setStatus("error", "error");
   }
 }
+function releaseOwnedClaims(reason) {
+  if (!overview || !token) return Promise.resolve([]);
+  const owned = [];
+  const seen = new Set();
+  [overview.decisionRows || [], overview.hostfsWrites || []].forEach(function(rows) {
+    rows.forEach(function(row) {
+      if (!row || !row.id && !row.decisionId || !row.claimToken) return;
+      const decisionId = row.id || row.decisionId;
+      if (seen.has(decisionId)) return;
+      seen.add(decisionId);
+      owned.push({decisionId: decisionId, claimToken: row.claimToken, revision: Number(row.revision || 0)});
+      row.claimToken = "";
+    });
+  });
+  return Promise.allSettled(owned.map(function(claim) {
+    return fetch("/api/v1/decision/release", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Hideout-UI-Token": token},
+      body: JSON.stringify({decisionId: claim.decisionId, expectedVersion: "hideout.decision/v1", expectedRevision: claim.revision, claimToken: claim.claimToken, reason: reason || "webui disconnected"}),
+      keepalive: true
+    });
+  }));
+}
 async function load() {
+  await releaseOwnedClaims("webui refreshed or changed scope");
   return seedLiveConsole();
 }
 profileScopeEl.addEventListener("change", function() {
@@ -1855,6 +2098,7 @@ document.getElementById("tabs").addEventListener("click", function(event) {
   if (overview) renderPanel();
 });
 document.getElementById("refresh").addEventListener("click", load);
+window.addEventListener("pagehide", function() { releaseOwnedClaims("webui page closed"); });
 seedLiveConsole();
 // Live state from the hideoutd event stream when served over the daemon's
 // loopback UI transport. The stream applies typed event payloads to local state
@@ -1871,7 +2115,7 @@ try {
         markLiveHealth("schema-mismatch", "invalid event json");
       }
     };
-    es.onerror = function() { markLiveHealth("disconnected", "event stream closed"); es.close(); };
+    es.onerror = function() { releaseOwnedClaims("webui event stream disconnected"); markLiveHealth("disconnected", "event stream closed"); es.close(); };
   }
 } catch (e) {}
 </script>

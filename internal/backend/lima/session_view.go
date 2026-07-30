@@ -357,6 +357,9 @@ func sessionRuntimePrerequisites(session *backend.Session, supervisor bool) []st
 	}
 	if supervisor {
 		paths = append(paths, GuestSessionSupervisorPath)
+		if session != nil && session.ObserverHelperDigest != "" {
+			paths = append(paths, GuestSessionDir+"/shims/hideout-observer")
+		}
 	}
 	if session != nil && session.ProjectionReadiness != nil {
 		paths = append(paths, GuestSessionDir+"/"+backend.ProjectionReadinessManifestFile)

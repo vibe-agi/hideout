@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/liveconsole"
+	"github.com/vibe-agi/hideout/internal/manager"
+	"github.com/vibe-agi/hideout/internal/profile"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
 
 func readEventStream(t *testing.T, d *Daemon, token string, timeout time.Duration) []Event {
@@ -93,6 +96,112 @@ func TestEventBusRedactsOrdersAndKeepsNoHistory(t *testing.T) {
 		t.Fatalf("late subscriber replayed history: %+v", ev)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func TestEventBusV2BindsIdentityAndPublishesBoundedProjectionDeltas(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	generation := uint64(4)
+	bus := newEventBusV2("daemon_fixture", func() uint64 { return generation })
+	sub := bus.subscribe(16)
+	desired := profile.Default("default")
+	profileProjection := manager.ProfileProjection{
+		Schema: manager.ProfileProjectionSchema, Profile: "default", Revision: 2,
+		ContentDigest: "sha256:" + strings.Repeat("a", 64), Desired: desired,
+		Effective: manager.ProfileEffective{
+			Status: manager.EffectiveNotObserved, Sessions: []manager.EffectiveSessionSnapshot{},
+		},
+		UpdatedAt: now,
+	}
+	transition := liveconsole.TransitionProjection{
+		Profile: "default",
+		Transition: manager.ProfileTransition{
+			OperationID: "op_projection01", Kind: "network.proxy", Phase: "staging",
+			StartedAt: now,
+		},
+	}
+	operation := manager.Operation{
+		Schema: manager.OperationSchema, ID: "op_projection01", Kind: "profile.update",
+		Owner:      manager.OperationOwner{Kind: "profile", ID: "default"},
+		PlanDigest: "sha256:" + strings.Repeat("b", 64), BaseRevision: 2,
+		Phase: manager.OperationPlanned, Effects: []manager.EffectResult{},
+		Recovery: manager.Recovery{
+			Code: "retry-operation", Summary: "Retry with the same operation identity.",
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	owner, err := workloadtypes.NewReusableOwner("env_fixture", "lima", "incarnation-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := workloadtypes.CoverageInterval{
+		Schema: workloadtypes.CoverageIntervalSchema, ID: "cov_alpha000001",
+		Owner: owner, SessionID: "ses_alpha", Subsystem: workloadtypes.SubsystemFile,
+		State: workloadtypes.CoverageAvailable, Reason: "observer-ready",
+		CollectorGeneration: 1, StartedAt: now,
+	}
+	risk := liveconsole.RiskFinding{
+		ID: "risk_alpha000001", RuleID: "file.outside-workspace", RuleVersion: "v1",
+		Severity: "high", Title: "wrote outside workspace",
+		Explanation:  "a descendant wrote outside the workspace",
+		EvidenceRefs: []string{"act_alpha000001"}, Confidence: "exact",
+		PolicyStatus: "not-evaluated", FirstAt: now, LastAt: now, Count: 1,
+		NextAction: "activity.files",
+	}
+	capability := liveconsole.CapabilityProjection{
+		ID: "activity.file", Status: workloadtypes.CoverageAvailable,
+		Provider: "ebpf", Mutable: false, ActionRefs: []string{"activity.files"},
+	}
+
+	publishers := []func() error{
+		func() error { return bus.publishProfileProjection(profileProjection) },
+		func() error { return bus.publishTransitionProjection(transition) },
+		func() error { return bus.publishOperationProjection(operation) },
+		func() error {
+			bus.OperationEvent(liveconsole.KindSession, "progress", map[string]any{
+				"id": "ses_alpha", "profile": "default", "status": "running",
+			})
+			return nil
+		},
+		func() error {
+			return bus.publishActivityProjection("default", "ses_alpha", liveconsole.ActivityProjectionDelta{
+				Cursor: "cursor-1", Counts: []liveconsole.ActivityCount{{Kind: "file", Count: 1}},
+				Appended: 1, LastAt: now,
+			})
+		},
+		func() error {
+			return bus.publishCoverageProjection("default", "ses_alpha", []workloadtypes.CoverageInterval{coverage})
+		},
+		func() error { return bus.publishRiskProjection("default", "ses_alpha", risk) },
+		func() error { return bus.publishCapabilityProjection(capability) },
+	}
+	for index, publish := range publishers {
+		if err := publish(); err != nil {
+			t.Fatalf("publisher %d: %v", index, err)
+		}
+		event := <-sub.ch
+		if event.Version != liveconsole.EventVersionV2 ||
+			event.InstanceID != "daemon_fixture" ||
+			event.CredentialGeneration != generation ||
+			event.Seq != index+1 {
+			t.Fatalf("event %d identity/sequence mismatch: %+v", index, event)
+		}
+		assertValidDaemonEvent(t, event)
+	}
+	before := bus.seq
+	if err := bus.publishCoverageProjection(
+		"default", "ses_alpha", make([]workloadtypes.CoverageInterval, 65),
+	); err == nil {
+		t.Fatal("oversized coverage projection was published")
+	}
+	if bus.seq != before {
+		t.Fatalf("rejected projection consumed sequence: before=%d after=%d", before, bus.seq)
+	}
+	terminal := bus.terminalEvent(sub, "subscriber-overflow")
+	if terminal.Version != liveconsole.EventVersionV2 || terminal.Seq != 0 ||
+		terminal.InstanceID != "daemon_fixture" || terminal.CredentialGeneration != generation {
+		t.Fatalf("v2 terminal invented broadcast sequence or lost identity: %+v", terminal)
+	}
+	assertValidDaemonEvent(t, terminal)
 }
 
 // T023: a slow subscriber whose bounded buffer fills is dropped with a terminal

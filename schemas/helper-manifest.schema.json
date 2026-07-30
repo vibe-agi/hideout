@@ -22,6 +22,7 @@
         "hideout-shim",
         "hideout-hostfsd",
         "hideout-session-supervisor",
+        "hideout-observer",
         "hideout-workspace-portal",
         "tun2socks"
       ]

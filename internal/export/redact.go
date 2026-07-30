@@ -34,12 +34,29 @@ func redactForExport(req Request, body any) (redactionOutcome, error) {
 	out := redactionOutcome{
 		Stages: []RedactionStage{{Name: "control-plane"}},
 	}
+	out.Stages = appendPolicyStages(out.Stages, req.PreRedactionStages)
 	redactedBody, residual, stages, err := applyUserRedaction(req, body, selectors)
 	if err != nil {
 		return redactionOutcome{}, err
 	}
 	out.Body = redactAny(redactedBody)
 	out.Stages = append(out.Stages, stages...)
+	if req.Source == SourceActivity && req.PathPolicy == PathPolicyRedactHost {
+		out.Body = redactLocalPathsAny(out.Body)
+		encoded, encodeErr := json.Marshal(out.Body)
+		if encodeErr != nil {
+			return redactionOutcome{}, encodeErr
+		}
+		if _, reviewErr := ReviewPublicEvidence(encoded); reviewErr != nil {
+			return redactionOutcome{}, fmt.Errorf(
+				"verify activity export path policy: %w",
+				reviewErr,
+			)
+		}
+		out.Stages = appendPolicyStages(out.Stages, []RedactionStage{{
+			Name: PublicEvidenceLocalPathStage,
+		}})
+	}
 	out.Residual = uniqueSorted(residual)
 	switch {
 	case len(selectors) > 0:
@@ -55,6 +72,44 @@ func redactForExport(req Request, body any) (redactionOutcome, error) {
 		out.Decision = ExportDecision{Mode: DecisionRedact, Channel: DecisionChannelFlag}
 	}
 	return out, nil
+}
+
+func redactLocalPathsAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = redactLocalPathsAny(item)
+		}
+		redactClassifiedActivityHostPaths(out)
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = redactLocalPathsAny(item)
+		}
+		return out
+	case string:
+		return RedactLocalPaths(typed)
+	default:
+		return value
+	}
+}
+
+func redactClassifiedActivityHostPaths(value map[string]any) {
+	if stringValue(value["kind"]) != "file" {
+		return
+	}
+	switch stringValue(value["pathClass"]) {
+	case "hostfs", "profile", "external":
+	default:
+		return
+	}
+	for _, key := range []string{"path", "targetPath"} {
+		if path, ok := value[key].(string); ok && path != "" {
+			value[key] = "<redacted:local-path>"
+		}
+	}
 }
 
 func parseSelectors(raw []string) ([]string, error) {

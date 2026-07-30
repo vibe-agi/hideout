@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/embedded-asset-manifest.schema.json",
+  "title": "Hideout Embedded Browser Console Asset Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "container",
+    "containerSHA256",
+    "license",
+    "assets"
+  ],
+  "properties": {
+    "schema": {"const": "hideout.embedded-asset-manifest/v1"},
+    "id": {"const": "browser-console"},
+    "container": {"const": "bin/hideout"},
+    "containerSHA256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "license": {"const": "Apache-2.0"},
+    "assets": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "prefixItems": [
+        {"$ref": "#/$defs/index"},
+        {"$ref": "#/$defs/style"},
+        {"$ref": "#/$defs/state"},
+        {"$ref": "#/$defs/client"},
+        {"$ref": "#/$defs/activity"},
+        {"$ref": "#/$defs/config"},
+        {"$ref": "#/$defs/presentation"},
+        {"$ref": "#/$defs/app"}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mediaType", "sha256"],
+      "properties": {
+        "path": {"type": "string"},
+        "mediaType": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "index": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "index.html"},
+          "mediaType": {"const": "text/html; charset=utf-8"}
+        }}
+      ]
+    },
+    "style": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "style.css"},
+          "mediaType": {"const": "text/css; charset=utf-8"}
+        }}
+      ]
+    },
+    "state": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "state.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    },
+    "client": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "client.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    },
+    "activity": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "activity.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    },
+    "config": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "config.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    },
+    "presentation": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "presentation.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    },
+    "app": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {
+          "path": {"const": "app.js"},
+          "mediaType": {"const": "text/javascript; charset=utf-8"}
+        }}
+      ]
+    }
+  }
+}

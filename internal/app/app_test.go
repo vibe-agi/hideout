@@ -69,6 +69,7 @@ type deterministicAppLifecycleBackend struct {
 	instanceName string
 	bootID       string
 	stopped      bool
+	absent       bool
 }
 
 func (b *deterministicAppLifecycleBackend) ObserveLifecycle(_ context.Context, instanceName string) backend.LifecycleObservation {
@@ -77,6 +78,10 @@ func (b *deterministicAppLifecycleBackend) ObserveLifecycle(_ context.Context, i
 	observation := backend.LifecycleObservation{
 		InstanceName: instanceName,
 		ObservedAt:   time.Now().UTC(),
+	}
+	if b.absent {
+		observation.State = backend.LifecycleAbsent
+		return observation
 	}
 	if b.stopped {
 		observation.State = backend.LifecycleStopped
@@ -98,7 +103,14 @@ func (b *deterministicAppLifecycleBackend) StopInstance(ctx context.Context, ins
 }
 
 func (b *deterministicAppLifecycleBackend) Cleanup(ctx context.Context, session *backend.Session) error {
-	return b.operator.Cleanup(ctx, session)
+	if err := b.operator.Cleanup(ctx, session); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.absent = true
+	b.stopped = false
+	b.mu.Unlock()
+	return nil
 }
 
 func (r appSessionSetupRunner) Check(context.Context, string) error { return r.checkErr }
@@ -118,13 +130,20 @@ func installAppTestLinuxSessionHelpers(t *testing.T, dir string) {
 	}{
 		{command: helperbin.LinuxSessionSupervisorCommand, envName: helperbin.LinuxSessionSupervisorPathEnvironment},
 		{command: helperbin.LinuxWorkspacePortalCommand, envName: helperbin.LinuxWorkspacePortalPathEnvironment},
+		{command: helperbin.LinuxObserverCommand, envName: helperbin.LinuxObserverPathEnvironment},
 	} {
 		path := filepath.Join(dir, helper.command+"-linux-"+runtime.GOARCH)
 		if err := os.WriteFile(path, []byte("test "+helper.command), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := helperbin.WriteStoreHelperManifest(path, helper.command, runtime.GOARCH); err != nil {
-			t.Fatal(err)
+		var manifestErr error
+		if helper.command == helperbin.LinuxObserverCommand {
+			manifestErr = helperbin.WriteLinuxObserverManifest(path, runtime.GOARCH)
+		} else {
+			manifestErr = helperbin.WriteStoreHelperManifest(path, helper.command, runtime.GOARCH)
+		}
+		if manifestErr != nil {
+			t.Fatal(manifestErr)
 		}
 		t.Setenv(helper.envName, path)
 	}
@@ -467,30 +486,31 @@ func TestUsageGroupsNewUserAndAdvancedCommands(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
+		"Hideout command catalog",
 		"Usage:",
-		"  hideout init --template privacy --profile <name> --backend lima --network tun2socks --proxy-secret <ref> --mediated-resolver <ip> --no-input",
-		"  hideout doctor",
-		"  hideout run [flags] -- <command> [args...]",
-		"First run:",
-		"Run and explain:",
-		"Profile and HostFS:",
-		"Inspect and manage:",
-		"Advanced and developer:",
-		"  hideout run --backend native --allow-weak-isolation -- <command>  # dev harness only",
-		"  hideout support matrix [--json]",
-		"  hideout version",
-		"Lab probes:",
-		"  hideout lab portbridge loopback --enable-lab --target 127.0.0.1:<port>",
+		"  hideout help <command>",
+		"  hideout help search <word>",
+		"  hideout help all [query]",
+		"Stable",
+		"  Get started",
+		"setup",
+		"doctor",
+		"  Run safely",
+		"run",
+		"Advanced",
+		"profile",
+		"Lab (unsupported; explicit opt-in)",
+		"lab",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("help output missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Index(text, "First run:") > strings.Index(text, "Advanced and developer:") {
-		t.Fatalf("help should show first-run path before advanced commands:\n%s", text)
+	if strings.Index(text, "Stable") > strings.Index(text, "Advanced") {
+		t.Fatalf("help should show stable commands before advanced commands:\n%s", text)
 	}
-	if strings.Index(text, "Advanced and developer:") > strings.Index(text, "Lab probes:") {
-		t.Fatalf("help should keep lab probes after advanced commands:\n%s", text)
+	if strings.Index(text, "Advanced") > strings.Index(text, "Lab (unsupported; explicit opt-in)") {
+		t.Fatalf("help should keep unsupported lab commands after advanced commands:\n%s", text)
 	}
 }
 
@@ -1743,18 +1763,37 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/hideout-shim-linux-" + runtime.GOARCH:                                    {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH:                                 {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH: {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
+		"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH:          {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH:   {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH:         {kind: "linux-helper", mode: 0o755, data: "#!/bin/sh\n"},
 		"install.sh":                           {kind: "installer", mode: 0o755, data: "#!/bin/sh\n"},
 		"README.md":                            {kind: "entrypoint", mode: 0o644, data: "readme\n"},
 		"README.zh-CN.md":                      {kind: "entrypoint", mode: 0o644, data: "readme zh\n"},
 		"LICENSE":                              {kind: "doc", mode: 0o644, data: "license\n"},
+		"LICENSES/GPL-2.0-only.txt":            {kind: "doc", mode: 0o644, data: "GPL-2.0-only\n"},
 		"THIRD_PARTY_NOTICES.md":               {kind: "doc", mode: 0o644, data: "notices\n"},
 		"SECURITY.md":                          {kind: "doc", mode: 0o644, data: "security\n"},
 		"third_party/tun2socks/LICENSE":        {kind: "doc", mode: 0o644, data: "MIT license\n"},
 		"runtime/catalog.json":                 {kind: "runtime-catalog", mode: 0o644, data: "{}\n"},
 		"schemas/package-manifest.schema.json": {kind: "schema", mode: 0o644, data: "{}\n"},
 		"schemas/release-dogfood.schema.json":  {kind: "schema", mode: 0o644, data: "{}\n"},
+	}
+	componentContract, err := json.MarshalIndent(
+		packagekit.ExpectedPackageComponentContract(),
+		"",
+		"  ",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[packagekit.PackageComponentContractPath] = struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{
+		kind: "runtime-contract",
+		mode: 0o644,
+		data: string(componentContract) + "\n",
 	}
 	for _, command := range []string{helperbin.LinuxSessionSupervisorCommand, helperbin.LinuxWorkspacePortalCommand} {
 		binaryRel := "bin/" + command + "-linux-" + runtime.GOARCH
@@ -1790,6 +1829,55 @@ func writeTestPackageRoot(t *testing.T) string {
 		mode os.FileMode
 		data string
 	}{kind: "helper-manifest", mode: 0o644, data: string(tunManifest) + "\n"}
+	observerBinaryRel := "bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH
+	observerSum := sha256.Sum256([]byte(files[observerBinaryRel].data))
+	observerManifest, err := json.MarshalIndent(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxObserverCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH,
+		Artifact: filepath.Base(observerBinaryRel),
+		SHA256:   hex.EncodeToString(observerSum[:]),
+		Builder:  "go build -trimpath", BuiltAt: "2026-01-01T00:00:00Z",
+		License: helperbin.LinuxObserverLicense, BuildMode: helperbin.LinuxObserverBuildMode,
+		PackageOwned: true,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[observerBinaryRel+".manifest.json"] = struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{
+		kind: "helper-manifest",
+		mode: 0o644,
+		data: string(observerManifest) + "\n",
+	}
+	assets := packagekit.BrowserConsoleAssets()
+	for index := range assets {
+		assets[index].SHA256 = packagekit.BytesSHA256(
+			[]byte("embedded fixture " + assets[index].Path + "\n"),
+		)
+	}
+	assetManifest, err := json.MarshalIndent(packagekit.EmbeddedAssetManifest{
+		Schema:          packagekit.EmbeddedAssetManifestSchema,
+		ID:              packagekit.BrowserConsoleAssetID,
+		Container:       packagekit.BrowserConsoleContainerPath,
+		ContainerSHA256: packagekit.BytesSHA256([]byte(files["bin/hideout"].data)),
+		License:         packagekit.BrowserConsoleAssetLicense,
+		Assets:          assets,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[packagekit.BrowserConsoleManifestPath] = struct {
+		kind string
+		mode os.FileMode
+		data string
+	}{
+		kind: "embedded-asset-manifest",
+		mode: 0o644,
+		data: string(assetManifest) + "\n",
+	}
 	manifest := packagekit.Manifest{Schema: packagekit.ArtifactSchema}
 	manifest.BuiltAt = "2026-01-01T00:00:00Z"
 	manifest.Release = packagekit.ReleaseInfo{ProductVersion: "0.1.0-alpha.1", Channel: "developer-preview", Tag: "v0.1.0-alpha.1"}
@@ -1807,11 +1895,21 @@ func writeTestPackageRoot(t *testing.T) string {
 		"bin/hideout-shim-linux-" + runtime.GOARCH,
 		"bin/hideout-hostfsd-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxSessionSupervisorCommand + "-linux-" + runtime.GOARCH,
+		"bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxWorkspacePortalCommand + "-linux-" + runtime.GOARCH,
 		"bin/" + helperbin.LinuxTun2SocksCommand + "-linux-" + runtime.GOARCH,
 	}
 	manifest.Layout.Entrypoints = []string{"install.sh", "README.md", "README.zh-CN.md"}
 	manifest.Layout.Directories = []string{"schemas", "docs", "packaging", "runtime", "third_party"}
+	manifest.EmbeddedAssets = []packagekit.EmbeddedAssetBinding{{
+		ID:        packagekit.BrowserConsoleAssetID,
+		Container: packagekit.BrowserConsoleContainerPath,
+		Manifest:  packagekit.BrowserConsoleManifestPath,
+		ManifestSHA256: packagekit.BytesSHA256(
+			[]byte(files[packagekit.BrowserConsoleManifestPath].data),
+		),
+		License: packagekit.BrowserConsoleAssetLicense,
+	}}
 	manifest.Migration.InstallStateSchema = packagekit.InstallStateSchema
 	manifest.Migration.FromInstalledSchemas = []string{packagekit.InstallStateSchema}
 	manifest.Migration.MinimumPackageSchema = packagekit.ArtifactSchema
@@ -2756,6 +2854,68 @@ func TestProfileCommandAdapterManageLocalAdapter(t *testing.T) {
 	}
 }
 
+func TestProfileMutationCLICommandsUseDurableSharedTransactions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := profile.Store{Root: filepath.Join(home, ".hideout")}
+	var out, errOut bytes.Buffer
+	run := func(args ...string) {
+		t.Helper()
+		out.Reset()
+		errOut.Reset()
+		if code := Main(args, &out, &errOut); code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, errOut.String())
+		}
+	}
+
+	run("profile", "env", "default", "set", "TRANSACTION_TEST=value")
+	run(
+		"profile", "network", "default", "tun2socks",
+		"--proxy-secret", "local-proxy",
+		"--mediated-resolver", "1.1.1.1",
+	)
+	run(
+		"profile", "fs", "default", "add",
+		"--fs", "read:/tmp/transaction.txt",
+		"--reason", "durable transaction test",
+	)
+	run(
+		"profile", "command-proxy", "default",
+		"add-open", "browser-open",
+	)
+	adapterDir := filepath.Join(store.ProfileDir("default"), "adapters")
+	if err := os.MkdirAll(adapterDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(adapterDir, "transaction.js"),
+		[]byte(`function decideCommandAdapter(){return {outcome:"deny",reason:"test"}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	run(
+		"profile", "command-adapter", "default", "add-local",
+		"--id", "transaction",
+		"--path", "adapters/transaction.js",
+		"--command", "transaction-tool",
+	)
+
+	operations, err := (manager.OperationStore{Root: store.Root}).List(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(operations) != 5 {
+		t.Fatalf("durable profile operations=%+v want 5", operations)
+	}
+	for _, operation := range operations {
+		if operation.Kind != "profile.transaction" ||
+			operation.Phase != manager.OperationSucceeded {
+			t.Fatalf("CLI mutation bypassed shared transaction: %+v", operation)
+		}
+	}
+}
+
 func TestProfileCommandProxyRejectsInvalidCommandWithoutCreatingProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -3456,7 +3616,11 @@ exit 0
 	if err != nil {
 		t.Fatalf("start lifecycle owner daemon: %v", err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 	waitForAppLifecycleReconciliation(t, d, rec.ID)
 
 	var out, errOut bytes.Buffer
@@ -3547,6 +3711,21 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 			Version:   manager.BoundarySummaryVersion,
 			Evidence:  "available",
 			AuditPath: "/tmp/hideout/audit.jsonl",
+			ActivityObservation: &manager.BoundaryActivityObservationSummary{
+				Scope:                  "top-level-command-and-descendants",
+				OwnerKind:              "reusable-environment",
+				OwnerBinding:           "exact-environment-or-disposable-session-plus-backend-incarnation",
+				LocalPathVisibility:    "visible-in-authenticated-local-view",
+				ShareablePathTreatment: "excluded-from-shareable-support-review-before-export",
+				ExcludedData: []string{
+					"file-content", "environment-values", "keystrokes",
+					"full-pty", "packet-payload",
+				},
+				CoverageNonClaim:       "no-events-does-not-prove-no-behavior-without-Available-coverage-for-the-subsystem-and-window",
+				RetentionMaxBytes:      256 << 20,
+				RetentionMaxAgeSeconds: 0,
+				RetentionLifecycle:     "clean-delete-recreate-removes-the-exact-old-owner",
+			},
 			Capabilities: []manager.BoundaryCapabilitySummary{
 				{Capability: "host.open", Allowed: 1, Denied: 2},
 				{Capability: "hostfs", Allowed: 3, Denied: 4, Unsupported: 5},
@@ -3564,6 +3743,10 @@ func TestWriteRunResultSummaryPrintsReusableEnvironmentResumeHint(t *testing.T) 
 		"clean-after-stop: hideout clean --stopped work",
 		"Hideout boundary:",
 		"  audit: /tmp/hideout/audit.jsonl",
+		"  activity: scope=top-level-command-and-descendants owner=exact-environment-or-disposable-session-plus-backend-incarnation localPaths=visible-in-authenticated-local-view",
+		"    retention: maxBytes=268435456 maxAge=owner-lifecycle lifecycle=clean-delete-recreate-removes-the-exact-old-owner",
+		"    not captured: file-content,environment-values,keystrokes,full-pty,packet-payload",
+		"    coverage non-claim: no-events-does-not-prove-no-behavior",
 		"  host.open: allowed=1 denied=2",
 		"  hostfs: allowed=3 denied=4 unsupported=5",
 		"  portbridge.host-to-guest: allowed=1 denied=0 owner=preview.open source=manual lifetime=run close=session-end endpoint=host-loopback",
@@ -3952,7 +4135,7 @@ for arg in "$@"; do
 done
 [ -n "$profile" ] || exit 2
 i=0
-while [ "$i" -lt 100 ]; do
+while [ "$i" -lt 600 ]; do
   /bin/mkdir -p "$profile" || exit 3
   printf '%%s\n/devtools/browser/fake\n' %q > "$profile/DevToolsActivePort" || exit 4
   i=$((i + 1))
@@ -3971,7 +4154,10 @@ done
 		"--browser-path",
 		fakeBrowser,
 		"--timeout",
-		"10s",
+		// The full-repository gate starts many process-backed fixtures in
+		// parallel. Keep the product timeout explicit but leave enough
+		// scheduling budget for this child process under that load.
+		"30s",
 	}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
@@ -4778,9 +4964,17 @@ func TestNaturalConnectionCommandsUseProfileNetworkPlanApply(t *testing.T) {
 		t.Fatalf("missing natural resolver recovery: %s", errOut.String())
 	}
 
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(profile.Default("default")); err != nil {
+		t.Fatal(err)
+	}
+
 	out.Reset()
 	errOut.Reset()
-	if code := Main([]string{"connect", "through", "charles", "using", "1.1.1.1"}, &out, &errOut); code != 0 {
+	if code := Main([]string{"connect", "through", "charles", "using", "1.1.1.1", "--yes"}, &out, &errOut); code != 0 {
 		t.Fatalf("connect exit=%d stderr=%s", code, errOut.String())
 	}
 	for _, want := range []string{
@@ -4804,17 +4998,13 @@ func TestNaturalConnectionCommandsUseProfileNetworkPlanApply(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if code := Main([]string{"connect", "directly"}, &out, &errOut); code != 0 {
+	if code := Main([]string{"connect", "directly", "--yes"}, &out, &errOut); code != 0 {
 		t.Fatalf("direct exit=%d stderr=%s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "default is set to connect directly on the next eligible attach (saved proxy: charles using 1.1.1.1).") {
 		t.Fatalf("direct output=%s", out.String())
 	}
 
-	store, err := profile.DefaultStore()
-	if err != nil {
-		t.Fatal(err)
-	}
 	stored, err := store.Load("default")
 	if err != nil {
 		t.Fatal(err)
@@ -4825,7 +5015,7 @@ func TestNaturalConnectionCommandsUseProfileNetworkPlanApply(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if code := Main([]string{"connect", "through", "next-proxy"}, &out, &errOut); code != 0 {
+	if code := Main([]string{"connect", "through", "next-proxy", "--yes"}, &out, &errOut); code != 0 {
 		t.Fatalf("resolver reuse exit=%d stderr=%s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "through next-proxy using 1.1.1.1 on the next eligible attach") {
@@ -4837,7 +5027,14 @@ func TestNaturalConnectionCommandsRespectExplicitProfileScope(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	var out, errOut bytes.Buffer
-	if code := Main([]string{"connect", "through", "work-proxy", "using", "9.9.9.9", "for", "profile", "work"}, &out, &errOut); code != 0 {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(profile.Default("work")); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"connect", "through", "work-proxy", "using", "9.9.9.9", "for", "profile", "work", "--yes"}, &out, &errOut); code != 0 {
 		t.Fatalf("connect exit=%d stderr=%s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "work is set to connect through work-proxy using 9.9.9.9 on the next eligible attach") {
@@ -5929,41 +6126,25 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
 	for _, want := range []string{
-		"Hideout TUI",
-		"Store: " + store.Root,
-		"Updated:",
-		"Profiles: 1",
-		"Environments: 1",
-		"Sessions: 12",
-		"Init Next:",
-		"Smoke run: hideout run --profile default --backend lima -- pwd",
-		"Capabilities: host.open",
-		"Profiles\n  - default",
-		"expected=agent-cli,agent-helper",
-		"commandProxies=open,xdg-open",
-		"commandAdapters=adapter:on(tool-x)",
-		"next: tools=hideout profile tools default list",
-		"next: expect-command=hideout profile tools default expected add <command>",
-		"next: command-proxy=hideout profile command-proxy default list",
-		"next: add-open=hideout profile command-proxy default add-open <command>",
-		"Backends",
-		"Network",
-		"warning=direct exposes network identity",
-		"Environments",
-		"fixture-env-102",
-		"image=template:_images/ubuntu-lts",
-		"next: run=hideout run --env fixture-env-102 -- <command>  stop=hideout stop fixture-env-102  clean-after-stop=hideout clean --stopped fixture-env-102",
-		"Sessions",
-		"showing newest 10 of 12",
+		"Hideout | default | DAEMONLESS | read-only",
 		"ses_20260704T010212Z_12",
-		"privilege=unknown",
-		"next: audit=hideout audit show --session ses_20260704T010212Z_12  cleanup-check=hideout cleanup --session ses_20260704T010212Z_12 --dry-run",
-		"Recent Denied Audit",
-		"Recent Audit",
+		"COMMAND unknown",
+		"CONNECTION not observed | desired direct",
+		"STATE unknown",
+		"COVERAGE unavailable",
+		"RISK none",
+		"NEXT inspect recent activity",
+		"Activity\nno activity yet",
+		"Details\nsession ses_20260704T010212Z_12 | profile default",
+		"coverage unavailable (no activity observed)",
+		"[1] Overview [2] Activity [3] Config [4] Operations [5] Help",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("tui output missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "\nCONNECTION direct\n") {
+		t.Fatalf("daemonless tui must not present desired networking as effective:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "ses_20260704T010201Z_01") {
 		t.Fatalf("tui output should omit oldest sessions when truncating:\n%s", out.String())
@@ -6049,21 +6230,21 @@ func TestTUIProfileFilterScopesDashboardAndAudit(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s stdout=%s", code, errOut.String(), out.String())
 	}
 	for _, want := range []string{
-		"Profile filter: agent",
-		"Profiles: 1",
-		"Environments: 1",
-		"Sessions: 1",
-		"Profiles\n  - agent",
-		"commandProxies=open,xdg-open",
-		"tools=hideout profile tools agent list",
-		"add-open=hideout profile command-proxy agent add-open <command>",
-		"agent-env",
-		"ses_20260704T020101Z_agent  profile=agent",
-		"Recent Audit\n  - agent  action=network.setup",
+		"Hideout | agent | DAEMONLESS | read-only",
+		"ses_20260704T020101Z_agent",
+		"COMMAND unknown",
+		"CONNECTION not observed | desired direct",
+		"STATE unknown",
+		"COVERAGE unavailable",
+		"NEXT inspect recent activity",
+		"Details\nsession ses_20260704T020101Z_agent | profile agent",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("filtered tui output missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "\nCONNECTION direct\n") {
+		t.Fatalf("daemonless filtered tui must not present desired networking as effective:\n%s", out.String())
 	}
 	for _, forbidden := range []string{
 		"smoke-env",
@@ -6460,8 +6641,11 @@ fi
 if [ "$1" = "stop" ]; then
   : > %q
 fi
+if [ "$1" = "delete" ]; then
+  rm -f %q %q
+fi
 exit 0
-`, logPath, statePath, statePath, statePath, statePath, stoppedPath, statePath, stoppedPath, stoppedPath)
+`, logPath, statePath, statePath, statePath, statePath, stoppedPath, statePath, stoppedPath, stoppedPath, statePath, stoppedPath)
 	if err := os.WriteFile(filepath.Join(fakeBin, "limactl"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -6550,7 +6734,11 @@ exit 0
 	if err != nil {
 		t.Fatalf("start lifecycle owner daemon: %v", err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 	waitForAppLifecycleReconciliation(t, d, records[0].ID)
 
 	out.Reset()
@@ -6729,17 +6917,6 @@ func TestRunCLIAllowsOverlappingCommandsInOneWorkspaceEnvironment(t *testing.T) 
 	records, err := (environment.Store{Root: profileStore.Root}).List()
 	if err != nil || len(records) != 1 || records[0].Status != "ready" {
 		t.Fatalf("final CLI environment=%+v err=%v", records, err)
-	}
-}
-
-func receiveAppSessionStart(t *testing.T, started <-chan string) string {
-	t.Helper()
-	select {
-	case id := <-started:
-		return id
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for overlapping CLI run")
-		return ""
 	}
 }
 
@@ -7025,6 +7202,11 @@ exit 0
 
 func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 	home := t.TempDir()
+	limaHome, err := os.MkdirTemp("/tmp", "hideout-lima-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(limaHome) })
 	workspace := t.TempDir()
 	fakeBin := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "limactl.log")
@@ -7038,6 +7220,7 @@ func TestRunLimaTun2SocksFailsClosedWithoutSetupIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("LIMA_HOME", limaHome)
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HTTP_PROXY", "http://user:pass@proxy.invalid:8080")
 	t.Setenv("HTTPS_PROXY", "http://user:pass@proxy.invalid:8443")
@@ -9123,7 +9306,11 @@ func TestDaemonReconcileCLIResolvesEnvironmentNameAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		status := d.Status().Lifecycle
@@ -9184,7 +9371,11 @@ func TestDoctorDaemonFeatureReportsBlockedLifecycleTruth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 
 	var out, errOut bytes.Buffer
 	code := Main([]string{"doctor", "--backend", "native", "--feature", "daemon", "--level", "deep", "--format", "json"}, &out, &errOut)
@@ -9252,7 +9443,11 @@ func TestRuntimeStatusHumanAndJSONSurfacesKeepRecoveryParity(t *testing.T) {
 
 func TestDaemonOptionsEnableAutomaticStopAndShareLimaSSHTransports(t *testing.T) {
 	opts := (app{}).daemonOptions(profile.Store{Root: t.TempDir()}, 15*time.Minute)
-	defer opts.BackendShutdown()
+	defer func() {
+		if err := opts.BackendShutdown(); err != nil {
+			t.Errorf("shut down daemon backend: %v", err)
+		}
+	}()
 	if !opts.LifecycleAutomaticStop {
 		t.Fatal("production composition did not enable automatic stop")
 	}

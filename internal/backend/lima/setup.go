@@ -81,7 +81,7 @@ func (r rootSSHSetupRunner) Run(ctx context.Context, instanceName, workdir strin
 	session.Stdin = stdin
 	session.Stdout = stdout
 	session.Stderr = stderr
-	return runCancelableSSHCommand(ctx, session, session, setupShellCommand(workdir, env, command))
+	return runCancelableSSHCommand(ctx, session, session, rootControlShellCommand(workdir, env, command))
 }
 
 func retrySetupSSHConnect(ctx context.Context, connect func() (*ssh.Client, error)) (*ssh.Client, error) {
@@ -146,6 +146,15 @@ func setupShellCommand(workdir string, env []string, command []string) string {
 		b.WriteString(shellQuote(arg))
 	}
 	return b.String()
+}
+
+func rootControlShellCommand(workdir string, env []string, command []string) string {
+	inner := setupShellCommand(workdir, env, command)
+	// Lima's root SSH account enters with UID 0 but an empty effective
+	// capability set. The fixed, authenticated root control channel uses sudo
+	// only to restore those capabilities; setupShellCommand still starts from
+	// an empty environment, and the target user remains separately denied sudo.
+	return "exec /usr/bin/sudo -n -- /bin/sh -c " + shellQuote(inner)
 }
 
 func (b Backend) setupIdentity(ctx context.Context, session *backend.Session) privilege.SetupIdentity {

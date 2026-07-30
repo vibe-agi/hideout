@@ -1,0 +1,422 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/operator-snapshot.schema.json",
+  "title": "Hideout operator console snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "instanceId",
+    "credentialGeneration",
+    "sequence",
+    "streamHealth",
+    "profiles",
+    "sessions",
+    "environments",
+    "activity",
+    "coverage",
+    "activityRetention",
+    "risks",
+    "operations",
+    "capabilities",
+    "nextActions"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.operator-snapshot.v1" },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^daemon_[A-Za-z0-9_-]{1,124}$"
+    },
+    "credentialGeneration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "streamHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": [
+            "seeding",
+            "live",
+            "idle-live",
+            "stale",
+            "disconnected",
+            "credential-expired",
+            "schema-mismatch",
+            "daemon-less"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "profile-projection.schema.json"
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "command"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ses_[A-Za-z0-9_-]{1,124}$"
+          },
+          "environmentId": {
+            "type": "string",
+            "pattern": "^env_[A-Za-z0-9_-]{1,124}$"
+          },
+          "profile": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "state": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "environments": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "status",
+          "activeSessions",
+          "activeWorkspaceViews"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^env_[A-Za-z0-9_-]{1,124}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "profile": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "backend": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "workspace": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "instanceName": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "lastSessionId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "lastCommand": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "activeSessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "activeWorkspaceViews": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ownerHealth": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastStartedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastEndedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "activity": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "activity-record.schema.json"
+      }
+    },
+    "activityCursor": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "coverage": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "$ref": "coverage-interval.schema.json"
+      }
+    },
+    "activityRetention": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "owner",
+          "usedBytes",
+          "limitBytes",
+          "maxAgeSeconds",
+          "pruned",
+          "corrupt",
+          "reasons"
+        ],
+        "properties": {
+          "owner": {
+            "$ref": "activity-owner.schema.json"
+          },
+          "earliestAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latestAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "usedBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limitBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxAgeSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 31536000
+          },
+          "pruned": {
+            "type": "boolean"
+          },
+          "corrupt": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+            }
+          }
+        }
+      }
+    },
+    "activityStoreRetention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "usedBytes",
+        "limitBytes",
+        "defaultOwnerLimitBytes",
+        "activeSegmentBytes",
+        "owners",
+        "segments"
+      ],
+      "properties": {
+        "usedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limitBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "defaultOwnerLimitBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "activeSegmentBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "owners": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "segments": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "ruleId",
+          "ruleVersion",
+          "severity",
+          "title",
+          "confidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^risk_[A-Za-z0-9_-]{8,124}$"
+          },
+          "ruleId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "ruleVersion": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "severity": {
+            "enum": ["info", "low", "medium", "high", "critical"]
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "explanation": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "evidenceRefs": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "string",
+              "pattern": "^act_[A-Za-z0-9_-]{8,124}$"
+            }
+          },
+          "confidence": {
+            "enum": ["exact", "inferred", "limited"]
+          },
+          "policyStatus": {
+            "enum": ["allowed", "denied", "not-evaluated"]
+          },
+          "firstAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "nextAction": {
+            "type": "string",
+            "maxLength": 128
+          }
+        }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "operation.schema.json"
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "state": {
+            "enum": ["available", "partial", "unavailable"]
+          },
+          "provider": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "mutable": {
+            "type": "boolean"
+          },
+          "actionRefs": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+            }
+          }
+        }
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+      }
+    }
+  }
+}

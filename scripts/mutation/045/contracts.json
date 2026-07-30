@@ -1,0 +1,517 @@
+{
+  "schema": "hideout.045-claim-judge-contracts/v1",
+  "claims": [
+    {
+      "id": "A01",
+      "judges": ["release-candidate-ui"],
+      "requirements": [
+        {"id": "draftApplyRequests", "expected": 0},
+        {"id": "confirmedApplyRequests", "expected": 1},
+        {"id": "exactOperationId", "expected": true}
+      ],
+      "negative": {"id": "N045-A01", "requirement": "confirmedApplyRequests", "actual": 0}
+    },
+    {
+      "id": "A02",
+      "judges": ["release-candidate-local"],
+      "requirements": [
+        {"id": "baseRevisionBound", "expected": true},
+        {"id": "staleEffects", "expected": 0},
+        {"id": "digestMismatchEffects", "expected": 0},
+        {"id": "expiredPlanEffects", "expected": 0}
+      ],
+      "negative": {"id": "N045-A02", "requirement": "baseRevisionBound", "actual": false}
+    },
+    {
+      "id": "A03",
+      "judges": ["release-candidate-local"],
+      "requirements": [
+        {"id": "winningOperations", "expected": 1},
+        {"id": "providerEffects", "expected": 1},
+        {"id": "responseReplayExact", "expected": true},
+        {"id": "blockerOwnerVisible", "expected": true}
+      ],
+      "negative": {"id": "N045-A03", "requirement": "winningOperations", "actual": 2}
+    },
+    {
+      "id": "A04",
+      "judges": ["release-candidate-privacy", "keychain-real"],
+      "requirements": [
+        {"id": "authenticatedTypedOperation", "expected": true},
+        {"id": "profileStoresReferenceOnly", "expected": true},
+        {"id": "publicSecretCanaryHits", "expected": 0},
+        {"id": "generationInvalidated", "expected": true}
+      ],
+      "negative": {"id": "N045-A04", "requirement": "publicSecretCanaryHits", "actual": 1}
+    },
+    {
+      "id": "A05",
+      "judges": ["release-candidate-lima"],
+      "requirements": [
+        {"id": "genericTransactionWired", "expected": true},
+        {"id": "providerSequence", "expected": ["stage", "probe", "activate", "prove", "commit"]},
+        {"id": "stagingOnlyTerminalSuccess", "expected": false},
+        {"id": "committedRequiresProof", "expected": true}
+      ],
+      "negative": {"id": "N045-A05", "requirement": "providerSequence", "actual": ["stage", "probe", "activate", "commit"]}
+    },
+    {
+      "id": "A06",
+      "judges": ["release-candidate-lima"],
+      "requirements": [
+        {"id": "daemonPidStable", "expected": true},
+        {"id": "sessionIdStable", "expected": true},
+        {"id": "oldConnectionRouteStable", "expected": true},
+        {"id": "newConnectionUsesCommittedRoute", "expected": true}
+      ],
+      "negative": {"id": "N045-A06", "requirement": "oldConnectionRouteStable", "actual": false}
+    },
+    {
+      "id": "A07",
+      "judges": ["browser-console", "release-candidate-ui"],
+      "requirements": [
+        {"id": "controlsEnabledWhileStale", "expected": false},
+        {"id": "rejectedMutationAttempts", "expected": 1},
+        {"id": "authoritativeReseedObserved", "expected": true}
+      ],
+      "negative": {"id": "N045-A07", "requirement": "rejectedMutationAttempts", "actual": 0}
+    },
+    {
+      "id": "A08",
+      "judges": ["release-candidate-local"],
+      "requirements": [
+        {"id": "leaseBounded", "expected": true},
+        {"id": "releaseOrExpiryEvents", "expected": 1},
+        {"id": "survivingProviderTokens", "expected": 0},
+        {"id": "takeoverExactRevision", "expected": true}
+      ],
+      "negative": {"id": "N045-A08", "requirement": "releaseOrExpiryEvents", "actual": 0}
+    },
+    {
+      "id": "A09",
+      "judges": ["browser-console", "release-candidate-privacy"],
+      "requirements": [
+        {"id": "authenticatedLocalSurfaces", "expected": ["cli", "tui", "web"]},
+        {"id": "unauthenticatedResponsesWithOwnerData", "expected": 0},
+        {"id": "nonLoopbackExposure", "expected": false}
+      ],
+      "negative": {"id": "N045-A09", "requirement": "unauthenticatedResponsesWithOwnerData", "actual": 1}
+    },
+    {
+      "id": "A10",
+      "judges": ["release-candidate-privacy", "publication-absence"],
+      "requirements": [
+        {"id": "reviewedPlanApplied", "expected": true},
+        {"id": "pathPolicyAcknowledged", "expected": true},
+        {"id": "planDigestBound", "expected": true},
+        {"id": "publicationEffects", "expected": 0}
+      ],
+      "negative": {"id": "N045-A10", "requirement": "publicationEffects", "actual": 1}
+    },
+    {
+      "id": "AT01",
+      "judges": ["workload-observation-lima", "release-candidate-lima"],
+      "requirements": [
+        {"id": "targetObserved", "expected": true},
+        {"id": "descendantsObserved", "expected": true},
+        {"id": "reparentedChildObserved", "expected": true},
+        {"id": "unrelatedAttributedProcesses", "expected": 0},
+        {"id": "exactCgroupIdentity", "expected": true}
+      ],
+      "negative": {"id": "N045-AT01", "requirement": "unrelatedAttributedProcesses", "actual": 1}
+    },
+    {
+      "id": "AT02",
+      "judges": ["release-candidate-lima"],
+      "requirements": [
+        {"id": "executionIdsUniqueAcrossPidReuse", "expected": true},
+        {"id": "guestIdentityComplete", "expected": true},
+        {"id": "parentIdentityExact", "expected": true},
+        {"id": "unknownExitReassigned", "expected": false}
+      ],
+      "negative": {"id": "N045-AT02", "requirement": "executionIdsUniqueAcrossPidReuse", "actual": false}
+    },
+    {
+      "id": "AT03",
+      "judges": ["release-candidate-lima"],
+      "requirements": [
+        {"id": "provedMediatorActorExact", "expected": true},
+        {"id": "unboundMediatorAttribution", "expected": "unknown"},
+        {"id": "crossSessionMediatorAttributions", "expected": 0}
+      ],
+      "negative": {"id": "N045-AT03", "requirement": "unboundMediatorAttribution", "actual": "exact"}
+    },
+    {
+      "id": "AT04",
+      "judges": ["workload-observation-lima"],
+      "requirements": [
+        {"id": "requiredOperations", "expected": ["open", "read", "write", "mmap", "create", "truncate", "rename", "unlink", "metadata", "hardlink", "symlink"]},
+        {"id": "actorEvidenceComplete", "expected": true},
+        {"id": "fabricatedResolvedPaths", "expected": 0},
+        {"id": "destructiveOperationsCollapsed", "expected": 0}
+      ],
+      "negative": {"id": "N045-AT04", "requirement": "fabricatedResolvedPaths", "actual": 1}
+    },
+    {
+      "id": "AT05",
+      "judges": ["workload-observation-lima", "release-candidate-lima"],
+      "requirements": [
+        {"id": "requiredTransports", "expected": ["tcp4", "tcp6", "udp"]},
+        {"id": "actorEndpointEvidenceExact", "expected": true},
+        {"id": "mismatchedSocketEvidenceAccepted", "expected": false},
+        {"id": "desiredUsedAsEffective", "expected": false}
+      ],
+      "negative": {"id": "N045-AT05", "requirement": "desiredUsedAsEffective", "actual": true}
+    },
+    {
+      "id": "AT06",
+      "judges": ["workload-observation-lima", "workload-privacy-lima"],
+      "requirements": [
+        {"id": "expectedDnsFactsPresent", "expected": true},
+        {"id": "transactionActorMatched", "expected": true},
+        {"id": "packetPayloadBytesRetained", "expected": 0},
+        {"id": "parserUncertaintyBounded", "expected": true}
+      ],
+      "negative": {"id": "N045-AT06", "requirement": "packetPayloadBytesRetained", "actual": 16}
+    },
+    {
+      "id": "AT07",
+      "judges": ["release-candidate-lima"],
+      "requirements": [
+        {"id": "supportedGrades", "expected": ["exact", "inferred", "unknown"]},
+        {"id": "falseExactAttributions", "expected": 0},
+        {"id": "ttlAndExecutionBound", "expected": true},
+        {"id": "sharedLiteralEncryptedReduced", "expected": true}
+      ],
+      "negative": {"id": "N045-AT07", "requirement": "falseExactAttributions", "actual": 1}
+    },
+    {
+      "id": "AT08",
+      "judges": ["release-candidate-local", "release-candidate-ui"],
+      "requirements": [
+        {"id": "ruleAndVersionPresent", "expected": true},
+        {"id": "evidenceRefsComplete", "expected": true},
+        {"id": "policyAndObservationSeparate", "expected": true},
+        {"id": "deterministicOutput", "expected": true},
+        {"id": "nextActionPresent", "expected": true}
+      ],
+      "negative": {"id": "N045-AT08", "requirement": "evidenceRefsComplete", "actual": false}
+    },
+    {
+      "id": "R01",
+      "judges": ["workload-privacy-lima", "release-candidate-privacy"],
+      "requirements": [
+        {"id": "sinkCanaryHits", "expected": {"api": 0, "evidence": 0, "export": 0, "index": 0, "log": 0, "process": 0, "store": 0, "support": 0, "ui": 0}},
+        {"id": "fileContentFields", "expected": 0},
+        {"id": "packetPayloadFields", "expected": 0}
+      ],
+      "negative": {"id": "N045-R01", "requirement": "sinkCanaryHits", "actual": {"api": 0, "evidence": 0, "export": 0, "index": 0, "log": 0, "process": 0, "store": 1, "support": 0, "ui": 0}}
+    },
+    {
+      "id": "R02",
+      "judges": ["release-candidate-privacy"],
+      "requirements": [
+        {"id": "canaryClassHits", "expected": {"authField": 0, "controlToken": 0, "encoded": 0, "managedValue": 0, "sensitiveArg": 0, "sensitiveQuery": 0, "splitForm": 0, "uriUserinfo": 0}},
+        {"id": "redactionBeforePersistence", "expected": true},
+        {"id": "redactionFailurePersistedRecords", "expected": 0}
+      ],
+      "negative": {"id": "N045-R02", "requirement": "canaryClassHits", "actual": {"authField": 0, "controlToken": 0, "encoded": 0, "managedValue": 0, "sensitiveArg": 0, "sensitiveQuery": 0, "splitForm": 0, "uriUserinfo": 1}}
+    },
+    {
+      "id": "R03",
+      "judges": ["release-candidate-privacy"],
+      "requirements": [
+        {"id": "localPathPreserved", "expected": true},
+        {"id": "redactedExportContainsHostPath", "expected": false},
+        {"id": "preservePolicyRequiresAcknowledgement", "expected": true}
+      ],
+      "negative": {"id": "N045-R03", "requirement": "redactedExportContainsHostPath", "actual": true}
+    },
+    {
+      "id": "R04",
+      "judges": ["documentation-truth", "terminology-privacy"],
+      "requirements": [
+        {"id": "residualUserDataRiskDisclosed", "expected": true},
+        {"id": "auditAndActivityRetentionDistinct", "expected": true},
+        {"id": "completeAuditOverclaims", "expected": 0},
+        {"id": "arbitrarySecretDiscoveryClaims", "expected": 0}
+      ],
+      "negative": {"id": "N045-R04", "requirement": "completeAuditOverclaims", "actual": 1}
+    },
+    {
+      "id": "R05",
+      "judges": ["release-candidate-privacy"],
+      "requirements": [
+        {"id": "directoryMode", "expected": "0700"},
+        {"id": "fileMode", "expected": "0600"},
+        {"id": "linkReplacementAccepted", "expected": false},
+        {"id": "targetReadSucceeded", "expected": false},
+        {"id": "unauthenticatedReadSucceeded", "expected": false}
+      ],
+      "negative": {"id": "N045-R05", "requirement": "fileMode", "actual": "0644"}
+    },
+    {
+      "id": "C01",
+      "judges": ["workload-observation-lima", "release-candidate-ui"],
+      "requirements": [
+        {"id": "coverageSubsystems", "expected": ["process", "file", "network", "dns"]},
+        {"id": "independentIntervals", "expected": true},
+        {"id": "reasonGenerationLossRetentionFields", "expected": true},
+        {"id": "sharedGlobalInterval", "expected": false}
+      ],
+      "negative": {"id": "N045-C01", "requirement": "independentIntervals", "actual": false}
+    },
+    {
+      "id": "C02",
+      "judges": ["workload-privacy-lima", "browser-console", "release-candidate-lima"],
+      "requirements": [
+        {"id": "injectedReasons", "expected": ["unsupported-capability", "observer-restart", "escape", "truncation", "schema-mismatch", "redaction-loss", "stream-gap", "event-loss"]},
+        {"id": "affectedSubsystemOnly", "expected": true},
+        {"id": "falseAvailableIntervals", "expected": 0},
+        {"id": "visibleReasonsComplete", "expected": true}
+      ],
+      "negative": {"id": "N045-C02", "requirement": "falseAvailableIntervals", "actual": 1}
+    },
+    {
+      "id": "C03",
+      "judges": ["browser-console", "release-candidate-ui"],
+      "requirements": [
+        {"id": "partialRenderedHealthy", "expected": false},
+        {"id": "unavailableRenderedAsZeroActivity", "expected": false},
+        {"id": "mutationEnabledOnReducedCoverage", "expected": false},
+        {"id": "coverageReasonVisible", "expected": true}
+      ],
+      "negative": {"id": "N045-C03", "requirement": "partialRenderedHealthy", "actual": true}
+    },
+    {
+      "id": "C04",
+      "judges": ["browser-console", "release-candidate-ui"],
+      "requirements": [
+        {"id": "duplicateCountDelta", "expected": 0},
+        {"id": "gapRequiresReseed", "expected": true},
+        {"id": "liveWithoutReseed", "expected": false},
+        {"id": "healthyPollingRequests", "expected": 0}
+      ],
+      "negative": {"id": "N045-C04", "requirement": "liveWithoutReseed", "actual": true}
+    },
+    {
+      "id": "C05",
+      "judges": ["workload-privacy-lima", "release-candidate-performance"],
+      "requirements": [
+        {"id": "queryOwnerStable", "expected": true},
+        {"id": "pruneOrder", "expected": "oldest-sealed"},
+        {"id": "foreignOwnerPruned", "expected": false},
+        {"id": "historyCompleteAfterPrune", "expected": false},
+        {"id": "quotaOvershootActiveSegments", "expected": 1}
+      ],
+      "negative": {"id": "N045-C05", "requirement": "historyCompleteAfterPrune", "actual": true}
+    },
+    {
+      "id": "C06",
+      "judges": ["release-candidate-performance"],
+      "requirements": [
+        {"id": "rawSamplesPresent", "expected": true},
+        {"id": "percentilesRecomputed", "expected": true},
+        {"id": "unitsStable", "expected": true},
+        {"id": "thresholdsPassed", "expected": true},
+        {"id": "exactCandidateBound", "expected": true}
+      ],
+      "negative": {"id": "N045-C06", "requirement": "rawSamplesPresent", "actual": false}
+    },
+    {
+      "id": "H01",
+      "judges": ["release-candidate-local", "quickstart-installed"],
+      "requirements": [
+        {"id": "ordinaryJourneyOrder", "expected": ["setup", "run", "inspect", "change", "recover"]},
+        {"id": "copyableExamples", "expected": true},
+        {"id": "expandedHelpRoute", "expected": "hideout help all"},
+        {"id": "maxHelpInvocations", "expected": 2}
+      ],
+      "negative": {"id": "N045-H01", "requirement": "ordinaryJourneyOrder", "actual": ["setup", "run", "inspect", "change"]}
+    },
+    {
+      "id": "H02",
+      "judges": ["release-candidate-local"],
+      "requirements": [
+        {"id": "metadataFields", "expected": ["purpose", "syntax", "prerequisites", "effects", "safety", "recovery", "nextAction", "audience", "stability"]},
+        {"id": "routeInventoryExact", "expected": true},
+        {"id": "aliasesUnique", "expected": true},
+        {"id": "unknownRoutes", "expected": 0}
+      ],
+      "negative": {"id": "N045-H02", "requirement": "routeInventoryExact", "actual": false}
+    },
+    {
+      "id": "H03",
+      "judges": ["release-candidate-ui", "quickstart-installed"],
+      "requirements": [
+        {"id": "helpWrites", "expected": 0},
+        {"id": "unknownTopicExpandedHint", "expected": true},
+        {"id": "surfaceCatalogsEqual", "expected": true},
+        {"id": "surfaceEffectsEqual", "expected": true}
+      ],
+      "negative": {"id": "N045-H03", "requirement": "surfaceEffectsEqual", "actual": false}
+    },
+    {
+      "id": "U01",
+      "judges": ["release-candidate-ui"],
+      "requirements": [
+        {"id": "alternateScreenEntered", "expected": true},
+        {"id": "alternateScreenRestored", "expected": true},
+        {"id": "keyboardDialogReached", "expected": true},
+        {"id": "primaryFactsVisible", "expected": true},
+        {"id": "onceModePlain", "expected": true}
+      ],
+      "negative": {"id": "N045-U01", "requirement": "alternateScreenRestored", "actual": false}
+    },
+    {
+      "id": "U02",
+      "judges": ["browser-console"],
+      "requirements": [
+        {"id": "filterGroups", "expected": ["owner", "session", "process", "time", "subject", "risk", "coverage"]},
+        {"id": "correlationReached", "expected": true},
+        {"id": "retainedGapVisible", "expected": true},
+        {"id": "newestFirst", "expected": true},
+        {"id": "maxMountedRows", "expected": 200},
+        {"id": "healthyPollingRequests", "expected": 0}
+      ],
+      "negative": {"id": "N045-U02", "requirement": "maxMountedRows", "actual": 201}
+    },
+    {
+      "id": "U03",
+      "judges": ["release-candidate-ui"],
+      "requirements": [
+        {"id": "surfaceFactsEqual", "expected": true},
+        {"id": "desiredEffectiveDistinct", "expected": true},
+        {"id": "priorSessionSnapshotImmutable", "expected": true},
+        {"id": "stateLabelsComplete", "expected": ["live", "next-attach", "recreate", "stale", "blocked", "failed", "rolled-back"]}
+      ],
+      "negative": {"id": "N045-U03", "requirement": "surfaceFactsEqual", "actual": false}
+    },
+    {
+      "id": "U04",
+      "judges": ["browser-console", "release-candidate-ui"],
+      "requirements": [
+        {"id": "phases", "expected": ["draft", "plan", "review", "confirm", "apply", "terminal"]},
+        {"id": "preconfirmApplyRequests", "expected": 0},
+        {"id": "operationIdStable", "expected": true},
+        {"id": "terminalEvidencePresent", "expected": true},
+        {"id": "responseLossLookupSucceeded", "expected": true}
+      ],
+      "negative": {"id": "N045-U04", "requirement": "preconfirmApplyRequests", "actual": 1}
+    },
+    {
+      "id": "U05",
+      "judges": ["browser-console"],
+      "requirements": [
+        {"id": "accessibilityViolations", "expected": 0},
+        {"id": "focusReturned", "expected": true},
+        {"id": "maxMountedRows", "expected": 200},
+        {"id": "credentialInFragmentAfterBoot", "expected": false},
+        {"id": "unsafeDynamicHtmlNodes", "expected": 0}
+      ],
+      "negative": {"id": "N045-U05", "requirement": "credentialInFragmentAfterBoot", "actual": true}
+    },
+    {
+      "id": "RC01",
+      "judges": ["recovery", "release-candidate-lima"],
+      "requirements": [
+        {"id": "prePostOperationIdSame", "expected": true},
+        {"id": "queryableAfterRestart", "expected": true},
+        {"id": "provedEffectReplayed", "expected": false},
+        {"id": "terminalEvidencePresent", "expected": true}
+      ],
+      "negative": {"id": "N045-RC01", "requirement": "terminalEvidencePresent", "actual": false}
+    },
+    {
+      "id": "RC02",
+      "judges": ["recovery"],
+      "requirements": [
+        {"id": "crashPoints", "expected": 16},
+        {"id": "successWithoutProof", "expected": 0},
+        {"id": "proofArtifactsPresent", "expected": true},
+        {"id": "effectArtifactsPresent", "expected": true}
+      ],
+      "negative": {"id": "N045-RC02", "requirement": "proofArtifactsPresent", "actual": false}
+    },
+    {
+      "id": "RC03",
+      "judges": ["recovery"],
+      "requirements": [
+        {"id": "duplicateProviderEffects", "expected": 0},
+        {"id": "duplicateTerminalEvents", "expected": 0},
+        {"id": "responseReplayExact", "expected": true},
+        {"id": "runningEffectsObserved", "expected": true}
+      ],
+      "negative": {"id": "N045-RC03", "requirement": "duplicateProviderEffects", "actual": 1}
+    },
+    {
+      "id": "RC04",
+      "judges": ["formal", "recovery"],
+      "requirements": [
+        {"id": "requiredModels", "expected": ["OperatorConfiguration", "SecretTransition", "WorkloadObservation", "RequestWorkflow"]},
+        {"id": "counterexamples", "expected": 0},
+        {"id": "staleModelDigests", "expected": 0},
+        {"id": "livenessComplete", "expected": true},
+        {"id": "refinementTracesPassed", "expected": true}
+      ],
+      "negative": {"id": "N045-RC04", "requirement": "counterexamples", "actual": 1}
+    },
+    {
+      "id": "RC05",
+      "judges": ["release-candidate-lima"],
+      "requirements": [
+        {"id": "crashBoundaries", "expected": ["validation", "stage", "activate", "proof", "rollback"]},
+        {"id": "falseTerminalSuccess", "expected": 0},
+        {"id": "exactGenerationAndProbeEvidence", "expected": true},
+        {"id": "activationReplayed", "expected": false},
+        {"id": "actionableRecoveryPresent", "expected": true}
+      ],
+      "negative": {"id": "N045-RC05", "requirement": "exactGenerationAndProbeEvidence", "actual": false}
+    },
+    {
+      "id": "CL01",
+      "judges": ["workload-privacy-lima", "release-candidate-lima"],
+      "requirements": [
+        {"id": "terminalProofPresent", "expected": true},
+        {"id": "exactDisposableOwnerAbsent", "expected": true},
+        {"id": "reusableOwnerPreserved", "expected": true},
+        {"id": "auditPreserved", "expected": true}
+      ],
+      "negative": {"id": "N045-CL01", "requirement": "terminalProofPresent", "actual": false}
+    },
+    {
+      "id": "CL02",
+      "judges": ["workload-privacy-lima", "release-candidate-lima"],
+      "requirements": [
+        {"id": "plannedIncarnationMatched", "expected": true},
+        {"id": "oldIncarnationAbsent", "expected": true},
+        {"id": "newIncarnationPresent", "expected": true},
+        {"id": "queryOnlyProof", "expected": false}
+      ],
+      "negative": {"id": "N045-CL02", "requirement": "newIncarnationPresent", "actual": false}
+    },
+    {
+      "id": "CL03",
+      "judges": ["release-candidate-privacy", "release-candidate-performance"],
+      "requirements": [
+        {"id": "corruptFramesReturned", "expected": 0},
+        {"id": "pruneOrder", "expected": "oldest-sealed"},
+        {"id": "coverageGapVisible", "expected": true},
+        {"id": "quarantinePresent", "expected": true}
+      ],
+      "negative": {"id": "N045-CL03", "requirement": "quarantinePresent", "actual": false}
+    },
+    {
+      "id": "CL04",
+      "judges": ["package-lifecycle", "local-install", "publication-absence"],
+      "requirements": [
+        {"id": "candidateIdentitySame", "expected": true},
+        {"id": "legacyActivityAbsent", "expected": true},
+        {"id": "unrelatedDataPreserved", "expected": true},
+        {"id": "observerAndUiAssetsRemoved", "expected": true},
+        {"id": "publicationEffects", "expected": 0}
+      ],
+      "negative": {"id": "N045-CL04", "requirement": "publicationEffects", "actual": 1}
+    }
+  ]
+}

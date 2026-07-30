@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/hideout/internal/sessionwire"
 )
 
 type recordingWire struct {
@@ -37,8 +39,8 @@ func (w *recordingWire) ReadControl() (supervisorControl, error) {
 	result := <-w.controls
 	return result.control, result.err
 }
-func (*recordingWire) WriteReady() error               { return nil }
-func (*recordingWire) WriteError(string, string) error { return nil }
+func (*recordingWire) WriteReady(*sessionwire.SupervisorActivityReady) error { return nil }
+func (*recordingWire) WriteError(string, string) error                       { return nil }
 func (w *recordingWire) WriteCompletion(completion targetCompletion) error {
 	w.mu.Lock()
 	w.completion = completion
@@ -69,9 +71,10 @@ func (w *recordingWire) completed() targetCompletion {
 }
 
 type commitFailureWire struct {
-	spec      startSpec
-	commitErr error
-	ready     bool
+	spec          startSpec
+	commitErr     error
+	ready         bool
+	readyActivity *sessionwire.SupervisorActivityReady
 }
 
 func (w *commitFailureWire) ReadStart() (startSpec, error) { return w.spec, nil }
@@ -79,8 +82,9 @@ func (w *commitFailureWire) ReadCommit() error             { return w.commitErr 
 func (*commitFailureWire) ReadControl() (supervisorControl, error) {
 	return supervisorControl{}, io.EOF
 }
-func (w *commitFailureWire) WriteReady() error {
+func (w *commitFailureWire) WriteReady(activity *sessionwire.SupervisorActivityReady) error {
 	w.ready = true
+	w.readyActivity = activity
 	return nil
 }
 func (*commitFailureWire) WriteOutput(outputKind, []byte) error   { return nil }
@@ -125,7 +129,7 @@ func TestSupervisorDoesNotStartTargetBeforeCommit(t *testing.T) {
 func TestPipeTargetKeepsStdoutStderrSeparateAndReaps(t *testing.T) {
 	spec := linuxTestStart(t, terminalSpec{Mode: "none"}, []string{"sh", "-c", "printf stdout; printf stderr >&2; exit 7"})
 	wire := newRecordingWire()
-	process, err := startTarget(spec, wire)
+	process, err := startLinuxTestTarget(t, spec, wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +155,7 @@ func TestPipeTargetKeepsStdoutStderrSeparateAndReaps(t *testing.T) {
 func TestPTYTargetUsesInitialAndDynamicSize(t *testing.T) {
 	spec := linuxTestStart(t, terminalSpec{Mode: "pty", Rows: 24, Columns: 80, Term: "xterm-256color"}, []string{"sh", "-c", "stty size; IFS= read -r line; stty size; printf ':%s:' \"$line\""})
 	wire := newRecordingWire()
-	process, err := startTarget(spec, wire)
+	process, err := startLinuxTestTarget(t, spec, wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +185,7 @@ func TestPTYTargetUsesInitialAndDynamicSize(t *testing.T) {
 func TestTransportEOFTerminatesAndReapsProcessGroup(t *testing.T) {
 	spec := linuxTestStart(t, terminalSpec{Mode: "none"}, []string{"sh", "-c", "trap 'exit 0' TERM; printf ready; while :; do sleep 1; done"})
 	wire := newRecordingWire()
-	process, err := startTarget(spec, wire)
+	process, err := startLinuxTestTarget(t, spec, wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +203,7 @@ func TestTransportEOFTerminatesAndReapsProcessGroup(t *testing.T) {
 func TestCancelProducesTypedCompletionAfterReaping(t *testing.T) {
 	spec := linuxTestStart(t, terminalSpec{Mode: "none"}, []string{"sh", "-c", "trap 'exit 0' TERM; printf ready; while :; do sleep 1; done"})
 	wire := newRecordingWire()
-	process, err := startTarget(spec, wire)
+	process, err := startLinuxTestTarget(t, spec, wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +222,7 @@ func TestCancelProducesTypedCompletionAfterReaping(t *testing.T) {
 func TestPipeStdinEOFCausesRealChildEOF(t *testing.T) {
 	spec := linuxTestStart(t, terminalSpec{Mode: "none"}, []string{"sh", "-c", "cat; printf eof >&2"})
 	wire := newRecordingWire()
-	process, err := startTarget(spec, wire)
+	process, err := startLinuxTestTarget(t, spec, wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +245,7 @@ func TestPipeStdinEOFCausesRealChildEOF(t *testing.T) {
 func TestPipeStdinEOFAfterTargetExitIsIdempotent(t *testing.T) {
 	spec := linuxTestStart(t, terminalSpec{Mode: "none"}, []string{"true"})
 	wire := newRecordingWire()
-	process, err := startTarget(spec, wire)
+	process, err := startLinuxTestTarget(t, spec, wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,13 +304,26 @@ func TestOutputQueueFailsClosedInsteadOfDropping(t *testing.T) {
 
 type blockingWire struct{ release chan struct{} }
 
-func (*blockingWire) ReadStart() (startSpec, error)           { return startSpec{}, io.EOF }
-func (*blockingWire) ReadCommit() error                       { return nil }
-func (*blockingWire) ReadControl() (supervisorControl, error) { return supervisorControl{}, io.EOF }
-func (*blockingWire) WriteReady() error                       { return nil }
-func (*blockingWire) WriteError(string, string) error         { return nil }
-func (*blockingWire) WriteCompletion(targetCompletion) error  { return nil }
-func (w *blockingWire) WriteOutput(outputKind, []byte) error  { <-w.release; return nil }
+func (*blockingWire) ReadStart() (startSpec, error)                         { return startSpec{}, io.EOF }
+func (*blockingWire) ReadCommit() error                                     { return nil }
+func (*blockingWire) ReadControl() (supervisorControl, error)               { return supervisorControl{}, io.EOF }
+func (*blockingWire) WriteReady(*sessionwire.SupervisorActivityReady) error { return nil }
+func (*blockingWire) WriteError(string, string) error                       { return nil }
+func (*blockingWire) WriteCompletion(targetCompletion) error                { return nil }
+func (w *blockingWire) WriteOutput(outputKind, []byte) error                { <-w.release; return nil }
+
+func startLinuxTestTarget(
+	t *testing.T,
+	spec startSpec,
+	wire supervisorWire,
+) (*targetProcess, error) {
+	t.Helper()
+	return startTargetWithSessionCgroup(spec, wire, sessionCgroupOptions{
+		Root:                       t.TempDir(),
+		Backend:                    newFakeSessionCgroupBackend(),
+		SkipAtomicPlacementForTest: true,
+	})
+}
 
 func linuxTestStart(t *testing.T, terminal terminalSpec, argv []string) startSpec {
 	t.Helper()

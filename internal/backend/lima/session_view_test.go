@@ -737,9 +737,53 @@ func TestEnvironmentNetworkDNSReconfigureSeparatesHelperAndStateDirectories(t *t
 		`pid_file="$network_dir/dns-stub.pid"`,
 		`"$network_dir/dns-stub.log"`,
 		`"$network_dir/mediated-resolver"`,
+		"/proc/sys/kernel/random/boot_id",
+		session.ExpectedBootID,
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("DNS reconfiguration missing %q: %s", required, joined)
+		}
+	}
+}
+
+func TestEnvironmentNetworkDNSVerifierBindsExactBootAndResolver(
+	t *testing.T,
+) {
+	runner := &sessionViewSetupRunner{}
+	b := Backend{
+		SetupRunner:   runner,
+		ControlStdout: io.Discard,
+		ControlStderr: io.Discard,
+	}
+	session := &backend.Session{
+		ID:           "ses_20260716T120000Z_0123456789abcdef",
+		InstanceName: "hideout-test",
+		ExpectedBootID: "01234567-89ab-cdef-0123-" +
+			"456789abcdef",
+	}
+	if err := b.VerifyEnvironmentNetworkDNS(
+		context.Background(),
+		session,
+		"/hideout/runtime/services/network",
+		"9.9.9.9",
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.command, " ")
+	for _, required := range []string{
+		"/proc/sys/kernel/random/boot_id",
+		session.ExpectedBootID,
+		`"$network_dir/mediated-resolver"`,
+		"9.9.9.9",
+		`"$network_dir/dns-stub.pid"`,
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf(
+				"DNS verification missing %q: %s",
+				required,
+				joined,
+			)
 		}
 	}
 }

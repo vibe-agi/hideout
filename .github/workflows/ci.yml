@@ -51,6 +51,20 @@ jobs:
             .dependencies.markdownlint.version == "0.40.0"
           ' >/dev/null
 
+      - name: Install pinned workload-observer generation tooling
+        run: |
+          set -euo pipefail
+          brew install llvm@19
+          llvm_prefix="$(brew --prefix llvm@19)"
+          echo "HIDEOUT_BPF_CLANG=${llvm_prefix}/bin/clang" >>"$GITHUB_ENV"
+          echo "HIDEOUT_BPF_LLVM_STRIP=${llvm_prefix}/bin/llvm-strip" >>"$GITHUB_ENV"
+
+      - name: Reject stale feature artifacts or missing licenses
+        run: |
+          set -euo pipefail
+          scripts/gates/generated.sh
+          scripts/gates/dependency-licenses.sh
+
       - name: Run the complete local contract gate
         env:
           # A skipped tap parity check is not parity proof: CI checks out the

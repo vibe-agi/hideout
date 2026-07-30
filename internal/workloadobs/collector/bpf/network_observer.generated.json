@@ -1,0 +1,16 @@
+{
+  "bpf2goVersion": "v0.22.0",
+  "compiler": "clang",
+  "compilerVersion": "19.1.7",
+  "generatedGo": "internal/workloadobs/collector/bpf/network_observer_bpfel.go",
+  "generatedGoSHA256": "0ba96749f08dab806213a1f412cde7c893b583b266c1701ec36fa3d33f76f62d",
+  "goVersion": "go1.25.12",
+  "kernelProgramLicense": "GPL",
+  "license": "Apache-2.0 OR GPL-2.0-only",
+  "object": "internal/workloadobs/collector/bpf/network_observer_bpfel.o",
+  "objectSHA256": "92888a0ab00795238c58ae52513f7af7ad19bdbd08a980dc4311765d0996a4e8",
+  "schema": "hideout.generated-bpf/v2",
+  "source": "internal/workloadobs/collector/bpf/network_programs.c",
+  "sourceSHA256": "e6a72552bca14f7e2eb1aedc0ab0a678961a781bf58019c6f230b9a2eac5971b",
+  "target": "bpfel"
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,10 +274,17 @@ func TestCapabilityTokenEqualRequiresExactNonEmptyMatch(t *testing.T) {
 
 func TestHandleAllowsHTTPSOpen(t *testing.T) {
 	opener := &recordingOpener{}
+	evaluator := policy.NewEvaluator(profile.Default("test"))
+	evaluator.ResolveHost = func(host string) ([]netip.Addr, error) {
+		if host != "example.com" {
+			return nil, errors.New("unexpected host")
+		}
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
 	server := Server{
 		SessionID: "ses_1",
 		Token:     "cap_good",
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: evaluator,
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{

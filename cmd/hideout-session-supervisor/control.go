@@ -1,6 +1,10 @@
 package main
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/vibe-agi/hideout/internal/sessionwire"
+)
 
 type controlKind uint8
 
@@ -36,7 +40,7 @@ type supervisorWire interface {
 	ReadStart() (startSpec, error)
 	ReadCommit() error
 	ReadControl() (supervisorControl, error)
-	WriteReady() error
+	WriteReady(*sessionwire.SupervisorActivityReady) error
 	WriteOutput(outputKind, []byte) error
 	WriteError(code, summary string) error
 	WriteCompletion(targetCompletion) error

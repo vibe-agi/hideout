@@ -1,0 +1,741 @@
+{
+  "schema": "hideout.045-production-mutations/v1",
+  "mutations": [
+    {
+      "id": "M045-A01",
+      "claimId": "A01",
+      "description": "Apply the reviewed TUI configuration plan as soon as planning returns, before review and confirmation.",
+      "source": "internal/tui/modal/config.go",
+      "from": "\teditor.profilePlan = &plan\n\teditor.stage = StageReview\n\treturn nil, Outcome{}\n",
+      "to": "\teditor.profilePlan = &plan\n\treturn editor.startConfigurationApply()\n",
+      "packages": [
+        "./internal/app"
+      ],
+      "tests": "^TestTUIConfigPTYDraftReviewConfirmApplyAndTerminalEvidence$",
+      "killTests": [
+        "TestTUIConfigPTYDraftReviewConfirmApplyAndTerminalEvidence"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A02",
+      "claimId": "A02",
+      "description": "Accept a canonical replan whose digest or target no longer matches the reviewed configuration plan.",
+      "source": "internal/manager/profile_transaction.go",
+      "from": "\tif replanned.Plan.PlanDigest != record.Plan.PlanDigest ||\n\t\treplanned.TargetDigest != record.TargetDigest {\n",
+      "to": "\tif false && (replanned.Plan.PlanDigest != record.Plan.PlanDigest ||\n\t\treplanned.TargetDigest != record.TargetDigest) {\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestProfileTransactionRejectsCanonicalReplanDrift$",
+      "killTests": [
+        "TestProfileTransactionRejectsCanonicalReplanDrift"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A03",
+      "claimId": "A03",
+      "description": "Ignore a terminal operation on response retry and attempt to execute its private plan again.",
+      "source": "internal/manager/profile_transaction.go",
+      "from": "\tif operation.Terminal() {\n\t\tprojection, projectionErr := service.projections().Load(request.Profile)\n\t\treturn ConfigurationApplyResult{\n\t\t\tOperation: operation, Projection: projection,\n\t\t}, projectionErr\n\t}\n",
+      "to": "\tif false && operation.Terminal() {\n\t\tprojection, projectionErr := service.projections().Load(request.Profile)\n\t\treturn ConfigurationApplyResult{\n\t\t\tOperation: operation, Projection: projection,\n\t\t}, projectionErr\n\t}\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestProfileTransactionResponseLossRetryReplaysTerminalResult$",
+      "killTests": [
+        "TestProfileTransactionResponseLossRetryReplaysTerminalResult"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A04",
+      "claimId": "A04",
+      "description": "Leave caller-owned secret material live after the typed secret operation returns.",
+      "source": "internal/manager/secret_service.go",
+      "from": "\t\tdefer request.Value.Clear()\n",
+      "to": "\t\t_ = request.Value\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestSecretServicePlansWithoutValueAndAppliesExactlyOnce$",
+      "killTests": [
+        "TestSecretServicePlansWithoutValueAndAppliesExactlyOnce"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A05",
+      "claimId": "A05",
+      "description": "Commit a staged network candidate before the probe, activation, route proof, and drain checkpoints.",
+      "source": "internal/manager/network_transition.go",
+      "from": "\tproof, err = handle.ProbeNetworkCandidate(ctx)\n",
+      "to": "\t_ = handle.CommitNetworkCandidate(ctx)\n\tproof, err = handle.ProbeNetworkCandidate(ctx)\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestNetworkTransitionRouteStagesProbesActivatesProvesDrainsAndCommits$",
+      "killTests": [
+        "TestNetworkTransitionRouteStagesProbesActivatesProvesDrainsAndCommits"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A06",
+      "claimId": "A06",
+      "description": "Re-read the active gateway route when handling an accepted connection instead of retaining its accept-time route.",
+      "source": "internal/network/gateway.go",
+      "from": "\tif route == nil || route.dial == nil {\n",
+      "to": "\troute = entry.route.Load()\n\tif route == nil || route.dial == nil {\n",
+      "packages": [
+        "./internal/network"
+      ],
+      "tests": "^TestEnvironmentGatewayAcceptedConnectionKeepsPreviousRoute$",
+      "killTests": [
+        "TestEnvironmentGatewayAcceptedConnectionKeepsPreviousRoute"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A07",
+      "claimId": "A07",
+      "description": "Authorize mutations regardless of stale, disconnected, gap-detected, or credential-expired stream health.",
+      "source": "internal/liveconsole/model.go",
+      "from": "func (state State) CanMutate() bool {\n\tif state.Version != SeedVersionV2 ||\n\t\t!daemonInstancePattern.MatchString(state.DaemonInstanceID) ||\n\t\tstate.CredentialGeneration == 0 ||\n\t\tstate.LastSeq < 0 ||\n\t\tstate.ReadOnly ||\n\t\tstate.RequiresReseed {\n\t\treturn false\n\t}\n\treturn state.StreamHealth.State == HealthLive || state.StreamHealth.State == HealthIdleLive\n}\n",
+      "to": "func (state State) CanMutate() bool {\n\treturn true\n}\n",
+      "packages": [
+        "./internal/liveconsole"
+      ],
+      "tests": "^TestReducerV2SequenceGapIsStickyReadOnly$",
+      "killTests": [
+        "TestReducerV2SequenceGapIsStickyReadOnly"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A08",
+      "claimId": "A08",
+      "description": "Check claim expiry against an earlier time so an expired decision lease retains authority.",
+      "source": "internal/manager/decision_service.go",
+      "from": "\treleased, err := store.ReleaseExpiredClaims(now)\n",
+      "to": "\treleased, err := store.ReleaseExpiredClaims(now.Add(-24 * time.Hour))\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestDecisionClaimExpiryEmitsReleaseAndStaleClaimantFails$",
+      "killTests": [
+        "TestDecisionClaimExpiryEmitsReleaseAndStaleClaimantFails"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A09",
+      "claimId": "A09",
+      "description": "Continue serving Manager resources after local API authentication fails.",
+      "source": "internal/manager/api.go",
+      "from": "\tif err := api.authorize(r); err != nil {\n",
+      "to": "\tif err := api.authorize(r); false && err != nil {\n",
+      "packages": [
+        "./internal/workloadobs/store"
+      ],
+      "tests": "^TestUnauthenticatedActivityAPILeaksNoStoreEvidence$",
+      "killTests": [
+        "TestUnauthenticatedActivityAPILeaksNoStoreEvidence"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-A10",
+      "claimId": "A10",
+      "description": "Allow an activity export apply request to cross the authority boundary without explicit confirmation.",
+      "source": "internal/manager/activity_export.go",
+      "from": "\tif !request.Confirmed {\n\t\treturn ActivityExportApplyResult{},\n\t\t\tErrActivityExportConfirmationRequired\n\t}\n",
+      "to": "\tif false && !request.Confirmed {\n\t\treturn ActivityExportApplyResult{},\n\t\t\tErrActivityExportConfirmationRequired\n\t}\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestActivityExportApplyRejectsUnconfirmedTamperedAndStalePlans$",
+      "killTests": [
+        "TestActivityExportApplyRejectsUnconfirmedTamperedAndStalePlans"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT01",
+      "claimId": "AT01",
+      "description": "Accept a process event from a different cgroup into the workload execution tree.",
+      "source": "internal/workloadobs/collector/process/process.go",
+      "from": "\t\tevent.CgroupID != normalizer.boundary.CgroupID ||\n",
+      "to": "\t\tfalse && event.CgroupID != normalizer.boundary.CgroupID ||\n",
+      "packages": [
+        "./internal/workloadobs/collector"
+      ],
+      "tests": "^TestProcessNormalizerRejectsCrossCgroupAndUnknownExitWithoutReassignment$",
+      "killTests": [
+        "TestProcessNormalizerRejectsCrossCgroupAndUnknownExitWithoutReassignment"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT02",
+      "claimId": "AT02",
+      "description": "Derive execution identity from the PID while replacing the exec sequence and monotonic start with constants.",
+      "source": "internal/workloadobs/types/model.go",
+      "from": "\t\tPID: input.PID, ExecSequence: input.ExecSequence,\n\t\tStartedAtMonoNS: input.StartedAtMonoNS,\n",
+      "to": "\t\tPID: input.PID, ExecSequence: 1,\n\t\tStartedAtMonoNS: 1,\n",
+      "packages": [
+        "./internal/workloadobs/types"
+      ],
+      "tests": "^TestExecutionIdentitySurvivesPIDReuseAndRequiresGuestIdentity$",
+      "killTests": [
+        "TestExecutionIdentitySurvivesPIDReuseAndRequiresGuestIdentity"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT03",
+      "claimId": "AT03",
+      "description": "Replace the observed forked child PID with the resolved parent execution PID in proxy mediator attribution.",
+      "source": "internal/workloadobs/collector/dns/kernel_proxy.go",
+      "from": "\t\tPID:         raw.PID,\n",
+      "to": "\t\tPID:         resolved.PID,\n",
+      "packages": [
+        "./internal/workloadobs/collector/dns"
+      ],
+      "tests": "^TestProxyChunkFromKernelRecordPreservesForkedChildActor$",
+      "killTests": [
+        "TestProxyChunkFromKernelRecordPreservesForkedChildActor"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT04",
+      "claimId": "AT04",
+      "description": "Label aliased, raced, truncated, and unknown file paths as resolved in retained activity facts.",
+      "source": "internal/workloadobs/collector/file/file.go",
+      "from": "\t\tPathState: event.PathState, PathClass: event.PathClass,\n",
+      "to": "\t\tPathState: \"resolved\", PathClass: event.PathClass,\n",
+      "packages": [
+        "./internal/workloadobs/collector"
+      ],
+      "tests": "^TestFileNormalizerLabelsAliasesSymlinksAndPathRacesWithoutFabrication$",
+      "killTests": [
+        "TestFileNormalizerLabelsAliasesSymlinksAndPathRacesWithoutFabrication"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT05",
+      "claimId": "AT05",
+      "description": "Accept network socket evidence whose observer sequence or socket identity does not match the kernel event.",
+      "source": "internal/workloadobs/collector/network/kernel_event.go",
+      "from": "\t\tif err := evidence.ValidateFor(raw); err != nil {\n",
+      "to": "\t\tif err := evidence.ValidateFor(raw); false && err != nil {\n",
+      "packages": [
+        "./internal/workloadobs/collector/network"
+      ],
+      "tests": "^TestNormalizeKernelConnectionRejectsMismatchedEvidence$",
+      "killTests": [
+        "TestNormalizeKernelConnectionRejectsMismatchedEvidence"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT06",
+      "claimId": "AT06",
+      "description": "Retain DNS packet wire bytes after parsing instead of clearing the transient payload.",
+      "source": "internal/workloadobs/collector/dns/parser.go",
+      "from": "\tdefer clear(payload)\n",
+      "to": "\t_ = payload\n",
+      "packages": [
+        "./internal/workloadobs/collector/dns"
+      ],
+      "tests": "^TestParserConsumesUDPQueryResponseAndClearsWireBytes$",
+      "killTests": [
+        "TestParserConsumesUDPQueryResponseAndClearsWireBytes"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT07",
+      "claimId": "AT07",
+      "description": "Promote one arbitrarily selected domain on a shared IP to exact attribution.",
+      "source": "internal/workloadobs/collector/network/network.go",
+      "from": "\tdefault:\n\t\treturn \"\", workloadtypes.AttributionUnknown, \"shared-ip-ambiguous\"\n",
+      "to": "\tdefault:\n\t\tfor domain := range activeDomains {\n\t\t\treturn domain, workloadtypes.AttributionExact, \"shared-ip-promoted\"\n\t\t}\n",
+      "packages": [
+        "./internal/workloadobs/collector"
+      ],
+      "tests": "^TestNetworkCorrelatorDoesNotGuessSharedIPCacheLiteralOrEncryptedDNS$",
+      "killTests": [
+        "TestNetworkCorrelatorDoesNotGuessSharedIPCacheLiteralOrEncryptedDNS"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-AT08",
+      "claimId": "AT08",
+      "description": "Overwrite a finding's evidence references so an aggregated explainable finding retains only the latest activity.",
+      "source": "internal/workloadobs/risk/risk.go",
+      "from": "\t\t\tfinding.EvidenceRefs = append(finding.EvidenceRefs, item.Activity.ID)\n",
+      "to": "\t\t\tfinding.EvidenceRefs = []string{item.Activity.ID}\n",
+      "packages": [
+        "./internal/workloadobs/risk"
+      ],
+      "tests": "^TestRiskEngineProducesVersionedExplainableDeterministicFindings$",
+      "killTests": [
+        "TestRiskEngineProducesVersionedExplainableDeterministicFindings"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-R01",
+      "claimId": "R01",
+      "description": "Retain transient SOCKS5 handshake and authentication bytes after parser consumption.",
+      "source": "internal/workloadobs/collector/dns/proxy.go",
+      "from": "\tdefer clear(payload)\n",
+      "to": "\t_ = payload\n",
+      "packages": [
+        "./internal/workloadobs/collector/dns"
+      ],
+      "tests": "^TestSOCKS5ParserClearsUsernamePasswordAndSupportsFragmentedAuth$",
+      "killTests": [
+        "TestSOCKS5ParserClearsUsernamePasswordAndSupportsFragmentedAuth"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-R02",
+      "claimId": "R02",
+      "description": "Skip structured sensitive-flag handling so split and equals-form credentials remain in argv.",
+      "source": "internal/workloadobs/redact/redact.go",
+      "from": "\t\tif _, sensitive := sensitiveFlags[flagName]; sensitive {\n",
+      "to": "\t\tif _, sensitive := sensitiveFlags[flagName]; false && sensitive {\n",
+      "packages": [
+        "./internal/workloadobs/redact"
+      ],
+      "tests": "^TestRedactorHandlesSplitEqualsQueryAndAuthorizationForms$",
+      "killTests": [
+        "TestRedactorHandlesSplitEqualsQueryAndAuthorizationForms"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-R03",
+      "claimId": "R03",
+      "description": "Skip the reviewed redact-host path policy for activity exports.",
+      "source": "internal/export/redact.go",
+      "from": "\tif req.Source == SourceActivity && req.PathPolicy == PathPolicyRedactHost {\n",
+      "to": "\tif false && req.Source == SourceActivity && req.PathPolicy == PathPolicyRedactHost {\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestActivityExportPreservesLocalViewButReviewsAndRedactsArtifact$",
+      "killTests": [
+        "TestActivityExportPreservesLocalViewButReviewsAndRedactsArtifact"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-R04",
+      "claimId": "R04",
+      "description": "Remove the post-start legacy-secret limitation from privacy connection help.",
+      "source": "internal/app/command_catalog.go",
+      "from": "\t\t\t\t\t\"Exports made after daemon start cannot apply. Migrate with `hideout secret set <ref>`.\",\n",
+      "to": "\t\t\t\t\t\"Legacy environment exports are deprecated.\",\n",
+      "packages": [
+        "./internal/app"
+      ],
+      "tests": "^TestPrivacyAndSecretHelpExplainStartupFallbackMigration$",
+      "killTests": [
+        "TestPrivacyAndSecretHelpExplainStartupFallbackMigration"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-R05",
+      "claimId": "R05",
+      "description": "Create workload observation files with group/world-readable 0644 permissions.",
+      "source": "internal/workloadobs/store/security.go",
+      "from": "\tprivateFileMode      = 0o600\n",
+      "to": "\tprivateFileMode      = 0o644\n",
+      "packages": [
+        "./internal/workloadobs/store"
+      ],
+      "tests": "^TestStoreCreatesOnlyHostPrivateDirectoriesAndFiles$",
+      "killTests": [
+        "TestStoreCreatesOnlyHostPrivateDirectoriesAndFiles"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-C01",
+      "claimId": "C01",
+      "description": "Omit DNS from the independent subsystem coverage timelines registered at the workload boundary.",
+      "source": "internal/daemon/activity_service.go",
+      "from": "\tactivitySubsystems    = []string{\n\t\tworkloadtypes.SubsystemProcess,\n\t\tworkloadtypes.SubsystemFile,\n\t\tworkloadtypes.SubsystemNetwork,\n\t\tworkloadtypes.SubsystemDNS,\n\t}\n",
+      "to": "\tactivitySubsystems    = []string{\n\t\tworkloadtypes.SubsystemProcess,\n\t\tworkloadtypes.SubsystemFile,\n\t\tworkloadtypes.SubsystemNetwork,\n\t}\n",
+      "packages": [
+        "./internal/daemon"
+      ],
+      "tests": "^TestActivityServiceRegistersCoverageAtOneBoundaryInstant$",
+      "killTests": [
+        "TestActivityServiceRegistersCoverageAtOneBoundaryInstant"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-C02",
+      "claimId": "C02",
+      "description": "Suppress an event-loss transition so known dropped events do not create a Partial coverage interval.",
+      "source": "internal/workloadobs/coverage/coverage.go",
+      "from": "\treturn timeline.transitionLocked(Transition{\n\t\tState: workloadtypes.CoveragePartial, Reason: reason,\n\t\tCollectorGeneration: timeline.currentGenerationLocked(), DroppedEventCount: dropped,\n\t\tSequence: sequence, At: at,\n\t})\n",
+      "to": "\tcurrent := timeline.intervals[len(timeline.intervals)-1]\n\treturn cloneInterval(current), nil\n",
+      "packages": [
+        "./internal/workloadobs/coverage"
+      ],
+      "tests": "^TestTimelinePreservesLossAndRecoveryAsSeparateIntervals$",
+      "killTests": [
+        "TestTimelinePreservesLossAndRecoveryAsSeparateIntervals"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-C03",
+      "claimId": "C03",
+      "description": "Render an empty activity query as ordinary empty history even when coverage is Partial, Unavailable, lossy, or pruned.",
+      "source": "internal/tui/render/activity.go",
+      "from": "\t\tif interval.State != workloadtypes.CoverageAvailable ||\n\t\t\tinterval.DroppedEventCount > 0 ||\n\t\t\tinterval.RetentionGap {\n",
+      "to": "\t\tif false && (interval.State != workloadtypes.CoverageAvailable ||\n\t\t\tinterval.DroppedEventCount > 0 ||\n\t\t\tinterval.RetentionGap) {\n",
+      "packages": [
+        "./internal/tui/render"
+      ],
+      "tests": "^TestActivityReducedCoverageNeverPresentsNoRowsAsProofOfNoActivity$",
+      "killTests": [
+        "TestActivityReducedCoverageNeverPresentsNoRowsAsProofOfNoActivity"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-C04",
+      "claimId": "C04",
+      "description": "Accept a non-contiguous authoritative event sequence without forcing a sticky read-only reseed.",
+      "source": "internal/liveconsole/reducer_v2.go",
+      "from": "\tif event.Seq != state.LastSeq+1 {\n",
+      "to": "\tif false && event.Seq != state.LastSeq+1 {\n",
+      "packages": [
+        "./internal/liveconsole"
+      ],
+      "tests": "^TestReducerV2SequenceGapIsStickyReadOnly$",
+      "killTests": [
+        "TestReducerV2SequenceGapIsStickyReadOnly"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-C05",
+      "claimId": "C05",
+      "description": "Reverse sealed-segment retention ordering so the newest history is pruned before the oldest.",
+      "source": "internal/workloadobs/store/retention.go",
+      "from": "\t\t\treturn leftTime.Before(rightTime)\n",
+      "to": "\t\t\treturn leftTime.After(rightTime)\n",
+      "packages": [
+        "./internal/workloadobs/store"
+      ],
+      "tests": "^TestQuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot$",
+      "killTests": [
+        "TestQuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-C06",
+      "claimId": "C06",
+      "description": "Relax the global storage quota by two active-segment allowances, exceeding the frozen supported overshoot bound.",
+      "source": "internal/workloadobs/store/retention.go",
+      "from": "\t\tif stats.UsedBytes <= uint64(store.options.GlobalBytes) {\n",
+      "to": "\t\tif stats.UsedBytes <= uint64(store.options.GlobalBytes+2*store.options.ActiveSegmentBytes) {\n",
+      "packages": [
+        "./internal/workloadobs/store"
+      ],
+      "tests": "^TestQuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot$",
+      "killTests": [
+        "TestQuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-H01",
+      "claimId": "H01",
+      "description": "Corrupt the copyable ordinary run command in primary help so the first-run journey no longer leads to a valid target invocation.",
+      "source": "internal/app/help.go",
+      "from": "\tfmt.Fprintln(a.stdout, \"     hideout run -- git status --short\")\n",
+      "to": "\tfmt.Fprintln(a.stdout, \"     hideout run git status --short\")\n",
+      "packages": [
+        "./internal/app"
+      ],
+      "tests": "^TestPrimaryHelpShowsOrdinaryJourneyBeforeExpandedIndex$",
+      "killTests": [
+        "TestPrimaryHelpShowsOrdinaryJourneyBeforeExpandedIndex"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-H02",
+      "claimId": "H02",
+      "description": "Remove the safety metadata from a stable top-level setup route.",
+      "source": "internal/app/command_catalog.go",
+      "from": "\t\t\t\tSafety:        []string{\"Defaults to No at its confirmation prompt and shows the intended setup before writing.\"},\n",
+      "to": "\t\t\t\tSafety:        []string{},\n",
+      "packages": [
+        "./internal/app"
+      ],
+      "tests": "^TestCommandCatalogMetadataIsCompleteAndSearchable$",
+      "killTests": [
+        "TestCommandCatalogMetadataIsCompleteAndSearchable"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-H03",
+      "claimId": "H03",
+      "description": "Replace the CLI-supplied render-only help catalog with an empty browser catalog at daemon startup.",
+      "source": "internal/daemon/daemon.go",
+      "from": "\t\thelpCatalog:      opts.HelpCatalog.Clone(),\n",
+      "to": "\t\thelpCatalog:      operatorhelp.Catalog{Schema: operatorhelp.CatalogSchema, Commands: []operatorhelp.Command{}},\n",
+      "packages": [
+        "./internal/daemon"
+      ],
+      "tests": "^TestLoopbackUIReceivesRenderOnlyHelpCatalog$",
+      "killTests": [
+        "TestLoopbackUIReceivesRenderOnlyHelpCatalog"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-U01",
+      "claimId": "U01",
+      "description": "Discard the interactive TUI program output, including its alternate-screen entry, visible HUD, and restoration sequence.",
+      "source": "internal/app/tui.go",
+      "from": "\t\ttea.WithOutput(output),\n",
+      "to": "\t\ttea.WithOutput(io.Discard),\n",
+      "packages": [
+        "./internal/app"
+      ],
+      "tests": "^TestTUIProgramEntersAndRestoresAlternateScreenWithKeyboardNavigation$",
+      "killTests": [
+        "TestTUIProgramEntersAndRestoresAlternateScreenWithKeyboardNavigation"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-U02",
+      "claimId": "U02",
+      "description": "Ignore the requested activity path filter so browser history returns unrelated retained records.",
+      "source": "internal/workloadobs/query/events.go",
+      "from": "\tif query.Path != \"\" && !recordPathContains(record, query.Path) {\n",
+      "to": "\tif false && query.Path != \"\" && !recordPathContains(record, query.Path) {\n",
+      "packages": [
+        "./internal/workloadobs/query"
+      ],
+      "tests": "^TestEventsFiltersFileDomainIPExecutionAndRiskEvidence$",
+      "killTests": [
+        "TestEventsFiltersFileDomainIPExecutionAndRiskEvidence"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-U03",
+      "claimId": "U03",
+      "description": "Populate the effective configuration column from desired profile data instead of independently observed effective state.",
+      "source": "internal/tui/render/config.go",
+      "from": "\t\t\tEffective: configEffectiveValue(\n\t\t\t\tstate,\n\t\t\t\tprojection,\n\t\t\t\tdefinition.editorID,\n\t\t\t),\n",
+      "to": "\t\t\tEffective: configDesiredValue(\n\t\t\t\tprojection,\n\t\t\t\tdefinition.editorID,\n\t\t\t),\n",
+      "packages": [
+        "./internal/tui/render"
+      ],
+      "tests": "^TestConfigSeparatesDesiredEffectiveTransitionAndScope$",
+      "killTests": [
+        "TestConfigSeparatesDesiredEffectiveTransitionAndScope"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-U04",
+      "claimId": "U04",
+      "description": "Allow the shared browser/TUI profile transaction to apply a reviewed plan before explicit confirmation.",
+      "source": "internal/manager/profile_transaction.go",
+      "from": "\tif !request.Confirmed {\n\t\treturn ConfigurationApplyResult{}, ErrConfigurationConfirmationRequired\n\t}\n",
+      "to": "\tif false && !request.Confirmed {\n\t\treturn ConfigurationApplyResult{}, ErrConfigurationConfirmationRequired\n\t}\n",
+      "packages": [
+        "./internal/daemon"
+      ],
+      "tests": "^TestBrowserProfileTransactionDraftReviewConfirmApplyAndStalePlan$",
+      "killTests": [
+        "TestBrowserProfileTransactionDraftReviewConfirmApplyAndStalePlan"
+      ],
+      "timeoutSeconds": 90
+    },
+    {
+      "id": "M045-U05",
+      "claimId": "U05",
+      "description": "Relax the browser boundary to permit inline scripts, reintroducing an unsafe dynamic-HTML execution path.",
+      "source": "internal/daemon/uiweb_assets/assets.go",
+      "from": "\t\t\t\"style-src 'self'; script-src 'self'; base-uri 'none'; \"+\n",
+      "to": "\t\t\t\"style-src 'self'; script-src 'self' 'unsafe-inline'; base-uri 'none'; \"+\n",
+      "packages": [
+        "./internal/daemon/uiweb_assets"
+      ],
+      "tests": "^TestHandlerServesTypedAssetsWithStrictBrowserBoundary$",
+      "killTests": [
+        "TestHandlerServesTypedAssetsWithStrictBrowserBoundary"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-RC01",
+      "claimId": "RC01",
+      "description": "Skip an accepted Claimed operation during daemon startup recovery instead of reconciling it before serving.",
+      "source": "internal/daemon/operation_recovery.go",
+      "from": "\t\tif operation.Terminal() || operation.Phase == manager.OperationPlanned {\n",
+      "to": "\t\tif operation.Terminal() || operation.Phase == manager.OperationPlanned || operation.Phase == manager.OperationClaimed {\n",
+      "packages": [
+        "./internal/daemon"
+      ],
+      "tests": "^TestDaemonStartReconcilesAcceptedProfileBeforeServing$",
+      "killTests": [
+        "TestDaemonStartReconcilesAcceptedProfileBeforeServing"
+      ],
+      "timeoutSeconds": 75
+    },
+    {
+      "id": "M045-RC02",
+      "claimId": "RC02",
+      "description": "Allow a non-terminal operation to claim terminal success without validating durable effect evidence.",
+      "source": "internal/manager/operation_service.go",
+      "from": "\tif !current.Terminal() {\n\t\tif err := validateOperationTerminalEvidence(\n",
+      "to": "\tif false && !current.Terminal() {\n\t\tif err := validateOperationTerminalEvidence(\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestOperationServiceRefusesEveryUnprovedTerminalClaim$",
+      "killTests": [
+        "TestOperationServiceRefusesEveryUnprovedTerminalClaim"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-RC03",
+      "claimId": "RC03",
+      "description": "Publish a terminal operation event on every exact replay instead of only on the durable transition that changed state.",
+      "source": "internal/manager/operation_service.go",
+      "from": "\tif changed && service.Observer != nil {\n\t\tservice.Observer.OperationEvent(\n\t\t\t\"operation\",\n\t\t\tphase,\n",
+      "to": "\tif (changed || !changed) && service.Observer != nil {\n\t\tservice.Observer.OperationEvent(\n\t\t\t\"operation\",\n\t\t\tphase,\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestOperationServicePublishesOneTerminalEventAcrossConcurrentReplay$",
+      "killTests": [
+        "TestOperationServicePublishesOneTerminalEventAcrossConcurrentReplay"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-RC04",
+      "claimId": "RC04",
+      "description": "Treat a retry with a different reviewed plan digest as the same durable operation binding.",
+      "source": "internal/manager/operation.go",
+      "from": "\t\toperation.PlanDigest == binding.PlanDigest &&\n",
+      "to": "\t\ttrue &&\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestOperationRecoveryTraceRefinesOperatorConfigurationModel$",
+      "killTests": [
+        "TestOperationRecoveryTraceRefinesOperatorConfigurationModel"
+      ],
+      "timeoutSeconds": 45
+    },
+    {
+      "id": "M045-RC05",
+      "claimId": "RC05",
+      "description": "Accept network phase evidence from a route generation other than the immutable staged candidate generation.",
+      "source": "internal/manager/network_transition.go",
+      "from": "\t\tproof.RouteGeneration != candidateGeneration {\n",
+      "to": "\t\tfalse && proof.RouteGeneration != candidateGeneration {\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestNetworkTransitionRecoveryRequiresExactBindingGenerationAndProbe$",
+      "killTests": [
+        "TestNetworkTransitionRecoveryRequiresExactBindingGenerationAndProbe"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-CL01",
+      "claimId": "CL01",
+      "description": "Retain a terminal disposable session's activity instead of applying its exact-owner cleanup after a clean worker exit.",
+      "source": "internal/daemon/sessions.go",
+      "from": "\t\tif cleanupError == \"\" && activityCleanup != nil {\n",
+      "to": "\t\tif false && cleanupError == \"\" && activityCleanup != nil {\n",
+      "packages": [
+        "./internal/daemon"
+      ],
+      "tests": "^TestSessionRegistryDeletesOnlyDisposableActivityAfterCleanTerminal$",
+      "killTests": [
+        "TestSessionRegistryDeletesOnlyDisposableActivityAfterCleanTerminal"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-CL02",
+      "claimId": "CL02",
+      "description": "Delete every current owner matching an environment name during apply instead of only the exact incarnations captured by the reviewed cleanup plan.",
+      "source": "internal/manager/activity_cleanup.go",
+      "from": "\tfor _, owner := range plan.Owners {\n\t\tproof, err := service.store.DeleteOwner(ctx, owner)\n",
+      "to": "\townersToDelete, err := service.store.Owners(ctx)\n\tif err != nil {\n\t\treturn result, err\n\t}\n\tfor _, owner := range ownersToDelete {\n\t\tif !cleanupOwnerMatches(owner, plan.Scope, plan.EnvironmentID, plan.SessionID) {\n\t\t\tcontinue\n\t\t}\n\t\tproof, err := service.store.DeleteOwner(ctx, owner)\n",
+      "packages": [
+        "./internal/manager"
+      ],
+      "tests": "^TestActivityCleanupPlanNeverDeletesAnIncarnationCreatedAfterPlanning$",
+      "killTests": [
+        "TestActivityCleanupPlanNeverDeletesAnIncarnationCreatedAfterPlanning"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-CL03",
+      "claimId": "CL03",
+      "description": "Prune an old sealed activity segment without retaining the explicit Partial coverage gap for its affected scopes.",
+      "source": "internal/workloadobs/store/retention.go",
+      "from": "\taddCoverageGaps(\n\t\t&state, owner, segmentID,\n\t\tCoverageReasonRetentionPruned, descriptor.Manifest.Scopes,\n\t)\n",
+      "to": "\t_ = descriptor.Manifest.Scopes\n",
+      "packages": [
+        "./internal/workloadobs/store"
+      ],
+      "tests": "^TestQuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot$",
+      "killTests": [
+        "TestQuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot"
+      ],
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "M045-CL04",
+      "claimId": "CL04",
+      "description": "Leave the installed browser-console container binary behind during package uninstall.",
+      "source": "internal/packagekit/uninstall.go",
+      "from": "\tfor _, rel := range files {\n\t\tjoined, err := rootedPackagePath(root, rel)\n",
+      "to": "\tfor _, rel := range files {\n\t\tif rel == \"bin/hideout\" {\n\t\t\tcontinue\n\t\t}\n\t\tjoined, err := rootedPackagePath(root, rel)\n",
+      "packages": [
+        "./internal/packagekit"
+      ],
+      "tests": "^TestUninstallDryRunPreserveAndPurge$",
+      "killTests": [
+        "TestUninstallDryRunPreserveAndPurge"
+      ],
+      "timeoutSeconds": 60
+    }
+  ]
+}

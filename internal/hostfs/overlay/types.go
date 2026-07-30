@@ -113,7 +113,12 @@ type ClaimResponse struct {
 	DecisionID     string    `json:"decisionId"`
 	State          string    `json:"state"`
 	ClaimToken     string    `json:"claimToken"`
+	Surface        string    `json:"surface"`
+	ClaimedAt      time.Time `json:"claimedAt"`
 	ClaimExpiresAt time.Time `json:"claimExpiresAt"`
+	LeaseSeconds   int64     `json:"leaseSeconds"`
+	Takeover       bool      `json:"takeover,omitempty"`
+	Revision       int       `json:"revision"`
 }
 
 type Result struct {

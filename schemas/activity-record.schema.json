@@ -1,0 +1,519 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/activity-record.schema.json",
+  "title": "Hideout redacted workload activity record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "owner",
+    "sessionId",
+    "kind",
+    "operation",
+    "subject",
+    "outcome",
+    "count",
+    "firstAt",
+    "lastAt",
+    "firstSequence",
+    "lastSequence",
+    "attribution",
+    "coverageId",
+    "redactionStatus"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.activity-record.v1" },
+    "id": {
+      "type": "string",
+      "pattern": "^act_[A-Za-z0-9_-]{8,124}$"
+    },
+    "owner": {
+      "$ref": "activity-owner.schema.json"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9_-]{1,124}$"
+    },
+    "actor": {
+      "$ref": "#/$defs/actor"
+    },
+    "mediator": {
+      "$ref": "#/$defs/mediator"
+    },
+    "kind": {
+      "enum": ["process", "file", "connection", "dns", "risk", "coverage"]
+    },
+    "operation": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "subject": {
+      "oneOf": [
+        { "$ref": "#/$defs/processSubject" },
+        { "$ref": "#/$defs/fileSubject" },
+        { "$ref": "#/$defs/networkSubject" },
+        { "$ref": "#/$defs/dnsSubject" },
+        { "$ref": "#/$defs/genericSubject" }
+      ]
+    },
+    "outcome": {
+      "$ref": "#/$defs/outcome"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "firstAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "lastAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "firstSequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lastSequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "attribution": {
+      "enum": ["exact", "inferred", "mediated", "unknown"]
+    },
+    "truncation": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+      }
+    },
+    "coverageId": {
+      "type": "string",
+      "pattern": "^cov_[A-Za-z0-9_-]{8,124}$"
+    },
+    "redactionStatus": {
+      "const": "passed"
+    }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executionId", "pid", "uid", "gid"],
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "pattern": "^exec_[A-Za-z0-9_-]{8,124}$"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "user": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "group": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "mediator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "attribution"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "hostfs",
+            "workspace-portal",
+            "broker",
+            "proxy",
+            "resolver",
+            "guest-service",
+            "unknown"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "executionId": {
+          "type": "string",
+          "pattern": "^exec_[A-Za-z0-9_-]{8,124}$"
+        },
+        "attribution": {
+          "enum": ["exact", "inferred", "unknown"]
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "denied",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "code": {
+          "type": "integer"
+        },
+        "signal": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        }
+      }
+    },
+    "processSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "executionId", "executable", "argv", "guestIdentity"],
+      "properties": {
+        "kind": { "const": "process" },
+        "executionId": {
+          "type": "string",
+          "pattern": "^exec_[A-Za-z0-9_-]{8,124}$"
+        },
+        "parentExecutionId": {
+          "type": "string",
+          "pattern": "^exec_[A-Za-z0-9_-]{8,124}$"
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "argv": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "type": "string",
+            "maxLength": 8192
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "guestIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["uid", "gid"],
+          "properties": {
+            "uid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "gid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "user": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "group": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        },
+        "durationNs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "fileSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "pathState", "pathClass", "fileType", "destructive"],
+      "properties": {
+        "kind": { "const": "file" },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "targetPath": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "pathState": {
+          "enum": ["resolved", "aliased", "raced", "truncated", "unknown"]
+        },
+        "pathClass": {
+          "enum": [
+            "workspace",
+            "hostfs",
+            "profile",
+            "runtime",
+            "system",
+            "external",
+            "unknown"
+          ]
+        },
+        "device": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inode": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mountId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fileType": {
+          "enum": [
+            "regular",
+            "directory",
+            "symlink",
+            "socket",
+            "fifo",
+            "device",
+            "unknown"
+          ]
+        },
+        "destructive": { "type": "boolean" }
+      }
+    },
+    "networkSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "protocol",
+        "ip",
+        "port",
+        "route",
+        "direction",
+        "domainAttribution",
+        "correlationReason"
+      ],
+      "properties": {
+        "kind": { "const": "connection" },
+        "protocol": {
+          "enum": ["tcp", "udp"]
+        },
+        "ip": {
+          "oneOf": [
+            { "type": "string", "format": "ipv4" },
+            { "type": "string", "format": "ipv6" }
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "targetIp": {
+          "oneOf": [
+            { "type": "string", "format": "ipv4" },
+            { "type": "string", "format": "ipv6" }
+          ]
+        },
+        "targetPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "route": {
+          "enum": ["direct", "proxy", "unknown"]
+        },
+        "direction": {
+          "enum": ["egress", "ingress"]
+        },
+        "socketCookie": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "domainAttribution": {
+          "enum": ["exact", "inferred", "unknown"]
+        },
+        "correlationReason": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["domain"]
+          },
+          "then": {
+            "properties": {
+              "domainAttribution": {
+                "enum": ["exact", "inferred"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "domainAttribution": {
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": ["targetIp", "domain"]
+          }
+        },
+        {
+          "if": {
+            "required": ["targetIp"]
+          },
+          "then": {
+            "required": ["targetPort"]
+          }
+        },
+        {
+          "if": {
+            "required": ["targetPort"]
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["targetIp"] },
+              { "required": ["domain"] }
+            ]
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "route": { "const": "proxy" }
+                },
+                "required": ["route"]
+              },
+              { "required": ["domain"] }
+            ]
+          },
+          "then": {
+            "required": ["targetPort"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "route": {
+                "enum": ["direct", "unknown"]
+              }
+            },
+            "required": ["route"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["targetIp"] },
+                { "required": ["targetPort"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "dnsSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "query", "queryType", "answers", "responseCode"],
+      "properties": {
+        "kind": { "const": "dns" },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "queryType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "answers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "responseCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "resolver": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "genericSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code"],
+      "properties": {
+        "kind": { "enum": ["risk", "coverage"] },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2048
+        }
+      }
+    }
+  }
+}

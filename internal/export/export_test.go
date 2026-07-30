@@ -3,6 +3,7 @@ package export
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -318,6 +319,45 @@ func TestExportRejectsNonLocalOut(t *testing.T) {
 	_, err := Apply(baseRequest("https://example.com/artifact.json", t.TempDir(), []AuditEvent{}))
 	if err == nil || !strings.Contains(err.Error(), "local path") {
 		t.Fatalf("expected local path refusal, got %v", err)
+	}
+}
+
+func TestApplyPlanRejectsSourceOrReviewDriftBeforeWriting(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "reviewed.json")
+	reviewedRequest := Request{
+		Source: SourceAudit,
+		AuditEvents: []AuditEvent{testAuditEvent(map[string]any{
+			"target": "reviewed-value",
+		})},
+		Out: out, AcknowledgeFullFidelity: true,
+		Now: func() time.Time {
+			return time.Date(2026, 7, 29, 16, 0, 0, 0, time.UTC)
+		},
+	}
+	plan, err := BuildPlan(reviewedRequest)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	drifted := reviewedRequest
+	drifted.AuditEvents = []AuditEvent{testAuditEvent(map[string]any{
+		"target": "unreviewed-value",
+	})}
+	if _, err := ApplyPlan(drifted, plan); !errors.Is(
+		err,
+		ErrReviewedPlanMismatch,
+	) {
+		t.Fatalf("source drift error=%v", err)
+	}
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source drift wrote output: %v", err)
+	}
+
+	// Wall-clock presentation metadata is not source authority.
+	reviewedRequest.Now = func() time.Time {
+		return time.Date(2026, 7, 29, 16, 1, 0, 0, time.UTC)
+	}
+	if _, err := ApplyPlan(reviewedRequest, plan); err != nil {
+		t.Fatalf("createdAt-only change should remain applicable: %v", err)
 	}
 }
 

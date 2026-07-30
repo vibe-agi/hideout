@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
 
 func TestSessionWireRequiresStartAndPreservesBinaryControls(t *testing.T) {
@@ -102,7 +104,7 @@ func TestSessionWireWritesReadySeparatedDataAndTypedCompletion(t *testing.T) {
 	if _, err := wire.ReadStart(); err != nil {
 		t.Fatal(err)
 	}
-	if err := wire.WriteReady(); err != nil {
+	if err := wire.WriteReady(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := wire.WriteOutput(outputStdout, []byte("out\x00")); err != nil {
@@ -124,6 +126,114 @@ func TestSessionWireWritesReadySeparatedDataAndTypedCompletion(t *testing.T) {
 		if frame.Type != wantType {
 			t.Fatalf("frame %d type=%s want %s", index, frame.Type, wantType)
 		}
+	}
+}
+
+func TestSessionWireBindsActivityReadyAndCompletionToStartAuthority(t *testing.T) {
+	sessionID := "ses_20260729T120000Z_activity_wire"
+	owner, err := workloadtypes.NewReusableOwner("env_fixture", "lima", "incarnation-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	var input bytes.Buffer
+	inputWriter := sessionwire.NewWriter(&input, sessionwire.DaemonToSupervisor)
+	start := &sessionwire.SupervisorStart{
+		Protocol: sessionwire.SupervisorProtocol, SessionID: sessionID,
+		TargetUser: "developer", GuestWork: "/workspace", Argv: []string{"true"},
+		Terminal:       sessionwire.TerminalDescriptor{Mode: sessionwire.TerminalNone},
+		ExpectedBootID: "01234567-89ab-cdef-0123-456789abcdef",
+		SessionSource:  "/hideout/runtime/sessions/" + sessionID,
+		Activity: &sessionwire.SupervisorActivityExpectation{
+			Owner: owner, ObserverGeneration: 2, ObserverHelperDigest: digest,
+			ObserverStreamToken: sessionwire.ObserverStreamToken{1},
+		},
+	}
+	if err := inputWriter.WriteControl(sessionwire.TypeSupervisorStart, start); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	wire := newSessionWire(&input, &output)
+	decoded, err := wire.ReadStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Activity == nil || !decoded.Activity.Owner.Equal(owner) {
+		t.Fatalf("decoded activity=%+v", decoded.Activity)
+	}
+	if err := decoded.Activity.ObserverStreamToken.Validate(); err != nil {
+		t.Fatalf("runtime activity token=%v", err)
+	}
+	if wire.activityExpectation == decoded.Activity {
+		t.Fatal("runtime and readiness authority share a mutable token")
+	}
+	decoded.Activity.ObserverStreamToken.Destroy()
+	if err := wire.activityExpectation.ObserverStreamToken.Validate(); err != nil {
+		t.Fatalf("destroying runtime token altered readiness authority: %v", err)
+	}
+	coverage := observerUnavailableCapabilities().Coverage()
+	ready := &sessionwire.SupervisorActivityReady{
+		Boundary: workloadtypes.WorkloadBoundary{
+			Schema: workloadtypes.WorkloadBoundarySchema, Owner: owner,
+			SessionID:  sessionID,
+			CgroupPath: "/sys/fs/cgroup/hideout/sessions/" + sessionID,
+			CgroupID:   77, TargetUser: "developer", State: workloadtypes.BoundaryReady,
+			ObserverGeneration: 2, GuestBootID: start.ExpectedBootID, CreatedAtMonoNS: 1,
+		},
+		ObserverHelperDigest: digest,
+		Coverage:             coverage,
+	}
+	if err := wire.WriteReady(ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.activityExpectation.ObserverStreamToken.Validate(); err == nil {
+		t.Fatal("readiness authority token remained live after WriteReady")
+	}
+	completion := &sessionwire.SupervisorActivityCompletion{
+		Owner: owner, SessionID: sessionID, CgroupID: 77, ObserverGeneration: 2,
+		BoundaryState: workloadtypes.BoundaryRemoved,
+		Coverage:      coverage, CleanupProved: true,
+	}
+	if err := wire.WriteCompletion(targetCompletion{
+		Kind: "exit", ExitCode: 0, Completed: true, CleanupCompleted: true,
+		Activity: completion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := sessionwire.NewReader(&output, sessionwire.SupervisorToDaemon)
+	frame, err := reader.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := sessionwire.DecodeControl(frame.Type, frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyControl := control.(*sessionwire.SupervisorReady)
+	if readyControl.Activity == nil || readyControl.Activity.Boundary.CgroupID != 77 {
+		t.Fatalf("ready control=%+v", readyControl)
+	}
+	frame, err = reader.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err = sessionwire.DecodeControl(frame.Type, frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completionControl := control.(*sessionwire.Completion)
+	if completionControl.Activity == nil || !completionControl.CleanupCompleted ||
+		completionControl.Activity.BoundaryState != workloadtypes.BoundaryRemoved {
+		t.Fatalf("completion control=%+v", completionControl)
+	}
+
+	completion.CgroupID++
+	if err := wire.WriteCompletion(targetCompletion{
+		Kind: "cleanup-error", ExitCode: 125, Completed: true,
+		CleanupCompleted: true, Activity: completion,
+	}); err == nil {
+		t.Fatal("wire accepted activity completion for another cgroup")
 	}
 }
 
@@ -158,7 +268,7 @@ func TestSessionWireReportsExactProjectionReadinessOrTypedRefusal(t *testing.T) 
 	if _, err := wire.ReadStart(); err != nil {
 		t.Fatal(err)
 	}
-	if err := wire.WriteReady(); err != nil {
+	if err := wire.WriteReady(nil); err != nil {
 		t.Fatal(err)
 	}
 	reader := sessionwire.NewReader(&output, sessionwire.SupervisorToDaemon)
@@ -187,7 +297,7 @@ func TestSessionWireReportsExactProjectionReadinessOrTypedRefusal(t *testing.T) 
 	if _, err := wire.ReadStart(); err != nil {
 		t.Fatal(err)
 	}
-	if err := wire.WriteReady(); err == nil {
+	if err := wire.WriteReady(nil); err == nil {
 		t.Fatal("missing readiness manifest reported ready")
 	}
 	reader = sessionwire.NewReader(&output, sessionwire.SupervisorToDaemon)

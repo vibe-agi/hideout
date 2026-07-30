@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	workloadredact "github.com/vibe-agi/hideout/internal/workloadobs/redact"
 )
 
 type credentialTestClock struct {
@@ -302,6 +305,62 @@ func TestCredentialManagerRejectsInvalidConfiguration(t *testing.T) {
 				t.Fatal("invalid credential configuration was accepted")
 			}
 		})
+	}
+}
+
+func TestCredentialRotationFeedsGenerationBoundRedactionSnapshots(t *testing.T) {
+	clock := &credentialTestClock{now: time.Unix(7_000, 0).UTC()}
+	manager, err := newCredentialManager(
+		t.TempDir(),
+		time.Hour,
+		time.Minute,
+		clock.Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := workloadredact.Builder{
+		ControlTokens: daemonControlTokenSource{credentials: manager},
+		Now:           clock.Now,
+	}
+	firstToken := manager.Token()
+	first, err := builder.Build(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Clear()
+	if got := first.Metadata().ControlGenerations; len(got) != 1 ||
+		got[0].Generation != 1 {
+		t.Fatalf("first control generations=%+v", got)
+	}
+
+	clock.Advance(time.Second)
+	secondToken, err := manager.Rotate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := builder.Build(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Clear()
+	if got := second.Metadata().ControlGenerations; len(got) != 1 ||
+		got[0].Generation != 2 ||
+		second.Metadata().ID == first.Metadata().ID {
+		t.Fatalf("second control generations=%+v", got)
+	}
+	firstSafe, _, err := first.Text(firstToken + " " + secondToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSafe, _, err := second.Text(firstToken + " " + secondToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSafe != workloadredact.Replacement+" "+secondToken ||
+		secondSafe != firstToken+" "+workloadredact.Replacement {
+		t.Fatalf("generation snapshots drifted: first=%q second=%q",
+			firstSafe, secondSafe)
 	}
 }
 

@@ -24,13 +24,15 @@ import (
 )
 
 const (
-	EnvironmentActionStop  = "stop"
-	EnvironmentActionClean = "clean"
+	EnvironmentActionStop   = "stop"
+	EnvironmentActionClean  = "clean"
+	EnvironmentActionDelete = "delete"
 )
 
 type EnvironmentActionOptions struct {
 	IDs         []string
 	StoppedOnly bool
+	Force       bool
 	Idle        time.Duration
 	IdleSet     bool
 	Now         time.Time
@@ -42,7 +44,10 @@ type EnvironmentActionFilter struct {
 }
 
 type EnvironmentActionPlan struct {
+	OperationID  string                    `json:"operationId,omitempty"`
+	PlanDigest   string                    `json:"planDigest,omitempty"`
 	Action       string                    `json:"action"`
+	Force        bool                      `json:"force,omitempty"`
 	RequestedIDs []string                  `json:"requestedIds,omitempty"`
 	Filter       EnvironmentActionFilter   `json:"filter,omitempty"`
 	Targets      []EnvironmentActionTarget `json:"targets"`
@@ -51,9 +56,10 @@ type EnvironmentActionPlan struct {
 }
 
 type EnvironmentActionResult struct {
-	Plan    EnvironmentActionPlan     `json:"plan"`
-	Applied []EnvironmentActionTarget `json:"applied"`
-	Skipped []EnvironmentActionTarget `json:"skipped"`
+	Plan      EnvironmentActionPlan     `json:"plan"`
+	Applied   []EnvironmentActionTarget `json:"applied"`
+	Skipped   []EnvironmentActionTarget `json:"skipped"`
+	Operation *Operation                `json:"operation,omitempty"`
 }
 
 type EnvironmentActionTarget struct {
@@ -89,7 +95,11 @@ type EnvironmentLifecycleBackendFactory func(environment.Record) (EnvironmentLif
 
 // StopEnvironmentIncarnation performs the coordinator-owned automatic stop
 // transaction while preserving Manager's environment-lock authority.
-func (c Core) StopEnvironmentIncarnation(ctx context.Context, request lifecycle.StopRequest, provider EnvironmentLifecycleBackend) (lifecycle.StopResult, error) {
+func (c Core) StopEnvironmentIncarnation(
+	ctx context.Context,
+	request lifecycle.StopRequest,
+	provider EnvironmentLifecycleBackend,
+) (result lifecycle.StopResult, resultErr error) {
 	if provider == nil {
 		return lifecycle.StopResult{}, errors.New("environment lifecycle backend is required")
 	}
@@ -104,7 +114,9 @@ func (c Core) StopEnvironmentIncarnation(ctx context.Context, request lifecycle.
 	if err != nil {
 		return lifecycle.StopResult{}, err
 	}
-	defer lock.Unlock()
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.Unlock())
+	}()
 	record, err := store.Load(request.Incarnation.EnvironmentID)
 	if err != nil {
 		return lifecycle.StopResult{}, err
@@ -124,7 +136,7 @@ func (c Core) StopEnvironmentIncarnation(ctx context.Context, request lifecycle.
 	default:
 		return lifecycle.StopResult{ReasonCode: "stop-mode-invalid"}, errors.New("environment lifecycle stop mode is invalid")
 	}
-	result, err := observeAndStopEnvironment(ctx, record.InstanceName, request.Incarnation.BootID, provider)
+	result, err = observeAndStopEnvironment(ctx, record.InstanceName, request.Incarnation.BootID, provider)
 	if err != nil {
 		return result, err
 	}
@@ -353,6 +365,10 @@ func EnvironmentRecoveryCode(err error) string {
 	var ownerErr *EnvironmentOwnerError
 	if errors.As(err, &ownerErr) {
 		return ownerErr.Code
+	}
+	var terminalErr *environmentActionTerminalError
+	if errors.As(err, &terminalErr) {
+		return terminalErr.code
 	}
 	return ""
 }
@@ -590,12 +606,19 @@ func environmentActionTargetFromRecord(rec environment.Record, reason string) En
 	return target
 }
 
-func applyEnvironmentStopTarget(ctx context.Context, store environment.Store, operator EnvironmentOperator, id string) (EnvironmentActionTarget, EnvironmentActionTarget, error) {
+func applyEnvironmentStopTarget(
+	ctx context.Context,
+	store environment.Store,
+	operator EnvironmentOperator,
+	id string,
+) (applied EnvironmentActionTarget, skipped EnvironmentActionTarget, resultErr error) {
 	lock, err := store.LockContext(ctx, id)
 	if err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
 	}
-	defer lock.Unlock()
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.Unlock())
+	}()
 	rec, err := store.Load(id)
 	if err != nil {
 		return EnvironmentActionTarget{}, EnvironmentActionTarget{}, err
@@ -690,12 +713,19 @@ func recoverStoppedEnvironmentOwners(store environment.Store, environmentID stri
 	return &EnvironmentOwnerError{Code: code, EnvironmentID: environmentID, Err: err}
 }
 
-func applyEnvironmentCleanTarget(ctx context.Context, store environment.Store, operator EnvironmentOperator, id string) (EnvironmentActionTarget, error) {
+func applyEnvironmentCleanTarget(
+	ctx context.Context,
+	store environment.Store,
+	operator EnvironmentOperator,
+	id string,
+) (target EnvironmentActionTarget, resultErr error) {
 	lock, err := store.LockContext(ctx, id)
 	if err != nil {
 		return EnvironmentActionTarget{}, err
 	}
-	defer lock.Unlock()
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.Unlock())
+	}()
 	rec, err := store.Load(id)
 	if err != nil {
 		return EnvironmentActionTarget{}, err
@@ -703,7 +733,7 @@ func applyEnvironmentCleanTarget(ctx context.Context, store environment.Store, o
 	if err := requireNoEnvironmentOwners(store, rec.ID); err != nil {
 		return EnvironmentActionTarget{}, err
 	}
-	target := environmentActionTargetFromRecord(rec, "")
+	target = environmentActionTargetFromRecord(rec, "")
 	if rec.Backend == "lima" && strings.TrimSpace(rec.InstanceName) != "" {
 		if err := operator.Cleanup(ctx, &backend.Session{InstanceName: rec.InstanceName}); err != nil {
 			return EnvironmentActionTarget{}, err
@@ -1076,7 +1106,12 @@ func (c Core) EnvironmentByName(name string) (environment.Record, error) {
 // RemoveEnvironment tears down a named environment's guest and record. A
 // running guest fails closed with a copyable stop command; the explicit force
 // flag stops the guest first and then proceeds.
-func (c Core) RemoveEnvironment(ctx context.Context, name string, force bool, opts EnvironmentApplyOptions) (environment.Record, error) {
+func (c Core) RemoveEnvironment(
+	ctx context.Context,
+	name string,
+	force bool,
+	opts EnvironmentApplyOptions,
+) (result environment.Record, resultErr error) {
 	store, err := c.environmentStore()
 	if err != nil {
 		return environment.Record{}, err
@@ -1089,7 +1124,9 @@ func (c Core) RemoveEnvironment(ctx context.Context, name string, force bool, op
 	if err != nil {
 		return environment.Record{}, err
 	}
-	defer lock.Unlock()
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.Unlock())
+	}()
 	rec, err := store.Load(selected.ID)
 	if err != nil {
 		return environment.Record{}, err
@@ -1125,7 +1162,12 @@ func (c Core) RemoveEnvironment(ctx context.Context, name string, force bool, op
 // record from its pinned declaration under the same name and id. It is the
 // explicit answer to machine-identity or static-mount drift; session, service,
 // and reconcilable boot changes must use their narrower lifecycle paths.
-func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, opts EnvironmentApplyOptions) (environment.Record, error) {
+func (c Core) RecreateEnvironment(
+	ctx context.Context,
+	name string,
+	force bool,
+	opts EnvironmentApplyOptions,
+) (result environment.Record, resultErr error) {
 	store, err := c.environmentStore()
 	if err != nil {
 		return environment.Record{}, err
@@ -1138,7 +1180,9 @@ func (c Core) RecreateEnvironment(ctx context.Context, name string, force bool, 
 	if err != nil {
 		return environment.Record{}, err
 	}
-	defer lock.Unlock()
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.Unlock())
+	}()
 	rec, err := store.Load(selected.ID)
 	if err != nil {
 		return environment.Record{}, err

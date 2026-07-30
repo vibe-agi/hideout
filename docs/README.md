@@ -43,9 +43,11 @@ Subsystem documents:
 | Network privacy | [network-privacy-architecture.md](network-privacy-architecture.md) |
 | OpenTarget and host reach-back | [opentarget-architecture.md](opentarget-architecture.md) |
 | Policy/config supply chain | [policy-config-supply-chain.md](policy-config-supply-chain.md): authoring, source resolution, install, update, trust, override, and export behavior for the ecosystem model. |
+| Interrupted operations and recovery | [recovery.md](recovery.md) |
 | Script adapters | [script-extension-architecture.md](script-extension-architecture.md) |
 | Support matrix | [support-matrix.md](support-matrix.md) |
 | TUI/Web UI | [tui-webui-experience.md](tui-webui-experience.md) |
+| Workload activity, coverage, and retention | [activity-observation.md](activity-observation.md) |
 
 ## Authority
 

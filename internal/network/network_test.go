@@ -113,6 +113,115 @@ func TestSecretResolverErrorsDoNotExposeBackingEnvName(t *testing.T) {
 	}
 }
 
+func TestEnvironmentSecretResolutionIsExplicitDeprecatedStartupFallback(t *testing.T) {
+	const value = "socks5://fallback-user:fallback-password@127.0.0.1:7890"
+	resolution, err := (EnvSecretResolver{Env: []string{
+		SecretEnvName("local-proxy") + "=" + value,
+	}}).ResolveSecret("local-proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Value != value ||
+		resolution.Source != SecretSourceStartupEnvironment ||
+		!resolution.Deprecated ||
+		!strings.Contains(resolution.Reason, "daemon started") ||
+		resolution.RecoveryCommand != "hideout secret set local-proxy" {
+		t.Fatalf("environment resolution=%+v", resolution)
+	}
+	for _, text := range []string{
+		resolution.Source,
+		resolution.Reason,
+		resolution.RecoveryCommand,
+	} {
+		if strings.Contains(text, value) ||
+			strings.Contains(text, "fallback-password") ||
+			strings.Contains(text, SecretEnvName("local-proxy")) {
+			t.Fatalf("fallback metadata exposed secret backing data: %q", text)
+		}
+	}
+}
+
+func TestPrepareMarksDeprecatedSecretSourceAndSafeMigration(t *testing.T) {
+	const value = "socks5://fallback-user:fallback-password@127.0.0.1:7890"
+	p := profile.Default("test")
+	p.Network.Mode = ModeTun2Socks
+	p.Network.ProxySecretRef = "local-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	plan, err := Prepare(Spec{
+		Profile: p, ArtifactDir: t.TempDir(),
+		SecretDir: t.TempDir(), GuestSecretDir: "/hideout/session",
+		Verified: true,
+		Resolver: EnvSecretResolver{Env: []string{
+			SecretEnvName("local-proxy") + "=" + value,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ProxySecretSource != SecretSourceStartupEnvironment ||
+		!plan.ProxySecretDeprecated ||
+		plan.ProxySecretRecovery != "hideout secret set local-proxy" ||
+		!strings.Contains(plan.Reason, "compatibility-only") {
+		t.Fatalf("fallback plan=%+v", plan)
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), value) ||
+		strings.Contains(string(data), "fallback-password") ||
+		strings.Contains(string(data), SecretEnvName("local-proxy")) {
+		t.Fatalf("fallback plan serialized secret backing data: %s", data)
+	}
+}
+
+func TestPrepareCanonicalizesSerializableSecretProvenance(t *testing.T) {
+	const metadataCanary = "metadata-user:metadata-password@private.invalid"
+	p := profile.Default("test")
+	p.Network.Mode = ModeTun2Socks
+	p.Network.ProxySecretRef = "local-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	plan, err := Prepare(Spec{
+		Profile: p, ArtifactDir: t.TempDir(),
+		SecretDir: t.TempDir(), GuestSecretDir: "/hideout/session",
+		Verified: true,
+		Resolver: detailedSecretResolverFixture{resolution: SecretResolution{
+			Value:  "socks5://127.0.0.1:7890",
+			Source: SecretSourceStartupEnvironment,
+			Reason: metadataCanary, RecoveryCommand: metadataCanary,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), metadataCanary) ||
+		strings.Contains(plan.Reason, metadataCanary) ||
+		plan.ProxySecretRecovery != "hideout secret set local-proxy" {
+		t.Fatalf("provider-controlled provenance escaped canonicalization: plan=%+v json=%s", plan, data)
+	}
+}
+
+type detailedSecretResolverFixture struct {
+	resolution SecretResolution
+	err        error
+}
+
+func (resolver detailedSecretResolverFixture) Resolve(
+	string,
+) (string, error) {
+	return resolver.resolution.Value, resolver.err
+}
+
+func (resolver detailedSecretResolverFixture) ResolveSecret(
+	string,
+) (SecretResolution, error) {
+	return resolver.resolution, resolver.err
+}
+
 func TestTun2SocksWithoutMediatedResolverFailsClosed(t *testing.T) {
 	// With the DNS closure enforced (bootstrap DNAT + connected-subnet block), a
 	// connected-subnet-only environment is refused: privacy mode requires a

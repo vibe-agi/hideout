@@ -180,7 +180,7 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 		if err := session.RuntimeResultSink(runtimePassingReport(session)); err != nil {
 			return err
 		}
-		var commandCheckErr error = backend.CommandNotFoundError{Backend: "lima", Command: "missing-tool", Path: "/usr/bin:/bin", Workspace: "/workspace"}
+		commandCheckErr := runtimeMissingCommandError()
 		if commandCheckErr != nil {
 			return commandCheckErr
 		}
@@ -203,6 +203,15 @@ func TestApplyRunMapsExactRuntimeCommandMissWithoutTargetSideEffect(t *testing.T
 }
 
 const runtimeLimaTestBootID = "01234567-89ab-cdef-0123-456789abcdef"
+
+func runtimeMissingCommandError() error {
+	return backend.CommandNotFoundError{
+		Backend:   "lima",
+		Command:   "missing-tool",
+		Path:      "/usr/bin:/bin",
+		Workspace: "/workspace",
+	}
+}
 
 type runtimeLimaApplyBackend struct {
 	*applyRunFakeBackend

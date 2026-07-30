@@ -25,6 +25,7 @@ for path in \
   "$prefix/bin/hideout-shim-linux-$arch" \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
   "$prefix/bin/hideout-session-supervisor-linux-$arch" \
+  "$prefix/bin/hideout-observer-linux-$arch" \
   "$prefix/bin/hideout-workspace-portal-linux-$arch"
 do
   if [ ! -x "$path" ]; then
@@ -37,6 +38,7 @@ done
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-observer-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-workspace-portal-linux-$arch.manifest.json"
 test -f "$store/install-state.json"
 test -f "$store/logs/init-audit.jsonl"
@@ -125,9 +127,23 @@ if scripts/package-local.sh --finalize "$corrupt_stage" --out "$tmp/corrupt-supe
 fi
 grep -q 'Linux helper hideout-session-supervisor checksum mismatch' "$tmp/corrupt-stage.err"
 
+missing_observer_stage="$tmp/package-stage-missing-observer"
+cp -R "$package_stage" "$missing_observer_stage"
+rm "$missing_observer_stage/hideout/bin/hideout-observer-linux-$arch"
+if scripts/package-local.sh --finalize "$missing_observer_stage" \
+  --out "$tmp/missing-observer.tar.gz" \
+  >"$tmp/missing-observer-stage.out" \
+  2>"$tmp/missing-observer-stage.err"; then
+  echo "install-smoke: package finalization accepted a missing observer" >&2
+  exit 1
+fi
+grep -q 'required Linux helper hideout-observer is missing' \
+  "$tmp/missing-observer-stage.err"
+
 scripts/package-local.sh --finalize "$package_stage" --out "$package_archive" >/dev/null
 jq -e --arg arch "$arch" '
   (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $arch)) and
+  (.layout.binaries | index("bin/hideout-observer-linux-" + $arch)) and
   (.layout.binaries | index("bin/hideout-workspace-portal-linux-" + $arch)) and
   any(.files[];
     .path == "bin/hideout-session-supervisor-linux-" + $arch and
@@ -136,11 +152,24 @@ jq -e --arg arch "$arch" '
     .path == "bin/hideout-session-supervisor-linux-" + $arch + ".manifest.json" and
     .kind == "helper-manifest") and
   any(.files[];
+    .path == "bin/hideout-observer-linux-" + $arch and
+    .kind == "linux-helper" and .executable == true) and
+  any(.files[];
+    .path == "bin/hideout-observer-linux-" + $arch + ".manifest.json" and
+    .kind == "helper-manifest") and
+  any(.files[];
     .path == "bin/hideout-workspace-portal-linux-" + $arch and
     .kind == "linux-helper" and .executable == true) and
   any(.files[];
     .path == "bin/hideout-workspace-portal-linux-" + $arch + ".manifest.json" and
-    .kind == "helper-manifest")
+    .kind == "helper-manifest") and
+  any(.files[];
+    .path == "runtime/package-components.json" and
+    .kind == "runtime-contract") and
+  any(.files[];
+    .path == "runtime/browser-console.assets.json" and
+    .kind == "embedded-asset-manifest") and
+  .embeddedAssets[0].manifest == "runtime/browser-console.assets.json"
 ' "$package_stage/hideout/package-manifest.json" >/dev/null
 
 missing_helper="$tmp/package-missing-supervisor"

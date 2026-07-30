@@ -210,7 +210,7 @@ func selectAutomaticRunEnvironmentForPlatform(
 	backendName, workspace, guestWorkspace string,
 	opts RunEnvironmentOptions,
 	hostOS, hostArch string,
-) (RunEnvironment, error) {
+) (result RunEnvironment, resultErr error) {
 	spec, err := automaticRunEnvironmentSpecForPlatform(p, backendName, workspace, guestWorkspace, hostOS, hostArch)
 	if err != nil {
 		return RunEnvironment{}, err
@@ -221,7 +221,9 @@ func selectAutomaticRunEnvironmentForPlatform(
 		if err != nil {
 			return RunEnvironment{}, err
 		}
-		defer slotLock.Unlock()
+		defer func() {
+			resultErr = errors.Join(resultErr, slotLock.Unlock())
+		}()
 	}
 	rec, err := store.LoadByName(spec.Name)
 	switch {
@@ -455,7 +457,8 @@ func (c Core) finishConcurrentRunEnvironment(
 			recoveryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			outcome, recoveryErr := c.recoverDisposableEnvironmentLocked(
-				recoveryCtx, store, rec, DisposableRecoverySourceOrdinary, disposableProvider,
+				recoveryCtx, store, rec, DisposableRecoverySourceOrdinary,
+				disposableProvider, nil,
 			)
 			return outcome.Status, errors.Join(finalErr, recoveryErr)
 		}

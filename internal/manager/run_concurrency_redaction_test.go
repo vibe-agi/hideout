@@ -28,9 +28,17 @@ func TestConcurrentSessionEvidenceRedactsControlMaterialAndStaysSessionLocal(t *
 	}
 
 	first := openConcurrentAuditSession(t, core, plan)
-	defer core.CloseRunSession(first)
+	defer func() {
+		if _, err := core.CloseRunSession(first); err != nil {
+			t.Errorf("close first run session: %v", err)
+		}
+	}()
 	second := openConcurrentAuditSession(t, core, plan)
-	defer core.CloseRunSession(second)
+	defer func() {
+		if _, err := core.CloseRunSession(second); err != nil {
+			t.Errorf("close second run session: %v", err)
+		}
+	}()
 	firstNetwork, err := core.PrepareRunNetwork(first, RunNetworkOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -43,12 +51,26 @@ func TestConcurrentSessionEvidenceRedactsControlMaterialAndStaysSessionLocal(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunDataPlane(firstPlane)
+	firstPlaneClosed := false
+	defer func() {
+		if !firstPlaneClosed {
+			if err := core.CloseRunDataPlane(firstPlane); err != nil {
+				t.Errorf("close first run data plane: %v", err)
+			}
+		}
+	}()
 	secondPlane, err := core.StartRunDataPlane(context.Background(), second, secondNetwork, RunDataPlaneOptions{Opener: broker.NoopOpener{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunDataPlane(secondPlane)
+	secondPlaneClosed := false
+	defer func() {
+		if !secondPlaneClosed {
+			if err := core.CloseRunDataPlane(secondPlane); err != nil {
+				t.Errorf("close second run data plane: %v", err)
+			}
+		}
+	}()
 
 	firstToken := envValueForManagerTest(firstPlane.Env, broker.EnvToken)
 	secondToken := envValueForManagerTest(secondPlane.Env, broker.EnvToken)
@@ -60,12 +82,13 @@ func TestConcurrentSessionEvidenceRedactsControlMaterialAndStaysSessionLocal(t *
 	}
 
 	for _, fixture := range []struct {
-		session RunSession
-		plane   RunDataPlane
-		token   string
+		session     RunSession
+		plane       RunDataPlane
+		planeClosed *bool
+		token       string
 	}{
-		{session: first, plane: firstPlane, token: firstToken},
-		{session: second, plane: secondPlane, token: secondToken},
+		{session: first, plane: firstPlane, planeClosed: &firstPlaneClosed, token: firstToken},
+		{session: second, plane: secondPlane, planeClosed: &secondPlaneClosed, token: secondToken},
 	} {
 		if err := fixture.session.Audit.Emit(audit.Event{
 			Session: fixture.session.Layout.ID, Profile: "default", Backend: "native",
@@ -81,6 +104,10 @@ func TestConcurrentSessionEvidenceRedactsControlMaterialAndStaysSessionLocal(t *
 		}); err != nil {
 			t.Fatal(err)
 		}
+		if err := core.CloseRunDataPlane(fixture.plane); err != nil {
+			t.Fatal(err)
+		}
+		*fixture.planeClosed = true
 		if err := fixture.session.Audit.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +158,11 @@ func TestActiveSessionSummaryRedactsRawOwnerPathsAndCleanupMaterial(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer owner.Release()
+	defer func() {
+		if err := owner.Release(); err != nil {
+			t.Errorf("release session owner: %v", err)
+		}
+	}()
 	rawRuntime := environmentStore.RuntimeSessionDir(record.ID, owner.Record().SessionID)
 	rawLock := filepath.Join(environmentStore.OwnerRoot(record.ID), owner.Record().SessionID, "owner.lock")
 	cleanupMessage := "failed at " + rawRuntime + " lock=" + rawLock + " token=cap_0123456789abcdef0123456789abcdef"

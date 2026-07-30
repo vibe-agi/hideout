@@ -429,6 +429,10 @@ func (c Core) claimHostFSRead(req DecisionClaimRequest, d decision.Decision) (de
 	if err != nil {
 		return decision.ClaimResponse{}, err
 	}
+	lease, err := decisionClaimLease(req.LeaseSeconds)
+	if err != nil {
+		return decision.ClaimResponse{}, err
+	}
 	var claim decision.ClaimResponse
 	var updated decision.Decision
 	err = providerStore.WithExclusive(func() error {
@@ -447,7 +451,13 @@ func (c Core) claimHostFSRead(req DecisionClaimRequest, d decision.Decision) (de
 		if err != nil {
 			return err
 		}
-		claim, updated, err = decisionStore.ClaimDecision(d.ID, req.Surface, time.Minute)
+		claim, updated, err = decisionStore.ClaimDecisionWithOptions(d.ID, decision.ClaimOptions{
+			Surface:          req.Surface,
+			Operator:         decisionClaimOperator,
+			Lease:            lease,
+			ExpectedRevision: req.ExpectedRevision,
+			TakeoverExpired:  req.Takeover,
+		})
 		if err != nil {
 			return err
 		}
@@ -455,17 +465,29 @@ func (c Core) claimHostFSRead(req DecisionClaimRequest, d decision.Decision) (de
 		record.Revision = updated.Revision
 		record.TimeoutAt = updated.TimeoutAt
 		state.Requests[key] = record
-		state.UpdatedAt = time.Now().UTC()
+		state.UpdatedAt = c.decisionNow()
 		return providerStore.SaveState(state)
 	})
 	if err != nil {
 		_ = c.emitDecisionAudit(decision.ActionDecisionStale, "deny", d, map[string]any{"reason": err.Error()})
 		return decision.ClaimResponse{}, err
 	}
-	if err := c.emitDecisionAudit(decision.ActionDecisionClaim, "allow", updated, map[string]any{"surface": req.Surface}); err != nil {
+	action := decision.ActionDecisionClaim
+	phase := "claimed"
+	if claim.Takeover {
+		action = decision.ActionDecisionTakeover
+		phase = "claim-taken-over"
+	}
+	if err := c.emitDecisionAudit(action, "allow", updated, map[string]any{
+		"surface":          claim.Surface,
+		"leaseSeconds":     claim.LeaseSeconds,
+		"claimExpiresAt":   claim.ClaimExpiresAt,
+		"takeover":         claim.Takeover,
+		"expectedRevision": req.ExpectedRevision,
+	}); err != nil {
 		return decision.ClaimResponse{}, err
 	}
-	c.emitDecision(updated, "claimed", "")
+	c.emitDecision(updated, phase, "")
 	return claim, nil
 }
 

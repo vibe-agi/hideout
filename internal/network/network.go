@@ -27,6 +27,12 @@ const (
 	ModeDirect    = "direct"
 	ModeTun2Socks = "tun2socks"
 
+	SecretSourceManaged            = "managed"
+	SecretSourceStartupEnvironment = "startup-environment"
+
+	startupEnvironmentSecretReason = "compatibility-only startup environment fallback; " +
+		"only variables captured when the daemon started are visible"
+
 	// dnsStubAddr is the guest-local address the DoH DNS stub listens on; the
 	// guest resolver is pointed here and connected-subnet resolvers are blocked.
 	dnsStubAddr = "127.0.0.1:53"
@@ -41,6 +47,24 @@ var serviceBootIDPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]
 
 type SecretResolver interface {
 	Resolve(ref string) (string, error)
+}
+
+// DetailedSecretResolver adds non-secret provenance to a resolution without
+// widening the long-standing SecretResolver contract. Runtime-only values stay
+// out of serialized plans; source, generation, and migration guidance may be
+// shown to the operator.
+type DetailedSecretResolver interface {
+	SecretResolver
+	ResolveSecret(ref string) (SecretResolution, error)
+}
+
+type SecretResolution struct {
+	Value           string `json:"-"`
+	Source          string `json:"source,omitempty"`
+	Generation      uint64 `json:"generation,omitempty"`
+	Deprecated      bool   `json:"deprecated,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	RecoveryCommand string `json:"recoveryCommand,omitempty"`
 }
 
 type EnvSecretResolver struct {
@@ -80,6 +104,10 @@ type Plan struct {
 	DNSPolicy                string   `json:"dnsPolicy,omitempty"`
 	LocalBypassHosts         []string `json:"localBypassHosts,omitempty"`
 	ProxySecretRef           string   `json:"proxySecretRef,omitempty"`
+	ProxySecretSource        string   `json:"proxySecretSource,omitempty"`
+	ProxySecretGeneration    uint64   `json:"proxySecretGeneration,omitempty"`
+	ProxySecretDeprecated    bool     `json:"proxySecretDeprecated,omitempty"`
+	ProxySecretRecovery      string   `json:"proxySecretRecovery,omitempty"`
 	ProxySecretPath          string   `json:"-"`
 	GuestProxySecretPath     string   `json:"guestProxySecretPath,omitempty"`
 	MediatedResolver         string   `json:"mediatedResolver,omitempty"`
@@ -192,7 +220,7 @@ func Prepare(spec Spec) (Plan, error) {
 		if resolver == nil {
 			resolver = EnvSecretResolver{}
 		}
-		secret, err := resolver.Resolve(ref)
+		resolution, err := resolveSecret(resolver, ref)
 		if err != nil {
 			plan.FailClosed = true
 			plan.ProxySecretRef = ref
@@ -200,6 +228,11 @@ func Prepare(spec Spec) (Plan, error) {
 			_ = maybeWriteArtifacts(plan, spec.DryRun)
 			return plan, err
 		}
+		secret := resolution.Value
+		plan.ProxySecretSource = resolution.Source
+		plan.ProxySecretGeneration = resolution.Generation
+		plan.ProxySecretDeprecated = resolution.Deprecated
+		plan.ProxySecretRecovery = resolution.RecoveryCommand
 		if err := validateProxyURL(secret); err != nil {
 			plan.FailClosed = true
 			plan.ProxySecretRef = ref
@@ -243,7 +276,10 @@ func Prepare(spec Spec) (Plan, error) {
 				if err := writeProxySecret(plan.ProxySecretPath, proxyMaterial, spec.DryRun); err != nil {
 					return plan, err
 				}
-				plan.Reason = "tun2socks routing will be verified inside the guest before launching target command"
+				plan.Reason = secretResolutionReason(
+					"tun2socks routing will be verified inside the guest before launching target command",
+					resolution,
+				)
 				return plan, maybeWriteArtifactsWithSecret(plan, spec.DryRun)
 			}
 			plan.FailClosed = true
@@ -262,7 +298,10 @@ func Prepare(spec Spec) (Plan, error) {
 		if err := writeProxySecret(plan.ProxySecretPath, proxyMaterial, spec.DryRun); err != nil {
 			return plan, err
 		}
-		plan.Reason = "tun2socks routing verified"
+		plan.Reason = secretResolutionReason(
+			"tun2socks routing verified",
+			resolution,
+		)
 		return plan, maybeWriteArtifactsWithSecret(plan, spec.DryRun)
 	default:
 		return plan, fmt.Errorf("unsupported network mode %q", plan.Mode)
@@ -571,24 +610,103 @@ func ContainsProxyEnv(env []string) bool {
 }
 
 func (r EnvSecretResolver) Resolve(ref string) (string, error) {
+	resolution, err := r.ResolveSecret(ref)
+	return resolution.Value, err
+}
+
+func (r EnvSecretResolver) ResolveSecret(ref string) (SecretResolution, error) {
 	env := r.Env
 	if env == nil {
 		env = os.Environ()
 	}
 	name, err := secrets.EnvName(ref)
 	if err != nil {
-		return "", err
+		return SecretResolution{}, err
 	}
 	for _, kv := range env {
 		k, v, ok := strings.Cut(kv, "=")
 		if ok && k == name {
 			if v == "" {
-				return "", fmt.Errorf("secret ref %s is empty", ref)
+				return SecretResolution{}, fmt.Errorf("secret ref %s is empty", ref)
 			}
-			return v, nil
+			return SecretResolution{
+				Value:           v,
+				Source:          SecretSourceStartupEnvironment,
+				Deprecated:      true,
+				Reason:          startupEnvironmentSecretReason,
+				RecoveryCommand: "hideout secret set " + ref,
+			}, nil
 		}
 	}
-	return "", fmt.Errorf("secret ref %s is not set", ref)
+	return SecretResolution{}, fmt.Errorf(
+		"secret ref %s is not set; store it with hideout secret set %s",
+		ref,
+		ref,
+	)
+}
+
+func resolveSecret(
+	resolver SecretResolver,
+	ref string,
+) (SecretResolution, error) {
+	if detailed, ok := resolver.(DetailedSecretResolver); ok {
+		resolution, err := detailed.ResolveSecret(ref)
+		if err != nil {
+			return SecretResolution{}, err
+		}
+		if resolution.Value == "" {
+			return SecretResolution{}, fmt.Errorf("secret ref %s is empty", ref)
+		}
+		switch resolution.Source {
+		case SecretSourceManaged:
+			if resolution.Generation == 0 {
+				return SecretResolution{}, errors.New(
+					"managed secret resolution metadata is invalid",
+				)
+			}
+			resolution.Deprecated = false
+			resolution.Reason = ""
+			resolution.RecoveryCommand = ""
+		case SecretSourceStartupEnvironment:
+			if resolution.Generation != 0 {
+				return SecretResolution{}, errors.New(
+					"startup secret resolution metadata is invalid",
+				)
+			}
+			// Provenance text is canonical, not provider-controlled, because it
+			// is serialized into plans and audit records.
+			resolution.Deprecated = true
+			resolution.Reason = startupEnvironmentSecretReason
+			resolution.RecoveryCommand = "hideout secret set " + ref
+		default:
+			return SecretResolution{}, errors.New(
+				"secret resolution source is invalid",
+			)
+		}
+		return resolution, nil
+	}
+	value, err := resolver.Resolve(ref)
+	if err != nil {
+		return SecretResolution{}, err
+	}
+	if value == "" {
+		return SecretResolution{}, fmt.Errorf("secret ref %s is empty", ref)
+	}
+	return SecretResolution{Value: value}, nil
+}
+
+func secretResolutionReason(
+	base string,
+	resolution SecretResolution,
+) string {
+	if !resolution.Deprecated || resolution.Reason == "" {
+		return base
+	}
+	reason := base + "; " + resolution.Reason
+	if resolution.RecoveryCommand != "" {
+		reason += "; migrate with " + resolution.RecoveryCommand
+	}
+	return reason
 }
 
 func SecretEnvName(ref string) string {

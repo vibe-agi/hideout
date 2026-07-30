@@ -24,15 +24,6 @@ type supportReportOptions struct {
 	overwrite bool
 }
 
-func (a app) supportReportUsage() {
-	fmt.Fprintln(a.stdout, "Usage:")
-	fmt.Fprintln(a.stdout, "  hideout support report --out <path> [--profile <name>] [--backend auto|lima] [--workspace <path>] [--overwrite]")
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Write one bounded, redacted support report to a local file.")
-	fmt.Fprintln(a.stdout, "Nothing is uploaded. The destination must already have a private, user-owned parent.")
-	fmt.Fprintln(a.stdout, "Existing regular files are replaced only with explicit --overwrite.")
-}
-
 func (a app) supportReport(args []string) error {
 	opts, err := parseSupportReportOptions(args)
 	if err != nil {
@@ -179,6 +170,23 @@ func collectReadOnlySupportDoctor(opts supportReportOptions, protected []string)
 	default:
 		builder.Add("network", "network", doctorpkg.StatusError, "network mode is unsupported")
 	}
+
+	builder.Add(
+		"activity-privacy",
+		"activity",
+		doctorpkg.StatusPass,
+		"workload activity is local metadata owned by an exact VM/session incarnation; this shareable report excludes activity records and raw paths",
+		doctorpkg.WithRequired(false),
+		doctorpkg.WithDetails(map[string]any{
+			"observedFacts": activityPrivacyFacts(
+				activityRetentionForProfile(p),
+			),
+		}),
+		doctorpkg.WithNextActions(
+			"hideout doctor --feature activity",
+			"hideout activity coverage",
+		),
+	)
 
 	if opts.workspace == "" {
 		builder.Add("workspace", "workspace", doctorpkg.StatusSkipped,

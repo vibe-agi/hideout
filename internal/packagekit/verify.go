@@ -164,6 +164,14 @@ func VerifyArtifact(root string, manifest Manifest) error {
 	if !containsString(manifest.Layout.Directories, "schemas") {
 		return errors.New("package manifest layout.directories must include schemas")
 	}
+	observerRel := "bin/" + helperbin.LinuxObserverCommand + "-linux-" +
+		manifest.Target.LinuxGuestArch
+	if !containsString(manifest.Layout.Binaries, observerRel) {
+		return fmt.Errorf(
+			"package manifest layout.binaries must include %s",
+			observerRel,
+		)
+	}
 	if err := verifyLayout(root, manifest.Layout); err != nil {
 		return err
 	}
@@ -182,12 +190,32 @@ func VerifyArtifact(root string, manifest Manifest) error {
 			return fmt.Errorf("package manifest layout path %q is not covered by file checksums", rel)
 		}
 	}
-	for _, rel := range []string{"LICENSE", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "README.md", "runtime/catalog.json"} {
+	for _, rel := range []string{
+		"LICENSE",
+		"LICENSES/GPL-2.0-only.txt",
+		"THIRD_PARTY_NOTICES.md",
+		"SECURITY.md",
+		"README.md",
+		"runtime/catalog.json",
+		PackageComponentContractPath,
+		BrowserConsoleManifestPath,
+	} {
 		if _, ok := seen[rel]; !ok {
 			return fmt.Errorf("package manifest must checksum %q", rel)
 		}
 	}
 	if err := verifyRequiredLinuxSessionHelpers(root, manifest.Target.LinuxGuestArch, manifest.Files); err != nil {
+		return err
+	}
+	if err := verifyPackageComponentContract(root, manifest.Files, false); err != nil {
+		return err
+	}
+	if err := verifyEmbeddedBrowserConsole(
+		root,
+		manifest.Files,
+		manifest.EmbeddedAssets,
+		false,
+	); err != nil {
 		return err
 	}
 	return nil
@@ -202,6 +230,17 @@ func VerifyInstalled(prefix string, state InstallState) error {
 		return err
 	}
 	if err := verifyRequiredLinuxSessionHelpers(cleanPrefix, state.Package.Target.LinuxGuestArch, state.Files); err != nil {
+		return err
+	}
+	if err := verifyPackageComponentContract(cleanPrefix, state.Files, true); err != nil {
+		return err
+	}
+	if err := verifyEmbeddedBrowserConsole(
+		cleanPrefix,
+		state.Files,
+		nil,
+		true,
+	); err != nil {
 		return err
 	}
 	for _, stale := range state.ObsoleteFiles {
@@ -259,6 +298,36 @@ func verifyRequiredLinuxSessionHelpers(root, guestArch string, files []File) err
 	if _, ok := helperbin.Tun2SocksHelperCurrent(tunPath, guestArch, true); !ok {
 		return fmt.Errorf("package Linux helper identity is invalid for %q", tunBinaryRel)
 	}
+	observerBinaryRel := "bin/" + helperbin.LinuxObserverCommand + "-linux-" + guestArch
+	observerManifestRel := observerBinaryRel + ".manifest.json"
+	observerBinary, observerBinaryOK := indexed[observerBinaryRel]
+	observerManifest, observerManifestOK := indexed[observerManifestRel]
+	if !observerBinaryOK ||
+		observerBinary.Kind != "linux-helper" ||
+		!observerBinary.Executable {
+		return fmt.Errorf(
+			"package requires executable Linux helper %q",
+			observerBinaryRel,
+		)
+	}
+	if !observerManifestOK ||
+		observerManifest.Kind != "helper-manifest" ||
+		observerManifest.Executable {
+		return fmt.Errorf(
+			"package requires helper manifest %q",
+			observerManifestRel,
+		)
+	}
+	observerPath, err := JoinRelative(root, observerBinaryRel)
+	if err != nil {
+		return err
+	}
+	if _, ok := helperbin.LinuxObserverHelperCurrent(observerPath, guestArch); !ok {
+		return fmt.Errorf(
+			"package Linux helper identity is invalid for %q",
+			observerBinaryRel,
+		)
+	}
 	licenseFound := false
 	for _, rel := range []string{
 		"third_party/tun2socks/LICENSE",
@@ -270,6 +339,18 @@ func verifyRequiredLinuxSessionHelpers(root, guestArch string, files []File) err
 	}
 	if !licenseFound {
 		return errors.New("package requires third-party tun2socks license")
+	}
+	observerLicenseFound := false
+	for _, rel := range []string{
+		"LICENSES/GPL-2.0-only.txt",
+		"share/hideout/LICENSES/GPL-2.0-only.txt",
+	} {
+		if file, ok := indexed[rel]; ok && file.Kind == "doc" && !file.Executable {
+			observerLicenseFound = true
+		}
+	}
+	if !observerLicenseFound {
+		return errors.New("package requires GPL-2.0-only text for embedded observer programs")
 	}
 	return nil
 }
@@ -313,6 +394,9 @@ func validateManifest(manifest Manifest, requireHostTarget bool) error {
 	}
 	if len(manifest.Files) == 0 {
 		return errors.New("package manifest has no files")
+	}
+	if err := validateEmbeddedAssetBindings(manifest.EmbeddedAssets); err != nil {
+		return err
 	}
 	if manifest.Migration.InstallStateSchema == "" {
 		return errors.New("package manifest migration.installStateSchema is required")
@@ -459,6 +543,7 @@ func isSupportedKind(kind string) bool {
 		"runtime-catalog",
 		"runtime-contract",
 		"runtime-build",
+		"embedded-asset-manifest",
 	}, kind)
 }
 

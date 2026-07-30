@@ -3,6 +3,7 @@ package lima
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -15,13 +16,14 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
 
 func TestSupervisorStartControlBindsProjectionExpectation(t *testing.T) {
 	session := projectionReadySessionFixture()
 	start, err := supervisorStartControl(
 		session, []string{"code", "."}, []string{"PATH=/hideout/session/shims:/usr/bin"},
-		backend.RunStreams{},
+		backend.RunStreams{}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +338,14 @@ func TestSupervisorProtocolPostCommitCancellationKeepsGracefulProtocol(t *testin
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
+	wantCommand := rootControlShellCommand(
+		"/",
+		[]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		[]string{GuestSessionSupervisorPath},
+	)
+	if result.command != wantCommand {
+		t.Fatalf("supervisor exec command=%q want %q", result.command, wantCommand)
+	}
 	if readyCalls != 1 || session.ProjectionReadinessObservation == nil {
 		t.Fatalf("matching proof readyCalls=%d observation=%+v", readyCalls, session.ProjectionReadinessObservation)
 	}
@@ -348,7 +358,257 @@ func TestSupervisorProtocolPostCommitCancellationKeepsGracefulProtocol(t *testin
 	}
 }
 
+func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *testing.T) {
+	session := projectionReadySessionFixture()
+	owner, err := workloadtypes.NewReusableOwner(
+		session.EnvironmentID,
+		"lima",
+		"hideout-projection:3:"+session.ExpectedBootID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Activity = &backend.ActivityPreparation{
+		Owner: owner, SessionID: session.ID, EnvironmentID: session.EnvironmentID,
+		Backend: "lima", BackendIncarnationID: owner.BackendIncarnationID,
+		GuestBootID: session.ExpectedBootID, ObserverGeneration: 1,
+		ObserverHelperDigest: "sha256:" + strings.Repeat("a", 64),
+		Retention:            workloadtypes.DefaultActivityRetentionPolicy(),
+	}
+	token, err := sessionwire.NewObserverStreamToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Destroy()
+
+	starts := make(chan *sessionwire.SupervisorStart, 1)
+	observed := make(chan struct{})
+	var observedOnce sync.Once
+	client, server := newObserverStreamSSHTestClient(t, func(command string, channel ssh.Channel) error {
+		if strings.Contains(command, "observer-stream") {
+			start := <-starts
+			defer start.Activity.ObserverStreamToken.Destroy()
+			open, err := sessionwire.ReadObserverStreamOpen(channel)
+			if err != nil {
+				return err
+			}
+			if err := sessionwire.AuthenticateObserverStreamOpen(
+				open,
+				start.SessionID,
+				start.Activity.ObserverStreamToken,
+				sessionwire.ObserverStreamPeer{UID: 0},
+			); err != nil {
+				return err
+			}
+			binding := sessionwire.ObserverBinding{
+				Owner: start.Activity.Owner, SessionID: start.SessionID,
+				EnvironmentID:        session.EnvironmentID,
+				BackendIncarnationID: start.Activity.Owner.BackendIncarnationID,
+				GuestBootID:          start.ExpectedBootID, CgroupID: 8080,
+				ObserverGeneration: start.Activity.ObserverGeneration,
+			}
+			capability := sessionwire.ObserverCapability{
+				State:    workloadtypes.CoverageAvailable,
+				Evidence: []string{"fixture.available"},
+			}
+			hello := sessionwire.ObserverHello{
+				Type: sessionwire.ObserverHelloType, Schema: sessionwire.ObserverWireSchema,
+				Owner: binding.Owner, SessionID: binding.SessionID,
+				EnvironmentID:        binding.EnvironmentID,
+				BackendIncarnationID: binding.BackendIncarnationID,
+				GuestBootID:          binding.GuestBootID, CgroupID: binding.CgroupID,
+				ObserverGeneration: binding.ObserverGeneration,
+				HelperDigest:       session.Activity.ObserverHelperDigest,
+				Capabilities: sessionwire.ObserverCapabilities{
+					Process: capability, File: capability, Network: capability, DNS: capability,
+				},
+			}
+			if err := sessionwire.WriteObserverHello(channel, hello); err != nil {
+				return err
+			}
+			accepted, err := sessionwire.ReadObserverAccepted(channel)
+			if err != nil {
+				return err
+			}
+			if err := accepted.ValidateBinding(binding); err != nil {
+				return err
+			}
+			payload, _ := json.Marshal(struct {
+				LatestSequence uint64 `json:"latestSequence"`
+				KernelDropped  uint64 `json:"kernelDropped"`
+				RingDropped    uint64 `json:"ringDropped"`
+			}{LatestSequence: 1})
+			if err := sessionwire.WriteObserverEnvelope(channel, sessionwire.ObservationEnvelope{
+				Schema: sessionwire.ObservationSchema, Owner: binding.Owner,
+				SessionID: binding.SessionID, CgroupID: binding.CgroupID,
+				ObserverGeneration: binding.ObserverGeneration,
+				CPU:                0, Sequence: 1, MonotonicNS: 1,
+				Kind: "collector.heartbeat", Payload: payload,
+			}); err != nil {
+				return err
+			}
+			_, err = io.Copy(io.Discard, channel)
+			return err
+		}
+
+		reader := sessionwire.NewReader(channel, sessionwire.DaemonToSupervisor)
+		writer := sessionwire.NewWriter(channel, sessionwire.SupervisorToDaemon)
+		start, err := readSupervisorStartForTest(reader)
+		if err != nil {
+			return err
+		}
+		if start.Activity == nil {
+			return errors.New("supervisor start omitted activity expectation")
+		}
+		starts <- start
+		capability := sessionwire.ObserverCapability{
+			State:    workloadtypes.CoverageAvailable,
+			Evidence: []string{"fixture.available"},
+		}
+		coverageValues := (sessionwire.ObserverCapabilities{
+			Process: capability, File: capability, Network: capability, DNS: capability,
+		}).Coverage()
+		activityReady := &sessionwire.SupervisorActivityReady{
+			Boundary: workloadtypes.WorkloadBoundary{
+				Schema: workloadtypes.WorkloadBoundarySchema, Owner: start.Activity.Owner,
+				SessionID:  start.SessionID,
+				CgroupPath: "/sys/fs/cgroup/hideout/" + start.SessionID,
+				CgroupID:   8080, TargetUser: start.TargetUser,
+				State:              workloadtypes.BoundaryReady,
+				ObserverGeneration: start.Activity.ObserverGeneration,
+				GuestBootID:        start.ExpectedBootID, CreatedAtMonoNS: 1,
+			},
+			ObserverHelperDigest: start.Activity.ObserverHelperDigest,
+			Coverage:             coverageValues,
+		}
+		ready := supervisorReadyForTest(session)
+		ready.Activity = activityReady
+		if err := writer.WriteControl(sessionwire.TypeSupervisorReady, ready); err != nil {
+			return err
+		}
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			return err
+		}
+		if frame.Type != sessionwire.TypeSupervisorCommit {
+			return errors.New("target was not committed after activity readiness")
+		}
+		select {
+		case <-observed:
+		case <-time.After(time.Second):
+			return errors.New("target commit raced ahead of activity ingestion")
+		}
+		return writer.WriteControl(sessionwire.TypeCompletion, &sessionwire.Completion{
+			Kind: sessionwire.CompletionExit, ExitCode: 0,
+			TargetCompleted: true, CleanupCompleted: true,
+			SessionID: session.ID, Summary: "exited",
+			Activity: &sessionwire.SupervisorActivityCompletion{
+				Owner: start.Activity.Owner, SessionID: start.SessionID,
+				CgroupID: 8080, ObserverGeneration: start.Activity.ObserverGeneration,
+				BoundaryState: workloadtypes.BoundaryRemoved,
+				Coverage:      coverageValues, CleanupProved: true,
+			},
+		})
+	})
+
+	var (
+		orderMu sync.Mutex
+		order   []string
+		closed  bool
+	)
+	streams := backend.RunStreams{
+		Stdout: io.Discard, Stderr: io.Discard,
+		Activity: &backend.ActivityStreams{
+			Prepare: func(preparation backend.ActivityPreparation) (sessionwire.SupervisorActivityExpectation, error) {
+				if preparation != *session.Activity {
+					return sessionwire.SupervisorActivityExpectation{}, errors.New("activity preparation identity drift")
+				}
+				orderMu.Lock()
+				order = append(order, "prepare")
+				orderMu.Unlock()
+				return sessionwire.SupervisorActivityExpectation{
+					Owner:                preparation.Owner,
+					ObserverGeneration:   preparation.ObserverGeneration,
+					ObserverHelperDigest: preparation.ObserverHelperDigest,
+					ObserverStreamToken:  token,
+				}, nil
+			},
+			BoundaryReady: func(ready *sessionwire.SupervisorActivityReady) error {
+				if ready == nil || ready.Boundary.CgroupID != 8080 {
+					return errors.New("wrong activity boundary")
+				}
+				orderMu.Lock()
+				order = append(order, "boundary")
+				orderMu.Unlock()
+				return nil
+			},
+			Observe: func(envelope sessionwire.ObservationEnvelope) error {
+				if envelope.Kind != "collector.heartbeat" {
+					return errors.New("unexpected activity observation")
+				}
+				orderMu.Lock()
+				order = append(order, "observe")
+				orderMu.Unlock()
+				observedOnce.Do(func() { close(observed) })
+				return nil
+			},
+			ObserverClosed: func(error) error { return nil },
+			SessionClosed: func(completion *sessionwire.SupervisorActivityCompletion, _ error) error {
+				if completion == nil || completion.CgroupID != 8080 {
+					return errors.New("activity completion was not bound")
+				}
+				orderMu.Lock()
+				order = append(order, "closed")
+				closed = true
+				orderMu.Unlock()
+				return nil
+			},
+		},
+		Ready: func(backend.SessionReadyProof) error {
+			orderMu.Lock()
+			order = append(order, "ready")
+			orderMu.Unlock()
+			return nil
+		},
+	}
+	if err := (Backend{}).runSupervisorProtocol(
+		context.Background(),
+		session,
+		client,
+		[]string{GuestSessionSupervisorPath},
+		[]string{"code", "."},
+		[]string{"PATH=/usr/bin"},
+		streams,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close()
+	result := waitObserverStreamSSHServer(t, server)
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	if !closed {
+		t.Fatal("activity session was not closed")
+	}
+	boundaryIndex, readyIndex := -1, -1
+	for index, value := range order {
+		switch value {
+		case "boundary":
+			boundaryIndex = index
+		case "ready":
+			readyIndex = index
+		}
+	}
+	if boundaryIndex < 0 || readyIndex < 0 || boundaryIndex >= readyIndex {
+		t.Fatalf("activity boundary was not registered before target readiness: %v", order)
+	}
+}
+
 type supervisorProtocolServerResult struct {
+	command  string
 	requests []string
 	err      error
 }
@@ -406,6 +666,15 @@ func newSupervisorProtocolTestClient(
 			_ = channel.Close()
 			return
 		}
+		var execRequest struct {
+			Command string
+		}
+		if err := ssh.Unmarshal(request.Payload, &execRequest); err != nil {
+			result.err = err
+			_ = channel.Close()
+			return
+		}
+		result.command = execRequest.Command
 		if err := request.Reply(true, nil); err != nil {
 			result.err = err
 			_ = channel.Close()

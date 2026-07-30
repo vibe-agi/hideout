@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -401,12 +400,3 @@ func hostAppResourceKinds(values []string) []hostcap.ResourceKind {
 func hostAppLaunch(spec hostapppack.LaunchSpec) appopen.LaunchSpec {
 	return appopen.LaunchSpec{GotoFlag: spec.GotoFlag, NewWindowFlag: spec.NewWindowFlag, ReuseWindowFlag: spec.ReuseWindowFlag, GotoSeparator: spec.GotoSeparator}
 }
-
-func hostAppSafeProfileFor(app hostapppack.AppSpec, identity hostcap.ObservedApplicationIdentity, platform hostcap.Platform) (appopen.SafetyProfile, error) {
-	if app.RequestedSafetyProfile == "" {
-		return appopen.SafetyProfile{}, errors.New("host-app safe access requires a requested Core safety profile")
-	}
-	return hostcap.SelectCoreSafetyProfile(app.RequestedSafetyProfile, identity.SafetyIdentity(platform))
-}
-
-func cleanHostAppRelative(path string) string { return filepath.ToSlash(filepath.Clean(path)) }

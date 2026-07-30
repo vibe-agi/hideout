@@ -17,7 +17,11 @@ import (
 	"github.com/vibe-agi/hideout/internal/lifecycle"
 	"github.com/vibe-agi/hideout/internal/manager"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
+	"github.com/vibe-agi/hideout/internal/operatorhelp"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/secrets"
+	workloadredact "github.com/vibe-agi/hideout/internal/workloadobs/redact"
+	workloadstore "github.com/vibe-agi/hideout/internal/workloadobs/store"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
@@ -58,6 +62,19 @@ type Options struct {
 	BackendShutdown    func() error
 	WorkspaceProviders workspaceattach.ProviderFactory
 	SessionCapacity    int
+	// SecretStore is daemon-owned. Tests may inject an in-memory provider;
+	// production defaults to the platform Keychain implementation.
+	SecretStore secrets.RuntimeStore
+	// HelpCatalog is a render-only projection supplied by the CLI entrypoint.
+	// It carries no dispatch or mutation authority.
+	HelpCatalog operatorhelp.Catalog
+	// NetworkTransitionCheckpoints is an optional process-local evidence and
+	// fault-injection seam. The production app leaves it nil; when supplied it
+	// observes boundaries only after the durable Manager checkpoint.
+	NetworkTransitionCheckpoints manager.NetworkTransitionEffectCheckpoint
+	// ActivityStore is injectable for recovery and lifecycle tests. Production
+	// opens the private bounded store rooted under Store.Root.
+	ActivityStore *workloadstore.Store
 	// LiveResources lists resources that could survive a restart (running
 	// environments). Defaults to none; the daemon reports any it cannot prove it
 	// owns as orphans. Injectable for tests.
@@ -66,41 +83,47 @@ type Options struct {
 
 // Daemon is the single per-store local control-plane process.
 type Daemon struct {
-	store            profile.Store
-	buildID          string
-	runtimeDir       string
-	socket           string
-	instanceID       string
-	limaHome         string
-	startedAt        time.Time
-	credentials      *credentialManager
-	api              manager.API
-	audit            *auditLog
-	bus              *eventBus
-	bg               *bgRegistry
-	own              *ownership
-	orphans          []LiveResource
-	ln               net.Listener
-	sessionListener  *SessionListener
-	sessionServer    *sessionServer
-	sessions         *sessionRegistry
-	lifecycle        *lifecycle.Coordinator
-	lifecycleBackend manager.EnvironmentLifecycleBackendFactory
-	backendShutdown  func() error
-	networkGateways  *netpolicy.GatewayRegistry
-	lifecycleCtx     context.Context
-	lifecycleCancel  context.CancelFunc
-	lifecycleWG      sync.WaitGroup
-	lifecycleSlots   chan struct{}
-	server           *http.Server
-	uiServer         *http.Server
-	uiURL            string
-	lockFile         *os.File
-	tailStop         chan struct{}
-	hostFSStop       chan struct{}
-	credentialStop   chan struct{}
-	credentialDone   chan struct{}
-	done             chan struct{}
+	store              profile.Store
+	buildID            string
+	runtimeDir         string
+	socket             string
+	instanceID         string
+	limaHome           string
+	startedAt          time.Time
+	credentials        *credentialManager
+	api                manager.API
+	audit              *auditLog
+	bus                *eventBus
+	bg                 *bgRegistry
+	own                *ownership
+	orphans            []LiveResource
+	ln                 net.Listener
+	sessionListener    *SessionListener
+	sessionServer      *sessionServer
+	sessions           *sessionRegistry
+	activityStore      *workloadstore.Store
+	activityOwned      bool
+	activityCleanup    *manager.ActivityCleanupService
+	secrets            *daemonSecretService
+	environmentActions *manager.EnvironmentActionService
+	lifecycle          *lifecycle.Coordinator
+	lifecycleBackend   manager.EnvironmentLifecycleBackendFactory
+	backendShutdown    func() error
+	networkGateways    *netpolicy.GatewayRegistry
+	lifecycleCtx       context.Context
+	lifecycleCancel    context.CancelFunc
+	lifecycleWG        sync.WaitGroup
+	lifecycleSlots     chan struct{}
+	server             *http.Server
+	uiServer           *http.Server
+	uiURL              string
+	helpCatalog        operatorhelp.Catalog
+	lockFile           *os.File
+	tailStop           chan struct{}
+	hostFSStop         chan struct{}
+	credentialStop     chan struct{}
+	credentialDone     chan struct{}
+	done               chan struct{}
 
 	mu    sync.Mutex
 	state string
@@ -115,6 +138,9 @@ func Start(opts Options) (*Daemon, error) {
 	if opts.Store.Root == "" {
 		return nil, errors.New("daemon: store root is required")
 	}
+	// Compatibility secret fallback is intentionally a point-in-time startup
+	// snapshot. Later exports cannot silently alter a long-running daemon.
+	startupEnvironment := append([]string(nil), os.Environ()...)
 	buildID, err := resolveBuildID(opts.BuildID)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: resolve build identity: %w", err)
@@ -187,10 +213,19 @@ func Start(opts Options) (*Daemon, error) {
 		return nil, err
 	}
 	instanceID := "daemon_" + strings.TrimPrefix(connectionID, "conn_")
-	bus := newEventBus()
+	bus := newEventBusV2(instanceID, credentials.Generation)
 	al.publish = bus.publishAudit
 	core := manager.New(opts.Store)
 	core.Observer = bus
+	secretStore := opts.SecretStore
+	if secretStore == nil {
+		secretStore = secrets.NewKeychainStoreForRoot(opts.Store.Root)
+	}
+	secretService := newDaemonSecretService(core, secretStore)
+	networkSecretResolver := daemonNetworkSecretResolver{
+		managed: secretService,
+		startup: netpolicy.EnvSecretResolver{Env: startupEnvironment},
+	}
 	lifecycleCoordinator, err := lifecycle.NewCoordinator(lifecycle.CoordinatorOptions{
 		Store: lifecycle.JournalStore{Root: opts.Store.Root}, DaemonID: instanceID,
 		Now: opts.Now, IdleGrace: opts.LifecycleIdleGrace, Enabled: opts.LifecycleAutomaticStop,
@@ -270,9 +305,94 @@ func Start(opts Options) (*Daemon, error) {
 			AuditRef: "audit:background:" + id,
 		})
 	}
+	activityStore := opts.ActivityStore
+	activityOwned := false
+	if activityStore == nil {
+		activityStore, err = workloadstore.Open(workloadstore.Options{
+			Root: filepath.Join(opts.Store.Root, "activity"),
+			Now:  opts.Now,
+		})
+		if err != nil {
+			_ = lifecycleCoordinator.Close()
+			_ = sessionListener.Close()
+			_ = ln.Close()
+			_ = al.close()
+			releaseLock(lockFile, filepath.Join(dir, lockName))
+			return nil, fmt.Errorf("daemon: open activity store: %w", err)
+		}
+		activityOwned = true
+	}
 	sessions := newSessionRegistry(opts.SessionCapacity, opts.Now)
+	sessions.activity.setPersistentStore(activityStore)
+	sessions.activity.setRedactionBuilder(workloadredact.Builder{
+		Secrets: secretStore,
+		ControlTokens: daemonControlTokenSource{
+			credentials: credentials,
+		},
+		Now: opts.Now,
+	})
+	activityCleanup := manager.NewActivityCleanupService(
+		newDaemonActivityCleanupStore(activityStore, sessions.activity),
+		opts.Now,
+	)
+	secretService.beginApply = sessions.activity.beginSecretMutation
+	sessions.setActivityCleanup(activityCleanup)
 	sessions.setWorkspacePublisher(bus.publishWorkspaceViews)
 	core.ActiveWorkspaceViews = sessions.workspaceViewSnapshots
+	activityProvider, err := newDaemonActivityProviderWithStore(
+		sessions.activity,
+		activityStore,
+		instanceID,
+		credentials.Token(),
+	)
+	if err != nil {
+		if activityOwned {
+			_ = activityStore.Close()
+		}
+		_ = lifecycleCoordinator.Close()
+		_ = sessionListener.Close()
+		_ = ln.Close()
+		_ = al.close()
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, fmt.Errorf("daemon: initialize activity query provider: %w", err)
+	}
+	profileTransactions := manager.NewProfileTransactionService(core)
+	profileTransactions.Mutations = lifecycleCoordinator
+	gatewayNetworkTransitions := manager.GatewayNetworkTransitionProvider{
+		StoreRoot: opts.Store.Root,
+		Gateways:  core.NetworkGateways,
+		Now:       opts.Now,
+	}
+	networkRecoveryProvider :=
+		manager.LiveDNSNetworkTransitionRecoveryProvider{
+			StoreRoot: opts.Store.Root,
+			Runtimes: startupNetworkRuntimeProvider{
+				storeRoot: opts.Store.Root,
+				backends:  opts.LifecycleBackend,
+			},
+			Now: opts.Now,
+		}
+	liveNetworkTransitions :=
+		&manager.ProfileNetworkTransitionCoordinator{
+			Core: core,
+			Provider: manager.LiveNetworkTransitionProvider{
+				Gateway:  gatewayNetworkTransitions,
+				Runtimes: sessions,
+				Now:      opts.Now,
+			},
+			Sessions:         sessions,
+			SecretReferences: secretService,
+			SecretResolver:   networkSecretResolver,
+			RecoveryProvider: networkRecoveryProvider,
+			Checkpoints:      opts.NetworkTransitionCheckpoints,
+		}
+	profileTransactions.NetworkTransitions =
+		liveNetworkTransitions
+	secretService.manager.NetworkTransitions =
+		liveNetworkTransitions
+	if opts.Now != nil {
+		profileTransactions.SetClock(opts.Now)
+	}
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	d := &Daemon{
 		store:            opts.Store,
@@ -290,10 +410,15 @@ func Start(opts Options) (*Daemon, error) {
 		ln:               ln,
 		sessionListener:  sessionListener,
 		sessions:         sessions,
+		activityStore:    activityStore,
+		activityOwned:    activityOwned,
+		activityCleanup:  activityCleanup,
+		secrets:          secretService,
 		lifecycle:        lifecycleCoordinator,
 		lifecycleBackend: opts.LifecycleBackend,
 		backendShutdown:  opts.BackendShutdown,
 		networkGateways:  core.NetworkGateways,
+		helpCatalog:      opts.HelpCatalog.Clone(),
 		lifecycleCtx:     lifecycleCtx,
 		lifecycleCancel:  lifecycleCancel,
 		lifecycleSlots:   make(chan struct{}, 4),
@@ -304,23 +429,106 @@ func Start(opts Options) (*Daemon, error) {
 		done:             make(chan struct{}),
 		state:            "serving",
 		api: manager.API{
-			Core:           core,
-			Token:          credentials.Token(),
-			TokenValidator: credentials.Validate,
-			AllowedHosts:   []string{"localhost", "hideoutd"},
-			Now:            opts.Now,
-			RunBackend:     opts.RunBackend,
-			RunOpener:      opts.RunOpener,
-			RunLifecycle:   lifecycleCoordinator,
+			Core:                core,
+			Token:               credentials.Token(),
+			TokenValidator:      credentials.Validate,
+			AllowedHosts:        []string{"localhost", "hideoutd"},
+			Now:                 opts.Now,
+			RunBackend:          opts.RunBackend,
+			RunOpener:           opts.RunOpener,
+			RunLifecycle:        lifecycleCoordinator,
+			LifecycleMutations:  lifecycleCoordinator,
+			ActivityProvider:    activityProvider,
+			SecretProvider:      secretService,
+			RunSecretResolver:   networkSecretResolver,
+			ProfileTransactions: profileTransactions,
 		},
 	}
 	d.api.EnvironmentStopApply = d.applyEnvironmentStopPlan
 	d.api.EnvironmentCleanApply = d.applyEnvironmentCleanPlan
+	d.api.OperatorSnapshotProvider = manager.OperatorSnapshotProviderFunc(d.operatorSnapshot)
 	d.sessionServer = &sessionServer{
 		core: core, credentials: credentials, instanceID: instanceID,
 		registry: sessions, backendFactory: opts.RunServiceBackend,
 		openerFactory: opts.RunServiceOpener, audit: al, lifecycle: lifecycleCoordinator,
 		workspaceProviders: opts.WorkspaceProviders,
+		networkResolver:    networkSecretResolver,
+	}
+	operationStore := manager.OperationStore{
+		Root: opts.Store.Root,
+		Now:  opts.Now,
+	}
+	operationService := manager.OperationService{
+		Store:    operationStore,
+		Observer: bus,
+	}
+	environmentActions := &manager.EnvironmentActionService{
+		Core:        core,
+		Operations:  operationService,
+		Now:         opts.Now,
+		ApplyStop:   d.applyEnvironmentStopPlan,
+		ApplyClean:  d.applyEnvironmentCleanPlan,
+		ApplyDelete: d.applyEnvironmentDeletePlan,
+		Prove:       d.proveEnvironmentAction,
+	}
+	d.environmentActions = environmentActions
+	d.api.EnvironmentActions = environmentActions
+	networkTransitions := manager.NetworkTransitionRecoveryService{
+		Store:      operationStore,
+		Operations: operationService,
+		Provider:   networkRecoveryProvider,
+	}
+	if err := (startupOperationRecovery{
+		Store:      operationStore,
+		Operations: operationService,
+		ReconcileEnvironment: func(
+			ctx context.Context,
+			operationID string,
+		) (manager.Operation, error) {
+			return environmentActions.ReconcileOperation(ctx, operationID)
+		},
+		ReconcileProfile: func(
+			ctx context.Context,
+			operationID string,
+		) (manager.Operation, error) {
+			result, err := profileTransactions.ReconcileOperation(
+				ctx,
+				operationID,
+			)
+			return result.Operation, err
+		},
+		ReconcileSecret: func(
+			ctx context.Context,
+			operationID string,
+		) (manager.Operation, error) {
+			result, err := secretService.
+				reconcileOperationWithNetworkAuthorityReset(
+					ctx,
+					operationID,
+					&manager.NetworkAuthorityResetProof{
+						AuthorityID: instanceID,
+						ObservedAt:  now,
+					},
+				)
+			return result.Operation, err
+		},
+		ReconcileNetwork: networkTransitions.ReconcileOperation,
+		Record:           al.record,
+	}).Run(context.Background()); err != nil {
+		lifecycleCancel()
+		if activityOwned {
+			_ = activityStore.Close()
+		}
+		_ = core.NetworkGateways.Close()
+		_ = lifecycleCoordinator.Close()
+		_ = sessionListener.Close()
+		_ = ln.Close()
+		_ = al.close()
+		releaseLock(lockFile, filepath.Join(dir, lockName))
+		return nil, fmt.Errorf(
+			"daemon: reconcile accepted operations: %w",
+			err,
+		)
 	}
 	d.server = &http.Server{Handler: d.buildHandler()}
 	d.startAuditTail()
@@ -348,6 +556,53 @@ func Start(opts Options) (*Daemon, error) {
 	d.startLifecycleReconciliation(lifecycleRecords)
 	d.startMissingDisposableRecovery(missingLifecycleRecords)
 	return d, nil
+}
+
+// operatorSnapshot holds the event-bus sequence lock while the Manager reads
+// its authoritative projections. Any event caused after the seed is captured
+// therefore receives a strictly later sequence; clients cannot silently skip a
+// delta published between projection reads and sequence capture.
+func (d *Daemon) operatorSnapshot(
+	ctx context.Context,
+	query manager.OperatorSnapshotQuery,
+) (manager.OperatorSnapshot, error) {
+	d.bus.mu.Lock()
+	defer d.bus.mu.Unlock()
+	sequence := d.bus.seq
+	service := manager.OperatorSnapshotService{
+		Core: d.api.Core,
+		Connection: manager.OperatorConnectionProviderFunc(
+			func(context.Context) (manager.OperatorConnectionProjection, error) {
+				return manager.OperatorConnectionProjection{
+					InstanceID: d.instanceID, CredentialGeneration: d.credentials.Generation(),
+					Sequence:     sequence,
+					StreamHealth: manager.OperatorStreamHealth{State: manager.OperatorHealthLive},
+				}, nil
+			},
+		),
+		Observation: manager.OperatorObservationProviderFunc(
+			func(
+				ctx context.Context,
+				query manager.OperatorSnapshotQuery,
+			) (manager.OperatorObservation, error) {
+				return daemonOperatorObservationWithProvider(
+					ctx,
+					d.sessions.activity,
+					d.api.ActivityProvider,
+					d.activityStore,
+					query,
+				)
+			},
+		),
+		NetworkRoutes: manager.GatewayNetworkTransitionProvider{
+			StoreRoot: d.store.Root,
+			Gateways:  d.networkGateways,
+			Now:       d.api.Now,
+		},
+		MutationCapabilities: manager.DefaultConfigurationCapabilities(true),
+		Now:                  d.api.Now,
+	}
+	return service.Build(ctx, query)
 }
 
 func lifecycleAuditDecision(kind string) string {
@@ -549,6 +804,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.server != nil {
 		stopErr = errors.Join(stopErr, d.server.Shutdown(ctx))
+	}
+	if d.activityOwned && d.activityStore != nil {
+		stopErr = errors.Join(stopErr, d.activityStore.Close())
 	}
 	if d.ln != nil {
 		stopErr = errors.Join(stopErr, d.ln.Close())

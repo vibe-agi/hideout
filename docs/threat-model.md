@@ -45,13 +45,20 @@ hold secrets, or create host-side authority.
 TCB:
 
 - `hideout` binary and Manager Core;
-- Profile, Environment, Session, Policy, Audit, HostFS, Network, and Broker
-  packages inside the Hideout binary;
+- Profile, Environment, Session, Policy, Operation, Secret, Activity, Audit,
+  HostFS, Network, and Broker packages inside the Hideout binary;
 - host broker process and per-run broker token handling;
 - host-side opener implementations selected by Hideout;
 - HostFS host service and guest FUSE/shim protocol when HostFS is enabled;
 - backend adapter code that prepares the sandbox boundary;
 - the selected backend runtime, such as Lima, for its isolation claims;
+- the fixed packaged session supervisor and `hideout-observer`, their
+  authenticated bounded transport, cgroup-v2 boundary code, and selected
+  kernel/fanotify observation hooks when workload evidence is enabled;
+- the host-private activity store, deterministic pre-persistence redactor, and
+  exact-owner lifecycle cleanup;
+- the macOS Security.framework Keychain provider when managed secrets are
+  enabled; and
 - the package-owned, digest/provenance-verified `tun2socks` binary and route
   setup helpers when network privacy is enabled.
 
@@ -121,7 +128,8 @@ Hideout protects the following assets by default:
 - browser automation endpoints and debugging ports;
 - HostFS backing paths and grant implementation details;
 - broker tokens, broker endpoints, proxy bootstrap files, and route secrets;
-- audit integrity and run/session identity.
+- audit/activity integrity, coverage and loss evidence, exact retention-owner
+  identity, and run/session identity.
 
 The workspace is intentionally shared unless a later workspace-filtering
 feature is enabled. Project-local secrets inside the workspace are not protected
@@ -435,9 +443,10 @@ Before a PortBridge direction is promoted to a product path, it must satisfy:
 - no raw host port exposure without an owning typed capability;
 - backend-default port forwarding must be disabled or explicitly ignored before
   product code runs;
-- endpoint observation must not itself create reachability. Observed endpoints
-  are evidence and candidates only; exposure is a separate transaction with an
-  active owner, policy decision, validator, audit, and cleanup;
+- service-listener endpoint discovery (`endpoint.observe`) must not itself
+  create reachability. Observed listeners are evidence and candidates only;
+  exposure is a separate transaction with an active owner, policy decision,
+  validator, audit, and cleanup;
 - no bridge to broker tokens, browser debugging endpoints, VM control sockets,
   or Hideout control-plane endpoints unless an owning typed capability
   explicitly models that authority;
@@ -473,19 +482,20 @@ guest code reachability to a host-side service. It needs separate product design
 before use by browser automation, adb, IDE, database, simulator, or similar
 adapters. It must not inherit the host-to-guest validator or risk posture.
 
-Endpoint observation and endpoint exposure have separate trust models. An
-observed guest listener can be created by malicious guest code with perfect
+Service-listener discovery and endpoint exposure have separate trust models.
+An observed guest listener can be created by malicious guest code with perfect
 freshness and process ownership. Those properties may support denial or user
 explanation, but they are not sufficient evidence for automatic exposure.
-Observed-only candidates default to audit-only or ask, and must fail closed when
-no prompt channel exists.
+Observed-only candidates default to audit-only or ask, and must fail closed
+when no prompt channel exists.
 
-Endpoint observation is Later work and expands the trusted observation surface.
-The observer, guest socket enumeration mechanism, and any Access Sensor
-integration become part of the evidence path. Observation should record only
-candidate metadata needed for policy or explanation, such as endpoint class,
-source, process class, and timing. It must not record forwarded bytes, callback
-query strings, broker tokens, proxy secrets, or raw backend handles.
+Automatic service-listener discovery (`endpoint.observe`) is Later work and is
+different from Feature 045's bounded workload process-to-IP/port activity.
+When implemented, socket enumeration and any Access Sensor integration become
+part of the exposure-candidate evidence path. It should record only candidate
+metadata needed for policy or explanation, such as endpoint class, source,
+process class, and timing. It must not record forwarded bytes, callback query
+strings, broker tokens, proxy secrets, or raw backend handles.
 
 ## Host Capability Projection
 
@@ -641,9 +651,144 @@ as guest root containment, workspace write blocking/DLP, native backend
 isolation, browser security, public marketplace trust, and unsupported
 platforms.
 
+## Durable Operations And Recovery
+
+Manager mutations separate a reviewed request, accepted operation, provider
+effect, durable evidence, terminal result, event publication, and client
+response. An operation ID is bound to one kind, owner, canonical plan digest,
+and base revision. Reusing it with different input fails closed; creating a new
+ID is a new request rather than an idempotent retry.
+
+Planning alone creates no provider authority. After confirmed apply, a
+`running` effect may already have committed even when the client or daemon lost
+the response. Recovery therefore observes the provider and the exact operation
+envelope instead of blindly invoking the effect again. A succeeded terminal
+operation requires evidence for every required effect. Failed, rolled-back, and
+rollback-unproved results require evidence for their own classifications.
+Unknown completion becomes `recovery-required` or `rollback-unproved`, never
+success.
+
+Daemon startup scans already accepted non-terminal operations and dispatches
+only to the provider for their bound kind. It leaves unconfirmed `planned`
+operations untouched. Keychain reconciliation uses operation identity and
+generation; an ambiguous delete is not replayed. Network restart reconciliation
+is observation-only and cannot stage or activate a route. For a live-route
+secret rotation, all stage/probe/activate/prove/drain checkpoints precede the
+Keychain write. A replacement daemon may call the rotation successful only when
+the Keychain reconciler proves the exact next generation and every required
+route proof was already durable. Exact unchanged generation terminates without
+a write; mismatch remains `recovery-required`.
+
+The replacement daemon supplies a network-authority-reset proof only after it
+owns the stable singleton lock. Ordered shutdown closes the in-memory gateway
+registry before releasing that lock. Process death removes the former daemon's
+ability to execute or own its in-memory registry while the OS tears down its
+descriptors. Recovery therefore cannot adopt or replay the former daemon's
+route pointers or accepted connections. Effective networking becomes
+`not-observed` until the current daemon constructs and observes a new gateway.
+Durable desired route state alone is never promoted to Effective.
+
+Stop, clean, and delete require repeated exact backend/metadata observations
+rather than one provider return or inventory sample. Terminal event or response
+loss is repaired from the durable operation snapshot without repeating
+provider effects.
+
+Decision claims are bounded leases, not approval authority. Explicit release
+requires the opaque claim token. Expiry returns the decision to pending and
+records the release; takeover is allowed only after expiry, with explicit
+takeover intent and an exact revision. A surface label cannot release or steal
+another live claim.
+
+Attach, reconciliation, configuration, stop, cleanup, and lifecycle mutation
+share serialized keys. A conflict exposes only the bounded blocking owner,
+phase, start time, and recovery text. This information explains the refusal; it
+does not grant takeover, cancellation, cleanup, or filesystem-edit authority.
+
+The operator procedure and current public-surface limitations are in
+[recovery.md](recovery.md). In particular, a healthy daemon need not be stopped
+for an ordinary managed-secret or desired-connection update, and desired
+connection persistence does not prove that an existing session was rerouted.
+The public CLI currently has no generic arbitrary-operation retry command, so
+an accepted operation that remains unproved after startup stays blocked rather
+than being replaced or force-completed.
+
+## Operator Console And Workload Observation (045)
+
+The console is a detective and control-plane view, not a prevention engine.
+The target workload is the top-level command after `hideout run --` and every
+descendant that remains in that session's non-delegated cgroup. The supervisor,
+observer, unrelated guest services, other sessions, and host processes are not
+part of that workload. PID alone never establishes identity. Guest-root or
+cgroup/observer tampering invalidates coverage; it does not widen the observed
+scope or create an enforcement claim.
+
+The host may retain already-redacted metadata for:
+
+- command exec/exit, bounded argv/cwd, ancestry, count, and time;
+- open/read/write/mmap/create/truncate/rename/unlink/metadata file behavior,
+  normalized path/identity, count, time, and supported byte counters;
+- process-to-IP/port/transport connections and supported route evidence; and
+- supported plaintext DNS query/response metadata and graded domain
+  correlation.
+
+It never intentionally retains environment values, keystrokes, full terminal
+input/output, file contents, packet payloads, or proxy-auth payloads. Local
+authenticated views preserve ordinary normalized paths because investigation
+requires them. Before persistence, deterministic selectors remove known
+managed secret values and supported encodings, URI userinfo, named auth
+fields, sensitive argument/query values, and Hideout control-plane tokens.
+Hideout does not claim to recognize arbitrary secrets embedded in an otherwise
+ordinary path or argument. Support reports exclude individual activity; any
+fuller export is a separate reviewed and redacted operation.
+
+Runtime coverage is an append-only time-window claim, not a green badge:
+
+| Subsystem | Current supported Lima reference | Threat-model consequence |
+| --- | --- | --- |
+| Process | `Available` while cgroup and observer evidence remain healthy | Exact descendant evidence is supported only inside those intervals. |
+| File | `Partial` | Recorded metadata is useful, but current hook/path-outcome limits forbid a no-access conclusion from an empty result. |
+| Network | `Partial` | Process-to-endpoint evidence is useful, but incomplete route attribution forbids a complete route claim. |
+| DNS | `Partial` | Plaintext evidence can be exact; encrypted, cached, literal-IP, shared, or external-resolver cases remain unknown. |
+
+Native/unproved backends report workload observation `Unavailable`. Sequence
+gaps, drops, observer or daemon restart, schema mismatch, path/actor
+uncertainty, redaction rejection, retention pruning, corruption, target exit,
+and cleanup uncertainty close or degrade the affected interval. A later
+healthy interval cannot repair history. An empty result proves absence only
+when the entire queried subsystem/time window is `Available`.
+
+Activity data is host-private (`0700` directories and `0600` files), bounded
+to 8 MiB active segments, 256 MiB per exact owner, and 1 GiB globally by
+default. Reusable ownership binds environment plus backend incarnation;
+disposable ownership binds the exact session. Stop preserves evidence. Clean,
+delete, recreate, or successful disposable teardown removes only the proved
+owner; ambiguous identity or failed absence proof blocks success.
+
+CLI, Bubble Tea TUI, and WebUI consume one Manager snapshot/event/operation
+model. Presentation code is outside the TCB and receives no secret value or
+provider handle. Every edit remains
+Draft → canonical Plan → diff/effects/blockers/recovery → Confirm → Apply →
+terminal evidence, bound by profile revision, plan digest, and operation ID.
+A stream gap, instance change, disconnect, or expired credential makes the
+client STALE/read-only until an authenticated reseed; displayed state cannot
+authorize a mutation or prove success.
+
+On supported Macs, managed secret bytes live in the daemon's Keychain
+provider. Public surfaces show only ref/provider/availability/generation.
+`HIDEOUT_SECRET_*` is a one-release daemon-start compatibility source, is not
+auto-imported, and cannot be changed by exporting into a shell after daemon
+start. Re-entering with `hideout secret set <ref>` is the migration path.
+Healthy eligible secret/proxy/DNS changes do not require daemon stop or VM
+recreation; blockers and rollback remain explicit.
+
+Feature 045 development and disposable-clean implementation gates have passed
+through package lifecycle validation. Those results do not promote a public
+release: final clean main-tree evidence, installed-machine smoke, and
+publication-absence proof remain required.
+
 ## Phase 1 Status
 
-Required:
+Implemented phase-1 baseline:
 
 - HostFS read/list/stat policy and audit;
 - HostFS write overlay for explicit overlay grants: staged guest write-class
@@ -661,12 +806,21 @@ Required:
 - hidden env and proxy-secret handling;
 - Boundary Summary for HostFS, `host.open`, implemented PortBridge transport
   events, product Endpoint Exposure events, and `preview.open`;
+- the local operator console shared by CLI, Bubble Tea TUI, and WebUI, including
+  authenticated snapshots/events, stale read-only behavior, canonical
+  Draft → Plan → Confirm → Apply transactions, durable operation identity, and
+  Keychain-backed managed-secret metadata;
+- exact cgroup-v2 workload ownership for the command after `--` and its
+  descendants, bounded process/file/network/DNS metadata, explicit
+  `Available`/`Partial`/`Unavailable` intervals, deterministic redaction,
+  exact-owner retention, and lifecycle-bound cleanup;
 - this Threat Model Lite.
 
 Design-ready or later:
 
-- richer approval UX beyond the current local decision center;
-- endpoint observation;
+- remote or multi-user approval UX beyond the current local decision center;
+- automatic endpoint discovery and complete route observation beyond 045's
+  bounded process-to-endpoint metadata;
 - project-declared endpoint candidates and workspace trust review;
 - direct JS endpoint exposure proposal entrypoints and richer candidate
   snapshots for adapter scripts;

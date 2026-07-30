@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostcap"
 	"github.com/vibe-agi/hideout/internal/hostfs"
 	"github.com/vibe-agi/hideout/internal/lifecycle"
+	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
 	runsession "github.com/vibe-agi/hideout/internal/session"
 )
@@ -144,6 +145,64 @@ func TestRunServiceApplyRejectsProfileDriftAndStaleConfirmation(t *testing.T) {
 	if !errors.Is(err, ErrRunPlanStale) {
 		t.Fatalf("profile drift error=%v", err)
 	}
+}
+
+func TestRunServiceApplyPropagatesDaemonSecretResolver(t *testing.T) {
+	store := profile.Store{Root: t.TempDir()}
+	p := profile.Default("managed-network")
+	p.Network.Mode = netpolicy.ModeTun2Socks
+	p.Network.ProxySecretRef = "local-proxy"
+	p.Network.MediatedResolver = "1.1.1.1"
+	if err := store.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	service := RunService{Core: New(store)}
+	request := RunServiceRequest{
+		Version: RunServiceRequestVersion, ProfileName: p.Name,
+		Backend: "native", AllowWeakIsolation: true,
+		Workspace: t.TempDir(), Command: []string{"true"},
+		Terminal: TerminalDescriptor{Mode: runsession.TerminalNone},
+	}
+	prepared, err := service.Prepare(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Review.RequiresConfirmation {
+		request.Confirmation = &RunConfirmation{
+			PlanVersion: prepared.Review.PlanVersion,
+			PlanDigest:  prepared.Review.PlanDigest,
+			Accepted:    true,
+		}
+	}
+	sentinel := errors.New("managed resolver reached")
+	resolver := &runServiceSecretResolverFixture{err: sentinel}
+	_, err = service.Apply(
+		context.Background(),
+		prepared,
+		request,
+		RunServiceDependencies{
+			Backend:         &applyRunFakeBackend{name: "native"},
+			NetworkResolver: resolver,
+		},
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Apply error=%v want resolver sentinel", err)
+	}
+	if len(resolver.refs) != 1 || resolver.refs[0] != "local-proxy" {
+		t.Fatalf("resolved refs=%v", resolver.refs)
+	}
+}
+
+type runServiceSecretResolverFixture struct {
+	refs []string
+	err  error
+}
+
+func (resolver *runServiceSecretResolverFixture) Resolve(
+	ref string,
+) (string, error) {
+	resolver.refs = append(resolver.refs, ref)
+	return "", resolver.err
 }
 
 func TestRunServiceApplyRejectsProjectionCatalogDrift(t *testing.T) {

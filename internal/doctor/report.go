@@ -32,6 +32,7 @@ const (
 )
 
 var SupportedFeatures = []string{
+	"activity",
 	"adapters",
 	"cleanup",
 	"daemon",

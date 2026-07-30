@@ -21,9 +21,11 @@ gate2_034_require() {
 
 gate2_034_wait_file() {
   local path="$1" description="$2" attempts="${3:-600}" i
-  for i in $(seq 1 "$attempts"); do
+  i=0
+  while [ "$i" -lt "$attempts" ]; do
     [ -f "$path" ] && return 0
     sleep 0.1
+    i=$((i + 1))
   done
   echo "concurrent-sessions gate2: timed out waiting for $description ($path)" >&2
   return 1
@@ -39,6 +41,24 @@ gate2_034_dirty() {
   else
     printf 'false\n'
   fi
+}
+
+gate2_034_delete_temp_tree() {
+  local target="$1"
+  [ -e "$target" ] || return 0
+  [ -d "$target" ] && [ ! -L "$target" ] || {
+    echo "concurrent-sessions gate2: refusing non-directory cleanup target: $target" >&2
+    return 1
+  }
+  case "$(basename "$target")" in
+    hideout-034-gate2.* | h34-store.* | h34.* | hideout-034-hostfs.*)
+      find "$target" -depth -delete
+      ;;
+    *)
+      echo "concurrent-sessions gate2: refusing unexpected cleanup target: $target" >&2
+      return 1
+      ;;
+  esac
 }
 
 gate2_concurrent_sessions_run() {
@@ -59,6 +79,7 @@ gate2_concurrent_sessions_run() {
 
   mkdir -p "$out/logs"
   out="$(cd "$out" && pwd -P)"
+  chmod 0700 "$out" "$out/logs"
   local tmp store workspace hostfs_root hostfs_file bin hideout lima_home profile short_tmp
   # Lima's socket path has a 104-byte platform limit. Keep this explicit
   # override separate from ordinary TMPDIR-backed test artifacts. The daemon
@@ -85,8 +106,12 @@ gate2_concurrent_sessions_run() {
 		: "${HIDEOUT_LINUX_SHIM_PATH:?packaged Linux shim is required}"
 		: "${HIDEOUT_LINUX_HOSTFSD_PATH:?packaged Linux HostFS helper is required}"
 		: "${HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH:?packaged Linux session supervisor is required}"
+		: "${HIDEOUT_LINUX_OBSERVER_PATH:?packaged Linux observer is required}"
+		: "${HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH:?packaged Linux workspace portal is required}"
 		[ -x "$HIDEOUT_LINUX_SHIM_PATH" ] && [ -x "$HIDEOUT_LINUX_HOSTFSD_PATH" ] &&
-			[ -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ] || {
+			[ -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ] &&
+			[ -x "$HIDEOUT_LINUX_OBSERVER_PATH" ] &&
+			[ -x "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" ] || {
 			echo "concurrent-sessions gate2: packaged Linux helpers are not executable" >&2
 			return 2
 		}
@@ -99,12 +124,20 @@ gate2_concurrent_sessions_run() {
 		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
 		HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch"
 		HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
+		HIDEOUT_LINUX_OBSERVER_PATH="$bin/hideout-observer-linux-$arch"
+		HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
 		"$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$root" >/dev/null
 		"$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$root" >/dev/null
 		go -C "$root" run ./internal/helperbin/cmd/build-session-supervisor \
 			--out "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" --goarch "$arch" --source "$root" >/dev/null
+		go -C "$root" run ./internal/helperbin/cmd/build-observer \
+			--out "$HIDEOUT_LINUX_OBSERVER_PATH" --goarch "$arch" --source "$root" >/dev/null
+		go -C "$root" run ./internal/helperbin/cmd/build-workspace-portal \
+			--out "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" --goarch "$arch" --source "$root" >/dev/null
 	fi
-	export HIDEOUT_LINUX_SHIM_PATH HIDEOUT_LINUX_HOSTFSD_PATH HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH
+	export HIDEOUT_LINUX_SHIM_PATH HIDEOUT_LINUX_HOSTFSD_PATH
+	export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH HIDEOUT_LINUX_OBSERVER_PATH
+	export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH
 
 	local first_pid="" second_pid="" third_pid="" instance=""
   GATE2_034_CLEANUP_TMP="$tmp"
@@ -140,8 +173,10 @@ gate2_concurrent_sessions_run() {
         [ -n "$cleanup_instance" ] || continue
         LIMA_HOME="$GATE2_034_CLEANUP_LIMA_HOME" limactl delete --force --tty=false "$cleanup_instance" >/dev/null 2>&1 || true
       done < <(LIMA_HOME="$GATE2_034_CLEANUP_LIMA_HOME" limactl list --quiet 2>/dev/null || true)
-      rm -rf "$GATE2_034_CLEANUP_TMP" "$GATE2_034_CLEANUP_STORE" \
-        "$GATE2_034_CLEANUP_LIMA_HOME" "$GATE2_034_CLEANUP_HOSTFS_ROOT"
+      gate2_034_delete_temp_tree "$GATE2_034_CLEANUP_TMP"
+      gate2_034_delete_temp_tree "$GATE2_034_CLEANUP_STORE"
+      gate2_034_delete_temp_tree "$GATE2_034_CLEANUP_LIMA_HOME"
+      gate2_034_delete_temp_tree "$GATE2_034_CLEANUP_HOSTFS_ROOT"
     fi
   }
   trap gate2_034_cleanup EXIT
@@ -300,6 +335,7 @@ ROOTSH
 	awk 'NR == 2 { exit !($7 == 2 && $6 == "running") }' "$out/logs/env-two.out"
 
 	local interrupted_session terminated_probe owner_release_start owner_release_end owner_release_ms owner_reconciled
+	local owner_reconcile_attempt terminated_probe_attempt
 	interrupted_session="$(cat "$workspace/a.session")"
 	owner_release_start="$(gate2_034_now_seconds)"
 	kill -KILL "$first_pid"
@@ -310,13 +346,15 @@ ROOTSH
 	first_pid=""
 	GATE2_034_CLEANUP_FIRST_PID=""
 	owner_reconciled=0
-	for _ in $(seq 1 20); do
+	owner_reconcile_attempt=0
+	while [ "$owner_reconcile_attempt" -lt 20 ]; do
 		if HIDEOUT_STORE_ROOT="$store" "$hideout" env list >"$out/logs/env-owner-reconcile.out" 2>"$out/logs/env-owner-reconcile.err" &&
 			awk 'NR == 2 { exit !($7 == 1 && $6 == "running") }' "$out/logs/env-owner-reconcile.out"; then
 			owner_reconciled=1
 			break
 		fi
 		sleep 0.02
+		owner_reconcile_attempt=$((owner_reconcile_attempt + 1))
 	done
 	owner_release_end="$(gate2_034_now_seconds)"
 	owner_release_ms="$(awk -v start="$owner_release_start" -v end="$owner_release_end" 'BEGIN { printf "%.3f", (end-start)*1000 }')"
@@ -326,7 +364,8 @@ ROOTSH
 		return 1
 	}
 	terminated_probe=""
-	for _ in $(seq 1 100); do
+	terminated_probe_attempt=0
+	while [ "$terminated_probe_attempt" -lt 100 ]; do
 		terminated_probe="$(ssh -F "$ssh_config" -o BatchMode=yes -o User=root -o ControlMaster=no -o ControlPath=none \
 			"lima-$instance" sh -s -- "$interrupted_session" <<'ROOTSH'
 session_id=$1
@@ -343,6 +382,7 @@ ROOTSH
 		terminated_probe="$(printf '%s\n' "$terminated_probe" | tr -d '\r' | tail -n1)"
 		[ "$terminated_probe" = "gone" ] && break
 		sleep 0.1
+		terminated_probe_attempt=$((terminated_probe_attempt + 1))
 	done
 	[ "$terminated_probe" = "gone" ] || {
 		echo "concurrent-sessions gate2: interrupted target process tree remains" >&2
@@ -433,6 +473,7 @@ EOF
 			--arg generated "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
 			'{schema:"hideout.concurrent-sessions-gate2/v1",status:"passed",generatedAt:$generated,
 			  commit:$commit,dirty:$dirty,backend:"lima",host:"macos-arm64",
+			  candidateAcceptance:($dirty | not),
 			  metrics:{ownerReconcileMs:$ownerReconcileMs},artifacts:{sessionPTYEvidenceSHA256:$sessionPTYEvidenceSHA256},
 			  checks:{threeSameWorkspaceOwners:true,distinctSessionIds:true,distinctPidNamespaces:true,
 			    distinctMountNamespaces:true,nonRootTargets:true,privateProc:true,siblingPidHidden:true,
@@ -444,6 +485,8 @@ EOF
 			    restartStaleOwnerFailedClosed:true,explicitRecovery:true,postRecoveryRun:true},
 		  nonClaims:{guestRootContainment:"not-claimed"}}' \
     >"$out/result.json"
+  find "$out" -type d -exec chmod 0700 {} +
+  find "$out" -type f -exec chmod 0600 {} +
   echo "concurrent-sessions Gate 2 passed: $out/result.json"
   gate2_034_cleanup
   trap - EXIT

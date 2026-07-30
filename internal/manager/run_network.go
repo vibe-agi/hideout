@@ -108,6 +108,10 @@ func (c Core) PrepareRunNetwork(runSession RunSession, opts RunNetworkOptions) (
 			"engine":             netPlan.Engine,
 			"dnsPolicy":          netPlan.DNSPolicy,
 			"proxySecretRef":     netPlan.ProxySecretRef,
+			"proxySecretSource":  netPlan.ProxySecretSource,
+			"proxyGeneration":    netPlan.ProxySecretGeneration,
+			"proxyDeprecated":    netPlan.ProxySecretDeprecated,
+			"proxyRecovery":      netPlan.ProxySecretRecovery,
 			"verified":           netPlan.Verified,
 			"runtimeVerify":      netPlan.RuntimeVerify,
 			"failClosed":         netPlan.FailClosed,
@@ -157,7 +161,29 @@ func (c Core) prepareEnvironmentNetworkService(runSession RunSession, spec netpo
 	if registry == nil {
 		registry = netpolicy.NewGatewayRegistry()
 	}
-	binding, gatewayChange, err := registry.Stage(runSession.Environment.Record.ID, candidate.UpstreamProxyURL)
+	var (
+		binding       netpolicy.GatewayBinding
+		gatewayChange *netpolicy.GatewayChange
+	)
+	if candidate.Mode == netpolicy.ModeTun2Socks &&
+		candidate.ProxySecretGeneration == 0 {
+		// The startup-environment compatibility fallback is intentionally
+		// unversioned. Keep it on the legacy adapter for one release; managed
+		// Keychain values always use the strict generation-bound route.
+		binding, gatewayChange, err = registry.Stage(
+			runSession.Environment.Record.ID,
+			candidate.UpstreamProxyURL,
+		)
+	} else {
+		binding, gatewayChange, err = registry.StageRoute(
+			runSession.Environment.Record.ID,
+			netpolicy.GatewayRouteSpec{
+				UpstreamProxyURL: candidate.UpstreamProxyURL,
+				ProxySecretRef:   candidate.ProxySecretRef,
+				SecretGeneration: candidate.ProxySecretGeneration,
+			},
+		)
+	}
 	if err != nil {
 		return RunNetwork{Plan: candidate, EnvironmentService: true, ServiceDir: serviceDir, GuestServiceDir: guestServiceDir, ServiceStatePath: statePath}, err
 	}
@@ -376,6 +402,16 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 			gatewayResolved = true
 			return nil
 		}
+		if !gatewayActivated {
+			// Healthy reuse deliberately retains the already effective immutable
+			// route. Resolve its staged duplicate without pretending that the
+			// candidate was committed.
+			if err := runNetwork.GatewayChange.Rollback(); err != nil {
+				return err
+			}
+			gatewayResolved = true
+			return nil
+		}
 		if err := runNetwork.GatewayChange.Commit(); err != nil {
 			return err
 		}
@@ -503,6 +539,9 @@ func (c Core) StartRunNetworkService(ctx context.Context, runSession RunSession,
 			operationErr = dnsController.ReconfigureEnvironmentNetworkDNS(ctx, session, runNetwork.GuestServiceDir, runNetwork.PreviousServiceState.Resolver, runNetwork.Plan.MediatedResolver, env)
 			if operationErr == nil {
 				operationErr = controller.VerifyEnvironmentNetwork(ctx, session, runNetwork.GuestServiceDir, env)
+			}
+			if operationErr == nil {
+				operationErr = activateGateway()
 			}
 		}
 	case networkServiceRestartProxy:

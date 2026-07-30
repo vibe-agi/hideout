@@ -54,15 +54,17 @@ func TestExpandedHelpRetainsCompleteCommandInventory(t *testing.T) {
 		t.Fatalf("help --all exit=%d stderr=%s", code, stderr.String())
 	}
 	for _, want := range []string{
-		"First run:",
-		"Run and explain:",
-		"Profile and HostFS:",
-		"Inspect and manage:",
-		"Advanced and developer:",
-		"Lab probes:",
-		"hideout adapter-pack <install|list|inspect|test|enable|disable|upgrade|revoke>",
-		"hideout shim build-linux",
-		"hideout lab portbridge loopback",
+		"Hideout command catalog",
+		"Usage:",
+		"hideout help <command>",
+		"hideout help search <word>",
+		"hideout help all [query]",
+		"Stable",
+		"Advanced",
+		"Lab (unsupported; explicit opt-in)",
+		"adapter-pack",
+		"shim",
+		"lab",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("expanded help missing %q:\n%s", want, out.String())
@@ -81,6 +83,8 @@ func TestContextualHelpIsSuccessfulAndWritesNoState(t *testing.T) {
 		{"help", "doctor"},
 		{"doctor", "--help"},
 		{"help", "privacy"},
+		{"help", "secret"},
+		{"secret", "--help"},
 		{"help", "package"},
 		{"package", "--help"},
 		{"help", "support"},
@@ -99,6 +103,29 @@ func TestContextualHelpIsSuccessfulAndWritesNoState(t *testing.T) {
 				t.Fatalf("%v created store state: %v", args, err)
 			}
 		})
+	}
+}
+
+func TestPrivacyAndSecretHelpExplainStartupFallbackMigration(t *testing.T) {
+	for _, args := range [][]string{
+		{"help", "privacy"},
+		{"help", "secret"},
+	} {
+		var out, stderr bytes.Buffer
+		if code := Main(args, &out, &stderr); code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, stderr.String())
+		}
+		text := out.String()
+		for _, want := range []string{
+			"One-release compatibility",
+			"daemon startup environment",
+			"after daemon start cannot apply",
+			"hideout secret set <ref>",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%v help missing %q:\n%s", args, want, text)
+			}
+		}
 	}
 }
 

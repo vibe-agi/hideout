@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/coverage-interval.schema.json",
+  "title": "Hideout workload coverage interval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "owner",
+    "sessionId",
+    "subsystem",
+    "state",
+    "reason",
+    "collectorGeneration",
+    "droppedEventCount",
+    "retentionGap",
+    "startedAt"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.coverage-interval.v1" },
+    "id": {
+      "type": "string",
+      "pattern": "^cov_[A-Za-z0-9_-]{8,124}$"
+    },
+    "owner": {
+      "$ref": "activity-owner.schema.json"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9_-]{1,124}$"
+    },
+    "subsystem": {
+      "enum": ["process", "file", "network", "dns"]
+    },
+    "state": {
+      "enum": ["Available", "Partial", "Unavailable"]
+    },
+    "reason": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,127}$"
+    },
+    "collectorGeneration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "droppedEventCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "retentionGap": {
+      "type": "boolean"
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "startSequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "endSequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "endedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

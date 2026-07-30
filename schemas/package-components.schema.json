@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/package-components.schema.json",
+  "title": "Hideout Package Component Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "components"],
+  "properties": {
+    "schema": {"const": "hideout.package-components/v1"},
+    "components": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {"$ref": "#/$defs/observer"},
+        {"$ref": "#/$defs/browserConsole"}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "observer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "artifactTemplate",
+        "manifestTemplate",
+        "license",
+        "sourceLicense",
+        "kernelProgramLicense",
+        "licenseText",
+        "buildMode",
+        "packageOwned"
+      ],
+      "properties": {
+        "id": {"const": "linux-observer"},
+        "kind": {"const": "linux-helper"},
+        "artifactTemplate": {
+          "const": "bin/hideout-observer-linux-{linuxGuestArch}"
+        },
+        "manifestTemplate": {
+          "const": "bin/hideout-observer-linux-{linuxGuestArch}.manifest.json"
+        },
+        "license": {"const": "Apache-2.0"},
+        "sourceLicense": {"const": "Apache-2.0 OR GPL-2.0-only"},
+        "kernelProgramLicense": {"const": "GPL"},
+        "licenseText": {"const": "LICENSES/GPL-2.0-only.txt"},
+        "buildMode": {"const": "embedded-core-bpf"},
+        "packageOwned": {"const": true}
+      }
+    },
+    "browserConsole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "container",
+        "manifest",
+        "license",
+        "packageOwned",
+        "assets"
+      ],
+      "properties": {
+        "id": {"const": "browser-console"},
+        "kind": {"const": "embedded-assets"},
+        "container": {"const": "bin/hideout"},
+        "manifest": {"const": "runtime/browser-console.assets.json"},
+        "license": {"const": "Apache-2.0"},
+        "packageOwned": {"const": true},
+        "assets": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "prefixItems": [
+            {"$ref": "#/$defs/index"},
+            {"$ref": "#/$defs/style"},
+            {"$ref": "#/$defs/state"},
+            {"$ref": "#/$defs/client"},
+            {"$ref": "#/$defs/activity"},
+            {"$ref": "#/$defs/config"},
+            {"$ref": "#/$defs/presentation"},
+            {"$ref": "#/$defs/app"}
+          ],
+          "items": false
+        }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mediaType"],
+      "properties": {
+        "path": {"type": "string"},
+        "mediaType": {"type": "string"}
+      }
+    },
+    "index": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "index.html"}, "mediaType": {"const": "text/html; charset=utf-8"}}}
+      ]
+    },
+    "style": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "style.css"}, "mediaType": {"const": "text/css; charset=utf-8"}}}
+      ]
+    },
+    "state": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "state.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    },
+    "client": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "client.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    },
+    "activity": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "activity.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    },
+    "config": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "config.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    },
+    "presentation": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "presentation.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    },
+    "app": {
+      "allOf": [
+        {"$ref": "#/$defs/asset"},
+        {"properties": {"path": {"const": "app.js"}, "mediaType": {"const": "text/javascript; charset=utf-8"}}}
+      ]
+    }
+  }
+}

@@ -1,0 +1,476 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/release-evidence.schema.json",
+  "title": "Hideout local release evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "result",
+    "stage",
+    "releaseReadiness",
+    "source",
+    "candidate",
+    "package",
+    "formal",
+    "gates",
+    "review",
+    "limitations",
+    "closure",
+    "digest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.release-evidence/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result": {
+      "const": "passed"
+    },
+    "stage": {
+      "enum": [
+        "package-bound",
+        "installed-local",
+        "final-ready"
+      ]
+    },
+    "releaseReadiness": {
+      "type": "boolean"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "tree",
+        "dirty",
+        "committedAt",
+        "manifest"
+      ],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "tree": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "dirty": {
+          "const": false
+        },
+        "committedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "manifest": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "tag",
+        "channel",
+        "signingMode",
+        "publicationStatus",
+        "archive",
+        "packageManifest",
+        "packageSummary",
+        "lifecycleSummary"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
+        },
+        "channel": {
+          "const": "developer-preview"
+        },
+        "signingMode": {
+          "const": "developer-preview-unsigned"
+        },
+        "publicationStatus": {
+          "const": "local-only"
+        },
+        "archive": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "packageManifest": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "packageSummary": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "lifecycleSummary": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "helpers",
+        "browserConsole",
+        "runtime"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "minItems": 100,
+          "items": {
+            "$ref": "#/$defs/packageFile"
+          }
+        },
+        "helpers": {
+          "type": "array",
+          "minItems": 12,
+          "items": {
+            "$ref": "#/$defs/packageFile"
+          }
+        },
+        "browserConsole": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manifest",
+            "container",
+            "inventory"
+          ],
+          "properties": {
+            "manifest": {
+              "$ref": "#/$defs/packageFile"
+            },
+            "container": {
+              "$ref": "#/$defs/packageFile"
+            },
+            "inventory": {
+              "$ref": "embedded-asset-manifest.schema.json"
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "revision",
+            "catalogFileSHA256",
+            "artifactSHA256",
+            "catalog",
+            "contract"
+          ],
+          "properties": {
+            "family": {
+              "type": "string",
+              "minLength": 1
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "catalogFileSHA256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "artifactSHA256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "catalog": {
+              "$ref": "#/$defs/packageFile"
+            },
+            "contract": {
+              "$ref": "#/$defs/packageFile"
+            }
+          }
+        }
+      }
+    },
+    "formal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory",
+        "sourceInventory",
+        "configurationCount",
+        "moduleCount",
+        "invariantCount",
+        "propertyCount",
+        "goTestCount"
+      ],
+      "properties": {
+        "inventory": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "sourceInventory": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "configurationCount": {
+          "const": 12
+        },
+        "moduleCount": {
+          "const": 10
+        },
+        "invariantCount": {
+          "const": 72
+        },
+        "propertyCount": {
+          "const": 18
+        },
+        "goTestCount": {
+          "const": 12
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "items": {
+        "$ref": "#/$defs/gate"
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "requiredFindings",
+        "openRequiredFindings",
+        "report",
+        "claimMatrix"
+      ],
+      "properties": {
+        "result": {
+          "const": "passed"
+        },
+        "requiredFindings": {
+          "const": 7
+        },
+        "openRequiredFindings": {
+          "const": 0
+        },
+        "report": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "claimMatrix": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "localInstall",
+        "publicationAbsence"
+      ],
+      "properties": {
+        "localInstall": {
+          "$ref": "#/$defs/closureItem"
+        },
+        "publicationAbsence": {
+          "$ref": "#/$defs/closureItem"
+        }
+      }
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "detachedPath"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "detachedPath": {
+          "$ref": "#/$defs/safePath"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gitObject": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
+    },
+    "safePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\r\\n\\t]+$",
+      "not": {
+        "pattern": "(^|/)\\.\\.(/|$)"
+      }
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes",
+        "mode"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "enum": [
+            "0600",
+            "0644",
+            "0755"
+          ]
+        }
+      }
+    },
+    "packageFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "kind",
+        "sha256",
+        "bytes",
+        "mode",
+        "executable"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safePath"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "enum": [
+            "0644",
+            "0755"
+          ]
+        },
+        "executable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scope",
+        "schema",
+        "generatedAt",
+        "result",
+        "candidateAcceptance",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "formal",
+            "local",
+            "dependencies",
+            "package-components",
+            "recovery",
+            "privacy",
+            "ui",
+            "performance",
+            "lima",
+            "package-build",
+            "package-lifecycle"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "source",
+            "candidate"
+          ]
+        },
+        "schema": {
+          "type": "string",
+          "pattern": "^hideout\\.[A-Za-z0-9.-]+/v[0-9]+$"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "result": {
+          "const": "passed"
+        },
+        "candidateAcceptance": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "$ref": "#/$defs/artifactRef"
+        },
+        "pointer": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    },
+    "closureItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "passed"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/artifactRef"
+        }
+      }
+    }
+  }
+}

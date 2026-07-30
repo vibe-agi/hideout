@@ -4,7 +4,11 @@
 
 Hideout uses small TLA+ models for lifecycle and concurrency rules that are
 easy to state incorrectly in implementation code. These models are bounded
-abstractions. They do not prove that the Go implementation refines the model.
+abstractions. TLC alone does not prove that the Go implementation refines a
+model. The repository gate therefore combines TLC with 12 named Go
+production-refinement and crash-matrix tests; those tests establish explicit
+trace correspondences and regression boundaries, not a machine-checked
+whole-program refinement proof.
 
 The operator command parser follows the same separation of concerns:
 
@@ -40,6 +44,10 @@ each has an explicit Manager plan mapping and behavioral parity tests.
 | `RequestWorkflow` | Requests have one claimant, terminal states carry no claimant, and an ended session cannot retain pending authority. |
 | `StopObservation` | Environment stop separates actual VM state from inventory samples: success requires stable terminal proof and is never reported while the bound incarnation still runs; anomalous samples and boot changes fail closed. |
 | `AttachReservation` | The attach-establishment reservation excludes reconciliation without the rejected lock cycle; reconcile scrubs only provably orphaned residue, cancellation removes only the run's own state, and daemon-crash residue stays scrubbable. |
+| `DisposableRecovery` | Disposable owner cleanup binds an exact lifecycle generation and cannot remove retained evidence before backend absence and metadata cleanup are proved. |
+| `OperatorConfiguration` | Multiple clients share CAS revisions, canonical operation identity, leases, crash recovery, rollback evidence, and fail-closed terminal publication. |
+| `SecretTransition` | Live secret rotation proves route stage/probe/activate/prove/drain before the provider generation changes; daemon authority reset closes connections, exact committed or unchanged generations reconcile without replay, and mismatches remain recovery-required. |
+| `WorkloadObservation` | Workload records remain owner-isolated; known loss, retention truncation, coverage degradation, and exact cleanup are explicit and make bounded progress. |
 
 `StopObservation` pins the stop-path contract behind the 2026-07 false-stop
 fix. Its safety claim is conditional on an explicit environment assumption:
@@ -48,12 +56,11 @@ Weakening the model to accept a single terminal sample (the pre-fix
 behavior), or dropping the isolated-anomaly assumption, makes TLC produce
 the false-success trace recorded in `DEBT.md`.
 
-`AttachReservation` models the GROUP 3 #10 establishment protocol ahead of
-its implementation. Reconciliation judges only observable evidence (durable
-owner records plus a liveness probe), so removing the reservation/reconcile
-exclusion reproduces the runtime-scrub race the protocol was designed
-against. Model success does not replace the Go interleaving tests the DEBT
-entry requires when the protocol is implemented.
+`AttachReservation` models the establishment protocol implemented by the
+lifecycle coordinator. Reconciliation judges only observable evidence
+(durable owner records plus a liveness probe), so removing the
+reservation/reconcile exclusion reproduces the runtime-scrub race. Model
+success does not replace the Go interleaving tests.
 
 The state spaces intentionally exclude concrete filesystem paths, file
 contents, secrets, Lima commands, and unbounded production identifiers. Those
@@ -61,16 +68,19 @@ belong in implementation tests and real backend evidence.
 
 ## Running TLC
 
-Run all checked models with:
+Run the complete inventoried model and Go-refinement gate with:
 
 ```bash
-scripts/test-formal-models.sh
+scripts/gates/formal.sh
 ```
 
-The script pins TLA+ tools `v1.7.4` by SHA-256 and caches the approximately
-2.2 MB jar under `~/.cache/hideout/tla`. Java is a development dependency only;
-it is not included in the Hideout package and is not required in a target
-environment. Gate 0 invokes the same script.
+The gate reads `formal/inventory.json`, pins TLA+ tools `v1.7.4` by SHA-256,
+runs all 12 configurations across 10 modules and all 12 inventoried Go tests,
+checks the exact set of 72 safety invariants and 18 liveness properties,
+verifies the evidence independently, and writes private digest-bound output
+below `.artifacts/045/formal/`. Java is a development dependency only; it is
+not included in the Hideout package and is not required in a target
+environment. Gate 0 invokes this same formal gate.
 
 ## Refinement Discipline
 
@@ -85,7 +95,25 @@ TLC complements rather than replaces:
 When TLC finds a counterexample that can occur in the implementation, add the
 smallest equivalent trace as a Go regression test before changing the model.
 
-The natural `connect` command maps through `ProfileNetworkPlan` before runtime
-network reconciliation. `NetworkTransition` models the later live transition;
-it does not make profile persistence itself proof that an existing session has
-changed routes.
+The natural `connect` command maps through the generic profile transaction,
+which coordinates a checkpointed network batch for every eligible live
+environment. `NetworkTransition` and `SecretTransition` model that runtime
+authority; profile persistence alone is still never proof that a route became
+Effective.
+
+## Feature 045 Refinement Map
+
+The three 045 models deliberately meet production code at narrow, reviewable
+trace boundaries:
+
+| Model | Production correspondence | Required adverse traces |
+| --- | --- | --- |
+| `OperatorConfiguration` | Manager canonicalizes a plan, binds it to a base revision and operation ID, claims its mutation keys, records ordered effects/evidence, and publishes one terminal result. API, TUI, and WebUI are clients of that same operation model. | Concurrent stale client, identical retry, changed-input operation-ID reuse, daemon exit before/after each durable boundary, rollback, response loss, and terminal reseed. |
+| `SecretTransition` | A managed-secret generation and every eligible live gateway participate in one ordered stage → probe → activate → prove → drain → provider-commit transition. Startup recovery observes exact route and provider generations without replaying an ambiguous effect. | Failure or crash at every network boundary, unchanged/committed/mismatched provider generation, old-authority reset, rollback proof, and idempotent retry. |
+| `WorkloadObservation` | The supervisor establishes one exact cgroup owner; observer frames become owner-bound activity and coverage intervals; the store applies deterministic redaction, bounded retention, and exact lifecycle cleanup. | Sequence gap, explicit drop, observer/daemon restart, target exit, retention pruning, corruption repair/quarantine, ambiguous owner, disposable teardown, and reusable-incarnation replacement. |
+
+The production tests named in `formal/inventory.json` must remain present and
+green. The formal verifier rejects a missing configuration or test, a changed
+model/log digest, a counterexample, or an incomplete invariant/liveness pass
+set. Real cgroup, eBPF, Lima, Keychain, terminal, and browser behavior remains
+the responsibility of the corresponding non-formal release gates.

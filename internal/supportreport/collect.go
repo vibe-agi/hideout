@@ -49,11 +49,8 @@ func Collect(opts CollectOptions) (Report, error) {
 			Doctor: "collected", Recovery: "collected",
 		},
 		Redaction: Redaction{
-			Mode: "shareable-support",
-			ExcludedDataClasses: []string{
-				"raw-audit", "workspace-content", "secret-backing", "proxy-value",
-				"control-plane-token", "machine-id", "raw-host-path",
-			},
+			Mode:                "shareable-support",
+			ExcludedDataClasses: shareableExcludedDataClasses(),
 		},
 		Provenance: Provenance{
 			Command:  "hideout support report --out <path>",

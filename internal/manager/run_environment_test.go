@@ -90,6 +90,14 @@ func TestRuntimeConfigurationSeparatesMachineBootServiceAndSessionInputs(t *test
 	assertImpact("command-adapter", func(value *profile.Profile) {
 		value.CommandAdapters.Adapters = map[string]profile.CommandAdapter{"fixture": {Enabled: true, Builtin: "fixture"}}
 	}, environment.ImpactNewSession, "session")
+	assertImpact("activity-retention", func(value *profile.Profile) {
+		value.Activity = &profile.ActivityConfig{
+			Retention: profile.ActivityRetention{
+				MaxBytes:      64 << 20,
+				MaxAgeSeconds: 7 * 24 * 60 * 60,
+			},
+		}
+	}, environment.ImpactNone)
 	assertImpact("policy-capability", func(value *profile.Profile) {
 		value.Policy.MaxCapabilities = append(value.Policy.MaxCapabilities, "host.fs.write.plan")
 	}, environment.ImpactNewSession, "session")
@@ -133,6 +141,7 @@ func TestRuntimeConfigurationCoversEveryTopLevelProfileDomain(t *testing.T) {
 		"hostfs":           "session",
 		"commandProxy":     "session",
 		"commandAdapters":  "session",
+		"activity":         "manager-control-only",
 		"policy":           "session",
 		"audit":            "session",
 		"metadata":         "selected-machine+session+control-only",

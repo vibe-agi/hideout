@@ -5,6 +5,8 @@ const (
 	ActionDeny     = "host.fs.overlay.deny"
 	ActionPending  = "host.fs.overlay.pending"
 	ActionClaim    = "host.fs.overlay.claim"
+	ActionRelease  = "host.fs.overlay.claim-release"
+	ActionExpiry   = "host.fs.overlay.claim-expired"
 	ActionApply    = "host.fs.overlay.apply"
 	ActionDiscard  = "host.fs.overlay.discard"
 	ActionTimeout  = "host.fs.overlay.timeout"

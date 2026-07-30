@@ -24,7 +24,11 @@ func TestDaemonLifecycleKeepsSiblingSessionPinnedUntilFinalRelease(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Errorf("stop daemon: %v", err)
+		}
+	}()
 
 	attach := func(sessionID string) lifecycle.Registration {
 		t.Helper()

@@ -11,9 +11,17 @@ type SourceKind string
 
 const (
 	SourceAudit           SourceKind = "audit"
+	SourceActivity        SourceKind = "activity"
 	SourceBundle          SourceKind = "bundle"
 	SourceBoundarySummary SourceKind = "boundary-summary"
 	SourceDoctorReport    SourceKind = "doctor-report"
+)
+
+type PathPolicy string
+
+const (
+	PathPolicyRedactHost PathPolicy = "redact-host"
+	PathPolicyPreserve   PathPolicy = "preserve"
 )
 
 type DecisionMode string
@@ -59,12 +67,15 @@ type ExportDecision struct {
 }
 
 type Request struct {
-	Source            SourceKind
-	AuditEvents       []AuditEvent
-	BundlePath        string
-	BoundarySummary   any
-	BoundaryAuditPath string
-	DoctorReportPath  string
+	Source             SourceKind
+	AuditEvents        []AuditEvent
+	BundlePath         string
+	BoundarySummary    any
+	BoundaryAuditPath  string
+	DoctorReportPath   string
+	Activity           any
+	PathPolicy         PathPolicy
+	PreRedactionStages []RedactionStage
 
 	Out                     string
 	StoreRoot               string

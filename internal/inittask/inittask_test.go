@@ -614,6 +614,7 @@ func fakeSourceRoot(t *testing.T) string {
 		filepath.Join("cmd", "hideout-shim", "main.go"),
 		filepath.Join("cmd", "hideout-hostfsd", "main.go"),
 		filepath.Join("cmd", "hideout-session-supervisor", "main_linux.go"),
+		filepath.Join("cmd", "hideout-observer", "main_linux.go"),
 	} {
 		full := filepath.Join(root, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {

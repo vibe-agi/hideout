@@ -23,6 +23,7 @@ type establishment struct {
 	coordinator *Coordinator
 	environment string
 	session     string
+	lease       *mutationLease
 
 	mu          sync.Mutex
 	phase       establishmentPhase
@@ -43,6 +44,17 @@ func (c *Coordinator) reserveAttach(ctx context.Context, request EstablishmentRe
 	}
 	if !idPattern.MatchString(request.EnvironmentID) || !idPattern.MatchString(request.SessionID) {
 		return nil, errors.New("lifecycle establishment identity is invalid")
+	}
+	keys := append(
+		[]string{EnvironmentMutationKey(request.EnvironmentID)},
+		request.MutationKeys...,
+	)
+	mutationRequest, err := c.normalizeMutationRequest(MutationRequest{
+		Keys:  keys,
+		Owner: attachMutationOwner(request.SessionID, c.nowUTC()),
+	})
+	if err != nil {
+		return nil, err
 	}
 	waitingReason := ""
 	for {
@@ -77,6 +89,16 @@ func (c *Coordinator) reserveAttach(ctx context.Context, request EstablishmentRe
 			continue
 		}
 		if state.blocked {
+			if state.mutation {
+				conflictErr := c.environmentConflictLocked(
+					request.EnvironmentID,
+					state,
+					mutationRequest.Owner,
+					ErrAttachBlocked,
+				)
+				c.mu.Unlock()
+				return nil, conflictErr
+			}
 			reasonCode := state.journal.Reconciliation.ReasonCode
 			c.mu.Unlock()
 			return nil, &AttachBlockedError{ReasonCode: reasonCode}
@@ -104,11 +126,24 @@ func (c *Coordinator) reserveAttach(ctx context.Context, request EstablishmentRe
 			}
 			continue
 		}
-		if state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
+		lease, claimErr := c.claimMutationKeysLocked(mutationRequest)
+		if claimErr != nil {
 			c.mu.Unlock()
-			return nil, ErrStopInFlight
+			return nil, claimErr
+		}
+		if state.mutation || attemptBlocksAttach(state.journal.StopAttempt) || state.stopCancel != nil {
+			lease.releaseLocked()
+			conflictErr := c.environmentConflictLocked(
+				request.EnvironmentID,
+				state,
+				mutationRequest.Owner,
+				ErrStopInFlight,
+			)
+			c.mu.Unlock()
+			return nil, conflictErr
 		}
 		if state.handles[request.SessionID] || state.establishing[request.SessionID] != nil {
+			lease.releaseLocked()
 			c.mu.Unlock()
 			return nil, errors.New("lifecycle session is already registered or establishing")
 		}
@@ -121,6 +156,7 @@ func (c *Coordinator) reserveAttach(ctx context.Context, request EstablishmentRe
 			coordinator: c,
 			environment: request.EnvironmentID,
 			session:     request.SessionID,
+			lease:       lease,
 			phase:       establishmentReserved,
 		}
 		state.establishing[request.SessionID] = reservation
@@ -249,6 +285,10 @@ func (e *establishment) Promote(ctx context.Context) (Registration, error) {
 	state.journal.Reconciliation = Reconciliation{DaemonInstanceID: e.coordinator.daemonID, State: "complete", ObservedAt: e.coordinator.nowUTC()}
 	state.committed[e.session] = false
 	delete(state.establishing, e.session)
+	if e.lease != nil {
+		e.lease.releaseLocked()
+		e.lease = nil
+	}
 	e.phase = establishmentPromoted
 	registration := &registration{
 		coordinator: e.coordinator,
@@ -293,6 +333,10 @@ func (e *establishment) Abort(ctx context.Context, cause error) error {
 				return err
 			}
 		}
+	}
+	if e.lease != nil {
+		e.lease.releaseLocked()
+		e.lease = nil
 	}
 	e.phase = establishmentAborted
 	return nil

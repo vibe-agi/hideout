@@ -99,6 +99,7 @@ for path in \
   "$prefix/bin/hideout-shim-linux-$arch" \
   "$prefix/bin/hideout-hostfsd-linux-$arch" \
   "$prefix/bin/hideout-session-supervisor-linux-$arch" \
+  "$prefix/bin/hideout-observer-linux-$arch" \
   "$prefix/bin/hideout-workspace-portal-linux-$arch" \
   "$prefix/bin/tun2socks-linux-$arch" \
   "$prefix/install.sh" \
@@ -108,10 +109,13 @@ for path in \
   "$prefix/CHANGELOG.md" \
   "$prefix/RELEASE_NOTES.md" \
   "$prefix/LICENSE" \
+  "$prefix/LICENSES/GPL-2.0-only.txt" \
   "$prefix/THIRD_PARTY_NOTICES.md" \
   "$prefix/SECURITY.md" \
   "$prefix/third_party/tun2socks/LICENSE" \
   "$prefix/schemas/package-manifest.schema.json" \
+  "$prefix/schemas/embedded-asset-manifest.schema.json" \
+  "$prefix/schemas/package-components.schema.json" \
   "$prefix/schemas/release-dogfood.schema.json" \
   "$prefix/schemas/runtime-catalog.schema.json" \
   "$prefix/schemas/runtime-verification.schema.json" \
@@ -125,6 +129,8 @@ for path in \
   "$prefix/schemas/run-plan.schema.json" \
   "$prefix/runtime/catalog.json" \
   "$prefix/runtime/contract.json" \
+  "$prefix/runtime/package-components.json" \
+  "$prefix/runtime/browser-console.assets.json" \
   "$prefix/runtime/developer-standard/sources.lock.json" \
   "$prefix/runtime/developer-standard/build.sh" \
   "$prefix/host-app/recipes/builtin-vscode.json" \
@@ -143,6 +149,7 @@ done
 test -f "$prefix/bin/hideout-shim-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-hostfsd-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-session-supervisor-linux-$arch.manifest.json"
+test -f "$prefix/bin/hideout-observer-linux-$arch.manifest.json"
 test -f "$prefix/bin/hideout-workspace-portal-linux-$arch.manifest.json"
 test -f "$prefix/bin/tun2socks-linux-$arch.manifest.json"
 jq -e --arg arch "$arch" '
@@ -156,6 +163,35 @@ jq -e --arg arch "$arch" '
   .buildMode == "source-built-pinned-module" and
   .packageOwned == true
 ' "$prefix/bin/tun2socks-linux-$arch.manifest.json" >/dev/null
+jq -e --arg arch "$arch" '
+  .version == "hideout.helper-manifest/v1" and
+  .command == "hideout-observer" and
+  .targetOS == "linux" and
+  .targetArch == $arch and
+  .builder == "go build -trimpath" and
+  .license == "Apache-2.0" and
+  .buildMode == "embedded-core-bpf" and
+  .packageOwned == true and
+  (.sha256 | test("^[a-f0-9]{64}$"))
+' "$prefix/bin/hideout-observer-linux-$arch.manifest.json" >/dev/null
+jq -e --arg container_sha "$(sha256_file "$prefix/bin/hideout")" '
+  .schema == "hideout.embedded-asset-manifest/v1" and
+  .id == "browser-console" and
+  .container == "bin/hideout" and
+  .containerSHA256 == $container_sha and
+  .license == "Apache-2.0" and
+  ([.assets[].path] == [
+    "index.html",
+    "style.css",
+    "state.js",
+    "client.js",
+    "activity.js",
+    "config.js",
+    "presentation.js",
+    "app.js"
+  ]) and
+  all(.assets[]; (.sha256 | test("^[a-f0-9]{64}$")))
+' "$prefix/runtime/browser-console.assets.json" >/dev/null
 
 ambient_bin="$tmp/ambient-helper"
 mkdir -p "$ambient_bin"
@@ -178,6 +214,12 @@ grep -q 'release evidence forbids HIDEOUT_LINUX_TUN2SOCKS_PATH' \
   "$tmp/package-tun2socks-override.err"
 
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$prefix/package-manifest.json"
+go run ./cmd/hideout-schema-validate \
+  "$prefix/schemas/embedded-asset-manifest.schema.json" \
+  "$prefix/runtime/browser-console.assets.json"
+go run ./cmd/hideout-schema-validate \
+  "$prefix/schemas/package-components.schema.json" \
+  "$prefix/runtime/package-components.json"
 for manifest in \
   "$prefix/host-app/recipes/builtin-vscode.json" \
   "$prefix/examples/host-app-packs/cursor/hideout.host-app-pack.json" \
@@ -206,6 +248,7 @@ jq -e \
     (.layout.binaries | index("bin/hideout")) and
     (.layout.binaries | index("bin/hideout-shim-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-session-supervisor-linux-" + $host_arch)) and
+    (.layout.binaries | index("bin/hideout-observer-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/hideout-workspace-portal-linux-" + $host_arch)) and
     (.layout.binaries | index("bin/tun2socks-linux-" + $host_arch)) and
     (.layout.entrypoints | index("install.sh")) and
@@ -222,6 +265,12 @@ jq -e \
     (.runtime.catalogFileSHA256 | test("^[a-f0-9]{64}$")) and
     (.runtime.artifactSHA256 | test("^[a-f0-9]{64}$")) and
     .signingSummary.mode == "developer-preview-unsigned" and
+    (.embeddedAssets | length == 1) and
+    .embeddedAssets[0].id == "browser-console" and
+    .embeddedAssets[0].container == "bin/hideout" and
+    .embeddedAssets[0].manifest == "runtime/browser-console.assets.json" and
+    (.embeddedAssets[0].manifestSHA256 | test("^[a-f0-9]{64}$")) and
+    .embeddedAssets[0].license == "Apache-2.0" and
     .migration.installStateSchema == "hideout.package-install-state/v1" and
     (.migration.fromInstalledSchemas | index("hideout.package-install-state/v1")) and
     .migration.minimumPackageSchema == "hideout.package-manifest/v1" and
@@ -230,16 +279,21 @@ jq -e \
     any(.files[]; .path == "bin/hideout" and .kind == "binary" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-shim-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-session-supervisor-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-observer-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "bin/hideout-observer-linux-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/hideout-workspace-portal-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/tun2socks-linux-" + $host_arch and .kind == "linux-helper" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "bin/tun2socks-linux-" + $host_arch + ".manifest.json" and .kind == "helper-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "install.sh" and .kind == "installer" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "README.md" and .kind == "entrypoint" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "LICENSES/GPL-2.0-only.txt" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "THIRD_PARTY_NOTICES.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "SECURITY.md" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "third_party/tun2socks/LICENSE" and .kind == "doc" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/package-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/embedded-asset-manifest.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "schemas/package-components.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/release-dogfood.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/runtime-catalog.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "schemas/runtime-verification.schema.json" and .kind == "schema" and (.sha256 | test("^[a-f0-9]{64}$"))) and
@@ -250,11 +304,14 @@ jq -e \
     any(.files[]; .path == "examples/host-app-packs/cursor/hideout.host-app-pack.json" and .kind == "host-app-example" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "runtime/catalog.json" and .kind == "runtime-catalog" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "runtime/contract.json" and .kind == "runtime-contract" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "runtime/package-components.json" and .kind == "runtime-contract" and (.sha256 | test("^[a-f0-9]{64}$"))) and
+    any(.files[]; .path == "runtime/browser-console.assets.json" and .kind == "embedded-asset-manifest" and (.sha256 | test("^[a-f0-9]{64}$"))) and
     any(.files[]; .path == "runtime/developer-standard/sources.lock.json" and .kind == "runtime-build" and (.sha256 | test("^[a-f0-9]{64}$")))
   ' "$prefix/package-manifest.json" >/dev/null
 
 cmp internal/runtimecatalog/catalog.json "$prefix/runtime/catalog.json"
 cmp internal/runtimecatalog/contract.json "$prefix/runtime/contract.json"
+cmp runtime/package-components.json "$prefix/runtime/package-components.json"
 
 jq -r '.layout.binaries[]' "$prefix/package-manifest.json" | while IFS= read -r rel; do
   if ! manifest_relative_path "$rel"; then
@@ -295,7 +352,7 @@ jq -r '.files[] | [.path, .kind, .sha256] | @tsv' "$prefix/package-manifest.json
     exit 1
   fi
   case "$kind" in
-    binary|linux-helper|helper-manifest|installer|entrypoint|schema|doc|script|packaging|host-app-core-data|host-app-example|runtime-catalog|runtime-contract|runtime-build)
+    binary|linux-helper|helper-manifest|installer|entrypoint|schema|doc|script|packaging|host-app-core-data|host-app-example|runtime-catalog|runtime-contract|runtime-build|embedded-asset-manifest)
       ;;
     *)
       echo "package-smoke: manifest file has unknown kind: $rel ($kind)" >&2
@@ -327,9 +384,9 @@ grep -q 'profile: ok default' "$tmp/doctor.out"
 grep -q 'manager: ok' "$tmp/doctor.out"
 
 HIDEOUT_STORE_ROOT="$store" "$prefix/bin/hideout" tui --once >"$tmp/tui.out"
-grep -q '^Hideout TUI$' "$tmp/tui.out"
-grep -q '^Status: ok$' "$tmp/tui.out"
-grep -q '^Profiles:' "$tmp/tui.out"
+grep -q '^Hideout | default |' "$tmp/tui.out"
+grep -q '^STATE idle$' "$tmp/tui.out"
+grep -q '^Activity$' "$tmp/tui.out"
 if grep -q 'Hideout UI:' "$tmp/tui.out"; then
   echo "package-smoke: tui should not start WebUI" >&2
   cat "$tmp/tui.out" >&2
@@ -367,6 +424,40 @@ fi
 grep -q 'bin/hideout-hostfsd-linux' "$tmp/broken-helper.err"
 if [ -e "$tmp/broken-helper-install/bin/hideout" ]; then
   echo "package-smoke: broken helper package copied binaries before failing" >&2
+  exit 1
+fi
+
+broken_missing_observer="$tmp/package-missing-observer"
+cp -R "$prefix" "$broken_missing_observer"
+rm -f "$broken_missing_observer/bin/hideout-observer-linux-$arch"
+if "$broken_missing_observer/install.sh" \
+  --prefix "$tmp/broken-observer-install" \
+  --store "$tmp/broken-observer-store" \
+  --skip-init >"$tmp/broken-observer.out" 2>"$tmp/broken-observer.err"; then
+  echo "package-smoke: installer accepted package missing workload observer" >&2
+  exit 1
+fi
+grep -q 'bin/hideout-observer-linux' "$tmp/broken-observer.err"
+if [ -e "$tmp/broken-observer-install/bin/hideout" ]; then
+  echo "package-smoke: missing-observer package copied binaries before failing" >&2
+  exit 1
+fi
+
+broken_browser_manifest="$tmp/package-bad-browser-manifest"
+cp -R "$prefix" "$broken_browser_manifest"
+printf '\ncorrupt-for-smoke\n' \
+  >>"$broken_browser_manifest/runtime/browser-console.assets.json"
+if "$broken_browser_manifest/install.sh" \
+  --prefix "$tmp/broken-browser-install" \
+  --store "$tmp/broken-browser-store" \
+  --skip-init >"$tmp/broken-browser.out" 2>"$tmp/broken-browser.err"; then
+  echo "package-smoke: installer accepted browser asset manifest drift" >&2
+  exit 1
+fi
+grep -q 'package checksum mismatch for runtime/browser-console.assets.json' \
+  "$tmp/broken-browser.err"
+if [ -e "$tmp/broken-browser-install/bin/hideout" ]; then
+  echo "package-smoke: drifted browser manifest copied binaries before failing" >&2
   exit 1
 fi
 
@@ -450,12 +541,17 @@ test -x "$installed_prefix/bin/hideout-shim"
 test -x "$installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$installed_prefix/bin/hideout-session-supervisor-linux-$arch"
+test -x "$installed_prefix/bin/hideout-observer-linux-$arch"
 test -x "$installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -x "$installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
+test -f "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json"
 test -f "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
+test -f "$installed_prefix/share/hideout/LICENSES/GPL-2.0-only.txt"
 test -f "$installed_prefix/share/hideout/package-manifest.json"
 test -f "$installed_prefix/share/hideout/schemas/package-manifest.schema.json"
+test -f "$installed_prefix/share/hideout/schemas/embedded-asset-manifest.schema.json"
+test -f "$installed_prefix/share/hideout/schemas/package-components.schema.json"
 test -f "$installed_prefix/share/hideout/schemas/runtime-catalog.schema.json"
 test -f "$installed_prefix/share/hideout/schemas/runtime-verification.schema.json"
 test -f "$installed_prefix/share/hideout/schemas/host-app-pack.schema.json"
@@ -465,8 +561,10 @@ test -f "$installed_prefix/share/hideout/host-app/recipes/safety-profiles.json"
 test -f "$installed_prefix/share/hideout/examples/host-app-packs/cursor/hideout.host-app-pack.json"
 test -f "$installed_prefix/share/hideout/docs/README.md"
 test -f "$installed_prefix/share/hideout/docs/STATUS.md"
+test -f "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
 cmp internal/runtimecatalog/catalog.json "$installed_prefix/share/hideout/runtime/catalog.json"
 cmp internal/runtimecatalog/contract.json "$installed_prefix/share/hideout/runtime/contract.json"
+cmp runtime/package-components.json "$installed_prefix/share/hideout/runtime/package-components.json"
 cmp runtime/developer-standard/sources.lock.json "$installed_prefix/share/hideout/runtime/developer-standard/sources.lock.json"
 go run ./cmd/hideout-schema-validate "$prefix/schemas/package-manifest.schema.json" "$installed_prefix/share/hideout/package-manifest.json"
 "$installed_prefix/bin/hideout" package verify "$installed_prefix" >"$tmp/package-installed-verify.out"
@@ -491,10 +589,10 @@ upgrade_unrelated="$installed_prefix/bin/operator-before-upgrade"
 printf 'operator-owned-before-upgrade\n' >"$upgrade_unrelated"
 before_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
 
-# Model the last supported package line before tun2socks became package-owned.
-# The installed-state schema is still supported, but the old inventory has no
-# helper, helper manifest, or redistributed license. The candidate upgrade
-# must add all three without touching durable or unrelated files.
+# Model the last supported package line before tun2socks, the observer, and the
+# embedded browser manifest became mandatory package-owned components. The
+# candidate upgrade must add all of them without touching durable or unrelated
+# files.
 installed_state="$installed_prefix/share/hideout/package-manifest.json"
 jq --arg arch "$arch" '
   .package.release.productVersion = "0.1.0-alpha.0" |
@@ -503,14 +601,24 @@ jq --arg arch "$arch" '
   .files |= map(select(
     .path != ("bin/tun2socks-linux-" + $arch) and
     .path != ("bin/tun2socks-linux-" + $arch + ".manifest.json") and
-    .path != "share/hideout/third_party/tun2socks/LICENSE"
+    .path != ("bin/hideout-observer-linux-" + $arch) and
+    .path != ("bin/hideout-observer-linux-" + $arch + ".manifest.json") and
+    .path != "share/hideout/third_party/tun2socks/LICENSE" and
+    .path != "share/hideout/LICENSES/GPL-2.0-only.txt" and
+    .path != "share/hideout/runtime/package-components.json" and
+    .path != "share/hideout/runtime/browser-console.assets.json"
   ))
 ' "$installed_state" >"$tmp/prior-install-state.json"
 cp "$tmp/prior-install-state.json" "$installed_state"
 rm -f \
   "$installed_prefix/bin/tun2socks-linux-$arch" \
   "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json" \
-  "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
+  "$installed_prefix/bin/hideout-observer-linux-$arch" \
+  "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json" \
+  "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE" \
+  "$installed_prefix/share/hideout/LICENSES/GPL-2.0-only.txt" \
+  "$installed_prefix/share/hideout/runtime/package-components.json" \
+  "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
 
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-upgrade.out"
 grep -q 'package: upgrade' "$tmp/package-upgrade.out"
@@ -518,14 +626,19 @@ test -f "$durable_fixture"
 test -f "$upgrade_unrelated"
 test -x "$installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
+test -x "$installed_prefix/bin/hideout-observer-linux-$arch"
+test -f "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json"
 test -f "$installed_prefix/share/hideout/third_party/tun2socks/LICENSE"
+test -f "$installed_prefix/share/hideout/LICENSES/GPL-2.0-only.txt"
+test -f "$installed_prefix/share/hideout/runtime/package-components.json"
+test -f "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
 after_upgrade_sha="$(sha256_file "$installed_prefix/bin/hideout")"
 test "$before_upgrade_sha" = "$after_upgrade_sha"
 "$installed_prefix/bin/hideout" help update >"$tmp/package-help-update.out"
 "$installed_prefix/bin/hideout" help uninstall >"$tmp/package-help-uninstall.out"
-grep -q 'brew upgrade vibe-agi/tap/hideout' "$tmp/package-help-update.out"
-grep -q 'brew uninstall vibe-agi/tap/hideout' "$tmp/package-help-uninstall.out"
-grep -q 'Normal upgrade and uninstall preserve durable state' "$tmp/package-help-uninstall.out"
+grep -q 'brew upgrade' "$tmp/package-help-update.out"
+grep -q 'brew uninstall' "$tmp/package-help-uninstall.out"
+grep -q 'uninstall preserves durable state' "$tmp/package-help-uninstall.out"
 grep -q -- '--confirm-purge <exact-store>' "$tmp/package-help-uninstall.out"
 
 stale_upgrade="$tmp/package-stale-upgrade"
@@ -626,6 +739,7 @@ printf 'operator-owned\n' >"$unrelated_installed"
 grep -q 'package: uninstall dry-run' "$tmp/package-uninstall-dry.out"
 grep -q 'remove bin/hideout' "$tmp/package-uninstall-dry.out"
 grep -q "remove bin/tun2socks-linux-$arch" "$tmp/package-uninstall-dry.out"
+grep -q "remove bin/hideout-observer-linux-$arch" "$tmp/package-uninstall-dry.out"
 test -x "$installed_prefix/bin/hideout"
 test -f "$durable_fixture"
 "$installed_prefix/bin/hideout" package uninstall --prefix "$installed_prefix" >"$tmp/package-uninstall.out"
@@ -633,6 +747,9 @@ grep -q 'durableState=preserved' "$tmp/package-uninstall.out"
 test ! -e "$installed_prefix/bin/hideout"
 test ! -e "$installed_prefix/bin/tun2socks-linux-$arch"
 test ! -e "$installed_prefix/bin/tun2socks-linux-$arch.manifest.json"
+test ! -e "$installed_prefix/bin/hideout-observer-linux-$arch"
+test ! -e "$installed_prefix/bin/hideout-observer-linux-$arch.manifest.json"
+test ! -e "$installed_prefix/share/hideout/runtime/browser-console.assets.json"
 test -f "$unrelated_installed"
 test -f "$durable_fixture"
 "$prefix/install.sh" --prefix "$installed_prefix" --store "$installed_store" --skip-init >"$tmp/package-reinstall-for-purge.out"
@@ -660,6 +777,9 @@ cat >"$tmp/package-lifecycle-summary.json" <<JSON
 {
   "priorVersionUpgrade": true,
   "packageHelperAdded": true,
+  "observerHelperAdded": true,
+  "browserAssetManifestAdded": true,
+  "packageComponentContractAdded": true,
   "durableStatePreservedOnUpgrade": true,
   "unrelatedFilePreservedOnUpgrade": true,
   "homebrewGuidance": true,
@@ -679,6 +799,7 @@ test -x "$default_installed_prefix/bin/hideout-shim"
 test -x "$default_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
+test -x "$default_installed_prefix/bin/hideout-observer-linux-$arch"
 test -x "$default_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -x "$default_installed_prefix/bin/tun2socks-linux-$arch"
 test -f "$default_installed_store/install-state.json"
@@ -709,6 +830,7 @@ test -x "$skip_installed_prefix/bin/hideout-shim"
 test -x "$skip_installed_prefix/bin/hideout-shim-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-hostfsd-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-session-supervisor-linux-$arch"
+test -x "$skip_installed_prefix/bin/hideout-observer-linux-$arch"
 test -x "$skip_installed_prefix/bin/hideout-workspace-portal-linux-$arch"
 test -x "$skip_installed_prefix/bin/tun2socks-linux-$arch"
 HIDEOUT_STORE_ROOT="$skip_installed_store" "$skip_installed_prefix/bin/hideout" help >"$tmp/package-help.out"

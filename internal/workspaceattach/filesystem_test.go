@@ -108,6 +108,31 @@ func TestSelectedWorkspaceFilesystemDirectWriteOperationMatrix(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(root, "dir", "original.txt")); err != nil || string(got) != "repla" {
 		t.Fatalf("host lower after truncate = %q, %v", got, err)
 	}
+	appendHandle, err := client.Open(
+		ctx,
+		"dir/original.txt",
+		os.O_WRONLY|os.O_APPEND,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written, err := client.Write(
+		ctx,
+		appendHandle,
+		0,
+		[]byte("-appended"),
+	); err != nil || written != len("-appended") {
+		t.Fatalf("append = %d, %v", written, err)
+	}
+	if err := client.CloseHandle(ctx, appendHandle); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(
+		filepath.Join(root, "dir", "original.txt"),
+	); err != nil || string(got) != "repla-appended" {
+		t.Fatalf("host lower after append = %q, %v", got, err)
+	}
 
 	if err := client.Chmod(ctx, "dir/original.txt", 0o600); err != nil {
 		t.Fatal(err)

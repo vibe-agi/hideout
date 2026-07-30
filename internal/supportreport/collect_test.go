@@ -186,6 +186,67 @@ func writeVerifiedInstalledPackage(t *testing.T) (string, string) {
 	}
 	writeFile(tunRel+".manifest.json", "helper-manifest", string(tunManifest)+"\n", false)
 	writeFile("share/hideout/third_party/tun2socks/LICENSE", "doc", "MIT license\n", false)
+	observerRel := "bin/" + helperbin.LinuxObserverCommand + "-linux-" + runtime.GOARCH
+	writeFile(observerRel, "linux-helper", "#!/bin/sh\n", true)
+	observerSum := files[len(files)-1].SHA256
+	observerManifest, err := json.Marshal(helperbin.Manifest{
+		Version: helperbin.ManifestVersion, Command: helperbin.LinuxObserverCommand,
+		TargetOS: "linux", TargetArch: runtime.GOARCH,
+		Artifact: filepath.Base(observerRel), SHA256: observerSum,
+		Builder: "go build -trimpath", BuiltAt: "2026-07-26T00:00:00Z",
+		License: helperbin.LinuxObserverLicense, BuildMode: helperbin.LinuxObserverBuildMode,
+		PackageOwned: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(
+		observerRel+".manifest.json",
+		"helper-manifest",
+		string(observerManifest)+"\n",
+		false,
+	)
+	writeFile(
+		"share/hideout/LICENSES/GPL-2.0-only.txt",
+		"doc",
+		"GPL-2.0-only\n",
+		false,
+	)
+	componentContract, err := json.Marshal(
+		packagekit.ExpectedPackageComponentContract(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(
+		"share/hideout/"+packagekit.PackageComponentContractPath,
+		"runtime-contract",
+		string(componentContract)+"\n",
+		false,
+	)
+	assets := packagekit.BrowserConsoleAssets()
+	for index := range assets {
+		assets[index].SHA256 = packagekit.BytesSHA256(
+			[]byte("embedded fixture " + assets[index].Path),
+		)
+	}
+	browserManifest, err := json.Marshal(packagekit.EmbeddedAssetManifest{
+		Schema:          packagekit.EmbeddedAssetManifestSchema,
+		ID:              packagekit.BrowserConsoleAssetID,
+		Container:       packagekit.BrowserConsoleContainerPath,
+		ContainerSHA256: files[0].SHA256,
+		License:         packagekit.BrowserConsoleAssetLicense,
+		Assets:          assets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(
+		"share/hideout/"+packagekit.BrowserConsoleManifestPath,
+		"embedded-asset-manifest",
+		string(browserManifest)+"\n",
+		false,
+	)
 
 	state := packagekit.InstallState{
 		Schema:        packagekit.InstallStateSchema,

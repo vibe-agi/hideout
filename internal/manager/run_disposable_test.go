@@ -198,16 +198,16 @@ type disposableLifecycleApplyBackend struct {
 
 type observingDisposalCoordinator struct {
 	lifecycle.DisposalCoordinator
-	environmentStore               environment.Store
-	journalStore                   lifecycle.JournalStore
-	failComplete                   bool
-	recordPresentAtJournalRemoval  bool
-	journalGoneBeforeRecordRemoval bool
+	environmentStore             environment.Store
+	journalStore                 lifecycle.JournalStore
+	failComplete                 bool
+	recordAbsentAtJournalRemoval bool
+	journalRemovedAfterRecord    bool
 }
 
 func (coordinator *observingDisposalCoordinator) CompleteDisposalMetadata(ctx context.Context, environmentID, digest string) error {
-	if _, err := coordinator.environmentStore.Load(environmentID); err == nil {
-		coordinator.recordPresentAtJournalRemoval = true
+	if _, err := coordinator.environmentStore.Load(environmentID); err != nil {
+		coordinator.recordAbsentAtJournalRemoval = true
 	}
 	if coordinator.failComplete {
 		return errors.New("injected journal removal failure")
@@ -217,7 +217,9 @@ func (coordinator *observingDisposalCoordinator) CompleteDisposalMetadata(ctx co
 	}
 	_, journalErr := coordinator.journalStore.Load(environmentID)
 	_, recordErr := coordinator.environmentStore.Load(environmentID)
-	coordinator.journalGoneBeforeRecordRemoval = errors.Is(journalErr, os.ErrNotExist) && recordErr == nil
+	coordinator.journalRemovedAfterRecord =
+		errors.Is(journalErr, os.ErrNotExist) &&
+			recordErr != nil
 	return nil
 }
 
@@ -249,7 +251,7 @@ func (provider *disposableLifecycleApplyBackend) Cleanup(ctx context.Context, se
 	return err
 }
 
-func TestApplyRunDisposableLifecycleProtocolRemovesJournalBeforeRecord(t *testing.T) {
+func TestApplyRunDisposableLifecycleProtocolRemovesRecordBeforeJournal(t *testing.T) {
 	setFakeLinuxShim(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
@@ -300,9 +302,9 @@ func TestApplyRunDisposableLifecycleProtocolRemovesJournalBeforeRecord(t *testin
 	if _, err := journalStore.Load(result.EnvironmentID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ordinary disposable finalizer retained lifecycle journal: %v", err)
 	}
-	if !observingCoordinator.recordPresentAtJournalRemoval ||
-		!observingCoordinator.journalGoneBeforeRecordRemoval {
-		t.Fatalf("record-last ordering was not observed: %+v", observingCoordinator)
+	if !observingCoordinator.recordAbsentAtJournalRemoval ||
+		!observingCoordinator.journalRemovedAfterRecord {
+		t.Fatalf("recoverable record-before-journal ordering was not observed: %+v", observingCoordinator)
 	}
 }
 
@@ -347,17 +349,16 @@ func TestApplyRunDisposableLifecycleProtocolRetainsClassifiableStateWhenJournalR
 		t.Fatalf("error=%v result=%+v", err, result)
 	}
 	if result.EnvironmentDisposition != DisposableRecoveryCleanupRequired ||
-		!observingCoordinator.recordPresentAtJournalRemoval {
+		!observingCoordinator.recordAbsentAtJournalRemoval {
 		t.Fatalf("result=%+v observer=%+v", result, observingCoordinator)
 	}
-	retained, err := (environment.Store{Root: root}).Load(result.EnvironmentID)
-	if err != nil || !retained.Disposable || retained.Status != environment.StatusError {
-		t.Fatalf("retained record=%+v err=%v", retained, err)
+	if _, err := (environment.Store{Root: root}).Load(result.EnvironmentID); err == nil {
+		t.Fatalf("environment record survived metadata-removal checkpoint: %v", err)
 	}
 	journal, err := journalStore.Load(result.EnvironmentID)
 	if err != nil || journal.Disposal == nil ||
-		journal.Disposal.State != lifecycle.DisposalStateBlocked ||
-		journal.Disposal.ReasonCode != lifecycle.DisposalReasonJournalRemovalFailed {
+		journal.Disposal.State != lifecycle.DisposalStateMetadataCleaning ||
+		journal.Disposal.ReasonCode != "" {
 		t.Fatalf("retained journal=%+v err=%v", journal, err)
 	}
 }

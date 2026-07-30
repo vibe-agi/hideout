@@ -1,0 +1,30 @@
+Hideout command catalog filtered by "proxy"
+Usage:
+  hideout help <command>       open purpose, effects, safety, and recovery
+  hideout help search <word>   search by task or keyword
+  hideout help all [query]     browse or filter this catalog
+  Compatibility: hideout help --all is the same as hideout help all
+
+Stable
+  Get started
+    doctor            Check installation, runtime, profile, network, and
+                      observation readiness with actionable findings.
+  Run safely
+    run               Run one command inside the selected Hideout VM boundary
+                      and observe that command plus its descendants.
+  Configure
+    connect           Plan and set a profile's desired direct or proxied
+                      connection.
+    secret            Set, rotate, inspect, or delete named credentials in the
+                      daemon-managed secure store (macOS Keychain on supported
+                      Macs).
+
+Advanced
+  Configure
+    init              Initialize or repair a named profile non-interactively
+                      through typed init tasks.
+    profile           Manage advanced profile identity, network, filesystem,
+                      environment, tool, and command-adapter policy.
+  Diagnose and recover
+    daemon            Start, inspect, reconcile, or stop the per-user Hideout
+                      daemon.

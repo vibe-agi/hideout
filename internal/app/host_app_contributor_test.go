@@ -323,7 +323,8 @@ func requireHostAppContributorFailure(t *testing.T, result hostAppContributorCLI
 
 func assertHostAppContributorTerminalSafe(t *testing.T, output string) {
 	t.Helper()
-	if strings.ContainsAny(output, "\x00\x07\x1b\x9b") {
+	if strings.ContainsAny(output, "\x00\x07\x1b") ||
+		strings.IndexByte(output, '\x9b') >= 0 {
 		t.Fatalf("CLI output contains terminal control bytes: %q", output)
 	}
 }

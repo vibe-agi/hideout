@@ -67,7 +67,13 @@ func TestHostAppDecisionUsesGenericKindAndExactBindingScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.SetNow(func() time.Time { return private.Claim.ExpiresAt.Add(time.Second) })
-	claim, _, err := store.ClaimDecision(d.ID, "lease-replacement", time.Minute)
+	claim, _, err := store.ClaimDecisionWithOptions(d.ID, decision.ClaimOptions{
+		Surface:          "lease-replacement",
+		Operator:         "local-operator",
+		Lease:            time.Minute,
+		ExpectedRevision: private.Revision,
+		TakeoverExpired:  true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

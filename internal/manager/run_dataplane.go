@@ -52,6 +52,7 @@ type RunDataPlaneOptions struct {
 type RunDataPlane struct {
 	Registry             cmdproxy.Registry
 	ProjectionReadiness  *backend.ProjectionReadinessExpectation
+	ObserverHelperDigest string
 	HostFSPolicy         hostfs.EffectivePolicy
 	HostFSEnabled        bool
 	HostFSGrafts         []string
@@ -150,6 +151,14 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 		return RunDataPlane{}, err
 	}
 	if err := MaterializeSessionSupervisor(runSession.RuntimeShimDir, runSession.Plan.Backend, opts.RequireSessionSupervisor); err != nil {
+		return RunDataPlane{}, err
+	}
+	observerHelperDigest, err := MaterializeObserver(
+		runSession.RuntimeShimDir,
+		runSession.Plan.Backend,
+		opts.RequireSessionSupervisor,
+	)
+	if err != nil {
 		return RunDataPlane{}, err
 	}
 	if err := MaterializeWorkspacePortal(
@@ -420,6 +429,7 @@ func (c Core) StartRunDataPlane(ctx context.Context, runSession RunSession, runN
 	return RunDataPlane{
 		Registry:             registry,
 		ProjectionReadiness:  projectionReadiness,
+		ObserverHelperDigest: observerHelperDigest,
 		HostFSPolicy:         hostFSPolicy,
 		HostFSEnabled:        hostFSEnabled,
 		HostFSGrafts:         HostFSGrafts(hostFSPolicy),
@@ -858,6 +868,30 @@ func MaterializeSessionSupervisor(dir, backendName string, required bool) error 
 	return copyExecutable(source, filepath.Join(dir, helperbin.LinuxSessionSupervisorCommand))
 }
 
+func MaterializeObserver(dir, backendName string, required bool) (string, error) {
+	if !required || backendName != "lima" {
+		return "", nil
+	}
+	resolution, err := resolveLinuxObserver()
+	if err != nil {
+		return "", err
+	}
+	if resolution.Path == "" {
+		return "", errors.New(
+			"lima activity observation requires a manifest-verified linux hideout-observer",
+		)
+	}
+	digest := strings.TrimPrefix(resolution.ExpectedDigest, "sha256:")
+	if err := helperbin.CopyVerifiedExecutable(
+		resolution.Path,
+		filepath.Join(dir, helperbin.LinuxObserverCommand),
+		digest,
+	); err != nil {
+		return "", err
+	}
+	return resolution.ExpectedDigest, nil
+}
+
 func MaterializeWorkspacePortal(dir, backendName string, required bool) error {
 	if !required || backendName != "lima" {
 		return nil
@@ -919,6 +953,14 @@ func ResolveLinuxSessionSupervisorPath() string {
 		return ""
 	}
 	return helperbin.ResolveLinuxSessionSupervisorPath(store.Root, runtime.GOARCH)
+}
+
+func resolveLinuxObserver() (helperbin.LinuxObserverResolution, error) {
+	store, err := profile.DefaultStore()
+	if err != nil {
+		return helperbin.LinuxObserverResolution{}, err
+	}
+	return helperbin.ResolveLinuxObserver(store.Root, runtime.GOARCH)
 }
 
 func ResolveLinuxWorkspacePortalPath() string {

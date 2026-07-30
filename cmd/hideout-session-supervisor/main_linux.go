@@ -26,10 +26,40 @@ func runSupervisor(reader io.Reader, writer io.Writer) error {
 type supervisorContextVerifier func(startSpec) error
 type supervisorTargetStarter func(startSpec, supervisorWire) (*targetProcess, error)
 type supervisorTargetRunner func(*targetProcess, supervisorWire) error
+type supervisorActivityPreparer func(startSpec) (*observerSession, error)
+
+func runSupervisorCommand(args []string, reader io.Reader, writer io.Writer) error {
+	if len(args) == 0 {
+		return runSupervisor(reader, writer)
+	}
+	if len(args) != 3 || args[0] != "observer-stream" || args[1] != "--session" {
+		return errors.New("invalid fixed guest session supervisor command")
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("observer stream bridge requires the authenticated root launcher")
+	}
+	return runObserverStreamBridge(args[2], observerStreamRuntimeRoot, reader, writer)
+}
 
 func runSupervisorWire(
 	wire supervisorWire,
 	verify supervisorContextVerifier,
+	start supervisorTargetStarter,
+	run supervisorTargetRunner,
+) error {
+	return runSupervisorWireWithActivity(
+		wire,
+		verify,
+		prepareSupervisorActivity,
+		start,
+		run,
+	)
+}
+
+func runSupervisorWireWithActivity(
+	wire supervisorWire,
+	verify supervisorContextVerifier,
+	prepareActivity supervisorActivityPreparer,
 	start supervisorTargetStarter,
 	run supervisorTargetRunner,
 ) error {
@@ -44,14 +74,42 @@ func runSupervisorWire(
 		return writeInitialFailure(wire, "supervisor.context.invalid", err)
 	}
 
-	if err := wire.WriteReady(); err != nil {
+	if prepareActivity == nil {
+		return writeInitialFailure(
+			wire,
+			"supervisor.observer.invalid",
+			errors.New("supervisor activity preparer is required"),
+		)
+	}
+	activity, err := prepareActivity(spec)
+	if spec.Activity != nil {
+		spec.Activity.ObserverStreamToken.Destroy()
+	}
+	if err != nil {
+		return writeInitialFailure(wire, "supervisor.observer.invalid", err)
+	}
+	spec.activityRuntime = activity
+	var activityReady *sessionwire.SupervisorActivityReady
+	if activity != nil {
+		activityReady = activity.Ready()
+	}
+	if err := wire.WriteReady(activityReady); err != nil {
+		if activity != nil {
+			err = errors.Join(err, activity.Abort(observerShutdownWait))
+		}
 		return fmt.Errorf("write supervisor ready: %w", err)
 	}
 	if err := wire.ReadCommit(); err != nil {
+		if activity != nil {
+			err = errors.Join(err, activity.Abort(observerShutdownWait))
+		}
 		return fmt.Errorf("read supervisor commit: %w", err)
 	}
 	process, err := start(spec, wire)
 	if err != nil {
+		if activity != nil {
+			err = errors.Join(err, activity.Abort(observerShutdownWait))
+		}
 		return writeInitialFailure(wire, "supervisor.target.start-failed", err)
 	}
 	process.queue.begin()
@@ -101,6 +159,14 @@ func superviseTarget(process *targetProcess, wire supervisorWire) error {
 			if outputErr := process.finishOutput(); outputErr != nil {
 				return finishProtocolFailure(wire, result, "supervisor.output.failed", outputErr)
 			}
+			if result.cleanupErr != nil {
+				return finishProtocolFailure(
+					wire,
+					result,
+					"supervisor.cgroup.cleanup-unproved",
+					result.cleanupErr,
+				)
+			}
 			return wire.WriteCompletion(result.completion)
 		case outputErr := <-process.queue.failure():
 			result := process.terminateAndWait()
@@ -126,7 +192,17 @@ func superviseTarget(process *targetProcess, wire supervisorWire) error {
 				if outputErr := process.finishOutput(); outputErr != nil {
 					return outputErr
 				}
-				result.completion = targetCompletion{Kind: "cancelled", ExitCode: 130, Completed: result.completion.Completed}
+				if result.cleanupErr != nil {
+					return finishProtocolFailure(
+						wire,
+						result,
+						"supervisor.cgroup.cleanup-unproved",
+						result.cleanupErr,
+					)
+				}
+				result.completion.Kind = "cancelled"
+				result.completion.ExitCode = 130
+				result.completion.Signal = ""
 				return wire.WriteCompletion(result.completion)
 			} else if err != nil {
 				result := process.terminateAndWait()
@@ -178,7 +254,13 @@ func finishProtocolFailure(wire supervisorWire, result waitResult, code string, 
 	if err := wire.WriteError(code, boundedSummary(failure)); err != nil {
 		return errors.Join(failure, err)
 	}
-	completion := targetCompletion{Kind: "protocol-error", ExitCode: 125, Completed: result.completion.Completed}
+	completion := result.completion
+	completion.Kind = "protocol-error"
+	if result.cleanupErr != nil {
+		completion.Kind = "cleanup-error"
+	}
+	completion.ExitCode = 125
+	completion.Signal = ""
 	if err := wire.WriteCompletion(completion); err != nil {
 		return errors.Join(failure, err)
 	}

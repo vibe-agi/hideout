@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/hideout/internal/sessionwire"
 )
 
 const (
@@ -45,13 +47,17 @@ type startSpec struct {
 	ExpectedBootID      string
 	SessionSource       string
 	ProjectionReadiness *projectionReadinessSpec
+	Activity            *sessionwire.SupervisorActivityExpectation
+	activityRuntime     any
 }
 
 type targetCompletion struct {
-	Kind      string
-	ExitCode  int
-	Signal    string
-	Completed bool
+	Kind             string
+	ExitCode         int
+	Signal           string
+	Completed        bool
+	CleanupCompleted bool
+	Activity         *sessionwire.SupervisorActivityCompletion
 }
 
 func validateStart(spec startSpec, expectedProtocol string) error {
@@ -73,6 +79,11 @@ func validateStart(spec startSpec, expectedProtocol string) error {
 	}
 	if spec.ProjectionReadiness != nil {
 		if err := spec.ProjectionReadiness.validate(); err != nil {
+			return err
+		}
+	}
+	if spec.Activity != nil {
+		if err := spec.Activity.Validate(spec.SessionID); err != nil {
 			return err
 		}
 	}

@@ -199,6 +199,58 @@ func TestDaemonSpecificEndpointsAreSeparateSurface(t *testing.T) {
 	}
 }
 
+func TestDaemonControlRoutesBoundAndStrictlyDecodeRequests(t *testing.T) {
+	d := startTestDaemon(t)
+	for name, body := range map[string]string{
+		"unknown field":  `{"environmentId":"env_fixture","unexpected":true}`,
+		"trailing value": `{"environmentId":"env_fixture"} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, response := daemonPost(
+				t,
+				d,
+				lifecycleReconcilePath,
+				body,
+				d.Token(),
+			)
+			if code != http.StatusBadRequest ||
+				!strings.Contains(string(response), "invalid request body") {
+				t.Fatalf(
+					"strict decode status=%d body=%s",
+					code,
+					response,
+				)
+			}
+		})
+	}
+
+	oversized := `{"environmentId":"` +
+		strings.Repeat("x", daemonControlRequestBodyLimit) +
+		`"}`
+	code, response := daemonPost(
+		t,
+		d,
+		lifecycleReconcilePath,
+		oversized,
+		d.Token(),
+	)
+	if code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(string(response), "route limit") {
+		t.Fatalf("oversized status=%d body=%s", code, response)
+	}
+
+	if code, response := daemonDo(
+		t,
+		d,
+		http.MethodPost,
+		eventsPath,
+		d.Token(),
+	); code != http.StatusMethodNotAllowed ||
+		!strings.Contains(string(response), "GET required") {
+		t.Fatalf("POST events status=%d body=%s", code, response)
+	}
+}
+
 // T012: the daemon exposes no confirmation/prompt surface (no daemon-mediated
 // prompting); a confirmation route does not exist and serving is headless.
 func TestDaemonHasNoPromptSurface(t *testing.T) {

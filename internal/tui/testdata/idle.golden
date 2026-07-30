@@ -1,0 +1,16 @@
+Hideout | default | IDLE LIVE | no active session | 12:00:00
+COMMAND none
+CONNECTION proxy | DNS 1.1.1.1
+STATE idle
+COVERAGE unavailable | no active workload
+RISK none
+NEXT start a protected command
+
+Activity
+no activity yet
+
+Details
+start with: hideout run -- <command>
+
+[1] Overview [2] Activity [3] Config [4] Operations [5] Help
+j/k select | Enter inspect | e environments | ? keys | q quit

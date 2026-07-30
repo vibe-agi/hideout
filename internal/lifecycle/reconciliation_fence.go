@@ -34,9 +34,32 @@ func (c *Coordinator) BeginReconciliation(ctx context.Context, environmentID str
 		state.journal.Reconciliation.State == "complete" {
 		return false, nil
 	}
+	request, err := c.normalizeMutationRequest(MutationRequest{
+		Keys: []string{EnvironmentMutationKey(environmentID)},
+		Owner: MutationOwner{
+			Kind: MutationOwnerReconcile, ID: c.daemonID,
+			Phase:     MutationPhaseReconciling,
+			Recovery:  "wait for lifecycle reconciliation to finish, then retry",
+			StartedAt: c.nowUTC(),
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	lease, err := c.claimMutationKeysLocked(request)
+	if err != nil {
+		return false, err
+	}
 	if len(state.handles) != 0 || len(state.establishing) != 0 || state.mutation ||
 		attemptBlocksReconciliation(state.journal.StopAttempt, c.daemonID) || state.stopCancel != nil {
-		return false, errors.New("lifecycle reconciliation is blocked by environment activity")
+		lease.releaseLocked()
+		conflictErr := c.environmentConflictLocked(
+			environmentID,
+			state,
+			request.Owner,
+			ErrMutationBlockedByActivity,
+		)
+		return false, conflictErr
 	}
 	if state.timer != nil {
 		state.timer.Stop()
@@ -50,6 +73,7 @@ func (c *Coordinator) BeginReconciliation(ctx context.Context, environmentID str
 	state.blocked = true
 	state.reconciling = true
 	state.reconcileDone = make(chan struct{})
+	state.reconcileLease = lease
 	state.journal.Reconciliation = Reconciliation{
 		DaemonInstanceID: c.daemonID,
 		State:            "pending",
@@ -147,6 +171,10 @@ func (c *Coordinator) finishReconciliationLocked(state *registryEnvironment) {
 		return
 	}
 	state.reconciling = false
+	if state.reconcileLease != nil {
+		state.reconcileLease.releaseLocked()
+		state.reconcileLease = nil
+	}
 	if state.reconcileDone != nil {
 		close(state.reconcileDone)
 		state.reconcileDone = nil

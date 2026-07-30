@@ -47,7 +47,11 @@ func TestRunNetworkGatewayObservationUsesBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer change.Rollback()
+	defer func() {
+		if err := change.Rollback(); err != nil {
+			t.Errorf("roll back gateway stage: %v", err)
+		}
+	}()
 	baseline, ok := registry.Observation("env_observation")
 	if !ok {
 		t.Fatal("gateway baseline is unavailable")

@@ -152,10 +152,9 @@ func setFakeLinuxWorkspacePortal(t *testing.T) {
 	t.Setenv(helperbin.LinuxWorkspacePortalPathEnvironment, path)
 }
 
-// setFakeLinuxSessionSupervisor pins the manifest-verified supervisor helper
-// to a test-owned fake. Without it, helper resolution falls through to the
-// operator's default store (~/.hideout), so a test passes on a machine with a
-// real installation and fails on a fresh checkout.
+// setFakeLinuxSessionSupervisor pins the manifest-verified supervisor and
+// observer helpers to test-owned fakes. Lima run setup requires the pair, and
+// neither helper may fall through to the operator's default store.
 func setFakeLinuxSessionSupervisor(t *testing.T) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), helperbin.LinuxSessionSupervisorCommand+"-linux-"+runtime.GOARCH)
@@ -166,6 +165,15 @@ func setFakeLinuxSessionSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(helperbin.LinuxSessionSupervisorPathEnvironment, path)
+
+	observerPath := filepath.Join(t.TempDir(), helperbin.LinuxObserverCommand+"-linux-"+runtime.GOARCH)
+	if err := os.WriteFile(observerPath, []byte("fake linux observer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := helperbin.WriteLinuxObserverManifest(observerPath, runtime.GOARCH); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(helperbin.LinuxObserverPathEnvironment, observerPath)
 }
 
 func TestCorePlanRunOwnsProfileBackendAndWorkspace(t *testing.T) {
@@ -2032,6 +2040,25 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 			},
 		},
 		{
+			Action:   "activity.observation.boundary",
+			Decision: "audit-only",
+			Details: map[string]any{
+				"scope":                  "top-level-command-and-descendants",
+				"ownerKind":              "reusable-environment",
+				"ownerBinding":           "exact-environment-or-disposable-session-plus-backend-incarnation",
+				"localPathVisibility":    "visible-in-authenticated-local-view",
+				"shareablePathTreatment": "excluded-from-shareable-support-review-before-export",
+				"excludedData": []string{
+					"file-content", "environment-values", "keystrokes",
+					"full-pty", "packet-payload",
+				},
+				"coverageNonClaim":       "no-events-does-not-prove-no-behavior-without-Available-coverage-for-the-subsystem-and-window",
+				"retentionMaxBytes":      int64(256 << 20),
+				"retentionMaxAgeSeconds": int64(0),
+				"retentionLifecycle":     "clean-delete-recreate-removes-the-exact-old-owner",
+			},
+		},
+		{
 			Action:   "host.fs.read",
 			Decision: "allow",
 			Details: map[string]any{
@@ -2128,6 +2155,16 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	if summary.HostFSVisibility == nil || summary.HostFSVisibility.Posture != "landmarks-one-level" || summary.HostFSVisibility.DiscoverGrants != 3 || summary.HostFSVisibility.DiscoverDeny != 2 || summary.HostFSVisibility.MaxListEntries != hostfs.DefaultMaxListEntries || summary.HostFSVisibility.MaxDepth != hostfs.MaxDiscoverDepth || summary.HostFSVisibility.NonClaim != hostFSVisibilityNonClaim {
 		t.Fatalf("HostFS visibility posture mismatch: %+v", summary.HostFSVisibility)
 	}
+	if summary.ActivityObservation == nil ||
+		summary.ActivityObservation.Scope != "top-level-command-and-descendants" ||
+		summary.ActivityObservation.OwnerKind != "reusable-environment" ||
+		summary.ActivityObservation.RetentionMaxBytes != 256<<20 ||
+		summary.ActivityObservation.RetentionMaxAgeSeconds != 0 ||
+		!strings.Contains(summary.ActivityObservation.CoverageNonClaim, "no-events-does-not-prove") ||
+		strings.Join(summary.ActivityObservation.ExcludedData, ",") !=
+			"file-content,environment-values,keystrokes,full-pty,packet-payload" {
+		t.Fatalf("activity observation boundary mismatch: %+v", summary.ActivityObservation)
+	}
 	hostFSBoundary := boundarySummaryCapability(t, summary, "hostfs")
 	if hostFSBoundary.Allowed != 1 || hostFSBoundary.Denied != 2 || hostFSBoundary.Unsupported != 1 {
 		t.Fatalf("HostFS boundary counts mismatch: %+v", hostFSBoundary)
@@ -2148,6 +2185,25 @@ func TestBoundarySummaryAggregatesAuditWithoutSensitiveDetails(t *testing.T) {
 	summaryData, err := json.Marshal(summary)
 	if err != nil {
 		t.Fatalf("marshal summary: %v", err)
+	}
+	resultData, err := json.Marshal(RunResult{
+		Version: RunResultVersion, SessionID: "ses_boundary",
+		Profile: "default", Backend: "native", Command: []string{"true"},
+		BoundarySummary: &summary,
+	})
+	if err != nil {
+		t.Fatalf("marshal boundary run result: %v", err)
+	}
+	resultDocument, err := jsonschema.UnmarshalJSON(bytes.NewReader(resultData))
+	if err != nil {
+		t.Fatalf("decode boundary run result: %v", err)
+	}
+	if err := compileRunResultSchema(t).Validate(resultDocument); err != nil {
+		t.Fatalf(
+			"activity boundary summary does not match run-result schema: %v\n%s",
+			err,
+			resultData,
+		)
 	}
 	for _, leaked := range []string{
 		"/Users/alice",
@@ -2481,7 +2537,11 @@ func TestCoreApplyRunWaitsForLockedEnvironmentUntilContextCancellation(t *testin
 	if err != nil {
 		t.Fatalf("Lock: %v", err)
 	}
-	defer lock.Unlock()
+	defer func() {
+		if err := lock.Unlock(); err != nil {
+			t.Errorf("unlock environment: %v", err)
+		}
+	}()
 
 	fake := &applyRunFakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

@@ -39,6 +39,150 @@ func TestManagerRouteInventoryRecognizesEveryRoute(t *testing.T) {
 	}
 }
 
+func TestManagerRouteInventoryCarriesRequestAndPrivacyMetadata(t *testing.T) {
+	sensitive := map[string]bool{}
+	for _, spec := range ManagerRoutes() {
+		if !spec.NoStore || !spec.NoBodyLog {
+			t.Fatalf("%s %s lacks mandatory private-route metadata: %+v", spec.Method, spec.Path, spec)
+		}
+		switch spec.Method {
+		case http.MethodGet:
+			if spec.MaxRequestBodyBytes != 0 {
+				t.Fatalf("GET route %s has a body allowance: %+v", spec.Path, spec)
+			}
+		case http.MethodPost:
+			if spec.MaxRequestBodyBytes <= 0 || spec.MaxRequestBodyBytes > DefaultRequestBodyLimit {
+				t.Fatalf("POST route %s has an invalid body bound: %+v", spec.Path, spec)
+			}
+		}
+		if spec.Sensitive {
+			sensitive[spec.Resource] = true
+		}
+	}
+	for _, resource := range []string{
+		"run/plan",
+		"run/apply",
+		"profile/env/plan",
+		"profile/env/apply",
+		"secret/plan",
+		"secret/apply",
+	} {
+		if !sensitive[resource] {
+			t.Fatalf("sensitive request route %q is not classified", resource)
+		}
+	}
+	if SecretRequestBodyLimit != 16<<10 {
+		t.Fatalf("secret request bound=%d want %d", SecretRequestBodyLimit, 16<<10)
+	}
+}
+
+func TestManagerRoutePatternsSupportNamedParametersWithoutTraversal(t *testing.T) {
+	patterns := map[string]string{
+		"profiles/{profile}/projection": "profiles/default/projection",
+		"operations/{operation}":        "operations/op_fixture0001",
+		"activity/{owner}/events":       "activity/owner_fixture/events",
+	}
+	for pattern, resource := range patterns {
+		if !routeResourceMatches(pattern, resource) {
+			t.Fatalf("pattern %q did not match %q", pattern, resource)
+		}
+		spec := RouteSpec{Resource: pattern}
+		if sample := spec.SamplePath(); strings.Contains(sample, "{") || !strings.HasPrefix(sample, "/api/v1/") {
+			t.Fatalf("pattern %q produced invalid sample %q", pattern, sample)
+		}
+	}
+	for _, resource := range []string{
+		"profiles//projection",
+		"profiles/../projection",
+		"profiles/default/extra/projection",
+		"profiles/default\n/ projection",
+	} {
+		if routeResourceMatches("profiles/{profile}/projection", resource) {
+			t.Fatalf("unsafe route parameter matched %q", resource)
+		}
+	}
+}
+
+func TestManagerAPIDetailedErrorsRemainBackwardCompatibleAndSchemaValid(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeAPIDetailedError(response, http.StatusConflict, APIErrorDetail{
+		Code: "stale-plan", Field: "baseRevision",
+		Message:  "profile changed after this review",
+		Recovery: "refresh the profile and review the new diff",
+	})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope APIResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Errors) != 1 || len(envelope.ErrorDetails) != 1 ||
+		envelope.ErrorDetails[0].Code != "stale-plan" {
+		t.Fatalf("detailed error lost legacy or stable shape: %+v", envelope)
+	}
+	if err := validateManagerAPIDocument(compileManagerAPISchema(t), envelope); err != nil {
+		t.Fatalf("detailed error violates Manager schema: %v", err)
+	}
+}
+
+func TestManagerPOSTBodyLimitRejectsDeclaredAndStreamingOversizeBodies(t *testing.T) {
+	api := API{
+		Core:      Core{Store: profile.Store{Root: t.TempDir()}},
+		Token:     "ui_token",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	cases := []struct {
+		name          string
+		body          string
+		contentLength int64
+	}{
+		{
+			name:          "declared",
+			body:          strings.Repeat("x", int(DefaultRequestBodyLimit)+1),
+			contentLength: DefaultRequestBodyLimit + 1,
+		},
+		{
+			name:          "streaming",
+			body:          "{}" + strings.Repeat(" ", int(DefaultRequestBodyLimit)+1),
+			contentLength: -1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/init/plan", strings.NewReader(tc.body))
+			request.ContentLength = tc.contentLength
+			request.Host = "localhost"
+			request.Header.Set("Authorization", "Bearer ui_token")
+			response := httptest.NewRecorder()
+			api.ServeHTTP(response, request)
+			if response.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("oversize response is cacheable: %v", response.Header())
+			}
+			var envelope APIResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if len(envelope.ErrorDetails) != 1 || envelope.ErrorDetails[0].Code != "request-too-large" {
+				t.Fatalf("oversize response lacks stable detail: %+v", envelope)
+			}
+		})
+	}
+}
+
+func TestStrictJSONRejectsNonJSONTrailingBytes(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/init/plan", strings.NewReader("{} trailing"))
+	response := httptest.NewRecorder()
+	var value InitAPIRequest
+	if err := decodeStrictJSON(response, request, &value, "invalid init request"); err == nil ||
+		err.Error() != "invalid init request" {
+		t.Fatalf("trailing bytes error=%v", err)
+	}
+}
+
 func TestManagerRouteInventoryAndResponseSchemaStayInParity(t *testing.T) {
 	routes := map[string]bool{}
 	for _, spec := range ManagerRoutes() {
@@ -86,6 +230,8 @@ func TestManagerRouteRecognizerCoversDynamicMembers(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/v1/decisions/dec_123", "decisions/{id}"},
 		{http.MethodGet, "/api/v1/notices/notice_123", "notices/{id}"},
+		{http.MethodGet, "/api/v1/operations/op_fixture0001", "operations/{operation}"},
+		{http.MethodGet, "/api/v1/profiles/default/projection", "profiles/{profile}/projection"},
 		{http.MethodPost, "/api/v1/decisions/dec_123/claim", "decisions/{id}/claim"},
 		{http.MethodPost, "/api/v1/decisions/dec_123/approve", "decisions/{id}/approve"},
 		{http.MethodPost, "/api/v1/decisions/dec_123/deny", "decisions/{id}/deny"},

@@ -144,15 +144,11 @@ func RunSessionClient(ctx context.Context, opts SessionClientOptions) (SessionCl
 		}
 	}()
 	started := false
-	completed := false
 	var renewalOnce sync.Once
 	var ioPumpsOnce sync.Once
 	for {
 		frame, err := reader.ReadFrame()
 		if err != nil {
-			if completed {
-				return result, nil
-			}
 			return result, fmt.Errorf("daemon session ended before completion: %w", err)
 		}
 		if frame.Type.IsExtension() {
@@ -262,7 +258,7 @@ func RunSessionClient(ctx context.Context, opts SessionClientOptions) (SessionCl
 		case sessionwire.TypeError:
 			return result, decodeRemoteSessionError(frame)
 		case sessionwire.TypeCompletion:
-			if !started || completed {
+			if !started {
 				return result, errors.New("daemon sent duplicate or unstarted completion")
 			}
 			decoded, decodeErr := sessionwire.DecodeControl(frame.Type, frame.Payload)
@@ -283,7 +279,6 @@ func RunSessionClient(ctx context.Context, opts SessionClientOptions) (SessionCl
 					return result, errors.New("daemon session completion changed session identity")
 				}
 			}
-			completed = true
 			cancelRun()
 			if result.Completion.ExitCode != 0 || result.Completion.Kind != sessionwire.CompletionExit || !result.Completion.CleanupCompleted {
 				return result, RemoteExitError{Completion: result.Completion}

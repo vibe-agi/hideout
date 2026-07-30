@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+source "$ROOT/scripts/lib/reproducible-package.sh"
 
 usage() {
   cat <<'USAGE'
@@ -23,6 +24,10 @@ The two-phase form stages package content without a package manifest, allowing
 host binaries to be signed exactly once. Finalization inventories the frozen
 tree, writes the canonical manifest, verifies it, and creates the final archive
 without rebuilding or mutating signed binaries.
+
+Set SOURCE_DATE_EPOCH to a non-negative Unix timestamp for deterministic
+binary/helper timestamps, normalized archive metadata, sorted ustar entries,
+and a timestamp-free gzip header.
 USAGE
 }
 
@@ -143,6 +148,58 @@ verify_tun2socks_helper() {
   fi
 }
 
+verify_observer_helper() {
+  local root="$1" arch="$2"
+  verify_linux_helper "$root" "$arch" "hideout-observer"
+  local manifest="$root/bin/hideout-observer-linux-$arch.manifest.json"
+  if ! jq -e '
+    .builder == "go build -trimpath" and
+    (.builtAt | fromdateiso8601 | type == "number") and
+    .license == "Apache-2.0" and
+    .buildMode == "embedded-core-bpf" and
+    .packageOwned == true
+  ' "$manifest" >/dev/null; then
+    echo "package-local: hideout-observer provenance manifest is invalid: $manifest" >&2
+    return 1
+  fi
+  if [ ! -f "$root/LICENSES/GPL-2.0-only.txt" ] ||
+    [ -L "$root/LICENSES/GPL-2.0-only.txt" ]; then
+    echo "package-local: embedded observer GPL-2.0-only license text is missing" >&2
+    return 1
+  fi
+}
+
+write_and_verify_embedded_asset_manifest() {
+  local root="$1"
+  local manifest="$root/runtime/browser-console.assets.json"
+  mkdir -p "$root/runtime"
+  "$root/bin/hideout" package embedded-assets >"$manifest"
+  chmod 0644 "$manifest"
+  if ! jq -e --arg container_sha "$(sha256_file "$root/bin/hideout")" '
+    .schema == "hideout.embedded-asset-manifest/v1" and
+    .id == "browser-console" and
+    .container == "bin/hideout" and
+    .containerSHA256 == $container_sha and
+    .license == "Apache-2.0" and
+    ([.assets[] | {path,mediaType}] == [
+      {path:"index.html",mediaType:"text/html; charset=utf-8"},
+      {path:"style.css",mediaType:"text/css; charset=utf-8"},
+      {path:"state.js",mediaType:"text/javascript; charset=utf-8"},
+      {path:"client.js",mediaType:"text/javascript; charset=utf-8"},
+      {path:"activity.js",mediaType:"text/javascript; charset=utf-8"},
+      {path:"config.js",mediaType:"text/javascript; charset=utf-8"},
+      {path:"presentation.js",mediaType:"text/javascript; charset=utf-8"},
+      {path:"app.js",mediaType:"text/javascript; charset=utf-8"}
+    ]) and
+    all(.assets[]; (.sha256 | test("^[a-f0-9]{64}$")))
+  ' "$manifest" >/dev/null; then
+    echo "package-local: embedded browser console manifest is invalid: $manifest" >&2
+    return 1
+  fi
+  go -C "$source" run ./cmd/hideout-schema-validate \
+    "$source/schemas/embedded-asset-manifest.schema.json" "$manifest" >/dev/null
+}
+
 absolute_path() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
@@ -158,15 +215,29 @@ package_kind() {
     install.sh) echo installer ;;
     README.md|README.zh-CN.md|CHANGELOG.md|RELEASE_NOTES.md) echo entrypoint ;;
     schemas/*) echo schema ;;
-    LICENSE|THIRD_PARTY_NOTICES.md|SECURITY.md|docs/*|third_party/*) echo doc ;;
+    LICENSE|LICENSES/*|THIRD_PARTY_NOTICES.md|SECURITY.md|docs/*|third_party/*) echo doc ;;
     host-app/*) echo host-app-core-data ;;
     examples/*) echo host-app-example ;;
     packaging/*) echo packaging ;;
     runtime/catalog.json) echo runtime-catalog ;;
     runtime/contract.json) echo runtime-contract ;;
+    runtime/package-components.json) echo runtime-contract ;;
+    runtime/browser-console.assets.json) echo embedded-asset-manifest ;;
     runtime/*) echo runtime-build ;;
     *) echo script ;;
   esac
+}
+
+normalize_package_modes() {
+  local root="$1"
+  find "$root" -type d -exec chmod 0755 {} +
+  while IFS= read -r file; do
+    if [ -x "$file" ]; then
+      chmod 0755 "$file"
+    else
+      chmod 0644 "$file"
+    fi
+  done < <(find "$root" -type f | LC_ALL=C sort)
 }
 
 write_metadata() {
@@ -178,7 +249,7 @@ write_metadata() {
     [ -n "$(git -C "$source" status --porcelain --untracked-files=normal)" ]; then
     dirty=true
   fi
-  built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  built_at="$(hideout_build_timestamp)"
   host_os="$(go env GOOS)"
   host_arch="$(go env GOARCH)"
   guest_arch="$host_arch"
@@ -224,6 +295,9 @@ stage_package() {
   for file in README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md; do
     install -m 0644 "$source/$file" "$prefix/$file"
   done
+  mkdir -p "$prefix/LICENSES"
+  install -m 0644 "$source/LICENSES/GPL-2.0-only.txt" \
+    "$prefix/LICENSES/GPL-2.0-only.txt"
   mkdir -p "$prefix/third_party/tun2socks"
   install -m 0644 "$source/third_party/tun2socks/LICENSE" \
     "$prefix/third_party/tun2socks/LICENSE"
@@ -235,11 +309,14 @@ stage_package() {
   cp -R "$source/packaging/homebrew" "$prefix/packaging/homebrew"
   install -m 0644 "$source/internal/runtimecatalog/catalog.json" "$prefix/runtime/catalog.json"
   install -m 0644 "$source/internal/runtimecatalog/contract.json" "$prefix/runtime/contract.json"
+  install -m 0644 "$source/runtime/package-components.json" \
+    "$prefix/runtime/package-components.json"
   cp -R "$source/runtime/developer-standard" "$prefix/runtime/developer-standard"
   archive_name="hideout-v$version-$(go env GOOS)-$(go env GOARCH).tar.gz"
   "$source/scripts/render-package-release-docs.sh" \
     --package-root "$prefix" --version "$version" --tag "$tag" \
     --channel "$channel" --archive "$archive_name" >/dev/null
+  normalize_package_modes "$prefix"
   write_metadata "$root"
   printf '%s\n' "$root"
 }
@@ -263,8 +340,14 @@ finalize_package() {
   local guest_arch
   guest_arch="$(jq -er '.guestArch' "$metadata")"
   verify_linux_helper "$prefix" "$guest_arch" "hideout-session-supervisor"
+  verify_observer_helper "$prefix" "$guest_arch"
   verify_linux_helper "$prefix" "$guest_arch" "hideout-workspace-portal"
   verify_tun2socks_helper "$prefix" "$guest_arch"
+  write_and_verify_embedded_asset_manifest "$prefix"
+  normalize_package_modes "$prefix"
+  go -C "$source" run ./cmd/hideout-schema-validate \
+    "$source/schemas/package-components.schema.json" \
+    "$prefix/runtime/package-components.json" >/dev/null
 
   local files_ndjson="$root/.files.ndjson"
   : >"$files_ndjson"
@@ -279,8 +362,12 @@ finalize_package() {
 
   local files_json="$root/.files.json"
   jq -s '.' "$files_ndjson" >"$files_json"
-  jq -n --slurpfile meta "$metadata" --slurpfile files "$files_json" '
+  jq -n --slurpfile meta "$metadata" --slurpfile files "$files_json" \
+    --slurpfile embedded "$prefix/runtime/browser-console.assets.json" \
+    --arg embeddedManifestSHA256 \
+      "$(sha256_file "$prefix/runtime/browser-console.assets.json")" '
     ($meta[0]) as $m |
+    ($embedded[0]) as $e |
     {
       schema:"hideout.package-manifest/v1",
       builtAt:$m.builtAt,
@@ -295,18 +382,31 @@ finalize_package() {
         binaries:([$files[0][] | select(.kind == "binary" or .kind == "linux-helper") | .path] | sort),
         entrypoints:["install.sh","README.md","README.zh-CN.md","CHANGELOG.md","RELEASE_NOTES.md"],
         directories:["schemas","docs","host-app","examples","packaging","runtime","third_party"]},
+      embeddedAssets:[{
+        id:$e.id,
+        container:$e.container,
+        manifest:"runtime/browser-console.assets.json",
+        manifestSHA256:$embeddedManifestSHA256,
+        license:$e.license
+      }],
       files:$files[0],
       migration:{installStateSchema:"hideout.package-install-state/v1",
         fromInstalledSchemas:["hideout.package-install-state/v1"],
         minimumPackageSchema:"hideout.package-manifest/v1",
         maximumPackageSchema:"hideout.package-manifest/v1"}
     }' >"$prefix/package-manifest.json"
+  chmod 0644 "$prefix/package-manifest.json"
 
   go -C "$source" run ./cmd/hideout-schema-validate \
     "$source/schemas/package-manifest.schema.json" "$prefix/package-manifest.json" >/dev/null
   "$prefix/bin/hideout" package verify "$prefix" >/dev/null
   mkdir -p "$(dirname "$archive")"
-  COPYFILE_DISABLE=1 tar -C "$root" -czf "$archive" hideout
+  if [ "${SOURCE_DATE_EPOCH+x}" = "x" ]; then
+    hideout_create_reproducible_tar_gz \
+      "$root" "hideout" "$archive" "$SOURCE_DATE_EPOCH"
+  else
+    COPYFILE_DISABLE=1 tar -C "$root" -czf "$archive" hideout
+  fi
   printf '%s\n' "$archive"
 }
 

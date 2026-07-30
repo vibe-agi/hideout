@@ -36,12 +36,20 @@ func TestConcurrentHostFSSessionsKeepReadsStagedWritesAndCleanupSeparate(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(firstSession)
+	defer func() {
+		if _, err := core.CloseRunSession(firstSession); err != nil {
+			t.Errorf("close first run session: %v", err)
+		}
+	}()
 	secondSession, err := core.BeginRunSession(plan, RunEnvironment{}, RunSessionOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(secondSession)
+	defer func() {
+		if _, err := core.CloseRunSession(secondSession); err != nil {
+			t.Errorf("close second run session: %v", err)
+		}
+	}()
 	firstNetwork, err := core.PrepareRunNetwork(firstSession, RunNetworkOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +92,11 @@ func TestConcurrentHostFSSessionsKeepReadsStagedWritesAndCleanupSeparate(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunDataPlane(second)
+	defer func() {
+		if err := core.CloseRunDataPlane(second); err != nil {
+			t.Errorf("close second run data plane: %v", err)
+		}
+	}()
 
 	firstToken := envValueForManagerTest(first.Env, broker.EnvToken)
 	secondToken := envValueForManagerTest(second.Env, broker.EnvToken)

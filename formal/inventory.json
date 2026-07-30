@@ -1,0 +1,168 @@
+{
+  "schema": "hideout.formal-inventory/v1",
+  "tla2tools": {
+    "version": "1.7.4",
+    "sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+    "url": "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
+  },
+  "configurations": [
+    {
+      "id": "AttachReservation",
+      "module": "formal/AttachReservation.tla",
+      "config": "formal/AttachReservation.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "ConfigurationLifecycle",
+      "module": "formal/ConfigurationLifecycle.tla",
+      "config": "formal/ConfigurationLifecycle.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "DisposableRecovery",
+      "module": "formal/DisposableRecovery.tla",
+      "config": "formal/DisposableRecovery.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "NetworkTransition",
+      "module": "formal/NetworkTransition.tla",
+      "config": "formal/NetworkTransition.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "RequestWorkflow",
+      "module": "formal/RequestWorkflow.tla",
+      "config": "formal/RequestWorkflow.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "ResourceLifecycle",
+      "module": "formal/ResourceLifecycle.tla",
+      "config": "formal/ResourceLifecycle.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "StopObservation",
+      "module": "formal/StopObservation.tla",
+      "config": "formal/StopObservation.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "OperatorConfiguration",
+      "module": "formal/OperatorConfiguration.tla",
+      "config": "formal/cfg/OperatorConfiguration.cfg",
+      "kind": "safety"
+    },
+    {
+      "id": "OperatorConfigurationLiveness",
+      "module": "formal/OperatorConfiguration.tla",
+      "config": "formal/cfg/OperatorConfigurationLiveness.cfg",
+      "kind": "safety-liveness"
+    },
+    {
+      "id": "RequestWorkflowLiveness",
+      "module": "formal/RequestWorkflow.tla",
+      "config": "formal/cfg/RequestWorkflowLiveness.cfg",
+      "kind": "safety-liveness"
+    },
+    {
+      "id": "SecretTransition",
+      "module": "formal/SecretTransition.tla",
+      "config": "formal/cfg/SecretTransition.cfg",
+      "kind": "safety-liveness"
+    },
+    {
+      "id": "WorkloadObservation",
+      "module": "formal/WorkloadObservation.tla",
+      "config": "formal/cfg/WorkloadObservation.cfg",
+      "kind": "safety-liveness"
+    }
+  ],
+  "goRefinement": {
+    "packages": [
+      {
+        "path": "./internal/manager",
+        "importPath": "github.com/vibe-agi/hideout/internal/manager"
+      },
+      {
+        "path": "./internal/daemon",
+        "importPath": "github.com/vibe-agi/hideout/internal/daemon"
+      }
+    ],
+    "tests": [
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestFormalFoundationConfigurationsMatchSharedConstantsAndInvariants",
+        "source": "internal/manager/formal_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestOperatorConfigurationProductionTraceRefinesFoundationModel",
+        "source": "internal/manager/formal_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestWorkloadObservationProductionTypesRefineFoundationModel",
+        "source": "internal/manager/formal_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestFormalGoFixturesConformToPublishedSchemas",
+        "source": "internal/manager/formal_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestProfileTransactionTraceRefinesOperatorConfigurationModel",
+        "source": "internal/manager/profile_transaction_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestSecretAndRouteTraceRefinesSecretTransitionModel",
+        "source": "internal/manager/profile_transaction_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestSecretAuthorityResetRecoveryTraceRefinesSecretTransitionModel",
+        "source": "internal/manager/profile_transaction_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestFormalReleaseGateEnumeratesEveryTLAConfiguration",
+        "source": "internal/manager/profile_transaction_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestOperationRecoveryTraceRefinesOperatorConfigurationModel",
+        "source": "internal/manager/operation_recovery_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestOperationRollbackTraceRefinesOperatorConfigurationModel",
+        "source": "internal/manager/operation_recovery_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestOperationRecoveryRefinementMutationJudge",
+        "source": "internal/manager/operation_recovery_refinement_test.go",
+        "classification": "refinement"
+      },
+      {
+        "package": "github.com/vibe-agi/hideout/internal/manager",
+        "name": "TestOperationRecoveryCrashMatrix",
+        "source": "internal/manager/operation_recovery_test.go",
+        "classification": "crash-matrix"
+      }
+    ]
+  }
+}

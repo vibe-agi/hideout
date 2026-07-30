@@ -214,6 +214,7 @@ type portalHandle struct {
 	file      *os.File
 	path      string
 	lock      bool
+	append    bool
 	admission AdmissionLease
 }
 
@@ -520,6 +521,7 @@ func (state *portalConnection) open(payload []byte) ([]byte, error) {
 		// os.Root already confines traversal but does not accept O_NOFOLLOW.
 		hostFlags &^= syscall.O_NOFOLLOW
 	}
+	appendMode := hostFlags&syscall.O_APPEND != 0
 	file, err := state.server.root.OpenFile(path, hostFlags, os.FileMode(mode)&0o777)
 	if err != nil {
 		admission.Release()
@@ -529,7 +531,9 @@ func (state *portalConnection) open(payload []byte) ([]byte, error) {
 	if state.nextHandle == 0 {
 		state.nextHandle++
 	}
-	state.handles[state.nextHandle] = &portalHandle{file: file, path: path, admission: admission}
+	state.handles[state.nextHandle] = &portalHandle{
+		file: file, path: path, append: appendMode, admission: admission,
+	}
 	var encoder portalEncoder
 	encoder.uint64(state.nextHandle)
 	return encoder.Bytes(), nil
@@ -763,7 +767,18 @@ func (state *portalConnection) writeFile(payload []byte) ([]byte, error) {
 	if handle == nil {
 		return nil, ErrPortalHandleNotFound
 	}
-	n, writeErr := handle.file.WriteAt(data, offset)
+	var (
+		n        int
+		writeErr error
+	)
+	if handle.append {
+		// os.File.WriteAt intentionally rejects O_APPEND descriptors. Preserve
+		// POSIX append semantics on the authority-holding host instead of
+		// trusting a potentially stale guest-provided offset.
+		n, writeErr = handle.file.Write(data)
+	} else {
+		n, writeErr = handle.file.WriteAt(data, offset)
+	}
 	var encoder portalEncoder
 	encoder.uint32(uint32(n))
 	if writeErr != nil {

@@ -9,11 +9,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/liveconsole"
+	"github.com/vibe-agi/hideout/internal/manager"
 )
 
 // SocketPath returns the daemon socket path for a store root (client side).
@@ -78,12 +81,78 @@ func SubscribeEvents(ctx context.Context, storeRoot string) (<-chan liveconsole.
 				}
 				select {
 				case ch <- ev:
-				default:
+				case <-ctx.Done():
+					return
 				}
 			}
 		}
 	}()
 	return ch, nil
+}
+
+// FetchOperatorSnapshot returns the sole authoritative seed for v2 event
+// reduction. Callers must replace their local projection rather than merging
+// this result with prior state.
+func FetchOperatorSnapshot(
+	ctx context.Context,
+	storeRoot string,
+	query manager.OperatorSnapshotQuery,
+) (manager.OperatorSnapshot, error) {
+	if err := query.Validate(); err != nil {
+		return manager.OperatorSnapshot{}, err
+	}
+	client, base, token, err := DialClient(storeRoot)
+	if err != nil {
+		return manager.OperatorSnapshot{}, err
+	}
+	values := url.Values{}
+	if query.Profile != "" {
+		values.Set("profile", query.Profile)
+	}
+	if query.Session != "" {
+		values.Set("session", query.Session)
+	}
+	values.Set("activityLimit", strconv.Itoa(query.ActivityLimit))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		base+"/api/v1/operator/snapshot?"+values.Encode(),
+		nil,
+	)
+	if err != nil {
+		return manager.OperatorSnapshot{}, err
+	}
+	req.Host = "localhost"
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return manager.OperatorSnapshot{}, err
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		Version  string                   `json:"version"`
+		Resource string                   `json:"resource"`
+		Data     manager.OperatorSnapshot `json:"data"`
+		Errors   []string                 `json:"errors"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 8<<20))
+	if err := decoder.Decode(&envelope); err != nil {
+		return manager.OperatorSnapshot{}, fmt.Errorf("decode operator snapshot: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		message := strings.Join(envelope.Errors, "; ")
+		if message == "" {
+			message = resp.Status
+		}
+		return manager.OperatorSnapshot{}, fmt.Errorf("operator snapshot: %s", message)
+	}
+	if envelope.Version != manager.APIVersion || envelope.Resource != "operator/snapshot" {
+		return manager.OperatorSnapshot{}, errors.New("operator snapshot response contract mismatch")
+	}
+	if err := envelope.Data.Validate(); err != nil {
+		return manager.OperatorSnapshot{}, fmt.Errorf("validate operator snapshot: %w", err)
+	}
+	return envelope.Data, nil
 }
 
 // FetchStatus returns the authenticated daemon seed state used before clients

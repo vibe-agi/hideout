@@ -2,6 +2,8 @@ package network
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -272,6 +274,246 @@ func TestEnvironmentGatewayAcceptedConnectionKeepsPreviousRoute(t *testing.T) {
 	if connection, err := dialGateway(binding, targetAddress); err == nil {
 		_ = connection.Close()
 		t.Fatal("new connection did not use the staged route")
+	}
+}
+
+func TestGatewayRouteAndSecretGenerationBindAtAcceptAcrossSwitchAndRollback(t *testing.T) {
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+	binding, initial, err := registry.StageRoute(
+		"env_generation",
+		GatewayRouteSpec{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialRoute := initial.CandidateRoute()
+	if initialRoute.RouteGeneration == 0 ||
+		initialRoute.Mode != ModeDirect ||
+		initialRoute.SecretGeneration != 0 {
+		t.Fatalf("initial candidate=%+v", initialRoute)
+	}
+	if err := initial.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := initial.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	existing, err := net.DialTimeout("tcp", binding.Address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer existing.Close()
+	waitForGatewayRouteBindings(t, registry, "env_generation", func(
+		observation GatewayRouteObservation,
+	) bool {
+		return len(observation.Connections) == 1 &&
+			observation.Connections[0].RouteGeneration ==
+				initialRoute.RouteGeneration &&
+			observation.Connections[0].Count == 1
+	})
+
+	_, candidate, err := registry.StageRoute(
+		"env_generation",
+		GatewayRouteSpec{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateRoute := candidate.CandidateRoute()
+	if candidateRoute.RouteGeneration <= initialRoute.RouteGeneration {
+		t.Fatalf("candidate route generation=%+v prior=%+v", candidateRoute, initialRoute)
+	}
+	if err := candidate.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	activated, ok := registry.RouteObservation("env_generation")
+	if !ok ||
+		activated.Active.RouteGeneration != candidateRoute.RouteGeneration ||
+		len(activated.Connections) != 1 ||
+		activated.Connections[0].RouteGeneration != initialRoute.RouteGeneration {
+		t.Fatalf("activated observation=%+v available=%t", activated, ok)
+	}
+	if err := candidate.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := registry.RouteObservation("env_generation")
+	if !ok ||
+		restored.Active.RouteGeneration <= candidateRoute.RouteGeneration ||
+		restored.Active.Mode != initialRoute.Mode ||
+		len(restored.Connections) != 1 ||
+		restored.Connections[0].RouteGeneration != initialRoute.RouteGeneration {
+		t.Fatalf("rollback observation=%+v available=%t", restored, ok)
+	}
+}
+
+func TestGatewayManagedSecretGenerationIsVisibleWithoutMaterial(t *testing.T) {
+	const upstream = "socks5://managed-user:managed-password@127.0.0.1:7890"
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+	_, change, err := registry.StageRoute(
+		"env_managedgeneration",
+		GatewayRouteSpec{
+			UpstreamProxyURL: upstream,
+			ProxySecretRef:   "local-proxy",
+			SecretGeneration: 7,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := change.CandidateRoute()
+	if candidate.Mode != ModeTun2Socks ||
+		candidate.ProxySecretRef != "local-proxy" ||
+		candidate.SecretGeneration != 7 ||
+		candidate.RouteGeneration == 0 {
+		t.Fatalf("candidate metadata=%+v", candidate)
+	}
+	if err := change.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	observation, ok := registry.RouteObservation(
+		"env_managedgeneration",
+	)
+	if !ok || observation.Active != candidate {
+		t.Fatalf("route observation=%+v available=%t", observation, ok)
+	}
+	encoded, err := json.Marshal(observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		upstream,
+		"managed-user",
+		"managed-password",
+		"fingerprint",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("route observation leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestGatewayCandidateProbeDoesNotActivateTraffic(t *testing.T) {
+	target, targetAddress := startGatewayEchoTarget(t)
+	defer target.Close()
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+	binding, change, err := registry.StageRoute(
+		"env_candidateprobe",
+		GatewayRouteSpec{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Probe(context.Background(), targetAddress); err != nil {
+		t.Fatalf("candidate probe: %v", err)
+	}
+	observation, ok := registry.RouteObservation("env_candidateprobe")
+	if !ok || observation.ActiveAvailable {
+		t.Fatalf("probe activated staged traffic: %+v available=%t", observation, ok)
+	}
+	if connection, err := dialGateway(binding, targetAddress); err == nil {
+		_ = connection.Close()
+		t.Fatal("probe made the staged route effective")
+	}
+	if err := change.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := dialGateway(binding, targetAddress)
+	if err != nil {
+		t.Fatalf("activated candidate unavailable: %v", err)
+	}
+	_ = connection.Close()
+}
+
+func TestGatewayCandidateCannotCommitBeforeActivation(t *testing.T) {
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+	_, change, err := registry.StageRoute(
+		"env_commitstate",
+		GatewayRouteSpec{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Commit(); err == nil ||
+		!strings.Contains(err.Error(), "not active") {
+		t.Fatalf("unactivated commit error=%v", err)
+	}
+	if err := change.Rollback(); err != nil {
+		t.Fatalf("rollback after rejected commit: %v", err)
+	}
+}
+
+func TestGatewayManagedRouteMetadataFailsClosed(t *testing.T) {
+	registry := NewGatewayRegistry()
+	defer registry.Close()
+	for _, test := range []struct {
+		name string
+		spec GatewayRouteSpec
+	}{
+		{
+			name: "proxy ref without generation",
+			spec: GatewayRouteSpec{
+				UpstreamProxyURL: "socks5://127.0.0.1:7890",
+				ProxySecretRef:   "local-proxy",
+			},
+		},
+		{
+			name: "proxy generation without ref",
+			spec: GatewayRouteSpec{
+				UpstreamProxyURL: "socks5://127.0.0.1:7890",
+				SecretGeneration: 1,
+			},
+		},
+		{
+			name: "direct secret identity",
+			spec: GatewayRouteSpec{
+				ProxySecretRef:   "local-proxy",
+				SecretGeneration: 1,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := registry.StageRoute(
+				"env_invalidmetadata",
+				test.spec,
+			); err == nil {
+				t.Fatalf("accepted invalid managed route: %+v", test.spec)
+			}
+		})
+	}
+}
+
+func waitForGatewayRouteBindings(
+	t *testing.T,
+	registry *GatewayRegistry,
+	environmentID string,
+	ready func(GatewayRouteObservation) bool,
+) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		observation, ok := registry.RouteObservation(environmentID)
+		if ok && ready(observation) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"gateway route bindings did not become ready: %+v available=%t",
+				observation,
+				ok,
+			)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

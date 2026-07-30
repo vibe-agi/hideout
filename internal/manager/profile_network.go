@@ -36,6 +36,10 @@ type ProfileNetworkResult struct {
 	Plan    ProfileNetworkPlan  `json:"plan"`
 	Applied bool                `json:"applied"`
 	Network ProfileNetworkState `json:"network"`
+	// Operation is present when the compatibility adapter routed the mutation
+	// through the durable generic transaction service. Older direct Core
+	// no-op results leave it absent.
+	Operation *Operation `json:"operation,omitempty"`
 }
 
 func (c Core) ProfileNetwork(profileName string) (ProfileNetworkState, error) {

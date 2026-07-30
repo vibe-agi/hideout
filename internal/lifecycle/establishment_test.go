@@ -595,7 +595,11 @@ func TestEstablishmentStatusAndEventsRedactControlMaterial(t *testing.T) {
 
 func TestEstablishmentContractCarriesOnlyOpaqueIdentities(t *testing.T) {
 	typeOfRequest := reflect.TypeOf(EstablishmentRequest{})
-	if typeOfRequest.NumField() != 2 || typeOfRequest.Field(0).Name != "EnvironmentID" || typeOfRequest.Field(1).Name != "SessionID" {
+	if typeOfRequest.NumField() != 3 ||
+		typeOfRequest.Field(0).Name != "EnvironmentID" ||
+		typeOfRequest.Field(1).Name != "SessionID" ||
+		typeOfRequest.Field(2).Name != "MutationKeys" ||
+		typeOfRequest.Field(2).Type != reflect.TypeOf([]string{}) {
 		t.Fatalf("establishment request authority drifted: %v", typeOfRequest)
 	}
 }

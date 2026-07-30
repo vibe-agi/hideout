@@ -39,7 +39,8 @@ if [ -n "$unformatted" ]; then
 fi
 go test -p "$go_test_parallelism" -count=1 ./...
 scripts/test-vulnerability-gate.sh --self-test --source
-scripts/test-formal-models.sh
+scripts/gates/formal.sh
+scripts/gates/recovery.sh
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh
 scripts/test-standalone-install.sh
@@ -148,6 +149,7 @@ grep -Fq "url \"https://github.com/vibe-agi/hideout/releases/download/$published
 grep -Fq "sha256 \"$published_sha\"" packaging/homebrew/hideout.rb
 grep -q 'depends_on "lima"' packaging/homebrew/hideout.rb
 grep -q 'skip_clean "bin/hideout-dns-stub-linux-arm64"' packaging/homebrew/hideout.rb
+grep -q '"bin/hideout-observer-linux-arm64"' packaging/homebrew/hideout.rb
 grep -q 'system "/usr/bin/codesign", "--verify", "--strict"' packaging/homebrew/hideout.rb
 grep -q '"--skip-init"' packaging/homebrew/hideout.rb
 grep -q '"package", "verify", prefix' packaging/homebrew/hideout.rb

@@ -1,6 +1,7 @@
 package helperbin
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"debug/elf"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +31,10 @@ const (
 	Tun2SocksSourceStore                  = "store-manifest"
 	LinuxSessionSupervisorCommand         = "hideout-session-supervisor"
 	LinuxSessionSupervisorPathEnvironment = "HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH"
+	LinuxObserverCommand                  = "hideout-observer"
+	LinuxObserverPathEnvironment          = "HIDEOUT_LINUX_OBSERVER_PATH"
+	LinuxObserverLicense                  = "Apache-2.0"
+	LinuxObserverBuildMode                = "embedded-core-bpf"
 	LinuxWorkspacePortalCommand           = "hideout-workspace-portal"
 	LinuxWorkspacePortalPathEnvironment   = "HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH"
 )
@@ -73,6 +79,12 @@ type Tun2SocksResolution struct {
 	Manifest       Manifest
 }
 
+type LinuxObserverResolution struct {
+	Path           string
+	ExpectedDigest string
+	Manifest       Manifest
+}
+
 func DefaultLinuxShimPath(storeRoot, goarch string) string {
 	if goarch == "" {
 		goarch = "unknown"
@@ -99,6 +111,13 @@ func DefaultLinuxSessionSupervisorPath(storeRoot, goarch string) string {
 		goarch = "unknown"
 	}
 	return filepath.Join(storeRoot, "bin", LinuxSessionSupervisorCommand+"-linux-"+goarch)
+}
+
+func DefaultLinuxObserverPath(storeRoot, goarch string) string {
+	if goarch == "" {
+		goarch = "unknown"
+	}
+	return filepath.Join(storeRoot, "bin", LinuxObserverCommand+"-linux-"+goarch)
 }
 
 func DefaultLinuxWorkspacePortalPath(storeRoot, goarch string) string {
@@ -327,6 +346,69 @@ func ResolveLinuxSessionSupervisorPath(storeRoot, goarch string) string {
 	return ""
 }
 
+// ResolveLinuxObserver returns both the manifest-bound executable and the
+// digest the daemon must put into supervisor start authority. An explicit path
+// is never accepted without the same exact manifest identity as a packaged
+// helper.
+func ResolveLinuxObserver(
+	storeRoot,
+	goarch string,
+) (LinuxObserverResolution, error) {
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	if !SupportedLinuxGuestArch(goarch) {
+		return LinuxObserverResolution{}, fmt.Errorf(
+			"unsupported Linux observer architecture %q",
+			goarch,
+		)
+	}
+	resolve := func(candidate string) (LinuxObserverResolution, bool) {
+		manifest, ok := LinuxObserverHelperCurrent(candidate, goarch)
+		if !ok {
+			return LinuxObserverResolution{}, false
+		}
+		return LinuxObserverResolution{
+			Path: candidate, ExpectedDigest: "sha256:" + manifest.SHA256,
+			Manifest: manifest,
+		}, true
+	}
+	if path := os.Getenv(LinuxObserverPathEnvironment); path != "" {
+		if resolution, ok := resolve(path); ok {
+			return resolution, nil
+		}
+		return LinuxObserverResolution{}, fmt.Errorf(
+			"%s does not identify a current packaged observer",
+			LinuxObserverPathEnvironment,
+		)
+	}
+	name := LinuxObserverCommand + "-linux-" + goarch
+	if executable, err := os.Executable(); err == nil {
+		if resolution, ok := resolve(filepath.Join(filepath.Dir(executable), name)); ok {
+			return resolution, nil
+		}
+	}
+	if storeRoot != "" {
+		if resolution, ok := resolve(DefaultLinuxObserverPath(storeRoot, goarch)); ok {
+			return resolution, nil
+		}
+	}
+	if path, err := exec.LookPath(name); err == nil {
+		if resolution, ok := resolve(path); ok {
+			return resolution, nil
+		}
+	}
+	return LinuxObserverResolution{}, nil
+}
+
+func ResolveLinuxObserverPath(storeRoot, goarch string) string {
+	resolution, err := ResolveLinuxObserver(storeRoot, goarch)
+	if err != nil {
+		return ""
+	}
+	return resolution.Path
+}
+
 // ResolveLinuxWorkspacePortalPath accepts only a manifest-bound Linux helper.
 // The research probe binary is deliberately not a fallback product helper.
 func ResolveLinuxWorkspacePortalPath(storeRoot, goarch string) string {
@@ -367,6 +449,17 @@ func BuildLinuxSessionSupervisor(opts BuildOptions) error {
 	}
 	opts.Command = LinuxSessionSupervisorCommand
 	return BuildLinuxCommand(opts)
+}
+
+func BuildLinuxObserver(opts BuildOptions) error {
+	if !SupportedLinuxGuestArch(opts.GOARCH) {
+		return fmt.Errorf("unsupported Linux observer architecture %q", opts.GOARCH)
+	}
+	opts.Command = LinuxObserverCommand
+	if err := BuildLinuxCommand(opts); err != nil {
+		return err
+	}
+	return WriteLinuxObserverManifest(opts.Out, opts.GOARCH)
 }
 
 func BuildLinuxWorkspacePortal(opts BuildOptions) error {
@@ -497,6 +590,10 @@ func WriteStoreHelperManifest(binaryPath, command, goarch string) error {
 	if err != nil {
 		return err
 	}
+	builtAt, err := helperManifestBuildTimestamp()
+	if err != nil {
+		return err
+	}
 	manifest := Manifest{
 		Version:    ManifestVersion,
 		Command:    command,
@@ -505,7 +602,7 @@ func WriteStoreHelperManifest(binaryPath, command, goarch string) error {
 		Artifact:   filepath.Base(binaryPath),
 		SHA256:     sum,
 		Builder:    "go build",
-		BuiltAt:    time.Now().UTC().Format(time.RFC3339),
+		BuiltAt:    builtAt,
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -531,6 +628,10 @@ func WriteTun2SocksManifest(binaryPath, goarch string, packageOwned bool) error 
 	if err != nil {
 		return err
 	}
+	builtAt, err := helperManifestBuildTimestamp()
+	if err != nil {
+		return err
+	}
 	return writeManifest(binaryPath, Manifest{
 		Version:         ManifestVersion,
 		Command:         LinuxTun2SocksCommand,
@@ -539,13 +640,96 @@ func WriteTun2SocksManifest(binaryPath, goarch string, packageOwned bool) error 
 		Artifact:        filepath.Base(binaryPath),
 		SHA256:          sum,
 		Builder:         "go build -mod=readonly",
-		BuiltAt:         time.Now().UTC().Format(time.RFC3339),
+		BuiltAt:         builtAt,
 		UpstreamModule:  Tun2SocksUpstreamModule,
 		UpstreamVersion: Tun2SocksUpstreamVersion,
 		License:         Tun2SocksLicense,
 		BuildMode:       Tun2SocksBuildMode,
 		PackageOwned:    packageOwned,
 	})
+}
+
+func WriteLinuxObserverManifest(binaryPath, goarch string) error {
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	sum, err := FileSHA256(binaryPath)
+	if err != nil {
+		return err
+	}
+	builtAt, err := helperManifestBuildTimestamp()
+	if err != nil {
+		return err
+	}
+	return writeManifest(binaryPath, Manifest{
+		Version:      ManifestVersion,
+		Command:      LinuxObserverCommand,
+		TargetOS:     "linux",
+		TargetArch:   goarch,
+		Artifact:     filepath.Base(binaryPath),
+		SHA256:       sum,
+		Builder:      "go build -trimpath",
+		BuiltAt:      builtAt,
+		License:      LinuxObserverLicense,
+		BuildMode:    LinuxObserverBuildMode,
+		PackageOwned: true,
+	})
+}
+
+func helperManifestBuildTimestamp() (string, error) {
+	raw, set := os.LookupEnv("SOURCE_DATE_EPOCH")
+	if !set {
+		return time.Now().UTC().Format(time.RFC3339), nil
+	}
+	if raw == "" || strings.Trim(raw, "0123456789") != "" {
+		return "", errors.New(
+			"SOURCE_DATE_EPOCH must be a non-negative decimal integer",
+		)
+	}
+	epoch, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || epoch < 0 {
+		return "", errors.New(
+			"SOURCE_DATE_EPOCH must be a non-negative decimal integer",
+		)
+	}
+	instant := time.Unix(epoch, 0).UTC()
+	if instant.Year() < 0 || instant.Year() > 9999 {
+		return "", errors.New(
+			"SOURCE_DATE_EPOCH is outside the RFC3339 date range",
+		)
+	}
+	return instant.Format(time.RFC3339), nil
+}
+
+func LinuxObserverHelperCurrent(binaryPath, goarch string) (Manifest, bool) {
+	info, err := os.Lstat(binaryPath)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 ||
+		!info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		return Manifest{}, false
+	}
+	manifest, err := ReadManifest(ManifestPath(binaryPath))
+	if err != nil {
+		return Manifest{}, false
+	}
+	if manifest.Version != ManifestVersion ||
+		manifest.Command != LinuxObserverCommand ||
+		manifest.TargetOS != "linux" ||
+		manifest.TargetArch != goarch ||
+		manifest.Artifact != filepath.Base(binaryPath) ||
+		manifest.Builder != "go build -trimpath" ||
+		manifest.License != LinuxObserverLicense ||
+		manifest.BuildMode != LinuxObserverBuildMode ||
+		!manifest.PackageOwned {
+		return Manifest{}, false
+	}
+	if _, err := time.Parse(time.RFC3339, manifest.BuiltAt); err != nil {
+		return Manifest{}, false
+	}
+	sum, err := FileSHA256(binaryPath)
+	if err != nil || manifest.SHA256 != sum {
+		return Manifest{}, false
+	}
+	return manifest, true
 }
 
 func Tun2SocksHelperCurrent(binaryPath, goarch string, requirePackageOwned bool) (Manifest, bool) {
@@ -716,8 +900,17 @@ func ReadManifest(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
 	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := decoder.Decode(&manifest); err != nil {
+		return Manifest{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values")
+		}
 		return Manifest{}, err
 	}
 	return manifest, nil
@@ -766,6 +959,9 @@ func sourceRoot(dir string) bool {
 		return false
 	}
 	if _, err := os.Stat(filepath.Join(dir, "cmd", LinuxSessionSupervisorCommand)); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cmd", LinuxObserverCommand)); err != nil {
 		return false
 	}
 	return true

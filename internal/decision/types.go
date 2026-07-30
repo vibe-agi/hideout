@@ -8,11 +8,12 @@ import (
 )
 
 const (
-	DecisionVersion       = "hideout.decision/v1"
-	DecisionClaimVersion  = "hideout.decision-claim/v1"
-	DecisionResultVersion = "hideout.decision-result/v1"
-	NoticeVersion         = "hideout.notice/v1"
-	StatusVersion         = "hideout.decision-status/v1"
+	DecisionVersion        = "hideout.decision/v1"
+	DecisionClaimVersion   = "hideout.decision-claim/v1"
+	DecisionReleaseVersion = "hideout.decision-claim-release/v1"
+	DecisionResultVersion  = "hideout.decision-result/v1"
+	NoticeVersion          = "hideout.notice/v1"
+	StatusVersion          = "hideout.decision-status/v1"
 
 	KindHostFSWrite         = "hostfs.write"
 	KindHostFSRead          = "hostfs.read"
@@ -104,8 +105,38 @@ type ClaimResponse struct {
 	DecisionID     string    `json:"decisionId"`
 	State          string    `json:"state"`
 	ClaimToken     string    `json:"claimToken"`
+	Surface        string    `json:"surface"`
+	ClaimedAt      time.Time `json:"claimedAt"`
 	ClaimExpiresAt time.Time `json:"claimExpiresAt"`
+	LeaseSeconds   int64     `json:"leaseSeconds"`
+	Takeover       bool      `json:"takeover,omitempty"`
 	Revision       int       `json:"revision"`
+}
+
+type ClaimOptions struct {
+	Surface          string
+	Operator         string
+	Lease            time.Duration
+	ExpectedRevision int
+	TakeoverExpired  bool
+}
+
+type ClaimRelease struct {
+	Version           string    `json:"version"`
+	DecisionID        string    `json:"decisionId"`
+	State             string    `json:"state"`
+	Reason            string    `json:"reason"`
+	ReleasedAt        time.Time `json:"releasedAt"`
+	PreviousSurface   string    `json:"previousSurface,omitempty"`
+	PreviousClaimedAt time.Time `json:"previousClaimedAt,omitzero"`
+	PreviousExpiresAt time.Time `json:"previousExpiresAt,omitzero"`
+	Expired           bool      `json:"expired,omitempty"`
+	Revision          int       `json:"revision"`
+}
+
+type ReleasedClaim struct {
+	Release  ClaimRelease
+	Decision Decision
 }
 
 type Resolution struct {
@@ -243,6 +274,18 @@ func ValidateDecision(d Decision) error {
 	}
 	if d.State != StateClaimed && d.Claim != nil {
 		return errors.New("claim metadata is only allowed in claimed state")
+	}
+	if d.Claim != nil {
+		if strings.TrimSpace(d.Claim.Surface) == "" {
+			return errors.New("decision claim surface is required")
+		}
+		if d.Claim.ClaimedAt.IsZero() || d.Claim.ExpiresAt.IsZero() ||
+			!d.Claim.ExpiresAt.After(d.Claim.ClaimedAt) {
+			return errors.New("decision claim lease is invalid")
+		}
+		if strings.TrimSpace(d.Claim.TokenHash) == "" {
+			return errors.New("decision claim token hash is required")
+		}
 	}
 	return nil
 }

@@ -333,9 +333,24 @@ Release discipline:
 
 Required Phase 1:
 
+- Declarative task-oriented command catalog shared by primary/contextual/all
+  CLI help, TUI Help, and WebUI Help.
 - CLI: `init --no-input`, `run`, `explain`, `doctor`, `doctor --fix --dry-run`, `cleanup`, `audit show`, `profile init`, `profile clone`, `profile path`, and the persistent profile policy editors (`profile fs`, `profile env`, `profile command-proxy`, `profile home import`).
 - Canonical Manager Core with stable domain APIs, hosted by the resident daemon
   for executable runs. Non-executable planning may call the same Core locally.
+- Resident `hideoutd`, authenticated operator snapshot/event-v2 transport,
+  Bubble Tea operator HUD, and local WebUI history console over the same
+  Manager projection and mutation services.
+- Revision/CAS profile transactions, canonical plan digest, idempotent durable
+  operation ID, explicit review/confirm/apply, stale-client read-only behavior,
+  and crash/retry reconciliation.
+- Daemon-managed secret lifecycle backed by macOS Keychain on supported Macs,
+  with metadata-only public views and online eligible proxy/DNS transition.
+- Per-run non-delegated Linux cgroup workload identity plus packaged observer
+  for command/descendant, file-metadata, process-to-IP/port, and DNS evidence;
+  independent honest coverage, private exact-owner bounded retention, risk
+  explanation, deterministic pre-persistence redaction, and exact lifecycle
+  deletion.
 - Profile schema, defaults, validation, and generated identity store.
 - Persistent profile identity and `--ephemeral` session identity. Ephemeral runs
   fork identity material for one session and must not mutate or reuse the
@@ -377,16 +392,12 @@ Required Phase 1:
 
 Design-ready Phase 1:
 
-- `hideoutd` daemon mode.
-- Broader Manager API resource model over protected Unix socket transport, with
-  command-scoped localhost loopback transport only for token-protected Web UI.
-- Minimal Manager API run resources: `run/plan`, `run/apply`, and `run/status`
-  over the local token-protected server.
-- Local Web UI page map and data model.
 - OpenTarget and Endpoint Exposure contracts beyond the first
-  `endpoint.expose.host-to-guest` path: endpoint observation, project-declared
-  candidates, JS adapter entrypoints, callback flows, browser control,
-  guest-to-host exposure, and device/simulator targets.
+  `endpoint.expose.host-to-guest` path: automatic service-listener discovery
+  (`endpoint.observe`), project-declared candidates, JS adapter entrypoints,
+  callback flows, browser control, guest-to-host exposure, and
+  device/simulator targets. Feature 045's bounded workload
+  process-to-IP/port activity is a separate implemented evidence path.
 - Profile identity rotate/reset.
 - Audit query API.
 - More complete policy editing surfaces.
@@ -413,13 +424,16 @@ Capability Probe Phase 1:
 Later:
 
 - Browser automation through DevTools or remote debugging.
-- Docker, IDE, clipboard, SSH agent, keychain, or host credential brokering.
-- Full guest process audit.
+- Docker, IDE, clipboard, SSH agent, or host credential brokering. Using the
+  operator's Keychain as Hideout's own secret provider does not broker
+  Keychain access into the guest.
+- File-content, environment-value, keystroke, complete PTY, or packet-payload
+  recording. Feature 045 intentionally records bounded workload metadata only.
 - Runtime patching of Node, Bun, or other runtimes.
 - Package attribution inside bundled binaries.
 - Remote execution.
-- Full visual Web UI. A read-only smoke surface may ship only when it stays
-  additive and does not delay or redefine the required CLI runner.
+- Remote or multi-operator WebUI service. The implemented local WebUI remains
+  additive and cannot redefine the CLI/Manager authority boundary.
 
 Phase 1 fixed decisions:
 
@@ -434,9 +448,9 @@ Phase 1 fixed decisions:
 | Hidden proxy | Guest-side routing through `tun2socks`. | Effective-but-unreadable process env. |
 | Host escape | `host.open` through Host Broker. | Generic host command execution. |
 | Host files outside workspace | HostFS Portal with explicit grants. | Dynamic broad home mounts, `ls/cat` command proxy, or symlink/copy shadow hacks. |
-| Command visibility | Registered Command Proxy shims only. | Auditing every guest child process. |
+| Workload visibility | Per-run cgroup observer covers the target command and attributable descendants with explicit subsystem coverage. | File contents, environment values, terminal recording, packet payloads, unrelated guest processes, or a claim of completeness across Partial/Unavailable intervals. |
 | Environment reuse | Reuse by profile plus workspace. | Reusing runtime secrets or capability tokens. |
-| Web UI | Domain/API model and optional read-only smoke surface. | Required visual console for first usable CLI. |
+| Web UI | Implemented optional local history/configuration client over the same Manager snapshot, events, plans, and operations. | Cloud/remote admin plane or a second policy model. |
 
 ## Domain Model
 
@@ -446,42 +460,63 @@ Treat these as stable contracts.
 | --- | --- | --- |
 | Profile | User-editable privacy policy and defaults. | Owns env, identity defaults, workspace defaults, network mode, command proxy policy, expected-command declarations, and script refs. |
 | IdentityStore | Generated identity material for persistent profiles and ephemeral sessions. | Owns fake home/config/cache/data/browser state and session identity metadata. The profile-scoped guest machine identity belongs to the reusable environment lifecycle and is projected read-only into each session identity root. |
-| Environment | Resumable isolated environment for one profile and one normalized workspace. | Design-ready default runtime model. It owns reusable guest tool/cache/home state but must not own broker tokens, proxy secret files, network routes, active shims, or other per-run authority. |
+| Environment | Resumable isolated environment for one profile and one normalized workspace. | Owns reusable guest tool/cache/home state and one backend incarnation, but not broker tokens, secret values, active run credentials, or other per-run authority. |
 | Session | One command execution under one profile. | Owns session ID, workspace mapping, backend run, broker endpoint, shims, audit file, and explain snapshot. |
+| ProfileProjection | Revisioned desired/effective/transition view of one profile. | Supplies CAS revision and canonical content digest to every CLI/TUI/WebUI transaction. |
+| ConfigurationPlan | Canonical review of typed profile changes. | Binds normalized diff, effects, blockers, rollback, expiry, base revision, plan digest, and operation ID before confirmation. |
+| Operation | Durable idempotent mutation/recovery record. | Binds one ID to one owner and plan digest, checkpoints provider effects, and exposes only evidence-proved terminal results. |
 | Backend | Execution substrate. | Starts the Lima guest from the declared base image, mounts workspace and current identity runtime state, launches command, streams stdio. |
 | CapabilityPolicy | Canonical permission model. | Evaluates subject/action/resource/route/decision using JSON rules and optional scripts. |
 | CommandProxy | Guest-visible registered command shim system. | Normalizes explicitly registered commands. Phase 1 supports configured command symbols for brokered `host.open` using the `open-target-v1` argv schema; other routes are protocol vocabulary unless named elsewhere as Required. |
 | HostBroker | Host-side capability authority. | Executes approved host actions such as `host.open` after policy validation. |
-| HostFSPortal | Guest-visible filesystem portal for explicitly granted host paths. | Phase 1 implements the read-only `stat`, `read`, and `list` data plane for Linux guests through FUSE and broker RPC. It owns path grants, filesystem RPC, metadata filtering, reserved-store rejection, and audit for host paths outside the workspace. Write overlay, native host mount adapters, and Windows native adapter are Later. |
-| HostPathGrant | Explicit authority record for one host path scope. | Phase 1 implements read-only grants for `stat`, `read`, and `list`; write-class grants remain Later. |
+| HostFSPortal | Guest-visible filesystem portal for explicitly granted host paths. | Implements filtered read/list/stat and separately reviewed write-overlay effects through Linux FUSE/broker paths; owns grants, RPC, reserved-store rejection, conflict checks, and audit. Native/Windows adapters remain later. |
+| HostPathGrant | Explicit authority record for one host path scope. | Supports read/list/stat and explicit staged write-overlay classes; deny and reserved-root rules win. |
 | PassthroughMount | Explicit backend mount outside the workspace. | Design-ready opt-in compatibility escape hatch. It owns host path, guest path, read/write mode, lifetime, explanation, and audit. It is broad authority and must not be created implicitly by HostFS. |
 | OpenTarget | Typed host or guest application target behind an explicit brokered action. | Phase 1 implements `host.open` URL/workspace-file targets and the minimal `preview.open` target over `endpoint.expose.host-to-guest`. Browser-control, IDE, Docker, device/simulator, and guest-to-host targets are Later implementations. |
 | PortBridge | Auditable TCP bridge between explicit listen and target endpoints. | Phase 1 implements run-scoped host-to-guest transport only as the lower-layer provider for typed Endpoint Exposure. It has no raw CLI/API/script trigger surface, and `host.open` must not create port mappings. Guest-to-host remains lab/separate design. |
 | NetworkPlan | Egress model for a session. | Supports `direct` and guest-side `tun2socks` with hidden proxy env. |
-| SecretRef | Named reference to a sensitive host value. | Resolves availability for setup components without exposing secret values to target env, audit, explain, broker requests, or Web UI. |
+| SecretRef | Named reference to a sensitive host value. | Exposes provider/availability/generation only; the daemon resolves macOS Keychain bytes internally without a public read path or target-env/audit/UI disclosure. |
+| WorkloadBoundary | Per-session non-delegated cgroup identity. | Contains the target command and descendants while keeping supervisor/observer and unrelated guest work outside attribution. |
+| ActivityRecord | Redacted, aggregated workload metadata. | Records process, file, connection, DNS, risk, or coverage evidence for one exact owner/session/execution without content or payload capture. |
+| CoverageInterval | Append-only subsystem/time-window claim. | Separately reports process/file/network/DNS as Available, Partial, or Unavailable with reason, generation, loss, retention, and time/sequence bounds. |
+| OperatorSnapshot | Authoritative console seed. | Gives CLI/TUI/WebUI one daemon instance/sequence and the same profiles, sessions, activity, coverage, risks, operations, capabilities, and next actions. |
 | AuditLog | Evidence trail. | Records setup, policy decisions, broker requests, redactions, and session result. |
 | ExplainSnapshot | Human-readable privacy summary. | Makes each run understandable without reading raw JSON. |
-| ManagerCore | In-process local control plane. | Coordinates profiles, sessions, backends, capabilities, broker, network, secrets, audit, settings, CLI, and future UI/API surfaces. |
+| ManagerCore | In-process local control plane hosted by the daemon. | Coordinates profiles, transactions, operations, sessions, lifecycle, backends, capabilities, broker, network, secrets, activity, audit, settings, and all three operator surfaces. |
 
 Avoid adding new first-class objects in Phase 1 unless they clearly belong to one
 of these domains.
 
 ## Trust Boundaries
 
-Hideout has six trust domains:
+Hideout distinguishes nine trust domains:
 
 ```text
 Host
   The real machine. Contains real home, credentials, browser profiles, keychain,
   Docker socket, editor state, and network identity.
 
-Guest
+Guest workload
   The isolated execution environment. Runs the target command, child processes,
-  fake home, command proxy shims, and optional guest network engine.
+  fake home, command proxy shims, and optional guest network engine inside one
+  session workload boundary.
+
+Guest observer/control
+  Fixed privileged packaged helpers outside the workload cgroup. They may
+  observe bounded metadata and supervise lifecycle but grant no target
+  capability.
 
 Workspace
   A deliberate shared read-write boundary between host and guest. It is not
   private from the guest.
+
+Daemon/Manager
+  The authenticated per-user control plane. It owns plans, operations,
+  sessions, network transitions, activity ingestion, and console projections.
+
+macOS Keychain
+  The supported daemon secret provider. Secret bytes cross only the narrow
+  internal provider/runtime boundary and never a public Manager read route.
 
 Broker
   Host-side authority that executes selected host actions after policy checks.
@@ -491,8 +526,9 @@ HostFS Portal
   only policy-approved filesystem metadata and bytes, never the host filesystem
   as a raw mount.
 
-Profile/Identity Store
-  Persistent policy and generated identity material.
+Profile/Identity/Activity Store
+  Persistent policy, generated identity material, and separate private
+  exact-owner redacted activity segments.
 ```
 
 Workspace data is outside Hideout's privacy guarantee. If a secret, token,
@@ -521,6 +557,9 @@ Boundary defaults:
 | Guest -> additional passthrough mount | Deny unless explicitly mounted | When mounted, follows the user-selected read/write or read-only mode and backend filesystem semantics. |
 | Guest -> host home | Deny | Real home is not mounted by default. |
 | Guest -> HostFS Portal | Deny unless granted | Ungranted paths are hidden as missing. Granted paths are filtered and audited. |
+| Guest workload -> observer/control | Deny | The target receives no observer credential, writable endpoint, cgroup delegation, or helper authority. |
+| Guest workload -> daemon/activity store/Keychain | Deny | These host authorities are never mounted or exposed through guest networking. |
+| Daemon -> Keychain secret bytes | Internal named-ref resolution only | No public read route, output, plan, audit, event, or value-derived digest. |
 | Guest -> broker | Restricted | Requires session/action/resource/route/token validation. |
 | Guest -> internet | Direct or `tun2socks` | Direct exposes network identity; `tun2socks` hides proxy env from target env. |
 | Broker -> host browser | Isolated profile | Real browser profile is opt-in Later behavior. |
@@ -719,7 +758,7 @@ Phase 1 capability implementation matrix:
 | `guest.exec` | top-level run or registered command proxy shim | `route=guest-direct` for the top-level command; `route=guest-exec` only for an explicitly registered shim that execs the matching real guest binary without host side effects. | Intercepting arbitrary guest commands. |
 | `network.connect` | session setup | `route=guest-direct` for setup and route verification evidence for `direct` or `tun2socks`; `route=deny` on failure. | Per-socket firewalling or request audit. |
 | `portbridge.host-to-guest` | Manager run data plane only | `route=portbridge`; explicit owner label, run lifetime, host-loopback endpoint category, guest target scope, audit, cleanup, and no untrusted request surface. | Product authorization, raw host port exposure, `host.open` localhost exceptions, script-supplied addresses, or business-specific adb/browser semantics. |
-| `endpoint.expose.host-to-guest` | Manager run data plane for active OpenTarget owners | `route=portbridge`; profile-declared or run-scoped manual candidate, active owner, guest-loopback TCP target, host-loopback endpoint, run lifetime, audit, cleanup, and backend provider fail-closed. | Endpoint observation, project-declared auto exposure, guest-to-host reachability, script-supplied addresses, or `host.open` localhost exceptions. |
+| `endpoint.expose.host-to-guest` | Manager run data plane for active OpenTarget owners | `route=portbridge`; profile-declared or run-scoped manual candidate, active owner, guest-loopback TCP target, host-loopback endpoint, run lifetime, audit, cleanup, and backend provider fail-closed. | Automatic service-listener discovery (`endpoint.observe`), project-declared auto exposure, guest-to-host reachability, script-supplied addresses, or `host.open` localhost exceptions. |
 
 Any action outside the Phase 1 implementation matrix and Capability Probe matrix
 is unsupported in Phase 1 and fails closed before it reaches an implementation.
@@ -2188,9 +2227,10 @@ heuristic command parsing. If Access Sensor ships later, it may help answer:
 Access Sensor output is advisory unless a separate enforcement policy explicitly
 promotes it. It must not grant host filesystem access, create HostPathGrants,
 mount new directories, or reveal hidden host path existence to the target
-process. Endpoint observation follows the same rule: `endpoint.observe` may
-produce candidate evidence and warnings, but it must not authorize
-`endpoint.expose.*` by itself.
+process. Automatic service-listener discovery follows the same rule:
+`endpoint.observe` may produce candidate evidence and warnings, but it must not
+authorize `endpoint.expose.*` by itself. This candidate-discovery path is
+separate from Feature 045 workload network activity.
 
 Product CLI shape:
 
@@ -2683,28 +2723,46 @@ boundary.
 Required model:
 
 ```text
-secret value
-  -> resolved by Hideout setup component
+secret value from hidden TTY or stdin
+  -> reviewed daemon Manager operation
+  -> daemon-owned secure provider (macOS Keychain on supported Macs)
+  -> short-lived internal runtime resolution
   -> referenced by name in policy/audit/explain
   -> never inserted into target env
 ```
 
 Secret ref names are stable identifiers, not secret values. Phase 1 secret refs
 must be lowercase ASCII names using letters, digits, and `-`, must start and end
-with a letter or digit, and must be at most 64 characters. The host env backing
-store maps `default-proxy` to `HIDEOUT_SECRET_DEFAULT_PROXY`. Invalid refs fail
-closed instead of being normalized into another ref.
+with a letter or digit, and must be at most 64 characters. Invalid refs fail
+closed instead of being normalized into another ref. Public Manager, CLI, TUI,
+WebUI, operation, and audit models expose only the ref, provider, availability,
+generation, update time, and stable reason. There is no public read-value
+operation or secret-derived digest.
 
-`HIDEOUT_SECRET_*` is a host-only backing namespace. It is always denied from
-the target env, cannot be reintroduced through `env.public` or `env.inherit`,
-and must not appear in audit, explain, command proxy requests, broker requests,
-or Web UI responses.
+On macOS, the source of truth is a Security.framework generic-password item
+owned by the daemon under service `com.vibe-agi.hideout.secret`. Set, rotate,
+and delete are durable operation effects. A successful live-route rotation
+stages and proves every eligible route before committing the new Keychain
+generation; crash recovery compares operation identity and generation instead
+of replaying a blind write. Non-macOS builds expose a typed unavailable
+provider rather than storing plaintext.
+
+`HIDEOUT_SECRET_*` remains a one-release, read-only compatibility source from
+the daemon startup environment. It is not imported automatically into
+Keychain, profile, or local data. An export made after daemon start cannot
+change that process. Migrate by re-entering the value once with
+`hideout secret set <ref>`, then remove the export from shell startup files.
+The namespace is always denied from the target env, cannot be reintroduced
+through `env.public` or `env.inherit`, and must not appear in activity, audit,
+explain, command-proxy, broker, API, TUI, or WebUI output.
 
 Allowed Phase 1 secret uses:
 
 - network setup resolves `proxySecretRef` to configure guest-side `tun2socks`;
 - broker/session setup uses short-lived tokens for the broker endpoint;
-- diagnostics report secret availability by ref name only.
+- diagnostics report secret availability by ref name only; and
+- healthy eligible set/rotate/delete and proxy/DNS transitions use the running
+  daemon without requiring daemon stop or VM recreation.
 
 Not allowed in Phase 1:
 
@@ -3543,11 +3601,13 @@ Candidate trust in the implemented path stays simple. Profile-declared
 candidates are user-authored policy; manual candidates come from an explicit
 run request, `hideout run --preview <guest-loopback-host:port> -- ...`, and
 are run-scoped unless the user persists them into profile policy.
-`endpoint.observe` is a lower trust level than exposure: observation may
-produce candidate evidence and warnings, but it must not create reachability
-or authorize `endpoint.expose.*` by itself. Project-declared candidates
-discovered from the workspace require review or interactive ask before
-exposure because the workspace is writable by the target.
+The reserved later `endpoint.observe` service-listener discovery action is a
+lower trust level than exposure: observation may produce candidate evidence
+and warnings, but it must not create reachability or authorize
+`endpoint.expose.*` by itself. It is distinct from Feature 045 workload
+process-to-IP/port evidence. Project-declared candidates discovered from the
+workspace require review or interactive ask before exposure because the
+workspace is writable by the target.
 
 Candidate resolution keeps authority in Go. A candidate ID is opaque,
 unguessable, and session-bound; adapter or CLI input selects a candidate by ID
@@ -3562,9 +3622,11 @@ Guest-to-host exposure is a separate design.
 services such as adb servers, DevTools, databases, or control sockets. It is
 higher authority than host-to-guest exposure and requires its own threat
 model, validator, and product promotion before implementation; today it fails
-closed, together with endpoint observation, project-declared automatic
-exposure, direct JS endpoint proposal entrypoints, OAuth callback automation,
-and device/simulator targets. Future browser automation follows the same
+closed, together with automatic service-listener discovery
+(`endpoint.observe`), project-declared automatic exposure, direct JS endpoint
+proposal entrypoints, OAuth callback automation, and device/simulator targets.
+Feature 045 workload network activity remains evidence only and does not
+change that exposure boundary. Future browser automation follows the same
 rule: it is a Browser OpenTarget over a brokered `guest-to-host` bridge, not
 an extension of `host.open`.
 
@@ -3881,6 +3943,107 @@ during normal post-bootstrap execution. Guest network cleanup must stop
 delete runtime proxy files. Phase 1 still does not claim protection from a
 privileged guest process that can inspect the network engine process or memory.
 
+## Workload Activity Privacy, Coverage, and Retention
+
+The workload activity plane is detective evidence, not an enforcement engine.
+Its supported scope is the top-level command passed after `--` and every
+descendant that remains attributable to that run's non-delegated workload
+boundary. An unrelated host process, a different VM workload, the broker, and
+Hideout's own observer are outside that workload. Guest-root or boundary
+tampering degrades the affected coverage; it never expands a claim.
+
+The host retains already-redacted metadata needed to answer these questions:
+
+- which command executed, its execution identity and ancestry, time, and
+  outcome;
+- which attributable process opened, read, or wrote which normalized path,
+  how often, and when;
+- which attributable process connected to which IP and port; and
+- which DNS name was queried and which response metadata was observed when
+  that attribution is supported.
+
+The activity plane never captures file contents, environment values,
+keystrokes, a full PTY transcript, or packet payloads. Local paths are not
+heuristically hidden: the authenticated local CLI, TUI, and WebUI show the
+complete normalized path because it is necessary evidence. Known
+managed secret values and supported encodings, URI userinfo, named
+authentication fields, registered sensitive arguments/query values, and
+Hideout control-plane tokens are deterministically removed before activity
+persistence or presentation. Hideout does not guess whether arbitrary path or
+argv text is secret; the authenticated local view may therefore contain
+user-sensitive data that does not match one of those deterministic selectors.
+
+Local visibility is not sharing authority. `hideout support report` excludes
+all activity records, local activity paths, command argv, domains, and IPs.
+Boundary Summary includes only the categorical scope, privacy exclusions,
+coverage non-claim, owner kind, and retention policy; it excludes exact owner
+IDs and individual activity. Any fuller export is a separate explicit
+review/redaction boundary and must be inspected before it leaves the machine.
+
+Coverage is independent for process, file, network, and DNS and is evaluated
+for a particular subsystem and time window:
+
+- `Available` means the provider was ready and no known loss invalidates that
+  interval.
+- `Partial` names the loss, retention gap, attribution uncertainty, or provider
+  limitation.
+- `Unavailable` means the subsystem cannot support a behavioral conclusion.
+
+The current supported macOS arm64 Lima/Debian reference is intentionally
+asymmetric:
+
+| Subsystem | Best proved reference interval | Supported conclusion |
+| --- | --- | --- |
+| Process | `Available` | Exact cgroup-bound command/descendant execution identity and ancestry while the observer is healthy. |
+| File | `Partial` | Useful attributable file-operation metadata is recorded, but current hook/path-outcome completeness does not support an absence claim. |
+| Network | `Partial` | Process-to-IP/port evidence is recorded; current route attribution can be incomplete. |
+| DNS | `Partial` | Supported plaintext metadata can be correlated; encrypted, cached, literal-IP, shared-address, and external-resolver cases remain unknown or partial. |
+
+Native and unproved backends report these capabilities `Unavailable`. The
+runtime interval is more authoritative than this support table: a loss,
+restart, target exit, retention gap, or provider failure closes or degrades
+the affected interval without rewriting earlier evidence. The release-facing
+mirror is [support-matrix.md](support-matrix.md).
+
+An empty event result is never proof that no behavior occurred unless the
+requested subsystem and entire requested window are covered by `Available`
+intervals. Missing intervals, an observer that started late, sequence gaps,
+ring or transport drops, daemon disconnects, corruption, quota/TTL pruning,
+encrypted DNS, guest-root tampering, and cleanup uncertainty all prevent that
+absence claim. Recovery can start a later `Available` interval; it does not
+rewrite the damaged history.
+
+Retention belongs to one exact owner:
+
+- a reusable environment is keyed by environment ID plus backend incarnation;
+- a disposable run is keyed by session ID plus backend incarnation; and
+- guest boot ID and PID are execution/collector identity, not retention
+  ownership.
+
+The default owner policy is 256 MiB and lifecycle-only retention. An optional
+TTL prunes fully expired sealed segments; zero TTL means no wall-clock expiry.
+The host store also has a default 1 GiB global safety ceiling. The active
+segment is a separately reported, bounded write allowance (8 MiB by default),
+so quota and TTL operate at sealed-segment granularity rather than pretending
+to be per-record deletion deadlines. Pruning the oldest sealed evidence opens
+a `Partial` coverage interval with a stable retention reason.
+
+The first attach binds the profile retention policy immutably to that exact
+owner. Editing the profile changes Desired policy for future owners; an
+existing reusable owner keeps its Effective bound policy until it is replaced.
+Stopping a VM preserves its owner and evidence. Clean, delete, successful
+disposable teardown, or recreate removes only the proved exact owner; recreate
+therefore removes the old incarnation's activity and starts a new owner. An
+unproved owner or cleanup failure blocks deletion rather than erasing evidence
+under an ambiguous identity.
+
+Operator surfaces must show per-owner used/limit, configured TTL or
+`owner-lifecycle`, pruning/corruption reasons, and the read-only global
+used/limit plus active-segment allowance. Doctor may report these dynamic facts
+only from an authenticated daemon snapshot. If that snapshot is unavailable,
+it reports the limitation and the coverage non-claim instead of rendering zero
+events or zero bytes as success.
+
 ## Audit and Explain
 
 Audit format:
@@ -4022,20 +4185,25 @@ Manager Core must expose stable in-process domain APIs for:
 
 ```text
 profiles
+profile projections and transactions
 sessions
 backends
 capabilities
 broker
 network
 secrets
+operations
+activity, coverage, and risks
 audit
 settings
 ```
 
-The minimum manager view is a read-only overview snapshot. It may report profile
-names, identity IDs, session IDs, backend health, network mode, command proxy
-registrations, secret ref availability, audit file locations, and settings
-paths. It must not expose secret values.
+The authoritative console seed is `hideout.operator-snapshot.v1`. It carries
+one daemon instance and sequence plus scoped profiles, sessions, desired and
+effective network state, transitions, durable operations, recent already
+redacted activity, coverage, risks, retention, capabilities, and
+catalog-backed next actions. It must not expose secret values. A client never
+merges a new snapshot with old state.
 
 Manager and Web UI views may show generated Hideout IDs for traceability. They
 must not expose raw guest `machine-id` values, browser storage identifiers,
@@ -4109,30 +4277,47 @@ Daemon invariants:
 - Per-run broker tokens, proxy secret refs, HostFS materialization, endpoint
   exposure leases, and audit handles remain session-scoped even when the daemon
   is long-lived.
-- TUI and WebUI subscribe to daemon event streams when `hideoutd` is running.
-  They seed once from Manager overview/redacted audit, then apply typed
-  `liveconsole.Event` payloads without steady-state overview/audit polling
-  while the stream is healthy. Authority-changing actions still go through
-  Manager plan/apply and emit audit. Event streams carry the same deterministic
-  redaction as local audit views.
+- TUI and WebUI subscribe to daemon event v2 after an operator snapshot. They
+  apply only the next sequence for the same daemon instance and never poll
+  while the authenticated stream is healthy. A sequence gap, instance/schema
+  change, disconnect, or expired credential makes the projection STALE and
+  disables mutation until a fresh snapshot and stream agree.
+  Authority-changing actions still go through Manager plan/apply and emit
+  audit. Event streams carry the same deterministic redaction as local audit
+  views.
 - A daemon restart must not grant new authority. It reports and audits any
   live resource it cannot prove belongs to the current daemon instance, and it
   does not silently re-adopt or destroy that resource.
 
-Design-ready local HTTP resources:
+Representative implemented local HTTP resources (the production route
+inventory is authoritative):
 
 ```text
+GET /api/v1/operator/snapshot
 GET /api/v1/overview
 GET /api/v1/profiles
+GET /api/v1/profiles/{id}/projection
 GET /api/v1/sessions
 GET /api/v1/backends
 GET /api/v1/capabilities
 GET /api/v1/broker
 GET /api/v1/network
 GET /api/v1/secrets
+GET /api/v1/operations/{id}
+GET /api/v1/activity/summary
+GET /api/v1/activity/events
+GET /api/v1/activity/executions
+GET /api/v1/activity/coverage
+GET /api/v1/activity/risks
 GET /api/v1/audit
 GET /api/v1/audit/events?session=&profile=&action=&decision=&limit=
 GET /api/v1/settings
+POST /api/v1/profile/transaction/plan
+POST /api/v1/profile/transaction/apply
+POST /api/v1/secret/plan
+POST /api/v1/secret/apply
+POST /api/v1/activity/export/plan
+POST /api/v1/activity/export/apply
 POST /api/v1/init/plan
 POST /api/v1/init/apply
 POST /api/v1/run/plan
@@ -4144,6 +4329,7 @@ POST /api/v1/profile/hostfs/plan
 POST /api/v1/profile/hostfs/apply
 POST /api/v1/profile/env/plan
 POST /api/v1/profile/env/apply
+GET /daemon/events
 ```
 
 Every local HTTP response uses a stable envelope:
@@ -4168,6 +4354,13 @@ Rules:
 - empty collections are returned as `[]`, not omitted;
 - partial domain errors may be returned in `errors` while still returning a
   read-only snapshot;
+- configuration and secret mutation uses
+  Draft → canonical Plan → review/confirm → Apply, binds the current profile
+  revision and plan digest to one durable operation ID, and returns stored
+  progress/results for exact retries;
+- activity queries resolve one exact environment incarnation or disposable
+  session owner before opening the private store; cursors cannot cross owners
+  or selected runs;
 - audit event queries read redacted JSONL events and support session, profile,
   action, decision, and limit filters;
 - init plan/apply requests expose only typed init tasks and generic tool-supply
@@ -4179,7 +4372,9 @@ Rules:
 - command-proxy plan/apply requests expose only typed registration of
   `host.open` command symbols with the `open-target-v1` schema. They are not a
   raw profile writer, provider descriptor writer, or host command execution API;
-- secret values are never returned, only refs and availability;
+- secret values are accepted only by the bounded no-store apply route and are
+  never returned; all other surfaces expose refs, availability, provider, and
+  generation only;
 - network resources expose mode, proxy secret refs, and proxy-env visibility as
   leak-check state; they must not expose proxy URLs or credentials.
 - host-open capability resources expose URL scope, local-network URL policy,
@@ -4191,10 +4386,12 @@ No Required Phase 1 behavior may depend on a web console being present.
 
 ## Local Web UI
 
-The Web UI is optional in Phase 1, but its data model must align with the manager
-API from the start. A read-only smoke surface may ship if it does not delay the
-runner. Mutating controls are Design-ready unless their underlying CLI/domain
-state transition is already Required Phase 1.
+The WebUI is an implemented optional local client. It provides deeper retained
+history than the terminal HUD but consumes the same operator snapshot,
+event-v2 reducer semantics, configuration plans, operations, activity queries,
+coverage, and risks. Browser JavaScript owns rendering and drafts only; it
+cannot write a profile, Keychain item, VM, lifecycle record, or activity
+segment directly. Hideout run and CLI recovery do not depend on a browser.
 
 Product rule:
 
@@ -4217,25 +4414,15 @@ Security requirements:
 The Web UI technology stack, design direction, and experience model are
 specified in [tui-webui-experience.md](tui-webui-experience.md).
 
-Primary pages:
-
-This page map describes domain ownership and future navigation. It is not a
-second delivery list. A Web UI control may mutate state only when the underlying
-CLI/domain transition is already Required Phase 1 or explicitly shipped as a
-Design-ready feature; otherwise the page stays read-only for that domain.
+Primary views:
 
 | Page | Domain owner | Purpose |
 | --- | --- | --- |
-| Overview | manager | Health, active sessions, backend, network, pending prompts. |
-| Profiles | profile | Policy, identity lineage, clone/rotate/reset. |
-| Capabilities | policy, cmdproxy | Capability matrix, command proxy rules, script hooks. |
-| Sessions | manager, backend | Command, workspace, env, network, explain, status. |
-| Broker | broker | Pending host capability requests and decision history. |
-| Decisions | manager, provider cores | Actionable local decisions with claim/lease/resolve semantics plus informational notices with acknowledgement only. |
-| Audit | audit | Filtered JSONL event view and redacted export. |
-| Network | network, secrets | direct/tun2socks mode, proxy secret refs, leak checks. |
-| Backends | backend | Lima health, image state, doctor checks. |
-| Settings | manager | UI token, browser launcher, storage paths, diagnostics. |
+| Overview | Manager snapshot | Connection/stream health, active workload, coverage, highest risk/blocker, and next action. |
+| Activity | Manager activity service | Session timeline, execution tree, file/network/DNS facts, compound filters, retained gaps, and correlated risk evidence. |
+| Config | Profile transaction and secret services | Desired/effective/transition state and canonical draft/review/confirm/apply dialogs. |
+| Operations | Durable operation store | Effect phases, evidence, result, response-loss lookup, and recovery. |
+| Help | Declarative command catalog | Searchable tasks, copyable CLI syntax, prerequisites, effects, safety, and recovery. |
 
 Web UI sequence:
 
@@ -4252,58 +4439,51 @@ sequenceDiagram
     M->>M: Create short-lived UI token
     CLI->>Br: Open 127.0.0.1 URL with token
     Br->>UI: Load embedded assets
-    UI->>M: API request with token
-    M-->>UI: Profiles, sessions, health summary
+    UI->>M: Authenticated operator snapshot
+    M-->>UI: Snapshot with instance and sequence
+    UI->>M: Authenticated event-v2 stream
+    M-->>UI: Contiguous redacted deltas
+    UI->>M: Bounded activity query or canonical mutation plan/apply
 ```
 
 ## CLI
 
-Required commands:
+The declarative command catalog is the source of truth. The ordinary operator
+journey is:
 
 ```text
+hideout help
+hideout help <command>
+hideout help all [query]
+hideout setup
+hideout doctor
 hideout run -- <command> [args...]
 hideout run --profile <name> -- <command> [args...]
-hideout run --explain -- <command> [args...]
-hideout explain --profile <name> -- <command> [args...]
-hideout init --template dev --profile default --backend native --network direct --no-input
-hideout doctor
-hideout doctor --fix --dry-run
-hideout cleanup
-hideout profile init <name>
-hideout profile clone <source> <name>
-hideout profile path <name>
-hideout audit show [--session <id>] [--profile <name>] [--action <name>] [--decision <value>] [--limit N] [--json]
-hideout profile fs <name> <subcommand>
-hideout profile env <name> <subcommand>
-hideout profile command-proxy <name> add-open <symbol>
-hideout profile home <name> import --from <path> --to <relative> [--force]
-```
-
-`hideout shim build-linux` and `hideout hostfsd build-linux` are build helpers
-for development and packaging. They support the release process but are not
-part of the operator-facing Required CLI.
-
-Design-ready commands:
-
-```text
 hideout run --env <name> -- <command> [args...]
 hideout run --rm -- <command> [args...]
-hideout env create <name> [--image <declaration>] [--workspace <path>] [--profile <p>] [--backend <b>]
+hideout tui [--profile <name>] [--session <id>]
+hideout tui --once [--profile <name>] [--session <id>]
+hideout ui
+hideout activity summary|events|executions|coverage|risks [owner] [filters]
+hideout secret set|rotate|delete|status|list
+hideout show connection
+hideout connect directly [for profile <name>] [--yes]
+hideout connect through <secret-ref> [using <resolver>] [for profile <name>] [--yes]
+hideout connect plan --profile <name> (--direct | --through <secret-ref> [--dns <resolver>])
+hideout connect apply <operation-id> [--yes]
 hideout env list
 hideout env inspect <name>
-hideout env recreate <name> [--force]
-hideout env remove <name> [--force]
-hideout stop [--idle <duration>] [--verbose] [name-or-id...]
-hideout clean [--stopped] [--idle <duration>] [--verbose] [name-or-id...]
-hideout profile rotate-identity <name>
-hideout profile reset <name>
-hideout ui [--listen 127.0.0.1:0] [--ttl 15m] [--no-open] [--print-url]
-hideout tui [--profile <name>] [--interval 2s]
-hideout tui --once [--profile <name>]
+hideout stop [--dry-run] [environment-id...]
+hideout clean [--dry-run] [environment-id...]
+hideout support report --out <path>
+hideout package verify|repair|uninstall ...
 ```
 
-These commands may ship in Phase 1 only if they do not delay the required local
-runner. Their domain model, API shape, and schema still need to remain stable.
+Advanced profile, environment, package, support, and build commands remain
+available through `hideout help all`; they are not mixed into the primary
+first-use path. `hideout shim build-linux`, `hideout hostfsd build-linux`, and
+other helper builders support development and packaging rather than ordinary
+operation.
 
 `hideout run -- <command>` is the primary experience. Once the Environment
 model ships, it defaults to the most recent environment for the current
@@ -4375,23 +4555,28 @@ the user stops it. `--print-url` is a nonblocking diagnostic/test mode: it
 allocates the server, prints the URL/API/token metadata, closes the server, and
 does not promise an interactive UI session.
 
-`hideout tui` is the terminal observer surface. By default it stays alive so an
-operator can keep it open beside another terminal running an agent or CLI. When
-`hideoutd` is running, the TUI reads one Manager/audit seed, consumes typed
-daemon events through `daemon.SubscribeEvents`, and renders from the live
-reducer without interval overview/audit polling while the stream is healthy. If
-no daemon is running or the stream closes, it falls back to the daemon-less
-snapshot/interval behavior. It does not start a local HTTP server, mint a UI
-token, or open a browser. `--once` renders the same domain view once for
-scripts, package smoke, and documentation snapshots; it is not the product
-interaction model.
+`hideout tui` is the Bubble Tea terminal operator HUD. By default it stays
+alive beside another terminal running an agent or CLI and prioritizes active
+workload, effective connection, process/file/network/DNS coverage, highest
+risk or blocker, and one next action. Overview, Activity, Config, Operations,
+and Help provide progressive detail. Enter inspects evidence or opens an
+editor; it never applies a change directly. Every edit passes through draft,
+canonical plan, diff/effects/blockers/recovery review, explicit confirmation,
+apply, and terminal Manager evidence.
 
-The local manager server exposes minimal init and run resources for future
-TUI/WebUI control: `POST /api/v1/init/plan`, `POST /api/v1/init/apply`,
-`POST /api/v1/run/plan`, `POST /api/v1/run/apply`, and
-`GET /api/v1/run/status`. `init/apply` uses typed init tasks rather than a raw
-profile writer. `run/apply` uses the same backend adapters as CLI `run` through
-Manager Core; it is not a generic host execution API.
+The TUI seeds from one operator snapshot and consumes contiguous daemon
+event-v2 updates without healthy-stream polling. A gap, instance/schema
+change, disconnect, or expired credential changes the header to an explicit
+read-only state and disables plan/apply until a fresh authenticated reseed.
+It does not start a local HTTP server, mint a UI token, or open a browser.
+`--once` renders deterministic plain read-only output for scripts, package
+smoke, and weak terminals; it is not the product interaction model.
+
+TUI and WebUI configuration, secret, activity, operation, init, run, and
+lifecycle controls use the implemented Manager resources listed above.
+`init/apply` still uses typed init tasks rather than a raw profile writer, and
+`run/apply` uses the same backend adapters as CLI `run`; neither surface is a
+generic host execution API.
 
 `hideout shim build-linux` cross-compiles the guest-side `hideout-shim` binary
 for Lima command proxies. By default it writes

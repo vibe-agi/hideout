@@ -1,9 +1,7 @@
 package manager
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/audit"
+	decisionpkg "github.com/vibe-agi/hideout/internal/decision"
 	"github.com/vibe-agi/hideout/internal/hostfs/overlay"
 )
 
@@ -28,9 +27,12 @@ type HostFSWritePlanRequest struct {
 }
 
 type HostFSWriteClaimRequest struct {
-	DecisionID      string `json:"decisionId"`
-	ExpectedVersion string `json:"expectedVersion"`
-	Surface         string `json:"surface"`
+	DecisionID       string `json:"decisionId"`
+	ExpectedVersion  string `json:"expectedVersion"`
+	Surface          string `json:"surface"`
+	ExpectedRevision int    `json:"expectedRevision,omitempty"`
+	LeaseSeconds     int64  `json:"leaseSeconds,omitempty"`
+	Takeover         bool   `json:"takeover,omitempty"`
 }
 
 type HostFSWriteApplyRequest struct {
@@ -99,39 +101,48 @@ func (c Core) ClaimHostFSWrite(req HostFSWriteClaimRequest) (HostFSWriteClaim, e
 	if surface == "" {
 		surface = "manager-client"
 	}
+	lease, err := decisionClaimLease(req.LeaseSeconds)
+	if err != nil {
+		return HostFSWriteClaim{}, err
+	}
 	ref, err := c.findHostFSWriteByDecision(decisionID)
 	if err != nil {
 		return HostFSWriteClaim{}, err
 	}
-	now := time.Now().UTC()
+	now := c.decisionNow()
 	if hostFSWriteDecisionVisible(ref.decision.State) && !ref.decision.TimeoutAt.IsZero() && !now.Before(ref.decision.TimeoutAt) {
 		if err := c.expireHostFSWriteRef(ref); err != nil {
 			return HostFSWriteClaim{}, err
 		}
 		return HostFSWriteClaim{}, fmt.Errorf("HostFS write decision %s expired", decisionID)
 	}
-	if ref.decision.State != overlay.StatePending {
-		if ref.decision.State == overlay.StateClaimed && ref.decision.Claim != nil && now.After(ref.decision.Claim.ExpiresAt) {
-			// Stale claim can be replaced.
-		} else {
-			return HostFSWriteClaim{}, fmt.Errorf("HostFS write decision %s is %s", decisionID, ref.decision.State)
-		}
+	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
+		return HostFSWriteClaim{}, err
 	}
-	token, err := newClaimToken()
+	store, err := c.decisionStore()
+	if err != nil {
+		return HostFSWriteClaim{}, err
+	}
+	claim, updated, err := store.ClaimDecisionWithOptions(decisionID, decisionpkg.ClaimOptions{
+		Surface:          surface,
+		Operator:         decisionClaimOperator,
+		Lease:            lease,
+		ExpectedRevision: req.ExpectedRevision,
+		TakeoverExpired:  req.Takeover,
+	})
 	if err != nil {
 		return HostFSWriteClaim{}, err
 	}
 	ref.decision.State = overlay.StateClaimed
 	ref.decision.Claim = &overlay.Claim{
-		Surface:   surface,
-		ClaimedAt: now,
-		ExpiresAt: now.Add(time.Minute),
-		TokenHash: hashClaimToken(token),
+		Surface:   claim.Surface,
+		Operator:  decisionClaimOperator,
+		ClaimedAt: claim.ClaimedAt,
+		ExpiresAt: claim.ClaimExpiresAt,
+		TokenHash: decisionpkg.HashClaimToken(claim.ClaimToken),
 	}
 	if err := ref.store.SaveDecision(ref.decision); err != nil {
-		return HostFSWriteClaim{}, err
-	}
-	if _, err := c.upsertHostFSWriteDecision(ref); err != nil {
+		_, _, _ = store.ReleaseDecisionClaim(decisionID, claim.ClaimToken, claim.Revision, "provider claim mirror failed")
 		return HostFSWriteClaim{}, err
 	}
 	c.emitHostFSWriteAudit(ref, overlay.ActionClaim, "allow", overlay.ClaimDetails(ref.decision, surface))
@@ -139,8 +150,13 @@ func (c Core) ClaimHostFSWrite(req HostFSWriteClaimRequest) (HostFSWriteClaim, e
 	return HostFSWriteClaim{
 		DecisionID:     decisionID,
 		State:          overlay.StateClaimed,
-		ClaimToken:     token,
+		ClaimToken:     claim.ClaimToken,
+		Surface:        claim.Surface,
+		ClaimedAt:      claim.ClaimedAt,
 		ClaimExpiresAt: ref.decision.Claim.ExpiresAt,
+		LeaseSeconds:   claim.LeaseSeconds,
+		Takeover:       claim.Takeover,
+		Revision:       updated.Revision,
 	}, nil
 }
 
@@ -323,16 +339,25 @@ func validateHostFSWriteExpectedVersion(version string) error {
 }
 
 func validateHostFSWriteClaim(decision overlay.Decision, token string) error {
-	if decision.State != overlay.StateClaimed || decision.Claim == nil {
+	if err := validateHostFSWriteClaimToken(decision, token); err != nil {
+		return err
+	}
+	if !time.Now().UTC().Before(decision.Claim.ExpiresAt) {
+		return errors.New("claimToken expired")
+	}
+	return nil
+}
+
+func validateHostFSWriteClaimToken(d overlay.Decision, token string) error {
+	if d.State != overlay.StateClaimed || d.Claim == nil {
 		return errors.New("HostFS write decision is not claimed")
 	}
 	if strings.TrimSpace(token) == "" {
 		return errors.New("claimToken is required")
 	}
-	if time.Now().UTC().After(decision.Claim.ExpiresAt) {
-		return errors.New("claimToken expired")
-	}
-	if hashClaimToken(token) != decision.Claim.TokenHash {
+	got := []byte(decisionpkg.HashClaimToken(token))
+	want := []byte(d.Claim.TokenHash)
+	if len(got) != len(want) || subtle.ConstantTimeCompare(got, want) != 1 {
 		return errors.New("claimToken is invalid")
 	}
 	return nil
@@ -477,17 +502,4 @@ func hostFSWriteCleanupDetails(ref hostFSWriteRef, reason string) map[string]any
 		"hostChanged":     false,
 		"privilegeStatus": ref.decision.Privilege.Status,
 	}
-}
-
-func newClaimToken() (string, error) {
-	var raw [18]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return "claim_" + hex.EncodeToString(raw[:]), nil
-}
-
-func hashClaimToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }

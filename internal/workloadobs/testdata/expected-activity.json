@@ -1,0 +1,47 @@
+{
+  "schema": "hideout.expected-workload-activity/v1",
+  "process": {
+    "minimumExecutions": 70,
+    "requiredExecutables": [
+      "sh",
+      "cat",
+      "chmod",
+      "mv",
+      "ln",
+      "rm",
+      "getent",
+      "curl"
+    ],
+    "requiresReparentedDescendant": true,
+    "requiresFastExitDescendants": true
+  },
+  "file": {
+    "requiredOperations": [
+      "open",
+      "read",
+      "write",
+      "create",
+      "truncate",
+      "rename",
+      "unlink",
+      "mkdir",
+      "rmdir",
+      "metadata"
+    ],
+    "contentRetained": false
+  },
+  "network": {
+    "requiresDNSQuery": true,
+    "requiresDirectConnection": true,
+    "requiresProxyConnectionWhenConfigured": true,
+    "domainAttribution": [
+      "exact",
+      "inferred",
+      "unknown"
+    ]
+  },
+  "isolation": {
+    "allowUnrelatedGuestEvents": false,
+    "allowCrossSessionEvents": false
+  }
+}

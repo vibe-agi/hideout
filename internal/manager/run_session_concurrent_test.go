@@ -30,12 +30,20 @@ func TestReusableRunSessionsUseUniqueRuntimeChildrenAndClearOnlyOwner(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(first)
+	defer func() {
+		if _, err := core.CloseRunSession(first); err != nil {
+			t.Errorf("close first run session: %v", err)
+		}
+	}()
 	second, err := core.BeginRunSession(plan, runEnvironment, RunSessionOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(second)
+	defer func() {
+		if _, err := core.CloseRunSession(second); err != nil {
+			t.Errorf("close second run session: %v", err)
+		}
+	}()
 
 	if first.Layout.ID == second.Layout.ID || first.RuntimeSessionDir == second.RuntimeSessionDir || first.RuntimeShimDir == second.RuntimeShimDir {
 		t.Fatalf("session runtime paths are not unique: first=%+v second=%+v", first, second)
@@ -89,7 +97,11 @@ func TestSessionOnlyProfileChangeUsesSameMachineAndNewSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(first)
+	defer func() {
+		if _, err := core.CloseRunSession(first); err != nil {
+			t.Errorf("close first run session: %v", err)
+		}
+	}()
 
 	p, err := store.Load("default")
 	if err != nil {
@@ -111,7 +123,11 @@ func TestSessionOnlyProfileChangeUsesSameMachineAndNewSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.CloseRunSession(second)
+	defer func() {
+		if _, err := core.CloseRunSession(second); err != nil {
+			t.Errorf("close second run session: %v", err)
+		}
+	}()
 
 	if changedEnvironment.Record.ID != runEnvironment.Record.ID || changedEnvironment.Record.MachineIdentityID != runEnvironment.Record.MachineIdentityID || changedEnvironment.Record.BootConfigurationID != runEnvironment.Record.BootConfigurationID {
 		t.Fatalf("session-only change replaced machine: before=%+v after=%+v", runEnvironment.Record, changedEnvironment.Record)

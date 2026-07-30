@@ -12,6 +12,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
 
 const (
@@ -284,14 +286,15 @@ const (
 )
 
 type Completion struct {
-	Kind             CompletionKind  `json:"kind"`
-	ExitCode         int             `json:"exitCode"`
-	Signal           string          `json:"signal,omitempty"`
-	TargetCompleted  bool            `json:"targetCompleted"`
-	CleanupCompleted bool            `json:"cleanupCompleted"`
-	SessionID        string          `json:"sessionId"`
-	Summary          string          `json:"summary"`
-	Result           json.RawMessage `json:"result,omitempty"`
+	Kind             CompletionKind                `json:"kind"`
+	ExitCode         int                           `json:"exitCode"`
+	Signal           string                        `json:"signal,omitempty"`
+	TargetCompleted  bool                          `json:"targetCompleted"`
+	CleanupCompleted bool                          `json:"cleanupCompleted"`
+	SessionID        string                        `json:"sessionId"`
+	Summary          string                        `json:"summary"`
+	Result           json.RawMessage               `json:"result,omitempty"`
+	Activity         *SupervisorActivityCompletion `json:"activity,omitempty"`
 }
 
 func (c *Completion) Validate() error {
@@ -322,6 +325,14 @@ func (c *Completion) Validate() error {
 	if len(c.Result) != 0 && !json.Valid(c.Result) {
 		return errors.New("completion result is invalid JSON")
 	}
+	if c.Activity != nil {
+		if err := c.Activity.Validate(c.SessionID); err != nil {
+			return err
+		}
+		if c.CleanupCompleted != c.Activity.CleanupProved {
+			return errors.New("completion cleanup state does not match activity cleanup proof")
+		}
+	}
 	return optionalText(c.Summary, "completion summary", 4096)
 }
 
@@ -348,6 +359,46 @@ type SupervisorStart struct {
 	ExpectedBootID      string                                    `json:"expectedBootId"`
 	SessionSource       string                                    `json:"sessionSource"`
 	ProjectionReadiness *SupervisorProjectionReadinessExpectation `json:"projectionReadiness,omitempty"`
+	Activity            *SupervisorActivityExpectation            `json:"activity,omitempty"`
+}
+
+type SupervisorActivityExpectation struct {
+	Owner                workloadtypes.ActivityOwner `json:"owner"`
+	ObserverGeneration   uint64                      `json:"observerGeneration"`
+	ObserverHelperDigest string                      `json:"observerHelperDigest"`
+	ObserverStreamToken  ObserverStreamToken         `json:"observerStreamToken"`
+	RedactionGeneration  string                      `json:"redactionGeneration,omitempty"`
+}
+
+func (expectation *SupervisorActivityExpectation) Validate(sessionID string) error {
+	if expectation == nil {
+		return errors.New("supervisor activity expectation is nil")
+	}
+	if err := expectation.Owner.Validate(); err != nil {
+		return err
+	}
+	if expectation.Owner.Kind == workloadtypes.OwnerDisposableSession &&
+		expectation.Owner.SessionID != sessionID {
+		return errors.New("disposable activity owner does not match the supervisor session")
+	}
+	if expectation.ObserverGeneration == 0 {
+		return errors.New("observer generation is required")
+	}
+	if err := requirePrefixedSHA256(expectation.ObserverHelperDigest, "observer helper digest"); err != nil {
+		return err
+	}
+	if expectation.RedactionGeneration != "" {
+		if !strings.HasPrefix(expectation.RedactionGeneration, "red_") {
+			return errors.New("activity redaction generation must start with red_")
+		}
+		if err := requireID(
+			expectation.RedactionGeneration,
+			"activity redaction generation",
+		); err != nil {
+			return err
+		}
+	}
+	return expectation.ObserverStreamToken.Validate()
 }
 
 type SupervisorProjectionReadinessExpectation struct {
@@ -427,6 +478,11 @@ func (s *SupervisorStart) Validate() error {
 			return err
 		}
 	}
+	if s.Activity != nil {
+		if err := s.Activity.Validate(s.SessionID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -435,6 +491,185 @@ type SupervisorReady struct {
 	SessionID           string                              `json:"sessionId"`
 	Terminal            TerminalDescriptor                  `json:"terminal"`
 	ProjectionReadiness *SupervisorProjectionReadinessReady `json:"projectionReadiness,omitempty"`
+	Activity            *SupervisorActivityReady            `json:"activity,omitempty"`
+}
+
+type SupervisorCoverageSummary struct {
+	Subsystem         string   `json:"subsystem"`
+	State             string   `json:"state"`
+	Reason            string   `json:"reason"`
+	Evidence          []string `json:"evidence"`
+	DroppedEventCount uint64   `json:"droppedEventCount,omitempty"`
+}
+
+func (summary SupervisorCoverageSummary) Validate() error {
+	switch summary.Subsystem {
+	case workloadtypes.SubsystemProcess, workloadtypes.SubsystemFile,
+		workloadtypes.SubsystemNetwork, workloadtypes.SubsystemDNS:
+	default:
+		return errors.New("supervisor coverage subsystem is invalid")
+	}
+	switch summary.State {
+	case workloadtypes.CoverageAvailable, workloadtypes.CoveragePartial,
+		workloadtypes.CoverageUnavailable:
+	default:
+		return errors.New("supervisor coverage state is invalid")
+	}
+	if err := requireCode(summary.Reason); err != nil {
+		return err
+	}
+	if summary.State == workloadtypes.CoverageAvailable &&
+		summary.DroppedEventCount != 0 {
+		return workloadtypes.ErrFalseAvailableCoverage
+	}
+	if len(summary.Evidence) > 64 {
+		return errors.New("supervisor coverage evidence exceeds the bound")
+	}
+	seen := make(map[string]struct{}, len(summary.Evidence))
+	for _, evidence := range summary.Evidence {
+		if err := requireCode(evidence); err != nil {
+			return err
+		}
+		if _, exists := seen[evidence]; exists {
+			return errors.New("supervisor coverage evidence is duplicated")
+		}
+		seen[evidence] = struct{}{}
+	}
+	return nil
+}
+
+type SupervisorActivityReady struct {
+	Boundary             workloadtypes.WorkloadBoundary `json:"boundary"`
+	ObserverHelperDigest string                         `json:"observerHelperDigest"`
+	Coverage             []SupervisorCoverageSummary    `json:"coverage"`
+}
+
+func (ready *SupervisorActivityReady) Validate(sessionID string) error {
+	if ready == nil {
+		return errors.New("supervisor activity readiness is nil")
+	}
+	if err := ready.Boundary.Validate(); err != nil {
+		return err
+	}
+	if ready.Boundary.SessionID != sessionID {
+		return errors.New("activity boundary session does not match supervisor readiness")
+	}
+	if ready.Boundary.State != workloadtypes.BoundaryReady {
+		return errors.New("supervisor activity readiness requires a ready boundary")
+	}
+	if err := requirePrefixedSHA256(ready.ObserverHelperDigest, "observer helper digest"); err != nil {
+		return err
+	}
+	return validateSupervisorCoverage(ready.Coverage)
+}
+
+// ValidateExpectation binds the independently authenticated supervisor-ready
+// message to the daemon-issued start authority. Callers must use it before
+// committing target execution; validating the two controls independently is
+// insufficient because an otherwise valid owner or cgroup could be replayed.
+func (ready *SupervisorActivityReady) ValidateExpectation(
+	sessionID string,
+	expectation *SupervisorActivityExpectation,
+) error {
+	if expectation == nil {
+		return errors.New("supervisor activity expectation is required")
+	}
+	if err := expectation.Validate(sessionID); err != nil {
+		return err
+	}
+	if err := ready.Validate(sessionID); err != nil {
+		return err
+	}
+	if !ready.Boundary.Owner.Equal(expectation.Owner) ||
+		ready.Boundary.ObserverGeneration != expectation.ObserverGeneration ||
+		ready.ObserverHelperDigest != expectation.ObserverHelperDigest {
+		return errors.New("supervisor activity readiness does not match start authority")
+	}
+	return nil
+}
+
+type SupervisorActivityCompletion struct {
+	Owner              workloadtypes.ActivityOwner `json:"owner"`
+	SessionID          string                      `json:"sessionId"`
+	CgroupID           uint64                      `json:"cgroupId"`
+	ObserverGeneration uint64                      `json:"observerGeneration"`
+	BoundaryState      string                      `json:"boundaryState"`
+	Coverage           []SupervisorCoverageSummary `json:"coverage"`
+	CleanupProved      bool                        `json:"cleanupProved"`
+}
+
+func (completion *SupervisorActivityCompletion) Validate(sessionID string) error {
+	if completion == nil {
+		return errors.New("supervisor activity completion is nil")
+	}
+	if err := completion.Owner.Validate(); err != nil {
+		return err
+	}
+	if err := requireSessionID(completion.SessionID); err != nil {
+		return err
+	}
+	if completion.SessionID != sessionID || completion.CgroupID == 0 ||
+		completion.ObserverGeneration == 0 {
+		return errors.New("supervisor activity completion identity is invalid")
+	}
+	if completion.Owner.Kind == workloadtypes.OwnerDisposableSession &&
+		completion.Owner.SessionID != sessionID {
+		return errors.New("disposable activity completion owner does not match the supervisor session")
+	}
+	switch completion.BoundaryState {
+	case workloadtypes.BoundaryRemoved:
+		if !completion.CleanupProved {
+			return errors.New("removed activity boundary lacks cleanup proof")
+		}
+	case workloadtypes.BoundaryUnproved:
+		if completion.CleanupProved {
+			return errors.New("unproved activity boundary cannot claim cleanup")
+		}
+	default:
+		return errors.New("supervisor activity completion state is invalid")
+	}
+	return validateSupervisorCoverage(completion.Coverage)
+}
+
+// ValidateReady binds the terminal activity summary to the exact ready
+// boundary so cleanup for another cgroup or observer generation cannot be
+// accepted as proof for this session.
+func (completion *SupervisorActivityCompletion) ValidateReady(
+	sessionID string,
+	ready *SupervisorActivityReady,
+) error {
+	if ready == nil {
+		return errors.New("supervisor activity readiness is required")
+	}
+	if err := ready.Validate(sessionID); err != nil {
+		return err
+	}
+	if err := completion.Validate(sessionID); err != nil {
+		return err
+	}
+	if !completion.Owner.Equal(ready.Boundary.Owner) ||
+		completion.CgroupID != ready.Boundary.CgroupID ||
+		completion.ObserverGeneration != ready.Boundary.ObserverGeneration {
+		return errors.New("supervisor activity completion does not match ready boundary")
+	}
+	return nil
+}
+
+func validateSupervisorCoverage(values []SupervisorCoverageSummary) error {
+	if len(values) != 4 {
+		return errors.New("supervisor coverage must account for four subsystems")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if err := value.Validate(); err != nil {
+			return err
+		}
+		if _, exists := seen[value.Subsystem]; exists {
+			return errors.New("supervisor coverage subsystem is duplicated")
+		}
+		seen[value.Subsystem] = struct{}{}
+	}
+	return nil
 }
 
 type SupervisorProjectionReadinessReady struct {
@@ -483,7 +718,14 @@ func (r *SupervisorReady) Validate() error {
 		return err
 	}
 	if r.ProjectionReadiness != nil {
-		return r.ProjectionReadiness.Validate()
+		if err := r.ProjectionReadiness.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.Activity != nil {
+		if err := r.Activity.Validate(r.SessionID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -54,6 +54,9 @@ type AttachRequest struct {
 type EstablishmentRequest struct {
 	EnvironmentID string
 	SessionID     string
+	// MutationKeys are profile-scoped configuration keys consumed by this
+	// attach. The environment key is always added by Coordinator.
+	MutationKeys []string
 }
 
 // RegistrationSpec describes one resource before its effect becomes usable.
@@ -427,27 +430,30 @@ func (c *Coordinator) RecordSessionFact(ctx context.Context, sessionID string, s
 }
 
 type registryEnvironment struct {
-	journal       Journal
-	handles       map[string]bool
-	establishing  map[string]*establishment
-	committed     map[string]bool
-	closing       map[string]bool
-	mutation      bool
-	resourceUsers map[string]map[string]bool
-	resourceOrder map[string][]ResourceRef
-	terminal      map[string]ResourceState
-	timer         timerHandle
-	stopCancel    context.CancelFunc
-	stopDone      chan struct{}
-	deadlineSeq   uint64
-	checkpoint    timerHandle
-	checkpointSeq uint64
-	dirty         bool
-	loaded        bool
-	blocked       bool
-	reconciling   bool
-	reconcileDone chan struct{}
-	observation   backend.LifecycleObservation
+	journal        Journal
+	handles        map[string]bool
+	establishing   map[string]*establishment
+	committed      map[string]bool
+	closing        map[string]bool
+	mutation       bool
+	mutationOwner  *MutationOwner
+	mutationLease  *mutationLease
+	resourceUsers  map[string]map[string]bool
+	resourceOrder  map[string][]ResourceRef
+	terminal       map[string]ResourceState
+	timer          timerHandle
+	stopCancel     context.CancelFunc
+	stopDone       chan struct{}
+	deadlineSeq    uint64
+	checkpoint     timerHandle
+	checkpointSeq  uint64
+	dirty          bool
+	loaded         bool
+	blocked        bool
+	reconciling    bool
+	reconcileDone  chan struct{}
+	reconcileLease *mutationLease
+	observation    backend.LifecycleObservation
 }
 
 func (c *Coordinator) ActiveAttachObservation(ctx context.Context, environmentID, instanceName string) (backend.LifecycleObservation, bool) {

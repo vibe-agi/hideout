@@ -405,7 +405,9 @@ func TestInitDaemonRequestAuthenticatesAndDecodesStrictly(t *testing.T) {
 			"data": setupPreparedFixture(manager.InitStateFresh),
 		})
 	})}
-	go server.Serve(listener)
+	go func() {
+		_ = server.Serve(listener)
+	}()
 	defer server.Close()
 
 	var prepared manager.PreparedInit
@@ -446,7 +448,9 @@ func TestInitDaemonRequestHonorsCancellation(t *testing.T) {
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})}
-	go server.Serve(listener)
+	go func() {
+		_ = server.Serve(listener)
+	}()
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
@@ -490,7 +494,9 @@ func TestInitDaemonRequestClassifiesTransportAndProtocolFailures(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = io.WriteString(w, tc.body)
 			})}
-			go server.Serve(listener)
+			go func() {
+				_ = server.Serve(listener)
+			}()
 			defer server.Close()
 			var prepared manager.PreparedInit
 			err = initDaemonRequest(context.Background(), root, "/api/v1/init/plan", manager.InitAPIRequest{Request: ptrSetupRequest()}, &prepared)

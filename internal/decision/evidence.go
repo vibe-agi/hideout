@@ -7,16 +7,19 @@ import (
 )
 
 const (
-	ActionDecisionCreate  = "decision.create"
-	ActionDecisionClaim   = "decision.claim"
-	ActionDecisionApply   = "decision.apply"
-	ActionDecisionDeny    = "decision.deny"
-	ActionDecisionTimeout = "decision.timeout"
-	ActionDecisionReopen  = "decision.reopen"
-	ActionDecisionRevoke  = "decision.revoke"
-	ActionDecisionStale   = "decision.stale-claim"
-	ActionNoticeCreate    = "notice.create"
-	ActionNoticeAck       = "notice.ack"
+	ActionDecisionCreate   = "decision.create"
+	ActionDecisionClaim    = "decision.claim"
+	ActionDecisionRelease  = "decision.claim-release"
+	ActionDecisionExpiry   = "decision.claim-expired"
+	ActionDecisionTakeover = "decision.claim-takeover"
+	ActionDecisionApply    = "decision.apply"
+	ActionDecisionDeny     = "decision.deny"
+	ActionDecisionTimeout  = "decision.timeout"
+	ActionDecisionReopen   = "decision.reopen"
+	ActionDecisionRevoke   = "decision.revoke"
+	ActionDecisionStale    = "decision.stale-claim"
+	ActionNoticeCreate     = "notice.create"
+	ActionNoticeAck        = "notice.ack"
 )
 
 func DecisionEvent(action, auditDecision string, d Decision, details map[string]any) audit.Event {

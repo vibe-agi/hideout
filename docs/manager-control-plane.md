@@ -570,10 +570,18 @@ WebUI should call Manager API and must not implement separate policy logic.
 The Operator Console does not add backend authority, doctor execution authority,
 package repair authority, or new decision semantics. Its buttons call existing
 Manager routes (`decision/claim`, `decision/approve`, `decision/deny`,
-`decision/revoke`, `decision/reopen`, `notice/ack`, and HostFS write
+`decision/release`, `decision/revoke`, `decision/reopen`, `notice/ack`, and HostFS write
 compatibility routes), and its doctor, package, and support rows are read-only
 or copyable commands unless the operator explicitly uses an existing CLI/API
 action.
+
+Decision claims use a visible, server-bounded lease: 60 seconds by default,
+with accepted values from 5 seconds through 5 minutes. Closing or refreshing
+the browser, changing scope, or losing the authoritative event stream sends an
+authenticated release for every claim whose token is owned by that browser.
+An active lease cannot be taken over. Replacing an expired lease requires an
+explicit takeover request and the exact observed decision revision; the old
+claim token cannot approve, deny, or release the replacement lease.
 
 ## Local API Security
 

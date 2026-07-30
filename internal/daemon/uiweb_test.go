@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/hideout/internal/operatorhelp"
 )
 
 // T032: the daemon serves the WebUI over a loopback UI transport, and that WebUI
@@ -24,7 +26,8 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	// The WebUI root is served and wires an EventSource to the daemon stream.
+	// The WebUI root is a CSP-safe shell; behavior is served as typed, auditable
+	// same-origin assets rather than one opaque inline program.
 	resp, err := client.Get(base + "/")
 	if err != nil {
 		t.Fatalf("GET UI root: %v", err)
@@ -35,28 +38,70 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 		t.Fatalf("UI root: want 200, got %d", resp.StatusCode)
 	}
 	html := string(body)
-	if !strings.Contains(html, "EventSource") || !strings.Contains(html, "/daemon/events") {
-		t.Fatalf("WebUI does not consume the daemon event stream (no EventSource on /daemon/events)")
-	}
 	for _, want := range []string{
-		"function applyLiveEvent(event)",
-		"applyLiveEvent(JSON.parse(message.data))",
-		"overview.environments = upsertByID(overview.environments, payload)",
+		`src="/assets/state.js"`,
+		`src="/assets/client.js"`,
+		`src="/assets/activity.js"`,
+		`src="/assets/config.js"`,
+		`src="/assets/presentation.js"`,
+		`src="/assets/app.js"`,
+		`href="/assets/style.css"`,
+		`data-panel="overview"`,
+		`data-panel="timeline"`,
+		`data-panel="executions"`,
+		`data-panel="files"`,
+		`data-panel="network"`,
+		`data-panel="coverage"`,
+		`data-panel="risks"`,
+		`data-panel="operations"`,
+		`data-panel="config"`,
+		`data-panel="help"`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("loopback WebUI missing typed event consumer %q", want)
+			t.Fatalf("loopback WebUI shell missing %q", want)
+		}
+	}
+	clientJS := getLoopbackUIAsset(t, client, base+"/assets/client.js", "text/javascript")
+	stateJS := getLoopbackUIAsset(t, client, base+"/assets/state.js", "text/javascript")
+	appJS := getLoopbackUIAsset(t, client, base+"/assets/app.js", "text/javascript")
+	for _, want := range []string{
+		"new EventSource(",
+		`"/daemon/events?token="`,
+		"handlers.event(JSON.parse(message.data))",
+	} {
+		if !strings.Contains(clientJS, want) {
+			t.Fatalf("loopback WebUI client missing typed event consumer %q", want)
+		}
+	}
+	for _, want := range []string{
+		"function validateSnapshot(input)",
+		"function validateEvent(input)",
+		"function applyEvent(state, input)",
+		`requireReseed(state, "stale", "event sequence gap")`,
+		`requireReseed(state, "credential-expired"`,
+	} {
+		if !strings.Contains(stateJS, want) {
+			t.Fatalf("loopback WebUI state reducer missing %q", want)
 		}
 	}
 	// Event-triggered scope (FR-009): refresh is driven by events, not a polling
-	// timer — the served WebUI has no setInterval.
-	if strings.Contains(html, "setInterval") {
+	// timer — none of the executable assets has a setInterval.
+	if strings.Contains(clientJS+stateJS+appJS, "setInterval") {
 		t.Fatalf("WebUI must refresh on events, not a polling timer (found setInterval)")
 	}
-	eventHandler := html[strings.Index(html, "es.onmessage = function(message)"):]
-	eventHandler = eventHandler[:strings.Index(eventHandler, "es.onerror = function()")]
-	if strings.Contains(eventHandler, "load()") || strings.Contains(eventHandler, `api("overview")`) || strings.Contains(eventHandler, `api("audit/events`) {
+	eventHandler := clientJS[strings.Index(clientJS, "source.onmessage = function(message)"):]
+	eventHandler = eventHandler[:strings.Index(eventHandler, "source.onerror = function()")]
+	if strings.Contains(eventHandler, "snapshot()") ||
+		strings.Contains(eventHandler, "fetch(") ||
+		strings.Contains(eventHandler, "/api/v1/") {
 		t.Fatalf("loopback WebUI event handler must not re-fetch seed data:\n%s", eventHandler)
 	}
+	if got := resp.Header.Get("Content-Security-Policy"); strings.Contains(got, "'unsafe-inline'") ||
+		!strings.Contains(got, "script-src 'self'") ||
+		!strings.Contains(got, "style-src 'self'") {
+		t.Fatalf("loopback WebUI CSP permits inline code: %q", got)
+	}
+	_ = getLoopbackUIAsset(t, client, base+"/assets/style.css", "text/css")
 
 	// The event endpoint accepts a browser query-param token (EventSource cannot set
 	// headers) and refuses a wrong one.
@@ -71,6 +116,132 @@ func TestLoopbackUIServesEventConsumingWebUI(t *testing.T) {
 	if code := getStatusAuthed(t, client, base+"/api/v1/overview", d.Token()); code != http.StatusOK {
 		t.Fatalf("/api/v1/overview over loopback: want 200, got %d", code)
 	}
+}
+
+func TestLoopbackUIRejectsForeignHostAndOriginOnDaemonEndpoints(
+	t *testing.T,
+) {
+	d := startTestDaemon(t)
+	base := strings.TrimSuffix(strings.Split(d.UIURL(), "#")[0], "/")
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	requestStatus := func(host, origin string) int {
+		t.Helper()
+		request, err := http.NewRequest(
+			http.MethodGet,
+			base+"/daemon/status",
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if host != "" {
+			request.Host = host
+		}
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		request.Header.Set("Authorization", "Bearer "+d.Token())
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("loopback response is cacheable: %v", response.Header)
+		}
+		return response.StatusCode
+	}
+
+	if status := requestStatus("rebound.invalid", ""); status !=
+		http.StatusForbidden {
+		t.Fatalf("foreign Host status=%d want 403", status)
+	}
+	if status := requestStatus("", "http://rebound.invalid"); status !=
+		http.StatusForbidden {
+		t.Fatalf("foreign Origin status=%d want 403", status)
+	}
+	if status := requestStatus("", base); status != http.StatusOK {
+		t.Fatalf("same-origin daemon status=%d want 200", status)
+	}
+}
+
+func TestLoopbackUIReceivesRenderOnlyHelpCatalog(t *testing.T) {
+	catalog := operatorhelp.Catalog{
+		Schema: operatorhelp.CatalogSchema,
+		Commands: []operatorhelp.Command{{
+			ID: "run", Name: "run", TaskGroup: "Run safely",
+			Purpose:       "DAEMON HELP SENTINEL",
+			Syntax:        []string{"hideout run -- <command>"},
+			Examples:      []string{"hideout run -- true"},
+			Prerequisites: []string{"setup"},
+			Effects:       []string{"execute"},
+			Safety:        []string{"review"},
+			Recovery:      []string{"stop"},
+			Next:          []string{"hideout tui"},
+			Audience:      operatorhelp.AudienceNewUser,
+			Stability:     operatorhelp.StabilityStable,
+		}},
+	}
+	d, err := Start(Options{
+		Store:       testStore(t),
+		HelpCatalog: catalog,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Stop(context.Background()) })
+	base := strings.Split(d.UIURL(), "#")[0]
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(base)
+	if err != nil {
+		t.Fatalf("GET UI root: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("UI root: want 200, got %d", resp.StatusCode)
+	}
+	for _, want := range []string{
+		"DAEMON HELP SENTINEL",
+		`data-panel="help"`,
+		`hideout run -- \u003ccommand\u003e`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("loopback help missing %q", want)
+		}
+	}
+}
+
+func getLoopbackUIAsset(
+	t *testing.T,
+	client *http.Client,
+	endpoint string,
+	contentType string,
+) string {
+	t.Helper()
+	resp, err := client.Get(endpoint)
+	if err != nil {
+		t.Fatalf("GET %s: %v", endpoint, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(resp.Header.Get("Content-Type"), contentType) ||
+		resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf(
+			"asset %s status=%d content-type=%q cache=%q body=%s",
+			endpoint,
+			resp.StatusCode,
+			resp.Header.Get("Content-Type"),
+			resp.Header.Get("Cache-Control"),
+			body,
+		)
+	}
+	return string(body)
 }
 
 func getStatus(t *testing.T, client *http.Client, url string) int {

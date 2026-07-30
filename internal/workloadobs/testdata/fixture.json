@@ -1,0 +1,66 @@
+{
+  "schema": "hideout.workload-observation-fixture/v1",
+  "dns": {
+    "queryName": "fixture.hideout.invalid",
+    "queryType": "A",
+    "answers": [
+      {
+        "type": "A",
+        "value": "192.0.2.45",
+        "ttl": 30
+      }
+    ],
+    "responseCode": 0
+  },
+  "http": {
+    "listen": "127.0.0.1:0",
+    "method": "GET",
+    "path": "/health",
+    "status": 204
+  },
+  "socks5": {
+    "listen": "127.0.0.1:0",
+    "targetHost": "fixture.hideout.invalid",
+    "targetPort": 443,
+    "username": "fixture-user",
+    "passwordCanaryRef": "proxy-password"
+  },
+  "pidReuse": {
+    "pid": 4242,
+    "firstExecSequence": 7,
+    "secondExecSequence": 11,
+    "expectedDistinctExecutionIds": true
+  },
+  "eventLoss": [
+    {
+      "name": "sequence-gap",
+      "collectorGeneration": 1,
+      "cpu": 0,
+      "beforeSequence": 10,
+      "afterSequence": 12,
+      "expectedCoverage": "Partial",
+      "reason": "sequence-gap"
+    },
+    {
+      "name": "ring-overflow",
+      "collectorGeneration": 1,
+      "cpu": 1,
+      "droppedEventCount": 3,
+      "expectedCoverage": "Partial",
+      "reason": "ring-overflow"
+    },
+    {
+      "name": "collector-restart",
+      "beforeCollectorGeneration": 1,
+      "afterCollectorGeneration": 2,
+      "expectedCoverage": "Partial",
+      "reason": "observer-restarted"
+    },
+    {
+      "name": "retention-prune",
+      "prunedRecords": 8,
+      "expectedCoverage": "Partial",
+      "reason": "retention-pruned"
+    }
+  ]
+}

@@ -3,12 +3,14 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	doctorpkg "github.com/vibe-agi/hideout/internal/doctor"
 	"github.com/vibe-agi/hideout/internal/packagekit"
 )
 
@@ -60,6 +62,10 @@ func TestSupportReportWritesLocalBoundedSourceReport(t *testing.T) {
 			Applicability string `json:"applicability"`
 			Verification  string `json:"verification"`
 		} `json:"package"`
+		Doctor    doctorpkg.Report `json:"doctor"`
+		Redaction struct {
+			ExcludedDataClasses []string `json:"excludedDataClasses"`
+		} `json:"redaction"`
 		Provenance struct {
 			Uploaded bool `json:"uploaded"`
 		} `json:"provenance"`
@@ -75,6 +81,43 @@ func TestSupportReportWritesLocalBoundedSourceReport(t *testing.T) {
 	}
 	if len(data) > 1<<20 {
 		t.Fatalf("support report exceeds 1 MiB: %d", len(data))
+	}
+	var privacyFinding *doctorpkg.Finding
+	for index := range report.Doctor.Findings {
+		if report.Doctor.Findings[index].CheckID == "activity-privacy" {
+			privacyFinding = &report.Doctor.Findings[index]
+			break
+		}
+	}
+	if privacyFinding == nil {
+		t.Fatalf("support report lacks activity privacy disclosure: %+v", report.Doctor)
+	}
+	privacyFacts := fmt.Sprint(privacyFinding.Details["observedFacts"])
+	for _, want := range []string{
+		"localPathVisibility=visible-in-authenticated-local-view",
+		"shareableSupport=activity-records-and-raw-paths-excluded",
+		"coverageNonClaim=no-events-does-not-prove-no-behavior",
+		"retentionOwner=exact-environment-or-disposable-session-plus-backend-incarnation",
+		"desiredOwnerLimitBytes=268435456",
+		"desiredMaxAge=owner-lifecycle",
+		"defaultGlobalSafetyLimitBytes=1073741824",
+		"defaultActiveSegmentAllowanceBytes=8388608",
+	} {
+		if !strings.Contains(privacyFacts, want) {
+			t.Fatalf("support privacy facts missing %q:\n%s", want, privacyFacts)
+		}
+	}
+	exclusions := strings.Join(report.Redaction.ExcludedDataClasses, ",")
+	for _, want := range []string{
+		"activity-record",
+		"activity-local-path",
+		"activity-command-argv",
+		"activity-domain",
+		"activity-ip",
+	} {
+		if !strings.Contains(exclusions, want) {
+			t.Fatalf("support redaction exclusions missing %q: %s", want, exclusions)
+		}
 	}
 	if _, err := os.Lstat(filepath.Join(home, ".hideout")); !os.IsNotExist(err) {
 		t.Fatalf("support collection mutated store: %v", err)

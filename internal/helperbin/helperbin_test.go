@@ -18,6 +18,7 @@ func TestFindSourceRootWalksUpFromPackageDirectory(t *testing.T) {
 		filepath.Join(root, "cmd", "hideout-shim"),
 		filepath.Join(root, "cmd", "hideout-hostfsd"),
 		filepath.Join(root, "cmd", LinuxSessionSupervisorCommand),
+		filepath.Join(root, "cmd", LinuxObserverCommand),
 		filepath.Join(root, "cmd", LinuxWorkspacePortalCommand),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -36,6 +37,9 @@ func TestDefaultLinuxHelperPathsUseStoreBin(t *testing.T) {
 	}
 	if got, want := DefaultLinuxSessionSupervisorPath(root, "arm64"), filepath.Join(root, "bin", "hideout-session-supervisor-linux-arm64"); got != want {
 		t.Fatalf("DefaultLinuxSessionSupervisorPath=%q want %q", got, want)
+	}
+	if got, want := DefaultLinuxObserverPath(root, "arm64"), filepath.Join(root, "bin", "hideout-observer-linux-arm64"); got != want {
+		t.Fatalf("DefaultLinuxObserverPath=%q want %q", got, want)
 	}
 	if got, want := DefaultLinuxWorkspacePortalPath(root, "arm64"), filepath.Join(root, "bin", "hideout-workspace-portal-linux-arm64"); got != want {
 		t.Fatalf("DefaultLinuxWorkspacePortalPath=%q want %q", got, want)
@@ -371,6 +375,86 @@ func TestStoreHelperManifestCurrent(t *testing.T) {
 	}
 }
 
+func TestHelperManifestSourceDateEpochIsDeterministic(t *testing.T) {
+	t.Setenv("SOURCE_DATE_EPOCH", "1785456000")
+	root := t.TempDir()
+	for _, test := range []struct {
+		name  string
+		write func(string) error
+	}{
+		{
+			name: "store",
+			write: func(path string) error {
+				return WriteStoreHelperManifest(
+					path,
+					LinuxSessionSupervisorCommand,
+					"arm64",
+				)
+			},
+		},
+		{
+			name: "observer",
+			write: func(path string) error {
+				return WriteLinuxObserverManifest(path, "arm64")
+			},
+		},
+		{
+			name: "tun2socks",
+			write: func(path string) error {
+				return WriteTun2SocksManifest(path, "arm64", true)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(root, test.name)
+			if err := os.WriteFile(path, []byte(test.name), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.write(path); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := ReadManifest(ManifestPath(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "2026-07-31T00:00:00Z"; manifest.BuiltAt != want {
+				t.Fatalf("BuiltAt=%q want %q", manifest.BuiltAt, want)
+			}
+		})
+	}
+}
+
+func TestHelperManifestRejectsInvalidSourceDateEpoch(t *testing.T) {
+	for _, value := range []string{
+		"",
+		"-1",
+		"1x",
+		" 1",
+		"9223372036854775807",
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("SOURCE_DATE_EPOCH", value)
+			path := filepath.Join(t.TempDir(), "helper")
+			if err := os.WriteFile(path, []byte("helper"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteStoreHelperManifest(
+				path,
+				LinuxSessionSupervisorCommand,
+				"arm64",
+			); err == nil {
+				t.Fatalf("accepted SOURCE_DATE_EPOCH=%q", value)
+			}
+			if _, err := os.Lstat(ManifestPath(path)); !errors.Is(
+				err,
+				os.ErrNotExist,
+			) {
+				t.Fatalf("manifest written after invalid epoch: %v", err)
+			}
+		})
+	}
+}
+
 func TestResolveLinuxStoreHelpersRequireCurrentManifest(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("PATH", t.TempDir())
@@ -450,10 +534,93 @@ func TestResolveLinuxSessionSupervisorRejectsUnsupportedArchitectureAndHostFallb
 	}
 }
 
+func TestResolveLinuxObserverRequiresLicensedManifestAndReturnsPrefixedDigest(t *testing.T) {
+	root := t.TempDir()
+	path := DefaultLinuxObserverPath(root, "arm64")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("observer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv(LinuxObserverPathEnvironment, "")
+	if resolution, err := ResolveLinuxObserver(root, "arm64"); err != nil || resolution.Path != "" {
+		t.Fatalf("observer without manifest resolution=%+v error=%v", resolution, err)
+	}
+	if err := WriteStoreHelperManifest(path, LinuxObserverCommand, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err := ResolveLinuxObserver(root, "arm64"); err != nil || resolution.Path != "" {
+		t.Fatalf("observer with generic manifest resolution=%+v error=%v", resolution, err)
+	}
+	if err := WriteLinuxObserverManifest(path, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := ResolveLinuxObserver(root, "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Path != path ||
+		resolution.ExpectedDigest != "sha256:"+resolution.Manifest.SHA256 ||
+		resolution.Manifest.License != LinuxObserverLicense ||
+		!resolution.Manifest.PackageOwned {
+		t.Fatalf("observer resolution=%+v", resolution)
+	}
+	if err := os.WriteFile(path, []byte("replaced"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if resolution, err := ResolveLinuxObserver(root, "arm64"); err != nil || resolution.Path != "" {
+		t.Fatalf("drifted observer resolution=%+v error=%v", resolution, err)
+	}
+}
+
+func TestExplicitLinuxObserverPathFailsClosedOnManifestDrift(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hideout-observer-linux-arm64")
+	if err := os.WriteFile(path, []byte("observer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(LinuxObserverPathEnvironment, path)
+	if _, err := ResolveLinuxObserver("", "arm64"); err == nil {
+		t.Fatal("explicit observer without a manifest was accepted")
+	}
+	if err := WriteLinuxObserverManifest(path, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := ResolveLinuxObserver("", "arm64")
+	if err != nil || resolution.Path != path {
+		t.Fatalf("explicit observer resolution=%+v error=%v", resolution, err)
+	}
+	manifest, err := ReadManifest(ManifestPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Builder = "unknown builder"
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(path), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveLinuxObserver("", "arm64"); err == nil {
+		t.Fatal("explicit observer with untrusted builder identity was accepted")
+	}
+}
+
 func TestBuildLinuxSessionSupervisorRejectsUnsupportedArchitecture(t *testing.T) {
 	err := BuildLinuxSessionSupervisor(BuildOptions{Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: "."})
 	if err == nil {
 		t.Fatal("BuildLinuxSessionSupervisor accepted unsupported architecture")
+	}
+}
+
+func TestBuildLinuxObserverRejectsUnsupportedArchitecture(t *testing.T) {
+	err := BuildLinuxObserver(BuildOptions{
+		Out: filepath.Join(t.TempDir(), "helper"), GOARCH: "386", Source: ".",
+	})
+	if err == nil {
+		t.Fatal("BuildLinuxObserver accepted unsupported architecture")
 	}
 }
 
@@ -483,6 +650,23 @@ func TestReadManifestRejectsInvalidJSON(t *testing.T) {
 	}
 	if _, err := ReadManifest(path); err == nil {
 		t.Fatal("ReadManifest should reject invalid JSON")
+	}
+}
+
+func TestReadManifestRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
+	for name, data := range map[string]string{
+		"unknown-field":  `{"unknown":true}`,
+		"trailing-value": `{} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "helper.manifest.json")
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadManifest(path); err == nil {
+				t.Fatalf("ReadManifest accepted %s", name)
+			}
+		})
 	}
 }
 

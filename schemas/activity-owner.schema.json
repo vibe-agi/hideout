@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/activity-owner.schema.json",
+  "title": "Hideout workload activity owner",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "environmentId",
+        "backend",
+        "backendIncarnationId"
+      ],
+      "properties": {
+        "kind": { "const": "reusable-environment" },
+        "environmentId": {
+          "type": "string",
+          "pattern": "^env_[A-Za-z0-9_-]{1,124}$"
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "backendIncarnationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "sessionId",
+        "backend",
+        "backendIncarnationId"
+      ],
+      "properties": {
+        "kind": { "const": "disposable-session" },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^ses_[A-Za-z0-9_-]{1,124}$"
+        },
+        "backend": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "backendIncarnationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    }
+  ]
+}

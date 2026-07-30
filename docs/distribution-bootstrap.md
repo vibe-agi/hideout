@@ -179,8 +179,14 @@ hideout
 hideout-shim
 hideout-shim-linux-<arch>
 hideout-hostfsd-linux-<arch>
+hideout-session-supervisor-linux-<arch>
+hideout-observer-linux-<arch>
+hideout-workspace-portal-linux-<arch>
+tun2socks-linux-<arch>
 install.sh
 package-manifest.json
+runtime/package-components.json
+runtime/browser-console.assets.json
 README.md
 README.zh-CN.md
 schemas
@@ -190,17 +196,20 @@ default profile templates
 The package does not own or checksum `limactl`; Lima remains an explicit host
 prerequisite for the supported VM path. The package does own the guest Linux
 `tun2socks` privacy helper and verifies its artifact digest, pinned upstream
-version, target, build mode, package ownership, and redistributed license.
+version, target, build mode, package ownership, and redistributed license. It
+also owns `hideout-observer`: the helper manifest binds the exact executable,
+target, builder, build mode, and userspace license, while the component contract
+binds the dual-licensed embedded BPF source declaration and redistributed GPL
+text.
 `hideout package verify` and `doctor` distinguish the package-owned helper from
 the remaining host prerequisite.
 
-Optional artifacts:
-
-```text
-TUI assets
-WebUI assets
-backend templates
-```
+The TUI is compiled into `hideout`. The browser console's eight inert source
+assets are also compiled into that binary. During finalization the frozen
+binary reports their individual SHA-256 values; the generated runtime manifest
+binds them to the container binary SHA-256, and the outer package manifest
+checksums both. Package and installed-state verification reject a missing,
+stale, reordered, relicensed, or container-mismatched inventory.
 
 ## Store Layout
 

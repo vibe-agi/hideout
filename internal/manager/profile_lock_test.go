@@ -24,7 +24,11 @@ func TestProfileMutationLockUsesProcessSharedFlock(t *testing.T) {
 	if err := unix.Flock(int(first.Fd()), unix.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Flock(int(first.Fd()), unix.LOCK_UN)
+	defer func() {
+		if err := unix.Flock(int(first.Fd()), unix.LOCK_UN); err != nil {
+			t.Errorf("unlock first profile mutation lock: %v", err)
+		}
+	}()
 	if err := unix.Flock(int(second.Fd()), unix.LOCK_EX|unix.LOCK_NB); !errors.Is(err, unix.EWOULDBLOCK) {
 		t.Fatalf("second lock error=%v, want EWOULDBLOCK", err)
 	}

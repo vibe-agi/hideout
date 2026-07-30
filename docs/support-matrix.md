@@ -22,6 +22,11 @@ Current published package: [v0.1.0-alpha.3](https://github.com/vibe-agi/hideout/
 `61807ce60d7a037139713cffe475f492ee8e60cced56674ba3f0be0580e65050`; `releases/current.json` is the machine-readable source.
 <!-- hideout-public-release:end -->
 
+The entries below describe the current source contract. A gate-required or
+implemented source entry does not retrofit a capability into alpha.3:
+`helper/linux-observer` and the Feature 045 workload-observation entries apply
+only to an exact later candidate that carries and passes their required gates.
+
 Supported macOS installation uses the official Homebrew tap:
 
 ```bash
@@ -55,6 +60,7 @@ platform, backend, maturity, or automatic-update claims below.
 | `helper/linux-hostfsd` | supported | Gate 0 package smoke |
 | `helper/linux-dns-stub` | supported | Gate 3 hidden proxy |
 | `helper/linux-session-supervisor` | supported | Gate 0 package smoke and 034 real Lima Gate 2 |
+| `helper/linux-observer` | supported | Gate 0 package smoke and exact 045 real Lima observation |
 | `helper/linux-workspace-portal` | supported | Gate 0 package smoke and 035 real Lima Gate 2 |
 | `helper/linux-tun2socks-v2.6.0` | supported | Package checksum/provenance and exact-package Gate 3 |
 
@@ -63,6 +69,10 @@ platform, backend, maturity, or automatic-update claims below.
 | Subject | Level | Required Gate |
 | --- | --- | --- |
 | `feature/package-install` | supported | Gate 0 |
+| `feature/workload-observation-process` | gate-required | Exact 045 real Lima observation; require an `Available` interval for the selected run |
+| `feature/workload-observation-file` | degraded | Exact 045 real Lima observation; current reference completeness is `Partial` |
+| `feature/workload-observation-network` | degraded | Exact 045 real Lima observation; current reference route attribution is `Partial` |
+| `feature/workload-observation-dns` | degraded | Exact 045 real Lima observation; encrypted/cached/ambiguous names remain `Partial` or unknown |
 | `feature/dns-mediation` | gate-required | Gate 3 hidden proxy |
 | `feature/hostfs-write-overlay` | gate-required | Gate 2 Lima |
 | `feature/guest-privilege-separation` | gate-required | Gate 3 hidden proxy privilege evidence |
@@ -81,6 +91,28 @@ platform, backend, maturity, or automatic-update claims below.
 | `release/developer-id-notarization` | gate-required | Developer ID and accepted notarization |
 | `gate/release-candidate` | gate-required | Clean pushed package, Gate 2, Gate 3, fully executed UI, signing, notarization, and aggregate readiness |
 
+## Workload Observation Coverage
+
+Support level and runtime coverage are different. The table above says whether
+a product path is supported or gate-required; every individual run still
+reports independent `Available`, `Partial`, or `Unavailable` intervals. The
+runtime interval, reason, generation, loss count, and time range are the
+authority for that run.
+
+| Subsystem | Current macOS arm64 + Lima/Debian reference | What is recorded | Important limit |
+| --- | --- | --- | --- |
+| Process | `Available` after the cgroup-v2 boundary and observer are proved | Top-level command and attributable descendants, execution ancestry, bounded argv/cwd, time, and exit | PID alone is never identity; a gap, drop, restart, boundary loss, or target exit closes availability. |
+| File | `Partial` | Attributable open/read/write/mmap/create/truncate/rename/unlink/metadata facts, normalized path/identity, counts, bytes when known, and time | Current hook/path outcome coverage is not complete. No file content is captured, and an empty result is not proof of no access. |
+| Network | `Partial` | Attributable TCP/UDP destination IP, port, transport, and route/correlation evidence when known | Current reference route attribution is incomplete. No payload is captured; proxy mediation and shared endpoints can reduce attribution. |
+| DNS | `Partial` | Plaintext query/response metadata and execution/domain correlation when supported | Hideout does not decrypt encrypted DNS; caches, shared IPs, literals, and external resolvers can make the domain unknown. |
+
+The native backend has no supported cgroup/eBPF workload boundary and reports
+these subsystems `Unavailable`. A terminal run may show a historical
+`Available` or `Partial` interval followed by current `Unavailable
+(target-exited)`; that does not erase the historical evidence. See
+[activity-observation.md](activity-observation.md) for retention and risk
+defaults.
+
 ## Schema And ABI Support
 
 | Subject | Level |
@@ -93,7 +125,7 @@ platform, backend, maturity, or automatic-update claims below.
 
 ## Required Non-Claims
 
-- `guest-root-containment`: Hideout does not claim containment after the target obtains guest root.
+- `guest-root-containment`: Hideout does not claim containment after the target obtains guest root; guest root can tamper with the workload boundary or observer, so affected coverage must degrade.
 - `workspace-write-blocking`: Hideout does not block or DLP-scan writes inside the mounted workspace.
 - `native-isolation`: The native backend is a weak development harness, not isolation evidence.
 - `marketplace-trust`: Local adapter packs are supported; public marketplace trust is not productized.

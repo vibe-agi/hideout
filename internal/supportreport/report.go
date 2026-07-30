@@ -144,6 +144,23 @@ func validateModel(report Report) error {
 	if report.Redaction.Mode != "shareable-support" || len(report.Redaction.ExcludedDataClasses) == 0 {
 		return errors.New("shareable support redaction declaration is required")
 	}
+	excluded := make(map[string]bool, len(report.Redaction.ExcludedDataClasses))
+	for _, class := range report.Redaction.ExcludedDataClasses {
+		if strings.TrimSpace(class) == "" || excluded[class] {
+			return errors.New(
+				"shareable support redaction data classes are empty or duplicated",
+			)
+		}
+		excluded[class] = true
+	}
+	for _, required := range shareableExcludedDataClasses() {
+		if !excluded[required] {
+			return fmt.Errorf(
+				"shareable support redaction is missing %q",
+				required,
+			)
+		}
+	}
 	if report.Provenance.Command != "hideout support report --out <path>" ||
 		report.Provenance.Delivery != "local-file-only" ||
 		report.Provenance.Uploaded ||
@@ -161,6 +178,23 @@ func validateModel(report Report) error {
 		seen[entry.Code] = true
 	}
 	return nil
+}
+
+func shareableExcludedDataClasses() []string {
+	return []string{
+		"raw-audit",
+		"workspace-content",
+		"secret-backing",
+		"proxy-value",
+		"control-plane-token",
+		"machine-id",
+		"raw-host-path",
+		"activity-record",
+		"activity-local-path",
+		"activity-command-argv",
+		"activity-domain",
+		"activity-ip",
+	}
 }
 
 func validateCollection(collection Collection) error {

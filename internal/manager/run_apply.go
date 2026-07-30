@@ -25,6 +25,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/recovery"
 	runsession "github.com/vibe-agi/hideout/internal/session"
+	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
@@ -55,6 +56,7 @@ type ApplyRunOptions struct {
 	PrepareWorkspaceAttachment  func(*RunSession) error
 	ActivateWorkspaceAttachment func(*RunSession) error
 	ReleaseWorkspaceAttachment  func(context.Context) error
+	NetworkRuntimes             EnvironmentNetworkRuntimeRegistrar
 	TerminalMode                runsession.TerminalMode
 	Streams                     *backend.RunStreams
 	Lifecycle                   lifecycle.Registrar
@@ -125,6 +127,7 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		establishment, err = opts.Lifecycle.ReserveAttach(ctx, lifecycle.EstablishmentRequest{
 			EnvironmentID: runEnv.Record.ID,
 			SessionID:     layout.ID,
+			MutationKeys:  attachProfileMutationKeys(plan.ProfileName),
 		})
 		if err != nil {
 			var blocked *lifecycle.AttachBlockedError
@@ -398,6 +401,17 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 	}
 	result.AuditPath = runSession.AuditPath
 	c.emitOperation("session", "start", runSessionOperationDetails(runSession, "running"))
+	sessionEndWritten := false
+	defer func() {
+		if sessionEndWritten {
+			return
+		}
+		emitRunSessionEnd(
+			runSession,
+			plan,
+			retErr,
+		)
+	}()
 	defer func() {
 		status := "completed"
 		phase := "complete"
@@ -658,11 +672,105 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 				return result, err
 			}
 		}
+		if opts.NetworkRuntimes != nil &&
+			runNetwork.EnvironmentService &&
+			runNetwork.Plan.Mode == netpolicy.ModeTun2Socks {
+			dnsController, controllerOK :=
+				opts.Backend.(backend.EnvironmentNetworkDNSController)
+			dnsVerifier, verifierOK :=
+				opts.Backend.(backend.EnvironmentNetworkDNSVerifier)
+			networkController, networkOK :=
+				opts.Backend.(backend.EnvironmentNetworkServiceController)
+			if !controllerOK || !verifierOK || !networkOK {
+				return result, errors.New(
+					"selected backend cannot register live DNS control",
+				)
+			}
+			sessionRef := session
+			serviceDir := runNetwork.GuestServiceDir
+			controlEnv := append([]string(nil), dataPlane.Env...)
+			releaseRuntime, registerErr :=
+				opts.NetworkRuntimes.RegisterEnvironmentNetworkRuntime(
+					EnvironmentNetworkRuntimeRegistration{
+						EnvironmentID: runEnv.Record.ID,
+						SessionID:     session.ID,
+						BootID:        session.ExpectedBootID,
+						ReconfigureDNS: func(
+							callCtx context.Context,
+							oldResolver string,
+							newResolver string,
+						) error {
+							return dnsController.
+								ReconfigureEnvironmentNetworkDNS(
+									callCtx,
+									sessionRef,
+									serviceDir,
+									oldResolver,
+									newResolver,
+									controlEnv,
+								)
+						},
+						VerifyDNS: func(
+							callCtx context.Context,
+							resolver string,
+						) error {
+							if err := dnsVerifier.
+								VerifyEnvironmentNetworkDNS(
+									callCtx,
+									sessionRef,
+									serviceDir,
+									resolver,
+									controlEnv,
+								); err != nil {
+								return err
+							}
+							return networkController.
+								VerifyEnvironmentNetwork(
+									callCtx,
+									sessionRef,
+									serviceDir,
+									controlEnv,
+								)
+						},
+					},
+				)
+			if registerErr != nil {
+				return result, fmt.Errorf(
+					"register live environment DNS control: %w",
+					registerErr,
+				)
+			}
+			if releaseRuntime == nil {
+				return result, errors.New(
+					"live environment DNS control returned no release",
+				)
+			}
+			defer releaseRuntime()
+		}
 		if err := transitionLock.Unlock(); err != nil {
 			transitionLock = nil
 			return result, err
 		}
 		transitionLock = nil
+	}
+	if opts.Streams != nil && opts.Streams.Activity != nil {
+		preparation, preparationErr := activityPreparationForRun(
+			session,
+			runEnv,
+			lifecycleRegistration,
+			plan.RuntimeProfile,
+		)
+		if preparationErr != nil {
+			return result, preparationErr
+		}
+		session.Activity = &preparation
+		if err := emitActivityObservationBoundary(
+			runSession.Audit,
+			runSession,
+			preparation,
+		); err != nil {
+			return result, err
+		}
 	}
 	previewCtx, cancelPreview := context.WithCancel(ctx)
 	var previewEvents <-chan []audit.Event
@@ -761,22 +869,15 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 			}
 		}
 	}
-	decision := "allow"
+	sessionEndErr := runErr
 	if runErr != nil {
-		decision = "error"
 		result.Error = runErr.Error()
 	} else if previewAuditErr != nil {
-		decision = "error"
+		sessionEndErr = previewAuditErr
 		result.Error = previewAuditErr.Error()
 	}
-	_ = runSession.Audit.Emit(audit.Event{
-		Session:  runSession.Layout.ID,
-		Profile:  plan.ProfileName,
-		Backend:  plan.Backend,
-		Action:   "session.end",
-		Decision: decision,
-		Details:  sessionEndDetails(plan.Command, runErr),
-	})
+	emitRunSessionEnd(runSession, plan, sessionEndErr)
+	sessionEndWritten = true
 	if runErr != nil {
 		return result, runErr
 	}
@@ -784,6 +885,129 @@ func (c Core) ApplyRun(ctx context.Context, plan RunPlan, opts ApplyRunOptions) 
 		return result, previewAuditErr
 	}
 	return result, nil
+}
+
+func attachProfileMutationKeys(profileName string) []string {
+	logical := DefaultTypedChangeRegistry().MutationKeys()
+	keys := make([]string, 0, len(logical))
+	for _, key := range logical {
+		if scoped := lifecycle.ProfileMutationKey(profileName, key); scoped != "" {
+			keys = append(keys, scoped)
+		}
+	}
+	return keys
+}
+
+func emitRunSessionEnd(
+	runSession RunSession,
+	plan RunPlan,
+	runErr error,
+) {
+	decision := "allow"
+	if runErr != nil {
+		decision = "error"
+	}
+	_ = runSession.Audit.Emit(audit.Event{
+		Session: runSession.Layout.ID, Profile: plan.ProfileName,
+		Backend: plan.Backend, Action: "session.end",
+		Decision: decision,
+		Details:  sessionEndDetails(plan.Command, runErr),
+	})
+}
+
+func activityPreparationForRun(
+	session *backend.Session,
+	runEnv RunEnvironment,
+	registration lifecycle.Registration,
+	runtimeProfile profile.Profile,
+) (backend.ActivityPreparation, error) {
+	if session == nil || registration == nil || !runEnv.Active {
+		return backend.ActivityPreparation{},
+			errors.New("activity observation requires an active lifecycle-bound session")
+	}
+	incarnation := registration.Incarnation()
+	if err := incarnation.Validate(true); err != nil {
+		return backend.ActivityPreparation{}, err
+	}
+	if session.ID == "" || session.EnvironmentID != incarnation.EnvironmentID ||
+		session.InstanceName != incarnation.InstanceName ||
+		session.ExpectedBootID != incarnation.BootID ||
+		session.ObserverHelperDigest == "" {
+		return backend.ActivityPreparation{},
+			errors.New("activity observation identity is incomplete")
+	}
+	backendIncarnationID := fmt.Sprintf(
+		"%s:%d:%s",
+		incarnation.InstanceName,
+		incarnation.StartGeneration,
+		incarnation.BootID,
+	)
+	var (
+		owner workloadtypes.ActivityOwner
+		err   error
+	)
+	if runEnv.Record.Disposable {
+		owner, err = workloadtypes.NewDisposableOwner(
+			session.ID,
+			session.Backend,
+			backendIncarnationID,
+		)
+	} else {
+		owner, err = workloadtypes.NewReusableOwner(
+			session.EnvironmentID,
+			session.Backend,
+			backendIncarnationID,
+		)
+	}
+	if err != nil {
+		return backend.ActivityPreparation{}, err
+	}
+	retention := workloadtypes.DefaultActivityRetentionPolicy()
+	if runtimeProfile.Activity != nil {
+		retention = runtimeProfile.Activity.Retention
+	}
+	preparation := backend.ActivityPreparation{
+		Owner: owner, SessionID: session.ID,
+		EnvironmentID: session.EnvironmentID, Backend: session.Backend,
+		BackendIncarnationID: backendIncarnationID,
+		GuestBootID:          session.ExpectedBootID,
+		ObserverGeneration:   1,
+		ObserverHelperDigest: session.ObserverHelperDigest,
+		Retention:            retention,
+	}
+	return preparation, preparation.Validate()
+}
+
+func emitActivityObservationBoundary(
+	aw *audit.Writer,
+	runSession RunSession,
+	preparation backend.ActivityPreparation,
+) error {
+	if aw == nil {
+		return errors.New("activity observation boundary audit is unavailable")
+	}
+	if err := preparation.Validate(); err != nil {
+		return err
+	}
+	return aw.Emit(audit.Event{
+		Session:  runSession.Layout.ID,
+		Profile:  runSession.Plan.ProfileName,
+		Backend:  runSession.Plan.Backend,
+		Action:   "activity.observation.boundary",
+		Decision: "audit-only",
+		Details: map[string]any{
+			"scope":                  workloadtypes.ActivityObservationScope,
+			"ownerKind":              preparation.Owner.Kind,
+			"ownerBinding":           workloadtypes.ActivityRetentionOwner,
+			"localPathVisibility":    workloadtypes.ActivityLocalPathVisibility,
+			"shareablePathTreatment": workloadtypes.ActivityShareablePathTreatment,
+			"excludedData":           workloadtypes.ActivityExcludedData(),
+			"coverageNonClaim":       workloadtypes.ActivityCoverageNonClaim,
+			"retentionMaxBytes":      preparation.Retention.MaxBytes,
+			"retentionMaxAgeSeconds": preparation.Retention.MaxAgeSeconds,
+			"retentionLifecycle":     workloadtypes.ActivityRetentionLifecycle,
+		},
+	})
 }
 
 func lifecycleObservationForAttach(ctx context.Context, registrar lifecycle.Registrar, runBackend backend.Backend, environmentID, instanceName string) (backend.LifecycleObservation, error) {
@@ -1079,6 +1303,7 @@ func (c Core) runSpec(runSession RunSession, runEnv RunEnvironment, dataPlane Ru
 		PortBridges:               append([]backend.PortBridgeEndpoint(nil), dataPlane.PortBridges...),
 		AuditPath:                 runSession.AuditPath,
 		ProjectionReadiness:       backend.CloneProjectionReadinessExpectation(dataPlane.ProjectionReadiness),
+		ObserverHelperDigest:      dataPlane.ObserverHelperDigest,
 		NetworkPrivilegedSetup:    runNetwork.Plan.Mode == netpolicy.ModeTun2Socks,
 		PrivilegedSetupRequired:   runNetwork.Plan.Mode == netpolicy.ModeTun2Socks || dataPlane.HostFSEnabled,
 		PrivilegeStatusSink: func(status privilege.Status) error {

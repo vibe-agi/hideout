@@ -1,0 +1,47 @@
+connect  [stable · new-user]
+Purpose:
+  Plan and set a profile's desired direct or proxied connection.
+
+Usage:
+  hideout connect directly [for profile <name>] [--yes]
+  hideout connect through <proxy-secret> [using <resolver>] [for profile <name>] [--yes]
+  hideout connect plan --profile <name> (--direct | --through <proxy-secret> [--dns <resolver>])
+  hideout connect apply <operation-id> [--yes]
+
+Flags:
+  --profile <name>            select the affected profile in plan mode
+  --direct                    plan direct networking
+  --through <ref>             plan a daemon-managed proxy secret reference
+  --dns <ip>                  select the mediated resolver in plan mode
+  --yes                       confirm the exact displayed plan non-interactively
+
+Examples:
+  hideout connect directly
+  hideout connect through local-proxy using 1.1.1.1
+  hideout connect plan --profile default --through local-proxy --dns 1.1.1.1
+
+Before:
+  For a proxied connection, first store the exact ref with
+  `hideout secret set <ref>`.
+  One-release compatibility applies only to legacy HIDEOUT_SECRET_<REF> exports.
+  The daemon startup environment is the only legacy source.
+  Exports made after daemon start cannot apply. Migrate with
+  `hideout secret set <ref>`.
+
+Effects:
+  Planning is read-only. Confirmed apply changes desired connection state; the
+  result says whether activation is live or pending the next eligible attach.
+
+Safety:
+  The canonical diff, effects, blockers, and rollback are displayed before
+  confirmation.
+  A privacy connection fails closed when its proxy secret or mediated resolver
+  cannot be proved; it never silently falls back to direct.
+
+Recovery:
+  Inspect the exact operation in `hideout tui`; restore with a newly reviewed
+  `hideout connect directly` plan or the prior proved proxy ref.
+
+Next:
+  hideout show connection
+  hideout doctor --network tun2socks --proxy-secret <ref> --mediated-resolver <ip>

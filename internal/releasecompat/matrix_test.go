@@ -3,6 +3,7 @@ package releasecompat
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -17,6 +18,11 @@ func TestBuiltinMatrixValidatesRequiredRows(t *testing.T) {
 		"platform/linux/arm64",
 		"backend/native",
 		"helper/linux-session-supervisor",
+		"helper/linux-observer",
+		"feature/workload-observation-process",
+		"feature/workload-observation-file",
+		"feature/workload-observation-network",
+		"feature/workload-observation-dns",
 		"feature/dns-mediation",
 		"feature/hostfs-write-overlay",
 		"feature/hostfs-discoverable-namespace",
@@ -62,6 +68,35 @@ func TestBuiltinMatrixBindsProjectionClaimsToExactProofs(t *testing.T) {
 	}
 }
 
+func TestBuiltinMatrixCarriesHonestWorkloadObservationLevels(t *testing.T) {
+	matrix := BuiltinMatrix()
+	for _, want := range []struct {
+		subject string
+		level   string
+	}{
+		{subject: "feature/workload-observation-process", level: LevelGateRequired},
+		{subject: "feature/workload-observation-file", level: LevelDegraded},
+		{subject: "feature/workload-observation-network", level: LevelDegraded},
+		{subject: "feature/workload-observation-dns", level: LevelDegraded},
+	} {
+		entry, ok := FindEntry(matrix, want.subject)
+		if !ok {
+			t.Fatalf("missing subject %s", want.subject)
+		}
+		if entry.Level != want.level {
+			t.Fatalf("%s level=%s want %s", want.subject, entry.Level, want.level)
+		}
+		if len(entry.RequiredGates) != 1 ||
+			entry.RequiredGates[0] != "gate2-lima" {
+			t.Fatalf("%s gates=%v", want.subject, entry.RequiredGates)
+		}
+		if len(entry.Evidence) != 1 ||
+			entry.Evidence[0] != "workload-observation-lima" {
+			t.Fatalf("%s evidence=%v", want.subject, entry.Evidence)
+		}
+	}
+}
+
 func TestBuiltinMatrixCarriesPublicAlphaNonClaims(t *testing.T) {
 	matrix := BuiltinMatrix()
 	want := map[string]bool{
@@ -81,6 +116,29 @@ func TestBuiltinMatrixCarriesPublicAlphaNonClaims(t *testing.T) {
 	for id, found := range want {
 		if !found {
 			t.Fatalf("missing public alpha non-claim %s", id)
+		}
+	}
+}
+
+func TestGuestRootNonClaimCoversWorkloadObservation(t *testing.T) {
+	var guestRoot NonClaim
+	for _, claim := range BuiltinMatrix().NonClaims {
+		if claim.ID == "guest-root-containment" {
+			guestRoot = claim
+			break
+		}
+	}
+	if guestRoot.ID == "" {
+		t.Fatal("missing guest-root-containment non-claim")
+	}
+	for _, subject := range []string{
+		"feature/workload-observation-process",
+		"feature/workload-observation-file",
+		"feature/workload-observation-network",
+		"feature/workload-observation-dns",
+	} {
+		if !slices.Contains(guestRoot.AppliesTo, subject) {
+			t.Fatalf("guest-root non-claim does not apply to %s", subject)
 		}
 	}
 }

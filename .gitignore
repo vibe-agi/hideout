@@ -1,4 +1,5 @@
 .codegraph/
+.artifacts/
 .hideout-bin/
 .hideout-release-evidence/
 .hideout-operator*
@@ -27,4 +28,5 @@ vendor/
 .specify/
 
 # Stray cmd build artifacts at repo root
+/hideout
 /hideout-gate-*

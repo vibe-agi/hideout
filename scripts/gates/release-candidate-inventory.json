@@ -1,0 +1,44 @@
+{
+  "schema": "hideout.local-release-candidate-inventory/v1",
+  "requiredGoVersion": "go1.25.12",
+  "requiredLanes": [
+    "unit",
+    "race",
+    "fuzz-property",
+    "schema",
+    "generated",
+    "static",
+    "dependencies-advisory",
+    "mutations",
+    "release-blockers"
+  ],
+  "fuzzTests": [
+    {
+      "package": "./internal/manager",
+      "importPath": "github.com/vibe-agi/hideout/internal/manager",
+      "name": "FuzzTypedChangeNormalizationAndReview",
+      "source": "internal/manager/profile_transaction_fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/sessionwire",
+      "importPath": "github.com/vibe-agi/hideout/internal/sessionwire",
+      "name": "FuzzObserverEnvelopeStrictRoundTrip",
+      "source": "internal/sessionwire/observer_fuzz_test.go",
+      "fuzzTime": "5s"
+    },
+    {
+      "package": "./internal/workloadobs/redact",
+      "importPath": "github.com/vibe-agi/hideout/internal/workloadobs/redact",
+      "name": "FuzzRedactorTextAndArgvFailClosed",
+      "source": "internal/workloadobs/redact/redact_fuzz_test.go",
+      "fuzzTime": "5s"
+    }
+  ],
+  "claimContracts": "scripts/mutation/045/contracts.json",
+  "claimMatrix": "docs/release/045-claim-matrix.md",
+  "productionMutationManifest": "scripts/mutation/045/production-mutations.json",
+  "productionMutationRunner": "scripts/mutation/045/run-production-mutations.sh",
+  "recoveryMutationRunner": "scripts/gates/recovery.sh",
+  "negativeFixtureRunner": "scripts/mutation/045/run-negative-fixtures.sh"
+}

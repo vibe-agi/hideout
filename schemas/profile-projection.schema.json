@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/profile-projection.schema.json",
+  "title": "Hideout profile projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile",
+    "revision",
+    "contentDigest",
+    "desired",
+    "effective",
+    "updatedAt"
+  ],
+  "properties": {
+    "schema": { "const": "hideout.profile-projection.v1" },
+    "profile": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "contentDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "desired": {
+      "type": "object"
+    },
+    "effective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sessions"],
+      "properties": {
+        "status": {
+          "enum": [
+            "not-observed",
+            "effective",
+            "transitioning",
+            "blocked",
+            "failed",
+            "unproved"
+          ]
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["direct", "proxy", "unknown"] },
+            "proxySecretRef": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+            },
+            "secretGeneration": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "dns": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "observedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "sessions": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sessionId", "snapshotId", "current"],
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "pattern": "^ses_[A-Za-z0-9_-]{1,124}$"
+              },
+              "snapshotId": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "profileRevision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "current": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "kind", "phase", "startedAt"],
+      "properties": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^op_[A-Za-z0-9_-]{8,124}$"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "phase": {
+          "enum": [
+            "staging",
+            "activating",
+            "draining",
+            "proving",
+            "rolling-back",
+            "recovery-required"
+          ]
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

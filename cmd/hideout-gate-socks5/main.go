@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -21,6 +23,11 @@ func main() {
 func run() int {
 	listen := flag.String("listen", "127.0.0.1:0", "TCP listen address")
 	urlHost := flag.String("url-host", "", "host name to print in the socks5 URL")
+	authenticated := flag.Bool(
+		"authenticated",
+		false,
+		"generate private in-memory username/password credentials",
+	)
 	useEnvHTTPProxy := flag.Bool("use-env-http-proxy", false, "chain fixture egress through HTTPS_PROXY/HTTP_PROXY")
 	mapConnect := flag.String("map-connect", "", "rewrite one exact CONNECT target as source=destination")
 	flag.Parse()
@@ -29,6 +36,18 @@ func run() int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hideout-gate-socks5:", err)
 		return 1
+	}
+	if *authenticated {
+		server.Username, err = randomCredential("gate_u_")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "hideout-gate-socks5:", err)
+			return 1
+		}
+		server.Password, err = randomCredential("gate_p_")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "hideout-gate-socks5:", err)
+			return 1
+		}
 	}
 	// The gate captures this stream. Without it a failed privacy forward proof
 	// cannot distinguish a guest that never reached the proxy from a CONNECT
@@ -82,6 +101,14 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func randomCredential(prefix string) (string, error) {
+	material := make([]byte, 18)
+	if _, err := rand.Read(material); err != nil {
+		return "", fmt.Errorf("generate proxy credential: %w", err)
+	}
+	return prefix + hex.EncodeToString(material), nil
 }
 
 func parseConnectMap(value string) (string, string, error) {

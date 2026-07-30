@@ -18,10 +18,29 @@ func BuildSeed(input SeedInput) Seed {
 		health = HealthLive
 	}
 	overview := scopeOverview(input.Overview, input.ProfileScope)
+	version := SeedVersion
+	if input.DaemonInstanceID != "" || input.CredentialGeneration != 0 || input.EventSequence != 0 {
+		version = SeedVersionV2
+	}
 	return Seed{
-		Version:         SeedVersion,
-		GeneratedAt:     generatedAt.UTC(),
-		Overview:        overview,
+		Version:              version,
+		GeneratedAt:          generatedAt.UTC(),
+		DaemonInstanceID:     input.DaemonInstanceID,
+		CredentialGeneration: input.CredentialGeneration,
+		EventSequence:        input.EventSequence,
+		Overview:             overview,
+		Profiles:             cloneProfileProjections(input.Profiles),
+		Transitions:          cloneTransitions(input.Transitions),
+		Operations:           cloneOperations(input.Operations),
+		Activity:             cloneActivityProjection(input.Activity),
+		Coverage:             cloneCoverage(input.Coverage),
+		ActivityRetention:    cloneActivityRetention(input.ActivityRetention),
+		ActivityStoreRetention: cloneActivityStoreRetention(
+			input.ActivityStoreRetention,
+		),
+		Risks:           cloneRisks(input.Risks),
+		Capabilities:    cloneCapabilities(input.Capabilities),
+		NextActions:     append([]NextActionRef(nil), input.NextActions...),
 		AuditTail:       scopeAudit(input.AuditTail, input.ProfileScope),
 		DeniedAuditTail: scopeAudit(input.DeniedAuditTail, input.ProfileScope),
 		Background:      append([]BackgroundRow(nil), input.Background...),
@@ -36,9 +55,28 @@ func BuildSeed(input SeedInput) Seed {
 }
 
 func NewState(seed Seed) State {
+	readOnly := seed.Version != SeedVersionV2 ||
+		!daemonInstancePattern.MatchString(seed.DaemonInstanceID) ||
+		seed.CredentialGeneration == 0 ||
+		seed.EventSequence < 0 ||
+		(seed.StreamHealth.State != HealthLive && seed.StreamHealth.State != HealthIdleLive)
 	return State{
-		Version:         seed.Version,
-		Overview:        seed.Overview,
+		Version:              seed.Version,
+		DaemonInstanceID:     seed.DaemonInstanceID,
+		CredentialGeneration: seed.CredentialGeneration,
+		Overview:             seed.Overview,
+		Profiles:             cloneProfileProjections(seed.Profiles),
+		Transitions:          cloneTransitions(seed.Transitions),
+		Operations:           cloneOperations(seed.Operations),
+		Activity:             cloneActivityProjection(seed.Activity),
+		Coverage:             cloneCoverage(seed.Coverage),
+		ActivityRetention:    cloneActivityRetention(seed.ActivityRetention),
+		ActivityStoreRetention: cloneActivityStoreRetention(
+			seed.ActivityStoreRetention,
+		),
+		Risks:           cloneRisks(seed.Risks),
+		Capabilities:    cloneCapabilities(seed.Capabilities),
+		NextActions:     append([]NextActionRef(nil), seed.NextActions...),
 		AuditTail:       append([]audit.Event(nil), seed.AuditTail...),
 		DeniedAuditTail: append([]audit.Event(nil), seed.DeniedAuditTail...),
 		Background:      append([]BackgroundRow(nil), seed.Background...),
@@ -48,7 +86,9 @@ func NewState(seed Seed) State {
 		StatusRows:      append([]StatusRow(nil), seed.StatusRows...),
 		Lifecycle:       append([]lifecycle.Status(nil), seed.Lifecycle...),
 		StreamHealth:    seed.StreamHealth,
+		LastSeq:         seed.EventSequence,
 		ProfileScope:    seed.ProfileScope,
+		ReadOnly:        readOnly,
 		Seen:            map[string]map[string]bool{},
 	}
 }
