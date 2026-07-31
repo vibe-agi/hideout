@@ -22,31 +22,64 @@ gate2_034_finalize_reference_result() {
   local samples="$4" warmups="$5" reference_uid="$6"
   local reference_digest="$7"
   local baseline_median baseline_p95 observed_median observed_p95
-  local overhead_percent
+  local baseline_samples_json observed_samples_json
+  local overhead_samples_json overhead_percent
 
+  baseline_samples_json="$(gate2_034_values_json "$baseline_values")"
+  observed_samples_json="$(gate2_034_values_json "$observed_values")"
   baseline_median="$(gate2_034_percentile "$baseline_values" 50)"
   baseline_p95="$(gate2_034_percentile "$baseline_values" 95)"
   observed_median="$(gate2_034_percentile "$observed_values" 50)"
   observed_p95="$(gate2_034_percentile "$observed_values" 95)"
-  overhead_percent="$(
-    awk -v baseline="$baseline_median" -v observed="$observed_median" '
-      BEGIN {
-        if (baseline <= 0) exit 1
-        printf "%.3f\n", ((observed-baseline)/baseline)*100
-      }
+  overhead_samples_json="$(
+    jq -cn \
+      --argjson baseline "$baseline_samples_json" \
+      --argjson observed "$observed_samples_json" \
+      --argjson expected "$samples" '
+      if $expected <= 0 or
+          ($baseline | length) != $expected or
+          ($observed | length) != $expected or
+          any($baseline[]; . <= 0) or
+          any($observed[]; . <= 0)
+      then
+        error("reference workload samples are incomplete or invalid")
+      else
+        [
+          range(0; $expected) as $index |
+          (
+            (
+              (
+                ($observed[$index] - $baseline[$index]) /
+                $baseline[$index]
+              ) * 100000
+            ) | round
+          ) / 1000
+        ]
+      end
     '
+  )"
+  overhead_percent="$(
+    printf '%s\n' "$overhead_samples_json" |
+      jq -r '
+        sort |
+        .[((length * 50 + 99) / 100 | floor) - 1]
+      '
   )"
   jq -n \
     --arg unit "milliseconds" \
     --arg clock "guest-python-time.monotonic_ns" \
     --arg order "alternating-baseline-observed" \
+    --arg pairing "index-aligned-adjacent-counterbalanced" \
+    --arg overheadAggregation \
+      "nearest-rank-median-of-paired-percent-deltas" \
     --arg percentile "nearest-rank-ceiling" \
     --arg uid "$reference_uid" \
     --arg digest "$reference_digest" \
     --argjson samples "$samples" \
     --argjson warmups "$warmups" \
-    --argjson baselineSamples "$(gate2_034_values_json "$baseline_values")" \
-    --argjson observedSamples "$(gate2_034_values_json "$observed_values")" \
+    --argjson baselineSamples "$baseline_samples_json" \
+    --argjson observedSamples "$observed_samples_json" \
+    --argjson overheadSamples "$overhead_samples_json" \
     --argjson baselineMedian "$baseline_median" \
     --argjson baselineP95 "$baseline_p95" \
     --argjson observedMedian "$observed_median" \
@@ -59,6 +92,8 @@ gate2_034_finalize_reference_result() {
         samples: $samples,
         warmups: $warmups,
         sampleOrder: $order,
+        samplePairing: $pairing,
+        overheadAggregation: $overheadAggregation,
         clock: $clock,
         percentile: $percentile,
         uid: ($uid | tonumber),
@@ -78,6 +113,7 @@ gate2_034_finalize_reference_result() {
       },
       elapsedOverhead: {
         unit: "percent",
+        samples: $overheadSamples,
         median: $overhead,
         threshold: 10,
         thresholdPassed: ($overhead <= 10)

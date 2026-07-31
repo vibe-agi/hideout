@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found twenty-five required
-issues. All twenty-five were resolved in the review-close worktree, and their
+The final source, security, and operator-UX review found twenty-six required
+issues. All twenty-six were resolved in the review-close worktree, and their
 focused regression judges pass. There is no open required review finding.
 
 This report is not itself a release-candidate attestation. At review close, the
@@ -19,7 +19,7 @@ claimed.
 | Field | Value |
 | --- | --- |
 | Review date | 2026-07-31 |
-| Base `HEAD` | `c5db6514ae380ff500de42934d9749a3732268b9` |
+| Base `HEAD` | `fa5997c8c719e581541463670a26f8ff6f192afc` |
 | Branch | `master` |
 | Worktree at review close | Dirty implementation tree; exact source identity is bound only by the later candidate freeze |
 | Candidate status | At review close: not a candidate; exact clean identity remains T163/T171 |
@@ -124,6 +124,7 @@ Severity means:
 | CR045-023 | Low | The Portal saturation regression launched a delayed request after an Open response, then treated any global in-flight count as proof that the delayed request owned the slot. The server writes a response before its deferred admission release, so under full-suite scheduling the observation could still belong to Open: the delayed request was rejected and the supposed overload request then succeeded, randomly failing an otherwise-correct release candidate. | Workspace Portal test maintainers | Wait for prior active requests to release, acquire the same production admission controller's exact environment/provider/session in-flight lease directly, then exercise overload, sibling isolation, and reserved teardown through real Portal clients without a timer or goroutine scheduling assumption. | Retained clean aggregate `run-20260731T093015Z-35323` failed only `TestPortalSaturationDoesNotStarveSiblingOrTeardown`; the corrected test passed 500 ordinary repetitions and 100 race repetitions; and the final clean unit/race aggregates. |
 | CR045-024 | Low | The package-lifecycle gate downloaded the immutable previous release with curl's default retry policy. A transient TLS handshake error exited with status 35, which is not retried by `--retry` alone; stdout and stderr were redirected to a scratch log that the EXIT trap immediately deleted, so the final candidate sequence stopped with no actionable terminal message. | Package lifecycle gate maintainers | Restrict the helper to the public release URL, retry all curl error classes within explicit connection/transfer bounds, remove a partial destination, and surface the exact curl status plus a bounded public diagnostic before cleanup. | The clean `1d23d14` lifecycle run exited 35 with no output; a fake-curl preflight proves all-error retry and time bounds are present and a synthetic TLS failure retains status 35 and its diagnostic; Bash syntax and ShellCheck; and the final exact lifecycle pass. |
 | CR045-025 | Low | The first TLS-failure preflight used short-circuit success chains with a shared fallback for multi-assertion checks. The intended truth table happened to work, but ShellCheck correctly rejected the ambiguous construct because the fallback can also run after a later term fails when an earlier term succeeded; an error-severity-only local scan missed the informational diagnostic. | Package lifecycle gate maintainers | Express both assertion groups as explicit conditional blocks with individually negated alternatives and rerun the same complete source-following ShellCheck inventory used by the release static lane without a suppression. | Clean aggregate `c5db651` failed only static with two SC2015 findings; `xargs shellcheck -x` over the exact release inventory and the package-lifecycle preflight pass; and the final clean static aggregate. |
+| CR045-026 | Medium | The reference-overhead experiment counterbalanced adjacent baseline/observed pairs, but its verdict divided the two groups' independent medians. When host speed changed between samples, those medians could represent different points in time: a low-contention run whose paired median was 8.413% was falsely rejected as 11.353%. A genuinely contended run still had a failing paired median of 21.541%. | Release performance gate maintainers | Preserve the 10% limit and counterbalanced order, derive one rounded percentage delta from each exact pair, retain all paired deltas, judge their nearest-rank median, and independently recompute that array and median in the outer candidate gate. | A synthetic preflight where the obsolete marginal-median ratio exceeds 10% while the paired median passes; Bash syntax and ShellCheck; retained low/high-contention evidence proving 8.413% acceptance and 21.541% rejection; and the final exact performance aggregate. |
 
 ## Closure terminology and false-success audit
 

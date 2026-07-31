@@ -186,8 +186,19 @@ if [ "$preflight_only" -eq 1 ]; then
     "$reference_result" "$reference_baseline" "$reference_observed" \
     3 1 1000 "$(printf '0%.0s' {1..64})" >/dev/null
   jq -e '
+    def nr($values; $percentile):
+      ($values | sort) as $sorted |
+      (($sorted | length) * $percentile + 99) / 100 | floor as $rank |
+      $sorted[$rank - 1];
     .elapsedOverhead.thresholdPassed == true and
     .elapsedOverhead.threshold == 10 and
+    (.elapsedOverhead.samples | length) == 3 and
+    .elapsedOverhead.median ==
+      nr(.elapsedOverhead.samples; 50) and
+    .methodology.samplePairing ==
+      "index-aligned-adjacent-counterbalanced" and
+    .methodology.overheadAggregation ==
+      "nearest-rank-median-of-paired-percent-deltas" and
     (.baseline.samples | length) == 3 and
     (.observed.samples | length) == 3
   ' "$reference_result" >/dev/null || {
@@ -207,8 +218,15 @@ if [ "$preflight_only" -eq 1 ]; then
     exit 1
   fi
   if ! jq -e '
+      def nr($values; $percentile):
+        ($values | sort) as $sorted |
+        (($sorted | length) * $percentile + 99) / 100 | floor as $rank |
+        $sorted[$rank - 1];
       .elapsedOverhead.thresholdPassed == false and
       .elapsedOverhead.threshold == 10 and
+      (.elapsedOverhead.samples | length) == 3 and
+      .elapsedOverhead.median ==
+        nr(.elapsedOverhead.samples; 50) and
       (.baseline.samples | length) == 3 and
       (.observed.samples | length) == 3
     ' "$reference_result" >/dev/null ||
@@ -218,6 +236,34 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   fi
+  paired_baseline="$preflight_root/paired-baseline.txt"
+  paired_observed="$preflight_root/paired-observed.txt"
+  paired_result="$preflight_root/paired-result.json"
+  printf '%s\n' 80 120 100 90 70 60 65 >"$paired_baseline"
+  printf '%s\n' 90 87 95 97 76 71 92 >"$paired_observed"
+  gate2_034_finalize_reference_result \
+    "$paired_result" "$paired_baseline" "$paired_observed" \
+    7 1 1000 "$(printf '0%.0s' {1..64})" >/dev/null
+  jq -e '
+    def nr($values; $percentile):
+      ($values | sort) as $sorted |
+      (($sorted | length) * $percentile + 99) / 100 | floor as $rank |
+      $sorted[$rank - 1];
+    .elapsedOverhead.thresholdPassed == true and
+    .elapsedOverhead.median ==
+      nr(.elapsedOverhead.samples; 50) and
+    (
+      (
+        (.observed.median - .baseline.median) /
+        .baseline.median
+      ) * 100
+    ) > 10
+  ' "$paired_result" >/dev/null || {
+    printf \
+      'release-candidate-performance: paired A/B aggregation regressed\n' \
+      >&2
+    exit 1
+  }
   nested_errexit_marker="$preflight_root/nested-errexit-continued"
   set +e
   bash -c '
@@ -646,7 +692,28 @@ jq -e \
       nr(.referenceWorkload.observed.samples; 50) and
     .referenceWorkload.observed.p95 ==
       nr(.referenceWorkload.observed.samples; 95) and
+    .referenceWorkload.methodology.samplePairing ==
+      "index-aligned-adjacent-counterbalanced" and
+    .referenceWorkload.methodology.overheadAggregation ==
+      "nearest-rank-median-of-paired-percent-deltas" and
     .referenceWorkload.elapsedOverhead.unit == "percent" and
+    (.referenceWorkload.elapsedOverhead.samples | length) == $samples and
+    .referenceWorkload.elapsedOverhead.samples == [
+      range(0; $samples) as $index |
+      (
+        (
+          (
+            (
+              .referenceWorkload.observed.samples[$index] -
+              .referenceWorkload.baseline.samples[$index]
+            ) /
+            .referenceWorkload.baseline.samples[$index]
+          ) * 100000
+        ) | round
+      ) / 1000
+    ] and
+    .referenceWorkload.elapsedOverhead.median ==
+      nr(.referenceWorkload.elapsedOverhead.samples; 50) and
     .referenceWorkload.elapsedOverhead.threshold == 10 and
     .referenceWorkload.elapsedOverhead.thresholdPassed == true
   ' "$concurrent_performance" >/dev/null
