@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/homebrew-formula.sh"
 doc_root="${HIDEOUT_DOC_ROOT:-$ROOT}"
 inventory="$doc_root/releases/current.json"
 
@@ -695,8 +696,9 @@ validate_cross_docs() {
       echo "doc-truth-smoke: Homebrew source formula does not match the published inventory" >&2
       exit 1
     fi
-    if ! cmp <(tail -n +3 "$formula") "$formula_snapshot" >/dev/null; then
-      echo "doc-truth-smoke: release-time Homebrew formula snapshot drifted" >&2
+    if ! homebrew_formula_matches_published_snapshot \
+      "$formula" "$formula_snapshot"; then
+      echo "doc-truth-smoke: Homebrew formula has unapproved release-snapshot drift" >&2
       exit 1
     fi
     for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHANGELOG.md; do

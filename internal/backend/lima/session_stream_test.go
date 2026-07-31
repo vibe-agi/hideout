@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -359,6 +361,7 @@ func TestSupervisorProtocolPostCommitCancellationKeepsGracefulProtocol(t *testin
 }
 
 func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *testing.T) {
+	const observerTail = 512
 	session := projectionReadySessionFixture()
 	owner, err := workloadtypes.NewReusableOwner(
 		session.EnvironmentID,
@@ -383,7 +386,10 @@ func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *test
 
 	starts := make(chan *sessionwire.SupervisorStart, 1)
 	observed := make(chan struct{})
+	targetCommitted := make(chan struct{})
+	observerEOF := make(chan struct{})
 	var observedOnce sync.Once
+	var observedCount atomic.Uint64
 	client, server := newObserverStreamSSHTestClient(t, func(command string, channel ssh.Channel) error {
 		if strings.Contains(command, "observer-stream") {
 			start := <-starts
@@ -447,8 +453,31 @@ func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *test
 			}); err != nil {
 				return err
 			}
-			_, err = io.Copy(io.Discard, channel)
-			return err
+			select {
+			case <-targetCommitted:
+			case <-time.After(time.Second):
+				return errors.New("target was not committed before observer tail")
+			}
+			for sequence := uint64(2); sequence <= observerTail+1; sequence++ {
+				if err := sessionwire.WriteObserverEnvelope(channel, sessionwire.ObservationEnvelope{
+					Schema: sessionwire.ObservationSchema, Owner: binding.Owner,
+					SessionID: binding.SessionID, CgroupID: binding.CgroupID,
+					ObserverGeneration: binding.ObserverGeneration,
+					CPU:                0, Sequence: sequence, MonotonicNS: sequence,
+					Kind: "process.exec", Payload: json.RawMessage(`{"pid":42}`),
+				}); err != nil {
+					return err
+				}
+			}
+			return sessionwire.WriteObserverEnvelope(channel, sessionwire.ObservationEnvelope{
+				Schema: sessionwire.ObservationSchema, Owner: binding.Owner,
+				SessionID: binding.SessionID, CgroupID: binding.CgroupID,
+				ObserverGeneration: binding.ObserverGeneration,
+				CPU:                sessionwire.ObserverTransportCPU, Sequence: 1,
+				MonotonicNS: observerTail + 2,
+				Kind:        "collector.goodbye",
+				Payload:     json.RawMessage(`{"reason":"relay-drained"}`),
+			})
 		}
 
 		reader := sessionwire.NewReader(channel, sessionwire.DaemonToSupervisor)
@@ -498,6 +527,12 @@ func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *test
 		case <-time.After(time.Second):
 			return errors.New("target commit raced ahead of activity ingestion")
 		}
+		close(targetCommitted)
+		select {
+		case <-observerEOF:
+		case <-time.After(time.Second):
+			return errors.New("observer EOF was not persisted before activity completion")
+		}
 		return writer.WriteControl(sessionwire.TypeCompletion, &sessionwire.Completion{
 			Kind: sessionwire.CompletionExit, ExitCode: 0,
 			TargetCompleted: true, CleanupCompleted: true,
@@ -512,9 +547,10 @@ func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *test
 	})
 
 	var (
-		orderMu sync.Mutex
-		order   []string
-		closed  bool
+		orderMu        sync.Mutex
+		order          []string
+		observerClosed bool
+		closed         bool
 	)
 	streams := backend.RunStreams{
 		Stdout: io.Discard, Stderr: io.Discard,
@@ -543,8 +579,13 @@ func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *test
 				return nil
 			},
 			Observe: func(envelope sessionwire.ObservationEnvelope) error {
-				if envelope.Kind != "collector.heartbeat" {
+				if envelope.Kind != "collector.heartbeat" &&
+					envelope.Kind != "process.exec" &&
+					envelope.Kind != "collector.goodbye" {
 					return errors.New("unexpected activity observation")
+				}
+				if envelope.Kind != "collector.goodbye" {
+					observedCount.Add(1)
 				}
 				orderMu.Lock()
 				order = append(order, "observe")
@@ -552,12 +593,33 @@ func TestSupervisorProtocolRegistersAndIngestsActivityBeforeTargetCommit(t *test
 				observedOnce.Do(func() { close(observed) })
 				return nil
 			},
-			ObserverClosed: func(error) error { return nil },
+			ObserverClosed: func(cause error) error {
+				if cause != nil {
+					return fmt.Errorf("proved observer drain cause: %w", cause)
+				}
+				orderMu.Lock()
+				order = append(order, "observer-closed")
+				observerClosed = true
+				orderMu.Unlock()
+				close(observerEOF)
+				return nil
+			},
 			SessionClosed: func(completion *sessionwire.SupervisorActivityCompletion, _ error) error {
 				if completion == nil || completion.CgroupID != 8080 {
 					return errors.New("activity completion was not bound")
 				}
+				if got := observedCount.Load(); got != observerTail+1 {
+					return fmt.Errorf(
+						"activity completion raced observer tail: got=%d want=%d",
+						got,
+						observerTail+1,
+					)
+				}
 				orderMu.Lock()
+				if !observerClosed {
+					orderMu.Unlock()
+					return errors.New("activity session closed before observer EOF receipt")
+				}
 				order = append(order, "closed")
 				closed = true
 				orderMu.Unlock()

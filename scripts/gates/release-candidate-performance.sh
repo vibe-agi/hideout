@@ -10,20 +10,31 @@ gate_completed=0
 umask 077
 evidence_out="$repo_root/.artifacts/045/performance"
 preflight_only=0
-attach_samples=7
+attach_samples=30
 attach_warmups=2
 browser_samples=5
 local_samples=30
 local_warmups=5
 process_samples=15
+host_contention_samples=3
+host_contention_minimum_hits=2
+host_generic_cpu_threshold=50
+host_virtualization_cpu_threshold=5
+host_build_cpu_threshold=10
+host_contention_method="three-one-second-process-snapshots-two-hit-rejection"
 
 usage() {
   printf '%s\n' \
     "Usage: scripts/gates/release-candidate-performance.sh [--preflight] [--out DIR]" \
     "" \
     "Measures production query/render latency, daemon/TUI RSS, five real-" \
-    "Chrome freshness samples, seven real-Lima warm attaches, paired reference" \
+    "Chrome freshness samples, thirty real-Lima warm attaches, paired reference" \
     "overhead, observer CPU/RSS/event/drop rate, and real quota overshoot." \
+    "Run only on a quiet host after pausing unrelated CPU-heavy tests, VMs," \
+    "and emulators; known contention invalidates wall-clock evidence." \
+    "A full run requires HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 and" \
+    "rejects sustained process/VM/build CPU contention before building." \
+    "It retains private preflight/start/boundary/end host diagnostics." \
     "Evidence is private, immutable, digest-bound, and never published."
 }
 
@@ -72,30 +83,206 @@ validate_summary() {
   jq -e \
     --arg treeSHA256 "$expected_tree_sha" \
     --argjson artifactCount "$expected_artifact_count" '
+      . as $summary |
       .schema == "hideout.release-candidate-performance/v1" and
       .result == "passed" and
       .source.treeSHA256 == $treeSHA256 and
       .source.stableAcrossRun == true and
+      (.source.dirty | type) == "boolean" and
+      .candidateAcceptance == (.source.dirty | not) and
       .candidate.exactSourceTreeBound == true and
+      .candidate.acceptance == .candidateAcceptance and
       .methodology.rawSamplesPresent == true and
       .methodology.percentilesIndependentlyRecomputed == true and
       .methodology.unitsStable == true and
+      .hostDiagnostics.quietHostConfirmed == true and
+      .hostDiagnostics.policy ==
+        "operator-confirmed-quiet-host-known-contention-invalidates-run" and
+      .hostDiagnostics.initialContentionAssessment.passed == true and
+      .hostDiagnostics.initialContentionAssessment.method ==
+        "three-one-second-process-snapshots-two-hit-rejection" and
+      .hostDiagnostics.initialContentionAssessment.samples == 3 and
+      .hostDiagnostics.initialContentionAssessment.minimumHits == 2 and
+      .hostDiagnostics.initialContentionAssessment.genericCPUPercentThreshold == 50 and
+      .hostDiagnostics.initialContentionAssessment.virtualizationCPUPercentThreshold == 5 and
+      .hostDiagnostics.initialContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
+      .hostDiagnostics.initialContentionAssessment.path ==
+        "host-contention-preflight.txt" and
+      (.hostDiagnostics.initialContentionAssessment.sha256 |
+        test("^[a-f0-9]{64}$")) and
+      (.hostDiagnostics.snapshots | length) == 3 and
+      [.hostDiagnostics.snapshots[] | [.phase, .path]] == [
+        ["start", "host-state-start.txt"],
+        ["before-real-lima", "host-state-before-real-lima.txt"],
+        ["after-real-lima", "host-state-after-real-lima.txt"]
+      ] and
+      all(.hostDiagnostics.snapshots[];
+        (.phase | type) == "string" and (.phase | length) > 0 and
+        (.path | type) == "string" and (.path | length) > 0 and
+        (.sha256 | test("^[a-f0-9]{64}$"))) and
+      .validation.referenceMedianUpperConfidenceBoundWithinTenPercent == true and
+      .validation.quietHostExplicitlyConfirmed == true and
+      .validation.initialHostContentionAssessmentPassed == true and
+      .validation.hostDiagnosticsRetained == true and
       all(.validation[]; . == true) and
       (.claimReceipts | length) == 3 and
       all(.claimReceipts[]; .passed == true) and
       (.artifacts | length) == $artifactCount and
+      ([.artifacts[].path] | unique | length) == $artifactCount and
       all(.artifacts[];
+        (.path | type) == "string" and (.path | length) > 0 and
         (.sha256 | test("^[a-f0-9]{64}$")) and
         (.bytes | type) == "number" and
         .bytes >= 0 and
         .bytes == (.bytes | floor) and
-        .mode == "0600")
+        .mode == "0600") and
+      all(.hostDiagnostics.snapshots[];
+        . as $snapshot |
+        any($summary.artifacts[];
+          .path == $snapshot.path and .sha256 == $snapshot.sha256)) and
+      (.hostDiagnostics.initialContentionAssessment as $assessment |
+        any($summary.artifacts[];
+          .path == $assessment.path and .sha256 == $assessment.sha256))
     ' "$summary_path" >/dev/null
 }
 
+record_host_state() {
+  local destination="$1" phase="$2"
+
+  {
+    printf 'schema=hideout.performance-host-state/v1\n'
+    printf 'phase=%s\n' "$phase"
+    printf 'captured_at='
+    date -u +'%Y-%m-%dT%H:%M:%SZ'
+    printf 'uname='
+    uname -a
+    printf 'logical_cpu='
+    sysctl -n hw.logicalcpu
+    printf 'load='
+    uptime
+    printf 'thermal_state_begin\n'
+    pmset -g therm 2>&1 || true
+    printf 'thermal_state_end\n'
+    printf 'power_state_begin\n'
+    pmset -g batt 2>&1 || true
+    printf 'power_state_end\n'
+    printf 'top_processes_begin\n'
+    ps -Ao pid=,ppid=,pcpu=,pmem=,etime=,ucomm= -r | sed -n '1,25p'
+    printf 'top_processes_end\n'
+  } >"$destination"
+  chmod 0600 "$destination"
+}
+
+record_initial_host_contention() {
+  local destination="$1" sample
+
+  {
+    printf 'schema=hideout.performance-host-contention/v1\n'
+    printf 'method=%s\n' "$host_contention_method"
+    printf 'samples=%d\n' "$host_contention_samples"
+    printf 'minimum_hits=%d\n' "$host_contention_minimum_hits"
+    printf 'generic_cpu_percent_threshold=%d\n' \
+      "$host_generic_cpu_threshold"
+    printf 'virtualization_cpu_percent_threshold=%d\n' \
+      "$host_virtualization_cpu_threshold"
+    printf 'build_or_test_cpu_percent_threshold=%d\n' \
+      "$host_build_cpu_threshold"
+    sample=1
+    while [ "$sample" -le "$host_contention_samples" ]; do
+      printf 'sample_begin=%d\n' "$sample"
+      LC_ALL=C ps -Ao pid=,ppid=,pcpu=,pmem=,ucomm= -r |
+        sed -n '1,50p'
+      printf 'sample_end=%d\n' "$sample"
+      if [ "$sample" -lt "$host_contention_samples" ]; then
+        sleep 1
+      fi
+      sample=$((sample + 1))
+    done
+  } >"$destination"
+  chmod 0600 "$destination"
+}
+
+assess_initial_host_contention() {
+  local source="$1"
+
+  awk \
+    -v expected_samples="$host_contention_samples" \
+    -v minimum_hits="$host_contention_minimum_hits" \
+    -v generic_threshold="$host_generic_cpu_threshold" \
+    -v virtualization_threshold="$host_virtualization_cpu_threshold" \
+    -v build_threshold="$host_build_cpu_threshold" \
+    -v excluded_pid="$$" '
+      function is_virtualization(name) {
+        return name ~ /^qemu-system-/ ||
+          name ~ /^com[.]apple[.]Virtua/ ||
+          name ~ /^VirtualBoxVM/ ||
+          name ~ /^vmware-vmx/ ||
+          name ~ /^prl_vm_app/ ||
+          name ~ /^UTM/
+      }
+      function is_build_or_test(name) {
+        return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+          name ~ /[.]test$/
+      }
+      /^sample_begin=[1-9][0-9]*$/ {
+        split($0, fields, "=")
+        current_sample = fields[2] + 0
+        samples[current_sample] = 1
+        next
+      }
+      /^sample_end=[1-9][0-9]*$/ {
+        current_sample = 0
+        next
+      }
+      current_sample > 0 &&
+        $1 ~ /^[0-9]+$/ &&
+        $2 ~ /^[0-9]+$/ &&
+        $3 ~ /^[0-9]+([.][0-9]+)?$/ {
+        pid = $1 + 0
+        if (pid == excluded_pid) next
+        cpu = $3 + 0
+        name = $5
+        threshold = generic_threshold
+        reason = "generic-high-cpu"
+        if (is_virtualization(name)) {
+          threshold = virtualization_threshold
+          reason = "active-virtualization"
+        } else if (is_build_or_test(name)) {
+          threshold = build_threshold
+          reason = "active-build-or-test"
+        }
+        if (cpu >= threshold) {
+          key = pid SUBSEP name SUBSEP reason
+          sample_key = current_sample SUBSEP key
+          if (!(sample_key in counted)) {
+            counted[sample_key] = 1
+            hits[key]++
+          }
+          if (cpu > maximum_cpu[key]) maximum_cpu[key] = cpu
+        }
+      }
+      END {
+        sample_count = 0
+        for (sample in samples) sample_count++
+        if (sample_count != expected_samples) {
+          printf "invalid host contention sample inventory: expected=%d actual=%d\n", expected_samples, sample_count > "/dev/stderr"
+          exit 2
+        }
+        offenders = 0
+        for (key in hits) {
+          if (hits[key] < minimum_hits) continue
+          split(key, parts, SUBSEP)
+          printf "pid=%s process=%s reason=%s hits=%d/%d max_cpu_percent=%.1f\n", parts[1], parts[2], parts[3], hits[key], expected_samples, maximum_cpu[key] > "/dev/stderr"
+          offenders++
+        }
+        if (offenders > 0) exit 1
+      }
+    ' "$source"
+}
+
 for required_command in \
-  awk bash cmp find git go grep jq limactl node perl ps rg sed shasum sort ssh \
-  stat tail tr wc; do
+  awk bash cmp date find git go grep jq limactl node perl ps rg sed shasum \
+  sleep sort ssh stat tail tr wc; do
   require_command "$required_command"
 done
 
@@ -112,14 +299,22 @@ if ! jq -e \
   exit 1
 fi
 
+if [ "$attach_samples" -lt 30 ] || [ "$attach_warmups" -lt 1 ]; then
+  printf \
+    'release-candidate-performance: real-Lima methodology requires at least 30 samples and one warmup\n' \
+    >&2
+  exit 1
+fi
+
+scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
 if [ "$preflight_only" -eq 1 ]; then
-  preflight_root="$(mktemp -d /tmp/hideout-performance-preflight.XXXXXX)"
+  preflight_root="$(mktemp -d "$scratch_parent/hideout-performance-preflight.XXXXXX")"
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
     local exit_status=$?
     case "${preflight_root:-}" in
-      /tmp/hideout-performance-preflight.*)
+      "$scratch_parent"/hideout-performance-preflight.*)
         [ ! -d "$preflight_root" ] ||
           find "$preflight_root" -depth -delete
         ;;
@@ -136,31 +331,66 @@ if [ "$preflight_only" -eq 1 ]; then
   trap cleanup_preflight EXIT
   summary_contract_fixture="$preflight_root/summary.json"
   summary_contract_negative="$preflight_root/summary-negative.json"
+  summary_quiet_negative="$preflight_root/summary-quiet-negative.json"
+  summary_contention_negative="$preflight_root/summary-contention-negative.json"
+  summary_validation_negative="$preflight_root/summary-validation-negative.json"
+  summary_duplicate_negative="$preflight_root/summary-duplicate-negative.json"
+  summary_acceptance_negative="$preflight_root/summary-acceptance-negative.json"
   jq -n '
     {
       schema:"hideout.release-candidate-performance/v1",
       result:"passed",
-      source:{treeSHA256:"preflight-tree",stableAcrossRun:true},
-      candidate:{exactSourceTreeBound:true},
+      source:{treeSHA256:"preflight-tree",dirty:false,stableAcrossRun:true},
+      candidateAcceptance:true,
+      candidate:{exactSourceTreeBound:true,acceptance:true},
       methodology:{
         rawSamplesPresent:true,
         percentilesIndependentlyRecomputed:true,
         unitsStable:true
       },
-      validation:{thresholds:true},
+      hostDiagnostics:{
+        quietHostConfirmed:true,
+        policy:
+          "operator-confirmed-quiet-host-known-contention-invalidates-run",
+        initialContentionAssessment:{
+          passed:true,
+          method:"three-one-second-process-snapshots-two-hit-rejection",
+          samples:3,
+          minimumHits:2,
+          genericCPUPercentThreshold:50,
+          virtualizationCPUPercentThreshold:5,
+          buildOrTestCPUPercentThreshold:10,
+          path:"host-contention-preflight.txt",
+          sha256:("4" * 64)
+        },
+        snapshots:[
+          {phase:"start",path:"host-state-start.txt",sha256:("1" * 64)},
+          {phase:"before-real-lima",path:"host-state-before-real-lima.txt",sha256:("2" * 64)},
+          {phase:"after-real-lima",path:"host-state-after-real-lima.txt",sha256:("3" * 64)}
+        ]
+      },
+      validation:{
+        thresholds:true,
+        referenceMedianUpperConfidenceBoundWithinTenPercent:true,
+        quietHostExplicitlyConfirmed:true,
+        initialHostContentionAssessmentPassed:true,
+        hostDiagnosticsRetained:true
+      },
       claimReceipts:[
         {passed:true},
         {passed:true},
         {passed:true}
       ],
-      artifacts:[{
-        sha256:("0" * 64),
-        bytes:0,
-        mode:"0600"
-      }]
+      artifacts:[
+        {path:"fixture.txt",sha256:("0" * 64),bytes:0,mode:"0600"},
+        {path:"host-state-start.txt",sha256:("1" * 64),bytes:0,mode:"0600"},
+        {path:"host-state-before-real-lima.txt",sha256:("2" * 64),bytes:0,mode:"0600"},
+        {path:"host-state-after-real-lima.txt",sha256:("3" * 64),bytes:0,mode:"0600"},
+        {path:"host-contention-preflight.txt",sha256:("4" * 64),bytes:0,mode:"0600"}
+      ]
     }
   ' >"$summary_contract_fixture"
-  validate_summary "$summary_contract_fixture" "preflight-tree" 1 || {
+  validate_summary "$summary_contract_fixture" "preflight-tree" 5 || {
     printf \
       'release-candidate-performance: empty evidence contract regressed\n' \
       >&2
@@ -168,23 +398,289 @@ if [ "$preflight_only" -eq 1 ]; then
   }
   jq '.artifacts[0].bytes = -1' \
     "$summary_contract_fixture" >"$summary_contract_negative"
-  if validate_summary "$summary_contract_negative" "preflight-tree" 1; then
+  if validate_summary "$summary_contract_negative" "preflight-tree" 5; then
     printf \
       'release-candidate-performance: negative evidence size was accepted\n' \
       >&2
     exit 1
   fi
+  jq '.hostDiagnostics.quietHostConfirmed = false' \
+    "$summary_contract_fixture" >"$summary_quiet_negative"
+  if validate_summary "$summary_quiet_negative" "preflight-tree" 5; then
+    printf \
+      'release-candidate-performance: unconfirmed quiet host was accepted\n' \
+      >&2
+    exit 1
+  fi
+  jq '.hostDiagnostics.initialContentionAssessment.passed = false' \
+    "$summary_contract_fixture" >"$summary_contention_negative"
+  if validate_summary "$summary_contention_negative" "preflight-tree" 5; then
+    printf \
+      'release-candidate-performance: failed contention assessment was accepted\n' \
+      >&2
+    exit 1
+  fi
+  jq 'del(.validation.initialHostContentionAssessmentPassed)' \
+    "$summary_contract_fixture" >"$summary_validation_negative"
+  if validate_summary "$summary_validation_negative" "preflight-tree" 5; then
+    printf \
+      'release-candidate-performance: missing validation field was accepted\n' \
+      >&2
+    exit 1
+  fi
+  jq '.artifacts += [.artifacts[-1]]' \
+    "$summary_contract_fixture" >"$summary_duplicate_negative"
+  if validate_summary "$summary_duplicate_negative" "preflight-tree" 6; then
+    printf \
+      'release-candidate-performance: duplicate artifact path was accepted\n' \
+      >&2
+    exit 1
+  fi
+  jq '.candidateAcceptance = false' \
+    "$summary_contract_fixture" >"$summary_acceptance_negative"
+  if validate_summary "$summary_acceptance_negative" "preflight-tree" 5; then
+    printf \
+      'release-candidate-performance: mismatched candidate acceptance was accepted\n' \
+      >&2
+    exit 1
+  fi
+  if [ "$(uname -s)" = "Darwin" ]; then
+    preflight_host_state="$preflight_root/host-state.txt"
+    record_host_state "$preflight_host_state" "preflight"
+    if [ "$(stat -f '%Lp' "$preflight_host_state")" != "600" ] ||
+      ! grep -Fq 'schema=hideout.performance-host-state/v1' \
+        "$preflight_host_state" ||
+      ! grep -Fq 'phase=preflight' "$preflight_host_state" ||
+      ! grep -Fq 'top_processes_begin' "$preflight_host_state" ||
+      ! grep -Fq 'top_processes_end' "$preflight_host_state"; then
+      printf \
+        'release-candidate-performance: host diagnostics preflight failed\n' \
+        >&2
+      exit 1
+    fi
+  fi
+  contention_quiet_fixture="$preflight_root/contention-quiet.txt"
+  contention_busy_fixture="$preflight_root/contention-busy.txt"
+  contention_busy_log="$preflight_root/contention-busy.log"
+  contention_generic_fixture="$preflight_root/contention-generic.txt"
+  contention_build_fixture="$preflight_root/contention-build.txt"
+  contention_transient_fixture="$preflight_root/contention-transient.txt"
+  {
+    printf '%s\n' \
+      'schema=hideout.performance-host-contention/v1' \
+      'sample_begin=1' \
+      '101 1 49.9 1.0 browser' \
+      '102 1 4.9 1.0 qemu-system-aarc' \
+      '103 1 9.9 1.0 go' \
+      'sample_end=1' \
+      'sample_begin=2' \
+      '101 1 49.9 1.0 browser' \
+      '102 1 4.9 1.0 qemu-system-aarc' \
+      '103 1 9.9 1.0 go' \
+      'sample_end=2' \
+      'sample_begin=3' \
+      '101 1 49.9 1.0 browser' \
+      '102 1 4.9 1.0 qemu-system-aarc' \
+      '103 1 9.9 1.0 go' \
+      'sample_end=3'
+  } >"$contention_quiet_fixture"
+  assess_initial_host_contention "$contention_quiet_fixture" || {
+    printf \
+      'release-candidate-performance: quiet contention fixture was rejected\n' \
+      >&2
+    exit 1
+  }
+  sed 's/4[.]9 1[.]0 qemu-system-aarc/12.0 1.0 qemu-system-aarc/' \
+    "$contention_quiet_fixture" >"$contention_busy_fixture"
+  if assess_initial_host_contention "$contention_busy_fixture" \
+    >"$contention_busy_log" 2>&1; then
+    printf \
+      'release-candidate-performance: sustained VM contention was accepted\n' \
+      >&2
+    exit 1
+  fi
+  if ! grep -Fq \
+    'process=qemu-system-aarc reason=active-virtualization hits=3/3' \
+    "$contention_busy_log"; then
+    printf \
+      'release-candidate-performance: contention rejection evidence regressed\n' \
+      >&2
+    exit 1
+  fi
+  sed 's/49[.]9 1[.]0 browser/55.0 1.0 browser/' \
+    "$contention_quiet_fixture" >"$contention_generic_fixture"
+  if assess_initial_host_contention "$contention_generic_fixture" \
+    >"$contention_busy_log" 2>&1 ||
+    ! grep -Fq \
+      'process=browser reason=generic-high-cpu hits=3/3' \
+      "$contention_busy_log"; then
+    printf \
+      'release-candidate-performance: generic CPU contention was not rejected\n' \
+      >&2
+    exit 1
+  fi
+  sed 's/9[.]9 1[.]0 go/15.0 1.0 go/' \
+    "$contention_quiet_fixture" >"$contention_build_fixture"
+  if assess_initial_host_contention "$contention_build_fixture" \
+    >"$contention_busy_log" 2>&1 ||
+    ! grep -Fq \
+      'process=go reason=active-build-or-test hits=3/3' \
+      "$contention_busy_log"; then
+    printf \
+      'release-candidate-performance: build CPU contention was not rejected\n' \
+      >&2
+    exit 1
+  fi
+  awk '
+    /^sample_begin=/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+    }
+    sample == 1 && $5 == "qemu-system-aarc" {$3 = "12.0"}
+    {print}
+  ' "$contention_quiet_fixture" >"$contention_transient_fixture"
+  assess_initial_host_contention "$contention_transient_fixture" || {
+    printf \
+      'release-candidate-performance: one transient contention hit was rejected\n' \
+      >&2
+    exit 1
+  }
   reference_baseline="$preflight_root/reference-baseline.txt"
   reference_observed="$preflight_root/reference-observed.txt"
   reference_result="$preflight_root/reference-result.json"
+  reference_coverage="$preflight_root/reference-coverage.jsonl"
+  reference_resources="$preflight_root/reference-resources.jsonl"
+  reference_resources_invalid="$preflight_root/reference-resources-invalid.jsonl"
+  reference_coverage_loss="$preflight_root/reference-coverage-loss.jsonl"
+  reference_coverage_inconsistent="$preflight_root/reference-coverage-inconsistent.jsonl"
+  reference_raw_coverage="$preflight_root/reference-raw-coverage.json"
+  reference_extracted_coverage="$preflight_root/reference-extracted-coverage.json"
   reference_failure_log="$preflight_root/reference-failure.log"
+  confidence_baseline="$preflight_root/confidence-baseline.txt"
+  confidence_observed="$preflight_root/confidence-observed.txt"
+  confidence_coverage="$preflight_root/confidence-coverage.jsonl"
+  confidence_resources="$preflight_root/confidence-resources.jsonl"
+  confidence_result="$preflight_root/confidence-result.json"
+  confidence_failure_log="$preflight_root/confidence-failure.log"
   printf '%s\n' 100 101 102 >"$reference_baseline"
   printf '%s\n' 105 106 107 >"$reference_observed"
+  : >"$reference_coverage"
+  : >"$reference_resources"
+  for fixture_index in 1 2 3 4; do
+    jq -cn \
+      --argjson sampleIndex "$fixture_index" \
+      --argjson recorded "$([ "$fixture_index" -gt 1 ] && printf true || printf false)" \
+      '{sampleIndex:$sampleIndex,recorded:$recorded,
+        sessionId:("ses_preflight_" + ($sampleIndex|tostring)),
+        droppedEventCount:0,ringOverflow:false,
+        kernelDropped:0,ringDropped:0,
+        localDropped:{process:0,file:0,network:0,dns:0},
+        fileCollectorCounters:{
+          matchedEvents:(100 + $sampleIndex),
+          reservedEvents:(100 + $sampleIndex),
+          ringbufDrops:0,stateDrops:0,stateDegradations:6,
+          pathFailures:0,identityFailures:1
+        }}' \
+      >>"$reference_coverage"
+    jq -cn \
+      --argjson sampleIndex "$fixture_index" \
+      --argjson recorded "$([ "$fixture_index" -gt 1 ] && printf true || printf false)" '
+      {
+        sampleIndex:$sampleIndex,
+        recorded:$recorded,
+        baseline:{
+          userMs:(80 + $sampleIndex),systemMs:10,
+          voluntaryContextSwitches:2,
+          involuntaryContextSwitches:(3 + $sampleIndex)
+        },
+        observed:{
+          userMs:(84 + $sampleIndex),systemMs:12,
+          voluntaryContextSwitches:3,
+          involuntaryContextSwitches:(5 + $sampleIndex)
+        }
+      }' >>"$reference_resources"
+  done
   # shellcheck source=scripts/lib/gate2-concurrent-performance.sh
   . "$repo_root/scripts/lib/gate2-concurrent-performance.sh"
+  if [ "$(gate2_034_median_upper_confidence_rank 30)" != "20" ]; then
+    printf \
+      'release-candidate-performance: exact median confidence rank regressed\n' \
+      >&2
+    exit 1
+  fi
+  reference_runner_script="$(declare -f gate2_034_run_performance)"
+  reference_workload_runner_script="$(declare -f gate2_034_run_reference_workload)"
+  reference_baseline_script="$(declare -f gate2_034_measure_reference_baseline)"
+  if ! awk '
+    /gate2_034_run_reference_workload/ { measured = NR }
+    /kill "\$candidate_anchor_pid"/ {
+      if (measured > 0 && measured < NR) proved = 1
+    }
+    END { exit !proved }
+  ' <<<"$reference_runner_script" ||
+    ! grep -Fq 'signal.pause()' <<<"$reference_baseline_script" ||
+    ! grep -Fq 'gate2_034_wait_active_session_count' \
+      <<<"$reference_baseline_script" ||
+    ! grep -Fq 'performance-reference-resources.jsonl' \
+      <<<"$reference_workload_runner_script" ||
+    ! grep -Fq 'involuntary_context_switches' \
+      <<<"$reference_workload_runner_script"; then
+    printf \
+      'release-candidate-performance: reference observer symmetry regressed\n' \
+      >&2
+    exit 1
+  fi
+  jq -n '
+    {
+      intervals:[{
+        id:"cov_preflight_extract",
+        sessionId:"ses_preflight_extract",
+        reason:"target-exited",
+        droppedEventCount:0,
+        evidence: (
+          [{code:"target-exited"}] +
+          ([
+            ["kernel-dropped","0"],
+            ["ring-dropped","0"],
+            ["local-process-dropped","0"],
+            ["local-file-dropped","0"],
+            ["local-network-dropped","0"],
+            ["local-dns-dropped","0"],
+            ["file-matched-events","101"],
+            ["file-reserved-events","101"],
+            ["file-ringbuf-drops","0"],
+            ["file-state-drops","0"],
+            ["file-state-degradations","6"],
+            ["file-path-failures","0"],
+            ["file-identity-failures","1"]
+          ] | map({code:.[0],value:.[1]}))
+        )
+      }],
+      current:[]
+    }
+  ' >"$reference_raw_coverage"
+  gate2_034_extract_reference_coverage_sample \
+    "$reference_raw_coverage" 9 1 >"$reference_extracted_coverage"
+  jq -e '
+    .sampleIndex == 9 and .recorded == true and
+    .sessionId == "ses_preflight_extract" and
+    .droppedEventCount == 0 and .ringOverflow == false and
+    .kernelDropped == 0 and .ringDropped == 0 and
+    .fileCollectorCounters.matchedEvents == 101 and
+    .fileCollectorCounters.reservedEvents == 101 and
+    .fileCollectorCounters.stateDegradations == 6 and
+    .fileCollectorCounters.identityFailures == 1
+  ' "$reference_extracted_coverage" >/dev/null || {
+    printf \
+      'release-candidate-performance: coverage counter extraction regressed\n' \
+      >&2
+    exit 1
+  }
   gate2_034_finalize_reference_result \
     "$reference_result" "$reference_baseline" "$reference_observed" \
-    3 1 1000 "$(printf '0%.0s' {1..64})" >/dev/null
+    3 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$reference_coverage" "$reference_resources" \
+    "$(printf '0%.0s' {1..64})" >/dev/null
   jq -e '
     def nr($values; $percentile):
       ($values | sort) as $sorted |
@@ -199,6 +695,37 @@ if [ "$preflight_only" -eq 1 ]; then
       "index-aligned-adjacent-counterbalanced" and
     .methodology.overheadAggregation ==
       "nearest-rank-median-of-paired-percent-deltas" and
+    .methodology.fixturePreparation ==
+      "once-via-control-before-all-warmup-and-recorded-samples" and
+    .methodology.pairProximity ==
+      "adjacent-halves-reuse-one-immutable-warmed-source-with-no-drain-sleep" and
+    .methodology.backgroundObserverPolicy ==
+      "concurrent-anchor-plus-arm-equivalent-inert-baseline-session" and
+    .observationIntegrity.noReportedLoss == true and
+    (.observationIntegrity.fileBPFObjectSHA256 |
+      test("^[a-f0-9]{64}$")) and
+    (.observationIntegrity.coverageSamples | length) == 4 and
+    (.observationIntegrity.fileCollectorCounters | length) == 4 and
+    all(.observationIntegrity.coverageSamples[];
+      .droppedEventCount == 0 and .ringOverflow == false and
+      .kernelDropped == 0 and .ringDropped == 0 and
+      .fileCollectorCounters.matchedEvents ==
+        .fileCollectorCounters.reservedEvents) and
+    all(.observationIntegrity.fileCollectorCounters[];
+      .matchedEvents > 0 and
+      .matchedEvents == (.reservedEvents + .ringbufDrops)) and
+    .resourceUsage.scope == "reference-workload-child-process" and
+    .resourceUsage.source == "getrusage(RUSAGE_CHILDREN)" and
+    .resourceUsage.acceptanceFilter == false and
+    (.resourceUsage.samples | length) == 4 and
+    ([.resourceUsage.samples[] | select(.recorded)] | length) == 3 and
+    all(.resourceUsage.samples[];
+      .baseline.userMs >= 0 and .baseline.systemMs >= 0 and
+      .baseline.voluntaryContextSwitches >= 0 and
+      .baseline.involuntaryContextSwitches >= 0 and
+      .observed.userMs >= 0 and .observed.systemMs >= 0 and
+      .observed.voluntaryContextSwitches >= 0 and
+      .observed.involuntaryContextSwitches >= 0) and
     (.baseline.samples | length) == 3 and
     (.observed.samples | length) == 3
   ' "$reference_result" >/dev/null || {
@@ -207,10 +734,58 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   }
+  jq -c '
+    if .sampleIndex == 4 then .droppedEventCount = 1 else . end
+  ' "$reference_coverage" >"$reference_coverage_loss"
+  if gate2_034_finalize_reference_result \
+    "$reference_result" "$reference_baseline" "$reference_observed" \
+    3 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$reference_coverage_loss" "$reference_resources" \
+    "$(printf '0%.0s' {1..64})" \
+    >"$reference_failure_log" 2>&1; then
+    printf \
+      'release-candidate-performance: reported observer loss was accepted\n' \
+      >&2
+    exit 1
+  fi
+  jq -c '
+    if .sampleIndex == 4 then
+      .fileCollectorCounters.reservedEvents -= 1
+    else . end
+  ' "$reference_coverage" >"$reference_coverage_inconsistent"
+  if gate2_034_finalize_reference_result \
+    "$reference_result" "$reference_baseline" "$reference_observed" \
+    3 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$reference_coverage_inconsistent" "$reference_resources" \
+    "$(printf '0%.0s' {1..64})" \
+    >"$reference_failure_log" 2>&1; then
+    printf \
+      'release-candidate-performance: inconsistent file counters were accepted\n' \
+      >&2
+    exit 1
+  fi
+  jq -c '
+    if .sampleIndex == 4 then
+      .observed.involuntaryContextSwitches = -1
+    else . end
+  ' "$reference_resources" >"$reference_resources_invalid"
+  if gate2_034_finalize_reference_result \
+    "$reference_result" "$reference_baseline" "$reference_observed" \
+    3 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$reference_coverage" "$reference_resources_invalid" \
+    "$(printf '0%.0s' {1..64})" \
+    >"$reference_failure_log" 2>&1; then
+    printf \
+      'release-candidate-performance: invalid resource sample was accepted\n' \
+      >&2
+    exit 1
+  fi
   printf '%s\n' 120 121 122 >"$reference_observed"
   if gate2_034_finalize_reference_result \
     "$reference_result" "$reference_baseline" "$reference_observed" \
     3 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$reference_coverage" "$reference_resources" \
+    "$(printf '0%.0s' {1..64})" \
     >"$reference_failure_log" 2>&1; then
     printf \
       'release-candidate-performance: failing reference fixture was accepted\n' \
@@ -239,11 +814,50 @@ if [ "$preflight_only" -eq 1 ]; then
   paired_baseline="$preflight_root/paired-baseline.txt"
   paired_observed="$preflight_root/paired-observed.txt"
   paired_result="$preflight_root/paired-result.json"
+  paired_resources="$preflight_root/paired-resources.jsonl"
   printf '%s\n' 80 120 100 90 70 60 65 >"$paired_baseline"
   printf '%s\n' 90 87 95 97 76 71 92 >"$paired_observed"
+  : >"$reference_coverage"
+  : >"$paired_resources"
+  for fixture_index in 1 2 3 4 5 6 7 8; do
+    jq -cn \
+      --argjson sampleIndex "$fixture_index" \
+      --argjson recorded "$([ "$fixture_index" -gt 1 ] && printf true || printf false)" \
+      '{sampleIndex:$sampleIndex,recorded:$recorded,
+        sessionId:("ses_paired_" + ($sampleIndex|tostring)),
+        droppedEventCount:0,ringOverflow:false,
+        kernelDropped:0,ringDropped:0,
+        localDropped:{process:0,file:0,network:0,dns:0},
+        fileCollectorCounters:{
+          matchedEvents:(100 + $sampleIndex),
+          reservedEvents:(100 + $sampleIndex),
+          ringbufDrops:0,stateDrops:0,stateDegradations:6,
+          pathFailures:0,identityFailures:1
+        }}' \
+      >>"$reference_coverage"
+    jq -cn \
+      --argjson sampleIndex "$fixture_index" \
+      --argjson recorded "$([ "$fixture_index" -gt 1 ] && printf true || printf false)" '
+      {
+        sampleIndex:$sampleIndex,
+        recorded:$recorded,
+        baseline:{
+          userMs:(70 + $sampleIndex),systemMs:8,
+          voluntaryContextSwitches:1,
+          involuntaryContextSwitches:(2 + $sampleIndex)
+        },
+        observed:{
+          userMs:(75 + $sampleIndex),systemMs:9,
+          voluntaryContextSwitches:2,
+          involuntaryContextSwitches:(4 + $sampleIndex)
+        }
+      }' >>"$paired_resources"
+  done
   gate2_034_finalize_reference_result \
     "$paired_result" "$paired_baseline" "$paired_observed" \
-    7 1 1000 "$(printf '0%.0s' {1..64})" >/dev/null
+    7 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$reference_coverage" "$paired_resources" \
+    "$(printf '0%.0s' {1..64})" >/dev/null
   jq -e '
     def nr($values; $percentile):
       ($values | sort) as $sorted |
@@ -252,6 +866,8 @@ if [ "$preflight_only" -eq 1 ]; then
     .elapsedOverhead.thresholdPassed == true and
     .elapsedOverhead.median ==
       nr(.elapsedOverhead.samples; 50) and
+    (.resourceUsage.samples | length) == 8 and
+    ([.resourceUsage.samples[] | select(.recorded)] | length) == 7 and
     (
       (
         (.observed.median - .baseline.median) /
@@ -264,6 +880,132 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   }
+  : >"$confidence_baseline"
+  : >"$confidence_observed"
+  : >"$confidence_coverage"
+  : >"$confidence_resources"
+  confidence_index=1
+  while [ "$confidence_index" -le 31 ]; do
+    confidence_recorded=false
+    if [ "$confidence_index" -gt 1 ]; then
+      confidence_recorded=true
+      printf '100\n' >>"$confidence_baseline"
+      printf '105\n' >>"$confidence_observed"
+    fi
+    jq -cn \
+      --argjson sampleIndex "$confidence_index" \
+      --argjson recorded "$confidence_recorded" '
+      {
+        sampleIndex:$sampleIndex,
+        recorded:$recorded,
+        sessionId:("ses_confidence_" + ($sampleIndex|tostring)),
+        droppedEventCount:0,
+        ringOverflow:false,
+        kernelDropped:0,
+        ringDropped:0,
+        localDropped:{process:0,file:0,network:0,dns:0},
+        fileCollectorCounters:{
+          matchedEvents:(100 + $sampleIndex),
+          reservedEvents:(100 + $sampleIndex),
+          ringbufDrops:0,
+          stateDrops:0,
+          stateDegradations:0,
+          pathFailures:0,
+          identityFailures:0
+        }
+      }' >>"$confidence_coverage"
+    jq -cn \
+      --argjson sampleIndex "$confidence_index" \
+      --argjson recorded "$confidence_recorded" '
+      {
+        sampleIndex:$sampleIndex,
+        recorded:$recorded,
+        baseline:{
+          userMs:80,systemMs:10,
+          voluntaryContextSwitches:2,
+          involuntaryContextSwitches:3
+        },
+        observed:{
+          userMs:84,systemMs:12,
+          voluntaryContextSwitches:3,
+          involuntaryContextSwitches:5
+        }
+      }' >>"$confidence_resources"
+    confidence_index=$((confidence_index + 1))
+  done
+  gate2_034_finalize_reference_result \
+    "$confidence_result" "$confidence_baseline" "$confidence_observed" \
+    30 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$confidence_coverage" "$confidence_resources" \
+    "$(printf '0%.0s' {1..64})" >/dev/null
+  jq -e '
+    .elapsedOverhead.median == 5 and
+    .elapsedOverhead.confidence.level == 0.95 and
+    .elapsedOverhead.confidence.method ==
+      "one-sided-exact-binomial-order-statistic" and
+    .elapsedOverhead.confidence.rank == 20 and
+    .elapsedOverhead.confidence.upperBound == 5 and
+    .elapsedOverhead.confidence.thresholdPassed == true and
+    .elapsedOverhead.thresholdPassed == true
+  ' "$confidence_result" >/dev/null || {
+    printf \
+      'release-candidate-performance: median confidence receipt regressed\n' \
+      >&2
+    exit 1
+  }
+  : >"$confidence_observed"
+  confidence_index=1
+  while [ "$confidence_index" -le 30 ]; do
+    if [ "$confidence_index" -le 19 ]; then
+      printf '105\n' >>"$confidence_observed"
+    else
+      printf '112\n' >>"$confidence_observed"
+    fi
+    confidence_index=$((confidence_index + 1))
+  done
+  if gate2_034_finalize_reference_result \
+    "$confidence_result" "$confidence_baseline" "$confidence_observed" \
+    30 1 1000 "$(printf '0%.0s' {1..64})" \
+    "$confidence_coverage" "$confidence_resources" \
+    "$(printf '0%.0s' {1..64})" \
+    >"$confidence_failure_log" 2>&1; then
+    printf \
+      'release-candidate-performance: noisy median-only pass was accepted\n' \
+      >&2
+    exit 1
+  fi
+  if ! jq -e '
+      .elapsedOverhead.median == 5 and
+      .elapsedOverhead.confidence.rank == 20 and
+      .elapsedOverhead.confidence.upperBound == 12 and
+      .elapsedOverhead.confidence.thresholdPassed == false and
+      .elapsedOverhead.thresholdPassed == false
+    ' "$confidence_result" >/dev/null ||
+    ! grep -Fq 'one-sided 95% median upper bound' \
+      "$confidence_failure_log"; then
+    printf \
+      'release-candidate-performance: noisy confidence failure was not retained\n' \
+      >&2
+    exit 1
+  fi
+  reference_setup_script="$(gate2_034_reference_fixture_setup)"
+  reference_measured_script="$(gate2_034_reference_workload)"
+  if ! grep -Fq \
+      'mktemp -d /var/tmp/hideout-reference.XXXXXX' \
+      <<<"$reference_setup_script" ||
+    grep -Eq \
+      'mktemp|(^|[[:space:]])sleep([[:space:]]|$)' \
+      <<<"$reference_measured_script" ||
+    ! grep -Fq "work_root=\"\${1:-}\"" <<<"$reference_measured_script" ||
+    ! grep -Fq 'resource.getrusage(resource.RUSAGE_CHILDREN)' \
+      <<<"$reference_measured_script" ||
+    ! grep -Fq 'user_ms=' <<<"$reference_measured_script" ||
+    ! grep -Fq 'system_ms=' <<<"$reference_measured_script"; then
+    printf \
+      'release-candidate-performance: reference fixture/sample separation regressed\n' \
+      >&2
+    exit 1
+  fi
   nested_errexit_marker="$preflight_root/nested-errexit-continued"
   set +e
   bash -c '
@@ -312,6 +1054,16 @@ fi
   printf 'release-candidate-performance: full gate requires arm64\n' >&2
   exit 1
 }
+for full_run_command in pmset sysctl uname uptime; do
+  require_command "$full_run_command"
+done
+if [ "${HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED:-0}" != "1" ]; then
+  printf '%s\n' \
+    'release-candidate-performance: full gate requires explicit quiet-host confirmation' \
+    'pause unrelated tests, VMs, and emulators, then set HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1' \
+    >&2
+  exit 1
+fi
 
 if [ -L "$evidence_out" ]; then
   printf \
@@ -347,11 +1099,24 @@ chmod 0700 \
   "$run_dir/lanes" \
   "$run_dir/tests"
 
-scratch="$(mktemp -d /tmp/hideout-release-performance.XXXXXX)"
+host_contention_evidence="$run_dir/host-contention-preflight.txt"
+record_initial_host_contention "$host_contention_evidence"
+if ! contention_findings="$(
+  assess_initial_host_contention "$host_contention_evidence" 2>&1
+)"; then
+  printf '%s\n' \
+    'release-candidate-performance: sustained host contention detected; run is invalid before measurement' \
+    "$contention_findings" \
+    'pause the reported workload and retry; Hideout did not stop any process' \
+    >&2
+  exit 1
+fi
+
+scratch="$(mktemp -d "$scratch_parent/hideout-release-performance.XXXXXX")"
 cleanup() {
   local exit_status=$?
   case "${scratch:-}" in
-    /tmp/hideout-release-performance.*)
+    "$scratch_parent"/hideout-release-performance.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
       ;;
     *)
@@ -434,6 +1199,7 @@ write_source_manifest() {
 }
 
 source_manifest="$run_dir/source-manifest.tsv"
+record_host_state "$run_dir/host-state-start.txt" "start"
 write_source_manifest "$source_manifest"
 source_tree_sha="$(sha256_file "$source_manifest")"
 source_file_count="$(wc -l <"$source_manifest" | tr -d ' ')"
@@ -643,6 +1409,8 @@ jq -n \
 
 concurrent_dir="$run_dir/lima-concurrent"
 concurrent_log="$run_dir/lanes/lima-concurrent.log"
+record_host_state \
+  "$run_dir/host-state-before-real-lima.txt" "before-real-lima"
 printf \
   'release-candidate-performance: stage=real-lima-attach-reference samples=%d warmups=%d\n' \
   "$attach_samples" "$attach_warmups"
@@ -687,12 +1455,15 @@ jq -e \
       ($values | sort) as $sorted |
       (($sorted | length) * $percentile + 99) / 100 | floor as $rank |
       $sorted[$rank - 1];
-    .schema == "hideout.concurrent-sessions-performance/v3" and
+    .schema == "hideout.concurrent-sessions-performance/v4" and
     .status == "passed" and
     .candidate.commit == $commit and
     .candidate.dirty == $dirty and
     .methodology.samples == $samples and
     .methodology.warmups == $warmups and
+    .methodology.hostContentionPolicy ==
+      "operator-confirmed-quiet-host-known-contention-invalidates-run" and
+    .methodology.hostQuietConfirmed == true and
     (.warmAttach.samplesMs | length) == $samples and
     .warmAttach.medianMs == nr(.warmAttach.samplesMs; 50) and
     .warmAttach.p95Ms == nr(.warmAttach.samplesMs; 95) and
@@ -711,6 +1482,48 @@ jq -e \
       "index-aligned-adjacent-counterbalanced" and
     .referenceWorkload.methodology.overheadAggregation ==
       "nearest-rank-median-of-paired-percent-deltas" and
+    .referenceWorkload.methodology.fixturePreparation ==
+      "once-via-control-before-all-warmup-and-recorded-samples" and
+    .referenceWorkload.methodology.pairProximity ==
+      "adjacent-halves-reuse-one-immutable-warmed-source-with-no-drain-sleep" and
+    .referenceWorkload.methodology.backgroundObserverPolicy ==
+      "concurrent-anchor-plus-arm-equivalent-inert-baseline-session" and
+    .referenceWorkload.observationIntegrity.noReportedLoss == true and
+    (.referenceWorkload.observationIntegrity.fileBPFObjectSHA256 |
+      test("^[a-f0-9]{64}$")) and
+    (.referenceWorkload.observationIntegrity.coverageSamples | length) ==
+      ($samples + $warmups) and
+    ([.referenceWorkload.observationIntegrity.coverageSamples[] |
+      select(.recorded)] | length) == $samples and
+    (.referenceWorkload.observationIntegrity.fileCollectorCounters | length) ==
+      ($samples + $warmups) and
+    all(.referenceWorkload.observationIntegrity.coverageSamples[];
+      .droppedEventCount == 0 and .ringOverflow == false and
+      .kernelDropped == 0 and .ringDropped == 0 and
+      .localDropped.process == 0 and .localDropped.file == 0 and
+      .localDropped.network == 0 and .localDropped.dns == 0 and
+      .fileCollectorCounters.matchedEvents > 0 and
+      .fileCollectorCounters.matchedEvents ==
+        (.fileCollectorCounters.reservedEvents +
+          .fileCollectorCounters.ringbufDrops) and
+      .fileCollectorCounters.ringbufDrops == 0 and
+      .fileCollectorCounters.stateDrops == 0) and
+    .referenceWorkload.resourceUsage.scope ==
+      "reference-workload-child-process" and
+    .referenceWorkload.resourceUsage.source ==
+      "getrusage(RUSAGE_CHILDREN)" and
+    .referenceWorkload.resourceUsage.acceptanceFilter == false and
+    (.referenceWorkload.resourceUsage.samples | length) ==
+      ($samples + $warmups) and
+    ([.referenceWorkload.resourceUsage.samples[] |
+      select(.recorded)] | length) == $samples and
+    all(.referenceWorkload.resourceUsage.samples[];
+      .baseline.userMs >= 0 and .baseline.systemMs >= 0 and
+      .baseline.voluntaryContextSwitches >= 0 and
+      .baseline.involuntaryContextSwitches >= 0 and
+      .observed.userMs >= 0 and .observed.systemMs >= 0 and
+      .observed.voluntaryContextSwitches >= 0 and
+      .observed.involuntaryContextSwitches >= 0) and
     .referenceWorkload.elapsedOverhead.unit == "percent" and
     (.referenceWorkload.elapsedOverhead.samples | length) == $samples and
     .referenceWorkload.elapsedOverhead.samples == [
@@ -730,6 +1543,14 @@ jq -e \
     .referenceWorkload.elapsedOverhead.median ==
       nr(.referenceWorkload.elapsedOverhead.samples; 50) and
     .referenceWorkload.elapsedOverhead.threshold == 10 and
+    .referenceWorkload.elapsedOverhead.confidence.level == 0.95 and
+    .referenceWorkload.elapsedOverhead.confidence.method ==
+      "one-sided-exact-binomial-order-statistic" and
+    .referenceWorkload.elapsedOverhead.confidence.rank == 20 and
+    .referenceWorkload.elapsedOverhead.confidence.upperBound ==
+      ((.referenceWorkload.elapsedOverhead.samples | sort)[19]) and
+    .referenceWorkload.elapsedOverhead.confidence.thresholdPassed == true and
+    .referenceWorkload.elapsedOverhead.confidence.upperBound <= 10 and
     .referenceWorkload.elapsedOverhead.thresholdPassed == true
   ' "$concurrent_performance" >/dev/null
 jq -e \
@@ -801,6 +1622,8 @@ jq -e '
     .performance.healthyDropRate.coverageAccounted == true and
     .performance.healthyDropRate.value <= 1
   ' "$privacy_summary" >/dev/null
+record_host_state \
+  "$run_dir/host-state-after-real-lima.txt" "after-real-lima"
 
 receipts="$run_dir/claim-receipts.json"
 jq -n '[
@@ -942,6 +1765,14 @@ jq -n \
   --arg manifest "source-manifest.tsv" \
   --argjson sourceFiles "$source_file_count" \
   --arg binarySHA256 "$candidate_sha" \
+  --arg hostContentionSHA256 \
+    "$(sha256_file "$host_contention_evidence")" \
+  --arg hostStateStartSHA256 \
+    "$(sha256_file "$run_dir/host-state-start.txt")" \
+  --arg hostStateBeforeRealLimaSHA256 \
+    "$(sha256_file "$run_dir/host-state-before-real-lima.txt")" \
+  --arg hostStateAfterRealLimaSHA256 \
+    "$(sha256_file "$run_dir/host-state-after-real-lima.txt")" \
   --argjson local "$(cat "$run_dir/lanes/local-query-render.json")" \
   --argjson process "$(cat "$run_dir/lanes/daemon-tui-process.json")" \
   --argjson browser "$(cat "$run_dir/lanes/browser-performance.json")" \
@@ -954,6 +1785,7 @@ jq -n \
     schema:"hideout.release-candidate-performance/v1",
     generatedAt:$generatedAt,
     result:"passed",
+    candidateAcceptance:($dirty | not),
     source:{
       commit:$commit,
       dirty:$dirty,
@@ -972,6 +1804,39 @@ jq -n \
       percentile:"nearest-rank-ceiling",
       percentilesIndependentlyRecomputed:true,
       unitsStable:true
+    },
+    hostDiagnostics:{
+      quietHostConfirmed:true,
+      policy:
+        "operator-confirmed-quiet-host-known-contention-invalidates-run",
+      initialContentionAssessment:{
+        passed:true,
+        method:"three-one-second-process-snapshots-two-hit-rejection",
+        samples:3,
+        minimumHits:2,
+        genericCPUPercentThreshold:50,
+        virtualizationCPUPercentThreshold:5,
+        buildOrTestCPUPercentThreshold:10,
+        path:"host-contention-preflight.txt",
+        sha256:$hostContentionSHA256
+      },
+      snapshots:[
+        {
+          phase:"start",
+          path:"host-state-start.txt",
+          sha256:$hostStateStartSHA256
+        },
+        {
+          phase:"before-real-lima",
+          path:"host-state-before-real-lima.txt",
+          sha256:$hostStateBeforeRealLimaSHA256
+        },
+        {
+          phase:"after-real-lima",
+          path:"host-state-after-real-lima.txt",
+          sha256:$hostStateAfterRealLimaSHA256
+        }
+      ]
     },
     metrics:{
       query:$local.query,
@@ -996,12 +1861,16 @@ jq -n \
       browserFreshnessP95WithinTwoSeconds:true,
       warmAttachP95WithinTwoSeconds:true,
       referenceMedianOverheadWithinTenPercent:true,
+      referenceMedianUpperConfidenceBoundWithinTenPercent:true,
       observerCPUAndRSSWithinBudgets:true,
       healthyDropRateWithinOnePercentAndAccounted:true,
       quotaWithinOneActiveSegment:true,
       exactRecoveryPassSet:true,
       sourceStableAcrossRun:true,
-      contractReceiptsExact:true
+      contractReceiptsExact:true,
+      quietHostExplicitlyConfirmed:true,
+      initialHostContentionAssessmentPassed:true,
+      hostDiagnosticsRetained:true
     },
     artifacts:$artifacts,
     limitations:

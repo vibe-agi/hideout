@@ -385,7 +385,10 @@ why evidence is incomplete.
 - `SecretTransition`: secret availability/generation, route stage/activate,
   active-connection preservation, failure, and rollback;
 - `WorkloadObservation`: cgroup membership, event sequence/loss, aggregation,
-  coverage intervals, retention, exact-owner cleanup, and stale projections.
+  coverage intervals, retention, exact-owner cleanup, observer tail drain,
+  exact final-counter receipt, authenticated clean EOF and successful bridge
+  exit after durable goodbye,
+  forced-close degradation, and stale projections.
 
 Extend request workflow refinement to connect terminal operation evidence and
 decision-lease release. TLC configurations check invariants and liveness under
@@ -447,10 +450,15 @@ signing would instead invalidate the exact signature/notarization identity.
 
 ## Resolved unknowns and deferred items
 
-There are no specification blockers. T156/T157 measured and froze the v1
-storage defaults, aggregation windows, and rule thresholds; T158 froze the
-clean, reproducible unsigned package boundary. Changing either requires fresh
-evidence but does not alter the surrounding safety contracts. Mandatory
+There are no specification blockers. T156/T157 used historical diagnostic
+measurements to freeze the v1 storage defaults, aggregation windows, and rule
+thresholds; accepted T156 evidence still requires the current explicitly
+confirmed quiet-host thirty-sample rerun, a passing automatic sustained-host-
+contention preflight, private host-state diagnostics, and both the paired
+median and its exact one-sided 95% upper confidence bound to remain within ten
+percent. T158 froze the clean, reproducible unsigned package boundary.
+Changing either requires fresh evidence but does not alter the surrounding
+safety contracts. Mandatory
 blocking based on observation, remote multi-operator access, encrypted-DNS
 decryption, full PTY recording, arbitrary secret classification, and a
 complete Cobra migration are explicitly outside this feature.

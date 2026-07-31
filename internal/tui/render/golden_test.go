@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/manager"
 	"github.com/vibe-agi/hideout/internal/profile"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 func TestOverviewGoldenLayouts(t *testing.T) {
@@ -71,6 +72,60 @@ func TestOverviewSanitizesTerminalControlAndBidiInput(t *testing.T) {
 		if DisplayWidth(line) > 96 {
 			t.Fatalf("render line width=%d exceeds terminal width: %q", DisplayWidth(line), line)
 		}
+	}
+}
+
+func TestOverviewSeparatesMachineAndWorkspaceViews(t *testing.T) {
+	state := renderFixture()
+	state.Overview.Environments = []manager.EnvironmentSummary{{
+		ID: "env_shared", Name: "default shared", Status: "running",
+		MachineIdentityID: "machine_fixture", ActiveSessions: 2,
+		ActiveWorkspaceViews: 2, WorkspaceProviderState: "ready",
+		OwnerHealth: "live",
+	}}
+	relation := workspaceattach.RootRelationNotice{
+		Relation:         workspaceattach.RootDisjoint,
+		SelectedPosition: workspaceattach.RelationPositionPeer,
+		OtherWorkspaceID: "wrk_bbbbbbbb",
+	}
+	state.Overview.Sessions = []manager.SessionSummary{
+		{
+			ID: "ses_a", Profile: "default", EnvironmentID: "env_shared",
+			State: "running", CommandClass: "claude", WorkspaceID: "wrk_aaaaaaaa",
+			WorkspaceLabel: "project-a [aaaaaaaa]", GuestWorkspace: "/workspace",
+			WorkspaceTransport: "portal", WorkspaceViewState: workspaceattach.AttachmentReady,
+			WorkspaceRelations: []workspaceattach.RootRelationNotice{relation},
+		},
+		{
+			ID: "ses_b", Profile: "default", EnvironmentID: "env_shared",
+			State: "running", CommandClass: "codex", WorkspaceID: "wrk_bbbbbbbb",
+			WorkspaceLabel: "project-b [bbbbbbbb]", GuestWorkspace: "/workspace",
+			WorkspaceTransport: "portal", WorkspaceViewState: workspaceattach.AttachmentReady,
+			WorkspaceRelations: []workspaceattach.RootRelationNotice{{
+				Relation:         workspaceattach.RootDisjoint,
+				SelectedPosition: workspaceattach.RelationPositionPeer,
+				OtherWorkspaceID: "wrk_aaaaaaaa",
+			}},
+		},
+	}
+	output := Overview(OverviewInput{State: state}, Options{
+		Width: 120, Height: 40, Unicode: true, NoColor: true,
+	})
+	for _, expected := range []string{
+		"Environment", "sessions=2 active-views=2", "machine-id=machine_fixture",
+		"Workspace views", "workspace-view=ready project-a [aaaaaaaa]",
+		"workspace-view=ready project-b [bbbbbbbb]",
+		"relation=disjoint position=peer",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("overview missing %q:\n%s", expected, output)
+		}
+	}
+	if count := strings.Count(output, "machine-id="); count != 1 {
+		t.Fatalf("machine rows=%d want=1:\n%s", count, output)
+	}
+	if count := strings.Count(output, "workspace-view="); count != 2 {
+		t.Fatalf("workspace rows=%d want=2:\n%s", count, output)
 	}
 }
 

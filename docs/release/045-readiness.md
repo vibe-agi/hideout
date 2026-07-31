@@ -41,6 +41,19 @@ the manifest bytes. Any missing, stale, reduced, unsupported, dirty, mismatched,
 or failed required input makes the verdict **BLOCKED**, not conditionally
 ready.
 
+Performance evidence is valid only when the release operator first pauses
+unrelated CPU-heavy tests, VMs, and emulators and keeps the host quiet through
+all thirty recorded real-Lima samples. Known contention invalidates that run;
+it is never explained away after seeing the result or used to change the
+frozen threshold. The full lane requires the explicit
+`HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1` acknowledgement and retains
+private host-state snapshots at the run start and real-Lima boundaries. Before
+building, it also takes three one-second process-name/CPU snapshots and rejects
+sustained high-CPU, virtualization, or build/test contention in at least two;
+it records no argv or environment and never stops the reported process. The
+paired overhead median and its exact nonparametric one-sided 95% upper
+confidence bound must both remain at or below ten percent.
+
 ## Closure sequence
 
 Run the source, model, privacy, UI, performance, real-Lima, package, and

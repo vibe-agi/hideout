@@ -523,6 +523,7 @@ var observerKinds = map[string]struct{}{
 	"network.connect": {}, "network.close": {},
 	"dns.query": {}, "dns.response": {}, "proxy.target": {},
 	"coverage.changed": {}, "collector.loss": {}, "collector.heartbeat": {},
+	"collector.goodbye": {},
 }
 
 func (envelope ObservationEnvelope) Validate() error {
@@ -549,7 +550,9 @@ func (envelope ObservationEnvelope) Validate() error {
 	if _, ok := observerKinds[envelope.Kind]; !ok {
 		return fmt.Errorf("%w: %q", ErrObserverKind, envelope.Kind)
 	}
-	if envelope.CPU == ObserverTransportCPU && envelope.Kind != "collector.loss" {
+	if envelope.CPU == ObserverTransportCPU &&
+		envelope.Kind != "collector.loss" &&
+		envelope.Kind != "collector.goodbye" {
 		return fmt.Errorf("%w: reserved observer transport cpu", ErrObserverSchema)
 	}
 	payload := bytes.TrimSpace(envelope.Payload)
@@ -589,7 +592,10 @@ func ReadObserverEnvelope(reader io.Reader) (ObservationEnvelope, error) {
 		return ObservationEnvelope{}, errors.New("observer reader is nil")
 	}
 	header := make([]byte, ObserverFrameHeaderSize)
-	if _, err := io.ReadFull(reader, header); err != nil {
+	if read, err := io.ReadFull(reader, header); err != nil {
+		if read == 0 && errors.Is(err, io.EOF) {
+			return ObservationEnvelope{}, io.EOF
+		}
 		return ObservationEnvelope{}, fmt.Errorf("%w: header: %v", ErrObserverTruncated, err)
 	}
 	size := binary.BigEndian.Uint32(header[:4])
@@ -790,6 +796,7 @@ type ObserverQueue struct {
 	dropped      uint64
 	droppedBytes uint64
 	notify       chan struct{}
+	space        chan struct{}
 	done         chan struct{}
 	closed       bool
 }
@@ -810,6 +817,7 @@ func NewObserverQueueWithByteLimit(capacity, byteLimit int) (*ObserverQueue, err
 		byteLimit: byteLimit,
 		values:    make([][]byte, 0, capacity),
 		notify:    make(chan struct{}, 1),
+		space:     make(chan struct{}, 1),
 		done:      make(chan struct{}),
 	}, nil
 }
@@ -845,6 +853,53 @@ func (queue *ObserverQueue) Enqueue(value []byte) error {
 	return nil
 }
 
+// EnqueueWait preserves a bounded queue without converting a temporary slow
+// consumer into evidence loss. The producer waits for an existing frame to be
+// removed, while stop lets lifecycle teardown interrupt that wait. Kernel-side
+// collectors retain their own bounded ring/drop accounting, so this moves
+// pressure to an explicitly measured boundary instead of silently replacing a
+// frame already admitted here.
+func (queue *ObserverQueue) EnqueueWait(
+	value []byte,
+	stop <-chan struct{},
+) error {
+	if queue == nil {
+		return errors.New("observer queue is nil")
+	}
+	if len(value) == 0 || len(value) > MaxObserverQueuedFrameBytes {
+		return ErrObserverFrameTooLarge
+	}
+	for {
+		queue.mu.Lock()
+		switch {
+		case queue.closed:
+			queue.mu.Unlock()
+			return ErrObserverQueueClosed
+		case len(value) > queue.byteLimit:
+			queue.mu.Unlock()
+			return ErrObserverBackpressure
+		case len(queue.values) < queue.capacity &&
+			len(value) <= queue.byteLimit-queue.bytes:
+			queue.values = append(queue.values, append([]byte(nil), value...))
+			queue.bytes += len(value)
+			queue.signalLocked()
+			queue.mu.Unlock()
+			return nil
+		default:
+			space := queue.space
+			done := queue.done
+			queue.mu.Unlock()
+			select {
+			case <-space:
+			case <-done:
+				return ErrObserverQueueClosed
+			case <-stop:
+				return ErrObserverQueueClosed
+			}
+		}
+	}
+}
+
 func (queue *ObserverQueue) Dequeue() ([]byte, bool) {
 	if queue == nil {
 		return nil, false
@@ -859,6 +914,7 @@ func (queue *ObserverQueue) Dequeue() ([]byte, bool) {
 	queue.values[len(queue.values)-1] = nil
 	queue.values = queue.values[:len(queue.values)-1]
 	queue.bytes -= len(value)
+	queue.signalSpaceLocked()
 	return value, true
 }
 
@@ -899,7 +955,23 @@ func (queue *ObserverQueue) Done() <-chan struct{} {
 	return queue.done
 }
 
-func (queue *ObserverQueue) Close() {
+// SealedAndDrained is true only after producers have been rejected and the
+// consumer has removed every admitted frame and acknowledged the reserved loss
+// summary. Done alone is not a drain receipt: it closes at Seal time and can
+// race with the final coalesced Notify signal.
+func (queue *ObserverQueue) SealedAndDrained() bool {
+	if queue == nil {
+		return false
+	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	return queue.closed && len(queue.values) == 0 && queue.bytes == 0 &&
+		queue.dropped == 0 && queue.droppedBytes == 0
+}
+
+// Seal rejects new values but preserves every admitted frame and reserved loss
+// counter for a consumer to drain before Done terminates its stream loop.
+func (queue *ObserverQueue) Seal() {
 	if queue == nil {
 		return
 	}
@@ -909,19 +981,41 @@ func (queue *ObserverQueue) Close() {
 		return
 	}
 	queue.closed = true
+	close(queue.done)
+	queue.signalLocked()
+	queue.signalSpaceLocked()
+}
+
+func (queue *ObserverQueue) Close() {
+	if queue == nil {
+		return
+	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if !queue.closed {
+		queue.closed = true
+		close(queue.done)
+	}
 	for index := range queue.values {
 		clear(queue.values[index])
 		queue.values[index] = nil
 	}
 	queue.values = nil
 	queue.bytes = 0
-	close(queue.done)
 	queue.signalLocked()
+	queue.signalSpaceLocked()
 }
 
 func (queue *ObserverQueue) signalLocked() {
 	select {
 	case queue.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (queue *ObserverQueue) signalSpaceLocked() {
+	select {
+	case queue.space <- struct{}{}:
 	default:
 	}
 }

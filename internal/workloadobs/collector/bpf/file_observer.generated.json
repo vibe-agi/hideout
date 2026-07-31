@@ -3,14 +3,14 @@
   "compiler": "clang",
   "compilerVersion": "19.1.7",
   "generatedGo": "internal/workloadobs/collector/bpf/file_observer_bpfel.go",
-  "generatedGoSHA256": "520e5b3a79197852806aeee1ab06b08711d6bd891fd5108a7c03e479cb8e56d4",
+  "generatedGoSHA256": "93ae623a04dff5de8add98224a5d14c5f9ae4da6def6faeb2fd7057db27be759",
   "goVersion": "go1.25.12",
   "kernelProgramLicense": "GPL",
   "license": "Apache-2.0 OR GPL-2.0-only",
   "object": "internal/workloadobs/collector/bpf/file_observer_bpfel.o",
-  "objectSHA256": "ffe9eeb2d36fd6afdad51e733f4a40859b50053e4cdee624a60aa359263fd952",
+  "objectSHA256": "1614c14ad20f8519e1b19b33ca6e60ed6e9be06024deb65643ba62d5e16aff1a",
   "schema": "hideout.generated-bpf/v2",
   "source": "internal/workloadobs/collector/bpf/file_programs.c",
-  "sourceSHA256": "c0ed85873e16101fe34eaaa1d1663f8c4e7db71f675c53a279ae6e00e313d32b",
+  "sourceSHA256": "fac9a973d7fff7b9f8eda1b4aea02454ff7270639ec1839ae5d59e304f7ba46c",
   "target": "bpfel"
 }

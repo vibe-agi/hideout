@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 const (
@@ -43,8 +44,9 @@ var (
 	operatorEnvironmentIDPattern = regexp.MustCompile(
 		`^env_[A-Za-z0-9_-]{1,124}$`,
 	)
-	operatorRiskIDPattern = regexp.MustCompile(`^risk_[A-Za-z0-9_-]{8,124}$`)
-	operatorCodePattern   = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,127}$`)
+	operatorWorkspaceIDPattern = regexp.MustCompile(`^wrk_[a-f0-9]{64}$`)
+	operatorRiskIDPattern      = regexp.MustCompile(`^risk_[A-Za-z0-9_-]{8,124}$`)
+	operatorCodePattern        = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,127}$`)
 )
 
 // ActivityProjection and CoverageProjection intentionally reuse the persisted,
@@ -80,12 +82,20 @@ type OperatorStreamHealth struct {
 }
 
 type OperatorSessionProjection struct {
-	ID            string    `json:"id"`
-	EnvironmentID string    `json:"environmentId,omitempty"`
-	Profile       string    `json:"profile,omitempty"`
-	State         string    `json:"state"`
-	Command       string    `json:"command"`
-	StartedAt     time.Time `json:"startedAt,omitempty"`
+	ID                     string                               `json:"id"`
+	EnvironmentID          string                               `json:"environmentId,omitempty"`
+	Profile                string                               `json:"profile,omitempty"`
+	State                  string                               `json:"state"`
+	Command                string                               `json:"command"`
+	StartedAt              time.Time                            `json:"startedAt,omitempty"`
+	WorkspaceID            string                               `json:"workspaceId,omitempty"`
+	WorkspaceLabel         string                               `json:"workspaceLabel,omitempty"`
+	GuestWorkspace         string                               `json:"guestWorkspace,omitempty"`
+	WorkspaceTransport     string                               `json:"workspaceTransport,omitempty"`
+	WorkspaceViewState     workspaceattach.AttachmentState      `json:"workspaceViewState,omitempty"`
+	WorkspaceRelations     []workspaceattach.RootRelationNotice `json:"workspaceRelations,omitempty"`
+	WorkspaceCleanupStatus string                               `json:"workspaceCleanupStatus,omitempty"`
+	WorkspaceBlockerCode   string                               `json:"workspaceBlockerCode,omitempty"`
 }
 
 // OperatorEnvironmentProjection is the bounded environment inventory needed
@@ -93,21 +103,25 @@ type OperatorSessionProjection struct {
 // carries no mutation authority; exact stop/clean targets are still resolved
 // and authorized by the Manager plan/apply routes.
 type OperatorEnvironmentProjection struct {
-	ID                   string    `json:"id"`
-	Name                 string    `json:"name,omitempty"`
-	Profile              string    `json:"profile,omitempty"`
-	Backend              string    `json:"backend,omitempty"`
-	Status               string    `json:"status"`
-	Workspace            string    `json:"workspace,omitempty"`
-	InstanceName         string    `json:"instanceName,omitempty"`
-	LastSessionID        string    `json:"lastSessionId,omitempty"`
-	LastCommand          string    `json:"lastCommand,omitempty"`
-	ActiveSessions       int       `json:"activeSessions"`
-	ActiveWorkspaceViews int       `json:"activeWorkspaceViews"`
-	OwnerHealth          string    `json:"ownerHealth,omitempty"`
-	CreatedAt            time.Time `json:"createdAt,omitempty"`
-	LastStartedAt        time.Time `json:"lastStartedAt,omitempty"`
-	LastEndedAt          time.Time `json:"lastEndedAt,omitempty"`
+	ID                     string           `json:"id"`
+	Name                   string           `json:"name,omitempty"`
+	Profile                string           `json:"profile,omitempty"`
+	Backend                string           `json:"backend,omitempty"`
+	Status                 string           `json:"status"`
+	Mode                   environment.Mode `json:"mode,omitempty"`
+	SharedSlot             string           `json:"sharedSlot,omitempty"`
+	MachineIdentityID      string           `json:"machineIdentityId,omitempty"`
+	Workspace              string           `json:"workspace,omitempty"`
+	InstanceName           string           `json:"instanceName,omitempty"`
+	LastSessionID          string           `json:"lastSessionId,omitempty"`
+	LastCommand            string           `json:"lastCommand,omitempty"`
+	ActiveSessions         int              `json:"activeSessions"`
+	ActiveWorkspaceViews   int              `json:"activeWorkspaceViews"`
+	WorkspaceProviderState string           `json:"workspaceProviderState,omitempty"`
+	OwnerHealth            string           `json:"ownerHealth,omitempty"`
+	CreatedAt              time.Time        `json:"createdAt,omitempty"`
+	LastStartedAt          time.Time        `json:"lastStartedAt,omitempty"`
+	LastEndedAt            time.Time        `json:"lastEndedAt,omitempty"`
 }
 
 type RiskFinding struct {
@@ -952,8 +966,19 @@ func (projection OperatorSessionProjection) Validate() error {
 		(projection.EnvironmentID != "" && len(projection.EnvironmentID) > 128) ||
 		len(projection.Profile) > 128 || len(projection.State) > 64 ||
 		len(projection.Command) > 8192 ||
-		strings.IndexByte(projection.Command, 0) >= 0 {
+		len(projection.WorkspaceRelations) > 64 ||
+		strings.IndexByte(projection.Command, 0) >= 0 ||
+		containsOperatorControl(
+			projection.WorkspaceLabel,
+			projection.GuestWorkspace,
+			projection.WorkspaceTransport,
+			projection.WorkspaceCleanupStatus,
+			projection.WorkspaceBlockerCode,
+		) {
 		return errors.New("operator session projection is invalid")
+	}
+	if err := validateOperatorWorkspaceProjection(projection); err != nil {
+		return err
 	}
 	return nil
 }
@@ -965,27 +990,124 @@ func (projection OperatorEnvironmentProjection) Validate() error {
 		len(projection.Backend) > 128 ||
 		len(projection.Status) == 0 ||
 		len(projection.Status) > 64 ||
+		len(projection.SharedSlot) > 128 ||
 		len(projection.Workspace) > 4096 ||
 		len(projection.InstanceName) > 256 ||
 		len(projection.LastSessionID) > 128 ||
 		len(projection.LastCommand) > 8192 ||
 		projection.ActiveSessions < 0 ||
 		projection.ActiveWorkspaceViews < 0 ||
+		len(projection.WorkspaceProviderState) > 64 ||
 		len(projection.OwnerHealth) > 64 ||
 		containsOperatorControl(
 			projection.Name,
 			projection.Profile,
 			projection.Backend,
 			projection.Status,
+			string(projection.Mode),
+			projection.SharedSlot,
+			projection.MachineIdentityID,
 			projection.Workspace,
 			projection.InstanceName,
 			projection.LastSessionID,
 			projection.LastCommand,
+			projection.WorkspaceProviderState,
 			projection.OwnerHealth,
 		) {
 		return errors.New(
 			"operator environment projection is invalid",
 		)
+	}
+	switch projection.Mode {
+	case "", environment.ModeShared, environment.ModeDedicated,
+		environment.ModeWorkspaceBound:
+	default:
+		return errors.New("operator environment mode is invalid")
+	}
+	if projection.MachineIdentityID != "" &&
+		!environment.ValidConfigurationID(projection.MachineIdentityID) {
+		return errors.New("operator environment machine identity is invalid")
+	}
+	switch projection.WorkspaceProviderState {
+	case "", "not-started", "starting", "ready", "draining", "released", "unproved":
+	default:
+		return errors.New("operator environment workspace provider state is invalid")
+	}
+	if projection.ActiveWorkspaceViews > 0 &&
+		(projection.Mode != environment.ModeShared ||
+			projection.WorkspaceProviderState == "") {
+		return errors.New("operator environment workspace view counts are inconsistent")
+	}
+	return nil
+}
+
+func validateOperatorWorkspaceProjection(
+	projection OperatorSessionProjection,
+) error {
+	hasWorkspace := projection.WorkspaceID != "" ||
+		projection.WorkspaceLabel != "" ||
+		projection.GuestWorkspace != "" ||
+		projection.WorkspaceTransport != "" ||
+		projection.WorkspaceViewState != "" ||
+		len(projection.WorkspaceRelations) != 0 ||
+		projection.WorkspaceCleanupStatus != "" ||
+		projection.WorkspaceBlockerCode != ""
+	if !hasWorkspace {
+		return nil
+	}
+	if projection.EnvironmentID == "" ||
+		!operatorWorkspaceIDPattern.MatchString(projection.WorkspaceID) ||
+		len(projection.WorkspaceLabel) == 0 ||
+		len(projection.WorkspaceLabel) > 256 ||
+		projection.GuestWorkspace != workspaceattach.LogicalWorkspaceRoot ||
+		projection.WorkspaceTransport != workspaceattach.SelectedTransport ||
+		len(projection.WorkspaceBlockerCode) > 128 {
+		return errors.New("operator session workspace projection is invalid")
+	}
+	switch projection.WorkspaceViewState {
+	case workspaceattach.AttachmentPlanned,
+		workspaceattach.AttachmentProviderStarting,
+		workspaceattach.AttachmentProviderReady,
+		workspaceattach.AttachmentViewMounting,
+		workspaceattach.AttachmentReady,
+		workspaceattach.AttachmentDraining:
+		if projection.WorkspaceCleanupStatus != "" ||
+			projection.WorkspaceBlockerCode != "" {
+			return errors.New("active operator workspace projection carries terminal cleanup state")
+		}
+	case workspaceattach.AttachmentReleased:
+		if projection.WorkspaceCleanupStatus != workspaceattach.CleanupAbsent ||
+			projection.WorkspaceBlockerCode != "" {
+			return errors.New("released operator workspace projection is inconsistent")
+		}
+	case workspaceattach.AttachmentUnproved:
+		if projection.WorkspaceCleanupStatus != workspaceattach.CleanupUnproved ||
+			projection.WorkspaceBlockerCode == "" {
+			return errors.New("unproved operator workspace projection is inconsistent")
+		}
+	default:
+		return errors.New("operator session workspace state is invalid")
+	}
+	for _, relation := range projection.WorkspaceRelations {
+		if !operatorWorkspaceIDPattern.MatchString(relation.WorkspaceID) ||
+			!operatorWorkspaceIDPattern.MatchString(relation.OtherWorkspaceID) ||
+			relation.WorkspaceID != projection.WorkspaceID ||
+			relation.OtherWorkspaceID == projection.WorkspaceID {
+			return errors.New("operator workspace relation identity is invalid")
+		}
+		switch relation.Relation {
+		case workspaceattach.RootSame, workspaceattach.RootNested,
+			workspaceattach.RootDisjoint:
+		default:
+			return errors.New("operator workspace relation is invalid")
+		}
+		switch relation.SelectedPosition {
+		case workspaceattach.RelationPositionPeer,
+			workspaceattach.RelationPositionAncestor,
+			workspaceattach.RelationPositionDescendant:
+		default:
+			return errors.New("operator workspace relation position is invalid")
+		}
 	}
 	return nil
 }
@@ -1064,6 +1186,16 @@ func scopeOperatorSessions(values []SessionSummary, query OperatorSnapshotQuery)
 		out = append(out, OperatorSessionProjection{
 			ID: value.ID, EnvironmentID: value.EnvironmentID, Profile: value.Profile,
 			State: string(value.State), Command: command, StartedAt: value.StartedAt,
+			WorkspaceID: value.WorkspaceID, WorkspaceLabel: value.WorkspaceLabel,
+			GuestWorkspace:     value.GuestWorkspace,
+			WorkspaceTransport: value.WorkspaceTransport,
+			WorkspaceViewState: value.WorkspaceViewState,
+			WorkspaceRelations: append(
+				[]workspaceattach.RootRelationNotice(nil),
+				value.WorkspaceRelations...,
+			),
+			WorkspaceCleanupStatus: value.WorkspaceCleanupStatus,
+			WorkspaceBlockerCode:   value.WorkspaceBlockerCode,
 		})
 	}
 	return out
@@ -1097,12 +1229,15 @@ func scopeOperatorEnvironments(
 		projection := OperatorEnvironmentProjection{
 			ID: value.ID, Name: value.Name, Profile: value.Profile,
 			Backend: value.Backend, Status: value.Status,
-			Workspace: value.Workspace, InstanceName: value.InstanceName,
-			LastSessionID:        value.LastSessionID,
-			LastCommand:          value.LastCommand,
-			ActiveSessions:       value.ActiveSessions,
-			ActiveWorkspaceViews: value.ActiveWorkspaceViews,
-			OwnerHealth:          value.OwnerHealth, CreatedAt: value.CreatedAt,
+			Mode: value.Mode, SharedSlot: value.SharedSlot,
+			MachineIdentityID: value.MachineIdentityID,
+			Workspace:         value.Workspace, InstanceName: value.InstanceName,
+			LastSessionID:          value.LastSessionID,
+			LastCommand:            value.LastCommand,
+			ActiveSessions:         value.ActiveSessions,
+			ActiveWorkspaceViews:   value.ActiveWorkspaceViews,
+			WorkspaceProviderState: value.WorkspaceProviderState,
+			OwnerHealth:            value.OwnerHealth, CreatedAt: value.CreatedAt,
 		}
 		if value.LastStartedAt != nil {
 			projection.LastStartedAt = *value.LastStartedAt

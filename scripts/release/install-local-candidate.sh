@@ -1100,15 +1100,15 @@ case "$ui_url" in
     ;;
 esac
 ui_token="${ui_url##*#token=}"
-manager_api="$(
-  sed -n 's/^Manager API: //p' "$scratch/ui.raw" |
+local_api="$(
+  sed -n 's/^Local Hideout API: //p' "$scratch/ui.raw" |
     head -1
 )"
-case "$manager_api" in
+case "$local_api" in
   http://127.0.0.1:*/api/v1/overview)
     ;;
   *)
-    fail "local WebUI did not publish its loopback Manager API"
+    fail "local WebUI did not publish its loopback API"
     ;;
 esac
 [ -n "$ui_token" ] ||
@@ -1118,7 +1118,7 @@ printf '%s\n%s\n' "$ui_url" "$ui_token" \
 ui_status="$(
   printf \
     'url = "%s"\nheader = "X-Hideout-UI-Token: %s"\n' \
-    "$manager_api" "$ui_token" |
+    "$local_api" "$ui_token" |
     curl --silent --show-error \
       --output "$scratch/ui-body.raw" \
       --write-out '%{http_code}' \
@@ -1131,7 +1131,7 @@ jq -e '
   .resource == "overview" and
   (.data | type == "object")
 ' "$scratch/ui-body.raw" >/dev/null ||
-  fail "authenticated local WebUI Manager API response is invalid"
+  fail "authenticated local WebUI API response is invalid"
 jq -n \
   --argjson httpStatus "$ui_status" \
   --arg bodySHA256 "$(sha256_file "$scratch/ui-body.raw")" \

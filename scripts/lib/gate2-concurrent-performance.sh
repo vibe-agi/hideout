@@ -13,17 +13,102 @@ gate2_034_percentile() {
   sort -n "$values" | sed -n "${index}p"
 }
 
+gate2_034_median_upper_confidence_rank() {
+  local samples="$1"
+
+  awk -v samples="$samples" '
+    function combination(n, k, result, position) {
+      if (k > n - k) k = n - k
+      result = 1
+      for (position = 1; position <= k; position++)
+        result = result * (n - k + position) / position
+      return result
+    }
+    BEGIN {
+      if (samples < 1 || samples > 1000) exit 1
+      denominator = 2 ^ samples
+      for (rank = 1; rank <= samples; rank++) {
+        upper_tail = 0
+        for (count = rank; count <= samples; count++)
+          upper_tail += combination(samples, count) / denominator
+        if (upper_tail <= 0.05 + 0.000000000001) {
+          print rank
+          exit 0
+        }
+      }
+      exit 1
+    }
+  '
+}
+
 gate2_034_values_json() {
   jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' "$1"
+}
+
+gate2_034_extract_reference_coverage_sample() {
+  local coverage_path="$1" sample_index="$2" recorded="$3"
+
+  jq -c \
+    --argjson sampleIndex "$sample_index" \
+    --argjson recorded "$recorded" '
+      ([.intervals[], .current[]] | unique_by(.id)) as $coverage |
+      ([$coverage[].sessionId] | unique) as $sessions |
+      def terminal_counter($code):
+        ([
+          $coverage[] |
+          select(.reason == "target-exited") |
+          .evidence[]? |
+          select(.code == $code) |
+          .value
+        ] | unique) as $values |
+        if ($values | length) != 1 or
+            ($values[0] | type) != "string" or
+            (($values[0] | test("^(0|[1-9][0-9]*)$")) | not)
+        then error("missing or divergent terminal counter: " + $code)
+        else ($values[0] | tonumber)
+        end;
+      if ($sessions | length) != 1 then
+        error("reference coverage session identity diverged")
+      else
+        {
+          sampleIndex: $sampleIndex,
+          recorded: ($recorded == 1),
+          sessionId: $sessions[0],
+          droppedEventCount:
+            ([$coverage[].droppedEventCount] | max // 0),
+          ringOverflow: (any($coverage[]; .reason == "ring-overflow")),
+          kernelDropped: terminal_counter("kernel-dropped"),
+          ringDropped: terminal_counter("ring-dropped"),
+          localDropped: {
+            process: terminal_counter("local-process-dropped"),
+            file: terminal_counter("local-file-dropped"),
+            network: terminal_counter("local-network-dropped"),
+            dns: terminal_counter("local-dns-dropped")
+          },
+          fileCollectorCounters: {
+            matchedEvents: terminal_counter("file-matched-events"),
+            reservedEvents: terminal_counter("file-reserved-events"),
+            ringbufDrops: terminal_counter("file-ringbuf-drops"),
+            stateDrops: terminal_counter("file-state-drops"),
+            stateDegradations:
+              terminal_counter("file-state-degradations"),
+            pathFailures: terminal_counter("file-path-failures"),
+            identityFailures: terminal_counter("file-identity-failures")
+          }
+        }
+      end
+    ' "$coverage_path"
 }
 
 gate2_034_finalize_reference_result() {
   local output="$1" baseline_values="$2" observed_values="$3"
   local samples="$4" warmups="$5" reference_uid="$6"
-  local reference_digest="$7"
+  local reference_digest="$7" coverage_values="$8" resource_values="$9"
+  local bpf_object_sha="${10}"
   local baseline_median baseline_p95 observed_median observed_p95
   local baseline_samples_json observed_samples_json
-  local overhead_samples_json overhead_percent
+  local overhead_samples_json overhead_percent coverage_samples_json
+  local resource_samples_json confidence_json confidence_rank confidence_upper
 
   baseline_samples_json="$(gate2_034_values_json "$baseline_values")"
   observed_samples_json="$(gate2_034_values_json "$observed_values")"
@@ -31,6 +116,71 @@ gate2_034_finalize_reference_result() {
   baseline_p95="$(gate2_034_percentile "$baseline_values" 95)"
   observed_median="$(gate2_034_percentile "$observed_values" 50)"
   observed_p95="$(gate2_034_percentile "$observed_values" 95)"
+  coverage_samples_json="$(jq -s '.' "$coverage_values")"
+  resource_samples_json="$(jq -s '.' "$resource_values")"
+  jq -e \
+    --argjson samples "$samples" \
+    --argjson warmups "$warmups" '
+      length == ($samples + $warmups) and
+      ([.[].sampleIndex] == [range(1; $samples + $warmups + 1)]) and
+      ([.[] | select(.recorded)] | length) == $samples and
+      ([.[].sessionId] | unique | length) == length and
+      all(.[];
+        .droppedEventCount == 0 and .ringOverflow == false and
+        .kernelDropped == 0 and .ringDropped == 0 and
+        .localDropped.process == 0 and
+        .localDropped.file == 0 and
+        .localDropped.network == 0 and
+        .localDropped.dns == 0 and
+        .fileCollectorCounters.matchedEvents > 0 and
+        .fileCollectorCounters.matchedEvents ==
+          (.fileCollectorCounters.reservedEvents +
+            .fileCollectorCounters.ringbufDrops) and
+        .fileCollectorCounters.ringbufDrops == 0 and
+        .fileCollectorCounters.stateDrops == 0 and
+        .fileCollectorCounters.stateDegradations >= 0 and
+        .fileCollectorCounters.pathFailures >= 0 and
+        .fileCollectorCounters.identityFailures >= 0 and
+        (.sessionId | test("^ses_[A-Za-z0-9_-]+$")))
+    ' <<<"$coverage_samples_json" >/dev/null || {
+    echo "concurrent-sessions performance: reference coverage samples are invalid" >&2
+    return 1
+  }
+  jq -e \
+    --argjson samples "$samples" \
+    --argjson warmups "$warmups" '
+      length == ($samples + $warmups) and
+      ([.[].sampleIndex] == [range(1; $samples + $warmups + 1)]) and
+      ([.[] | select(.recorded)] | length) == $samples and
+      all(.[];
+        (.sampleIndex | type) == "number" and
+        .sampleIndex == (.sampleIndex | floor) and
+        (.recorded | type) == "boolean" and
+        all([.baseline, .observed][];
+          (.userMs | type) == "number" and .userMs >= 0 and
+          (.systemMs | type) == "number" and .systemMs >= 0 and
+          (.voluntaryContextSwitches | type) == "number" and
+          .voluntaryContextSwitches >= 0 and
+          .voluntaryContextSwitches ==
+            (.voluntaryContextSwitches | floor) and
+          (.involuntaryContextSwitches | type) == "number" and
+          .involuntaryContextSwitches >= 0 and
+          .involuntaryContextSwitches ==
+            (.involuntaryContextSwitches | floor)))
+    ' <<<"$resource_samples_json" >/dev/null || {
+    echo "concurrent-sessions performance: reference resource samples are invalid" >&2
+    return 1
+  }
+  if [ "${#bpf_object_sha}" -ne 64 ]; then
+    echo "concurrent-sessions performance: invalid file observer object digest" >&2
+    return 1
+  fi
+  case "$bpf_object_sha" in
+    *[!0-9a-f]*)
+      echo "concurrent-sessions performance: invalid file observer object digest" >&2
+      return 1
+      ;;
+  esac
   overhead_samples_json="$(
     jq -cn \
       --argjson baseline "$baseline_samples_json" \
@@ -65,6 +215,34 @@ gate2_034_finalize_reference_result() {
         .[((length * 50 + 99) / 100 | floor) - 1]
       '
   )"
+  confidence_json='null'
+  confidence_rank=''
+  confidence_upper=''
+  if [ "$samples" -ge 30 ]; then
+    confidence_rank="$(gate2_034_median_upper_confidence_rank "$samples")" || {
+      echo "concurrent-sessions performance: cannot derive median confidence rank" >&2
+      return 1
+    }
+    confidence_upper="$(
+      jq -nr \
+        --argjson values "$overhead_samples_json" \
+        --argjson rank "$confidence_rank" \
+        '$values | sort | .[$rank - 1]'
+    )"
+    confidence_json="$(
+      jq -cn \
+        --argjson rank "$confidence_rank" \
+        --argjson upperBound "$confidence_upper" '
+          {
+            level: 0.95,
+            method: "one-sided-exact-binomial-order-statistic",
+            rank: $rank,
+            upperBound: $upperBound,
+            thresholdPassed: ($upperBound <= 10)
+          }
+        '
+    )"
+  fi
   jq -n \
     --arg unit "milliseconds" \
     --arg clock "guest-python-time.monotonic_ns" \
@@ -72,9 +250,16 @@ gate2_034_finalize_reference_result() {
     --arg pairing "index-aligned-adjacent-counterbalanced" \
     --arg overheadAggregation \
       "nearest-rank-median-of-paired-percent-deltas" \
+    --arg fixturePreparation \
+      "once-via-control-before-all-warmup-and-recorded-samples" \
+    --arg pairProximity \
+      "adjacent-halves-reuse-one-immutable-warmed-source-with-no-drain-sleep" \
+    --arg backgroundObserverPolicy \
+      "concurrent-anchor-plus-arm-equivalent-inert-baseline-session" \
     --arg percentile "nearest-rank-ceiling" \
     --arg uid "$reference_uid" \
     --arg digest "$reference_digest" \
+    --arg bpfObjectSHA256 "$bpf_object_sha" \
     --argjson samples "$samples" \
     --argjson warmups "$warmups" \
     --argjson baselineSamples "$baseline_samples_json" \
@@ -85,6 +270,9 @@ gate2_034_finalize_reference_result() {
     --argjson observedMedian "$observed_median" \
     --argjson observedP95 "$observed_p95" \
     --argjson overhead "$overhead_percent" \
+    --argjson confidence "$confidence_json" \
+    --argjson coverageSamples "$coverage_samples_json" \
+    --argjson resourceSamples "$resource_samples_json" \
     '{
       methodology: {
         workload:
@@ -94,6 +282,9 @@ gate2_034_finalize_reference_result() {
         sampleOrder: $order,
         samplePairing: $pairing,
         overheadAggregation: $overheadAggregation,
+        fixturePreparation: $fixturePreparation,
+        pairProximity: $pairProximity,
+        backgroundObserverPolicy: $backgroundObserverPolicy,
         clock: $clock,
         percentile: $percentile,
         uid: ($uid | tonumber),
@@ -111,12 +302,44 @@ gate2_034_finalize_reference_result() {
         median: $observedMedian,
         p95: $observedP95
       },
+      observationIntegrity: {
+        fileBPFObjectSHA256: $bpfObjectSHA256,
+        coverageSamples: $coverageSamples,
+        fileCollectorCounters: [
+          $coverageSamples[] |
+          {sampleIndex, recorded, sessionId} + .fileCollectorCounters
+        ],
+        noReportedLoss: all($coverageSamples[];
+          .droppedEventCount == 0 and .ringOverflow == false and
+          .kernelDropped == 0 and .ringDropped == 0 and
+          .localDropped.process == 0 and
+          .localDropped.file == 0 and
+          .localDropped.network == 0 and
+          .localDropped.dns == 0 and
+          .fileCollectorCounters.matchedEvents > 0 and
+          .fileCollectorCounters.matchedEvents ==
+            (.fileCollectorCounters.reservedEvents +
+              .fileCollectorCounters.ringbufDrops) and
+          .fileCollectorCounters.ringbufDrops == 0 and
+              .fileCollectorCounters.stateDrops == 0)
+      },
+      resourceUsage: {
+        scope: "reference-workload-child-process",
+        source: "getrusage(RUSAGE_CHILDREN)",
+        cpuTimeUnit: "milliseconds",
+        contextSwitchUnit: "count",
+        acceptanceFilter: false,
+        samples: $resourceSamples
+      },
       elapsedOverhead: {
         unit: "percent",
         samples: $overheadSamples,
         median: $overhead,
         threshold: 10,
-        thresholdPassed: ($overhead <= 10)
+        confidence: $confidence,
+        thresholdPassed:
+          ($overhead <= 10 and
+            ($confidence == null or $confidence.thresholdPassed))
       }
     }' >"$output"
 
@@ -127,28 +350,38 @@ gate2_034_finalize_reference_result() {
       >&2
     return 1
   }
+  if [ -n "$confidence_upper" ]; then
+    awk -v value="$confidence_upper" \
+      'BEGIN {exit !(value <= 10.0)}' || {
+      echo \
+        "concurrent-sessions performance: reference one-sided 95% median upper bound ${confidence_upper}% exceeds 10%" \
+        >&2
+      return 1
+    }
+  fi
 }
 
-gate2_034_reference_workload() {
+gate2_034_reference_fixture_setup() {
   cat <<'EOF'
+umask 077
 work_root="$(mktemp -d /var/tmp/hideout-reference.XXXXXX)"
-reference_completed=0
-cleanup_reference() {
-  cleanup_status=$?
+cleanup_failed_setup() {
+  setup_status=$?
+  trap - EXIT
+  if [ "$setup_status" -eq 0 ]; then
+    exit 0
+  fi
   case "$work_root" in
-    /var/tmp/hideout-reference.*)
+    /var/tmp/hideout-reference.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]])
       find "$work_root" -depth -delete
       ;;
     *)
-      printf 'reference workload: refusing unexpected cleanup path\n' >&2
+      printf 'reference fixture: refusing unexpected failed-setup cleanup path\n' >&2
       ;;
   esac
-  if [ "$cleanup_status" -eq 0 ] && [ "$reference_completed" != "1" ]; then
-    printf 'reference workload: run ended before its success line\n' >&2
-    exit 1
-  fi
+  exit "$setup_status"
 }
-trap cleanup_reference EXIT HUP INT TERM
+trap cleanup_failed_setup EXIT
 /usr/bin/python3 - "$work_root" <<'PY'
 import json
 import os
@@ -197,17 +430,35 @@ for iteration in range(96):
         )
 print(digest.hexdigest())
 PY
-# Preparation is deliberately outside the measured interval. Let the observed
-# pipeline drain it so the paired sample measures the reference workload, not
-# fixture construction.
-sleep 1
+printf 'root=%s\n' "$work_root"
+EOF
+}
+
+gate2_034_reference_workload() {
+  cat <<'EOF'
+work_root="${1:-}"
+case "$work_root" in
+  /var/tmp/hideout-reference.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]]) ;;
+  *)
+    printf 'reference workload: refusing unexpected fixture path\n' >&2
+    exit 1
+    ;;
+esac
+[ -d "$work_root" ] && [ ! -L "$work_root" ] &&
+  [ -d "$work_root/source" ] && [ ! -L "$work_root/source" ] &&
+  [ -f "$work_root/worker.py" ] && [ ! -L "$work_root/worker.py" ] || {
+  printf 'reference workload: fixture identity is invalid\n' >&2
+  exit 1
+}
 /usr/bin/python3 - "$work_root" <<'PY'
 import os
+import resource
 import subprocess
 import sys
 import time
 
 root = sys.argv[1]
+usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
 started = time.monotonic_ns()
 completed = subprocess.run(
     ["/usr/bin/python3", os.path.join(root, "worker.py"), root],
@@ -216,7 +467,11 @@ completed = subprocess.run(
     stderr=None,
     text=True,
 )
-elapsed_ms = (time.monotonic_ns() - started) / 1_000_000
+finished = time.monotonic_ns()
+usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+elapsed_ms = (finished - started) / 1_000_000
+user_ms = (usage_after.ru_utime - usage_before.ru_utime) * 1_000
+system_ms = (usage_after.ru_stime - usage_before.ru_stime) * 1_000
 digest = completed.stdout.strip()
 if len(digest) != 64 or any(
     value not in "0123456789abcdef" for value in digest
@@ -225,8 +480,20 @@ if len(digest) != 64 or any(
 print(f"uid={os.getuid()}")
 print(f"digest={digest}")
 print(f"elapsed_ms={elapsed_ms:.3f}")
+print(f"user_ms={user_ms:.3f}")
+print(f"system_ms={system_ms:.3f}")
+print(
+    "voluntary_context_switches="
+    f"{usage_after.ru_nvcsw - usage_before.ru_nvcsw}"
+)
+print(
+    "involuntary_context_switches="
+    f"{usage_after.ru_nivcsw - usage_before.ru_nivcsw}"
+)
 PY
-reference_completed=1
+if [ -n "${HIDEOUT_SESSION_ID:-}" ]; then
+  printf 'session_id=%s\n' "$HIDEOUT_SESSION_ID"
+fi
 EOF
 }
 
@@ -236,41 +503,217 @@ gate2_034_reference_result() {
     "$output" | tr -d '\r' | tail -n1
 }
 
-gate2_034_measure_reference_baseline() {
-  local lima_home="$1" instance="$2" output="$3" errors="$4"
-  local workload="$5"
-  LIMA_HOME="$lima_home" limactl shell --tty=false --workdir / \
-    "$instance" -- sh -eu -c "$workload" \
-    >"$output" 2>"$errors"
+gate2_034_wait_active_session_count() {
+  local hideout="$1" store="$2" expected="$3" output="$4" errors="$5"
+  local attempts=0
+
+  while [ "$attempts" -lt 100 ]; do
+    if HIDEOUT_STORE_ROOT="$store" "$hideout" env list \
+      >"$output" 2>"$errors" &&
+      awk -v expected="$expected" \
+        'NR == 2 {
+          exit !($7 == expected && $6 == "running" && $9 == "ready")
+        }' \
+        "$output"; then
+      return 0
+    fi
+    sleep 0.05
+    attempts=$((attempts + 1))
+  done
+  return 1
 }
 
-gate2_034_measure_reference_observed() {
+gate2_034_measure_reference_baseline() {
   local hideout="$1" store="$2" lima_home="$3" profile="$4"
-  local workspace="$5" shim="$6" hostfsd="$7"
-  local output="$8" errors="$9" workload="${10}"
+  local workspace="$5" shim="$6" hostfsd="$7" instance="$8"
+  local output="$9" errors="${10}" workload="${11}" fixture_root="${12}"
+  local sample_index="${13}" marker guest_marker inert_output inert_errors
+  local inert_pid attempts status=0
+
+  marker="$workspace/.hideout-gate-control/reference-inert-$sample_index.ready"
+  guest_marker="/workspace/.hideout-gate-control/reference-inert-$sample_index.ready"
+  inert_output="$output.inert.out"
+  inert_errors="$errors.inert.err"
+  case "$marker" in
+    */.hideout-gate-control/reference-inert-*.ready) ;;
+    *)
+      echo "concurrent-sessions performance: invalid inert baseline marker" >&2
+      return 1
+      ;;
+  esac
+  rm -f "$marker"
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
     HIDEOUT_LINUX_SHIM_PATH="$shim" \
     HIDEOUT_LINUX_HOSTFSD_PATH="$hostfsd" \
     "$hideout" run --profile "$profile" --backend lima --network direct \
       --workspace "$workspace" --guest-workspace /workspace -- \
-      sh -eu -c "$workload" >"$output" 2>"$errors"
+      /usr/bin/python3 -c '
+import pathlib
+import signal
+import sys
+pathlib.Path(sys.argv[1]).touch()
+signal.pause()
+' "$guest_marker" >"$inert_output" 2>"$inert_errors" &
+  inert_pid=$!
+  attempts=0
+  while [ ! -f "$marker" ]; do
+    if ! kill -0 "$inert_pid" 2>/dev/null; then
+      wait "$inert_pid" 2>/dev/null || true
+      cat "$inert_output" "$inert_errors" >&2
+      echo "concurrent-sessions performance: inert baseline session exited before ready" >&2
+      return 1
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 600 ]; then
+      status=1
+      break
+    fi
+    sleep 0.05
+  done
+  if [ "$status" -eq 0 ] &&
+    ! gate2_034_wait_active_session_count \
+      "$hideout" "$store" 2 \
+      "$output.inert-env-before.out" "$errors.inert-env-before.err"; then
+    status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    LIMA_HOME="$lima_home" limactl shell --tty=false --workdir / \
+      "$instance" -- sh -eu -c "$workload" reference-workload "$fixture_root" \
+      >"$output" 2>"$errors" || status=$?
+  fi
+  kill "$inert_pid" 2>/dev/null || true
+  wait "$inert_pid" 2>/dev/null || true
+  if ! gate2_034_wait_active_session_count \
+    "$hideout" "$store" 1 \
+    "$output.inert-env-after.out" "$errors.inert-env-after.err"; then
+    status=1
+  fi
+  rm -f "$marker"
+  if [ "$status" -ne 0 ]; then
+    cat "$inert_output" "$inert_errors" >&2
+    echo "concurrent-sessions performance: inert baseline arm failed" >&2
+    return "$status"
+  fi
+}
+
+gate2_034_measure_reference_observed() {
+  local hideout="$1" store="$2" lima_home="$3" profile="$4"
+  local workspace="$5" shim="$6" hostfsd="$7"
+  local output="$8" errors="$9" workload="${10}" fixture_root="${11}"
+  local session_id coverage_output
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    HIDEOUT_LINUX_SHIM_PATH="$shim" \
+    HIDEOUT_LINUX_HOSTFSD_PATH="$hostfsd" \
+    "$hideout" run --profile "$profile" --backend lima --network direct \
+      --workspace "$workspace" --guest-workspace /workspace -- \
+      sh -eu -c "$workload" reference-workload "$fixture_root" \
+      >"$output" 2>"$errors"
+  session_id="$(gate2_034_reference_result "$output" session_id)"
+  case "$session_id" in
+    ses_*) ;;
+    *)
+      echo "concurrent-sessions performance: invalid observed reference session" >&2
+      return 1
+      ;;
+  esac
+  case "$session_id" in
+    *[!A-Za-z0-9_-]*)
+      echo "concurrent-sessions performance: invalid observed reference session" >&2
+      return 1
+      ;;
+  esac
+  coverage_output="$output.coverage.json"
+  HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" \
+    "$hideout" activity coverage --session "$session_id" --json \
+      >"$coverage_output" 2>>"$errors"
+  jq -e '
+    (.intervals | type) == "array" and
+    (.current | type) == "array" and
+    (([.intervals[], .current[]] | unique_by(.id)) as $coverage |
+      ($coverage | length) >= 4 and
+      all($coverage[];
+        .droppedEventCount == 0 and .reason != "ring-overflow"))
+  ' "$coverage_output" >/dev/null || {
+    echo "concurrent-sessions performance: observed reference coverage reported loss" >&2
+    return 1
+  }
+}
+
+gate2_034_prepare_reference_fixture() {
+  local lima_home="$1" instance="$2" output="$3" errors="$4"
+  local setup
+  setup="$(gate2_034_reference_fixture_setup)"
+  LIMA_HOME="$lima_home" limactl shell --tty=false --workdir / \
+    "$instance" -- sh -eu -c "$setup" \
+    >"$output" 2>"$errors"
+}
+
+gate2_034_cleanup_reference_fixture() {
+  local lima_home="$1" instance="$2" fixture_root="$3"
+  local output="$4" errors="$5"
+  # The single-quoted program expands positional parameters inside the guest.
+  # shellcheck disable=SC2016
+  LIMA_HOME="$lima_home" limactl shell --tty=false --workdir / \
+    "$instance" -- sh -eu -c '
+work_root="${1:-}"
+case "$work_root" in
+  /var/tmp/hideout-reference.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]]) ;;
+  *)
+    printf "reference fixture: refusing unexpected cleanup path\n" >&2
+    exit 1
+    ;;
+esac
+[ -d "$work_root" ] && [ ! -L "$work_root" ] || {
+  printf "reference fixture: cleanup identity is invalid\n" >&2
+  exit 1
+}
+find "$work_root" -depth -delete
+' reference-cleanup "$fixture_root" >"$output" 2>"$errors"
 }
 
 gate2_034_run_reference_workload() {
   local out="$1" lima_home="$2" instance="$3"
   local hideout="$4" store="$5" profile="$6" workspace="$7"
   local shim="$8" hostfsd="$9" samples="${10}" warmups="${11}"
+  local repo_root="${12}"
   local workload i record baseline_output baseline_errors
   local observed_output observed_errors baseline_ms observed_ms
   local baseline_uid observed_uid baseline_digest observed_digest
+  local baseline_user_ms observed_user_ms baseline_system_ms observed_system_ms
+  local baseline_voluntary observed_voluntary
+  local baseline_involuntary observed_involuntary
   local reference_uid="" reference_digest=""
-  local baseline_values observed_values
+  local baseline_values observed_values coverage_values resource_values fixture_root
+  local setup_output setup_errors cleanup_output cleanup_errors
+  local bpf_object_sha
 
   workload="$(gate2_034_reference_workload)"
   baseline_values="$out/logs/performance-reference-baseline-ms.txt"
   observed_values="$out/logs/performance-reference-observed-ms.txt"
+  coverage_values="$out/logs/performance-reference-coverage.jsonl"
+  resource_values="$out/logs/performance-reference-resources.jsonl"
+  setup_output="$out/logs/performance-reference-setup.out"
+  setup_errors="$out/logs/performance-reference-setup.err"
+  cleanup_output="$out/logs/performance-reference-cleanup.out"
+  cleanup_errors="$out/logs/performance-reference-cleanup.err"
   : >"$baseline_values"
   : >"$observed_values"
+  : >"$coverage_values"
+  : >"$resource_values"
+  bpf_object_sha="$(jq -r '.objectSHA256' \
+    "$repo_root/internal/workloadobs/collector/bpf/file_observer.generated.json")"
+
+  gate2_034_prepare_reference_fixture \
+    "$lima_home" "$instance" "$setup_output" "$setup_errors"
+  fixture_root="$(gate2_034_reference_result "$setup_output" root)"
+  case "$fixture_root" in
+    /var/tmp/hideout-reference.[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]]) ;;
+    *)
+      cat "$setup_output" "$setup_errors" >&2
+      echo "concurrent-sessions performance: invalid reference fixture root" >&2
+      return 1
+      ;;
+  esac
 
   i=1
   while [ "$i" -le $((warmups + samples)) ]; do
@@ -282,20 +725,24 @@ gate2_034_run_reference_workload() {
 
     if [ $((i % 2)) -eq 1 ]; then
       gate2_034_measure_reference_baseline \
-        "$lima_home" "$instance" "$baseline_output" "$baseline_errors" \
-        "$workload"
+        "$hideout" "$store" "$lima_home" "$profile" "$workspace" \
+        "$shim" "$hostfsd" "$instance" \
+        "$baseline_output" "$baseline_errors" \
+        "$workload" "$fixture_root" "$i"
       gate2_034_measure_reference_observed \
         "$hideout" "$store" "$lima_home" "$profile" "$workspace" \
         "$shim" "$hostfsd" "$observed_output" "$observed_errors" \
-        "$workload"
+        "$workload" "$fixture_root"
     else
       gate2_034_measure_reference_observed \
         "$hideout" "$store" "$lima_home" "$profile" "$workspace" \
         "$shim" "$hostfsd" "$observed_output" "$observed_errors" \
-        "$workload"
+        "$workload" "$fixture_root"
       gate2_034_measure_reference_baseline \
-        "$lima_home" "$instance" "$baseline_output" "$baseline_errors" \
-        "$workload"
+        "$hideout" "$store" "$lima_home" "$profile" "$workspace" \
+        "$shim" "$hostfsd" "$instance" \
+        "$baseline_output" "$baseline_errors" \
+        "$workload" "$fixture_root" "$i"
     fi
 
     baseline_ms="$(gate2_034_reference_result "$baseline_output" elapsed_ms)"
@@ -304,11 +751,29 @@ gate2_034_run_reference_workload() {
     observed_uid="$(gate2_034_reference_result "$observed_output" uid)"
     baseline_digest="$(gate2_034_reference_result "$baseline_output" digest)"
     observed_digest="$(gate2_034_reference_result "$observed_output" digest)"
+    baseline_user_ms="$(gate2_034_reference_result "$baseline_output" user_ms)"
+    observed_user_ms="$(gate2_034_reference_result "$observed_output" user_ms)"
+    baseline_system_ms="$(gate2_034_reference_result "$baseline_output" system_ms)"
+    observed_system_ms="$(gate2_034_reference_result "$observed_output" system_ms)"
+    baseline_voluntary="$(gate2_034_reference_result \
+      "$baseline_output" voluntary_context_switches)"
+    observed_voluntary="$(gate2_034_reference_result \
+      "$observed_output" voluntary_context_switches)"
+    baseline_involuntary="$(gate2_034_reference_result \
+      "$baseline_output" involuntary_context_switches)"
+    observed_involuntary="$(gate2_034_reference_result \
+      "$observed_output" involuntary_context_switches)"
     [ "$baseline_uid" = "$observed_uid" ] &&
       [ "$baseline_digest" = "$observed_digest" ] || {
       echo "concurrent-sessions performance: reference workload identity diverged" >&2
       return 1
     }
+    if [ -n "$reference_uid" ] &&
+      { [ "$baseline_uid" != "$reference_uid" ] ||
+        [ "$baseline_digest" != "$reference_digest" ]; }; then
+      echo "concurrent-sessions performance: reference fixture changed between pairs" >&2
+      return 1
+    fi
     case "$baseline_ms:$observed_ms:$baseline_uid:$baseline_digest" in
       *[!0-9.:a-f]* | :* | *:)
         echo "concurrent-sessions performance: invalid reference workload output" >&2
@@ -317,6 +782,60 @@ gate2_034_run_reference_workload() {
     esac
     reference_uid="$baseline_uid"
     reference_digest="$baseline_digest"
+    if ! jq -cn \
+      --arg sampleIndex "$i" \
+      --arg recorded "$record" \
+      --arg baselineUserMs "$baseline_user_ms" \
+      --arg observedUserMs "$observed_user_ms" \
+      --arg baselineSystemMs "$baseline_system_ms" \
+      --arg observedSystemMs "$observed_system_ms" \
+      --arg baselineVoluntary "$baseline_voluntary" \
+      --arg observedVoluntary "$observed_voluntary" \
+      --arg baselineInvoluntary "$baseline_involuntary" \
+      --arg observedInvoluntary "$observed_involuntary" '
+        ($sampleIndex | tonumber) as $index |
+        ($baselineUserMs | tonumber) as $baselineUser |
+        ($observedUserMs | tonumber) as $observedUser |
+        ($baselineSystemMs | tonumber) as $baselineSystem |
+        ($observedSystemMs | tonumber) as $observedSystem |
+        ($baselineVoluntary | tonumber) as $baselineVoluntaryCount |
+        ($observedVoluntary | tonumber) as $observedVoluntaryCount |
+        ($baselineInvoluntary | tonumber) as $baselineInvoluntaryCount |
+        ($observedInvoluntary | tonumber) as $observedInvoluntaryCount |
+        if any([
+          $baselineUser, $observedUser,
+          $baselineSystem, $observedSystem,
+          $baselineVoluntaryCount, $observedVoluntaryCount,
+          $baselineInvoluntaryCount, $observedInvoluntaryCount
+        ][]; . < 0) or
+          any([
+            $baselineVoluntaryCount, $observedVoluntaryCount,
+            $baselineInvoluntaryCount, $observedInvoluntaryCount
+          ][]; . != floor)
+        then error("invalid reference resource sample")
+        else {
+          sampleIndex: $index,
+          recorded: ($recorded == "1"),
+          baseline: {
+            userMs: $baselineUser,
+            systemMs: $baselineSystem,
+            voluntaryContextSwitches: $baselineVoluntaryCount,
+            involuntaryContextSwitches: $baselineInvoluntaryCount
+          },
+          observed: {
+            userMs: $observedUser,
+            systemMs: $observedSystem,
+            voluntaryContextSwitches: $observedVoluntaryCount,
+            involuntaryContextSwitches: $observedInvoluntaryCount
+          }
+        } end
+      ' >>"$resource_values"; then
+      echo "concurrent-sessions performance: invalid reference resource output" >&2
+      return 1
+    fi
+    gate2_034_extract_reference_coverage_sample \
+      "$observed_output.coverage.json" "$i" "$record" \
+      >>"$coverage_values"
     if [ "$record" = "1" ]; then
       printf '%s\n' "$baseline_ms" >>"$baseline_values"
       printf '%s\n' "$observed_ms" >>"$observed_values"
@@ -324,10 +843,19 @@ gate2_034_run_reference_workload() {
     i=$((i + 1))
   done
 
+  if ! gate2_034_cleanup_reference_fixture \
+    "$lima_home" "$instance" "$fixture_root" \
+    "$cleanup_output" "$cleanup_errors"; then
+    cat "$cleanup_output" "$cleanup_errors" >&2
+    echo "concurrent-sessions performance: reference fixture cleanup failed" >&2
+    return 1
+  fi
+
   gate2_034_finalize_reference_result \
     "$out/logs/performance-reference.json" \
     "$baseline_values" "$observed_values" \
-    "$samples" "$warmups" "$reference_uid" "$reference_digest"
+    "$samples" "$warmups" "$reference_uid" "$reference_digest" \
+    "$coverage_values" "$resource_values" "$bpf_object_sha"
 }
 
 gate2_034_prepare_fixture() {
@@ -423,6 +951,16 @@ gate2_034_run_performance() {
   local runtime_family runtime_revision runtime_digest runtime_build_commit candidate_commit candidate_dirty
 	local fixture_digest candidate_record control_dir
   local extended_performance=false reference_evidence='null'
+  local host_quiet_confirmed=false
+
+  if [ "${HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED:-0}" = "1" ]; then
+    host_quiet_confirmed=true
+  fi
+  if [ "${HIDEOUT_034_EXTENDED_PERFORMANCE:-0}" = "1" ] &&
+    [ "$host_quiet_confirmed" != "true" ]; then
+    echo "concurrent-sessions performance: quiet host must be explicitly confirmed" >&2
+    return 1
+  fi
 
   candidate_bin="$(dirname "$candidate_hideout")"
 	control_dir="$workspace/.hideout-gate-control"
@@ -477,7 +1015,8 @@ exec sleep infinity
       "$out" "$lima_home" "$candidate_instance" \
       "$candidate_hideout" "$candidate_store" "$candidate_profile" \
       "$workspace" "$candidate_bin/hideout-shim-linux-$arch" \
-      "$candidate_bin/hideout-hostfsd-linux-$arch" "$samples" "$warmups"
+      "$candidate_bin/hideout-hostfsd-linux-$arch" "$samples" "$warmups" \
+      "$root"
     jq -e '.elapsedOverhead.thresholdPassed == true' \
       "$out/logs/performance-reference.json" >/dev/null ||
       return 1
@@ -509,6 +1048,7 @@ exec sleep infinity
     echo "concurrent-sessions performance: anchor owner did not reconcile before explicit stop" >&2
     return 1
   fi
+
   HIDEOUT_STORE_ROOT="$candidate_store" LIMA_HOME="$lima_home" \
     "$candidate_hideout" stop "$candidate_env" >/dev/null
 
@@ -536,6 +1076,9 @@ exec sleep infinity
     --arg fixtureSHA256 "$fixture_digest" \
     --arg candidateSampling "per-run-host-invocation-to-first-target-byte" \
     --arg measurementClock "host-monotonic-observed-first-byte" \
+    --arg hostContentionPolicy \
+      "operator-confirmed-quiet-host-known-contention-invalidates-run" \
+    --argjson hostQuietConfirmed "$host_quiet_confirmed" \
     --argjson samples "$samples" --argjson warmups "$warmups" \
     --argjson readySamples "$(gate2_034_values_json "$ready_values")" \
     --argjson readyMedian "$ready_median" --argjson readyP95 "$ready_p95" \
@@ -543,7 +1086,7 @@ exec sleep infinity
     --argjson reference "$reference_evidence" \
     '{schema:
         (if $extended then
-          "hideout.concurrent-sessions-performance/v3"
+          "hideout.concurrent-sessions-performance/v4"
         else
           "hideout.concurrent-sessions-performance/v2"
         end),
@@ -551,9 +1094,13 @@ exec sleep infinity
       candidate:{commit:$candidateCommit,dirty:$candidateDirty,environmentId:$candidateEnvironmentId,instance:$candidateInstance},
       host:{os:$hostOS,arch:$hostArch},
       runtime:{family:$runtimeFamily,revision:$runtimeRevision,artifactSHA256:$runtimeArtifactSHA256,buildCommit:$runtimeBuildCommit,buildDirty:false},
-      methodology:{samples:$samples,warmups:$warmups,readyThresholdMs:2000,
+      methodology:({samples:$samples,warmups:$warmups,readyThresholdMs:2000,
         fixtureSHA256:$fixtureSHA256,candidateSampling:$candidateSampling,
-        measurementClock:$measurementClock},
+        measurementClock:$measurementClock} +
+        if $extended then {
+          hostContentionPolicy:$hostContentionPolicy,
+          hostQuietConfirmed:$hostQuietConfirmed
+        } else {} end),
       warmAttach:{samplesMs:$readySamples,medianMs:$readyMedian,p95Ms:$readyP95}} +
       if $extended then {referenceWorkload:$reference} else {} end' \
     >"$out/logs/performance.json"

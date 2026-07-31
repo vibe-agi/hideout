@@ -83,10 +83,25 @@ type RawFileEvent struct {
 }
 
 func DecodeFileEvent(record []byte) (RawFileEvent, error) {
+	var event RawFileEvent
+	if err := DecodeFileEventInto(record, &event); err != nil {
+		return RawFileEvent{}, err
+	}
+	return event, nil
+}
+
+// DecodeFileEventInto decodes into caller-owned storage. The live collector
+// reuses one RawFileEvent per read loop so compact 120-byte records are not
+// expanded into a 1408-byte value and copied repeatedly between layers.
+func DecodeFileEventInto(record []byte, event *RawFileEvent) error {
 	compact := len(record) == FileCompactRecordSize
 	cached := len(record) == FileCachedRecordSize
+	if event == nil {
+		return ErrFileRecord
+	}
 	if !compact && !cached && len(record) != FileRecordSize {
-		return RawFileEvent{}, fmt.Errorf(
+		*event = RawFileEvent{}
+		return fmt.Errorf(
 			"%w: size=%d want=%d-or-%d-or-%d",
 			ErrFileRecord,
 			len(record),
@@ -106,22 +121,34 @@ func DecodeFileEvent(record []byte) (RawFileEvent, error) {
 		offset += 8
 		return value
 	}
-	event := RawFileEvent{
-		Kind: next32(), CPU: next32(), PID: next32(), TID: next32(),
-		ExecutionPID: next32(), UID: next32(), GID: next32(),
-		Flags: next32(), FileType: next32(), Reserved: next32(),
-		Result:   int64(next64()),
-		CgroupID: next64(), ObserverSequence: next64(),
-		ExecSequence: next64(), MonotonicNS: next64(),
-		Bytes: next64(), Device: next64(), Inode: next64(),
-		MountID: next64(), FileKey: next64(),
-		Compact: compact,
-		Cached:  cached,
-	}
+	event.Kind = next32()
+	event.CPU = next32()
+	event.PID = next32()
+	event.TID = next32()
+	event.ExecutionPID = next32()
+	event.UID = next32()
+	event.GID = next32()
+	event.Flags = next32()
+	event.FileType = next32()
+	event.Reserved = next32()
+	event.Result = int64(next64())
+	event.CgroupID = next64()
+	event.ObserverSequence = next64()
+	event.ExecSequence = next64()
+	event.MonotonicNS = next64()
+	event.Bytes = next64()
+	event.Device = next64()
+	event.Inode = next64()
+	event.MountID = next64()
+	event.FileKey = next64()
+	event.Compact = compact
+	event.Cached = cached
 	if !compact {
 		copy(event.Path[:], record[offset:offset+FilePathBytes])
 		sanitizeFileString(event.Path[:])
 		offset += FilePathBytes
+	} else {
+		clear(event.Path[:])
 	}
 	if !compact && !cached {
 		copy(event.PathName[:], record[offset:offset+FileNameBytes])
@@ -133,6 +160,10 @@ func DecodeFileEvent(record []byte) (RawFileEvent, error) {
 		copy(event.TargetName[:], record[offset:offset+FileNameBytes])
 		sanitizeFileString(event.TargetName[:])
 		offset += FileNameBytes
+	} else {
+		clear(event.PathName[:])
+		clear(event.TargetPath[:])
+		clear(event.TargetName[:])
 	}
 
 	if offset != len(record) ||
@@ -144,17 +175,26 @@ func DecodeFileEvent(record []byte) (RawFileEvent, error) {
 			(event.FileKey == 0 ||
 				!cachedFileEventKind(event.Kind))) ||
 		(compact &&
-			(event.Kind != FileEventRead &&
-				event.Kind != FileEventWrite ||
+			(!compactFileEventKind(event.Kind) ||
 				event.FileKey == 0)) {
-		return RawFileEvent{}, ErrFileRecord
+		*event = RawFileEvent{}
+		return ErrFileRecord
 	}
-	return event, nil
+	return nil
 }
 
 func sanitizeFileString(value []byte) {
 	if index := bytes.IndexByte(value, 0); index >= 0 {
 		clear(value[index:])
+	}
+}
+
+func compactFileEventKind(kind uint32) bool {
+	switch kind {
+	case FileEventRead, FileEventWrite, FileEventMmap, FileEventTruncate:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -32,13 +32,14 @@ const (
 
 	observerExecutionWait = 50 * time.Millisecond
 	observerRetryInterval = time.Millisecond
+	observerDrainWait     = time.Second
 )
 
 type linuxObserverCollectors struct {
 	capabilities sessionwire.ObserverCapabilities
 
 	processReader     *observerbpf.ProcessEventReader
-	fileReader        *observerbpf.FileEventReader
+	fileReader        observerFileReader
 	networkReader     *observerbpf.NetworkEventReader
 	processNormalizer *processcollector.Normalizer
 	fileNormalizer    *filecollector.Normalizer
@@ -53,13 +54,28 @@ type linuxObserverCollectors struct {
 	networkAnchor   networkcollector.ClockAnchor
 	dnsAnchor       dnscollector.ClockAnchor
 
-	startOnce sync.Once
-	closeOnce sync.Once
-	wait      sync.WaitGroup
-	errs      chan error
-	closed    atomic.Bool
-	localDrop atomic.Uint64
-	closeErr  error
+	startOnce        sync.Once
+	stopOnce         sync.Once
+	closeOnce        sync.Once
+	wait             sync.WaitGroup
+	errs             chan error
+	draining         atomic.Bool
+	closed           atomic.Bool
+	localProcessDrop atomic.Uint64
+	localFileDrop    atomic.Uint64
+	localNetworkDrop atomic.Uint64
+	localDNSDrop     atomic.Uint64
+	stopErr          error
+	closeErr         error
+}
+
+type observerFileReader interface {
+	ReadFileEventInto(*observerbpf.RawFileEvent) error
+	SetDeadline(time.Time)
+	Counters() (observerbpf.FileCollectorCounters, error)
+	FlushPending() error
+	Stop() error
+	Close() error
 }
 
 func openObserverCollectors(
@@ -400,7 +416,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 		raw, err := collectors.processReader.ReadProcessEvent()
 		if err != nil {
 			if errors.Is(err, observerbpf.ErrProcessRecord) {
-				collectors.noteDrop()
+				collectors.noteDrop("process")
 				continue
 			}
 			collectors.failRead(ctx, "process")
@@ -411,7 +427,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 			raw,
 		)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("process")
 			continue
 		}
 		var previous workloadtypes.Execution
@@ -421,7 +437,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 				collectors.processNormalizer.LookupCurrentExecution(event.PID)
 		}
 		if err := collectors.processNormalizer.Apply(event); err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("process")
 			continue
 		}
 		if previousPresent {
@@ -431,7 +447,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 			)
 			if !ok || updated.Exit == nil ||
 				updated.Exit.AtMonoNS != event.MonotonicNS {
-				collectors.noteDrop()
+				collectors.noteDrop("process")
 				continue
 			}
 			if err := sink(observerRecord{
@@ -449,7 +465,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 				event.ExecSequence,
 			)
 			if !ok || updated.Exit == nil {
-				collectors.noteDrop()
+				collectors.noteDrop("process")
 				continue
 			}
 			if err := sink(observerRecord{
@@ -470,7 +486,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 			event.ExecSequence,
 		)
 		if !ok {
-			collectors.noteDrop()
+			collectors.noteDrop("process")
 			continue
 		}
 		if err := sink(observerRecord{
@@ -486,7 +502,7 @@ func (collectors *linuxObserverCollectors) readProcess(
 			observerProcessCoverageID,
 		)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("process")
 			continue
 		}
 		if err := sink(observerRecord{
@@ -505,6 +521,7 @@ func (collectors *linuxObserverCollectors) readFile(
 	sink observerRecordSink,
 ) {
 	aggregator := newFileObservationAggregator()
+	var raw observerbpf.RawFileEvent
 	flush := func() bool {
 		if err := aggregator.Flush(
 			collectors.fileNormalizer,
@@ -533,18 +550,26 @@ func (collectors *linuxObserverCollectors) readFile(
 			flushAt = time.Now().Add(observerFileAggregationWindow)
 			collectors.fileReader.SetDeadline(flushAt)
 		}
-		raw, err := collectors.fileReader.ReadFileEvent()
+		err := collectors.fileReader.ReadFileEventInto(&raw)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				if !flush() {
 					return
+				}
+				if collectors.draining.Load() {
+					// The aggregation deadline and FlushPending can become ready
+					// together. A deadline is not the shutdown boundary: clear the
+					// expired timer and continue until Read returns ErrFlushed after
+					// every record visible at the flush call.
+					collectors.fileReader.SetDeadline(time.Time{})
+					continue
 				}
 				flushAt = time.Now().Add(observerFileAggregationWindow)
 				collectors.fileReader.SetDeadline(flushAt)
 				continue
 			}
 			if errors.Is(err, observerbpf.ErrFileRecord) {
-				collectors.noteDrop()
+				collectors.noteDrop("file")
 				continue
 			}
 			if !flush() {
@@ -560,16 +585,16 @@ func (collectors *linuxObserverCollectors) readFile(
 				raw.ExecSequence,
 			)
 		}
-		event, err := filecollector.EventFromKernelRecord(
+		event, err := filecollector.EventFromKernelRecordRef(
 			collectors.fileBoundary,
 			collectors.fileAnchor,
 			observerFileCoverageID,
-			raw,
+			&raw,
 			lookup,
 			nil,
 		)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("file")
 			continue
 		}
 		if !retainFileObservation(event) {
@@ -630,7 +655,7 @@ func (collectors *linuxObserverCollectors) readNetwork(
 		raw, err := collectors.networkReader.ReadNetworkEvent()
 		if err != nil {
 			if errors.Is(err, observerbpf.ErrNetworkRecord) {
-				collectors.noteDrop()
+				collectors.noteDrop("network")
 				continue
 			}
 			collectors.failRead(ctx, "network")
@@ -659,14 +684,14 @@ func (collectors *linuxObserverCollectors) readNetwork(
 			nil,
 		)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("network")
 			continue
 		}
 		record, err := collectors.networkCorrelator.NormalizeConnection(
 			event,
 		)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("network")
 			continue
 		}
 		if err := sink(observerRecord{
@@ -688,7 +713,7 @@ func (collectors *linuxObserverCollectors) readDNS(
 		raw, err := collectors.networkReader.ReadDNSPacket()
 		if err != nil {
 			if errors.Is(err, observerbpf.ErrDNSPacketRecord) {
-				collectors.noteDrop()
+				collectors.noteDrop("dns")
 				continue
 			}
 			collectors.failRead(ctx, "dns")
@@ -711,7 +736,7 @@ func (collectors *linuxObserverCollectors) readDNS(
 			collectors.processNormalizer.LookupActor,
 		)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("dns")
 			continue
 		}
 		event, err := collectors.dnsParser.Consume(&packet)
@@ -722,7 +747,7 @@ func (collectors *linuxObserverCollectors) readDNS(
 			) {
 				continue
 			}
-			collectors.noteDrop()
+			collectors.noteDrop("dns")
 			continue
 		}
 		if event == nil {
@@ -730,7 +755,7 @@ func (collectors *linuxObserverCollectors) readDNS(
 		}
 		record, err := collectors.networkCorrelator.ObserveDNS(*event)
 		if err != nil {
-			collectors.noteDrop()
+			collectors.noteDrop("dns")
 			continue
 		}
 		if err := sink(observerRecord{
@@ -785,6 +810,9 @@ func (collectors *linuxObserverCollectors) stopping(
 	if collectors == nil || collectors.closed.Load() {
 		return true
 	}
+	if collectors.draining.Load() {
+		return false
+	}
 	select {
 	case <-ctx.Done():
 		return true
@@ -797,14 +825,15 @@ func (collectors *linuxObserverCollectors) failRead(
 	ctx context.Context,
 	subsystem string,
 ) {
-	if collectors.stopping(ctx) {
+	if collectors.draining.Load() || collectors.stopping(ctx) {
 		return
 	}
 	collectors.fail(fmt.Errorf("%s collector ring became unavailable", subsystem))
 }
 
 func (collectors *linuxObserverCollectors) fail(err error) {
-	if collectors == nil || err == nil || collectors.closed.Load() {
+	if collectors == nil || err == nil ||
+		collectors.draining.Load() || collectors.closed.Load() {
 		return
 	}
 	select {
@@ -813,14 +842,27 @@ func (collectors *linuxObserverCollectors) fail(err error) {
 	}
 }
 
-func (collectors *linuxObserverCollectors) noteDrop() {
+func (collectors *linuxObserverCollectors) noteDrop(subsystem string) {
 	if collectors == nil {
 		return
 	}
+	var target *atomic.Uint64
+	switch subsystem {
+	case "process":
+		target = &collectors.localProcessDrop
+	case "file":
+		target = &collectors.localFileDrop
+	case "network":
+		target = &collectors.localNetworkDrop
+	case "dns":
+		target = &collectors.localDNSDrop
+	default:
+		return
+	}
 	for {
-		current := collectors.localDrop.Load()
+		current := target.Load()
 		if current == math.MaxUint64 ||
-			collectors.localDrop.CompareAndSwap(current, current+1) {
+			target.CompareAndSwap(current, current+1) {
 			return
 		}
 	}
@@ -835,7 +877,19 @@ func (collectors *linuxObserverCollectors) Counters() (
 			"observer collectors are unavailable",
 		)
 	}
-	result := observerDropCounters{Kernel: collectors.localDrop.Load()}
+	result := observerDropCounters{Local: observerLocalDropCounters{
+		Process: collectors.localProcessDrop.Load(),
+		File:    collectors.localFileDrop.Load(),
+		Network: collectors.localNetworkDrop.Load(),
+		DNS:     collectors.localDNSDrop.Load(),
+	}}
+	addDropCounter(
+		&result.Kernel,
+		result.Local.Process,
+		result.Local.File,
+		result.Local.Network,
+		result.Local.DNS,
+	)
 	if collectors.processReader != nil {
 		counters, err := collectors.processReader.Counters()
 		if err != nil {
@@ -852,10 +906,17 @@ func (collectors *linuxObserverCollectors) Counters() (
 		addDropCounter(
 			&result.Kernel,
 			counters.StateDrops,
-			counters.PathFailures,
-			counters.IdentityFailures,
 		)
 		addDropCounter(&result.Ring, counters.RingbufDrops)
+		result.File = observerFileCollectorCounters{
+			MatchedEvents:     counters.MatchedEvents,
+			ReservedEvents:    counters.ReservedEvents,
+			RingbufDrops:      counters.RingbufDrops,
+			StateDrops:        counters.StateDrops,
+			StateDegradations: counters.StateDegradations,
+			PathFailures:      counters.PathFailures,
+			IdentityFailures:  counters.IdentityFailures,
+		}
 	}
 	if collectors.networkReader != nil {
 		counters, err := collectors.networkReader.Counters()
@@ -899,7 +960,7 @@ func (collectors *linuxObserverCollectors) Close() error {
 		return nil
 	}
 	collectors.closeOnce.Do(func() {
-		collectors.closed.Store(true)
+		collectors.closeErr = errors.Join(collectors.closeErr, collectors.Stop())
 		if collectors.networkReader != nil {
 			collectors.closeErr = errors.Join(
 				collectors.closeErr,
@@ -918,12 +979,76 @@ func (collectors *linuxObserverCollectors) Close() error {
 				collectors.processReader.Close(),
 			)
 		}
-		collectors.wait.Wait()
+	})
+	return collectors.closeErr
+}
+
+func (collectors *linuxObserverCollectors) Stop() error {
+	if collectors == nil {
+		return nil
+	}
+	collectors.stopOnce.Do(func() {
+		collectors.draining.Store(true)
+		if collectors.networkReader != nil {
+			collectors.stopErr = errors.Join(
+				collectors.stopErr,
+				collectors.networkReader.FlushPending(),
+			)
+		}
+		if collectors.fileReader != nil {
+			collectors.stopErr = errors.Join(
+				collectors.stopErr,
+				collectors.fileReader.FlushPending(),
+			)
+		}
+		if collectors.processReader != nil {
+			collectors.stopErr = errors.Join(
+				collectors.stopErr,
+				collectors.processReader.FlushPending(),
+			)
+		}
+		drained := make(chan struct{})
+		go func() {
+			collectors.wait.Wait()
+			close(drained)
+		}()
+		timer := time.NewTimer(observerDrainWait)
+		select {
+		case <-drained:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			collectors.stopErr = errors.Join(
+				collectors.stopErr,
+				errors.New("observer collector drain exceeded its bound"),
+				collectors.forceStopReaders(),
+			)
+			<-drained
+		}
+		collectors.closed.Store(true)
 		if collectors.dnsParser != nil {
 			collectors.dnsParser.Close()
 		}
 	})
-	return collectors.closeErr
+	return collectors.stopErr
+}
+
+func (collectors *linuxObserverCollectors) forceStopReaders() error {
+	if collectors == nil {
+		return nil
+	}
+	var result error
+	if collectors.networkReader != nil {
+		result = errors.Join(result, collectors.networkReader.Stop())
+	}
+	if collectors.fileReader != nil {
+		result = errors.Join(result, collectors.fileReader.Stop())
+	}
+	if collectors.processReader != nil {
+		result = errors.Join(result, collectors.processReader.Stop())
+	}
+	return result
 }
 
 var _ observerCollectorRuntime = (*linuxObserverCollectors)(nil)

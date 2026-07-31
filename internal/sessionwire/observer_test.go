@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
@@ -283,6 +285,15 @@ func TestObserverFrameEnforcesCRCStrictSchemaAndBounds(t *testing.T) {
 		decoded.Owner.Key() != envelope.Owner.Key() {
 		t.Fatalf("decoded envelope=%+v", decoded)
 	}
+	if _, err := ReadObserverEnvelope(bytes.NewReader(nil)); !errors.Is(err, io.EOF) {
+		t.Fatalf("frame-boundary EOF error=%v want %v", err, io.EOF)
+	}
+	if _, err := ReadObserverEnvelope(bytes.NewReader([]byte{0x01})); !errors.Is(
+		err,
+		ErrObserverTruncated,
+	) {
+		t.Fatalf("partial header error=%v want %v", err, ErrObserverTruncated)
+	}
 
 	badCRC := append([]byte(nil), encodedObserverEnvelope(t, envelope)...)
 	badCRC[len(badCRC)-1] ^= 0xff
@@ -425,6 +436,57 @@ func TestObserverQueueAccountsForFramingOverheadAtWireLimit(t *testing.T) {
 	if err := queue.Enqueue(make([]byte, MaxObserverQueuedFrameBytes+1)); !errors.Is(err, ErrObserverFrameTooLarge) {
 		t.Fatalf("over-limit framed value error=%v want %v", err, ErrObserverFrameTooLarge)
 	}
+}
+
+func TestObserverQueueWaitsForBoundedSpaceAndSealPreservesTail(t *testing.T) {
+	queue, err := NewObserverQueueWithByteLimit(1, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Enqueue([]byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() {
+		waited <- queue.EnqueueWait([]byte("second"), nil)
+	}()
+	select {
+	case err := <-waited:
+		t.Fatalf("bounded enqueue returned before space was available: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	first, ok := queue.Dequeue()
+	if !ok || string(first) != "first" {
+		t.Fatalf("first dequeue=%q/%v", first, ok)
+	}
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded enqueue did not resume after dequeue")
+	}
+	queue.Seal()
+	if queue.SealedAndDrained() {
+		t.Fatal("sealed observer queue reported drained with an admitted tail")
+	}
+	second, ok := queue.Dequeue()
+	if !ok || string(second) != "second" {
+		t.Fatalf("sealed queue tail=%q/%v", second, ok)
+	}
+	if !queue.SealedAndDrained() {
+		t.Fatal("sealed observer queue did not report its exact drain")
+	}
+	select {
+	case <-queue.Done():
+	default:
+		t.Fatal("sealed observer queue did not publish completion")
+	}
+	if err := queue.EnqueueWait([]byte("later"), nil); !errors.Is(err, ErrObserverQueueClosed) {
+		t.Fatalf("sealed queue error=%v want %v", err, ErrObserverQueueClosed)
+	}
+	queue.Close()
 }
 
 func observerTestBinding(t *testing.T) ObserverBinding {

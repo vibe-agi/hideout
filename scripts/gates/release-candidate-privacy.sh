@@ -78,14 +78,15 @@ if ! jq -e \
   exit 1
 fi
 
+scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
 if [ "$preflight_only" -eq 1 ]; then
-  preflight_out="$(mktemp -d /tmp/hideout-privacy-preflight.XXXXXX)"
+  preflight_out="$(mktemp -d "$scratch_parent/hideout-privacy-preflight.XXXXXX")"
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
     local exit_status=$?
     case "${preflight_out:-}" in
-      /tmp/hideout-privacy-preflight.*)
+      "$scratch_parent"/hideout-privacy-preflight.*)
         [ ! -d "$preflight_out" ] ||
           find "$preflight_out" -depth -delete
         ;;
@@ -163,11 +164,11 @@ run_dir="$out/$run_id"
 mkdir -p "$run_dir/tests" "$run_dir/lanes"
 chmod 0700 "$run_dir" "$run_dir/tests" "$run_dir/lanes"
 
-scratch="$(mktemp -d /tmp/hideout-release-privacy.XXXXXX)"
+scratch="$(mktemp -d "$scratch_parent/hideout-release-privacy.XXXXXX")"
 cleanup() {
   local exit_status=$?
   case "${scratch:-}" in
-    /tmp/hideout-release-privacy.*)
+    "$scratch_parent"/hideout-release-privacy.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
       ;;
     *)

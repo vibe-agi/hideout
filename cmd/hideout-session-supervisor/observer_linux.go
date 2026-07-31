@@ -330,7 +330,7 @@ func (session *observerSession) readObservations() {
 		case sessionwire.ObserverSequenceRestart:
 			session.degradeCoverage("observer-generation-changed", 1)
 		}
-		if err := session.relay.Enqueue(envelope); err != nil {
+		if err := session.relay.EnqueueWait(envelope); err != nil {
 			if errors.Is(err, sessionwire.ErrObserverBackpressure) {
 				session.degradeCoverage("observer-send-queue-overflow", 1)
 				continue
@@ -397,35 +397,75 @@ func (session *observerSession) Stop(timeout time.Duration) error {
 		if timeout <= 0 {
 			timeout = observerShutdownWait
 		}
-		closeErr := session.stdin.Close()
+		deadline := time.Now().Add(timeout)
+		remaining := func() time.Duration {
+			value := time.Until(deadline)
+			if value <= 0 {
+				return time.Millisecond
+			}
+			return value
+		}
+		closeErr := observerEndpointCloseError(session.stdin.Close())
 		var waitErr error
+		processStopped := false
+		processTimer := time.NewTimer(remaining())
 		select {
 		case waitErr = <-session.processDone:
-		case <-time.After(timeout):
+			processStopped = true
+			if !processTimer.Stop() {
+				<-processTimer.C
+			}
+		case <-processTimer.C:
 			waitErr = errors.New("observer helper did not stop within the bound")
 			if killErr := session.process.kill(); killErr != nil {
 				waitErr = errors.Join(waitErr, killErr)
 			}
+			reapTimer := time.NewTimer(remaining())
 			select {
 			case reapedErr := <-session.processDone:
 				waitErr = errors.Join(waitErr, reapedErr)
-			case <-time.After(timeout):
+				processStopped = true
+				if !reapTimer.Stop() {
+					<-reapTimer.C
+				}
+			case <-reapTimer.C:
 				waitErr = errors.Join(waitErr, errors.New("observer helper was not reaped"))
 			}
 		}
-		_ = session.stdout.Close()
+		readerDrained := false
+		readerTimer := time.NewTimer(remaining())
 		select {
 		case <-session.readerDone:
-		case <-time.After(timeout):
+			readerDrained = true
+			if !readerTimer.Stop() {
+				<-readerTimer.C
+			}
+		case <-readerTimer.C:
 			waitErr = errors.Join(waitErr, errors.New("observer reader did not stop"))
 		}
-		relayErr := session.relay.Close()
+		closeErr = errors.Join(
+			closeErr,
+			observerEndpointCloseError(session.stdout.Close()),
+		)
+		var relayErr error
+		if processStopped && readerDrained {
+			relayErr = session.relay.DrainAndClose(remaining())
+		} else {
+			relayErr = session.relay.Close()
+		}
 		session.stopErr = errors.Join(closeErr, waitErr, relayErr)
 		if session.stopErr != nil {
 			session.degradeCoverage("observer-shutdown-unproved", 1)
 		}
 	})
 	return session.stopErr
+}
+
+func observerEndpointCloseError(err error) error {
+	if errors.Is(err, os.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return nil
+	}
+	return err
 }
 
 func (session *observerSession) ObserverStreamAuthenticated() <-chan struct{} {

@@ -90,6 +90,7 @@ func plainOverview(state liveconsole.State, now time.Time, options Options) stri
 			facts.next, components.Tabs(false, options.Width), components.Footer(false, false),
 		)
 	}
+	resources := overviewResourceSummary(state, false)
 	return fmt.Sprintf(
 		"Hideout | %s | %s | %s | %s\n"+
 			"COMMAND %s\n"+
@@ -101,11 +102,12 @@ func plainOverview(state liveconsole.State, now time.Time, options Options) stri
 			"Activity\n%s\n\n"+
 			"Details\nsession %s | profile %s\n"+
 			"%s\n\n"+
+			"%s"+
 			"%s\n%s\n",
 		facts.profile, facts.healthAndAccess(), facts.session, now.Format("15:04:05"),
 		facts.command, facts.connection, facts.state, facts.coverage,
 		facts.risk, facts.next, facts.activity,
-		facts.session, facts.profile, facts.activityCoverageLine,
+		facts.session, facts.profile, facts.activityCoverageLine, resources,
 		components.Tabs(false, options.Width), components.Footer(false, false),
 	)
 }
@@ -115,6 +117,7 @@ func unicodeOverview(state liveconsole.State, now time.Time, options Options) st
 	if facts.stale || facts.idle {
 		return plainOverview(state, now, Options{Width: options.Width, Height: options.Height})
 	}
+	resources := overviewResourceSummary(state, true)
 	return fmt.Sprintf(
 		"┌ Hideout · %s · %s · %s · %s\n"+
 			"│ COMMAND %s\n"+
@@ -127,6 +130,7 @@ func unicodeOverview(state liveconsole.State, now time.Time, options Options) st
 			"│ %s\n"+
 			"│ session %s · profile %s\n"+
 			"│ %s\n"+
+			"%s"+
 			"├ %s\n"+
 			"│ %s\n"+
 			"└\n",
@@ -136,7 +140,7 @@ func unicodeOverview(state liveconsole.State, now time.Time, options Options) st
 		facts.state, strings.ReplaceAll(facts.coverage, " | ", " · "),
 		strings.ReplaceAll(facts.risk, " | ", " · "), facts.next,
 		strings.ReplaceAll(facts.activity, " | ", " · "),
-		facts.session, facts.profile, facts.activityCoverageLine,
+		facts.session, facts.profile, facts.activityCoverageLine, resources,
 		components.Tabs(true, options.Width),
 		components.Footer(true, false),
 	)
@@ -185,6 +189,103 @@ func tooSmallOverview(state liveconsole.State, _ Options) string {
 		"Hideout · %s\nterminal too small\n? help · q quit\n",
 		strings.ReplaceAll(facts.healthAndAccess(), " | ", " · "),
 	)
+}
+
+const (
+	maxOverviewEnvironments  = 2
+	maxOverviewWorkspaceRows = 3
+)
+
+func overviewResourceSummary(state liveconsole.State, unicode bool) string {
+	environments := state.Overview.Environments
+	workspaceRows := make([]manager.SessionSummary, 0, len(state.Overview.Sessions))
+	for _, session := range state.Overview.Sessions {
+		if session.WorkspaceID != "" || session.WorkspaceViewState != "" {
+			workspaceRows = append(workspaceRows, session)
+		}
+	}
+	if len(environments) == 0 && len(workspaceRows) == 0 {
+		return ""
+	}
+	headingPrefix, rowPrefix := "", ""
+	if unicode {
+		headingPrefix, rowPrefix = "├ ", "│ "
+	}
+	lines := make([]string, 0, 12)
+	if len(environments) != 0 {
+		lines = append(lines, headingPrefix+"Environment")
+		limit := min(len(environments), maxOverviewEnvironments)
+		for _, environment := range environments[:limit] {
+			name := overviewDisplayValue(environment.Name, environment.ID, "unnamed")
+			status := overviewDisplayValue(environment.Status, "unknown")
+			lines = append(lines, fmt.Sprintf(
+				"%smachine %s status=%s sessions=%d active-views=%d",
+				rowPrefix, name, status,
+				environment.ActiveSessions, environment.ActiveWorkspaceViews,
+			))
+			if machineID := sanitizeInline(environment.MachineIdentityID); machineID != "" {
+				detail := rowPrefix + "machine-id=" + machineID
+				if provider := sanitizeInline(environment.WorkspaceProviderState); provider != "" {
+					detail += " provider=" + provider
+				}
+				if owner := sanitizeInline(environment.OwnerHealth); owner != "" {
+					detail += " owner=" + owner
+				}
+				lines = append(lines, detail)
+			}
+		}
+		if remaining := len(environments) - limit; remaining > 0 {
+			lines = append(lines, fmt.Sprintf("%s… %d more environment(s)", rowPrefix, remaining))
+		}
+	}
+	if len(workspaceRows) != 0 {
+		lines = append(lines, headingPrefix+"Workspace views")
+		limit := min(len(workspaceRows), maxOverviewWorkspaceRows)
+		for _, session := range workspaceRows[:limit] {
+			viewState := overviewDisplayValue(string(session.WorkspaceViewState), "unknown")
+			label := overviewDisplayValue(session.WorkspaceLabel, session.ID, "unnamed")
+			workspaceID := overviewDisplayValue(session.WorkspaceID, "unknown")
+			lines = append(lines, fmt.Sprintf(
+				"%sworkspace-view=%s %s id=%s",
+				rowPrefix, viewState, label, workspaceID,
+			))
+			detail := rowPrefix
+			if guest := sanitizeInline(session.GuestWorkspace); guest != "" {
+				detail += "guest=" + guest
+			}
+			if transport := sanitizeInline(session.WorkspaceTransport); transport != "" {
+				if detail != rowPrefix {
+					detail += " "
+				}
+				detail += "transport=" + transport
+			}
+			if len(session.WorkspaceRelations) != 0 {
+				relation := session.WorkspaceRelations[0]
+				if detail != rowPrefix {
+					detail += " "
+				}
+				detail += "relation=" + sanitizeInline(string(relation.Relation)) +
+					" position=" + sanitizeInline(relation.SelectedPosition) +
+					" other=" + sanitizeInline(relation.OtherWorkspaceID)
+			}
+			if detail != rowPrefix {
+				lines = append(lines, detail)
+			}
+		}
+		if remaining := len(workspaceRows) - limit; remaining > 0 {
+			lines = append(lines, fmt.Sprintf("%s… %d more workspace view(s)", rowPrefix, remaining))
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func overviewDisplayValue(values ...string) string {
+	for _, value := range values {
+		if cleaned := sanitizeInline(value); cleaned != "" {
+			return cleaned
+		}
+	}
+	return "unknown"
 }
 
 type facts struct {

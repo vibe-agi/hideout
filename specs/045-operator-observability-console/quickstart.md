@@ -10,6 +10,10 @@ the final spellings from a clean package, not a developer binary.
 - a disposable test workspace with no credentials;
 - a local test SOCKS proxy and deterministic DNS/HTTP fixtures;
 - no unrelated VM mutation;
+- no unrelated CPU-heavy test, VM, or emulator during performance evidence;
+  the release operator explicitly confirms this condition and the gate retains
+  private host-state diagnostics, automatically rejects sustained contention
+  before building, and does not accept a median-only result;
 - no remote tag, GitHub Release, or Homebrew publication.
 
 Use an isolated Hideout store and Keychain references reserved for the test.

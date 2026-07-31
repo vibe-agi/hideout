@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/hideout/internal/environment"
 	netpolicy "github.com/vibe-agi/hideout/internal/network"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/session"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
+	"github.com/vibe-agi/hideout/internal/workspaceattach"
 )
 
 func TestOperatorSnapshotUnscopedEmptyCollectionsEncodeAsArrays(t *testing.T) {
@@ -43,6 +45,65 @@ func TestOperatorSnapshotUnscopedEmptyCollectionsEncodeAsArrays(t *testing.T) {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("operator collection missing %s: %s", field, encoded)
 		}
+	}
+}
+
+func TestOperatorSessionWorkspaceProjectionRejectsUnprovedIdentityAndCleanup(t *testing.T) {
+	workspaceID := "wrk_" + strings.Repeat("a", 64)
+	base := OperatorSessionProjection{
+		ID: "ses_workspace", EnvironmentID: "env_workspace",
+		State: "running", Command: "claude",
+		WorkspaceID: workspaceID, WorkspaceLabel: "workspace [aaaaaaaa]",
+		GuestWorkspace:     workspaceattach.LogicalWorkspaceRoot,
+		WorkspaceTransport: workspaceattach.SelectedTransport,
+		WorkspaceViewState: workspaceattach.AttachmentReady,
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid workspace projection: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*OperatorSessionProjection)
+	}{
+		{
+			name: "wrong logical guest root",
+			mutate: func(value *OperatorSessionProjection) {
+				value.GuestWorkspace = "/host/workspace"
+			},
+		},
+		{
+			name: "malformed workspace identity",
+			mutate: func(value *OperatorSessionProjection) {
+				value.WorkspaceID = "wrk_not-canonical"
+			},
+		},
+		{
+			name: "foreign relation identity",
+			mutate: func(value *OperatorSessionProjection) {
+				value.WorkspaceRelations = []workspaceattach.RootRelationNotice{{
+					Relation:         workspaceattach.RootDisjoint,
+					SelectedPosition: workspaceattach.RelationPositionPeer,
+					WorkspaceID:      "wrk_" + strings.Repeat("b", 64),
+					OtherWorkspaceID: "wrk_" + strings.Repeat("c", 64),
+				}}
+			},
+		},
+		{
+			name: "released without cleanup proof",
+			mutate: func(value *OperatorSessionProjection) {
+				value.WorkspaceViewState = workspaceattach.AttachmentReleased
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projection := base
+			test.mutate(&projection)
+			if err := projection.Validate(); err == nil {
+				t.Fatal("invalid workspace projection was accepted")
+			}
+		})
 	}
 }
 
@@ -101,12 +162,18 @@ func TestOperatorSnapshotBuilderScopesEverySessionOwnedProjection(t *testing.T) 
 	if len(snapshot.Profiles) != 1 || snapshot.Profiles[0].Profile != "alpha" {
 		t.Fatalf("profile scope=%+v", snapshot.Profiles)
 	}
-	if len(snapshot.Sessions) != 1 || snapshot.Sessions[0].ID != "ses_alpha" {
+	if len(snapshot.Sessions) != 1 || snapshot.Sessions[0].ID != "ses_alpha" ||
+		snapshot.Sessions[0].WorkspaceLabel != "alpha [aaaaaaaa]" ||
+		snapshot.Sessions[0].WorkspaceViewState != workspaceattach.AttachmentReady {
 		t.Fatalf("session scope=%+v", snapshot.Sessions)
 	}
 	if len(snapshot.Environments) != 1 ||
 		snapshot.Environments[0].ID != "env_alpha" ||
-		snapshot.Environments[0].ActiveSessions != 1 {
+		snapshot.Environments[0].ActiveSessions != 1 ||
+		snapshot.Environments[0].ActiveWorkspaceViews != 1 ||
+		snapshot.Environments[0].Mode != environment.ModeShared ||
+		snapshot.Environments[0].MachineIdentityID != testEnvironmentMachineIdentityID() ||
+		snapshot.Environments[0].WorkspaceProviderState != "ready" {
 		t.Fatalf("environment scope=%+v", snapshot.Environments)
 	}
 	if len(snapshot.Activity) != 1 || snapshot.Activity[0].SessionID != "ses_alpha" {
@@ -560,14 +627,24 @@ func operatorSnapshotOverviewFixture(now time.Time) Overview {
 		Version:  "hideout.manager/v1",
 		Profiles: []ProfileSummary{{Name: "alpha"}, {Name: "beta"}},
 		Sessions: []SessionSummary{
-			{ID: "ses_alpha", Profile: "alpha", EnvironmentID: "env_alpha", State: session.OwnerStateRunning, CommandClass: "claude", StartedAt: now.Add(-time.Minute)},
+			{
+				ID: "ses_alpha", Profile: "alpha", EnvironmentID: "env_alpha",
+				State: session.OwnerStateRunning, CommandClass: "claude",
+				StartedAt:      now.Add(-time.Minute),
+				WorkspaceID:    "wrk_" + strings.Repeat("a", 64),
+				WorkspaceLabel: "alpha [aaaaaaaa]", GuestWorkspace: workspaceattach.LogicalWorkspaceRoot,
+				WorkspaceTransport: workspaceattach.SelectedTransport,
+				WorkspaceViewState: workspaceattach.AttachmentReady,
+			},
 			{ID: "ses_beta", Profile: "beta", EnvironmentID: "env_beta", State: session.OwnerStateRunning, CommandClass: "codex", StartedAt: now.Add(-time.Minute)},
 		},
 		Environments: []EnvironmentSummary{
 			{
 				ID: "env_alpha", Name: "alpha", Profile: "alpha",
-				Backend: "lima", Status: "running",
+				Backend: "lima", Status: "running", Mode: environment.ModeShared,
+				SharedSlot: "alpha", MachineIdentityID: testEnvironmentMachineIdentityID(),
 				InstanceName: "hideout-alpha", ActiveSessions: 1,
+				ActiveWorkspaceViews: 1, WorkspaceProviderState: "ready",
 				OwnerHealth: "live", CreatedAt: now.Add(-time.Hour),
 			},
 			{

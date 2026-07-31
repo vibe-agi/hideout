@@ -155,6 +155,18 @@ struct file_metadata {
 	__u32 flags;
 	__u32 created;
 	__u32 announced;
+};
+
+/*
+ * Path resolution needs a zeroed 512-byte destination, but retaining that
+ * destination in every observed_files entry makes the 65,536-entry hash
+ * consume and randomly dirty tens of MiB. Keep it in one per-CPU scratch
+ * value instead; observed_files retains only stable identity and state.
+ */
+struct resolved_file_metadata {
+	struct file_metadata cached;
+	__u32 path_flags;
+	__u32 reserved;
 	char path[HIDEOUT_FILE_PATH_BYTES];
 };
 
@@ -163,6 +175,7 @@ struct file_collector_counters {
 	__u64 reserved_events;
 	__u64 ringbuf_drops;
 	__u64 state_drops;
+	__u64 state_degradations;
 	__u64 path_failures;
 	__u64 identity_failures;
 };
@@ -228,7 +241,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
-	__type(value, struct file_metadata);
+	__type(value, struct resolved_file_metadata);
 } file_metadata_scratch SEC(".maps");
 
 struct {
@@ -287,6 +300,19 @@ static __always_inline void note_state_drop(void)
 
 	if (value)
 		value->state_drops++;
+}
+
+/*
+ * A degradation preserves the event and marks the unavailable field in its
+ * flags. Keep it separate from state_drops, which is reserved for a missing
+ * sequence or a failed cleanup that can lose/corrupt later observations.
+ */
+static __always_inline void note_state_degradation(void)
+{
+	struct file_collector_counters *value = counters();
+
+	if (value)
+		value->state_degradations++;
 }
 
 static __always_inline void note_path_failure(void)
@@ -392,14 +418,22 @@ static __always_inline void clear_cached_file_event_path(
 static __always_inline void clear_file_metadata(
 	struct file_metadata *metadata)
 {
-	int index;
-
 	metadata->device = 0;
 	metadata->inode = 0;
 	metadata->file_type = 0;
 	metadata->flags = 0;
 	metadata->created = 0;
 	metadata->announced = 0;
+}
+
+static __always_inline void clear_resolved_file_metadata(
+	struct resolved_file_metadata *metadata)
+{
+	int index;
+
+	clear_file_metadata(&metadata->cached);
+	metadata->path_flags = 0;
+	metadata->reserved = 0;
 #pragma unroll
 	for (index = 0; index < HIDEOUT_FILE_PATH_BYTES / 8; index++)
 		((__u64 *)metadata->path)[index] = 0;
@@ -495,11 +529,10 @@ static __always_inline void fill_path(
 	}
 	/*
 	 * bpf_d_path may leave its internal end-of-buffer copy after the first
-	 * NUL. Every destination is zeroed before this helper runs, and the
-	 * userspace decoder deterministically clears bytes from the first NUL
-	 * before caching or exposing the record. Keeping that linear scrub out of
-	 * the synchronous BPF open hook avoids hundreds of instructions per open
-	 * without changing the decoded path.
+	 * NUL. Every destination must therefore be zeroed before this helper runs:
+	 * the fixed-size host decoder rejects a non-zero suffix before its later
+	 * sanitization step. Keeping the invariant at each call site avoids a
+	 * second linear scrub after path resolution.
 	 */
 }
 
@@ -572,6 +605,11 @@ static __always_inline void populate_file_event_header(
 	event->tid = (__u32)pid_tgid;
 	event->uid = (__u32)uid_gid;
 	event->gid = uid_gid >> 32;
+	/*
+	 * Preserve an independently observed boundary receipt in every record.
+	 * Reservation checks reject non-target work, while this second read lets
+	 * userspace fail closed if a future call path violates that precondition.
+	 */
 	event->cgroup_id = bpf_get_current_cgroup_id();
 	event->observer_sequence = next_observer_sequence();
 	if (!event->observer_sequence) {
@@ -582,7 +620,7 @@ static __always_inline void populate_file_event_header(
 	execution = bpf_map_lookup_elem(&exec_sequences, &pid);
 	if (!execution || !execution->pid || !execution->exec_sequence) {
 		event->flags |= HIDEOUT_FILE_STATE_UNAVAILABLE;
-		note_state_drop();
+		note_state_degradation();
 	} else {
 		event->execution_pid = execution->pid;
 		event->exec_sequence = execution->exec_sequence;
@@ -616,14 +654,13 @@ reserve_file_event(__u32 kind)
 }
 
 static __always_inline struct hideout_file_event *
-reserve_compact_file_event(__u32 kind)
+reserve_compact_file_event_for_target(__u32 kind)
 {
 	struct file_collector_counters *counter;
 	struct hideout_file_event *event;
 	__u32 zero = 0;
 
-	if (!in_target_cgroup())
-		return 0;
+	/* emit_compact_io has already rejected every non-target cgroup. */
 	counter = bpf_map_lookup_elem(&file_counters, &zero);
 	if (counter)
 		counter->matched_events++;
@@ -649,14 +686,16 @@ reserve_compact_file_event(__u32 kind)
  * needlessly amplifies a file-heavy workload.
  */
 static __always_inline struct hideout_file_event *
-reserve_cached_file_event(__u32 kind)
+reserve_cached_file_event_for_target(__u32 kind)
 {
 	struct file_collector_counters *counter;
 	struct hideout_file_event *event;
 	__u32 zero = 0;
 
-	if (!in_target_cgroup())
-		return 0;
+	/*
+	 * Open, mmap, descriptor truncate, and compact-I/O fallback callers all
+	 * prove the target cgroup before entering this helper.
+	 */
 	counter = bpf_map_lookup_elem(&file_counters, &zero);
 	if (counter)
 		counter->matched_events++;
@@ -671,9 +710,9 @@ reserve_cached_file_event(__u32 kind)
 	if (counter)
 		counter->reserved_events++;
 	/*
-	 * Do not zero the path here: successful callers overwrite every byte
-	 * from initialized metadata. Each metadata-miss branch must clear it
-	 * before submission so no reserved ring-buffer byte is exposed.
+	 * Do not zero the path here: open copies every byte from zero-initialized
+	 * resolution scratch, while pathless fallback callers clear it and mark it
+	 * unavailable. No submission path may skip one of those initializations.
 	 */
 	clear_file_event_header(event);
 	populate_file_event_header(event, kind);
@@ -681,65 +720,64 @@ reserve_cached_file_event(__u32 kind)
 }
 
 static __always_inline int fill_metadata_from_file(
-	struct file *file, struct file_metadata *metadata)
+	struct file *file, struct resolved_file_metadata *metadata)
 {
 	struct path *path;
 	__u32 mode = 0;
 
 	if (!file || !metadata)
 		return -1;
-	clear_file_metadata(metadata);
+	clear_resolved_file_metadata(metadata);
 	fill_file_identity(
-		file, &metadata->device, &metadata->inode,
-		&metadata->file_type, &metadata->flags);
+		file, &metadata->cached.device, &metadata->cached.inode,
+		&metadata->cached.file_type, &metadata->cached.flags);
 	path = __builtin_preserve_access_index(&file->f_path);
 	fill_path(
 		path, metadata->path, sizeof(metadata->path),
 		HIDEOUT_FILE_PATH_UNAVAILABLE,
 		HIDEOUT_FILE_PATH_TRUNCATED,
-		&metadata->flags);
+		&metadata->path_flags);
 	if (bpf_probe_read_kernel(
 		    &mode, sizeof(mode),
 		    __builtin_preserve_access_index(&file->f_mode)) < 0) {
-		metadata->flags |= HIDEOUT_FILE_STATE_UNAVAILABLE;
-		note_state_drop();
+		metadata->cached.flags |= HIDEOUT_FILE_STATE_UNAVAILABLE;
+		note_state_degradation();
 	} else if (mode & HIDEOUT_FMODE_CREATED) {
-		metadata->created = 1;
+		metadata->cached.created = 1;
 	}
 	return 0;
 }
 
-static __always_inline int cache_file(struct file *file)
+static __always_inline struct resolved_file_metadata *
+prepare_file_metadata(struct file *file)
 {
-	struct file_metadata *scratch;
-	__u64 key = (__u64)file;
+	struct resolved_file_metadata *scratch;
 	__u32 zero = 0;
 
 	if (!file)
-		return -1;
+		return 0;
 	scratch = bpf_map_lookup_elem(&file_metadata_scratch, &zero);
 	if (!scratch) {
-		note_state_drop();
-		return -1;
+		note_state_degradation();
+		return 0;
 	}
-	if (fill_metadata_from_file(file, scratch) < 0 ||
-	    bpf_map_update_elem(&observed_files, &key, scratch, BPF_ANY) < 0) {
-		note_state_drop();
-		return -1;
+	if (fill_metadata_from_file(file, scratch) < 0) {
+		note_state_degradation();
+		return 0;
 	}
-	return 0;
+	return scratch;
 }
 
 /*
- * Descriptions inherited from the supervisor predate the target cgroup, so
- * security_file_open cannot seed their paths. Capture their stable identity
- * once without attaching security_file_permission to every read/write. The
- * resulting path-unavailable limitation is explicit and subsequent I/O can
- * use the compact event path.
+ * Descriptors inherited from the supervisor predate the target cgroup, so
+ * security_file_open cannot seed their identity or path. Capture identity once
+ * without attaching security_file_permission to every read/write. Their first
+ * emitted event remains explicitly path-unavailable; later compact events may
+ * reuse only that same identity and limitation through the userspace cache.
  */
 static __always_inline int cache_file_identity_only(struct file *file)
 {
-	struct file_metadata *scratch;
+	struct resolved_file_metadata *scratch;
 	__u64 key = (__u64)file;
 	__u32 zero = 0;
 
@@ -747,17 +785,16 @@ static __always_inline int cache_file_identity_only(struct file *file)
 		return -1;
 	scratch = bpf_map_lookup_elem(&file_metadata_scratch, &zero);
 	if (!scratch) {
-		note_state_drop();
+		note_state_degradation();
 		return -1;
 	}
-	clear_file_metadata(scratch);
+	clear_file_metadata(&scratch->cached);
 	fill_file_identity(
-		file, &scratch->device, &scratch->inode,
-		&scratch->file_type, &scratch->flags);
-	scratch->flags |= HIDEOUT_FILE_PATH_UNAVAILABLE;
+		file, &scratch->cached.device, &scratch->cached.inode,
+		&scratch->cached.file_type, &scratch->cached.flags);
 	if (bpf_map_update_elem(
-		    &observed_files, &key, scratch, BPF_ANY) < 0) {
-		note_state_drop();
+		    &observed_files, &key, &scratch->cached, BPF_ANY) < 0) {
+		note_state_degradation();
 		return -1;
 	}
 	return 0;
@@ -773,42 +810,67 @@ static __always_inline void copy_metadata_identity(
 	event->flags |= metadata->flags;
 }
 
-static __always_inline void copy_metadata(
+static __always_inline void copy_resolved_metadata(
 	struct hideout_file_event *event,
-	const struct file_metadata *metadata)
+	const struct resolved_file_metadata *metadata)
 {
-	copy_metadata_identity(event, metadata);
+	copy_metadata_identity(event, &metadata->cached);
+	event->flags |= metadata->path_flags;
 	__builtin_memcpy(
 		event->path, metadata->path, sizeof(event->path));
 }
 
-static __always_inline int emit_cached_file(
+static __always_inline void fill_pathless_cached_event(
+	struct hideout_file_event *event, struct file *file,
+	struct file_metadata *metadata)
+{
+	clear_cached_file_event_path(event);
+	event->flags |= HIDEOUT_FILE_PATH_UNAVAILABLE;
+	if (metadata) {
+		copy_metadata_identity(event, metadata);
+		metadata->announced = 1;
+	} else {
+		event->flags |= HIDEOUT_FILE_STATE_UNAVAILABLE;
+		fill_file_identity(
+			file, &event->device, &event->inode,
+			&event->file_type, &event->flags);
+		note_state_degradation();
+	}
+}
+
+static __always_inline int emit_cached_file_for_target(
 	__u32 kind, struct file *file, __s64 result,
-	__u64 bytes, int outcome_unknown, int authorization_hook)
+	__u64 bytes, int outcome_unknown, int authorization_hook,
+	__u32 extra_flags)
 {
 	struct hideout_file_event *event;
 	struct file_metadata *metadata;
 	__u64 key = (__u64)file;
 
-	event = reserve_cached_file_event(kind);
-	if (!event)
-		return 0;
-	event->file_key = key;
 	metadata = bpf_map_lookup_elem(&observed_files, &key);
-	if (metadata) {
-		copy_metadata(event, metadata);
-		metadata->announced = 1;
+	/*
+	 * bpf_d_path is verifier-allowed at security_file_open but not at every
+	 * descriptor hook. Once an open record has been announced, mmap/truncate
+	 * can carry only identity and let the ordered userspace cache restore the
+	 * verified path, just like read/write. Without that prior record, emit an
+	 * explicit path-unavailable cached event instead of guessing a stale path.
+	 */
+	if ((kind == HIDEOUT_FILE_MMAP || kind == HIDEOUT_FILE_TRUNCATE) &&
+	    metadata && metadata->announced) {
+		event = reserve_compact_file_event_for_target(kind);
+		if (!event)
+			return 0;
+		copy_metadata_identity(event, metadata);
 	} else {
-		clear_cached_file_event_path(event);
-		event->flags |= HIDEOUT_FILE_PATH_UNAVAILABLE |
-				HIDEOUT_FILE_STATE_UNAVAILABLE;
-		fill_file_identity(
-			file, &event->device, &event->inode,
-			&event->file_type, &event->flags);
-		note_state_drop();
+		event = reserve_cached_file_event_for_target(kind);
+		if (!event)
+			return 0;
+		fill_pathless_cached_event(event, file, metadata);
 	}
+	event->file_key = key;
 	event->result = result;
 	event->bytes = bytes;
+	event->flags |= extra_flags;
 	if (outcome_unknown && result == 0)
 		event->flags |= HIDEOUT_FILE_OUTCOME_UNKNOWN;
 	if (authorization_hook)
@@ -837,9 +899,9 @@ static __always_inline int emit_compact_io(
 		metadata = bpf_map_lookup_elem(&observed_files, &key);
 	}
 	if (!metadata || !metadata->announced)
-		return emit_cached_file(
-			kind, file, result, bytes, 0, 0);
-	event = reserve_compact_file_event(kind);
+		return emit_cached_file_for_target(
+			kind, file, result, bytes, 0, 0, 0);
+	event = reserve_compact_file_event_for_target(kind);
 	if (!event)
 		return 0;
 	event->file_key = key;
@@ -939,6 +1001,12 @@ int hideout_forget_file(unsigned long long *ctx)
 	struct file *file = (struct file *)ctx[0];
 	__u64 key = (__u64)file;
 
+	/*
+	 * This hook is system-wide and most file objects have no retained entry.
+	 * Keep the missing-key path to an RCU lookup; hash deletion takes the bucket
+	 * lock even when the key is absent. Retained entries still fail closed if
+	 * their required deletion fails.
+	 */
 	if (file && bpf_map_lookup_elem(&observed_files, &key) &&
 	    bpf_map_delete_elem(&observed_files, &key) < 0)
 		note_state_drop();
@@ -949,6 +1017,8 @@ SEC("fexit/security_file_open")
 int hideout_observe_file_open(unsigned long long *ctx)
 {
 	struct file *file = (struct file *)ctx[0];
+	struct hideout_file_event *event;
+	struct resolved_file_metadata *resolved;
 	struct file_metadata *metadata;
 	__u64 key;
 	__s64 result = (__s64)ctx[1];
@@ -963,11 +1033,35 @@ int hideout_observe_file_open(unsigned long long *ctx)
 	 * compact I/O events; a separate entry hook would duplicate the hot-path
 	 * trampoline without adding evidence.
 	 */
-	cache_file(file);
-	metadata = bpf_map_lookup_elem(&observed_files, &key);
-	if (metadata && metadata->created)
+	resolved = prepare_file_metadata(file);
+	if (!resolved)
+		return emit_cached_file_for_target(
+			kind, file, result, 0, 0, 0, 0);
+	metadata = &resolved->cached;
+	if (metadata->created)
 		kind = HIDEOUT_FILE_CREATE;
-	return emit_cached_file(kind, file, result, 0, 0, 0);
+	event = reserve_cached_file_event_for_target(kind);
+	/*
+	 * The cache's announced bit commits whether a full-path event entered the
+	 * ring. If reservation fails, the first I/O event retries the full record.
+	 * Build the value before its single update so open never looks the same
+	 * hash entry up again merely to emit the record it just created.
+	 */
+	if (event)
+		metadata->announced = 1;
+	if (bpf_map_update_elem(
+		    &observed_files, &key, metadata, BPF_ANY) < 0) {
+		note_state_degradation();
+		if (event)
+			event->flags |= HIDEOUT_FILE_STATE_UNAVAILABLE;
+	}
+	if (!event)
+		return 0;
+	event->file_key = key;
+	copy_resolved_metadata(event, resolved);
+	event->result = result;
+	bpf_ringbuf_submit(event, 0);
+	return 0;
 }
 
 static __always_inline int emit_io(
@@ -1031,7 +1125,7 @@ int hideout_capture_mmap_length(struct trace_event_raw_sys_enter *ctx)
 	key = bpf_get_current_pid_tgid();
 	length = ctx->args[1];
 	if (bpf_map_update_elem(&mmap_lengths, &key, &length, BPF_ANY) < 0)
-		note_state_drop();
+		note_state_degradation();
 	return 0;
 }
 
@@ -1051,43 +1145,21 @@ SEC("fexit/security_mmap_file")
 int hideout_observe_mmap_file(unsigned long long *ctx)
 {
 	struct file *file = (struct file *)ctx[0];
-	struct hideout_file_event *event;
-	struct file_metadata *metadata;
 	__u64 key = bpf_get_current_pid_tgid();
-	__u64 file_key = (__u64)file;
 	__u64 *length;
+	__u64 bytes = 0;
+	__u32 extra_flags = 0;
 	int ret = (__s32)ctx[3];
 
 	if (!in_target_cgroup() || !file)
 		return 0;
-	event = reserve_cached_file_event(HIDEOUT_FILE_MMAP);
-	if (!event)
-		return 0;
-	event->file_key = file_key;
-	metadata = bpf_map_lookup_elem(&observed_files, &file_key);
-	if (metadata) {
-		copy_metadata(event, metadata);
-		metadata->announced = 1;
-	} else {
-		clear_cached_file_event_path(event);
-		event->flags |= HIDEOUT_FILE_PATH_UNAVAILABLE |
-				HIDEOUT_FILE_STATE_UNAVAILABLE;
-		fill_file_identity(
-			file, &event->device, &event->inode,
-			&event->file_type, &event->flags);
-		note_state_drop();
-	}
 	length = bpf_map_lookup_elem(&mmap_lengths, &key);
 	if (length)
-		event->bytes = *length;
+		bytes = *length;
 	else
-		event->flags |= HIDEOUT_FILE_BYTES_UNAVAILABLE;
-	event->result = ret;
-	event->flags |= HIDEOUT_FILE_AUTHORIZATION_HOOK;
-	if (ret == 0)
-		event->flags |= HIDEOUT_FILE_OUTCOME_UNKNOWN;
-	bpf_ringbuf_submit(event, 0);
-	return 0;
+		extra_flags |= HIDEOUT_FILE_BYTES_UNAVAILABLE;
+	return emit_cached_file_for_target(
+		HIDEOUT_FILE_MMAP, file, ret, bytes, 1, 1, extra_flags);
 }
 
 SEC("fexit/security_path_truncate")
@@ -1108,8 +1180,8 @@ int hideout_observe_file_truncate(unsigned long long *ctx)
 	int ret = (__s32)ctx[1];
 
 	if (in_target_cgroup() && file)
-		emit_cached_file(
-			HIDEOUT_FILE_TRUNCATE, file, ret, 0, 1, 1);
+		emit_cached_file_for_target(
+			HIDEOUT_FILE_TRUNCATE, file, ret, 0, 1, 1, 0);
 	return 0;
 }
 

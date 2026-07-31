@@ -150,11 +150,12 @@ run_dir="$out/$run_id"
 mkdir -p "$run_dir/tests" "$run_dir/lanes"
 chmod 0700 "$run_dir" "$run_dir/tests" "$run_dir/lanes"
 
-scratch="$(mktemp -d /tmp/hideout-release-ui.XXXXXX)"
+scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
+scratch="$(mktemp -d "$scratch_parent/hideout-release-ui.XXXXXX")"
 cleanup() {
   local exit_status=$?
   case "${scratch:-}" in
-    /tmp/hideout-release-ui.*)
+    "$scratch_parent"/hideout-release-ui.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
       ;;
     *)

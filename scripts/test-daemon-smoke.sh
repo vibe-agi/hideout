@@ -72,7 +72,27 @@ code="$(curl_sock -o /dev/null -w '%{http_code}' -H 'Host: localhost' -H "Author
 ui_url="$(sed -n 's/^WebUI: //p' "$tmp/start.out" | head -n1)"
 [ -n "$ui_url" ] || { echo "daemon-smoke: no WebUI URL printed" >&2; cat "$tmp/start.out" >&2; exit 1; }
 ui_base="${ui_url%%/#*}"
-curl -sS "$ui_base/" | grep -q "EventSource" || { echo "daemon-smoke: WebUI does not consume the event stream" >&2; exit 1; }
+curl --fail --silent --show-error "$ui_base/" >"$tmp/ui-index.html"
+grep -Fq 'src="/assets/client.js"' "$tmp/ui-index.html" || {
+  echo "daemon-smoke: WebUI does not load its event client" >&2
+  exit 1
+}
+grep -Fq 'src="/assets/app.js"' "$tmp/ui-index.html" || {
+  echo "daemon-smoke: WebUI does not load its console application" >&2
+  exit 1
+}
+curl --fail --silent --show-error \
+  "$ui_base/assets/client.js" >"$tmp/ui-client.js"
+grep -Fq 'new EventSource(' "$tmp/ui-client.js" || {
+  echo "daemon-smoke: WebUI event client does not open the event stream" >&2
+  exit 1
+}
+curl --fail --silent --show-error \
+  "$ui_base/assets/app.js" >"$tmp/ui-app.js"
+grep -Fq 'root.Client.events({' "$tmp/ui-app.js" || {
+  echo "daemon-smoke: WebUI console does not subscribe to the event client" >&2
+  exit 1
+}
 # The event endpoint is SSE (streams); cap it and read just the status.
 code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' "$ui_base/daemon/events?token=$token" || true)"
 [ "$code" = "200" ] || { echo "daemon-smoke: WebUI event endpoint (query token) want 200 got $code" >&2; exit 1; }

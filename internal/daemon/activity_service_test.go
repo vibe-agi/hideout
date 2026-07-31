@@ -240,6 +240,331 @@ func TestActivityServiceRejectsMalformedControlBeforeConsumingSequence(t *testin
 	}
 }
 
+func TestActivityServiceAcceptsOnlyBoundTransportDrainMarker(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 101, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	finalHeartbeat := activityEnvelope(
+		preparation,
+		101,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{"latestSequence":1,"kernelDropped":0,"ringDropped":0,"final":true}`,
+	)
+	goodbye := activityEnvelope(
+		preparation,
+		101,
+		sessionwire.ObserverTransportCPU,
+		1,
+		"collector.goodbye",
+		`{"reason":"relay-drained"}`,
+	)
+	if err := service.IngestBatch(
+		preparation.SessionID,
+		[]sessionwire.ObservationEnvelope{finalHeartbeat, goodbye},
+	); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok || snapshot.Accepted != 2 || snapshot.LastKind != "collector.goodbye" ||
+		snapshot.Invalid != 0 {
+		t.Fatalf("transport drain snapshot=%+v present=%v", snapshot, ok)
+	}
+
+	wrongCPU := goodbye
+	wrongCPU.CPU = 7
+	wrongCPU.Sequence = 1
+	if err := service.Ingest(preparation.SessionID, wrongCPU); !errors.Is(err, errActivityObservationInvalid) {
+		t.Fatalf("wrong-CPU drain marker error=%v", err)
+	}
+}
+
+func TestActivityServiceRejectsDrainWithoutExactFinalCollectorReceipt(t *testing.T) {
+	tests := []struct {
+		name      string
+		heartbeat string
+	}{
+		{name: "missing heartbeat"},
+		{
+			name:      "non-final heartbeat",
+			heartbeat: `{"latestSequence":1,"kernelDropped":0,"ringDropped":0}`,
+		},
+		{
+			name: "inexact final file counters",
+			heartbeat: `{
+				"latestSequence":1,
+				"kernelDropped":0,
+				"ringDropped":0,
+				"file":{"matchedEvents":2,"reservedEvents":1},
+				"final":true
+			}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := newActivityService(nil)
+			preparation := activityPreparationFixture(t)
+			if _, err := service.Prepare(preparation); err != nil {
+				t.Fatal(err)
+			}
+			if err := service.RegisterBoundary(
+				preparation.SessionID,
+				activityReadyFixture(preparation, 101, allAvailableCoverage()),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if test.heartbeat != "" {
+				heartbeat := activityEnvelope(
+					preparation,
+					101,
+					sessionwire.ObserverControlCPU,
+					1,
+					"collector.heartbeat",
+					test.heartbeat,
+				)
+				if err := service.Ingest(preparation.SessionID, heartbeat); err != nil {
+					t.Fatalf("heartbeat: %v", err)
+				}
+			}
+			goodbye := activityEnvelope(
+				preparation,
+				101,
+				sessionwire.ObserverTransportCPU,
+				1,
+				"collector.goodbye",
+				`{"reason":"relay-drained"}`,
+			)
+			if err := service.Ingest(preparation.SessionID, goodbye); !errors.Is(
+				err,
+				errActivityObservationInvalid,
+			) {
+				t.Fatalf("drain marker error=%v", err)
+			}
+		})
+	}
+}
+
+func TestActivityServiceInvalidatesFinalReceiptAfterLaterObserverFrame(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 101, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	finalHeartbeat := activityEnvelope(
+		preparation,
+		101,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{"latestSequence":1,"kernelDropped":0,"ringDropped":0,"final":true}`,
+	)
+	if err := service.Ingest(preparation.SessionID, finalHeartbeat); err != nil {
+		t.Fatal(err)
+	}
+	laterHeartbeat := activityEnvelope(
+		preparation,
+		101,
+		sessionwire.ObserverControlCPU,
+		2,
+		"collector.heartbeat",
+		`{"latestSequence":2,"kernelDropped":0,"ringDropped":0}`,
+	)
+	if err := service.Ingest(preparation.SessionID, laterHeartbeat); !errors.Is(
+		err,
+		errActivityObservationInvalid,
+	) {
+		t.Fatalf("post-final observer frame error=%v", err)
+	}
+	goodbye := activityEnvelope(
+		preparation,
+		101,
+		sessionwire.ObserverTransportCPU,
+		1,
+		"collector.goodbye",
+		`{"reason":"relay-drained"}`,
+	)
+	if err := service.Ingest(preparation.SessionID, goodbye); !errors.Is(
+		err,
+		errActivityObservationInvalid,
+	) {
+		t.Fatalf("goodbye after invalidated final receipt error=%v", err)
+	}
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok || snapshot.Accepted != 1 || snapshot.Invalid != 2 ||
+		snapshot.LastKind != "collector.heartbeat" {
+		t.Fatalf("invalidated final receipt snapshot=%+v present=%v", snapshot, ok)
+	}
+}
+
+func TestActivityServiceBindsGracefulCompletionToGoodbyeAndTransportEOF(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	ready := activityReadyFixture(preparation, 111, allAvailableCoverage())
+	if err := service.RegisterBoundary(preparation.SessionID, ready); err != nil {
+		t.Fatal(err)
+	}
+	finalHeartbeat := activityEnvelope(
+		preparation,
+		111,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{"latestSequence":1,"kernelDropped":0,"ringDropped":0,"final":true}`,
+	)
+	goodbye := activityEnvelope(
+		preparation,
+		111,
+		sessionwire.ObserverTransportCPU,
+		1,
+		"collector.goodbye",
+		`{"reason":"relay-drained"}`,
+	)
+	if err := service.IngestBatch(
+		preparation.SessionID,
+		[]sessionwire.ObservationEnvelope{finalHeartbeat, goodbye},
+	); err != nil {
+		t.Fatal(err)
+	}
+	beforeEOF, ok := service.Snapshot(preparation.SessionID)
+	if !ok || !beforeEOF.GoodbyeAccepted || beforeEOF.TransportClosed {
+		t.Fatalf("pre-EOF receipt=%+v present=%v", beforeEOF, ok)
+	}
+	if err := service.ObserverExited(preparation.SessionID, nil); err != nil {
+		t.Fatal(err)
+	}
+	afterEOF, ok := service.Snapshot(preparation.SessionID)
+	if !ok || !afterEOF.ObserverClosed || !afterEOF.TransportClosed {
+		t.Fatalf("post-EOF receipt=%+v present=%v", afterEOF, ok)
+	}
+	for _, subsystem := range activitySubsystems {
+		if summary := afterEOF.Coverage[subsystem]; summary.CurrentState != workloadtypes.CoverageUnavailable ||
+			summary.CurrentReason != coverage.ReasonTargetExited {
+			t.Fatalf("%s post-EOF coverage=%+v", subsystem, summary)
+		}
+	}
+	completion := &sessionwire.SupervisorActivityCompletion{
+		Owner: preparation.Owner, SessionID: preparation.SessionID,
+		CgroupID: 111, ObserverGeneration: preparation.ObserverGeneration,
+		BoundaryState: workloadtypes.BoundaryRemoved,
+		Coverage:      allAvailableCoverage(),
+		CleanupProved: true,
+	}
+	if err := service.SessionExited(preparation.SessionID, completion, nil); err != nil {
+		t.Fatal(err)
+	}
+	closed, ok := service.Snapshot(preparation.SessionID)
+	if !ok || !closed.SessionClosed || closed.Invalid != 0 {
+		t.Fatalf("graceful activity completion=%+v present=%v", closed, ok)
+	}
+	for _, subsystem := range activitySubsystems {
+		if summary := closed.Coverage[subsystem]; summary.CurrentState != workloadtypes.CoverageUnavailable ||
+			summary.CurrentReason != coverage.ReasonTargetExited {
+			t.Fatalf("%s graceful coverage=%+v", subsystem, summary)
+		}
+	}
+}
+
+func TestActivityServiceRejectsCleanTransportCloseWithoutDrainReceipt(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 112, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ObserverExited(preparation.SessionID, nil); !errors.Is(
+		err,
+		errActivityObservationInvalid,
+	) {
+		t.Fatalf("receipt-free transport close error=%v", err)
+	}
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok || !snapshot.ObserverClosed || snapshot.TransportClosed ||
+		snapshot.GoodbyeAccepted || snapshot.Invalid != 1 {
+		t.Fatalf("receipt-free transport close=%+v present=%v", snapshot, ok)
+	}
+}
+
+func TestActivityServiceRejectsCleanupProofBeforeTransportReceipt(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	ready := activityReadyFixture(preparation, 113, allAvailableCoverage())
+	if err := service.RegisterBoundary(preparation.SessionID, ready); err != nil {
+		t.Fatal(err)
+	}
+	finalHeartbeat := activityEnvelope(
+		preparation,
+		113,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{"latestSequence":1,"kernelDropped":0,"ringDropped":0,"final":true}`,
+	)
+	goodbye := activityEnvelope(
+		preparation,
+		113,
+		sessionwire.ObserverTransportCPU,
+		1,
+		"collector.goodbye",
+		`{"reason":"relay-drained"}`,
+	)
+	if err := service.IngestBatch(
+		preparation.SessionID,
+		[]sessionwire.ObservationEnvelope{finalHeartbeat, goodbye},
+	); err != nil {
+		t.Fatal(err)
+	}
+	completion := &sessionwire.SupervisorActivityCompletion{
+		Owner: preparation.Owner, SessionID: preparation.SessionID,
+		CgroupID: 113, ObserverGeneration: preparation.ObserverGeneration,
+		BoundaryState: workloadtypes.BoundaryRemoved,
+		Coverage:      allAvailableCoverage(),
+		CleanupProved: true,
+	}
+	if err := service.SessionExited(
+		preparation.SessionID,
+		completion,
+		nil,
+	); !errors.Is(err, errActivityObservationInvalid) {
+		t.Fatalf("pre-EOF cleanup proof error=%v", err)
+	}
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok || !snapshot.GoodbyeAccepted || snapshot.TransportClosed ||
+		!snapshot.SessionClosed || snapshot.Invalid != 1 {
+		t.Fatalf("pre-EOF cleanup proof=%+v present=%v", snapshot, ok)
+	}
+	for _, subsystem := range activitySubsystems {
+		if summary := snapshot.Coverage[subsystem]; summary.CurrentReason != coverage.ReasonCleanupUnproved {
+			t.Fatalf("%s pre-EOF cleanup coverage=%+v", subsystem, summary)
+		}
+	}
+}
+
 func TestActivityServiceRegistersCoverageAtOneBoundaryInstant(t *testing.T) {
 	base := time.Date(2026, 7, 29, 15, 0, 0, 0, time.UTC)
 	ticks := 0
@@ -334,6 +659,31 @@ func TestActivityServiceCompletionDoesNotDoubleCountHostObservedLoss(t *testing.
 		Coverage:      terminalCoverage,
 		CleanupProved: true,
 	}
+	finalHeartbeat := activityEnvelope(
+		preparation,
+		103,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{"latestSequence":1,"kernelDropped":0,"ringDropped":0,"final":true}`,
+	)
+	goodbye := activityEnvelope(
+		preparation,
+		103,
+		sessionwire.ObserverTransportCPU,
+		1,
+		"collector.goodbye",
+		`{"reason":"relay-drained"}`,
+	)
+	if err := service.IngestBatch(
+		preparation.SessionID,
+		[]sessionwire.ObservationEnvelope{finalHeartbeat, goodbye},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ObserverExited(preparation.SessionID, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.SessionExited(preparation.SessionID, completion, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -426,6 +776,331 @@ func TestActivityServiceHeartbeatsAccountOnlyCounterDeltas(t *testing.T) {
 	}
 }
 
+func TestActivityServicePublishesDetailedFinalCollectorCounters(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 106, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := activityEnvelope(
+		preparation,
+		106,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{
+			"latestSequence":1,
+			"kernelDropped":0,
+			"ringDropped":0,
+			"local":{"process":0,"file":0,"network":0,"dns":0},
+			"file":{
+				"matchedEvents":57,
+				"reservedEvents":57,
+				"ringbufDrops":0,
+				"stateDrops":0,
+				"stateDegradations":6,
+				"pathFailures":0,
+				"identityFailures":0
+			},
+			"final":true
+		}`,
+	)
+	if err := service.Ingest(preparation.SessionID, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	goodbye := activityEnvelope(
+		preparation,
+		106,
+		sessionwire.ObserverTransportCPU,
+		1,
+		"collector.goodbye",
+		`{"reason":"relay-drained"}`,
+	)
+	if err := service.Ingest(preparation.SessionID, goodbye); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ObserverExited(preparation.SessionID, nil); err != nil {
+		t.Fatal(err)
+	}
+	completion := &sessionwire.SupervisorActivityCompletion{
+		Owner: preparation.Owner, SessionID: preparation.SessionID,
+		CgroupID: 106, ObserverGeneration: preparation.ObserverGeneration,
+		BoundaryState: workloadtypes.BoundaryRemoved,
+		Coverage:      allAvailableCoverage(),
+		CleanupProved: true,
+	}
+	if err := service.SessionExited(preparation.SessionID, completion, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok {
+		t.Fatal("activity snapshot missing")
+	}
+	want := map[string]string{
+		"kernel-dropped":          "0",
+		"ring-dropped":            "0",
+		"local-process-dropped":   "0",
+		"local-file-dropped":      "0",
+		"local-network-dropped":   "0",
+		"local-dns-dropped":       "0",
+		"file-matched-events":     "57",
+		"file-reserved-events":    "57",
+		"file-ringbuf-drops":      "0",
+		"file-state-drops":        "0",
+		"file-state-degradations": "6",
+		"file-path-failures":      "0",
+		"file-identity-failures":  "0",
+	}
+	for _, subsystem := range activitySubsystems {
+		intervals := snapshot.Intervals[subsystem]
+		if len(intervals) == 0 {
+			t.Fatalf("%s terminal coverage interval missing", subsystem)
+		}
+		terminal := intervals[len(intervals)-1]
+		if terminal.Reason != coverage.ReasonTargetExited {
+			t.Fatalf("%s terminal reason=%q", subsystem, terminal.Reason)
+		}
+		got := make(map[string]string, len(terminal.Evidence))
+		for _, current := range terminal.Evidence {
+			if _, duplicate := got[current.Code]; duplicate {
+				t.Fatalf("%s duplicate terminal evidence code %q", subsystem, current.Code)
+			}
+			got[current.Code] = current.Value
+		}
+		for code, value := range want {
+			if got[code] != value {
+				t.Fatalf("%s evidence %s=%q want %q", subsystem, code, got[code], value)
+			}
+		}
+	}
+}
+
+func TestActivityServiceFileDegradationMakesOnlyFileCoveragePartial(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 108, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := activityEnvelope(
+		preparation,
+		108,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{
+			"latestSequence":1,
+			"kernelDropped":0,
+			"ringDropped":0,
+			"local":{"process":0,"file":0,"network":0,"dns":0},
+			"file":{
+				"matchedEvents":3,
+				"reservedEvents":3,
+				"ringbufDrops":0,
+				"stateDrops":0,
+				"stateDegradations":1,
+				"pathFailures":1,
+				"identityFailures":0
+			}
+		}`,
+	)
+	if err := service.Ingest(preparation.SessionID, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok {
+		t.Fatal("activity snapshot missing")
+	}
+	for _, subsystem := range activitySubsystems {
+		summary := snapshot.Coverage[subsystem]
+		if subsystem == workloadtypes.SubsystemFile {
+			if summary.CurrentState != workloadtypes.CoveragePartial ||
+				summary.CurrentReason != coverage.ReasonCollectorPartial ||
+				summary.DroppedEventCount != 0 {
+				t.Fatalf("file degradation coverage=%+v", summary)
+			}
+			intervals := snapshot.Intervals[subsystem]
+			current := intervals[len(intervals)-1]
+			wantEvidence := map[string]string{
+				"file-state-degradation": "1",
+				"file-path-failure":      "1",
+			}
+			for _, evidence := range current.Evidence {
+				delete(wantEvidence, evidence.Code)
+			}
+			if len(wantEvidence) != 0 {
+				t.Fatalf("file degradation evidence missing: %v in %+v", wantEvidence, current)
+			}
+			continue
+		}
+		if summary.CurrentState != workloadtypes.CoverageAvailable ||
+			summary.DroppedEventCount != 0 {
+			t.Fatalf("%s coverage changed by file-only degradation: %+v", subsystem, summary)
+		}
+	}
+}
+
+func TestActivityServiceDetailedFileLossDoesNotDegradeOtherDomains(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 109, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := activityEnvelope(
+		preparation,
+		109,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{
+			"latestSequence":1,
+			"kernelDropped":2,
+			"ringDropped":1,
+			"local":{"process":0,"file":1,"network":0,"dns":0},
+			"file":{
+				"matchedEvents":3,
+				"reservedEvents":2,
+				"ringbufDrops":1,
+				"stateDrops":1,
+				"stateDegradations":0,
+				"pathFailures":0,
+				"identityFailures":0
+			}
+		}`,
+	)
+	if err := service.Ingest(preparation.SessionID, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, ok := service.Snapshot(preparation.SessionID)
+	if !ok {
+		t.Fatal("activity snapshot missing")
+	}
+	for _, subsystem := range activitySubsystems {
+		summary := snapshot.Coverage[subsystem]
+		if subsystem == workloadtypes.SubsystemFile {
+			if summary.CurrentState != workloadtypes.CoveragePartial ||
+				summary.CurrentReason != coverage.ReasonRingOverflow ||
+				summary.DroppedEventCount != 3 {
+				t.Fatalf("file loss coverage=%+v", summary)
+			}
+			continue
+		}
+		if summary.CurrentState != workloadtypes.CoverageAvailable ||
+			summary.DroppedEventCount != 0 {
+			t.Fatalf("%s coverage changed by file-only loss: %+v", subsystem, summary)
+		}
+	}
+}
+
+func TestActivityServiceRejectsDetailedCountersBeyondAggregate(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 107, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := activityEnvelope(
+		preparation,
+		107,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{
+			"latestSequence":1,
+			"kernelDropped":1,
+			"ringDropped":0,
+			"local":{"process":1,"file":0,"network":0,"dns":0},
+			"file":{"stateDrops":1}
+		}`,
+	)
+	if err := service.Ingest(preparation.SessionID, heartbeat); !errors.Is(
+		err,
+		errActivityObservationInvalid,
+	) {
+		t.Fatalf("detailed aggregate error=%v", err)
+	}
+}
+
+func TestActivityServiceRejectsDetailedLossCatchUpWithoutAggregateDelta(t *testing.T) {
+	service := newActivityService(nil)
+	preparation := activityPreparationFixture(t)
+	if _, err := service.Prepare(preparation); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterBoundary(
+		preparation.SessionID,
+		activityReadyFixture(preparation, 110, allAvailableCoverage()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	first := activityEnvelope(
+		preparation,
+		110,
+		sessionwire.ObserverControlCPU,
+		1,
+		"collector.heartbeat",
+		`{"latestSequence":1,"kernelDropped":2,"ringDropped":0}`,
+	)
+	if err := service.Ingest(preparation.SessionID, first); err != nil {
+		t.Fatal(err)
+	}
+	catchUp := activityEnvelope(
+		preparation,
+		110,
+		sessionwire.ObserverControlCPU,
+		2,
+		"collector.heartbeat",
+		`{
+			"latestSequence":2,
+			"kernelDropped":2,
+			"ringDropped":0,
+			"local":{"process":0,"file":1,"network":0,"dns":0}
+		}`,
+	)
+	if err := service.Ingest(preparation.SessionID, catchUp); !errors.Is(
+		err,
+		errActivityObservationInvalid,
+	) {
+		t.Fatalf("detailed counter catch-up error=%v", err)
+	}
+	retry := activityEnvelope(
+		preparation,
+		110,
+		sessionwire.ObserverControlCPU,
+		2,
+		"collector.heartbeat",
+		`{"latestSequence":2,"kernelDropped":2,"ringDropped":0}`,
+	)
+	if err := service.Ingest(preparation.SessionID, retry); err != nil {
+		t.Fatalf("valid retry after detailed counter rejection: %v", err)
+	}
+}
+
 func TestActivityServiceConcurrentObservationAndExitClosesExactlyOnce(t *testing.T) {
 	service := newActivityService(nil)
 	preparation := activityPreparationFixture(t)
@@ -439,9 +1114,9 @@ func TestActivityServiceConcurrentObservationAndExitClosesExactlyOnce(t *testing
 	completion := &sessionwire.SupervisorActivityCompletion{
 		Owner: preparation.Owner, SessionID: preparation.SessionID,
 		CgroupID: 105, ObserverGeneration: preparation.ObserverGeneration,
-		BoundaryState: workloadtypes.BoundaryRemoved,
+		BoundaryState: workloadtypes.BoundaryUnproved,
 		Coverage:      allAvailableCoverage(),
-		CleanupProved: true,
+		CleanupProved: false,
 	}
 
 	start := make(chan struct{})
@@ -493,7 +1168,7 @@ func TestActivityServiceConcurrentObservationAndExitClosesExactlyOnce(t *testing
 	for _, subsystem := range activitySubsystems {
 		summary := snapshot.Coverage[subsystem]
 		if summary.CurrentState != workloadtypes.CoverageUnavailable ||
-			summary.CurrentReason != coverage.ReasonTargetExited {
+			summary.CurrentReason != coverage.ReasonCleanupUnproved {
 			t.Fatalf("%s terminal coverage=%+v", subsystem, summary)
 		}
 	}
@@ -539,9 +1214,9 @@ func TestActivityServiceClosesCoverageOnObserverAndSessionExit(t *testing.T) {
 	completion := &sessionwire.SupervisorActivityCompletion{
 		Owner: preparation.Owner, SessionID: preparation.SessionID,
 		CgroupID: 777, ObserverGeneration: preparation.ObserverGeneration,
-		BoundaryState: workloadtypes.BoundaryRemoved,
+		BoundaryState: workloadtypes.BoundaryUnproved,
 		Coverage:      allAvailableCoverage(),
-		CleanupProved: true,
+		CleanupProved: false,
 	}
 	if err := service.SessionExited(preparation.SessionID, completion, nil); err != nil {
 		t.Fatal(err)
@@ -556,7 +1231,7 @@ func TestActivityServiceClosesCoverageOnObserverAndSessionExit(t *testing.T) {
 	for _, subsystem := range activitySubsystems {
 		summary := closed.Coverage[subsystem]
 		if summary.CurrentState != workloadtypes.CoverageUnavailable ||
-			summary.CurrentReason != coverage.ReasonTargetExited {
+			summary.CurrentReason != coverage.ReasonCleanupUnproved {
 			t.Fatalf("%s terminal coverage=%+v", subsystem, summary)
 		}
 	}

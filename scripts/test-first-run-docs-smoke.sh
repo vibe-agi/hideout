@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/lib/homebrew-formula.sh"
 
 doc="docs/first-run-alpha.md"
 test -f "$doc"
@@ -61,7 +62,11 @@ formula_snapshot="releases/formulas/${release_tag}.rb"
 test -f "$formula_snapshot"
 grep -Fq "releases/download/$release_tag/hideout-$release_tag-darwin-arm64.tar.gz" "$formula_snapshot"
 grep -Fq "sha256 \"$release_sha\"" "$formula_snapshot"
-cmp <(tail -n +3 "$source_formula") "$formula_snapshot"
+if ! homebrew_formula_matches_published_snapshot \
+  "$source_formula" "$formula_snapshot"; then
+  echo "first-run-docs-smoke: source formula has unapproved drift from $release_tag" >&2
+  exit 1
+fi
 tap_formula="${HIDEOUT_TAP_FORMULA:-}"
 if [ -n "$tap_formula" ]; then
   if [ ! -f "$tap_formula" ]; then
@@ -86,6 +91,7 @@ fi
 for helper in \
   hideout-dns-stub-linux-arm64 \
   hideout-hostfsd-linux-arm64 \
+  hideout-observer-linux-arm64 \
   hideout-session-supervisor-linux-arm64 \
   hideout-workspace-portal-linux-arm64 \
   hideout-shim-linux-arm64 \

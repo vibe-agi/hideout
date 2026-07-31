@@ -22,6 +22,8 @@ type ProcessEventReader struct {
 	links    []link.Link
 	hooks    []string
 
+	stopOnce  sync.Once
+	stopErr   error
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -134,6 +136,16 @@ func (reader *ProcessEventReader) SetDeadline(deadline time.Time) {
 	}
 }
 
+// FlushPending drains every record visible at the call boundary and then
+// interrupts ReadProcessEvent with ringbuf.ErrFlushed. Unlike SetDeadline, it
+// is safe to call while another goroutine is blocked in ReadProcessEvent.
+func (reader *ProcessEventReader) FlushPending() error {
+	if reader == nil || reader.reader == nil {
+		return ringbuf.ErrClosed
+	}
+	return reader.reader.Flush()
+}
+
 func (reader *ProcessEventReader) AttachedHooks() []string {
 	if reader == nil {
 		return nil
@@ -181,15 +193,27 @@ func (reader *ProcessEventReader) Close() error {
 		return nil
 	}
 	reader.closeOnce.Do(func() {
-		if reader.reader != nil {
-			reader.closeErr = errors.Join(reader.closeErr, reader.reader.Close())
-		}
+		reader.closeErr = errors.Join(reader.closeErr, reader.Stop())
 		for index := len(reader.links) - 1; index >= 0; index-- {
 			reader.closeErr = errors.Join(reader.closeErr, reader.links[index].Close())
 		}
 		reader.closeErr = errors.Join(reader.closeErr, closeObserverObjects(&reader.objects))
 	})
 	return reader.closeErr
+}
+
+// Stop interrupts the userspace ring reader while retaining attached programs
+// and maps long enough for the owner to take one final exact counter snapshot.
+func (reader *ProcessEventReader) Stop() error {
+	if reader == nil {
+		return nil
+	}
+	reader.stopOnce.Do(func() {
+		if reader.reader != nil {
+			reader.stopErr = errors.Join(reader.stopErr, reader.reader.Close())
+		}
+	})
+	return reader.stopErr
 }
 
 func closeObserverObjects(objects *observerObjects) error {

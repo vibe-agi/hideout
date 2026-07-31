@@ -94,7 +94,8 @@ Closed kinds:
   `file.hardlink`, `file.symlink`, `file.mkdir`, `file.rmdir`;
 - `network.connect`, `network.close`;
 - `dns.query`, `dns.response`, `proxy.target`;
-- `coverage.changed`, `collector.loss`, `collector.heartbeat`.
+- `coverage.changed`, `collector.loss`, `collector.heartbeat`,
+  `collector.goodbye`.
 
 Per-kind field and list bounds are enforced on both sides. Argv is limited by
 argument count and total bytes. DNS parser output contains normalized metadata,
@@ -110,6 +111,17 @@ PID reuse never overwrites an earlier execution.
 - Each `(observerGeneration, cpu)` sequence increases by one.
 - Heartbeats include the latest sequence and kernel/ring drop counters for all
   CPUs, even when there is no activity.
+- Ordinary heartbeats carry `final: false`. After the collectors have stopped
+  accepting work and consumed each explicit ring flush boundary, the observer
+  emits one `final: true` heartbeat. Its detailed file counters must satisfy
+  `matchedEvents = reservedEvents + ringbufDrops`.
+- `collector.goodbye` is accepted only after that exact final counter receipt,
+  after the bounded relay queue is empty, and when authenticated stream EOF
+  immediately follows it and the bridge reports successful exit. After the
+  final receipt, any observer-origin frame permanently invalidates that
+  receipt; only relay-owned transport loss and goodbye remain admissible. A
+  missing/non-final/inexact receipt, trailing frame, or failed/missing bridge
+  exit status fails closed instead of claiming graceful completion.
 - A missing sequence, increased counter, invalid frame, reconnect, or
   generation change immediately emits a coverage change for the affected
   interval.

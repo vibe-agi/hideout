@@ -20,6 +20,24 @@ import (
 func TestObserverRegistersHeartbeatsAndStopsOnSupervisorEOF(t *testing.T) {
 	config := observerTestConfig(t)
 	collectors := newObserverTestCollectors()
+	collectors.stop = func() {
+		collectors.counters = observerDropCounters{
+			Kernel: 2,
+			Ring:   5,
+			Local: observerLocalDropCounters{
+				Process: 1,
+			},
+			File: observerFileCollectorCounters{
+				MatchedEvents:     57,
+				ReservedEvents:    55,
+				RingbufDrops:      2,
+				StateDrops:        1,
+				StateDegradations: 6,
+				PathFailures:      1,
+				IdentityFailures:  1,
+			},
+		}
+	}
 	accepted := sessionwire.ObserverAccepted{
 		Type: "observer.accepted", Schema: sessionwire.ObserverWireSchema,
 		Owner: config.Binding.Owner, SessionID: config.Binding.SessionID,
@@ -75,8 +93,114 @@ func TestObserverRegistersHeartbeatsAndStopsOnSupervisorEOF(t *testing.T) {
 		heartbeat.MonotonicNS != 9001 {
 		t.Fatalf("heartbeat=%+v", heartbeat)
 	}
+	var initialCounters struct {
+		Final bool `json:"final"`
+	}
+	if err := json.Unmarshal(heartbeat.Payload, &initialCounters); err != nil {
+		t.Fatal(err)
+	}
+	if initialCounters.Final {
+		t.Fatal("initial heartbeat was marked final")
+	}
+	finalHeartbeat, err := sessionwire.ReadObserverEnvelope(&guestOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalHeartbeat.Kind != "collector.heartbeat" ||
+		finalHeartbeat.CPU != sessionwire.ObserverControlCPU ||
+		finalHeartbeat.Sequence != 2 ||
+		finalHeartbeat.MonotonicNS != 9001 {
+		t.Fatalf("final heartbeat=%+v", finalHeartbeat)
+	}
+	var finalCounters struct {
+		LatestSequence uint64                        `json:"latestSequence"`
+		KernelDropped  uint64                        `json:"kernelDropped"`
+		RingDropped    uint64                        `json:"ringDropped"`
+		Local          observerLocalDropCounters     `json:"local"`
+		File           observerFileCollectorCounters `json:"file"`
+		Final          bool                          `json:"final"`
+	}
+	if err := json.Unmarshal(finalHeartbeat.Payload, &finalCounters); err != nil {
+		t.Fatal(err)
+	}
+	if finalCounters.LatestSequence != 2 ||
+		finalCounters.KernelDropped != 2 || finalCounters.RingDropped != 5 ||
+		finalCounters.Local.Process != 1 ||
+		finalCounters.File.MatchedEvents != 57 ||
+		finalCounters.File.ReservedEvents != 55 ||
+		finalCounters.File.RingbufDrops != 2 ||
+		finalCounters.File.StateDegradations != 6 ||
+		!finalCounters.Final {
+		t.Fatalf("final counters=%+v", finalCounters)
+	}
 	if guestOutput.Len() != 0 {
 		t.Fatalf("unexpected trailing observer output: %d bytes", guestOutput.Len())
+	}
+}
+
+func TestObserverSignalCancellationDrainsBeforeCancelingCollectorReads(t *testing.T) {
+	config := observerTestConfig(t)
+	collectors := newObserverTestCollectors()
+	started := make(chan struct{})
+	collectors.started = func() { close(started) }
+	stopSawCanceled := false
+	collectors.stop = func() {
+		select {
+		case <-collectors.startContext.Done():
+			stopSawCanceled = true
+		default:
+		}
+	}
+	accepted := sessionwire.ObserverAccepted{
+		Type: "observer.accepted", Schema: sessionwire.ObserverWireSchema,
+		Owner: config.Binding.Owner, SessionID: config.Binding.SessionID,
+		CgroupID: config.Binding.CgroupID, ObserverGeneration: config.Binding.ObserverGeneration,
+		ExpectedNextSequence: 1, MaxFrameBytes: sessionwire.MaxObserverFrameSize,
+	}
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	writeResult := make(chan error, 1)
+	go func() { writeResult <- sessionwire.WriteObserverAccepted(writer, accepted) }()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- runObserver(
+			ctx,
+			reader,
+			io.Discard,
+			config,
+			observerDependencies{
+				EUID:             func() int { return 0 },
+				ExecutableDigest: func() (string, error) { return config.ExpectedDigest, nil },
+				ValidateBoundary: func(string, uint64) error { return nil },
+				OpenCollectors: func(observerCollectorConfig) (observerCollectorRuntime, error) {
+					return collectors, nil
+				},
+				Now:         func() time.Time { return time.Unix(1, 0).UTC() },
+				MonotonicNS: func() (uint64, error) { return 9001, nil },
+			},
+		)
+	}()
+	if err := <-writeResult; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("observer collectors did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observer did not stop after signal cancellation")
+	}
+	if stopSawCanceled {
+		t.Fatal("collector read context was canceled before the drain")
 	}
 }
 
@@ -154,7 +278,7 @@ func TestObserverEmitterKeepsActivityAndControlSequencesContiguous(t *testing.T)
 	if err := emitter.heartbeat(40_000, observerDropCounters{
 		Kernel: 4,
 		Ring:   5,
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -289,6 +413,9 @@ type observerTestCollectors struct {
 	errs         chan error
 	counters     observerDropCounters
 	start        func(observerRecordSink)
+	started      func()
+	startContext context.Context
+	stop         func()
 }
 
 func newObserverTestCollectors() *observerTestCollectors {
@@ -313,9 +440,13 @@ func (collectors *observerTestCollectors) Capabilities() sessionwire.ObserverCap
 }
 
 func (collectors *observerTestCollectors) Start(
-	_ context.Context,
+	ctx context.Context,
 	sink observerRecordSink,
 ) {
+	collectors.startContext = ctx
+	if collectors.started != nil {
+		collectors.started()
+	}
 	if collectors.start != nil {
 		collectors.start(sink)
 	}
@@ -330,6 +461,13 @@ func (collectors *observerTestCollectors) Counters() (
 	error,
 ) {
 	return collectors.counters, nil
+}
+
+func (collectors *observerTestCollectors) Stop() error {
+	if collectors.stop != nil {
+		collectors.stop()
+	}
+	return nil
 }
 
 func (collectors *observerTestCollectors) Close() error {

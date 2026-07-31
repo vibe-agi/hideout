@@ -65,8 +65,9 @@ func (preparation ActivityPreparation) Validate() error {
 
 // ActivityStreams is the daemon-owned observer lifecycle attached to one
 // backend run. Backends must call BoundaryReady before Ready, must deliver
-// every decoded envelope (including duplicates), and must call SessionClosed
-// on every path after Prepare succeeds.
+// every decoded envelope (including duplicates), call ObserverClosed exactly
+// once after an established stream reaches authenticated EOF or fails, and
+// call SessionClosed on every path after Prepare succeeds.
 type ActivityStreams struct {
 	Prepare        func(ActivityPreparation) (sessionwire.SupervisorActivityExpectation, error)
 	BoundaryReady  func(*sessionwire.SupervisorActivityReady) error

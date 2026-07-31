@@ -2041,7 +2041,8 @@ scripts/gates/release-candidate.sh
 scripts/gates/formal.sh
 scripts/gates/release-candidate-privacy.sh
 scripts/gates/release-candidate-ui.sh
-scripts/gates/release-candidate-performance.sh
+HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 \
+  scripts/gates/release-candidate-performance.sh
 scripts/gates/release-candidate-lima.sh
 ```
 
@@ -2075,7 +2076,7 @@ recovery claim in `docs/release/045-claim-matrix.md` needs both a positive
 judge and a retained negative fixture that makes that judge fail.
 
 The formal lane reads `formal/inventory.json` and must run exactly 12
-configurations across 10 modules, all 72 inventoried safety invariants, all 18
+configurations across 10 modules, all 76 inventoried safety invariants, all 19
 liveness properties, and all 12 named Go production-refinement/crash tests.
 The independent verifier rejects a missing result, counterexample, incomplete
 pass set, changed source/log digest, or stale inventory.
@@ -2149,12 +2150,27 @@ Ambiguous identity or failed absence proof blocks deletion.
 ### Performance acceptance
 
 The independently recomputed results must remain within all frozen v1
-ceilings: reference workload median overhead at most 10%, warm attach and
-browser freshness p95 at most 2 seconds, and the documented query/render,
-daemon/TUI memory, observer CPU/RSS, event/drop accounting, and one-active-
-segment quota bounds in `docs/activity-observation.md`. Every measured drop
-must be reflected in degraded coverage; silently improving a latency result by
-discarding evidence is a failure.
+ceilings: the reference workload's paired median overhead and its exact
+nonparametric one-sided 95% median upper confidence bound are each at most
+10%, warm attach and browser freshness p95 are at most 2 seconds, and the
+documented query/render, daemon/TUI memory, observer CPU/RSS, event/drop
+accounting, and one-active-segment quota bounds in
+`docs/activity-observation.md` hold. Every measured drop must be reflected in
+degraded coverage; silently improving a latency result by discarding evidence
+is a failure.
+
+The real-Lima attach and reference-workload methodology uses thirty recorded
+adjacent counterbalanced samples after at least one warmup. Before starting,
+the release operator must pause unrelated CPU-heavy tests, VMs, and emulators
+and keep the host quiet until the gate finishes. The full lane refuses to
+start without `HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1` and retains private
+host-state snapshots at the run start and real-Lima boundaries. Before any
+build or measurement, three one-second snapshots retain only PID, parent PID,
+CPU, memory, and process name; two sustained threshold hits from
+the same high-CPU, virtualization, or build/test process reject the run without
+stopping it. Known contention invalidates the run rather than relaxing the
+ten-percent ceiling, discarding samples, or selecting favorable measurements
+afterward.
 
 ### Package and final evidence acceptance
 

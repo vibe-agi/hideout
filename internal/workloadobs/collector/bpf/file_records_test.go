@@ -1,10 +1,77 @@
 package bpf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"testing"
 )
+
+func TestDecodeFileEventIntoReusesStorageWithoutStalePaths(t *testing.T) {
+	full := make([]byte, FileRecordSize)
+	binary.LittleEndian.PutUint32(full[0:4], FileEventWrite)
+	binary.LittleEndian.PutUint32(full[32:36], FileTypeRegular)
+	binary.LittleEndian.PutUint64(full[112:120], 0x1234)
+	for index := FileCompactRecordSize; index < len(full); index++ {
+		full[index] = 'x'
+	}
+	var event RawFileEvent
+	if err := DecodeFileEventInto(full, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Path[0] != 'x' || event.TargetName[0] != 'x' {
+		t.Fatalf("full event=%+v", event)
+	}
+
+	compact := make([]byte, FileCompactRecordSize)
+	binary.LittleEndian.PutUint32(compact[0:4], FileEventRead)
+	binary.LittleEndian.PutUint32(compact[32:36], FileTypeRegular)
+	binary.LittleEndian.PutUint64(compact[112:120], 0x1234)
+	if err := DecodeFileEventInto(compact, &event); err != nil {
+		t.Fatal(err)
+	}
+	if !event.Compact || event.Cached ||
+		event.Path != [FilePathBytes]byte{} ||
+		event.PathName != [FileNameBytes]byte{} ||
+		event.TargetPath != [FilePathBytes]byte{} ||
+		event.TargetName != [FileNameBytes]byte{} {
+		t.Fatalf("compact event retained stale paths: %+v", event)
+	}
+
+	fill(event.PathName[:], 'y')
+	fill(event.TargetPath[:], 'y')
+	fill(event.TargetName[:], 'y')
+	cached := make([]byte, FileCachedRecordSize)
+	binary.LittleEndian.PutUint32(cached[0:4], FileEventOpen)
+	binary.LittleEndian.PutUint32(cached[32:36], FileTypeRegular)
+	binary.LittleEndian.PutUint64(cached[112:120], 0x1234)
+	copy(cached[FileCompactRecordSize:], "/workspace/input.txt")
+	if err := DecodeFileEventInto(cached, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Compact || !event.Cached ||
+		!bytes.Equal(event.Path[:20], []byte("/workspace/input.txt")) ||
+		event.PathName != [FileNameBytes]byte{} ||
+		event.TargetPath != [FilePathBytes]byte{} ||
+		event.TargetName != [FileNameBytes]byte{} {
+		t.Fatalf("cached event retained stale paths: %+v", event)
+	}
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		if err := DecodeFileEventInto(compact, &event); err != nil {
+			panic(err)
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("compact decode allocations=%f want=0", allocations)
+	}
+}
+
+func fill(value []byte, current byte) {
+	for index := range value {
+		value[index] = current
+	}
+}
 
 func TestDecodeFileEventUsesExactFixedLayout(t *testing.T) {
 	record := make([]byte, FileRecordSize)
@@ -88,8 +155,13 @@ func TestDecodeFileEventAcceptsCachedPathLayout(t *testing.T) {
 	}
 }
 
-func TestDecodeFileEventAcceptsCompactReadWriteLayout(t *testing.T) {
-	for _, kind := range []uint32{FileEventRead, FileEventWrite} {
+func TestDecodeFileEventAcceptsCompactDescriptorLayout(t *testing.T) {
+	for _, kind := range []uint32{
+		FileEventRead,
+		FileEventWrite,
+		FileEventMmap,
+		FileEventTruncate,
+	} {
 		record := make([]byte, FileCompactRecordSize)
 		binary.LittleEndian.PutUint32(record[0:4], kind)
 		binary.LittleEndian.PutUint32(record[32:36], FileTypeRegular)

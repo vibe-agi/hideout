@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/sessionwire"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
@@ -56,6 +57,65 @@ func TestLimaObserverStreamReadsBufferedFramesAsOrderedBatch(t *testing.T) {
 		if envelope.Sequence != uint64(index+1) {
 			t.Fatalf("batch[%d] sequence=%d", index, envelope.Sequence)
 		}
+	}
+}
+
+func TestPumpLimaObserverStreamRejectsFrameAfterBatchFinalGoodbye(t *testing.T) {
+	t.Parallel()
+
+	binding, _, token := limaObserverFixture(t)
+	defer token.Destroy()
+	tracker, err := sessionwire.NewObserverSequenceTracker(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire bytes.Buffer
+	for sequence := uint64(1); sequence < limaObserverBatchEnvelopes; sequence++ {
+		if err := sessionwire.WriteObserverEnvelope(
+			&wire,
+			limaObserverEnvelope(binding, 2, sequence, "process.exec"),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sessionwire.WriteObserverEnvelope(&wire, sessionwire.ObservationEnvelope{
+		Schema: sessionwire.ObservationSchema, Owner: binding.Owner,
+		SessionID: binding.SessionID, CgroupID: binding.CgroupID,
+		ObserverGeneration: binding.ObserverGeneration,
+		CPU:                sessionwire.ObserverTransportCPU,
+		Sequence:           1,
+		MonotonicNS:        56,
+		Kind:               "collector.goodbye",
+		Payload:            json.RawMessage(`{"reason":"relay-drained"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionwire.WriteObserverEnvelope(
+		&wire,
+		limaObserverEnvelope(
+			binding,
+			2,
+			limaObserverBatchEnvelopes,
+			"process.exec",
+		),
+	); err != nil {
+		t.Fatal(err)
+	}
+	stream := &limaObserverStream{
+		stdout: bufio.NewReaderSize(
+			bytes.NewReader(wire.Bytes()),
+			limaObserverReadBufferBytes,
+		),
+		tracker: tracker,
+	}
+	results := make(chan error, 1)
+	pumpLimaObserverStream(stream, &backend.ActivityStreams{
+		Observe: func(sessionwire.ObservationEnvelope) error { return nil },
+	}, results)
+	result, ok := <-results
+	if !ok || result == nil ||
+		!strings.Contains(result.Error(), "after completion") {
+		t.Fatalf("trailing observer frame result=%v present=%v", result, ok)
 	}
 }
 
@@ -159,6 +219,77 @@ func TestLimaObserverStreamUsesDedicatedSSHChannelAndHidesAuthorityFromCommand(t
 			strings.Contains(command, binding.Owner.Key()) {
 			t.Fatalf("observer authority leaked into SSH command %q", command)
 		}
+	}
+}
+
+func TestLimaObserverStreamCloseRetainsExitFailureAfterFrameBoundaryEOF(t *testing.T) {
+	binding, hello, token := limaObserverFixture(t)
+	defer token.Destroy()
+	eofSent := make(chan struct{})
+	releaseExit := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseExit) }) }
+	defer release()
+	terminalFailure := errors.New("observer bridge failed after stdout EOF")
+	client, server := newObserverStreamSSHTestClient(t, func(_ string, channel ssh.Channel) error {
+		open, err := sessionwire.ReadObserverStreamOpen(channel)
+		if err != nil {
+			return err
+		}
+		if err := sessionwire.AuthenticateObserverStreamOpen(
+			open,
+			binding.SessionID,
+			token,
+			sessionwire.ObserverStreamPeer{UID: 0},
+		); err != nil {
+			return err
+		}
+		if err := sessionwire.WriteObserverHello(channel, hello); err != nil {
+			return err
+		}
+		accepted, err := sessionwire.ReadObserverAccepted(channel)
+		if err != nil {
+			return err
+		}
+		if err := accepted.ValidateBinding(binding); err != nil {
+			return err
+		}
+		if err := channel.CloseWrite(); err != nil {
+			return err
+		}
+		close(eofSent)
+		<-releaseExit
+		return terminalFailure
+	})
+	stream, err := openLimaObserverStream(context.Background(), client, observerStreamExpectation{
+		Binding: binding, Token: token, HelperDigest: hello.HelperDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-eofSent:
+	case <-time.After(time.Second):
+		t.Fatal("observer bridge did not publish its stdout EOF")
+	}
+	if _, _, err := stream.Read(); !errors.Is(err, io.EOF) {
+		t.Fatalf("frame-boundary read error=%v want %v", err, io.EOF)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		release()
+	}()
+	closeErr := stream.Close()
+	var exitErr *ssh.ExitError
+	if !errors.As(closeErr, &exitErr) || exitErr.ExitStatus() != 1 {
+		t.Fatalf("post-EOF observer exit error=%v", closeErr)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result := waitObserverStreamSSHServer(t, server)
+	if !errors.Is(result.err, terminalFailure) {
+		t.Fatalf("observer SSH server result=%v", result.err)
 	}
 }
 
@@ -329,7 +460,9 @@ func newObserverStreamSSHTestClient(
 				mu.Unlock()
 				go ssh.DiscardRequests(channelRequests)
 				handlerErr := handle(payload.Command, channel)
+				exitStatus := uint32(0)
 				if handlerErr != nil && !errors.Is(handlerErr, io.EOF) {
+					exitStatus = 1
 					mu.Lock()
 					failures = append(failures, handlerErr)
 					mu.Unlock()
@@ -337,7 +470,7 @@ func newObserverStreamSSHTestClient(
 				_, _ = channel.SendRequest(
 					"exit-status",
 					false,
-					ssh.Marshal(struct{ Status uint32 }{0}),
+					ssh.Marshal(struct{ Status uint32 }{exitStatus}),
 				)
 			}()
 		}

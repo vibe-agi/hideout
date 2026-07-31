@@ -157,13 +157,26 @@ func (b Backend) runSupervisorProtocol(
 		return err
 	}
 	var (
-		observerStream        *limaObserverStream
-		activityCompletion    *sessionwire.SupervisorActivityCompletion
-		activitySessionClosed bool
+		observerStream         *limaObserverStream
+		activityCompletion     *sessionwire.SupervisorActivityCompletion
+		activityObserverClosed bool
+		activitySessionClosed  bool
 	)
 	defer func() {
 		if observerStream != nil {
-			_ = observerStream.Close()
+			closeErr := observerStream.Close()
+			observerStream = nil
+			if activityPrepared && !activityObserverClosed {
+				activityObserverClosed = true
+				observerCause := errors.Join(retErr, closeErr)
+				retErr = errors.Join(
+					retErr,
+					closeErr,
+					streams.Activity.ObserverClosed(observerCause),
+				)
+			} else {
+				retErr = errors.Join(retErr, closeErr)
+			}
 		}
 		if activityExpectation != nil {
 			activityExpectation.ObserverStreamToken.Destroy()
@@ -439,10 +452,32 @@ func (b Backend) runSupervisorProtocol(
 						return fmt.Errorf("validate supervisor activity completion: %w", err)
 					}
 					activityCompletion = value.Activity
-					observerResults = nil
+					var observerCloseCause error
+					if observerResults != nil {
+						observerCloseCause = awaitLimaObserverDrain(
+							observerStream,
+							observerResults,
+						)
+						observerResults = nil
+					}
 					if observerStream != nil {
-						_ = observerStream.Close()
+						closeErr := observerStream.Close()
 						observerStream = nil
+						observerCloseCause = errors.Join(
+							observerCloseCause,
+							closeErr,
+						)
+					}
+					if !activityObserverClosed {
+						activityObserverClosed = true
+						if err := streams.Activity.ObserverClosed(
+							observerCloseCause,
+						); err != nil {
+							return fmt.Errorf(
+								"close daemon observer stream: %w",
+								err,
+							)
+						}
 					}
 					if err := streams.Activity.SessionClosed(
 						value.Activity,
@@ -495,18 +530,24 @@ func (b Backend) runSupervisorProtocol(
 
 		case observerErr, ok := <-observerResults:
 			observerResults = nil
-			if !ok || activitySessionClosed {
+			if activitySessionClosed {
 				continue
 			}
-			if err := streams.Activity.ObserverClosed(observerErr); err != nil {
-				cancelForProtocolError(fmt.Errorf(
-					"close daemon observer coverage: %w",
-					err,
-				))
+			if !ok {
+				observerErr = errors.New(
+					"daemon observer stream ended without a terminal result",
+				)
 			}
 			if observerStream != nil {
-				_ = observerStream.Close()
+				observerErr = errors.Join(observerErr, observerStream.Close())
 				observerStream = nil
+			}
+			activityObserverClosed = true
+			if err := streams.Activity.ObserverClosed(observerErr); err != nil {
+				cancelForProtocolError(fmt.Errorf(
+					"close daemon observer stream: %w",
+					err,
+				))
 			}
 
 		case <-heartbeat.C:
@@ -632,6 +673,19 @@ func pumpLimaObserverStream(
 	defer close(results)
 	for {
 		envelopes, readErr := stream.ReadBatch(limaObserverBatchEnvelopes)
+		terminal := false
+		for index, envelope := range envelopes {
+			if envelope.Kind != "collector.goodbye" {
+				continue
+			}
+			if terminal || index != len(envelopes)-1 {
+				results <- errors.New(
+					"observer transport completion was not the final envelope",
+				)
+				return
+			}
+			terminal = true
+		}
 		if len(envelopes) != 0 {
 			var observeErr error
 			if callbacks.ObserveBatch != nil {
@@ -648,10 +702,49 @@ func pumpLimaObserverStream(
 				return
 			}
 		}
+		if terminal {
+			trailing, terminalErr := stream.ReadBatch(1)
+			if len(trailing) != 0 {
+				results <- errors.New(
+					"observer transport emitted an envelope after completion",
+				)
+				return
+			}
+			if !errors.Is(terminalErr, io.EOF) {
+				results <- fmt.Errorf(
+					"observer transport did not end after completion: %w",
+					terminalErr,
+				)
+				return
+			}
+			results <- nil
+			return
+		}
 		if readErr != nil {
 			results <- readErr
 			return
 		}
+	}
+}
+
+func awaitLimaObserverDrain(
+	stream *limaObserverStream,
+	results <-chan error,
+) error {
+	if stream == nil || results == nil {
+		return errors.New("daemon observer drain is unavailable")
+	}
+	timer := time.NewTimer(limaObserverShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case err, ok := <-results:
+		if !ok {
+			return errors.New("daemon observer stream ended without a drain marker")
+		}
+		return err
+	case <-timer.C:
+		_ = stream.Close()
+		return errors.New("daemon observer stream did not drain within the bound")
 	}
 }
 

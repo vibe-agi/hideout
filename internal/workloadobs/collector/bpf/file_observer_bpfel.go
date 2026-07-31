@@ -21,13 +21,14 @@ type fileObserverExecutionRef struct {
 }
 
 type fileObserverFileCollectorCounters struct {
-	_                structs.HostLayout
-	MatchedEvents    uint64
-	ReservedEvents   uint64
-	RingbufDrops     uint64
-	StateDrops       uint64
-	PathFailures     uint64
-	IdentityFailures uint64
+	_                 structs.HostLayout
+	MatchedEvents     uint64
+	ReservedEvents    uint64
+	RingbufDrops      uint64
+	StateDrops        uint64
+	StateDegradations uint64
+	PathFailures      uint64
+	IdentityFailures  uint64
 }
 
 type fileObserverFileMetadata struct {
@@ -38,6 +39,13 @@ type fileObserverFileMetadata struct {
 	Flags     uint32
 	Created   uint32
 	Announced uint32
+}
+
+type fileObserverResolvedFileMetadata struct {
+	_         structs.HostLayout
+	Cached    fileObserverFileMetadata
+	PathFlags uint32
+	Reserved  uint32
 	Path      [512]int8
 }
 

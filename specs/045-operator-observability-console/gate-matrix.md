@@ -30,7 +30,7 @@ or implicitly passing check.
 | Dependency/license/advisory | `scripts/gates/dependencies.sh` | `.artifacts/045/dependencies/` | Active |
 | Package component inventory | `scripts/gates/package-components.sh` | `.artifacts/045/package-components/` | Active |
 | Mutation proofs and local static/race gates | `scripts/mutation/045/run-negative-fixtures.sh` then `scripts/gates/release-candidate.sh` | `.artifacts/045/local/` | Active and passing locally (T152): 46 source-overlay production mutants and 46 judge-negative fixtures; exact clean-candidate binding remains T163 |
-| Performance/quota | `scripts/gates/release-candidate-performance.sh` | `.artifacts/045/performance/`; current proof: `.artifacts/045/performance-current/result.json` and `.artifacts/045/performance-current/run-20260730T193602Z-54620/summary.json` | Active and passing for the measured dirty source tree (T156/T157): raw samples and independently recomputed percentiles passed query/render, daemon/TUI RSS, browser freshness, warm attach, 4.298% reference overhead, observer CPU/RSS, 186.418 exec/s, 0.085714% fully accounted loss, and one-active-segment quota bounds; v1 defaults are frozen in `internal/workloadobs/defaults.go`; exact clean-candidate binding remains T163/T171 |
+| Performance/quota | `HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 scripts/gates/release-candidate-performance.sh` | `.artifacts/045/performance/`; historical seven-sample diagnostics include `.artifacts/045/performance/run-20260731T054812Z-47419/summary.json` and `.artifacts/045/performance-current/run-20260730T193602Z-54620/summary.json` | Gate implementation active; accepted T156 evidence is pending. The retained dirty-tree runs passed their then-current budgets but used the superseded seven-sample methodology. The gate and final validator now require thirty recorded real-Lima samples plus warmup, an explicit quiet-host confirmation, a passing three-snapshot sustained-contention preflight, private start/boundary/end host-state diagnostics, and both the paired median and its exact nonparametric one-sided 95% upper confidence bound at or below 10%. The rerun must occur on a quiet host before T163/T171; T157's frozen v1 defaults remain subject to that fresh verification. |
 | Package build | `scripts/release/build-candidate.sh` | `.artifacts/045/package/` | Active (T158): fail-closed clean-tree gate, two independent Go caches, byte-identical archive/manifest/tree proof, exact manifest-derived package inventory, all 9 Go binaries and 6 helper manifests, every repository schema, 8 embedded browser assets, runtime catalog/contract/artifact binding, and final-binary advisory scans. The exact current counts are taken only from the final clean candidate receipt. |
 | Install/upgrade/uninstall/reinstall | `scripts/release/test-package-lifecycle.sh` | `.artifacts/045/package-lifecycle/` | Active (T159): consumes the exact T158 archive without rebuilding; verifies the checked-in immutable `v0.1.0-alpha.3` receipt/download, clean install, macOS Keychain and legacy-export guidance, same-candidate reinstall, exact temporary legacy-store discard, old-version upgrade, normal uninstall absence, durable-state/unrelated-file preservation, source stability, private evidence modes/digests, and local-only status. A disposable exact-clean implementation validation passed all 11 lifecycle checks with 23 retained artifacts; accepted main-candidate evidence remains intentionally absent until T163/T171. |
 | Evidence binding | `scripts/release/collect-evidence.sh` | `.artifacts/045/evidence.json` and `.artifacts/045/evidence.json.sha256` | Active (T163 implementation): independently resolves every private pointer and digest, extracts and verifies the exact package, validates all 11 required gate identities, and emits package-bound/installed-local/final-ready stages. Final acceptance still requires one clean T171 run. |
@@ -47,7 +47,8 @@ scripts/gates/release-candidate.sh
 scripts/gates/formal.sh
 scripts/gates/release-candidate-privacy.sh
 scripts/gates/release-candidate-ui.sh
-scripts/gates/release-candidate-performance.sh
+HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 \
+  scripts/gates/release-candidate-performance.sh
 scripts/gates/release-candidate-lima.sh
 scripts/release/build-candidate.sh
 scripts/release/test-package-lifecycle.sh
@@ -82,6 +83,16 @@ package-bound stage; only the final `--require-closure` collection may record
   `gh`, the configured source remote, and a clean local `vibe-agi/tap` checkout.
 - Real-Lima lanes require the supported Debian 13 runtime, cgroup v2, and an
   otherwise unrelated-VM-safe fixture environment.
+- Performance evidence requires a quiet host: pause unrelated CPU-heavy tests,
+  VMs, and emulators before the thirty recorded samples and keep them paused
+  until the gate completes. Known contention invalidates the run. The full gate
+  fails before measurement unless the operator explicitly sets
+  `HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1`. It then takes three one-second
+  process-name/CPU snapshots and rejects sustained generic, virtualization, or
+  build/test contention before building; it records no argv/environment and
+  never stops a process. Private host-state snapshots make the run auditable,
+  and a median-only statistical pass is insufficient without the one-sided 95%
+  confidence bound.
 
 ## Publication boundary
 

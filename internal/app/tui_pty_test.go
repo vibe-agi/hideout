@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"github.com/vibe-agi/hideout/internal/profile"
 )
@@ -191,12 +192,26 @@ func waitForTUIOutput(t *testing.T, output *synchronizedBuffer, expected string)
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(output.String(), expected) {
+		raw := output.String()
+		visible := raw
+		if !strings.Contains(expected, "\x1b") {
+			// Bubble Tea's incremental renderer can wrap inserted text in
+			// terminal-mode sequences, so a phrase visible on screen is not
+			// necessarily contiguous in the raw PTY byte stream.
+			visible = ansi.Strip(raw)
+		}
+		if strings.Contains(visible, expected) {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("TUI output never contained %q: %q", expected, output.String())
+	raw := output.String()
+	t.Fatalf(
+		"TUI output never contained %q; visible=%q raw=%q",
+		expected,
+		ansi.Strip(raw),
+		raw,
+	)
 }
 
 func assertAlternateScreenRestored(t *testing.T, output string) {

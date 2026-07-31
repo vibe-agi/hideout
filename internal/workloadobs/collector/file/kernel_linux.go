@@ -25,6 +25,7 @@ type KernelEventSource struct {
 	lookup     ExecutionLookup
 	classify   PathClassifier
 	reader     *observerbpf.FileEventReader
+	raw        observerbpf.RawFileEvent
 }
 
 func OpenKernelEventSource(
@@ -60,15 +61,14 @@ func (source *KernelEventSource) Read() (Event, error) {
 	if source == nil || source.reader == nil {
 		return Event{}, ErrKernelEventSourceClosed
 	}
-	raw, err := source.reader.ReadFileEvent()
-	if err != nil {
+	if err := source.reader.ReadFileEventInto(&source.raw); err != nil {
 		return Event{}, err
 	}
-	return EventFromKernelRecord(
+	return EventFromKernelRecordRef(
 		source.boundary,
 		source.anchor,
 		source.coverageID,
-		raw,
+		&source.raw,
 		source.lookup,
 		source.classify,
 	)

@@ -182,8 +182,222 @@ local_run_artifact_reference() {
     ' "$summary_path"
 }
 
+validate_performance_evidence_contract() {
+  local performance_file="$1"
+
+  jq -e '
+    .hostDiagnostics.quietHostConfirmed == true and
+    .hostDiagnostics.policy ==
+      "operator-confirmed-quiet-host-known-contention-invalidates-run" and
+    .hostDiagnostics.initialContentionAssessment.passed == true and
+    .hostDiagnostics.initialContentionAssessment.method ==
+      "three-one-second-process-snapshots-two-hit-rejection" and
+    .hostDiagnostics.initialContentionAssessment.samples == 3 and
+    .hostDiagnostics.initialContentionAssessment.minimumHits == 2 and
+    .hostDiagnostics.initialContentionAssessment.genericCPUPercentThreshold == 50 and
+    .hostDiagnostics.initialContentionAssessment.virtualizationCPUPercentThreshold == 5 and
+    .hostDiagnostics.initialContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
+    .hostDiagnostics.initialContentionAssessment.path ==
+      "host-contention-preflight.txt" and
+    (.hostDiagnostics.initialContentionAssessment.sha256 |
+      test("^[a-f0-9]{64}$")) and
+    (.hostDiagnostics.snapshots | length) == 3 and
+    [.hostDiagnostics.snapshots[] | [.phase, .path]] == [
+      ["start", "host-state-start.txt"],
+      ["before-real-lima", "host-state-before-real-lima.txt"],
+      ["after-real-lima", "host-state-after-real-lima.txt"]
+    ] and
+    all(.hostDiagnostics.snapshots[];
+      (.sha256 | test("^[a-f0-9]{64}$"))) and
+    .metrics.referenceWorkload.methodology.samples == 30 and
+    .metrics.referenceWorkload.methodology.warmups >= 1 and
+    .metrics.referenceWorkload.elapsedOverhead.threshold == 10 and
+    .metrics.referenceWorkload.elapsedOverhead.thresholdPassed == true and
+    .metrics.referenceWorkload.elapsedOverhead.confidence.level == 0.95 and
+    .metrics.referenceWorkload.elapsedOverhead.confidence.method ==
+      "one-sided-exact-binomial-order-statistic" and
+    .metrics.referenceWorkload.elapsedOverhead.confidence.rank == 20 and
+    .metrics.referenceWorkload.elapsedOverhead.confidence.upperBound <= 10 and
+    .metrics.referenceWorkload.elapsedOverhead.confidence.thresholdPassed == true and
+    .validation.referenceMedianUpperConfidenceBoundWithinTenPercent == true and
+    .validation.quietHostExplicitlyConfirmed == true and
+    .validation.initialHostContentionAssessmentPassed == true and
+    .validation.hostDiagnosticsRetained == true
+  ' "$performance_file" >/dev/null
+}
+
+validate_performance_contention_file() {
+  local contention_file="$1"
+
+  awk '
+    function is_virtualization(name) {
+      return name ~ /^qemu-system-/ ||
+        name ~ /^com[.]apple[.]Virtua/ ||
+        name ~ /^VirtualBoxVM/ ||
+        name ~ /^vmware-vmx/ ||
+        name ~ /^prl_vm_app/ ||
+        name ~ /^UTM/
+    }
+    function is_build_or_test(name) {
+      return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+        name ~ /[.]test$/
+    }
+    /^schema=hideout[.]performance-host-contention\/v1$/ {
+      schema_count++
+      next
+    }
+    /^method=three-one-second-process-snapshots-two-hit-rejection$/ {
+      method_count++
+      next
+    }
+    /^samples=3$/ {samples_count++; next}
+    /^minimum_hits=2$/ {minimum_count++; next}
+    /^generic_cpu_percent_threshold=50$/ {generic_count++; next}
+    /^virtualization_cpu_percent_threshold=5$/ {
+      virtualization_count++
+      next
+    }
+    /^build_or_test_cpu_percent_threshold=10$/ {build_count++; next}
+    /^sample_begin=[1-3]$/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+      if (current_sample != 0 || begins[sample] != 0) invalid = 1
+      current_sample = sample
+      begins[sample]++
+      next
+    }
+    /^sample_end=[1-3]$/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+      if (current_sample != sample || ends[sample] != 0) invalid = 1
+      ends[sample]++
+      current_sample = 0
+      next
+    }
+    current_sample > 0 {
+      if ($1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ ||
+          $3 !~ /^[0-9]+([.][0-9]+)?$/ ||
+          $4 !~ /^[0-9]+([.][0-9]+)?$/ || $5 == "") {
+        invalid = 1
+        next
+      }
+      rows[current_sample]++
+      pid = $1 + 0
+      cpu = $3 + 0
+      name = $5
+      threshold = 50
+      if (is_virtualization(name)) threshold = 5
+      else if (is_build_or_test(name)) threshold = 10
+      if (cpu >= threshold) {
+        key = pid SUBSEP name
+        sample_key = current_sample SUBSEP key
+        if (!(sample_key in counted)) {
+          counted[sample_key] = 1
+          hits[key]++
+        }
+      }
+      next
+    }
+    END {
+      if (current_sample != 0 || schema_count != 1 || method_count != 1 ||
+          samples_count != 1 || minimum_count != 1 || generic_count != 1 ||
+          virtualization_count != 1 || build_count != 1) invalid = 1
+      for (sample = 1; sample <= 3; sample++) {
+        if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
+          invalid = 1
+      }
+      if (invalid) exit 2
+      for (key in hits) if (hits[key] >= 2) exit 1
+    }
+  ' "$contention_file"
+}
+
+require_private_evidence_file() {
+  local evidence_file="$1" allowed_root="${2:-$artifact_root}" resolved_dir
+  allowed_root="$(CDPATH='' cd -- "$allowed_root" && pwd -P)"
+  [ -f "$evidence_file" ] &&
+    [ ! -L "$evidence_file" ] ||
+    fail "missing or unsafe evidence file: $evidence_file"
+  resolved_dir="$(
+    CDPATH='' cd -- "$(dirname -- "$evidence_file")" && pwd -P
+  )"
+  case "$resolved_dir/$(basename -- "$evidence_file")" in
+    "$allowed_root"/*)
+      ;;
+    *)
+      fail "evidence file escapes artifact root: $evidence_file"
+      ;;
+  esac
+  [ "$(normalized_mode "$evidence_file")" = "0600" ] ||
+    fail "evidence file mode is not 0600: $evidence_file"
+}
+
+verify_performance_host_diagnostics() {
+  local summary_file="$1" summary_dir kind phase relative expected_sha
+  local allowed_root="${2:-$artifact_root}"
+  local diagnostic_file diagnostic_count=0
+
+  summary_dir="$(
+    CDPATH='' cd -- "$(dirname -- "$summary_file")" && pwd -P
+  )"
+  while IFS=$'\t' read -r kind phase relative expected_sha; do
+    diagnostic_count=$((diagnostic_count + 1))
+    safe_relative_path "$relative" ||
+      fail "performance host diagnostic path is unsafe: $relative"
+    diagnostic_file="$summary_dir/$relative"
+    require_private_evidence_file "$diagnostic_file" "$allowed_root"
+    verify_sha256 "$diagnostic_file" "$expected_sha" ||
+      fail "performance host diagnostic digest does not match: $relative"
+    jq -e \
+      --arg path "$relative" \
+      --arg sha256 "$expected_sha" '
+        ([.artifacts[] |
+          select(.path == $path and .sha256 == $sha256 and .mode == "0600")]
+          | length) == 1
+      ' "$summary_file" >/dev/null ||
+      fail "performance summary does not bind one host diagnostic: $relative"
+    case "$kind" in
+      contention)
+        validate_performance_contention_file "$diagnostic_file" ||
+          fail "performance raw host contention evidence is invalid or busy"
+        ;;
+      snapshot)
+        if ! grep -Fxq 'schema=hideout.performance-host-state/v1' \
+          "$diagnostic_file" ||
+          ! grep -Fxq "phase=$phase" "$diagnostic_file" ||
+          ! grep -Fxq 'top_processes_begin' "$diagnostic_file" ||
+          ! grep -Fxq 'top_processes_end' "$diagnostic_file"; then
+          fail "performance host-state snapshot is invalid: $relative"
+        fi
+        ;;
+      *)
+        fail "performance host diagnostic kind is invalid: $kind"
+        ;;
+    esac
+  done < <(
+    jq -r '
+      ([{
+        kind:"contention",
+        phase:"preflight",
+        path:.hostDiagnostics.initialContentionAssessment.path,
+        sha256:.hostDiagnostics.initialContentionAssessment.sha256
+      }] + [
+        .hostDiagnostics.snapshots[] |
+        {kind:"snapshot",phase,path,sha256}
+      ])[] |
+      [.kind, .phase, .path, .sha256] | @tsv
+    ' "$summary_file"
+  )
+  [ "$diagnostic_count" -eq 4 ] ||
+    fail "performance host diagnostic inventory is incomplete"
+}
+
 run_preflight() {
   local fixture digest review_fixture local_summary_fixture artifact_reference
+  local performance_fixture performance_invalid
+  local performance_contention_quiet performance_contention_busy
+  local performance_bound_fixture performance_snapshot_start
+  local performance_snapshot_before performance_snapshot_after
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-collect-evidence-preflight.XXXXXX"
   )"
@@ -277,6 +491,167 @@ run_preflight() {
     "dependencies/summary.json" >/dev/null 2>&1; then
     fail "missing local-run artifact fixture was accepted"
   fi
+  performance_fixture="$preflight_root/performance-summary.json"
+  performance_invalid="$preflight_root/performance-summary-invalid.json"
+  jq -n '
+    {
+      hostDiagnostics:{
+        quietHostConfirmed:true,
+        policy:
+          "operator-confirmed-quiet-host-known-contention-invalidates-run",
+        initialContentionAssessment:{
+          passed:true,
+          method:"three-one-second-process-snapshots-two-hit-rejection",
+          samples:3,
+          minimumHits:2,
+          genericCPUPercentThreshold:50,
+          virtualizationCPUPercentThreshold:5,
+          buildOrTestCPUPercentThreshold:10,
+          path:"host-contention-preflight.txt",
+          sha256:("4" * 64)
+        },
+        snapshots:[
+          {phase:"start",path:"host-state-start.txt",sha256:("1" * 64)},
+          {phase:"before-real-lima",path:"host-state-before-real-lima.txt",sha256:("2" * 64)},
+          {phase:"after-real-lima",path:"host-state-after-real-lima.txt",sha256:("3" * 64)}
+        ]
+      },
+      metrics:{
+        referenceWorkload:{
+          methodology:{samples:30,warmups:2},
+          elapsedOverhead:{
+            threshold:10,
+            thresholdPassed:true,
+            confidence:{
+              level:0.95,
+              method:"one-sided-exact-binomial-order-statistic",
+              rank:20,
+              upperBound:8.5,
+              thresholdPassed:true
+            }
+          }
+        }
+      },
+      validation:{
+        referenceMedianUpperConfidenceBoundWithinTenPercent:true,
+        quietHostExplicitlyConfirmed:true,
+        initialHostContentionAssessmentPassed:true,
+        hostDiagnosticsRetained:true
+      }
+    }
+  ' >"$performance_fixture"
+  validate_performance_evidence_contract "$performance_fixture" ||
+    fail "valid performance confidence fixture was rejected"
+  jq '.metrics.referenceWorkload.elapsedOverhead.confidence.upperBound = 12' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "failing performance confidence fixture was accepted"
+  fi
+  jq '.hostDiagnostics.quietHostConfirmed = false' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "unconfirmed performance host fixture was accepted"
+  fi
+  jq '.hostDiagnostics.initialContentionAssessment.passed = false' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "failed performance contention assessment was accepted"
+  fi
+  jq 'del(.validation.initialHostContentionAssessmentPassed)' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "missing performance contention validation was accepted"
+  fi
+  performance_contention_quiet="$preflight_root/host-contention-preflight.txt"
+  performance_contention_busy="$preflight_root/host-contention-busy.txt"
+  {
+    printf '%s\n' \
+      'schema=hideout.performance-host-contention/v1' \
+      'method=three-one-second-process-snapshots-two-hit-rejection' \
+      'samples=3' \
+      'minimum_hits=2' \
+      'generic_cpu_percent_threshold=50' \
+      'virtualization_cpu_percent_threshold=5' \
+      'build_or_test_cpu_percent_threshold=10' \
+      'sample_begin=1' \
+      '101 1 4.9 1.0 qemu-system-aarc' \
+      'sample_end=1' \
+      'sample_begin=2' \
+      '101 1 4.9 1.0 qemu-system-aarc' \
+      'sample_end=2' \
+      'sample_begin=3' \
+      '101 1 4.9 1.0 qemu-system-aarc' \
+      'sample_end=3'
+  } >"$performance_contention_quiet"
+  validate_performance_contention_file "$performance_contention_quiet" ||
+    fail "quiet raw host contention fixture was rejected"
+  sed 's/4[.]9 1[.]0 qemu-system-aarc/12.0 1.0 qemu-system-aarc/' \
+    "$performance_contention_quiet" >"$performance_contention_busy"
+  if validate_performance_contention_file "$performance_contention_busy"; then
+    fail "busy raw host contention fixture was accepted"
+  fi
+  chmod 0600 "$performance_contention_quiet"
+  performance_snapshot_start="$preflight_root/host-state-start.txt"
+  performance_snapshot_before="$preflight_root/host-state-before-real-lima.txt"
+  performance_snapshot_after="$preflight_root/host-state-after-real-lima.txt"
+  printf '%s\n' \
+    'schema=hideout.performance-host-state/v1' \
+    'phase=start' \
+    'top_processes_begin' \
+    'top_processes_end' >"$performance_snapshot_start"
+  printf '%s\n' \
+    'schema=hideout.performance-host-state/v1' \
+    'phase=before-real-lima' \
+    'top_processes_begin' \
+    'top_processes_end' >"$performance_snapshot_before"
+  printf '%s\n' \
+    'schema=hideout.performance-host-state/v1' \
+    'phase=after-real-lima' \
+    'top_processes_begin' \
+    'top_processes_end' >"$performance_snapshot_after"
+  chmod 0600 \
+    "$performance_snapshot_start" \
+    "$performance_snapshot_before" \
+    "$performance_snapshot_after"
+  performance_bound_fixture="$preflight_root/performance-summary-bound.json"
+  jq \
+    --arg contentionSHA "$(sha256_file "$performance_contention_quiet")" \
+    --arg startSHA "$(sha256_file "$performance_snapshot_start")" \
+    --arg beforeSHA "$(sha256_file "$performance_snapshot_before")" \
+    --arg afterSHA "$(sha256_file "$performance_snapshot_after")" '
+      .hostDiagnostics.initialContentionAssessment.sha256 = $contentionSHA |
+      .hostDiagnostics.snapshots[0].sha256 = $startSHA |
+      .hostDiagnostics.snapshots[1].sha256 = $beforeSHA |
+      .hostDiagnostics.snapshots[2].sha256 = $afterSHA |
+      .artifacts = [
+        {
+          path:"host-contention-preflight.txt",
+          sha256:$contentionSHA,
+          mode:"0600"
+        },
+        {path:"host-state-start.txt",sha256:$startSHA,mode:"0600"},
+        {
+          path:"host-state-before-real-lima.txt",
+          sha256:$beforeSHA,
+          mode:"0600"
+        },
+        {
+          path:"host-state-after-real-lima.txt",
+          sha256:$afterSHA,
+          mode:"0600"
+        }
+      ]
+    ' "$performance_fixture" >"$performance_bound_fixture"
+  verify_performance_host_diagnostics \
+    "$performance_bound_fixture" "$preflight_root"
+  jq '.hostDiagnostics.initialContentionAssessment.sha256 = ("f" * 64)' \
+    "$performance_bound_fixture" >"$performance_invalid"
+  if (
+    verify_performance_host_diagnostics \
+      "$performance_invalid" "$preflight_root"
+  ) >/dev/null 2>&1; then
+    fail "mismatched host diagnostic digest fixture was accepted"
+  fi
   gate_completed=1
   printf 'collect-evidence: preflight=passed\n'
 }
@@ -350,25 +725,6 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-
-require_private_evidence_file() {
-  local evidence_file="$1" resolved_dir
-  [ -f "$evidence_file" ] &&
-    [ ! -L "$evidence_file" ] ||
-    fail "missing or unsafe evidence file: $evidence_file"
-  resolved_dir="$(
-    CDPATH='' cd -- "$(dirname -- "$evidence_file")" && pwd -P
-  )"
-  case "$resolved_dir/$(basename -- "$evidence_file")" in
-    "$artifact_root"/*)
-      ;;
-    *)
-      fail "evidence file escapes artifact root: $evidence_file"
-      ;;
-  esac
-  [ "$(normalized_mode "$evidence_file")" = "0600" ] ||
-    fail "evidence file mode is not 0600: $evidence_file"
-}
 
 artifact_ref() {
   local evidence_file="$1" relative
@@ -576,8 +932,8 @@ jq -e '
   .candidateAcceptance == false and
   .inventory.configurationCount == 12 and
   .inventory.moduleCount == 10 and
-  .inventory.invariantCount == 72 and
-  .inventory.propertyCount == 18 and
+  .inventory.invariantCount == 76 and
+  .inventory.propertyCount == 19 and
   .inventory.goTestCount == 12 and
   all(.configurations[]; .result == "passed") and
   .goRefinement.result == "passed" and
@@ -650,6 +1006,9 @@ resolve_source_pointer \
   "hideout.release-candidate-performance-pointer/v1" \
   "hideout.release-candidate-performance/v1"
 performance_summary="$resolved_summary"
+validate_performance_evidence_contract "$performance_summary" ||
+  fail "performance evidence lacks quiet-host contention/confidence proof"
+verify_performance_host_diagnostics "$performance_summary"
 
 resolve_source_pointer \
   "$lima_pointer" \
@@ -1327,8 +1686,8 @@ jq -e \
     (.package.browserConsole.inventory.assets | length) == 8 and
     .formal.configurationCount == 12 and
     .formal.moduleCount == 10 and
-    .formal.invariantCount == 72 and
-    .formal.propertyCount == 18 and
+    .formal.invariantCount == 76 and
+    .formal.propertyCount == 19 and
     .formal.goTestCount == 12 and
     (.gates | length) == 11 and
     ([.gates[].id] | unique | length) == 11 and

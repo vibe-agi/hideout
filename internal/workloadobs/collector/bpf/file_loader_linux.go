@@ -23,10 +23,13 @@ type FileEventReader struct {
 	manifest ArtifactManifest
 	objects  fileObserverObjects
 	reader   *ringbuf.Reader
+	record   ringbuf.Record
 	links    []link.Link
 	hooks    []string
 	metadata map[uint64]fileEventMetadata
 
+	stopOnce  sync.Once
+	stopErr   error
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -40,12 +43,13 @@ type fileEventMetadata struct {
 }
 
 type FileCollectorCounters struct {
-	MatchedEvents    uint64
-	ReservedEvents   uint64
-	RingbufDrops     uint64
-	StateDrops       uint64
-	PathFailures     uint64
-	IdentityFailures uint64
+	MatchedEvents     uint64
+	ReservedEvents    uint64
+	RingbufDrops      uint64
+	StateDrops        uint64
+	StateDegradations uint64
+	PathFailures      uint64
+	IdentityFailures  uint64
 }
 
 func OpenFileEventReader(
@@ -162,25 +166,41 @@ func OpenFileEventReader(
 }
 
 func (reader *FileEventReader) ReadFileEvent() (RawFileEvent, error) {
+	var event RawFileEvent
+	if err := reader.ReadFileEventInto(&event); err != nil {
+		return RawFileEvent{}, err
+	}
+	return event, nil
+}
+
+// ReadFileEventInto reads and resolves one event into caller-owned storage.
+// Callers may reuse that storage only after they have finished consuming the
+// current event.
+func (reader *FileEventReader) ReadFileEventInto(event *RawFileEvent) error {
 	if reader == nil || reader.reader == nil {
-		return RawFileEvent{}, ringbuf.ErrClosed
+		return ringbuf.ErrClosed
 	}
-	record, err := reader.reader.Read()
-	if err != nil {
-		return RawFileEvent{}, err
+	if event == nil {
+		return ErrFileRecord
 	}
-	event, err := DecodeFileEvent(record.RawSample)
-	if err != nil {
-		return RawFileEvent{}, err
+	// ReadInto reuses the largest sample buffer seen by this single-consumer
+	// reader. File-heavy workloads otherwise allocate one RawSample for every
+	// open/read/write event before decoding it into the fixed record shape.
+	if err := reader.reader.ReadInto(&reader.record); err != nil {
+		return err
 	}
-	return reader.resolveFileMetadata(event), nil
+	if err := DecodeFileEventInto(reader.record.RawSample, event); err != nil {
+		return err
+	}
+	reader.resolveFileMetadata(event)
+	return nil
 }
 
 func (reader *FileEventReader) resolveFileMetadata(
-	event RawFileEvent,
-) RawFileEvent {
-	if reader == nil || event.FileKey == 0 {
-		return event
+	event *RawFileEvent,
+) {
+	if reader == nil || event == nil || event.FileKey == 0 {
+		return
 	}
 	if !event.Compact {
 		reader.rememberFileMetadata(event.FileKey, fileEventMetadata{
@@ -189,47 +209,20 @@ func (reader *FileEventReader) resolveFileMetadata(
 			Flags:    event.Flags & fileMetadataFlags(),
 			Path:     event.Path,
 		})
-		return event
+		return
 	}
 	metadata, ok := reader.metadata[event.FileKey]
 	if !ok || !fileMetadataMatchesEvent(metadata, event) {
-		metadata, ok = reader.lookupFileMetadata(event)
-		if ok {
-			reader.rememberFileMetadata(event.FileKey, metadata)
-		}
-	}
-	if !ok || !fileMetadataMatchesEvent(metadata, event) {
+		// The kernel cache intentionally retains only identity/state. A compact
+		// event whose preceding full-path record is absent cannot safely recover
+		// a path from that map, so expose the coverage gap instead of inventing
+		// or reusing stale metadata.
 		event.Flags |= FileFlagPathUnavailable | FileFlagStateUnavailable
 		clear(event.Path[:])
-		return event
+		return
 	}
 	event.Flags |= metadata.Flags
 	event.Path = metadata.Path
-	return event
-}
-
-func (reader *FileEventReader) lookupFileMetadata(
-	event RawFileEvent,
-) (fileEventMetadata, bool) {
-	if reader == nil || reader.objects.ObservedFiles == nil ||
-		event.FileKey == 0 {
-		return fileEventMetadata{}, false
-	}
-	var raw fileObserverFileMetadata
-	if err := reader.objects.ObservedFiles.Lookup(event.FileKey, &raw); err != nil ||
-		raw.Announced > 1 ||
-		raw.Flags&^fileMetadataFlags() != 0 {
-		return fileEventMetadata{}, false
-	}
-	metadata := fileEventMetadata{
-		Device: raw.Device, Inode: raw.Inode,
-		FileType: raw.FileType, Flags: raw.Flags,
-	}
-	for index, value := range raw.Path {
-		metadata.Path[index] = byte(value)
-	}
-	sanitizeFileString(metadata.Path[:])
-	return metadata, fileMetadataMatchesEvent(metadata, event)
 }
 
 func (reader *FileEventReader) rememberFileMetadata(
@@ -252,8 +245,11 @@ func (reader *FileEventReader) rememberFileMetadata(
 
 func fileMetadataMatchesEvent(
 	metadata fileEventMetadata,
-	event RawFileEvent,
+	event *RawFileEvent,
 ) bool {
+	if event == nil {
+		return false
+	}
 	return metadata.Device == event.Device &&
 		metadata.Inode == event.Inode &&
 		metadata.FileType == event.FileType
@@ -270,6 +266,16 @@ func (reader *FileEventReader) SetDeadline(deadline time.Time) {
 	if reader != nil && reader.reader != nil {
 		reader.reader.SetDeadline(deadline)
 	}
+}
+
+// FlushPending drains every record visible at the call boundary and then
+// interrupts ReadFileEventInto with ringbuf.ErrFlushed. It may be called while
+// the collector goroutine is blocked in the ring reader.
+func (reader *FileEventReader) FlushPending() error {
+	if reader == nil || reader.reader == nil {
+		return ringbuf.ErrClosed
+	}
+	return reader.reader.Flush()
 }
 
 func (reader *FileEventReader) AttachedHooks() []string {
@@ -308,6 +314,7 @@ func (reader *FileEventReader) Counters() (FileCollectorCounters, error) {
 			{&result.ReservedEvents, value.ReservedEvents},
 			{&result.RingbufDrops, value.RingbufDrops},
 			{&result.StateDrops, value.StateDrops},
+			{&result.StateDegradations, value.StateDegradations},
 			{&result.PathFailures, value.PathFailures},
 			{&result.IdentityFailures, value.IdentityFailures},
 		}
@@ -326,9 +333,7 @@ func (reader *FileEventReader) Close() error {
 		return nil
 	}
 	reader.closeOnce.Do(func() {
-		if reader.reader != nil {
-			reader.closeErr = errors.Join(reader.closeErr, reader.reader.Close())
-		}
+		reader.closeErr = errors.Join(reader.closeErr, reader.Stop())
 		for index := len(reader.links) - 1; index >= 0; index-- {
 			reader.closeErr = errors.Join(reader.closeErr, reader.links[index].Close())
 		}
@@ -338,6 +343,20 @@ func (reader *FileEventReader) Close() error {
 		)
 	})
 	return reader.closeErr
+}
+
+// Stop interrupts the userspace ring reader without closing the BPF maps used
+// for the final matched/reserved/drop counter receipt.
+func (reader *FileEventReader) Stop() error {
+	if reader == nil {
+		return nil
+	}
+	reader.stopOnce.Do(func() {
+		if reader.reader != nil {
+			reader.stopErr = errors.Join(reader.stopErr, reader.reader.Close())
+		}
+	})
+	return reader.stopErr
 }
 
 func closeFileObserverObjects(objects *fileObserverObjects) error {

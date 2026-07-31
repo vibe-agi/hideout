@@ -240,6 +240,49 @@ func TestKernelFileRecordConvertsExactActorPathBytesAndOutcome(t *testing.T) {
 	}
 }
 
+func TestKernelFileRecordExactHotPathAllocatesOnlyPath(t *testing.T) {
+	boundary, actor := fileTestBoundary(t)
+	anchor := filecollector.ClockAnchor{
+		WallTime:    time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+		MonotonicNS: 1_000,
+	}
+	raw := observerbpf.RawFileEvent{
+		Kind: observerbpf.FileEventRead, CPU: 3,
+		PID: 43, TID: 43, ExecutionPID: 42,
+		UID: 1000, GID: 1001, FileType: observerbpf.FileTypeRegular,
+		Result: 23, CgroupID: boundary.CgroupID, ObserverSequence: 9,
+		ExecSequence: 1, MonotonicNS: 1_500, Bytes: 23,
+		Device: 8, Inode: 9001, MountID: 77,
+	}
+	copy(raw.Path[:], "/workspace/project/main.go")
+	lookup := func(pid uint32, sequence uint64) (string, bool) {
+		return actor.ExecutionID, pid == 42 && sequence == 1
+	}
+	var observed filecollector.Event
+	allocations := testing.AllocsPerRun(1000, func() {
+		var err error
+		observed, err = filecollector.EventFromKernelRecordRef(
+			boundary,
+			anchor,
+			"cov_file_fixture",
+			&raw,
+			lookup,
+			nil,
+		)
+		if err != nil {
+			panic(err)
+		}
+	})
+	if allocations > 1 {
+		t.Fatalf("exact file event hot-path allocations=%f want<=1", allocations)
+	}
+	if observed.Path != "/workspace/project/main.go" ||
+		observed.Kind != filecollector.EventRead ||
+		observed.Limitations == nil || len(observed.Limitations) != 0 {
+		t.Fatalf("event=%+v", observed)
+	}
+}
+
 func TestKernelFileRecordPreservesRenameComponentsAndUnknownOutcome(t *testing.T) {
 	boundary, actor := fileTestBoundary(t)
 	raw := observerbpf.RawFileEvent{

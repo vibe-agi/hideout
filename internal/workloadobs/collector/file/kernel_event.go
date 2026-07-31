@@ -42,11 +42,35 @@ func EventFromKernelRecord(
 	executionLookup ExecutionLookup,
 	classify PathClassifier,
 ) (Event, error) {
+	return EventFromKernelRecordRef(
+		boundary,
+		anchor,
+		coverageID,
+		&raw,
+		executionLookup,
+		classify,
+	)
+}
+
+// EventFromKernelRecordRef converts caller-owned raw storage without copying
+// its fixed path buffers. The live reader reuses that storage only after this
+// synchronous conversion returns.
+func EventFromKernelRecordRef(
+	boundary Boundary,
+	anchor ClockAnchor,
+	coverageID string,
+	raw *observerbpf.RawFileEvent,
+	executionLookup ExecutionLookup,
+	classify PathClassifier,
+) (Event, error) {
 	if err := boundary.Validate(); err != nil {
 		return Event{}, err
 	}
 	if err := anchor.Validate(); err != nil {
 		return Event{}, err
+	}
+	if raw == nil {
+		return Event{}, ErrInvalidEvent
 	}
 	if raw.CgroupID != boundary.CgroupID {
 		return Event{}, ErrBoundaryMismatch
@@ -272,7 +296,10 @@ func validateKernelFileShape(
 	return nil
 }
 
-func validateKernelFileBytes(raw observerbpf.RawFileEvent, dataKind bool) error {
+func validateKernelFileBytes(raw *observerbpf.RawFileEvent, dataKind bool) error {
+	if raw == nil {
+		return ErrKernelFileMetadata
+	}
 	bytesUnavailable := raw.Flags&observerbpf.FileFlagBytesUnavailable != 0
 	switch raw.Kind {
 	case observerbpf.FileEventRead, observerbpf.FileEventWrite:
@@ -293,7 +320,10 @@ func validateKernelFileBytes(raw observerbpf.RawFileEvent, dataKind bool) error 
 	return nil
 }
 
-func kernelFileOutcome(raw observerbpf.RawFileEvent) (workloadtypes.Outcome, error) {
+func kernelFileOutcome(raw *observerbpf.RawFileEvent) (workloadtypes.Outcome, error) {
+	if raw == nil {
+		return workloadtypes.Outcome{}, ErrKernelFileMetadata
+	}
 	unknown := raw.Flags&observerbpf.FileFlagOutcomeUnknown != 0
 	authorization := raw.Flags&observerbpf.FileFlagAuthorizationHook != 0
 	if unknown {
@@ -322,6 +352,22 @@ func kernelFileOutcome(raw observerbpf.RawFileEvent) (workloadtypes.Outcome, err
 }
 
 func kernelFileLimitations(flags uint32) []string {
+	// The common exact-evidence path has no limitations. Avoid a backing array so
+	// every observed open/read/write does not allocate an otherwise empty
+	// eight-element backing array. Return a non-nil empty slice to preserve the
+	// existing JSON representation; exceptional paths retain deterministic
+	// ordering below.
+	const limitationFlags = observerbpf.FileFlagBytesUnavailable |
+		observerbpf.FileFlagIdentityUnavailable |
+		observerbpf.FileFlagOutcomeUnknown |
+		observerbpf.FileFlagPathTruncated |
+		observerbpf.FileFlagPathUnavailable |
+		observerbpf.FileFlagStateUnavailable |
+		observerbpf.FileFlagTargetTruncated |
+		observerbpf.FileFlagTargetUnavailable
+	if flags&limitationFlags == 0 {
+		return []string{}
+	}
 	result := make([]string, 0, 8)
 	if flags&observerbpf.FileFlagBytesUnavailable != 0 {
 		result = append(result, "bytes-unavailable")

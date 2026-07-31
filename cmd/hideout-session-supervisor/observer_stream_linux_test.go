@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -220,6 +221,78 @@ func TestObserverRelayQueueOverflowUsesReservedLossEnvelope(t *testing.T) {
 		loss.Reason != "observer-send-queue-overflow" ||
 		loss.Scope != "guest-observer-transport" {
 		t.Fatalf("loss payload=%+v", loss)
+	}
+}
+
+func TestObserverRelayGracefulCloseDrainsExactTailBeforeGoodbye(t *testing.T) {
+	binding, hello, token := observerRelayFixture(t)
+	relay, err := newObserverRelay(binding, hello, token, observerRelayOptions{
+		Root:                      shortObserverRelayRoot(t),
+		QueueEntries:              2,
+		QueueBytes:                4096,
+		HandshakeWait:             time.Second,
+		PeerUID:                   func(*net.UnixConn) (uint32, error) { return 0, nil },
+		MonotonicNS:               func() (uint64, error) { return 888, nil },
+		SkipRootOwnerCheckForTest: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := dialObserverRelay(t, relay.socketPath)
+	authenticateObserverRelay(t, connection, binding, hello.HelperDigest, token)
+
+	const observations = 64
+	readResult := make(chan error, 1)
+	go func() {
+		defer connection.Close()
+		for index := 1; index <= observations; index++ {
+			envelope, readErr := sessionwire.ReadObserverEnvelope(connection)
+			if readErr != nil {
+				readResult <- readErr
+				return
+			}
+			if envelope.Kind != "file.read" ||
+				envelope.CPU != 1 ||
+				envelope.Sequence != uint64(index) {
+				readResult <- fmt.Errorf("tail envelope %d = %+v", index, envelope)
+				return
+			}
+		}
+		goodbye, readErr := sessionwire.ReadObserverEnvelope(connection)
+		if readErr != nil {
+			readResult <- readErr
+			return
+		}
+		if goodbye.Kind != "collector.goodbye" ||
+			goodbye.CPU != sessionwire.ObserverTransportCPU ||
+			goodbye.Sequence != 1 ||
+			goodbye.MonotonicNS != 888 {
+			readResult <- fmt.Errorf("relay goodbye = %+v", goodbye)
+			return
+		}
+		readResult <- nil
+	}()
+	for index := 1; index <= observations; index++ {
+		if err := relay.EnqueueWait(relayObservation(
+			binding,
+			1,
+			uint64(index),
+			"file.read",
+			`{"path":"/workspace/input"}`,
+		)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := relay.DrainAndClose(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-readResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay tail reader did not observe the drain marker")
 	}
 }
 

@@ -102,14 +102,15 @@ done
   exit 1
 }
 
+scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
 if [ "$preflight_only" -eq 1 ]; then
-  scratch_preflight="$(mktemp -d /tmp/hideout-lima-preflight.XXXXXX)"
+  scratch_preflight="$(mktemp -d "$scratch_parent/hideout-lima-preflight.XXXXXX")"
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
     local exit_status=$?
     case "${scratch_preflight:-}" in
-      /tmp/hideout-lima-preflight.*)
+      "$scratch_parent"/hideout-lima-preflight.*)
         [ ! -d "$scratch_preflight" ] ||
           find "$scratch_preflight" -depth -delete
         ;;
@@ -157,11 +158,11 @@ run_dir="$out/$run_id"
 mkdir -p "$run_dir/lanes"
 chmod 0700 "$run_dir" "$run_dir/lanes"
 
-scratch="$(mktemp -d /tmp/hideout-release-lima.XXXXXX)"
+scratch="$(mktemp -d "$scratch_parent/hideout-release-lima.XXXXXX")"
 cleanup() {
   local exit_status=$?
   case "${scratch:-}" in
-    /tmp/hideout-release-lima.*)
+    "$scratch_parent"/hideout-release-lima.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
       ;;
     *)

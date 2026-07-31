@@ -59,6 +59,25 @@ type observerClockAnchor struct {
 type observerDropCounters struct {
 	Kernel uint64
 	Ring   uint64
+	Local  observerLocalDropCounters
+	File   observerFileCollectorCounters
+}
+
+type observerLocalDropCounters struct {
+	Process uint64 `json:"process"`
+	File    uint64 `json:"file"`
+	Network uint64 `json:"network"`
+	DNS     uint64 `json:"dns"`
+}
+
+type observerFileCollectorCounters struct {
+	MatchedEvents     uint64 `json:"matchedEvents"`
+	ReservedEvents    uint64 `json:"reservedEvents"`
+	RingbufDrops      uint64 `json:"ringbufDrops"`
+	StateDrops        uint64 `json:"stateDrops"`
+	StateDegradations uint64 `json:"stateDegradations"`
+	PathFailures      uint64 `json:"pathFailures"`
+	IdentityFailures  uint64 `json:"identityFailures"`
 }
 
 type observerRecord struct {
@@ -75,6 +94,7 @@ type observerCollectorRuntime interface {
 	Start(context.Context, observerRecordSink)
 	Errors() <-chan error
 	Counters() (observerDropCounters, error)
+	Stop() error
 	Close() error
 }
 
@@ -157,7 +177,7 @@ func runObserver(
 	stdout io.Writer,
 	config observerConfig,
 	dependencies observerDependencies,
-) error {
+) (resultErr error) {
 	if ctx == nil || stdin == nil || stdout == nil {
 		return errors.New("observer endpoints are required")
 	}
@@ -202,7 +222,9 @@ func runObserver(
 	if err != nil {
 		return fmt.Errorf("open observer collectors: %w", err)
 	}
-	defer collectors.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, collectors.Close())
+	}()
 	capabilities := collectors.Capabilities()
 	if err := capabilities.Validate(); err != nil {
 		return err
@@ -239,7 +261,7 @@ func runObserver(
 		writer: stdout, binding: config.Binding,
 		nextByCPU: make(map[uint64]uint64),
 	}
-	writeHeartbeat := func() error {
+	writeHeartbeat := func(final bool) error {
 		monotonicNS, err := dependencies.MonotonicNS()
 		if err != nil {
 			return err
@@ -248,27 +270,44 @@ func runObserver(
 		if err != nil {
 			return fmt.Errorf("read observer drop counters: %w", err)
 		}
-		return emitter.heartbeat(monotonicNS, counters)
+		return emitter.heartbeat(monotonicNS, counters, final)
 	}
-	if err := writeHeartbeat(); err != nil {
+	if err := writeHeartbeat(false); err != nil {
 		return err
 	}
-	collectors.Start(ctx, emitter.record)
+	// Parent cancellation is a request to begin the bounded drain, not authority
+	// for individual read loops to exit ahead of FlushPending. Keep collector
+	// reads on an owner-controlled context until Stop has consumed the ring tail.
+	collectorCtx, cancelCollectors := context.WithCancel(context.Background())
+	defer cancelCollectors()
+	collectors.Start(collectorCtx, emitter.record)
 	ticker := time.NewTicker(config.Heartbeat)
 	defer ticker.Stop()
+	stopAndHeartbeat := func() error {
+		stopErr := collectors.Stop()
+		cancelCollectors()
+		heartbeatErr := writeHeartbeat(true)
+		return errors.Join(stopErr, heartbeatErr)
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return stopAndHeartbeat()
 		case <-shutdown:
-			return nil
+			// Short sessions can finish before the periodic heartbeat. Publish one
+			// final counter snapshot while the BPF maps are still open so kernel
+			// and ring loss cannot disappear merely because the target was fast.
+			return stopAndHeartbeat()
 		case err := <-collectors.Errors():
 			if err != nil {
-				return fmt.Errorf("observer collector failed: %w", err)
+				return errors.Join(
+					fmt.Errorf("observer collector failed: %w", err),
+					stopAndHeartbeat(),
+				)
 			}
 		case <-ticker.C:
-			if err := writeHeartbeat(); err != nil {
-				return err
+			if err := writeHeartbeat(false); err != nil {
+				return errors.Join(err, collectors.Stop())
 			}
 		}
 	}
@@ -382,6 +421,7 @@ func (emitter *observerEmitter) record(observation observerRecord) error {
 func (emitter *observerEmitter) heartbeat(
 	monotonicNS uint64,
 	counters observerDropCounters,
+	final bool,
 ) error {
 	return emitter.write(
 		sessionwire.ObserverControlCPU,
@@ -390,13 +430,19 @@ func (emitter *observerEmitter) heartbeat(
 		nil,
 		func(sequence uint64) ([]byte, error) {
 			return json.Marshal(struct {
-				LatestSequence uint64 `json:"latestSequence"`
-				KernelDropped  uint64 `json:"kernelDropped"`
-				RingDropped    uint64 `json:"ringDropped"`
+				LatestSequence uint64                        `json:"latestSequence"`
+				KernelDropped  uint64                        `json:"kernelDropped"`
+				RingDropped    uint64                        `json:"ringDropped"`
+				Local          observerLocalDropCounters     `json:"local"`
+				File           observerFileCollectorCounters `json:"file"`
+				Final          bool                          `json:"final"`
 			}{
 				LatestSequence: sequence,
 				KernelDropped:  counters.Kernel,
 				RingDropped:    counters.Ring,
+				Local:          counters.Local,
+				File:           counters.File,
+				Final:          final,
 			})
 		},
 	)

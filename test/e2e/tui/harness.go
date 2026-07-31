@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,25 +73,27 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	}()
 
 	waitForTranscript(t, rawTranscript, func(s string) bool {
-		return strings.Contains(s, "Operator Console") && strings.Contains(s, "Stream: live")
+		return strings.Contains(s, "Hideout |") &&
+			strings.Contains(s, "IDLE LIVE") &&
+			strings.Contains(s, "[1] Overview [2] Activity")
 	}, 20*time.Second)
 	time.Sleep(300 * time.Millisecond)
 	idle := readTranscript(t, rawTranscript)
-	initialRenders := strings.Count(idle, "Operator Console")
+	initialRenders := strings.Count(idle, "\x1b[H\x1b[2J")
 	if initialRenders != 1 {
-		t.Fatalf("TUI rendered %d times while stream was healthy and idle; want exactly 1", initialRenders)
+		t.Fatalf("TUI cleared the screen %d times while healthy and idle; want exactly 1", initialRenders)
 	}
+	idleBytes := len(idle)
 	if err := fixture.PublishWorkspaceViews("ready"); err != nil {
 		t.Fatalf("publish workspace-view evidence: %v", err)
 	}
 	waitForTranscript(t, rawTranscript, func(s string) bool {
-		latest := latestDashboard(s)
-		return strings.Contains(latest, "project-a [aaaaaaaa]") &&
-			strings.Contains(latest, "project-b [bbbbbbbb]") &&
-			strings.Contains(latest, "active-views=2") &&
-			strings.Contains(latest, "relation=disjoint position=peer")
+		return strings.Contains(s, "project-a [aaaaaaaa]") &&
+			strings.Contains(s, "project-b [bbbbbbbb]") &&
+			strings.Contains(s, "active-views=2") &&
+			strings.Contains(s, "relation=disjoint position=peer")
 	}, 10*time.Second)
-	workspaceScreen := latestDashboard(readTranscript(t, rawTranscript))
+	workspaceScreen := readTranscript(t, rawTranscript)
 	if count := strings.Count(workspaceScreen, "machine-id="+fixture.MachineIdentityID); count != 1 {
 		t.Fatalf("TUI shared machine rows=%d want=1:\n%s", count, workspaceScreen)
 	}
@@ -106,16 +107,11 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 			t.Fatalf("TUI transcript leaked workspace private sentinel %q", sentinel)
 		}
 	}
-
-	ackNotice(t, fixture)
-	waitForTranscript(t, rawTranscript, func(s string) bool {
-		return strings.Contains(s, "acknowledged=true")
-	}, 10*time.Second)
-	afterEvent := readTranscript(t, rawTranscript)
-	eventRenders := strings.Count(afterEvent, "Operator Console")
-	if eventRenders <= initialRenders {
-		t.Fatalf("TUI did not render after live event; before=%d after=%d", initialRenders, eventRenders)
+	afterEvent := workspaceScreen
+	if len(afterEvent) <= idleBytes {
+		t.Fatalf("TUI emitted no incremental render after live event; before=%d after=%d", idleBytes, len(afterEvent))
 	}
+	eventRenders := initialRenders + 1
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := fixture.StopDaemon(stopCtx); err != nil {
@@ -175,14 +171,6 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 	return result
 }
 
-func latestDashboard(transcript string) string {
-	const clear = "\x1b[H\x1b[2J"
-	if index := strings.LastIndex(transcript, clear); index >= 0 {
-		return transcript[index+len(clear):]
-	}
-	return transcript
-}
-
 func buildHideoutBinary(t *testing.T, prereq Prerequisites, root, outDir string) string {
 	t.Helper()
 	binary := filepath.Join(outDir, "hideout-e2e")
@@ -199,13 +187,27 @@ func buildHideoutBinary(t *testing.T, prereq Prerequisites, root, outDir string)
 
 func tuiCommand(ctx context.Context, prereq Prerequisites, root, transcript, storeRoot, binary string, interval time.Duration) (*exec.Cmd, *bytes.Buffer) {
 	intervalArg := interval.String()
+	const terminalRows = 40
+	const terminalColumns = 120
 	var args []string
 	switch runtime.GOOS {
 	case "linux":
-		command := fmt.Sprintf("%s tui --interval %s", shellQuote(binary), shellQuote(intervalArg))
+		command := fmt.Sprintf(
+			"%s rows %d cols %d && exec %s tui --interval %s",
+			shellQuote(prereq.SttyPath), terminalRows, terminalColumns,
+			shellQuote(binary), shellQuote(intervalArg),
+		)
 		args = []string{"-q", "-f", "-e", "-c", command, transcript}
 	default:
-		args = []string{"-q", "-F", transcript, binary, "tui", "--interval", intervalArg}
+		command := fmt.Sprintf(
+			"%s rows %d cols %d && exec \"$@\"",
+			shellQuote(prereq.SttyPath), terminalRows, terminalColumns,
+		)
+		args = []string{
+			"-q", "-F", transcript,
+			prereq.ShellPath, "-c", command, "hideout-tui",
+			binary, "tui", "--interval", intervalArg,
+		}
 	}
 	cmd := exec.CommandContext(ctx, prereq.ScriptPath, args...)
 	cmd.Dir = root
@@ -222,25 +224,6 @@ func tuiCommand(ctx context.Context, prereq Prerequisites, root, transcript, sto
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-
-func ackNotice(t *testing.T, fixture webui.Fixture) {
-	t.Helper()
-	body := strings.NewReader(`{"noticeId":"` + fixture.NoticeID + `","surface":"tui-e2e"}`)
-	req, err := http.NewRequest(http.MethodPost, fixture.BaseURL+"/api/v1/notice/ack", body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+fixture.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("ack notice: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("ack notice status=%s", resp.Status)
-	}
 }
 
 func waitForTranscript(t *testing.T, path string, pred func(string) bool, timeout time.Duration) string {

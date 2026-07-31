@@ -41,6 +41,8 @@ type NetworkEventReader struct {
 	links       []link.Link
 	hooks       []string
 
+	stopOnce  sync.Once
+	stopErr   error
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -407,6 +409,26 @@ func (reader *NetworkEventReader) SetProxyDeadline(deadline time.Time) {
 	}
 }
 
+// FlushPending drains each active network stream through its read boundary.
+// Flush is safe to invoke concurrently with a blocked ringbuf Read, whereas
+// SetDeadline serializes on the reader lock and cannot be used for shutdown.
+func (reader *NetworkEventReader) FlushPending() error {
+	if reader == nil {
+		return ringbuf.ErrClosed
+	}
+	var result error
+	for _, current := range []*ringbuf.Reader{
+		reader.reader,
+		reader.dnsReader,
+		reader.proxyReader,
+	} {
+		if current != nil {
+			result = errors.Join(result, current.Flush())
+		}
+	}
+	return result
+}
+
 // CompleteProxyCapture prevents any later payload from the socket from being
 // copied into the transient handshake ring. A fresh connect with a reused
 // cookie clears this tombstone in the kernel before recording socket state.
@@ -504,24 +526,7 @@ func (reader *NetworkEventReader) Close() error {
 		return nil
 	}
 	reader.closeOnce.Do(func() {
-		if reader.reader != nil {
-			reader.closeErr = errors.Join(
-				reader.closeErr,
-				reader.reader.Close(),
-			)
-		}
-		if reader.dnsReader != nil {
-			reader.closeErr = errors.Join(
-				reader.closeErr,
-				reader.dnsReader.Close(),
-			)
-		}
-		if reader.proxyReader != nil {
-			reader.closeErr = errors.Join(
-				reader.closeErr,
-				reader.proxyReader.Close(),
-			)
-		}
+		reader.closeErr = errors.Join(reader.closeErr, reader.Stop())
 		for index := len(reader.links) - 1; index >= 0; index-- {
 			reader.closeErr = errors.Join(
 				reader.closeErr,
@@ -534,6 +539,35 @@ func (reader *NetworkEventReader) Close() error {
 		)
 	})
 	return reader.closeErr
+}
+
+// Stop interrupts every userspace ring reader while retaining programs and
+// maps for the final aggregate loss snapshot.
+func (reader *NetworkEventReader) Stop() error {
+	if reader == nil {
+		return nil
+	}
+	reader.stopOnce.Do(func() {
+		if reader.reader != nil {
+			reader.stopErr = errors.Join(
+				reader.stopErr,
+				reader.reader.Close(),
+			)
+		}
+		if reader.dnsReader != nil {
+			reader.stopErr = errors.Join(
+				reader.stopErr,
+				reader.dnsReader.Close(),
+			)
+		}
+		if reader.proxyReader != nil {
+			reader.stopErr = errors.Join(
+				reader.stopErr,
+				reader.proxyReader.Close(),
+			)
+		}
+	})
+	return reader.stopErr
 }
 
 func validCgroupPathSyntax(value string) bool {

@@ -197,23 +197,30 @@ func TestDaemonBacksOffTransientCredentialRotationFailure(t *testing.T) {
 	}
 	auditPath := filepath.Join(d.RuntimeDir(), auditName)
 	deadline := time.Now().Add(time.Second)
-	for credentialRotationAuditCount(t, auditPath) == 0 {
+	for credentialRotationFailureAuditCount(t, auditPath) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("credential rotation failure was not audited")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if got := credentialRotationAuditCount(t, auditPath); got != 1 {
+	if got := credentialRotationFailureAuditCount(t, auditPath); got != 1 {
 		t.Fatalf("credential rotation failures=%d want=1 during initial retry backoff", got)
 	}
 }
 
-func credentialRotationAuditCount(t *testing.T, path string) int {
+func credentialRotationFailureAuditCount(t *testing.T, path string) int {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.Count(string(data), `"action":"daemon.credential.rotate"`)
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, `"action":"daemon.credential.rotate"`) &&
+			strings.Contains(line, `"decision":"deny"`) {
+			count++
+		}
+	}
+	return count
 }

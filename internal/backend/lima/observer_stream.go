@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -54,7 +55,8 @@ type limaObserverStream struct {
 	hello   sessionwire.ObserverHello
 	tracker *sessionwire.ObserverSequenceTracker
 
-	readMu sync.Mutex
+	readMu  sync.Mutex
+	eofSeen atomic.Bool
 
 	waitDone chan struct{}
 	waitMu   sync.Mutex
@@ -237,6 +239,9 @@ func (stream *limaObserverStream) readLocked() (
 ) {
 	envelope, err := sessionwire.ReadObserverEnvelope(stream.stdout)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			stream.eofSeen.Store(true)
+		}
 		return sessionwire.ObservationEnvelope{}, sessionwire.ObserverSequenceResult{}, err
 	}
 	sequence, err := stream.tracker.Observe(envelope)
@@ -326,15 +331,40 @@ func (stream *limaObserverStream) Close() error {
 	}
 	stream.closeOnce.Do(func() {
 		alreadyDone := channelClosed(stream.waitDone)
-		sessionErr := stream.session.Close()
-		if errors.Is(sessionErr, io.EOF) {
-			sessionErr = nil
+		gracefulEOF := stream.eofSeen.Load()
+		var sessionErr error
+		waitCompleted := false
+		if gracefulEOF {
+			select {
+			case <-stream.waitDone:
+				waitCompleted = true
+			case <-time.After(limaObserverShutdownTimeout):
+			}
+		} else {
+			sessionErr = observerSSHSessionCloseError(stream.session.Close())
 		}
 		var timeoutErr error
-		select {
-		case <-stream.waitDone:
-		case <-time.After(limaObserverShutdownTimeout):
-			timeoutErr = errors.New("dedicated observer SSH channel did not stop within the bound")
+		if !waitCompleted {
+			if gracefulEOF {
+				timeoutErr = errors.New(
+					"dedicated observer SSH channel did not report exit after EOF within the bound",
+				)
+				sessionErr = errors.Join(
+					sessionErr,
+					observerSSHSessionCloseError(stream.session.Close()),
+				)
+			}
+			select {
+			case <-stream.waitDone:
+				waitCompleted = true
+			case <-time.After(limaObserverShutdownTimeout):
+			}
+		}
+		if !waitCompleted {
+			timeoutErr = errors.Join(
+				timeoutErr,
+				errors.New("dedicated observer SSH channel did not stop within the bound"),
+			)
 		}
 		select {
 		case <-stream.stderrDone:
@@ -342,12 +372,19 @@ func (stream *limaObserverStream) Close() error {
 			timeoutErr = errors.Join(timeoutErr, errors.New("observer SSH stderr did not close"))
 		}
 		var terminalErr error
-		if alreadyDone {
+		if waitCompleted && (alreadyDone || gracefulEOF) {
 			terminalErr = stream.Err()
 		}
 		stream.closeErr = errors.Join(sessionErr, timeoutErr, terminalErr)
 	})
 	return stream.closeErr
+}
+
+func observerSSHSessionCloseError(err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func (stream *limaObserverStream) closeAfterHandshakeFailure() error {

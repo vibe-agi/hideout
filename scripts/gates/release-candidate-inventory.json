@@ -37,6 +37,7 @@
     "scripts/lib/gate-result.sh",
     "scripts/lib/gate2-concurrent-performance.sh",
     "scripts/lib/gate2-concurrent-sessions.sh",
+    "scripts/lib/homebrew-formula.sh",
     "scripts/lib/reproducible-package.sh",
     "scripts/mutation/045/judge.sh",
     "scripts/mutation/045/run-negative-fixtures.sh",

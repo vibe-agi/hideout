@@ -354,7 +354,7 @@ uninstall/reinstall, and verify the evidence manifest and candidate identity.
 - [x] T153 [US8] Run real Lima concurrent observation, online proxy rotation, crash/retry, loss, cleanup, target-tamper, and attribution gates in `scripts/gates/release-candidate-lima.sh`
 - [x] T154 [US8] Run PTY/TUI and browser first-time, configuration, stale, recovery, parity, accessibility, and injection journeys in `scripts/gates/release-candidate-ui.sh`
 - [x] T155 [US8] Run privacy canary scan over stores, indexes, process listings, Keychain metadata output, APIs, UI, logs, exports, support, and evidence in `scripts/gates/release-candidate-privacy.sh`
-- [x] T156 [US8] Measure reference elapsed overhead, observer CPU/RSS, event/drop rate, daemon/TUI memory, render latency, query latency, quota overshoot, attach, and interactive freshness in `scripts/gates/release-candidate-performance.sh`
+- [ ] T156 [US8] Measure reference elapsed overhead, observer CPU/RSS, event/drop rate, daemon/TUI memory, render latency, query latency, quota overshoot, attach, and interactive freshness in `scripts/gates/release-candidate-performance.sh`
 - [x] T157 [US8] Tune and freeze aggregation windows, storage quotas, and risk thresholds from measured evidence in `internal/workloadobs/defaults.go` and `docs/activity-observation.md`
 - [x] T158 [US8] Build an exact clean package and verify binary/helper/schema/UI/runtime digests and reproducible manifest in `scripts/release/build-candidate.sh`
 - [x] T159 [US8] Test clean install, old-version upgrade with intentionally discarded old data, Keychain migration guidance, current-version reinstall, and uninstall absence in `scripts/release/test-package-lifecycle.sh`

@@ -56,7 +56,9 @@ type observerRelay struct {
 	done              chan struct{}
 	closeOnce         sync.Once
 	closing           atomic.Bool
+	draining          atomic.Bool
 	lossSequence      atomic.Uint64
+	closeErr          error
 
 	connMu sync.Mutex
 	conn   *net.UnixConn
@@ -339,8 +341,10 @@ func (relay *observerRelay) serve(expectedToken sessionwire.ObserverStreamToken)
 	relay.conn = authenticated
 	relay.connMu.Unlock()
 	relay.authenticatedOnce.Do(func() { close(relay.authenticated) })
-	if err := relay.stream(authenticated); err != nil && !relay.closing.Load() {
-		relay.setError(err)
+	if err := relay.stream(authenticated); err != nil {
+		if !relay.closing.Load() || relay.draining.Load() {
+			relay.setError(err)
+		}
 	}
 	_ = authenticated.Close()
 }
@@ -386,13 +390,36 @@ func (relay *observerRelay) Enqueue(envelope sessionwire.ObservationEnvelope) er
 	if relay == nil {
 		return errors.New("observer relay is nil")
 	}
-	var encoded bytes.Buffer
-	if err := sessionwire.WriteObserverEnvelope(&encoded, envelope); err != nil {
+	frame, err := encodeObserverRelayFrame(envelope)
+	if err != nil {
 		return err
 	}
-	frame := encoded.Bytes()
 	defer clear(frame)
 	return relay.queue.Enqueue(frame)
+}
+
+func encodeObserverRelayFrame(
+	envelope sessionwire.ObservationEnvelope,
+) ([]byte, error) {
+	var encoded bytes.Buffer
+	if err := sessionwire.WriteObserverEnvelope(&encoded, envelope); err != nil {
+		return nil, err
+	}
+	return encoded.Bytes(), nil
+}
+
+func (relay *observerRelay) EnqueueWait(
+	envelope sessionwire.ObservationEnvelope,
+) error {
+	if relay == nil || relay.queue == nil {
+		return errors.New("observer relay is unavailable")
+	}
+	frame, err := encodeObserverRelayFrame(envelope)
+	if err != nil {
+		return err
+	}
+	defer clear(frame)
+	return relay.queue.EnqueueWait(frame, relay.done)
 }
 
 func (relay *observerRelay) stream(connection *net.UnixConn) error {
@@ -414,10 +441,18 @@ func (relay *observerRelay) stream(connection *net.UnixConn) error {
 			}
 			continue
 		}
+		if relay.draining.Load() && relay.queue.SealedAndDrained() {
+			return relay.writeGoodbye(connection)
+		}
 		select {
 		case <-relay.queue.Notify():
 		case <-relay.queue.Done():
-			return nil
+			if !relay.draining.Load() {
+				return nil
+			}
+			// Seal closes Done before the consumer is necessarily empty. Loop
+			// through Dequeue/LossSummary once more and require an exact drain
+			// receipt before publishing collector.goodbye.
 		}
 	}
 }
@@ -459,6 +494,36 @@ func (relay *observerRelay) writeLoss(
 	}
 	if err := sessionwire.WriteObserverEnvelope(connection, envelope); err != nil {
 		return fmt.Errorf("write observer relay loss: %w", err)
+	}
+	return nil
+}
+
+func (relay *observerRelay) writeGoodbye(connection *net.UnixConn) error {
+	monotonicNS, err := relay.options.MonotonicNS()
+	if err != nil || monotonicNS == 0 {
+		return errors.New("observe monotonic observer transport completion time")
+	}
+	payload, err := json.Marshal(struct {
+		Reason string `json:"reason"`
+	}{Reason: "relay-drained"})
+	if err != nil {
+		return err
+	}
+	defer clear(payload)
+	envelope := sessionwire.ObservationEnvelope{
+		Schema:             sessionwire.ObservationSchema,
+		Owner:              relay.binding.Owner,
+		SessionID:          relay.binding.SessionID,
+		CgroupID:           relay.binding.CgroupID,
+		ObserverGeneration: relay.binding.ObserverGeneration,
+		CPU:                sessionwire.ObserverTransportCPU,
+		Sequence:           relay.lossSequence.Add(1),
+		MonotonicNS:        monotonicNS,
+		Kind:               "collector.goodbye",
+		Payload:            payload,
+	}
+	if err := sessionwire.WriteObserverEnvelope(connection, envelope); err != nil {
+		return fmt.Errorf("write observer relay completion: %w", err)
 	}
 	return nil
 }
@@ -510,36 +575,83 @@ func (relay *observerRelay) setError(err error) {
 }
 
 func (relay *observerRelay) Close() error {
+	return relay.close(false, observerRelayShutdownWait)
+}
+
+// DrainAndClose seals the producer boundary, lets the authenticated stream
+// write every already-admitted frame and reserved loss summary, and only then
+// tears down the connection. A bounded timeout falls back to the destructive
+// close path and is returned as an explicit shutdown failure.
+func (relay *observerRelay) DrainAndClose(timeout time.Duration) error {
+	return relay.close(true, timeout)
+}
+
+func (relay *observerRelay) close(drain bool, timeout time.Duration) error {
 	if relay == nil {
 		return nil
 	}
-	var closeErr error
+	if timeout <= 0 {
+		timeout = observerRelayShutdownWait
+	}
 	relay.closeOnce.Do(func() {
 		relay.closing.Store(true)
 		relay.token.Destroy()
-		relay.queue.Close()
+		if drain {
+			relay.draining.Store(true)
+			relay.queue.Seal()
+		} else {
+			relay.queue.Close()
+		}
 		listenerErr := relay.listener.Close()
 		if errors.Is(listenerErr, net.ErrClosed) {
 			listenerErr = nil
 		}
-		closeErr = errors.Join(closeErr, listenerErr)
-		relay.connMu.Lock()
-		if relay.conn != nil {
-			connectionErr := relay.conn.Close()
-			if errors.Is(connectionErr, net.ErrClosed) {
-				connectionErr = nil
+		relay.closeErr = errors.Join(relay.closeErr, listenerErr)
+		if !drain {
+			relay.connMu.Lock()
+			if relay.conn != nil {
+				connectionErr := relay.conn.Close()
+				if errors.Is(connectionErr, net.ErrClosed) {
+					connectionErr = nil
+				}
+				relay.closeErr = errors.Join(relay.closeErr, connectionErr)
 			}
-			closeErr = errors.Join(closeErr, connectionErr)
+			relay.connMu.Unlock()
 		}
-		relay.connMu.Unlock()
+		timer := time.NewTimer(timeout)
 		select {
 		case <-relay.done:
-		case <-time.After(observerRelayShutdownWait):
-			closeErr = errors.Join(closeErr, errors.New("observer relay did not stop within the bound"))
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			relay.closeErr = errors.Join(
+				relay.closeErr,
+				errors.New("observer relay did not drain within the bound"),
+			)
+			relay.queue.Close()
+			relay.connMu.Lock()
+			if relay.conn != nil {
+				connectionErr := relay.conn.Close()
+				if errors.Is(connectionErr, net.ErrClosed) {
+					connectionErr = nil
+				}
+				relay.closeErr = errors.Join(relay.closeErr, connectionErr)
+			}
+			relay.connMu.Unlock()
+			select {
+			case <-relay.done:
+			case <-time.After(observerRelayShutdownWait):
+				relay.closeErr = errors.Join(
+					relay.closeErr,
+					errors.New("observer relay did not stop after forced close"),
+				)
+			}
 		}
+		relay.queue.Close()
 		if err := os.Remove(relay.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			closeErr = errors.Join(closeErr, err)
+			relay.closeErr = errors.Join(relay.closeErr, err)
 		}
 	})
-	return errors.Join(closeErr, relay.Err())
+	return errors.Join(relay.closeErr, relay.Err())
 }

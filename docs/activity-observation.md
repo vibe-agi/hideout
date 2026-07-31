@@ -90,10 +90,14 @@ the action.
 
 ## Measurement basis
 
-T156 retained the current dirty-tree measurement at
+T156 retained a historical dirty-tree diagnostic at
 `.artifacts/045/performance/run-20260731T054812Z-47419/summary.json`
 with summary SHA-256
 `9363f509e48fbba8f18807e7753922364db5c631bee102be945f8bd1eb9a445e`.
+It used seven recorded real-Lima samples and no longer satisfies the current
+release evidence contract, which requires thirty recorded samples plus warmup.
+A quiet-host rerun remains mandatory; the values below are diagnostic rather
+than candidate-acceptance evidence.
 The reference is a mixed developer workload: one process parses 288 MiB of
 source payload across 96 files, performs four in-memory SHA-256 passes per
 parsed record, and writes bounded derived metadata. This lengthens the measured

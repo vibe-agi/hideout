@@ -14,6 +14,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/vibe-agi/hideout/internal/profile"
+	"github.com/vibe-agi/hideout/internal/sessionwire"
 	workloadcoverage "github.com/vibe-agi/hideout/internal/workloadobs/coverage"
 	workloadtypes "github.com/vibe-agi/hideout/internal/workloadobs/types"
 )
@@ -145,11 +146,16 @@ func TestFormalFoundationConfigurationsMatchSharedConstantsAndInvariants(t *test
 		"INVARIANT NoFalseAvailableCoverage",
 		"INVARIANT KnownLossIsExplicit",
 		"INVARIANT RetentionGapIsExplicit",
+		"INVARIANT RelayReceiptNeverLeadsAdmission",
+		"INVARIANT GracefulDrainIsComplete",
+		"INVARIANT ForcedCloseIsExplicit",
+		"INVARIANT SessionCompletionRequiresPersistedTerminalReceipt",
 		"INVARIANT CleanupCompletionRequiresAbsence",
 		"PROPERTY ExactOwnerPrune",
 		"PROPERTY ExactOwnerCleanup",
 		"PROPERTY RetentionEventuallyCompletes",
 		"PROPERTY CleanupEventuallyCompletes",
+		"PROPERTY TargetExitEventuallyPersistsAndCompletes",
 	})
 }
 
@@ -356,6 +362,42 @@ func TestWorkloadObservationProductionTypesRefineFoundationModel(t *testing.T) {
 		len(recordsByOwner[disposable.Key()]) != 1 ||
 		recordsByOwner[disposable.Key()][0].ID != otherBefore.ID {
 		t.Fatalf("ExactOwnerCleanup refinement crossed owners: %+v", recordsByOwner)
+	}
+
+	queue, err := sessionwire.NewObserverQueueWithByteLimit(2, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queue.Close()
+	firstFrame := []byte("first-admitted-frame")
+	secondFrame := []byte("second-admitted-frame")
+	if err := queue.EnqueueWait(firstFrame, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.EnqueueWait(secondFrame, nil); err != nil {
+		t.Fatal(err)
+	}
+	queue.Seal()
+	if err := queue.Enqueue([]byte("post-seal-frame")); !errors.Is(err, sessionwire.ErrObserverQueueClosed) {
+		t.Fatalf("sealed observer queue accepted a new frame: %v", err)
+	}
+	for index, expected := range [][]byte{firstFrame, secondFrame} {
+		actual, ok := queue.Dequeue()
+		if !ok || !bytes.Equal(actual, expected) {
+			t.Fatalf(
+				"graceful observer drain frame %d = %q, %t; want %q",
+				index,
+				actual,
+				ok,
+				expected,
+			)
+		}
+	}
+	if tail, ok := queue.Dequeue(); ok {
+		t.Fatalf("graceful observer drain retained an unexpected tail: %q", tail)
+	}
+	if !queue.SealedAndDrained() {
+		t.Fatal("graceful observer drain lacks an exact sealed receipt")
 	}
 }
 

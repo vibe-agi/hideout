@@ -2,6 +2,7 @@ package liveconsole
 
 import (
 	"errors"
+	"slices"
 	"sort"
 
 	"github.com/vibe-agi/hideout/internal/manager"
@@ -22,19 +23,28 @@ func NewStateFromOperatorSnapshot(snapshot manager.OperatorSnapshot) (State, err
 		overview.Sessions = append(overview.Sessions, manager.SessionSummary{
 			ID: value.ID, EnvironmentID: value.EnvironmentID, Profile: value.Profile,
 			State: session.OwnerState(value.State), CommandClass: value.Command,
-			StartedAt: value.StartedAt,
+			StartedAt: value.StartedAt, WorkspaceID: value.WorkspaceID,
+			WorkspaceLabel: value.WorkspaceLabel, GuestWorkspace: value.GuestWorkspace,
+			WorkspaceTransport:     value.WorkspaceTransport,
+			WorkspaceViewState:     value.WorkspaceViewState,
+			WorkspaceRelations:     slices.Clone(value.WorkspaceRelations),
+			WorkspaceCleanupStatus: value.WorkspaceCleanupStatus,
+			WorkspaceBlockerCode:   value.WorkspaceBlockerCode,
 		})
 	}
 	for _, value := range snapshot.Environments {
 		projection := manager.EnvironmentSummary{
 			ID: value.ID, Name: value.Name, Profile: value.Profile,
 			Backend: value.Backend, Status: value.Status,
-			Workspace: value.Workspace, InstanceName: value.InstanceName,
-			LastSessionID:        value.LastSessionID,
-			LastCommand:          value.LastCommand,
-			ActiveSessions:       value.ActiveSessions,
-			ActiveWorkspaceViews: value.ActiveWorkspaceViews,
-			OwnerHealth:          value.OwnerHealth, CreatedAt: value.CreatedAt,
+			Mode: value.Mode, SharedSlot: value.SharedSlot,
+			MachineIdentityID: value.MachineIdentityID,
+			Workspace:         value.Workspace, InstanceName: value.InstanceName,
+			LastSessionID:          value.LastSessionID,
+			LastCommand:            value.LastCommand,
+			ActiveSessions:         value.ActiveSessions,
+			ActiveWorkspaceViews:   value.ActiveWorkspaceViews,
+			WorkspaceProviderState: value.WorkspaceProviderState,
+			OwnerHealth:            value.OwnerHealth, CreatedAt: value.CreatedAt,
 		}
 		if !value.LastStartedAt.IsZero() {
 			started := value.LastStartedAt

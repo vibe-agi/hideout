@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -76,6 +77,9 @@ type activitySession struct {
 	lastKind        string
 
 	heartbeatByCPU      map[uint64]activityHeartbeatCounters
+	finalReceiptInvalid bool
+	goodbyeAccepted     bool
+	transportClosed     bool
 	supervisorDropped   map[string]uint64
 	accountedDropped    map[string]uint64
 	observerClosed      bool
@@ -93,6 +97,9 @@ type activitySession struct {
 type activityHeartbeatCounters struct {
 	kernel uint64
 	ring   uint64
+	local  activityLocalDropCounters
+	file   activityFileCollectorCounters
+	final  bool
 }
 
 type activitySessionSnapshot struct {
@@ -106,10 +113,14 @@ type activitySessionSnapshot struct {
 	DroppedBytes        uint64
 	KernelDropped       uint64
 	RingDropped         uint64
+	LocalDropped        activityLocalDropCounters
+	FileCollector       activityFileCollectorCounters
 	Invalid             uint64
 	LastKind            string
 	ObserverClosed      bool
 	SessionClosed       bool
+	GoodbyeAccepted     bool
+	TransportClosed     bool
 	RedactionGeneration string
 	Coverage            map[string]coverage.Summary
 	Intervals           map[string][]workloadtypes.CoverageInterval
@@ -123,9 +134,33 @@ type activityLossPayload struct {
 }
 
 type activityHeartbeatPayload struct {
-	LatestSequence uint64 `json:"latestSequence"`
-	KernelDropped  uint64 `json:"kernelDropped"`
-	RingDropped    uint64 `json:"ringDropped"`
+	LatestSequence uint64                        `json:"latestSequence"`
+	KernelDropped  uint64                        `json:"kernelDropped"`
+	RingDropped    uint64                        `json:"ringDropped"`
+	Local          activityLocalDropCounters     `json:"local"`
+	File           activityFileCollectorCounters `json:"file"`
+	Final          bool                          `json:"final"`
+}
+
+type activityLocalDropCounters struct {
+	Process uint64 `json:"process"`
+	File    uint64 `json:"file"`
+	Network uint64 `json:"network"`
+	DNS     uint64 `json:"dns"`
+}
+
+type activityFileCollectorCounters struct {
+	MatchedEvents     uint64 `json:"matchedEvents"`
+	ReservedEvents    uint64 `json:"reservedEvents"`
+	RingbufDrops      uint64 `json:"ringbufDrops"`
+	StateDrops        uint64 `json:"stateDrops"`
+	StateDegradations uint64 `json:"stateDegradations"`
+	PathFailures      uint64 `json:"pathFailures"`
+	IdentityFailures  uint64 `json:"identityFailures"`
+}
+
+type activityGoodbyePayload struct {
+	Reason string `json:"reason"`
 }
 
 type activityCoveragePayload struct {
@@ -991,6 +1026,23 @@ func (session *activitySession) prepareEnvelopeLocked(
 	if session.ready == nil || session.tracker == nil {
 		return preparedActivityObservation{}, false, errActivityBoundaryNotReady
 	}
+	if session.goodbyeAccepted {
+		return preparedActivityObservation{}, false,
+			session.rejectInvalidLocked(
+				errors.New("observer emitted a frame after transport completion"),
+				coverage.ReasonInvalidFrame,
+			)
+	}
+	if session.finalReceiptSeenLocked() &&
+		(envelope.CPU != sessionwire.ObserverTransportCPU ||
+			(envelope.Kind != "collector.loss" &&
+				envelope.Kind != "collector.goodbye")) {
+		return preparedActivityObservation{}, false,
+			session.rejectInvalidLocked(
+				errors.New("observer emitted a frame after its final collector receipt"),
+				coverage.ReasonInvalidFrame,
+			)
+	}
 	if err := envelope.Validate(); err != nil {
 		return preparedActivityObservation{}, false,
 			session.rejectInvalidLocked(err, coverage.ReasonInvalidFrame)
@@ -1051,6 +1103,12 @@ func (session *activitySession) prepareEnvelopeLocked(
 			return preparedActivityObservation{}, false,
 				session.rejectInvalidLocked(err, coverage.ReasonInvalidFrame)
 		}
+	case "collector.goodbye":
+		if err := session.validateGoodbyePayloadLocked(envelope); err != nil {
+			return preparedActivityObservation{}, false,
+				session.rejectInvalidLocked(err, coverage.ReasonInvalidFrame)
+		}
+		session.goodbyeAccepted = true
 	case "coverage.changed":
 		if err := session.ingestCoverageLocked(envelope); err != nil {
 			return preparedActivityObservation{}, false,
@@ -1120,6 +1178,9 @@ func (session *activitySession) validateObservationPayloadLocked(
 	case "collector.heartbeat":
 		_, err := session.validatedHeartbeatPayloadLocked(envelope)
 		return preparedActivityObservation{}, err
+	case "collector.goodbye":
+		return preparedActivityObservation{},
+			session.validateGoodbyePayloadLocked(envelope)
 	case "coverage.changed":
 		_, err := session.validatedCoveragePayloadLocked(envelope)
 		return preparedActivityObservation{}, err
@@ -1283,16 +1344,155 @@ func (session *activitySession) ingestHeartbeatLocked(
 	session.heartbeatByCPU[envelope.CPU] = activityHeartbeatCounters{
 		kernel: payload.KernelDropped,
 		ring:   payload.RingDropped,
+		local:  payload.Local,
+		file:   payload.File,
+		final:  payload.Final,
 	}
 	session.kernelDropped = saturatingAdd(session.kernelDropped, kernelDelta)
 	session.ringDropped = saturatingAdd(session.ringDropped, ringDelta)
-	dropped := saturatingAdd(kernelDelta, ringDelta)
-	if dropped == 0 {
-		return nil
+	var result error
+	fileDegradationEvidence := fileCollectorDegradationEvidence(
+		payload.File,
+		previous.file,
+	)
+	if len(fileDegradationEvidence) != 0 {
+		result = errors.Join(result, session.markSubsystemDegradedLocked(
+			workloadtypes.SubsystemFile,
+			coverage.ReasonCollectorPartial,
+			fileDegradationEvidence,
+		))
 	}
-	return session.markAllLossLocked(coverage.ReasonRingOverflow, dropped, []workloadtypes.CoverageEvidence{
-		{Code: "heartbeat-drop-counter"},
-	})
+	localDelta := activityLocalDropCounters{
+		Process: payload.Local.Process - previous.local.Process,
+		File:    payload.Local.File - previous.local.File,
+		Network: payload.Local.Network - previous.local.Network,
+		DNS:     payload.Local.DNS - previous.local.DNS,
+	}
+	fileStateDelta := payload.File.StateDrops - previous.file.StateDrops
+	fileRingDelta := payload.File.RingbufDrops - previous.file.RingbufDrops
+	markKnownLoss := func(
+		subsystem string,
+		dropped uint64,
+		codes ...string,
+	) {
+		if dropped == 0 {
+			return
+		}
+		evidence := []workloadtypes.CoverageEvidence{{
+			Code:  "heartbeat-drop-counter",
+			Value: strconv.FormatUint(dropped, 10),
+		}}
+		for _, code := range codes {
+			evidence = append(evidence, workloadtypes.CoverageEvidence{Code: code})
+		}
+		result = errors.Join(result, session.markSubsystemLossLocked(
+			subsystem,
+			coverage.ReasonRingOverflow,
+			dropped,
+			evidence,
+		))
+	}
+	markKnownLoss(
+		workloadtypes.SubsystemProcess,
+		localDelta.Process,
+		"process-normalization-drop",
+	)
+	fileLossCodes := make([]string, 0, 3)
+	if localDelta.File > 0 {
+		fileLossCodes = append(fileLossCodes, "file-normalization-drop")
+	}
+	if fileStateDelta > 0 {
+		fileLossCodes = append(fileLossCodes, "file-state-drop")
+	}
+	if fileRingDelta > 0 {
+		fileLossCodes = append(fileLossCodes, "file-ringbuf-drop")
+	}
+	markKnownLoss(
+		workloadtypes.SubsystemFile,
+		saturatingAdd(
+			saturatingAdd(localDelta.File, fileStateDelta),
+			fileRingDelta,
+		),
+		fileLossCodes...,
+	)
+	markKnownLoss(
+		workloadtypes.SubsystemNetwork,
+		localDelta.Network,
+		"network-normalization-drop",
+	)
+	markKnownLoss(
+		workloadtypes.SubsystemDNS,
+		localDelta.DNS,
+		"dns-normalization-drop",
+	)
+
+	knownKernelDelta := saturatingAdd(
+		saturatingAdd(localDelta.Process, localDelta.File),
+		saturatingAdd(
+			saturatingAdd(localDelta.Network, localDelta.DNS),
+			fileStateDelta,
+		),
+	)
+	unknownKernelDelta := uint64(0)
+	if kernelDelta > knownKernelDelta {
+		unknownKernelDelta = kernelDelta - knownKernelDelta
+	}
+	unknownRingDelta := uint64(0)
+	if ringDelta > fileRingDelta {
+		unknownRingDelta = ringDelta - fileRingDelta
+	}
+	unknownDropped := saturatingAdd(unknownKernelDelta, unknownRingDelta)
+	if unknownDropped == 0 {
+		return result
+	}
+	evidence := []workloadtypes.CoverageEvidence{{
+		Code:  "heartbeat-drop-counter",
+		Value: strconv.FormatUint(unknownDropped, 10),
+	}}
+	if unknownKernelDelta > 0 {
+		evidence = append(evidence, workloadtypes.CoverageEvidence{
+			Code:  "kernel-drop-counter",
+			Value: strconv.FormatUint(unknownKernelDelta, 10),
+		})
+	}
+	if unknownRingDelta > 0 {
+		evidence = append(evidence, workloadtypes.CoverageEvidence{
+			Code:  "ring-drop-counter",
+			Value: strconv.FormatUint(unknownRingDelta, 10),
+		})
+	}
+	return errors.Join(result, session.markAllLossLocked(
+		coverage.ReasonRingOverflow,
+		unknownDropped,
+		evidence,
+	))
+}
+
+func fileCollectorDegradationEvidence(
+	current, previous activityFileCollectorCounters,
+) []workloadtypes.CoverageEvidence {
+	result := make([]workloadtypes.CoverageEvidence, 0, 3)
+	appendDelta := func(code string, value, prior uint64) {
+		if value <= prior {
+			return
+		}
+		result = append(result, workloadtypes.CoverageEvidence{
+			Code:  code,
+			Value: strconv.FormatUint(value-prior, 10),
+		})
+	}
+	appendDelta(
+		"file-state-degradation",
+		current.StateDegradations,
+		previous.StateDegradations,
+	)
+	appendDelta("file-path-failure", current.PathFailures, previous.PathFailures)
+	appendDelta(
+		"file-identity-failure",
+		current.IdentityFailures,
+		previous.IdentityFailures,
+	)
+	return result
 }
 
 func (session *activitySession) validatedHeartbeatPayloadLocked(
@@ -1306,10 +1506,105 @@ func (session *activitySession) validatedHeartbeatPayloadLocked(
 		return activityHeartbeatPayload{}, errors.New("observer heartbeat sequence does not match its envelope")
 	}
 	previous := session.heartbeatByCPU[envelope.CPU]
-	if payload.KernelDropped < previous.kernel || payload.RingDropped < previous.ring {
+	if payload.KernelDropped < previous.kernel ||
+		payload.RingDropped < previous.ring ||
+		!activityLocalCountersNondecreasing(payload.Local, previous.local) ||
+		!activityFileCountersNondecreasing(payload.File, previous.file) {
 		return activityHeartbeatPayload{}, errors.New("observer heartbeat loss counter rolled back")
 	}
+	if payload.File.MatchedEvents < payload.File.ReservedEvents ||
+		payload.File.RingbufDrops >
+			payload.File.MatchedEvents-payload.File.ReservedEvents {
+		return activityHeartbeatPayload{}, errors.New("observer file collector counters are inconsistent")
+	}
+	localDropped := saturatingAdd(
+		saturatingAdd(payload.Local.Process, payload.Local.File),
+		saturatingAdd(payload.Local.Network, payload.Local.DNS),
+	)
+	detailedKernelDropped := saturatingAdd(localDropped, payload.File.StateDrops)
+	if detailedKernelDropped > payload.KernelDropped ||
+		payload.File.RingbufDrops > payload.RingDropped {
+		return activityHeartbeatPayload{}, errors.New("observer detailed counters exceed aggregate loss")
+	}
+	localDelta := saturatingAdd(
+		saturatingAdd(
+			payload.Local.Process-previous.local.Process,
+			payload.Local.File-previous.local.File,
+		),
+		saturatingAdd(
+			payload.Local.Network-previous.local.Network,
+			payload.Local.DNS-previous.local.DNS,
+		),
+	)
+	detailedKernelDelta := saturatingAdd(
+		localDelta,
+		payload.File.StateDrops-previous.file.StateDrops,
+	)
+	fileRingDelta := payload.File.RingbufDrops - previous.file.RingbufDrops
+	if (previous.kernel != math.MaxUint64 &&
+		detailedKernelDelta > payload.KernelDropped-previous.kernel) ||
+		(previous.ring != math.MaxUint64 &&
+			fileRingDelta > payload.RingDropped-previous.ring) {
+		return activityHeartbeatPayload{}, errors.New("observer detailed loss delta exceeds aggregate delta")
+	}
 	return payload, nil
+}
+
+func activityLocalCountersNondecreasing(
+	current, previous activityLocalDropCounters,
+) bool {
+	return current.Process >= previous.Process &&
+		current.File >= previous.File &&
+		current.Network >= previous.Network &&
+		current.DNS >= previous.DNS
+}
+
+func activityFileCountersNondecreasing(
+	current, previous activityFileCollectorCounters,
+) bool {
+	return current.MatchedEvents >= previous.MatchedEvents &&
+		current.ReservedEvents >= previous.ReservedEvents &&
+		current.RingbufDrops >= previous.RingbufDrops &&
+		current.StateDrops >= previous.StateDrops &&
+		current.StateDegradations >= previous.StateDegradations &&
+		current.PathFailures >= previous.PathFailures &&
+		current.IdentityFailures >= previous.IdentityFailures
+}
+
+func (session *activitySession) validateGoodbyePayloadLocked(
+	envelope sessionwire.ObservationEnvelope,
+) error {
+	var payload activityGoodbyePayload
+	if err := decodeActivityPayload(envelope.Payload, &payload); err != nil {
+		return err
+	}
+	if envelope.CPU != sessionwire.ObserverTransportCPU ||
+		payload.Reason != "relay-drained" {
+		return errors.New("observer transport completion payload is invalid")
+	}
+	if !session.exactFinalReceiptLocked() {
+		return errors.New("observer transport completion lacks an exact final collector receipt")
+	}
+	return nil
+}
+
+func (session *activitySession) finalReceiptSeenLocked() bool {
+	if session == nil {
+		return false
+	}
+	latest, ok := session.heartbeatByCPU[sessionwire.ObserverControlCPU]
+	return ok && latest.final
+}
+
+func (session *activitySession) exactFinalReceiptLocked() bool {
+	if session == nil || session.finalReceiptInvalid {
+		return false
+	}
+	latest, ok := session.heartbeatByCPU[sessionwire.ObserverControlCPU]
+	return ok && latest.final &&
+		latest.file.MatchedEvents >= latest.file.ReservedEvents &&
+		latest.file.RingbufDrops ==
+			latest.file.MatchedEvents-latest.file.ReservedEvents
 }
 
 func (session *activitySession) ingestCoverageLocked(
@@ -1380,6 +1675,9 @@ func (session *activitySession) rejectInvalidLocked(
 	cause error,
 	reason string,
 ) error {
+	if session.finalReceiptSeenLocked() {
+		session.finalReceiptInvalid = true
+	}
 	session.invalid = saturatingAdd(session.invalid, 1)
 	transitionErr := session.markAllLossLocked(reason, 1, []workloadtypes.CoverageEvidence{
 		{Code: "observation-rejected"},
@@ -1396,12 +1694,24 @@ func (session *activitySession) observerExited(cause error) error {
 	if session.observerClosed || session.sessionClosed {
 		return nil
 	}
-	session.observerClosed = true
-	session.clearRedactionSnapshotLocked()
 	if session.ready == nil {
+		session.observerClosed = true
+		session.clearRedactionSnapshotLocked()
 		return nil
 	}
 	var result error
+	if cause == nil {
+		if !session.goodbyeAccepted || !session.exactFinalReceiptLocked() {
+			result = errors.Join(result, session.rejectInvalidLocked(
+				errors.New("observer transport closed without its authenticated drain receipt"),
+				coverage.ReasonInvalidFrame,
+			))
+		} else {
+			session.transportClosed = true
+		}
+	}
+	session.observerClosed = true
+	session.clearRedactionSnapshotLocked()
 	if reason, evidence, invalid, account := observerExitLoss(cause); account {
 		if invalid {
 			session.invalid = saturatingAdd(session.invalid, 1)
@@ -1412,11 +1722,17 @@ func (session *activitySession) observerExited(cause error) error {
 			[]workloadtypes.CoverageEvidence{{Code: evidence}},
 		))
 	}
+	terminalReason := coverage.ReasonDaemonDisconnected
+	terminalEvidence := "observer-stream-ended"
+	if session.transportClosed {
+		terminalReason = coverage.ReasonTargetExited
+		terminalEvidence = "observer-drain-receipt"
+	}
 	result = errors.Join(result, session.markAllStateLocked(
 		workloadtypes.CoverageUnavailable,
-		coverage.ReasonDaemonDisconnected,
+		terminalReason,
 		0,
-		[]workloadtypes.CoverageEvidence{{Code: "observer-stream-ended"}},
+		[]workloadtypes.CoverageEvidence{{Code: terminalEvidence}},
 	))
 	return result
 }
@@ -1498,7 +1814,15 @@ func (session *activitySession) sessionExited(
 		} else {
 			result = errors.Join(result, session.reconcileCompletionLocked(completion))
 			if completion.CleanupProved {
-				reason = coverage.ReasonTargetExited
+				if session.goodbyeAccepted && session.transportClosed &&
+					session.exactFinalReceiptLocked() {
+					reason = coverage.ReasonTargetExited
+				} else {
+					result = errors.Join(result, session.rejectInvalidLocked(
+						errors.New("activity cleanup lacks an authenticated observer drain receipt"),
+						coverage.ReasonInvalidFrame,
+					))
+				}
 			}
 		}
 	}
@@ -1506,9 +1830,38 @@ func (session *activitySession) sessionExited(
 		workloadtypes.CoverageUnavailable,
 		reason,
 		0,
-		[]workloadtypes.CoverageEvidence{{Code: reason}},
+		session.terminalCollectorEvidenceLocked(reason),
 	))
 	return result
+}
+
+func (session *activitySession) terminalCollectorEvidenceLocked(
+	reason string,
+) []workloadtypes.CoverageEvidence {
+	evidence := []workloadtypes.CoverageEvidence{{Code: reason}}
+	latest, ok := session.heartbeatByCPU[sessionwire.ObserverControlCPU]
+	if !ok {
+		return evidence
+	}
+	appendCounter := func(code string, value uint64) {
+		evidence = append(evidence, workloadtypes.CoverageEvidence{
+			Code: code, Value: strconv.FormatUint(value, 10),
+		})
+	}
+	appendCounter("kernel-dropped", latest.kernel)
+	appendCounter("ring-dropped", latest.ring)
+	appendCounter("local-process-dropped", latest.local.Process)
+	appendCounter("local-file-dropped", latest.local.File)
+	appendCounter("local-network-dropped", latest.local.Network)
+	appendCounter("local-dns-dropped", latest.local.DNS)
+	appendCounter("file-matched-events", latest.file.MatchedEvents)
+	appendCounter("file-reserved-events", latest.file.ReservedEvents)
+	appendCounter("file-ringbuf-drops", latest.file.RingbufDrops)
+	appendCounter("file-state-drops", latest.file.StateDrops)
+	appendCounter("file-state-degradations", latest.file.StateDegradations)
+	appendCounter("file-path-failures", latest.file.PathFailures)
+	appendCounter("file-identity-failures", latest.file.IdentityFailures)
+	return evidence
 }
 
 func (session *activitySession) clearRedactionSnapshotLocked() {
@@ -1673,6 +2026,43 @@ func (session *activitySession) markSubsystemLossLocked(
 	return session.persistTimelineLocked(timeline)
 }
 
+func (session *activitySession) markSubsystemDegradedLocked(
+	subsystem, reason string,
+	evidence []workloadtypes.CoverageEvidence,
+) error {
+	if len(evidence) == 0 {
+		return errors.New("activity degradation evidence is required")
+	}
+	timeline := session.timelines[subsystem]
+	if timeline == nil {
+		return errActivityObservationInvalid
+	}
+	current, err := timeline.Current()
+	if err != nil {
+		return err
+	}
+	// An unavailable interval is already the stronger claim. Preserve it and
+	// retain the detailed collector totals in the terminal receipt instead of
+	// accidentally upgrading coverage while the subsystem is unavailable.
+	if current.State == workloadtypes.CoverageUnavailable {
+		return nil
+	}
+	session.ordinal = saturatingAdd(session.ordinal, 1)
+	_, err = timeline.Transition(coverage.Transition{
+		State: workloadtypes.CoveragePartial, Reason: reason,
+		CollectorGeneration: session.preparation.ObserverGeneration,
+		Evidence: append(
+			[]workloadtypes.CoverageEvidence(nil),
+			evidence...,
+		),
+		Sequence: session.ordinal, At: session.now(),
+	})
+	if err != nil {
+		return err
+	}
+	return session.persistTimelineLocked(timeline)
+}
+
 func (session *activitySession) markAllStateLocked(
 	state, reason string,
 	dropped uint64,
@@ -1712,9 +2102,15 @@ func (session *activitySession) snapshot() activitySessionSnapshot {
 		RingDropped: session.ringDropped, Invalid: session.invalid,
 		LastKind: session.lastKind, ObserverClosed: session.observerClosed,
 		SessionClosed:       session.sessionClosed,
+		GoodbyeAccepted:     session.goodbyeAccepted,
+		TransportClosed:     session.transportClosed,
 		RedactionGeneration: session.redactionGeneration,
 		Coverage:            make(map[string]coverage.Summary, len(session.timelines)),
 		Intervals:           make(map[string][]workloadtypes.CoverageInterval, len(session.timelines)),
+	}
+	if heartbeat, ok := session.heartbeatByCPU[sessionwire.ObserverControlCPU]; ok {
+		snapshot.LocalDropped = heartbeat.local
+		snapshot.FileCollector = heartbeat.file
 	}
 	if session.ready != nil {
 		boundary := session.ready.Boundary

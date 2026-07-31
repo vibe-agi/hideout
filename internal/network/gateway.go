@@ -787,11 +787,9 @@ func (entry *gatewayEntry) handle(client net.Conn, route *gatewayRoute) {
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(gatewayHandshakeTimeout))
 	reader := bufio.NewReader(client)
-	if err := authenticateGatewayClient(reader, client, entry.username, entry.password); err != nil {
-		entry.authenticationFailed.Add(1)
+	if err := entry.authenticateClient(reader, client); err != nil {
 		return
 	}
-	entry.authenticated.Add(1)
 	command, target, err := readSOCKSRequest(reader)
 	if err != nil {
 		entry.requestRejected.Add(1)
@@ -855,14 +853,18 @@ func (entry *gatewayEntry) shutdown() error {
 	return result
 }
 
-func authenticateGatewayClient(reader *bufio.Reader, client net.Conn, username, password string) error {
+func (entry *gatewayEntry) authenticateClient(reader *bufio.Reader, client net.Conn) error {
+	reject := func(err error) error {
+		entry.authenticationFailed.Add(1)
+		return err
+	}
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(reader, header); err != nil || header[0] != 0x05 || header[1] == 0 {
-		return errors.New("invalid SOCKS greeting")
+		return reject(errors.New("invalid SOCKS greeting"))
 	}
 	methods := make([]byte, int(header[1]))
 	if _, err := io.ReadFull(reader, methods); err != nil {
-		return err
+		return reject(err)
 	}
 	supported := false
 	for _, method := range methods {
@@ -871,35 +873,38 @@ func authenticateGatewayClient(reader *bufio.Reader, client net.Conn, username, 
 		}
 	}
 	if !supported {
+		err := reject(errors.New("SOCKS authentication required"))
 		_, _ = client.Write([]byte{0x05, 0xff})
-		return errors.New("SOCKS authentication required")
-	}
-	if _, err := client.Write([]byte{0x05, 0x02}); err != nil {
 		return err
 	}
+	if _, err := client.Write([]byte{0x05, 0x02}); err != nil {
+		return reject(err)
+	}
 	if version, err := reader.ReadByte(); err != nil || version != 0x01 {
-		return errors.New("invalid SOCKS authentication request")
+		return reject(errors.New("invalid SOCKS authentication request"))
 	}
 	userLength, err := reader.ReadByte()
 	if err != nil || userLength == 0 {
-		return errors.New("invalid SOCKS username")
+		return reject(errors.New("invalid SOCKS username"))
 	}
 	user := make([]byte, int(userLength))
 	if _, err := io.ReadFull(reader, user); err != nil {
-		return err
+		return reject(err)
 	}
 	passwordLength, err := reader.ReadByte()
 	if err != nil || passwordLength == 0 {
-		return errors.New("invalid SOCKS password")
+		return reject(errors.New("invalid SOCKS password"))
 	}
 	secret := make([]byte, int(passwordLength))
 	if _, err := io.ReadFull(reader, secret); err != nil {
+		return reject(err)
+	}
+	if string(user) != entry.username || string(secret) != entry.password {
+		err := reject(errors.New("SOCKS authentication failed"))
+		_, _ = client.Write([]byte{0x01, 0x01})
 		return err
 	}
-	if string(user) != username || string(secret) != password {
-		_, _ = client.Write([]byte{0x01, 0x01})
-		return errors.New("SOCKS authentication failed")
-	}
+	entry.authenticated.Add(1)
 	_, err = client.Write([]byte{0x01, 0x00})
 	return err
 }

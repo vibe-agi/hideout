@@ -88,6 +88,22 @@ func TestOpenVerifiedObserverHelperRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestObserverEndpointCloseNormalizesOnlyAlreadyClosedEndpoints(t *testing.T) {
+	for _, err := range []error{
+		os.ErrClosed,
+		io.ErrClosedPipe,
+		&os.PathError{Op: "close", Path: "|0", Err: os.ErrClosed},
+	} {
+		if got := observerEndpointCloseError(err); got != nil {
+			t.Fatalf("already-closed endpoint error=%v", got)
+		}
+	}
+	sentinel := errors.New("close failed")
+	if got := observerEndpointCloseError(sentinel); !errors.Is(got, sentinel) {
+		t.Fatalf("real close failure=%v want %v", got, sentinel)
+	}
+}
+
 func TestObserverSessionRegistersBeforeReadyAndAbortsExactBoundary(t *testing.T) {
 	spec := observerSupervisorStart(t)
 	backend := newFakeSessionCgroupBackend()

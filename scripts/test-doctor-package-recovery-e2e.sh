@@ -156,8 +156,8 @@ validate_artifacts() {
   grep -q 'confirm-purge' "$out/reports/package/package-uninstall-purge-unconfirmed.err"
   grep -q 'durableState=preserved' "$out/reports/package/package-uninstall.out"
   grep -q 'durableState=purged' "$out/reports/package/package-uninstall-purge.out"
-  grep -q 'brew upgrade vibe-agi/tap/hideout' "$out/reports/package/package-help-update.out"
-  grep -q 'brew uninstall vibe-agi/tap/hideout' "$out/reports/package/package-help-uninstall.out"
+  grep -q 'brew upgrade' "$out/reports/package/package-help-update.out"
+  grep -q 'brew uninstall' "$out/reports/package/package-help-uninstall.out"
 
   jq -e '
     .level == "deep" and

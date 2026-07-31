@@ -119,6 +119,7 @@ func TestEmbeddedFileObserverArtifactManifestAndObjectAreExact(t *testing.T) {
 	for _, name := range []string{
 		"file_observation_events",
 		"observed_files",
+		"file_metadata_scratch",
 		"mmap_lengths",
 		"file_counters",
 		"exec_sequences",
@@ -127,6 +128,12 @@ func TestEmbeddedFileObserverArtifactManifestAndObjectAreExact(t *testing.T) {
 		if spec.Maps[name] == nil {
 			t.Fatalf("spec map %q is missing", name)
 		}
+	}
+	if observed := spec.Maps["observed_files"]; observed.ValueSize != 32 || observed.MaxEntries != 65536 {
+		t.Fatalf("observed_files layout=%+v", observed)
+	}
+	if scratch := spec.Maps["file_metadata_scratch"]; scratch.ValueSize != 552 || scratch.MaxEntries != 1 {
+		t.Fatalf("file_metadata_scratch layout=%+v", scratch)
 	}
 	if loadedManifest.ObjectSHA256 != manifest.ObjectSHA256 {
 		t.Fatalf("loadedManifest=%+v", loadedManifest)
