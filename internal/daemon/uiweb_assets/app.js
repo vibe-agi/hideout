@@ -1385,6 +1385,7 @@
       const review = element("button");
       review.type = "button";
       review.className = "primary";
+      review.dataset.action = "review-config-draft";
       review.textContent =
         configTransaction.stage === root.Config.STAGE_PLANNING ?
           "Hideout is planning…" :

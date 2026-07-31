@@ -836,11 +836,12 @@ async function main() {
        )`
     );
     await evalValue(cdp, `(() => {
-      const button = Array.from(
-        document.querySelectorAll("#configBody button")
-      ).find((candidate) =>
-        candidate.textContent === "Review draft with Manager"
+      const button = document.querySelector(
+        '#configBody [data-action="review-config-draft"]'
       );
+      if (!button || button.disabled) {
+        throw new Error("configuration draft review is unavailable");
+      }
       button.click();
       return true;
     })()`);
