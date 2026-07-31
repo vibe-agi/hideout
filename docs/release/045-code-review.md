@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found eleven required
-issues. All eleven are resolved in the current worktree, and their focused regression
+The final source, security, and operator-UX review found twelve required
+issues. All twelve are resolved in the current worktree, and their focused regression
 judges pass. There is no open required review finding.
 
 This is not yet a release-candidate attestation. The reviewed tree is still the
@@ -18,9 +18,9 @@ publication-absence proof before readiness can be claimed.
 | Field | Value |
 | --- | --- |
 | Review date | 2026-07-31 |
-| Base `HEAD` | `3374af80686cf24b417d21fb8f2a37f71d75e51c` |
+| Base `HEAD` | `772fdff7b8e7b34b5184f256641c6a27f28efd9c` |
 | Branch | `master` |
-| Worktree at review close | Dirty; four tracked files changed, 14 additions, 11 deletions, and no untracked files |
+| Worktree at review close | Dirty; four tracked files changed, 182 additions, 81 deletions, and no untracked files |
 | Candidate status | Not a candidate; exact clean identity remains T163/T171 |
 | Publication authority | None; no remote tag, GitHub Release, Homebrew mutation, or package publication is authorized |
 
@@ -53,7 +53,9 @@ The review followed authority and data flow rather than package order:
    publication boundaries; and
 10. ran static analysis over production and test code, then reviewed every
     unreachable symbol, ignored error, ineffective assignment, and suspicious
-    simplification rather than suppressing the diagnostics.
+    simplification rather than suppressing the diagnostics; and
+11. audited nested release-gate failure propagation, structured failure
+    evidence, benchmark duration, and fixed-threshold enforcement.
 
 Severity means:
 
@@ -79,6 +81,7 @@ Severity means:
 | CR045-009 | Low | Ordinary help, TUI, and WebUI paths exposed control-plane terms such as Manager projection, authoritative re-seed, incarnation, generation, and capability without explaining the action a user should take. Protocol fields were correct, but the primary experience obscured current state, VM ownership, secret version, and recovery. | CLI/TUI/WebUI operator experience | Keep API/schema/flag compatibility, but render ordinary actions as verified state, refresh, exact VM instance, secret version, collector run, setting, and Hideout review. Preserve advanced identifiers only where needed for exact diagnostics or copyable flags. | Focused app/TUI/WebUI suites, help and golden tests, Markdown lint, control-text safety tests, and installed-candidate quickstart validation. |
 | CR045-010 | Low | Nine broker success-path tests resolved `example.com` through the machine's external DNS before reaching the behavior under test. A resolver outage could therefore report a product regression or block a release even though production correctly failed closed. | Broker test maintainers | Inject one deterministic public test address only into the named success-path tests. Keep DNS-policy and local-address rejection tests on their existing resolver paths so production resolution and fail-closed boundaries remain covered. | `go test ./internal/broker -count=1`, `go test -p 4 ./... -count=1`, and full no-limit static analysis all pass without external DNS. |
 | CR045-011 | Low | The real Chrome configuration journey selected the review action by obsolete user-facing copy, so the intended terminology improvement made the test dereference a missing button before it could exercise plan/apply. | WebUI E2E maintainers | Give the existing review button a non-authoritative stable `data-action` hook and select that hook in the browser proof, while retaining explicit missing/disabled failure checks. | `scripts/gates/browser-console.sh`, `scripts/gates/release-candidate-ui.sh`, and `scripts/gates/release-candidate-privacy.sh` all pass with the real browser, Keychain, and Lima lanes. |
+| CR045-012 | Medium | The real-Lima reference workload was too short for a stable fixed 10% comparison on a busy developer host. On threshold failure it exited before writing structured result evidence, and the nested Gate 2 caller discarded the nonzero status and wrote its own passed receipt. The outer performance aggregate still rejected the missing/failed evidence, so this could not publish a false-green candidate, but the child receipt and diagnosis were wrong. | Release performance gate maintainers | Increase bytes processed without increasing observation event count, finalize structured evidence before enforcing the immutable threshold, execute the nested gate in a fresh fail-closed Bash child, explicitly propagate the reference result, surface its terminal reason, and add passing/failing preflight fixtures. | Performance preflight positive/negative fixtures and nested-child `errexit` self-test, Bash syntax and ShellCheck, a real-Lima diagnostic measuring 6.840% reference median overhead for the 1.125 GiB workload, and the final exact performance aggregate. |
 
 ## Closure terminology and false-success audit
 

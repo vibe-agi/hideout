@@ -94,7 +94,8 @@ validate_summary() {
 }
 
 for required_command in \
-  awk bash cmp find git go jq limactl node perl ps rg sed shasum ssh stat; do
+  awk bash cmp find git go grep jq limactl node perl ps rg sed shasum sort ssh \
+  stat tail tr wc; do
   require_command "$required_command"
 done
 
@@ -170,6 +171,70 @@ if [ "$preflight_only" -eq 1 ]; then
   if validate_summary "$summary_contract_negative" "preflight-tree" 1; then
     printf \
       'release-candidate-performance: negative evidence size was accepted\n' \
+      >&2
+    exit 1
+  fi
+  reference_baseline="$preflight_root/reference-baseline.txt"
+  reference_observed="$preflight_root/reference-observed.txt"
+  reference_result="$preflight_root/reference-result.json"
+  reference_failure_log="$preflight_root/reference-failure.log"
+  printf '%s\n' 100 101 102 >"$reference_baseline"
+  printf '%s\n' 105 106 107 >"$reference_observed"
+  # shellcheck source=scripts/lib/gate2-concurrent-performance.sh
+  . "$repo_root/scripts/lib/gate2-concurrent-performance.sh"
+  gate2_034_finalize_reference_result \
+    "$reference_result" "$reference_baseline" "$reference_observed" \
+    3 1 1000 "$(printf '0%.0s' {1..64})" >/dev/null
+  jq -e '
+    .elapsedOverhead.thresholdPassed == true and
+    .elapsedOverhead.threshold == 10 and
+    (.baseline.samples | length) == 3 and
+    (.observed.samples | length) == 3
+  ' "$reference_result" >/dev/null || {
+    printf \
+      'release-candidate-performance: passing reference fixture was rejected\n' \
+      >&2
+    exit 1
+  }
+  printf '%s\n' 120 121 122 >"$reference_observed"
+  if gate2_034_finalize_reference_result \
+    "$reference_result" "$reference_baseline" "$reference_observed" \
+    3 1 1000 "$(printf '0%.0s' {1..64})" \
+    >"$reference_failure_log" 2>&1; then
+    printf \
+      'release-candidate-performance: failing reference fixture was accepted\n' \
+      >&2
+    exit 1
+  fi
+  if ! jq -e '
+      .elapsedOverhead.thresholdPassed == false and
+      .elapsedOverhead.threshold == 10 and
+      (.baseline.samples | length) == 3 and
+      (.observed.samples | length) == 3
+    ' "$reference_result" >/dev/null ||
+    ! grep -Fq 'reference median overhead' "$reference_failure_log"; then
+    printf \
+      'release-candidate-performance: failing reference evidence was not retained\n' \
+      >&2
+    exit 1
+  fi
+  nested_errexit_marker="$preflight_root/nested-errexit-continued"
+  set +e
+  bash -c '
+    set -e
+    nested_failure() {
+      false
+      : >"$1"
+    }
+    nested_failure "$1"
+  ' release-performance-preflight "$nested_errexit_marker" \
+    >"$preflight_root/nested-errexit.log" 2>&1
+  nested_errexit_status=$?
+  set -e
+  if [ "$nested_errexit_status" -eq 0 ] ||
+    [ -e "$nested_errexit_marker" ]; then
+    printf \
+      'release-candidate-performance: nested child failure was not fail-closed\n' \
       >&2
     exit 1
   fi
@@ -520,8 +585,13 @@ concurrent_log="$run_dir/lanes/lima-concurrent.log"
 printf \
   'release-candidate-performance: stage=real-lima-attach-reference samples=%d warmups=%d\n' \
   "$attach_samples" "$attach_warmups"
-(
+set +e
+bash -c '
   set -euo pipefail
+  repo_root="$1"
+  concurrent_dir="$2"
+  attach_samples="$3"
+  attach_warmups="$4"
   # shellcheck source=scripts/lib/gate2-concurrent-sessions.sh
   . "$repo_root/scripts/lib/gate2-concurrent-sessions.sh"
   # shellcheck source=scripts/lib/gate2-concurrent-performance.sh
@@ -531,7 +601,20 @@ printf \
   gate2_concurrent_sessions_run \
     "$repo_root" "$concurrent_dir" \
     "$attach_samples" "$attach_warmups"
-) >"$concurrent_log" 2>&1
+' hideout-performance-child \
+  "$repo_root" "$concurrent_dir" "$attach_samples" "$attach_warmups" \
+  >"$concurrent_log" 2>&1
+concurrent_status=$?
+set -e
+if [ "$concurrent_status" -ne 0 ]; then
+  concurrent_failure="$(sed -n '$p' "$concurrent_log")"
+  [ -n "$concurrent_failure" ] ||
+    concurrent_failure="no terminal reason was recorded"
+  printf \
+    'release-candidate-performance: real-Lima attach/reference failed: %s (log=%s)\n' \
+    "$concurrent_failure" "$concurrent_log" >&2
+  exit 1
+fi
 concurrent_result="$concurrent_dir/result.json"
 concurrent_performance="$concurrent_dir/logs/performance.json"
 jq -e \

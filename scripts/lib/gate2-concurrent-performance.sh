@@ -17,6 +17,82 @@ gate2_034_values_json() {
   jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' "$1"
 }
 
+gate2_034_finalize_reference_result() {
+  local output="$1" baseline_values="$2" observed_values="$3"
+  local samples="$4" warmups="$5" reference_uid="$6"
+  local reference_digest="$7"
+  local baseline_median baseline_p95 observed_median observed_p95
+  local overhead_percent
+
+  baseline_median="$(gate2_034_percentile "$baseline_values" 50)"
+  baseline_p95="$(gate2_034_percentile "$baseline_values" 95)"
+  observed_median="$(gate2_034_percentile "$observed_values" 50)"
+  observed_p95="$(gate2_034_percentile "$observed_values" 95)"
+  overhead_percent="$(
+    awk -v baseline="$baseline_median" -v observed="$observed_median" '
+      BEGIN {
+        if (baseline <= 0) exit 1
+        printf "%.3f\n", ((observed-baseline)/baseline)*100
+      }
+    '
+  )"
+  jq -n \
+    --arg unit "milliseconds" \
+    --arg clock "guest-python-time.monotonic_ns" \
+    --arg order "alternating-baseline-observed" \
+    --arg percentile "nearest-rank-ceiling" \
+    --arg uid "$reference_uid" \
+    --arg digest "$reference_digest" \
+    --argjson samples "$samples" \
+    --argjson warmups "$warmups" \
+    --argjson baselineSamples "$(gate2_034_values_json "$baseline_values")" \
+    --argjson observedSamples "$(gate2_034_values_json "$observed_values")" \
+    --argjson baselineMedian "$baseline_median" \
+    --argjson baselineP95 "$baseline_p95" \
+    --argjson observedMedian "$observed_median" \
+    --argjson observedP95 "$observed_p95" \
+    --argjson overhead "$overhead_percent" \
+    '{
+      methodology: {
+        workload:
+          "single Python process parses and hashes 1.125GiB across 96 source files and writes bounded derived metadata",
+        samples: $samples,
+        warmups: $warmups,
+        sampleOrder: $order,
+        clock: $clock,
+        percentile: $percentile,
+        uid: ($uid | tonumber),
+        outputSHA256: $digest
+      },
+      baseline: {
+        unit: $unit,
+        samples: $baselineSamples,
+        median: $baselineMedian,
+        p95: $baselineP95
+      },
+      observed: {
+        unit: $unit,
+        samples: $observedSamples,
+        median: $observedMedian,
+        p95: $observedP95
+      },
+      elapsedOverhead: {
+        unit: "percent",
+        median: $overhead,
+        threshold: 10,
+        thresholdPassed: ($overhead <= 10)
+      }
+    }' >"$output"
+
+  awk -v value="$overhead_percent" \
+    'BEGIN {exit !(value <= 10.0)}' || {
+    echo \
+      "concurrent-sessions performance: reference median overhead ${overhead_percent}% exceeds 10%" \
+      >&2
+    return 1
+  }
+}
+
 gate2_034_reference_workload() {
   cat <<'EOF'
 work_root="$(mktemp -d /var/tmp/hideout-reference.XXXXXX)"
@@ -45,7 +121,7 @@ import sys
 root = sys.argv[1]
 source = os.path.join(root, "source")
 os.mkdir(source)
-payload = "x" * 32768
+payload = "x" * 131072
 for index in range(96):
     path = os.path.join(source, f"unit-{index:03d}.json")
     with open(path, "w", encoding="utf-8") as handle:
@@ -150,8 +226,7 @@ gate2_034_run_reference_workload() {
   local observed_output observed_errors baseline_ms observed_ms
   local baseline_uid observed_uid baseline_digest observed_digest
   local reference_uid="" reference_digest=""
-  local baseline_values observed_values baseline_median baseline_p95
-  local observed_median observed_p95 overhead_percent
+  local baseline_values observed_values
 
   workload="$(gate2_034_reference_workload)"
   baseline_values="$out/logs/performance-reference-baseline-ms.txt"
@@ -211,73 +286,10 @@ gate2_034_run_reference_workload() {
     i=$((i + 1))
   done
 
-  baseline_median="$(gate2_034_percentile "$baseline_values" 50)"
-  baseline_p95="$(gate2_034_percentile "$baseline_values" 95)"
-  observed_median="$(gate2_034_percentile "$observed_values" 50)"
-  observed_p95="$(gate2_034_percentile "$observed_values" 95)"
-  overhead_percent="$(
-    awk -v baseline="$baseline_median" -v observed="$observed_median" '
-      BEGIN {
-        if (baseline <= 0) exit 1
-        printf "%.3f\n", ((observed-baseline)/baseline)*100
-      }
-    '
-  )"
-  awk -v value="$overhead_percent" \
-    'BEGIN {exit !(value <= 10.0)}' || {
-    echo \
-      "concurrent-sessions performance: reference median overhead ${overhead_percent}% exceeds 10%" \
-      >&2
-    return 1
-  }
-
-  jq -n \
-    --arg unit "milliseconds" \
-    --arg clock "guest-python-time.monotonic_ns" \
-    --arg order "alternating-baseline-observed" \
-    --arg percentile "nearest-rank-ceiling" \
-    --arg uid "$reference_uid" \
-    --arg digest "$reference_digest" \
-    --argjson samples "$samples" \
-    --argjson warmups "$warmups" \
-    --argjson baselineSamples "$(gate2_034_values_json "$baseline_values")" \
-    --argjson observedSamples "$(gate2_034_values_json "$observed_values")" \
-    --argjson baselineMedian "$baseline_median" \
-    --argjson baselineP95 "$baseline_p95" \
-    --argjson observedMedian "$observed_median" \
-    --argjson observedP95 "$observed_p95" \
-    --argjson overhead "$overhead_percent" \
-    '{
-      methodology: {
-        workload:
-          "single Python process parses and hashes 288MiB across 96 source files and writes bounded derived metadata",
-        samples: $samples,
-        warmups: $warmups,
-        sampleOrder: $order,
-        clock: $clock,
-        percentile: $percentile,
-        uid: ($uid | tonumber),
-        outputSHA256: $digest
-      },
-      baseline: {
-        unit: $unit,
-        samples: $baselineSamples,
-        median: $baselineMedian,
-        p95: $baselineP95
-      },
-      observed: {
-        unit: $unit,
-        samples: $observedSamples,
-        median: $observedMedian,
-        p95: $observedP95
-      },
-      elapsedOverhead: {
-        unit: "percent",
-        median: $overhead,
-        threshold: 10,
-        thresholdPassed: ($overhead <= 10)
-      }
-    }' >"$out/logs/performance-reference.json"
+  gate2_034_finalize_reference_result \
+    "$out/logs/performance-reference.json" \
+    "$baseline_values" "$observed_values" \
+    "$samples" "$warmups" "$reference_uid" "$reference_digest"
 }
 
 gate2_034_prepare_fixture() {
@@ -428,6 +440,9 @@ exec sleep infinity
       "$candidate_hideout" "$candidate_store" "$candidate_profile" \
       "$workspace" "$candidate_bin/hideout-shim-linux-$arch" \
       "$candidate_bin/hideout-hostfsd-linux-$arch" "$samples" "$warmups"
+    jq -e '.elapsedOverhead.thresholdPassed == true' \
+      "$out/logs/performance-reference.json" >/dev/null ||
+      return 1
     reference_evidence="$(cat "$out/logs/performance-reference.json")"
     extended_performance=true
   fi
