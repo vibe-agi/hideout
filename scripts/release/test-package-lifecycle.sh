@@ -99,6 +99,42 @@ file_bytes() {
     stat -c '%s' "$1" 2>/dev/null
 }
 
+download_public_package() {
+  local url="$1" destination="$2" log_path="$3"
+  local status=0
+  case "$url" in
+    https://github.com/vibe-agi/hideout/releases/download/*) ;;
+    *)
+      printf 'package-lifecycle: old package URL is not the public release path\n' >&2
+      return 2
+      ;;
+  esac
+  curl \
+    --fail \
+    --location \
+    --proto '=https' \
+    --tlsv1.2 \
+    --connect-timeout 30 \
+    --max-time 300 \
+    --retry 3 \
+    --retry-all-errors \
+    --retry-delay 1 \
+    --silent \
+    --show-error \
+    --output "$destination" \
+    "$url" \
+    >"$log_path" 2>&1 || status=$?
+  if [ "$status" -eq 0 ]; then
+    return 0
+  fi
+  rm -f "$destination"
+  printf \
+    'package-lifecycle: old package download failed after bounded retries (curl exit=%d)\n' \
+    "$status" >&2
+  sed -n '1,80p' "$log_path" >&2
+  return "$status"
+}
+
 safe_relative_path() {
   case "$1" in
     "" | /* | . | .. | ../* | */.. | */../* | *$'\n'* | *$'\r'* | *$'\t'*)
@@ -619,6 +655,41 @@ if [ "$preflight_only" -eq 1 ]; then
     exit 1
   fi
 
+  curl() {
+    printf '%s\n' "$@" >"$preflight_root/curl-args"
+    printf 'synthetic TLS handshake failure\n' >&2
+    return 35
+  }
+  download_status=0
+  download_public_package \
+    "https://github.com/vibe-agi/hideout/releases/download/v0.0.0-fixture/fixture.tar.gz" \
+    "$preflight_root/fixture.tar.gz" \
+    "$preflight_root/curl.log" \
+    >"$preflight_root/download.out" \
+    2>"$preflight_root/download.err" || download_status=$?
+  unset -f curl
+  [ "$download_status" -eq 35 ] ||
+    {
+      printf 'package-lifecycle: TLS failure fixture lost its exact status\n' >&2
+      exit 1
+    }
+  grep -Fx -- '--retry-all-errors' "$preflight_root/curl-args" >/dev/null &&
+    grep -Fx -- '--connect-timeout' "$preflight_root/curl-args" >/dev/null &&
+    grep -Fx -- '--max-time' "$preflight_root/curl-args" >/dev/null ||
+    {
+      printf 'package-lifecycle: public download lacks bounded all-error retry\n' >&2
+      exit 1
+    }
+  grep -F \
+    'old package download failed after bounded retries (curl exit=35)' \
+    "$preflight_root/download.err" >/dev/null &&
+    grep -F 'synthetic TLS handshake failure' \
+      "$preflight_root/download.err" >/dev/null ||
+    {
+      printf 'package-lifecycle: TLS failure diagnostic was discarded\n' >&2
+      exit 1
+    }
+
   bash -n scripts/release/test-package-lifecycle.sh
   go test ./internal/app \
     -run 'Test(ContextualHelpIsSuccessfulAndWritesNoState|CommandCatalogMetadataIsCompleteAndSearchable)' \
@@ -740,15 +811,10 @@ fi
 if [ -z "$old_package" ]; then
   old_package="$scratch/$old_archive_name"
   old_url="https://github.com/vibe-agi/hideout/releases/download/$old_tag/$old_archive_name"
-  curl \
-    --fail \
-    --location \
-    --proto '=https' \
-    --tlsv1.2 \
-    --retry 3 \
-    --output "$old_package" \
+  download_public_package \
     "$old_url" \
-    >"$evidence/old-package-download.log" 2>&1
+    "$old_package" \
+    "$evidence/old-package-download.log"
 else
   old_package="$(cd "$(dirname "$old_package")" && pwd -P)/$(basename "$old_package")"
   printf 'old package supplied locally; immutable receipt digest enforced\n' \

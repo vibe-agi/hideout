@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found twenty-three required
-issues. All twenty-three were resolved in the review-close worktree, and their
+The final source, security, and operator-UX review found twenty-four required
+issues. All twenty-four were resolved in the review-close worktree, and their
 focused regression judges pass. There is no open required review finding.
 
 This report is not itself a release-candidate attestation. At review close, the
@@ -19,7 +19,7 @@ claimed.
 | Field | Value |
 | --- | --- |
 | Review date | 2026-07-31 |
-| Base `HEAD` | `39ab730c47f6b1a8705fa8aca4283fe1951f144f` |
+| Base `HEAD` | `1d23d145b6b0a3556a6971e966770c52fc155820` |
 | Branch | `master` |
 | Worktree at review close | Dirty implementation tree; exact source identity is bound only by the later candidate freeze |
 | Candidate status | At review close: not a candidate; exact clean identity remains T163/T171 |
@@ -77,7 +77,10 @@ The review followed authority and data flow rather than package order:
     artifact and digest that produced it; and
 18. decoded the exact failing Go JSON event from a repeated clean aggregate,
     then separated Portal admission behavior from the test's response/release
-    scheduling assumption with high-count ordinary and race regressions.
+    scheduling assumption with high-count ordinary and race regressions; and
+19. followed an exact package-lifecycle exit through its deleted scratch
+    evidence and audited public-download retry, timeout, and terminal-diagnostic
+    behavior instead of treating a blank exit code as an external exception.
 
 Severity means:
 
@@ -115,6 +118,7 @@ Severity means:
 | CR045-021 | Medium | Hideout forced Lima's experimental `mountInotify` path on every VZ instance. Lima reflects each host notification back into the guest as `Chtimes`; under rapid dedicated-VirtioFS guest creates this produced a transient `EACCES` even while `/workspace` remained writable, target-owned, and the immediately following create succeeded. Fast network-rotation runs usually ended before the race was exercised. | Lima backend and network-rotation gate maintainers | Return `mountInotify` to Lima's safe disabled default, retain the existing nonclaim for host-originated filesystem notifications, and keep one active workload alive across the 30-second session-renewal boundary before requiring 64 consecutive workspace creates. Do not retry failed target syscalls. | Retained failure `run-20260731T080513Z-1596` failed at create 2 with `uid=1000`, mode `0700`, exact VirtioFS mountinfo, and an immediate successful probe; `TestPrepareWritesLimaYAML`; and `run-20260731T081241Z-36867` proves 40 seconds, 64 writes, online rotation, and all five real crash-recovery boundaries with `mountInotify=false`. |
 | CR045-022 | Medium | The documented final sequence ran dependency/advisory scanning inside the local aggregate and digest-bound its receipt below that run, but the evidence collector ignored that binding and read a separate top-level dependency summary. The first clean collection therefore found a stale dirty-tree receipt and failed closed; a separately refreshed same-commit receipt could have passed without proving it was the artifact produced by the accepted aggregate. | Release evidence maintainers | Resolve exactly `RUN/dependencies/summary.json` from the accepted local summary's artifact list, require one match, reject missing or duplicate references, validate its private path and recorded digest, and remove the unbound top-level fallback. | The clean `0ce7783` collection rejected the stale `636b8d4` receipt; exact, duplicate, and missing local-artifact preflight fixtures; Bash syntax and ShellCheck; and the final clean package-bound and closure collections. |
 | CR045-023 | Low | The Portal saturation regression launched a delayed request after an Open response, then treated any global in-flight count as proof that the delayed request owned the slot. The server writes a response before its deferred admission release, so under full-suite scheduling the observation could still belong to Open: the delayed request was rejected and the supposed overload request then succeeded, randomly failing an otherwise-correct release candidate. | Workspace Portal test maintainers | Wait for prior active requests to release, acquire the same production admission controller's exact environment/provider/session in-flight lease directly, then exercise overload, sibling isolation, and reserved teardown through real Portal clients without a timer or goroutine scheduling assumption. | Retained clean aggregate `run-20260731T093015Z-35323` failed only `TestPortalSaturationDoesNotStarveSiblingOrTeardown`; the corrected test passed 500 ordinary repetitions and 100 race repetitions; and the final clean unit/race aggregates. |
+| CR045-024 | Low | The package-lifecycle gate downloaded the immutable previous release with curl's default retry policy. A transient TLS handshake error exited with status 35, which is not retried by `--retry` alone; stdout and stderr were redirected to a scratch log that the EXIT trap immediately deleted, so the final candidate sequence stopped with no actionable terminal message. | Package lifecycle gate maintainers | Restrict the helper to the public release URL, retry all curl error classes within explicit connection/transfer bounds, remove a partial destination, and surface the exact curl status plus a bounded public diagnostic before cleanup. | The clean `1d23d14` lifecycle run exited 35 with no output; a fake-curl preflight proves all-error retry and time bounds are present and a synthetic TLS failure retains status 35 and its diagnostic; Bash syntax and ShellCheck; and the final exact lifecycle pass. |
 
 ## Closure terminology and false-success audit
 
