@@ -379,12 +379,11 @@ static __always_inline void clear_file_event(
 	}
 }
 
-static __always_inline void clear_cached_file_event(
+static __always_inline void clear_cached_file_event_path(
 	struct hideout_file_event *event)
 {
 	int index;
 
-	clear_file_event_header(event);
 #pragma unroll
 	for (index = 0; index < HIDEOUT_FILE_PATH_BYTES / 8; index++)
 		((__u64 *)event->path)[index] = 0;
@@ -671,7 +670,12 @@ reserve_cached_file_event(__u32 kind)
 	}
 	if (counter)
 		counter->reserved_events++;
-	clear_cached_file_event(event);
+	/*
+	 * Do not zero the path here: successful callers overwrite every byte
+	 * from initialized metadata. Each metadata-miss branch must clear it
+	 * before submission so no reserved ring-buffer byte is exposed.
+	 */
+	clear_file_event_header(event);
 	populate_file_event_header(event, kind);
 	return event;
 }
@@ -795,6 +799,7 @@ static __always_inline int emit_cached_file(
 		copy_metadata(event, metadata);
 		metadata->announced = 1;
 	} else {
+		clear_cached_file_event_path(event);
 		event->flags |= HIDEOUT_FILE_PATH_UNAVAILABLE |
 				HIDEOUT_FILE_STATE_UNAVAILABLE;
 		fill_file_identity(
@@ -1057,6 +1062,7 @@ int hideout_observe_mmap_file(unsigned long long *ctx)
 		copy_metadata(event, metadata);
 		metadata->announced = 1;
 	} else {
+		clear_cached_file_event_path(event);
 		event->flags |= HIDEOUT_FILE_PATH_UNAVAILABLE |
 				HIDEOUT_FILE_STATE_UNAVAILABLE;
 		fill_file_identity(
