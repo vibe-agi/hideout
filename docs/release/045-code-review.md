@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found twenty-one required
-issues. All twenty-one were resolved in the review-close worktree, and their
+The final source, security, and operator-UX review found twenty-two required
+issues. All twenty-two were resolved in the review-close worktree, and their
 focused regression judges pass. There is no open required review finding.
 
 This report is not itself a release-candidate attestation. At review close, the
@@ -19,7 +19,7 @@ claimed.
 | Field | Value |
 | --- | --- |
 | Review date | 2026-07-31 |
-| Base `HEAD` | `636b8d477d0dcd966a65a95eef35a27c2deb6471` |
+| Base `HEAD` | `0ce77834c31750b01db3ad6b30080fcbe387a21a` |
 | Branch | `master` |
 | Worktree at review close | Dirty implementation tree; exact source identity is bound only by the later candidate freeze |
 | Candidate status | At review close: not a candidate; exact clean identity remains T163/T171 |
@@ -71,7 +71,10 @@ The review followed authority and data flow rather than package order:
 16. held a real dedicated-VirtioFS workload across the daemon session-renewal
     boundary, pressured rapid guest creates, and compared the failing and
     passing Lima mount configurations instead of accepting an intermittent
-    retry.
+    retry; and
+17. executed the documented clean-candidate sequence through its first evidence
+    collection, then traced every consumed gate receipt back to the aggregate
+    artifact and digest that produced it.
 
 Severity means:
 
@@ -107,6 +110,7 @@ Severity means:
 | CR045-019 | Medium | Both initial DNS mediation and online resolver rotation treated a 200 ms sleep plus `kill -0` as proof that the replacement helper had bound UDP and TCP port 53. A live but unbound helper could leave the target or an in-flight session without working DNS, and rollback made the same unsupported assumption. | DNS mediation and Lima backend maintainers | Have the DNS helper publish a private marker containing its exact PID only after both listeners bind; require marker/PID equality before resolver redirection, activation, rollback proof, and reuse; remove stale markers; and terminate/reap a child that never becomes ready. | `TestPublishReadyMarkerBindsExactProcessAndPrivateMode`, `TestPublishReadyMarkerRejectsUnsafeTarget`, network/bootstrap and Lima command-contract tests, Linux helper build, and the final fresh-instance network-rotation lane. |
 | CR045-020 | Low | The final review table had grown beyond its original seven findings, but the release evidence writer and semantic validator still hard-coded `requiredFindings: 7`. A digest-valid manifest could therefore disagree with the exact review report it referenced. | Release evidence maintainers | Parse the review rows once, reject empty, duplicate, out-of-order, or non-contiguous finding IDs, feed that validated count into the generated manifest, and validate the same value instead of repeating a stale constant. | Positive, gap, duplicate, and empty collector preflight fixtures; syntax checks; and the exact clean evidence collection with detached-digest verification. |
 | CR045-021 | Medium | Hideout forced Lima's experimental `mountInotify` path on every VZ instance. Lima reflects each host notification back into the guest as `Chtimes`; under rapid dedicated-VirtioFS guest creates this produced a transient `EACCES` even while `/workspace` remained writable, target-owned, and the immediately following create succeeded. Fast network-rotation runs usually ended before the race was exercised. | Lima backend and network-rotation gate maintainers | Return `mountInotify` to Lima's safe disabled default, retain the existing nonclaim for host-originated filesystem notifications, and keep one active workload alive across the 30-second session-renewal boundary before requiring 64 consecutive workspace creates. Do not retry failed target syscalls. | Retained failure `run-20260731T080513Z-1596` failed at create 2 with `uid=1000`, mode `0700`, exact VirtioFS mountinfo, and an immediate successful probe; `TestPrepareWritesLimaYAML`; and `run-20260731T081241Z-36867` proves 40 seconds, 64 writes, online rotation, and all five real crash-recovery boundaries with `mountInotify=false`. |
+| CR045-022 | Medium | The documented final sequence ran dependency/advisory scanning inside the local aggregate and digest-bound its receipt below that run, but the evidence collector ignored that binding and read a separate top-level dependency summary. The first clean collection therefore found a stale dirty-tree receipt and failed closed; a separately refreshed same-commit receipt could have passed without proving it was the artifact produced by the accepted aggregate. | Release evidence maintainers | Resolve exactly `RUN/dependencies/summary.json` from the accepted local summary's artifact list, require one match, reject missing or duplicate references, validate its private path and recorded digest, and remove the unbound top-level fallback. | The clean `0ce7783` collection rejected the stale `636b8d4` receipt; exact, duplicate, and missing local-artifact preflight fixtures; Bash syntax and ShellCheck; and the final clean package-bound and closure collections. |
 
 ## Closure terminology and false-success audit
 

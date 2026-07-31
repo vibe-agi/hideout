@@ -162,8 +162,28 @@ review_finding_count_for_file() {
   printf '%s\n' "$count"
 }
 
+local_run_artifact_reference() {
+  local summary_path="$1" relative_path="$2"
+  jq -ce \
+    --arg relativePath "$relative_path" '
+      .run as $run
+      | ($run + "/" + $relativePath) as $expectedPath
+      | [
+          .artifacts[]?
+          | select(.path == $expectedPath)
+        ] as $matches
+      | if
+          ($matches | length) == 1 and
+          ($matches[0].sha256 | type) == "string" and
+          ($matches[0].sha256 | test("^[a-f0-9]{64}$"))
+        then $matches[0]
+        else error("missing, duplicate, or invalid local-run artifact")
+        end
+    ' "$summary_path"
+}
+
 run_preflight() {
-  local fixture digest review_fixture
+  local fixture digest review_fixture local_summary_fixture artifact_reference
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-collect-evidence-preflight.XXXXXX"
   )"
@@ -219,6 +239,43 @@ run_preflight() {
   : >"$review_fixture"
   if review_finding_count_for_file "$review_fixture" >/dev/null; then
     fail "empty review finding fixture was accepted"
+  fi
+  local_summary_fixture="$preflight_root/local-summary.json"
+  jq -n \
+    --arg digest "$(printf 'a%.0s' {1..64})" '
+      {
+        run:"run-fixture",
+        artifacts:[
+          {
+            path:"run-fixture/dependencies/summary.json",
+            sha256:$digest
+          }
+        ]
+      }
+    ' >"$local_summary_fixture"
+  artifact_reference="$(
+    local_run_artifact_reference \
+      "$local_summary_fixture" "dependencies/summary.json"
+  )" ||
+    fail "exact local-run artifact fixture was rejected"
+  jq -e '
+    .path == "run-fixture/dependencies/summary.json" and
+    (.sha256 | test("^[a-f0-9]{64}$"))
+  ' <<<"$artifact_reference" >/dev/null ||
+    fail "local-run artifact fixture resolved the wrong identity"
+  jq '.artifacts += [.artifacts[0]]' \
+    "$local_summary_fixture" >"$local_summary_fixture.duplicate"
+  if local_run_artifact_reference \
+    "$local_summary_fixture.duplicate" \
+    "dependencies/summary.json" >/dev/null 2>&1; then
+    fail "duplicate local-run artifact fixture was accepted"
+  fi
+  jq '.artifacts = []' \
+    "$local_summary_fixture" >"$local_summary_fixture.missing"
+  if local_run_artifact_reference \
+    "$local_summary_fixture.missing" \
+    "dependencies/summary.json" >/dev/null 2>&1; then
+    fail "missing local-run artifact fixture was accepted"
   fi
   gate_completed=1
   printf 'collect-evidence: preflight=passed\n'
@@ -504,7 +561,6 @@ package_pointer="$artifact_root/package/result.json"
 package_lifecycle_pointer="$artifact_root/package-lifecycle/result.json"
 formal_summary="$artifact_root/formal/summary.json"
 local_summary="$artifact_root/local/summary.json"
-dependency_summary="$artifact_root/dependencies/summary.json"
 component_summary="$artifact_root/package-components/summary.json"
 recovery_summary="$artifact_root/recovery/summary.json"
 privacy_pointer="$artifact_root/privacy/result.json"
@@ -539,6 +595,20 @@ jq -e '
 ' "$local_summary" >/dev/null ||
   fail "local release aggregate is incomplete"
 
+if ! dependency_reference="$(
+  local_run_artifact_reference \
+    "$local_summary" "dependencies/summary.json"
+)"; then
+  fail "local release aggregate does not bind one exact dependency summary"
+fi
+dependency_summary_relative="$(jq -er '.path' <<<"$dependency_reference")"
+dependency_summary_sha="$(jq -er '.sha256' <<<"$dependency_reference")"
+safe_relative_path "$dependency_summary_relative" ||
+  fail "local dependency summary path is unsafe"
+dependency_summary="$artifact_root/local/$dependency_summary_relative"
+require_private_evidence_file "$dependency_summary"
+verify_sha256 "$dependency_summary" "$dependency_summary_sha" ||
+  fail "local dependency summary digest does not match its aggregate"
 validate_simple_summary "$dependency_summary" \
   "hideout.dependencies-gate/v1"
 jq -e '
