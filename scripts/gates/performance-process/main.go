@@ -25,6 +25,8 @@ const (
 	processRSSLimitBytes = 256 << 20
 	tuiReadyLimitMS      = 2000.0
 	maxDiagnosticBytes   = 64 << 10
+	daemonReadyWait      = 15 * time.Second
+	processPollInterval  = 20 * time.Millisecond
 )
 
 type memoryMetric struct {
@@ -158,12 +160,13 @@ func run(hideout, store, out string, samples int) (resultErr error) {
 	}()
 
 	socket := filepath.Join(store, "daemon", "hideoutd.sock")
-	if err := waitFor(
-		5*time.Second,
+	if err := waitForProcess(
+		daemonReadyWait,
 		func() bool {
 			info, statErr := os.Stat(socket)
 			return statErr == nil && info.Mode()&os.ModeSocket != 0
 		},
+		daemonDone,
 	); err != nil {
 		return fmt.Errorf(
 			"daemon did not become ready: %w: %s",
@@ -223,13 +226,14 @@ func run(hideout, store, out string, samples int) (resultErr error) {
 		}
 		_ = terminal.Close()
 	}()
-	if err := waitFor(
+	if err := waitForProcess(
 		5*time.Second,
 		func() bool {
 			output := tuiOutput.String()
 			return strings.Contains(output, "\x1b[?1049h") &&
 				strings.Contains(output, "Hideout")
 		},
+		tuiDone,
 	); err != nil {
 		return fmt.Errorf(
 			"TUI did not become ready: %w: %q",
@@ -343,15 +347,39 @@ func run(hideout, store, out string, samples int) (resultErr error) {
 	return nil
 }
 
-func waitFor(limit time.Duration, ready func() bool) error {
-	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
+func waitForProcess(
+	limit time.Duration,
+	ready func() bool,
+	done chan error,
+) error {
+	if limit <= 0 || ready == nil || done == nil || cap(done) == 0 {
+		return errors.New("process readiness configuration is invalid")
+	}
+	timeout := time.NewTimer(limit)
+	defer timeout.Stop()
+	ticker := time.NewTicker(processPollInterval)
+	defer ticker.Stop()
+	for {
 		if ready() {
 			return nil
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case processErr := <-done:
+			// Cleanup still owns the one Wait result. Put it back after
+			// observing it so cleanup cannot wait for a consumed value.
+			done <- processErr
+			if processErr != nil {
+				return fmt.Errorf(
+					"process exited before readiness: %w",
+					processErr,
+				)
+			}
+			return errors.New("process exited before readiness")
+		case <-ticker.C:
+		case <-timeout.C:
+			return errors.New("timed out")
+		}
 	}
-	return errors.New("timed out")
 }
 
 func processRSSBytes(pid int) (uint64, error) {

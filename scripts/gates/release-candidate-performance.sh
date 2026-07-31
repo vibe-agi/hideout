@@ -486,12 +486,27 @@ jq -e \
   ' "$run_dir/lanes/local-query-render.json" >/dev/null
 
 printf 'release-candidate-performance: stage=daemon-tui-process\n'
+set +e
 go run ./scripts/gates/performance-process \
   --hideout "$candidate_bin" \
   --store "$scratch/process-store" \
   --out "$run_dir/lanes/daemon-tui-process.json" \
   --samples "$process_samples" \
   >"$run_dir/lanes/daemon-tui-process.log" 2>&1
+process_status=$?
+set -e
+if [ "$process_status" -ne 0 ]; then
+  process_failure="$(
+    sed -n '$p' "$run_dir/lanes/daemon-tui-process.log"
+  )"
+  [ -n "$process_failure" ] ||
+    process_failure="no terminal reason was recorded"
+  printf \
+    'release-candidate-performance: daemon/TUI process failed: %s (status=%d log=%s)\n' \
+    "$process_failure" "$process_status" \
+    "$run_dir/lanes/daemon-tui-process.log" >&2
+  exit 1
+fi
 jq -e \
   --argjson samples "$process_samples" '
     def nr($values; $percentile):
