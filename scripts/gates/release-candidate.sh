@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
 
 out="$root/.artifacts/045/local"
@@ -73,7 +73,7 @@ else
 fi
 
 mkdir -p "$out"
-out="$(CDPATH= cd -- "$out" && pwd -P)"
+out="$(CDPATH='' cd -- "$out" && pwd -P)"
 run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
 run_dir="$out/$run_id"
 mkdir -p \
@@ -740,6 +740,8 @@ mutations_lane() {
 
 release_blockers_lane() {
   {
+    # The backticks are literal Markdown delimiters in the table query.
+    # shellcheck disable=SC2016
     grep -E '^\| [A-Z0-9]+ \|.*`blocked-integration`' \
       docs/release/045-claim-matrix.md || true
   } |
@@ -750,6 +752,11 @@ release_blockers_lane() {
     paste -sd, "$scratch/blocked-integration"
     return 1
   fi
+  scripts/release/build-candidate.sh --preflight
+  scripts/release/test-package-lifecycle.sh --preflight
+  scripts/release/collect-evidence.sh --preflight
+  scripts/release/install-local-candidate.sh --preflight
+  scripts/release/verify-publication-absence.sh --preflight
   printf 'no required integration blocker remains\n'
 }
 

@@ -106,6 +106,20 @@ the judge implementation but was deleted with its synthetic commit; T163,
 T164, T165, and T171 still own accepted main-candidate, installed-machine, and
 publication-absence evidence.
 
+T163–T165 add three fail-closed closure judges. The evidence collector
+independently resolves private pointers and artifact digests, extracts the
+package, validates all required gate identities, and requires schema-valid
+installed-machine and publication-absence receipts before it can emit
+`stage=final-ready`. The installed-machine judge restricts destructive scope
+to the recognized installation and exact current-user store, consumes the
+accepted archive without rebuilding, exercises the packaged CLI/TUI/WebUI and
+real Lima path, and scans retained state for transient proxy and control
+secrets. The publication judge is read-only and double-observes tag, Release,
+remote formula, source, and local tap state. Their negative preflights and
+receipt schemas are active, but the rows remain unaccepted until the final
+clean candidate produces both exact receipts and T171 recollects the manifest
+with `--require-closure`.
+
 Implementation mutations change production behavior or a production contract;
 they do not delete or weaken the assertion. Judge fixtures change the
 candidate input, evidence, schema, digest, or reported outcome; they do not
@@ -191,7 +205,7 @@ modify the judge. Every mutation runner must:
 | CL01 | Disposable activity is deleted only after terminal lifecycle proof; reusable activity is not deleted by session exit; audit is preserved (FR-050). | `go test ./internal/manager ./internal/daemon -run 'Test(DisposableActivityCleanupDeletesOnlyTerminalOwnerAndPreservesAudit\|SessionRegistryDeletesOnlyDisposableActivityAfterCleanTerminal\|DaemonActivityCleanupRefusesLiveOwner)' -count=1` | Real privacy/cleanup gates and T153 must inspect exact owner absence plus retained audit after release. | `M045-CL01`: delete a live/reusable owner or retain terminal disposable activity. `N045-CL01`: cleanup artifact checks only session exit, not terminal proof/owner/audit; judge must reject it. | `active-real-backend-gate`; T153 passed exact terminal-owner cleanup and retained-audit assertions. |
 | CL02 | Clean/delete/recreate removes exactly the prior reusable incarnation only after destructive lifecycle evidence, never a newly created incarnation (FR-051, SC-009). | `go test ./internal/manager -run 'Test(ActivityCleanupRemovesExactReusableIncarnationsForDestructiveLifecycle\|ActivityCleanupPlanNeverDeletesAnIncarnationCreatedAfterPlanning\|ActivityCleanupRejectsCrossScopeAndTamperedPlans)' -count=1` | `scripts/gates/workload-privacy-lima.sh` and T153 must record old/new incarnation identities and disk/memory results. | `M045-CL02`: delete by environment name/current path instead of planned incarnation. `N045-CL02`: artifact omits new-incarnation preservation or reports only an empty query; judge must reject it. | `active-real-backend-gate`; T153 recorded old/new incarnation identities and proved exact old-incarnation removal with new-incarnation preservation. |
 | CL03 | Quota/age/corruption recovery is ordered and explicit: torn/corrupt tails are repaired or quarantined, oldest sealed data is pruned, and coverage reports the gap (FR-045, FR-052). | `go test ./internal/workloadobs/store -run 'Test(ActiveSegmentRepairsTornTailAndReportsCoverageGap\|ActiveSegmentCRCFailureTruncatesAfterLastValidFrame\|CorruptSealedSegmentIsQuarantinedAndNeverReturned\|QuotaPrunesOldestSealedAcrossOwnersAndBoundsOvershoot)' -count=1` | Privacy/performance gates must retain loss/quota/quarantine evidence and exact owner bounds. | `M045-CL03`: return corrupt frames, prune newest, or hide the coverage gap. `N045-CL03`: fixture claims complete history after repair/prune or omits quarantine; judge must reject it. | `active-real-backend-gate`; T155/T156 proved zero corrupt frames returned, quarantine, visible coverage gaps, oldest-sealed pruning, and the one-active-segment measured overshoot bound. |
-| CL04 | Candidate install/upgrade/reinstall/uninstall and authorized legacy-data discard affect only the exact package/store scope and leave no accidental publication (FR-070–FR-071). | `scripts/gates/package-components.sh` proves the local observer/UI component package and lifecycle mechanics with `candidateAcceptance=false`; `scripts/release/build-candidate.sh` rejects dirty source, rebuild drift, missing or changed package files, helper/UI/runtime digest drift, and final-binary advisories; `scripts/release/test-package-lifecycle.sh` consumes that exact archive and proves scoped install, upgrade, reinstall, discard, and uninstall behavior without rebuilding. | Local-install evidence and the T165 publication-absence judge must repeat the lifecycle against the accepted main candidate on this machine and prove no publication. | `M045-CL04`: preserve forbidden legacy activity, delete unrelated data, omit observer/UI asset removal, accept rebuild/digest drift, or invoke publication. `N045-CL04`: scope/digest/absence evidence is incomplete or from a different candidate; judge must reject it. | `active-package-gate`; T158/T159 full judges passed a disposable clean implementation snapshot, including the immutable public alpha.3 upgrade and 23-artifact lifecycle proof. Accepted main-repository candidate, installed-machine, and publication-absence evidence remain T163/T164/T165/T171 work. |
+| CL04 | Candidate install/upgrade/reinstall/uninstall and authorized legacy-data discard affect only the exact package/store scope and leave no accidental publication (FR-070–FR-071). | `scripts/gates/package-components.sh` proves the local observer/UI component package and lifecycle mechanics with `candidateAcceptance=false`; `scripts/release/build-candidate.sh` rejects dirty source, rebuild drift, missing or changed package files, helper/UI/runtime digest drift, and final-binary advisories; `scripts/release/test-package-lifecycle.sh` consumes that exact archive and proves scoped install, upgrade, reinstall, discard, and uninstall behavior without rebuilding; `scripts/release/install-local-candidate.sh` repeats the packaged journey on the target machine with exact-scope guards. | `scripts/release/verify-publication-absence.sh` must prove two absent tag/Release observations, stable remote formula bytes without candidate material, and unchanged source/local tap state; `scripts/release/collect-evidence.sh --require-closure` independently validates both closure schemas and every referenced private artifact. | `M045-CL04`: preserve forbidden legacy activity, delete unrelated data, omit observer/UI asset removal, accept rebuild/digest drift, or invoke publication. `N045-CL04`: scope/digest/absence evidence is incomplete or from a different candidate; judge must reject it. | `active-closure-gates`; T158/T159 full judges passed a disposable clean implementation snapshot, while T164/T165 schema/preflight mutations reject false checks, unsafe scope, remaining environments, candidate drift, tap mutation, and observed publication. Final accepted receipts remain T171 work. |
 
 ## Requirement coverage
 
@@ -265,8 +279,10 @@ exact package, or release-candidate run.
   tree and passes all frozen source-built/real-backend budgets; it does not
   substitute for the final exact clean package.
 - The dirty-source real-Lima, UI, privacy, and performance aggregates pass,
-  but packaging, lifecycle, install, publication-absence, and exact
-  clean-candidate rows remain unaccepted until their owning tasks pass.
+  and the package/evidence/install/publication closure judges are implemented.
+  Packaging, lifecycle, installed-machine, publication-absence, and exact
+  clean-candidate rows remain unaccepted until the final clean run produces
+  matching receipts and the collector passes with `--require-closure`.
 
 No row in this file authorizes a remote tag, GitHub Release, Homebrew change,
 or package publication.

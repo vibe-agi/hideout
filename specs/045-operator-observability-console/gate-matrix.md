@@ -18,7 +18,7 @@ or implicitly passing check.
 | --- | --- | --- | --- |
 | Setup/generated | `HIDEOUT_BPF_CLANG=/opt/homebrew/opt/llvm@19/bin/clang HIDEOUT_BPF_LLVM_STRIP=/opt/homebrew/opt/llvm@19/bin/llvm-strip scripts/gates/generated.sh` | Process exit and generated-byte comparison | Active |
 | Gate 0 | `scripts/test-gate0.sh` | Process exit and existing Gate 0 outputs | Active |
-| Documentation/help truth | `go test ./internal/app -run 'Test(PrivacyAndSecretHelpExplainStartupFallbackMigration\|EnglishAndChineseUserGuidesCoverSupportedJourney\|HelpGoldens)' -count=1 && go test ./internal/releasecompat -count=1 && markdownlint-cli2 docs/README.md docs/STATUS.md docs/privacy-run-design.md docs/threat-model.md docs/privacy-run-test-plan.md docs/formal-models.md docs/support-matrix.md docs/recovery.md docs/activity-observation.md docs/user-guide.md docs/user-guide.zh-CN.md && scripts/test-doc-truth-smoke.sh` | Process exit and doc-truth evidence | Active (T160): current product status, design, threat, test, model, privacy, retention, recovery, help, Keychain migration, and honest process/file/network/DNS coverage are synchronized; T168 terminology/privacy audit and exact T171 candidate binding remain required |
+| Documentation/help truth | `go test ./internal/app -run 'Test(PrivacyAndSecretHelpExplainStartupFallbackMigration\|EnglishAndChineseUserGuidesCoverSupportedJourney\|HelpGoldens)' -count=1 && go test ./internal/releasecompat -count=1 && markdownlint-cli2 docs/README.md docs/STATUS.md docs/privacy-run-design.md docs/threat-model.md docs/privacy-run-test-plan.md docs/formal-models.md docs/support-matrix.md docs/recovery.md docs/activity-observation.md docs/user-guide.md docs/user-guide.zh-CN.md docs/release/045-readiness.md && scripts/test-doc-truth-smoke.sh` | Process exit and doc-truth evidence | Active (T160): current product status, design, threat, test, model, privacy, retention, recovery, help, Keychain migration, and honest process/file/network/DNS coverage are synchronized; T168 terminology/privacy audit and exact T171 candidate binding remain required |
 | Models/refinement | `scripts/gates/formal.sh` | `.artifacts/045/formal/` | Active local bounded-model gate; exact candidate binding remains T163 |
 | Privacy/redaction | `scripts/gates/release-candidate-privacy.sh` | `.artifacts/045/privacy/`; current proof: `.artifacts/045/privacy-current-2/result.json` and `.artifacts/045/privacy-current-2/run-20260730T174215Z-43994/summary.json` | Active and passing for the current dirty source tree (T155): 73/73 exact tests, real Keychain, fresh CLI/TUI/WebUI, real Lima, 8/8 claim receipts, and zero canary hits across all 9 required sinks; exact installed-candidate binding remains T164/T171 |
 | Network/secret transition | `go test -race ./internal/network ./internal/secrets ./internal/manager && scripts/gates/keychain-real.sh && HIDEOUT_GATE3_RUNTIME_MODE=1 scripts/test-gate3-hidden-proxy.sh` | Test output, Keychain canary result, Gate 3 evidence | Active and passing in T152/T153/T155: exact secret generations, real Keychain behavior, stage/probe/activate/prove/rollback, response-loss replay, and online proxy rotation are covered; exact clean-candidate binding remains T163/T171 |
@@ -31,9 +31,12 @@ or implicitly passing check.
 | Package component inventory | `scripts/gates/package-components.sh` | `.artifacts/045/package-components/` | Active |
 | Mutation proofs and local static/race gates | `scripts/mutation/045/run-negative-fixtures.sh` then `scripts/gates/release-candidate.sh` | `.artifacts/045/local/` | Active and passing locally (T152): 46 source-overlay production mutants and 46 judge-negative fixtures; exact clean-candidate binding remains T163 |
 | Performance/quota | `scripts/gates/release-candidate-performance.sh` | `.artifacts/045/performance/`; current proof: `.artifacts/045/performance-current/result.json` and `.artifacts/045/performance-current/run-20260730T193602Z-54620/summary.json` | Active and passing for the measured dirty source tree (T156/T157): raw samples and independently recomputed percentiles passed query/render, daemon/TUI RSS, browser freshness, warm attach, 4.298% reference overhead, observer CPU/RSS, 186.418 exec/s, 0.085714% fully accounted loss, and one-active-segment quota bounds; v1 defaults are frozen in `internal/workloadobs/defaults.go`; exact clean-candidate binding remains T163/T171 |
-| Package build | `scripts/release/build-candidate.sh` | `.artifacts/045/package/` | Active (T158): fail-closed clean-tree gate, two independent Go caches, byte-identical archive/manifest/tree proof, exact 140-file package inventory, all 9 Go binaries and 6 helper manifests, 66 schemas, 8 embedded browser assets, runtime catalog/contract/artifact binding, and final-binary advisory scans passed in a disposable exact-clean implementation validation; the current main worktree remains dirty, so accepted main-candidate evidence is intentionally absent until T163/T171 |
+| Package build | `scripts/release/build-candidate.sh` | `.artifacts/045/package/` | Active (T158): fail-closed clean-tree gate, two independent Go caches, byte-identical archive/manifest/tree proof, exact manifest-derived package inventory, all 9 Go binaries and 6 helper manifests, every repository schema, 8 embedded browser assets, runtime catalog/contract/artifact binding, and final-binary advisory scans. The exact current counts are taken only from the final clean candidate receipt. |
 | Install/upgrade/uninstall/reinstall | `scripts/release/test-package-lifecycle.sh` | `.artifacts/045/package-lifecycle/` | Active (T159): consumes the exact T158 archive without rebuilding; verifies the checked-in immutable `v0.1.0-alpha.3` receipt/download, clean install, macOS Keychain and legacy-export guidance, same-candidate reinstall, exact temporary legacy-store discard, old-version upgrade, normal uninstall absence, durable-state/unrelated-file preservation, source stability, private evidence modes/digests, and local-only status. A disposable exact-clean implementation validation passed all 11 lifecycle checks with 23 retained artifacts; accepted main-candidate evidence remains intentionally absent until T163/T171. |
-| Evidence binding | `scripts/release/collect-evidence.sh` | `.artifacts/045/evidence.json` | Planned: T163 |
+| Evidence binding | `scripts/release/collect-evidence.sh` | `.artifacts/045/evidence.json` and `.artifacts/045/evidence.json.sha256` | Active (T163 implementation): independently resolves every private pointer and digest, extracts and verifies the exact package, validates all 11 required gate identities, and emits package-bound/installed-local/final-ready stages. Final acceptance still requires one clean T171 run. |
+| Installed-machine closure | `scripts/release/install-local-candidate.sh --yes-discard-legacy-data` | `.artifacts/045/local-install/` | Active (T164 implementation): consumes the accepted archive without rebuilding, constrains destructive scope to the recognized install and exact current-user store, exercises setup/secret/connect/proxied run/Help/TUI/WebUI/clean/update/uninstall/reinstall, scans retained state for transient secrets, and leaves the exact candidate installed with a fresh direct profile, no environment, and a stopped daemon. Final acceptance requires the exact clean candidate run. |
+| Publication absence | `scripts/release/verify-publication-absence.sh` | `.artifacts/045/publication-absence/` | Active (T165 implementation): read-only double observations require tag absence, an exact GitHub Release 404, stable remote formula bytes without candidate material, and an unchanged clean local tap. This gate has no publication authority and its point-in-time receipt must match the exact candidate archive. |
+| Final closure | `scripts/release/collect-evidence.sh --require-closure` | `.artifacts/045/evidence.json`, detached digest, and both closure receipts | Active: exits zero only when source, candidate, installed binary, all gates, local-install receipt, and publication-absence receipt are fresh, exact, private, schema-valid, digest-valid, and passing. |
 
 ## Local candidate sequence
 
@@ -49,12 +52,18 @@ scripts/gates/release-candidate-lima.sh
 scripts/release/build-candidate.sh
 scripts/release/test-package-lifecycle.sh
 scripts/release/collect-evidence.sh
+scripts/release/install-local-candidate.sh --yes-discard-legacy-data
+scripts/release/verify-publication-absence.sh
+scripts/release/collect-evidence.sh --require-closure
 ```
 
 The package is built only after source-level gates pass. Package lifecycle
-tests consume that exact artifact; they do not rebuild it. Evidence collection
-rejects a commit, package digest, helper digest, runtime digest, or timestamp
-that differs from the preceding lanes.
+tests and installed-machine closure consume that exact artifact; they do not
+rebuild it. Evidence collection rejects a commit, package digest, helper
+digest, runtime digest, closure schema, closure artifact, or timestamp that
+differs from the preceding lanes. The first collection records the
+package-bound stage; only the final `--require-closure` collection may record
+`final-ready`.
 
 ## Host-specific prerequisites
 
@@ -66,6 +75,11 @@ that differs from the preceding lanes.
 - Browser journeys require the pinned browser-test runtime introduced by their
   owning task.
 - Keychain and full candidate gates require macOS arm64.
+- Installed-machine closure requires the active Homebrew prefix, an unlocked
+  user Keychain, `expect`, `curl`, Python 3, and explicit authorization to
+  discard the exact current-user `~/.hideout` store.
+- Publication-absence verification requires authenticated read access through
+  `gh`, the configured source remote, and a clean local `vibe-agi/tap` checkout.
 - Real-Lima lanes require the supported Debian 13 runtime, cgroup v2, and an
   otherwise unrelated-VM-safe fixture environment.
 

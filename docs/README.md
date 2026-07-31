@@ -44,6 +44,7 @@ Subsystem documents:
 | OpenTarget and host reach-back | [opentarget-architecture.md](opentarget-architecture.md) |
 | Policy/config supply chain | [policy-config-supply-chain.md](policy-config-supply-chain.md): authoring, source resolution, install, update, trust, override, and export behavior for the ecosystem model. |
 | Interrupted operations and recovery | [recovery.md](recovery.md) |
+| Feature 045 local release closure | [release/045-readiness.md](release/045-readiness.md): exact READY/BLOCKED verdict, installed-machine proof, publication-absence boundary, and separately authorized publication handoff. |
 | Script adapters | [script-extension-architecture.md](script-extension-architecture.md) |
 | Support matrix | [support-matrix.md](support-matrix.md) |
 | TUI/Web UI | [tui-webui-experience.md](tui-webui-experience.md) |

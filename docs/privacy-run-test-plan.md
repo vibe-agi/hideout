@@ -2050,15 +2050,21 @@ Then build once and test only those bytes:
 ```sh
 scripts/release/build-candidate.sh
 scripts/release/test-package-lifecycle.sh
+scripts/release/collect-evidence.sh
+scripts/release/install-local-candidate.sh --yes-discard-legacy-data
+scripts/release/verify-publication-absence.sh
+scripts/release/collect-evidence.sh --require-closure
 ```
 
-T163 adds `scripts/release/collect-evidence.sh`; until that task lands, final
-evidence collection is a required missing lane. T164 then installs the exact
-archive on this machine and repeats the documented setup, secret, connection,
-run, TUI, WebUI, cleanup, update, and uninstall journeys. T165 proves that no
-remote tag, GitHub Release, Homebrew push, or package publication occurred.
-T171 reruns the complete sequence from the final clean tree and rejects any
-required `stale`, `reduced`, `not-run`, or `unsupported` result.
+The T163–T165 closure tools are active. The first collection binds the exact
+package and records `package-bound`; it is not readiness. T164 installs the
+exact archive on this machine and repeats the documented setup, secret,
+connection, run, Help, TUI, WebUI, cleanup, update, uninstall, and final
+reinstall journeys. T165 read-only observations prove that no matching remote
+tag, GitHub Release, Homebrew formula change, or supported-channel package
+publication occurred. Only the final `--require-closure` collection may emit
+`final-ready`. T171 reruns the complete sequence from the final clean tree and
+rejects any required `stale`, `reduced`, `not-run`, or `unsupported` result.
 
 ### Local, mutation, and formal acceptance
 
@@ -2173,5 +2179,7 @@ UI/browser, privacy, and performance behavior for the recorded development
 source identities. T158–T159 additionally proved the clean build and package
 lifecycle judges in a disposable exact-clean implementation snapshot. Those
 runs remain useful implementation evidence, but none is an accepted final
-main-tree release candidate. T163, T164, T165, and T171 remain mandatory
-before this gate may be promoted.
+main-tree release candidate. The T163–T165 judges and negative preflights are
+implemented; their exact package-bound and installed-machine receipts plus
+the T171 final clean recollection remain mandatory before this gate may be
+promoted.

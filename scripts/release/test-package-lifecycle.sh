@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
 
 umask 077
@@ -155,10 +155,11 @@ resolve_candidate() {
   fi
   summary_rel="$(jq -er '.summary' "$result_path")"
   archive_rel="$(jq -er '.archive' "$result_path")"
-  safe_relative_path "$summary_rel" && safe_relative_path "$archive_rel" || {
+  if ! safe_relative_path "$summary_rel" ||
+    ! safe_relative_path "$archive_rel"; then
     printf 'package-lifecycle: T158 result contains an unsafe path\n' >&2
     return 1
-  }
+  fi
   candidate_summary="$candidate_evidence_root/$summary_rel"
   candidate_archive="$candidate_evidence_root/$archive_rel"
   if [ ! -f "$candidate_summary" ] || [ -L "$candidate_summary" ] ||
@@ -326,7 +327,7 @@ validate_source_identity() {
   local source_root="$1" expected_commit="$2" expected_tree="$3"
   git -C "$source_root" rev-parse --git-dir >/dev/null 2>&1 &&
     [ "$(git -C "$source_root" rev-parse --verify HEAD)" = "$expected_commit" ] &&
-    [ "$(git -C "$source_root" rev-parse --verify HEAD^{tree})" = "$expected_tree" ] &&
+    [ "$(git -C "$source_root" rev-parse --verify 'HEAD^{tree}')" = "$expected_tree" ] &&
     [ -z "$(git -C "$source_root" status --porcelain=v1 --untracked-files=all)" ]
 }
 
@@ -404,6 +405,8 @@ if [ "$preflight_only" -eq 1 ]; then
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-package-lifecycle-preflight.XXXXXX"
   )"
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
   cleanup_preflight() {
     cleanup_tree \
       "${preflight_root:-}" \
@@ -598,7 +601,7 @@ if [ "$preflight_only" -eq 1 ]; then
   git -C "$source_fixture" add source.txt
   git -C "$source_fixture" commit -q -m fixture
   fixture_commit="$(git -C "$source_fixture" rev-parse HEAD)"
-  fixture_tree="$(git -C "$source_fixture" rev-parse HEAD^{tree})"
+  fixture_tree="$(git -C "$source_fixture" rev-parse 'HEAD^{tree}')"
   validate_source_identity "$source_fixture" "$fixture_commit" "$fixture_tree"
   printf 'dirty source fixture\n' >"$source_fixture/source.txt"
   if validate_source_identity \

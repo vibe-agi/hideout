@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/publication-absence.schema.json",
+  "title": "Hideout read-only publication absence receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "result",
+    "sourceCandidate",
+    "candidate",
+    "candidateArchiveSHA256",
+    "observations",
+    "remote",
+    "localTap",
+    "checks",
+    "artifacts",
+    "limitations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.publication-absence/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result": {
+      "const": "passed"
+    },
+    "sourceCandidate": {
+      "$ref": "#/$defs/sourceCandidate"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "tag",
+        "archiveSHA256"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
+        },
+        "archiveSHA256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "candidateArchiveSHA256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "remoteTagCreated",
+        "githubReleaseCreated",
+        "homebrewChanged",
+        "packagePublished"
+      ],
+      "properties": {
+        "remoteTagCreated": {
+          "const": false
+        },
+        "githubReleaseCreated": {
+          "const": false
+        },
+        "homebrewChanged": {
+          "const": false
+        },
+        "packagePublished": {
+          "const": false
+        }
+      }
+    },
+    "remote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRepository",
+        "tagQuery",
+        "releaseHTTPStatus",
+        "homebrewRepository",
+        "formulaPath",
+        "formulaSHA256"
+      ],
+      "properties": {
+        "sourceRepository": {
+          "const": "vibe-agi/hideout"
+        },
+        "tagQuery": {
+          "type": "string",
+          "pattern": "^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
+        },
+        "releaseHTTPStatus": {
+          "const": 404
+        },
+        "homebrewRepository": {
+          "const": "vibe-agi/homebrew-tap"
+        },
+        "formulaPath": {
+          "const": "Formula/hideout.rb"
+        },
+        "formulaSHA256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "localTap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "headBefore",
+        "headAfter",
+        "treeBefore",
+        "treeAfter",
+        "formulaSHA256Before",
+        "formulaSHA256After",
+        "cleanBefore",
+        "cleanAfter"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 2
+        },
+        "headBefore": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "headAfter": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "treeBefore": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "treeAfter": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "formulaSHA256Before": {
+          "$ref": "#/$defs/sha256"
+        },
+        "formulaSHA256After": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cleanBefore": {
+          "const": true
+        },
+        "cleanAfter": {
+          "const": true
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceClean",
+        "candidateDigestVerified",
+        "remoteTagAbsent",
+        "githubReleaseAbsent",
+        "homebrewFormulaUnchanged",
+        "homebrewCandidateAbsent",
+        "localTapUnchanged",
+        "noPublicationMutation",
+        "observationsExactlyFalse"
+      ],
+      "properties": {
+        "sourceClean": {
+          "const": true
+        },
+        "candidateDigestVerified": {
+          "const": true
+        },
+        "remoteTagAbsent": {
+          "const": true
+        },
+        "githubReleaseAbsent": {
+          "const": true
+        },
+        "homebrewFormulaUnchanged": {
+          "const": true
+        },
+        "homebrewCandidateAbsent": {
+          "const": true
+        },
+        "localTapUnchanged": {
+          "const": true
+        },
+        "noPublicationMutation": {
+          "const": true
+        },
+        "observationsExactlyFalse": {
+          "const": true
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "gitObject": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z.-]+$"
+    },
+    "safePath": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+    },
+    "sourceCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "tree",
+        "dirty"
+      ],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "tree": {
+          "$ref": "#/$defs/gitObject"
+        },
+        "dirty": {
+          "const": false
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes",
+        "mode"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "const": "0600"
+        }
+      }
+    }
+  }
+}

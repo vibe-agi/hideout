@@ -21,10 +21,12 @@ var feature045Schemas = []string{
 	"coverage-interval.schema.json",
 	"daemon-event-v2.schema.json",
 	"formal-inventory.schema.json",
+	"local-install-candidate.schema.json",
 	"observer-frame.schema.json",
 	"operation.schema.json",
 	"operator-snapshot.schema.json",
 	"profile-projection.schema.json",
+	"publication-absence.schema.json",
 	"release-evidence.schema.json",
 }
 
@@ -328,6 +330,155 @@ func TestDaemonEventV2SchemaAcceptsEveryProductionLegacyKind(t *testing.T) {
 		if err := schema.Validate(value); err != nil {
 			t.Fatalf("%s JSON schema validation: %v\n%s", event.Kind, err, data)
 		}
+	}
+}
+
+func TestReleaseClosureSchemasRejectFalseSuccessClaims(t *testing.T) {
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	tree := "89abcdef0123456789abcdef0123456789abcdef"
+	digest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	artifact := map[string]any{
+		"path":   "run-fixture/observation.json",
+		"sha256": digest,
+		"bytes":  42,
+		"mode":   "0600",
+	}
+	localChecks := map[string]any{
+		"sourceClean":                        true,
+		"archiveDigestVerified":              true,
+		"archiveSafetyVerified":              true,
+		"packageVerified":                    true,
+		"packageIdentityVerified":            true,
+		"legacyInstallRemoved":               true,
+		"legacyDataDiscarded":                true,
+		"unrelatedHomebrewPreserved":         true,
+		"setupCompleted":                     true,
+		"daemonStarted":                      true,
+		"secretStoredWithoutRetention":       true,
+		"connectionPlanned":                  true,
+		"connectionAppliedWithoutDaemonStop": true,
+		"runCompletedThroughProxy":           true,
+		"helpJourneysRendered":               true,
+		"tuiSnapshotRendered":                true,
+		"tuiPTYExitedCleanly":                true,
+		"webUIAuthenticated":                 true,
+		"environmentCleaned":                 true,
+		"sameCandidateUpdate":                true,
+		"uninstallDryRun":                    true,
+		"uninstallPreservedStore":            true,
+		"packageFilesAbsentAfterUninstall":   true,
+		"finalReinstallExact":                true,
+		"finalDaemonStopped":                 true,
+		"finalEnvironmentAbsent":             true,
+		"noSecretValueInEvidence":            true,
+	}
+	local := map[string]any{
+		"schema":      "hideout.local-install-candidate/v1",
+		"generatedAt": "2026-07-31T00:00:00Z",
+		"result":      "passed",
+		"sourceCandidate": map[string]any{
+			"commit": commit,
+			"tree":   tree,
+			"dirty":  false,
+		},
+		"candidateAcceptance": true,
+		"candidate": map[string]any{
+			"version":                "0.1.0-alpha.4",
+			"archive":                "run-fixture/hideout-v0.1.0-alpha.4-darwin-arm64.tar.gz",
+			"archiveSHA256":          digest,
+			"packageManifestSHA256":  digest,
+			"installedBinarySHA256":  digest,
+			"consumedWithoutRebuild": true,
+		},
+		"installation": map[string]any{
+			"hostOS":                "Darwin",
+			"hostArch":              "arm64",
+			"prefix":                "/opt/homebrew",
+			"store":                 "/Users/fixture/.hideout",
+			"legacyDataPolicy":      "explicitly-discarded",
+			"priorInstallation":     "homebrew-v0.1.0-alpha.3",
+			"finalInstallation":     "exact-standalone-candidate",
+			"finalDaemonState":      "stopped",
+			"finalEnvironmentCount": 0,
+		},
+		"checks": localChecks,
+		"artifacts": []any{
+			artifact, artifact, artifact, artifact,
+			artifact, artifact, artifact, artifact,
+		},
+		"limitations": []any{"local-only candidate"},
+	}
+	localSchema := compileFeatureSchema(t, "local-install-candidate.schema.json")
+	if err := localSchema.Validate(local); err != nil {
+		t.Fatalf("valid local-install receipt: %v", err)
+	}
+	localChecks["connectionAppliedWithoutDaemonStop"] = false
+	if err := localSchema.Validate(local); err == nil {
+		t.Fatal("local-install schema accepted a false required check")
+	}
+	localChecks["connectionAppliedWithoutDaemonStop"] = true
+
+	publication := map[string]any{
+		"schema":      "hideout.publication-absence/v1",
+		"generatedAt": "2026-07-31T00:00:00Z",
+		"result":      "passed",
+		"sourceCandidate": map[string]any{
+			"commit": commit,
+			"tree":   tree,
+			"dirty":  false,
+		},
+		"candidate": map[string]any{
+			"version":       "0.1.0-alpha.4",
+			"tag":           "v0.1.0-alpha.4",
+			"archiveSHA256": digest,
+		},
+		"candidateArchiveSHA256": digest,
+		"observations": map[string]any{
+			"remoteTagCreated":     false,
+			"githubReleaseCreated": false,
+			"homebrewChanged":      false,
+			"packagePublished":     false,
+		},
+		"remote": map[string]any{
+			"sourceRepository":   "vibe-agi/hideout",
+			"tagQuery":           "refs/tags/v0.1.0-alpha.4",
+			"releaseHTTPStatus":  404,
+			"homebrewRepository": "vibe-agi/homebrew-tap",
+			"formulaPath":        "Formula/hideout.rb",
+			"formulaSHA256":      digest,
+		},
+		"localTap": map[string]any{
+			"path":                "/opt/homebrew/Library/Taps/vibe-agi/homebrew-tap",
+			"headBefore":          commit,
+			"headAfter":           commit,
+			"treeBefore":          tree,
+			"treeAfter":           tree,
+			"formulaSHA256Before": digest,
+			"formulaSHA256After":  digest,
+			"cleanBefore":         true,
+			"cleanAfter":          true,
+		},
+		"checks": map[string]any{
+			"sourceClean":              true,
+			"candidateDigestVerified":  true,
+			"remoteTagAbsent":          true,
+			"githubReleaseAbsent":      true,
+			"homebrewFormulaUnchanged": true,
+			"homebrewCandidateAbsent":  true,
+			"localTapUnchanged":        true,
+			"noPublicationMutation":    true,
+			"observationsExactlyFalse": true,
+		},
+		"artifacts":   []any{artifact, artifact, artifact},
+		"limitations": []any{"read-only point-in-time observation"},
+	}
+	publicationSchema := compileFeatureSchema(t, "publication-absence.schema.json")
+	if err := publicationSchema.Validate(publication); err != nil {
+		t.Fatalf("valid publication-absence receipt: %v", err)
+	}
+	publication["observations"].(map[string]any)["githubReleaseCreated"] = true
+	if err := publicationSchema.Validate(publication); err == nil {
+		t.Fatal("publication-absence schema accepted an observed release")
 	}
 }
 

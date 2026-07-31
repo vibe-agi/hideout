@@ -121,7 +121,9 @@ cleanup_tree() {
   fi
   case "$target" in
     "$tmp_base"/"$prefix".*)
-      rm -rf -- "$target"
+      [ ! -L "$target" ] ||
+        fail "refusing symlink cleanup target: $target"
+      find "$target" -depth -delete
       ;;
     *)
       printf 'collect-evidence: refusing unexpected cleanup target: %s\n' \
@@ -275,6 +277,112 @@ validate_fresh_json() {
       ((.generatedAt | fromdateiso8601) >= $sourceEpoch)
     ' "$evidence_file" >/dev/null ||
     fail "evidence predates the candidate commit: $evidence_file"
+}
+
+validate_closure_receipt() {
+  local receipt="$1" schema="$2" receipt_root
+  local path expected_sha expected_bytes evidence_file
+  go run ./cmd/hideout-schema-validate \
+    "$schema" "$receipt" >/dev/null ||
+    fail "closure receipt failed JSON schema validation: $receipt"
+  jq -e '
+    ([.artifacts[].path] | length) > 0 and
+    ([.artifacts[].path] | unique | length) ==
+      ([.artifacts[].path] | length)
+  ' "$receipt" >/dev/null ||
+    fail "closure receipt artifact paths are empty or duplicated: $receipt"
+  receipt_root="$(
+    CDPATH='' cd -- "$(dirname -- "$receipt")" && pwd -P
+  )"
+  while IFS=$'\t' read -r path expected_sha expected_bytes; do
+    safe_relative_path "$path" ||
+      fail "closure receipt contains an unsafe artifact path: $path"
+    evidence_file="$receipt_root/$path"
+    require_private_evidence_file "$evidence_file"
+    verify_sha256 "$evidence_file" "$expected_sha" ||
+      fail "closure receipt artifact digest is invalid: $path"
+    [ "$(file_bytes "$evidence_file")" = "$expected_bytes" ] ||
+      fail "closure receipt artifact byte count is invalid: $path"
+  done < <(
+    jq -r \
+      '.artifacts[] | [.path,.sha256,(.bytes|tostring)] | @tsv' \
+      "$receipt"
+  )
+}
+
+validate_installed_candidate() {
+  local receipt="$1" receipt_prefix receipt_store expected_prefix expected_store
+  local installed expected_binary_sha packaged_binary_sha environment_count
+  require_command brew ||
+    fail "installed-candidate verification requires Homebrew"
+  receipt_prefix="$(jq -er '.installation.prefix' "$receipt")"
+  receipt_store="$(jq -er '.installation.store' "$receipt")"
+  expected_prefix="$(brew --prefix)"
+  expected_prefix="$(
+    CDPATH='' cd -- "$expected_prefix" && pwd -P
+  )"
+  expected_store="$(
+    CDPATH='' cd -- "$HOME" && printf '%s/.hideout\n' "$(pwd -P)"
+  )"
+  if [ "$receipt_prefix" != "$expected_prefix" ] ||
+    [ "$receipt_store" != "$expected_store" ]; then
+    fail "local-install receipt does not target this exact installation/store"
+  fi
+  if [ ! -d "$receipt_prefix" ] || [ -L "$receipt_prefix" ] ||
+    [ ! -d "$receipt_store" ] || [ -L "$receipt_store" ]; then
+    fail "installed candidate prefix/store is missing or unsafe"
+  fi
+  [ "$(normalized_mode "$receipt_store")" = "0700" ] ||
+    fail "installed candidate store is not private mode 0700"
+
+  installed="$receipt_prefix/bin/hideout"
+  [ -f "$installed" ] && [ ! -L "$installed" ] &&
+    [ -x "$installed" ] ||
+    fail "installed candidate binary is missing or unsafe"
+  expected_binary_sha="$(
+    jq -er '.candidate.installedBinarySHA256' "$receipt"
+  )"
+  packaged_binary_sha="$(sha256_file "$package_root/bin/hideout")"
+  if [ "$expected_binary_sha" != "$packaged_binary_sha" ] ||
+    ! verify_sha256 "$installed" "$packaged_binary_sha"; then
+    fail "installed binary does not match the exact packaged candidate"
+  fi
+
+  "$installed" version --json \
+    >"$scratch/installed-candidate-version.json"
+  jq -e \
+    --arg version "$candidate_version" \
+    --arg commit "$source_commit" '
+      .schema == "hideout.binary-identity/v1" and
+      .productVersion == $version and
+      .sourceCommit == $commit and
+      .hostOS == "darwin" and
+      .hostArch == "arm64"
+    ' "$scratch/installed-candidate-version.json" >/dev/null ||
+    fail "installed candidate binary identity is invalid"
+  "$installed" package verify "$receipt_prefix" \
+    >"$scratch/installed-candidate-package-verify.out" \
+    2>"$scratch/installed-candidate-package-verify.err" ||
+    fail "installed candidate package verification failed"
+  if "$installed" daemon status \
+    >"$scratch/installed-candidate-daemon.out" \
+    2>"$scratch/installed-candidate-daemon.err"; then
+    fail "installed candidate daemon is not in the required stopped state"
+  fi
+  "$installed" env list \
+    >"$scratch/installed-candidate-environments.out"
+  environment_count="$(
+    awk -F '\t' \
+      '$NF ~ /^env_[A-Za-z0-9_-]+$/ {count++} END {print count+0}' \
+      "$scratch/installed-candidate-environments.out"
+  )"
+  [ "$environment_count" -eq 0 ] ||
+    fail "installed candidate still retains an environment"
+  "$installed" show connection \
+    >"$scratch/installed-candidate-connection.out" \
+    2>"$scratch/installed-candidate-connection.err"
+  grep -Fqi 'direct' "$scratch/installed-candidate-connection.out" ||
+    fail "installed candidate final profile is not direct-network"
 }
 
 validate_simple_summary() {
@@ -827,6 +935,9 @@ publication_receipt="$artifact_root/publication-absence/result.json"
 
 if [ -f "$local_install_receipt" ]; then
   require_private_evidence_file "$local_install_receipt"
+  validate_closure_receipt \
+    "$local_install_receipt" \
+    "schemas/local-install-candidate.schema.json"
   jq -e \
     --arg commit "$source_commit" \
     --arg tree "$source_tree" \
@@ -841,6 +952,7 @@ if [ -f "$local_install_receipt" ]; then
       all(.checks[]; . == true)
     ' "$local_install_receipt" >/dev/null ||
     fail "local-install receipt is stale, failed, or mismatched"
+  validate_installed_candidate "$local_install_receipt"
   validate_fresh_json "$local_install_receipt"
   local_install_status="passed"
   local_install_ref="$(artifact_ref "$local_install_receipt")"
@@ -848,6 +960,9 @@ fi
 
 if [ -f "$publication_receipt" ]; then
   require_private_evidence_file "$publication_receipt"
+  validate_closure_receipt \
+    "$publication_receipt" \
+    "schemas/publication-absence.schema.json"
   jq -e \
     --arg commit "$source_commit" \
     --arg tree "$source_tree" \

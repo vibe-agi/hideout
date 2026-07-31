@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
+# The absolute path is rooted from this script before sourcing.
+# shellcheck disable=SC1091
 source "$repo_root/scripts/lib/reproducible-package.sh"
 
 umask 077
@@ -258,6 +260,8 @@ if [ "$preflight_only" -eq 1 ]; then
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-build-candidate-preflight.XXXXXX"
   )"
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
   cleanup_preflight() {
     cleanup_tree \
       "${preflight_root:-}" \
@@ -521,7 +525,7 @@ if [ -n "$source_status" ]; then
   exit 1
 fi
 source_commit="$(git rev-parse --verify HEAD)"
-source_tree="$(git rev-parse --verify HEAD^{tree})"
+source_tree="$(git rev-parse --verify 'HEAD^{tree}')"
 if [[ ! "$source_commit" =~ ^[a-f0-9]{40}$ ]] ||
   [[ ! "$source_tree" =~ ^[a-f0-9]{40}$ ]]; then
   printf 'build-candidate: source commit/tree identity is invalid\n' >&2
@@ -635,7 +639,8 @@ compare_regular_tree() {
 }
 
 verify_package() {
-  local build="$1" package_root="$scratch/extracted-$build/hideout"
+  local build="$1" package_root
+  package_root="$scratch/extracted-$build/hideout"
   local manifest="$package_root/package-manifest.json"
   local prefix="$scratch/verify-$build"
   local expected_binaries expected_files actual_files
@@ -1050,7 +1055,7 @@ fi
 
 source_manifest "$scratch/source-after.tsv"
 if [ "$(git rev-parse --verify HEAD)" != "$source_commit" ] ||
-  [ "$(git rev-parse --verify HEAD^{tree})" != "$source_tree" ] ||
+  [ "$(git rev-parse --verify 'HEAD^{tree}')" != "$source_tree" ] ||
   [ -n "$(git status --porcelain=v1 --untracked-files=all)" ] ||
   ! cmp -s "$scratch/source-before.tsv" "$scratch/source-after.tsv"; then
   printf 'build-candidate: source tree changed during candidate build\n' >&2
