@@ -866,11 +866,11 @@ cmp "$formal_inventory_source" "$formal_inventory_evidence" >/dev/null ||
 [ -f "$claim_matrix" ] &&
   [ ! -L "$claim_matrix" ] ||
   fail "claim matrix is missing or unsafe"
-[ "$(grep -Ec '^\| CR045-[0-9]{3} \|' "$review_file")" -eq 7 ] ||
-  fail "final code-review report does not contain exactly seven findings"
+[ "$(grep -Ec '^\| CR045-[0-9]{3} \|' "$review_file")" -eq 10 ] ||
+  fail "final code-review report does not contain exactly ten findings"
 grep -Fq 'There is no open required review finding.' "$review_file" ||
   fail "final code-review report lacks closed-required disposition"
-for finding_number in 001 002 003 004 005 006 007; do
+for finding_number in 001 002 003 004 005 006 007 008 009 010; do
   [ "$(grep -c "| CR045-$finding_number |" "$review_file")" -eq 1 ] ||
     fail "final code-review report has a missing or duplicate finding"
 done
