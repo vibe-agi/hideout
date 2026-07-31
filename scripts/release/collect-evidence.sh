@@ -137,15 +137,33 @@ cleanup_tree() {
 }
 
 verify_sha256() {
-  local evidence_file="$1" expected="$2"
-  [ -f "$evidence_file" ] &&
-    [ ! -L "$evidence_file" ] &&
-    [[ "$expected" =~ ^[a-f0-9]{64}$ ]] &&
-    [ "$(sha256_file "$evidence_file")" = "$expected" ]
+	local evidence_file="$1" expected="$2"
+	[ -f "$evidence_file" ] &&
+		[ ! -L "$evidence_file" ] &&
+		[[ "$expected" =~ ^[a-f0-9]{64}$ ]] &&
+		[ "$(sha256_file "$evidence_file")" = "$expected" ]
+}
+
+review_finding_count_for_file() {
+  local review_path="$1"
+  local finding_ids finding_id expected_id
+  local count=0
+  finding_ids="$(
+    sed -n \
+      's/^| CR045-\([0-9][0-9][0-9]\) |.*/\1/p' \
+      "$review_path"
+  )" || return 1
+  [ -n "$finding_ids" ] || return 1
+  while IFS= read -r finding_id; do
+    count=$((count + 1))
+    expected_id="$(printf '%03d' "$count")"
+    [ "$finding_id" = "$expected_id" ] || return 1
+  done <<<"$finding_ids"
+  printf '%s\n' "$count"
 }
 
 run_preflight() {
-  local fixture digest
+  local fixture digest review_fixture
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-collect-evidence-preflight.XXXXXX"
   )"
@@ -178,6 +196,29 @@ run_preflight() {
     safe_relative_path "/tmp/summary.json" ||
     safe_relative_path $'run-1/\tsummary.json'; then
     fail "unsafe evidence path was accepted"
+  fi
+  review_fixture="$preflight_root/review.md"
+  printf '%s\n' \
+    '| CR045-001 | Low | one |' \
+    '| CR045-002 | Low | two |' \
+    '| CR045-003 | Low | three |' >"$review_fixture"
+  [ "$(review_finding_count_for_file "$review_fixture")" -eq 3 ] ||
+    fail "contiguous review finding fixture was rejected"
+  printf '%s\n' \
+    '| CR045-001 | Low | one |' \
+    '| CR045-003 | Low | gap |' >"$review_fixture"
+  if review_finding_count_for_file "$review_fixture" >/dev/null; then
+    fail "gapped review finding fixture was accepted"
+  fi
+  printf '%s\n' \
+    '| CR045-001 | Low | one |' \
+    '| CR045-001 | Low | duplicate |' >"$review_fixture"
+  if review_finding_count_for_file "$review_fixture" >/dev/null; then
+    fail "duplicate review finding fixture was accepted"
+  fi
+  : >"$review_fixture"
+  if review_finding_count_for_file "$review_fixture" >/dev/null; then
+    fail "empty review finding fixture was accepted"
   fi
   gate_completed=1
   printf 'collect-evidence: preflight=passed\n'
@@ -866,14 +907,13 @@ cmp "$formal_inventory_source" "$formal_inventory_evidence" >/dev/null ||
 [ -f "$claim_matrix" ] &&
   [ ! -L "$claim_matrix" ] ||
   fail "claim matrix is missing or unsafe"
-[ "$(grep -Ec '^\| CR045-[0-9]{3} \|' "$review_file")" -eq 14 ] ||
-  fail "final code-review report does not contain exactly fourteen findings"
+if ! review_finding_count="$(
+  review_finding_count_for_file "$review_file"
+)"; then
+  fail "final code-review report finding IDs are empty, duplicated, out of order, or non-contiguous"
+fi
 grep -Fq 'There is no open required review finding.' "$review_file" ||
   fail "final code-review report lacks closed-required disposition"
-for finding_number in 001 002 003 004 005 006 007 008 009 010 011 012 013 014; do
-  [ "$(grep -c "| CR045-$finding_number |" "$review_file")" -eq 1 ] ||
-    fail "final code-review report has a missing or duplicate finding"
-done
 
 source_manifest_relative="$(
   jq -er '.source.manifestSHA256' "$package_summary"
@@ -1133,6 +1173,7 @@ jq -n \
   --argjson runtime "$(cat "$scratch/runtime.json")" \
   --argjson formal "$(cat "$scratch/formal.json")" \
   --argjson gates "$(cat "$scratch/gates.json")" \
+  --argjson reviewFindingCount "$review_finding_count" \
   --argjson review "$(artifact_ref "$review_file")" \
   --argjson claims "$(artifact_ref "$claim_matrix")" \
   --argjson limitations "$(cat "$scratch/limitations.json")" \
@@ -1172,7 +1213,7 @@ jq -n \
       gates:$gates,
       review:{
         result:"passed",
-        requiredFindings:7,
+        requiredFindings:$reviewFindingCount,
         openRequiredFindings:0,
         report:$review,
         claimMatrix:$claims
@@ -1197,6 +1238,7 @@ jq -e \
   --arg version "$candidate_version" \
   --arg archiveSHA256 "$candidate_archive_sha" \
   --arg stage "$stage" \
+  --argjson reviewFindingCount "$review_finding_count" \
   --argjson releaseReadiness "$release_readiness" '
     .schema == "hideout.release-evidence/v1" and
     .result == "passed" and
@@ -1223,7 +1265,7 @@ jq -e \
     all(.gates[]; .result == "passed") and
     all(.gates[] | select(.scope == "candidate");
       .candidateAcceptance == true) and
-    .review.requiredFindings == 7 and
+    .review.requiredFindings == $reviewFindingCount and
     .review.openRequiredFindings == 0 and
     (.limitations | length) >= 5
   ' "$output_tmp" >/dev/null ||

@@ -788,6 +788,7 @@ func BootstrapScript(plan Plan) string {
 		}
 		b.WriteString("command -v tun2socks >/dev/null 2>&1 || { echo 'hideout: tun2socks command missing' >&2; exit 127; }\n")
 		b.WriteString("command -v ip >/dev/null 2>&1 || { echo 'hideout: ip command missing' >&2; exit 127; }\n")
+		b.WriteString("command -v touch >/dev/null 2>&1 || { echo 'hideout: touch command missing' >&2; exit 127; }\n")
 		b.WriteString("[ -c /dev/net/tun ] || { echo 'hideout: /dev/net/tun is unavailable' >&2; exit 127; }\n")
 		fmt.Fprintf(&b, "[ -r %s ] || { echo 'hideout: proxy secret file missing' >&2; exit 127; }\n", shellQuote(proxyPath))
 		fmt.Fprintf(&b, "proxy_url=$(sed -n '1p' %s)\n", shellQuote(proxyPath))
@@ -796,7 +797,7 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("gateway_config=/run/hideout/network/tun2socks.yaml\n")
 		b.WriteString("umask 077\n")
 		b.WriteString("mkdir -p /run/hideout/network\n")
-		b.WriteString("printf 'device: tun://hideout0\\nproxy: %s\\nloglevel: warn\\n' \"$proxy_url\" > \"$gateway_config\"\n")
+		b.WriteString("printf 'device: tun://hideout0\\nproxy: %s\\nloglevel: warn\\ntun-post-up: touch /hideout/session/network/tun2socks.ready\\n' \"$proxy_url\" > \"$gateway_config\"\n")
 		b.WriteString("chmod 0600 \"$gateway_config\"\n")
 		b.WriteString("unset proxy_url\n")
 		// Self-heal a retained privacy network from an unclean prior teardown or
@@ -863,11 +864,14 @@ func BootstrapScript(plan Plan) string {
 		b.WriteString("else\n")
 		b.WriteString("  ip route replace \"$proxy_route_host\" dev \"$default_dev\" || { echo 'hideout: proxy endpoint route setup failed' >&2; exit 127; }\n")
 		b.WriteString("fi\n")
+		b.WriteString("rm -f /hideout/session/network/tun2socks.ready\n")
 		b.WriteString("tun2socks -config \"$gateway_config\" > /hideout/session/network/tun2socks.log 2>&1 &\n")
 		b.WriteString("unset proxy_url proxy_authority\n")
 		b.WriteString("echo $! > /hideout/session/network/tun2socks.pid\n")
-		b.WriteString("sleep 0.2\n")
+		b.WriteString("i=0\n")
+		b.WriteString("while [ ! -f /hideout/session/network/tun2socks.ready ] && kill -0 \"$(cat /hideout/session/network/tun2socks.pid)\" 2>/dev/null && [ \"$i\" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done\n")
 		b.WriteString("kill -0 \"$(cat /hideout/session/network/tun2socks.pid)\" 2>/dev/null || { echo 'hideout: tun2socks failed to start' >&2; exit 127; }\n")
+		b.WriteString("[ -f /hideout/session/network/tun2socks.ready ] || { echo 'hideout: tun2socks readiness timed out' >&2; exit 127; }\n")
 		b.WriteString("ip route replace default dev hideout0 metric 1\n")
 		b.WriteString("verified_default_route=$(ip route show default | head -n 1 || true)\n")
 		b.WriteString("printf '%s\\n' \"$verified_default_route\" > /hideout/session/network/default-route.after\n")
@@ -934,7 +938,7 @@ func CleanupScript(plan Plan) string {
 		b.WriteString("  ip link set dev hideout0 down 2>/dev/null || true\n")
 		b.WriteString("  ip tuntap del mode tun dev hideout0 2>/dev/null || true\n")
 		b.WriteString("fi\n")
-		b.WriteString("rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/proxy.url /run/hideout/network/tun2socks.yaml\n")
+		b.WriteString("rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/tun2socks.ready /hideout/session/network/proxy.url /run/hideout/network/tun2socks.yaml\n")
 		b.WriteString("write_status 'tun2socks cleanup complete'\n")
 		b.WriteString("[ \"$tun2socks_stop_failed\" -eq 0 ] || exit 1\n")
 	default:
@@ -1022,10 +1026,14 @@ func writeDNSMediationSetup(b *strings.Builder, mediatedResolver string) {
 	b.WriteString("chmod 0644 /hideout/session/network/resolvers.before 2>/dev/null || true\n")
 	// Start the DoH stub on 127.0.0.1:53. DNS in on :53, DoH out over HTTPS to
 	// the mediated resolver, which routes through the TUN and the CONNECT proxy.
-	fmt.Fprintf(b, "hideout-dns-stub --listen %s --doh-server \"$mediated_resolver\" > /hideout/session/network/dns-stub.log 2>&1 &\n", dnsStubAddr)
+	b.WriteString("rm -f /hideout/session/network/dns-stub.ready\n")
+	fmt.Fprintf(b, "hideout-dns-stub --listen %s --doh-server \"$mediated_resolver\" --ready-file /hideout/session/network/dns-stub.ready > /hideout/session/network/dns-stub.log 2>&1 &\n", dnsStubAddr)
 	b.WriteString("echo $! > /hideout/session/network/dns-stub.pid\n")
-	b.WriteString("sleep 0.2\n")
-	b.WriteString("kill -0 \"$(cat /hideout/session/network/dns-stub.pid)\" 2>/dev/null || { echo 'hideout: hideout-dns-stub failed to start' >&2; exit 127; }\n")
+	b.WriteString("i=0\n")
+	b.WriteString("while { [ ! -r /hideout/session/network/dns-stub.ready ] || [ \"$(sed -n '1p' /hideout/session/network/dns-stub.ready)\" != \"$(sed -n '1p' /hideout/session/network/dns-stub.pid)\" ]; } && kill -0 \"$(cat /hideout/session/network/dns-stub.pid)\" 2>/dev/null && [ \"$i\" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done\n")
+	b.WriteString("dns_stub_pid=$(sed -n '1p' /hideout/session/network/dns-stub.pid)\n")
+	b.WriteString("if ! kill -0 \"$dns_stub_pid\" 2>/dev/null; then wait \"$dns_stub_pid\" 2>/dev/null || true; rm -f /hideout/session/network/dns-stub.ready; echo 'hideout: hideout-dns-stub failed to start' >&2; exit 127; fi\n")
+	b.WriteString("if [ ! -r /hideout/session/network/dns-stub.ready ] || [ \"$(sed -n '1p' /hideout/session/network/dns-stub.ready)\" != \"$dns_stub_pid\" ]; then kill \"$dns_stub_pid\" 2>/dev/null || true; wait \"$dns_stub_pid\" 2>/dev/null || true; rm -f /hideout/session/network/dns-stub.ready; echo 'hideout: hideout-dns-stub readiness timed out' >&2; exit 127; fi\n")
 	// Point the guest resolver at the stub. Overriding /etc/resolv.conf (which is
 	// usually a systemd-resolved symlink) makes libc's DNS use the stub directly;
 	// resolvectl repoints systemd-resolved (the nss-resolve path) at the stub too.
@@ -1075,6 +1083,7 @@ func writeDNSMediationVerify(b *strings.Builder, mediatedResolver string) {
 	}
 	fmt.Fprintf(b, "grep -q '^nameserver %s' /etc/resolv.conf 2>/dev/null || { echo 'hideout: guest resolver was not pointed at the DNS stub' >&2; exit 127; }\n", dnsStubIP)
 	b.WriteString("kill -0 \"$(cat /hideout/session/network/dns-stub.pid)\" 2>/dev/null || { echo 'hideout: hideout-dns-stub stopped before target launch' >&2; exit 127; }\n")
+	b.WriteString("[ \"$(sed -n '1p' /hideout/session/network/dns-stub.ready 2>/dev/null)\" = \"$(sed -n '1p' /hideout/session/network/dns-stub.pid)\" ] || { echo 'hideout: hideout-dns-stub readiness identity changed' >&2; exit 127; }\n")
 	b.WriteString("write_status 'dns mediation enforced'\n")
 }
 
@@ -1106,7 +1115,7 @@ func writeDNSMediationCleanup(b *strings.Builder) {
 	b.WriteString("    for proto in udp tcp; do iptables -D OUTPUT -p \"$proto\" --dport 53 -d \"$ns\" -j DROP 2>/dev/null || true; done\n")
 	b.WriteString("  done\n")
 	b.WriteString("fi\n")
-	b.WriteString("rm -f /hideout/session/network/mediated-resolver /hideout/session/network/dns-stub.pid /hideout/session/network/resolvers.before\n")
+	b.WriteString("rm -f /hideout/session/network/mediated-resolver /hideout/session/network/dns-stub.pid /hideout/session/network/dns-stub.ready /hideout/session/network/resolvers.before\n")
 }
 
 func shellQuote(value string) string {

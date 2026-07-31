@@ -68,6 +68,16 @@ grep -q 'runtime_agent_secret_scan=passed' scripts/test-runtime-agent-install.sh
 grep -q 'HIDEOUT_GATE3_RUNTIME_MODE' scripts/test-gate3-hidden-proxy.sh
 grep -q 'runtime_agent_privacy=passed' scripts/test-gate3-hidden-proxy.sh
 grep -q 'catalog still contains an unpromoted artifact' scripts/test-runtime-lima.sh
+grep -F 'if [[ "$url" == https://example.invalid/* ]] || ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then' \
+  scripts/test-runtime-lima.sh >/dev/null
+if grep -F '[ "$url" = "https://example.invalid/"* ]' \
+  scripts/test-runtime-lima.sh >/dev/null; then
+  echo "runtime-smoke: placeholder URL guard uses literal [ ] comparison" >&2
+  exit 1
+fi
+placeholder_runtime_url="https://example.invalid/runtime.qcow2"
+[[ "$placeholder_runtime_url" == https://example.invalid/* ]] ||
+  { echo "runtime-smoke: placeholder URL pattern fixture was not rejected" >&2; exit 1; }
 grep -q 'RuntimePolicyExactReal' internal/productevidence/registry.go
 grep -q 'local fixture' internal/productevidence/evaluate_test.go
 grep -q 'dirty gate' internal/releasecompat/readiness_test.go

@@ -153,7 +153,28 @@ wait_for_file() {
   deadline=$(($(date +%s) + timeout_seconds))
   while [ ! -f "$path" ]; do
     if [ -n "${run_pid:-}" ] && ! kill -0 "$run_pid" 2>/dev/null; then
-      fail "workload exited before $description"
+      local run_status=0
+      if wait "$run_pid"; then
+        run_status=0
+      else
+        run_status=$?
+      fi
+      run_pid=""
+      local diagnostic=""
+      if [ -n "${evidence_root:-}" ] &&
+        [ -d "$evidence_root/logs" ] &&
+        [ -f "${work_root:-}/run.err" ]; then
+        local diagnostic_candidate
+        diagnostic_candidate="$evidence_root/logs/active-workload.stderr.log"
+        if cp "$work_root/run.err" "$diagnostic_candidate" &&
+          chmod 0600 "$diagnostic_candidate"; then
+          diagnostic="$diagnostic_candidate"
+        fi
+      fi
+      if [ -n "$diagnostic" ]; then
+        fail "workload exited with status $run_status before $description; private stderr evidence: $diagnostic"
+      fi
+      fail "workload exited with status $run_status before $description"
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       fail "timed out waiting for $description"
@@ -891,6 +912,21 @@ printf "%s\n" "$$" >"$workspace/target-pid-before"
 cat /proc/sys/kernel/random/boot_id >"$workspace/boot-before"
 printf "%s\n" "${HIDEOUT_SESSION_ID:-}" >"$workspace/session-before"
 
+workspace_write_failure() {
+  failure_label=$1
+  echo "workspace write failed: $failure_label" >&2
+  id >&2 || true
+  stat -c "workspace mode=%a uid=%u gid=%g type=%F" "$workspace" >&2 ||
+    true
+  grep " /workspace " /proc/self/mountinfo >&2 || true
+  if : >"$workspace/write-probe-after-failure"; then
+    echo "workspace write probe unexpectedly succeeded" >&2
+  else
+    echo "workspace write probe also failed" >&2
+  fi
+  exit 55
+}
+
 bash -eu -c '"'"'
 workspace=$1
 target_host=1.1.1.1
@@ -928,9 +964,35 @@ while [ ! -f "$workspace/rotate-go" ]; do sleep 0.05; done
 curl -fsS --max-time 20 "$url?phase=after" >/dev/null
 wait "$held_route_pid"
 test -f "$workspace/held-after-done"
-printf "%s\n" "$$" >"$workspace/target-pid-after"
-cat /proc/sys/kernel/random/boot_id >"$workspace/boot-after"
-printf "%s\n" "${HIDEOUT_SESSION_ID:-}" >"$workspace/session-after"
+
+# Keep the already-rotated workload alive across the 30-second daemon session
+# renewal boundary, then pressure fresh workspace creates. This catches
+# transport or authority failures that a fast happy-path run would finish
+# before exercising.
+if ! date +%s >"$workspace/renewal-boundary-before"; then
+  workspace_write_failure renewal-boundary-before
+fi
+sleep 40
+if ! date +%s >"$workspace/renewal-boundary-after"; then
+  workspace_write_failure renewal-boundary-after
+fi
+workspace_stress_index=0
+while [ "$workspace_stress_index" -lt 64 ]; do
+  workspace_stress_index=$((workspace_stress_index + 1))
+  if ! printf "%s\n" "$workspace_stress_index" \
+    >"$workspace/workspace-stress-$workspace_stress_index"; then
+    workspace_write_failure "workspace-stress-$workspace_stress_index"
+  fi
+done
+if ! printf "%s\n" "$$" >"$workspace/target-pid-after"; then
+  workspace_write_failure target-pid-after
+fi
+if ! cat /proc/sys/kernel/random/boot_id >"$workspace/boot-after"; then
+  workspace_write_failure boot-after
+fi
+if ! printf "%s\n" "${HIDEOUT_SESSION_ID:-}" >"$workspace/session-after"; then
+  workspace_write_failure session-after
+fi
 : >"$workspace/after-done"
 while [ ! -f "$workspace/release" ]; do sleep 0.05; done
 ' >"$work_root/run.out" 2>"$work_root/run.err" &
@@ -1090,6 +1152,25 @@ cmp -s "$workspace/session-before" "$workspace/session-after" ||
   fail "session identity changed during online rotation"
 [ -s "$workspace/session-before" ] ||
   fail "target session identity is empty"
+renewal_boundary_before="$(
+  sed -n '1p' "$workspace/renewal-boundary-before"
+)"
+renewal_boundary_after="$(
+  sed -n '1p' "$workspace/renewal-boundary-after"
+)"
+case "$renewal_boundary_before:$renewal_boundary_after" in
+  *[!0-9:]* | :* | *:) fail "session renewal boundary timestamps are invalid" ;;
+esac
+renewal_boundary_seconds=$((renewal_boundary_after - renewal_boundary_before))
+[ "$renewal_boundary_seconds" -ge 35 ] ||
+  fail "active workload did not cross the session renewal boundary"
+workspace_stress_writes="$(
+  find "$workspace" -maxdepth 1 -type f -name 'workspace-stress-*' |
+    wc -l |
+    tr -d '[:space:]'
+)"
+[ "$workspace_stress_writes" -eq 64 ] ||
+  fail "post-renewal workspace create stress was incomplete"
 
 : >"$workspace/release"
 if wait "$run_pid"; then
@@ -1741,6 +1822,8 @@ jq -n \
   --argjson proxyTwoBefore "$proxy_two_before" \
   --argjson proxyTwoAfterRotation "$proxy_two_after_rotation" \
   --argjson proxyTwoFinal "$proxy_two_final" \
+  --argjson renewalBoundarySeconds "$renewal_boundary_seconds" \
+  --argjson workspaceStressWrites "$workspace_stress_writes" \
   --arg heldHTTPConnection "$held_before_connection" \
   --slurpfile crashMatrix "$matrix_summary" \
   --slurpfile artifacts "$artifacts_path" '
@@ -1771,6 +1854,8 @@ jq -n \
       daemonNotRestarted:true,
       vmNotRecreated:true,
       targetNotReplaced:true,
+      sessionRenewalBoundaryCrossed:true,
+      workspacePostRenewalStress:true,
       observerTransportTamperRejected:true,
       cgroupEscapeRejected:true,
       proxyEnvironmentHidden:true,
@@ -1782,6 +1867,10 @@ jq -n \
       proxyTwoBefore:$proxyTwoBefore,
       proxyTwoAfterRotation:$proxyTwoAfterRotation,
       proxyTwoFinal:$proxyTwoFinal
+    },
+    workspaceContinuity: {
+      renewalBoundarySeconds:$renewalBoundarySeconds,
+      stressWrites:$workspaceStressWrites
     },
     routeProof: {
       heldHTTPConnection:$heldHTTPConnection,
@@ -1816,6 +1905,8 @@ jq -e '
   .connectionCounts.proxyTwoFinal >
     .connectionCounts.proxyTwoAfterRotation and
   .checks.existingConnectionRetainsPriorRoute == true and
+  .workspaceContinuity.renewalBoundarySeconds >= 35 and
+  .workspaceContinuity.stressWrites == 64 and
   .checks.networkCrashBoundaryMatrix == true and
   .networkCrashMatrix.result == "passed" and
   (.networkCrashMatrix.boundaries | length) == 5 and

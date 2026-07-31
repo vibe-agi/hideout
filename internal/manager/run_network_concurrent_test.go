@@ -151,6 +151,18 @@ func TestPrepareEnvironmentNetworkBindsManagedSecretGeneration(t *testing.T) {
 		strings.Contains(string(encoded), "managed-password") {
 		t.Fatalf("managed route metadata leaked secret: %s", encoded)
 	}
+	bootstrap, err := os.ReadFile(runNetwork.Plan.BootstrapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const guestReadyPath = "/hideout/runtime/services/network/network/tun2socks.ready"
+	if !strings.Contains(string(bootstrap), "tun-post-up: touch "+guestReadyPath) ||
+		!strings.Contains(string(bootstrap), "[ -f "+guestReadyPath+" ]") {
+		t.Fatalf(
+			"environment network bootstrap did not bind readiness to its service directory: %s",
+			bootstrap,
+		)
+	}
 }
 
 func TestEnvironmentNetworkServiceReusesMatchingFingerprintAndSwitchesProxyOnline(t *testing.T) {

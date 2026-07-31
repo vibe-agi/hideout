@@ -383,13 +383,64 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 		!strings.Contains(string(bootstrap), "chmod 0600 \"$gateway_config\"") {
 		t.Fatalf("runtime verify bootstrap missing tun2socks start: %s", bootstrap)
 	}
+	for _, want := range []string{
+		"hideout: touch command missing",
+		"tun-post-up: touch /hideout/session/network/tun2socks.ready",
+		"rm -f /hideout/session/network/tun2socks.ready",
+		"while [ ! -f /hideout/session/network/tun2socks.ready ]",
+		"tun2socks readiness timed out",
+	} {
+		if !strings.Contains(string(bootstrap), want) {
+			t.Fatalf("runtime verify bootstrap missing readiness handshake %q: %s", want, bootstrap)
+		}
+	}
+	readyIdx := strings.Index(
+		string(bootstrap),
+		"[ -f /hideout/session/network/tun2socks.ready ]",
+	)
+	defaultRouteIdx := strings.Index(
+		string(bootstrap),
+		"ip route replace default dev hideout0",
+	)
+	if readyIdx < 0 || defaultRouteIdx < 0 || readyIdx > defaultRouteIdx {
+		t.Fatalf(
+			"tun2socks readiness must be proved before the default route changes (ready=%d route=%d): %s",
+			readyIdx,
+			defaultRouteIdx,
+			bootstrap,
+		)
+	}
 	if strings.Contains(string(bootstrap), "tun2socks --device") || strings.Contains(string(bootstrap), "--proxy \"$proxy_url\"") {
 		t.Fatalf("runtime verify bootstrap exposes proxy material in process arguments: %s", bootstrap)
 	}
 	// DNS closure: start the DoH stub, redirect guest :53 to it, and blackhole
 	// connected-subnet resolvers, established after the default route is on TUN.
-	if !strings.Contains(string(bootstrap), "hideout-dns-stub --listen 127.0.0.1:53 --doh-server \"$mediated_resolver\"") {
+	if !strings.Contains(string(bootstrap), "hideout-dns-stub --listen 127.0.0.1:53 --doh-server \"$mediated_resolver\" --ready-file /hideout/session/network/dns-stub.ready") {
 		t.Fatalf("bootstrap missing DoH stub start: %s", bootstrap)
+	}
+	dnsReadyIdx := strings.Index(
+		string(bootstrap),
+		"hideout-dns-stub readiness timed out",
+	)
+	resolverRedirectIdx := strings.Index(
+		string(bootstrap),
+		"rm -f /etc/resolv.conf",
+	)
+	if dnsReadyIdx < 0 ||
+		resolverRedirectIdx < 0 ||
+		dnsReadyIdx > resolverRedirectIdx ||
+		!strings.Contains(
+			string(bootstrap),
+			`dns-stub.ready)" != "$dns_stub_pid"`,
+		) ||
+		!strings.Contains(
+			string(bootstrap),
+			`kill "$dns_stub_pid" 2>/dev/null || true; wait "$dns_stub_pid"`,
+		) {
+		t.Fatalf(
+			"DNS listener readiness must bind the exact process before resolver redirection: %s",
+			bootstrap,
+		)
 	}
 	if !strings.Contains(string(bootstrap), "nameserver 127.0.0.1") {
 		t.Fatalf("bootstrap missing guest resolver override to the stub: %s", bootstrap)
@@ -424,6 +475,9 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	}
 	if !strings.Contains(string(mediationCleanup), "dns-stub.pid") {
 		t.Fatalf("cleanup missing DoH stub teardown: %s", mediationCleanup)
+	}
+	if !strings.Contains(string(mediationCleanup), "dns-stub.ready") {
+		t.Fatalf("cleanup missing DoH stub readiness teardown: %s", mediationCleanup)
 	}
 	if !strings.Contains(string(mediationCleanup), "/etc/resolv.conf") {
 		t.Fatalf("cleanup missing resolv.conf restore: %s", mediationCleanup)
@@ -489,6 +543,7 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tun2socks.pid",
+		"tun2socks.ready",
 		"kill \"$pid\"",
 		"while tun2socks_alive && [ \"$i\" -lt 50 ]",
 		"kill -KILL \"$pid\"",
@@ -498,7 +553,7 @@ func TestTun2SocksRuntimeVerificationPlan(t *testing.T) {
 		"route_args=${default_route#default }",
 		"ip route replace default $route_args",
 		"ip tuntap del mode tun dev hideout0",
-		"rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/proxy.url",
+		"rm -f /hideout/session/network/tun2socks.pid /hideout/session/network/tun2socks.ready /hideout/session/network/proxy.url",
 		"sed '/ # hideout-managed-local-bypass$/d' /etc/hosts",
 	} {
 		if !strings.Contains(string(cleanup), want) {

@@ -457,6 +457,8 @@ test -r "$network_dir/tun2socks.pid"
 kill -0 "$(cat "$network_dir/tun2socks.pid")" 2>/dev/null
 test -r "$network_dir/dns-stub.pid"
 kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null
+test -r "$network_dir/dns-stub.ready"
+test "$(sed -n '1p' "$network_dir/dns-stub.ready")" = "$(sed -n '1p' "$network_dir/dns-stub.pid")"
 bypass_count=0
 for route_file in "$network_dir"/local-bypass-*-route.after; do
   [ -f "$route_file" ] || continue
@@ -531,6 +533,7 @@ old_resolver=$3
 new_resolver=$4
 helper="$service_dir/hideout-dns-stub"
 pid_file="$network_dir/dns-stub.pid"
+ready_file="$network_dir/dns-stub.ready"
 rollback_marker="$network_dir/dns-switch-rollback-proved"
 test "$(cat /proc/sys/kernel/random/boot_id)" = "$expected_boot"
 rm -f "$rollback_marker"
@@ -546,10 +549,24 @@ if kill -0 "$old_pid" 2>/dev/null; then
 fi
 start_stub() {
   resolver=$1
-  "$helper" --listen 127.0.0.1:53 --doh-server "$resolver" > "$network_dir/dns-stub.log" 2>&1 &
+  rm -f "$ready_file"
+  "$helper" --listen 127.0.0.1:53 --doh-server "$resolver" --ready-file "$ready_file" > "$network_dir/dns-stub.log" 2>&1 &
   candidate_pid=$!
-  sleep 0.2
-  kill -0 "$candidate_pid" 2>/dev/null
+  i=0
+  while { [ ! -r "$ready_file" ] || [ "$(sed -n '1p' "$ready_file")" != "$candidate_pid" ]; } &&
+    kill -0 "$candidate_pid" 2>/dev/null &&
+    [ "$i" -lt 200 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  if ! kill -0 "$candidate_pid" 2>/dev/null ||
+    [ ! -r "$ready_file" ] ||
+    [ "$(sed -n '1p' "$ready_file")" != "$candidate_pid" ]; then
+    kill "$candidate_pid" 2>/dev/null || true
+    wait "$candidate_pid" 2>/dev/null || true
+    rm -f "$ready_file"
+    return 1
+  fi
 }
 if start_stub "$new_resolver"; then
   printf '%s\n' "$candidate_pid" > "$pid_file.tmp"
@@ -586,6 +603,8 @@ test -f "$network_dir/dns-switch-rollback-proved"
 test "$(cat "$network_dir/mediated-resolver")" = "$old_resolver"
 test -r "$network_dir/dns-stub.pid"
 kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null
+test -r "$network_dir/dns-stub.ready"
+test "$(sed -n '1p' "$network_dir/dns-stub.ready")" = "$(sed -n '1p' "$network_dir/dns-stub.pid")"
 rm -f "$network_dir/dns-switch-rollback-proved"
 `
 	rollbackErr := b.runSetupCommand(
@@ -628,6 +647,8 @@ test -r "$network_dir/mediated-resolver"
 test "$(cat "$network_dir/mediated-resolver")" = "$resolver"
 test -r "$network_dir/dns-stub.pid"
 kill -0 "$(cat "$network_dir/dns-stub.pid")" 2>/dev/null
+test -r "$network_dir/dns-stub.ready"
+test "$(sed -n '1p' "$network_dir/dns-stub.ready")" = "$(sed -n '1p' "$network_dir/dns-stub.pid")"
 `
 	return b.runSetupCommand(
 		ctx,
@@ -1141,11 +1162,17 @@ func ConfigForMachineSpec(spec backend.MachineActivationSpec, static *StaticRunM
 		mounts = append(mounts, sessionStateMounts(static.SessionDir, spec.RuntimeRoot, spec.EnvironmentID != "")...)
 	}
 	return limaConfig{
-		Base:         base,
-		Images:       images,
-		VMType:       "vz",
-		MountType:    "virtiofs",
-		MountInotify: true,
+		Base:      base,
+		Images:    images,
+		VMType:    "vz",
+		MountType: "virtiofs",
+		// Lima implements mountInotify by reflecting every host notification
+		// back into the guest as Chtimes. On VZ virtiofs that races rapid guest
+		// creates and can surface a transient EACCES even though the mount and
+		// directory ownership remain writable. The upstream option is
+		// experimental and disabled by default; keep it off until the
+		// reflection path can be proven write-safe.
+		MountInotify: false,
 		User: user{
 			Name:    spec.Profile.Identity.User,
 			Comment: "Hideout profile user",

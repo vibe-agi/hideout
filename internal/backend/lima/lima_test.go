@@ -49,7 +49,7 @@ func TestPrepareWritesLimaYAML(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("yaml decode: %v\n%s", err, data)
 	}
-	if cfg.VMType != "vz" || cfg.MountType != "virtiofs" || !cfg.MountInotify {
+	if cfg.VMType != "vz" || cfg.MountType != "virtiofs" || cfg.MountInotify {
 		t.Fatalf("unexpected VM settings: %+v", cfg)
 	}
 	if !reflect.DeepEqual(cfg.Base, []string{"template:_images/ubuntu-lts"}) {

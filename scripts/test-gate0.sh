@@ -31,6 +31,12 @@ fi
 
 go build ./...
 go vet ./...
+# The Linux guest helpers and the Linux test binaries the real backend lanes
+# compile (`go test -c` in the workload-observation gate) come out of this same
+# module. A darwin-only symbol reached from portable code type-checks on the
+# host and only fails much later inside a real lane, so prove the guest target
+# here. vet is used rather than build because it also type-checks test files.
+GOOS=linux GOARCH=arm64 go vet ./...
 unformatted="$(gofmt -l cmd internal test)"
 if [ -n "$unformatted" ]; then
   echo "gate0: gofmt required for:" >&2

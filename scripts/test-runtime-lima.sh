@@ -67,7 +67,10 @@ case "$url" in
   https://*.qcow2) ;;
   *) echo "runtime-lima: catalog artifact is not a versioned HTTPS qcow2 URL: $url" >&2; exit 1 ;;
 esac
-if [ "$url" = "https://example.invalid/"* ] || ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+# A glob is only a pattern to [[ ]] and case; inside [ ] it is compared as a
+# literal, so the placeholder guard below silently accepted every unpromoted
+# example.invalid artifact until this became a pattern match.
+if [[ "$url" == https://example.invalid/* ]] || ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
   echo "runtime-lima: catalog still contains an unpromoted artifact" >&2
   exit 1
 fi

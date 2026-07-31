@@ -708,7 +708,8 @@ func TestEnvironmentNetworkReuseVerificationChecksCurrentBootAndRuntimeHealth(t 
 	for _, required := range []string{
 		"/proc/sys/kernel/random/boot_id", "ip link show dev hideout0", "ip route show default",
 		`network_dir="$service_dir/network"`, `"$network_dir/tun2socks.pid"`,
-		`"$network_dir/dns-stub.pid"`, `"$network_dir"/local-bypass-*-route.after`,
+		`"$network_dir/dns-stub.pid"`, `"$network_dir/dns-stub.ready"`,
+		`"$network_dir"/local-bypass-*-route.after`,
 		`ip route get "$route_host"`, `*' dev hideout0'|*' dev hideout0 '*`,
 		`[ "$bypass_count" -gt 0 ]`, "nameserver 127\\.0\\.0\\.1", session.ExpectedBootID,
 	} {
@@ -730,11 +731,21 @@ func TestEnvironmentNetworkDNSReconfigureSeparatesHelperAndStateDirectories(t *t
 	); err != nil {
 		t.Fatal(err)
 	}
+	if len(runner.command) < 3 {
+		t.Fatalf("DNS reconfiguration command=%q", runner.command)
+	}
+	if out, err := exec.Command("sh", "-n", "-c", runner.command[2]).CombinedOutput(); err != nil {
+		t.Fatalf("DNS reconfiguration has invalid shell syntax: %v\n%s\n%s", err, out, runner.command[2])
+	}
 	joined := strings.Join(runner.command, " ")
 	for _, required := range []string{
 		`network_dir="$service_dir/network"`,
 		`helper="$service_dir/hideout-dns-stub"`,
 		`pid_file="$network_dir/dns-stub.pid"`,
+		`ready_file="$network_dir/dns-stub.ready"`,
+		`--ready-file "$ready_file"`,
+		`[ "$(sed -n '1p' "$ready_file")" != "$candidate_pid" ]`,
+		`wait "$candidate_pid"`,
 		`"$network_dir/dns-stub.log"`,
 		`"$network_dir/mediated-resolver"`,
 		"/proc/sys/kernel/random/boot_id",
@@ -777,6 +788,7 @@ func TestEnvironmentNetworkDNSVerifierBindsExactBootAndResolver(
 		`"$network_dir/mediated-resolver"`,
 		"9.9.9.9",
 		`"$network_dir/dns-stub.pid"`,
+		`"$network_dir/dns-stub.ready"`,
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf(

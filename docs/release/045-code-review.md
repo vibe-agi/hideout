@@ -4,24 +4,25 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found fourteen required
-issues. All fourteen are resolved in the current worktree, and their focused regression
-judges pass. There is no open required review finding.
+The final source, security, and operator-UX review found twenty-one required
+issues. All twenty-one were resolved in the review-close worktree, and their
+focused regression judges pass. There is no open required review finding.
 
-This is not yet a release-candidate attestation. The reviewed tree is still the
-large, dirty implementation worktree on `master`; T163 and later tasks must
-bind a clean commit, exact package, installed binary, full gates, and final
-publication-absence proof before readiness can be claimed.
+This report is not itself a release-candidate attestation. At review close, the
+reviewed tree was still the large, dirty implementation worktree on `master`;
+T163 and later tasks must bind a clean commit, exact package, installed binary,
+full gates, and final publication-absence proof before readiness can be
+claimed.
 
 ## Reviewed source identity
 
 | Field | Value |
 | --- | --- |
 | Review date | 2026-07-31 |
-| Base `HEAD` | `9ad7f5339c4617a1ebf9b8ebc784af1d79baf701` |
+| Base `HEAD` | `636b8d477d0dcd966a65a95eef35a27c2deb6471` |
 | Branch | `master` |
-| Worktree at review close | Dirty; eight tracked files changed, 94 additions, 22 deletions, and no untracked files |
-| Candidate status | Not a candidate; exact clean identity remains T163/T171 |
+| Worktree at review close | Dirty implementation tree; exact source identity is bound only by the later candidate freeze |
+| Candidate status | At review close: not a candidate; exact clean identity remains T163/T171 |
 | Publication authority | None; no remote tag, GitHub Release, Homebrew mutation, or package publication is authorized |
 
 The size counters describe the review-close worktree only. They are not a
@@ -57,7 +58,20 @@ The review followed authority and data flow rather than package order:
 11. audited nested release-gate failure propagation, structured failure
     evidence, benchmark duration, and fixed-threshold enforcement; and
 12. profiled the system-wide BPF file-I/O hook and verified that target
-    cgroup rejection precedes every hot-path metadata-cache access.
+    cgroup rejection precedes every hot-path metadata-cache access; and
+13. repeated the real-Lima network-rotation lane from fresh instances, retained
+    the first failing workload stderr, and distinguished its dedicated
+    VirtioFS workspace from the separate shared-workspace Portal path rather
+    than accepting a retry;
+14. checked promoted-runtime rejection and the complete module against both
+    Darwin host and Linux guest build constraints; and
+15. audited DNS listener startup, online replacement, rollback, reuse, and
+    evidence-count binding for process-liveness substitutions and stale
+    constants; and
+16. held a real dedicated-VirtioFS workload across the daemon session-renewal
+    boundary, pressured rapid guest creates, and compared the failing and
+    passing Lima mount configurations instead of accepting an intermittent
+    retry.
 
 Severity means:
 
@@ -86,6 +100,13 @@ Severity means:
 | CR045-012 | Medium | The real-Lima reference workload was too short for a stable fixed 10% comparison on a busy developer host. On threshold failure it exited before writing structured result evidence, and the nested Gate 2 caller discarded the nonzero status and wrote its own passed receipt. The outer performance aggregate still rejected the missing/failed evidence, so this could not publish a false-green candidate, but the child receipt and diagnosis were wrong. The first duration fix enlarged each file and unintentionally multiplied observed `vfs_read` traffic; a clean rerun then exposed 25.441% overhead. | Release performance gate maintainers | Restore the original 32 KiB file payload and I/O density, lengthen the mixed workload with four in-memory SHA-256 passes per parsed record, finalize structured evidence before enforcing the immutable threshold, execute the nested gate in a fresh fail-closed Bash child, explicitly propagate the reference result, surface its terminal reason, and add passing/failing preflight fixtures. | Performance preflight positive/negative fixtures and nested-child `errexit` self-test, Bash syntax and ShellCheck, three stable standalone duration samples, a complete real-Lima diagnostic measuring 6.895% reference median overhead, and the final exact performance aggregate. |
 | CR045-013 | Low | The real-Lima network-rotation gate correctly proved the internal secret commit at generation 2, then rejected the successful CLI status read because it still searched for the obsolete human-facing label `generation=2` after the operator terminology had changed to `version=2`. | Network-rotation gate maintainers | Keep internal operation evidence on the protocol field `generation`, validate CLI status through one exact `version=N` parser, and exercise that parser with current and obsolete terminology fixtures plus the focused app output contract. | Network-rotation preflight, `TestSecretListAndStatusRenderMetadataOnly`, Bash syntax and ShellCheck, a complete dirty-tree real-Lima rotation/crash-recovery diagnostic, and the final exact Lima aggregate. |
 | CR045-014 | Medium | The system-wide BPF `vfs_read`/`vfs_write` hooks looked up and populated `observed_files` before checking the target cgroup. Non-target guest reads could therefore churn the target's bounded inode-identity cache and add avoidable system-wide overhead, although the later reservation guard prevented those events from being exported. | Workload file-observer maintainers | Reject a nil file or non-target cgroup before any file metadata lookup/cache mutation, regenerate the pinned LLVM 19.1.7 BPF object and manifest, and add a real-kernel regression that holds a non-target read descriptor open while proving its exact device/inode never enters the target map. | Reproducible BPF generation check, Linux-arm64 compilation, `TestFileEventReaderRealKernel`, complete real-Lima workload-observation proof with unrelated noise excluded, and the 6.895% real-Lima performance diagnostic. |
+| CR045-015 | Medium | The tun2socks bootstrap used a fixed 200 ms sleep and `kill -0` as its readiness claim. A live process did not prove that the packaged tun2socks engine had opened the TUN device and created its network stack before Hideout changed the default route and launched the target. | Network bootstrap maintainers | Configure the pinned helper's `tun-post-up` hook to write a private one-shot readiness marker only after stack creation, remove any stale marker before start, wait for it with a bounded process-aware loop before changing the default route, and delete it during cleanup. | `TestTun2SocksRuntimeVerificationPlan`, `TestPrepareEnvironmentNetworkBindsManagedSecretGeneration`, shell syntax, network-rotation preflight, and two consecutive fresh-instance real-Lima rotation/crash-recovery passes. |
+| CR045-016 | Low | The network-rotation gate reported only that the workload exited before its first request, then deleted the private work directory. It discarded the child exit status and stderr that distinguished a workspace permission race from a proxy failure, making a release blocker non-actionable. | Network-rotation gate maintainers | Reap the failed workload for its exact status, copy its private stderr into the run's mode-0600 evidence directory before cleanup, and point the terminal failure at that retained diagnostic without rendering secret material. | The exercised failure path retained status 2 and the exact `/workspace/session-before` error, Bash syntax and preflight pass, and both post-fix real-Lima runs retained normal success evidence without secret leakage. |
+| CR045-017 | Medium | The promoted-runtime gate compared an `example.invalid` URL with a glob inside single-bracket `test`, where the glob was a literal. A placeholder URL with a syntactically valid digest therefore passed the intended fail-closed promotion boundary and reached the real-image lane. | Runtime release-gate maintainers | Use Bash `[[ ... == pattern ]]` matching, assert the exact guard form from the runtime smoke, reject the obsolete literal comparison, and exercise a representative placeholder fixture. | `scripts/test-runtime-smoke.sh`, Bash syntax, ShellCheck error-level scan, and the exact release-candidate lane. |
+| CR045-018 | Medium | Portable Manager code referenced a signing observer supplied only by a Darwin-suffixed source file. Host builds passed, but whole-module Linux guest type-checking failed before any runtime behavior could be exercised, while the existing real-Lima compile list did not include the affected package graph. | Host capability and Gate 0 maintainers | Add a non-Darwin fail-closed observer returning the stable app-absent code and make full Gate 0 type-check every package and test for Linux/arm64. | Darwin hostcap/Manager tests, `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go vet ./...`, and the complete Gate 0 lane. |
+| CR045-019 | Medium | Both initial DNS mediation and online resolver rotation treated a 200 ms sleep plus `kill -0` as proof that the replacement helper had bound UDP and TCP port 53. A live but unbound helper could leave the target or an in-flight session without working DNS, and rollback made the same unsupported assumption. | DNS mediation and Lima backend maintainers | Have the DNS helper publish a private marker containing its exact PID only after both listeners bind; require marker/PID equality before resolver redirection, activation, rollback proof, and reuse; remove stale markers; and terminate/reap a child that never becomes ready. | `TestPublishReadyMarkerBindsExactProcessAndPrivateMode`, `TestPublishReadyMarkerRejectsUnsafeTarget`, network/bootstrap and Lima command-contract tests, Linux helper build, and the final fresh-instance network-rotation lane. |
+| CR045-020 | Low | The final review table had grown beyond its original seven findings, but the release evidence writer and semantic validator still hard-coded `requiredFindings: 7`. A digest-valid manifest could therefore disagree with the exact review report it referenced. | Release evidence maintainers | Parse the review rows once, reject empty, duplicate, out-of-order, or non-contiguous finding IDs, feed that validated count into the generated manifest, and validate the same value instead of repeating a stale constant. | Positive, gap, duplicate, and empty collector preflight fixtures; syntax checks; and the exact clean evidence collection with detached-digest verification. |
+| CR045-021 | Medium | Hideout forced Lima's experimental `mountInotify` path on every VZ instance. Lima reflects each host notification back into the guest as `Chtimes`; under rapid dedicated-VirtioFS guest creates this produced a transient `EACCES` even while `/workspace` remained writable, target-owned, and the immediately following create succeeded. Fast network-rotation runs usually ended before the race was exercised. | Lima backend and network-rotation gate maintainers | Return `mountInotify` to Lima's safe disabled default, retain the existing nonclaim for host-originated filesystem notifications, and keep one active workload alive across the 30-second session-renewal boundary before requiring 64 consecutive workspace creates. Do not retry failed target syscalls. | Retained failure `run-20260731T080513Z-1596` failed at create 2 with `uid=1000`, mode `0700`, exact VirtioFS mountinfo, and an immediate successful probe; `TestPrepareWritesLimaYAML`; and `run-20260731T081241Z-36867` proves 40 seconds, 64 writes, online rotation, and all five real crash-recovery boundaries with `mountInotify=false`. |
 
 ## Closure terminology and false-success audit
 
@@ -159,8 +180,8 @@ These are intentional boundaries, not unresolved required findings:
   coverage, not syscall-complete behavior proof or prevention.
 - A guest-root workload can rewrite its own guest routing/resolver state; no
   guest-root containment claim is made.
-- Current dirty-tree test results are engineering evidence only. They cannot
-  establish an exact package or release claim.
+- Review-close dirty-tree test results are engineering evidence only. They
+  cannot establish an exact package or release claim.
 
 ## Review-close judges
 
