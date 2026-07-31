@@ -68,22 +68,25 @@ func TestPortalSaturationDoesNotStarveSiblingOrTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	slowDone := make(chan error, 1)
-	go func() {
-		_, err := first.ProbeEcho(context.Background(), append([]byte{220, 5, 0, 0}, []byte("slow")...))
-		slowDone <- err
-	}()
-	// The overload assertion is meaningful only once the slow request holds
-	// the session's single in-flight slot. A fixed sleep races goroutine
-	// scheduling on slow runners, and probing for overload would contend for
-	// the very slot the slow request needs (rejecting it instead). The
-	// admission snapshot is a contention-free observation of that condition.
-	occupancyDeadline := time.Now().Add(3 * time.Second)
-	for server.admission.Snapshot().InFlight == 0 {
-		if time.Now().After(occupancyDeadline) {
-			t.Fatal("slow request never became in-flight")
-		}
-		time.Sleep(time.Millisecond)
+	if !server.WaitForIdle(time.Second) {
+		t.Fatal("handle-open request did not release its in-flight admission")
+	}
+	saturation, err := server.admission.Acquire(
+		context.Background(),
+		AdmissionRequest{
+			EnvironmentID: server.environmentID,
+			ProviderID:    server.providerID,
+			SessionID:     firstCredential.SessionID,
+			Class:         AdmissionOrdinary,
+			InFlight:      1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer saturation.Release()
+	if got := server.admission.Snapshot().InFlight; got != 1 {
+		t.Fatalf("in-flight saturation = %d, want 1", got)
 	}
 	if _, err := first.ProbeEcho(context.Background(), append([]byte{1, 0, 0, 0}, []byte("overload")...)); !errors.Is(err, ErrPortalOverloaded) {
 		t.Fatalf("same-session overload error = %v", err)
@@ -93,9 +96,6 @@ func TestPortalSaturationDoesNotStarveSiblingOrTeardown(t *testing.T) {
 	}
 	if err := first.CloseHandle(context.Background(), handle); err != nil {
 		t.Fatalf("teardown operation did not use reserved capacity: %v", err)
-	}
-	if err := <-slowDone; err != nil {
-		t.Fatal(err)
 	}
 }
 
