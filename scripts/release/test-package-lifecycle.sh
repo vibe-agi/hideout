@@ -673,22 +673,23 @@ if [ "$preflight_only" -eq 1 ]; then
       printf 'package-lifecycle: TLS failure fixture lost its exact status\n' >&2
       exit 1
     }
-  grep -Fx -- '--retry-all-errors' "$preflight_root/curl-args" >/dev/null &&
-    grep -Fx -- '--connect-timeout' "$preflight_root/curl-args" >/dev/null &&
-    grep -Fx -- '--max-time' "$preflight_root/curl-args" >/dev/null ||
-    {
-      printf 'package-lifecycle: public download lacks bounded all-error retry\n' >&2
-      exit 1
-    }
-  grep -F \
+  if ! grep -Fx -- '--retry-all-errors' \
+    "$preflight_root/curl-args" >/dev/null ||
+    ! grep -Fx -- '--connect-timeout' \
+      "$preflight_root/curl-args" >/dev/null ||
+    ! grep -Fx -- '--max-time' \
+      "$preflight_root/curl-args" >/dev/null; then
+    printf 'package-lifecycle: public download lacks bounded all-error retry\n' >&2
+    exit 1
+  fi
+  if ! grep -F \
     'old package download failed after bounded retries (curl exit=35)' \
-    "$preflight_root/download.err" >/dev/null &&
-    grep -F 'synthetic TLS handshake failure' \
-      "$preflight_root/download.err" >/dev/null ||
-    {
-      printf 'package-lifecycle: TLS failure diagnostic was discarded\n' >&2
-      exit 1
-    }
+    "$preflight_root/download.err" >/dev/null ||
+    ! grep -F 'synthetic TLS handshake failure' \
+      "$preflight_root/download.err" >/dev/null; then
+    printf 'package-lifecycle: TLS failure diagnostic was discarded\n' >&2
+    exit 1
+  fi
 
   bash -n scripts/release/test-package-lifecycle.sh
   go test ./internal/app \
