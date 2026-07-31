@@ -99,6 +99,13 @@ require_command() {
     not_run "missing required command: $1"
 }
 
+secret_status_has_version() {
+  local status_file="$1" expected_version="$2"
+  grep -Eq \
+    "(^|[[:space:]])version=${expected_version}([[:space:]]|$)" \
+    "$status_file"
+}
+
 with_timeout() {
   local duration="$1"
   shift
@@ -658,6 +665,20 @@ go build -trimpath -o "$hideout" ./cmd/hideout
 go test -c -trimpath -o "$crash_daemon" ./internal/app
 "$hideout" help secret >"$work_root/secret-help.txt"
 "$hideout" help connect >"$work_root/connect-help.txt"
+go test ./internal/app \
+  -run '^TestSecretListAndStatusRenderMetadataOnly$' \
+  -count=1 >"$work_root/secret-status-contract.log"
+printf '%s\n' \
+  'local-proxy  available  version=2  provider=macos-keychain' \
+  >"$work_root/secret-status-contract.txt"
+secret_status_has_version "$work_root/secret-status-contract.txt" 2 ||
+  fail "current secret status version contract was rejected"
+printf '%s\n' \
+  'local-proxy  available  generation=2  provider=macos-keychain' \
+  >"$work_root/secret-status-obsolete.txt"
+if secret_status_has_version "$work_root/secret-status-obsolete.txt" 2; then
+  fail "obsolete secret generation terminology was accepted"
+fi
 bash -n "$0"
 if [ "$preflight_only" -eq 1 ]; then
   gate_completed=1
@@ -1015,8 +1036,8 @@ jq -e --arg ref "$secret_ref" --arg environment "$environment_id" '
 ' "$work_root/rotation-operation.json" >/dev/null ||
   fail "rotation operation did not prove the exact stage/probe/activate/prove/drain and secret commit sequence"
 run_hideout secret status "$secret_ref" >"$work_root/secret-status.out"
-grep -q 'generation=2' "$work_root/secret-status.out" ||
-  fail "managed secret generation did not advance"
+secret_status_has_version "$work_root/secret-status.out" 2 ||
+  fail "managed secret version did not advance"
 
 run_hideout daemon status >"$work_root/daemon-after.json"
 run_hideout env list >"$work_root/env-after.txt"

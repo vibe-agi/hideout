@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found twelve required
-issues. All twelve are resolved in the current worktree, and their focused regression
+The final source, security, and operator-UX review found thirteen required
+issues. All thirteen are resolved in the current worktree, and their focused regression
 judges pass. There is no open required review finding.
 
 This is not yet a release-candidate attestation. The reviewed tree is still the
@@ -18,9 +18,9 @@ publication-absence proof before readiness can be claimed.
 | Field | Value |
 | --- | --- |
 | Review date | 2026-07-31 |
-| Base `HEAD` | `772fdff7b8e7b34b5184f256641c6a27f28efd9c` |
+| Base `HEAD` | `2979677c11fa57961535ec3b43a17f00a865166c` |
 | Branch | `master` |
-| Worktree at review close | Dirty; four tracked files changed, 182 additions, 81 deletions, and no untracked files |
+| Worktree at review close | Dirty; three tracked files changed, 31 additions, 9 deletions, and no untracked files |
 | Candidate status | Not a candidate; exact clean identity remains T163/T171 |
 | Publication authority | None; no remote tag, GitHub Release, Homebrew mutation, or package publication is authorized |
 
@@ -82,6 +82,7 @@ Severity means:
 | CR045-010 | Low | Nine broker success-path tests resolved `example.com` through the machine's external DNS before reaching the behavior under test. A resolver outage could therefore report a product regression or block a release even though production correctly failed closed. | Broker test maintainers | Inject one deterministic public test address only into the named success-path tests. Keep DNS-policy and local-address rejection tests on their existing resolver paths so production resolution and fail-closed boundaries remain covered. | `go test ./internal/broker -count=1`, `go test -p 4 ./... -count=1`, and full no-limit static analysis all pass without external DNS. |
 | CR045-011 | Low | The real Chrome configuration journey selected the review action by obsolete user-facing copy, so the intended terminology improvement made the test dereference a missing button before it could exercise plan/apply. | WebUI E2E maintainers | Give the existing review button a non-authoritative stable `data-action` hook and select that hook in the browser proof, while retaining explicit missing/disabled failure checks. | `scripts/gates/browser-console.sh`, `scripts/gates/release-candidate-ui.sh`, and `scripts/gates/release-candidate-privacy.sh` all pass with the real browser, Keychain, and Lima lanes. |
 | CR045-012 | Medium | The real-Lima reference workload was too short for a stable fixed 10% comparison on a busy developer host. On threshold failure it exited before writing structured result evidence, and the nested Gate 2 caller discarded the nonzero status and wrote its own passed receipt. The outer performance aggregate still rejected the missing/failed evidence, so this could not publish a false-green candidate, but the child receipt and diagnosis were wrong. | Release performance gate maintainers | Increase bytes processed without increasing observation event count, finalize structured evidence before enforcing the immutable threshold, execute the nested gate in a fresh fail-closed Bash child, explicitly propagate the reference result, surface its terminal reason, and add passing/failing preflight fixtures. | Performance preflight positive/negative fixtures and nested-child `errexit` self-test, Bash syntax and ShellCheck, a real-Lima diagnostic measuring 6.840% reference median overhead for the 1.125 GiB workload, and the final exact performance aggregate. |
+| CR045-013 | Low | The real-Lima network-rotation gate correctly proved the internal secret commit at generation 2, then rejected the successful CLI status read because it still searched for the obsolete human-facing label `generation=2` after the operator terminology had changed to `version=2`. | Network-rotation gate maintainers | Keep internal operation evidence on the protocol field `generation`, validate CLI status through one exact `version=N` parser, and exercise that parser with current and obsolete terminology fixtures plus the focused app output contract. | Network-rotation preflight, `TestSecretListAndStatusRenderMetadataOnly`, Bash syntax and ShellCheck, a complete dirty-tree real-Lima rotation/crash-recovery diagnostic, and the final exact Lima aggregate. |
 
 ## Closure terminology and false-success audit
 
