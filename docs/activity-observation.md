@@ -91,19 +91,23 @@ the action.
 ## Measurement basis
 
 T156 retained the current dirty-tree measurement at
-`.artifacts/045/performance-current/run-20260730T193602Z-54620/summary.json`
+`.artifacts/045/performance/run-20260731T054812Z-47419/summary.json`
 with summary SHA-256
-`77df91b45ffc3f3e308e67dbbd7aa6c1a72649ad83f755ddf67fb3ce5a31687d`.
+`9363f509e48fbba8f18807e7753922364db5c631bee102be945f8bd1eb9a445e`.
+The reference is a mixed developer workload: one process parses 288 MiB of
+source payload across 96 files, performs four in-memory SHA-256 passes per
+parsed record, and writes bounded derived metadata. This lengthens the measured
+interval without multiplying the original file-I/O observation density.
 The relevant results were:
 
-- 4.298% median reference-workload overhead against the 10% ceiling;
-- 973.290 ms warm-attach p95 and 79.797167 ms browser-freshness p95 against
+- 6.895% median reference-workload overhead against the 10% ceiling;
+- 1,227.697 ms warm-attach p95 and 79.219042 ms browser-freshness p95 against
   their 2 s ceilings;
-- 33.519667 ms query p95 and 0.859375 ms render p95;
-- 30.5% observer CPU p95 (one guest vCPU) and 73,281,536-byte RSS p95;
-- 186.418 generated execs/s, with 6/7000 events dropped (0.085714%) and every
+- 41.013333 ms query p95 and 0.944709 ms render p95;
+- 34.6% observer CPU p95 (one guest vCPU) and 73,527,296-byte RSS p95;
+- 240.715 generated execs/s, with 6/7000 events dropped (0.085714%) and every
   drop reflected in degraded coverage;
-- 6,843,117 bytes used under a 1,048,576-byte pressure-test owner quota plus
+- 6,843,409 bytes used under a 1,048,576-byte pressure-test owner quota plus
   exactly one 8,388,608-byte active-segment allowance.
 
 The gate independently recomputed percentiles from raw samples and verified

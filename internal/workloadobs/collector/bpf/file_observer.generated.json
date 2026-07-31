@@ -8,9 +8,9 @@
   "kernelProgramLicense": "GPL",
   "license": "Apache-2.0 OR GPL-2.0-only",
   "object": "internal/workloadobs/collector/bpf/file_observer_bpfel.o",
-  "objectSHA256": "1bae511cc406bdd2a0d8a971d2db03678df701b6e636716bc990722d8271b001",
+  "objectSHA256": "ffe9eeb2d36fd6afdad51e733f4a40859b50053e4cdee624a60aa359263fd952",
   "schema": "hideout.generated-bpf/v2",
   "source": "internal/workloadobs/collector/bpf/file_programs.c",
-  "sourceSHA256": "f5c561d62c32e19af4176824e13b04a62562537113ab2103f8f25df4a068dfff",
+  "sourceSHA256": "c0ed85873e16101fe34eaaa1d1663f8c4e7db71f675c53a279ae6e00e313d32b",
   "target": "bpfel"
 }

@@ -824,6 +824,13 @@ static __always_inline int emit_compact_io(
 	struct file_metadata *metadata;
 	__u64 key = (__u64)file;
 
+	/*
+	 * The tracing hooks are system-wide. Reject non-target I/O before touching
+	 * observed_files so unrelated guest processes cannot populate or evict the
+	 * target's bounded metadata cache.
+	 */
+	if (!file || !in_target_cgroup())
+		return 0;
 	metadata = bpf_map_lookup_elem(&observed_files, &key);
 	if (!metadata) {
 		cache_file_identity_only(file);

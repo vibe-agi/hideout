@@ -202,6 +202,43 @@ func TestFileEventReaderRealKernel(t *testing.T) {
 	if counters != (FileCollectorCounters{}) {
 		t.Fatalf("initial counters=%+v", counters)
 	}
+	outsidePath := t.TempDir() + "/outside-target.txt"
+	if err := os.WriteFile(outsidePath, []byte("outside-target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsideFile, err := os.Open(outsidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outsideByte [1]byte
+	if _, err := outsideFile.Read(outsideByte[:]); err != nil {
+		_ = outsideFile.Close()
+		t.Fatal(err)
+	}
+	outsideInfo, err := outsideFile.Stat()
+	if err != nil {
+		_ = outsideFile.Close()
+		t.Fatal(err)
+	}
+	outsideStat, ok := outsideInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		_ = outsideFile.Close()
+		t.Fatal("outside-target file has no Linux stat identity")
+	}
+	present, err := observedFileMetadataContains(
+		reader,
+		uint64(outsideStat.Dev),
+		outsideStat.Ino,
+	)
+	if closeErr := outsideFile.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		t.Fatal("non-target read populated the target file metadata cache")
+	}
 
 	reader.SetDeadline(time.Now().Add(10 * time.Second))
 	type readResult struct {
@@ -445,6 +482,25 @@ func resetFileCounters(t *testing.T, reader *FileEventReader) {
 	if err := reader.objects.FileCounters.Put(uint32(0), values); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func observedFileMetadataContains(
+	reader *FileEventReader,
+	device uint64,
+	inode uint64,
+) (bool, error) {
+	if reader == nil || reader.objects.ObservedFiles == nil {
+		return false, errors.New("observed file metadata map is unavailable")
+	}
+	iterator := reader.objects.ObservedFiles.Iterate()
+	var key uint64
+	var value fileObserverFileMetadata
+	for iterator.Next(&key, &value) {
+		if value.Device == device && value.Inode == inode {
+			return true, nil
+		}
+	}
+	return false, iterator.Err()
 }
 
 func allFileKindsObserved(values map[uint32]bool) bool {

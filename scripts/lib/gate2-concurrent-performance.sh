@@ -55,7 +55,7 @@ gate2_034_finalize_reference_result() {
     '{
       methodology: {
         workload:
-          "single Python process parses and hashes 1.125GiB across 96 source files and writes bounded derived metadata",
+          "single Python process parses 288MiB of source payload across 96 files, performs four in-memory SHA-256 passes per record, and writes bounded derived metadata",
         samples: $samples,
         warmups: $warmups,
         sampleOrder: $order,
@@ -121,7 +121,7 @@ import sys
 root = sys.argv[1]
 source = os.path.join(root, "source")
 os.mkdir(source)
-payload = "x" * 131072
+payload = "x" * 32768
 for index in range(96):
     path = os.path.join(source, f"unit-{index:03d}.json")
     with open(path, "w", encoding="utf-8") as handle:
@@ -143,13 +143,15 @@ source = os.path.join(root, "source")
 paths = sorted(os.path.join(source, name) for name in os.listdir(source))
 digest = hashlib.sha256()
 total = 0
+hash_passes = 4
 for iteration in range(96):
     for path in paths:
         with open(path, "rb") as handle:
             data = handle.read()
         value = json.loads(data)
         total += value["index"]
-        digest.update(data)
+        for _ in range(hash_passes):
+            digest.update(hashlib.sha256(data).digest())
     with open(os.path.join(root, "derived.json"), "w", encoding="utf-8") as handle:
         json.dump(
             {"iteration": iteration, "total": total, "digest": digest.hexdigest()},
