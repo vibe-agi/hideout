@@ -520,11 +520,10 @@ func (collectors *linuxObserverCollectors) readFile(
 	defer collectors.fileReader.SetDeadline(time.Time{})
 
 	lookup := func(pid uint32, sequence uint64) (string, bool) {
-		execution, ok := collectors.processNormalizer.LookupExecution(
+		return collectors.processNormalizer.LookupExecutionID(
 			pid,
 			sequence,
 		)
-		return execution.ID, ok
 	}
 	for !collectors.stopping(ctx) {
 		if !time.Now().Before(flushAt) {
@@ -753,23 +752,29 @@ func (collectors *linuxObserverCollectors) waitForExecution(
 	if collectors == nil || pid == 0 || sequence == 0 {
 		return
 	}
+	if _, ok := collectors.processNormalizer.LookupExecutionID(
+		pid,
+		sequence,
+	); ok {
+		return
+	}
 	deadline := time.NewTimer(observerExecutionWait)
 	defer deadline.Stop()
 	ticker := time.NewTicker(observerRetryInterval)
 	defer ticker.Stop()
 	for {
-		if _, ok := collectors.processNormalizer.LookupExecution(
-			pid,
-			sequence,
-		); ok {
-			return
-		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-deadline.C:
 			return
 		case <-ticker.C:
+			if _, ok := collectors.processNormalizer.LookupExecutionID(
+				pid,
+				sequence,
+			); ok {
+				return
+			}
 		}
 	}
 }

@@ -430,6 +430,27 @@ func (normalizer *Normalizer) LookupExecution(
 	return cloneExecution(execution), true
 }
 
+// LookupExecutionID is the allocation-free lookup for collector hot paths
+// that need only to bind an observation to an already-normalized execution.
+// Execution identities are immutable after insertion.
+func (normalizer *Normalizer) LookupExecutionID(
+	pid uint32,
+	execSequence uint64,
+) (string, bool) {
+	if normalizer == nil || !validPID(pid) || execSequence == 0 {
+		return "", false
+	}
+	normalizer.mu.Lock()
+	defer normalizer.mu.Unlock()
+	execution := normalizer.executions[executionKey{
+		pid: pid, execSequence: execSequence,
+	}]
+	if execution == nil || execution.ID == "" {
+		return "", false
+	}
+	return execution.ID, true
+}
+
 func (normalizer *Normalizer) LookupCurrentExecution(
 	pid uint32,
 ) (workloadtypes.Execution, bool) {

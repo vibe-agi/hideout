@@ -132,6 +132,18 @@ func TestProcessNormalizerLooksUpExactExecutionAndActorWithoutLeakingState(
 		*execution.Exit.Code != 0 {
 		t.Fatalf("execution=%+v ok=%v", execution, ok)
 	}
+	executionID, ok := normalizer.LookupExecutionID(4242, 11)
+	if !ok || executionID != execution.ID {
+		t.Fatalf("executionID=%q ok=%v execution=%+v", executionID, ok, execution)
+	}
+	if allocations := testing.AllocsPerRun(1000, func() {
+		if value, found := normalizer.LookupExecutionID(4242, 11); !found ||
+			value != execution.ID {
+			panic("allocation check lost the execution identity")
+		}
+	}); allocations != 0 {
+		t.Fatalf("execution ID hot-path allocations=%f want=0", allocations)
+	}
 	actor, ok := normalizer.LookupActor(4242, 11)
 	if !ok ||
 		actor.ExecutionID != execution.ID ||
@@ -169,10 +181,19 @@ func TestProcessNormalizerLooksUpExactExecutionAndActorWithoutLeakingState(
 		); ok {
 			t.Fatalf("unexpected actor lookup hit for pid=%d sequence=%d", lookup[0], lookup[1])
 		}
+		if _, ok := normalizer.LookupExecutionID(
+			uint32(lookup[0]),
+			lookup[1],
+		); ok {
+			t.Fatalf("unexpected execution ID lookup hit for pid=%d sequence=%d", lookup[0], lookup[1])
+		}
 	}
 	var nilNormalizer *processcollector.Normalizer
 	if _, ok := nilNormalizer.LookupExecution(4242, 11); ok {
 		t.Fatal("nil normalizer returned an execution")
+	}
+	if _, ok := nilNormalizer.LookupExecutionID(4242, 11); ok {
+		t.Fatal("nil normalizer returned an execution ID")
 	}
 	if _, ok := nilNormalizer.LookupActor(4242, 11); ok {
 		t.Fatal("nil normalizer returned an actor")
