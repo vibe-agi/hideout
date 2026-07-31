@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 # shellcheck source=scripts/lib/gate2-concurrent-sessions.sh
 . "$repo_root/scripts/lib/gate2-concurrent-sessions.sh"
 # shellcheck source=scripts/lib/gate2-concurrent-performance.sh
@@ -101,13 +104,19 @@ done
 
 if [ "$preflight_only" -eq 1 ]; then
   scratch_preflight="$(mktemp -d /tmp/hideout-lima-preflight.XXXXXX)"
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
   cleanup_preflight() {
+    local exit_status=$?
     case "${scratch_preflight:-}" in
       /tmp/hideout-lima-preflight.*)
         [ ! -d "$scratch_preflight" ] ||
           find "$scratch_preflight" -depth -delete
         ;;
     esac
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "release-candidate-lima-preflight"
+    fi
   }
   trap cleanup_preflight EXIT
   scripts/gates/workload-observation-lima.sh \
@@ -120,6 +129,7 @@ if [ "$preflight_only" -eq 1 ]; then
     scripts/lib/gate2-concurrent-sessions.sh \
     scripts/lib/gate2-concurrent-performance.sh \
     scripts/gates/release-candidate-lima.sh
+  gate_completed=1
   printf 'release-candidate-lima: preflight=passed\n'
   exit 0
 fi
@@ -149,6 +159,7 @@ chmod 0700 "$run_dir" "$run_dir/lanes"
 
 scratch="$(mktemp -d /tmp/hideout-release-lima.XXXXXX)"
 cleanup() {
+  local exit_status=$?
   case "${scratch:-}" in
     /tmp/hideout-release-lima.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
@@ -157,6 +168,9 @@ cleanup() {
       printf 'release-candidate-lima: refusing unexpected scratch cleanup\n' >&2
       ;;
   esac
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "release-candidate-lima"
+  fi
 }
 trap cleanup EXIT
 
@@ -202,7 +216,7 @@ run_lane() {
     tail -30 "$lane_log" >&2
   fi
   if [ -f "$lane_result_path" ]; then
-    lane_result_rel="${lane_result_path#$run_dir/}"
+    lane_result_rel="${lane_result_path#"$run_dir"/}"
     lane_result_sha="$(sha256_file "$lane_result_path")"
   fi
   lanes_json="$(
@@ -488,7 +502,7 @@ artifact_rows="$scratch/artifacts.jsonl"
 : >"$artifact_rows"
 find "$run_dir" -type f -print | LC_ALL=C sort |
   while IFS= read -r artifact_path; do
-    relative="${artifact_path#$run_dir/}"
+    relative="${artifact_path#"$run_dir"/}"
     jq -cn \
       --arg path "$relative" \
       --arg sha256 "$(sha256_file "$artifact_path")" \
@@ -608,4 +622,5 @@ if [ "$aggregate_result" != "passed" ]; then
   printf 'release-candidate-lima: failed\n' >&2
   exit 1
 fi
+gate_completed=1
 printf 'release-candidate-lima: passed\n'

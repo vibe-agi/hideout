@@ -112,7 +112,7 @@ func (s *Store) Stage(req StageRequest) (StageResult, error) {
 	}
 	nextSnapshot := Snapshot{}
 	contentObject := ""
-	preview := Preview{Kind: "summary", Summary: req.Operation}
+	var preview Preview
 	switch req.Operation {
 	case "create":
 		if base.Exists {

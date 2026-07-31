@@ -594,7 +594,7 @@ func extractGitArchive(reader io.Reader, dest string, limits Limits) error {
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, 0:
 			files++
 			total += header.Size
 			if files > limits.MaxFiles || header.Size > limits.MaxFileBytes || total > limits.MaxTotalBytes {

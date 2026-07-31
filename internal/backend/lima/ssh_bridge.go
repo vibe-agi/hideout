@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/vibe-agi/hideout/internal/portbridge"
@@ -144,7 +145,13 @@ func isTransientSSHConnectError(err error) bool {
 		return true
 	}
 	var networkError net.Error
-	return errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary())
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH)
 }
 
 func sshConnectDeadline(ctx context.Context) time.Time {

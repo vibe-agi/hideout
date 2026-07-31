@@ -142,7 +142,7 @@ func staleRenderFixture() liveconsole.State {
 	state.ReadOnly = true
 	state.RequiresReseed = true
 	state.NextActions = []liveconsole.NextActionRef{{
-		ID: "snapshot.refresh", Label: "refresh authoritative snapshot", Command: "hideout tui",
+		ID: "snapshot.refresh", Label: "refresh verified state", Command: "hideout tui",
 	}}
 	return state
 }

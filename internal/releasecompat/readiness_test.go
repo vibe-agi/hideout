@@ -997,11 +997,6 @@ func writeCompleteProductEvidence(t *testing.T, path, commit string) {
 	writeProductEvidence(t, path, commit, productevidence.ProductHardeningRequirements())
 }
 
-func writeFeatureProductEvidence(t *testing.T, path, commit string, featureID string) {
-	t.Helper()
-	writeProductEvidence(t, path, commit, productevidence.RequirementsForFeature(featureID))
-}
-
 func writeProductEvidence(t *testing.T, path, commit string, reqs []productevidence.ProofRequirement) {
 	t.Helper()
 	manifest := productevidence.NewManifest(commit, false)

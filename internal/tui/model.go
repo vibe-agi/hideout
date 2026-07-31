@@ -572,14 +572,14 @@ func (model *Model) requestActivity() tea.Cmd {
 		model.activityLoading = false
 		model.activityLoaded = false
 		model.activityData = tuirender.ActivityData{}
-		model.activityError = "exact workload owner is not present in the authoritative snapshot"
+		model.activityError = "this workload is not present in the current verified state"
 		return nil
 	}
 	if model.activityProvider == nil {
 		model.activityLoading = false
 		model.activityLoaded = false
 		model.activityData = tuirender.ActivityData{}
-		model.activityError = "authoritative Manager activity queries are unavailable"
+		model.activityError = "verified Hideout activity data is unavailable"
 		return nil
 	}
 	model.activityLoading = true
@@ -1083,7 +1083,7 @@ func (model *Model) syncConfigModal() {
 	mutable := ok && model.MutationEnabled() &&
 		model.configProvider != nil
 	if !ok {
-		reason = "authoritative profile projection is unavailable"
+		reason = "verified profile state is unavailable"
 	}
 	model.configModal.SyncAuthority(mutable, projection, reason)
 	operationID := model.configModal.OperationID()
@@ -1273,7 +1273,7 @@ func (model *Model) upsertOperation(operation manager.Operation) {
 func activityErrorMessage(err error) string {
 	switch {
 	case err == nil:
-		return "authoritative Manager activity query failed"
+		return "Hideout activity query failed"
 	case errors.Is(err, context.Canceled):
 		return "activity refresh was cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -1283,9 +1283,9 @@ func activityErrorMessage(err error) string {
 	case errors.Is(err, manager.ErrActivityCursorStale):
 		return "activity history changed; refresh from the newest cursor"
 	case errors.Is(err, workloadquery.ErrInvalidSnapshot):
-		return "Manager returned an invalid exact-owner activity response"
+		return "Hideout returned invalid activity data for this workload"
 	default:
-		return "authoritative Manager activity query failed"
+		return "Hideout activity query failed"
 	}
 }
 

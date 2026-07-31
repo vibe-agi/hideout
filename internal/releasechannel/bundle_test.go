@@ -40,8 +40,11 @@ func TestEvidenceBundleRejectsControlPlaneMaterial(t *testing.T) {
 	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	digest, size, _ := FileSHA256(path)
-	err := bundleFixture(digest, size).Validate(root, []string{"033.release.package-identity"})
+	digest, size, err := FileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = bundleFixture(digest, size).Validate(root, []string{"033.release.package-identity"})
 	if err == nil || !strings.Contains(err.Error(), "control-plane") {
 		t.Fatalf("error=%v", err)
 	}
@@ -50,10 +53,17 @@ func TestEvidenceBundleRejectsControlPlaneMaterial(t *testing.T) {
 func TestEvidenceBundleRejectsWrongProofSet(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "proofs", "proof.json")
-	os.MkdirAll(filepath.Dir(path), 0o700)
-	os.WriteFile(path, []byte("{}"), 0o600)
-	digest, size, _ := FileSHA256(path)
-	err := bundleFixture(digest, size).Validate(root, []string{"033.release.other"})
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest, size, err := FileSHA256(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = bundleFixture(digest, size).Validate(root, []string{"033.release.other"})
 	if err == nil {
 		t.Fatal("wrong proof set unexpectedly passed")
 	}

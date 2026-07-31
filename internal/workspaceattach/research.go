@@ -213,7 +213,11 @@ func LoadResearchDecision(path string, options ResearchEvaluationOptions) (Resea
 	return decision, nil
 }
 
-func WriteResearchDecision(path string, decision ResearchDecision, options ResearchEvaluationOptions) error {
+func WriteResearchDecision(
+	path string,
+	decision ResearchDecision,
+	options ResearchEvaluationOptions,
+) (resultErr error) {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("workspace research decision path is required")
 	}
@@ -233,7 +237,9 @@ func WriteResearchDecision(path string, decision ResearchDecision, options Resea
 	if err != nil {
 		return err
 	}
-	defer rooted.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, rooted.Close())
+	}()
 	parent := filepath.Dir(relative)
 	if parent != "." {
 		if err := rooted.MkdirAll(parent, 0o700); err != nil {
@@ -248,26 +254,41 @@ func WriteResearchDecision(path string, decision ResearchDecision, options Resea
 	if err != nil {
 		return err
 	}
-	defer rooted.Remove(temporaryPath)
+	temporaryClosed := false
+	temporaryRenamed := false
+	defer func() {
+		if !temporaryClosed {
+			resultErr = errors.Join(resultErr, temporary.Close())
+		}
+		if !temporaryRenamed {
+			removeErr := rooted.Remove(temporaryPath)
+			if !errors.Is(removeErr, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, removeErr)
+			}
+		}
+	}()
 	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
 		return err
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
 		return err
 	}
 	if err := temporary.Close(); err != nil {
+		temporaryClosed = true
 		return err
 	}
+	temporaryClosed = true
 	if err := rooted.Rename(temporaryPath, relative); err != nil {
 		return err
 	}
+	temporaryRenamed = true
 	directory, err := rooted.Open(parent)
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, directory.Close())
+	}()
 	return directory.Sync()
 }
 

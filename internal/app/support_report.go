@@ -175,7 +175,7 @@ func collectReadOnlySupportDoctor(opts supportReportOptions, protected []string)
 		"activity-privacy",
 		"activity",
 		doctorpkg.StatusPass,
-		"workload activity is local metadata owned by an exact VM/session incarnation; this shareable report excludes activity records and raw paths",
+		"workload activity is local metadata tied to one exact VM instance or run; this shareable report excludes activity records and raw paths",
 		doctorpkg.WithRequired(false),
 		doctorpkg.WithDetails(map[string]any{
 			"observedFacts": activityPrivacyFacts(

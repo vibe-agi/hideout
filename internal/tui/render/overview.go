@@ -65,8 +65,8 @@ func plainOverview(state liveconsole.State, now time.Time, options Options) stri
 				"COVERAGE %s\n"+
 				"RISK %s\n"+
 				"NEXT %s\n\n"+
-				"Activity\nlast authoritative data retained\n\n"+
-				"Details\nre-seed before planning or applying changes\n\n"+
+				"Activity\nlast verified data retained\n\n"+
+				"Details\nrefresh before planning or applying changes\n\n"+
 				"%s\n%s\n",
 			facts.profile, facts.health, now.Format("15:04:05"), facts.reason,
 			facts.command, facts.connection, facts.state, facts.coverage,
@@ -250,7 +250,7 @@ func overviewFacts(state liveconsole.State) facts {
 		state.StreamHealth.State == liveconsole.HealthSchemaMismatch
 	out.reason = sanitizeInline(state.StreamHealth.Reason)
 	if out.reason == "" {
-		out.reason = "authoritative stream unavailable"
+		out.reason = "verified state stream unavailable"
 	}
 	out.connection = connectionSummary(state, out.profile)
 	out.coverage = coverageSummary(state.Coverage)
@@ -280,7 +280,7 @@ func connectionSummary(state liveconsole.State, profileName string) string {
 			mode := sanitizeInline(projection.Effective.Network.Mode)
 			if projection.Effective.Network.SecretGeneration != 0 {
 				mode += fmt.Sprintf(
-					" gen %d",
+					" | secret version %d",
 					projection.Effective.Network.SecretGeneration,
 				)
 			}

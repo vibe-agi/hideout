@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$ROOT/scripts/lib/gate-result.sh"
+gate_completed=0
 source "$ROOT/scripts/lib/reproducible-package.sh"
 
 usage() {
@@ -438,7 +441,13 @@ if [ -n "$finalize" ]; then
 fi
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-package.XXXXXX")"
-cleanup() { rm -rf "$tmp"; }
+cleanup() {
+  local exit_status=$?
+  find "$tmp" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "package-local"
+  fi
+}
 trap cleanup EXIT
 if [ -z "$out" ]; then
   out="$source/dist/hideout-v$version-$(go env GOOS)-$(go env GOARCH).tar.gz"
@@ -447,3 +456,4 @@ else
 fi
 stage_package "$tmp/stage" >/dev/null
 finalize_package "$tmp/stage" "$out"
+gate_completed=1

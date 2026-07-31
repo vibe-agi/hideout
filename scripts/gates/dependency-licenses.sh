@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 for command_name in go jq awk; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -26,7 +29,11 @@ sha256_file() {
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/hideout-dependency-licenses.XXXXXX")"
 cleanup() {
-  rm -rf "$tmp_root"
+  local exit_status=$?
+  find "$tmp_root" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "dependency-licenses"
+  fi
 }
 trap cleanup EXIT
 
@@ -193,6 +200,8 @@ if [[ ! -f LICENSES/GPL-2.0-only.txt ]] ||
   echo "dependency-licenses: GPL-2.0-only license text is missing" >&2
   failed=1
 fi
+# The backticks are literal Markdown delimiters in the notice.
+# shellcheck disable=SC2016
 if ! grep -F \
   'The Hideout-owned BPF source is offered under' \
   THIRD_PARTY_NOTICES.md >/dev/null ||
@@ -207,4 +216,5 @@ if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
+gate_completed=1
 echo "dependency-licenses: root modules, isolated helper, and generated BPF licenses/digests are accounted for"

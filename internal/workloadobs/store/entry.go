@@ -107,21 +107,6 @@ func (entry segmentEntry) validate(owner workloadtypes.ActivityOwner) error {
 	return nil
 }
 
-func (entry segmentEntry) owner() workloadtypes.ActivityOwner {
-	switch entry.Kind {
-	case entryActivity:
-		return entry.Activity.Owner
-	case entryExecution:
-		return entry.Execution.Owner
-	case entryCoverage:
-		return entry.Coverage.Owner
-	case entryRisk:
-		return entry.Risk.Owner
-	default:
-		return workloadtypes.ActivityOwner{}
-	}
-}
-
 func (entry segmentEntry) timeRange() (time.Time, time.Time) {
 	switch entry.Kind {
 	case entryActivity:

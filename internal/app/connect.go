@@ -273,7 +273,7 @@ func (a app) replayTerminalConfigurationOperation(
 		return &configurationApplyOutcomeError{
 			operationID: operation.ID,
 			cause: errors.New(
-				"Manager returned mismatched terminal operation evidence",
+				"Hideout returned final evidence for a different operation",
 			),
 		}
 	}
@@ -431,7 +431,7 @@ func planProfileNetworkConfiguration(
 		!isNetworkConfigurationPlan(plan) {
 		return manager.ProfileNetworkPlan{}, manager.ConfigurationPlan{},
 			errors.New(
-				"Manager returned a mismatched connection configuration plan",
+				"Hideout returned a connection plan for different state",
 			)
 	}
 	return legacyPlan, plan, nil
@@ -497,7 +497,7 @@ func (a app) applyReviewedConnectionPlan(
 		return &configurationApplyOutcomeError{
 			operationID: plan.OperationID,
 			cause: errors.New(
-				"Manager returned mismatched configuration evidence",
+				"Hideout returned configuration evidence for a different operation",
 			),
 		}
 	}

@@ -199,6 +199,8 @@ network_guest_snapshot() {
   local raw_path="$output_path.raw"
   [ -n "${instance_name:-}" ] ||
     fail "guest network snapshot requires an exact Lima instance"
+  # The single-quoted program is intentionally passed verbatim to the guest.
+  # shellcheck disable=SC2016
   LIMA_HOME="$lima_home" limactl shell \
     --tty=false --workdir / "$instance_name" -- \
     sh -eu -c '
@@ -403,6 +405,8 @@ scan_process_value_absent() {
   local pattern_file="$2"
   local scan_status=0
   set +e
+  # This must inspect full argv plus environments; pgrep cannot do that.
+  # shellcheck disable=SC2009
   ps axeww -o command= |
     grep -F -f "$pattern_file" >/dev/null 2>&1
   scan_status=$?
@@ -581,7 +585,9 @@ cleanup() {
   fi
 
   if [ "$gate_completed" != "1" ]; then
+    [ "$status" -ne 0 ] || status=1
     write_failure_evidence "$status"
+    gate_require_completion "network-rotation-lima"
   fi
   exit "$status"
 }
@@ -821,6 +827,8 @@ run_hideout env create "$environment_name" \
   >"$work_root/env-create.out" 2>"$work_root/env-create.err"
 
 current_stage="active-route-before-rotation"
+# The single-quoted target program is intentionally passed verbatim to the VM.
+# shellcheck disable=SC2016
 with_timeout "$gate_timeout" run_hideout run \
   --verbose --env "$environment_name" --profile default \
   --backend lima --workspace "$workspace" \
@@ -1188,6 +1196,8 @@ for crash_effect in \
   matrix_ready="$workspace/crash-$effect_label-session-ready"
   matrix_guest_ready="/workspace/crash-$effect_label-session-ready"
   rm -f "$matrix_ready"
+  # The single-quoted target program is intentionally passed verbatim to the VM.
+  # shellcheck disable=SC2016
   run_hideout run \
     --verbose --env "$environment_name" --profile default \
     --backend lima --workspace "$workspace" \
@@ -1445,10 +1455,11 @@ while :; do sleep 1; done
     -- true >"$failed_closed_out" 2>"$failed_closed_err"
   failed_closed_status=$?
   set -e
-  [ "$failed_closed_status" -ne 0 ] &&
-    grep -Eq 'session[.]cleanup[.]failed|explicit recovery' \
-      "$failed_closed_err" ||
+  if [ "$failed_closed_status" -eq 0 ] ||
+    ! grep -Eq 'session[.]cleanup[.]failed|explicit recovery' \
+      "$failed_closed_err"; then
     fail "$crash_effect replacement attach did not fail closed on the stale owner"
+  fi
 
   settled_path="$evidence_root/logs/crash-$effect_label-lifecycle-settled.json"
   wait_for_lifecycle_settled "$environment_id" "$settled_path"
@@ -1471,6 +1482,8 @@ while :; do sleep 1; done
     proxy_connect_count "$work_root/proxy-two.log"
   )"
   probe_path="/fixture.txt?phase=crash-$effect_label-recovered"
+  # The single-quoted target program is intentionally passed verbatim to the VM.
+  # shellcheck disable=SC2016
   run_hideout run \
     --env "$environment_name" --profile default \
     --backend lima --workspace "$workspace" \

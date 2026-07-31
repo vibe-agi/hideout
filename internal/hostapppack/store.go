@@ -881,7 +881,7 @@ func (s Store) ensurePrivateRoot() error {
 	return os.Chmod(s.Root, 0o700)
 }
 
-func (s Store) withLock(fn func() error) error {
+func (s Store) withLock(fn func() error) (resultErr error) {
 	if err := s.ensurePrivateRoot(); err != nil {
 		return err
 	}
@@ -889,14 +889,23 @@ func (s Store) withLock(fn func() error) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	locked := false
+	defer func() {
+		if locked {
+			resultErr = errors.Join(
+				resultErr,
+				unix.Flock(int(lock.Fd()), unix.LOCK_UN),
+			)
+		}
+		resultErr = errors.Join(resultErr, lock.Close())
+	}()
 	if err := os.Chmod(s.LockPath(), 0o600); err != nil {
 		return err
 	}
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
 		return err
 	}
-	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	locked = true
 	return fn()
 }
 

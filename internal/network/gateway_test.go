@@ -251,7 +251,11 @@ func TestEnvironmentGatewayAcceptedConnectionKeepsPreviousRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer change.Rollback()
+	defer func() {
+		if err := change.Rollback(); err != nil {
+			t.Errorf("roll back staged gateway change: %v", err)
+		}
+	}()
 	preActivation, err := dialGateway(binding, targetAddress)
 	if err != nil {
 		t.Fatalf("prepared route changed new traffic before activation: %v", err)
@@ -524,7 +528,11 @@ func TestEnvironmentGatewayBindingUsesGuestHostWithoutLeakingUpstream(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer change.Rollback()
+	defer func() {
+		if err := change.Rollback(); err != nil {
+			t.Errorf("roll back staged gateway change: %v", err)
+		}
+	}()
 	value, err := binding.ProxyURL("host.lima.internal")
 	if err != nil {
 		t.Fatal(err)

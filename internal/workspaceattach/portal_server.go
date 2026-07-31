@@ -253,17 +253,17 @@ func (server *PortalServer) serveConnection(connection net.Conn) {
 	defer state.close()
 	frame, err := readPortalFrame(connection, server.limits.FrameBytes)
 	if err != nil || frame.Kind != portalKindRequest || frame.Opcode != portalOpHello || frame.RequestID != 0 {
-		state.write(portalFrame{Kind: portalKindResponse, Opcode: portalOpHello, Status: portalStatusProtocol})
+		_ = state.write(portalFrame{Kind: portalKindResponse, Opcode: portalOpHello, Status: portalStatusProtocol})
 		return
 	}
 	candidate, err := decodePortalCredential(frame.Payload)
 	if err != nil {
-		state.write(portalFrame{Kind: portalKindResponse, Opcode: portalOpHello, Status: portalStatusProtocol})
+		_ = state.write(portalFrame{Kind: portalKindResponse, Opcode: portalOpHello, Status: portalStatusProtocol})
 		return
 	}
 	lease, err := server.authority.authenticate(candidate)
 	if err != nil {
-		state.write(portalFrame{Kind: portalKindResponse, Opcode: portalOpHello, Status: portalStatusForError(err)})
+		_ = state.write(portalFrame{Kind: portalKindResponse, Opcode: portalOpHello, Status: portalStatusForError(err)})
 		return
 	}
 	state.credential = lease.credential
@@ -305,7 +305,9 @@ func (server *PortalServer) serveConnection(connection net.Conn) {
 			SessionID: state.credential.SessionID, Class: class, InFlight: 1, FrameBytes: len(frame.Payload),
 		})
 		if admissionErr != nil {
-			state.write(portalFrame{Kind: portalKindResponse, Opcode: frame.Opcode, RequestID: frame.RequestID, Status: portalStatusOverloaded})
+			if err := state.write(portalFrame{Kind: portalKindResponse, Opcode: frame.Opcode, RequestID: frame.RequestID, Status: portalStatusOverloaded}); err != nil {
+				return
+			}
 			continue
 		}
 		requestContext, cancel := context.WithCancel(context.Background())
@@ -332,10 +334,12 @@ func (server *PortalServer) serveConnection(connection net.Conn) {
 			if errors.Is(requestContext.Err(), context.Canceled) {
 				operationErr = contextCanceledError
 			}
-			state.write(portalFrame{
+			if err := state.write(portalFrame{
 				Kind: portalKindResponse, Opcode: frame.Opcode, RequestID: frame.RequestID,
 				Status: portalStatusForError(operationErr), Payload: payload,
-			})
+			}); err != nil {
+				_ = state.connection.Close()
+			}
 		}(frame, admission)
 	}
 }
@@ -357,8 +361,8 @@ func (state *portalConnection) watchCredential(lease portalCredentialLease) {
 }
 
 func (state *portalConnection) terminal(err error) {
-	state.write(portalFrame{Kind: portalKindTerminal, Status: portalStatusForError(err)})
-	state.connection.Close()
+	_ = state.write(portalFrame{Kind: portalKindTerminal, Status: portalStatusForError(err)})
+	_ = state.connection.Close()
 }
 
 func (state *portalConnection) write(frame portalFrame) error {
@@ -389,9 +393,13 @@ func (state *portalConnection) close() {
 		state.handleMu.Lock()
 		for id, handle := range state.handles {
 			if handle.lock {
-				state.server.locks.unlock(state.credential.SessionID, id, handle.path)
+				_ = state.server.locks.unlock(
+					state.credential.SessionID,
+					id,
+					handle.path,
+				)
 			}
-			handle.file.Close()
+			_ = handle.file.Close()
 			handle.admission.Release()
 		}
 		state.handles = nil
@@ -553,12 +561,17 @@ func (state *portalConnection) closeHandle(payload []byte) error {
 	if handle == nil {
 		return ErrPortalHandleNotFound
 	}
+	var unlockErr error
 	if handle.lock {
-		state.server.locks.unlock(state.credential.SessionID, handleID, handle.path)
+		unlockErr = state.server.locks.unlock(
+			state.credential.SessionID,
+			handleID,
+			handle.path,
+		)
 	}
-	err = handle.file.Close()
+	closeErr := handle.file.Close()
 	handle.admission.Release()
-	return err
+	return errors.Join(unlockErr, closeErr)
 }
 
 func (state *portalConnection) lock(payload []byte) error {

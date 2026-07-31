@@ -14,13 +14,6 @@ import (
 	"github.com/vibe-agi/hideout/internal/hostfs"
 )
 
-// brokerWorkspaceResolver maps a workspace ResourceRef (absolute guest path) to
-// a host path using the broker's existing, symlink-escape-checked workspace
-// mapping. The host path stays inside Core; it is never returned to the guest.
-type brokerWorkspaceResolver struct {
-	s *Server
-}
-
 type brokerResourceResolver struct {
 	s        *Server
 	hostFS   *hostfs.HostAppResource
@@ -77,22 +70,6 @@ func (r *brokerResourceResolver) auditResource() hostcap.ResourceRef {
 		return hostcap.ResourceRef{}
 	}
 	return r.resolved
-}
-
-func (r brokerWorkspaceResolver) ResolveWorkspace(ref hostcap.ResourceRef) (string, error) {
-	hostPath, err := r.s.mapGuestPath(ref.GuestPath)
-	if err != nil {
-		return "", &hostcap.Error{Code: hostcap.CodePathNoHostMapping, Reason: "resource is outside the workspace"}
-	}
-	return hostPath, nil
-}
-
-func (r brokerWorkspaceResolver) RevalidateWorkspace(ref hostcap.ResourceRef, previouslyResolved string) error {
-	hostPath, err := r.s.mapGuestPath(ref.GuestPath)
-	if err != nil || hostPath != previouslyResolved {
-		return &hostcap.Error{Code: hostcap.CodePathNoHostMapping, Reason: "resource mapping changed before launch"}
-	}
-	return nil
 }
 
 // handleHostAppOpen handles the host.app.open-resource projection action. It

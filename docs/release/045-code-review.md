@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found seven required issues.
-All seven are resolved in the current worktree, and their focused regression
+The final source, security, and operator-UX review found ten required issues.
+All ten are resolved in the current worktree, and their focused regression
 judges pass. There is no open required review finding.
 
 This is not yet a release-candidate attestation. The reviewed tree is still the
@@ -17,10 +17,10 @@ publication-absence proof before readiness can be claimed.
 
 | Field | Value |
 | --- | --- |
-| Review date | 2026-07-30 |
-| Base `HEAD` | `38f35848f8f2597d65907610f893d3330245c3b1` |
+| Review date | 2026-07-31 |
+| Base `HEAD` | `5aeb6bd8677b4bce3df5e40e016cd2bc864b4787` |
 | Branch | `master` |
-| Worktree at review close | Dirty; 173 tracked files changed, 16,369 additions, 2,214 deletions, and 386 untracked files |
+| Worktree at review close | Dirty; 107 tracked files changed, 1,112 additions, 536 deletions, and one untracked file |
 | Candidate status | Not a candidate; exact clean identity remains T163/T171 |
 | Publication authority | None; no remote tag, GitHub Release, Homebrew mutation, or package publication is authorized |
 
@@ -74,7 +74,27 @@ Severity means:
 | CR045-004 | Medium | Daemon lifecycle/background control handlers accepted unbounded or non-strict JSON, and the SSE route did not explicitly reject non-GET methods. | Daemon control server | Add a 64 KiB bounded strict decoder with unknown-field and trailing-content rejection to every daemon control mutation, stable 400/413 errors, explicit SSE GET enforcement, and uniform no-store/nosniff JSON headers. | `TestDaemonControlRoutesBoundAndStrictlyDecodeRequests`, full `internal/daemon` tests. |
 | CR045-005 | High | The stable CLI connection path planned and immediately confirmed internally; the documented `hideout connect plan` command did not exist. A non-TTY caller could mutate without first receiving the canonical diff/effects/blockers/rollback, and an exact retry could not reconstruct a terminal binding after the private plan was intentionally removed. | CLI configuration client and Manager transaction service | Add `connect plan` and exact-ID `connect apply`; make natural interactive commands review then prompt; require `--yes` in non-TTY use; use the generic Manager transaction API; retain exact operation identity on uncertain/recovery outcomes; revalidate durable plan bindings; and reconstruct only an exact idempotent terminal retry from the validated operation. | `TestConnectPlanAndApplyUseExactReviewedOperation`, `TestConnectWithoutTTYOrYesLeavesReviewedPlanUnapplied`, `TestConnectApplyFailureKeepsExactOperationRecoveryIdentity`, `TestConnectRecoveryGuidanceKeepsExactOperationIdentity`, `TestProfileTransactionInspectPlanRevalidatesExactOperationBinding`, full `internal/app` and `internal/manager` tests. |
 | CR045-006 | Low | The gate matrix still labelled completed network/secret and lifecycle/recovery work as planned, which could make release status disagree with task and evidence records. | Release documentation | Mark the lanes active/passing with their T152/T153/T155 evidence while preserving the clean-candidate T163/T171 requirement. Update the claim matrix with the review regressions. | Markdown lint, documentation/help truth tests, and `git diff --check`; exact candidate doc truth remains T167/T169/T171. |
-| CR045-007 | Medium | Static analysis found ignored output, lock-release, daemon/session cleanup, and rollback errors; ineffective assignments and redundant copies; and obsolete production helpers left unreachable after the Manager/console refactor. An unlock failure could be reported as success, while dead security-sensitive paths made the reviewed and advisory-reachable runtime surface ambiguous. | App, Manager, and daemon maintainers | Join fallible lock releases into the owning operation result, check output and cleanup failures, correct the test lifecycle ordering exposed by those checks, remove unreachable production/test helpers, and simplify ineffective assignments and identical API conversions. Do not add lint suppressions. | `golangci-lint run ./internal/app ./internal/manager ./internal/daemon`, full tests for all three packages, focused race tests, and `go vet` all pass. |
+| CR045-007 | Medium | Static analysis found ignored output, lock-release, daemon/session cleanup, and rollback errors; ineffective assignments and redundant copies; and obsolete production helpers left unreachable after the Manager/console refactor. An unlock failure could be reported as success, while dead security-sensitive paths made the reviewed and advisory-reachable runtime surface ambiguous. | App, Manager, and daemon maintainers | Join fallible lock releases into the owning operation result, check output and cleanup failures, correct the test lifecycle ordering exposed by those checks, remove unreachable production/test helpers, and simplify ineffective assignments and identical API conversions. Do not add lint suppressions. | `golangci-lint run --max-issues-per-linter=0 --max-same-issues=0 ./...`, `go test -p 4 ./... -count=1`, Linux-arm64 supervisor vet, and the complete static lane all pass. |
+| CR045-008 | High | Bash 3.2 can turn a `set -u` crash into exit status zero when an EXIT trap is installed. Several final candidate, evidence, package, install, and direct sub-gate scripts cleaned up in EXIT traps without an independent completion proof, so a crash could be accepted as green. | Release engineering | Add one shared fail-closed completion guard, set the proof only immediately before each success line, exercise the exact Bash failure mode in a child-shell self-test, and make the release-blocker lane reject missing guard wiring across every directly used 045 EXIT-trap boundary. | `gate_completion_guard_self_test`, `bash -n`, ShellCheck, all release preflights, and the final exact orchestrator. |
+| CR045-009 | Low | Ordinary help, TUI, and WebUI paths exposed control-plane terms such as Manager projection, authoritative re-seed, incarnation, generation, and capability without explaining the action a user should take. Protocol fields were correct, but the primary experience obscured current state, VM ownership, secret version, and recovery. | CLI/TUI/WebUI operator experience | Keep API/schema/flag compatibility, but render ordinary actions as verified state, refresh, exact VM instance, secret version, collector run, setting, and Hideout review. Preserve advanced identifiers only where needed for exact diagnostics or copyable flags. | Focused app/TUI/WebUI suites, help and golden tests, Markdown lint, control-text safety tests, and installed-candidate quickstart validation. |
+| CR045-010 | Low | Nine broker success-path tests resolved `example.com` through the machine's external DNS before reaching the behavior under test. A resolver outage could therefore report a product regression or block a release even though production correctly failed closed. | Broker test maintainers | Inject one deterministic public test address only into the named success-path tests. Keep DNS-policy and local-address rejection tests on their existing resolver paths so production resolution and fail-closed boundaries remain covered. | `go test ./internal/broker -count=1`, `go test -p 4 ./... -count=1`, and full no-limit static analysis all pass without external DNS. |
+
+## Closure terminology and false-success audit
+
+The closure pass treats wire compatibility separately from operator language:
+
+- schema names, JSON fields, API resources, Go type names, and the existing
+  `--incarnation` flag remain stable;
+- the flag help and user guides explain that `--incarnation` is the exact VM
+  instance ID;
+- primary help, TUI, WebUI, and routine human output use action-oriented terms
+  and retain technical identifiers only in expanded evidence;
+- secret values remain absent from help, errors, UI, logs, process arguments,
+  and release artifacts; only references and versions are rendered;
+- untrusted terminal and browser text still passes through the existing
+  control-safe rendering paths; and
+- no status, response, cleanup trap, or display sample is accepted as success
+  without its independently validated terminal evidence.
 
 ## Confirmed invariants and negative review results
 
@@ -140,7 +160,8 @@ The following focused judges passed against the review-close worktree:
 
 ```sh
 go test ./internal/app ./internal/manager ./internal/daemon -count=1
-golangci-lint run ./internal/app ./internal/manager ./internal/daemon
+go test -p 4 ./... -count=1
+golangci-lint run --max-issues-per-linter=0 --max-same-issues=0 ./...
 go test -race ./internal/app \
   -run 'Test(ConnectPlanAndApplyUseExactReviewedOperation|ConnectWithoutTTYOrYesLeavesReviewedPlanUnapplied|ConnectApplyFailureKeepsExactOperationRecoveryIdentity|SecretApplyFailureKeepsExactOperationRecoveryIdentity)' \
   -count=1
@@ -155,7 +176,8 @@ The exact Linux-arm64 supervisor test binary was also copied into the running
 Lima guest and its full package test suite passed there, including descriptor
 execution after pathname replacement and symlink rejection.
 
-T162 reran the affected full tests, static analysis, vet, focused race,
-formatting, Markdown, and diff checks after this report. T163 and later tasks
-must rerun the complete release matrix against one clean candidate; this report
-does not substitute for those gates.
+The closure review reran full tests, no-limit static analysis, vet including the
+Linux-arm64 supervisor, generated/schema checks, formatting, shell and Markdown
+lint, acceptance identifier reconciliation, and diff checks after the final
+fixes. T163 and later tasks must still rerun the complete release matrix against
+one clean candidate; this report does not substitute for those gates.

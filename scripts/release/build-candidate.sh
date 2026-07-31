@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 # The absolute path is rooted from this script before sourcing.
 # shellcheck disable=SC1091
 source "$repo_root/scripts/lib/reproducible-package.sh"
@@ -263,9 +266,13 @@ if [ "$preflight_only" -eq 1 ]; then
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
+    local exit_status=$?
     cleanup_tree \
       "${preflight_root:-}" \
       "hideout-build-candidate-preflight"
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "build-candidate-preflight"
+    fi
   }
   trap cleanup_preflight EXIT
 
@@ -500,6 +507,7 @@ if [ "$preflight_only" -eq 1 ]; then
   go test ./internal/helperbin \
     -run 'TestHelperManifest(SourceDateEpochIsDeterministic|RejectsInvalidSourceDateEpoch)' \
     -count=1 >/dev/null
+  gate_completed=1
   printf 'build-candidate: preflight=passed\n'
   exit 0
 fi
@@ -545,7 +553,11 @@ scratch="$(
   mktemp -d "$tmp_base/hideout-build-candidate.XXXXXX"
 )"
 cleanup() {
+  local exit_status=$?
   cleanup_tree "${scratch:-}" "hideout-build-candidate"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "build-candidate"
+  fi
 }
 trap cleanup EXIT
 
@@ -1273,6 +1285,7 @@ jq -n \
 chmod 0600 "$pointer_tmp"
 mv "$pointer_tmp" "$out/result.json"
 
+gate_completed=1
 printf \
   'build-candidate: passed archive=%s sha256=%s summary=%s\n' \
   "$run_dir/$archive_name" \

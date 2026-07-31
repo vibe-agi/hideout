@@ -1419,20 +1419,6 @@ func CommandCheck(command string) []string {
 	return []string{"sh", "-c", "command -v \"$1\" >/dev/null 2>&1 || exit 127", "hideout-command-check", command}
 }
 
-func uniqueStrings(values []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
-}
-
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }

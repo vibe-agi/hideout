@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 summary=""
 evidence_root=""
@@ -107,11 +110,15 @@ if [ -z "$evidence_root" ]; then
   evidence_root="$(dirname "$summary")"
 fi
 [ -d "$evidence_root" ] || fail "evidence-root-not-found"
-evidence_root="$(CDPATH= cd -- "$evidence_root" && pwd -P)"
+evidence_root="$(CDPATH='' cd -- "$evidence_root" && pwd -P)"
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hideout-formal-verify.XXXXXX")"
 cleanup() {
+  local exit_status=$?
   rm -rf -- "$scratch"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "formal-verify"
+  fi
 }
 trap cleanup EXIT
 
@@ -371,7 +378,6 @@ if ! jq -e '
 fi
 
 go_json_path="$(jq -er '.goRefinement.jsonLog.path' "$summary")"
-go_human_path="$(jq -er '.goRefinement.humanLog.path' "$summary")"
 for log_kind in jsonLog humanLog; do
   log_path="$(jq -er --arg kind "$log_kind" '.goRefinement[$kind].path' "$summary")"
   safe_evidence_path "$log_path" || fail "unsafe-go-log-path:$log_kind"
@@ -435,6 +441,7 @@ while IFS= read -r source; do
 done <"$scratch/expected-go-sources"
 
 if [ "$core_only" = true ]; then
+  gate_completed=1
   printf 'formal-verify: core evidence accepted\n'
   exit 0
 fi
@@ -521,6 +528,7 @@ done <"$scratch/recorded-artifacts"
 [ "$(file_mode "$summary")" = "600" ] ||
   fail "summary-mode-mismatch"
 
+gate_completed=1
 printf \
   'formal-verify: accepted configurations=%s invariants=%s properties=%s goTests=%s\n' \
   "$configuration_count" "$total_invariants" "$total_properties" "$go_test_count"

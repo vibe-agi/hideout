@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
 
 require_real=0
 preflight_only=0
@@ -268,8 +270,11 @@ cleanup() {
         printf 'workload-observation-lima: refusing unexpected work cleanup path %s\n' \
           "$work_root" >&2
         status=1
-        ;;
+      ;;
     esac
+  fi
+  if [ "$gate_completed" != "1" ] && [ "$status" -eq 0 ]; then
+    status=1
   fi
   if { [ "$gate_completed" != "1" ] || [ "$status" -ne 0 ]; } &&
     [ -n "${out:-}" ]; then
@@ -289,6 +294,9 @@ cleanup() {
         failure: {stage: $stage, exitCode: $exitCode}
       }' >"$out/result.json" 2>/dev/null || true
     chmod 0600 "$out/result.json" 2>/dev/null || true
+  fi
+  if [ "$gate_completed" != "1" ]; then
+    gate_require_completion "workload-observation-lima"
   fi
   exit "$status"
 }
@@ -410,6 +418,8 @@ run_workload() {
   local workspace="$2"
   local stdout_path="$work_root/$label.out"
   local stderr_path="$work_root/$label.err"
+  # The single-quoted target program is intentionally passed verbatim to the VM.
+  # shellcheck disable=SC2016
   with_timeout "$gate_timeout" run_hideout run \
     --verbose --backend lima --network direct --workspace "$workspace" \
     -- sh -eu -c '
@@ -553,6 +563,8 @@ case "$old_pid_max" in
     ;;
 esac
 run_lima_root "sysctl -w kernel.pid_max=1024" >/dev/null
+# The single-quoted target program is intentionally passed verbatim to the VM.
+# shellcheck disable=SC2016
 LIMA_HOME="$lima_home" limactl shell "$instance_name" \
   -- sh -c 'i=0; while [ "$i" -lt 800 ]; do sh -c "true"; i=$((i + 1)); done; touch /tmp/hideout-unrelated-noise-canary' &
 noise_pid=$!

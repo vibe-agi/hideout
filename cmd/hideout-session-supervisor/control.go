@@ -1,3 +1,5 @@
+//go:build linux
+
 package main
 
 import (
@@ -44,4 +46,13 @@ type supervisorWire interface {
 	WriteOutput(outputKind, []byte) error
 	WriteError(code, summary string) error
 	WriteCompletion(targetCompletion) error
+}
+
+type targetCompletion struct {
+	Kind             string
+	ExitCode         int
+	Signal           string
+	Completed        bool
+	CleanupCompleted bool
+	Activity         *sessionwire.SupervisorActivityCompletion
 }

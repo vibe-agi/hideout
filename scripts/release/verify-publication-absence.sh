@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
 export LC_ALL=C
@@ -207,7 +210,18 @@ run_preflight() {
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-publication-absence-preflight.XXXXXX"
   )"
-  trap 'cleanup_tree "$preflight_root" "hideout-publication-absence-preflight"' EXIT
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
+  cleanup_preflight() {
+    local exit_status=$?
+    cleanup_tree \
+      "${preflight_root:-}" \
+      "hideout-publication-absence-preflight"
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "publication-absence-preflight"
+    fi
+  }
+  trap cleanup_preflight EXIT
   fixture="$preflight_root/receipt.json"
   commit="0123456789abcdef0123456789abcdef01234567"
   tree="89abcdef0123456789abcdef0123456789abcdef"
@@ -296,6 +310,7 @@ run_preflight() {
     "$fixture.mutated" "$commit" "$tree" "$digest" "$version" "$tag"; then
     fail "candidate digest mismatch was accepted"
   fi
+  gate_completed=1
   printf 'publication-absence: preflight=passed\n'
 }
 
@@ -413,7 +428,14 @@ tap_formula_sha_before="$(sha256_file "$tap_formula")"
 scratch="$(
   mktemp -d "$tmp_base/hideout-publication-absence.XXXXXX"
 )"
-trap 'cleanup_tree "${scratch:-}" "hideout-publication-absence"' EXIT
+cleanup() {
+  local exit_status=$?
+  cleanup_tree "${scratch:-}" "hideout-publication-absence"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "publication-absence"
+  fi
+}
+trap cleanup EXIT
 
 check_remote_tag_absent() {
   local label="$1" output_file query_exit
@@ -685,6 +707,7 @@ while IFS= read -r artifact; do
 done < <(jq -c '.artifacts[]' "$result_tmp")
 mv "$result_tmp" "$out/result.json"
 
+gate_completed=1
 printf \
   'publication-absence: passed tag=%s archiveSHA256=%s receipt=%s\n' \
   "$tag" "$archive_sha" "$out/result.json"

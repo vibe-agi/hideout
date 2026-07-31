@@ -3,9 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
-out="$repo_root/.artifacts/045/performance"
+evidence_out="$repo_root/.artifacts/045/performance"
 preflight_only=0
 attach_samples=7
 attach_warmups=2
@@ -35,7 +38,7 @@ while [ "$#" -gt 0 ]; do
         printf 'release-candidate-performance: --out requires a directory\n' >&2
         exit 2
       }
-      out="$2"
+      evidence_out="$2"
       shift 2
       ;;
     -h | --help)
@@ -110,7 +113,10 @@ fi
 
 if [ "$preflight_only" -eq 1 ]; then
   preflight_root="$(mktemp -d /tmp/hideout-performance-preflight.XXXXXX)"
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
   cleanup_preflight() {
+    local exit_status=$?
     case "${preflight_root:-}" in
       /tmp/hideout-performance-preflight.*)
         [ ! -d "$preflight_root" ] ||
@@ -122,6 +128,9 @@ if [ "$preflight_only" -eq 1 ]; then
           >&2
         ;;
     esac
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "release-candidate-performance-preflight"
+    fi
   }
   trap cleanup_preflight EXIT
   summary_contract_fixture="$preflight_root/summary.json"
@@ -179,6 +188,7 @@ if [ "$preflight_only" -eq 1 ]; then
     ./internal/workloadobs/store >/dev/null
   scripts/gates/workload-privacy-lima.sh \
     --preflight --out "$preflight_root/privacy" >/dev/null
+  gate_completed=1
   printf 'release-candidate-performance: preflight=passed\n'
   exit 0
 fi
@@ -192,15 +202,15 @@ fi
   exit 1
 }
 
-if [ -L "$out" ]; then
+if [ -L "$evidence_out" ]; then
   printf \
     'release-candidate-performance: evidence directory must not be a symlink\n' \
     >&2
   exit 1
 fi
-mkdir -p "$out"
-out="$(cd "$out" && pwd -P)"
-chmod 0700 "$out"
+mkdir -p "$evidence_out"
+evidence_out="$(cd "$evidence_out" && pwd -P)"
+chmod 0700 "$evidence_out"
 
 source_commit="$(git rev-parse HEAD)"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
@@ -209,7 +219,7 @@ else
   source_dirty=false
 fi
 run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
-run_dir="$out/$run_id"
+run_dir="$evidence_out/$run_id"
 [ ! -e "$run_dir" ] || {
   printf \
     'release-candidate-performance: run directory already exists\n' \
@@ -228,6 +238,7 @@ chmod 0700 \
 
 scratch="$(mktemp -d /tmp/hideout-release-performance.XXXXXX)"
 cleanup() {
+  local exit_status=$?
   case "${scratch:-}" in
     /tmp/hideout-release-performance.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
@@ -238,6 +249,9 @@ cleanup() {
         >&2
       ;;
   esac
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "release-candidate-performance"
+  fi
 }
 trap cleanup EXIT
 
@@ -845,7 +859,7 @@ fi
 
 summary_relative="$run_id/summary.json"
 summary_sha="$(sha256_file "$summary")"
-pointer_tmp="$out/.result.$$.json"
+pointer_tmp="$evidence_out/.result.$$.json"
 jq -n \
   --arg generatedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
   --arg commit "$source_commit" \
@@ -865,8 +879,9 @@ jq -n \
     candidateAcceptance:($dirty | not)
   }' >"$pointer_tmp"
 chmod 0600 "$pointer_tmp"
-mv "$pointer_tmp" "$out/result.json"
+mv "$pointer_tmp" "$evidence_out/result.json"
 
+gate_completed=1
 printf \
   'release-candidate-performance: passed evidence=%s summary-sha256=%s artifacts=%s\n' \
   "$summary" "$summary_sha" "$artifact_count"

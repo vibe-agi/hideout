@@ -103,7 +103,7 @@ func NewLifecycle(options LifecycleOptions) *Lifecycle {
 	if len(editor.environments) == 0 {
 		editor.stage = StageError
 		editor.errorMessage =
-			"No authoritative environments are present in this scope."
+			"No current environments are present in this scope."
 		return editor
 	}
 	if !options.Mutable || options.Provider == nil {
@@ -283,7 +283,7 @@ func (editor *Lifecycle) receivePlan(
 	if message.err != nil {
 		editor.stage = StageError
 		editor.errorMessage = safeAuthorityError(
-			"Manager could not create an environment lifecycle plan",
+			"Hideout could not create an environment lifecycle plan",
 			message.err,
 		)
 		return nil, LifecycleOutcome{}
@@ -297,7 +297,7 @@ func (editor *Lifecycle) receivePlan(
 		) {
 		editor.stage = StageError
 		editor.errorMessage =
-			"Manager returned a lifecycle plan that does not match the exact environment."
+			"Hideout returned a lifecycle plan for a different environment."
 		return nil, LifecycleOutcome{}
 	}
 	plan := message.plan
@@ -365,7 +365,7 @@ func (editor *Lifecycle) receiveApply(
 		) {
 		editor.stage = StageTerminal
 		editor.errorMessage =
-			"Manager returned a lifecycle result that does not match the exact environment."
+			"Hideout returned a lifecycle result for a different environment."
 		return nil, LifecycleOutcome{}
 	}
 	result := message.result
@@ -437,7 +437,7 @@ func (editor *Lifecycle) activeBlockers() []lifecycleBlocker {
 	if !ok {
 		return []lifecycleBlocker{{
 			code:     "environment.missing",
-			summary:  "the exact environment is absent from the authoritative snapshot",
+			summary:  "the exact environment is absent from the current verified state",
 			recovery: "refresh the snapshot",
 		}}
 	}
@@ -528,13 +528,13 @@ func (editor *Lifecycle) View(width int) string {
 		lines = append(
 			lines,
 			"",
-			"j/k select · s stop · c clean · Enter review with Manager · Esc cancel",
+			"j/k select · s stop · c clean · Enter review · Esc cancel",
 		)
 	case StagePlanning:
 		lines = []string{
 			"Planning environment " + safeInline(editor.action),
 			"Target " + safeInline(editor.SelectedEnvironmentID()),
-			"Manager is resolving the exact lifecycle target…",
+			"Resolving the exact lifecycle target…",
 			"Esc closes this client; no lifecycle action has been applied.",
 		}
 	case StageReview:
@@ -560,7 +560,7 @@ func (editor *Lifecycle) View(width int) string {
 		lines = []string{
 			"Applying environment " + safeInline(editor.action),
 			"Target " + safeInline(editor.SelectedEnvironmentID()),
-			"Manager is rechecking owners and backend state under lifecycle authority…",
+			"Rechecking active users and VM state…",
 			"Esc closes this dialog; it does not cancel an accepted request.",
 		}
 	case StageTerminal:
@@ -568,7 +568,7 @@ func (editor *Lifecycle) View(width int) string {
 	case StageStale:
 		reason := editor.authorityReason
 		if reason == "" {
-			reason = "authoritative environment state changed"
+			reason = "verified environment state changed"
 		}
 		lines = []string{
 			"STALE · read-only",
@@ -603,7 +603,7 @@ func (editor *Lifecycle) reviewLines() []string {
 	lines := []string{
 		"Review environment " + safeInline(plan.Action),
 		"Exact target " + safeInline(editor.SelectedEnvironmentID()),
-		"Manager revalidates this ID, ownership, and backend state at apply.",
+		"Hideout rechecks this ID, active users, and VM state before applying.",
 		"",
 	}
 	if plan.Action == manager.EnvironmentActionClean {
@@ -679,7 +679,7 @@ func (editor *Lifecycle) terminalLines() []string {
 			"Action " + safeInline(editor.action) +
 				" · target " + targetID,
 			safeInline(editor.errorMessage),
-			"Refresh authoritative environment state before deciding whether any new action is needed.",
+			"Refresh current environment state before deciding whether another action is needed.",
 			"Enter/Esc close",
 		}
 	}
@@ -712,7 +712,7 @@ func (editor *Lifecycle) terminalLines() []string {
 	}
 	return append(
 		lines,
-		"Manager returned terminal lifecycle evidence.",
+		"Hideout returned verified final lifecycle evidence.",
 		"Enter/Esc close",
 	)
 }

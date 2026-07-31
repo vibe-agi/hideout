@@ -32,12 +32,6 @@ func cloneActivityProjection(value ActivityProjection) ActivityProjection {
 	return cloned
 }
 
-func cloneActivityDelta(value ActivityProjectionDelta) ActivityProjectionDelta {
-	cloned := value
-	cloned.Counts = append([]ActivityCount(nil), value.Counts...)
-	return cloned
-}
-
 func cloneActivityRecord(record workloadtypes.ActivityRecord) workloadtypes.ActivityRecord {
 	cloned := record
 	if record.Actor != nil {

@@ -182,10 +182,6 @@ func (redactor *Redactor) argv(
 			truncation = appendUnique(truncation, "argv-value-truncated")
 		}
 	}
-	if redactNext {
-		// A sensitive flag without a following value is still safe to retain.
-		// Command validation may separately report the malformed invocation.
-	}
 	if encodedStringBytes(output) > redactor.maxOutputBytes {
 		return nil, nil, ErrRedactionFailed
 	}

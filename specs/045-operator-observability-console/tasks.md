@@ -375,11 +375,11 @@ fresh and passing; unsupported/reduced/not-run cannot substitute for a claim.
 **Purpose**: Remove drift, verify the written product path, and leave an exact
 handoff.
 
-- [ ] T166 [P] Run Go formatting, Markdown lint, shell/static lint, schema validation, generated checks, and `git diff --check`, fixing all feature-owned failures
+- [x] T166 [P] Run Go formatting, Markdown lint, shell/static lint, schema validation, generated checks, and `git diff --check`, fixing all feature-owned failures
 - [ ] T167 [P] Validate every command and interaction in `specs/045-operator-observability-console/quickstart.md` against the installed candidate and update only documented final spellings
-- [ ] T168 [P] Audit all new logs/events/errors for internal jargon, raw secret, control-sequence, and false-success language in `internal/`, `cmd/`, and `docs/`
-- [ ] T169 Reconcile all 71 functional requirements and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
-- [ ] T170 Record only genuinely deferred non-required work with owner, risk, trigger, and non-claim in `DEBT.md`
+- [x] T168 [P] Audit all new logs/events/errors for internal jargon, raw secret, control-sequence, and false-success language in `internal/`, `cmd/`, and `docs/`
+- [x] T169 Reconcile all 72 functional requirement identifiers (FR-001–FR-071 plus FR-035a) and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
+- [x] T170 Record only genuinely deferred non-required work with owner, risk, trigger, and non-claim in `docs/DEBT.md`
 - [ ] T171 Run the complete release-candidate orchestrator once more from the exact clean tree and verify the evidence manifest has no stale/reduced/not-run required entry in `.artifacts/045/`
 - [ ] T172 Confirm the local install is the exact candidate, preserve no legacy data as authorized, and hand off publication as a separate explicitly authorized action in `docs/release/045-readiness.md`
 

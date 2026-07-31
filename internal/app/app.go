@@ -8037,7 +8037,7 @@ func (a app) ui(args []string) error {
 	}
 	defer server.Close()
 	fmt.Fprintf(a.stdout, "Hideout UI: %s\n", server.UIURL)
-	fmt.Fprintf(a.stdout, "Manager API: %s\n", server.APIURL)
+	fmt.Fprintf(a.stdout, "Local Hideout API: %s\n", server.APIURL)
 	fmt.Fprintf(a.stdout, "Token expires: %s\n", server.ExpiresAt.Format(time.RFC3339))
 	if opts.printURL {
 		return nil
@@ -8217,7 +8217,7 @@ func writeDaemonStatusHuman(w io.Writer, status daemon.Status, now time.Time) {
 			activity += fmt.Sprintf(" (%s remaining)", remaining.Round(time.Second))
 		}
 		fmt.Fprintf(w, "Environment  %s\n", audit.RedactString(row.EnvironmentID))
-		fmt.Fprintf(w, "  Backend    %s generation=%d observed=%s\n", audit.RedactString(row.BackendState), row.StartGeneration, row.BackendObservedAt.UTC().Format(time.RFC3339))
+		fmt.Fprintf(w, "  Backend    %s vm-instance-version=%d observed=%s\n", audit.RedactString(row.BackendState), row.StartGeneration, row.BackendObservedAt.UTC().Format(time.RFC3339))
 		fmt.Fprintf(w, "  Activity   %s\n", activity)
 		fmt.Fprintf(w, "  Resources  pins=%d drains=%d orphans=%d\n",
 			len(row.Pins), len(row.Drains), len(row.Orphans))
@@ -8400,12 +8400,12 @@ func parseTUIOptions(args []string) (tuiOptions, error) {
 	fs.DurationVar(&opts.interval, "interval", opts.interval, "daemon-less fallback refresh interval")
 	fs.StringVar(&opts.profileName, "profile", "", "filter dashboard and audit rows to one profile")
 	fs.StringVar(&opts.sessionID, "session", "", "select one active or retained session")
-	jsonOutput := fs.Bool("json", false, "unsupported; use Manager API query routes")
+	jsonOutput := fs.Bool("json", false, "unsupported; use an activity command with --json")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
 	if *jsonOutput {
-		return opts, errors.New("hideout tui does not support --json; use Manager API or explicit activity commands for structured output")
+		return opts, errors.New("hideout tui does not support --json; use an activity command with --json for structured output")
 	}
 	if fs.NArg() != 0 {
 		return opts, errors.New("usage: hideout tui [--profile <name>] [--session <id>] [--interval 2s] | hideout tui --once [--profile <name>] [--session <id>]")
@@ -8817,7 +8817,7 @@ func writeTUILiveDashboard(w io.Writer, state liveconsole.State, err error, prof
 		if row.IdleDeadline != nil {
 			deadline = row.IdleDeadline.UTC().Format(time.RFC3339)
 		}
-		fmt.Fprintf(w, "  - %s  backend=%s  backend-observed=%s  activity=%s  generation=%d  pins=%d drains=%d orphans=%d  retained-facts=%d handoff-facts=%d  deadline=%s\n",
+		fmt.Fprintf(w, "  - %s  backend=%s  backend-observed=%s  activity=%s  vm-instance-version=%d  pins=%d drains=%d orphans=%d  retained-facts=%d handoff-facts=%d  deadline=%s\n",
 			dash(row.EnvironmentID), dash(row.BackendState), row.BackendObservedAt.UTC().Format(time.RFC3339), dash(string(row.Activity)), row.StartGeneration,
 			len(row.Pins), len(row.Drains), len(row.Orphans), len(row.Retained), len(row.Handoffs), deadline)
 		if row.Reconciliation != "complete" || row.ReasonCode != "" {

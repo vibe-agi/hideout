@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
 out="$repo_root/.artifacts/045/privacy"
@@ -77,7 +80,10 @@ fi
 
 if [ "$preflight_only" -eq 1 ]; then
   preflight_out="$(mktemp -d /tmp/hideout-privacy-preflight.XXXXXX)"
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
   cleanup_preflight() {
+    local exit_status=$?
     case "${preflight_out:-}" in
       /tmp/hideout-privacy-preflight.*)
         [ ! -d "$preflight_out" ] ||
@@ -89,6 +95,9 @@ if [ "$preflight_only" -eq 1 ]; then
           >&2
         ;;
     esac
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "release-candidate-privacy-preflight"
+    fi
   }
   trap cleanup_preflight EXIT
   bash -n \
@@ -112,6 +121,7 @@ if [ "$preflight_only" -eq 1 ]; then
     --preflight --out "$preflight_out/ui" >/dev/null
   scripts/gates/workload-privacy-lima.sh \
     --preflight --out "$preflight_out/lima" >/dev/null
+  gate_completed=1
   printf 'release-candidate-privacy: preflight=passed\n'
   exit 0
 fi
@@ -155,6 +165,7 @@ chmod 0700 "$run_dir" "$run_dir/tests" "$run_dir/lanes"
 
 scratch="$(mktemp -d /tmp/hideout-release-privacy.XXXXXX)"
 cleanup() {
+  local exit_status=$?
   case "${scratch:-}" in
     /tmp/hideout-release-privacy.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
@@ -165,6 +176,9 @@ cleanup() {
         >&2
       ;;
   esac
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "release-candidate-privacy"
+  fi
 }
 trap cleanup EXIT
 
@@ -558,6 +572,8 @@ if find "$run_dir" -type f ! -name '*.png' -print0 |
     >/dev/null 2>&1; then
   private_evidence_valid=false
 fi
+# The single-quoted Perl program must be passed verbatim.
+# shellcheck disable=SC2016
 if find "$run_dir" -type f ! -name '*.png' -print0 |
   xargs -0 perl -0777 -ne '
     $found = 1 if /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
@@ -584,7 +600,7 @@ artifact_rows="$scratch/artifacts.jsonl"
 : >"$artifact_rows"
 find "$run_dir" -type f -print | LC_ALL=C sort |
   while IFS= read -r artifact_path; do
-    relative="${artifact_path#$run_dir/}"
+    relative="${artifact_path#"$run_dir"/}"
     jq -cn \
       --arg path "$relative" \
       --arg sha256 "$(sha256_file "$artifact_path")" \
@@ -616,7 +632,7 @@ jq -n \
   --arg keychainLogSHA256 "$(sha256_file "$keychain_log")" \
   --arg uiStarted "$ui_started" \
   --arg uiFinished "$ui_finished" \
-  --arg uiSummary "${ui_summary#$run_dir/}" \
+  --arg uiSummary "${ui_summary#"$run_dir"/}" \
   --arg uiSummarySHA256 "$ui_summary_sha" \
   --arg limaStarted "$lima_started" \
   --arg limaFinished "$lima_finished" \
@@ -866,4 +882,5 @@ if [ "$aggregate_result" != "passed" ]; then
   printf 'release-candidate-privacy: failed\n' >&2
   exit 1
 fi
+gate_completed=1
 printf 'release-candidate-privacy: passed\n'

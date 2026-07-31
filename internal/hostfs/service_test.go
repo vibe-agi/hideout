@@ -1,12 +1,11 @@
 package hostfs
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -457,12 +456,15 @@ func TestHostAppResourceRequiresLiveContentOrTreeAuthority(t *testing.T) {
 		t.Fatalf("owner checks=%d want 2", len(authority.checks))
 	}
 
-	encoded, err := json.Marshal(fileResource)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), root) || string(encoded) != "{}" {
-		t.Fatalf("HostFS authority handle exposed a lower path: %s", encoded)
+	resourceType := reflect.TypeOf(fileResource)
+	for index := 0; index < resourceType.NumField(); index++ {
+		field := resourceType.Field(index)
+		if field.IsExported() {
+			t.Fatalf(
+				"HostFS authority handle exported lower-path field %q",
+				field.Name,
+			)
+		}
 	}
 }
 

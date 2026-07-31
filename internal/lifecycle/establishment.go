@@ -304,10 +304,7 @@ func (e *establishment) Promote(ctx context.Context) (Registration, error) {
 	return registration, nil
 }
 
-func (e *establishment) Abort(ctx context.Context, cause error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (e *establishment) Abort(_ context.Context, cause error) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.phase == establishmentPromoted || e.phase == establishmentAborted {

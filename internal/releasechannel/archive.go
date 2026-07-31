@@ -64,7 +64,7 @@ func ExtractPackageArchive(archivePath, destination string) (string, error) {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return "", err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, 0:
 			if hdr.Size < 0 || total+hdr.Size > maxPackageUncompressedBytes {
 				return "", errors.New("package archive exceeds uncompressed size limit")
 			}
@@ -236,7 +236,7 @@ func ExtractEvidenceArchive(archivePath, destination string) error {
 			if err := os.MkdirAll(target, 0o700); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, 0:
 			if header.Size <= 0 || total+header.Size > MaxEvidenceBundleBytes {
 				return errors.New("evidence archive exceeds size limit or contains an empty file")
 			}

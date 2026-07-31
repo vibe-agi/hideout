@@ -98,7 +98,7 @@ func guidanceForError(
 	if errors.As(err, &configurationOutcome) {
 		return errorGuidance{
 			Code: "operation.outcome-unknown",
-			Reason: "Manager did not return authoritative terminal evidence " +
+			Reason: "Hideout has not yet returned verified final evidence " +
 				"for operation " + configurationOutcome.operationID + ".",
 			Next: []string{
 				"hideout tui",
@@ -106,7 +106,7 @@ func guidanceForError(
 			},
 			Notes: []string{
 				"Inspect this exact ID in Operations before attempting another mutation.",
-				"Do not create or apply a replacement plan until the exact operation has authoritative terminal evidence.",
+				"Do not create or apply a replacement plan until this exact operation shows a verified final result.",
 			},
 		}
 	}
@@ -115,7 +115,7 @@ func guidanceForError(
 	if errors.As(err, &secretOutcome) {
 		return errorGuidance{
 			Code: "operation.outcome-unknown",
-			Reason: "Manager did not return authoritative terminal evidence " +
+			Reason: "Hideout has not yet returned verified final evidence " +
 				"for operation " + secretOutcome.operationID + ".",
 			Next: []string{
 				"hideout tui",

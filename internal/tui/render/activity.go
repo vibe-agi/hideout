@@ -231,7 +231,7 @@ func activityHeader(input ActivityInput, options Options) string {
 func activityUnavailable(input ActivityInput, options Options) string {
 	reason := sanitizeInline(input.Error)
 	if reason == "" {
-		reason = "authoritative Manager activity query is unavailable"
+		reason = "verified Hideout activity data is unavailable"
 	}
 	return components.EmptyState(
 		"Activity unavailable: "+reason,
@@ -369,7 +369,7 @@ func activityDetailLines(
 
 func activityEmptyLines(input ActivityInput) []string {
 	if input.Loading {
-		return []string{"Loading authoritative activity…"}
+		return []string{"Loading verified activity…"}
 	}
 	coverage := selectedActivityCoverage(input)
 	for _, interval := range coverage {
@@ -551,7 +551,7 @@ func activityCoverageDetail(interval workloadtypes.CoverageInterval) []string {
 		"coverage " + sanitizeInline(interval.Subsystem) + " " + sanitizeInline(interval.State),
 		"reason " + sanitizeInline(interval.Reason),
 		fmt.Sprintf(
-			"collector generation %d · sequence %d",
+			"collector run %d · sequence %d",
 			interval.CollectorGeneration,
 			interval.StartSequence,
 		),

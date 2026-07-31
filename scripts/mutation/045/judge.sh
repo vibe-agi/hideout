@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)"
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)"
 contracts="$root/scripts/mutation/045/contracts.json"
 matrix="$root/docs/release/045-claim-matrix.md"
 receipt=""
@@ -104,11 +104,13 @@ if [[ ! "$evidence_path" =~ ^[A-Za-z0-9._/-]+$ ]]; then
   fail "$diagnostic_prefix:unsafe-evidence-path"
 fi
 
-receipt_dir="$(CDPATH= cd -- "$(dirname -- "$receipt")" && pwd -P)"
+receipt_dir="$(CDPATH='' cd -- "$(dirname -- "$receipt")" && pwd -P)"
 evidence="$receipt_dir/$evidence_path"
 [ -f "$evidence" ] || fail "$diagnostic_prefix:evidence-not-found"
 [ ! -L "$evidence" ] || fail "$diagnostic_prefix:evidence-is-symlink"
-resolved_evidence_dir="$(CDPATH= cd -- "$(dirname -- "$evidence")" && pwd -P)"
+resolved_evidence_dir="$(
+  CDPATH='' cd -- "$(dirname -- "$evidence")" && pwd -P
+)"
 case "$resolved_evidence_dir/" in
   "$receipt_dir/"*)
     ;;

@@ -6024,7 +6024,7 @@ func TestUIPrintURLStartsLocalManagerAPIAndExits(t *testing.T) {
 	for _, want := range []string{
 		"Hideout UI: http://127.0.0.1:",
 		"/#token=ui_",
-		"Manager API: http://127.0.0.1:",
+		"Local Hideout API: http://127.0.0.1:",
 		"/api/v1/overview",
 		"Token expires:",
 	} {
@@ -6041,7 +6041,7 @@ func TestUIPrintURLStartsLocalManagerAPIAndExits(t *testing.T) {
 		switch {
 		case strings.HasPrefix(line, "Hideout UI: "):
 			uiLine = line
-		case strings.HasPrefix(line, "Manager API: "):
+		case strings.HasPrefix(line, "Local Hideout API: "):
 			apiLine = line
 		}
 	}
@@ -6151,7 +6151,7 @@ func TestTUIRendersTerminalDashboardWithoutStartingWebUI(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"Hideout UI:",
-		"Manager API:",
+		"Local Hideout API:",
 		"ui_",
 		"#token=",
 	} {
@@ -9228,7 +9228,7 @@ func TestTUILifecycleStatusRendersTypedClassification(t *testing.T) {
 	writeTUILiveDashboard(&out, state, nil, "")
 	text := out.String()
 	for _, want := range []string{
-		"env-lifecycle", "backend=running", "activity=blocked-unproved", "generation=4",
+		"env-lifecycle", "backend=running", "activity=blocked-unproved", "vm-instance-version=4",
 		"pins=1 drains=1 orphans=1", "retained-facts=1 handoff-facts=1", "reconciliation=blocked",
 		"reason=cleanup-unproved", "hideout doctor --feature daemon --level deep",
 	} {

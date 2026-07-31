@@ -246,10 +246,6 @@ func validFileMetadata(event Event, targetKind bool) bool {
 		!hasLimitation(event.Limitations, "target-path-unavailable") {
 		return false
 	}
-	if !targetKind && event.TargetPath != "" {
-		// The normalizer intentionally ignores irrelevant target fields, but
-		// still validates their bounded encoding above.
-	}
 	if event.Inode == 0 {
 		return hasLimitation(event.Limitations, "identity-unavailable")
 	}

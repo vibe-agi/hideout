@@ -46,12 +46,14 @@ func (s *Store) SetNow(now func() time.Time) {
 	s.now = now
 }
 
-func (s *Store) CreateOrUpdateDecision(d Decision) (Decision, error) {
+func (s *Store) CreateOrUpdateDecision(
+	d Decision,
+) (decisionResult Decision, resultErr error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -141,12 +143,19 @@ func (s *Store) ClaimDecision(id, surface string, lease time.Duration) (ClaimRes
 	})
 }
 
-func (s *Store) ClaimDecisionWithOptions(id string, opts ClaimOptions) (ClaimResponse, Decision, error) {
+func (s *Store) ClaimDecisionWithOptions(
+	id string,
+	opts ClaimOptions,
+) (
+	response ClaimResponse,
+	decisionResult Decision,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return ClaimResponse{}, Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -240,12 +249,20 @@ func (s *Store) ClaimDecisionWithOptions(id string, opts ClaimOptions) (ClaimRes
 	}, RedactDecision(d), nil
 }
 
-func (s *Store) ReleaseDecisionClaim(id, token string, expectedRevision int, reason string) (ClaimRelease, Decision, error) {
+func (s *Store) ReleaseDecisionClaim(
+	id, token string,
+	expectedRevision int,
+	reason string,
+) (
+	releaseResult ClaimRelease,
+	decisionResult Decision,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return ClaimRelease{}, Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -285,12 +302,14 @@ func (s *Store) ReleaseDecisionClaim(id, token string, expectedRevision int, rea
 	return release, RedactDecision(d), nil
 }
 
-func (s *Store) ReleaseExpiredClaims(now time.Time) ([]ReleasedClaim, error) {
+func (s *Store) ReleaseExpiredClaims(
+	now time.Time,
+) (released []ReleasedClaim, resultErr error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if now.IsZero() {
@@ -357,12 +376,19 @@ func claimRelease(d Decision, previous Claim, releasedAt time.Time, reason strin
 	}
 }
 
-func (s *Store) ResolveDecision(id, token, state, decision, reason string, providerResult map[string]any) (Resolution, Decision, error) {
+func (s *Store) ResolveDecision(
+	id, token, state, decision, reason string,
+	providerResult map[string]any,
+) (
+	resolutionResult Resolution,
+	decisionResult Decision,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Resolution{}, Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -406,12 +432,18 @@ func (s *Store) ResolveDecision(id, token, state, decision, reason string, provi
 // RevokeGrantedDecision revokes an active terminal grant. It is deliberately
 // separate from ResolveDecision: revocation does not reuse a stale claim token
 // and is restricted to the expected provider kind and approved state.
-func (s *Store) RevokeGrantedDecision(id, expectedKind, reason string) (Resolution, Decision, error) {
+func (s *Store) RevokeGrantedDecision(
+	id, expectedKind, reason string,
+) (
+	resolutionResult Resolution,
+	decisionResult Decision,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Resolution{}, Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, err := s.decisionLocked(id)
@@ -444,12 +476,18 @@ func (s *Store) RevokeGrantedDecision(id, expectedKind, reason string) (Resoluti
 // InvalidateProviderDecision removes authority when its owning lifecycle can
 // no longer be proven. It can invalidate pending, claimed, or approved records;
 // already non-authoritative terminal outcomes are left unchanged.
-func (s *Store) InvalidateProviderDecision(id, expectedKind, reason string) (Resolution, Decision, error) {
+func (s *Store) InvalidateProviderDecision(
+	id, expectedKind, reason string,
+) (
+	resolutionResult Resolution,
+	decisionResult Decision,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Resolution{}, Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, err := s.decisionLocked(id)
@@ -473,12 +511,20 @@ func (s *Store) InvalidateProviderDecision(id, expectedKind, reason string) (Res
 	return RedactResolution(res), RedactDecision(d), nil
 }
 
-func (s *Store) ReopenProviderDecision(id, expectedKind string, timeout time.Duration, reason string) (Resolution, Decision, error) {
+func (s *Store) ReopenProviderDecision(
+	id, expectedKind string,
+	timeout time.Duration,
+	reason string,
+) (
+	resolutionResult Resolution,
+	decisionResult Decision,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Resolution{}, Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if timeout <= 0 {
@@ -519,12 +565,14 @@ func (s *Store) ReopenProviderDecision(id, expectedKind string, timeout time.Dur
 	return RedactResolution(res), RedactDecision(d), nil
 }
 
-func (s *Store) FailAppliedProviderDecision(id, expectedKind string) (Decision, error) {
+func (s *Store) FailAppliedProviderDecision(
+	id, expectedKind string,
+) (decisionResult Decision, resultErr error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, err := s.decisionLocked(id)
@@ -551,12 +599,14 @@ func (s *Store) FailAppliedProviderDecision(id, expectedKind string) (Decision, 
 	return RedactDecision(d), nil
 }
 
-func (s *Store) ValidateDecisionClaim(id, token string) (Decision, error) {
+func (s *Store) ValidateDecisionClaim(
+	id, token string,
+) (decisionResult Decision, resultErr error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Decision{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -584,12 +634,14 @@ func (s *Store) TimeoutExpired(now time.Time) (int, error) {
 	return len(timedOut), nil
 }
 
-func (s *Store) TimeoutExpiredDecisions(now time.Time) ([]Decision, error) {
+func (s *Store) TimeoutExpiredDecisions(
+	now time.Time,
+) (decisions []Decision, resultErr error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if now.IsZero() {
@@ -631,12 +683,14 @@ func (s *Store) timeoutDecisionLocked(d *Decision, now time.Time) error {
 	return s.writeJSONAtomic(s.decisionPath(d.ID), *d)
 }
 
-func (s *Store) CreateOrUpdateNotice(n Notice) (Notice, error) {
+func (s *Store) CreateOrUpdateNotice(
+	n Notice,
+) (noticeResult Notice, resultErr error) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Notice{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -717,12 +771,18 @@ func (s *Store) Notices(filter ListFilter) ([]Notice, error) {
 	return out, nil
 }
 
-func (s *Store) AckNotice(id, surface string) (Acknowledgement, Notice, error) {
+func (s *Store) AckNotice(
+	id, surface string,
+) (
+	acknowledgementResult Acknowledgement,
+	noticeResult Notice,
+	resultErr error,
+) {
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Acknowledgement{}, Notice{}, err
 	}
-	defer unlock()
+	defer joinUnlockError(unlock, &resultErr)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -843,6 +903,10 @@ func (s *Store) lockFile() (func() error, error) {
 		}
 		return closeErr
 	}, nil
+}
+
+func joinUnlockError(unlock func() error, resultErr *error) {
+	*resultErr = errors.Join(*resultErr, unlock())
 }
 
 func decisionMatches(d Decision, f ListFilter) bool {

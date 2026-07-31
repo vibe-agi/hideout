@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
 export LC_ALL=C
@@ -208,6 +211,9 @@ cleanup() {
       >/dev/null 2>&1 || true
   fi
   cleanup_tree "${scratch:-}" "hideout-local-install"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "local-install"
+  fi
   exit "$exit_status"
 }
 
@@ -332,7 +338,18 @@ run_preflight() {
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-local-install-preflight.XXXXXX"
   )"
-  trap 'cleanup_tree "$preflight_root" "hideout-local-install-preflight"' EXIT
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
+  cleanup_preflight() {
+    local exit_status=$?
+    cleanup_tree \
+      "${preflight_root:-}" \
+      "hideout-local-install-preflight"
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "local-install-preflight"
+    fi
+  }
+  trap cleanup_preflight EXIT
   fixture_root="$preflight_root/home"
   mkdir -p "$fixture_root/.hideout"
   store_fixture="$fixture_root/.hideout"
@@ -451,6 +468,7 @@ run_preflight() {
     "$digest" "$digest" "$digest" "$prefix_fixture" "$store_fixture"; then
     fail "remaining environment fixture was accepted"
   fi
+  gate_completed=1
   printf 'local-install: preflight=passed\n'
 }
 
@@ -1510,6 +1528,7 @@ fi
 mv "$result_tmp" "$out/result.json"
 package_removed=0
 
+gate_completed=1
 printf \
   'local-install: passed version=%s archiveSHA256=%s receipt=%s\n' \
   "$candidate_version" "$candidate_archive_sha" "$out/result.json"

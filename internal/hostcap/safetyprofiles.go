@@ -13,14 +13,10 @@ import (
 //go:embed recipes/safety-profiles.json
 var safetyProfilesJSON []byte
 
-var coreSafetyProfiles = mustLoadCoreSafetyProfiles()
-
-func mustLoadCoreSafetyProfiles() []appopen.SafetyProfile {
-	profiles, err := loadCoreSafetyProfiles(safetyProfilesJSON)
-	if err != nil {
+func init() {
+	if _, err := loadCoreSafetyProfiles(safetyProfilesJSON); err != nil {
 		panic("hostcap: invalid embedded safety profiles: " + err.Error())
 	}
-	return profiles
 }
 
 func loadCoreSafetyProfiles(raw []byte) ([]appopen.SafetyProfile, error) {

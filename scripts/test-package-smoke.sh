@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$ROOT/scripts/lib/gate-result.sh"
+gate_completed=0
 . "$ROOT/scripts/lib/daemon-temp.sh"
 
 tmp="$(hideout_mktemp_daemon_store)"
 cleanup() {
-  rm -rf "$tmp"
+  local exit_status=$?
+  find "$tmp" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "package-smoke"
+  fi
 }
 trap cleanup EXIT
 
@@ -854,4 +861,5 @@ fi
 HIDEOUT_STORE_ROOT="$proxy_installed_store" "$proxy_installed_prefix/bin/hideout" daemon stop >"$tmp/package-proxy-daemon-stop.out"
 
 copy_artifacts
+gate_completed=1
 echo "package-smoke: passed"

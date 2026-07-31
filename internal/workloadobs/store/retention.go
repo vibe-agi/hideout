@@ -474,7 +474,3 @@ func (store *Store) listOwnersLocked() ([]workloadtypes.ActivityOwner, error) {
 	})
 	return result, nil
 }
-
-func descriptorAge(descriptor sealedDescriptor) time.Time {
-	return descriptor.Manifest.SealedAt
-}

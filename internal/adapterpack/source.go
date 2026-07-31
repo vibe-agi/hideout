@@ -92,10 +92,6 @@ func adapterSourceLock(lock packsnapshot.SourceLock) SourceLock {
 	return SourceLock{Kind: lock.Kind, Path: lock.Path, URL: lock.URL, Commit: lock.Commit}
 }
 
-func isFullCommit(value string) bool {
-	return packsnapshot.IsFullCommit(value)
-}
-
 func adapterSnapshotLimits() packsnapshot.Limits {
 	// 011 did not impose source-size limits. Keep its accepted lifecycle while
 	// sharing the hardened snapshot implementation; host-app packs opt into the

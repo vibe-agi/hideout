@@ -114,7 +114,7 @@
           "credential-refreshed"
         );
       }
-      const error = new Error(`Manager request did not return: ${String(cause)}`);
+      const error = new Error(`Hideout request did not return: ${String(cause)}`);
       error.transport = true;
       error.cause = cause;
       throw error;
@@ -141,7 +141,7 @@
         throw error;
       }
       const error = new Error(
-        `Manager returned invalid JSON (${response.status})`
+        `Hideout returned invalid JSON (${response.status})`
       );
       error.transport = true;
       error.status = response.status;
@@ -154,7 +154,7 @@
         (detail && `${detail.code}: ${detail.message}`) ||
         (envelope.errors || []).join("; ") ||
         response.statusText ||
-        (expired ? "operator credential was rejected" : "Manager request failed"),
+        (expired ? "operator credential was rejected" : "Hideout request failed"),
         expired ? "credential-expired" : detail && detail.code || ""
       );
       error.transport = false;
@@ -275,7 +275,7 @@
     if (envelope.version !== "hideout.manager-api/v1" ||
         envelope.resource !== "profile/projection" ||
         !envelope.data) {
-      throw new Error("profile projection response contract mismatch");
+      throw new Error("profile state response contract mismatch");
     }
     return envelope.data;
   }

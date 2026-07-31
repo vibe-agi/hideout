@@ -20,7 +20,9 @@ gate2_034_values_json() {
 gate2_034_reference_workload() {
   cat <<'EOF'
 work_root="$(mktemp -d /var/tmp/hideout-reference.XXXXXX)"
+reference_completed=0
 cleanup_reference() {
+  cleanup_status=$?
   case "$work_root" in
     /var/tmp/hideout-reference.*)
       find "$work_root" -depth -delete
@@ -29,6 +31,10 @@ cleanup_reference() {
       printf 'reference workload: refusing unexpected cleanup path\n' >&2
       ;;
   esac
+  if [ "$cleanup_status" -eq 0 ] && [ "$reference_completed" != "1" ]; then
+    printf 'reference workload: run ended before its success line\n' >&2
+    exit 1
+  fi
 }
 trap cleanup_reference EXIT HUP INT TERM
 /usr/bin/python3 - "$work_root" <<'PY'
@@ -106,6 +112,7 @@ print(f"uid={os.getuid()}")
 print(f"digest={digest}")
 print(f"elapsed_ms={elapsed_ms:.3f}")
 PY
+reference_completed=1
 EOF
 }
 
@@ -309,7 +316,7 @@ gate2_034_prepare_fixture() {
 gate2_034_fixture_digest() {
 	local workspace="$1"
 	(
-		cd "$workspace"
+		cd "$workspace" || exit
 		{
 			git rev-parse 'HEAD^{tree}'
 			git diff --no-ext-diff --binary HEAD -- . ':(exclude).hideout-gate-control'
@@ -427,6 +434,8 @@ exec sleep infinity
 
   kill "$candidate_anchor_pid" 2>/dev/null || true
   wait "$candidate_anchor_pid" 2>/dev/null || true
+  # Read by gate2_034_cleanup, which is defined in the sourcing script.
+  # shellcheck disable=SC2034
   GATE2_034_CLEANUP_FIRST_PID=""
   candidate_env="$(HIDEOUT_STORE_ROOT="$candidate_store" "$candidate_hideout" env list | awk 'NR == 2 {print $1}')"
   owner_ready=0

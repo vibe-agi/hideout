@@ -41,7 +41,7 @@ for keys that apply to the current view. Press Enter on a row to inspect it.
 Configuration and environment actions open a review dialog; they do not apply
 on the first Enter.
 
-For a browser presentation of the same Manager facts:
+For a browser presentation of the same verified Hideout state:
 
 ```sh
 hideout ui
@@ -139,11 +139,11 @@ After daemon restart, stale durable route state is shown as `not-observed`
 until a new gateway is proved. A failed privacy prerequisite fails closed;
 Hideout does not silently fall back to direct networking.
 
-In the TUI, choose Config with `3`, select a capability, and press Enter. The
+In the TUI, choose Config with `3`, select a setting, and press Enter. The
 dialog follows:
 
 ```text
-Draft → Manager Plan → diff and impact → Confirm → Apply → terminal evidence
+Draft → Hideout Plan → diff and impact → Confirm → Apply → verified result
 ```
 
 If another client changes the profile, the reviewed plan becomes stale and
@@ -186,7 +186,8 @@ hideout activity coverage --session <id>
 
 `--session` always means that one run, including when several runs share a
 reusable environment. Use `--environment <id> --incarnation <id>` only when you
-intentionally want the retained history for the whole exact VM incarnation.
+intentionally want retained history for the whole exact VM instance. The
+`--incarnation` value is that VM instance ID.
 
 Coverage is a result, not decoration:
 
@@ -196,7 +197,7 @@ Coverage is a result, not decoration:
 - `Unavailable` means absence of events must not be interpreted as absence of
   behavior.
 
-Local activity belongs to an exact environment/VM incarnation. It is stored
+Local activity belongs to an exact environment and VM instance. It is stored
 privately for the current user and lasts for that environment lifecycle.
 Cleaning or recreating the environment removes its retained observations.
 Capacity limits are bounded; truncation changes coverage to Partial rather than
@@ -228,7 +229,7 @@ hideout clean <environment-id>
 ```
 
 Stop retains environment data. Clean deletes the selected environment runtime
-and its incarnation-bound retained observation data. Clean is not reversible.
+and the observations bound to its exact VM instance. Clean is not reversible.
 Active sessions, active workspace views, unproved ownership, or a stale plan
 block apply.
 
@@ -335,7 +336,7 @@ hideout daemon start
 hideout tui
 ```
 
-Only a new authoritative snapshot restores mutation controls.
+Only a fresh verified state refresh restores mutation controls.
 
 ### Activity is empty
 

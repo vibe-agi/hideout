@@ -242,7 +242,7 @@ func (editor *Config) SyncAuthority(
 		editor.stage = StageStale
 		if !sameBase {
 			editor.authorityReason =
-				"profile revision changed; discard this draft and review a fresh projection"
+				"profile changed; discard this draft and refresh current state"
 		}
 		return
 	}
@@ -472,12 +472,12 @@ func (editor *Config) receiveConfigurationPlan(
 			editor.stageBeforeStale = StagePlanning
 			editor.stage = StageStale
 			editor.authorityReason =
-				"Manager rejected the stale profile revision; refresh before reviewing"
+				"Hideout rejected an out-of-date profile; refresh before reviewing"
 			return nil, Outcome{}
 		}
 		editor.stage = StageError
 		editor.errorMessage = safeAuthorityError(
-			"Manager could not create a configuration plan",
+			"Hideout could not create a configuration plan",
 			message.err,
 		)
 		return nil, Outcome{}
@@ -491,7 +491,7 @@ func (editor *Config) receiveConfigurationPlan(
 		plan.CanonicalChanges[0].Kind != editor.editorID {
 		editor.stage = StageError
 		editor.errorMessage =
-			"Manager returned a plan that does not match this exact draft."
+			"Hideout returned a plan for a different draft."
 		return nil, Outcome{}
 	}
 	editor.profilePlan = &plan
@@ -511,12 +511,12 @@ func (editor *Config) receiveSecretPlan(
 			editor.stageBeforeStale = StagePlanning
 			editor.stage = StageStale
 			editor.authorityReason =
-				"Manager rejected stale secret metadata; refresh before reviewing"
+				"Hideout rejected out-of-date secret details; refresh before reviewing"
 			return nil, Outcome{}
 		}
 		editor.stage = StageError
 		editor.errorMessage = safeAuthorityError(
-			"Manager could not create a secret plan",
+			"Hideout could not create a secret plan",
 			message.err,
 		)
 		return nil, Outcome{}
@@ -528,7 +528,7 @@ func (editor *Config) receiveSecretPlan(
 		plan.Action != editor.secretDraft.Action {
 		editor.stage = StageError
 		editor.errorMessage =
-			"Manager returned an invalid secret plan."
+			"Hideout returned an invalid secret plan."
 		return nil, Outcome{}
 	}
 	editor.secretPlan = &plan
@@ -664,7 +664,7 @@ func (editor *Config) receiveConfigurationApply(
 		result.Projection.Profile != plan.Profile ||
 		result.Projection.Revision <= plan.BaseRevision {
 		editor.finishResponseLoss(
-			errors.New("Manager returned a mismatched apply result"),
+			errors.New("Hideout returned a result for a different operation"),
 		)
 		return nil, Outcome{}
 	}
@@ -709,7 +709,7 @@ func (editor *Config) receiveSecretApply(
 		result.Reference.Validate() != nil ||
 		result.Reference.Ref != plan.Ref {
 		editor.finishResponseLoss(
-			errors.New("Manager returned a mismatched secret result"),
+			errors.New("Hideout returned a secret result for a different operation"),
 		)
 		return nil, Outcome{}
 	}
@@ -729,7 +729,7 @@ func (editor *Config) finishResponseLoss(err error) {
 	editor.stage = StageTerminal
 	editor.responseLost = true
 	editor.errorMessage = safeAuthorityError(
-		"Apply response was not authoritative",
+		"Apply response could not be verified",
 		err,
 	)
 }
@@ -871,13 +871,13 @@ func (editor *Config) View(width int) string {
 			editorPrompt(editor.editorID),
 			"> "+safeInline(string(editor.input)),
 			"",
-			"Enter review with Manager · Esc cancel",
+			"Enter review · Esc cancel",
 		)
 	case StagePlanning:
 		lines = append(
 			lines,
 			"Planning "+editorLabel(editor.editorID),
-			"Manager is validating the exact draft…",
+			"Validating the exact draft…",
 			"Esc closes this client; no configuration has been applied.",
 		)
 	case StageReview:
@@ -918,7 +918,7 @@ func (editor *Config) View(width int) string {
 			lines,
 			"Applying reviewed operation",
 			"Operation "+safeInline(editor.OperationID()),
-			"Waiting for Manager terminal evidence…",
+			"Waiting for a verified final result…",
 			"Esc closes this dialog but does not cancel the operation.",
 		)
 	case StageTerminal:
@@ -926,7 +926,7 @@ func (editor *Config) View(width int) string {
 	case StageStale:
 		reason := editor.authorityReason
 		if reason == "" {
-			reason = "authoritative state changed"
+			reason = "verified state changed"
 		}
 		lines = append(
 			lines,
@@ -1006,9 +1006,9 @@ func (editor *Config) reviewLines() []string {
 			"Expires "+plan.ExpiresAt.UTC().Format(time.RFC3339),
 			"",
 			"Before "+safeInline(plan.Current.Availability)+
-				fmt.Sprintf(" generation %d", plan.BaseGeneration),
+				fmt.Sprintf(" version %d", plan.BaseGeneration),
 			"After "+safeInline(plan.NextAvailability)+
-				fmt.Sprintf(" generation %d", plan.NextGeneration),
+				fmt.Sprintf(" version %d", plan.NextGeneration),
 			"Value hidden · never present in this plan",
 			"",
 			"Effects",
@@ -1098,7 +1098,7 @@ func (editor *Config) terminalLines() []string {
 		return []string{
 			"OUTCOME UNKNOWN",
 			"Operation " + id,
-			"Inspect Operations for authoritative evidence.",
+			"Inspect Operations for verified final evidence.",
 			"Enter/Esc close",
 		}
 	}
@@ -1198,7 +1198,7 @@ func parseTypedChange(
 		}
 	default:
 		return manager.TypedChange{}, errors.New(
-			"This Manager configuration capability is unsupported.",
+			"This Hideout setting is unsupported.",
 		)
 	}
 	change, err := manager.NewTypedChange(kind, value)

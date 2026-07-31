@@ -172,10 +172,7 @@ func (event RawNetworkEvent) valid() bool {
 	}
 	cookieUnavailable :=
 		event.Flags&NetworkFlagCookieUnavailable != 0
-	if (event.SocketCookie == 0) != cookieUnavailable {
-		return false
-	}
-	return true
+	return (event.SocketCookie == 0) == cookieUnavailable
 }
 
 func (evidence NetworkSocketEvidence) ValidateFor(

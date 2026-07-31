@@ -265,7 +265,7 @@ func (correlator *Correlator) NormalizeConnection(
 	targetIP := ""
 	targetPort := uint16(0)
 	domainAttribution := workloadtypes.AttributionUnknown
-	correlationReason := "literal-or-uncorrelated-ip"
+	var correlationReason string
 	var mediator *workloadtypes.Mediator
 
 	correlator.mu.Lock()

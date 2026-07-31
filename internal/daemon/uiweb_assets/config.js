@@ -58,7 +58,7 @@
       scope: "live · new connections",
       description:
         "Use the system resolver or carry DNS through an IP-backed mediated " +
-        "resolver. Manager performs authoritative validation."
+        "resolver. Hideout validates the exact change before applying it."
     }),
     Object.freeze({
       kind: "profile.environment",
@@ -94,7 +94,7 @@
       scope: "new sessions",
       description:
         "Add, enable, disable, refresh, or remove an exact command adapter. " +
-        "Local adapter source is verified by Manager."
+        "Hideout verifies the local adapter source."
     }),
     Object.freeze({
       kind: "activity.retention",
@@ -140,7 +140,7 @@
         !Number.isSafeInteger(current.revision) ||
         current.revision < 1 ||
         !PROFILE_PATTERN.test(profile)) {
-      throw new Error("authoritative profile projection is unavailable");
+      throw new Error("verified profile state is unavailable");
     }
     nonceCounter++;
     return {
@@ -461,7 +461,7 @@
         if (entrypoint) result.entrypoint = entrypoint;
         const allowed = list(
           input.allowedProposalCapabilities,
-          "proposal capability"
+          "allowed broker action"
         );
         if (allowed.length) result.allowedProposalCapabilities = allowed;
         return result;
@@ -562,7 +562,7 @@
         name: "value", label: "Public value (set only)", type: "textarea",
         value: "",
         help:
-          "Use managed secrets for credentials. Manager hides this value in review."
+          "Use managed secrets for credentials. Hideout hides this value in review."
       }];
       break;
     case "profile.hostfs":
@@ -626,7 +626,7 @@
         value: "", placeholder: "tool, tool-safe"
       }, {
         name: "allowedProposalCapabilities",
-        label: "Allowed proposal capabilities, comma separated",
+        label: "Allowed broker actions, comma separated",
         type: "text", value: "", placeholder: "host.open"
       }];
       break;
@@ -741,7 +741,7 @@
       }
       next.stage = STAGE_STALE;
       next.authorityReason = !sameBase ?
-        "Profile revision changed; discard this draft and review a fresh projection." :
+        "Profile changed; discard this draft and review the current state." :
         expired ?
           "The reviewed plan expired; discard it and request a fresh plan." :
           reason || "Authenticated mutation authority is unavailable.";
@@ -771,15 +771,15 @@
     }
     const plan = transaction.plan;
     if (!mutable) reasons.push("Console state is not live and mutable.");
-    if (!plan) reasons.push("Manager plan is unavailable.");
+    if (!plan) reasons.push("The reviewed plan is unavailable.");
     if (!current ||
         current.profile !== transaction.draft.profile ||
         current.revision !== transaction.draft.baseRevision ||
         current.contentDigest !== transaction.baseDigest) {
-      reasons.push("The profile projection no longer matches the reviewed base.");
+      reasons.push("The current profile no longer matches the reviewed base.");
     }
     if (plan && !isBefore(now || new Date(), plan.expiresAt)) {
-      reasons.push("The Manager plan has expired.");
+      reasons.push("The reviewed plan has expired.");
     }
     if (plan && Array.isArray(plan.blockers) && plan.blockers.length) {
       reasons.push("The reviewed plan has unresolved blockers.");
@@ -828,10 +828,10 @@
       validatePlan(plan, next);
       const expectedDigest = await canonicalPlanDigest(plan);
       if (expectedDigest !== plan.planDigest) {
-        throw new Error("Manager configuration plan digest mismatch");
+        throw new Error("Hideout configuration plan digest mismatch");
       }
       if (next.reviewedDraftFingerprint !== draftFingerprint(next.draft)) {
-        throw new Error("local draft changed while Manager was planning");
+        throw new Error("local draft changed while Hideout was planning");
       }
       next.plan = clone(plan);
       next.stage = STAGE_REVIEW;
@@ -843,9 +843,9 @@
         error.code === "stale-plan"
       ) ? STAGE_STALE : STAGE_ERROR;
       next.stageBeforeStale = STAGE_PLANNING;
-      next.error = `Manager could not create a matching plan: ${String(error)}`;
+      next.error = `Hideout could not create a matching plan: ${String(error)}`;
       next.authorityReason = next.stage === STAGE_STALE ?
-        "Manager rejected the stale profile revision; refresh before reviewing." :
+        "The profile changed; refresh it before reviewing again." :
         "";
       return next;
     }
@@ -869,7 +869,7 @@
         !plan.rollback ||
         !Array.isArray(plan.rollback.effects) ||
         !isBefore(new Date(0), plan.expiresAt)) {
-      throw new Error("Manager returned an invalid configuration plan");
+      throw new Error("Hideout returned an invalid configuration plan");
     }
     for (const collection of [
       plan.canonicalChanges,
@@ -879,7 +879,7 @@
       plan.warnings
     ]) {
       if (collection.length > 256) {
-        throw new Error("Manager plan exceeds browser review bounds");
+        throw new Error("Hideout plan exceeds browser review bounds");
       }
     }
     const expectedKinds = transaction.draft.changes.map(
@@ -889,12 +889,12 @@
       if (!definition(change.kind) ||
           !change.value ||
           typeof change.value !== "object") {
-        throw new Error("Manager returned an unknown canonical change");
+        throw new Error("Hideout returned an unknown reviewed change");
       }
       return change.kind;
     }).sort();
     if (canonicalJSON(expectedKinds) !== canonicalJSON(actualKinds)) {
-      throw new Error("Manager plan does not bind the exact local draft");
+      throw new Error("Hideout plan does not match the exact local draft");
     }
     for (const diff of plan.diff) {
       if (!diff ||
@@ -904,7 +904,7 @@
           String(diff.field).length > 256 ||
           String(diff.before || "").length > 2048 ||
           String(diff.after || "").length > 2048) {
-        throw new Error("Manager returned an invalid review diff");
+        throw new Error("Hideout returned an invalid review diff");
       }
     }
     for (const effect of plan.effects) {
@@ -915,21 +915,21 @@
           !effect.provider ||
           !effect.summary ||
           !Array.isArray(effect.proofRequired)) {
-        throw new Error("Manager returned an invalid planned effect");
+        throw new Error("Hideout returned an invalid planned effect");
       }
     }
     for (const blocker of plan.blockers) {
       if (!blocker || !blocker.code || !blocker.summary || !blocker.recovery) {
-        throw new Error("Manager returned an invalid blocker");
+        throw new Error("Hideout returned an invalid blocker");
       }
     }
     for (const warning of plan.warnings) {
       if (!warning || !warning.code || !warning.summary) {
-        throw new Error("Manager returned an invalid warning");
+        throw new Error("Hideout returned an invalid warning");
       }
     }
     if (!plan.rollback.mode || !plan.rollback.summary) {
-      throw new Error("Manager returned an invalid rollback plan");
+      throw new Error("Hideout returned an invalid rollback plan");
     }
   }
 
@@ -1033,7 +1033,7 @@
       next.stage = STAGE_TERMINAL;
       next.responseLost = true;
       next.error =
-        `Apply response was not authoritative: ${String(applyError)}`;
+        `Apply response was not verified: ${String(applyError)}`;
       try {
         const operation = await client.operation(plan.operationId);
         validateOperation(operation, plan);
@@ -1051,18 +1051,18 @@
   /** @param {Object} result @param {Object} plan */
   function validateApplyResult(result, plan) {
     if (!result || !result.operation) {
-      throw new Error("Manager returned no durable operation");
+      throw new Error("Hideout returned no saved operation");
     }
     validateOperation(result.operation, plan);
     if (result.projection && result.projection.profile) {
       if (result.projection.profile !== plan.profile ||
           !Number.isSafeInteger(result.projection.revision) ||
           result.projection.revision < plan.baseRevision) {
-        throw new Error("Manager returned a mismatched profile projection");
+        throw new Error("Hideout returned mismatched profile state");
       }
     } else if (isTerminalOperation(result.operation) &&
                result.operation.phase === "succeeded") {
-      throw new Error("Manager omitted the committed profile projection");
+      throw new Error("Hideout omitted the committed profile state");
     }
   }
 
@@ -1079,7 +1079,7 @@
         !operation.phase ||
         !Array.isArray(operation.effects) ||
         !operation.recovery) {
-      throw new Error("Manager returned a mismatched durable operation");
+      throw new Error("Hideout returned a mismatched saved operation");
     }
   }
 
@@ -1304,7 +1304,7 @@
         effectiveValue = effective.network ?
           effective.network.proxySecretRef +
             (effective.network.secretGeneration ?
-              ` · generation ${effective.network.secretGeneration}` : "") :
+              ` · version ${effective.network.secretGeneration}` : "") :
           effective.status;
         break;
       case "network.dns":
@@ -1345,7 +1345,7 @@
           advertised.mutable === true &&
           advertised.state === "available",
         reason: advertised.reason || (
-          advertised.mutable ? "" : "Manager marked this capability read-only"
+          advertised.mutable ? "" : "Hideout marked this setting read-only"
         )
       }];
     });

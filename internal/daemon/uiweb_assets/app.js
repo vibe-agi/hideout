@@ -170,7 +170,7 @@
       "credential-expired", "schema-mismatch"
     ].includes(state.health.state) ? state.health.state : "stale";
     const healthReason = state.health.reason ||
-      `daemon ${state.instanceId} · credential ${state.credentialGeneration}`;
+      `daemon ${state.instanceId} · sign-in version ${state.credentialGeneration}`;
     connectionState.textContent = healthState.toUpperCase();
     connectionState.className = `badge ${healthTone}`;
     connectionState.setAttribute(
@@ -184,23 +184,23 @@
         case "credential-expired":
           staleBanner.textContent =
             "Credential expired. All changes are disabled. Open a freshly " +
-            "issued Hideout WebUI link to reauthenticate and re-seed; the " +
+            "issued Hideout WebUI link to sign in again and refresh; the " +
             "fragment credential is removed from the address bar immediately.";
           break;
         case "disconnected":
           staleBanner.textContent =
             "Event stream disconnected. All changes are disabled while the " +
-            "console performs bounded read-only re-seed attempts.";
+            "console makes bounded read-only refresh attempts.";
           break;
         case "seeding":
           staleBanner.textContent =
-            "Refreshing authoritative state. All changes remain disabled " +
+            "Refreshing verified state. All changes remain disabled " +
             "until the snapshot and authenticated event stream are live.";
           break;
         default:
           staleBanner.textContent =
-            "State is stale and all changes are disabled. An authoritative " +
-            "snapshot and contiguous authenticated stream are required.";
+            "State is out of date and all changes are disabled. Refresh the " +
+            "verified state and authenticated event stream to continue.";
       }
     }
     configMode.textContent = mutable ? "live" : "read-only";
@@ -1238,7 +1238,7 @@
     ) : card(
       "Recovery evidence unavailable",
       "unproved",
-      [["next action", "Refresh the authoritative snapshot and inspect Operations."]],
+      [["next action", "Refresh current state and inspect Operations."]],
       "stale"
     );
     const actions = element("div", "dialog-actions");
@@ -1277,7 +1277,7 @@
     if (!profiles.length || !selectedProfile) {
       empty(
         bodies.config,
-        "No authoritative profile projection is available."
+        "No verified profile state is available."
       );
       return;
     }
@@ -1311,7 +1311,7 @@
     scope.append(scopeLabel, select);
     const authority = element("p", "muted");
     authority.textContent = safeText(root.State.canMutate(state) ?
-      "Edits remain local until Manager review and explicit confirmation." :
+      "Edits remain local until Hideout review and explicit confirmation." :
       "Read-only until a fresh, contiguous authenticated snapshot is live.");
     toolbar.append(scope, authority);
     container.append(toolbar);
@@ -1387,10 +1387,10 @@
       review.className = "primary";
       review.textContent =
         configTransaction.stage === root.Config.STAGE_PLANNING ?
-          "Manager is planning…" :
+          "Hideout is planning…" :
           configTransaction.stage === root.Config.STAGE_REVIEW ?
             "Open canonical review" :
-            "Review draft with Manager";
+            "Review draft";
       review.disabled =
         !root.State.canMutate(state) ||
         !changes.length ||
@@ -1426,7 +1426,7 @@
           ["desired", field.desired],
           ["effective", field.effective],
           ["transition", field.transition],
-          ["capability", field.capability],
+          ["setting ID", field.capability],
           ["availability", field.reason || (
             field.editable ? "available" : "read-only"
           )]
@@ -1456,7 +1456,7 @@
     if (!selected.fields.length) {
       const message = element("div", "empty");
       message.textContent =
-        "Manager advertised no profile configuration capabilities.";
+        "Hideout offers no editable settings for this profile.";
       fields.append(message);
     }
     container.append(group("Configuration controls", [fields]));
@@ -1549,8 +1549,8 @@
     if (!query) {
       details = emptyDetails();
       details.error =
-        "Exact workload owner is not present in the authoritative snapshot. " +
-        "History cannot be queried without environment/incarnation or disposable-session ownership.";
+        "This workload is not present in the current verified state. " +
+        "Select its exact environment and VM instance, or its disposable run.";
       renderAll();
       return;
     }
@@ -1750,13 +1750,13 @@
     if (state) {
       root.State.beginReseed(
         state,
-        options.reason || "refreshing authoritative snapshot"
+        options.reason || "refreshing verified state"
       );
       renderAll();
     } else {
       connectionState.textContent = "SEEDING";
       connectionState.className = "badge seeding";
-      connectionReason.textContent = "Loading authoritative state…";
+      connectionReason.textContent = "Loading verified state…";
       staleBanner.hidden = true;
       reseedButton.disabled = true;
       reseedButton.textContent = "Refreshing…";
@@ -1860,7 +1860,7 @@
     dialogReturnFocus = null;
   });
   reseedButton.addEventListener("click", () => {
-    seedLiveConsole({reason: "manual authoritative snapshot refresh"})
+    seedLiveConsole({reason: "manual verified state refresh"})
       .catch(() => {});
   });
   document.getElementById("loadMoreActivity").addEventListener(

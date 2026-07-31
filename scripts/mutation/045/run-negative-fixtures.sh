@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)"
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)"
 cd "$root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 contracts="$root/scripts/mutation/045/contracts.json"
 matrix="$root/docs/release/045-claim-matrix.md"
@@ -66,7 +69,14 @@ mkdir -p "$run_dir"
 chmod 0700 "$out_root" "$run_dir"
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/hideout-045-negative-fixtures.XXXXXX")"
-trap 'rm -rf "$tmp_dir"' EXIT
+cleanup() {
+  local exit_status=$?
+  find "$tmp_dir" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "045-negative-fixtures"
+  fi
+}
+trap cleanup EXIT
 
 awk -F'|' '
   /^\| (A|AT|R|C|H|U|RC|CL)[0-9][0-9] / {
@@ -315,6 +325,7 @@ jq -n \
   }' >"$out_root/summary.json"
 chmod 0600 "$out_root/summary.json"
 
+gate_completed=1
 printf \
   '045-negative-fixtures: passed claims=%s fixtures=%s evidence=%s\n' \
   "$claim_count" "$claim_count" "$run_dir/summary.json"

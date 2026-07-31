@@ -56,7 +56,7 @@ func TestConnectionSummaryShowsProvedSecretGeneration(
 	if got := connectionSummary(
 		state,
 		"default",
-	); got != "proxy gen 4 | DNS 1.1.1.1" {
+	); got != "proxy | secret version 4 | DNS 1.1.1.1" {
 		t.Fatalf("effective connection summary=%q", got)
 	}
 }
@@ -79,7 +79,7 @@ func TestConfigEffectiveProxyIncludesSecretGeneration(
 		liveconsole.State{},
 		projection,
 		manager.ChangeNetworkProxyRef,
-	); got != "local-proxy · generation 4" {
+	); got != "local-proxy · version 4" {
 		t.Fatalf("effective proxy value=%q", got)
 	}
 }

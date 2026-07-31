@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$ROOT/scripts/lib/gate-result.sh"
+gate_completed=0
 . "$ROOT/scripts/lib/daemon-temp.sh"
 
 tmp="$(hideout_mktemp_daemon_store)"
 cleanup() {
-  rm -rf "$tmp"
+  local exit_status=$?
+  find "$tmp" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "install-smoke"
+  fi
 }
 trap cleanup EXIT
 
@@ -190,4 +197,5 @@ if "$prefix/bin/hideout" package verify "$corrupt_helper" >"$tmp/corrupt-helper.
 fi
 grep -q 'package checksum mismatch for bin/hideout-session-supervisor-linux-' "$tmp/corrupt-helper.err"
 
+gate_completed=1
 echo "install-smoke: passed"

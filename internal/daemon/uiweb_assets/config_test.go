@@ -304,7 +304,7 @@ JSON.stringify({
 		proof.Blocked.Allowed ||
 		proof.Expired.Allowed ||
 		proof.Stale.Stage != "stale" ||
-		!strings.Contains(proof.Stale.AuthorityReason, "revision changed") {
+		!strings.Contains(proof.Stale.AuthorityReason, "Profile changed") {
 		t.Fatalf("review authority semantics=%+v", proof)
 	}
 	var reviewedEnvironment map[string]any
@@ -341,7 +341,7 @@ JSON.stringify({
 			t.Fatalf("available Manager capability rendered read-only: %+v", proof.Rows)
 		}
 		if field.Kind == manager.ChangeNetworkProxyRef &&
-			field.Effective != "local-proxy · generation 4" {
+			field.Effective != "local-proxy · version 4" {
 			t.Fatalf(
 				"browser hid effective secret generation: %+v",
 				field,

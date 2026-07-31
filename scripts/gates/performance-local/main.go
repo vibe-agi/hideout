@@ -170,6 +170,9 @@ func run(out string, samples, warmups int) error {
 	if err != nil {
 		return err
 	}
+	if querySink == 0 {
+		return errors.New("query benchmark did not consume its result")
+	}
 
 	state := liveconsole.State{
 		StreamHealth: liveconsole.StreamHealth{State: liveconsole.HealthLive},
@@ -190,6 +193,9 @@ func run(out string, samples, warmups int) error {
 	})
 	if err != nil {
 		return err
+	}
+	if renderSink == "" {
+		return errors.New("render benchmark did not consume its result")
 	}
 
 	result := evidence{

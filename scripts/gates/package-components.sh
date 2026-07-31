@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 out="$repo_root/.artifacts/045/package-components"
 
@@ -70,7 +73,11 @@ chmod 0700 "$out" "$run_dir"
 
 package_components_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-package-components.XXXXXX")"
 cleanup() {
-  rm -rf "$package_components_tmp"
+  local exit_status=$?
+  find "$package_components_tmp" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "package-components-gate"
+  fi
 }
 trap cleanup EXIT
 
@@ -239,5 +246,6 @@ jq -n \
   }' >"$summary"
 chmod 0600 "$summary"
 
+gate_completed=1
 printf 'package-components-gate: passed run=%s evidence=%s\n' \
   "$run_id" "$summary"

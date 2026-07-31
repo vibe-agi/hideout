@@ -116,9 +116,9 @@ gate2_concurrent_sessions_run() {
 			return 2
 		}
 		bin="$(dirname "$hideout")"
-	else
-		(
-			cd "$root"
+		else
+			(
+				cd "$root" || exit
 			go build -o "$hideout" ./cmd/hideout
 		)
 		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
@@ -146,11 +146,14 @@ gate2_concurrent_sessions_run() {
   GATE2_034_CLEANUP_HOSTFS_ROOT="$hostfs_root"
   GATE2_034_CLEANUP_HIDEOUT="$hideout"
   GATE2_034_CLEANUP_LIMA_HOME="$lima_home"
-	GATE2_034_CLEANUP_FIRST_PID=""
-	GATE2_034_CLEANUP_SECOND_PID=""
-	GATE2_034_CLEANUP_THIRD_PID=""
-  GATE2_034_CLEANUP_ROOT="$root"
+		GATE2_034_CLEANUP_FIRST_PID=""
+		GATE2_034_CLEANUP_SECOND_PID=""
+		GATE2_034_CLEANUP_THIRD_PID=""
+  local gate2_034_completed=0
   gate2_034_cleanup() {
+    # The function is also the EXIT trap and must capture the triggering status.
+    # shellcheck disable=SC2320
+    local cleanup_status=$?
 		touch "$GATE2_034_CLEANUP_WORKSPACE/a.release" \
 			"$GATE2_034_CLEANUP_WORKSPACE/b.probe" \
 			"$GATE2_034_CLEANUP_WORKSPACE/b.release" \
@@ -178,6 +181,11 @@ gate2_concurrent_sessions_run() {
       gate2_034_delete_temp_tree "$GATE2_034_CLEANUP_LIMA_HOME"
       gate2_034_delete_temp_tree "$GATE2_034_CLEANUP_HOSTFS_ROOT"
     fi
+    if [ "$cleanup_status" -eq 0 ] &&
+      [ "$gate2_034_completed" != "1" ]; then
+      echo "concurrent-sessions gate2: run ended before its success line" >&2
+      exit 1
+    fi
   }
   trap gate2_034_cleanup EXIT
 
@@ -185,6 +193,8 @@ gate2_concurrent_sessions_run() {
     --profile "$profile" --template dev --backend lima --network direct \
     --runtime developer-standard --no-input >"$out/logs/init.out" 2>"$out/logs/init.err"
 
+  # The single-quoted target program is intentionally passed verbatim to the VM.
+  # shellcheck disable=SC2016
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
     --verbose --profile "$profile" --backend lima --network direct --workspace "$workspace" --guest-workspace /workspace \
     --fs "overlay:$hostfs_file" -- sh -eu -c '
@@ -216,6 +226,8 @@ while [ ! -f /workspace/a.release ]; do sleep 0.05; done
   GATE2_034_CLEANUP_FIRST_PID="$first_pid"
   gate2_034_wait_file "$workspace/a.ready" "first session"
 
+  # The single-quoted target program is intentionally passed verbatim to the VM.
+  # shellcheck disable=SC2016
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
     --verbose --profile "$profile" --backend lima --network direct --workspace "$workspace" --guest-workspace /workspace \
     --fs "read:$hostfs_file" -- sh -eu -c '
@@ -264,7 +276,9 @@ while [ ! -f /workspace/b.release ]; do sleep 0.05; done
 	grep -Eq 'proc .*/proc proc ' "$workspace/a.proc-mount"
 	grep -Eq 'proc .*/proc proc ' "$workspace/b.proc-mount"
 
-	HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
+		# The single-quoted target program is intentionally passed verbatim to the VM.
+		# shellcheck disable=SC2016
+		HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" run \
 		--verbose --profile "$profile" --backend lima --network direct --workspace "$workspace" --guest-workspace /workspace \
 		-- sh -eu -c '
 printf "%s\n" "$HIDEOUT_SESSION_ID" > /workspace/c.session
@@ -359,10 +373,12 @@ ROOTSH
 	owner_release_end="$(gate2_034_now_seconds)"
 	owner_release_ms="$(awk -v start="$owner_release_start" -v end="$owner_release_end" 'BEGIN { printf "%.3f", (end-start)*1000 }')"
 	printf '%s\n' "$owner_release_ms" >"$out/logs/owner-reconcile-ms.txt"
-	[ "$owner_reconciled" -eq 1 ] && awk -v elapsed="$owner_release_ms" 'BEGIN { exit !(elapsed > 0 && elapsed <= 1000) }' || {
-		echo "concurrent-sessions gate2: host owner liveness did not reconcile within one second (${owner_release_ms}ms)" >&2
-		return 1
-	}
+		if [ "$owner_reconciled" -ne 1 ] ||
+			! awk -v elapsed="$owner_release_ms" \
+				'BEGIN { exit !(elapsed > 0 && elapsed <= 1000) }'; then
+			echo "concurrent-sessions gate2: host owner liveness did not reconcile within one second (${owner_release_ms}ms)" >&2
+			return 1
+		fi
 	terminated_probe=""
 	terminated_probe_attempt=0
 	while [ "$terminated_probe_attempt" -lt 100 ]; do
@@ -415,10 +431,10 @@ ROOTSH
 	  gate2_034_run_performance "$root" "$out" "$lima_home" "$workspace" \
 	    "$hideout" "$store" "$profile" "$samples" "$warmups" "$arch"
 
-	local session_pty_evidence session_pty_sha256
-	session_pty_evidence="$out/logs/session-pty.json"
-	(
-		cd "$root"
+		local session_pty_evidence session_pty_sha256
+		session_pty_evidence="$out/logs/session-pty.json"
+		(
+			cd "$root" || exit
 		go run ./test/e2e/sessionpty \
 			--hideout "$hideout" \
 			--store "$store" \
@@ -487,6 +503,7 @@ EOF
     >"$out/result.json"
   find "$out" -type d -exec chmod 0700 {} +
   find "$out" -type f -exec chmod 0600 {} +
+  gate2_034_completed=1
   echo "concurrent-sessions Gate 2 passed: $out/result.json"
   gate2_034_cleanup
   trap - EXIT

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -213,12 +212,4 @@ func firstAddress(values []string) string {
 		return ""
 	}
 	return normalized[0]
-}
-
-func sortedIndexEntries(entries []IndexEntry) []IndexEntry {
-	result := append([]IndexEntry(nil), entries...)
-	sort.Slice(result, func(left, right int) bool {
-		return result[left].Ordinal < result[right].Ordinal
-	})
-	return result
 }

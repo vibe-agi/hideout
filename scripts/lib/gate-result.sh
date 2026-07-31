@@ -36,6 +36,36 @@ gate_require_completion() {
   fi
 }
 
+# gate_completion_guard_self_test
+#
+# Exercise both sides of the guard in a child shell. The first child
+# deliberately references an unset variable after installing an EXIT trap.
+# Bash 3.2 may otherwise turn that crash into status 0; the completion guard
+# must make it non-zero. The second child proves that a completed run remains
+# successful.
+gate_completion_guard_self_test() {
+  if (
+    set -u
+    gate_completed=0
+    trap 'gate_require_completion completion-guard-self-test' EXIT
+    # Deliberately unset: this is the failure the guard must turn non-zero.
+    # shellcheck disable=SC2154
+    printf '%s\n' "$hideout_completion_guard_deliberately_unset" >/dev/null
+  ) >/dev/null 2>&1; then
+    echo "completion-guard-self-test: unset-variable crash was accepted" >&2
+    return 1
+  fi
+  if ! (
+    set -u
+    gate_completed=1
+    trap 'gate_require_completion completion-guard-self-test' EXIT
+    :
+  ) >/dev/null 2>&1; then
+    echo "completion-guard-self-test: completed run was rejected" >&2
+    return 1
+  fi
+}
+
 gate_sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -300,7 +330,9 @@ validate_retained_gate0_candidate() {
   local commit="${2:-}"
   local package_sha="${3:-}"
   local required_go_version module_file
-  module_file="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)/go.mod"
+  module_file="$(
+    CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd
+  )/go.mod"
   required_go_version="go$(awk '$1 == "go" { print $2; exit }' "$module_file")"
   if [ -z "$candidate" ] || [ ! -f "$candidate" ] ||
     ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' ||

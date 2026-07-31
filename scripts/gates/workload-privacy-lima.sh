@@ -1037,6 +1037,8 @@ fi
 
 current_stage="recreate-owner-preservation"
 printf 'workload-privacy-lima: stage=%s\n' "$current_stage"
+# The single-quoted target program is intentionally passed verbatim to the VM.
+# shellcheck disable=SC2016
 with_timeout "$gate_timeout" run_hideout run \
   --verbose --backend lima --network direct --workspace "$workspace" \
   -- sh -eu -c '

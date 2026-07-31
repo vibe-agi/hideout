@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
 out="$repo_root/.artifacts/045/ui"
@@ -149,6 +152,7 @@ chmod 0700 "$run_dir" "$run_dir/tests" "$run_dir/lanes"
 
 scratch="$(mktemp -d /tmp/hideout-release-ui.XXXXXX)"
 cleanup() {
+  local exit_status=$?
   case "${scratch:-}" in
     /tmp/hideout-release-ui.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
@@ -157,6 +161,9 @@ cleanup() {
       printf 'release-candidate-ui: refusing unexpected scratch cleanup\n' >&2
       ;;
   esac
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "release-candidate-ui"
+  fi
 }
 trap cleanup EXIT
 
@@ -465,6 +472,8 @@ if find "$run_dir" -type f ! -name '*.png' -print0 |
     >/dev/null 2>&1; then
   privacy_scan_valid=false
 fi
+# The single-quoted Perl program must be passed verbatim.
+# shellcheck disable=SC2016
 if find "$run_dir" -type f ! -name '*.png' -print0 |
   xargs -0 perl -0777 -ne '
     $found = 1 if /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
@@ -490,7 +499,7 @@ artifact_rows="$scratch/artifacts.jsonl"
 : >"$artifact_rows"
 find "$run_dir" -type f -print | LC_ALL=C sort |
   while IFS= read -r artifact_path; do
-    relative="${artifact_path#$run_dir/}"
+    relative="${artifact_path#"$run_dir"/}"
     jq -cn \
       --arg path "$relative" \
       --arg sha256 "$(sha256_file "$artifact_path")" \
@@ -515,6 +524,8 @@ jq -n \
   --arg goVersion "$(go version)" \
   --arg nodeVersion "$(node --version)" \
   --arg chromeVersion "$("$chrome" --version 2>/dev/null | head -1)" \
+  --arg browserStarted "$browser_started" \
+  --arg browserFinished "$browser_finished" \
   --arg browserRun "$browser_run" \
   --arg browserSummarySHA256 "$(
     if [ -f "$browser_summary" ]; then
@@ -551,6 +562,8 @@ jq -n \
       browser:{
         result:
           (if $browserValid then "passed" else "failed" end),
+        startedAt:$browserStarted,
+        finishedAt:$browserFinished,
         exitCode:$browserExit,
         run:$browserRun,
         summary:"browser/summary.json",
@@ -812,4 +825,5 @@ if [ "$aggregate_result" != "passed" ]; then
   printf 'release-candidate-ui: failed\n' >&2
   exit 1
 fi
+gate_completed=1
 printf 'release-candidate-ui: passed\n'

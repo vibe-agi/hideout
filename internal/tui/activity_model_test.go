@@ -188,7 +188,7 @@ func TestActivityViewExplainsUnavailableOwnerAndReducedCoverage(t *testing.T) {
 	rendered := model.View().Content
 	for _, expected := range []string{
 		"Activity unavailable",
-		"exact workload owner",
+		"this workload",
 		"hideout doctor --feature activity",
 	} {
 		if !strings.Contains(rendered, expected) {

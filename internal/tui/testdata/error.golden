@@ -5,13 +5,13 @@ CONNECTION proxy | DNS 1.1.1.1
 STATE running | mutations disabled
 COVERAGE process Available | file Partial | network Available | dns Partial
 RISK HIGH | wrote outside workspace
-NEXT refresh authoritative snapshot
+NEXT refresh verified state
 
 Activity
-last authoritative data retained
+last verified data retained
 
 Details
-re-seed before planning or applying changes
+refresh before planning or applying changes
 
 [1] Overview [2] Activity [3] Config [4] Operations [5] Help
 j/k select | Enter inspect | e environments | ? keys | q quit

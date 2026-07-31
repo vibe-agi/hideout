@@ -105,8 +105,8 @@ func Config(input ConfigInput, options Options) string {
 	rows := ConfigRows(input.State)
 	if !ok {
 		output := fmt.Sprintf(
-			"Config · no authoritative profile projection\n"+
-				"READ-ONLY · refresh the Manager snapshot before editing\n\n"+
+			"Config · no verified profile state\n"+
+				"READ-ONLY · refresh Hideout state before editing\n\n"+
 				"%s\n%s\n",
 			components.Tabs(options.Unicode, options.Width),
 			configFooter(options.Unicode, true),
@@ -135,18 +135,18 @@ func Config(input ConfigInput, options Options) string {
 	if !input.State.CanMutate() {
 		reason := sanitizeInline(input.State.StreamHealth.Reason)
 		if reason == "" {
-			reason = "authoritative mutation state is unavailable"
+			reason = "verified change state is unavailable"
 		}
 		lines = append(
 			lines,
-			"Mutation disabled: "+reason+" · re-seed before planning or applying",
+			"Changes disabled: "+reason+" · refresh before planning or applying",
 		)
 	}
 	lines = append(lines, "", "FIELD | DESIRED | SCOPE | EFFECTIVE | TRANSITION")
 	if len(rows) == 0 {
 		lines = append(
 			lines,
-			"No editable configuration capabilities were advertised by Manager.",
+			"No editable settings are available for this profile.",
 		)
 	} else if options.Width < 80 {
 		lines = append(lines, narrowConfigRows(rows, input.Selected)...)
@@ -173,7 +173,7 @@ func Config(input ConfigInput, options Options) string {
 		} else {
 			reason := row.Reason
 			if reason == "" {
-				reason = "capability is read-only"
+				reason = "setting is read-only"
 			}
 			lines = append(lines, "  DISABLED    "+reason)
 		}
@@ -229,15 +229,15 @@ func ConfigRows(state liveconsole.State) []ConfigRow {
 			Reason: sanitizeInline(capability.Reason),
 		}
 		if row.Reason == "" && !capability.Mutable {
-			row.Reason = "Manager marked this capability read-only"
+			row.Reason = "Hideout marked this setting read-only"
 		}
 		if row.Reason == "" &&
 			capability.Status != workloadtypes.CoverageAvailable {
-			row.Reason = "Manager capability is " +
+			row.Reason = "This setting is " +
 				strings.ToLower(sanitizeInline(capability.Status))
 		}
 		if row.Reason == "" && !state.CanMutate() {
-			row.Reason = "console is read-only until authoritative re-seed"
+			row.Reason = "console is read-only until current state is refreshed"
 		}
 		rows = append(rows, row)
 	}
@@ -361,7 +361,7 @@ func configEffectiveValue(
 		)
 		if projection.Effective.Network.SecretGeneration != 0 {
 			value += fmt.Sprintf(
-				" · generation %d",
+				" · version %d",
 				projection.Effective.Network.SecretGeneration,
 			)
 		}
@@ -375,7 +375,7 @@ func configEffectiveValue(
 		}
 		return sanitizeInline(projection.Effective.Network.DNS)
 	case "secret.manage":
-		return "availability and generation via Manager"
+		return "availability and version from Hideout"
 	case manager.ChangeActivityRetention:
 		return configActivityRetentionEffective(state, projection)
 	default:

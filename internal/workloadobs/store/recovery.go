@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -544,8 +543,4 @@ func removePrivateRegular(path string) error {
 		return err
 	}
 	return os.Remove(path)
-}
-
-func corruptionError(format string, arguments ...any) error {
-	return errors.Join(ErrStoreCorrupt, fmt.Errorf(format, arguments...))
 }

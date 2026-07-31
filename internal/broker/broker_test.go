@@ -140,6 +140,14 @@ func (r *browserRecordingOpener) BrowserProfile() string {
 	return r.browserProfile
 }
 
+func publicHostEvaluator(p profile.Profile) policy.Evaluator {
+	evaluator := policy.NewEvaluator(p)
+	evaluator.ResolveHost = func(string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+	}
+	return evaluator
+}
+
 func hostFSRequest(id, action, path string, extra map[string]any) Request {
 	args := map[string]any{"path": path}
 	for key, value := range extra {
@@ -801,7 +809,7 @@ func TestHandleAuditsIsolatedBrowserProfileForURLOpen(t *testing.T) {
 		Profile:   "test",
 		Backend:   "native",
 		Commands:  []string{"open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 		Audit:     writer,
 	}
@@ -910,7 +918,7 @@ func TestHandleFailsClosedWhenHostOpenerIsMissing(t *testing.T) {
 		Profile:   "test",
 		Backend:   "native",
 		Commands:  []string{"open", "xdg-open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Audit:     writer,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -1704,7 +1712,7 @@ func TestHandleAcceptsRegisteredCustomCommandProxy(t *testing.T) {
 		SessionID: "ses_1",
 		Token:     "cap_good",
 		Commands:  []string{"open", "browser-open"},
-		Evaluator: policy.NewEvaluator(profile.Default("test")),
+		Evaluator: publicHostEvaluator(profile.Default("test")),
 		Opener:    opener,
 	}
 	resp := server.Handle(context.Background(), Request{
@@ -2650,7 +2658,7 @@ func TestCommandScriptContextArgvIsRaw(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      audit.NewDiscard(),
 		ScriptRefs: []profile.ScriptRef{{
@@ -2713,7 +2721,7 @@ func TestHandleGivesCommandPolicyScriptRawTargetAndAuditsVerbatim(t *testing.T) 
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3213,7 +3221,7 @@ function redactAudit(ctx) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     &recordingOpener{},
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3305,7 +3313,7 @@ function redactAudit(ctx) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     &recordingOpener{},
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{
@@ -3389,7 +3397,7 @@ function redactAudit(ctx) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     &recordingOpener{},
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{
@@ -3533,7 +3541,7 @@ func TestHandleAuditRedactionScriptFailureFailsClosed(t *testing.T) {
 		Profile:    "test",
 		ProfileDir: profileDir,
 		Commands:   []string{"open"},
-		Evaluator:  policy.NewEvaluator(profile.Default("test")),
+		Evaluator:  publicHostEvaluator(profile.Default("test")),
 		Opener:     opener,
 		Audit:      writer,
 		ScriptRefs: []profile.ScriptRef{{

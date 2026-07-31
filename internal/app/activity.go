@@ -83,7 +83,7 @@ func (a app) activityUsage() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "OWNER:")
 	fmt.Fprintln(a.stdout, "  --session ID                         select a run (reusable or disposable)")
-	fmt.Fprintln(a.stdout, "  --environment ID --incarnation ID   select an exact reusable environment incarnation")
+	fmt.Fprintln(a.stdout, "  --environment ID --incarnation ID   select one exact reusable VM instance")
 	fmt.Fprintln(a.stdout, "  omit OWNER                           use the newest active workload")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Repeat filter flags to match any listed value. Queries are read-only and require the running daemon.")
@@ -396,7 +396,7 @@ func registerActivityOwnerFlags(
 ) {
 	fs.StringVar(&options.session, "session", "", "session ID")
 	fs.StringVar(&options.environment, "environment", "", "exact environment ID")
-	fs.StringVar(&options.incarnation, "incarnation", "", "exact backend incarnation ID")
+	fs.StringVar(&options.incarnation, "incarnation", "", "exact VM instance ID")
 }
 
 func registerActivityTimeFlags(
@@ -930,7 +930,7 @@ func writeActivityExecutionHuman(
 	)
 	fmt.Fprintf(
 		w,
-		"%s  process: pid=%d tid=%d sequence=%d generation=%d boot=%s\n",
+		"%s  process: pid=%d tid=%d exec-sequence=%d observer-run=%d boot=%s\n",
 		indent,
 		execution.PID,
 		execution.TID,
@@ -1015,7 +1015,7 @@ func writeActivityCoverageRows(
 		}
 		fmt.Fprintf(
 			w,
-			"coverage %s %s reason=%s started=%s ended=%s dropped=%d retention-gap=%t sequences=%d..%s generation=%d id=%s session=%s\n",
+			"coverage %s %s reason=%s started=%s ended=%s dropped=%d retention-gap=%t sequences=%d..%s collector-run=%d id=%s session=%s\n",
 			activityHuman(interval.Subsystem),
 			activityHuman(interval.State),
 			activityHuman(interval.Reason),
@@ -1123,7 +1123,7 @@ func writeActivityScopeHuman(w io.Writer, scope activityCommandScope) {
 	case workloadtypes.OwnerReusableEnvironment:
 		fmt.Fprintf(
 			w,
-			"owner: %s environment=%s backend=%s incarnation=%s\n",
+			"owner: %s environment=%s backend=%s vm-instance=%s\n",
 			activityHuman(owner.Kind),
 			activityHuman(owner.EnvironmentID),
 			activityHuman(owner.Backend),
@@ -1132,7 +1132,7 @@ func writeActivityScopeHuman(w io.Writer, scope activityCommandScope) {
 	case workloadtypes.OwnerDisposableSession:
 		fmt.Fprintf(
 			w,
-			"owner: %s session=%s backend=%s incarnation=%s\n",
+			"owner: %s session=%s backend=%s vm-instance=%s\n",
 			activityHuman(owner.Kind),
 			activityHuman(owner.SessionID),
 			activityHuman(owner.Backend),

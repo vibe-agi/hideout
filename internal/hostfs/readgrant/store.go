@@ -145,7 +145,7 @@ func (s *Store) WithShared(fn func() error) error {
 	return s.withLock(unix.LOCK_SH, fn)
 }
 
-func (s *Store) withLock(mode int, fn func() error) error {
+func (s *Store) withLock(mode int, fn func() error) (resultErr error) {
 	if s == nil || fn == nil {
 		return errors.New("HostFS read store and lock callback are required")
 	}
@@ -157,11 +157,20 @@ func (s *Store) withLock(mode int, fn func() error) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	locked := false
+	defer func() {
+		if locked {
+			resultErr = errors.Join(
+				resultErr,
+				unix.Flock(int(f.Fd()), unix.LOCK_UN),
+			)
+		}
+		resultErr = errors.Join(resultErr, f.Close())
+	}()
 	if err := unix.Flock(int(f.Fd()), mode); err != nil {
 		return err
 	}
-	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
+	locked = true
 	return fn()
 }
 

@@ -15,7 +15,7 @@ Environment:
 USAGE
 }
 
-mode=write
+mode='write'
 case "${1:-}" in
   "")
     ;;
@@ -33,6 +33,9 @@ case "${1:-}" in
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 package_dir="$repo_root/internal/workloadobs/collector/bpf"
 expected_llvm_version="19.1.7"
 expected_bpf2go_version="v0.22.0"
@@ -84,7 +87,11 @@ esac
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/hideout-bpf-generate.XXXXXX")"
 cleanup() {
-  rm -rf "$tmp_root"
+  local exit_status=$?
+  find "$tmp_root" -depth -delete
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "generated-bpf"
+  fi
 }
 trap cleanup EXIT
 
@@ -193,6 +200,7 @@ if [[ "$mode" == check ]]; then
   if [[ "$failed" -ne 0 ]]; then
     exit 1
   fi
+  gate_completed=1
   echo "generated-bpf: checked-in artifacts match pinned generation"
   exit 0
 fi
@@ -200,4 +208,5 @@ fi
 for name in "${generated_files[@]}"; do
   install -m 0644 "$output_dir/$name" "$package_dir/$name"
 done
+gate_completed=1
 echo "generated-bpf: wrote ${generated_files[*]}"

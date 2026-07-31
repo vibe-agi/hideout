@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 out="$root/.artifacts/045/formal"
 inventory="$root/formal/inventory.json"
@@ -88,7 +91,7 @@ else
 fi
 
 mkdir -p "$out"
-out="$(CDPATH= cd -- "$out" && pwd -P)"
+out="$(CDPATH='' cd -- "$out" && pwd -P)"
 run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
 run_dir="$out/$run_id"
 mkdir -p "$run_dir/tlc" "$run_dir/go" "$run_dir/judge"
@@ -96,7 +99,11 @@ chmod 0700 "$out" "$run_dir" "$run_dir/tlc" "$run_dir/go" "$run_dir/judge"
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hideout-formal-gate.XXXXXX")"
 cleanup() {
+  local exit_status=$?
   rm -rf -- "$scratch"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "formal-gate"
+  fi
 }
 trap cleanup EXIT
 
@@ -560,6 +567,7 @@ write_summary "$summary" "$negative_proofs" "$artifacts"
 chmod 0600 "$summary"
 "$verifier" --summary "$summary" --evidence-root "$out"
 
+gate_completed=1
 printf \
   'formal-gate: passed configurations=%d modules=%s invariants=%d properties=%d goTests=%s evidence=%s\n' \
   "$configuration_count" \

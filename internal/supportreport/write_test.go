@@ -53,7 +53,11 @@ func TestWriteAtomicRejectsSymlinkAndUnsafeParent(t *testing.T) {
 		if err := os.Chmod(dir, 0o777); err != nil {
 			t.Fatal(err)
 		}
-		defer os.Chmod(dir, 0o700)
+		t.Cleanup(func() {
+			if err := os.Chmod(dir, 0o700); err != nil {
+				t.Errorf("restore private test directory mode: %v", err)
+			}
+		})
 		if err := WriteAtomic(filepath.Join(dir, "report.json"), []byte("{}\n"), false); err == nil {
 			t.Fatal("group/world-writable parent accepted")
 		}

@@ -129,12 +129,8 @@ func runTUIProof(t *testing.T, prereq Prerequisites, fixture webui.Fixture, outD
 
 	cancel()
 	select {
-	case err := <-done:
+	case <-done:
 		processDone = true
-		if err != nil && !errors.Is(ctx.Err(), context.Canceled) {
-			// script(1) commonly returns a signal-related status after context
-			// cancellation; the transcript assertions above are the proof.
-		}
 	case <-time.After(5 * time.Second):
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()

@@ -1002,26 +1002,6 @@ func appendUniqueString(values []string, value string) []string {
 	return append(values, value)
 }
 
-func safeTaskID(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	var b strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	out := strings.Trim(b.String(), "_")
-	if out == "" {
-		return "value"
-	}
-	return out
-}
-
 func buildLinuxHelper(storeRoot, command string) error {
 	source, err := findHelperSourceRoot()
 	if err != nil {

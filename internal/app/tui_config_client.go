@@ -129,14 +129,14 @@ func (client *tuiConfigurationClient) PlanConfiguration(
 		plan.BaseRevision != normalized.BaseRevision ||
 		len(plan.CanonicalChanges) != len(normalized.Changes) {
 		return manager.ConfigurationPlan{}, errors.New(
-			"Manager returned a mismatched configuration plan",
+			"Hideout returned a configuration plan for different state",
 		)
 	}
 	for index := range plan.CanonicalChanges {
 		if plan.CanonicalChanges[index].Kind !=
 			normalized.Changes[index].Kind {
 			return manager.ConfigurationPlan{}, errors.New(
-				"Manager returned a mismatched configuration plan",
+				"Hideout returned a configuration plan for different state",
 			)
 		}
 	}
@@ -177,7 +177,7 @@ func (client *tuiConfigurationClient) ApplyConfiguration(
 			ID:   request.Profile,
 		}) {
 		return manager.ConfigurationApplyResult{}, errors.New(
-			"Manager returned a mismatched configuration result",
+			"Hideout returned a configuration result for a different operation",
 		)
 	}
 	// Recovery-required responses intentionally carry only the durable
@@ -188,7 +188,7 @@ func (client *tuiConfigurationClient) ApplyConfiguration(
 			result.Projection.Revision <= request.BaseRevision ||
 			result.Projection.Desired.Validate() != nil {
 			return manager.ConfigurationApplyResult{}, errors.New(
-				"Manager returned an invalid profile projection",
+				"Hideout returned invalid profile state",
 			)
 		}
 	}
@@ -225,7 +225,7 @@ func (client *tuiConfigurationClient) ApplyProfileNetwork(
 					ID:   options.ProfileName,
 				})) {
 		return manager.ProfileNetworkResult{},
-			errors.New("Manager returned a mismatched profile network result")
+			errors.New("Hideout returned network state for a different profile")
 	}
 	return result, nil
 }
@@ -286,7 +286,7 @@ func (client *tuiConfigurationClient) PlanEnvironment(
 		request.IDs[0],
 	) {
 		return manager.EnvironmentActionPlan{},
-			errors.New("Manager returned a mismatched lifecycle plan")
+			errors.New("Hideout returned a lifecycle plan for a different environment")
 	}
 	return plan, nil
 }
@@ -325,7 +325,7 @@ func (client *tuiConfigurationClient) ApplyEnvironment(
 		request.PlanDigest,
 	) {
 		return manager.EnvironmentActionResult{},
-			errors.New("Manager returned a mismatched lifecycle result")
+			errors.New("Hideout returned a lifecycle result for a different operation")
 	}
 	return result, nil
 }

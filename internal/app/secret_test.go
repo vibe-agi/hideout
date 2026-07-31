@@ -250,7 +250,7 @@ func TestSecretListAndStatusRenderMetadataOnly(t *testing.T) {
 		for _, want := range []string{
 			"local-proxy",
 			"available",
-			"generation=4",
+			"version=4",
 			"macos-keychain",
 		} {
 			if !strings.Contains(combined, want) {

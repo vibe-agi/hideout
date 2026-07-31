@@ -631,10 +631,7 @@ func (s Service) pathVisible(op Op, requested, resolved string) bool {
 		return false
 	}
 	if canonical != requested {
-		if !canonicalDecision.Allowed {
-			return false
-		}
-		return true
+		return canonicalDecision.Allowed
 	}
 	return requestedDecision.Allowed
 }
@@ -953,7 +950,7 @@ func (s Service) readGrantCandidate(path string) (ReadGrantCheck, os.FileInfo, e
 	if visibility.State == VisibilityHidden || !visibility.ExplicitDomain {
 		return ReadGrantCheck{}, nil, ErrNotFound
 	}
-	info, err := s.lstatPath(clean)
+	_, err = s.lstatPath(clean)
 	if err != nil {
 		return ReadGrantCheck{}, nil, s.discoveryHostError(clean, visibility, err)
 	}
@@ -972,7 +969,7 @@ func (s Service) readGrantCandidate(path string) (ReadGrantCheck, os.FileInfo, e
 	if cleanDecision.Effect == "deny" || canonicalDecision.Effect == "deny" {
 		return ReadGrantCheck{}, nil, &AccessError{Kind: ErrReadDenied, RequestedPath: clean, CanonicalPath: canonical, Visibility: visibility}
 	}
-	info, err = os.Stat(canonical)
+	info, err := os.Stat(canonical)
 	if err != nil {
 		return ReadGrantCheck{}, nil, s.discoveryHostError(clean, visibility, err)
 	}
@@ -1122,13 +1119,6 @@ func (s Service) syntheticEntries(path string) []DirEntry {
 		}
 	}
 	return entries
-}
-
-func syntheticMode(kind string) string {
-	if kind == "file" {
-		return "-r--r--r--"
-	}
-	return "dr-xr-xr-x"
 }
 
 func appendMissingEntries(entries []DirEntry, synthetic ...DirEntry) []DirEntry {

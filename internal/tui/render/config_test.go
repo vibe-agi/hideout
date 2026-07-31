@@ -85,7 +85,7 @@ func TestConfigStaleIsReadOnlyAndSanitizesCapabilityReason(t *testing.T) {
 		Width: 80, Height: 24, NoColor: true,
 	})
 	if !strings.Contains(output, "READ-ONLY") ||
-		!strings.Contains(output, "re-seed") ||
+		!strings.Contains(output, "refresh") ||
 		strings.Contains(output, "\x1b") ||
 		strings.Contains(output, "\u202e") {
 		t.Fatalf("stale configuration rendering is unsafe:\n%q", output)

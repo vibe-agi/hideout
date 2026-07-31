@@ -33,8 +33,8 @@ Rules:
 
 | Deferred item | Trigger (when it becomes due) | Source |
 | --- | --- | --- |
-| Gate scripts can report success after crashing: the macOS system shell is bash 3.2, which delivers exit status 0 for a `set -u` unbound-variable death when an EXIT trap is installed (the trap itself observes `$? = 0`; explicit exit, `set -e` command failure, and normal exit all propagate correctly). A crashed gate therefore looks green to its caller. `gate_require_completion` in `scripts/lib/gate-result.sh` is the fail-closed guard — each gate sets `gate_completed=1` immediately before its final success line and calls the guard from its EXIT trap — and is wired into gate2, gate3, and gate4. About 36 other `scripts/test-*.sh` share the same shape (`set -euo pipefail` plus an EXIT trap) and remain unguarded; each needs its own success line identified. | Before any of those scripts' green result is used as release evidence, and opportunistically when one is next edited | 2026-07-24 Gate 3 preflight: an empty-array expansion killed the run while the script exited 0 |
-| Real-backend gates inherited the guest session supervisor and Workspace Portal from whatever `install-local.sh` last left on PATH instead of building them from the candidate source, so a gate could prove a stale guest binary's behavior (observed: a supervisor predating 043 rejected the `projectionReadiness` control field). gate2 and gate3 now build both helpers from `internal/helperbin/cmd/build-*`. Remaining: the other real-backend lanes (`test-*-lima-e2e.sh`, `test-workspace-portal-lima.sh`, `test-runtime-lima.sh`, dogfood) still resolve these helpers through the operator's PATH, and neither helper has a `build-linux` CLI the way the shim and hostfsd do. | Before those lanes' results are used as candidate evidence; a `build-linux` subcommand would close the class | 2026-07-24 Gate 3 preflight helper-drift failure |
+| Gate scripts can report success after crashing: the macOS system shell is bash 3.2, which delivers exit status 0 for a `set -u` unbound-variable death when an EXIT trap is installed (the trap itself observes `$? = 0`; explicit exit, `set -e` command failure, and normal exit all propagate correctly). `gate_require_completion` in `scripts/lib/gate-result.sh` is the fail-closed guard. The complete 045 candidate/evidence/package/install path now has an independently self-tested guard at every directly used EXIT-trap boundary, and `release-candidate.sh` rejects missing wiring. Forty-five older shell scripts or sourced lane helpers still have the hazardous shape without this shared guard. | Before any remaining script's green result is used as release evidence, and opportunistically when one is next edited | 2026-07-24 Gate 3 preflight failure; 045 closure audit on 2026-07-31 |
+| Real-backend gates inherited guest helpers from whatever `install-local.sh` last left on PATH, so a gate could prove a stale guest binary's behavior (observed: a supervisor predating 043 rejected the `projectionReadiness` control field). All real-backend lanes required by the 045 candidate now build every helper they use from `internal/helperbin/cmd/build-*`. Remaining legacy lanes (`test-*-lima-e2e.sh`, `test-workspace-portal-lima.sh`, `test-runtime-lima.sh`, dogfood) can still resolve helpers through the operator's PATH, and the session supervisor and Workspace Portal do not expose a `build-linux` CLI like the shim and hostfsd. | Before one of those legacy lanes is used as candidate evidence; a shared source-bound helper builder or `build-linux` subcommands would close the class | 2026-07-24 Gate 3 preflight helper-drift failure; 045 real-lane audit on 2026-07-31 |
 | Runtime image CVE rebuild cadence and a "runtime is N days old" signal | Before `developer-standard` drops its preview label / any supported claim | 031 review |
 | Multi-revision runtime image disk sprawl governance (003 promised list/idle-stop/clean story) | When operators accumulate multiple runtime revisions or report disk pressure | 003 research; 031 review |
 | GA self-built image license/redistribution review (SBOM deferred to GA) | Before GA distribution of self-built runtime images | 031/033 reviews |
@@ -49,8 +49,27 @@ Rules:
 | Guest-to-host projection (adb, DevTools): separate design line with its own threat model | Flagship projection slice after host-to-guest story is told | opentarget-architecture; 2026-07-10 positioning |
 | portbridge guest-reachable listener unimplemented (lab-only) | Same as guest-to-host projection | portbridge.go |
 | `hideout hostfs migrate-list` exists but is documented nowhere user-facing | First external user hitting a legacy list-rule profile | 029 acceptance minor |
-| UI E2E lanes (TUI/browser/HostFS decision) are env-var gated and never run in the default gate | Before any UI behavior claim is made externally | 2026-07-11 verification |
 | HostFS per-op RPC performance ceiling for metadata-heavy workloads | Real-user reports of slow metadata operations on large repos | privacy-run-design |
 | 011-016 low-priority leftovers: two weak assertions in 011; human-channel redaction symmetry in 015 | Opportunistic; bundle lifecycle or decision-center rework touches those files | 011-016 acceptance |
 | One guest write stages two `hostfs.write` decisions (per-op granularity: create + write); operator-facing count reads noisy | Decision-center UX iteration | 2026-07-20 first-run walkthrough |
 | Repeated write to a path with an undecided pending decision surfaces as a bare guest `EIO` with no typed explanation | HostFS write-overlay UX iteration | 2026-07-20 first-run walkthrough |
+
+## Feature 045 follow-on work
+
+These items are not part of the current product claim. The owner, user risk,
+trigger, and present non-claim are explicit so a future feature cannot silently
+promote an observation into a protection promise.
+
+| Deferred item | Owner | User risk while deferred | Trigger (when it becomes due) | Current non-claim |
+| --- | --- | --- | --- | --- |
+| Optional policy that prevents an action because an explainable activity-risk rule matched | Policy and Manager | A user could mistake a detective risk finding for a firewall or execution block | Before any UI, documentation, or package claims that activity risks prevent commands, file actions, or network access | Risk findings explain observed behavior and policy status; they do not block it |
+| Tamper-resistant observation against a workload with effective guest-root control | Runtime isolation and workload observer | Guest root can stop or confuse collectors, reducing confidence if the reduction is ignored | Before supporting hostile guest root or claiming complete observation despite guest-root tampering | Guest-root tampering is outside the trusted observation boundary and must reduce coverage to Partial or Unavailable |
+
+## Resolved ledger decisions
+
+- 2026-07-31: the active “UI E2E lanes are optional” debt is retired for the
+  Feature 045 UI claims. `scripts/gates/release-candidate-ui.sh` is a required
+  exact-candidate lane for TUI, browser, accessibility, injection, stale-state,
+  and recovery behavior; the final evidence collector rejects a missing,
+  reduced, or non-passing receipt. This does not make unrelated legacy UI
+  smoke scripts release evidence.

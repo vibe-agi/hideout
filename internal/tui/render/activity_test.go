@@ -329,7 +329,7 @@ func TestActivityCoverageRendersIndependentSubsystemEvidence(t *testing.T) {
 		for _, expected := range []string{
 			"coverage " + current.subsystem + " " + current.state,
 			"reason " + current.reason,
-			fmt.Sprintf("collector generation %d", current.generation),
+			fmt.Sprintf("collector run %d", current.generation),
 			fmt.Sprintf("dropped %d", current.dropped),
 			fmt.Sprintf("retention gap %t", current.retention),
 		} {

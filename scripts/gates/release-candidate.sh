@@ -3,6 +3,9 @@ set -euo pipefail
 
 root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 out="$root/.artifacts/045/local"
 inventory="$root/scripts/gates/release-candidate-inventory.json"
@@ -39,7 +42,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-for command in awk bash comm find git go gofmt grep jq sed sort stat; do
+for command in \
+  awk bash cmp comm find git go gofmt grep jq markdownlint-cli2 sed shellcheck \
+  sort stat tr wc xargs; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'release-candidate-local: missing required command: %s\n' \
       "$command" >&2
@@ -94,7 +99,11 @@ chmod 0700 \
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-local.XXXXXX")"
 cleanup() {
+  local exit_status=$?
   rm -rf -- "$scratch"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "release-candidate-local"
+  fi
 }
 trap cleanup EXIT
 
@@ -105,6 +114,16 @@ if ! jq -e '
   .requiredGoVersion == "go1.25.12" and
   (.requiredLanes | length) == 9 and
   (.requiredLanes | length) == (.requiredLanes | unique | length) and
+  (.shellLint | length) >= 30 and
+  (.shellLint | length) == (.shellLint | unique | length) and
+  all(.shellLint[];
+    type == "string" and
+    test("^[A-Za-z0-9._/-]+[.]sh$")) and
+  (.markdownLint | length) >= 30 and
+  (.markdownLint | length) == (.markdownLint | unique | length) and
+  all(.markdownLint[];
+    type == "string" and
+    test("^[A-Za-z0-9._/-]+[.]md$")) and
   (.fuzzTests | length) >= 3 and
   (.fuzzTests | length) ==
     (.fuzzTests | map(.importPath + "::" + .name) | unique | length) and
@@ -253,6 +272,7 @@ generated_lane() {
 }
 
 static_lane() {
+  local lint_path
   go build ./...
   go vet ./...
 
@@ -279,8 +299,60 @@ static_lane() {
   while IFS= read -r script; do
     bash -n "$script" || return
   done < <(find scripts -type f -name '*.sh' | LC_ALL=C sort)
+  jq -r '.shellLint[]' "$inventory" >"$scratch/shell-lint-files"
+  while IFS= read -r lint_path; do
+    [ -f "$lint_path" ] && [ ! -L "$lint_path" ] || {
+      printf 'shell lint inventory path is missing or unsafe: %s\n' \
+        "$lint_path" >&2
+      return 1
+    }
+  done <"$scratch/shell-lint-files"
+  xargs shellcheck -x <"$scratch/shell-lint-files"
+  jq -r '.markdownLint[]' "$inventory" >"$scratch/markdown-lint-files"
+  while IFS= read -r lint_path; do
+    [ -f "$lint_path" ] && [ ! -L "$lint_path" ] || {
+      printf 'Markdown lint inventory path is missing or unsafe: %s\n' \
+        "$lint_path" >&2
+      return 1
+    }
+  done <"$scratch/markdown-lint-files"
+  xargs markdownlint-cli2 <"$scratch/markdown-lint-files"
+  sed -E -n \
+    's/^- \*\*(FR-[0-9]+a?)\*\*:.*/\1/p' \
+    specs/045-operator-observability-console/spec.md |
+    LC_ALL=C sort >"$scratch/spec-functional-requirements"
+  sed -E -n \
+    's/^\| (FR-[0-9]+a?) \|.*/\1/p' \
+    specs/045-operator-observability-console/checklists/acceptance.md |
+    LC_ALL=C sort >"$scratch/accepted-functional-requirements"
+  sed -E -n \
+    's/^- \*\*(SC-[0-9]+)\*\*:.*/\1/p' \
+    specs/045-operator-observability-console/spec.md |
+    LC_ALL=C sort >"$scratch/spec-success-criteria"
+  sed -E -n \
+    's/^\| (SC-[0-9]+) \|.*/\1/p' \
+    specs/045-operator-observability-console/checklists/acceptance.md |
+    LC_ALL=C sort >"$scratch/accepted-success-criteria"
+  if [ "$(wc -l <"$scratch/spec-functional-requirements" | tr -d ' ')" -ne 72 ] ||
+    [ "$(wc -l <"$scratch/spec-success-criteria" | tr -d ' ')" -ne 15 ] ||
+    ! cmp -s \
+      "$scratch/spec-functional-requirements" \
+      "$scratch/accepted-functional-requirements" ||
+    ! cmp -s \
+      "$scratch/spec-success-criteria" \
+      "$scratch/accepted-success-criteria"; then
+    printf 'Feature 045 acceptance identifier set drifted from the spec\n' >&2
+    comm -3 \
+      "$scratch/spec-functional-requirements" \
+      "$scratch/accepted-functional-requirements" >&2 || true
+    comm -3 \
+      "$scratch/spec-success-criteria" \
+      "$scratch/accepted-success-criteria" >&2 || true
+    return 1
+  fi
   git diff --check
-  printf 'build, vet, gofmt, module tidy, shell syntax, and diff checks passed\n'
+  printf \
+    'build, vet, gofmt, module tidy, shell/Markdown lint, syntax, and diff checks passed\n'
 }
 
 dependencies_advisory_lane() {
@@ -739,6 +811,7 @@ mutations_lane() {
 }
 
 release_blockers_lane() {
+  local guarded_script
   {
     # The backticks are literal Markdown delimiters in the table query.
     # shellcheck disable=SC2016
@@ -752,6 +825,42 @@ release_blockers_lane() {
     paste -sd, "$scratch/blocked-integration"
     return 1
   fi
+  gate_completion_guard_self_test
+  while IFS= read -r guarded_script; do
+    if ! grep -F 'scripts/lib/gate-result.sh' "$guarded_script" >/dev/null ||
+      ! grep -F 'gate_completed=0' "$guarded_script" >/dev/null ||
+      ! grep -F 'gate_completed=1' "$guarded_script" >/dev/null ||
+      ! grep -F 'gate_require_completion' "$guarded_script" >/dev/null; then
+      printf \
+        'release completion guard is not wired: %s\n' \
+        "$guarded_script" >&2
+      return 1
+    fi
+  done <<'EOF'
+scripts/gates/release-candidate.sh
+scripts/gates/release-candidate-privacy.sh
+scripts/gates/release-candidate-ui.sh
+scripts/gates/release-candidate-performance.sh
+scripts/gates/release-candidate-lima.sh
+scripts/gates/dependency-licenses.sh
+scripts/gates/formal-verify.sh
+scripts/gates/formal.sh
+scripts/gates/network-rotation-lima.sh
+scripts/gates/package-components.sh
+scripts/gates/workload-observation-lima.sh
+scripts/gates/workload-privacy-lima.sh
+scripts/generate-workload-observer-bpf.sh
+scripts/mutation/045/run-negative-fixtures.sh
+scripts/package-local.sh
+scripts/release/build-candidate.sh
+scripts/release/test-package-lifecycle.sh
+scripts/release/collect-evidence.sh
+scripts/release/install-local-candidate.sh
+scripts/release/verify-publication-absence.sh
+scripts/test-install-smoke.sh
+scripts/test-package-smoke.sh
+scripts/test-vulnerability-gate.sh
+EOF
   scripts/release/build-candidate.sh --preflight
   scripts/release/test-package-lifecycle.sh --preflight
   scripts/release/collect-evidence.sh --preflight
@@ -897,9 +1006,13 @@ if ! jq -e \
   exit 1
 fi
 
+if [ "$failed_lanes" -ne 0 ]; then
+  printf \
+    'release-candidate-local: result=%s failedLanes=%d evidence=%s\n' \
+    "$result" "$failed_lanes" "$summary"
+  exit 1
+fi
+gate_completed=1
 printf \
   'release-candidate-local: result=%s failedLanes=%d evidence=%s\n' \
   "$result" "$failed_lanes" "$summary"
-if [ "$failed_lanes" -ne 0 ]; then
-  exit 1
-fi

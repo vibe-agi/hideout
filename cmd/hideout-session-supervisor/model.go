@@ -51,15 +51,6 @@ type startSpec struct {
 	activityRuntime     any
 }
 
-type targetCompletion struct {
-	Kind             string
-	ExitCode         int
-	Signal           string
-	Completed        bool
-	CleanupCompleted bool
-	Activity         *sessionwire.SupervisorActivityCompletion
-}
-
 func validateStart(spec startSpec, expectedProtocol string) error {
 	if expectedProtocol == "" || spec.Protocol != expectedProtocol {
 		return fmt.Errorf("unsupported protocol %q", spec.Protocol)
@@ -86,6 +77,11 @@ func validateStart(spec startSpec, expectedProtocol string) error {
 		if err := spec.Activity.Validate(spec.SessionID); err != nil {
 			return err
 		}
+	}
+	if spec.Activity == nil && spec.activityRuntime != nil {
+		return errors.New(
+			"activity runtime requires an authorized activity expectation",
+		)
 	}
 	if !bootIDPattern.MatchString(spec.ExpectedBootID) {
 		return errors.New("expected guest boot identity is invalid")

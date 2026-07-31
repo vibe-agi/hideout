@@ -36,7 +36,7 @@ hideout tui
 视图真正可用的按键，选中一行后按 Enter 查看详情。配置和环境操作会先打开
 复核弹窗，第一次 Enter 不会直接修改状态。
 
-同一套 Manager 数据也可以在本地浏览器里查看：
+同一套 Hideout 已验证状态也可以在本地浏览器里查看：
 
 ```sh
 hideout ui
@@ -125,10 +125,10 @@ gateway，新建连接可在 stage/probe/activate/prove 完成后在线切换；
 重新建立并证明前显示 `not-observed`。隐私模式的前置条件失败时会 fail
 closed，不会悄悄退回 direct。
 
-在 TUI 中按 `3` 进入 Config，选择能力后按 Enter。弹窗严格遵循：
+在 TUI 中按 `3` 进入 Config，选择设置后按 Enter。弹窗严格遵循：
 
 ```text
-Draft → Manager Plan → diff 与影响 → Confirm → Apply → 终态证据
+Draft → Hideout Plan → diff 与影响 → Confirm → Apply → 已验证结果
 ```
 
 如果另一个客户端改了 profile，当前复核计划会变成 stale，不能 Apply。刷新
@@ -164,8 +164,9 @@ hideout activity coverage --session <id>
 ```
 
 `--session` 始终只查看这一次 run；即使多个 run 共用同一个可复用环境，也不会
-混入其他会话。只有明确需要查看整个精确 VM incarnation 的保留历史时，才使用
-`--environment <id> --incarnation <id>`。
+混入其他会话。只有明确需要查看整个精确 VM 实例的保留历史时，才使用
+`--environment <id> --incarnation <id>`；这里的 `--incarnation` 值就是该
+VM 实例 ID。
 
 Coverage 是结论的一部分：
 
@@ -173,7 +174,7 @@ Coverage 是结论的一部分：
 - `Partial`：明确列出丢失、截断、provider 缺口或归因限制。
 - `Unavailable`：不能把“没有事件”解释成“没有行为”。
 
-本地活动绑定到精确的 environment/VM incarnation，以当前用户私有方式保存，
+本地活动绑定到精确的 environment 和 VM 实例，以当前用户私有方式保存，
 生命周期与该环境一致。clean 或 recreate 环境时，其保留观测也会删除。容量
 有上限；发生截断时 coverage 会降为 Partial，而不会伪装成完整记录。
 
@@ -200,7 +201,7 @@ hideout clean --dry-run <environment-id>
 hideout clean <environment-id>
 ```
 
-stop 保留环境数据。clean 会删除选中环境的 runtime 和 incarnation 绑定的
+stop 保留环境数据。clean 会删除选中环境的运行数据，以及与精确 VM 实例绑定的
 观测数据，且不可恢复。活动 session、活动 workspace view、无法证明的 owner
 或 stale plan 都会阻止 Apply。
 

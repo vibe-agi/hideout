@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
 export LC_ALL=C
@@ -146,7 +149,18 @@ run_preflight() {
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-collect-evidence-preflight.XXXXXX"
   )"
-  trap 'cleanup_tree "$preflight_root" "hideout-collect-evidence-preflight"' EXIT
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2329
+  cleanup_preflight() {
+    local exit_status=$?
+    cleanup_tree \
+      "${preflight_root:-}" \
+      "hideout-collect-evidence-preflight"
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "collect-evidence-preflight"
+    fi
+  }
+  trap cleanup_preflight EXIT
 
   fixture="$preflight_root/evidence.json"
   printf '%s\n' '{"schema":"hideout.release-evidence/v1"}' >"$fixture"
@@ -165,6 +179,7 @@ run_preflight() {
     safe_relative_path $'run-1/\tsummary.json'; then
     fail "unsafe evidence path was accepted"
   fi
+  gate_completed=1
   printf 'collect-evidence: preflight=passed\n'
 }
 
@@ -230,7 +245,11 @@ scratch="$(
   mktemp -d "$tmp_base/hideout-collect-evidence.XXXXXX"
 )"
 cleanup() {
+  local exit_status=$?
   cleanup_tree "${scratch:-}" "hideout-collect-evidence"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "collect-evidence"
+  fi
 }
 trap cleanup EXIT
 
@@ -1227,6 +1246,7 @@ chmod 0600 "$output" "$detached_output"
 verify_sha256 "$output" "$evidence_sha" ||
   fail "written evidence manifest does not match detached digest"
 
+gate_completed=1
 printf \
   'collect-evidence: passed stage=%s readiness=%s manifest=%s sha256=%s\n' \
   "$stage" \

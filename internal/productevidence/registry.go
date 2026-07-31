@@ -352,12 +352,6 @@ func req(featureID, proofID, layer, requiredFor, freshness, artifact string, cla
 	return r
 }
 
-func evidenceClassReq(featureID, proofID, layer, requiredFor, freshness, artifact, evidenceClass string, claimIDs ...string) ProofRequirement {
-	r := req(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
-	r.RequiredEvidenceClass = evidenceClass
-	return r
-}
-
 func validatorReq(featureID, proofID, layer, requiredFor, freshness, artifact, validator string, claimIDs ...string) ProofRequirement {
 	r := req(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
 	r.ArtifactValidator = validator

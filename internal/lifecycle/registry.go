@@ -260,10 +260,7 @@ func (r *registration) RecordFact(ctx context.Context, spec FactSpec) error {
 	return r.coordinator.recordFact(r.environment, r.id, spec)
 }
 
-func (r *registration) Finish(ctx context.Context, cleanupErr error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (r *registration) Finish(_ context.Context, cleanupErr error) error {
 	r.mu.Lock()
 	if r.finished {
 		r.mu.Unlock()

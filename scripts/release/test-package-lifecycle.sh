@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$repo_root"
+# shellcheck source=scripts/lib/gate-result.sh
+. "$repo_root/scripts/lib/gate-result.sh"
+gate_completed=0
 
 umask 077
 export LC_ALL=C
@@ -408,9 +411,13 @@ if [ "$preflight_only" -eq 1 ]; then
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
+    local exit_status=$?
     cleanup_tree \
       "${preflight_root:-}" \
       "hideout-package-lifecycle-preflight"
+    if [ "$exit_status" -eq 0 ]; then
+      gate_require_completion "package-lifecycle-preflight"
+    fi
   }
   trap cleanup_preflight EXIT
 
@@ -616,6 +623,7 @@ if [ "$preflight_only" -eq 1 ]; then
   go test ./internal/app \
     -run 'Test(ContextualHelpIsSuccessfulAndWritesNoState|CommandCatalogMetadataIsCompleteAndSearchable)' \
     -count=1 >/dev/null
+  gate_completed=1
   printf 'package-lifecycle: preflight=passed\n'
   exit 0
 fi
@@ -640,7 +648,11 @@ scratch="$(
   mktemp -d "$tmp_base/hideout-package-lifecycle.XXXXXX"
 )"
 cleanup() {
+  local exit_status=$?
   cleanup_tree "${scratch:-}" "hideout-package-lifecycle"
+  if [ "$exit_status" -eq 0 ]; then
+    gate_require_completion "package-lifecycle"
+  fi
 }
 trap cleanup EXIT
 evidence="$scratch/evidence"
@@ -1140,6 +1152,7 @@ jq -n \
 chmod 0600 "$pointer_tmp"
 mv "$pointer_tmp" "$out/result.json"
 
+gate_completed=1
 printf \
   'package-lifecycle: passed candidate=%s summary=%s\n' \
   "$candidate_archive_sha" \

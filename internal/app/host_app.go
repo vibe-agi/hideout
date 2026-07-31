@@ -466,7 +466,7 @@ func writeHostAppPlanReview(w io.Writer, plan manager.HostAppPackPlan) {
 		}
 	}
 	if plan.QualityTestStatus != "" {
-		fmt.Fprintf(w, "  Package quality tests: %s (advisory; Core constraints remain authoritative)\n", clean(plan.QualityTestStatus))
+		fmt.Fprintf(w, "  Package quality tests: %s (advisory; Core safety checks still decide whether it can run)\n", clean(plan.QualityTestStatus))
 	}
 	safety := "none (approval required each run)"
 	if plan.SafetyProfileID != "" {

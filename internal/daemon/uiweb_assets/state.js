@@ -167,7 +167,7 @@
         !isObject(projection.desired) ||
         projection.desired.name !== projection.profile ||
         !validTimestamp(projection.updatedAt)) {
-      throw new Error("profile projection is invalid");
+      throw new Error("profile state is invalid");
     }
   }
 
@@ -188,7 +188,7 @@
         (transition.blockers || []).some(
           (value) => !CODE_PATTERN.test(value || "")
         )) {
-      throw new Error("transition projection is invalid");
+      throw new Error("profile transition state is invalid");
     }
   }
 
@@ -267,7 +267,7 @@
           typeof (result.summary || "") !== "string" ||
           (result.summary || "").length > 2048
         ) : isObject(result))) {
-      throw new Error("operation projection is invalid");
+      throw new Error("operation state is invalid");
     }
   }
 
@@ -282,7 +282,7 @@
         (projection.session || "").length > 128 ||
         !Array.isArray(projection.counts || []) ||
         (projection.counts || []).length > 64) {
-      throw new Error("activity projection is invalid");
+      throw new Error("activity state is invalid");
     }
     const seen = new Set();
     for (const count of projection.counts || []) {
@@ -291,7 +291,7 @@
           !Number.isInteger(count.count) ||
           count.count < 0 ||
           seen.has(count.kind)) {
-        throw new Error("activity projection is invalid");
+        throw new Error("activity state is invalid");
       }
       seen.add(count.kind);
     }
@@ -300,7 +300,7 @@
   /** @param {unknown} value */
   function validateCoverageProjection(value) {
     if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
-      throw new Error("coverage projection is empty or too large");
+      throw new Error("coverage state is empty or too large");
     }
     for (const interval of value) {
       if (!isObject(interval) ||
@@ -325,7 +325,7 @@
           !validTimestamp(interval.startedAt) ||
           !Array.isArray(interval.evidence || []) ||
           (interval.evidence || []).length > 256) {
-        throw new Error("coverage projection is invalid");
+        throw new Error("coverage state is invalid");
       }
       const reusable = interval.owner.kind === "reusable-environment";
       if ((reusable &&
@@ -334,11 +334,11 @@
           (!reusable &&
            (!/^ses_[A-Za-z0-9_-]{1,124}$/.test(interval.owner.sessionId || "") ||
             Boolean(interval.owner.environmentId)))) {
-        throw new Error("coverage projection owner is invalid");
+        throw new Error("coverage owner is invalid");
       }
       if (interval.state === "Available" &&
           ((interval.droppedEventCount || 0) !== 0 || interval.retentionGap === true)) {
-        throw new Error("coverage projection falsely claims availability");
+        throw new Error("coverage state falsely claims availability");
       }
     }
   }
@@ -374,7 +374,7 @@
         ) ||
         (finding.nextAction &&
          !CODE_PATTERN.test(finding.nextAction))) {
-      throw new Error("risk projection is invalid");
+      throw new Error("risk state is invalid");
     }
   }
 
@@ -391,7 +391,7 @@
         !Array.isArray(capability.actionRefs || []) ||
         capability.actionRefs.length > 64 ||
         capability.actionRefs.some((value) => !CODE_PATTERN.test(value || ""))) {
-      throw new Error("capability projection is invalid");
+      throw new Error("setting availability is invalid");
     }
   }
 
@@ -636,7 +636,7 @@
    * @param {string} reason
    */
   function requireReseed(state, health, reason) {
-    const message = reason || "authoritative reseed required";
+    const message = reason || "current state must be refreshed";
     setHealth(state, health, message);
     appendDiagnostic(state, message);
     state.readOnly = true;
@@ -648,7 +648,7 @@
     requireReseed(
       state,
       "seeding",
-      reason || "refreshing authoritative snapshot"
+      reason || "refreshing verified state"
     );
   }
 
@@ -1060,12 +1060,12 @@
       return {status: "error", reason: "nil state"};
     }
     if (state.requiresReseed) {
-      return {status: "stale", reason: "authoritative reseed required"};
+      return {status: "stale", reason: "current state must be refreshed"};
     }
     if (state.version !== SNAPSHOT_SCHEMA ||
         !state.snapshot ||
         state.snapshot.schema !== SNAPSHOT_SCHEMA) {
-      const reason = "v2 event requires an authoritative v2 snapshot";
+      const reason = "new event format requires fresh verified state";
       requireReseed(state, "schema-mismatch", reason);
       return {status: "stale", reason};
     }
@@ -1084,7 +1084,7 @@
       return {status: "stale", reason};
     }
     if (event.credentialGeneration !== state.credentialGeneration) {
-      const reason = "stream credential generation changed";
+      const reason = "stream sign-in credential changed";
       requireReseed(state, "credential-expired", reason);
       return {status: "stale", reason};
     }

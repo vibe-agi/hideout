@@ -518,7 +518,8 @@ func TestEventsRejectsTamperedCursorAndNilContext(t *testing.T) {
 	}); !errors.Is(err, query.ErrCursorInvalid) {
 		t.Fatalf("tampered cursor error=%v", err)
 	}
-	if _, err := service.Events(nil, query.EventsQuery{
+	var missingContext context.Context
+	if _, err := service.Events(missingContext, query.EventsQuery{
 		Owner: owner, Limit: 1,
 	}); !errors.Is(err, query.ErrInvalidQuery) {
 		t.Fatalf("nil context error=%v", err)

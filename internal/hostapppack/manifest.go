@@ -409,10 +409,7 @@ func validateFlag(value string) error {
 	if len(value) < 2 || len(value) > MaxFlagBytes || !strings.HasPrefix(value, "-") || !safePrintable(value) {
 		return fmt.Errorf("flag %q must be one bounded flag token", value)
 	}
-	body := value[1:]
-	if strings.HasPrefix(body, "-") {
-		body = body[1:]
-	}
+	body := strings.TrimPrefix(value[1:], "-")
 	if body == "" {
 		return fmt.Errorf("flag %q must name a flag", value)
 	}

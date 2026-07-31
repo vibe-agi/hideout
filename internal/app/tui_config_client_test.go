@@ -393,7 +393,7 @@ func TestTUILifecycleClientRejectsMismatchedAuthorityResult(
 		},
 	)
 	if err == nil ||
-		!strings.Contains(err.Error(), "mismatched lifecycle plan") {
+		!strings.Contains(err.Error(), "different environment") {
 		t.Fatalf("mismatched lifecycle authority error=%v", err)
 	}
 }

@@ -235,7 +235,7 @@ func (a app) mutateSecret(options secretMutationOptions) error {
 	}
 	fmt.Fprintf(
 		a.stdout,
-		"Secret %s %s generation=%d\n",
+		"Secret %s %s version=%d\n",
 		result.Reference.Ref,
 		result.Reference.Availability,
 		result.Reference.Generation,
@@ -267,7 +267,7 @@ func (a app) listSecrets(ref string) error {
 	for _, reference := range references {
 		fmt.Fprintf(
 			a.stdout,
-			"%s  %s  generation=%d  provider=%s",
+			"%s  %s  version=%d  provider=%s",
 			reference.Ref,
 			reference.Availability,
 			reference.Generation,
@@ -476,13 +476,13 @@ func writeSecretPlanReview(w io.Writer, plan manager.SecretPlan) {
 	fmt.Fprintf(w, "  Action      %s\n", plan.Action)
 	fmt.Fprintf(
 		w,
-		"  Current     %s generation=%d\n",
+		"  Current     %s version=%d\n",
 		plan.Current.Availability,
 		plan.BaseGeneration,
 	)
 	fmt.Fprintf(
 		w,
-		"  After       %s generation=%d\n",
+		"  After       %s version=%d\n",
 		plan.NextAvailability,
 		plan.NextGeneration,
 	)
@@ -860,8 +860,8 @@ func (err *secretApplyOutcomeError) Error() string {
 	}
 	return message +
 		"; open hideout tui and inspect this exact ID in Operations; " +
-		"do not create a new plan or apply again until authoritative " +
-		"terminal evidence is shown"
+		"do not create a new plan or apply again until a verified final " +
+		"result is shown"
 }
 
 func (err *secretApplyOutcomeError) Unwrap() error {
@@ -932,7 +932,7 @@ func encodeSecretApplyPayload(
 	if len(payload) > int(manager.SecretRequestBodyLimit) {
 		clear(payload)
 		return nil, errors.New(
-			"secret value is too large for the protected Manager request",
+			"secret value is too large for the protected Hideout request",
 		)
 	}
 	return payload, nil
