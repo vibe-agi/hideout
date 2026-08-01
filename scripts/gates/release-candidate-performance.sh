@@ -2377,7 +2377,7 @@ watch_measurement_contention_signal \
   "$measurement_contention_watchdog_stop" \
   "$concurrent_pid" "$concurrent_pgid" &
 measurement_contention_watchdog_pid=$!
-wait "$concurrent_pid"
+wait "$concurrent_pid" 2>/dev/null
 concurrent_status=$?
 concurrent_pid=""
 concurrent_pgid=""
