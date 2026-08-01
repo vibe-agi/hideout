@@ -144,6 +144,19 @@ verify_sha256() {
 		[ "$(sha256_file "$evidence_file")" = "$expected" ]
 }
 
+package_manifest_executable_value() {
+  jq -r '
+    if type == "object" and
+      has("executable") and
+      (.executable | type) == "boolean"
+    then
+      (.executable | tostring)
+    else
+      error("package manifest executable must be a boolean")
+    end
+  '
+}
+
 review_finding_count_for_file() {
   local review_path="$1"
   local finding_ids finding_id expected_id
@@ -636,6 +649,18 @@ run_preflight() {
   printf '%s\n' '{"mutation":true}' >>"$fixture"
   if verify_sha256 "$fixture" "$digest"; then
     fail "mutated evidence fixture retained detached digest validity"
+  fi
+  [ "$(package_manifest_executable_value <<<'{"executable":false}')" = \
+    "false" ] ||
+    fail "false package executable fixture was rejected"
+  [ "$(package_manifest_executable_value <<<'{"executable":true}')" = \
+    "true" ] ||
+    fail "true package executable fixture was rejected"
+  if package_manifest_executable_value \
+    <<<'{"executable":"false"}' >/dev/null 2>&1 ||
+    package_manifest_executable_value \
+      <<<'{}' >/dev/null 2>&1; then
+    fail "invalid package executable fixture was accepted"
   fi
   safe_relative_path "run-1/summary.json" ||
     fail "safe evidence path was rejected"
@@ -1554,7 +1579,9 @@ while IFS= read -r package_entry; do
   package_path="$(jq -er '.path' <<<"$package_entry")"
   package_kind="$(jq -er '.kind' <<<"$package_entry")"
   package_sha="$(jq -er '.sha256' <<<"$package_entry")"
-  package_executable="$(jq -er '.executable' <<<"$package_entry")"
+  package_executable="$(
+    package_manifest_executable_value <<<"$package_entry"
+  )"
   safe_relative_path "$package_path" ||
     fail "package manifest contains an unsafe path: $package_path"
   packaged_file="$package_root/$package_path"
