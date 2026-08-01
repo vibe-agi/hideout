@@ -359,7 +359,7 @@ uninstall/reinstall, and verify the evidence manifest and candidate identity.
 - [ ] T158 [US8] Build an exact clean package and verify binary/helper/schema/UI/runtime digests and reproducible manifest in `scripts/release/build-candidate.sh`
 - [ ] T159 [US8] Test clean install, old-version upgrade with intentionally discarded old data, Keychain migration guidance, current-version reinstall, and uninstall absence in `scripts/release/test-package-lifecycle.sh`
 - [x] T160 [US8] Update product status, design, threat model, test plan, formal model catalog, privacy, retention, recovery, help, and supported coverage matrix in `docs/STATUS.md`, `docs/privacy-run-design.md`, `docs/threat-model.md`, `docs/privacy-run-test-plan.md`, and `docs/formal-models.md`
-- [ ] T161 [US8] Perform final source/security/UX code review, record severity/owner/resolution for every finding, and leave no required finding open in `docs/release/045-code-review.md`
+- [x] T161 [US8] Perform final source/security/UX code review, record severity/owner/resolution for every finding, and leave no required finding open in `docs/release/045-code-review.md`
 - [ ] T162 [US8] Fix all required review, gate, dependency, advisory, performance, packaging, install, and documentation findings in their owning source files and rerun affected judges
 - [ ] T163 [US8] Generate a signed-by-digest local evidence manifest binding commit, version, package, helpers, runtime, models, gates, limitations, and review in `scripts/release/collect-evidence.sh` and `.artifacts/045/evidence.json`
 - [ ] T164 [US8] Install the exact local candidate on this machine, discard legacy Hideout data as authorized, run setup/secret/connect/run/TUI/WebUI/clean/update/uninstall smoke, and record results in `.artifacts/045/local-install/`
@@ -378,7 +378,7 @@ handoff.
 - [ ] T166 [P] Run Go formatting, Markdown lint, shell/static lint, schema validation, generated checks, and `git diff --check`, fixing all feature-owned failures
 - [ ] T167 [P] Validate every command and interaction in `specs/045-operator-observability-console/quickstart.md` against the installed candidate and update only documented final spellings
 - [x] T168 [P] Audit all new logs/events/errors for internal jargon, raw secret, control-sequence, and false-success language in `internal/`, `cmd/`, and `docs/`
-- [ ] T169 Reconcile all 72 functional requirement identifiers (FR-001–FR-071 plus FR-035a) and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
+- [x] T169 Reconcile all 72 functional requirement identifiers (FR-001–FR-071 plus FR-035a) and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
 - [x] T170 Record only genuinely deferred non-required work with owner, risk, trigger, and non-claim in `docs/DEBT.md`
 - [ ] T171 Run the complete release-candidate orchestrator once more from the exact clean tree and verify the evidence manifest has no stale/reduced/not-run required entry in `.artifacts/045/`
 - [ ] T172 Confirm the local install is the exact candidate, preserve no legacy data as authorized, and hand off publication as a separate explicitly authorized action in `docs/release/045-readiness.md`
