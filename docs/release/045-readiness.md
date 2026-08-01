@@ -43,16 +43,26 @@ ready.
 
 Performance evidence is valid only when the release operator first pauses
 unrelated CPU-heavy tests, VMs, and emulators and keeps the host quiet through
-all thirty recorded real-Lima samples. Known contention invalidates that run;
-it is never explained away after seeing the result or used to change the
+all thirty recorded real-Lima samples. Host-wide samples decide whether the run
+is eligible; they are not Hideout's overhead metric. Acceptance is independently
+computed from the exact reference child process's user/system CPU and from its
+paired elapsed time. The median and one-sided exact 95% upper confidence bound
+for both must remain at or below ten percent. Known contention invalidates that
+run; it is never explained away after seeing the result or used to change the
 frozen threshold. The full lane requires the explicit
 `HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1` acknowledgement and retains
 private host-state snapshots at the run start and real-Lima boundaries. Before
 building, it also takes three one-second process-name/CPU snapshots and rejects
 sustained high-CPU, virtualization, or build/test contention in at least two;
-it records no argv or environment and never stops the reported process. The
-paired overhead median and its exact nonparametric one-sided 95% upper
-confidence bound must both remain at or below ten percent.
+it records no argv or environment and never stops the reported process.
+
+A retained run may be reused after an evidence-only change only through
+`scripts/release/revalidate-performance-evidence.sh`. Its versioned receipt must
+verify the original summary and every retained artifact, independently recompute
+both workload CPU and elapsed-time results from the raw samples, enumerate the
+exact Git diff, and prove the normalized measurement entrypoint is unchanged.
+Any product, BPF, workload, measurement, threshold, or unclassified path change
+fails closed and requires a new performance run.
 
 ## Closure sequence
 

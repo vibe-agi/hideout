@@ -703,6 +703,13 @@ for required_command in \
   require_command "$required_command"
 done
 
+# HIDEOUT_INCREMENTAL_PERFORMANCE_IGNORE_BEGIN final-evidence-preflight
+# Performance is the most expensive candidate lane. Compile and execute the
+# complete final-evidence builder/schema/semantic fixture before doing any host
+# sampling or starting Lima so deterministic collector drift fails cheaply.
+scripts/release/collect-evidence.sh --preflight >/dev/null
+# HIDEOUT_INCREMENTAL_PERFORMANCE_IGNORE_END final-evidence-preflight
+
 expected_contract_claims='["C05","C06","CL03"]'
 if ! jq -e \
   --argjson expected "$expected_contract_claims" '
@@ -1967,6 +1974,30 @@ while True:
       >&2
     exit 1
   fi
+  # HIDEOUT_INCREMENTAL_PERFORMANCE_IGNORE_BEGIN preflight-order-assertion
+  collector_preflight_line="$(
+    grep -nF \
+      'scripts/release/collect-evidence.sh --preflight >/dev/null' \
+      scripts/gates/release-candidate-performance.sh |
+      sed -n '1s/:.*//p'
+  )"
+  # The dollar expression is an intentional literal source-order sentinel.
+  # shellcheck disable=SC2016
+  host_sample_line="$(
+    grep -nF \
+      'record_initial_host_contention "$host_contention_evidence"' \
+      scripts/gates/release-candidate-performance.sh |
+      sed -n '1s/:.*//p'
+  )"
+  if ! [[ "$collector_preflight_line" =~ ^[0-9]+$ ]] ||
+    ! [[ "$host_sample_line" =~ ^[0-9]+$ ]] ||
+    [ "$collector_preflight_line" -ge "$host_sample_line" ]; then
+    printf '%s\n' \
+      'release-candidate-performance: final-evidence preflight is not ahead of host sampling' \
+      >&2
+    exit 1
+  fi
+  # HIDEOUT_INCREMENTAL_PERFORMANCE_IGNORE_END preflight-order-assertion
   bash -n \
     scripts/gates/release-candidate-performance.sh \
     scripts/gates/browser-console.sh \

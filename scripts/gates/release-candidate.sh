@@ -855,6 +855,7 @@ scripts/package-local.sh
 scripts/release/build-candidate.sh
 scripts/release/test-package-lifecycle.sh
 scripts/release/collect-evidence.sh
+scripts/release/revalidate-performance-evidence.sh
 scripts/release/install-local-candidate.sh
 scripts/release/verify-publication-absence.sh
 scripts/test-install-smoke.sh

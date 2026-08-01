@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hideout.local/schemas/performance-evidence-reuse.schema.json",
+  "title": "Hideout incremental performance evidence revalidation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "result",
+    "candidateAcceptance",
+    "mode",
+    "source",
+    "measurement",
+    "impact",
+    "assessment",
+    "artifactVerification",
+    "limitations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hideout.release-candidate-performance-reuse/v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result": {
+      "const": "passed"
+    },
+    "candidateAcceptance": {
+      "const": true
+    },
+    "mode": {
+      "const": "incremental-content-revalidation"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree", "dirty"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/commit"},
+        "tree": {"$ref": "#/$defs/commit"},
+        "dirty": {"const": false}
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceCommit",
+        "sourceTreeSHA256",
+        "sourceDirty",
+        "stableAcrossRun",
+        "candidateBinarySHA256",
+        "pointer",
+        "summary"
+      ],
+      "properties": {
+        "sourceCommit": {"$ref": "#/$defs/commit"},
+        "sourceTreeSHA256": {"$ref": "#/$defs/sha256"},
+        "sourceDirty": {"const": false},
+        "stableAcrossRun": {"const": true},
+        "candidateBinarySHA256": {"$ref": "#/$defs/sha256"},
+        "pointer": {"$ref": "#/$defs/artifactRef"},
+        "summary": {"$ref": "#/$defs/artifactRef"}
+      }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "changedFiles",
+        "productOrMeasurementChanges",
+        "performanceEntrypoint"
+      ],
+      "properties": {
+        "policy": {
+          "const": "reviewed-evidence-only-v1"
+        },
+        "changedFiles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/changedFile"}
+        },
+        "productOrMeasurementChanges": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "performanceEntrypoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "baseNormalizedSHA256",
+            "currentNormalizedSHA256",
+            "identical"
+          ],
+          "properties": {
+            "path": {
+              "const": "scripts/gates/release-candidate-performance.sh"
+            },
+            "baseNormalizedSHA256": {"$ref": "#/$defs/sha256"},
+            "currentNormalizedSHA256": {"$ref": "#/$defs/sha256"},
+            "identical": {"const": true}
+          }
+        }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "result",
+        "targetWorkloadCPU",
+        "elapsedTime",
+        "hostContention",
+        "observationIntegrity"
+      ],
+      "properties": {
+        "schema": {
+          "const": "hideout.performance-evidence-assessment/v1"
+        },
+        "result": {"const": "passed"},
+        "targetWorkloadCPU": {"$ref": "#/$defs/metricAssessment"},
+        "elapsedTime": {"$ref": "#/$defs/metricAssessment"},
+        "hostContention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "initialPassed",
+            "continuousPassed",
+            "continuousSamples"
+          ],
+          "properties": {
+            "role": {"const": "eligibility-and-invalidation-only"},
+            "initialPassed": {"const": true},
+            "continuousPassed": {"const": true},
+            "continuousSamples": {"type": "integer", "minimum": 3}
+          }
+        },
+        "observationIntegrity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["noReportedLoss"],
+          "properties": {
+            "noReportedLoss": {"const": true}
+          }
+        }
+      }
+    },
+    "artifactVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactCount",
+        "uniquePaths",
+        "allDigestsVerified",
+        "allByteCountsVerified",
+        "allModesPrivate"
+      ],
+      "properties": {
+        "artifactCount": {"type": "integer", "minimum": 1},
+        "uniquePaths": {"const": true},
+        "allDigestsVerified": {"const": true},
+        "allByteCountsVerified": {"const": true},
+        "allModesPrivate": {"const": true}
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 512}
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "safePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\r\\n\\t]+(?:/[^/\\r\\n\\t]+)*$",
+      "not": {"pattern": "(^|/)\\.\\.(/|$)"}
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "mode"],
+      "properties": {
+        "path": {"$ref": "#/$defs/safePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "mode": {"const": "0600"}
+      }
+    },
+    "changedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "status", "afterSHA256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/safePath"},
+        "status": {"enum": ["A", "M"]},
+        "beforeSHA256": {"$ref": "#/$defs/sha256"},
+        "afterSHA256": {"$ref": "#/$defs/sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "M"}}},
+          "then": {"required": ["beforeSHA256"]}
+        },
+        {
+          "if": {"properties": {"status": {"const": "A"}}},
+          "then": {"not": {"required": ["beforeSHA256"]}}
+        }
+      ]
+    },
+    "metricAssessment": {
+      "type": "object",
+      "required": [
+        "scope",
+        "samples",
+        "unit",
+        "pairedOverhead",
+        "median",
+        "threshold",
+        "confidence"
+      ],
+      "properties": {
+        "scope": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "samples": {"const": 30},
+        "unit": {"const": "percent"},
+        "pairedOverhead": {
+          "type": "array",
+          "minItems": 30,
+          "maxItems": 30,
+          "items": {"type": "number"}
+        },
+        "median": {"type": "number", "maximum": 10},
+        "threshold": {"const": 10},
+        "confidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "level",
+            "method",
+            "rank",
+            "upperBound",
+            "thresholdPassed"
+          ],
+          "properties": {
+            "level": {"const": 0.95},
+            "method": {
+              "const": "one-sided-exact-binomial-order-statistic"
+            },
+            "rank": {"const": 20},
+            "upperBound": {"type": "number", "maximum": 10},
+            "thresholdPassed": {"const": true}
+          }
+        },
+        "medianUserDeltaMs": {"type": "number"},
+        "medianSystemDeltaMs": {"type": "number"},
+        "medianTotalDeltaMs": {"type": "number"},
+        "medianInvoluntaryContextSwitchDelta": {"type": "number"},
+        "producerAcceptanceFilter": {"type": "boolean"},
+        "independentlyAccepted": {"const": true}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -17,6 +17,9 @@ require_closure=0
 preflight_only=0
 tmp_base="${TMPDIR:-/tmp}"
 tmp_base="${tmp_base%/}"
+release_evidence_filter="$repo_root/scripts/release/release-evidence.jq"
+release_evidence_semantic_filter="$repo_root/scripts/release/release-evidence-semantic.jq"
+performance_evidence_assessment_filter="$repo_root/scripts/release/performance-evidence-assessment.jq"
 installed_validation_binary=""
 installed_validation_daemon_pid=""
 
@@ -233,6 +236,50 @@ helper_manifest_binding_valid() {
     ' "$manifest_path" >/dev/null
 }
 
+build_closure_json() {
+  local local_install_status="$1" publication_status="$2"
+  local local_install_evidence="$3" publication_evidence="$4"
+
+  jq -n \
+    --arg localInstall "$local_install_status" \
+    --arg publicationAbsence "$publication_status" \
+    --argjson localInstallEvidence "$local_install_evidence" \
+    --argjson publicationEvidence "$publication_evidence" '
+      {
+        localInstall:(
+          {status:$localInstall} +
+          (if $localInstallEvidence == null then {}
+           else {evidence:$localInstallEvidence} end)
+        ),
+        publicationAbsence:(
+          {status:$publicationAbsence} +
+          (if $publicationEvidence == null then {}
+           else {evidence:$publicationEvidence} end)
+        )
+      }
+    '
+}
+
+build_release_evidence_from_inputs() {
+  local inputs_path="$1"
+  jq -f "$release_evidence_filter" "$inputs_path"
+}
+
+validate_release_evidence_semantics() {
+  local evidence_path="$1" commit="$2" tree="$3" version="$4"
+  local archive_sha="$5" stage="$6" review_count="$7" readiness="$8"
+  jq -e \
+    --arg commit "$commit" \
+    --arg tree "$tree" \
+    --arg version "$version" \
+    --arg archiveSHA256 "$archive_sha" \
+    --arg stage "$stage" \
+    --argjson reviewFindingCount "$review_count" \
+    --argjson releaseReadiness "$readiness" \
+    -f "$release_evidence_semantic_filter" \
+    "$evidence_path" >/dev/null
+}
+
 review_finding_count_for_file() {
   local review_path="$1"
   local finding_ids finding_id expected_id
@@ -274,61 +321,8 @@ local_run_artifact_reference() {
 validate_performance_evidence_contract() {
   local performance_file="$1"
 
-  jq -e '
-    .hostDiagnostics.quietHostConfirmed == true and
-    .hostDiagnostics.policy ==
-      "operator-confirmed-quiet-host-known-contention-invalidates-run" and
-    .hostDiagnostics.initialContentionAssessment.passed == true and
-    .hostDiagnostics.initialContentionAssessment.method ==
-      "three-one-second-process-snapshots-two-hit-rejection" and
-    .hostDiagnostics.initialContentionAssessment.samples == 3 and
-    .hostDiagnostics.initialContentionAssessment.minimumHits == 2 and
-    .hostDiagnostics.initialContentionAssessment.genericCPUPercentThreshold == 50 and
-    .hostDiagnostics.initialContentionAssessment.virtualizationCPUPercentThreshold == 5 and
-    .hostDiagnostics.initialContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
-    .hostDiagnostics.initialContentionAssessment.path ==
-      "host-contention-preflight.txt" and
-    (.hostDiagnostics.initialContentionAssessment.sha256 |
-      test("^[a-f0-9]{64}$")) and
-    .hostDiagnostics.measurementContentionAssessment.passed == true and
-    .hostDiagnostics.measurementContentionAssessment.method ==
-      "continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics" and
-    .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
-    .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
-    .hostDiagnostics.measurementContentionAssessment.minimumHits == 3 and
-    .hostDiagnostics.measurementContentionAssessment.genericHighCPUPolicy ==
-      "diagnostic-only" and
-    .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
-    .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
-    .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
-    .hostDiagnostics.measurementContentionAssessment.path ==
-      "host-contention-measurement.txt" and
-    (.hostDiagnostics.measurementContentionAssessment.sha256 |
-      test("^[a-f0-9]{64}$")) and
-    (.hostDiagnostics.snapshots | length) == 3 and
-    [.hostDiagnostics.snapshots[] | [.phase, .path]] == [
-      ["start", "host-state-start.txt"],
-      ["before-real-lima", "host-state-before-real-lima.txt"],
-      ["after-real-lima", "host-state-after-real-lima.txt"]
-    ] and
-    all(.hostDiagnostics.snapshots[];
-      (.sha256 | test("^[a-f0-9]{64}$"))) and
-    .metrics.referenceWorkload.methodology.samples == 30 and
-    .metrics.referenceWorkload.methodology.warmups >= 1 and
-    .metrics.referenceWorkload.elapsedOverhead.threshold == 10 and
-    .metrics.referenceWorkload.elapsedOverhead.thresholdPassed == true and
-    .metrics.referenceWorkload.elapsedOverhead.confidence.level == 0.95 and
-    .metrics.referenceWorkload.elapsedOverhead.confidence.method ==
-      "one-sided-exact-binomial-order-statistic" and
-    .metrics.referenceWorkload.elapsedOverhead.confidence.rank == 20 and
-    .metrics.referenceWorkload.elapsedOverhead.confidence.upperBound <= 10 and
-    .metrics.referenceWorkload.elapsedOverhead.confidence.thresholdPassed == true and
-    .validation.referenceMedianUpperConfidenceBoundWithinTenPercent == true and
-    .validation.quietHostExplicitlyConfirmed == true and
-    .validation.initialHostContentionAssessmentPassed == true and
-    .validation.measurementHostContentionAssessmentPassed == true and
-    .validation.hostDiagnosticsRetained == true
-  ' "$performance_file" >/dev/null
+  jq -e -f "$performance_evidence_assessment_filter" \
+    "$performance_file" >/dev/null 2>&1
 }
 
 validate_performance_contention_file() {
@@ -695,6 +689,9 @@ verify_performance_host_diagnostics() {
 run_preflight() {
   local fixture digest review_fixture local_summary_fixture artifact_reference
   local daemon_status_fixture
+  local closure_fixture closure_local_ref closure_publication_ref
+  local final_inputs final_evidence final_invalid final_detached final_digest
+  local browser_fixture final_review_count
   local helper_binary helper_manifest helper_sha
   local observer_binary observer_manifest observer_sha
   local tun_binary tun_manifest tun_sha
@@ -741,6 +738,36 @@ run_preflight() {
     package_manifest_executable_value \
       <<<'{}' >/dev/null 2>&1; then
     fail "invalid package executable fixture was accepted"
+  fi
+  closure_fixture="$(
+    build_closure_json "pending" "pending" "null" "null"
+  )" || fail "closure JSON without optional evidence did not compile"
+  jq -e '
+    .localInstall == {status:"pending"} and
+    .publicationAbsence == {status:"pending"}
+  ' <<<"$closure_fixture" >/dev/null ||
+    fail "closure JSON without optional evidence was malformed"
+  closure_local_ref='{"path":"local-install/result.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bytes":1,"mode":"0600"}'
+  closure_publication_ref='{"path":"publication-absence/result.json","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","bytes":1,"mode":"0600"}'
+  closure_fixture="$(
+    build_closure_json \
+      "passed" "passed" \
+      "$closure_local_ref" "$closure_publication_ref"
+  )" || fail "closure JSON with exact evidence did not compile"
+  jq -e \
+    --argjson localEvidence "$closure_local_ref" \
+    --argjson publicationEvidence "$closure_publication_ref" '
+      .localInstall == {status:"passed",evidence:$localEvidence} and
+      .publicationAbsence == {
+        status:"passed",
+        evidence:$publicationEvidence
+      }
+    ' <<<"$closure_fixture" >/dev/null ||
+    fail "closure JSON with exact evidence was malformed"
+  if build_closure_json \
+    "passed" "passed" "$closure_local_ref" "not-json" \
+    >/dev/null 2>&1; then
+    fail "closure JSON accepted an invalid evidence reference"
   fi
   helper_binary="$preflight_root/hideout-hostfsd-linux-arm64"
   helper_manifest="$helper_binary.manifest.json"
@@ -965,14 +992,45 @@ run_preflight() {
       metrics:{
         referenceWorkload:{
           methodology:{samples:30,warmups:2},
+          baseline:{samples:[range(0; 30) | 100]},
+          observed:{samples:[range(0; 30) | 105]},
+          observationIntegrity:{noReportedLoss:true},
+          resourceUsage:{
+            scope:"reference-workload-child-process",
+            source:"getrusage(RUSAGE_CHILDREN)",
+            cpuTimeUnit:"milliseconds",
+            contextSwitchUnit:"count",
+            acceptanceFilter:false,
+            samples:[
+              range(1; 33) as $sampleIndex |
+              {
+                sampleIndex:$sampleIndex,
+                recorded:($sampleIndex > 2),
+                baseline:{
+                  userMs:80,
+                  systemMs:20,
+                  voluntaryContextSwitches:1,
+                  involuntaryContextSwitches:2
+                },
+                observed:{
+                  userMs:84,
+                  systemMs:21,
+                  voluntaryContextSwitches:2,
+                  involuntaryContextSwitches:3
+                }
+              }
+            ]
+          },
           elapsedOverhead:{
+            samples:[range(0; 30) | 5],
+            median:5,
             threshold:10,
             thresholdPassed:true,
             confidence:{
               level:0.95,
               method:"one-sided-exact-binomial-order-statistic",
               rank:20,
-              upperBound:8.5,
+              upperBound:5,
               thresholdPassed:true
             }
           }
@@ -1018,6 +1076,22 @@ run_preflight() {
     "$performance_fixture" >"$performance_invalid"
   if validate_performance_evidence_contract "$performance_invalid"; then
     fail "missing measurement contention validation was accepted"
+  fi
+  jq '
+    .metrics.referenceWorkload.resourceUsage.samples |= map(
+      if .recorded then
+        .observed.userMs = 100 |
+        .observed.systemMs = 20
+      else . end
+    )
+  ' "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "excessive target-workload CPU overhead was accepted"
+  fi
+  jq 'del(.metrics.referenceWorkload.resourceUsage.samples[-1])' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "incomplete target-workload resource samples were accepted"
   fi
   performance_contention_quiet="$preflight_root/host-contention-preflight.txt"
   performance_contention_busy="$preflight_root/host-contention-busy.txt"
@@ -1240,6 +1314,190 @@ run_preflight() {
   ) >/dev/null 2>&1; then
     fail "mismatched measurement sample inventory was accepted"
   fi
+  browser_fixture="$preflight_root/browser-inventory.json"
+  go run ./cmd/hideout package embedded-assets >"$browser_fixture"
+  final_review_count="$(
+    review_finding_count_for_file \
+      "$repo_root/docs/release/045-code-review.md"
+  )" || fail "final-ready fixture could not resolve the review inventory"
+  final_inputs="$preflight_root/release-evidence-inputs.json"
+  final_evidence="$preflight_root/release-evidence.json"
+  final_invalid="$preflight_root/release-evidence-invalid.json"
+  final_detached="$preflight_root/release-evidence.json.sha256"
+  jq -n \
+    --slurpfile browser "$browser_fixture" \
+    --argjson closure "$closure_fixture" \
+    --argjson reviewFindingCount "$final_review_count" '
+      def ref($path; $sha; $mode): {
+        path:$path,
+        sha256:$sha,
+        bytes:1,
+        mode:$mode
+      };
+      def package_file($path; $kind; $sha; $mode; $executable): {
+        path:$path,
+        kind:$kind,
+        sha256:$sha,
+        bytes:1,
+        mode:$mode,
+        executable:$executable
+      };
+      ("a" * 40) as $commit |
+      ("b" * 40) as $tree |
+      ("c" * 64) as $sha |
+      ("d" * 64) as $archiveSHA |
+      [
+        "formal",
+        "local",
+        "dependencies",
+        "package-components",
+        "recovery",
+        "privacy",
+        "ui",
+        "performance",
+        "lima",
+        "package-build",
+        "package-lifecycle"
+      ] as $gateIDs |
+      {
+        generatedAt:"2026-08-01T00:00:00Z",
+        stage:"final-ready",
+        releaseReadiness:true,
+        commit:$commit,
+        tree:$tree,
+        committedAt:"2026-08-01T00:00:00Z",
+        sourceManifest:ref("source/source-manifest.tsv"; $sha; "0600"),
+        version:"0.1.0-alpha.4",
+        tag:"v0.1.0-alpha.4",
+        archive:ref("package/hideout-alpha.4.tar.gz"; $archiveSHA; "0600"),
+        packageManifest:ref("package/package-manifest.json"; $sha; "0600"),
+        packageSummary:ref("package/summary.json"; $sha; "0600"),
+        lifecycleSummary:ref("package-lifecycle/summary.json"; $sha; "0600"),
+        files:[
+          range(0; 100) as $index |
+          package_file(
+            "files/file-\($index)";
+            "fixture";
+            $sha;
+            "0644";
+            false
+          )
+        ],
+        helpers:[
+          range(0; 13) as $index |
+          package_file(
+            "bin/helper-\($index)";
+            (if $index < 6 then "helper-manifest" else "linux-helper" end);
+            $sha;
+            (if $index < 6 then "0644" else "0755" end);
+            ($index >= 6)
+          )
+        ],
+        browserConsole:{
+          manifest:package_file(
+            "runtime/browser-console.assets.json";
+            "embedded-asset-manifest";
+            $sha;
+            "0644";
+            false
+          ),
+          container:package_file(
+            "bin/hideout";
+            "binary";
+            $sha;
+            "0755";
+            true
+          ),
+          inventory:$browser[0]
+        },
+        runtime:{
+          family:"lima",
+          revision:"fixture",
+          catalogFileSHA256:$sha,
+          artifactSHA256:$sha,
+          catalog:package_file(
+            "runtime/catalog.json"; "runtime-catalog"; $sha; "0644"; false
+          ),
+          contract:package_file(
+            "runtime/contract.json"; "runtime-contract"; $sha; "0644"; false
+          )
+        },
+        formal:{
+          inventory:ref("formal/inventory.json"; $sha; "0600"),
+          sourceInventory:ref("formal/source-inventory.json"; $sha; "0644"),
+          configurationCount:12,
+          moduleCount:10,
+          invariantCount:76,
+          propertyCount:19,
+          goTestCount:12
+        },
+        gates:[
+          $gateIDs[] as $id |
+          {
+            id:$id,
+            scope:"candidate",
+            schema:"hideout.fixture/v1",
+            generatedAt:"2026-08-01T00:00:00Z",
+            result:"passed",
+            candidateAcceptance:true,
+            evidence:ref("gates/\($id).json"; $sha; "0600")
+          }
+        ],
+        reviewFindingCount:$reviewFindingCount,
+        review:ref("docs/release/045-code-review.md"; $sha; "0644"),
+        claims:ref("docs/release/045-claim-matrix.md"; $sha; "0644"),
+        limitations:["one","two","three","four","five"],
+        closure:$closure,
+        detachedPath:".artifacts/045/evidence.json.sha256"
+      }
+    ' >"$final_inputs"
+  build_release_evidence_from_inputs "$final_inputs" >"$final_evidence"
+  chmod 0600 "$final_evidence"
+  go run ./cmd/hideout-schema-validate \
+    schemas/release-evidence.schema.json \
+    "$final_evidence" >/dev/null ||
+    fail "synthetic final-ready evidence failed schema validation"
+  validate_release_evidence_semantics \
+    "$final_evidence" \
+    "$(printf 'a%.0s' {1..40})" \
+    "$(printf 'b%.0s' {1..40})" \
+    "0.1.0-alpha.4" \
+    "$(printf 'd%.0s' {1..64})" \
+    "final-ready" "$final_review_count" "true" ||
+    fail "synthetic final-ready evidence failed semantic validation"
+  final_digest="$(sha256_file "$final_evidence")"
+  printf '%s  %s\n' "$final_digest" "$(basename -- "$final_evidence")" \
+    >"$final_detached"
+  chmod 0600 "$final_detached"
+  verify_sha256 \
+    "$final_evidence" "$(awk '{print $1}' "$final_detached")" ||
+    fail "synthetic final-ready detached digest did not verify"
+  jq '.formal.invariantCount = 75' \
+    "$final_evidence" >"$final_invalid"
+  if go run ./cmd/hideout-schema-validate \
+    schemas/release-evidence.schema.json \
+    "$final_invalid" >/dev/null 2>&1; then
+    fail "release evidence schema accepted a stale formal inventory"
+  fi
+  if validate_release_evidence_semantics \
+    "$final_invalid" \
+    "$(printf 'a%.0s' {1..40})" \
+    "$(printf 'b%.0s' {1..40})" \
+    "0.1.0-alpha.4" \
+    "$(printf 'd%.0s' {1..64})" \
+    "final-ready" "$final_review_count" "true"; then
+    fail "release evidence semantics accepted a stale formal inventory"
+  fi
+  jq '.candidate.archive.path = "/tmp/escape"' \
+    "$final_evidence" >"$final_invalid"
+  if go run ./cmd/hideout-schema-validate \
+    schemas/release-evidence.schema.json \
+    "$final_invalid" >/dev/null 2>&1; then
+    fail "release evidence schema accepted an unsafe absolute path"
+  fi
+  scripts/release/revalidate-performance-evidence.sh \
+    --preflight >/dev/null ||
+    fail "incremental performance evidence preflight failed"
   gate_completed=1
   printf 'collect-evidence: preflight=passed\n'
 }
@@ -1531,6 +1789,78 @@ resolve_source_pointer() {
   validate_fresh_json "$resolved_summary"
 }
 
+performance_measurement_summary=""
+resolve_performance_evidence() {
+  local pointer="$1" pointer_schema summary_relative summary_sha pointer_dir
+  local reuse_summary measured_relative
+
+  require_private_evidence_file "$pointer"
+  pointer_schema="$(jq -er '.schema' "$pointer")"
+  case "$pointer_schema" in
+    hideout.release-candidate-performance-pointer/v1)
+      resolve_source_pointer \
+        "$pointer" \
+        "hideout.release-candidate-performance-pointer/v1" \
+        "hideout.release-candidate-performance/v1"
+      performance_measurement_summary="$resolved_summary"
+      validate_performance_evidence_contract \
+        "$performance_measurement_summary" ||
+        fail "performance evidence lacks target-workload CPU, quiet-host, or confidence proof"
+      verify_performance_host_diagnostics \
+        "$performance_measurement_summary"
+      ;;
+    hideout.release-candidate-performance-pointer/v2)
+      jq -e \
+        --arg commit "$source_commit" \
+        --arg tree "$source_tree" '
+          .schema ==
+            "hideout.release-candidate-performance-pointer/v2" and
+          .result == "passed" and
+          .mode == "incremental-content-revalidation" and
+          .candidateAcceptance == true and
+          .source == {commit:$commit,tree:$tree,dirty:false}
+        ' "$pointer" >/dev/null ||
+        fail "incremental performance pointer is stale or mismatched"
+      validate_fresh_json "$pointer"
+      summary_relative="$(jq -er '.summary' "$pointer")"
+      summary_sha="$(jq -er '.summarySHA256' "$pointer")"
+      safe_relative_path "$summary_relative" ||
+        fail "incremental performance pointer has an unsafe summary path"
+      pointer_dir="$(
+        CDPATH='' cd -- "$(dirname -- "$pointer")" && pwd -P
+      )"
+      reuse_summary="$pointer_dir/$summary_relative"
+      require_private_evidence_file "$reuse_summary"
+      verify_sha256 "$reuse_summary" "$summary_sha" ||
+        fail "incremental performance receipt digest does not match pointer"
+      scripts/release/revalidate-performance-evidence.sh \
+        --check "$reuse_summary" >/dev/null ||
+        fail "incremental performance receipt did not revalidate"
+      validate_fresh_json "$reuse_summary"
+      measured_relative="$(
+        jq -er '.measurement.summary.path' "$reuse_summary"
+      )"
+      safe_relative_path "$measured_relative" ||
+        fail "incremental performance receipt has an unsafe measurement path"
+      performance_measurement_summary="$repo_root/$measured_relative"
+      require_private_evidence_file "$performance_measurement_summary"
+      verify_sha256 \
+        "$performance_measurement_summary" \
+        "$(jq -er '.measurement.summary.sha256' "$reuse_summary")" ||
+        fail "incremental performance measurement summary changed"
+      validate_performance_evidence_contract \
+        "$performance_measurement_summary" ||
+        fail "reused performance evidence lacks target-workload CPU, quiet-host, or confidence proof"
+      verify_performance_host_diagnostics \
+        "$performance_measurement_summary"
+      resolved_summary="$reuse_summary"
+      ;;
+    *)
+      fail "unsupported performance pointer schema: $pointer_schema"
+      ;;
+  esac
+}
+
 package_pointer="$artifact_root/package/result.json"
 package_lifecycle_pointer="$artifact_root/package-lifecycle/result.json"
 formal_summary="$artifact_root/formal/summary.json"
@@ -1619,14 +1949,8 @@ resolve_source_pointer \
   "hideout.release-candidate-ui-evidence/v1"
 ui_summary="$resolved_summary"
 
-resolve_source_pointer \
-  "$performance_pointer" \
-  "hideout.release-candidate-performance-pointer/v1" \
-  "hideout.release-candidate-performance/v1"
+resolve_performance_evidence "$performance_pointer"
 performance_summary="$resolved_summary"
-validate_performance_evidence_contract "$performance_summary" ||
-  fail "performance evidence lacks quiet-host contention/confidence proof"
-verify_performance_host_diagnostics "$performance_summary"
 
 resolve_source_pointer \
   "$lima_pointer" \
@@ -1850,7 +2174,7 @@ package_ref() {
 jq '
   [
     .[] |
-    select(.kind == "helper" or .kind == "helper-manifest")
+    select(.kind == "linux-helper" or .kind == "helper-manifest")
   ]
 ' "$scratch/package-files.json" >"$scratch/helpers.json"
 [ "$(jq '[.[] | select(.kind == "helper-manifest")] | length' \
@@ -2114,22 +2438,10 @@ if [ "$local_install_status" = "passed" ] &&
   release_readiness=true
 fi
 
-jq -n \
-  --arg localInstall "$local_install_status" \
-  --arg publicationAbsence "$publication_status" \
-  --argjson localInstallEvidence "$local_install_ref" \
-  --argjson publicationEvidence "$publication_ref" '
-    {
-      localInstall:{
-        status:$localInstall
-      } + if $localInstallEvidence == null then {}
-          else {evidence:$localInstallEvidence} end,
-      publicationAbsence:{
-        status:$publicationAbsence
-      } + if $publicationEvidence == null then {}
-          else {evidence:$publicationEvidence} end
-    }
-  ' >"$scratch/closure.json"
+build_closure_json \
+  "$local_install_status" "$publication_status" \
+  "$local_install_ref" "$publication_ref" \
+  >"$scratch/closure.json"
 
 jq -s '
   [
@@ -2148,6 +2460,7 @@ jq -s '
   "$privacy_summary" \
   "$ui_summary" \
   "$performance_summary" \
+  "$performance_measurement_summary" \
   "$lima_summary" \
   "$dependency_summary" \
   "$component_summary" \
@@ -2236,95 +2549,46 @@ jq -n \
   --argjson closure "$(cat "$scratch/closure.json")" \
   --arg detachedPath "${detached_output#"$repo_root"/}" '
     {
-      schema:"hideout.release-evidence/v1",
       generatedAt:$generatedAt,
-      result:"passed",
       stage:$stage,
       releaseReadiness:$releaseReadiness,
-      source:{
-        commit:$commit,
-        tree:$tree,
-        dirty:false,
-        committedAt:$committedAt,
-        manifest:$sourceManifest
-      },
-      candidate:{
-        version:$version,
-        tag:$tag,
-        channel:"developer-preview",
-        signingMode:"developer-preview-unsigned",
-        publicationStatus:"local-only",
-        archive:$archive,
-        packageManifest:$packageManifest,
-        packageSummary:$packageSummary,
-        lifecycleSummary:$lifecycleSummary
-      },
-      package:{
-        files:$files,
-        helpers:$helpers,
-        browserConsole:$browserConsole,
-        runtime:$runtime
-      },
+      commit:$commit,
+      tree:$tree,
+      committedAt:$committedAt,
+      sourceManifest:$sourceManifest,
+      version:$version,
+      tag:$tag,
+      archive:$archive,
+      packageManifest:$packageManifest,
+      packageSummary:$packageSummary,
+      lifecycleSummary:$lifecycleSummary,
+      files:$files,
+      helpers:$helpers,
+      browserConsole:$browserConsole,
+      runtime:$runtime,
       formal:$formal,
       gates:$gates,
-      review:{
-        result:"passed",
-        requiredFindings:$reviewFindingCount,
-        openRequiredFindings:0,
-        report:$review,
-        claimMatrix:$claims
-      },
+      reviewFindingCount:$reviewFindingCount,
+      review:$review,
+      claims:$claims,
       limitations:$limitations,
       closure:$closure,
-      digest:{
-        algorithm:"sha256",
-        detachedPath:$detachedPath
-      }
+      detachedPath:$detachedPath
     }
-  ' >"$output_tmp"
+  ' >"$scratch/release-evidence-inputs.json"
+build_release_evidence_from_inputs \
+  "$scratch/release-evidence-inputs.json" >"$output_tmp"
 chmod 0600 "$output_tmp"
 
 go run ./cmd/hideout-schema-validate \
   schemas/release-evidence.schema.json \
   "$output_tmp" >/dev/null
 
-jq -e \
-  --arg commit "$source_commit" \
-  --arg tree "$source_tree" \
-  --arg version "$candidate_version" \
-  --arg archiveSHA256 "$candidate_archive_sha" \
-  --arg stage "$stage" \
-  --argjson reviewFindingCount "$review_finding_count" \
-  --argjson releaseReadiness "$release_readiness" '
-    .schema == "hideout.release-evidence/v1" and
-    .result == "passed" and
-    .stage == $stage and
-    .releaseReadiness == $releaseReadiness and
-    .source.commit == $commit and
-    .source.tree == $tree and
-    .source.dirty == false and
-    .candidate.version == $version and
-    .candidate.archive.sha256 == $archiveSHA256 and
-    .candidate.publicationStatus == "local-only" and
-    (.package.files | length) >= 100 and
-    ([.package.files[].path] | unique | length) ==
-      (.package.files | length) and
-    ([.package.helpers[] | select(.kind == "helper-manifest")] | length) == 6 and
-    (.package.browserConsole.inventory.assets | length) == 8 and
-    .formal.configurationCount == 12 and
-    .formal.moduleCount == 10 and
-    .formal.invariantCount == 76 and
-    .formal.propertyCount == 19 and
-    .formal.goTestCount == 12 and
-    (.gates | length) == 11 and
-    ([.gates[].id] | unique | length) == 11 and
-    all(.gates[]; .result == "passed") and
-    all(.gates[] | select(.scope == "candidate");
-      .candidateAcceptance == true) and
-    .review.requiredFindings == $reviewFindingCount and
-    .review.openRequiredFindings == 0 and
-    (.limitations | length) >= 5
-  ' "$output_tmp" >/dev/null ||
+validate_release_evidence_semantics \
+  "$output_tmp" \
+  "$source_commit" "$source_tree" "$candidate_version" \
+  "$candidate_archive_sha" "$stage" "$review_finding_count" \
+  "$release_readiness" ||
   fail "final evidence manifest failed semantic validation"
 
 if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then

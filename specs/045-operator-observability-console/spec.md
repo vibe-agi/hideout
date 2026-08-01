@@ -657,7 +657,9 @@ candidate identity.
   every new judge MUST have a negative fixture.
 - **FR-068**: Supported reference workloads MUST meet documented attach,
   runtime overhead, memory, storage, event-loss, and UI freshness budgets on
-  the real supported backend.
+  the real supported backend. Runtime-overhead acceptance MUST be derived from
+  the exact workload child process or workload cgroup plus paired elapsed time;
+  host-wide process sampling is eligibility and invalidation evidence only.
 - **FR-069**: Documentation and product status MUST identify supported
   coverage, unavoidable attribution uncertainty, guest-root limitations,
   observation-versus-enforcement boundaries, retention, redaction, recovery,
@@ -665,7 +667,11 @@ candidate identity.
 - **FR-070**: Release readiness MUST require all applicable local,
   real-backend, privacy, terminal, browser, packaging, clean-install,
   upgrade/uninstall, dependency, advisory, redaction, and performance evidence
-  for one exact clean candidate.
+  for one exact clean candidate. A retained expensive measurement MAY be
+  rebound only by a versioned, content-addressed receipt that verifies every
+  retained artifact, independently recomputes its raw acceptance metrics, and
+  proves the candidate diff contains no product or measurement-input change;
+  any unclassified or measurement-relevant change MUST require a new run.
 - **FR-071**: Producing a verified candidate MUST NOT publish a remote tag,
   release, or package-manager update without separate explicit operator
   authorization.
@@ -739,10 +745,11 @@ candidate identity.
 - **SC-010**: Default activity retention never exceeds its configured storage
   bound by more than one active bounded segment, and every historical deletion
   is reflected in coverage and operation evidence.
-- **SC-011**: The supported developer reference workload completes with no
-  more than 10% median elapsed-time overhead from enabled default observation,
-  no unreported event loss, and no regression beyond existing attach and
-  interactive freshness budgets.
+- **SC-011**: The supported developer reference workload completes with both
+  target child-process CPU overhead and paired elapsed-time overhead at or below
+  10% for the median and its one-sided exact 95% upper confidence bound, with
+  no unreported event loss and no regression beyond existing attach and
+  interactive freshness budgets. Host-wide CPU is never the overhead metric.
 - **SC-012**: All defined bounded safety and progress scenarios complete
   without a counterexample, including stale-client, crash, retry, rollback,
   observation-loss, and cleanup traces.
@@ -756,6 +763,8 @@ candidate identity.
   real-backend, privacy, terminal, browser, packaging, upgrade/uninstall,
   redaction, dependency, advisory, performance, mutation-proof, and negative
   fixture gate with no required result failed, stale, reduced, or `not-run`.
+  Incrementally revalidated evidence counts only when its exact receipt meets
+  FR-070; a prior green verdict by itself never counts.
 
 ## Assumptions
 
