@@ -16,6 +16,7 @@ browser_samples=5
 local_samples=30
 local_warmups=5
 process_samples=15
+daemon_socket_path_max=100
 host_contention_samples=3
 host_contention_minimum_hits=2
 host_generic_cpu_threshold=50
@@ -280,6 +281,17 @@ assess_initial_host_contention() {
     ' "$source"
 }
 
+process_store_socket_path() {
+  printf '%s/daemon/hideoutd.sock' "$1"
+}
+
+process_store_path_is_safe() {
+  local socket_path
+
+  socket_path="$(process_store_socket_path "$1")"
+  [ "${#socket_path}" -le "$daemon_socket_path_max" ]
+}
+
 for required_command in \
   awk bash cmp date find git go grep jq limactl node perl ps rg sed shasum \
   sleep sort ssh stat tail tr wc; do
@@ -307,12 +319,26 @@ if [ "$attach_samples" -lt 30 ] || [ "$attach_warmups" -lt 1 ]; then
 fi
 
 scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
+short_scratch_parent="$(CDPATH='' cd -- /tmp && pwd -P)"
 if [ "$preflight_only" -eq 1 ]; then
   preflight_root="$(mktemp -d "$scratch_parent/hideout-performance-preflight.XXXXXX")"
+  preflight_process_scratch=""
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
     local exit_status=$?
+    case "${preflight_process_scratch:-}" in
+      "") ;;
+      "$short_scratch_parent"/hp.*)
+        [ ! -d "$preflight_process_scratch" ] ||
+          find "$preflight_process_scratch" -depth -delete
+        ;;
+      *)
+        printf \
+          'release-candidate-performance: refusing unexpected short-path preflight cleanup\n' \
+          >&2
+        ;;
+    esac
     case "${preflight_root:-}" in
       "$scratch_parent"/hideout-performance-preflight.*)
         [ ! -d "$preflight_root" ] ||
@@ -329,6 +355,32 @@ if [ "$preflight_only" -eq 1 ]; then
     fi
   }
   trap cleanup_preflight EXIT
+  preflight_process_scratch="$(mktemp -d "$short_scratch_parent/hp.XXXXXX")"
+  preflight_process_store="$preflight_process_scratch/store"
+  preflight_process_socket="$(
+    process_store_socket_path "$preflight_process_store"
+  )"
+  preflight_process_mode="$(
+    stat -f '%Lp' "$preflight_process_scratch" 2>/dev/null ||
+      stat -c '%a' "$preflight_process_scratch" 2>/dev/null
+  )"
+  if [ -L "$preflight_process_scratch" ] ||
+    [ "$preflight_process_mode" != "700" ] ||
+    ! process_store_path_is_safe "$preflight_process_store"; then
+    printf \
+      'release-candidate-performance: short private process store preflight failed: path=%s mode=%s socket-bytes=%d\n' \
+      "$preflight_process_store" "$preflight_process_mode" \
+      "${#preflight_process_socket}" >&2
+    exit 1
+  fi
+  preflight_long_component="$(printf 'x%.0s' {1..101})"
+  if process_store_path_is_safe \
+    "$preflight_process_scratch/$preflight_long_component"; then
+    printf \
+      'release-candidate-performance: overlong process store negative fixture was accepted\n' \
+      >&2
+    exit 1
+  fi
   summary_contract_fixture="$preflight_root/summary.json"
   summary_contract_negative="$preflight_root/summary-negative.json"
   summary_quiet_negative="$preflight_root/summary-quiet-negative.json"
@@ -1113,8 +1165,21 @@ if ! contention_findings="$(
 fi
 
 scratch="$(mktemp -d "$scratch_parent/hideout-release-performance.XXXXXX")"
+process_scratch=""
 cleanup() {
   local exit_status=$?
+  case "${process_scratch:-}" in
+    "") ;;
+    "$short_scratch_parent"/hp.*)
+      [ ! -d "$process_scratch" ] ||
+        find "$process_scratch" -depth -delete
+      ;;
+    *)
+      printf \
+        'release-candidate-performance: refusing unexpected short-path scratch cleanup\n' \
+        >&2
+      ;;
+  esac
   case "${scratch:-}" in
     "$scratch_parent"/hideout-release-performance.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
@@ -1252,10 +1317,25 @@ jq -e \
   ' "$run_dir/lanes/local-query-render.json" >/dev/null
 
 printf 'release-candidate-performance: stage=daemon-tui-process\n'
+process_scratch="$(mktemp -d "$short_scratch_parent/hp.XXXXXX")"
+process_store="$process_scratch/store"
+process_socket="$(process_store_socket_path "$process_store")"
+process_scratch_mode="$(
+  stat -f '%Lp' "$process_scratch" 2>/dev/null ||
+    stat -c '%a' "$process_scratch" 2>/dev/null
+)"
+if [ -L "$process_scratch" ] ||
+  [ "$process_scratch_mode" != "700" ] ||
+  ! process_store_path_is_safe "$process_store"; then
+  printf \
+    'release-candidate-performance: private process store is unsafe: path=%s mode=%s socket-bytes=%d\n' \
+    "$process_store" "$process_scratch_mode" "${#process_socket}" >&2
+  exit 1
+fi
 set +e
 go run ./scripts/gates/performance-process \
   --hideout "$candidate_bin" \
-  --store "$scratch/process-store" \
+  --store "$process_store" \
   --out "$run_dir/lanes/daemon-tui-process.json" \
   --samples "$process_samples" \
   >"$run_dir/lanes/daemon-tui-process.log" 2>&1

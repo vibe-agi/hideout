@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found forty-five required
-issues. All forty-five were resolved in the review-close worktree, and their
+The final source, security, and operator-UX review found forty-six required
+issues. All forty-six were resolved in the review-close worktree, and their
 focused regression judges pass. There is no open required review finding.
 
 This report is not itself a release-candidate attestation. At review close, the
@@ -96,7 +96,12 @@ The review followed authority and data flow rather than package order:
 23. audited the performance gate as a statistical evidence producer: arm
     symmetry, sample pairing, explicit and automatically assessed host
     contention, confidence, candidate acceptance, and final collector
-    compatibility were each exercised through a positive and fail-closed path.
+    compatibility were each exercised through a positive and fail-closed path;
+    and
+24. executed the clean performance command through candidate build and the
+    daemon/TUI process lane, then checked its private store placement against
+    the macOS Unix-socket path limit instead of treating a harness startup
+    failure as a performance result.
 
 Severity means:
 
@@ -156,6 +161,7 @@ Severity means:
 | CR045-043 | Low | The performance summary stored clean/dirty acceptance only as `candidate.acceptance`, while the generic final evidence resolver requires the same top-level `candidateAcceptance` field used by every candidate pointer and summary. Even a clean successful T156 run would therefore be rejected later at T163, after the expensive real-Lima measurement had completed. | Release performance and final-evidence maintainers | Emit top-level `candidateAcceptance` from the exact source dirty bit, require it to equal both `!source.dirty` and `candidate.acceptance`, add a negative contract fixture, and make final collection explicitly require the quiet-host confidence receipt. | Performance preflight accepts the exact summary contract and rejects mismatched acceptance, negative artifact size, and missing quiet-host confirmation. `collect-evidence --preflight`, exact ShellCheck, and documentation truth validation pass. |
 | CR045-044 | Medium | Quiet-host acceptance still depended on an operator-set environment variable. A release run accidentally started while Android QEMU, Docker virtualization, or another build/test process was already consuming CPU would retain diagnostics but spend the full gate and could still be mistaken for valid evidence. | Release performance and final-evidence maintainers | Before any build or measurement, take three one-second process snapshots without argv or environment data. Reject the run when the same generic process uses at least 50% CPU, a virtualization process at least 5%, or a recognized build/test process at least 10% in two snapshots. Bind the private assessment and thresholds into the summary and require them again during final evidence collection; never stop the reported process. | Quiet and sustained-VM synthetic fixtures pass/fail as intended; the live preflight rejected the current `qemu-system-aarch64` and Docker Virtualization VM before candidate build, while retaining only non-argument process/CPU diagnostics. Performance and collector preflights, Bash syntax, and ShellCheck pass. |
 | CR045-045 | Low | The performance summary validator used `all(.validation[]; . == true)`, which proves only fields that happen to exist. It also accepted arbitrary non-empty diagnostic paths and did not reject duplicate artifact paths. A producer regression could therefore mark its own incomplete summary passed, leaving the final collector to discover the mismatch only after an expensive run. | Release performance and final-evidence maintainers | Require every quiet-host/confidence validation field by name, freeze the four diagnostic paths and snapshot order, require unique artifact paths, and make final collection resolve the four private files, verify mode and SHA-256, check snapshot headers, and independently reparse the raw contention samples. | Producer preflight rejects a missing validation field and a duplicate artifact path. Collector preflight accepts a fully bound four-file fixture, rejects a forged digest, busy raw samples, and missing contention validation; performance/collector preflights, Bash syntax, and ShellCheck pass. |
+| CR045-046 | Low | The clean performance gate created its daemon/TUI fixture store below macOS's long per-user `$TMPDIR`. The resulting `daemon/hideoutd.sock` path was 126 bytes, above Hideout's explicit 100-byte Unix-socket ceiling, so the product correctly failed closed before the lane could measure anything. | Release performance maintainers | Keep general build scratch under the operator temp directory, but create the process fixture's private store in a separate `mktemp`-owned `/private/tmp/hp.*` directory. Validate the exact socket path before launch, clean only that recognized prefix, and add a negative fixture proving an overlong store cannot pass the path judge. | The retained clean run `run-20260801T021715Z-70709` reports the exact 126-byte rejection. Bash syntax, ShellCheck, and performance preflight pass; a five-sample non-evidence smoke starts the daemon/TUI from the short private store and passes with cleanup. |
 
 ## Closure terminology and false-success audit
 

@@ -2170,7 +2170,11 @@ CPU, memory, and process name; two sustained threshold hits from
 the same high-CPU, virtualization, or build/test process reject the run without
 stopping it. Known contention invalidates the run rather than relaxing the
 ten-percent ceiling, discarding samples, or selecting favorable measurements
-afterward.
+afterward. The daemon/TUI fixture uses a separate `mktemp`-owned short private
+store below `/private/tmp`, validates that its resulting Unix socket path is at
+most 100 bytes before launch, and rejects an overlong-path fixture in
+preflight; this is test placement only and does not relax the product's
+fail-closed socket-path boundary.
 
 ### Package and final evidence acceptance
 
