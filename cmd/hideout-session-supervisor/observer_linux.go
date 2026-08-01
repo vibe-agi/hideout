@@ -448,7 +448,14 @@ func (session *observerSession) Stop(timeout time.Duration) error {
 			observerEndpointCloseError(session.stdout.Close()),
 		)
 		var relayErr error
-		if processStopped && readerDrained {
+		// A drain marker claims that the collector completed cleanly and that
+		// every admitted observation has an exact final receipt. Reaping the
+		// helper and draining its stdout are necessary but not sufficient: an
+		// externally killed or otherwise unsuccessful helper reaches both states
+		// without publishing that receipt. Close the relay destructively in that
+		// case so the host accounts an unexpected transport loss instead of
+		// receiving a false collector.goodbye.
+		if processStopped && readerDrained && waitErr == nil && closeErr == nil {
 			relayErr = session.relay.DrainAndClose(remaining())
 		} else {
 			relayErr = session.relay.Close()

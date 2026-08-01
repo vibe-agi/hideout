@@ -2108,7 +2108,10 @@ Runtime coverage acceptance is intentionally asymmetric:
 | DNS | `Partial` | Plaintext query correlation is useful; encrypted, cached, literal-IP, shared, or external-resolver cases remain unknown. |
 
 An injected sequence gap or drop must degrade the affected interval and expose
-its reason and loss count. Target exit must close current coverage as
+its reason and loss count. Killing the observer helper must never produce a
+graceful relay drain marker: an unsuccessful helper exit closes the relay
+destructively, retains `transport-drop`, and leaves all four current subsystem
+intervals unavailable. Target exit must close current coverage as
 `Unavailable (target-exited)` without deleting prior evidence. Native or
 unproved backends must report observation `Unavailable`, never silently
 promote fixture evidence.
@@ -2174,7 +2177,9 @@ afterward. The daemon/TUI fixture uses a separate `mktemp`-owned short private
 store below `/private/tmp`, validates that its resulting Unix socket path is at
 most 100 bytes before launch, and rejects an overlong-path fixture in
 preflight; this is test placement only and does not relax the product's
-fail-closed socket-path boundary.
+fail-closed socket-path boundary. A failing real-Lima observer/quota child is
+also reported with its exact status, terminal reason, and retained private log
+path rather than disappearing behind the aggregate's `errexit` boundary.
 
 ### Package and final evidence acceptance
 

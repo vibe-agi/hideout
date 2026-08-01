@@ -161,6 +161,44 @@ func TestObserverSessionRegistersBeforeReadyAndAbortsExactBoundary(t *testing.T)
 	}
 }
 
+func TestObserverSessionFailureClosesRelayWithoutDrainMarker(t *testing.T) {
+	spec := observerSupervisorStart(t)
+	backend := newFakeSessionCgroupBackend()
+	helper := newFakeObserverHelper(t, observerUnavailableCapabilities())
+	helper.exitErr = errors.New("observer helper exited unsuccessfully")
+	session, err := prepareObserverSession(spec, observerSessionOptions{
+		Cgroup: sessionCgroupOptions{
+			Root: observerTestCgroupRoot(t), Backend: backend,
+		},
+		ObserverPath:  "/test/fixed/hideout-observer",
+		Launch:        helper.Launch,
+		MonotonicNS:   func() (uint64, error) { return 424242, nil },
+		HandshakeWait: time.Second,
+		ShutdownWait:  time.Second,
+		Relay:         observerRelayTestOptions(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = session.Abort(time.Second)
+	if !errors.Is(err, helper.exitErr) {
+		t.Fatalf("abort error=%v want %v", err, helper.exitErr)
+	}
+	if session.relay.draining.Load() {
+		t.Fatal("unsuccessful helper exit published a false relay drain marker")
+	}
+	if !backend.removed {
+		t.Fatal("unsuccessful helper exit leaked its observer cgroup")
+	}
+	for _, summary := range session.Completion(helper.exitErr).Coverage {
+		if summary.DroppedEventCount == 0 ||
+			!containsString(summary.Evidence, "observer-shutdown-unproved") {
+			t.Fatalf("failed helper coverage=%+v", summary)
+		}
+	}
+}
+
 func TestObserverSessionRejectsForeignRegistrationAndCleansBoundary(t *testing.T) {
 	spec := observerSupervisorStart(t)
 	backend := newFakeSessionCgroupBackend()
@@ -372,6 +410,7 @@ type fakeObserverHelper struct {
 	t            *testing.T
 	capabilities sessionwire.ObserverCapabilities
 	mutateHello  func(*sessionwire.ObserverHello)
+	exitErr      error
 
 	mu         sync.Mutex
 	accepted   bool
@@ -451,7 +490,7 @@ func (helper *fakeObserverHelper) Launch(
 		helper.stopped = true
 		helper.mu.Unlock()
 		closeHelper()
-		done <- nil
+		done <- helper.exitErr
 	}()
 	return &observerHelperProcess{
 		stdin: supervisorInput, stdout: supervisorOutput,

@@ -1647,12 +1647,24 @@ privacy_dir="$run_dir/lima-privacy"
 privacy_log="$run_dir/lanes/lima-privacy.log"
 printf \
   'release-candidate-performance: stage=real-lima-observer-quota\n'
+set +e
 HIDEOUT_WORKLOAD_PRIVACY_MEASURE_PERFORMANCE=1 \
 HIDEOUT_WORKLOAD_PRIVACY_EVENTS_PER_ROUND=7000 \
 HIDEOUT_WORKLOAD_PRIVACY_MAXIMUM_ROUNDS=3 \
   scripts/gates/workload-privacy-lima.sh \
     --require-real --out "$privacy_dir" \
     >"$privacy_log" 2>&1
+privacy_status=$?
+set -e
+if [ "$privacy_status" -ne 0 ]; then
+  privacy_failure="$(sed -n '$p' "$privacy_log")"
+  [ -n "$privacy_failure" ] ||
+    privacy_failure="no terminal reason was recorded"
+  printf \
+    'release-candidate-performance: real-Lima observer/quota failed: %s (status=%d log=%s)\n' \
+    "$privacy_failure" "$privacy_status" "$privacy_log" >&2
+  exit 1
+fi
 privacy_result="$privacy_dir/result.json"
 privacy_summary="$privacy_dir/reports/privacy-summary.json"
 jq -e \

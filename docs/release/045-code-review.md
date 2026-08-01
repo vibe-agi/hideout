@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found forty-six required
-issues. All forty-six were resolved in the review-close worktree, and their
+The final source, security, and operator-UX review found forty-eight required
+issues. All forty-eight were resolved in the review-close worktree, and their
 focused regression judges pass. There is no open required review finding.
 
 This report is not itself a release-candidate attestation. At review close, the
@@ -101,7 +101,11 @@ The review followed authority and data flow rather than package order:
 24. executed the clean performance command through candidate build and the
     daemon/TUI process lane, then checked its private store placement against
     the macOS Unix-socket path limit instead of treating a harness startup
-    failure as a performance result.
+    failure as a performance result; and
+25. completed the quiet-host thirty-pair reference measurement, retained the
+    later observer-loss failure, and traced the injected helper kill through
+    collector wait status, relay shutdown, authenticated goodbye validation,
+    host coverage transitions, and outer-gate diagnostic propagation.
 
 Severity means:
 
@@ -162,6 +166,8 @@ Severity means:
 | CR045-044 | Medium | Quiet-host acceptance still depended on an operator-set environment variable. A release run accidentally started while Android QEMU, Docker virtualization, or another build/test process was already consuming CPU would retain diagnostics but spend the full gate and could still be mistaken for valid evidence. | Release performance and final-evidence maintainers | Before any build or measurement, take three one-second process snapshots without argv or environment data. Reject the run when the same generic process uses at least 50% CPU, a virtualization process at least 5%, or a recognized build/test process at least 10% in two snapshots. Bind the private assessment and thresholds into the summary and require them again during final evidence collection; never stop the reported process. | Quiet and sustained-VM synthetic fixtures pass/fail as intended; the live preflight rejected the current `qemu-system-aarch64` and Docker Virtualization VM before candidate build, while retaining only non-argument process/CPU diagnostics. Performance and collector preflights, Bash syntax, and ShellCheck pass. |
 | CR045-045 | Low | The performance summary validator used `all(.validation[]; . == true)`, which proves only fields that happen to exist. It also accepted arbitrary non-empty diagnostic paths and did not reject duplicate artifact paths. A producer regression could therefore mark its own incomplete summary passed, leaving the final collector to discover the mismatch only after an expensive run. | Release performance and final-evidence maintainers | Require every quiet-host/confidence validation field by name, freeze the four diagnostic paths and snapshot order, require unique artifact paths, and make final collection resolve the four private files, verify mode and SHA-256, check snapshot headers, and independently reparse the raw contention samples. | Producer preflight rejects a missing validation field and a duplicate artifact path. Collector preflight accepts a fully bound four-file fixture, rejects a forged digest, busy raw samples, and missing contention validation; performance/collector preflights, Bash syntax, and ShellCheck pass. |
 | CR045-046 | Low | The clean performance gate created its daemon/TUI fixture store below macOS's long per-user `$TMPDIR`. The resulting `daemon/hideoutd.sock` path was 126 bytes, above Hideout's explicit 100-byte Unix-socket ceiling, so the product correctly failed closed before the lane could measure anything. | Release performance maintainers | Keep general build scratch under the operator temp directory, but create the process fixture's private store in a separate `mktemp`-owned `/private/tmp/hp.*` directory. Validate the exact socket path before launch, clean only that recognized prefix, and add a negative fixture proving an overlong store cannot pass the path judge. | The retained clean run `run-20260801T021715Z-70709` reports the exact 126-byte rejection. Bash syntax, ShellCheck, and performance preflight pass; a five-sample non-evidence smoke starts the daemon/TUI from the short private store and passes with cleanup. |
+| CR045-047 | Medium | Observer shutdown selected graceful relay draining whenever the helper had been reaped and its stdout reader had ended, even when the helper's wait status was unsuccessful. An externally killed helper therefore caused the supervisor to publish `collector.goodbye` without the required final collector receipt. The host correctly rejected that false receipt as `invalid-frame`, but the injected-loss proof never retained the required `transport-drop` interval. | Guest session-supervisor maintainers | Publish the relay drain marker only after a clean helper exit, clean endpoint close, and drained reader. Use destructive relay close for every unsuccessful or unproved helper stop so the authenticated host stream ends unexpectedly and accounts transport loss without accepting a false graceful receipt. | `TestObserverSessionFailureClosesRelayWithoutDrainMarker`, Linux-arm64 supervisor type-check, and the exact real-Lima privacy fixture with performance sampling pass; the injected kill now retains quota gaps plus `transport-drop` and all four current subsystems become unavailable. |
+| CR045-048 | Low | The performance aggregate redirected the real-Lima observer/quota child to a private log while running under outer `set -e`. A child failure after the expensive thirty-pair reference measurement therefore terminated the aggregate without printing the retained reason or log path. | Release performance maintainers | Capture the child status explicitly, restore `errexit`, surface the final bounded diagnostic line together with status and private log path, and fail before interpreting child evidence. | The retained clean run `run-20260801T022353Z-27727` demonstrates the formerly silent observer-loss exit while preserving its private log; Bash syntax, ShellCheck, performance preflight, and the post-fix standalone real-Lima privacy lane pass. |
 
 ## Closure terminology and false-success audit
 
