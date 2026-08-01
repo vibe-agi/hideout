@@ -382,8 +382,8 @@ handoff.
 - [x] T170 Record only genuinely deferred non-required work with owner, risk, trigger, and non-claim in `docs/DEBT.md`
 - [ ] T171 Run the complete release-candidate orchestrator once more from the exact clean tree and verify the evidence manifest has no stale/reduced/not-run required entry in `.artifacts/045/`
 - [ ] T172 Confirm the local install is the exact candidate, preserve no legacy data as authorized, and hand off publication as a separate explicitly authorized action in `docs/release/045-readiness.md`
-- [ ] T173 Fix the high-event observer shutdown deadline/reap defect, execute its Linux regression in the real-Lima observation lane, and retain an exact-clean passing receipt in `cmd/hideout-session-supervisor/`, `scripts/gates/workload-observation-lima.sh`, and `.artifacts/045/`
-- [ ] T174 Add fail-closed progressive Lima aggregation that revalidates and reuses only exact-commit passed lanes from the immediately preceding digest-bound aggregate in `scripts/gates/release-candidate-lima.sh`
+- [x] T173 Fix the high-event observer shutdown deadline/reap defect, execute its Linux regression in the real-Lima observation lane, and retain an exact-clean passing receipt in `cmd/hideout-session-supervisor/`, `scripts/gates/workload-observation-lima.sh`, and `.artifacts/045/`
+- [x] T174 Add fail-closed progressive Lima aggregation that revalidates and reuses only exact-commit passed lanes from the immediately preceding digest-bound aggregate in `scripts/gates/release-candidate-lima.sh`
 
 ---
 
