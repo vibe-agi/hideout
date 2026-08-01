@@ -2169,11 +2169,18 @@ and keep the host quiet until the gate finishes. The full lane refuses to
 start without `HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1` and retains private
 host-state snapshots at the run start and real-Lima boundaries. Before any
 build or measurement, three one-second snapshots retain only PID, parent PID,
-CPU, memory, and process name; two sustained threshold hits from
-the same high-CPU, virtualization, or build/test process reject the run without
-stopping it. Known contention invalidates the run rather than relaxing the
-ten-percent ceiling, discarding samples, or selecting favorable measurements
-afterward. The daemon/TUI fixture uses a separate `mktemp`-owned short private
+CPU, memory, and process name; two sustained threshold hits from the same
+high-CPU, virtualization, or build/test process reject the run without stopping
+it. During the complete real-Lima attach/reference interval, a one-second
+monitor also rejects two threshold hits by the same PID/name within any rolling
+three-sample window. Only the gate process group and Hideout/Lima
+virtualization processes proven to use the gate's private runtime paths are
+excluded. Its private evidence retains PID, parent PID, process group, CPU,
+memory, and normalized process name, but no argv, environment, or runtime path;
+the final collector independently reparses the digest-bound file. Known
+contention invalidates the run rather than relaxing the ten-percent ceiling,
+discarding samples, or selecting favorable measurements afterward. The
+daemon/TUI fixture uses a separate `mktemp`-owned short private
 store below `/private/tmp`, validates that its resulting Unix socket path is at
 most 100 bytes before launch, and rejects an overlong-path fixture in
 preflight; this is test placement only and does not relax the product's

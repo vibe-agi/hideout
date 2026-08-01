@@ -201,6 +201,19 @@ validate_performance_evidence_contract() {
       "host-contention-preflight.txt" and
     (.hostDiagnostics.initialContentionAssessment.sha256 |
       test("^[a-f0-9]{64}$")) and
+    .hostDiagnostics.measurementContentionAssessment.passed == true and
+    .hostDiagnostics.measurementContentionAssessment.method ==
+      "continuous-one-second-rolling-three-sample-two-hit-rejection" and
+    .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
+    .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
+    .hostDiagnostics.measurementContentionAssessment.minimumHits == 2 and
+    .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
+    .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
+    .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
+    .hostDiagnostics.measurementContentionAssessment.path ==
+      "host-contention-measurement.txt" and
+    (.hostDiagnostics.measurementContentionAssessment.sha256 |
+      test("^[a-f0-9]{64}$")) and
     (.hostDiagnostics.snapshots | length) == 3 and
     [.hostDiagnostics.snapshots[] | [.phase, .path]] == [
       ["start", "host-state-start.txt"],
@@ -222,6 +235,7 @@ validate_performance_evidence_contract() {
     .validation.referenceMedianUpperConfidenceBoundWithinTenPercent == true and
     .validation.quietHostExplicitlyConfirmed == true and
     .validation.initialHostContentionAssessmentPassed == true and
+    .validation.measurementHostContentionAssessmentPassed == true and
     .validation.hostDiagnosticsRetained == true
   ' "$performance_file" >/dev/null
 }
@@ -312,6 +326,154 @@ validate_performance_contention_file() {
   ' "$contention_file"
 }
 
+validate_performance_measurement_contention_file() {
+  local contention_file="$1" expected_samples="$2"
+
+  case "$expected_samples" in
+    '' | *[!0-9]* | 0 | 1 | 2)
+      return 2
+      ;;
+  esac
+
+  awk -v expected_samples="$expected_samples" '
+    function is_virtualization(name) {
+      return name ~ /^qemu-system-/ ||
+        name ~ /^com[.]apple[.]Virtua/ ||
+        name ~ /^VirtualBoxVM/ ||
+        name ~ /^vmware-vmx/ ||
+        name ~ /^prl_vm_app/ ||
+        name ~ /^UTM/
+    }
+    function is_build_or_test(name) {
+      return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+        name ~ /[.]test$/
+    }
+    /^schema=hideout[.]performance-host-contention\/v2$/ {
+      if (sampling_started) invalid = 1
+      schema_count++
+      next
+    }
+    /^method=continuous-one-second-rolling-three-sample-two-hit-rejection$/ {
+      if (sampling_started) invalid = 1
+      method_count++
+      next
+    }
+    /^rolling_window=3$/ {
+      if (sampling_started) invalid = 1
+      window_count++
+      next
+    }
+    /^minimum_hits=2$/ {
+      if (sampling_started) invalid = 1
+      minimum_count++
+      next
+    }
+    /^generic_cpu_percent_threshold=50$/ {
+      if (sampling_started) invalid = 1
+      generic_count++
+      next
+    }
+    /^virtualization_cpu_percent_threshold=5$/ {
+      if (sampling_started) invalid = 1
+      virtualization_count++
+      next
+    }
+    /^build_or_test_cpu_percent_threshold=10$/ {
+      if (sampling_started) invalid = 1
+      build_count++
+      next
+    }
+    /^gate_process_group=[1-9][0-9]*$/ {
+      if (sampling_started) invalid = 1
+      split($0, fields, "=")
+      excluded_pgid = fields[2] + 0
+      gate_group_count++
+      next
+    }
+    /^owned_process=[1-9][0-9]*:[^:=[:space:]]+:gate-private-runtime$/ {
+      if (current_sample == 0) invalid = 1
+      split($0, fields, "=")
+      split(fields[2], owner, ":")
+      owner_key = owner[1] SUBSEP owner[2]
+      owned[owner_key] = 1
+      owned_count[owner_key]++
+      next
+    }
+    /^sample_begin=[1-9][0-9]*$/ {
+      if (schema_count != 1 || method_count != 1 || window_count != 1 ||
+          minimum_count != 1 || generic_count != 1 ||
+          virtualization_count != 1 || build_count != 1 ||
+          gate_group_count != 1) invalid = 1
+      split($0, fields, "=")
+      sample = fields[2] + 0
+      if (current_sample != 0 || sample != sample_count + 1)
+        invalid = 1
+      current_sample = sample
+      sample_count++
+      begins[sample]++
+      sampling_started = 1
+      next
+    }
+    /^sample_end=[1-9][0-9]*$/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+      if (current_sample != sample || ends[sample] != 0) invalid = 1
+      ends[sample]++
+      current_sample = 0
+      next
+    }
+    current_sample > 0 {
+      if (NF != 6 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ ||
+          $3 !~ /^[0-9]+$/ ||
+          $4 !~ /^[0-9]+([.][0-9]+)?$/ ||
+          $5 !~ /^[0-9]+([.][0-9]+)?$/ ||
+          $6 !~ /^[^:=[:space:]]+$/) {
+        invalid = 1
+        next
+      }
+      rows[current_sample]++
+      pid = $1 + 0
+      pgid = $3 + 0
+      cpu = $4 + 0
+      name = $6
+      observed[pid SUBSEP name]++
+      if (pgid == excluded_pgid) next
+      threshold = 50
+      if (is_virtualization(name)) threshold = 5
+      else if (is_build_or_test(name)) threshold = 10
+      if (cpu < threshold) next
+      key = pid SUBSEP name
+      sample_key = current_sample SUBSEP key
+      if (sample_key in counted) next
+      counted[sample_key] = 1
+      if (last_hit[key] > 0 && current_sample - last_hit[key] < 3)
+        violations[key] = 1
+      last_hit[key] = current_sample
+      next
+    }
+    {invalid = 1}
+    END {
+      if (current_sample != 0 || sample_count != expected_samples ||
+          schema_count != 1 ||
+          method_count != 1 || window_count != 1 || minimum_count != 1 ||
+          generic_count != 1 || virtualization_count != 1 ||
+          build_count != 1 || gate_group_count != 1) invalid = 1
+      for (sample = 1; sample <= sample_count; sample++) {
+        if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
+          invalid = 1
+      }
+      for (key in owned) {
+        if (owned_count[key] != 1 || observed[key] < 1) invalid = 1
+        split(key, owner, SUBSEP)
+        if (!(owner[2] == "hideout" || owner[2] == "limactl" ||
+              is_virtualization(owner[2]))) invalid = 1
+      }
+      if (invalid) exit 2
+      for (key in violations) if (!owned[key]) exit 1
+    }
+  ' "$contention_file"
+}
+
 require_private_evidence_file() {
   local evidence_file="$1" allowed_root="${2:-$artifact_root}" resolved_dir
   allowed_root="$(CDPATH='' cd -- "$allowed_root" && pwd -P)"
@@ -335,10 +497,14 @@ require_private_evidence_file() {
 verify_performance_host_diagnostics() {
   local summary_file="$1" summary_dir kind phase relative expected_sha
   local allowed_root="${2:-$artifact_root}"
-  local diagnostic_file diagnostic_count=0
+  local diagnostic_file diagnostic_count=0 measurement_samples
 
   summary_dir="$(
     CDPATH='' cd -- "$(dirname -- "$summary_file")" && pwd -P
+  )"
+  measurement_samples="$(
+    jq -r '.hostDiagnostics.measurementContentionAssessment.samples' \
+      "$summary_file"
   )"
   while IFS=$'\t' read -r kind phase relative expected_sha; do
     diagnostic_count=$((diagnostic_count + 1))
@@ -357,9 +523,14 @@ verify_performance_host_diagnostics() {
       ' "$summary_file" >/dev/null ||
       fail "performance summary does not bind one host diagnostic: $relative"
     case "$kind" in
-      contention)
+      contention-initial)
         validate_performance_contention_file "$diagnostic_file" ||
           fail "performance raw host contention evidence is invalid or busy"
+        ;;
+      contention-measurement)
+        validate_performance_measurement_contention_file \
+          "$diagnostic_file" "$measurement_samples" ||
+          fail "performance raw measurement contention evidence is invalid or busy"
         ;;
       snapshot)
         if ! grep -Fxq 'schema=hideout.performance-host-state/v1' \
@@ -377,10 +548,15 @@ verify_performance_host_diagnostics() {
   done < <(
     jq -r '
       ([{
-        kind:"contention",
+        kind:"contention-initial",
         phase:"preflight",
         path:.hostDiagnostics.initialContentionAssessment.path,
         sha256:.hostDiagnostics.initialContentionAssessment.sha256
+      },{
+        kind:"contention-measurement",
+        phase:"real-lima-measurement",
+        path:.hostDiagnostics.measurementContentionAssessment.path,
+        sha256:.hostDiagnostics.measurementContentionAssessment.sha256
       }] + [
         .hostDiagnostics.snapshots[] |
         {kind:"snapshot",phase,path,sha256}
@@ -388,7 +564,7 @@ verify_performance_host_diagnostics() {
       [.kind, .phase, .path, .sha256] | @tsv
     ' "$summary_file"
   )
-  [ "$diagnostic_count" -eq 4 ] ||
+  [ "$diagnostic_count" -eq 5 ] ||
     fail "performance host diagnostic inventory is incomplete"
 }
 
@@ -396,6 +572,8 @@ run_preflight() {
   local fixture digest review_fixture local_summary_fixture artifact_reference
   local performance_fixture performance_invalid
   local performance_contention_quiet performance_contention_busy
+  local performance_measurement_quiet performance_measurement_busy
+  local performance_measurement_unowned performance_measurement_invalid_owner
   local performance_bound_fixture performance_snapshot_start
   local performance_snapshot_before performance_snapshot_after
   preflight_root="$(
@@ -510,6 +688,19 @@ run_preflight() {
           path:"host-contention-preflight.txt",
           sha256:("4" * 64)
         },
+        measurementContentionAssessment:{
+          passed:true,
+          method:
+            "continuous-one-second-rolling-three-sample-two-hit-rejection",
+          samples:3,
+          rollingWindow:3,
+          minimumHits:2,
+          genericCPUPercentThreshold:50,
+          virtualizationCPUPercentThreshold:5,
+          buildOrTestCPUPercentThreshold:10,
+          path:"host-contention-measurement.txt",
+          sha256:("5" * 64)
+        },
         snapshots:[
           {phase:"start",path:"host-state-start.txt",sha256:("1" * 64)},
           {phase:"before-real-lima",path:"host-state-before-real-lima.txt",sha256:("2" * 64)},
@@ -536,6 +727,7 @@ run_preflight() {
         referenceMedianUpperConfidenceBoundWithinTenPercent:true,
         quietHostExplicitlyConfirmed:true,
         initialHostContentionAssessmentPassed:true,
+        measurementHostContentionAssessmentPassed:true,
         hostDiagnosticsRetained:true
       }
     }
@@ -557,10 +749,20 @@ run_preflight() {
   if validate_performance_evidence_contract "$performance_invalid"; then
     fail "failed performance contention assessment was accepted"
   fi
+  jq '.hostDiagnostics.measurementContentionAssessment.passed = false' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "failed measurement contention assessment was accepted"
+  fi
   jq 'del(.validation.initialHostContentionAssessmentPassed)' \
     "$performance_fixture" >"$performance_invalid"
   if validate_performance_evidence_contract "$performance_invalid"; then
     fail "missing performance contention validation was accepted"
+  fi
+  jq 'del(.validation.measurementHostContentionAssessmentPassed)' \
+    "$performance_fixture" >"$performance_invalid"
+  if validate_performance_evidence_contract "$performance_invalid"; then
+    fail "missing measurement contention validation was accepted"
   fi
   performance_contention_quiet="$preflight_root/host-contention-preflight.txt"
   performance_contention_busy="$preflight_root/host-contention-busy.txt"
@@ -590,7 +792,68 @@ run_preflight() {
   if validate_performance_contention_file "$performance_contention_busy"; then
     fail "busy raw host contention fixture was accepted"
   fi
+  performance_measurement_quiet="$preflight_root/host-contention-measurement.txt"
+  performance_measurement_busy="$preflight_root/host-contention-measurement-busy.txt"
+  performance_measurement_unowned="$preflight_root/host-contention-measurement-unowned.txt"
+  performance_measurement_invalid_owner="$preflight_root/host-contention-measurement-invalid-owner.txt"
+  {
+    printf '%s\n' \
+      'schema=hideout.performance-host-contention/v2' \
+      'method=continuous-one-second-rolling-three-sample-two-hit-rejection' \
+      'rolling_window=3' \
+      'minimum_hits=2' \
+      'generic_cpu_percent_threshold=50' \
+      'virtualization_cpu_percent_threshold=5' \
+      'build_or_test_cpu_percent_threshold=10' \
+      'gate_process_group=900' \
+      'sample_begin=1' \
+      'owned_process=201:com.apple.Virtua:gate-private-runtime' \
+      '101 1 101 49.9 1.0 browser' \
+      '201 1 201 80.0 1.0 com.apple.Virtua' \
+      '301 1 900 99.0 1.0 go' \
+      'sample_end=1' \
+      'sample_begin=2' \
+      '101 1 101 49.9 1.0 browser' \
+      '201 1 201 80.0 1.0 com.apple.Virtua' \
+      '301 1 900 99.0 1.0 go' \
+      'sample_end=2' \
+      'sample_begin=3' \
+      '101 1 101 49.9 1.0 browser' \
+      '201 1 201 80.0 1.0 com.apple.Virtua' \
+      '301 1 900 99.0 1.0 go' \
+      'sample_end=3'
+  } >"$performance_measurement_quiet"
+  validate_performance_measurement_contention_file \
+    "$performance_measurement_quiet" 3 ||
+    fail "quiet raw measurement contention fixture was rejected"
+  awk '
+    /^sample_begin=/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+    }
+    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    {print}
+  ' "$performance_measurement_quiet" >"$performance_measurement_busy"
+  if validate_performance_measurement_contention_file \
+    "$performance_measurement_busy" 3; then
+    fail "busy raw measurement contention fixture was accepted"
+  fi
+  sed '/^owned_process=/d' \
+    "$performance_measurement_quiet" >"$performance_measurement_unowned"
+  if validate_performance_measurement_contention_file \
+    "$performance_measurement_unowned" 3; then
+    fail "unowned active measurement VM fixture was accepted"
+  fi
+  sed \
+    's/owned_process=201:com[.]apple[.]Virtua/owned_process=101:browser/' \
+    "$performance_measurement_quiet" \
+    >"$performance_measurement_invalid_owner"
+  if validate_performance_measurement_contention_file \
+    "$performance_measurement_invalid_owner" 3; then
+    fail "invalid measurement ownership fixture was accepted"
+  fi
   chmod 0600 "$performance_contention_quiet"
+  chmod 0600 "$performance_measurement_quiet"
   performance_snapshot_start="$preflight_root/host-state-start.txt"
   performance_snapshot_before="$preflight_root/host-state-before-real-lima.txt"
   performance_snapshot_after="$preflight_root/host-state-after-real-lima.txt"
@@ -616,10 +879,14 @@ run_preflight() {
   performance_bound_fixture="$preflight_root/performance-summary-bound.json"
   jq \
     --arg contentionSHA "$(sha256_file "$performance_contention_quiet")" \
+    --arg measurementContentionSHA \
+      "$(sha256_file "$performance_measurement_quiet")" \
     --arg startSHA "$(sha256_file "$performance_snapshot_start")" \
     --arg beforeSHA "$(sha256_file "$performance_snapshot_before")" \
     --arg afterSHA "$(sha256_file "$performance_snapshot_after")" '
       .hostDiagnostics.initialContentionAssessment.sha256 = $contentionSHA |
+      .hostDiagnostics.measurementContentionAssessment.sha256 =
+        $measurementContentionSHA |
       .hostDiagnostics.snapshots[0].sha256 = $startSHA |
       .hostDiagnostics.snapshots[1].sha256 = $beforeSHA |
       .hostDiagnostics.snapshots[2].sha256 = $afterSHA |
@@ -627,6 +894,11 @@ run_preflight() {
         {
           path:"host-contention-preflight.txt",
           sha256:$contentionSHA,
+          mode:"0600"
+        },
+        {
+          path:"host-contention-measurement.txt",
+          sha256:$measurementContentionSHA,
           mode:"0600"
         },
         {path:"host-state-start.txt",sha256:$startSHA,mode:"0600"},
@@ -651,6 +923,22 @@ run_preflight() {
       "$performance_invalid" "$preflight_root"
   ) >/dev/null 2>&1; then
     fail "mismatched host diagnostic digest fixture was accepted"
+  fi
+  jq '.hostDiagnostics.measurementContentionAssessment.sha256 = ("e" * 64)' \
+    "$performance_bound_fixture" >"$performance_invalid"
+  if (
+    verify_performance_host_diagnostics \
+      "$performance_invalid" "$preflight_root"
+  ) >/dev/null 2>&1; then
+    fail "mismatched measurement diagnostic digest fixture was accepted"
+  fi
+  jq '.hostDiagnostics.measurementContentionAssessment.samples = 4' \
+    "$performance_bound_fixture" >"$performance_invalid"
+  if (
+    verify_performance_host_diagnostics \
+      "$performance_invalid" "$preflight_root"
+  ) >/dev/null 2>&1; then
+    fail "mismatched measurement sample inventory was accepted"
   fi
   gate_completed=1
   printf 'collect-evidence: preflight=passed\n'

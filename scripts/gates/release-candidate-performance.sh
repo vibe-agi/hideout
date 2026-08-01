@@ -23,6 +23,8 @@ host_generic_cpu_threshold=50
 host_virtualization_cpu_threshold=5
 host_build_cpu_threshold=10
 host_contention_method="three-one-second-process-snapshots-two-hit-rejection"
+host_measurement_contention_method="continuous-one-second-rolling-three-sample-two-hit-rejection"
+host_measurement_contention_window=3
 
 usage() {
   printf '%s\n' \
@@ -34,8 +36,9 @@ usage() {
     "Run only on a quiet host after pausing unrelated CPU-heavy tests, VMs," \
     "and emulators; known contention invalidates wall-clock evidence." \
     "A full run requires HIDEOUT_PERFORMANCE_QUIET_HOST_CONFIRMED=1 and" \
-    "rejects sustained process/VM/build CPU contention before building." \
-    "It retains private preflight/start/boundary/end host diagnostics." \
+    "rejects sustained process/VM/build CPU contention before building and" \
+    "throughout the real-Lima attach/reference measurement." \
+    "It retains private preflight/measurement/start/boundary/end diagnostics." \
     "Evidence is private, immutable, digest-bound, and never published."
 }
 
@@ -111,6 +114,19 @@ validate_summary() {
         "host-contention-preflight.txt" and
       (.hostDiagnostics.initialContentionAssessment.sha256 |
         test("^[a-f0-9]{64}$")) and
+      .hostDiagnostics.measurementContentionAssessment.passed == true and
+      .hostDiagnostics.measurementContentionAssessment.method ==
+        "continuous-one-second-rolling-three-sample-two-hit-rejection" and
+      .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
+      .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
+      .hostDiagnostics.measurementContentionAssessment.minimumHits == 2 and
+      .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
+      .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
+      .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
+      .hostDiagnostics.measurementContentionAssessment.path ==
+        "host-contention-measurement.txt" and
+      (.hostDiagnostics.measurementContentionAssessment.sha256 |
+        test("^[a-f0-9]{64}$")) and
       (.hostDiagnostics.snapshots | length) == 3 and
       [.hostDiagnostics.snapshots[] | [.phase, .path]] == [
         ["start", "host-state-start.txt"],
@@ -124,6 +140,7 @@ validate_summary() {
       .validation.referenceMedianUpperConfidenceBoundWithinTenPercent == true and
       .validation.quietHostExplicitlyConfirmed == true and
       .validation.initialHostContentionAssessmentPassed == true and
+      .validation.measurementHostContentionAssessmentPassed == true and
       .validation.hostDiagnosticsRetained == true and
       all(.validation[]; . == true) and
       (.claimReceipts | length) == 3 and
@@ -142,6 +159,9 @@ validate_summary() {
         any($summary.artifacts[];
           .path == $snapshot.path and .sha256 == $snapshot.sha256)) and
       (.hostDiagnostics.initialContentionAssessment as $assessment |
+        any($summary.artifacts[];
+          .path == $assessment.path and .sha256 == $assessment.sha256)) and
+      (.hostDiagnostics.measurementContentionAssessment as $assessment |
         any($summary.artifacts[];
           .path == $assessment.path and .sha256 == $assessment.sha256))
     ' "$summary_path" >/dev/null
@@ -281,6 +301,267 @@ assess_initial_host_contention() {
     ' "$source"
 }
 
+measurement_process_is_gate_owned() {
+  local pid="$1"
+
+  lsof -n -p "$pid" -Fn 2>/dev/null |
+    awk '
+      /^n/ && (
+        $0 ~ /\/hideout-034-gate2[.][^/]+\/bin\/hideout$/ ||
+        $0 ~ /^n\/private\/tmp\/h34[.][^/]+\//
+      ) {found = 1}
+      END {exit(found ? 0 : 1)}
+    '
+}
+
+record_measurement_host_contention() {
+  local destination="$1" stop_file="$2" sample_file="$3" gate_pgid="$4"
+  local sample=0 owned_processes=" "
+  local pid ppid pgid cpu memory name process_key
+
+  {
+    printf 'schema=hideout.performance-host-contention/v2\n'
+    printf 'method=%s\n' "$host_measurement_contention_method"
+    printf 'rolling_window=%d\n' "$host_measurement_contention_window"
+    printf 'minimum_hits=%d\n' "$host_contention_minimum_hits"
+    printf 'generic_cpu_percent_threshold=%d\n' \
+      "$host_generic_cpu_threshold"
+    printf 'virtualization_cpu_percent_threshold=%d\n' \
+      "$host_virtualization_cpu_threshold"
+    printf 'build_or_test_cpu_percent_threshold=%d\n' \
+      "$host_build_cpu_threshold"
+    printf 'gate_process_group=%s\n' "$gate_pgid"
+  } >"$destination"
+  chmod 0600 "$destination"
+
+  while [ ! -e "$stop_file" ]; do
+    sample=$((sample + 1))
+    LC_ALL=C ps -Ao pid=,ppid=,pgid=,pcpu=,pmem=,ucomm= -r |
+      sed -n '1,50p' >"$sample_file"
+    {
+      printf 'sample_begin=%d\n' "$sample"
+      while read -r pid ppid pgid cpu memory name; do
+        case "$pid:$ppid:$pgid" in
+          *[!0-9:]* | *::* | *:)
+            continue
+            ;;
+        esac
+        case "$cpu:$memory" in
+          *[!0-9.:]* | *::* | *:)
+            continue
+            ;;
+        esac
+        [ -n "$name" ] || continue
+        name="${name//[[:space:]]/_}"
+        name="${name//:/_}"
+        name="${name//=/_}"
+        process_key="$pid:$name"
+        case "$name" in
+          hideout | limactl | qemu-system-* | com.apple.Virtua* | \
+            VirtualBoxVM | vmware-vmx | prl_vm_app | UTM)
+            case "$owned_processes" in
+              *" $process_key "*) ;;
+              *)
+                if measurement_process_is_gate_owned "$pid"; then
+                  owned_processes="$owned_processes$process_key "
+                  printf 'owned_process=%s:gate-private-runtime\n' \
+                    "$process_key"
+                fi
+                ;;
+            esac
+            ;;
+        esac
+        printf '%s %s %s %s %s %s\n' \
+          "$pid" "$ppid" "$pgid" "$cpu" "$memory" "$name"
+      done <"$sample_file"
+      printf 'sample_end=%d\n' "$sample"
+    } >>"$destination"
+    [ -e "$stop_file" ] || sleep 1
+  done
+  rm -f -- "$sample_file"
+}
+
+assess_measurement_host_contention() {
+  local source="$1"
+
+  awk \
+    -v expected_method="$host_measurement_contention_method" \
+    -v expected_window="$host_measurement_contention_window" \
+    -v minimum_hits="$host_contention_minimum_hits" \
+    -v generic_threshold="$host_generic_cpu_threshold" \
+    -v virtualization_threshold="$host_virtualization_cpu_threshold" \
+    -v build_threshold="$host_build_cpu_threshold" '
+      function is_virtualization(name) {
+        return name ~ /^qemu-system-/ ||
+          name ~ /^com[.]apple[.]Virtua/ ||
+          name ~ /^VirtualBoxVM/ ||
+          name ~ /^vmware-vmx/ ||
+          name ~ /^prl_vm_app/ ||
+          name ~ /^UTM/
+      }
+      function is_build_or_test(name) {
+        return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+          name ~ /[.]test$/
+      }
+      /^schema=hideout[.]performance-host-contention\/v2$/ {
+        if (sampling_started) invalid = 1
+        schema_count++
+        next
+      }
+      /^method=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if (fields[2] == expected_method) method_count++
+        else invalid = 1
+        next
+      }
+      /^rolling_window=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if ((fields[2] + 0) == expected_window) window_count++
+        else invalid = 1
+        next
+      }
+      /^minimum_hits=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if ((fields[2] + 0) == minimum_hits) minimum_count++
+        else invalid = 1
+        next
+      }
+      /^generic_cpu_percent_threshold=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if ((fields[2] + 0) == generic_threshold) generic_count++
+        else invalid = 1
+        next
+      }
+      /^virtualization_cpu_percent_threshold=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if ((fields[2] + 0) == virtualization_threshold)
+          virtualization_count++
+        else invalid = 1
+        next
+      }
+      /^build_or_test_cpu_percent_threshold=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if ((fields[2] + 0) == build_threshold) build_count++
+        else invalid = 1
+        next
+      }
+      /^gate_process_group=[1-9][0-9]*$/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        excluded_pgid = fields[2] + 0
+        gate_group_count++
+        next
+      }
+      /^owned_process=[1-9][0-9]*:[^:=[:space:]]+:gate-private-runtime$/ {
+        if (current_sample == 0) invalid = 1
+        split($0, fields, "=")
+        split(fields[2], owner, ":")
+        owned[owner[1] SUBSEP owner[2]] = 1
+        owned_count[owner[1] SUBSEP owner[2]]++
+        next
+      }
+      /^sample_begin=[1-9][0-9]*$/ {
+        if (schema_count != 1 || method_count != 1 || window_count != 1 ||
+            minimum_count != 1 || generic_count != 1 ||
+            virtualization_count != 1 || build_count != 1 ||
+            gate_group_count != 1) invalid = 1
+        split($0, fields, "=")
+        sample = fields[2] + 0
+        if (current_sample != 0 || sample != sample_count + 1)
+          invalid = 1
+        current_sample = sample
+        sample_count++
+        begins[sample]++
+        sampling_started = 1
+        next
+      }
+      /^sample_end=[1-9][0-9]*$/ {
+        split($0, fields, "=")
+        sample = fields[2] + 0
+        if (current_sample != sample || ends[sample] != 0) invalid = 1
+        ends[sample]++
+        current_sample = 0
+        next
+      }
+      current_sample > 0 {
+        if (NF != 6 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ ||
+            $3 !~ /^[0-9]+$/ ||
+            $4 !~ /^[0-9]+([.][0-9]+)?$/ ||
+            $5 !~ /^[0-9]+([.][0-9]+)?$/ ||
+            $6 !~ /^[^:=[:space:]]+$/) {
+          invalid = 1
+          next
+        }
+        rows[current_sample]++
+        pid = $1 + 0
+        pgid = $3 + 0
+        cpu = $4 + 0
+        name = $6
+        observed[pid SUBSEP name]++
+        if (pgid == excluded_pgid) next
+        threshold = generic_threshold
+        reason = "generic-high-cpu"
+        if (is_virtualization(name)) {
+          threshold = virtualization_threshold
+          reason = "active-virtualization"
+        } else if (is_build_or_test(name)) {
+          threshold = build_threshold
+          reason = "active-build-or-test"
+        }
+        if (cpu < threshold) next
+        key = pid SUBSEP name SUBSEP reason
+        sample_key = current_sample SUBSEP key
+        if (sample_key in counted) next
+        counted[sample_key] = 1
+        if (last_hit[key] > 0 &&
+            current_sample - last_hit[key] < expected_window &&
+            !(key in violations)) {
+          violations[key] = last_hit[key] "," current_sample
+        }
+        last_hit[key] = current_sample
+        if (cpu > maximum_cpu[key]) maximum_cpu[key] = cpu
+        next
+      }
+      {invalid = 1}
+      END {
+        if (current_sample != 0 || sample_count < expected_window ||
+            schema_count != 1 || method_count != 1 || window_count != 1 ||
+            minimum_count != 1 || generic_count != 1 ||
+            virtualization_count != 1 || build_count != 1 ||
+            gate_group_count != 1) invalid = 1
+        for (sample = 1; sample <= sample_count; sample++) {
+          if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
+            invalid = 1
+        }
+        for (key in owned) {
+          if (owned_count[key] != 1 || observed[key] < 1) invalid = 1
+          split(key, owner, SUBSEP)
+          if (!(owner[2] == "hideout" || owner[2] == "limactl" ||
+                is_virtualization(owner[2]))) invalid = 1
+        }
+        if (invalid) {
+          printf "invalid continuous host contention evidence\n" > "/dev/stderr"
+          exit 2
+        }
+        offenders = 0
+        for (key in violations) {
+          split(key, parts, SUBSEP)
+          owner_key = parts[1] SUBSEP parts[2]
+          if (owned[owner_key]) continue
+          printf "pid=%s process=%s reason=%s samples=%s rolling_window=%d max_cpu_percent=%.1f\n", parts[1], parts[2], parts[3], violations[key], expected_window, maximum_cpu[key] > "/dev/stderr"
+          offenders++
+        }
+        if (offenders > 0) exit 1
+      }
+    ' "$source"
+}
+
 process_store_socket_path() {
   printf '%s/daemon/hideoutd.sock' "$1"
 }
@@ -293,7 +574,7 @@ process_store_path_is_safe() {
 }
 
 for required_command in \
-  awk bash cmp date find git go grep jq limactl node perl ps rg sed shasum \
+  awk bash cmp date find git go grep jq limactl lsof node perl ps rg sed shasum \
   sleep sort ssh stat tail tr wc; do
   require_command "$required_command"
 done
@@ -385,7 +666,9 @@ if [ "$preflight_only" -eq 1 ]; then
   summary_contract_negative="$preflight_root/summary-negative.json"
   summary_quiet_negative="$preflight_root/summary-quiet-negative.json"
   summary_contention_negative="$preflight_root/summary-contention-negative.json"
+  summary_measurement_negative="$preflight_root/summary-measurement-negative.json"
   summary_validation_negative="$preflight_root/summary-validation-negative.json"
+  summary_measurement_validation_negative="$preflight_root/summary-measurement-validation-negative.json"
   summary_duplicate_negative="$preflight_root/summary-duplicate-negative.json"
   summary_acceptance_negative="$preflight_root/summary-acceptance-negative.json"
   jq -n '
@@ -415,6 +698,19 @@ if [ "$preflight_only" -eq 1 ]; then
           path:"host-contention-preflight.txt",
           sha256:("4" * 64)
         },
+        measurementContentionAssessment:{
+          passed:true,
+          method:
+            "continuous-one-second-rolling-three-sample-two-hit-rejection",
+          samples:3,
+          rollingWindow:3,
+          minimumHits:2,
+          genericCPUPercentThreshold:50,
+          virtualizationCPUPercentThreshold:5,
+          buildOrTestCPUPercentThreshold:10,
+          path:"host-contention-measurement.txt",
+          sha256:("5" * 64)
+        },
         snapshots:[
           {phase:"start",path:"host-state-start.txt",sha256:("1" * 64)},
           {phase:"before-real-lima",path:"host-state-before-real-lima.txt",sha256:("2" * 64)},
@@ -426,6 +722,7 @@ if [ "$preflight_only" -eq 1 ]; then
         referenceMedianUpperConfidenceBoundWithinTenPercent:true,
         quietHostExplicitlyConfirmed:true,
         initialHostContentionAssessmentPassed:true,
+        measurementHostContentionAssessmentPassed:true,
         hostDiagnosticsRetained:true
       },
       claimReceipts:[
@@ -438,11 +735,12 @@ if [ "$preflight_only" -eq 1 ]; then
         {path:"host-state-start.txt",sha256:("1" * 64),bytes:0,mode:"0600"},
         {path:"host-state-before-real-lima.txt",sha256:("2" * 64),bytes:0,mode:"0600"},
         {path:"host-state-after-real-lima.txt",sha256:("3" * 64),bytes:0,mode:"0600"},
-        {path:"host-contention-preflight.txt",sha256:("4" * 64),bytes:0,mode:"0600"}
+        {path:"host-contention-preflight.txt",sha256:("4" * 64),bytes:0,mode:"0600"},
+        {path:"host-contention-measurement.txt",sha256:("5" * 64),bytes:0,mode:"0600"}
       ]
     }
   ' >"$summary_contract_fixture"
-  validate_summary "$summary_contract_fixture" "preflight-tree" 5 || {
+  validate_summary "$summary_contract_fixture" "preflight-tree" 6 || {
     printf \
       'release-candidate-performance: empty evidence contract regressed\n' \
       >&2
@@ -450,7 +748,7 @@ if [ "$preflight_only" -eq 1 ]; then
   }
   jq '.artifacts[0].bytes = -1' \
     "$summary_contract_fixture" >"$summary_contract_negative"
-  if validate_summary "$summary_contract_negative" "preflight-tree" 5; then
+  if validate_summary "$summary_contract_negative" "preflight-tree" 6; then
     printf \
       'release-candidate-performance: negative evidence size was accepted\n' \
       >&2
@@ -458,7 +756,7 @@ if [ "$preflight_only" -eq 1 ]; then
   fi
   jq '.hostDiagnostics.quietHostConfirmed = false' \
     "$summary_contract_fixture" >"$summary_quiet_negative"
-  if validate_summary "$summary_quiet_negative" "preflight-tree" 5; then
+  if validate_summary "$summary_quiet_negative" "preflight-tree" 6; then
     printf \
       'release-candidate-performance: unconfirmed quiet host was accepted\n' \
       >&2
@@ -466,23 +764,40 @@ if [ "$preflight_only" -eq 1 ]; then
   fi
   jq '.hostDiagnostics.initialContentionAssessment.passed = false' \
     "$summary_contract_fixture" >"$summary_contention_negative"
-  if validate_summary "$summary_contention_negative" "preflight-tree" 5; then
+  if validate_summary "$summary_contention_negative" "preflight-tree" 6; then
     printf \
       'release-candidate-performance: failed contention assessment was accepted\n' \
       >&2
     exit 1
   fi
+  jq '.hostDiagnostics.measurementContentionAssessment.passed = false' \
+    "$summary_contract_fixture" >"$summary_measurement_negative"
+  if validate_summary "$summary_measurement_negative" "preflight-tree" 6; then
+    printf \
+      'release-candidate-performance: failed measurement contention assessment was accepted\n' \
+      >&2
+    exit 1
+  fi
   jq 'del(.validation.initialHostContentionAssessmentPassed)' \
     "$summary_contract_fixture" >"$summary_validation_negative"
-  if validate_summary "$summary_validation_negative" "preflight-tree" 5; then
+  if validate_summary "$summary_validation_negative" "preflight-tree" 6; then
     printf \
       'release-candidate-performance: missing validation field was accepted\n' \
       >&2
     exit 1
   fi
+  jq 'del(.validation.measurementHostContentionAssessmentPassed)' \
+    "$summary_contract_fixture" >"$summary_measurement_validation_negative"
+  if validate_summary \
+    "$summary_measurement_validation_negative" "preflight-tree" 6; then
+    printf \
+      'release-candidate-performance: missing measurement validation field was accepted\n' \
+      >&2
+    exit 1
+  fi
   jq '.artifacts += [.artifacts[-1]]' \
     "$summary_contract_fixture" >"$summary_duplicate_negative"
-  if validate_summary "$summary_duplicate_negative" "preflight-tree" 6; then
+  if validate_summary "$summary_duplicate_negative" "preflight-tree" 7; then
     printf \
       'release-candidate-performance: duplicate artifact path was accepted\n' \
       >&2
@@ -490,7 +805,7 @@ if [ "$preflight_only" -eq 1 ]; then
   fi
   jq '.candidateAcceptance = false' \
     "$summary_contract_fixture" >"$summary_acceptance_negative"
-  if validate_summary "$summary_acceptance_negative" "preflight-tree" 5; then
+  if validate_summary "$summary_acceptance_negative" "preflight-tree" 6; then
     printf \
       'release-candidate-performance: mismatched candidate acceptance was accepted\n' \
       >&2
@@ -597,6 +912,97 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   }
+  measurement_quiet_fixture="$preflight_root/measurement-quiet.txt"
+  measurement_busy_fixture="$preflight_root/measurement-busy.txt"
+  measurement_busy_log="$preflight_root/measurement-busy.log"
+  measurement_transient_fixture="$preflight_root/measurement-transient.txt"
+  measurement_unowned_vm_fixture="$preflight_root/measurement-unowned-vm.txt"
+  measurement_invalid_owner_fixture="$preflight_root/measurement-invalid-owner.txt"
+  {
+    printf '%s\n' \
+      'schema=hideout.performance-host-contention/v2' \
+      'method=continuous-one-second-rolling-three-sample-two-hit-rejection' \
+      'rolling_window=3' \
+      'minimum_hits=2' \
+      'generic_cpu_percent_threshold=50' \
+      'virtualization_cpu_percent_threshold=5' \
+      'build_or_test_cpu_percent_threshold=10' \
+      'gate_process_group=900' \
+      'sample_begin=1' \
+      'owned_process=201:com.apple.Virtua:gate-private-runtime' \
+      '101 1 101 49.9 1.0 browser' \
+      '201 1 201 80.0 1.0 com.apple.Virtua' \
+      '301 1 900 99.0 1.0 go' \
+      'sample_end=1' \
+      'sample_begin=2' \
+      '101 1 101 49.9 1.0 browser' \
+      '201 1 201 80.0 1.0 com.apple.Virtua' \
+      '301 1 900 99.0 1.0 go' \
+      'sample_end=2' \
+      'sample_begin=3' \
+      '101 1 101 49.9 1.0 browser' \
+      '201 1 201 80.0 1.0 com.apple.Virtua' \
+      '301 1 900 99.0 1.0 go' \
+      'sample_end=3'
+  } >"$measurement_quiet_fixture"
+  assess_measurement_host_contention "$measurement_quiet_fixture" || {
+    printf \
+      'release-candidate-performance: quiet measurement contention fixture was rejected\n' \
+      >&2
+    exit 1
+  }
+  awk '
+    /^sample_begin=/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+    }
+    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    {print}
+  ' "$measurement_quiet_fixture" >"$measurement_busy_fixture"
+  if assess_measurement_host_contention "$measurement_busy_fixture" \
+    >"$measurement_busy_log" 2>&1 ||
+    ! grep -Fq \
+      'process=browser reason=generic-high-cpu samples=1,2 rolling_window=3' \
+      "$measurement_busy_log"; then
+    printf \
+      'release-candidate-performance: rolling measurement contention was not rejected\n' \
+      >&2
+    exit 1
+  fi
+  awk '
+    /^sample_begin=/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+    }
+    sample == 1 && $6 == "browser" {$4 = "55.0"}
+    {print}
+  ' "$measurement_quiet_fixture" >"$measurement_transient_fixture"
+  assess_measurement_host_contention "$measurement_transient_fixture" || {
+    printf \
+      'release-candidate-performance: one transient measurement hit was rejected\n' \
+      >&2
+    exit 1
+  }
+  sed '/^owned_process=/d' \
+    "$measurement_quiet_fixture" >"$measurement_unowned_vm_fixture"
+  if assess_measurement_host_contention "$measurement_unowned_vm_fixture" \
+    >"$measurement_busy_log" 2>&1 ||
+    ! grep -Fq 'reason=active-virtualization samples=1,2' \
+      "$measurement_busy_log"; then
+    printf \
+      'release-candidate-performance: unrelated measurement VM was not rejected\n' \
+      >&2
+    exit 1
+  fi
+  sed 's/owned_process=201:com[.]apple[.]Virtua/owned_process=101:browser/' \
+    "$measurement_quiet_fixture" >"$measurement_invalid_owner_fixture"
+  if assess_measurement_host_contention "$measurement_invalid_owner_fixture" \
+    >/dev/null 2>&1; then
+    printf \
+      'release-candidate-performance: invalid measurement ownership proof was accepted\n' \
+      >&2
+    exit 1
+  fi
   reference_baseline="$preflight_root/reference-baseline.txt"
   reference_observed="$preflight_root/reference-observed.txt"
   reference_result="$preflight_root/reference-result.json"
@@ -1166,8 +1572,34 @@ fi
 
 scratch="$(mktemp -d "$scratch_parent/hideout-release-performance.XXXXXX")"
 process_scratch=""
+measurement_contention_pid=""
+measurement_contention_stop="$scratch/host-contention-measurement.stop"
+measurement_contention_sample="$scratch/host-contention-measurement.sample"
+measurement_contention_evidence="$run_dir/host-contention-measurement.txt"
+host_gate_pgid="$(ps -p $$ -o pgid= | tr -d ' ')"
+case "$host_gate_pgid" in
+  '' | *[!0-9]*)
+    printf \
+      'release-candidate-performance: could not resolve the gate process group\n' \
+      >&2
+    exit 1
+    ;;
+esac
+
+stop_measurement_contention_monitor() {
+  local monitor_status=0
+
+  if [ -n "${measurement_contention_pid:-}" ]; then
+    : >"$measurement_contention_stop"
+    wait "$measurement_contention_pid" || monitor_status=$?
+    measurement_contention_pid=""
+  fi
+  return "$monitor_status"
+}
+
 cleanup() {
   local exit_status=$?
+  stop_measurement_contention_monitor >/dev/null 2>&1 || true
   case "${process_scratch:-}" in
     "") ;;
     "$short_scratch_parent"/hp.*)
@@ -1489,6 +1921,12 @@ jq -n \
 
 concurrent_dir="$run_dir/lima-concurrent"
 concurrent_log="$run_dir/lanes/lima-concurrent.log"
+record_measurement_host_contention \
+  "$measurement_contention_evidence" \
+  "$measurement_contention_stop" \
+  "$measurement_contention_sample" \
+  "$host_gate_pgid" &
+measurement_contention_pid=$!
 record_host_state \
   "$run_dir/host-state-before-real-lima.txt" "before-real-lima"
 printf \
@@ -1514,7 +1952,33 @@ bash -c '
   "$repo_root" "$concurrent_dir" "$attach_samples" "$attach_warmups" \
   >"$concurrent_log" 2>&1
 concurrent_status=$?
+stop_measurement_contention_monitor
+measurement_contention_status=$?
 set -e
+if [ "$measurement_contention_status" -ne 0 ]; then
+  printf \
+    'release-candidate-performance: continuous host contention monitor failed (status=%d evidence=%s)\n' \
+    "$measurement_contention_status" "$measurement_contention_evidence" >&2
+  exit 1
+fi
+measurement_contention_samples="$(
+  awk '/^sample_begin=/{count++} END {print count + 0}' \
+    "$measurement_contention_evidence"
+)"
+set +e
+measurement_contention_findings="$(
+  assess_measurement_host_contention "$measurement_contention_evidence" 2>&1
+)"
+measurement_contention_assessment_status=$?
+set -e
+if [ "$measurement_contention_assessment_status" -eq 1 ]; then
+  printf '%s\n' \
+    'release-candidate-performance: sustained host contention detected during real-Lima measurement; run is invalid' \
+    "$measurement_contention_findings" \
+    'pause the reported workload and retry; Hideout did not stop any process' \
+    >&2
+  exit 1
+fi
 if [ "$concurrent_status" -ne 0 ]; then
   concurrent_failure="$(sed -n '$p' "$concurrent_log")"
   [ -n "$concurrent_failure" ] ||
@@ -1522,6 +1986,12 @@ if [ "$concurrent_status" -ne 0 ]; then
   printf \
     'release-candidate-performance: real-Lima attach/reference failed: %s (log=%s)\n' \
     "$concurrent_failure" "$concurrent_log" >&2
+  exit 1
+fi
+if [ "$measurement_contention_assessment_status" -ne 0 ]; then
+  printf '%s\n' \
+    'release-candidate-performance: continuous host contention evidence is invalid' \
+    "$measurement_contention_findings" >&2
   exit 1
 fi
 concurrent_result="$concurrent_dir/result.json"
@@ -1859,6 +2329,10 @@ jq -n \
   --arg binarySHA256 "$candidate_sha" \
   --arg hostContentionSHA256 \
     "$(sha256_file "$host_contention_evidence")" \
+  --arg hostMeasurementContentionSHA256 \
+    "$(sha256_file "$measurement_contention_evidence")" \
+  --argjson hostMeasurementContentionSamples \
+    "$measurement_contention_samples" \
   --arg hostStateStartSHA256 \
     "$(sha256_file "$run_dir/host-state-start.txt")" \
   --arg hostStateBeforeRealLimaSHA256 \
@@ -1912,6 +2386,19 @@ jq -n \
         path:"host-contention-preflight.txt",
         sha256:$hostContentionSHA256
       },
+      measurementContentionAssessment:{
+        passed:true,
+        method:
+          "continuous-one-second-rolling-three-sample-two-hit-rejection",
+        samples:$hostMeasurementContentionSamples,
+        rollingWindow:3,
+        minimumHits:2,
+        genericCPUPercentThreshold:50,
+        virtualizationCPUPercentThreshold:5,
+        buildOrTestCPUPercentThreshold:10,
+        path:"host-contention-measurement.txt",
+        sha256:$hostMeasurementContentionSHA256
+      },
       snapshots:[
         {
           phase:"start",
@@ -1962,6 +2449,7 @@ jq -n \
       contractReceiptsExact:true,
       quietHostExplicitlyConfirmed:true,
       initialHostContentionAssessmentPassed:true,
+      measurementHostContentionAssessmentPassed:true,
       hostDiagnosticsRetained:true
     },
     artifacts:$artifacts,
