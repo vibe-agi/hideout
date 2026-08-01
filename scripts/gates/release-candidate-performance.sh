@@ -301,17 +301,21 @@ assess_initial_host_contention() {
     ' "$source"
 }
 
+measurement_lsof_paths_prove_gate_owned() {
+  awk '
+    /^n\/private\/tmp\/h34[.][^\/]+\// {found = 1; next}
+    /^n/ && /\/hideout-034-gate2[.][^\/]+\/bin\/hideout$/ {
+      found = 1
+    }
+    END {exit(found ? 0 : 1)}
+  '
+}
+
 measurement_process_is_gate_owned() {
   local pid="$1"
 
   lsof -n -p "$pid" -Fn 2>/dev/null |
-    awk '
-      /^n/ && (
-        $0 ~ /\/hideout-034-gate2[.][^/]+\/bin\/hideout$/ ||
-        $0 ~ /^n\/private\/tmp\/h34[.][^/]+\//
-      ) {found = 1}
-      END {exit(found ? 0 : 1)}
-    '
+    measurement_lsof_paths_prove_gate_owned
 }
 
 record_measurement_host_contention() {
@@ -912,6 +916,45 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   }
+  printf '%s\n' \
+    'p201' \
+    'n/private/tmp/h34.fixture/diffdisk' |
+    measurement_lsof_paths_prove_gate_owned || {
+    printf \
+      'release-candidate-performance: private Lima ownership proof was rejected\n' \
+      >&2
+    exit 1
+  }
+  printf '%s\n' \
+    'p202' \
+    'n/private/var/folders/fixture/hideout-034-gate2.fixture/bin/hideout' |
+    measurement_lsof_paths_prove_gate_owned || {
+    printf \
+      'release-candidate-performance: private Hideout ownership proof was rejected\n' \
+      >&2
+    exit 1
+  }
+  if printf '%s\n' \
+    'p203' \
+    'n/Users/operator/.lima/unrelated/diffdisk' |
+    measurement_lsof_paths_prove_gate_owned; then
+    printf \
+      'release-candidate-performance: unrelated Lima ownership proof was accepted\n' \
+      >&2
+    exit 1
+  fi
+  measurement_ownership_probe="$preflight_root/hideout-034-gate2.fixture/bin/hideout"
+  mkdir -p "$(dirname -- "$measurement_ownership_probe")"
+  : >"$measurement_ownership_probe"
+  exec 9<"$measurement_ownership_probe"
+  measurement_process_is_gate_owned "$$" || {
+    exec 9<&-
+    printf \
+      'release-candidate-performance: live lsof ownership proof was rejected\n' \
+      >&2
+    exit 1
+  }
+  exec 9<&-
   measurement_quiet_fixture="$preflight_root/measurement-quiet.txt"
   measurement_busy_fixture="$preflight_root/measurement-busy.txt"
   measurement_busy_log="$preflight_root/measurement-busy.log"
