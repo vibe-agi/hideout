@@ -185,6 +185,54 @@ package_manifest_executable_value() {
   '
 }
 
+helper_manifest_binding_valid() {
+  local manifest_path="$1" binary_path="$2"
+  local expected_command="$3" expected_arch="$4"
+  local expected_artifact expected_sha
+
+  case "$expected_command" in
+    hideout-hostfsd | hideout-observer | hideout-session-supervisor | \
+      hideout-shim | hideout-workspace-portal | tun2socks)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  [ -f "$manifest_path" ] && [ ! -L "$manifest_path" ] &&
+    [ -f "$binary_path" ] && [ ! -L "$binary_path" ] || return 1
+  expected_artifact="$(basename -- "$binary_path")"
+  expected_sha="$(sha256_file "$binary_path")" || return 1
+  jq -e \
+    --arg command "$expected_command" \
+    --arg arch "$expected_arch" \
+    --arg artifact "$expected_artifact" \
+    --arg sha256 "$expected_sha" '
+      .version == "hideout.helper-manifest/v1" and
+      .command == $command and
+      .targetOS == "linux" and
+      .targetArch == $arch and
+      .artifact == $artifact and
+      .sha256 == $sha256 and
+      ((.builtAt | try fromdateiso8601 catch null) | type) == "number" and
+      if $command == "hideout-observer" then
+        .builder == "go build -trimpath" and
+        .license == "Apache-2.0" and
+        .buildMode == "embedded-core-bpf" and
+        .packageOwned == true
+      elif $command == "tun2socks" then
+        .builder == "go build -mod=readonly" and
+        .upstreamModule == "github.com/xjasonlyu/tun2socks/v2" and
+        .upstreamVersion == "v2.6.0" and
+        .license == "MIT" and
+        .buildMode == "source-built-pinned-module" and
+        .packageOwned == true
+      else
+        .builder == "go build" and
+        ((has("packageOwned") | not) or .packageOwned == true)
+      end
+    ' "$manifest_path" >/dev/null
+}
+
 review_finding_count_for_file() {
   local review_path="$1"
   local finding_ids finding_id expected_id
@@ -647,6 +695,9 @@ verify_performance_host_diagnostics() {
 run_preflight() {
   local fixture digest review_fixture local_summary_fixture artifact_reference
   local daemon_status_fixture
+  local helper_binary helper_manifest helper_sha
+  local observer_binary observer_manifest observer_sha
+  local tun_binary tun_manifest tun_sha
   local performance_fixture performance_invalid
   local performance_contention_quiet performance_contention_busy
   local performance_measurement_quiet performance_measurement_busy
@@ -691,6 +742,98 @@ run_preflight() {
       <<<'{}' >/dev/null 2>&1; then
     fail "invalid package executable fixture was accepted"
   fi
+  helper_binary="$preflight_root/hideout-hostfsd-linux-arm64"
+  helper_manifest="$helper_binary.manifest.json"
+  printf '%s\n' 'generic helper fixture' >"$helper_binary"
+  chmod 0700 "$helper_binary"
+  helper_sha="$(sha256_file "$helper_binary")"
+  jq -n \
+    --arg sha256 "$helper_sha" '
+      {
+        version:"hideout.helper-manifest/v1",
+        command:"hideout-hostfsd",
+        targetOS:"linux",
+        targetArch:"arm64",
+        artifact:"hideout-hostfsd-linux-arm64",
+        sha256:$sha256,
+        builder:"go build",
+        builtAt:"2026-08-01T00:00:00Z"
+      }
+    ' >"$helper_manifest"
+  helper_manifest_binding_valid \
+    "$helper_manifest" "$helper_binary" "hideout-hostfsd" "arm64" ||
+    fail "generic helper manifest without packageOwned was rejected"
+  jq '.packageOwned = false' \
+    "$helper_manifest" >"$helper_manifest.not-owned"
+  if helper_manifest_binding_valid \
+    "$helper_manifest.not-owned" "$helper_binary" \
+    "hideout-hostfsd" "arm64"; then
+    fail "explicitly non-package-owned helper manifest was accepted"
+  fi
+  jq '.sha256 = ("0" * 64)' \
+    "$helper_manifest" >"$helper_manifest.wrong-sha"
+  if helper_manifest_binding_valid \
+    "$helper_manifest.wrong-sha" "$helper_binary" \
+    "hideout-hostfsd" "arm64"; then
+    fail "helper manifest with a mismatched digest was accepted"
+  fi
+  observer_binary="$preflight_root/hideout-observer-linux-arm64"
+  observer_manifest="$observer_binary.manifest.json"
+  printf '%s\n' 'observer helper fixture' >"$observer_binary"
+  chmod 0700 "$observer_binary"
+  observer_sha="$(sha256_file "$observer_binary")"
+  jq -n \
+    --arg sha256 "$observer_sha" '
+      {
+        version:"hideout.helper-manifest/v1",
+        command:"hideout-observer",
+        targetOS:"linux",
+        targetArch:"arm64",
+        artifact:"hideout-observer-linux-arm64",
+        sha256:$sha256,
+        builder:"go build -trimpath",
+        builtAt:"2026-08-01T00:00:00Z",
+        license:"Apache-2.0",
+        buildMode:"embedded-core-bpf",
+        packageOwned:true
+      }
+    ' >"$observer_manifest"
+  helper_manifest_binding_valid \
+    "$observer_manifest" "$observer_binary" "hideout-observer" "arm64" ||
+    fail "package-owned observer manifest was rejected"
+  jq 'del(.packageOwned)' \
+    "$observer_manifest" >"$observer_manifest.unowned"
+  if helper_manifest_binding_valid \
+    "$observer_manifest.unowned" "$observer_binary" \
+    "hideout-observer" "arm64"; then
+    fail "observer manifest without package ownership was accepted"
+  fi
+  tun_binary="$preflight_root/tun2socks-linux-arm64"
+  tun_manifest="$tun_binary.manifest.json"
+  printf '%s\n' 'tun2socks helper fixture' >"$tun_binary"
+  chmod 0700 "$tun_binary"
+  tun_sha="$(sha256_file "$tun_binary")"
+  jq -n \
+    --arg sha256 "$tun_sha" '
+      {
+        version:"hideout.helper-manifest/v1",
+        command:"tun2socks",
+        targetOS:"linux",
+        targetArch:"arm64",
+        artifact:"tun2socks-linux-arm64",
+        sha256:$sha256,
+        builder:"go build -mod=readonly",
+        builtAt:"2026-08-01T00:00:00Z",
+        upstreamModule:"github.com/xjasonlyu/tun2socks/v2",
+        upstreamVersion:"v2.6.0",
+        license:"MIT",
+        buildMode:"source-built-pinned-module",
+        packageOwned:true
+      }
+    ' >"$tun_manifest"
+  helper_manifest_binding_valid \
+    "$tun_manifest" "$tun_binary" "tun2socks" "arm64" ||
+    fail "package-owned tun2socks manifest was rejected"
   daemon_status_fixture="$preflight_root/daemon-status.json"
   jq -n '
     {
@@ -1713,6 +1856,9 @@ jq '
 [ "$(jq '[.[] | select(.kind == "helper-manifest")] | length' \
   "$scratch/helpers.json")" -eq 6 ] ||
   fail "candidate helper manifest count is not six"
+package_guest_arch="$(jq -er '.target.linuxGuestArch' \
+  "$package_root/package-manifest.json")"
+helper_suffix="-linux-$package_guest_arch"
 while IFS= read -r helper_manifest_relative; do
   helper_manifest="$package_root/$helper_manifest_relative"
   helper_binary_relative="${helper_manifest_relative%.manifest.json}"
@@ -1720,14 +1866,18 @@ while IFS= read -r helper_manifest_relative; do
   [ -f "$helper_binary" ] &&
     [ ! -L "$helper_binary" ] ||
     fail "helper manifest lacks its binary: $helper_manifest_relative"
-  jq -e \
-    --arg artifact "$(basename -- "$helper_binary_relative")" \
-    --arg sha256 "$(sha256_file "$helper_binary")" '
-      .version == "hideout.helper-manifest/v1" and
-      .artifact == $artifact and
-      .sha256 == $sha256 and
-      .packageOwned == true
-    ' "$helper_manifest" >/dev/null ||
+  helper_artifact="$(basename -- "$helper_binary_relative")"
+  case "$helper_artifact" in
+    *"$helper_suffix")
+      helper_command="${helper_artifact%"$helper_suffix"}"
+      ;;
+    *)
+      fail "helper artifact does not bind the guest architecture: $helper_artifact"
+      ;;
+  esac
+  helper_manifest_binding_valid \
+    "$helper_manifest" "$helper_binary" \
+    "$helper_command" "$package_guest_arch" ||
     fail "helper manifest binding is invalid: $helper_manifest_relative"
 done < <(
   jq -r \

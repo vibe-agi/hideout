@@ -4,8 +4,8 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found fifty-seven required issues.
-All fifty-seven were resolved before candidate closure, and their
+The final source, security, and operator-UX review found fifty-eight required issues.
+All fifty-eight were resolved before candidate closure, and their
 focused regression judges pass. There is no open required review finding.
 
 This report is not itself a release-candidate attestation. The initial review
@@ -124,7 +124,10 @@ The review followed authority and data flow rather than package order:
     controlled validation-window transitions; and
 31. executed the operator quickstart spellings against the exact installed
     candidate, then added documentation truth guards for its stdin confirmation
-    and read-only connection inspection commands.
+    and read-only connection inspection commands; and
+32. traced the exact-package evidence failure through the generic helper
+    schema and all six manifest producers, separating optional package
+    ownership metadata from the observer and tun2socks provenance contracts.
 
 Severity means:
 
@@ -196,6 +199,7 @@ Severity means:
 | CR045-055 | Low | Final collection correctly required the installed daemon to be stopped, then called `hideout env list` directly. Environment reads are Manager API operations and therefore correctly fail while the daemon is unreachable, making the closure contract internally contradictory. | Final-evidence and installed-state maintainers | Prove initial stopped state, open a bounded validation window with the exact installed binary, require strict serving status, query the zero-environment/direct-profile state, perform ordered stop, and prove the daemon is unreachable again. The EXIT cleanup owns the same exact process. | Collector preflight rejects invalid daemon states; the manual exact sequence and final collector validation observe zero environments, direct networking, and a stopped final daemon without leaving another instance. |
 | CR045-056 | Low | The executable quickstart piped a secret through stdin without `--yes`. Because stdin is already the value channel, the CLI correctly refused to apply the reviewed mutation rather than consuming an ambiguous second confirmation, so the documented copy-and-paste command could never complete. | Operator documentation maintainers | Add the explicit non-interactive confirmation flag after the reviewed stdin plan while retaining the warning that values never belong in argv or environment variables. Add a documentation-truth assertion for the exact spelling. | Against the exact installed candidate, the old command exits 1 and leaves the reference missing; the corrected command succeeds, exposes no value, reports the reference available, and the cleanup deletes it. The documentation smoke passes. |
 | CR045-057 | Low | The quickstart taught `hideout connect status --profile default`, but `connect` owns only direct/through and plan/apply mutations. The installed CLI correctly rejected the nonexistent status form, while Help directs users to the read-only `show connection` projection. | Operator documentation maintainers | Replace the unsupported command with `hideout show connection for profile default` and make the documentation smoke reject the stale spelling. | The exact installed candidate rejects the old form with `input.invalid`; the corrected command exits zero and reports the default profile's desired/effective connection. The documentation smoke, Bash syntax, ShellCheck, and diff validation pass. |
+| CR045-058 | Low | Final evidence collection required `.packageOwned == true` in all six helper manifests, but the versioned helper schema intentionally makes that field optional for the four ordinary first-party Go helpers. Only the observer and tun2socks provenance writers emit and require it. The exact valid package therefore passed build, package, lifecycle, and install verification but was falsely blocked at final collection. | Final-evidence maintainers | Validate every helper's command, target, artifact, digest, build timestamp, and builder; require the specialized observer/tun2socks provenance and package ownership fields; accept omission only for ordinary Go helpers while rejecting an explicit `false`. | Collector preflight covers ordinary omission, explicit false, digest mismatch, valid observer/tun2socks provenance, and missing observer ownership. The exact package proceeds past all six helper bindings; Bash syntax, ShellCheck, and final collection are rerun. |
 
 ## Closure terminology and false-success audit
 
