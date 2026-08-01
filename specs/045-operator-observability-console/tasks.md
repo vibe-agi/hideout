@@ -376,7 +376,7 @@ fresh and passing; unsupported/reduced/not-run cannot substitute for a claim.
 handoff.
 
 - [x] T166 [P] Run Go formatting, Markdown lint, shell/static lint, schema validation, generated checks, and `git diff --check`, fixing all feature-owned failures
-- [ ] T167 [P] Validate every command and interaction in `specs/045-operator-observability-console/quickstart.md` against the installed candidate and update only documented final spellings
+- [x] T167 [P] Validate every command and interaction in `specs/045-operator-observability-console/quickstart.md` against the installed candidate and update only documented final spellings
 - [x] T168 [P] Audit all new logs/events/errors for internal jargon, raw secret, control-sequence, and false-success language in `internal/`, `cmd/`, and `docs/`
 - [x] T169 Reconcile all 72 functional requirement identifiers (FR-001–FR-071 plus FR-035a) and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
 - [x] T170 Record only genuinely deferred non-required work with owner, risk, trigger, and non-claim in `docs/DEBT.md`

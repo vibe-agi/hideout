@@ -7,6 +7,8 @@ cd "$ROOT"
 
 doc="docs/first-run-alpha.md"
 test -f "$doc"
+operator_quickstart="specs/045-operator-observability-console/quickstart.md"
+test -f "$operator_quickstart"
 
 grep -q 'docs/first-run-alpha.md' README.md
 grep -q 'first-run-alpha.md' docs/README.md
@@ -42,6 +44,17 @@ grep -q 'never changes a requested privacy profile to direct' "$doc"
 
 grep -q '^hideout setup$' README.md
 grep -q '^hideout setup$' README.zh-CN.md
+
+# Keep the executable operator quickstart on the reviewed non-interactive
+# secret contract and the actual read-only connection command. These spellings
+# are exercised by the installed-candidate smoke; stale aliases must fail here
+# before another candidate is built.
+grep -q 'hideout secret set local-proxy --stdin --yes' "$operator_quickstart"
+grep -q '^hideout show connection for profile default$' "$operator_quickstart"
+if grep -q 'hideout connect status' "$operator_quickstart"; then
+  echo "first-run-docs-smoke: operator quickstart teaches unsupported connect status" >&2
+  exit 1
+fi
 
 # Published-tap parity anchors the official vibe-agi/homebrew-tap checkout to
 # the receipt-rendered release formula snapshot. The snapshot proves the

@@ -4,25 +4,25 @@
 
 ## Disposition
 
-The final source, security, and operator-UX review found fifty required issues.
-All fifty were resolved in the review-close worktree, and their
+The final source, security, and operator-UX review found fifty-seven required issues.
+All fifty-seven were resolved before candidate closure, and their
 focused regression judges pass. There is no open required review finding.
 
-This report is not itself a release-candidate attestation. At review close, the
-reviewed tree was still the large, dirty implementation worktree on `master`;
-T163 and later tasks must bind a clean commit, exact package, installed binary,
-full gates, and final publication-absence proof before readiness can be
-claimed.
+This report is not itself a release-candidate attestation. The initial review
+closed over the large, dirty implementation worktree on `master`; subsequent
+closure findings are appended below. T163 and later tasks must still bind one
+clean commit, exact package, installed binary, full gates, and final
+publication-absence proof before readiness can be claimed.
 
 ## Reviewed source identity
 
 | Field | Value |
 | --- | --- |
 | Review date | 2026-08-01 |
-| Base `HEAD` | `7eb76393bdd06e0031b62145cad021a26d0d2e3d` |
+| Initial review base `HEAD` | `7eb76393bdd06e0031b62145cad021a26d0d2e3d` |
 | Branch | `master` |
-| Worktree at review close | Dirty implementation tree; exact source identity is bound only by the later candidate freeze |
-| Candidate status | At review close: not a candidate; exact clean identity remains T163/T171 |
+| Worktree at initial review close | Dirty implementation tree; exact source identity is bound only by the later candidate freeze |
+| Candidate status | Not attested by this document; exact clean identity remains T163/T171 |
 | Publication authority | None; no remote tag, GitHub Release, Homebrew mutation, or package publication is authorized |
 
 The size counters describe the review-close worktree only. They are not a
@@ -115,7 +115,16 @@ The review followed authority and data flow rather than package order:
     leftovers before permitting an early measurement abort; and
 28. traced the first post-contention clean retry through the newly isolated
     real-Lima child and found that its own Go linker was being classified as
-    an unrelated build because only the outer gate process group was exempt.
+    an unrelated build because only the outer gate process group was exempt;
+29. followed final evidence collection through every packaged manifest entry,
+    including legitimate non-executable files whose JSON boolean value is
+    `false`, instead of treating `jq -e` truthiness as schema validation;
+30. compared installed-candidate daemon probes with the public daemon-status
+    enum and exercised stopped, serving, identity-preserving online apply, and
+    controlled validation-window transitions; and
+31. executed the operator quickstart spellings against the exact installed
+    candidate, then added documentation truth guards for its stdin confirmation
+    and read-only connection inspection commands.
 
 Severity means:
 
@@ -182,6 +191,11 @@ Severity means:
 | CR045-050 | Low | The real-Lima Gate 2 created its general scratch, store, HostFS root, and Lima home before building the candidate and Linux helpers, but installed its EXIT cleanup trap only after those builds. An early build failure or the new contention watchdog could therefore leave private `hideout-034-gate2.*`, `h34.*`, `h34-store.*`, and `hideout-034-hostfs.*` trees behind; twelve inactive historical leftovers were present locally. | Concurrent-session Gate 2 maintainers | Bind every exact scratch path and install the guarded EXIT cleanup immediately after creating the private directories, before the first candidate/helper build. Run the measured child in its own process group, verify PID equals PGID before signaling, let its EXIT trap remove only recognized test prefixes, and have the parent retain a separate cleanup fallback. | A controlled `go env` failure exits with status 86 after scratch creation and leaves no recognized temp directory across five repetitions. The watchdog fixture terminates only its isolated group, preserves an unrelated process, and observes the child cleanup marker; the real early-abort run also leaves zero Gate 2 scratch. Twelve inactive historical Gate 2 directories were checked for open handles and removed; Bash syntax, ShellCheck, performance/collector preflights, and diff validation pass. |
 | CR045-051 | Low | The continuous contention monitor excluded the outer performance-gate process group but not the intentionally isolated real-Lima measurement group. On the first retry after CC Switch exited, the measured child's own Go `link` process reached 83.7% CPU and was misclassified as an unrelated build, making every such clean candidate vulnerable to a deterministic false rejection. | Release performance and final-evidence maintainers | Resolve the isolated child PID/PGID before monitoring, bind both distinct groups into a versioned raw receipt, and exclude exactly those two groups in both producer and independent collector validators. Continue rejecting the same build process in any third process group. | Retained invalid run `run-20260801T065216Z-64217` binds `link` PID 86881 to measurement PGID 86832 while the outer gate was PGID 64217. Producer and collector preflights accept high CPU in both exact owned groups, reject the same `link` in PGID 902, reject non-isolated group declarations, and the live Darwin fixture simultaneously excludes one isolated measurement hog while detecting another external hog. Bash syntax, ShellCheck error-level scan, both preflights, and diff validation pass. |
 | CR045-052 | Medium | The continuous monitor treated host-wide CPU as if it were Hideout overhead: any two threshold hits in three seconds killed the entire thirteen-minute measurement. Retained retries correctly found real `py_brain` pytest contention, but Preview, `mds_stores`, and `duetexpertd` bursts also invalidated otherwise counterbalanced thirty-pair runs. The receipt exposed `minimum_hits`, yet producer and collector hard-coded a second-hit test. | Release performance and final-evidence maintainers | Keep the strict two-of-three pre-build screen, but version the continuous receipt to v4. During measurement, retain generic high CPU as diagnostic only; reject a recognized VM or build/test/runtime workload after three consecutive unchanged-threshold hits. Classify macOS `Python` plus `python3`, `uv`, and `node` so real tests do not hide behind a generic process name. Do not delete timing pairs: generic load and short classified transients stay in the paired distribution, while target wall time/resource use and Hideout observer CPU/RSS remain the product metrics. Generalize both parsers to honor `minimum_hits` and preserve exact PGID exclusions. | Producer and collector preflights must prove diagnostic generic CPU is accepted, two classified hits are accepted, and three classified hits, an external build, and an unowned VM fail. Live Darwin watchdog, Bash syntax, ShellCheck, Markdown/document-truth checks, and a fresh thirty-pair run are required before this review item closes. |
+| CR045-053 | Low | Final evidence collection read every package manifest entry with `jq -er '.executable'`. A valid JSON boolean `false` therefore made `jq` exit 1 under `set -e`, silently aborting collection for ordinary non-executable package files even though the package itself had passed verification. | Final-evidence maintainers | Validate that `executable` exists and is a JSON boolean, then stringify either boolean without using its truthiness as the command status. Reject missing and string-valued fixtures. | Collector preflight accepts both boolean values, rejects `"false"` and omission, and the exact package manifest proceeds through full collection. Bash syntax, ShellCheck, and local aggregate gates pass. |
+| CR045-054 | Low | The installed-candidate smoke waited for daemon state `running`, but the published daemon-status schema uses `starting`, `serving`, `stopping`, and `stopped`. A healthy online connection apply preserved the exact daemon instance yet the smoke reported that it had restarted or been replaced. | Local-install and daemon-contract maintainers | Centralize strict serving-state validation over schema, state, instance ID, and start time; use it in startup, online apply, UI, direct-restore, and final-stop checks. | Preflight accepts `serving`, rejects the nonexistent `running` state and missing identity; the exact installed candidate preserves one instance/start time across proxy and direct apply and completes the full local-install lifecycle. |
+| CR045-055 | Low | Final collection correctly required the installed daemon to be stopped, then called `hideout env list` directly. Environment reads are Manager API operations and therefore correctly fail while the daemon is unreachable, making the closure contract internally contradictory. | Final-evidence and installed-state maintainers | Prove initial stopped state, open a bounded validation window with the exact installed binary, require strict serving status, query the zero-environment/direct-profile state, perform ordered stop, and prove the daemon is unreachable again. The EXIT cleanup owns the same exact process. | Collector preflight rejects invalid daemon states; the manual exact sequence and final collector validation observe zero environments, direct networking, and a stopped final daemon without leaving another instance. |
+| CR045-056 | Low | The executable quickstart piped a secret through stdin without `--yes`. Because stdin is already the value channel, the CLI correctly refused to apply the reviewed mutation rather than consuming an ambiguous second confirmation, so the documented copy-and-paste command could never complete. | Operator documentation maintainers | Add the explicit non-interactive confirmation flag after the reviewed stdin plan while retaining the warning that values never belong in argv or environment variables. Add a documentation-truth assertion for the exact spelling. | Against the exact installed candidate, the old command exits 1 and leaves the reference missing; the corrected command succeeds, exposes no value, reports the reference available, and the cleanup deletes it. The documentation smoke passes. |
+| CR045-057 | Low | The quickstart taught `hideout connect status --profile default`, but `connect` owns only direct/through and plan/apply mutations. The installed CLI correctly rejected the nonexistent status form, while Help directs users to the read-only `show connection` projection. | Operator documentation maintainers | Replace the unsupported command with `hideout show connection for profile default` and make the documentation smoke reject the stale spelling. | The exact installed candidate rejects the old form with `input.invalid`; the corrected command exits zero and reports the default profile's desired/effective connection. The documentation smoke, Bash syntax, ShellCheck, and diff validation pass. |
 
 ## Closure terminology and false-success audit
 

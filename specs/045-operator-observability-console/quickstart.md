@@ -43,7 +43,8 @@ Start or confirm the daemon, then write the secret through stdin/TTY:
 
 ```sh
 hideout daemon status
-printf '%s\n' 'socks5://127.0.0.1:7890' | hideout secret set local-proxy --stdin
+printf '%s\n' 'socks5://127.0.0.1:7890' |
+  hideout secret set local-proxy --stdin --yes
 hideout secret status local-proxy
 ```
 
@@ -101,7 +102,7 @@ that displayed diff non-interactively. Do not substitute a newly planned ID
 after an uncertain apply—inspect the original operation first. Then:
 
 ```sh
-hideout connect status --profile default
+hideout show connection for profile default
 hideout daemon status
 ```
 
