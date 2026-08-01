@@ -10,21 +10,28 @@ gate_completed=0
 . "$repo_root/scripts/lib/gate2-concurrent-sessions.sh"
 # shellcheck source=scripts/lib/gate2-concurrent-performance.sh
 . "$repo_root/scripts/lib/gate2-concurrent-performance.sh"
+# shellcheck source=scripts/lib/release-candidate-lima-resume.sh
+. "$repo_root/scripts/lib/release-candidate-lima-resume.sh"
 
 umask 077
 out="$repo_root/.artifacts/045/lima"
 preflight_only=0
+resume_passed=0
 concurrent_samples="${HIDEOUT_LIMA_CONCURRENT_SAMPLES:-1}"
 concurrent_warmups="${HIDEOUT_LIMA_CONCURRENT_WARMUPS:-0}"
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/gates/release-candidate-lima.sh [--preflight] [--out DIR] [--concurrent-samples N] [--concurrent-warmups N]" \
+    "Usage: scripts/gates/release-candidate-lima.sh [--preflight] [--resume-passed] [--out DIR] [--concurrent-samples N] [--concurrent-warmups N]" \
     "" \
     "Runs every required real macOS/arm64 Lima lane for feature 045:" \
     "concurrent observation and attribution, online proxy rotation, injected" \
     "loss/quota/cleanup, target tamper, concurrent isolation, daemon crash," \
     "stale-owner recovery, and post-recovery execution." \
+    "" \
+    "--resume-passed revalidates and reuses passed lanes from the immediately" \
+    "preceding clean failed aggregate only when commit, digests, modes, and inventory" \
+    "remain exact; failed or unproved lanes execute normally." \
     "" \
     "This command writes private digest-bound evidence and never publishes."
 }
@@ -33,6 +40,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --preflight)
       preflight_only=1
+      shift
+      ;;
+    --resume-passed)
+      resume_passed=1
       shift
       ;;
     --out)
@@ -90,7 +101,7 @@ require_command() {
 }
 
 for required_command in \
-  awk bash find git go jq limactl perl security shasum ssh stat; do
+  awk bash cmp find git go jq limactl perl security shasum ssh stat; do
   require_command "$required_command"
 done
 [ "$(uname -s)" = "Darwin" ] || {
@@ -104,6 +115,10 @@ done
 
 scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
 if [ "$preflight_only" -eq 1 ]; then
+  [ "$resume_passed" -eq 0 ] || {
+    printf 'release-candidate-lima: --preflight and --resume-passed are mutually exclusive\n' >&2
+    exit 2
+  }
   scratch_preflight="$(mktemp -d "$scratch_parent/hideout-lima-preflight.XXXXXX")"
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
@@ -126,9 +141,11 @@ if [ "$preflight_only" -eq 1 ]; then
     --require-real --preflight --out "$scratch_preflight/network-rotation"
   scripts/gates/workload-privacy-lima.sh \
     --require-real --preflight --out "$scratch_preflight/privacy"
+  release_lima_resume_preflight "$scratch_preflight/resume"
   bash -n \
     scripts/lib/gate2-concurrent-sessions.sh \
     scripts/lib/gate2-concurrent-performance.sh \
+    scripts/lib/release-candidate-lima-resume.sh \
     scripts/gates/release-candidate-lima.sh
   gate_completed=1
   printf 'release-candidate-lima: preflight=passed\n'
@@ -149,15 +166,6 @@ if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
 else
   source_dirty=false
 fi
-run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
-run_dir="$out/$run_id"
-[ ! -e "$run_dir" ] || {
-  printf 'release-candidate-lima: run directory already exists\n' >&2
-  exit 1
-}
-mkdir -p "$run_dir/lanes"
-chmod 0700 "$run_dir" "$run_dir/lanes"
-
 scratch="$(mktemp -d "$scratch_parent/hideout-release-lima.XXXXXX")"
 cleanup() {
   local exit_status=$?
@@ -174,6 +182,33 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+resume_source_json='null'
+resume_source_run_dir=""
+reused_lanes_json='[]'
+if [ "$resume_passed" -eq 1 ]; then
+  if ! resume_source_json="$(
+    release_lima_resume_validate \
+      "$out" "$source_commit" "$source_dirty" "$scratch"
+  )"; then
+    printf '%s\n' \
+      'release-candidate-lima: previous aggregate is not eligible for passed-lane reuse' \
+      >&2
+    exit 1
+  fi
+  resume_source_run_id="$(jq -er '.runId' <<<"$resume_source_json")"
+  resume_source_run_dir="$out/$resume_source_run_id"
+  printf 'release-candidate-lima: resume source=%s\n' "$resume_source_run_id"
+fi
+
+run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+run_dir="$out/$run_id"
+[ ! -e "$run_dir" ] || {
+  printf 'release-candidate-lima: run directory already exists\n' >&2
+  exit 1
+}
+mkdir -p "$run_dir/lanes"
+chmod 0700 "$run_dir" "$run_dir/lanes"
 
 sha256_file() {
   shasum -a 256 "$1" | awk '{print $1}'
@@ -233,6 +268,7 @@ run_lane() {
       --argjson exitCode "$lane_exit" \
       '. + [{
         id:$id,
+        execution:"executed",
         result:$result,
         exitCode:$exitCode,
         startedAt:$startedAt,
@@ -246,21 +282,121 @@ run_lane() {
   )"
 }
 
+lane_reusable() {
+  local lane_id="$1"
+  [ "$resume_passed" -eq 1 ] || return 1
+  jq -e --arg id "$lane_id" \
+    '.passedLanes | index($id) != null' \
+    <<<"$resume_source_json" >/dev/null || return 1
+  if [ "$lane_id" = "concurrent-crash-recovery" ]; then
+    jq -e \
+      --argjson samples "$concurrent_samples" \
+      --argjson warmups "$concurrent_warmups" '
+        .methodology.samples == $samples and
+        .methodology.warmups == $warmups
+      ' "$resume_source_run_dir/concurrent/logs/performance.json" \
+      >/dev/null || return 1
+  fi
+}
+
+reuse_lane() {
+  local lane_id="$1" lane_dir="$2" lane_result_path="$3"
+  local lane_log="$run_dir/lanes/$lane_id.log"
+  local lane_started lane_finished lane_result_rel lane_result_sha
+  local source_summary_sha source_lane_log_sha
+  lane_started="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  source_summary_sha="$(jq -er '.summarySHA256' <<<"$resume_source_json")"
+  source_lane_log_sha="$(
+    jq -er --arg id "$lane_id" \
+      '.lanes[] | select(.id == $id) | .log.sha256' \
+      "$resume_source_run_dir/summary.json"
+  )"
+  printf 'release-candidate-lima: revalidating %s from %s\n' \
+    "$lane_id" "$resume_source_run_id"
+  release_lima_resume_copy_lane \
+    "$resume_source_run_dir" "$run_dir" "$lane_dir"
+  release_lima_resume_verify_lane_copy \
+    "$resume_source_run_dir/summary.json" "$run_dir" "$lane_dir"
+  lane_finished="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  jq -n \
+    --arg laneId "$lane_id" \
+    --arg sourceRunId "$resume_source_run_id" \
+    --arg sourceSummarySHA256 "$source_summary_sha" \
+    --arg sourceLaneLogSHA256 "$source_lane_log_sha" '
+      {
+        schema:"hideout.release-candidate-lima-lane-reuse/v1",
+        result:"passed",
+        laneId:$laneId,
+        sourceRunId:$sourceRunId,
+        sourceSummarySHA256:$sourceSummarySHA256,
+        sourceLaneLogSHA256:$sourceLaneLogSHA256
+      }
+    ' >"$lane_log"
+  chmod 0600 "$lane_log"
+  [ -f "$lane_result_path" ] && [ ! -L "$lane_result_path" ] || {
+    printf 'release-candidate-lima: reused %s result is unavailable\n' \
+      "$lane_id" >&2
+    exit 1
+  }
+  lane_result_rel="${lane_result_path#"$run_dir"/}"
+  lane_result_sha="$(sha256_file "$lane_result_path")"
+  lanes_json="$(
+    jq -c \
+      --arg id "$lane_id" \
+      --arg startedAt "$lane_started" \
+      --arg finishedAt "$lane_finished" \
+      --arg log "lanes/$lane_id.log" \
+      --arg logSHA256 "$(sha256_file "$lane_log")" \
+      --arg evidence "$lane_result_rel" \
+      --arg evidenceSHA256 "$lane_result_sha" \
+      --arg sourceRunId "$resume_source_run_id" \
+      --arg sourceSummarySHA256 "$source_summary_sha" \
+      '. + [{
+        id:$id,
+        execution:"reused",
+        result:"passed",
+        exitCode:0,
+        startedAt:$startedAt,
+        finishedAt:$finishedAt,
+        log:{path:$log,sha256:$logSHA256},
+        evidence:{path:$evidence,sha256:$evidenceSHA256},
+        reuse:{
+          sourceRunId:$sourceRunId,
+          sourceSummarySHA256:$sourceSummarySHA256
+        }
+      }]' <<<"$lanes_json"
+  )"
+  reused_lanes_json="$(
+    jq -c --arg id "$lane_id" '. + [$id]' <<<"$reused_lanes_json"
+  )"
+  printf 'release-candidate-lima: %s reused\n' "$lane_id"
+}
+
+run_or_reuse_lane() {
+  local lane_id="$1" lane_dir="$2" lane_result_path="$3"
+  shift 3
+  if lane_reusable "$lane_id"; then
+    reuse_lane "$lane_id" "$lane_dir" "$lane_result_path"
+    return
+  fi
+  run_lane "$lane_id" "$lane_result_path" "$@"
+}
+
 workload_result="$run_dir/workload/result.json"
 rotation_result="$run_dir/network-rotation/result.json"
 privacy_result="$run_dir/privacy/result.json"
 concurrent_result="$run_dir/concurrent/result.json"
 
-run_lane workload-observation "$workload_result" \
+run_or_reuse_lane workload-observation workload "$workload_result" \
   scripts/gates/workload-observation-lima.sh \
   --require-real --out "$run_dir/workload"
-run_lane network-rotation "$rotation_result" \
+run_or_reuse_lane network-rotation network-rotation "$rotation_result" \
   scripts/gates/network-rotation-lima.sh \
   --require-real --out "$run_dir/network-rotation"
-run_lane workload-privacy "$privacy_result" \
+run_or_reuse_lane workload-privacy privacy "$privacy_result" \
   scripts/gates/workload-privacy-lima.sh \
   --require-real --out "$run_dir/privacy"
-run_lane concurrent-crash-recovery "$concurrent_result" \
+run_or_reuse_lane concurrent-crash-recovery concurrent "$concurrent_result" \
   gate2_concurrent_sessions_run \
   "$repo_root" "$run_dir/concurrent" \
   "$concurrent_samples" "$concurrent_warmups"
@@ -526,6 +662,8 @@ jq -n \
   --argjson privacyValid "$privacy_valid" \
   --argjson concurrentValid "$concurrent_valid" \
   --argjson lanes "$lanes_json" \
+  --argjson resumeSource "$resume_source_json" \
+  --argjson reusedLanes "$reused_lanes_json" \
   --slurpfile artifacts "$artifact_rows" '
     {
       schema:"hideout.release-candidate-lima-evidence/v1",
@@ -537,6 +675,17 @@ jq -n \
       runId:$runId,
       host:{os:$hostOS,arch:$hostArch,limaVersion:$limaVersion},
       lanes:$lanes,
+      progressiveReuse:
+        (if $resumeSource == null then
+          {mode:"none",reusedLanes:[]}
+        else
+          {
+            mode:"exact-previous-failed-aggregate",
+            sourceRunId:$resumeSource.runId,
+            sourceSummarySHA256:$resumeSource.summarySHA256,
+            reusedLanes:$reusedLanes
+          }
+        end),
       validation:{
         workloadObservation:$workloadValid,
         networkRotation:$rotationValid,
@@ -582,6 +731,21 @@ jq -e '
   (.result == "passed") ==
     (all(.validation[]; . == true) and
      all(.lanes[]; .result == "passed")) and
+  all(.lanes[];
+    (.execution == "executed" or .execution == "reused") and
+    (if .execution == "reused"
+     then (.reuse.sourceRunId | type) == "string" and
+       (.reuse.sourceSummarySHA256 | test("^[a-f0-9]{64}$"))
+     else (.reuse // null) == null
+     end)) and
+  ([.lanes[] | select(.execution == "reused") | .id] ==
+    .progressiveReuse.reusedLanes) and
+  (if .progressiveReuse.mode == "none"
+   then .progressiveReuse.reusedLanes == []
+   else .progressiveReuse.mode == "exact-previous-failed-aggregate" and
+     (.progressiveReuse.sourceSummarySHA256 |
+       test("^[a-f0-9]{64}$"))
+   end) and
   (.result != "passed" or all(.claims[]; . == true)) and
   all(.artifacts[];
     .mode == "0600" and
