@@ -225,6 +225,27 @@ verify_sha256() {
     [ "$(sha256_file "$file")" = "$expected" ]
 }
 
+daemon_status_is_serving() {
+  local status_file="$1"
+  jq -e '
+    .version == "hideout.daemon-status/v1" and
+    .state == "serving" and
+    (.instanceId | type == "string" and length > 0) and
+    (.startedAt | type == "string" and length > 0)
+  ' "$status_file" >/dev/null
+}
+
+daemon_status_matches_identity() {
+  local status_file="$1" instance_id="$2" started_at="$3"
+  daemon_status_is_serving "$status_file" &&
+    jq -e \
+      --arg instance "$instance_id" \
+      --arg startedAt "$started_at" '
+        .instanceId == $instance and
+        .startedAt == $startedAt
+      ' "$status_file" >/dev/null
+}
+
 validate_delete_scope() {
   local candidate_store="$1" expected_store="$2"
   [ "$candidate_store" = "$expected_store" ] &&
@@ -335,6 +356,7 @@ validate_receipt() {
 
 run_preflight() {
   local fixture_root fixture commit tree digest version prefix_fixture store_fixture
+  local daemon_status_fixture
   preflight_root="$(
     mktemp -d "$tmp_base/hideout-local-install-preflight.XXXXXX"
   )"
@@ -363,6 +385,29 @@ run_preflight() {
   ln -s "$fixture_root" "$store_fixture"
   if validate_delete_scope "$store_fixture" "$store_fixture"; then
     fail "symlink destructive store fixture was accepted"
+  fi
+
+  daemon_status_fixture="$preflight_root/daemon-status.json"
+  jq -n '
+    {
+      version:"hideout.daemon-status/v1",
+      state:"serving",
+      instanceId:"daemon_fixture",
+      startedAt:"2026-08-01T00:00:00Z"
+    }
+  ' >"$daemon_status_fixture"
+  daemon_status_is_serving "$daemon_status_fixture" ||
+    fail "serving daemon status fixture was rejected"
+  jq '.state = "running"' \
+    "$daemon_status_fixture" >"$daemon_status_fixture.running"
+  if daemon_status_is_serving "$daemon_status_fixture.running"; then
+    fail "non-schema running daemon status fixture was accepted"
+  fi
+  jq '.instanceId = ""' \
+    "$daemon_status_fixture" >"$daemon_status_fixture.missing-instance"
+  if daemon_status_is_serving \
+    "$daemon_status_fixture.missing-instance"; then
+    fail "daemon status fixture without an instance was accepted"
   fi
 
   fixture="$preflight_root/receipt.json"
@@ -669,8 +714,7 @@ wait_for_daemon() {
   local binary="$1" status_file="$2"
   for _ in $(seq 1 200); do
     if "$binary" daemon status >"$status_file" 2>/dev/null; then
-      jq -e '.state == "running" and (.instanceId | length) > 0' \
-        "$status_file" >/dev/null &&
+      daemon_status_is_serving "$status_file" &&
         return 0
     fi
     sleep 0.1
@@ -680,7 +724,8 @@ wait_for_daemon() {
 
 ensure_daemon() {
   local binary="$1" label="$2" status_file="$3"
-  if "$binary" daemon status >"$status_file" 2>/dev/null; then
+  if "$binary" daemon status >"$status_file" 2>/dev/null &&
+    daemon_status_is_serving "$status_file"; then
     return 0
   fi
   "$binary" daemon start \
@@ -954,14 +999,10 @@ if ! grep -Fq 'local-proxy' "$scratch/connection.out" ||
 fi
 "$installed_binary" daemon status \
   >"$scratch/daemon-status-after-connect.json"
-jq -e \
-  --arg instance "$daemon_instance_before" \
-  --arg startedAt "$daemon_started_before" '
-    .state == "running" and
-    .instanceId == $instance and
-    .startedAt == $startedAt
-  ' "$scratch/daemon-status-after-connect.json" >/dev/null ||
-  fail "connection apply restarted or replaced the running daemon"
+daemon_status_matches_identity \
+  "$scratch/daemon-status-after-connect.json" \
+  "$daemon_instance_before" "$daemon_started_before" ||
+  fail "connection apply changed or lost the serving daemon identity"
 
 # The single-quoted target program is intentionally passed verbatim into the VM.
 # shellcheck disable=SC2016
@@ -1153,13 +1194,9 @@ ui_pid=""
 
 "$installed_binary" daemon status \
   >"$scratch/daemon-status-after-surfaces.json"
-jq -e \
-  --arg instance "$daemon_instance_before" \
-  --arg startedAt "$daemon_started_before" '
-    .state == "running" and
-    .instanceId == $instance and
-    .startedAt == $startedAt
-  ' "$scratch/daemon-status-after-surfaces.json" >/dev/null ||
+daemon_status_matches_identity \
+  "$scratch/daemon-status-after-surfaces.json" \
+  "$daemon_instance_before" "$daemon_started_before" ||
   fail "daemon identity changed during installed-candidate smoke"
 
 "$installed_binary" stop --idle 0s --verbose \
@@ -1196,14 +1233,10 @@ esac
   2>"$scratch/connect-direct-apply.err"
 "$installed_binary" daemon status \
   >"$scratch/daemon-status-after-direct.json"
-jq -e \
-  --arg instance "$daemon_instance_before" \
-  --arg startedAt "$daemon_started_before" '
-    .state == "running" and
-    .instanceId == $instance and
-    .startedAt == $startedAt
-  ' "$scratch/daemon-status-after-direct.json" >/dev/null ||
-  fail "direct connection apply restarted or replaced the running daemon"
+daemon_status_matches_identity \
+  "$scratch/daemon-status-after-direct.json" \
+  "$daemon_instance_before" "$daemon_started_before" ||
+  fail "direct connection apply changed or lost the serving daemon identity"
 
 "$installed_binary" secret delete local-proxy --yes \
   >"$scratch/secret-delete.out" \
@@ -1287,6 +1320,8 @@ final_environment_count="$(
 [ "$final_environment_count" -eq 0 ] ||
   fail "final fresh installation unexpectedly contains environments"
 "$installed_binary" daemon status >"$scratch/final-daemon-running.json"
+daemon_status_is_serving "$scratch/final-daemon-running.json" ||
+  fail "final daemon did not reach the serving state before ordered stop"
 "$installed_binary" daemon stop \
   >"$scratch/final-daemon-stop.out" \
   2>"$scratch/final-daemon-stop.err"
