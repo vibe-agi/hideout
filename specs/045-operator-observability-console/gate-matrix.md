@@ -95,9 +95,11 @@ package-bound stage; only the final `--require-closure` collection may record
   same PID/name in a rolling three-sample window. It excludes only the gate
   process group and Hideout/Lima virtualization processes proven against the
   gate's private runtime, retains no argv/environment/path, and is independently
-  reparsed by final collection. Private host-state snapshots make the run
-  auditable, and a median-only statistical pass is insufficient without the
-  one-sided 95% confidence bound.
+  reparsed by final collection. A violation terminates only the isolated
+  PID-equals-PGID measurement child; its early-installed EXIT cleanup removes
+  exact Gate 2 scratch and external processes are never signaled. Private
+  host-state snapshots make the run auditable, and a median-only statistical
+  pass is insufficient without the one-sided 95% confidence bound.
 
 ## Publication boundary
 

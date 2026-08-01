@@ -98,47 +98,6 @@ gate2_concurrent_sessions_run() {
   printf 'host-lower\n' >"$hostfs_file"
   printf 'gate2-a-marker-034\n' >"$workspace/a.command-marker"
   hideout="$bin/hideout"
-	local arch
-	arch="$(go env GOARCH)"
-	if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
-		hideout="$HIDEOUT_RELEASE_BINARY"
-		[ -x "$hideout" ] || { echo "concurrent-sessions gate2: packaged hideout binary is not executable" >&2; return 2; }
-		: "${HIDEOUT_LINUX_SHIM_PATH:?packaged Linux shim is required}"
-		: "${HIDEOUT_LINUX_HOSTFSD_PATH:?packaged Linux HostFS helper is required}"
-		: "${HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH:?packaged Linux session supervisor is required}"
-		: "${HIDEOUT_LINUX_OBSERVER_PATH:?packaged Linux observer is required}"
-		: "${HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH:?packaged Linux workspace portal is required}"
-		[ -x "$HIDEOUT_LINUX_SHIM_PATH" ] && [ -x "$HIDEOUT_LINUX_HOSTFSD_PATH" ] &&
-			[ -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ] &&
-			[ -x "$HIDEOUT_LINUX_OBSERVER_PATH" ] &&
-			[ -x "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" ] || {
-			echo "concurrent-sessions gate2: packaged Linux helpers are not executable" >&2
-			return 2
-		}
-		bin="$(dirname "$hideout")"
-		else
-			(
-				cd "$root" || exit
-			go build -o "$hideout" ./cmd/hideout
-		)
-		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
-		HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch"
-		HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
-		HIDEOUT_LINUX_OBSERVER_PATH="$bin/hideout-observer-linux-$arch"
-		HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
-		"$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$root" >/dev/null
-		"$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$root" >/dev/null
-		go -C "$root" run ./internal/helperbin/cmd/build-session-supervisor \
-			--out "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" --goarch "$arch" --source "$root" >/dev/null
-		go -C "$root" run ./internal/helperbin/cmd/build-observer \
-			--out "$HIDEOUT_LINUX_OBSERVER_PATH" --goarch "$arch" --source "$root" >/dev/null
-		go -C "$root" run ./internal/helperbin/cmd/build-workspace-portal \
-			--out "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" --goarch "$arch" --source "$root" >/dev/null
-	fi
-	export HIDEOUT_LINUX_SHIM_PATH HIDEOUT_LINUX_HOSTFSD_PATH
-	export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH HIDEOUT_LINUX_OBSERVER_PATH
-	export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH
-
 	local first_pid="" second_pid="" third_pid="" instance=""
   GATE2_034_CLEANUP_TMP="$tmp"
   GATE2_034_CLEANUP_STORE="$store"
@@ -188,6 +147,47 @@ gate2_concurrent_sessions_run() {
     fi
   }
   trap gate2_034_cleanup EXIT
+
+	local arch
+	arch="$(go env GOARCH)"
+	if [ -n "${HIDEOUT_RELEASE_BINARY:-}" ]; then
+		hideout="$HIDEOUT_RELEASE_BINARY"
+		[ -x "$hideout" ] || { echo "concurrent-sessions gate2: packaged hideout binary is not executable" >&2; return 2; }
+		: "${HIDEOUT_LINUX_SHIM_PATH:?packaged Linux shim is required}"
+		: "${HIDEOUT_LINUX_HOSTFSD_PATH:?packaged Linux HostFS helper is required}"
+		: "${HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH:?packaged Linux session supervisor is required}"
+		: "${HIDEOUT_LINUX_OBSERVER_PATH:?packaged Linux observer is required}"
+		: "${HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH:?packaged Linux workspace portal is required}"
+		[ -x "$HIDEOUT_LINUX_SHIM_PATH" ] && [ -x "$HIDEOUT_LINUX_HOSTFSD_PATH" ] &&
+			[ -x "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" ] &&
+			[ -x "$HIDEOUT_LINUX_OBSERVER_PATH" ] &&
+			[ -x "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" ] || {
+			echo "concurrent-sessions gate2: packaged Linux helpers are not executable" >&2
+			return 2
+		}
+		bin="$(dirname "$hideout")"
+		else
+			(
+				cd "$root" || exit
+			go build -o "$hideout" ./cmd/hideout
+		)
+		HIDEOUT_LINUX_SHIM_PATH="$bin/hideout-shim-linux-$arch"
+		HIDEOUT_LINUX_HOSTFSD_PATH="$bin/hideout-hostfsd-linux-$arch"
+		HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH="$bin/hideout-session-supervisor-linux-$arch"
+		HIDEOUT_LINUX_OBSERVER_PATH="$bin/hideout-observer-linux-$arch"
+		HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH="$bin/hideout-workspace-portal-linux-$arch"
+		"$hideout" shim build-linux --out "$HIDEOUT_LINUX_SHIM_PATH" --goarch "$arch" --source "$root" >/dev/null
+		"$hideout" hostfsd build-linux --out "$HIDEOUT_LINUX_HOSTFSD_PATH" --goarch "$arch" --source "$root" >/dev/null
+		go -C "$root" run ./internal/helperbin/cmd/build-session-supervisor \
+			--out "$HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH" --goarch "$arch" --source "$root" >/dev/null
+		go -C "$root" run ./internal/helperbin/cmd/build-observer \
+			--out "$HIDEOUT_LINUX_OBSERVER_PATH" --goarch "$arch" --source "$root" >/dev/null
+		go -C "$root" run ./internal/helperbin/cmd/build-workspace-portal \
+			--out "$HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH" --goarch "$arch" --source "$root" >/dev/null
+	fi
+	export HIDEOUT_LINUX_SHIM_PATH HIDEOUT_LINUX_HOSTFSD_PATH
+	export HIDEOUT_LINUX_SESSION_SUPERVISOR_PATH HIDEOUT_LINUX_OBSERVER_PATH
+	export HIDEOUT_LINUX_WORKSPACE_PORTAL_PATH
 
   HIDEOUT_STORE_ROOT="$store" LIMA_HOME="$lima_home" "$hideout" init \
     --profile "$profile" --template dev --backend lima --network direct \

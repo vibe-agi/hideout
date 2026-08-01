@@ -318,10 +318,56 @@ measurement_process_is_gate_owned() {
     measurement_lsof_paths_prove_gate_owned
 }
 
+isolated_process_group_exec() {
+  exec python3 -c '
+import os
+import sys
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+' "$@"
+}
+
+resolve_isolated_process_group() {
+  local pid="$1" attempt pgid
+
+  attempt=1
+  while [ "$attempt" -le 50 ]; do
+    pgid="$(ps -p "$pid" -o pgid= 2>/dev/null | tr -d ' ')"
+    if [ "$pgid" = "$pid" ]; then
+      printf '%s\n' "$pgid"
+      return 0
+    fi
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+watch_measurement_contention_signal() {
+  local signal_file="$1" stop_file="$2" child_pid="$3" child_pgid="$4"
+  local actual_pgid
+
+  while [ ! -e "$stop_file" ] && kill -0 "$child_pid" 2>/dev/null; do
+    if [ -s "$signal_file" ]; then
+      actual_pgid="$(
+        ps -p "$child_pid" -o pgid= 2>/dev/null | tr -d ' '
+      )"
+      [ "$actual_pgid" = "$child_pgid" ] &&
+        [ "$child_pgid" = "$child_pid" ] || return 2
+      kill -TERM -- "-$child_pgid" 2>/dev/null || return 3
+      return 0
+    fi
+    sleep 0.1
+  done
+}
+
 record_measurement_host_contention() {
   local destination="$1" stop_file="$2" sample_file="$3" gate_pgid="$4"
-  local sample=0 owned_processes=" "
+  local signal_file="$5"
+  local sample=0 owned_processes=" " monitor_status=0
   local pid ppid pgid cpu memory name process_key
+  local assessment_status
 
   {
     printf 'schema=hideout.performance-host-contention/v2\n'
@@ -380,9 +426,22 @@ record_measurement_host_contention() {
       done <"$sample_file"
       printf 'sample_end=%d\n' "$sample"
     } >>"$destination"
+    if [ "$sample" -ge "$host_measurement_contention_window" ]; then
+      assessment_status=0
+      write_measurement_host_contention_signal \
+        "$destination" "$signal_file" || assessment_status=$?
+      if [ "$assessment_status" -ne 0 ]; then
+        monitor_status="$assessment_status"
+        if [ "$assessment_status" -eq 1 ]; then
+          monitor_status=0
+        fi
+        break
+      fi
+    fi
     [ -e "$stop_file" ] || sleep 1
   done
   rm -f -- "$sample_file"
+  return "$monitor_status"
 }
 
 assess_measurement_host_contention() {
@@ -566,6 +625,28 @@ assess_measurement_host_contention() {
     ' "$source"
 }
 
+write_measurement_host_contention_signal() {
+  local source="$1" signal_file="$2" signal_tmp="${2}.tmp"
+  local assessment_status=0 assessment_findings signal_kind="invalid"
+
+  assessment_findings="$(
+    assess_measurement_host_contention "$source" 2>&1
+  )" || assessment_status=$?
+  [ "$assessment_status" -ne 0 ] || return 0
+  if [ "$assessment_status" -eq 1 ]; then
+    signal_kind="contention"
+  fi
+  {
+    printf 'schema=hideout.performance-host-contention-signal/v1\n'
+    printf 'kind=%s\n' "$signal_kind"
+    printf 'assessment_status=%d\n' "$assessment_status"
+    printf '%s\n' "$assessment_findings"
+  } >"$signal_tmp"
+  chmod 0600 "$signal_tmp"
+  mv -- "$signal_tmp" "$signal_file"
+  return "$assessment_status"
+}
+
 process_store_socket_path() {
   printf '%s/daemon/hideoutd.sock' "$1"
 }
@@ -578,8 +659,8 @@ process_store_path_is_safe() {
 }
 
 for required_command in \
-  awk bash cmp date find git go grep jq limactl lsof node perl ps rg sed shasum \
-  sleep sort ssh stat tail tr wc; do
+  awk bash cmp date find git go grep jq limactl lsof mv node perl ps python3 rg \
+  sed shasum sleep sort ssh stat tail tr wc; do
   require_command "$required_command"
 done
 
@@ -608,10 +689,58 @@ short_scratch_parent="$(CDPATH='' cd -- /tmp && pwd -P)"
 if [ "$preflight_only" -eq 1 ]; then
   preflight_root="$(mktemp -d "$scratch_parent/hideout-performance-preflight.XXXXXX")"
   preflight_process_scratch=""
+  preflight_isolated_pid=""
+  preflight_isolated_pgid=""
+  preflight_isolated_watchdog_pid=""
+  preflight_unrelated_pid=""
+  preflight_live_monitor_pid=""
+  preflight_live_monitor_stop=""
+  preflight_live_hog_pid=""
+  preflight_live_hog_pgid=""
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   cleanup_preflight() {
     local exit_status=$?
+    local cleanup_pgid
+    if [ -n "${preflight_isolated_watchdog_pid:-}" ] &&
+      kill -0 "$preflight_isolated_watchdog_pid" 2>/dev/null; then
+      kill "$preflight_isolated_watchdog_pid" 2>/dev/null || true
+      wait "$preflight_isolated_watchdog_pid" 2>/dev/null || true
+    fi
+    if [ -n "${preflight_isolated_pid:-}" ] &&
+      kill -0 "$preflight_isolated_pid" 2>/dev/null; then
+      cleanup_pgid="$(
+        ps -p "$preflight_isolated_pid" -o pgid= 2>/dev/null | tr -d ' '
+      )"
+      if [ "$cleanup_pgid" = "$preflight_isolated_pid" ]; then
+        kill -TERM -- "-$cleanup_pgid" 2>/dev/null || true
+      else
+        kill "$preflight_isolated_pid" 2>/dev/null || true
+      fi
+      wait "$preflight_isolated_pid" 2>/dev/null || true
+    fi
+    if [ -n "${preflight_unrelated_pid:-}" ] &&
+      kill -0 "$preflight_unrelated_pid" 2>/dev/null; then
+      kill "$preflight_unrelated_pid" 2>/dev/null || true
+      wait "$preflight_unrelated_pid" 2>/dev/null || true
+    fi
+    if [ -n "${preflight_live_monitor_pid:-}" ]; then
+      [ -z "${preflight_live_monitor_stop:-}" ] ||
+        : >"$preflight_live_monitor_stop"
+      wait "$preflight_live_monitor_pid" 2>/dev/null || true
+    fi
+    if [ -n "${preflight_live_hog_pid:-}" ] &&
+      kill -0 "$preflight_live_hog_pid" 2>/dev/null; then
+      cleanup_pgid="$(
+        ps -p "$preflight_live_hog_pid" -o pgid= 2>/dev/null | tr -d ' '
+      )"
+      if [ "$cleanup_pgid" = "$preflight_live_hog_pid" ]; then
+        kill -TERM -- "-$cleanup_pgid" 2>/dev/null || true
+      else
+        kill "$preflight_live_hog_pid" 2>/dev/null || true
+      fi
+      wait "$preflight_live_hog_pid" 2>/dev/null || true
+    fi
     case "${preflight_process_scratch:-}" in
       "") ;;
       "$short_scratch_parent"/hp.*)
@@ -955,6 +1084,103 @@ if [ "$preflight_only" -eq 1 ]; then
     exit 1
   }
   exec 9<&-
+  preflight_isolated_cleanup="$preflight_root/isolated-cleanup.txt"
+  preflight_isolated_signal="$preflight_root/isolated-signal.txt"
+  preflight_isolated_watchdog_stop="$preflight_root/isolated-watchdog.stop"
+  sleep 30 &
+  preflight_unrelated_pid=$!
+  # The child expands its own positional cleanup-marker argument.
+  # shellcheck disable=SC2016
+  isolated_process_group_exec bash -c '
+    cleanup_marker="$1"
+    cleanup_probe() {
+      printf "cleaned\n" >"$cleanup_marker"
+    }
+    terminate_probe() {
+      exit 143
+    }
+    trap cleanup_probe EXIT
+    trap terminate_probe TERM
+    while :; do sleep 1; done
+  ' contention-preflight-child "$preflight_isolated_cleanup" \
+    >"$preflight_root/isolated-child.out" \
+    2>"$preflight_root/isolated-child.err" &
+  preflight_isolated_pid=$!
+  if ! preflight_isolated_pgid="$(
+    resolve_isolated_process_group "$preflight_isolated_pid"
+  )"; then
+    kill "$preflight_isolated_pid" 2>/dev/null || true
+    wait "$preflight_isolated_pid" 2>/dev/null || true
+    printf \
+      'release-candidate-performance: isolated process group was not established\n' \
+      >&2
+    exit 1
+  fi
+  watch_measurement_contention_signal \
+    "$preflight_isolated_signal" "$preflight_isolated_watchdog_stop" \
+    "$preflight_isolated_pid" "$preflight_isolated_pgid" &
+  preflight_isolated_watchdog_pid=$!
+  printf '%s\n' \
+    'schema=hideout.performance-host-contention-signal/v1' \
+    'kind=contention' >"$preflight_isolated_signal"
+  chmod 0600 "$preflight_isolated_signal"
+  preflight_isolated_watchdog_status=0
+  wait "$preflight_isolated_watchdog_pid" ||
+    preflight_isolated_watchdog_status=$?
+  if [ "$preflight_isolated_watchdog_status" -ne 0 ]; then
+    kill -TERM -- "-$preflight_isolated_pgid" 2>/dev/null || true
+  fi
+  preflight_isolated_status=0
+  wait "$preflight_isolated_pid" || preflight_isolated_status=$?
+  : >"$preflight_isolated_watchdog_stop"
+  if [ "$preflight_isolated_watchdog_status" -ne 0 ] ||
+    [ "$preflight_isolated_status" -eq 0 ] ||
+    ! kill -0 "$preflight_unrelated_pid" 2>/dev/null ||
+    ! grep -Fxq 'cleaned' "$preflight_isolated_cleanup"; then
+    printf \
+      'release-candidate-performance: contention watchdog cleanup proof failed\n' \
+      >&2
+    exit 1
+  fi
+  kill "$preflight_unrelated_pid" 2>/dev/null || true
+  wait "$preflight_unrelated_pid" 2>/dev/null || true
+  preflight_unrelated_pid=""
+  preflight_early_cleanup="$preflight_root/early-cleanup"
+  mkdir -p \
+    "$preflight_early_cleanup/out" \
+    "$preflight_early_cleanup/tmp" \
+    "$preflight_early_cleanup/short"
+  preflight_early_cleanup_status=0
+  # The child expands its own repository and output arguments.
+  # shellcheck disable=SC2016
+  TMPDIR="$preflight_early_cleanup/tmp" \
+    HIDEOUT_LIMA_SHORT_TMPDIR="$preflight_early_cleanup/short" \
+    bash -c '
+      set -euo pipefail
+      repo_root="$1"
+      out="$2"
+      . "$repo_root/scripts/lib/gate2-concurrent-sessions.sh"
+      go() {
+        return 86
+      }
+      gate2_concurrent_sessions_run "$repo_root" "$out" 30 2
+    ' early-cleanup-child "$repo_root" "$preflight_early_cleanup/out" \
+    >"$preflight_early_cleanup/stdout" \
+    2>"$preflight_early_cleanup/stderr" ||
+    preflight_early_cleanup_status=$?
+  if [ "$preflight_early_cleanup_status" -ne 86 ] ||
+    find \
+      "$preflight_early_cleanup/tmp" \
+      "$preflight_early_cleanup/short" \
+      -mindepth 1 -maxdepth 1 -type d \
+      \( -name 'hideout-034-gate2.*' -o -name 'h34-store.*' -o \
+        -name 'h34.*' -o -name 'hideout-034-hostfs.*' \) \
+      -print -quit | grep -q .; then
+    printf \
+      'release-candidate-performance: early Gate 2 failure leaked scratch\n' \
+      >&2
+    exit 1
+  fi
   measurement_quiet_fixture="$preflight_root/measurement-quiet.txt"
   measurement_busy_fixture="$preflight_root/measurement-busy.txt"
   measurement_busy_log="$preflight_root/measurement-busy.log"
@@ -1046,6 +1272,101 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   fi
+  measurement_quiet_signal_fixture="$preflight_root/measurement-quiet-signal.txt"
+  if ! write_measurement_host_contention_signal \
+    "$measurement_quiet_fixture" "$measurement_quiet_signal_fixture" ||
+    [ -e "$measurement_quiet_signal_fixture" ]; then
+    printf \
+      'release-candidate-performance: quiet measurement emitted a signal\n' \
+      >&2
+    exit 1
+  fi
+  measurement_signal_fixture="$preflight_root/measurement-signal.txt"
+  measurement_signal_status=0
+  write_measurement_host_contention_signal \
+    "$measurement_busy_fixture" "$measurement_signal_fixture" ||
+    measurement_signal_status=$?
+  if [ "$measurement_signal_status" -ne 1 ] ||
+    ! grep -Fxq 'kind=contention' "$measurement_signal_fixture" ||
+    ! grep -Fxq 'assessment_status=1' "$measurement_signal_fixture" ||
+    ! grep -Fq 'process=browser reason=generic-high-cpu' \
+      "$measurement_signal_fixture"; then
+    printf \
+      'release-candidate-performance: online contention signal was not bound\n' \
+      >&2
+    exit 1
+  fi
+  measurement_invalid_signal_fixture="$preflight_root/measurement-invalid-signal.txt"
+  measurement_signal_status=0
+  write_measurement_host_contention_signal \
+    "$measurement_invalid_owner_fixture" \
+    "$measurement_invalid_signal_fixture" ||
+    measurement_signal_status=$?
+  if [ "$measurement_signal_status" -ne 2 ] ||
+    ! grep -Fxq 'kind=invalid' "$measurement_invalid_signal_fixture" ||
+    ! grep -Fxq 'assessment_status=2' \
+      "$measurement_invalid_signal_fixture"; then
+    printf \
+      'release-candidate-performance: invalid monitor signal was not fail-closed\n' \
+      >&2
+    exit 1
+  fi
+  preflight_live_evidence="$preflight_root/live-measurement-contention.txt"
+  preflight_live_monitor_stop="$preflight_root/live-measurement.stop"
+  preflight_live_sample="$preflight_root/live-measurement.sample"
+  preflight_live_signal="$preflight_root/live-measurement.signal"
+  preflight_gate_pgid="$(ps -p $$ -o pgid= | tr -d ' ')"
+  isolated_process_group_exec python3 -c '
+while True:
+    pass
+' &
+  preflight_live_hog_pid=$!
+  if ! preflight_live_hog_pgid="$(
+    resolve_isolated_process_group "$preflight_live_hog_pid"
+  )"; then
+    kill "$preflight_live_hog_pid" 2>/dev/null || true
+    wait "$preflight_live_hog_pid" 2>/dev/null || true
+    preflight_live_hog_pid=""
+    printf \
+      'release-candidate-performance: live contention process was not isolated\n' \
+      >&2
+    exit 1
+  fi
+  sleep 0.2
+  record_measurement_host_contention \
+    "$preflight_live_evidence" \
+    "$preflight_live_monitor_stop" \
+    "$preflight_live_sample" \
+    "$preflight_gate_pgid" \
+    "$preflight_live_signal" &
+  preflight_live_monitor_pid=$!
+  preflight_live_attempt=1
+  while [ "$preflight_live_attempt" -le 100 ] &&
+    [ ! -s "$preflight_live_signal" ] &&
+    kill -0 "$preflight_live_monitor_pid" 2>/dev/null; do
+    sleep 0.1
+    preflight_live_attempt=$((preflight_live_attempt + 1))
+  done
+  : >"$preflight_live_monitor_stop"
+  preflight_live_monitor_status=0
+  wait "$preflight_live_monitor_pid" || preflight_live_monitor_status=$?
+  preflight_live_monitor_pid=""
+  kill -TERM -- "-$preflight_live_hog_pgid" 2>/dev/null || true
+  wait "$preflight_live_hog_pid" 2>/dev/null || true
+  measurement_signal_status=0
+  assess_measurement_host_contention "$preflight_live_evidence" \
+    >/dev/null 2>&1 || measurement_signal_status=$?
+  if [ "$preflight_live_monitor_status" -ne 0 ] ||
+    [ "$measurement_signal_status" -ne 1 ] ||
+    ! grep -Fxq 'kind=contention' "$preflight_live_signal" ||
+    ! grep -Fq "pid=$preflight_live_hog_pid" "$preflight_live_signal"; then
+    printf \
+      'release-candidate-performance: live Darwin contention monitor did not signal\n' \
+      >&2
+    exit 1
+  fi
+  preflight_live_hog_pid=""
+  preflight_live_hog_pgid=""
   reference_baseline="$preflight_root/reference-baseline.txt"
   reference_observed="$preflight_root/reference-observed.txt"
   reference_result="$preflight_root/reference-result.json"
@@ -1616,8 +1937,13 @@ fi
 scratch="$(mktemp -d "$scratch_parent/hideout-release-performance.XXXXXX")"
 process_scratch=""
 measurement_contention_pid=""
+measurement_contention_watchdog_pid=""
+concurrent_pid=""
+concurrent_pgid=""
 measurement_contention_stop="$scratch/host-contention-measurement.stop"
 measurement_contention_sample="$scratch/host-contention-measurement.sample"
+measurement_contention_signal="$scratch/host-contention-measurement.signal"
+measurement_contention_watchdog_stop="$scratch/host-contention-measurement-watchdog.stop"
 measurement_contention_evidence="$run_dir/host-contention-measurement.txt"
 host_gate_pgid="$(ps -p $$ -o pgid= | tr -d ' ')"
 case "$host_gate_pgid" in
@@ -1640,8 +1966,45 @@ stop_measurement_contention_monitor() {
   return "$monitor_status"
 }
 
+stop_measurement_contention_watchdog() {
+  local watchdog_status=0
+
+  if [ -n "${measurement_contention_watchdog_pid:-}" ]; then
+    : >"$measurement_contention_watchdog_stop"
+    wait "$measurement_contention_watchdog_pid" || watchdog_status=$?
+    measurement_contention_watchdog_pid=""
+  fi
+  return "$watchdog_status"
+}
+
+stop_concurrent_measurement() {
+  local actual_pgid="" stop_status=0
+
+  if [ -n "${concurrent_pid:-}" ]; then
+    if kill -0 "$concurrent_pid" 2>/dev/null; then
+      actual_pgid="$(
+        ps -p "$concurrent_pid" -o pgid= 2>/dev/null | tr -d ' '
+      )"
+      if [ "$actual_pgid" = "$concurrent_pgid" ] &&
+        [ "$concurrent_pgid" = "$concurrent_pid" ]; then
+        kill -TERM -- "-$concurrent_pgid" 2>/dev/null || true
+      else
+        stop_status=2
+      fi
+    fi
+    if [ "$stop_status" -eq 0 ]; then
+      wait "$concurrent_pid" 2>/dev/null || true
+      concurrent_pid=""
+      concurrent_pgid=""
+    fi
+  fi
+  return "$stop_status"
+}
+
 cleanup() {
   local exit_status=$?
+  stop_measurement_contention_watchdog >/dev/null 2>&1 || true
+  stop_concurrent_measurement >/dev/null 2>&1 || true
   stop_measurement_contention_monitor >/dev/null 2>&1 || true
   case "${process_scratch:-}" in
     "") ;;
@@ -1968,7 +2331,8 @@ record_measurement_host_contention \
   "$measurement_contention_evidence" \
   "$measurement_contention_stop" \
   "$measurement_contention_sample" \
-  "$host_gate_pgid" &
+  "$host_gate_pgid" \
+  "$measurement_contention_signal" &
 measurement_contention_pid=$!
 record_host_state \
   "$run_dir/host-state-before-real-lima.txt" "before-real-lima"
@@ -1976,7 +2340,9 @@ printf \
   'release-candidate-performance: stage=real-lima-attach-reference samples=%d warmups=%d\n' \
   "$attach_samples" "$attach_warmups"
 set +e
-bash -c '
+# The isolated child receives and expands its own positional arguments.
+# shellcheck disable=SC2016
+isolated_process_group_exec bash -c '
   set -euo pipefail
   repo_root="$1"
   concurrent_dir="$2"
@@ -1993,15 +2359,44 @@ bash -c '
     "$attach_samples" "$attach_warmups"
 ' hideout-performance-child \
   "$repo_root" "$concurrent_dir" "$attach_samples" "$attach_warmups" \
-  >"$concurrent_log" 2>&1
+  >"$concurrent_log" 2>&1 &
+concurrent_pid=$!
+if ! concurrent_pgid="$(resolve_isolated_process_group "$concurrent_pid")"; then
+  kill "$concurrent_pid" 2>/dev/null || true
+  wait "$concurrent_pid" 2>/dev/null || true
+  concurrent_pid=""
+  stop_measurement_contention_monitor >/dev/null 2>&1 || true
+  set -e
+  printf \
+    'release-candidate-performance: real-Lima child process group was not isolated\n' \
+    >&2
+  exit 1
+fi
+watch_measurement_contention_signal \
+  "$measurement_contention_signal" \
+  "$measurement_contention_watchdog_stop" \
+  "$concurrent_pid" "$concurrent_pgid" &
+measurement_contention_watchdog_pid=$!
+wait "$concurrent_pid"
 concurrent_status=$?
+concurrent_pid=""
+concurrent_pgid=""
+stop_measurement_contention_watchdog
+measurement_contention_watchdog_status=$?
 stop_measurement_contention_monitor
 measurement_contention_status=$?
 set -e
-if [ "$measurement_contention_status" -ne 0 ]; then
+if [ "$measurement_contention_watchdog_status" -ne 0 ]; then
   printf \
-    'release-candidate-performance: continuous host contention monitor failed (status=%d evidence=%s)\n' \
-    "$measurement_contention_status" "$measurement_contention_evidence" >&2
+    'release-candidate-performance: contention watchdog failed safely (status=%d)\n' \
+    "$measurement_contention_watchdog_status" >&2
+  exit 1
+fi
+if [ "$measurement_contention_status" -ne 0 ]; then
+  printf '%s\n' \
+    "release-candidate-performance: continuous host contention monitor failed (status=$measurement_contention_status evidence=$measurement_contention_evidence)" \
+    "$(sed -n '1,8p' "$measurement_contention_signal" 2>/dev/null)" \
+    >&2
   exit 1
 fi
 measurement_contention_samples="$(

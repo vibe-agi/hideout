@@ -2177,9 +2177,12 @@ three-sample window. Only the gate process group and Hideout/Lima
 virtualization processes proven to use the gate's private runtime paths are
 excluded. Its private evidence retains PID, parent PID, process group, CPU,
 memory, and normalized process name, but no argv, environment, or runtime path;
-the final collector independently reparses the digest-bound file. Known
-contention invalidates the run rather than relaxing the ten-percent ceiling,
-discarding samples, or selecting favorable measurements afterward. The
+the final collector independently reparses the digest-bound file. A violation
+signals only the measured child after proving it owns a distinct PID-equals-PGID
+process group; the child's early-installed EXIT trap removes its exact Gate 2
+scratch, while unrelated host processes remain untouched. Known contention
+invalidates the run rather than relaxing the ten-percent ceiling, discarding
+samples, or selecting favorable measurements afterward. The
 daemon/TUI fixture uses a separate `mktemp`-owned short private
 store below `/private/tmp`, validates that its resulting Unix socket path is at
 most 100 bytes before launch, and rejects an overlong-path fixture in
