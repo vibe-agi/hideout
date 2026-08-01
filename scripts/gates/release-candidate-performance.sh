@@ -23,9 +23,10 @@ host_generic_cpu_threshold=50
 host_virtualization_cpu_threshold=5
 host_build_cpu_threshold=10
 host_contention_method="three-one-second-process-snapshots-two-hit-rejection"
-host_measurement_contention_method="continuous-one-second-rolling-three-sample-three-hit-rejection"
+host_measurement_contention_method="continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics"
 host_measurement_contention_window=3
 host_measurement_contention_minimum_hits=3
+host_measurement_generic_policy="diagnostic-only"
 
 usage() {
   printf '%s\n' \
@@ -117,10 +118,12 @@ validate_summary() {
         test("^[a-f0-9]{64}$")) and
       .hostDiagnostics.measurementContentionAssessment.passed == true and
       .hostDiagnostics.measurementContentionAssessment.method ==
-        "continuous-one-second-rolling-three-sample-three-hit-rejection" and
+        "continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics" and
       .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
       .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
       .hostDiagnostics.measurementContentionAssessment.minimumHits == 3 and
+      .hostDiagnostics.measurementContentionAssessment.genericHighCPUPolicy ==
+        "diagnostic-only" and
       .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
       .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
       .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
@@ -243,7 +246,7 @@ assess_initial_host_contention() {
           name ~ /^UTM/
       }
       function is_build_or_test(name) {
-        return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+        return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|Python|Python3|python|python3|uv|node|nodejs|xcodebuild|ninja|make|java)$/ ||
           name ~ /[.]test$/
       }
       /^sample_begin=[1-9][0-9]*$/ {
@@ -376,6 +379,8 @@ record_measurement_host_contention() {
     printf 'rolling_window=%d\n' "$host_measurement_contention_window"
     printf 'minimum_hits=%d\n' \
       "$host_measurement_contention_minimum_hits"
+    printf 'generic_high_cpu_policy=%s\n' \
+      "$host_measurement_generic_policy"
     printf 'generic_cpu_percent_threshold=%d\n' \
       "$host_generic_cpu_threshold"
     printf 'virtualization_cpu_percent_threshold=%d\n' \
@@ -454,6 +459,7 @@ assess_measurement_host_contention() {
     -v expected_method="$host_measurement_contention_method" \
     -v expected_window="$host_measurement_contention_window" \
     -v minimum_hits="$host_measurement_contention_minimum_hits" \
+    -v expected_generic_policy="$host_measurement_generic_policy" \
     -v generic_threshold="$host_generic_cpu_threshold" \
     -v virtualization_threshold="$host_virtualization_cpu_threshold" \
     -v build_threshold="$host_build_cpu_threshold" '
@@ -466,7 +472,7 @@ assess_measurement_host_contention() {
           name ~ /^UTM/
       }
       function is_build_or_test(name) {
-        return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+        return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|Python|Python3|python|python3|uv|node|nodejs|xcodebuild|ninja|make|java)$/ ||
           name ~ /[.]test$/
       }
       /^schema=hideout[.]performance-host-contention\/v4$/ {
@@ -492,6 +498,13 @@ assess_measurement_host_contention() {
         if (sampling_started) invalid = 1
         split($0, fields, "=")
         if ((fields[2] + 0) == minimum_hits) minimum_count++
+        else invalid = 1
+        next
+      }
+      /^generic_high_cpu_policy=/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        if (fields[2] == expected_generic_policy) generic_policy_count++
         else invalid = 1
         next
       }
@@ -541,7 +554,8 @@ assess_measurement_host_contention() {
       }
       /^sample_begin=[1-9][0-9]*$/ {
         if (schema_count != 1 || method_count != 1 || window_count != 1 ||
-            minimum_count != 1 || generic_count != 1 ||
+            minimum_count != 1 || generic_policy_count != 1 ||
+            generic_count != 1 ||
             virtualization_count != 1 || build_count != 1 ||
             gate_group_count != 1 || measurement_group_count != 1 ||
             excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
@@ -590,6 +604,7 @@ assess_measurement_host_contention() {
           reason = "active-build-or-test"
         }
         if (cpu < threshold) next
+        if (reason == "generic-high-cpu") next
         key = pid SUBSEP name SUBSEP reason
         sample_key = current_sample SUBSEP key
         if (sample_key in counted) next
@@ -616,7 +631,8 @@ assess_measurement_host_contention() {
       END {
         if (current_sample != 0 || sample_count < expected_window ||
             schema_count != 1 || method_count != 1 || window_count != 1 ||
-            minimum_count != 1 || generic_count != 1 ||
+            minimum_count != 1 || generic_policy_count != 1 ||
+            generic_count != 1 ||
             virtualization_count != 1 || build_count != 1 ||
             gate_group_count != 1 || measurement_group_count != 1 ||
             excluded_gate_pgid == excluded_measurement_pgid ||
@@ -872,10 +888,11 @@ if [ "$preflight_only" -eq 1 ]; then
         measurementContentionAssessment:{
           passed:true,
           method:
-            "continuous-one-second-rolling-three-sample-three-hit-rejection",
+            "continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics",
           samples:3,
           rollingWindow:3,
           minimumHits:3,
+          genericHighCPUPolicy:"diagnostic-only",
           genericCPUPercentThreshold:50,
           virtualizationCPUPercentThreshold:5,
           buildOrTestCPUPercentThreshold:10,
@@ -1222,6 +1239,7 @@ if [ "$preflight_only" -eq 1 ]; then
   measurement_quiet_fixture="$preflight_root/measurement-quiet.txt"
   measurement_busy_fixture="$preflight_root/measurement-busy.txt"
   measurement_busy_log="$preflight_root/measurement-busy.log"
+  measurement_generic_fixture="$preflight_root/measurement-generic.txt"
   measurement_transient_fixture="$preflight_root/measurement-transient.txt"
   measurement_external_build_fixture="$preflight_root/measurement-external-build.txt"
   measurement_unowned_vm_fixture="$preflight_root/measurement-unowned-vm.txt"
@@ -1230,9 +1248,10 @@ if [ "$preflight_only" -eq 1 ]; then
   {
     printf '%s\n' \
       'schema=hideout.performance-host-contention/v4' \
-      'method=continuous-one-second-rolling-three-sample-three-hit-rejection' \
+      'method=continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics' \
       'rolling_window=3' \
       'minimum_hits=3' \
+      'generic_high_cpu_policy=diagnostic-only' \
       'generic_cpu_percent_threshold=50' \
       'virtualization_cpu_percent_threshold=5' \
       'build_or_test_cpu_percent_threshold=10' \
@@ -1240,19 +1259,22 @@ if [ "$preflight_only" -eq 1 ]; then
       'measurement_process_group=901' \
       'sample_begin=1' \
       'owned_process=201:com.apple.Virtua:gate-private-runtime' \
-      '101 1 101 49.9 1.0 browser' \
+      '101 1 101 9.9 1.0 Python' \
+      '102 1 102 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
       '302 1 901 99.0 1.0 link' \
       'sample_end=1' \
       'sample_begin=2' \
-      '101 1 101 49.9 1.0 browser' \
+      '101 1 101 9.9 1.0 Python' \
+      '102 1 102 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
       '302 1 901 99.0 1.0 link' \
       'sample_end=2' \
       'sample_begin=3' \
-      '101 1 101 49.9 1.0 browser' \
+      '101 1 101 9.9 1.0 Python' \
+      '102 1 102 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
       '302 1 901 99.0 1.0 link' \
@@ -1269,25 +1291,35 @@ if [ "$preflight_only" -eq 1 ]; then
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample <= 3 && $6 == "browser" {$4 = "55.0"}
+    sample <= 3 && $6 == "Python" {$4 = "55.0"}
     {print}
   ' "$measurement_quiet_fixture" >"$measurement_busy_fixture"
   if assess_measurement_host_contention "$measurement_busy_fixture" \
     >"$measurement_busy_log" 2>&1 ||
     ! grep -Fq \
-      'process=browser reason=generic-high-cpu samples=1,2,3 rolling_window=3' \
+      'process=Python reason=active-build-or-test samples=1,2,3 rolling_window=3' \
       "$measurement_busy_log"; then
     printf \
-      'release-candidate-performance: rolling measurement contention was not rejected\n' \
+      'release-candidate-performance: classified measurement contention was not rejected\n' \
       >&2
     exit 1
   fi
+  awk '
+    $6 == "browser" {$4 = "55.0"}
+    {print}
+  ' "$measurement_quiet_fixture" >"$measurement_generic_fixture"
+  assess_measurement_host_contention "$measurement_generic_fixture" || {
+    printf \
+      'release-candidate-performance: diagnostic generic CPU was treated as blocking\n' \
+      >&2
+    exit 1
+  }
   awk '
     /^sample_begin=/ {
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    sample <= 2 && $6 == "Python" {$4 = "55.0"}
     {print}
   ' "$measurement_quiet_fixture" >"$measurement_transient_fixture"
   assess_measurement_host_contention "$measurement_transient_fixture" || {
@@ -1355,7 +1387,7 @@ if [ "$preflight_only" -eq 1 ]; then
   if [ "$measurement_signal_status" -ne 1 ] ||
     ! grep -Fxq 'kind=contention' "$measurement_signal_fixture" ||
     ! grep -Fxq 'assessment_status=1' "$measurement_signal_fixture" ||
-    ! grep -Fq 'process=browser reason=generic-high-cpu' \
+    ! grep -Fq 'process=Python reason=active-build-or-test' \
       "$measurement_signal_fixture"; then
     printf \
       'release-candidate-performance: online contention signal was not bound\n' \
@@ -2915,10 +2947,11 @@ jq -n \
       measurementContentionAssessment:{
         passed:true,
         method:
-          "continuous-one-second-rolling-three-sample-three-hit-rejection",
+          "continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics",
         samples:$hostMeasurementContentionSamples,
         rollingWindow:3,
         minimumHits:3,
+        genericHighCPUPolicy:"diagnostic-only",
         genericCPUPercentThreshold:50,
         virtualizationCPUPercentThreshold:5,
         buildOrTestCPUPercentThreshold:10,

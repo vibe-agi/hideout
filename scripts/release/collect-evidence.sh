@@ -203,10 +203,12 @@ validate_performance_evidence_contract() {
       test("^[a-f0-9]{64}$")) and
     .hostDiagnostics.measurementContentionAssessment.passed == true and
     .hostDiagnostics.measurementContentionAssessment.method ==
-      "continuous-one-second-rolling-three-sample-three-hit-rejection" and
+      "continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics" and
     .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
     .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
     .hostDiagnostics.measurementContentionAssessment.minimumHits == 3 and
+    .hostDiagnostics.measurementContentionAssessment.genericHighCPUPolicy ==
+      "diagnostic-only" and
     .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
     .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
     .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
@@ -253,7 +255,7 @@ validate_performance_contention_file() {
         name ~ /^UTM/
     }
     function is_build_or_test(name) {
-      return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+      return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|Python|Python3|python|python3|uv|node|nodejs|xcodebuild|ninja|make|java)$/ ||
         name ~ /[.]test$/
     }
     /^schema=hideout[.]performance-host-contention\/v1$/ {
@@ -346,7 +348,7 @@ validate_performance_measurement_contention_file() {
         name ~ /^UTM/
     }
     function is_build_or_test(name) {
-      return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
+      return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|Python|Python3|python|python3|uv|node|nodejs|xcodebuild|ninja|make|java)$/ ||
         name ~ /[.]test$/
     }
     /^schema=hideout[.]performance-host-contention\/v4$/ {
@@ -354,7 +356,7 @@ validate_performance_measurement_contention_file() {
       schema_count++
       next
     }
-    /^method=continuous-one-second-rolling-three-sample-three-hit-rejection$/ {
+    /^method=continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics$/ {
       if (sampling_started) invalid = 1
       method_count++
       next
@@ -367,6 +369,11 @@ validate_performance_measurement_contention_file() {
     /^minimum_hits=3$/ {
       if (sampling_started) invalid = 1
       minimum_count++
+      next
+    }
+    /^generic_high_cpu_policy=diagnostic-only$/ {
+      if (sampling_started) invalid = 1
+      generic_policy_count++
       next
     }
     /^generic_cpu_percent_threshold=50$/ {
@@ -409,7 +416,8 @@ validate_performance_measurement_contention_file() {
     }
     /^sample_begin=[1-9][0-9]*$/ {
       if (schema_count != 1 || method_count != 1 || window_count != 1 ||
-          minimum_count != 1 || generic_count != 1 ||
+          minimum_count != 1 || generic_policy_count != 1 ||
+          generic_count != 1 ||
           virtualization_count != 1 || build_count != 1 ||
           gate_group_count != 1 || measurement_group_count != 1 ||
           excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
@@ -449,9 +457,17 @@ validate_performance_measurement_contention_file() {
       if (pgid == excluded_gate_pgid ||
           pgid == excluded_measurement_pgid) next
       threshold = 50
-      if (is_virtualization(name)) threshold = 5
-      else if (is_build_or_test(name)) threshold = 10
+      reason = "generic-high-cpu"
+      if (is_virtualization(name)) {
+        threshold = 5
+        reason = "active-virtualization"
+      }
+      else if (is_build_or_test(name)) {
+        threshold = 10
+        reason = "active-build-or-test"
+      }
       if (cpu < threshold) next
+      if (reason == "generic-high-cpu") next
       key = pid SUBSEP name
       sample_key = current_sample SUBSEP key
       if (sample_key in counted) next
@@ -471,7 +487,8 @@ validate_performance_measurement_contention_file() {
       if (current_sample != 0 || sample_count != expected_samples ||
           schema_count != 1 ||
           method_count != 1 || window_count != 1 || minimum_count != 1 ||
-          generic_count != 1 || virtualization_count != 1 ||
+          generic_policy_count != 1 || generic_count != 1 ||
+          virtualization_count != 1 ||
           build_count != 1 || gate_group_count != 1 ||
           measurement_group_count != 1 ||
           excluded_gate_pgid == excluded_measurement_pgid ||
@@ -709,10 +726,11 @@ run_preflight() {
         measurementContentionAssessment:{
           passed:true,
           method:
-            "continuous-one-second-rolling-three-sample-three-hit-rejection",
+            "continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics",
           samples:3,
           rollingWindow:3,
           minimumHits:3,
+          genericHighCPUPolicy:"diagnostic-only",
           genericCPUPercentThreshold:50,
           virtualizationCPUPercentThreshold:5,
           buildOrTestCPUPercentThreshold:10,
@@ -812,6 +830,7 @@ run_preflight() {
   fi
   performance_measurement_quiet="$preflight_root/host-contention-measurement.txt"
   performance_measurement_busy="$preflight_root/host-contention-measurement-busy.txt"
+  performance_measurement_generic="$preflight_root/host-contention-measurement-generic.txt"
   performance_measurement_transient="$preflight_root/host-contention-measurement-transient.txt"
   performance_measurement_external_build="$preflight_root/host-contention-measurement-external-build.txt"
   performance_measurement_unowned="$preflight_root/host-contention-measurement-unowned.txt"
@@ -820,9 +839,10 @@ run_preflight() {
   {
     printf '%s\n' \
       'schema=hideout.performance-host-contention/v4' \
-      'method=continuous-one-second-rolling-three-sample-three-hit-rejection' \
+      'method=continuous-one-second-three-hit-classified-contention-rejection-generic-diagnostics' \
       'rolling_window=3' \
       'minimum_hits=3' \
+      'generic_high_cpu_policy=diagnostic-only' \
       'generic_cpu_percent_threshold=50' \
       'virtualization_cpu_percent_threshold=5' \
       'build_or_test_cpu_percent_threshold=10' \
@@ -830,19 +850,22 @@ run_preflight() {
       'measurement_process_group=901' \
       'sample_begin=1' \
       'owned_process=201:com.apple.Virtua:gate-private-runtime' \
-      '101 1 101 49.9 1.0 browser' \
+      '101 1 101 9.9 1.0 Python' \
+      '102 1 102 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
       '302 1 901 99.0 1.0 link' \
       'sample_end=1' \
       'sample_begin=2' \
-      '101 1 101 49.9 1.0 browser' \
+      '101 1 101 9.9 1.0 Python' \
+      '102 1 102 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
       '302 1 901 99.0 1.0 link' \
       'sample_end=2' \
       'sample_begin=3' \
-      '101 1 101 49.9 1.0 browser' \
+      '101 1 101 9.9 1.0 Python' \
+      '102 1 102 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
       '302 1 901 99.0 1.0 link' \
@@ -856,7 +879,7 @@ run_preflight() {
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample <= 3 && $6 == "browser" {$4 = "55.0"}
+    sample <= 3 && $6 == "Python" {$4 = "55.0"}
     {print}
   ' "$performance_measurement_quiet" >"$performance_measurement_busy"
   if validate_performance_measurement_contention_file \
@@ -864,11 +887,18 @@ run_preflight() {
     fail "busy raw measurement contention fixture was accepted"
   fi
   awk '
+    $6 == "browser" {$4 = "55.0"}
+    {print}
+  ' "$performance_measurement_quiet" >"$performance_measurement_generic"
+  validate_performance_measurement_contention_file \
+    "$performance_measurement_generic" 3 ||
+    fail "diagnostic generic CPU fixture was treated as blocking"
+  awk '
     /^sample_begin=/ {
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    sample <= 2 && $6 == "Python" {$4 = "55.0"}
     {print}
   ' "$performance_measurement_quiet" >"$performance_measurement_transient"
   validate_performance_measurement_contention_file \

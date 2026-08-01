@@ -91,11 +91,12 @@ package-bound stage; only the final `--require-closure` collection may record
   process-name/CPU snapshots and rejects sustained generic, virtualization, or
   build/test contention before building; it records no argv/environment and
   never stops a process. A one-second monitor remains active throughout the
-  real-Lima attach/reference interval and rejects only when the same PID/name
-  exceeds its threshold in all three consecutive samples. One- or two-sample
-  host transients remain in the raw record and in the unfiltered paired timing
-  data; they are not charged to Hideout CPU and do not invalidate the run. It
-  excludes only the gate
+  real-Lima attach/reference interval. Generic high-CPU processes remain
+  diagnostic only; a recognized VM or build/test/runtime workload is rejected
+  only when the same PID/name exceeds its threshold in all three consecutive
+  samples. Generic load and one- or two-sample classified transients remain in
+  the raw record and unfiltered paired timing data; they are not charged to
+  Hideout CPU and do not invalidate the run. It excludes only the gate
   process group and Hideout/Lima virtualization processes proven against the
   gate's private runtime, retains no argv/environment/path, and is independently
   reparsed by final collection. A violation terminates only the isolated

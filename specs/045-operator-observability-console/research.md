@@ -456,11 +456,12 @@ thresholds; accepted T156 evidence still requires the current explicitly
 confirmed quiet-host thirty-sample rerun, a passing automatic sustained-host-
 contention preflight, private host-state diagnostics, and both the paired
 median and its exact one-sided 95% upper confidence bound to remain within ten
-percent. The paired data remains unfiltered: bounded one- or two-sample host
-transients are retained and absorbed by the counterbalanced thirty-pair
-distribution, while three consecutive threshold hits by the same external
-PID/name invalidate the run as sustained contention. T158 froze the clean,
-reproducible unsigned package boundary.
+percent. The paired data remains unfiltered: generic host load and bounded
+one- or two-sample classified transients are retained and absorbed by the
+counterbalanced thirty-pair distribution. Three consecutive threshold hits by
+the same recognized external VM or build/test/runtime PID/name invalidate the
+run as sustained contention. T158 froze the clean, reproducible unsigned
+package boundary.
 Changing either requires fresh evidence but does not alter the surrounding
 safety contracts. Mandatory
 blocking based on observation, remote multi-operator access, encrypted-DNS
