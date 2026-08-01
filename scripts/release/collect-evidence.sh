@@ -17,6 +17,8 @@ require_closure=0
 preflight_only=0
 tmp_base="${TMPDIR:-/tmp}"
 tmp_base="${tmp_base%/}"
+installed_validation_binary=""
+installed_validation_daemon_pid=""
 
 usage() {
   printf '%s\n' \
@@ -134,6 +136,32 @@ cleanup_tree() {
       return 1
       ;;
   esac
+}
+
+daemon_status_is_serving() {
+  local status_file="$1"
+  jq -e '
+    .version == "hideout.daemon-status/v1" and
+    .state == "serving" and
+    (.instanceId | type == "string" and length > 0) and
+    (.startedAt | type == "string" and length > 0)
+  ' "$status_file" >/dev/null
+}
+
+stop_installed_validation_daemon() {
+  local binary="${installed_validation_binary:-}"
+  local process_id="${installed_validation_daemon_pid:-}"
+  if [ -n "$binary" ] && [ -x "$binary" ]; then
+    "$binary" daemon stop >/dev/null 2>&1 || true
+  fi
+  if [ -n "$process_id" ] && kill -0 "$process_id" 2>/dev/null; then
+    kill -TERM "$process_id" 2>/dev/null || true
+  fi
+  if [ -n "$process_id" ]; then
+    wait "$process_id" 2>/dev/null || true
+  fi
+  installed_validation_binary=""
+  installed_validation_daemon_pid=""
 }
 
 verify_sha256() {
@@ -618,6 +646,7 @@ verify_performance_host_diagnostics() {
 
 run_preflight() {
   local fixture digest review_fixture local_summary_fixture artifact_reference
+  local daemon_status_fixture
   local performance_fixture performance_invalid
   local performance_contention_quiet performance_contention_busy
   local performance_measurement_quiet performance_measurement_busy
@@ -661,6 +690,28 @@ run_preflight() {
     package_manifest_executable_value \
       <<<'{}' >/dev/null 2>&1; then
     fail "invalid package executable fixture was accepted"
+  fi
+  daemon_status_fixture="$preflight_root/daemon-status.json"
+  jq -n '
+    {
+      version:"hideout.daemon-status/v1",
+      state:"serving",
+      instanceId:"daemon_fixture",
+      startedAt:"2026-08-01T00:00:00Z"
+    }
+  ' >"$daemon_status_fixture"
+  daemon_status_is_serving "$daemon_status_fixture" ||
+    fail "serving daemon status fixture was rejected"
+  jq '.state = "running"' \
+    "$daemon_status_fixture" >"$daemon_status_fixture.running"
+  if daemon_status_is_serving "$daemon_status_fixture.running"; then
+    fail "non-schema running daemon status fixture was accepted"
+  fi
+  jq '.instanceId = ""' \
+    "$daemon_status_fixture" >"$daemon_status_fixture.missing-instance"
+  if daemon_status_is_serving \
+    "$daemon_status_fixture.missing-instance"; then
+    fail "daemon status fixture without an instance was accepted"
   fi
   safe_relative_path "run-1/summary.json" ||
     fail "safe evidence path was rejected"
@@ -1055,7 +1106,8 @@ if [ "$preflight_only" -eq 1 ]; then
   exit 0
 fi
 
-for required_command in git go jq tar find sort comm awk sed grep stat cmp; do
+for required_command in git go jq tar find sort comm awk sed grep stat cmp \
+  seq sleep; do
   require_command "$required_command" || exit 1
 done
 
@@ -1113,6 +1165,7 @@ scratch="$(
 )"
 cleanup() {
   local exit_status=$?
+  stop_installed_validation_daemon
   cleanup_tree "${scratch:-}" "hideout-collect-evidence"
   if [ "$exit_status" -eq 0 ]; then
     gate_require_completion "collect-evidence"
@@ -1180,6 +1233,7 @@ validate_closure_receipt() {
 validate_installed_candidate() {
   local receipt="$1" receipt_prefix receipt_store expected_prefix expected_store
   local installed expected_binary_sha packaged_binary_sha environment_count
+  local daemon_ready=0
   require_command brew ||
     fail "installed-candidate verification requires Homebrew"
   receipt_prefix="$(jq -er '.installation.prefix' "$receipt")"
@@ -1236,6 +1290,26 @@ validate_installed_candidate() {
     2>"$scratch/installed-candidate-daemon.err"; then
     fail "installed candidate daemon is not in the required stopped state"
   fi
+  installed_validation_binary="$installed"
+  "$installed" daemon start \
+    >"$scratch/installed-candidate-daemon-start.out" \
+    2>"$scratch/installed-candidate-daemon-start.err" &
+  installed_validation_daemon_pid=$!
+  for _ in $(seq 1 200); do
+    if "$installed" daemon status \
+      >"$scratch/installed-candidate-daemon-serving.json" \
+      2>"$scratch/installed-candidate-daemon-serving.err" &&
+      daemon_status_is_serving \
+        "$scratch/installed-candidate-daemon-serving.json"; then
+      daemon_ready=1
+      break
+    fi
+    kill -0 "$installed_validation_daemon_pid" 2>/dev/null ||
+      fail "installed candidate daemon exited before serving"
+    sleep 0.1
+  done
+  [ "$daemon_ready" -eq 1 ] ||
+    fail "installed candidate daemon did not reach the serving state"
   "$installed" env list \
     >"$scratch/installed-candidate-environments.out"
   environment_count="$(
@@ -1250,6 +1324,13 @@ validate_installed_candidate() {
     2>"$scratch/installed-candidate-connection.err"
   grep -Fqi 'direct' "$scratch/installed-candidate-connection.out" ||
     fail "installed candidate final profile is not direct-network"
+  stop_installed_validation_daemon
+  if "$installed" daemon status \
+    >"$scratch/installed-candidate-daemon-final.out" \
+    2>"$scratch/installed-candidate-daemon-final.err"; then
+    installed_validation_binary="$installed"
+    fail "installed candidate daemon remained reachable after validation"
+  fi
 }
 
 validate_simple_summary() {
