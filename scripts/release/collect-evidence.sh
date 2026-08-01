@@ -348,7 +348,7 @@ validate_performance_measurement_contention_file() {
       return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
         name ~ /[.]test$/
     }
-    /^schema=hideout[.]performance-host-contention\/v2$/ {
+    /^schema=hideout[.]performance-host-contention\/v3$/ {
       if (sampling_started) invalid = 1
       schema_count++
       next
@@ -386,8 +386,15 @@ validate_performance_measurement_contention_file() {
     /^gate_process_group=[1-9][0-9]*$/ {
       if (sampling_started) invalid = 1
       split($0, fields, "=")
-      excluded_pgid = fields[2] + 0
+      excluded_gate_pgid = fields[2] + 0
       gate_group_count++
+      next
+    }
+    /^measurement_process_group=[1-9][0-9]*$/ {
+      if (sampling_started) invalid = 1
+      split($0, fields, "=")
+      excluded_measurement_pgid = fields[2] + 0
+      measurement_group_count++
       next
     }
     /^owned_process=[1-9][0-9]*:[^:=[:space:]]+:gate-private-runtime$/ {
@@ -403,7 +410,8 @@ validate_performance_measurement_contention_file() {
       if (schema_count != 1 || method_count != 1 || window_count != 1 ||
           minimum_count != 1 || generic_count != 1 ||
           virtualization_count != 1 || build_count != 1 ||
-          gate_group_count != 1) invalid = 1
+          gate_group_count != 1 || measurement_group_count != 1 ||
+          excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
       split($0, fields, "=")
       sample = fields[2] + 0
       if (current_sample != 0 || sample != sample_count + 1)
@@ -437,7 +445,8 @@ validate_performance_measurement_contention_file() {
       cpu = $4 + 0
       name = $6
       observed[pid SUBSEP name]++
-      if (pgid == excluded_pgid) next
+      if (pgid == excluded_gate_pgid ||
+          pgid == excluded_measurement_pgid) next
       threshold = 50
       if (is_virtualization(name)) threshold = 5
       else if (is_build_or_test(name)) threshold = 10
@@ -457,7 +466,9 @@ validate_performance_measurement_contention_file() {
           schema_count != 1 ||
           method_count != 1 || window_count != 1 || minimum_count != 1 ||
           generic_count != 1 || virtualization_count != 1 ||
-          build_count != 1 || gate_group_count != 1) invalid = 1
+          build_count != 1 || gate_group_count != 1 ||
+          measurement_group_count != 1 ||
+          excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
       for (sample = 1; sample <= sample_count; sample++) {
         if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
           invalid = 1
@@ -794,11 +805,13 @@ run_preflight() {
   fi
   performance_measurement_quiet="$preflight_root/host-contention-measurement.txt"
   performance_measurement_busy="$preflight_root/host-contention-measurement-busy.txt"
+  performance_measurement_external_build="$preflight_root/host-contention-measurement-external-build.txt"
   performance_measurement_unowned="$preflight_root/host-contention-measurement-unowned.txt"
   performance_measurement_invalid_owner="$preflight_root/host-contention-measurement-invalid-owner.txt"
+  performance_measurement_invalid_group="$preflight_root/host-contention-measurement-invalid-group.txt"
   {
     printf '%s\n' \
-      'schema=hideout.performance-host-contention/v2' \
+      'schema=hideout.performance-host-contention/v3' \
       'method=continuous-one-second-rolling-three-sample-two-hit-rejection' \
       'rolling_window=3' \
       'minimum_hits=2' \
@@ -806,21 +819,25 @@ run_preflight() {
       'virtualization_cpu_percent_threshold=5' \
       'build_or_test_cpu_percent_threshold=10' \
       'gate_process_group=900' \
+      'measurement_process_group=901' \
       'sample_begin=1' \
       'owned_process=201:com.apple.Virtua:gate-private-runtime' \
       '101 1 101 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
+      '302 1 901 99.0 1.0 link' \
       'sample_end=1' \
       'sample_begin=2' \
       '101 1 101 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
+      '302 1 901 99.0 1.0 link' \
       'sample_end=2' \
       'sample_begin=3' \
       '101 1 101 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
+      '302 1 901 99.0 1.0 link' \
       'sample_end=3'
   } >"$performance_measurement_quiet"
   validate_performance_measurement_contention_file \
@@ -838,6 +855,13 @@ run_preflight() {
     "$performance_measurement_busy" 3; then
     fail "busy raw measurement contention fixture was accepted"
   fi
+  sed 's/302 1 901 99[.]0 1[.]0 link/302 1 902 99.0 1.0 link/' \
+    "$performance_measurement_quiet" \
+    >"$performance_measurement_external_build"
+  if validate_performance_measurement_contention_file \
+    "$performance_measurement_external_build" 3; then
+    fail "external raw measurement build fixture was accepted"
+  fi
   sed '/^owned_process=/d' \
     "$performance_measurement_quiet" >"$performance_measurement_unowned"
   if validate_performance_measurement_contention_file \
@@ -851,6 +875,14 @@ run_preflight() {
   if validate_performance_measurement_contention_file \
     "$performance_measurement_invalid_owner" 3; then
     fail "invalid measurement ownership fixture was accepted"
+  fi
+  sed \
+    's/measurement_process_group=901/measurement_process_group=900/' \
+    "$performance_measurement_quiet" \
+    >"$performance_measurement_invalid_group"
+  if validate_performance_measurement_contention_file \
+    "$performance_measurement_invalid_group" 3; then
+    fail "non-isolated raw measurement group fixture was accepted"
   fi
   chmod 0600 "$performance_contention_quiet"
   chmod 0600 "$performance_measurement_quiet"

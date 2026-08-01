@@ -364,13 +364,13 @@ watch_measurement_contention_signal() {
 
 record_measurement_host_contention() {
   local destination="$1" stop_file="$2" sample_file="$3" gate_pgid="$4"
-  local signal_file="$5"
+  local measurement_pgid="$5" signal_file="$6"
   local sample=0 owned_processes=" " monitor_status=0
   local pid ppid pgid cpu memory name process_key
   local assessment_status
 
   {
-    printf 'schema=hideout.performance-host-contention/v2\n'
+    printf 'schema=hideout.performance-host-contention/v3\n'
     printf 'method=%s\n' "$host_measurement_contention_method"
     printf 'rolling_window=%d\n' "$host_measurement_contention_window"
     printf 'minimum_hits=%d\n' "$host_contention_minimum_hits"
@@ -381,6 +381,7 @@ record_measurement_host_contention() {
     printf 'build_or_test_cpu_percent_threshold=%d\n' \
       "$host_build_cpu_threshold"
     printf 'gate_process_group=%s\n' "$gate_pgid"
+    printf 'measurement_process_group=%s\n' "$measurement_pgid"
   } >"$destination"
   chmod 0600 "$destination"
 
@@ -466,7 +467,7 @@ assess_measurement_host_contention() {
         return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
           name ~ /[.]test$/
       }
-      /^schema=hideout[.]performance-host-contention\/v2$/ {
+      /^schema=hideout[.]performance-host-contention\/v3$/ {
         if (sampling_started) invalid = 1
         schema_count++
         next
@@ -517,8 +518,15 @@ assess_measurement_host_contention() {
       /^gate_process_group=[1-9][0-9]*$/ {
         if (sampling_started) invalid = 1
         split($0, fields, "=")
-        excluded_pgid = fields[2] + 0
+        excluded_gate_pgid = fields[2] + 0
         gate_group_count++
+        next
+      }
+      /^measurement_process_group=[1-9][0-9]*$/ {
+        if (sampling_started) invalid = 1
+        split($0, fields, "=")
+        excluded_measurement_pgid = fields[2] + 0
+        measurement_group_count++
         next
       }
       /^owned_process=[1-9][0-9]*:[^:=[:space:]]+:gate-private-runtime$/ {
@@ -533,7 +541,8 @@ assess_measurement_host_contention() {
         if (schema_count != 1 || method_count != 1 || window_count != 1 ||
             minimum_count != 1 || generic_count != 1 ||
             virtualization_count != 1 || build_count != 1 ||
-            gate_group_count != 1) invalid = 1
+            gate_group_count != 1 || measurement_group_count != 1 ||
+            excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
         split($0, fields, "=")
         sample = fields[2] + 0
         if (current_sample != 0 || sample != sample_count + 1)
@@ -567,7 +576,8 @@ assess_measurement_host_contention() {
         cpu = $4 + 0
         name = $6
         observed[pid SUBSEP name]++
-        if (pgid == excluded_pgid) next
+        if (pgid == excluded_gate_pgid ||
+            pgid == excluded_measurement_pgid) next
         threshold = generic_threshold
         reason = "generic-high-cpu"
         if (is_virtualization(name)) {
@@ -597,7 +607,8 @@ assess_measurement_host_contention() {
             schema_count != 1 || method_count != 1 || window_count != 1 ||
             minimum_count != 1 || generic_count != 1 ||
             virtualization_count != 1 || build_count != 1 ||
-            gate_group_count != 1) invalid = 1
+            gate_group_count != 1 || measurement_group_count != 1 ||
+            excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
         for (sample = 1; sample <= sample_count; sample++) {
           if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
             invalid = 1
@@ -695,6 +706,8 @@ if [ "$preflight_only" -eq 1 ]; then
   preflight_unrelated_pid=""
   preflight_live_monitor_pid=""
   preflight_live_monitor_stop=""
+  preflight_live_measurement_pid=""
+  preflight_live_measurement_pgid=""
   preflight_live_hog_pid=""
   preflight_live_hog_pgid=""
   # Invoked indirectly by the EXIT trap.
@@ -728,6 +741,19 @@ if [ "$preflight_only" -eq 1 ]; then
       [ -z "${preflight_live_monitor_stop:-}" ] ||
         : >"$preflight_live_monitor_stop"
       wait "$preflight_live_monitor_pid" 2>/dev/null || true
+    fi
+    if [ -n "${preflight_live_measurement_pid:-}" ] &&
+      kill -0 "$preflight_live_measurement_pid" 2>/dev/null; then
+      cleanup_pgid="$(
+        ps -p "$preflight_live_measurement_pid" -o pgid= 2>/dev/null |
+          tr -d ' '
+      )"
+      if [ "$cleanup_pgid" = "$preflight_live_measurement_pid" ]; then
+        kill -TERM -- "-$cleanup_pgid" 2>/dev/null || true
+      else
+        kill "$preflight_live_measurement_pid" 2>/dev/null || true
+      fi
+      wait "$preflight_live_measurement_pid" 2>/dev/null || true
     fi
     if [ -n "${preflight_live_hog_pid:-}" ] &&
       kill -0 "$preflight_live_hog_pid" 2>/dev/null; then
@@ -1185,11 +1211,13 @@ if [ "$preflight_only" -eq 1 ]; then
   measurement_busy_fixture="$preflight_root/measurement-busy.txt"
   measurement_busy_log="$preflight_root/measurement-busy.log"
   measurement_transient_fixture="$preflight_root/measurement-transient.txt"
+  measurement_external_build_fixture="$preflight_root/measurement-external-build.txt"
   measurement_unowned_vm_fixture="$preflight_root/measurement-unowned-vm.txt"
   measurement_invalid_owner_fixture="$preflight_root/measurement-invalid-owner.txt"
+  measurement_invalid_group_fixture="$preflight_root/measurement-invalid-group.txt"
   {
     printf '%s\n' \
-      'schema=hideout.performance-host-contention/v2' \
+      'schema=hideout.performance-host-contention/v3' \
       'method=continuous-one-second-rolling-three-sample-two-hit-rejection' \
       'rolling_window=3' \
       'minimum_hits=2' \
@@ -1197,21 +1225,25 @@ if [ "$preflight_only" -eq 1 ]; then
       'virtualization_cpu_percent_threshold=5' \
       'build_or_test_cpu_percent_threshold=10' \
       'gate_process_group=900' \
+      'measurement_process_group=901' \
       'sample_begin=1' \
       'owned_process=201:com.apple.Virtua:gate-private-runtime' \
       '101 1 101 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
+      '302 1 901 99.0 1.0 link' \
       'sample_end=1' \
       'sample_begin=2' \
       '101 1 101 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
+      '302 1 901 99.0 1.0 link' \
       'sample_end=2' \
       'sample_begin=3' \
       '101 1 101 49.9 1.0 browser' \
       '201 1 201 80.0 1.0 com.apple.Virtua' \
       '301 1 900 99.0 1.0 go' \
+      '302 1 901 99.0 1.0 link' \
       'sample_end=3'
   } >"$measurement_quiet_fixture"
   assess_measurement_host_contention "$measurement_quiet_fixture" || {
@@ -1252,6 +1284,18 @@ if [ "$preflight_only" -eq 1 ]; then
       >&2
     exit 1
   }
+  sed 's/302 1 901 99[.]0 1[.]0 link/302 1 902 99.0 1.0 link/' \
+    "$measurement_quiet_fixture" >"$measurement_external_build_fixture"
+  if assess_measurement_host_contention "$measurement_external_build_fixture" \
+    >"$measurement_busy_log" 2>&1 ||
+    ! grep -Fq \
+      'process=link reason=active-build-or-test samples=1,2 rolling_window=3' \
+      "$measurement_busy_log"; then
+    printf \
+      'release-candidate-performance: external measurement build was not rejected\n' \
+      >&2
+    exit 1
+  fi
   sed '/^owned_process=/d' \
     "$measurement_quiet_fixture" >"$measurement_unowned_vm_fixture"
   if assess_measurement_host_contention "$measurement_unowned_vm_fixture" \
@@ -1269,6 +1313,16 @@ if [ "$preflight_only" -eq 1 ]; then
     >/dev/null 2>&1; then
     printf \
       'release-candidate-performance: invalid measurement ownership proof was accepted\n' \
+      >&2
+    exit 1
+  fi
+  sed \
+    's/measurement_process_group=901/measurement_process_group=900/' \
+    "$measurement_quiet_fixture" >"$measurement_invalid_group_fixture"
+  if assess_measurement_host_contention "$measurement_invalid_group_fixture" \
+    >/dev/null 2>&1; then
+    printf \
+      'release-candidate-performance: non-isolated measurement group was accepted\n' \
       >&2
     exit 1
   fi
@@ -1320,6 +1374,22 @@ if [ "$preflight_only" -eq 1 ]; then
 while True:
     pass
 ' &
+  preflight_live_measurement_pid=$!
+  if ! preflight_live_measurement_pgid="$(
+    resolve_isolated_process_group "$preflight_live_measurement_pid"
+  )"; then
+    kill "$preflight_live_measurement_pid" 2>/dev/null || true
+    wait "$preflight_live_measurement_pid" 2>/dev/null || true
+    preflight_live_measurement_pid=""
+    printf \
+      'release-candidate-performance: live measurement process was not isolated\n' \
+      >&2
+    exit 1
+  fi
+  isolated_process_group_exec python3 -c '
+while True:
+    pass
+' &
   preflight_live_hog_pid=$!
   if ! preflight_live_hog_pgid="$(
     resolve_isolated_process_group "$preflight_live_hog_pid"
@@ -1338,6 +1408,7 @@ while True:
     "$preflight_live_monitor_stop" \
     "$preflight_live_sample" \
     "$preflight_gate_pgid" \
+    "$preflight_live_measurement_pgid" \
     "$preflight_live_signal" &
   preflight_live_monitor_pid=$!
   preflight_live_attempt=1
@@ -1353,6 +1424,8 @@ while True:
   preflight_live_monitor_pid=""
   kill -TERM -- "-$preflight_live_hog_pgid" 2>/dev/null || true
   wait "$preflight_live_hog_pid" 2>/dev/null || true
+  kill -TERM -- "-$preflight_live_measurement_pgid" 2>/dev/null || true
+  wait "$preflight_live_measurement_pid" 2>/dev/null || true
   measurement_signal_status=0
   assess_measurement_host_contention "$preflight_live_evidence" \
     >/dev/null 2>&1 || measurement_signal_status=$?
@@ -1367,6 +1440,8 @@ while True:
   fi
   preflight_live_hog_pid=""
   preflight_live_hog_pgid=""
+  preflight_live_measurement_pid=""
+  preflight_live_measurement_pgid=""
   reference_baseline="$preflight_root/reference-baseline.txt"
   reference_observed="$preflight_root/reference-observed.txt"
   reference_result="$preflight_root/reference-result.json"
@@ -2327,13 +2402,6 @@ jq -n \
 
 concurrent_dir="$run_dir/lima-concurrent"
 concurrent_log="$run_dir/lanes/lima-concurrent.log"
-record_measurement_host_contention \
-  "$measurement_contention_evidence" \
-  "$measurement_contention_stop" \
-  "$measurement_contention_sample" \
-  "$host_gate_pgid" \
-  "$measurement_contention_signal" &
-measurement_contention_pid=$!
 record_host_state \
   "$run_dir/host-state-before-real-lima.txt" "before-real-lima"
 printf \
@@ -2372,6 +2440,14 @@ if ! concurrent_pgid="$(resolve_isolated_process_group "$concurrent_pid")"; then
     >&2
   exit 1
 fi
+record_measurement_host_contention \
+  "$measurement_contention_evidence" \
+  "$measurement_contention_stop" \
+  "$measurement_contention_sample" \
+  "$host_gate_pgid" \
+  "$concurrent_pgid" \
+  "$measurement_contention_signal" &
+measurement_contention_pid=$!
 watch_measurement_contention_signal \
   "$measurement_contention_signal" \
   "$measurement_contention_watchdog_stop" \
