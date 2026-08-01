@@ -2172,8 +2172,11 @@ build or measurement, three one-second snapshots retain only PID, parent PID,
 CPU, memory, and process name; two sustained threshold hits from the same
 high-CPU, virtualization, or build/test process reject the run without stopping
 it. During the complete real-Lima attach/reference interval, a one-second
-monitor also rejects two threshold hits by the same PID/name within any rolling
-three-sample window. Only the gate process group and Hideout/Lima
+monitor rejects only when the same PID/name exceeds its threshold in all three
+consecutive samples. One- or two-sample host transients remain visible in the
+raw evidence and in the unfiltered counterbalanced pair distribution; they are
+not attributed to Hideout CPU and do not invalidate the run. Only the gate
+process group and Hideout/Lima
 virtualization processes proven to use the gate's private runtime paths are
 excluded. Its private evidence retains PID, parent PID, process group, CPU,
 memory, and normalized process name, but no argv, environment, or runtime path;

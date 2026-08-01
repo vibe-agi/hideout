@@ -203,10 +203,10 @@ validate_performance_evidence_contract() {
       test("^[a-f0-9]{64}$")) and
     .hostDiagnostics.measurementContentionAssessment.passed == true and
     .hostDiagnostics.measurementContentionAssessment.method ==
-      "continuous-one-second-rolling-three-sample-two-hit-rejection" and
+      "continuous-one-second-rolling-three-sample-three-hit-rejection" and
     .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
     .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
-    .hostDiagnostics.measurementContentionAssessment.minimumHits == 2 and
+    .hostDiagnostics.measurementContentionAssessment.minimumHits == 3 and
     .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
     .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
     .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
@@ -335,7 +335,8 @@ validate_performance_measurement_contention_file() {
       ;;
   esac
 
-  awk -v expected_samples="$expected_samples" '
+  awk -v expected_samples="$expected_samples" \
+    -v expected_window=3 -v minimum_hits=3 '
     function is_virtualization(name) {
       return name ~ /^qemu-system-/ ||
         name ~ /^com[.]apple[.]Virtua/ ||
@@ -348,12 +349,12 @@ validate_performance_measurement_contention_file() {
       return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
         name ~ /[.]test$/
     }
-    /^schema=hideout[.]performance-host-contention\/v3$/ {
+    /^schema=hideout[.]performance-host-contention\/v4$/ {
       if (sampling_started) invalid = 1
       schema_count++
       next
     }
-    /^method=continuous-one-second-rolling-three-sample-two-hit-rejection$/ {
+    /^method=continuous-one-second-rolling-three-sample-three-hit-rejection$/ {
       if (sampling_started) invalid = 1
       method_count++
       next
@@ -363,7 +364,7 @@ validate_performance_measurement_contention_file() {
       window_count++
       next
     }
-    /^minimum_hits=2$/ {
+    /^minimum_hits=3$/ {
       if (sampling_started) invalid = 1
       minimum_count++
       next
@@ -455,9 +456,14 @@ validate_performance_measurement_contention_file() {
       sample_key = current_sample SUBSEP key
       if (sample_key in counted) next
       counted[sample_key] = 1
-      if (last_hit[key] > 0 && current_sample - last_hit[key] < 3)
-        violations[key] = 1
-      last_hit[key] = current_sample
+      hit_count[key]++
+      hit_samples[key, hit_count[key]] = current_sample
+      if (hit_count[key] >= minimum_hits) {
+        first_hit_index = hit_count[key] - minimum_hits + 1
+        first_hit_sample = hit_samples[key, first_hit_index]
+        if (current_sample - first_hit_sample < expected_window)
+          violations[key] = 1
+      }
       next
     }
     {invalid = 1}
@@ -468,7 +474,8 @@ validate_performance_measurement_contention_file() {
           generic_count != 1 || virtualization_count != 1 ||
           build_count != 1 || gate_group_count != 1 ||
           measurement_group_count != 1 ||
-          excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
+          excluded_gate_pgid == excluded_measurement_pgid ||
+          minimum_hits < 2 || minimum_hits > expected_window) invalid = 1
       for (sample = 1; sample <= sample_count; sample++) {
         if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
           invalid = 1
@@ -702,10 +709,10 @@ run_preflight() {
         measurementContentionAssessment:{
           passed:true,
           method:
-            "continuous-one-second-rolling-three-sample-two-hit-rejection",
+            "continuous-one-second-rolling-three-sample-three-hit-rejection",
           samples:3,
           rollingWindow:3,
-          minimumHits:2,
+          minimumHits:3,
           genericCPUPercentThreshold:50,
           virtualizationCPUPercentThreshold:5,
           buildOrTestCPUPercentThreshold:10,
@@ -805,16 +812,17 @@ run_preflight() {
   fi
   performance_measurement_quiet="$preflight_root/host-contention-measurement.txt"
   performance_measurement_busy="$preflight_root/host-contention-measurement-busy.txt"
+  performance_measurement_transient="$preflight_root/host-contention-measurement-transient.txt"
   performance_measurement_external_build="$preflight_root/host-contention-measurement-external-build.txt"
   performance_measurement_unowned="$preflight_root/host-contention-measurement-unowned.txt"
   performance_measurement_invalid_owner="$preflight_root/host-contention-measurement-invalid-owner.txt"
   performance_measurement_invalid_group="$preflight_root/host-contention-measurement-invalid-group.txt"
   {
     printf '%s\n' \
-      'schema=hideout.performance-host-contention/v3' \
-      'method=continuous-one-second-rolling-three-sample-two-hit-rejection' \
+      'schema=hideout.performance-host-contention/v4' \
+      'method=continuous-one-second-rolling-three-sample-three-hit-rejection' \
       'rolling_window=3' \
-      'minimum_hits=2' \
+      'minimum_hits=3' \
       'generic_cpu_percent_threshold=50' \
       'virtualization_cpu_percent_threshold=5' \
       'build_or_test_cpu_percent_threshold=10' \
@@ -848,13 +856,24 @@ run_preflight() {
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    sample <= 3 && $6 == "browser" {$4 = "55.0"}
     {print}
   ' "$performance_measurement_quiet" >"$performance_measurement_busy"
   if validate_performance_measurement_contention_file \
     "$performance_measurement_busy" 3; then
     fail "busy raw measurement contention fixture was accepted"
   fi
+  awk '
+    /^sample_begin=/ {
+      split($0, fields, "=")
+      sample = fields[2] + 0
+    }
+    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    {print}
+  ' "$performance_measurement_quiet" >"$performance_measurement_transient"
+  validate_performance_measurement_contention_file \
+    "$performance_measurement_transient" 3 ||
+    fail "two-hit transient measurement fixture was rejected"
   sed 's/302 1 901 99[.]0 1[.]0 link/302 1 902 99.0 1.0 link/' \
     "$performance_measurement_quiet" \
     >"$performance_measurement_external_build"

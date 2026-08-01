@@ -23,8 +23,9 @@ host_generic_cpu_threshold=50
 host_virtualization_cpu_threshold=5
 host_build_cpu_threshold=10
 host_contention_method="three-one-second-process-snapshots-two-hit-rejection"
-host_measurement_contention_method="continuous-one-second-rolling-three-sample-two-hit-rejection"
+host_measurement_contention_method="continuous-one-second-rolling-three-sample-three-hit-rejection"
 host_measurement_contention_window=3
+host_measurement_contention_minimum_hits=3
 
 usage() {
   printf '%s\n' \
@@ -116,10 +117,10 @@ validate_summary() {
         test("^[a-f0-9]{64}$")) and
       .hostDiagnostics.measurementContentionAssessment.passed == true and
       .hostDiagnostics.measurementContentionAssessment.method ==
-        "continuous-one-second-rolling-three-sample-two-hit-rejection" and
+        "continuous-one-second-rolling-three-sample-three-hit-rejection" and
       .hostDiagnostics.measurementContentionAssessment.samples >= 3 and
       .hostDiagnostics.measurementContentionAssessment.rollingWindow == 3 and
-      .hostDiagnostics.measurementContentionAssessment.minimumHits == 2 and
+      .hostDiagnostics.measurementContentionAssessment.minimumHits == 3 and
       .hostDiagnostics.measurementContentionAssessment.genericCPUPercentThreshold == 50 and
       .hostDiagnostics.measurementContentionAssessment.virtualizationCPUPercentThreshold == 5 and
       .hostDiagnostics.measurementContentionAssessment.buildOrTestCPUPercentThreshold == 10 and
@@ -370,10 +371,11 @@ record_measurement_host_contention() {
   local assessment_status
 
   {
-    printf 'schema=hideout.performance-host-contention/v3\n'
+    printf 'schema=hideout.performance-host-contention/v4\n'
     printf 'method=%s\n' "$host_measurement_contention_method"
     printf 'rolling_window=%d\n' "$host_measurement_contention_window"
-    printf 'minimum_hits=%d\n' "$host_contention_minimum_hits"
+    printf 'minimum_hits=%d\n' \
+      "$host_measurement_contention_minimum_hits"
     printf 'generic_cpu_percent_threshold=%d\n' \
       "$host_generic_cpu_threshold"
     printf 'virtualization_cpu_percent_threshold=%d\n' \
@@ -451,7 +453,7 @@ assess_measurement_host_contention() {
   awk \
     -v expected_method="$host_measurement_contention_method" \
     -v expected_window="$host_measurement_contention_window" \
-    -v minimum_hits="$host_contention_minimum_hits" \
+    -v minimum_hits="$host_measurement_contention_minimum_hits" \
     -v generic_threshold="$host_generic_cpu_threshold" \
     -v virtualization_threshold="$host_virtualization_cpu_threshold" \
     -v build_threshold="$host_build_cpu_threshold" '
@@ -467,7 +469,7 @@ assess_measurement_host_contention() {
         return name ~ /^(go|compile|link|clang|clang[+][+]|rustc|cargo|pytest|xcodebuild|ninja|make|java)$/ ||
           name ~ /[.]test$/
       }
-      /^schema=hideout[.]performance-host-contention\/v3$/ {
+      /^schema=hideout[.]performance-host-contention\/v4$/ {
         if (sampling_started) invalid = 1
         schema_count++
         next
@@ -592,12 +594,21 @@ assess_measurement_host_contention() {
         sample_key = current_sample SUBSEP key
         if (sample_key in counted) next
         counted[sample_key] = 1
-        if (last_hit[key] > 0 &&
-            current_sample - last_hit[key] < expected_window &&
-            !(key in violations)) {
-          violations[key] = last_hit[key] "," current_sample
+        hit_count[key]++
+        hit_samples[key, hit_count[key]] = current_sample
+        if (hit_count[key] >= minimum_hits && !(key in violations)) {
+          first_hit_index = hit_count[key] - minimum_hits + 1
+          first_hit_sample = hit_samples[key, first_hit_index]
+          if (current_sample - first_hit_sample < expected_window) {
+            violation_samples = first_hit_sample
+            for (hit_index = first_hit_index + 1;
+                 hit_index <= hit_count[key]; hit_index++) {
+              violation_samples = violation_samples "," \
+                hit_samples[key, hit_index]
+            }
+            violations[key] = violation_samples
+          }
         }
-        last_hit[key] = current_sample
         if (cpu > maximum_cpu[key]) maximum_cpu[key] = cpu
         next
       }
@@ -608,7 +619,8 @@ assess_measurement_host_contention() {
             minimum_count != 1 || generic_count != 1 ||
             virtualization_count != 1 || build_count != 1 ||
             gate_group_count != 1 || measurement_group_count != 1 ||
-            excluded_gate_pgid == excluded_measurement_pgid) invalid = 1
+            excluded_gate_pgid == excluded_measurement_pgid ||
+            minimum_hits < 2 || minimum_hits > expected_window) invalid = 1
         for (sample = 1; sample <= sample_count; sample++) {
           if (begins[sample] != 1 || ends[sample] != 1 || rows[sample] < 1)
             invalid = 1
@@ -860,10 +872,10 @@ if [ "$preflight_only" -eq 1 ]; then
         measurementContentionAssessment:{
           passed:true,
           method:
-            "continuous-one-second-rolling-three-sample-two-hit-rejection",
+            "continuous-one-second-rolling-three-sample-three-hit-rejection",
           samples:3,
           rollingWindow:3,
-          minimumHits:2,
+          minimumHits:3,
           genericCPUPercentThreshold:50,
           virtualizationCPUPercentThreshold:5,
           buildOrTestCPUPercentThreshold:10,
@@ -1217,10 +1229,10 @@ if [ "$preflight_only" -eq 1 ]; then
   measurement_invalid_group_fixture="$preflight_root/measurement-invalid-group.txt"
   {
     printf '%s\n' \
-      'schema=hideout.performance-host-contention/v3' \
-      'method=continuous-one-second-rolling-three-sample-two-hit-rejection' \
+      'schema=hideout.performance-host-contention/v4' \
+      'method=continuous-one-second-rolling-three-sample-three-hit-rejection' \
       'rolling_window=3' \
-      'minimum_hits=2' \
+      'minimum_hits=3' \
       'generic_cpu_percent_threshold=50' \
       'virtualization_cpu_percent_threshold=5' \
       'build_or_test_cpu_percent_threshold=10' \
@@ -1257,13 +1269,13 @@ if [ "$preflight_only" -eq 1 ]; then
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample <= 2 && $6 == "browser" {$4 = "55.0"}
+    sample <= 3 && $6 == "browser" {$4 = "55.0"}
     {print}
   ' "$measurement_quiet_fixture" >"$measurement_busy_fixture"
   if assess_measurement_host_contention "$measurement_busy_fixture" \
     >"$measurement_busy_log" 2>&1 ||
     ! grep -Fq \
-      'process=browser reason=generic-high-cpu samples=1,2 rolling_window=3' \
+      'process=browser reason=generic-high-cpu samples=1,2,3 rolling_window=3' \
       "$measurement_busy_log"; then
     printf \
       'release-candidate-performance: rolling measurement contention was not rejected\n' \
@@ -1275,12 +1287,12 @@ if [ "$preflight_only" -eq 1 ]; then
       split($0, fields, "=")
       sample = fields[2] + 0
     }
-    sample == 1 && $6 == "browser" {$4 = "55.0"}
+    sample <= 2 && $6 == "browser" {$4 = "55.0"}
     {print}
   ' "$measurement_quiet_fixture" >"$measurement_transient_fixture"
   assess_measurement_host_contention "$measurement_transient_fixture" || {
     printf \
-      'release-candidate-performance: one transient measurement hit was rejected\n' \
+      'release-candidate-performance: two transient measurement hits were rejected\n' \
       >&2
     exit 1
   }
@@ -1289,7 +1301,7 @@ if [ "$preflight_only" -eq 1 ]; then
   if assess_measurement_host_contention "$measurement_external_build_fixture" \
     >"$measurement_busy_log" 2>&1 ||
     ! grep -Fq \
-      'process=link reason=active-build-or-test samples=1,2 rolling_window=3' \
+      'process=link reason=active-build-or-test samples=1,2,3 rolling_window=3' \
       "$measurement_busy_log"; then
     printf \
       'release-candidate-performance: external measurement build was not rejected\n' \
@@ -1300,7 +1312,7 @@ if [ "$preflight_only" -eq 1 ]; then
     "$measurement_quiet_fixture" >"$measurement_unowned_vm_fixture"
   if assess_measurement_host_contention "$measurement_unowned_vm_fixture" \
     >"$measurement_busy_log" 2>&1 ||
-    ! grep -Fq 'reason=active-virtualization samples=1,2' \
+    ! grep -Fq 'reason=active-virtualization samples=1,2,3' \
       "$measurement_busy_log"; then
     printf \
       'release-candidate-performance: unrelated measurement VM was not rejected\n' \
@@ -2903,10 +2915,10 @@ jq -n \
       measurementContentionAssessment:{
         passed:true,
         method:
-          "continuous-one-second-rolling-three-sample-two-hit-rejection",
+          "continuous-one-second-rolling-three-sample-three-hit-rejection",
         samples:$hostMeasurementContentionSamples,
         rollingWindow:3,
-        minimumHits:2,
+        minimumHits:3,
         genericCPUPercentThreshold:50,
         virtualizationCPUPercentThreshold:5,
         buildOrTestCPUPercentThreshold:10,
