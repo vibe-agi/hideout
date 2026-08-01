@@ -349,21 +349,21 @@ uninstall/reinstall, and verify the evidence manifest and candidate identity.
 - [x] T148 [P] [US8] Add negative fixtures that break each new judge and prove it fails before acceptance in `scripts/mutation/045/`
 - [x] T149 [P] [US8] Extend dependency/license/vulnerability/advisory scanning to embedded BPF and distinguish reachable from unreachable advisories with explicit evidence in `scripts/gates/dependencies.sh`
 - [x] T150 [P] [US8] Extend package/runtime manifests and helper digest/license verification for `hideout-observer` and UI assets in `internal/packagekit/`, `internal/helperbin/`, and `runtime/`
-- [x] T151 [US8] Run all TLC configurations and Go refinement suites with no invariant or liveness counterexample and record results in `scripts/gates/formal.sh` and `.artifacts/045/formal/`
-- [x] T152 [US8] Run full unit, race, fuzz/property, schema, generated, static, dependency, advisory, and mutation gates and record results in `scripts/gates/release-candidate.sh` and `.artifacts/045/local/`
-- [x] T153 [US8] Run real Lima concurrent observation, online proxy rotation, crash/retry, loss, cleanup, target-tamper, and attribution gates in `scripts/gates/release-candidate-lima.sh`
-- [x] T154 [US8] Run PTY/TUI and browser first-time, configuration, stale, recovery, parity, accessibility, and injection journeys in `scripts/gates/release-candidate-ui.sh`
-- [x] T155 [US8] Run privacy canary scan over stores, indexes, process listings, Keychain metadata output, APIs, UI, logs, exports, support, and evidence in `scripts/gates/release-candidate-privacy.sh`
-- [x] T156 [US8] Measure reference elapsed overhead, observer CPU/RSS, event/drop rate, daemon/TUI memory, render latency, query latency, quota overshoot, attach, and interactive freshness in `scripts/gates/release-candidate-performance.sh`
+- [ ] T151 [US8] Run all TLC configurations and Go refinement suites with no invariant or liveness counterexample and record results in `scripts/gates/formal.sh` and `.artifacts/045/formal/`
+- [ ] T152 [US8] Run full unit, race, fuzz/property, schema, generated, static, dependency, advisory, and mutation gates and record results in `scripts/gates/release-candidate.sh` and `.artifacts/045/local/`
+- [ ] T153 [US8] Run real Lima concurrent observation, online proxy rotation, crash/retry, loss, cleanup, target-tamper, and attribution gates in `scripts/gates/release-candidate-lima.sh`
+- [ ] T154 [US8] Run PTY/TUI and browser first-time, configuration, stale, recovery, parity, accessibility, and injection journeys in `scripts/gates/release-candidate-ui.sh`
+- [ ] T155 [US8] Run privacy canary scan over stores, indexes, process listings, Keychain metadata output, APIs, UI, logs, exports, support, and evidence in `scripts/gates/release-candidate-privacy.sh`
+- [ ] T156 [US8] Measure reference elapsed overhead, observer CPU/RSS, event/drop rate, daemon/TUI memory, render latency, query latency, quota overshoot, attach, and interactive freshness in `scripts/gates/release-candidate-performance.sh`
 - [x] T157 [US8] Tune and freeze aggregation windows, storage quotas, and risk thresholds from measured evidence in `internal/workloadobs/defaults.go` and `docs/activity-observation.md`
-- [x] T158 [US8] Build an exact clean package and verify binary/helper/schema/UI/runtime digests and reproducible manifest in `scripts/release/build-candidate.sh`
-- [x] T159 [US8] Test clean install, old-version upgrade with intentionally discarded old data, Keychain migration guidance, current-version reinstall, and uninstall absence in `scripts/release/test-package-lifecycle.sh`
+- [ ] T158 [US8] Build an exact clean package and verify binary/helper/schema/UI/runtime digests and reproducible manifest in `scripts/release/build-candidate.sh`
+- [ ] T159 [US8] Test clean install, old-version upgrade with intentionally discarded old data, Keychain migration guidance, current-version reinstall, and uninstall absence in `scripts/release/test-package-lifecycle.sh`
 - [x] T160 [US8] Update product status, design, threat model, test plan, formal model catalog, privacy, retention, recovery, help, and supported coverage matrix in `docs/STATUS.md`, `docs/privacy-run-design.md`, `docs/threat-model.md`, `docs/privacy-run-test-plan.md`, and `docs/formal-models.md`
-- [x] T161 [US8] Perform final source/security/UX code review, record severity/owner/resolution for every finding, and leave no required finding open in `docs/release/045-code-review.md`
-- [x] T162 [US8] Fix all required review, gate, dependency, advisory, performance, packaging, install, and documentation findings in their owning source files and rerun affected judges
-- [x] T163 [US8] Generate a signed-by-digest local evidence manifest binding commit, version, package, helpers, runtime, models, gates, limitations, and review in `scripts/release/collect-evidence.sh` and `.artifacts/045/evidence.json`
-- [x] T164 [US8] Install the exact local candidate on this machine, discard legacy Hideout data as authorized, run setup/secret/connect/run/TUI/WebUI/clean/update/uninstall smoke, and record results in `.artifacts/045/local-install/`
-- [x] T165 [US8] Verify no remote tag, GitHub Release, Homebrew commit/push, or package publication occurred and report the local candidate as ready-or-blocked in `docs/release/045-readiness.md`
+- [ ] T161 [US8] Perform final source/security/UX code review, record severity/owner/resolution for every finding, and leave no required finding open in `docs/release/045-code-review.md`
+- [ ] T162 [US8] Fix all required review, gate, dependency, advisory, performance, packaging, install, and documentation findings in their owning source files and rerun affected judges
+- [ ] T163 [US8] Generate a signed-by-digest local evidence manifest binding commit, version, package, helpers, runtime, models, gates, limitations, and review in `scripts/release/collect-evidence.sh` and `.artifacts/045/evidence.json`
+- [ ] T164 [US8] Install the exact local candidate on this machine, discard legacy Hideout data as authorized, run setup/secret/connect/run/TUI/WebUI/clean/update/uninstall smoke, and record results in `.artifacts/045/local-install/`
+- [ ] T165 [US8] Verify no remote tag, GitHub Release, Homebrew commit/push, or package publication occurred and report the local candidate as ready-or-blocked in `docs/release/045-readiness.md`
 
 **Checkpoint**: Candidate readiness requires every applicable result to be
 fresh and passing; unsupported/reduced/not-run cannot substitute for a claim.
@@ -375,13 +375,15 @@ fresh and passing; unsupported/reduced/not-run cannot substitute for a claim.
 **Purpose**: Remove drift, verify the written product path, and leave an exact
 handoff.
 
-- [x] T166 [P] Run Go formatting, Markdown lint, shell/static lint, schema validation, generated checks, and `git diff --check`, fixing all feature-owned failures
-- [x] T167 [P] Validate every command and interaction in `specs/045-operator-observability-console/quickstart.md` against the installed candidate and update only documented final spellings
+- [ ] T166 [P] Run Go formatting, Markdown lint, shell/static lint, schema validation, generated checks, and `git diff --check`, fixing all feature-owned failures
+- [ ] T167 [P] Validate every command and interaction in `specs/045-operator-observability-console/quickstart.md` against the installed candidate and update only documented final spellings
 - [x] T168 [P] Audit all new logs/events/errors for internal jargon, raw secret, control-sequence, and false-success language in `internal/`, `cmd/`, and `docs/`
-- [x] T169 Reconcile all 72 functional requirement identifiers (FR-001–FR-071 plus FR-035a) and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
+- [ ] T169 Reconcile all 72 functional requirement identifiers (FR-001–FR-071 plus FR-035a) and 15 success criteria to implementation, tests, and evidence in `specs/045-operator-observability-console/checklists/acceptance.md`
 - [x] T170 Record only genuinely deferred non-required work with owner, risk, trigger, and non-claim in `docs/DEBT.md`
-- [x] T171 Run the complete release-candidate orchestrator once more from the exact clean tree and verify the evidence manifest has no stale/reduced/not-run required entry in `.artifacts/045/`
-- [x] T172 Confirm the local install is the exact candidate, preserve no legacy data as authorized, and hand off publication as a separate explicitly authorized action in `docs/release/045-readiness.md`
+- [ ] T171 Run the complete release-candidate orchestrator once more from the exact clean tree and verify the evidence manifest has no stale/reduced/not-run required entry in `.artifacts/045/`
+- [ ] T172 Confirm the local install is the exact candidate, preserve no legacy data as authorized, and hand off publication as a separate explicitly authorized action in `docs/release/045-readiness.md`
+- [ ] T173 Fix the high-event observer shutdown deadline/reap defect, execute its Linux regression in the real-Lima observation lane, and retain an exact-clean passing receipt in `cmd/hideout-session-supervisor/`, `scripts/gates/workload-observation-lima.sh`, and `.artifacts/045/`
+- [ ] T174 Add fail-closed progressive Lima aggregation that revalidates and reuses only exact-commit passed lanes from the immediately preceding digest-bound aggregate in `scripts/gates/release-candidate-lima.sh`
 
 ---
 
@@ -504,7 +506,7 @@ T106 reviewed export
 
 All tasks may produce and install a local candidate. None authorizes a remote
 tag, GitHub Release, Homebrew change/push, or other publication. That remains a
-separate operator decision after T165/T172.
+separate operator decision after T165/T174.
 
 ## Completion format audit
 

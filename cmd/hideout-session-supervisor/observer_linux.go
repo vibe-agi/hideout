@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	fixedGuestObserverPath = "/hideout/session/shims/hideout-observer"
-	observerExecutableFD   = 3
-	observerHandshakeWait  = 3 * time.Second
-	observerShutdownWait   = 3 * time.Second
+	fixedGuestObserverPath     = "/hideout/session/shims/hideout-observer"
+	observerExecutableFD       = 3
+	observerHandshakeWait      = 3 * time.Second
+	observerShutdownWait       = 10 * time.Second
+	observerForcedShutdownWait = 3 * time.Second
 )
 
 type observerLaunchSpec struct {
@@ -406,48 +407,79 @@ func (session *observerSession) Stop(timeout time.Duration) error {
 			return value
 		}
 		closeErr := observerEndpointCloseError(session.stdin.Close())
-		var waitErr error
-		processStopped := false
-		processTimer := time.NewTimer(remaining())
-		select {
-		case waitErr = <-session.processDone:
-			processStopped = true
-			if !processTimer.Stop() {
-				<-processTimer.C
-			}
-		case <-processTimer.C:
-			waitErr = errors.New("observer helper did not stop within the bound")
+		waitErr, processStopped := waitObserverProcess(
+			session.processDone,
+			remaining(),
+		)
+		readerDrained := false
+		var relayErr error
+		if !processStopped {
+			waitErr = errors.Join(
+				waitErr,
+				errors.New("observer helper did not stop within the bound"),
+			)
 			if killErr := session.process.kill(); killErr != nil {
 				waitErr = errors.Join(waitErr, killErr)
 			}
-			reapTimer := time.NewTimer(remaining())
-			select {
-			case reapedErr := <-session.processDone:
-				waitErr = errors.Join(waitErr, reapedErr)
+			// Once graceful shutdown has failed, no final drain receipt can be
+			// trusted. Close both bounded transports before waiting again so a
+			// reader blocked on relay backpressure cannot prevent helper reaping.
+			closeErr = errors.Join(
+				closeErr,
+				observerEndpointCloseError(session.stdout.Close()),
+			)
+			relayErr = session.relay.Close()
+			if reapedErr, reaped := waitObserverProcess(
+				session.processDone,
+				observerForcedShutdownWait,
+			); reaped {
 				processStopped = true
-				if !reapTimer.Stop() {
-					<-reapTimer.C
+				waitErr = errors.Join(waitErr, reapedErr)
+			} else {
+				waitErr = errors.Join(
+					waitErr,
+					errors.New("observer helper was not reaped after forced shutdown"),
+				)
+			}
+			readerDrained = waitObserverReader(
+				session.readerDone,
+				observerForcedShutdownWait,
+			)
+			if !readerDrained {
+				waitErr = errors.Join(
+					waitErr,
+					errors.New("observer reader did not stop after forced close"),
+				)
+			}
+		} else {
+			readerDrained = waitObserverReader(session.readerDone, remaining())
+			if !readerDrained {
+				waitErr = errors.Join(
+					waitErr,
+					errors.New("observer reader did not stop within the bound"),
+				)
+				closeErr = errors.Join(
+					closeErr,
+					observerEndpointCloseError(session.stdout.Close()),
+				)
+				relayErr = session.relay.Close()
+				readerDrained = waitObserverReader(
+					session.readerDone,
+					observerForcedShutdownWait,
+				)
+				if !readerDrained {
+					waitErr = errors.Join(
+						waitErr,
+						errors.New("observer reader did not stop after forced close"),
+					)
 				}
-			case <-reapTimer.C:
-				waitErr = errors.Join(waitErr, errors.New("observer helper was not reaped"))
+			} else {
+				closeErr = errors.Join(
+					closeErr,
+					observerEndpointCloseError(session.stdout.Close()),
+				)
 			}
 		}
-		readerDrained := false
-		readerTimer := time.NewTimer(remaining())
-		select {
-		case <-session.readerDone:
-			readerDrained = true
-			if !readerTimer.Stop() {
-				<-readerTimer.C
-			}
-		case <-readerTimer.C:
-			waitErr = errors.Join(waitErr, errors.New("observer reader did not stop"))
-		}
-		closeErr = errors.Join(
-			closeErr,
-			observerEndpointCloseError(session.stdout.Close()),
-		)
-		var relayErr error
 		// A drain marker claims that the collector completed cleanly and that
 		// every admitted observation has an exact final receipt. Reaping the
 		// helper and draining its stdout are necessary but not sufficient: an
@@ -455,9 +487,14 @@ func (session *observerSession) Stop(timeout time.Duration) error {
 		// without publishing that receipt. Close the relay destructively in that
 		// case so the host accounts an unexpected transport loss instead of
 		// receiving a false collector.goodbye.
-		if processStopped && readerDrained && waitErr == nil && closeErr == nil {
-			relayErr = session.relay.DrainAndClose(remaining())
-		} else {
+		if relayErr == nil && processStopped && readerDrained &&
+			waitErr == nil && closeErr == nil {
+			relayWait := observerRelayShutdownWait
+			if timeout < relayWait {
+				relayWait = timeout
+			}
+			relayErr = session.relay.DrainAndClose(relayWait)
+		} else if relayErr == nil {
 			relayErr = session.relay.Close()
 		}
 		session.stopErr = errors.Join(closeErr, waitErr, relayErr)
@@ -466,6 +503,47 @@ func (session *observerSession) Stop(timeout time.Duration) error {
 		}
 	})
 	return session.stopErr
+}
+
+func waitObserverProcess(
+	done <-chan error,
+	timeout time.Duration,
+) (error, bool) {
+	if timeout <= 0 {
+		timeout = time.Millisecond
+	}
+	timer := time.NewTimer(timeout)
+	defer stopObserverTimer(timer)
+	select {
+	case err := <-done:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+func waitObserverReader(done <-chan struct{}, timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = time.Millisecond
+	}
+	timer := time.NewTimer(timeout)
+	defer stopObserverTimer(timer)
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func stopObserverTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
 }
 
 func observerEndpointCloseError(err error) error {

@@ -384,11 +384,15 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c \
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c \
   -o "$workspace_a/dns-mediator-attribution.test" \
   ./internal/workloadobs/collector/dns
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c \
+  -o "$workspace_a/session-supervisor.test" \
+  ./cmd/hideout-session-supervisor
 chmod 0700 \
   "$workspace_a/file-observer-kernel.test" \
   "$workspace_a/network-correlation-matrix.test" \
   "$workspace_a/network-kernel-attribution.test" \
-  "$workspace_a/dns-mediator-attribution.test"
+  "$workspace_a/dns-mediator-attribution.test" \
+  "$workspace_a/session-supervisor.test"
 
 run_hideout init \
   --no-input --profile default --template dev --backend lima --network direct >/dev/null
@@ -554,6 +558,26 @@ chmod 0600 \
   "$work_root/network-kernel-attribution.log" \
   "$work_root/dns-mediator-attribution.log"
 
+current_stage="real-lima-supervisor-shutdown-regression"
+supervisor_test_guest="/tmp/hideout-session-supervisor.test"
+LIMA_HOME="$lima_home" limactl copy \
+  --backend=scp --tty=false \
+  "$workspace_a/session-supervisor.test" \
+  "$instance_name:$supervisor_test_guest" \
+  >"$work_root/session-supervisor-copy.log" 2>&1
+if ! run_lima_root \
+  "chmod 0700 '$supervisor_test_guest' && '$supervisor_test_guest' -test.v -test.count=1 -test.run '^TestObserverSessionForcedShutdownUsesIndependentReapBudget$'" \
+  >"$work_root/session-supervisor-shutdown.log" 2>&1; then
+  fail "real Linux supervisor shutdown regression failed"
+fi
+grep -Eq \
+  '^--- PASS: TestObserverSessionForcedShutdownUsesIndependentReapBudget \(' \
+  "$work_root/session-supervisor-shutdown.log" ||
+  fail "real Linux supervisor shutdown regression omitted its PASS receipt"
+chmod 0600 \
+  "$work_root/session-supervisor-copy.log" \
+  "$work_root/session-supervisor-shutdown.log"
+
 old_pid_max="$(
   run_lima_root "sysctl -n kernel.pid_max"
 )"
@@ -570,10 +594,32 @@ LIMA_HOME="$lima_home" limactl shell "$instance_name" \
 noise_pid=$!
 
 touch "$workspace_a/go" "$workspace_b/go"
-wait "$workload_a_pid"
-wait "$workload_b_pid"
-wait "$noise_pid"
+current_stage="real-lima-concurrent-shutdown"
+workload_a_status=0
+workload_b_status=0
+noise_status=0
+if wait "$workload_a_pid"; then
+  :
+else
+  workload_a_status=$?
+fi
+if wait "$workload_b_pid"; then
+  :
+else
+  workload_b_status=$?
+fi
+if wait "$noise_pid"; then
+  :
+else
+  noise_status=$?
+fi
 run_lima_root "sysctl -w kernel.pid_max=$old_pid_max" >/dev/null
+[ "$workload_a_status" -eq 0 ] ||
+  fail "session-a command or observer shutdown failed (exit=$workload_a_status)"
+[ "$workload_b_status" -eq 0 ] ||
+  fail "session-b command or observer shutdown failed (exit=$workload_b_status)"
+[ "$noise_status" -eq 0 ] ||
+  fail "unrelated PID-reuse noise failed (exit=$noise_status)"
 
 session_a="$(extract_session_id "$work_root/session-a.err")"
 session_b="$(extract_session_id "$work_root/session-b.err")"
@@ -732,6 +778,8 @@ for artifact_name in \
   session-a.coverage.json \
   file-observer-kernel-copy.log \
   file-observer-kernel-test.log \
+  session-supervisor-copy.log \
+  session-supervisor-shutdown.log \
   network-correlation-copy.log \
   network-kernel-copy.log \
   dns-mediator-copy.log \
@@ -891,6 +939,7 @@ jq -n \
     assertions:{
       realLima:true,
       completeKernelFileProvider:true,
+      supervisorShutdownRegression:true,
       distinctSessions:($sessionA != $sessionB),
       completePagination:
         (all($eventSets[]; .queryTruncated == false)),

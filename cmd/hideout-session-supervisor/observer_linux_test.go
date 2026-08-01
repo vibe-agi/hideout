@@ -104,6 +104,77 @@ func TestObserverEndpointCloseNormalizesOnlyAlreadyClosedEndpoints(t *testing.T)
 	}
 }
 
+func TestObserverSessionForcedShutdownUsesIndependentReapBudget(t *testing.T) {
+	spec := observerSupervisorStart(t)
+	binding := sessionwire.ObserverBinding{
+		Owner: spec.Activity.Owner, SessionID: spec.SessionID,
+		EnvironmentID:        spec.ProjectionReadiness.EnvironmentID,
+		BackendIncarnationID: spec.Activity.Owner.BackendIncarnationID,
+		GuestBootID:          spec.ExpectedBootID,
+		CgroupID:             4242,
+		ObserverGeneration:   spec.Activity.ObserverGeneration,
+	}
+	capabilities := observerUnavailableCapabilities()
+	hello := sessionwire.ObserverHello{
+		Type: "observer.hello", Schema: sessionwire.ObserverWireSchema,
+		Owner: binding.Owner, SessionID: binding.SessionID,
+		EnvironmentID:        binding.EnvironmentID,
+		BackendIncarnationID: binding.BackendIncarnationID,
+		GuestBootID:          binding.GuestBootID,
+		CgroupID:             binding.CgroupID,
+		ObserverGeneration:   binding.ObserverGeneration,
+		HelperDigest:         spec.Activity.ObserverHelperDigest,
+		Capabilities:         capabilities,
+	}
+	relay, err := newObserverRelay(
+		binding,
+		hello,
+		spec.Activity.ObserverStreamToken,
+		observerRelayTestOptions(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	helperInput, supervisorInput := io.Pipe()
+	supervisorOutput, helperOutput := io.Pipe()
+	processDone := make(chan error, 1)
+	readerDone := make(chan struct{})
+	var killOnce sync.Once
+	session := &observerSession{
+		process: &observerHelperProcess{
+			stdin: supervisorInput, stdout: supervisorOutput,
+			kill: func() error {
+				killOnce.Do(func() {
+					go func() {
+						time.Sleep(25 * time.Millisecond)
+						_ = helperInput.Close()
+						_ = helperOutput.Close()
+						processDone <- nil
+						close(readerDone)
+					}()
+				})
+				return nil
+			},
+		},
+		stdin: supervisorInput, stdout: supervisorOutput,
+		processDone: processDone, readerDone: readerDone,
+		relay: relay,
+	}
+
+	err = session.Stop(5 * time.Millisecond)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"observer helper did not stop within the bound",
+	) {
+		t.Fatalf("shutdown error=%v", err)
+	}
+	if strings.Contains(err.Error(), "not reaped") ||
+		strings.Contains(err.Error(), "reader did not stop") {
+		t.Fatalf("forced cleanup inherited the exhausted graceful bound: %v", err)
+	}
+}
+
 func TestObserverSessionRegistersBeforeReadyAndAbortsExactBoundary(t *testing.T) {
 	spec := observerSupervisorStart(t)
 	backend := newFakeSessionCgroupBackend()
