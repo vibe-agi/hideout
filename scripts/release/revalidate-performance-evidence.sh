@@ -92,7 +92,7 @@ file_bytes() {
 file_mode() {
   local mode
   mode="$(stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null)"
-  printf '%04d\n' "$((8#$mode))"
+  printf '%04o\n' "$((8#$mode))"
 }
 
 safe_relative_path() {
@@ -716,6 +716,13 @@ run_preflight() {
       limitations:["one","two"]
     }
   ' >"$receipt_fixture"
+  chmod 0600 "$receipt_fixture"
+  [ "$(file_mode "$receipt_fixture")" = "0600" ] ||
+    fail "private file mode was not normalized as octal 0600"
+  chmod 0644 "$receipt_fixture"
+  [ "$(file_mode "$receipt_fixture")" = "0644" ] ||
+    fail "public file mode was not normalized as octal 0644"
+  chmod 0600 "$receipt_fixture"
   go run ./cmd/hideout-schema-validate \
     "$schema_path" "$receipt_fixture" >/dev/null ||
     fail "valid incremental performance receipt fixture was rejected"
