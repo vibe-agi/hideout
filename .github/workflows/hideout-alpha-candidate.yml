@@ -234,7 +234,9 @@ jobs:
 
       - name: Run local release contracts and retain bounded candidate metadata
         env:
-          HIDEOUT_TLC_WORKERS: "2"
+          # Keep the hosted-runner policy identical to CI. WorkloadObservation
+          # regresses severely with two TLC workers on this runner class.
+          HIDEOUT_TLC_WORKERS: "1"
         run: |
           set -euo pipefail
           scripts/test-gate0.sh

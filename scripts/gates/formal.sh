@@ -10,6 +10,7 @@ gate_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 gate_started_epoch="$(date +%s)"
 gate_stage="preflight"
 gate_current_configuration=""
+gate_current_configuration_started_at=""
 gate_current_configuration_started_epoch=0
 gate_configuration_timings='[]'
 gate_review_written=0
@@ -164,6 +165,7 @@ write_formal_run_review() {
     --arg finishedAt "$finished_at" \
     --arg stage "$gate_stage" \
     --arg configuration "$gate_current_configuration" \
+    --arg configurationStartedAt "$gate_current_configuration_started_at" \
     --arg selectedConfiguration "$selected_configuration" \
     --arg failureLayer "$failure_layer" \
     --arg failureReason "$failure_reason" \
@@ -191,10 +193,16 @@ write_formal_run_review() {
           workers:$workers,
           stage:$stage,
           currentConfiguration:(if $configuration == "" then null else $configuration end),
+          currentConfigurationStartedAt:(if $configurationStartedAt == "" then null else $configurationStartedAt end),
           currentConfigurationElapsedSeconds:$currentElapsedSeconds,
           completedConfigurations:$configurations
         },
-        timing:{startedAt:$startedAt,finishedAt:$finishedAt,elapsedSeconds:$elapsedSeconds},
+        timing:{
+          startedAt:$startedAt,
+          snapshotAt:$finishedAt,
+          finishedAt:(if $result == "running" then null else $finishedAt end),
+          elapsedSeconds:$elapsedSeconds
+        },
         failure:(if $result == "failed" then {
           firstObservedLayer:$failureLayer,
           reason:$failureReason
@@ -237,6 +245,7 @@ trap cleanup EXIT
 printf \
   'formal-gate: start=from-scratch checkpointReused=false workers=%s restartRequired=false powerCycleRequired=false review=%s\n' \
   "$tlc_workers" "$run_review"
+write_formal_run_review running "" ""
 
 go run ./cmd/hideout-schema-validate \
   "$inventory_schema" "$inventory" >"$run_dir/inventory-schema.log" 2>&1
@@ -315,7 +324,15 @@ configuration_entries() {
       '.configurations[] | select(.id == $id)' "$inventory"
     return
   fi
-  jq -c '.configurations[]' "$inventory"
+  # Run the two dominant models first. This does not change the inventoried
+  # state/property set or verifier, but a runner/worker regression now fails
+  # before spending time on fourteen already-fast configurations.
+  jq -c '
+    (.configurations[] | select(.id == "WorkloadObservation")),
+    (.configurations[] | select(.id == "SecretTransition")),
+    (.configurations[] |
+      select(.id != "WorkloadObservation" and .id != "SecretTransition"))
+  ' "$inventory"
 }
 
 tlc_results='[]'
@@ -330,7 +347,13 @@ while IFS= read -r entry; do
   log="$run_dir/tlc/$id.log"
   gate_stage="formal-model"
   gate_current_configuration="$id"
+  gate_current_configuration_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   gate_current_configuration_started_epoch="$(date +%s)"
+  # Persist progress before TLC starts. A GitHub job-level timeout can kill the
+  # foreground JVM and shell without running EXIT traps; this atomic receipt
+  # lets the always-run workflow finalizer retain the exact current model and
+  # every already-completed configuration instead of uploading no review.
+  write_formal_run_review running "" ""
 
   if [ ! -f "$module" ] || [ -L "$module" ] ||
     [ ! -f "$config" ] || [ -L "$config" ]; then
@@ -457,7 +480,9 @@ while IFS= read -r entry; do
     'formal-gate: configuration=%s result=passed elapsedSeconds=%s generated=%s distinct=%s\n' \
     "$id" "$configuration_elapsed_seconds" "$generated" "$distinct"
   gate_current_configuration=""
+  gate_current_configuration_started_at=""
   gate_current_configuration_started_epoch=0
+  write_formal_run_review running "" ""
 done < <(configuration_entries)
 
 if [ -n "$selected_configuration" ]; then

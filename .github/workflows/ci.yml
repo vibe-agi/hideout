@@ -79,7 +79,7 @@ jobs:
   gate0_formal:
     name: Gate 0 / formal
     runs-on: macos-15
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Check out source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -93,11 +93,22 @@ jobs:
           cache: true
 
       - name: Run the complete formal Gate 0 shard
+        id: formal
         env:
-          # TLC remains exhaustive over the same bounded models. Two workers
-          # reduce wall time without changing the state/property inventory.
-          HIDEOUT_TLC_WORKERS: "2"
+          # WorkloadObservation is memory/coordination bound on the hosted
+          # arm64 runner: two TLC workers took more than 66 minutes for that
+          # model, while the reviewed single-worker run completed normally.
+          HIDEOUT_TLC_WORKERS: "1"
         run: scripts/test-gate0.sh --shard formal
+
+      - name: Finalize the formal execution review
+        if: ${{ always() }}
+        env:
+          FORMAL_STEP_OUTCOME: ${{ steps.formal.outcome }}
+        run: |
+          scripts/gates/formal-review-finalize.sh \
+            --out .artifacts/045/formal/reviews \
+            --outcome "$FORMAL_STEP_OUTCOME"
 
       - name: Retain the formal execution review
         if: ${{ always() }}
@@ -105,7 +116,11 @@ jobs:
         with:
           name: gate0-formal-review-${{ github.run_id }}
           path: .artifacts/045/formal/reviews/**/run-review.json
-          if-no-files-found: warn
+          if-no-files-found: error
+          # The reviewed path is exact, but its repository-owned root is
+          # intentionally private/hidden. upload-artifact excludes it by
+          # default unless this is explicit.
+          include-hidden-files: true
           retention-days: 14
 
   gate0:

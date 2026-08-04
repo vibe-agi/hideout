@@ -2179,6 +2179,17 @@ diagnostic rerun command. Splitting changes scheduling and visibility only; it
 does not remove a model, invariant, property, refinement test, or evidence
 judge from the complete gate.
 
+The hosted arm64 runner uses one TLC worker. A measured two-worker attempt made
+`WorkloadObservation` exceed 66 minutes even though it improved the smaller
+`SecretTransition` model, so worker count is a per-runner policy rather than an
+assumed monotonic speedup. The formal producer atomically snapshots its review
+before and after each model. An always-run finalizer converts a surviving
+in-progress receipt into an explicit harness failure after cancellation and
+fails closed if no receipt exists; an artifact-upload warning is never accepted
+as a run review. The two dominant models run first, reducing time and repeated
+work when a runner or worker-policy regression affects either one; acceptance
+still verifies the complete inventory independent of execution order.
+
 Verification gates also isolate mutable tool configuration. Gate 0, the local
 release aggregate, and the migration gate pin Go's module mode to
 `-mod=readonly`, so an ambient developer `GOFLAGS` cannot silently repair or
