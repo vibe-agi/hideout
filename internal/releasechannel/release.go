@@ -3,6 +3,8 @@ package releasechannel
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ type PublicRelease struct {
 	Checksums            ChecksumsSummary    `json:"checksums"`
 	SupportMatrixVersion string              `json:"supportMatrixVersion"`
 	NonClaims            []string            `json:"nonClaims"`
+	FeatureIDs           []string            `json:"featureIds,omitempty"`
 	GeneratedAt          time.Time           `json:"generatedAt"`
 }
 
@@ -96,6 +99,9 @@ func (r PublicRelease) Validate(assetRoot string) error {
 	if r.GeneratedAt.IsZero() || r.SupportMatrixVersion == "" || len(r.NonClaims) == 0 {
 		return errors.New("generatedAt, supportMatrixVersion, and nonClaims are required")
 	}
+	if err := validateFeatureIDs(r.FeatureIDs); err != nil {
+		return fmt.Errorf("public release: %w", err)
+	}
 	wantPackage := fmt.Sprintf("hideout-v%s-darwin-arm64.tar.gz", r.Version)
 	wantEvidence := fmt.Sprintf("hideout-v%s-evidence.tar.gz", r.Version)
 	wantRelease := fmt.Sprintf("hideout-v%s-release.json", r.Version)
@@ -104,6 +110,7 @@ func (r PublicRelease) Validate(assetRoot string) error {
 		return errors.New("release manifest must declare exactly package and evidence artifacts")
 	}
 	seen := map[string]bool{}
+	var evidenceArtifact ReleaseArtifact
 	for _, artifact := range r.Artifacts {
 		if seen[artifact.Name] {
 			return fmt.Errorf("duplicate release artifact %q", artifact.Name)
@@ -117,6 +124,9 @@ func (r PublicRelease) Validate(assetRoot string) error {
 		}
 		if artifact.Kind == "evidence" && (artifact.Name != wantEvidence || artifact.Status != "passed" || !IsSHA256(artifact.BundleManifestSHA256) || !IsSHA256(artifact.ReadinessSHA256)) {
 			return errors.New("evidence artifact identity is invalid")
+		}
+		if artifact.Kind == "evidence" {
+			evidenceArtifact = artifact
 		}
 		if err := VerifyRootedRegularFile(assetRoot, artifact.Name, artifact.SHA256, artifact.Bytes); err != nil {
 			return err
@@ -146,7 +156,55 @@ func (r PublicRelease) Validate(assetRoot string) error {
 			return fmt.Errorf("required release asset %q: %w", name, err)
 		}
 	}
+	if len(r.FeatureIDs) > 0 {
+		if err := validateReleaseFeatureBinding(assetRoot, evidenceArtifact, r.FeatureIDs); err != nil {
+			return err
+		}
+	}
 	return ValidateChecksums(assetRoot, r.Checksums)
+}
+
+func validateReleaseFeatureBinding(
+	assetRoot string,
+	evidence ReleaseArtifact,
+	featureIDs []string,
+) error {
+	tmp, err := os.MkdirTemp("", "hideout-release-feature-binding-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	if err := ExtractEvidenceArchive(filepath.Join(assetRoot, evidence.Name), tmp); err != nil {
+		return fmt.Errorf("extract release evidence feature binding: %w", err)
+	}
+	return validateReleaseFeatureBindingRoot(tmp, evidence, featureIDs)
+}
+
+func validateReleaseFeatureBindingRoot(
+	root string,
+	evidence ReleaseArtifact,
+	featureIDs []string,
+) error {
+	bundlePath := filepath.Join(root, "bundle-manifest.json")
+	bundleDigest, _, err := FileSHA256(bundlePath)
+	if err != nil || bundleDigest != evidence.BundleManifestSHA256 {
+		return errors.New("release evidence bundle manifest binding is invalid")
+	}
+	var bundle EvidenceBundle
+	if err := ReadStrict(bundlePath, MaxJSONBytes, &bundle); err != nil {
+		return fmt.Errorf("read release evidence feature binding: %w", err)
+	}
+	if err := validateFeatureIDs(bundle.FeatureIDs); err != nil {
+		return fmt.Errorf("release evidence feature binding: %w", err)
+	}
+	if strings.Join(bundle.FeatureIDs, "\x00") != strings.Join(featureIDs, "\x00") {
+		return errors.New("release feature IDs do not match the evidence bundle")
+	}
+	readinessDigest, _, err := FileSHA256(filepath.Join(root, "release-readiness.json"))
+	if err != nil || readinessDigest != evidence.ReadinessSHA256 {
+		return errors.New("release readiness evidence binding is invalid")
+	}
+	return nil
 }
 
 func ValidateChecksums(root string, summary ChecksumsSummary) error {

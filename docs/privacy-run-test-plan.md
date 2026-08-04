@@ -2078,8 +2078,7 @@ and the bound runtime artifact SHA-256 is
 
 ## Gate 045: Operator Observability Console
 
-Status: **implementation gates active; exact release-candidate promotion
-pending.**
+Status: **implementation gates active; public inclusion is receipt-bound.**
 
 Feature 045 is accepted only when one clean source identity, one immutable
 package archive, and one installed candidate satisfy every lane below. Passing
@@ -2346,20 +2345,22 @@ ordinary uninstall absence, and preservation of durable or unrelated data.
 The final evidence manifest must bind source commit and tree, version, package
 and every packaged file digest, helpers, embedded UI assets, runtime, formal
 inventory/results, every required gate, limitations, review resolution, local
-install, and publication absence. A digest, source, timestamp, platform, or
-candidate mismatch fails closed.
+install, and publication absence. The public evidence bundle derives a sorted,
+unique feature-ID set from those validated proof manifests. The public release
+manifest copies that exact set and validates it against the evidence archive;
+the publication receipt then derives `releases/current.json` without manual
+feature transcription. A digest, source, timestamp, platform, candidate, or
+feature-set mismatch fails before publication. The 045/046 release requires
+both exact feature IDs.
 
-### Current evidence versus release acceptance
+### Development evidence versus release acceptance
 
-T151–T157 currently establish passing formal, local/adversarial, real-Lima,
-UI/browser, privacy, and performance behavior for the recorded development
-source identities. T158–T159 additionally proved the clean build and package
-lifecycle judges in a disposable exact-clean implementation snapshot. Those
-runs remain useful implementation evidence, but none is an accepted final
-main-tree release candidate. The T163–T165 judges and negative preflights are
-implemented; their exact package-bound and installed-machine receipts plus
-the T171 final clean recollection remain mandatory before this gate may be
-promoted.
+Historical development and disposable-clean runs remain useful engineering
+evidence but never become an accepted public candidate by description or by
+copying their result JSON. Each candidate must independently satisfy the exact
+clean-source, package-bound, installed-machine, and publication-boundary judges.
+After anonymous verification, public inclusion is asserted only by the
+receipt-derived inventory entry for `045-operator-observability-console`.
 
 ## Gate 046: Portable Migration
 

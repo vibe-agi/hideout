@@ -36,6 +36,7 @@ type EvidenceBundle struct {
 	Package         PackageIdentity `json:"package"`
 	RegistrySchema  string          `json:"registrySchema"`
 	ProofIDs        []string        `json:"proofIds"`
+	FeatureIDs      []string        `json:"featureIds,omitempty"`
 	Files           []BundleFile    `json:"files"`
 	RedactionStatus string          `json:"redactionStatus"`
 }
@@ -66,6 +67,9 @@ func (b EvidenceBundle) Validate(root string, requiredProofIDs []string) error {
 	sort.Strings(got)
 	if strings.Join(want, "\x00") != strings.Join(got, "\x00") {
 		return errors.New("evidence bundle proof IDs do not match registry requirements")
+	}
+	if err := validateFeatureIDs(b.FeatureIDs); err != nil {
+		return fmt.Errorf("evidence bundle: %w", err)
 	}
 	seen := map[string]string{}
 	var total int64
@@ -100,7 +104,7 @@ func (b EvidenceBundle) Validate(root string, requiredProofIDs []string) error {
 		return errors.New("evidence bundle has no files")
 	}
 	if isCanonicalCandidateProofSet(requiredProofIDs) {
-		if err := validateCanonicalEvidence(root, b.Package, seen); err != nil {
+		if err := validateCanonicalEvidence(root, b.Package, seen, b.FeatureIDs); err != nil {
 			return err
 		}
 	}
@@ -197,6 +201,7 @@ func BuildEvidenceBundle(root string, pkg PackageIdentity, requiredProofIDs []st
 	if err := aggregate.RequirePassed(proofIDs...); err != nil {
 		return EvidenceBundle{}, err
 	}
+	featureIDs := featureIDsFromProofManifests(proofManifests)
 	for _, manifest := range proofManifests {
 		if manifest.Dirty || manifest.Commit != pkg.SourceCommit {
 			return EvidenceBundle{}, errors.New("proof manifest is dirty or bound to another source commit")
@@ -209,7 +214,8 @@ func BuildEvidenceBundle(root string, pkg PackageIdentity, requiredProofIDs []st
 	bundle := EvidenceBundle{
 		Schema: EvidenceBundleSchema, GeneratedAt: generatedAt.UTC(), SourceCommit: pkg.SourceCommit,
 		Package: pkg, RegistrySchema: productevidence.RegistrySchema, ProofIDs: proofIDs,
-		Files: files, RedactionStatus: productevidence.RedactionPassed,
+		FeatureIDs: featureIDs,
+		Files:      files, RedactionStatus: productevidence.RedactionPassed,
 	}
 	if err := bundle.Validate(root, requiredProofIDs); err != nil {
 		return EvidenceBundle{}, err
@@ -305,7 +311,12 @@ func isCanonicalCandidateProofSet(values []string) bool {
 	return strings.Join(want, "\x00") == strings.Join(got, "\x00")
 }
 
-func validateCanonicalEvidence(root string, pkg PackageIdentity, actual map[string]string) error {
+func validateCanonicalEvidence(
+	root string,
+	pkg PackageIdentity,
+	actual map[string]string,
+	featureIDs []string,
+) error {
 	expected := make(map[string]bool, len(canonicalEvidenceCore))
 	for rel, kind := range canonicalEvidenceCore {
 		if actual[rel] != kind {
@@ -345,6 +356,12 @@ func validateCanonicalEvidence(root string, pkg PackageIdentity, actual map[stri
 	}
 	if len(proofManifests) == 0 {
 		return errors.New("canonical evidence has no proof manifests")
+	}
+	if len(featureIDs) > 0 {
+		observed := featureIDsFromProofManifests(proofManifests)
+		if strings.Join(featureIDs, "\x00") != strings.Join(observed, "\x00") {
+			return errors.New("canonical evidence feature IDs do not match proof manifests")
+		}
 	}
 	for rel := range actual {
 		if !expected[rel] {
@@ -428,6 +445,60 @@ func validateCanonicalEvidence(root string, pkg PackageIdentity, actual map[stri
 		return errors.New("evidence proof registry is not the authoritative registry")
 	}
 	return nil
+}
+
+func featureIDsFromProofManifests(manifests []productevidence.Manifest) []string {
+	seen := make(map[string]struct{})
+	for _, manifest := range manifests {
+		for _, proof := range manifest.Proofs {
+			seen[proof.FeatureID] = struct{}{}
+		}
+	}
+	featureIDs := make([]string, 0, len(seen))
+	for featureID := range seen {
+		featureIDs = append(featureIDs, featureID)
+	}
+	sort.Strings(featureIDs)
+	return featureIDs
+}
+
+func validateFeatureIDs(featureIDs []string) error {
+	for index, featureID := range featureIDs {
+		if !validFeatureID(featureID) {
+			return fmt.Errorf("invalid feature ID %q", featureID)
+		}
+		if index > 0 && featureIDs[index-1] >= featureID {
+			return errors.New("feature IDs must be sorted and unique")
+		}
+	}
+	return nil
+}
+
+func validFeatureID(value string) bool {
+	if len(value) < 5 || len(value) > 128 || value[3] != '-' {
+		return false
+	}
+	for index := 0; index < 3; index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	previousHyphen := true
+	for index := 4; index < len(value); index++ {
+		char := value[index]
+		if char == '-' {
+			if previousHyphen {
+				return false
+			}
+			previousHyphen = true
+			continue
+		}
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') {
+			return false
+		}
+		previousHyphen = false
+	}
+	return !previousHyphen
 }
 
 type canonicalEvidenceGate struct {

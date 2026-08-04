@@ -9,6 +9,7 @@ cd "$ROOT"
 # lets a passing release test dirty the exact candidate source.
 export GOFLAGS="-mod=readonly"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
+. "$ROOT/scripts/lib/public-alpha-features.sh"
 . "$ROOT/scripts/lib/verified-runtime-cache.sh"
 . "$ROOT/scripts/lib/gate-result.sh"
 mode="${1:---contract-only}"
@@ -60,6 +61,7 @@ bash -n \
   scripts/test-phase1.sh \
   scripts/lib/gate-result.sh \
   scripts/lib/lima-temp.sh \
+  scripts/lib/public-alpha-features.sh \
   scripts/lib/public-alpha-cleanup.sh \
   scripts/lib/verified-runtime-cache.sh \
   scripts/test-doc-truth-smoke.sh
@@ -337,6 +339,35 @@ grep -F -- '--arg summarySHA256 "$migration_summary_sha"' \
 grep -F 'cmd/validate-046' scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'product_evidence+=("$out/migration-lima/product-hardening-evidence.json")' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'public_alpha_required_feature_ids "$evidence_root/bundle-manifest.json"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F -- '--argjson featureIds "$bundle_feature_ids"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'featureIds:$featureIds' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+for feature_id in 045-operator-observability-console 046-portable-hideout-migration; do
+  grep -F "$feature_id" scripts/lib/public-alpha-features.sh >/dev/null
+done
+test "$(grep -Fc 'public_alpha_required_feature_ids "$manifest"' \
+  .github/workflows/hideout-alpha-promote.yml)" -eq 1
+test "$(grep -Fc 'public_alpha_required_feature_ids "$assets/$manifest"' \
+  .github/workflows/hideout-alpha-promote.yml)" -eq 1
+grep -F 'Included features: operator HUD and auditable activity' \
+  .github/workflows/hideout-alpha-promote.yml >/dev/null
+public_alpha_features_self_test
+for stale_status in \
+  'alpha.3-upgrade' \
+  'all three public alphas' \
+  'but not yet published' \
+  'No Feature 045 candidate has been remotely published' \
+  'full-state release claim remains pending' \
+  'no new package has been published from this worktree' \
+  'Not yet a released portability claim'; do
+  if grep -F "$stale_status" docs/STATUS.md >/dev/null; then
+    echo "public-alpha-release: STATUS retains version-specific candidate truth: $stale_status" >&2
+    exit 1
+  fi
+done
 grep -F 'hideout_seed_verified_runtime_cache' \
   scripts/test-public-alpha-clean-install.sh >/dev/null
 grep -F 'ln -s "$1" "$path"' scripts/test-runtime-lima.sh >/dev/null
@@ -727,6 +758,11 @@ evidence_archive="$tmp/hideout-v0.1.0-dev.0-evidence.tar.gz"
 go run ./cmd/hideout support release build-evidence --root "$evidence" \
   --package-identity "$tmp/package-identity.json" --out "$evidence_archive" >/dev/null
 go run ./cmd/hideout support release validate-evidence --archive "$evidence_archive" >/dev/null
+jq -e '
+  (.featureIds // []) as $features |
+  ($features | index("045-operator-observability-console")) != null and
+  ($features | index("046-portable-hideout-migration")) != null
+' "$evidence/bundle-manifest.json" >/dev/null
 
 missing_verification="$tmp/missing-verification"
 cp -R "$evidence" "$missing_verification"
@@ -842,7 +878,8 @@ jq -n --slurpfile package "$tmp/package-identity.json" \
     maturity:"public-supervised-alpha",platform:"darwin/arm64",backend:"lima",
     package:$package[0],releaseURL:("https://github.com/vibe-agi/hideout/releases/tag/v"+$package[0].productVersion),
     receiptSHA256:$receiptSHA,supportMatrix:"2026-07-alpha",
-    nonClaims:["public-alpha-maturity","workspace-write-blocking"]}}
+    nonClaims:["public-alpha-maturity","workspace-write-blocking"],
+    featureIds:["045-operator-observability-console","046-portable-hideout-migration"]}}
 ' >"$docs_root/releases/current.json"
 HIDEOUT_DOC_ROOT="$docs_root" scripts/render-public-release-docs.sh \
   --inventory "$docs_root/releases/current.json" >/dev/null
@@ -855,6 +892,10 @@ for file in README.md README.zh-CN.md docs/STATUS.md docs/support-matrix.md CHAN
   grep -F "v0.1.0-dev.0" "$docs_root/$file" >/dev/null
   grep -F 'https://github.com/vibe-agi/hideout/releases/tag/v0.1.0-dev.0' "$docs_root/$file" >/dev/null
 done
+grep -F 'operator HUD and auditable activity surface' "$docs_root/README.md" >/dev/null
+grep -F '操作员 HUD 与可审计活动记录' "$docs_root/README.zh-CN.md" >/dev/null
+grep -F '045-operator-observability-console' "$docs_root/docs/STATUS.md" >/dev/null
+grep -F '046-portable-hideout-migration' "$docs_root/docs/STATUS.md" >/dev/null
 formula="$docs_root/packaging/homebrew/hideout.rb"
 formula_snapshot="$docs_root/releases/formulas/v0.1.0-dev.0.rb"
 grep -F 'releases/download/v0.1.0-dev.0/hideout-v0.1.0-dev.0-darwin-arm64.tar.gz' "$formula" >/dev/null

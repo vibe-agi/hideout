@@ -573,7 +573,9 @@ func (a app) supportReleaseInventoryFromReceipt(args []string) error {
 			Version: release.Version, Tag: release.Tag, Maturity: release.Maturity,
 			Platform: "darwin/arm64", Backend: "lima", Package: receipt.Package,
 			ReleaseURL: receipt.URL, ReceiptSHA256: receiptDigest,
-			SupportMatrix: release.SupportMatrixVersion, NonClaims: append([]string(nil), release.NonClaims...),
+			SupportMatrix: release.SupportMatrixVersion,
+			NonClaims:     append([]string(nil), release.NonClaims...),
+			FeatureIDs:    append([]string(nil), release.FeatureIDs...),
 		},
 	}
 	if err := inventory.Validate(); err != nil {

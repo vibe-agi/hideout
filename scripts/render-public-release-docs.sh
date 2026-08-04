@@ -25,6 +25,8 @@ jq -e '
   .current.maturity == "public-supervised-alpha" and
   .current.platform == "darwin/arm64" and
   .current.backend == "lima" and
+  ((.current.featureIds // []) as $features |
+    $features == ($features | sort | unique)) and
   (.current.package.artifactSHA256 | test("^[0-9a-f]{64}$"))
 ' "$inventory" >/dev/null
 
@@ -32,6 +34,11 @@ version="$(jq -r '.current.version' "$inventory")"
 tag="$(jq -r '.current.tag' "$inventory")"
 release_url="$(jq -r '.current.releaseURL' "$inventory")"
 package_sha="$(jq -r '.current.package.artifactSHA256' "$inventory")"
+has_current_features="$(jq -r '
+  (.current.featureIds // []) as $features |
+  (($features | index("045-operator-observability-console")) != null and
+   ($features | index("046-portable-hideout-migration")) != null)
+' "$inventory")"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-docs.XXXXXX")"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
@@ -96,6 +103,34 @@ cat >"$tmp/changelog" <<EOF
 - Keep automatic updates, Linux packages, GA stability, workspace DLP,
   guest-root containment, and marketplace trust outside this release claim.
 EOF
+
+if [ "$has_current_features" = true ]; then
+  cat >>"$tmp/readme-en" <<'EOF'
+
+This release includes the operator HUD and auditable activity surface (Feature
+045), plus encrypted portable VM/config migration (Feature 046).
+EOF
+  cat >>"$tmp/readme-zh" <<'EOF'
+
+本版本包含操作员 HUD 与可审计活动记录（Feature 045），以及加密的 VM/配置
+迁移能力（Feature 046）。
+EOF
+  cat >>"$tmp/status" <<'EOF'
+
+The receipt-bound feature inventory includes the operator observability console
+(`045-operator-observability-console`) and portable Hideout migration
+(`046-portable-hideout-migration`).
+EOF
+  cat >>"$tmp/support" <<'EOF'
+
+Receipt-bound included features: `045-operator-observability-console` and
+`046-portable-hideout-migration`.
+EOF
+  cat >>"$tmp/changelog" <<'EOF'
+- Include the operator HUD/auditable activity surface and encrypted portable
+  VM/config migration, bound to their exact release evidence.
+EOF
+fi
 
 history_count=0
 while IFS= read -r receipt; do

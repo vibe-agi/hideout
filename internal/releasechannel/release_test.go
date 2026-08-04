@@ -76,6 +76,62 @@ func TestVerifyRootedRegularFileRejectsSymlinkAncestor(t *testing.T) {
 	}
 }
 
+func TestReleaseFeatureIDsAreBoundToExactEvidenceManifest(t *testing.T) {
+	root := t.TempDir()
+	featureIDs := []string{
+		"045-operator-observability-console",
+		"046-portable-hideout-migration",
+	}
+	bundle := EvidenceBundle{FeatureIDs: featureIDs}
+	if err := WriteJSONAtomic(filepath.Join(root, "bundle-manifest.json"), bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "release-readiness.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundleDigest, _, err := FileSHA256(filepath.Join(root, "bundle-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readinessDigest, _, err := FileSHA256(filepath.Join(root, "release-readiness.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := ReleaseArtifact{
+		BundleManifestSHA256: bundleDigest,
+		ReadinessSHA256:      readinessDigest,
+	}
+	if err := validateReleaseFeatureBindingRoot(root, evidence, featureIDs); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("feature mismatch", func(t *testing.T) {
+		if err := validateReleaseFeatureBindingRoot(
+			root,
+			evidence,
+			[]string{"045-operator-observability-console"},
+		); err == nil || !strings.Contains(err.Error(), "feature IDs") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+	t.Run("bundle digest mismatch", func(t *testing.T) {
+		mutated := evidence
+		mutated.BundleManifestSHA256 = testDigest
+		if err := validateReleaseFeatureBindingRoot(root, mutated, featureIDs); err == nil ||
+			!strings.Contains(err.Error(), "bundle manifest") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+	t.Run("readiness digest mismatch", func(t *testing.T) {
+		mutated := evidence
+		mutated.ReadinessSHA256 = testDigest
+		if err := validateReleaseFeatureBindingRoot(root, mutated, featureIDs); err == nil ||
+			!strings.Contains(err.Error(), "readiness") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+}
+
 func releaseFixture(t *testing.T) (string, PublicRelease) {
 	t.Helper()
 	root := t.TempDir()

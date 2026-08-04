@@ -17,6 +17,13 @@ func TestPublicReleaseSchemasAcceptModelsAndRejectUnknownFields(t *testing.T) {
 	bundle := bundleFixture(testDigest, 1)
 	receipt := receiptFixture(release)
 	inventory := inventoryFixture(release)
+	featureIDs := []string{
+		"045-operator-observability-console",
+		"046-portable-hideout-migration",
+	}
+	release.FeatureIDs = append([]string(nil), featureIDs...)
+	bundle.FeatureIDs = append([]string(nil), featureIDs...)
+	inventory.Current.FeatureIDs = append([]string(nil), featureIDs...)
 	verification := PackageVerificationObservation{
 		Schema: PackageVerificationSchema, ObservedAt: time.Now(), Status: "passed",
 		Mode: "artifact", Files: 1, Package: packageIdentityFromRelease(release),
@@ -148,7 +155,8 @@ func inventoryFixture(release PublicRelease) PublishedInventory {
 			Package:       packageIdentityFromRelease(release),
 			ReleaseURL:    "https://github.com/vibe-agi/hideout/releases/tag/" + release.Tag,
 			ReceiptSHA256: testDigest, SupportMatrix: "2026-07-13",
-			NonClaims: []string{"workspace-dlp"},
+			NonClaims:  []string{"workspace-dlp"},
+			FeatureIDs: append([]string(nil), release.FeatureIDs...),
 		},
 	}
 }

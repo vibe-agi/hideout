@@ -8,6 +8,7 @@ umask 077
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/public-alpha-cleanup.sh"
+. "$ROOT/scripts/lib/public-alpha-features.sh"
 . "$ROOT/scripts/lib/gate-result.sh"
 
 tag=""
@@ -527,6 +528,9 @@ evidence_archive="$out/$evidence_name"
 "$hideout" support release build-evidence --root "$evidence_root" \
   --package-identity "$out/package-identity.json" --out "$evidence_archive" >/dev/null
 "$hideout" support release validate-evidence --archive "$evidence_archive" >/dev/null
+bundle_feature_ids="$(
+  public_alpha_required_feature_ids "$evidence_root/bundle-manifest.json"
+)"
 
 package_bytes="$(wc -c <"$package" | tr -d '[:space:]')"
 evidence_sha="$(shasum -a 256 "$evidence_archive" | awk '{print $1}')"
@@ -548,6 +552,7 @@ jq -n \
   --arg evidenceSHA "$evidence_sha" --argjson evidenceBytes "$evidence_bytes" \
   --arg bundleManifestSHA "$bundle_manifest_sha" --arg readinessSHA "$readiness_sha" \
   --arg signingSHA "$signing_sha" \
+  --argjson featureIds "$bundle_feature_ids" \
   --slurpfile packageManifest "$work/package/hideout/package-manifest.json" \
   --slurpfile signing "$signing" --slurpfile notarization "$notarization" \
   --slurpfile matrix "$support_matrix" '
@@ -573,6 +578,7 @@ jq -n \
     checksums:{name:"SHA256SUMS",covers:([$packageName,$evidenceName,("hideout-v"+$version+"-release.json")]|sort)},
     supportMatrixVersion:$matrix[0].version,
     nonClaims:[$matrix[0].nonClaims[].id],
+    featureIds:$featureIds,
     generatedAt:$generatedAt
   }' >"$release_manifest"
 

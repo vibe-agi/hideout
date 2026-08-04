@@ -394,6 +394,7 @@ handoff.
 - [x] T182 Recover formal run reviews across job-level hard stops, fail closed when the review is absent, and pin the hosted runner to the measured single-worker policy after the two-worker `WorkloadObservation` regression
 - [x] T183 Remove the browser SSE credential-rotation subscriber-count race by proving stale unsubscription before fresh non-durable event publication
 - [x] T184 Pin native Temurin 21 in every Gate 0 and signed-candidate macOS job, reject translated or wrong-major Java before test work, and bind the host/JVM architecture identity into formal evidence
+- [x] T185 Bind the release's sorted feature inventory from validated 045/046 proof manifests through evidence, public manifest, promotion, receipt-derived docs, and Homebrew truth; reject stale candidate-specific STATUS claims before publication
 
 ---
 

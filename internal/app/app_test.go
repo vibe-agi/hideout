@@ -48,6 +48,7 @@ import (
 	"github.com/vibe-agi/hideout/internal/policy"
 	"github.com/vibe-agi/hideout/internal/profile"
 	"github.com/vibe-agi/hideout/internal/recovery"
+	"github.com/vibe-agi/hideout/internal/releasechannel"
 	"github.com/vibe-agi/hideout/internal/runtimecatalog"
 	"github.com/vibe-agi/hideout/internal/runtimeverify"
 	"github.com/vibe-agi/hideout/internal/session"
@@ -734,6 +735,89 @@ func TestSupportReleaseRedactPublicEvidence(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"status":"passed"`) || !strings.Contains(out.String(), `"name":"user-data.local-path"`) {
 		t.Fatalf("unexpected review output: %s", out.String())
+	}
+}
+
+func TestSupportReleaseInventoryFromReceiptPreservesBoundFeatureIDs(t *testing.T) {
+	root := t.TempDir()
+	const (
+		version = "0.1.0-alpha.4"
+		commit  = "0123456789abcdef0123456789abcdef01234567"
+		digest  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	featureIDs := []string{
+		"045-operator-observability-console",
+		"046-portable-hideout-migration",
+	}
+	release := releasechannel.PublicRelease{
+		Schema: releasechannel.PublicReleaseSchema, Version: version,
+		Maturity: "public-supervised-alpha", Tag: "v" + version,
+		Source: releasechannel.Source{
+			Repository: "https://github.com/vibe-agi/hideout", Commit: commit,
+		},
+		Artifacts: []releasechannel.ReleaseArtifact{{
+			Kind: "package", HostOS: "darwin", HostArch: "arm64", SHA256: digest,
+		}},
+		SupportMatrixVersion: "2026-07-alpha",
+		NonClaims:            []string{"workspace-dlp"},
+		FeatureIDs:           append([]string(nil), featureIDs...),
+	}
+	packageIdentity := releasechannel.PackageIdentity{
+		Name: "hideout", ProductVersion: version, SourceCommit: commit,
+		ArtifactSHA256: digest, HostOS: "darwin", HostArch: "arm64",
+	}
+	receipt := releasechannel.PublicationReceipt{
+		Schema: releasechannel.PublicationReceiptSchema, Status: "public-verified",
+		ObservedAt: time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC),
+		Version:    version, Tag: "v" + version, SourceCommit: commit,
+		ReleaseID:  1,
+		URL:        "https://github.com/vibe-agi/hideout/releases/tag/v" + version,
+		Prerelease: true, Immutable: true, Package: packageIdentity,
+		EvidenceSHA256: digest, ProofStatus: "satisfied",
+	}
+	for _, name := range []string{
+		"hideout-v" + version + "-darwin-arm64.tar.gz",
+		"hideout-v" + version + "-evidence.tar.gz",
+		"hideout-v" + version + "-release.json",
+		"SHA256SUMS",
+	} {
+		receipt.Assets = append(receipt.Assets, releasechannel.DownloadedAsset{
+			Name: name, Bytes: 1, APISHA256: digest, DownloadSHA256: digest,
+		})
+	}
+	write := func(name string, value any) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	releasePath := write("release.json", release)
+	receiptPath := write("receipt.json", receipt)
+	outPath := filepath.Join(root, "current.json")
+	var stdout bytes.Buffer
+	testApp := app{stdout: &stdout}
+	if err := testApp.supportReleaseInventoryFromReceipt([]string{
+		"--receipt", receiptPath, "--manifest", releasePath, "--out", outPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var inventory releasechannel.PublishedInventory
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if inventory.Current == nil ||
+		!slices.Equal(inventory.Current.FeatureIDs, featureIDs) {
+		t.Fatalf("inventory feature IDs=%v want %v", inventory.Current, featureIDs)
 	}
 }
 

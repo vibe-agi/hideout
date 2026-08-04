@@ -97,6 +97,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          . scripts/lib/public-alpha-features.sh
           request="$PROMOTION_ROOT/validated/promotion-request.json"
           assets="$PROMOTION_ROOT/validated/assets"
           mkdir -p "$assets"
@@ -149,6 +150,7 @@ jobs:
             .source.commit == $commit and .source.dirty == false and
             .maturity == "public-supervised-alpha" and .channel == "alpha"
           ' "$assets/$manifest" >/dev/null
+          public_alpha_required_feature_ids "$assets/$manifest" >/dev/null
           package_sha=$(jq -r '.artifacts[] | select(.kind == "package") | .sha256' "$assets/$manifest")
           runtime_family=$(jq -r '.runtime.family' "$assets/$manifest")
           runtime_revision=$(jq -r '.runtime.revision' "$assets/$manifest")
@@ -165,6 +167,7 @@ jobs:
           - Signing: \`${signing_name}\` (Team ID \`${signing_team}\`)
           - Notarization: accepted online; tar.gz does not claim a stapled ticket
           - License: Apache-2.0 for Hideout; third-party terms remain in \`THIRD_PARTY_NOTICES.md\`
+          - Included features: operator HUD and auditable activity (\`045-operator-observability-console\`); encrypted portable VM/config migration (\`046-portable-hideout-migration\`)
 
           The retained runtime is downloaded separately on first use and is approximately 1 GB. Start with the direct Lima quickstart, then review the separate privacy-network and safe \`code .\` walkthrough. Package migration, removed package-owned files, preservation, and support changes are candidate-bound and must agree with the package manifest, candidate changelog, and retained upgrade evidence; this text does not assume the candidate is the first public package.
 
@@ -239,6 +242,7 @@ jobs:
           RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
+          . scripts/lib/public-alpha-features.sh
           assets="$PUBLIC_ALPHA_ROOT/validated/assets"
           request="$PUBLIC_ALPHA_ROOT/validated/promotion-request.json"
           manifest="$assets/hideout-v${PUBLIC_ALPHA_VERSION}-release.json"
@@ -262,6 +266,7 @@ jobs:
           go run ./cmd/hideout support release validate --manifest "$manifest" --asset-root "$assets" >/dev/null
           go run ./cmd/hideout support release validate-evidence \
             --archive "$assets/hideout-v${PUBLIC_ALPHA_VERSION}-evidence.tar.gz" >/dev/null
+          public_alpha_required_feature_ids "$manifest" >/dev/null
           jq -e --arg package "$(jq -r '.assets.packageSHA256' "$request")" '
             .artifacts[] | select(.kind == "package") | .sha256 == $package
           ' "$manifest" >/dev/null

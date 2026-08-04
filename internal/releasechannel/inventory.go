@@ -23,6 +23,7 @@ type InventoryEntry struct {
 	ReceiptSHA256 string          `json:"receiptSHA256"`
 	SupportMatrix string          `json:"supportMatrix"`
 	NonClaims     []string        `json:"nonClaims"`
+	FeatureIDs    []string        `json:"featureIds,omitempty"`
 }
 
 func (i PublishedInventory) Validate() error {
@@ -41,6 +42,9 @@ func (i PublishedInventory) Validate() error {
 	}
 	if err := c.Package.Validate(); err != nil {
 		return fmt.Errorf("published inventory package: %w", err)
+	}
+	if err := validateFeatureIDs(c.FeatureIDs); err != nil {
+		return fmt.Errorf("published inventory: %w", err)
 	}
 	return nil
 }
