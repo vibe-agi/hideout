@@ -176,6 +176,46 @@ require_command() {
     fail "missing required command: $1"
 }
 
+wait_operation_phase() {
+  local store="$1" operation="$2" wanted="$3" stale_revision="${4:-}"
+  local path="$store/migration/operations/$operation.json"
+  local started now snapshot phase revision
+  started="$(date +%s)"
+  while :; do
+    snapshot="$(jq -er '[.phase, .revision] | @tsv' "$path" 2>/dev/null || true)"
+    phase="${snapshot%%$'\t'*}"
+    revision="${snapshot#*$'\t'}"
+    if [ "$phase" = "$wanted" ]; then
+      if [ -z "$stale_revision" ] || {
+        case "$revision:$stale_revision" in
+          *[!0-9:]* | :* | *:) false ;;
+          *) [ "$revision" -gt "$stale_revision" ] ;;
+        esac
+      }; then
+        return 0
+      fi
+    fi
+    case "$phase" in
+      recoverable-failure)
+        if [ -n "$stale_revision" ]; then
+          case "$revision:$stale_revision" in
+            *[!0-9:]* | :* | *:) return 1 ;;
+            *) [ "$revision" -le "$stale_revision" ] || return 1 ;;
+          esac
+        else
+          return 1
+        fi
+        ;;
+      complete | cancelled | rolled-back | failed)
+        return 1
+        ;;
+    esac
+    now="$(date +%s)"
+    [ $((now - started)) -lt "$timeout_seconds" ] || return 1
+    sleep 0.05
+  done
+}
+
 validate_migration_lima_summary() {
   jq -e '
     .schema == "hideout.migration-lima-evidence/v1" and
@@ -418,11 +458,46 @@ if [ "$preflight_only" -eq 1 ]; then
     find "$diagnostic_fixture" -depth -delete
     fail "candidate installer did not inherit the isolated Lima home and exact arguments"
   fi
+
+  phase_fixture_store="$diagnostic_fixture/phase-store"
+  phase_fixture_operation="op_migration_phase_fixture"
+  phase_fixture_path="$phase_fixture_store/migration/operations/$phase_fixture_operation.json"
+  mkdir -p "$(dirname "$phase_fixture_path")"
+  printf '%s\n' '{"phase":"recoverable-failure","revision":5}' \
+    >"$phase_fixture_path"
+  (
+    sleep 0.1
+    printf '%s\n' '{"phase":"materializing","revision":6}' \
+      >"$phase_fixture_path.next"
+    mv "$phase_fixture_path.next" "$phase_fixture_path"
+    sleep 0.1
+    printf '%s\n' '{"phase":"adopting","revision":7}' \
+      >"$phase_fixture_path.next"
+    mv "$phase_fixture_path.next" "$phase_fixture_path"
+  ) &
+  phase_fixture_writer=$!
+  saved_timeout_seconds="$timeout_seconds"
+  timeout_seconds=2
+  if ! wait_operation_phase \
+    "$phase_fixture_store" "$phase_fixture_operation" adopting 5; then
+    wait "$phase_fixture_writer" || true
+    find "$diagnostic_fixture" -depth -delete
+    fail "phase waiter rejected an accepted resume before its revision advanced"
+  fi
+  wait "$phase_fixture_writer"
+  printf '%s\n' '{"phase":"recoverable-failure","revision":6}' \
+    >"$phase_fixture_path"
+  if wait_operation_phase \
+    "$phase_fixture_store" "$phase_fixture_operation" adopting 5; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "phase waiter accepted a new recoverable failure after resume"
+  fi
+  timeout_seconds="$saved_timeout_seconds"
   find "$diagnostic_fixture" -depth -delete
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=12\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=14\n'
   exit 0
 fi
 
@@ -905,27 +980,6 @@ all_distinct() {
   done
 }
 
-wait_operation_phase() {
-  local store="$1" operation="$2" wanted="$3"
-  local path="$store/migration/operations/$operation.json"
-  local started now phase
-  started="$(date +%s)"
-  while :; do
-    phase="$(jq -er '.phase' "$path" 2>/dev/null || true)"
-    if [ "$phase" = "$wanted" ]; then
-      return 0
-    fi
-    case "$phase" in
-      complete | cancelled | rolled-back | failed | recoverable-failure)
-        return 1
-        ;;
-    esac
-    now="$(date +%s)"
-    [ $((now - started)) -lt "$timeout_seconds" ] || return 1
-    sleep 0.05
-  done
-}
-
 daemon_instance_for_store() {
   local store="$1" label="$2"
   local status_path="$scratch/daemon-$label.json"
@@ -1116,7 +1170,13 @@ hideout_for_store "$safe_three_store" migrate resume "$safe_three_operation" \
   --passphrase-stdin --json <"$passphrase_file" \
   >"$scratch/import-safe-three-resume.json" 2>&1 ||
   fail "resume third Safe Clone after materialization crash"
-wait_operation_phase "$safe_three_store" "$safe_three_operation" adopting ||
+safe_three_resume_revision="$(jq -er '
+  .revision | select(type == "number" and . >= 0 and floor == .)
+' "$scratch/import-safe-three-resume.json")" ||
+  fail "resumed third Safe Clone omitted its accepted revision"
+wait_operation_phase \
+  "$safe_three_store" "$safe_three_operation" adopting \
+  "$safe_three_resume_revision" ||
   fail "resumed third Safe Clone never reached durable adoption"
 second_crash_instance="$(
   crash_daemon_after_adoption_response \
