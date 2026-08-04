@@ -392,6 +392,12 @@ func (b Backend) prepareMigrationIdentityProbe(
 	if err := b.cloneMigrationFile(rootPath, paths.RootDisk); err != nil {
 		return "", vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
 	}
+	// clonefile preserves the source disk mode. Lima root disks can be 0644,
+	// while every disposable probe artifact must remain private and satisfy the
+	// closed cleanup allowlist. Tighten only the independent COW clone.
+	if err := os.Chmod(paths.RootDisk, 0o600); err != nil {
+		return "", vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
+	}
 	if err := syncMigrationRegularFile(paths.RootDisk); err != nil {
 		return "", vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
 	}

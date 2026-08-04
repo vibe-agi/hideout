@@ -561,6 +561,10 @@ func TestSnapshotMigrationSourceObservesIdentityThroughDisposableZeroNetworkCOWP
 	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
 		name: "hideout-alpha", environmentRef: "environment_alpha1", status: "Stopped",
 	}})
+	sourceRoot := filepath.Join(fixture.home, "hideout-alpha", "disk")
+	if err := os.Chmod(sourceRoot, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	executor := migrationVZAdoptionExecutorFixture(t, "executor-v1")
 	fixture.provider.Migration.AdoptionExecutorPath = executor
 	fixture.provider.Migration.adoptionIsolationProber = nil
@@ -603,6 +607,13 @@ func TestSnapshotMigrationSourceObservesIdentityThroughDisposableZeroNetworkCOWP
 		t, filepath.Join(fixture.home, "hideout-alpha"),
 	); after != sourceBefore {
 		t.Fatalf("identity probe changed source instance: before=%s after=%s", sourceBefore, after)
+	}
+	info, err := os.Lstat(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("identity probe changed source root mode: mode=%v", info.Mode())
 	}
 	snapshotDir := filepath.Join(
 		fixture.home, "_hideout-migration", "snapshots", string(snapshot.SnapshotHandle),
@@ -963,6 +974,11 @@ func (runner *migrationSourceRunner) runIdentityObservation(
 	if err := requestDecoder.Decode(&request); err != nil || request.Validate() != nil {
 		return errors.New("identity observation fixture request is invalid")
 	}
+	probeInfo, err := os.Lstat(paths.RootDisk)
+	if err != nil || probeInfo.Mode()&os.ModeSymlink != 0 ||
+		!probeInfo.Mode().IsRegular() || probeInfo.Mode().Perm() != 0o600 {
+		return errors.New("identity observation fixture root is not private")
+	}
 	probeDisk, err := os.OpenFile(paths.RootDisk, os.O_WRONLY, 0)
 	if err != nil {
 		return err
@@ -1202,7 +1218,13 @@ func copyMigrationFixtureFile(source, destination string) (retErr error) {
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, input.Close()) }()
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	info, err := input.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("migration fixture clone source is not a regular file")
+	}
+	output, err := os.OpenFile(
+		destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm(),
+	)
 	if err != nil {
 		return err
 	}
