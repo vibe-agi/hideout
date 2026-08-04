@@ -142,6 +142,61 @@ func TestMigrationImportOperationMaterializesThenReplaysWithoutAnotherSecret(t *
 	}
 }
 
+func TestMigrationDestinationValidationRejectsDiskStreamOrderMismatch(t *testing.T) {
+	fixture := writeManagerMaterializationBundle(t)
+	manifest := fixture.manifest
+	manifest.ComponentIndex[1].ComponentID = "component_z_root00001"
+	attachedDigest := migration.Digest("sha256:" + strings.Repeat("8", 64))
+	attached := migration.DiskObject{
+		DiskID: "disk_attached0001", Role: migration.DiskRoleAttached, Format: "raw",
+		LogicalBytes: 1, AllocatedBytesHint: 1, ContentDigest: attachedDigest,
+		Provider: migration.ProviderDiskFacts{
+			Name: "source-attached", Kind: "lima-additional", Features: []string{},
+		},
+	}
+	manifest.DiskObjects = append([]migration.DiskObject{attached}, manifest.DiskObjects...)
+	manifest.Environments[0].DiskRefs = []migration.OpaqueID{
+		"disk_attached0001", "disk_root0001",
+	}
+	manifest.DiskEdges = []migration.DiskEdge{
+		{
+			EnvironmentRef: "environment_source1", DiskID: "disk_attached0001",
+			Attachment: migration.DiskRoleAttached, GuestPath: "/mnt/data",
+		},
+		{
+			EnvironmentRef: "environment_source1", DiskID: "disk_root0001",
+			Attachment: migration.DiskRoleRoot, GuestPath: "/",
+		},
+	}
+	manifest.ComponentIndex = append(manifest.ComponentIndex, migration.ComponentIndexEntry{
+		ComponentID: "component_a_attached01", Kind: "disk", DiskID: "disk_attached0001",
+		LogicalBytes: 1, FirstRecord: 5, LastRecord: 5, RecordCount: 1,
+		ContentDigest: attachedDigest,
+	})
+	if err := manifest.Validate(migration.DefaultLimits()); err != nil {
+		t.Fatalf("valid reversed-order fixture: %v", err)
+	}
+
+	request := managerMaterializationDestinationRequest(manifest, 1)
+	request.Disks = append([]migration.DiskObject(nil), manifest.DiskObjects...)
+	request.Edges = append([]migration.DiskEdge(nil), manifest.DiskEdges...)
+	request.Components = []backend.MigrationDestinationComponent{
+		{
+			ComponentID: "component_a_attached01", DiskID: "disk_attached0001",
+			BackendIdentity: "backend_attached0001", Kind: "disk",
+			LogicalBytes: 1, ContentDigest: attachedDigest,
+		},
+		{
+			ComponentID: "component_z_root00001", DiskID: "disk_root0001",
+			BackendIdentity: request.Objects[0].BackendIdentity, Kind: "disk",
+			LogicalBytes: 3072, ContentDigest: fixture.diskDigest,
+		},
+	}
+	if err := validateMigrationDestinationAgainstManifest(request, manifest); !errors.Is(err, ErrMigrationPlanInvalid) {
+		t.Fatalf("record-order mismatch reached provider validation: %v", err)
+	}
+}
+
 func TestMigrationImportMaterializationResumesProviderCheckpointWithoutRecountingCapacity(t *testing.T) {
 	fixture := writeManagerMaterializationBundle(t)
 	secretInputs := NewMigrationSecretInputStore(MigrationSecretInputStoreOptions{})

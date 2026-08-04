@@ -564,7 +564,7 @@ func (service MigrationService) writeFreshMigrationExport(
 
 	components := append([]backend.MigrationComponent(nil), snapshot.Components...)
 	sort.Slice(components, func(left, right int) bool {
-		return components[left].DiskRef < components[right].DiskRef
+		return components[left].ComponentID < components[right].ComponentID
 	})
 	diskDigests := make(map[migration.OpaqueID]migration.Digest, len(components))
 	for _, component := range components {
@@ -726,7 +726,7 @@ func (service MigrationService) resumeMigrationExport(
 
 	components := append([]backend.MigrationComponent(nil), snapshot.Components...)
 	sort.Slice(components, func(left, right int) bool {
-		return components[left].DiskRef < components[right].DiskRef
+		return components[left].ComponentID < components[right].ComponentID
 	})
 	selectedSecrets := selectedMigrationExportSecrets(prepared.secrets)
 	secretFacts := make(map[migration.OpaqueID]migrationExportSecretContentFacts,

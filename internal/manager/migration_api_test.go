@@ -220,6 +220,15 @@ func TestMigrationManagerExportPlanApplyAndSnapshotContract(t *testing.T) {
 	}
 	record := createStoppedMigrationEnvironment(t, environments, "dev", "hideout-dev")
 	provider := newManagerMigrationProviderFixture()
+	// Deliberately invert disk-ref and component-ID order. The encrypted record
+	// stream must follow the component order consumed by destination providers,
+	// not the unrelated source disk identities.
+	provider.componentIDForDisk = func(diskRef migration.OpaqueID) migration.OpaqueID {
+		if strings.Contains(string(diskRef), "attached") {
+			return "component_z_attached0001"
+		}
+		return "component_a_root0000001"
+	}
 	now := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC)
 	secretInputs := NewMigrationSecretInputStore(MigrationSecretInputStoreOptions{
 		Now:    func() time.Time { return now },
@@ -378,6 +387,10 @@ func TestMigrationManagerExportPlanApplyAndSnapshotContract(t *testing.T) {
 		provider.snapshotCreates != 1 {
 		t.Fatalf("snapshot operation=%+v snapshot=%+v creates=%d", operation, snapshot, provider.snapshotCreates)
 	}
+	if snapshot.Components[0].ComponentID >= snapshot.Components[1].ComponentID ||
+		snapshot.Components[0].DiskRef <= snapshot.Components[1].DiskRef {
+		t.Fatalf("fixture did not invert component and disk order: %+v", snapshot.Components)
+	}
 	operation, snapshot, err = service.SnapshotExportSource(context.Background(), first.OperationID)
 	if err != nil {
 		t.Fatal(err)
@@ -434,6 +447,17 @@ func TestMigrationManagerExportPlanApplyAndSnapshotContract(t *testing.T) {
 		!slices.Equal(inspection.Manifest.ExcludedClasses,
 			[]string{"activity-history", "host-workspace-content", "runtime-state"}) {
 		t.Fatalf("sealed manifest=%+v", inspection.Manifest)
+	}
+	diskComponents := make([]migration.OpaqueID, 0, 2)
+	for _, component := range inspection.Manifest.ComponentIndex {
+		if component.Kind == "disk" {
+			diskComponents = append(diskComponents, component.ComponentID)
+		}
+	}
+	if !slices.Equal(diskComponents, []migration.OpaqueID{
+		"component_a_root0000001", "component_z_attached0001",
+	}) {
+		t.Fatalf("disk records do not follow destination component order: %v", diskComponents)
 	}
 	for _, claim := range written.Operation.Claims {
 		if claim.State != MigrationClaimReleased {
@@ -1324,6 +1348,7 @@ type managerMigrationProviderFixture struct {
 	failReadOnce             bool
 	snapshotResponseLossOnce bool
 	afterReadStart           func(backend.ComponentReadRequest) error
+	componentIDForDisk       func(migration.OpaqueID) migration.OpaqueID
 }
 
 func newManagerMigrationProviderFixture() *managerMigrationProviderFixture {
@@ -1441,8 +1466,12 @@ func (provider *managerMigrationProviderFixture) SnapshotMigrationSource(
 	handle := migration.OpaqueID("snapshot_" + hex.EncodeToString(hash[:8]))
 	components := make([]backend.MigrationComponent, len(request.DiskRefs))
 	for index, diskRef := range request.DiskRefs {
+		componentID := migration.OpaqueID("component_" + strings.TrimPrefix(string(diskRef), "disk_"))
+		if provider.componentIDForDisk != nil {
+			componentID = provider.componentIDForDisk(diskRef)
+		}
 		components[index] = backend.MigrationComponent{
-			ComponentID:    migration.OpaqueID("component_" + strings.TrimPrefix(string(diskRef), "disk_")),
+			ComponentID:    componentID,
 			SnapshotHandle: handle, DiskRef: diskRef, Kind: "disk",
 			LogicalBytes: map[bool]uint64{true: 4096, false: 8192}[strings.Contains(string(diskRef), "attached")],
 		}

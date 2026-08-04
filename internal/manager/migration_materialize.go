@@ -301,14 +301,19 @@ func validateMigrationDestinationAgainstManifest(
 	for _, component := range manifest.ComponentIndex {
 		components[component.ComponentID] = component
 	}
+	var previousDiskLastRecord uint64
+	previousDiskSeen := false
 	for _, component := range request.Components {
 		expected, exists := components[component.ComponentID]
 		if !exists || expected.Kind != "disk" || component.Kind != expected.Kind ||
 			component.DiskID != expected.DiskID ||
 			component.LogicalBytes != expected.LogicalBytes ||
-			component.ContentDigest != expected.ContentDigest {
+			component.ContentDigest != expected.ContentDigest ||
+			(previousDiskSeen && expected.FirstRecord <= previousDiskLastRecord) {
 			return ErrMigrationPlanInvalid
 		}
+		previousDiskLastRecord = expected.LastRecord
+		previousDiskSeen = true
 	}
 	return nil
 }
