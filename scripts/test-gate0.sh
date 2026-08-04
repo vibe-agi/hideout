@@ -7,6 +7,8 @@ export GOFLAGS=-mod=readonly
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/lib/java-toolchain.sh
+. "$ROOT/scripts/lib/java-toolchain.sh"
 
 # Several app tests intentionally launch bounded helper processes. Unbounded
 # package-level parallelism can starve those helpers on high-core hosts and
@@ -37,9 +39,10 @@ gate0_require_command() {
 gate0_release_preflight() {
   local command shellcheck_version markdownlint_version lima_version
   local expected_go_version actual_go_version
-  for command in git go jq limactl markdownlint-cli2 shellcheck; do
+  for command in git go jq java limactl markdownlint-cli2 shellcheck uname; do
     gate0_require_command "$command" || return 1
   done
+  hideout_require_native_java || return 1
   expected_go_version="go$(awk '$1 == "go" { print $2; exit }' go.mod)"
   actual_go_version="$(go env GOVERSION)"
   [ "$actual_go_version" = "$expected_go_version" ] || {
@@ -64,8 +67,11 @@ gate0_release_preflight() {
     printf 'gate0: Lima version=%s, want=2.2.0\n' "$lima_version" >&2
     return 1
   }
-  printf 'gate0: preflight=passed go=%s shellcheck=%s markdownlint=%s lima=%s vmBoots=0\n' \
-    "$actual_go_version" "$shellcheck_version" "$markdownlint_version" "$lima_version"
+  printf \
+    'gate0: preflight=passed go=%s java=%s javaArch=%s hostArch=%s shellcheck=%s markdownlint=%s lima=%s vmBoots=0\n' \
+    "$actual_go_version" "$HIDEOUT_JAVA_VERSION" "$HIDEOUT_JAVA_ARCH" \
+    "$HIDEOUT_JAVA_HOST_ARCH" "$shellcheck_version" \
+    "$markdownlint_version" "$lima_version"
 }
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then

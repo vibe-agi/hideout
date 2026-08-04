@@ -222,6 +222,7 @@ done < <(jq -c '.goRefinement.tests[]' "$inventory")
 printf '%s\n' \
   scripts/gates/formal.sh \
   scripts/gates/formal-verify.sh \
+  scripts/lib/java-toolchain.sh \
   schemas/formal-inventory.schema.json |
   LC_ALL=C sort >"$scratch/expected-gate-sources"
 jq -r '.gateSources[].path' "$summary" |
@@ -246,6 +247,24 @@ if ! jq -e --arg version "$(jq -r '.tla2tools.version' "$inventory")" \
     .tools.tla2tools.sha256 == $sha and
     (.tools.tlcWorkers | type == "number" and . >= 1 and . <= 64 and floor == .) and
     (.tools.java | type == "string" and length > 0) and
+    .tools.javaSpecification == "21" and
+    (.tools.javaArchitecture == "aarch64" or
+      .tools.javaArchitecture == "arm64" or
+      .tools.javaArchitecture == "amd64" or
+      .tools.javaArchitecture == "x86_64") and
+    (.tools.hostArchitecture == "aarch64" or
+      .tools.hostArchitecture == "arm64" or
+      .tools.hostArchitecture == "amd64" or
+      .tools.hostArchitecture == "x86_64") and
+    .tools.nativeJava == true and
+    (((.tools.hostArchitecture == "arm64" or
+        .tools.hostArchitecture == "aarch64") and
+       (.tools.javaArchitecture == "arm64" or
+        .tools.javaArchitecture == "aarch64")) or
+      ((.tools.hostArchitecture == "x86_64" or
+        .tools.hostArchitecture == "amd64") and
+       (.tools.javaArchitecture == "x86_64" or
+        .tools.javaArchitecture == "amd64"))) and
     (.tools.go | type == "string" and length > 0) and
     .execution.startMode == "from-scratch" and
     .execution.checkpointReused == false and

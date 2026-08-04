@@ -41,6 +41,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install the native Java toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
+          architecture: aarch64
+
+      - name: Reject a translated or unexpected Java toolchain
+        run: scripts/lib/java-toolchain.sh
+
       - name: Install pinned Gate 0 tooling
         run: |
           set -euo pipefail
@@ -91,6 +101,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install the native Java toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
+          architecture: aarch64
+
+      - name: Reject a translated or unexpected Java toolchain
+        run: scripts/lib/java-toolchain.sh
 
       - name: Run the complete formal Gate 0 shard
         id: formal

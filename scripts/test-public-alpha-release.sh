@@ -231,6 +231,12 @@ grep -F 'public_alpha_cleanup_root "$work" "$out/cleanup-report.json"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 for workflow in .github/workflows/ci.yml \
   .github/workflows/hideout-alpha-candidate.yml; do
+  grep -F 'actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961' \
+    "$workflow" >/dev/null
+  grep -F 'distribution: temurin' "$workflow" >/dev/null
+  grep -F 'java-version: "21"' "$workflow" >/dev/null
+  grep -F 'architecture: aarch64' "$workflow" >/dev/null
+  grep -F 'run: scripts/lib/java-toolchain.sh' "$workflow" >/dev/null
   grep -F 'brew install shellcheck lima' "$workflow" >/dev/null
   grep -F 'shellcheck --version' "$workflow" >/dev/null
   grep -F '= "0.11.0"' "$workflow" >/dev/null
@@ -238,6 +244,13 @@ for workflow in .github/workflows/ci.yml \
   grep -F '= "2.2.0"' "$workflow" >/dev/null
   grep -F 'HIDEOUT_TLC_WORKERS: "1"' "$workflow" >/dev/null
 done
+test "$(grep -Fc \
+  'actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961' \
+  .github/workflows/ci.yml)" -eq 2
+test "$(grep -Fc \
+  'actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961' \
+  .github/workflows/hideout-alpha-candidate.yml)" -eq 1
+scripts/lib/java-toolchain.sh --self-test
 grep -F 'run: scripts/test-gate0.sh --shard non-formal' \
   .github/workflows/ci.yml >/dev/null
 grep -F 'run: scripts/test-gate0.sh --shard formal' \

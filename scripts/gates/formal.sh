@@ -5,6 +5,8 @@ root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
 # shellcheck source=scripts/lib/gate-result.sh
 . "$root/scripts/lib/gate-result.sh"
+# shellcheck source=scripts/lib/java-toolchain.sh
+. "$root/scripts/lib/java-toolchain.sh"
 gate_completed=0
 gate_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 gate_started_epoch="$(date +%s)"
@@ -19,6 +21,7 @@ out="$root/.artifacts/045/formal"
 inventory="$root/formal/inventory.json"
 inventory_schema="$root/schemas/formal-inventory.schema.json"
 verifier="$root/scripts/gates/formal-verify.sh"
+java_toolchain="$root/scripts/lib/java-toolchain.sh"
 selected_configuration=""
 tlc_workers="${HIDEOUT_TLC_WORKERS:-1}"
 
@@ -92,6 +95,7 @@ for command in awk comm curl git go java jq sed sort; do
     exit 1
   fi
 done
+hideout_require_native_java
 
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -169,6 +173,10 @@ write_formal_run_review() {
     --arg selectedConfiguration "$selected_configuration" \
     --arg failureLayer "$failure_layer" \
     --arg failureReason "$failure_reason" \
+    --arg javaVersion "$HIDEOUT_JAVA_VERSION" \
+    --arg javaSpecification "$HIDEOUT_JAVA_SPECIFICATION" \
+    --arg javaArchitecture "$HIDEOUT_JAVA_ARCH" \
+    --arg hostArchitecture "$HIDEOUT_JAVA_HOST_ARCH" \
     --argjson workers "$tlc_workers" \
     --argjson elapsedSeconds "$elapsed_seconds" \
     --argjson currentElapsedSeconds "$current_elapsed" \
@@ -186,6 +194,13 @@ write_formal_run_review() {
           resultReused:false,
           restartRequired:false,
           powerCycleRequired:false
+        },
+        toolchain:{
+          javaVersion:$javaVersion,
+          javaSpecification:$javaSpecification,
+          javaArchitecture:$javaArchitecture,
+          hostArchitecture:$hostArchitecture,
+          nativeJava:true
         },
         execution:{
           scope:(if $selectedConfiguration == "" then "full-formal" else "single-configuration-diagnostic" end),
@@ -620,6 +635,9 @@ write_summary() {
     --arg tla_version "$tla_version" \
     --arg tla_sha "$tla_sha" \
     --arg java_version "$java_version" \
+    --arg java_specification "$HIDEOUT_JAVA_SPECIFICATION" \
+    --arg java_architecture "$HIDEOUT_JAVA_ARCH" \
+    --arg host_architecture "$HIDEOUT_JAVA_HOST_ARCH" \
     --arg go_version "$go_version" \
     --argjson tlc_workers "$tlc_workers" \
     --argjson elapsed_seconds "$(( $(date +%s) - gate_started_epoch ))" \
@@ -638,6 +656,7 @@ write_summary() {
     --arg go_log_sha "$(sha256_file "$run_dir/go/refinement.log")" \
     --arg gate_sha "$(sha256_file "$root/scripts/gates/formal.sh")" \
     --arg verifier_sha "$(sha256_file "$verifier")" \
+    --arg java_toolchain_sha "$(sha256_file "$java_toolchain")" \
     --arg inventory_schema_sha "$(sha256_file "$inventory_schema")" \
     --argjson proofs "$proofs" \
     --argjson artifacts "$artifacts" \
@@ -653,6 +672,10 @@ write_summary() {
         tla2tools: {version: $tla_version, sha256: $tla_sha},
         tlcWorkers: $tlc_workers,
         java: $java_version,
+        javaSpecification: $java_specification,
+        javaArchitecture: $java_architecture,
+        hostArchitecture: $host_architecture,
+        nativeJava: true,
         go: $go_version
       },
       execution: {
@@ -670,6 +693,10 @@ write_summary() {
         {
           path: "scripts/gates/formal-verify.sh",
           sha256: $verifier_sha
+        },
+        {
+          path: "scripts/lib/java-toolchain.sh",
+          sha256: $java_toolchain_sha
         },
         {
           path: "schemas/formal-inventory.schema.json",

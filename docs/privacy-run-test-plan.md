@@ -2190,6 +2190,14 @@ as a run review. The two dominant models run first, reducing time and repeated
 work when a runner or worker-policy regression affects either one; acceptance
 still verifies the complete inventory independent of execution order.
 
+Runner architecture is not accepted as JVM architecture proof. Both remote
+Gate 0 shards and the signed-candidate workflow install the same full-SHA-pinned
+Temurin 21 arm64 action, then compare `java.specification.version` and
+`os.arch` with the host before any test lane. Gate 0 repeats that zero-lane
+check, and formal evidence retains the Java version plus host/JVM
+architectures. A translated or wrong-major JVM is therefore a preflight
+failure with zero TLC configurations run, not a late performance observation.
+
 Verification gates also isolate mutable tool configuration. Gate 0, the local
 release aggregate, and the migration gate pin Go's module mode to
 `-mod=readonly`, so an ambient developer `GOFLAGS` cannot silently repair or
