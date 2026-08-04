@@ -29,6 +29,7 @@ const (
 	AdoptionActionResetMachineID   = "reset-machine-id"
 	AdoptionActionResetSSHHostKeys = "reset-ssh-host-keys"
 	AdoptionActionPreserveIdentity = "preserve-guest-identity"
+	AdoptionActionInstallSSHKeys   = "install-destination-ssh-keys"
 	AdoptionActionStatusCompleted  = "completed"
 	AdoptionActionStatusFailed     = "failed"
 	AdoptionReceiptStatusCompleted = "completed"
@@ -658,6 +659,7 @@ type AdoptionRequest struct {
 	ReceiptNonce       OpaqueID              `json:"receiptNonce"`
 	Policy             GuestIdentityPolicy   `json:"policy"`
 	SourceIdentity     GuestIdentityEvidence `json:"sourceIdentity"`
+	DestinationSSHUser string                `json:"destinationSSHUser"`
 	DestinationSSHKeys []string              `json:"destinationSSHKeys"`
 	PermittedActions   []string              `json:"permittedActions"`
 	Helper             HelperBinding         `json:"helper"`
@@ -826,7 +828,9 @@ func (request AdoptionRequest) Validate() error {
 		request.SourceIdentity.Validate() != nil || request.Helper.Validate() != nil {
 		return fmt.Errorf("%w: adoption request binding is invalid", ErrInvalidBundle)
 	}
-	if len(request.DestinationSSHKeys) == 0 || len(request.DestinationSSHKeys) > 32 {
+	if !manifestGuestUserPattern.MatchString(request.DestinationSSHUser) ||
+		request.DestinationSSHUser == "root" ||
+		len(request.DestinationSSHKeys) == 0 || len(request.DestinationSSHKeys) > 32 {
 		return fmt.Errorf("%w: destination SSH keys are invalid", ErrInvalidBundle)
 	}
 	seenKeys := make(map[string]struct{}, len(request.DestinationSSHKeys))
@@ -945,10 +949,14 @@ func (receipt AdoptionReceipt) MatchesRequest(request AdoptionRequest) error {
 
 func adoptionActionsForPolicy(policy GuestIdentityPolicy) []string {
 	if policy == GuestIdentitySafeClone {
-		return []string{AdoptionActionResetMachineID, AdoptionActionResetSSHHostKeys}
+		return []string{
+			AdoptionActionResetMachineID,
+			AdoptionActionResetSSHHostKeys,
+			AdoptionActionInstallSSHKeys,
+		}
 	}
 	if policy == GuestIdentityExactRestore {
-		return []string{AdoptionActionPreserveIdentity}
+		return []string{AdoptionActionPreserveIdentity, AdoptionActionInstallSSHKeys}
 	}
 	return nil
 }

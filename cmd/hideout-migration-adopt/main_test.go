@@ -44,9 +44,10 @@ func TestSafeCloneAdoptionProducesIndependentGuestIdentities(t *testing.T) {
 		if pair.receipt.PostIdentity.Equal(pair.fixture.sourceIdentity) {
 			t.Fatalf("Safe Clone preserved source identity: %+v", pair.receipt.PostIdentity)
 		}
-		if len(pair.receipt.ActionResults) != 2 ||
+		if len(pair.receipt.ActionResults) != 3 ||
 			pair.receipt.ActionResults[0].Action != migration.AdoptionActionResetMachineID ||
-			pair.receipt.ActionResults[1].Action != migration.AdoptionActionResetSSHHostKeys {
+			pair.receipt.ActionResults[1].Action != migration.AdoptionActionResetSSHHostKeys ||
+			pair.receipt.ActionResults[2].Action != migration.AdoptionActionInstallSSHKeys {
 			t.Fatalf("Safe Clone action results=%+v", pair.receipt.ActionResults)
 		}
 		machineID, err := os.ReadFile(filepath.Join(pair.fixture.rootPath, "etc", "machine-id"))
@@ -62,6 +63,7 @@ func TestSafeCloneAdoptionProducesIndependentGuestIdentities(t *testing.T) {
 		if !bytes.Equal(machineID, dbusID) {
 			t.Fatalf("machine-id=%q dbus=%q", machineID, dbusID)
 		}
+		assertDestinationSSHKeyInstalled(t, pair.fixture)
 	}
 	if firstReceipt.PostIdentity.Equal(*secondReceipt.PostIdentity) ||
 		firstReceipt.PostIdentity.MachineIDDigest == secondReceipt.PostIdentity.MachineIDDigest {
@@ -95,8 +97,9 @@ func TestExactGuestRestorePreservesIdentityWithoutCallingResetters(t *testing.T)
 		t.Fatal(err)
 	}
 	if !receipt.PostIdentity.Equal(fixture.sourceIdentity) || resetCalls != 0 ||
-		fixture.shutdowns != 1 || len(receipt.ActionResults) != 1 ||
-		receipt.ActionResults[0].Action != migration.AdoptionActionPreserveIdentity {
+		fixture.shutdowns != 1 || len(receipt.ActionResults) != 2 ||
+		receipt.ActionResults[0].Action != migration.AdoptionActionPreserveIdentity ||
+		receipt.ActionResults[1].Action != migration.AdoptionActionInstallSSHKeys {
 		t.Fatalf(
 			"Exact Guest Restore receipt=%+v resetCalls=%d shutdowns=%d",
 			receipt, resetCalls, fixture.shutdowns,
@@ -105,6 +108,7 @@ func TestExactGuestRestorePreservesIdentityWithoutCallingResetters(t *testing.T)
 	if after := guestIdentityFilesDigest(t, fixture.rootPath); after != before {
 		t.Fatalf("Exact Guest Restore changed guest identity files: before=%s after=%s", before, after)
 	}
+	assertDestinationSSHKeyInstalled(t, fixture)
 }
 
 func TestIdentityObservationReportsEvidenceWithoutMutatingGuest(t *testing.T) {
@@ -336,6 +340,97 @@ func TestAdoptionHelperMismatchAndSSHFailureLeaveNonCompletionReceipt(t *testing
 			t.Fatalf("SSH failure receipt=%+v shutdowns=%d", receipt, fixture.shutdowns)
 		}
 	})
+
+	t.Run("destination authorized keys symlink", func(t *testing.T) {
+		fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x74)
+		path := filepath.Join(
+			fixture.rootPath, "home", "developer", ".ssh", "authorized_keys",
+		)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../../../etc/passwd", path); err != nil {
+			t.Fatal(err)
+		}
+		err := fixture.runner(errorReader{errors.New("randomness must not be read")}).run()
+		if err == nil || err.Error() != "migration.adoption.destination_ssh_install_failed" {
+			t.Fatalf("destination SSH install error=%v", err)
+		}
+		receipt, readErr := readAdoptionReceipt(fixture.receiptPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if receipt.Status != migration.AdoptionReceiptStatusFailed ||
+			receipt.CompletionMarker || len(receipt.ActionResults) != 2 ||
+			receipt.ActionResults[0].Action != migration.AdoptionActionPreserveIdentity ||
+			receipt.ActionResults[0].Status != migration.AdoptionActionStatusCompleted ||
+			receipt.ActionResults[1].Action != migration.AdoptionActionInstallSSHKeys ||
+			receipt.ActionResults[1].Status != migration.AdoptionActionStatusFailed ||
+			fixture.shutdowns != 0 {
+			t.Fatalf("destination SSH failure receipt=%+v shutdowns=%d", receipt, fixture.shutdowns)
+		}
+	})
+
+	t.Run("destination authorized keys hard link", func(t *testing.T) {
+		fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x75)
+		path := filepath.Join(
+			fixture.rootPath, "home", "developer", ".ssh", "authorized_keys",
+		)
+		existing, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		existing = append(existing, fixture.request.DestinationSSHKeys[0]...)
+		existing = append(existing, '\n')
+		if err := os.WriteFile(path, existing, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		alias := filepath.Join(fixture.rootPath, "etc", "authorized-keys-alias")
+		if err := os.Link(path, alias); err != nil {
+			t.Fatal(err)
+		}
+		err = fixture.runner(errorReader{errors.New("randomness must not be read")}).run()
+		if err == nil || err.Error() != "migration.adoption.destination_ssh_install_failed" {
+			t.Fatalf("destination SSH hard-link error=%v", err)
+		}
+		info, statErr := os.Stat(alias)
+		if statErr != nil || info.Mode().Perm() != 0o644 {
+			t.Fatalf("hard-linked alias protection changed: info=%v err=%v", info, statErr)
+		}
+		observed, readErr := os.ReadFile(alias)
+		if readErr != nil || !bytes.Equal(observed, existing) {
+			t.Fatalf("hard-linked alias content changed: err=%v", readErr)
+		}
+	})
+
+	t.Run("changed cloud-init identity policy", func(t *testing.T) {
+		fixture := newAdoptionFixture(t, migration.GuestIdentityExactRestore, 0x76)
+		path := filepath.Join(
+			fixture.rootPath, "etc", "cloud", "cloud.cfg.d",
+			"99-hideout-migration-identity.cfg",
+		)
+		if err := os.WriteFile(path, []byte("ssh_deletekeys: true\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := fixture.runner(errorReader{errors.New("randomness must not be read")}).run()
+		if err == nil || err.Error() != "migration.adoption.destination_ssh_install_failed" {
+			t.Fatalf("changed cloud-init policy error=%v", err)
+		}
+		receipt, readErr := readAdoptionReceipt(fixture.receiptPath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if receipt.Status != migration.AdoptionReceiptStatusFailed ||
+			receipt.CompletionMarker || len(receipt.ActionResults) != 2 ||
+			receipt.ActionResults[1].Action != migration.AdoptionActionInstallSSHKeys ||
+			receipt.ActionResults[1].Status != migration.AdoptionActionStatusFailed ||
+			fixture.shutdowns != 0 {
+			t.Fatalf("changed cloud-init policy receipt=%+v shutdowns=%d", receipt, fixture.shutdowns)
+		}
+	})
 }
 
 func TestSafeCloneRejectsUnrecognizedSSHHostIdentityMaterial(t *testing.T) {
@@ -423,7 +518,10 @@ func newAdoptionFixture(
 	base := t.TempDir()
 	root := filepath.Join(base, "guest")
 	for _, directory := range []string{
+		filepath.Join(root, "etc", "cloud", "cloud.cfg.d"),
 		filepath.Join(root, "etc", "ssh"),
+		filepath.Join(root, "home", "developer", ".ssh"),
+		filepath.Join(root, "root"),
 		filepath.Join(root, "var", "lib", "dbus"),
 		filepath.Join(root, "sys", "class", "net", "lo"),
 		filepath.Join(base, "request"),
@@ -443,6 +541,20 @@ func newAdoptionFixture(
 		t.Fatal(err)
 	}
 	oldPublicKey := publicKeyFixture(t, seed)
+	if err := os.WriteFile(
+		filepath.Join(root, "etc", "passwd"),
+		[]byte("root:x:0:0:root:/root:/bin/bash\ndeveloper:x:1000:1000:Developer:/home/developer:/bin/bash\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "home", "developer", ".ssh", "authorized_keys"),
+		append(append([]byte(nil), oldPublicKey...), []byte("existing-source-key\n")...),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(
 		filepath.Join(root, "etc", "ssh", "ssh_host_ed25519_key.pub"),
 		oldPublicKey, 0o644,
@@ -467,11 +579,15 @@ func newAdoptionFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions := []string{migration.AdoptionActionPreserveIdentity}
+	actions := []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionInstallSSHKeys,
+	}
 	if policy == migration.GuestIdentitySafeClone {
 		actions = []string{
 			migration.AdoptionActionResetMachineID,
 			migration.AdoptionActionResetSSHHostKeys,
+			migration.AdoptionActionInstallSSHKeys,
 		}
 	}
 	request := migration.AdoptionRequest{
@@ -479,6 +595,7 @@ func newAdoptionFixture(
 		OperationID: "op_import1234", EnvironmentRef: "envref_dev1234",
 		RequestNonce: "nonce_request1234", ReceiptNonce: "nonce_receipt1234",
 		Policy: policy, SourceIdentity: sourceIdentity,
+		DestinationSSHUser: "developer",
 		DestinationSSHKeys: []string{strings.TrimSpace(string(publicKeyFixture(t, seed+1)))},
 		PermittedActions:   actions,
 		Helper: migration.HelperBinding{
@@ -519,6 +636,7 @@ func (fixture *adoptionFixture) runner(random io.Reader) adoptionRunner {
 				[]byte("fresh-fixture-private-host-key"), 0o600,
 			)
 		},
+		fileOwnership: func(*os.File, int, int) error { return nil },
 		shutdown: func() error {
 			fixture.shutdowns++
 			return nil
@@ -543,6 +661,45 @@ func runSafeCloneFixture(
 		t.Fatal(err)
 	}
 	return receipt
+}
+
+func assertDestinationSSHKeyInstalled(t *testing.T, fixture *adoptionFixture) {
+	t.Helper()
+	want := fixture.request.DestinationSSHKeys[0]
+	for _, path := range []string{
+		filepath.Join(fixture.rootPath, "home", "developer", ".ssh", "authorized_keys"),
+		filepath.Join(fixture.rootPath, "root", ".ssh", "authorized_keys"),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), want+"\n") {
+			t.Fatalf("destination control key is absent from %s", path)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("destination authorized_keys protection changed: path=%s info=%v err=%v", path, info, err)
+		}
+	}
+	target, err := os.ReadFile(filepath.Join(
+		fixture.rootPath, "home", "developer", ".ssh", "authorized_keys",
+	))
+	if err != nil || !bytes.Contains(target, []byte("existing-source-key\n")) {
+		t.Fatalf("existing guest authorized_keys content was not preserved: err=%v", err)
+	}
+	policyPath := filepath.Join(
+		fixture.rootPath, "etc", "cloud", "cloud.cfg.d",
+		"99-hideout-migration-identity.cfg",
+	)
+	policy, err := os.ReadFile(policyPath)
+	if err != nil || string(policy) != migrationCloudInitSSHPolicy {
+		t.Fatalf("migration cloud-init identity policy changed: data=%q err=%v", policy, err)
+	}
+	info, err := os.Stat(policyPath)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("migration cloud-init identity policy protection changed: info=%v err=%v", info, err)
+	}
 }
 
 func writeAdoptionRequestFixture(

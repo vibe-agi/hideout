@@ -205,14 +205,16 @@ type runtimeLimaInstance struct {
 	HostOS   string `json:"HostOS"`
 	HostArch string `json:"HostArch"`
 	Config   struct {
-		VMType string `json:"vmType"`
-		Arch   string `json:"arch"`
-		Images []struct {
-			Location string `json:"location"`
-			Arch     string `json:"arch"`
-			Digest   string `json:"digest"`
-		} `json:"images"`
+		VMType string             `json:"vmType"`
+		Arch   string             `json:"arch"`
+		Images []runtimeLimaImage `json:"images"`
 	} `json:"config"`
+}
+
+type runtimeLimaImage struct {
+	Location string `json:"location"`
+	Arch     string `json:"arch"`
+	Digest   string `json:"digest"`
 }
 
 // InspectRuntimeInstance re-observes a running managed VM for status. It uses
@@ -284,10 +286,20 @@ func (b Backend) inspectRuntimeInstance(ctx context.Context, runner CommandRunne
 		}
 	}
 	if imageMatches != 1 {
-		return backend.RuntimeInstanceObservation{}, fmt.Errorf("Lima config does not bind exactly one expected image (matches=%d)", imageMatches)
+		importedMatch, importedErr := b.importedRuntimeImageMatches(
+			hostEnv, session, info.Config.Images,
+		)
+		if importedErr != nil {
+			return backend.RuntimeInstanceObservation{}, fmt.Errorf("verify imported Lima runtime image provenance: %w", importedErr)
+		}
+		if !importedMatch {
+			return backend.RuntimeInstanceObservation{}, fmt.Errorf("Lima config does not bind exactly one expected image (matches=%d)", imageMatches)
+		}
 	}
-	// ImageLocation/ImageSHA256 describe the independently checked Lima config
-	// binding. Active build identity is populated only from the running guest.
+	// ImageLocation/ImageSHA256 describe either the independently checked Lima
+	// config binding or the authenticated import marker retained beside a
+	// fail-closed image sentinel. Active build identity is populated only from
+	// the running guest.
 	observation := backend.RuntimeInstanceObservation{
 		InstanceName: session.InstanceName, Status: info.Status, VMType: vmType,
 		HostOS: expected.HostOS, HostArch: expected.HostArch, GuestArch: guestArch,

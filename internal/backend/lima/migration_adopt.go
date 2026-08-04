@@ -3,7 +3,6 @@ package lima
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -19,7 +18,6 @@ import (
 	"github.com/vibe-agi/hideout/internal/helperbin"
 	"github.com/vibe-agi/hideout/internal/migration"
 	"github.com/vibe-agi/hideout/internal/migration/vzexecutor"
-	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -155,7 +153,7 @@ func (b Backend) AdoptMigrationDestination(
 	}
 
 	guestRequest, executionRequest, paths, err := prepareMigrationAdoptionControl(
-		home, stageDir, configuration, rootEntry, request, helper,
+		ctx, home, stageDir, configuration, rootEntry, request, helper,
 	)
 	if err != nil {
 		return backend.DestinationAdoption{}, migrationStageError(
@@ -243,12 +241,17 @@ func loadMigrationAdoptionOwner(
 }
 
 func prepareMigrationAdoptionControl(
+	ctx context.Context,
 	home, stageDir string,
 	configuration migrationStageConfiguration,
 	rootEntry migrationStageEntry,
 	request backend.DestinationAdoptionRequest,
 	helper helperbin.LinuxMigrationAdoptResolution,
 ) (migration.AdoptionRequest, vzexecutor.ExecutionRequest, vzexecutor.ExecutionPaths, error) {
+	destinationSSHKey, err := destinationLimaSSHKey(ctx, home)
+	if err != nil {
+		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
+	}
 	requestNonce, err := newMigrationAdoptionNonce("nonce_request")
 	if err != nil {
 		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
@@ -261,20 +264,15 @@ func prepareMigrationAdoptionControl(
 	if err != nil {
 		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
 	}
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
+	actions := []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionInstallSSHKeys,
 	}
-	defer clear(privateKey)
-	sshPublicKey, err := ssh.NewPublicKey(publicKey)
-	if err != nil {
-		return migration.AdoptionRequest{}, vzexecutor.ExecutionRequest{}, vzexecutor.ExecutionPaths{}, err
-	}
-	actions := []string{migration.AdoptionActionPreserveIdentity}
 	if request.Policy == migration.GuestIdentitySafeClone {
 		actions = []string{
 			migration.AdoptionActionResetMachineID,
 			migration.AdoptionActionResetSSHHostKeys,
+			migration.AdoptionActionInstallSSHKeys,
 		}
 	}
 	guestRequest := migration.AdoptionRequest{
@@ -282,7 +280,8 @@ func prepareMigrationAdoptionControl(
 		OperationID: request.Binding.OperationID, EnvironmentRef: request.EnvironmentRef,
 		RequestNonce: requestNonce, ReceiptNonce: receiptNonce,
 		Policy: request.Policy, SourceIdentity: request.SourceIdentity,
-		DestinationSSHKeys: []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPublicKey)))},
+		DestinationSSHUser: configuration.GuestUser,
+		DestinationSSHKeys: []string{destinationSSHKey},
 		PermittedActions:   actions, Helper: request.Helper,
 	}
 	if err := guestRequest.Validate(); err != nil {
@@ -446,7 +445,8 @@ func finalizeMigrationAdoption(
 	paths vzexecutor.ExecutionPaths,
 ) (backend.DestinationAdoption, error) {
 	if err := response.Validate(); err != nil || receipt.MatchesRequest(guestRequest) != nil ||
-		!migrationGuestRequestMatchesDestination(guestRequest, request) {
+		!migrationGuestRequestMatchesDestination(guestRequest, request) ||
+		guestRequest.DestinationSSHUser != configuration.GuestUser {
 		if err == nil {
 			err = errors.New("adoption completion binding is invalid")
 		}
@@ -587,7 +587,8 @@ func (b Backend) recoverMigrationAdoptionControl(
 	}
 	var guestRequest migration.AdoptionRequest
 	if err := readMigrationJSONStrict(paths.GuestRequest, &guestRequest); err != nil ||
-		!migrationGuestRequestMatchesDestination(guestRequest, request) {
+		!migrationGuestRequestMatchesDestination(guestRequest, request) ||
+		guestRequest.DestinationSSHUser != configuration.GuestUser {
 		return backend.DestinationAdoption{}, errors.New(
 			"recoverable adoption request is absent or changed",
 		)
@@ -635,6 +636,7 @@ func loadMigrationAdoptionEvidenceReplay(
 		evidence.ShutdownProof.Validate() != nil || !evidence.Stopped ||
 		!evidence.TemporaryAuthorityRemoved || !evidence.ImportedAuthorityAbsent ||
 		!migrationGuestRequestMatchesDestination(evidence.Request, request) ||
+		evidence.Request.DestinationSSHUser != configuration.GuestUser ||
 		evidence.Receipt.MatchesRequest(evidence.Request) != nil {
 		return backend.DestinationAdoption{}, true, errors.New(
 			"durable adoption evidence binding changed",

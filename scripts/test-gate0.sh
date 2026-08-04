@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Gate 0 is a verifier, never a module-graph editor. Pin the mode so an
+# operator's ambient GOFLAGS cannot dirty or silently repair the candidate.
+export GOFLAGS=-mod=readonly
+
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 

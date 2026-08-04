@@ -54,6 +54,7 @@ type adoptionRunner struct {
 	networkClassPath    string
 	random              io.Reader
 	generateSSHHostKeys func(string) error
+	fileOwnership       func(*os.File, int, int) error
 	shutdown            func() error
 }
 
@@ -120,6 +121,20 @@ func (runner adoptionRunner) run() error {
 			request, results, "migration.adoption.policy_invalid", nil,
 		)
 	}
+	if err := installDestinationSSHKeys(
+		runner.rootPath,
+		request.DestinationSSHUser,
+		request.DestinationSSHKeys,
+		runner.fileOwnership,
+	); err != nil {
+		return runner.fail(
+			request, results, "migration.adoption.destination_ssh_install_failed", err,
+		)
+	}
+	results = append(results, migration.AdoptionActionResult{
+		Action: migration.AdoptionActionInstallSSHKeys,
+		Status: migration.AdoptionActionStatusCompleted,
+	})
 
 	after, err := observeGuestIdentity(runner.rootPath)
 	if err != nil {
@@ -153,7 +168,8 @@ func (runner adoptionRunner) validate() error {
 		!filepath.IsAbs(runner.selfPath) || filepath.Clean(runner.selfPath) != runner.selfPath ||
 		!filepath.IsAbs(runner.networkClassPath) ||
 		filepath.Clean(runner.networkClassPath) != runner.networkClassPath ||
-		runner.random == nil || runner.generateSSHHostKeys == nil || runner.shutdown == nil {
+		runner.random == nil || runner.generateSSHHostKeys == nil ||
+		runner.fileOwnership == nil || runner.shutdown == nil {
 		return errors.New("adoption runtime binding is incomplete")
 	}
 	if runner.requestPath == runner.receiptPath || runner.selfPath == runner.requestPath ||

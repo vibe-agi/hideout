@@ -197,6 +197,28 @@ func TestMigrationDestinationValidationRejectsDiskStreamOrderMismatch(t *testing
 	}
 }
 
+func TestMigrationDestinationValidationBindsImageProvenance(t *testing.T) {
+	manifest := writeManagerMaterializationBundle(t).manifest
+	manifest.Environments[0].ImageProvenance = &migration.ImageProvenance{
+		Reference: "https://example.invalid/runtime.qcow2",
+		Digest:    migration.Digest("sha256:" + strings.Repeat("a", 64)),
+	}
+	if err := manifest.Validate(migration.DefaultLimits()); err != nil {
+		t.Fatal(err)
+	}
+	request := managerMaterializationDestinationRequest(manifest, 1)
+	if err := validateMigrationDestinationAgainstManifest(request, manifest); err != nil {
+		t.Fatalf("bound runtime image provenance: %v", err)
+	}
+	request.Objects[0].ImageProvenance = &migration.ImageProvenance{
+		Reference: manifest.Environments[0].ImageProvenance.Reference,
+		Digest:    migration.Digest("sha256:" + strings.Repeat("b", 64)),
+	}
+	if err := validateMigrationDestinationAgainstManifest(request, manifest); !errors.Is(err, ErrMigrationPlanInvalid) {
+		t.Fatalf("substituted runtime image provenance error=%v", err)
+	}
+}
+
 func TestMigrationImportMaterializationResumesProviderCheckpointWithoutRecountingCapacity(t *testing.T) {
 	fixture := writeManagerMaterializationBundle(t)
 	secretInputs := NewMigrationSecretInputStore(MigrationSecretInputStoreOptions{})
@@ -602,7 +624,12 @@ func writeManagerMaterializationBundle(t *testing.T) managerMaterializationFixtu
 		Environments: []migration.EnvironmentSnapshot{{
 			SourceEnvironmentRef: "environment_source1", DisplayNameHint: "dev",
 			Runtime: "linux", GuestUser: "developer", Backend: "lima",
-			Mode: migration.ExportModeFull, ProfileComponentID: "component_profile0001",
+			Mode: migration.ExportModeFull,
+			ImageProvenance: &migration.ImageProvenance{
+				Reference: "https://example.invalid/runtime.qcow2",
+				Digest:    migration.Digest("sha256:" + strings.Repeat("a", 64)),
+			},
+			ProfileComponentID:    "component_profile0001",
 			WorkspaceProposals:    []migration.WorkspaceProposal{},
 			AuthorityProposalRefs: []migration.OpaqueID{},
 			GuestIdentityEvidence: migration.GuestIdentityEvidence{
@@ -713,6 +740,7 @@ func managerMaterializationDestinationRequest(
 			EnvironmentRef: "environment_source1", BackendIdentity: backendIdentity,
 			Runtime: "linux", GuestArchitecture: "linux/arm64", GuestUser: "developer",
 			ProfileComponent: "component_profile0001",
+			ImageProvenance:  cloneMigrationImageProvenance(manifest.Environments[0].ImageProvenance),
 		}},
 		Disks: append([]migration.DiskObject(nil), manifest.DiskObjects...),
 		Edges: append([]migration.DiskEdge(nil), manifest.DiskEdges...),

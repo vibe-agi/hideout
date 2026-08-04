@@ -62,7 +62,10 @@ type migrationStageConfiguration struct {
 	GuestArchitecture      string               `json:"guestArchitecture"`
 	GuestUser              string               `json:"guestUser"`
 	ProfileComponent       migration.OpaqueID   `json:"profileComponent"`
+	RuntimeImageLocation   string               `json:"runtimeImageLocation,omitempty"`
+	RuntimeImageDigest     migration.Digest     `json:"runtimeImageDigest,omitempty"`
 	RootDiskID             migration.OpaqueID   `json:"rootDiskId"`
+	RootDiskLogicalBytes   uint64               `json:"rootDiskLogicalBytes"`
 	AttachedDiskHandles    []migration.OpaqueID `json:"attachedDiskHandles"`
 	YAMLRelativePath       string               `json:"yamlRelativePath"`
 	NormalizedRelativePath string               `json:"normalizedRelativePath"`
@@ -124,7 +127,10 @@ type migrationNormalizedStageConfig struct {
 	GuestArchitecture    string               `json:"guestArchitecture"`
 	GuestUser            string               `json:"guestUser"`
 	ProfileComponent     migration.OpaqueID   `json:"profileComponent"`
+	RuntimeImageLocation string               `json:"runtimeImageLocation,omitempty"`
+	RuntimeImageDigest   migration.Digest     `json:"runtimeImageDigest,omitempty"`
 	RootDiskID           migration.OpaqueID   `json:"rootDiskId"`
+	RootDiskLogicalBytes uint64               `json:"rootDiskLogicalBytes"`
 	AttachedDiskHandles  []migration.OpaqueID `json:"attachedDiskHandles"`
 	HostMountsEnabled    bool                 `json:"hostMountsEnabled"`
 	ImportedNetwork      bool                 `json:"importedNetwork"`
@@ -333,26 +339,39 @@ func buildMigrationStageOwner(
 	})
 
 	rootDiskByEnvironment := make(map[migration.OpaqueID]migration.OpaqueID)
+	rootBytesByEnvironment := make(map[migration.OpaqueID]uint64)
 	for diskID, environmentRef := range rootEnvironmentByDisk {
 		rootDiskByEnvironment[environmentRef] = diskID
+		for _, disk := range request.Disks {
+			if disk.DiskID == diskID {
+				rootBytesByEnvironment[environmentRef] = disk.LogicalBytes
+				break
+			}
+		}
 	}
 	configurations := make([]migrationStageConfiguration, 0, len(request.Objects))
 	for _, object := range request.Objects {
 		attached := append([]migration.OpaqueID(nil), attachedByEnvironment[object.EnvironmentRef]...)
 		sort.Slice(attached, func(left, right int) bool { return attached[left] < attached[right] })
-		configurations = append(configurations, migrationStageConfiguration{
+		configuration := migrationStageConfiguration{
 			EnvironmentRef: object.EnvironmentRef, BackendIdentity: object.BackendIdentity,
 			Runtime: object.Runtime, GuestArchitecture: object.GuestArchitecture,
 			GuestUser: object.GuestUser, ProfileComponent: object.ProfileComponent,
-			RootDiskID:          rootDiskByEnvironment[object.EnvironmentRef],
-			AttachedDiskHandles: attached,
+			RootDiskID:           rootDiskByEnvironment[object.EnvironmentRef],
+			RootDiskLogicalBytes: rootBytesByEnvironment[object.EnvironmentRef],
+			AttachedDiskHandles:  attached,
 			YAMLRelativePath: filepath.Join(
 				"instances", string(object.BackendIdentity), "lima.yaml",
 			),
 			NormalizedRelativePath: filepath.Join(
 				"instances", string(object.BackendIdentity), "normalized.json",
 			),
-		})
+		}
+		if object.ImageProvenance != nil {
+			configuration.RuntimeImageLocation = object.ImageProvenance.Reference
+			configuration.RuntimeImageDigest = object.ImageProvenance.Digest
+		}
+		configurations = append(configurations, configuration)
 	}
 	return migrationStageOwner{
 		Schema: migrationStageOwnerSchema, StageHandle: request.StagingHandle,
@@ -759,14 +778,17 @@ func migrationStageConfigurationBytes(
 		return nil, nil, errors.New("normalized Lima config is invalid or oversized")
 	}
 	normalized := migrationNormalizedStageConfig{
-		Schema:            migrationStageConfigSchema,
-		EnvironmentRef:    configuration.EnvironmentRef,
-		BackendIdentity:   configuration.BackendIdentity,
-		Runtime:           configuration.Runtime,
-		GuestArchitecture: configuration.GuestArchitecture,
-		GuestUser:         configuration.GuestUser,
-		ProfileComponent:  configuration.ProfileComponent,
-		RootDiskID:        configuration.RootDiskID,
+		Schema:               migrationStageConfigSchema,
+		EnvironmentRef:       configuration.EnvironmentRef,
+		BackendIdentity:      configuration.BackendIdentity,
+		Runtime:              configuration.Runtime,
+		GuestArchitecture:    configuration.GuestArchitecture,
+		GuestUser:            configuration.GuestUser,
+		ProfileComponent:     configuration.ProfileComponent,
+		RuntimeImageLocation: configuration.RuntimeImageLocation,
+		RuntimeImageDigest:   configuration.RuntimeImageDigest,
+		RootDiskID:           configuration.RootDiskID,
+		RootDiskLogicalBytes: configuration.RootDiskLogicalBytes,
 		AttachedDiskHandles: append(
 			[]migration.OpaqueID(nil), configuration.AttachedDiskHandles...,
 		),

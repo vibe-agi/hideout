@@ -402,6 +402,7 @@ func (evidence migrationAdoptionEvidence) validate(
 		evidence.Binding.EffectID == owner.Binding.EffectID ||
 		evidence.Binding.EffectID == verifyBinding.EffectID ||
 		evidence.EnvironmentRef != configuration.EnvironmentRef ||
+		evidence.Request.DestinationSSHUser != configuration.GuestUser ||
 		evidence.BackendIdentity != configuration.BackendIdentity ||
 		evidence.RootDiskID != configuration.RootDiskID ||
 		evidence.RootDiskID != entry.DiskID ||

@@ -2126,6 +2126,43 @@ publication occurred. Only the final `--require-closure` collection may emit
 `final-ready`. T171 reruns the complete sequence from the final clean tree and
 rejects any required `stale`, `reduced`, `not-run`, or `unsupported` result.
 
+### Gate execution and rerun review
+
+Every gate attempt must end with a short execution review, including failed
+preflights. The review records:
+
+1. the immutable candidate/tree and whether the attempt started from scratch,
+   an authenticated checkpoint, or a same-candidate retry;
+2. every reused result or artifact and the exact binding that made reuse safe;
+3. elapsed time, completed stages, VM boots, and relevant logical/encoded byte
+   counts (plus host-noise facts for performance work);
+4. the failure layer: preflight, harness, product, evidence judge, or publish;
+5. whether earlier deterministic validation could have prevented the work; and
+6. the smallest safe rerun scope, stated explicitly as `from-scratch` when no
+   authenticated checkpoint exists.
+
+Expensive gates put syntax, inventory, path-budget, fixture, package-binding,
+and semantic-judge checks before VM creation or bulk I/O, then verify each
+expensive stage before advancing. A harness change does not automatically
+invalidate an already authenticated product checkpoint, while a product change
+does invalidate downstream evidence. No result is described as passing merely
+because its producer exited zero; the evidence judge for that layer must also
+pass.
+
+Track process quality alongside product quality: time to first useful
+diagnostic, VM boots before failure, repeated logical/encoded bytes, rerun
+amplification (`repeated work / affected work`), authenticated-checkpoint hit
+rate, and harness/flaky failure rate. A post-run review that finds preventable
+work adds or moves a preflight before the next expensive attempt. The portable
+migration real-Lima gate is the first producer to retain this contract as
+`run-review.json`; it currently states `from-scratch` for every cross-run retry
+because no authenticated cross-run bundle checkpoint exists.
+
+Verification gates also isolate mutable tool configuration. Gate 0 and the
+migration gate pin Go's module mode to `-mod=readonly`, so an ambient developer
+`GOFLAGS` cannot silently repair or dirty the candidate. Any required module
+ledger change is an explicit pre-gate source change, never a test side effect.
+
 ### Local, mutation, and formal acceptance
 
 The local aggregate must pass unit, race, fuzz/property, schema, generated,

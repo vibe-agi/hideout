@@ -214,7 +214,11 @@ confirmed plan. Hideout control-plane identities are never governed by this enum
 
 The request is a strict, versioned, data-only document delivered during isolated
 boot. It contains operation/environment nonces, identity policy, expected source
-identity digest, destination SSH public material, and permitted actions. It
+identity digest, exact destination guest user, the destination Lima control
+public key, and permitted actions. The final permitted action installs that key
+for both the target and root control accounts, pins cloud-init to preserve the
+adopted SSH host identity/root control path across Lima's changing boot instance
+IDs, and is independently receipted. It
 contains no shell fragment, proxy secret, workspace mount, or endpoint grant.
 
 The receipt contains the same nonces, helper/package version, action results,

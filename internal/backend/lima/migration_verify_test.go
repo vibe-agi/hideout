@@ -278,11 +278,15 @@ func newMigrationDestinationVerificationFixture(
 				"sha256:" + strings.Repeat(postSSHDigit, 64),
 			)},
 		}
-		actions := []string{migration.AdoptionActionPreserveIdentity}
+		actions := []string{
+			migration.AdoptionActionPreserveIdentity,
+			migration.AdoptionActionInstallSSHKeys,
+		}
 		if policy == migration.GuestIdentitySafeClone {
 			actions = []string{
 				migration.AdoptionActionResetMachineID,
 				migration.AdoptionActionResetSSHHostKeys,
+				migration.AdoptionActionInstallSSHKeys,
 			}
 		}
 		guestRequest := migration.AdoptionRequest{
@@ -296,6 +300,7 @@ func newMigrationDestinationVerificationFixture(
 				"nonce_receipt_" + suffix + "_" + string(configuration.EnvironmentRef),
 			),
 			Policy: policy, SourceIdentity: sourceIdentity,
+			DestinationSSHUser: configuration.GuestUser,
 			DestinationSSHKeys: []string{
 				"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture" + string(rune('A'+index)),
 			},

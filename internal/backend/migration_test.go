@@ -401,10 +401,12 @@ func TestDestinationAdoptionVerificationAndRollbackContractsFailClosed(t *testin
 		EnvironmentRef: request.EnvironmentRef, RequestNonce: "request_nonce001",
 		ReceiptNonce: "receipt_nonce001", Policy: request.Policy,
 		SourceIdentity:     sourceIdentity,
+		DestinationSSHUser: "developer",
 		DestinationSSHKeys: []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture"},
 		PermittedActions: []string{
 			migration.AdoptionActionResetMachineID,
 			migration.AdoptionActionResetSSHHostKeys,
+			migration.AdoptionActionInstallSSHKeys,
 		},
 		Helper: helper,
 	}
@@ -425,6 +427,7 @@ func TestDestinationAdoptionVerificationAndRollbackContractsFailClosed(t *testin
 		ActionResults: []migration.AdoptionActionResult{
 			{Action: migration.AdoptionActionResetMachineID, Status: migration.AdoptionActionStatusCompleted},
 			{Action: migration.AdoptionActionResetSSHHostKeys, Status: migration.AdoptionActionStatusCompleted},
+			{Action: migration.AdoptionActionInstallSSHKeys, Status: migration.AdoptionActionStatusCompleted},
 		},
 		PostIdentity: &postIdentity, Status: migration.AdoptionReceiptStatusCompleted,
 		CompletionMarker: true,

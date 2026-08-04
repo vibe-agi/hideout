@@ -7,6 +7,13 @@ cd "$repo_root"
 # shellcheck disable=SC1091
 . "$repo_root/scripts/lib/gate-result.sh"
 gate_completed=0
+gate_review_started=0
+gate_review_result=""
+gate_review_started_at=""
+gate_review_started_epoch=0
+gate_stage="argument-validation"
+candidate_commit=""
+candidate_tree=""
 
 umask 077
 export LC_ALL=C
@@ -29,6 +36,8 @@ exact_store=""
 wrong_store=""
 compat_store=""
 daemon_socket_path_max=100
+lima_socket_path_max=104
+lima_socket_probe="ssh.sock.1234567890123456"
 # shellcheck disable=SC2016 # evaluated by the guest shell
 migration_guest_verify_script='
   set -eu
@@ -119,6 +128,13 @@ scratch_supports_daemon_sockets() {
   done
 }
 
+scratch_supports_lima_sockets() {
+  local root="$1"
+  local longest_instance="backend_0000000000000000000000000000000000000000"
+  local socket_path="$root/lima/$longest_instance/$lima_socket_probe"
+  [ "${#socket_path}" -lt "$lima_socket_path_max" ]
+}
+
 install_candidate_package() {
   local package_root_value="$1"
   local prefix_value="$2"
@@ -183,6 +199,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 fail() {
+  if [ "${gate_review_started:-0}" -eq 1 ]; then
+    write_gate_run_review failed "$1" || true
+  fi
   retain_failure_diagnostics
   if [ -n "${run_dir:-}" ] && [ -d "$run_dir/diagnostics" ]; then
     printf 'migration-lima: private diagnostics: %s\n' \
@@ -439,8 +458,8 @@ validate_migration_lima_summary() {
       operationCreated:false,
       destinationEnvironmentCreated:false
     } and
-    (.artifacts | length) == 6 and
-    ([.artifacts[].path] | unique | length) == 6 and
+    (.artifacts | length) == 8 and
+    ([.artifacts[].path] | unique | length) == 8 and
     all(.artifacts[];
       .bytes > 0 and .mode == "0600" and
       (.sha256 | test("^[a-f0-9]{64}$"))) and
@@ -537,11 +556,11 @@ migration_lima_summary_fixture() {
         adoptionCrashRecovered:true,
         daemonIdentityFreshAcrossCrashRecovery:true
       },
-      artifacts:[range(0;6) | {
+      artifacts:[range(0;8) | {
         path:("artifact-" + tostring + ".json"),
         bytes:1,
         mode:"0600",
-        sha256:digest((["5","6","7","8","9","a"][.] ))
+        sha256:digest((["5","6","7","8","9","a","b","c"][.] ))
       }]
     }
   '
@@ -575,11 +594,16 @@ if [ "$preflight_only" -eq 1 ]; then
       fail "summary validator accepted invalid preflight mutation: $mutation"
     fi
   done
-  scratch_supports_daemon_sockets "/private/tmp/ho-mig.fixture" ||
+  scratch_supports_daemon_sockets "/private/tmp/hm.ABCDEF" ||
     fail "short scratch fixture cannot host daemon sockets"
   long_scratch_fixture="/private/tmp/$(printf '%090d' 0)"
   if scratch_supports_daemon_sockets "$long_scratch_fixture"; then
     fail "long scratch fixture was accepted for daemon sockets"
+  fi
+  scratch_supports_lima_sockets "/private/tmp/hm.ABCDEF" ||
+    fail "short scratch fixture cannot host the longest imported Lima socket"
+  if scratch_supports_lima_sockets "/private/tmp/ho-mig.ABCDEF"; then
+    fail "overlong historical migration scratch was accepted for Lima sockets"
   fi
   diagnostic_fixture="$(mktemp -d "${TMPDIR:-/tmp}/ho-mig-preflight.XXXXXX")"
   scratch="$diagnostic_fixture/scratch"
@@ -799,7 +823,7 @@ if [ "$preflight_only" -eq 1 ]; then
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=29\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=31\n'
   exit 0
 fi
 
@@ -843,6 +867,87 @@ file_bytes() {
   stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1" 2>/dev/null
 }
 
+mark_gate_stage() {
+  gate_stage="$1"
+  [ "${gate_review_started:-0}" -eq 1 ] || return 0
+  jq -nc \
+    --arg at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    --arg stage "$gate_stage" '{at:$at,stage:$stage}' \
+    >>"$run_dir/stage-events.jsonl"
+  chmod 0600 "$run_dir/stage-events.jsonl"
+}
+
+write_gate_run_review() {
+  local result="$1" reason="${2:-}"
+  [ "${gate_review_started:-0}" -eq 1 ] &&
+    [ -n "${run_dir:-}" ] && [ -d "$run_dir" ] || return 0
+  local finished_at finished_epoch elapsed_seconds
+  local logical_bytes=0 encoded_bytes=0 bundle_bytes=0 completed_imports=0
+  local status_path stages_json='[]' review_tmp
+  finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  finished_epoch="$(date +%s)"
+  elapsed_seconds=$((finished_epoch - gate_review_started_epoch))
+  if [ -f "${scratch:-}/export-status.json" ]; then
+    logical_bytes="$(jq -r '.progress.totalLogicalBytes // 0' "$scratch/export-status.json" 2>/dev/null || printf '0')"
+    encoded_bytes="$(jq -r '.progress.totalEncodedBytes // 0' "$scratch/export-status.json" 2>/dev/null || printf '0')"
+  fi
+  if [ -n "${bundle:-}" ] && [ -f "$bundle" ] && [ ! -L "$bundle" ]; then
+    bundle_bytes="$(file_bytes "$bundle" 2>/dev/null || printf '0')"
+  fi
+  for status_path in "${scratch:-}"/import-*-status.json; do
+    [ -f "$status_path" ] || continue
+    if jq -e '.state == "complete"' "$status_path" >/dev/null 2>&1; then
+      completed_imports=$((completed_imports + 1))
+    fi
+  done
+  if [ -f "$run_dir/stage-events.jsonl" ]; then
+    stages_json="$(jq -s . "$run_dir/stage-events.jsonl" 2>/dev/null || printf '[]')"
+  fi
+  review_tmp="$run_dir/.run-review.$$.json"
+  jq -n \
+    --arg startedAt "$gate_review_started_at" \
+    --arg finishedAt "$finished_at" \
+    --arg result "$result" \
+    --arg commit "$candidate_commit" \
+    --arg tree "$candidate_tree" \
+    --arg failureStage "$gate_stage" \
+    --arg failureReason "$reason" \
+    --argjson elapsedSeconds "$elapsed_seconds" \
+    --argjson logicalBytes "$logical_bytes" \
+    --argjson encodedBytes "$encoded_bytes" \
+    --argjson bundleBytes "$bundle_bytes" \
+    --argjson completedImports "$completed_imports" \
+    --argjson stages "$stages_json" '
+      {
+        schema:"hideout.gate-run-review/v1",
+        gate:"migration-lima",
+        result:$result,
+        candidate:{commit:$commit,tree:$tree},
+        timing:{startedAt:$startedAt,finishedAt:$finishedAt,elapsedSeconds:$elapsedSeconds},
+        start:{mode:"from-scratch",checkpointReused:false,reusedCandidatePackage:true},
+        execution:{stages:$stages,completedImports:$completedImports},
+        resources:{sourceLogicalBytes:$logicalBytes,sourceEncodedBytes:$encodedBytes,bundleBytes:$bundleBytes},
+        failure:(if $result == "failed" then {stage:$failureStage,reason:$failureReason} else null end),
+        rerun:(if $result == "failed" then {
+          minimumScope:"full-gate",
+          startMode:"from-scratch",
+          reason:"no authenticated cross-run migration checkpoint exists"
+        } else null end),
+        efficiency:{
+          crossRunCheckpointAvailable:false,
+          expensiveWorkExecuted:($logicalBytes > 0),
+          crossRunWorkReused:false,
+          repeatAssessmentRequiresPostRunReview:true,
+          avoidableWasteRequiresPostRunReview:true,
+          metrics:["elapsedSeconds","sourceLogicalBytes","sourceEncodedBytes","bundleBytes","completedImports"]
+        }
+      }
+    ' >"$review_tmp"
+  chmod 0600 "$review_tmp"
+  mv "$review_tmp" "$run_dir/run-review.json"
+  gate_review_result="$result"
+}
+
 safe_relative_path() {
   case "$1" in
     "" | /* | . | .. | ../* | */.. | */../* | *$'\n'* | *$'\r'* | *$'\t'*)
@@ -866,6 +971,10 @@ cleanup() {
   local exit_status=$?
   set +e
   if [ "$exit_status" -ne 0 ]; then
+    if [ "${gate_review_started:-0}" -eq 1 ] &&
+      [ "${gate_review_result:-}" != "failed" ]; then
+      write_gate_run_review failed "unclassified command failure" || true
+    fi
     retain_failure_diagnostics
   fi
   for store in \
@@ -887,7 +996,7 @@ cleanup() {
       done
   fi
   case "${scratch:-}" in
-    "$scratch_parent"/ho-mig.*)
+    "$scratch_parent"/hm.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
       ;;
     "") ;;
@@ -942,15 +1051,23 @@ run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
 run_dir="$out/$run_id"
 mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
+candidate_commit="$(jq -er '.source.commit' "$candidate_result")"
+candidate_tree="$(jq -er '.source.tree' "$candidate_result")"
+gate_review_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+gate_review_started_epoch="$(date +%s)"
+gate_review_started=1
+mark_gate_stage scratch-preflight
 
 tmp_base="${HIDEOUT_MIGRATION_LIMA_TMPDIR:-/tmp}"
 mkdir -p "$tmp_base"
 scratch_parent="$(CDPATH='' cd -- "$tmp_base" && pwd -P)"
-scratch="$(mktemp -d "$scratch_parent/ho-mig.XXXXXX")"
+scratch="$(mktemp -d "$scratch_parent/hm.XXXXXX")"
 scratch="$(CDPATH='' cd -- "$scratch" && pwd -P)"
 chmod 0700 "$scratch"
 scratch_supports_daemon_sockets "$scratch" ||
   fail "private scratch root is too long for daemon sockets: $scratch"
+scratch_supports_lima_sockets "$scratch" ||
+  fail "private scratch root is too long for imported Lima sockets: $scratch"
 lima_home="$scratch/lima"
 source_store="$scratch/source-store"
 safe_one_store="$scratch/safe-one-store"
@@ -975,6 +1092,7 @@ chmod 0700 "$lima_home" "$source_workspace" "$safe_one_workspace" \
 openssl rand -hex 32 >"$passphrase_file"
 chmod 0600 "$passphrase_file"
 
+mark_gate_stage candidate-install
 tar -xzf "$archive" -C "$package_extract"
 package_root="$package_extract/hideout"
 [ -x "$package_root/bin/hideout" ] && [ -x "$package_root/install.sh" ] ||
@@ -992,6 +1110,7 @@ installed_sha="$(sha256_file "$hideout_binary")"
 [ "$installed_sha" = "$(sha256_file "$package_root/bin/hideout")" ] ||
   fail "installed binary differs from the accepted package"
 
+mark_gate_stage source-preparation
 for store in \
   "$safe_one_store" "$safe_two_store" "$safe_three_store" "$exact_store"; do
   hideout_for_store "$store" init --no-input --profile default --template dev \
@@ -1116,6 +1235,7 @@ record_sha_before="$(sha256_file "$source_record_path")"
 
 bundle="$scratch/source.hideout-migration"
 export_log="$scratch/export.log"
+mark_gate_stage source-export
 hideout_for_store "$source_store" migrate export \
   --environment "$source_name" --out "$bundle" --ack-guest-content \
   --passphrase-stdin --yes --idempotency-key migration-export-gate-0001 \
@@ -1170,6 +1290,7 @@ if grep -aFq "$root_canary" "$bundle" || grep -aFq "$attached_canary" "$bundle";
   fail "encrypted bundle exposes a plaintext guest sentinel"
 fi
 
+mark_gate_stage bundle-negative-and-compatibility
 inspect_log="$scratch/inspect.json"
 hideout_for_store "$safe_one_store" migrate inspect "$bundle" \
   --passphrase-stdin --json <"$passphrase_file" >"$inspect_log" 2>&1 ||
@@ -1510,12 +1631,15 @@ verify_import() {
     >"$scratch/stop-$label.log" 2>&1 || return 1
 }
 
+mark_gate_stage safe-one-import-and-verify
 import_bundle "$safe_one_store" safe-one safe || fail "first Safe Clone import"
 verify_import "$safe_one_store" "$safe_one_workspace" safe-one ||
   fail "verify first Safe Clone destination"
+mark_gate_stage safe-two-import-and-verify
 import_bundle "$safe_two_store" safe-two safe || fail "second Safe Clone import"
 verify_import "$safe_two_store" "$safe_two_workspace" safe-two ||
   fail "verify second Safe Clone destination"
+mark_gate_stage safe-three-crash-recovery
 safe_three_operation="$(start_import "$safe_three_store" safe-three safe)" ||
   fail "start third Safe Clone import"
 wait_operation_phase "$safe_three_store" "$safe_three_operation" materializing ||
@@ -1561,6 +1685,7 @@ all_distinct "$first_crash_instance" "$second_crash_instance" "$final_crash_inst
   fail "crash recovery reused a daemon instance identity"
 verify_import "$safe_three_store" "$safe_three_workspace" safe-three ||
   fail "verify crash-recovered third Safe Clone destination"
+mark_gate_stage exact-restore-import-and-verify
 import_bundle "$exact_store" exact exact || fail "Exact Guest Restore import"
 verify_import "$exact_store" "$exact_workspace" exact ||
   fail "verify Exact Guest Restore destination"
@@ -1603,6 +1728,7 @@ all_distinct \
   [ "$source_ssh_digest" = "$exact_ssh_digest" ] ||
   fail "Exact Guest Restore did not preserve guest identity"
 
+mark_gate_stage final-fidelity-and-evidence
 root_sha_after="$(sha256_file "$source_root_path")"
 attached_sha_after="$(sha256_file "$source_attached_path")"
 record_sha_after="$(sha256_file "$source_record_path")"
@@ -1614,6 +1740,7 @@ bundle_sha_after="$(sha256_file "$bundle")"
 [ "$bundle_sha_before" = "$bundle_sha_after" ] ||
   fail "bundle changed while reused across destinations"
 
+write_gate_run_review passed ""
 evidence_log="$run_dir/gate.log"
 {
   printf 'candidate=%s\n' "$archive_sha"

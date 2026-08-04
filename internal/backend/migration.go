@@ -724,12 +724,13 @@ type MigrationComponentReader func(
 ) error
 
 type MigrationDestinationObject struct {
-	EnvironmentRef    migration.OpaqueID `json:"environmentRef"`
-	BackendIdentity   migration.OpaqueID `json:"backendIdentity"`
-	Runtime           string             `json:"runtime"`
-	GuestArchitecture string             `json:"guestArchitecture"`
-	GuestUser         string             `json:"guestUser"`
-	ProfileComponent  migration.OpaqueID `json:"profileComponent"`
+	EnvironmentRef    migration.OpaqueID         `json:"environmentRef"`
+	BackendIdentity   migration.OpaqueID         `json:"backendIdentity"`
+	Runtime           string                     `json:"runtime"`
+	GuestArchitecture string                     `json:"guestArchitecture"`
+	GuestUser         string                     `json:"guestUser"`
+	ProfileComponent  migration.OpaqueID         `json:"profileComponent"`
+	ImageProvenance   *migration.ImageProvenance `json:"imageProvenance,omitempty"`
 }
 
 // MigrationDestinationComponent is the authenticated bundle-to-disk binding
@@ -776,6 +777,11 @@ func (request DestinationStageRequest) Validate() error {
 			!validMigrationOpaqueID(object.ProfileComponent) ||
 			(previousEnvironment != "" && previousEnvironment >= object.EnvironmentRef) {
 			return fmt.Errorf("%w: destination object", ErrMigrationProviderRequest)
+		}
+		if object.ImageProvenance != nil &&
+			(!boundedProviderText(object.ImageProvenance.Reference, 4096) ||
+				object.ImageProvenance.Digest.Validate() != nil) {
+			return fmt.Errorf("%w: destination object image provenance", ErrMigrationProviderRequest)
 		}
 		if _, exists := backendIdentities[object.BackendIdentity]; exists {
 			return fmt.Errorf("%w: duplicate destination backend identity", ErrMigrationProviderRequest)

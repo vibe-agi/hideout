@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Release evidence must not depend on, or mutate the module graph through, an
+# operator's ambient GOFLAGS (for example a workstation-wide -mod=mod).
+export GOFLAGS=-mod=readonly
+
 root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
 # shellcheck source=scripts/lib/gate-result.sh

@@ -1343,6 +1343,7 @@ func (service MigrationService) buildMigrationExportManifest(
 			SourceEnvironmentRef: ref, DisplayNameHint: record.Name,
 			Runtime: "linux", GuestUser: profileValue.guestUser,
 			Backend: prepared.capability.Provider, Mode: migration.ExportModeFull,
+			ImageProvenance:    migrationEnvironmentImageProvenance(record),
 			ProfileComponentID: profileValue.componentID,
 			WorkspaceProposals: workspaceProposals,
 			AuthorityProposalRefs: append(
@@ -1403,6 +1404,16 @@ func (service MigrationService) buildMigrationExportManifest(
 		return migration.Manifest{}, err
 	}
 	return manifest, nil
+}
+
+func migrationEnvironmentImageProvenance(record environment.Record) *migration.ImageProvenance {
+	if record.Runtime == nil {
+		return nil
+	}
+	return &migration.ImageProvenance{
+		Reference: record.Runtime.ArtifactLocation,
+		Digest:    migration.Digest("sha256:" + record.Runtime.ArtifactSHA256),
+	}
 }
 
 func (service MigrationService) buildMigrationConfigExportManifest(

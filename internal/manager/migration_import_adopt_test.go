@@ -175,12 +175,16 @@ func migrationDestinationAdoptionFixture(
 	call int,
 ) backend.DestinationAdoption {
 	t.Helper()
-	actions := []string{migration.AdoptionActionPreserveIdentity}
+	actions := []string{
+		migration.AdoptionActionPreserveIdentity,
+		migration.AdoptionActionInstallSSHKeys,
+	}
 	post := fixed.SourceIdentity
 	if fixed.Policy == migration.GuestIdentitySafeClone {
 		actions = []string{
 			migration.AdoptionActionResetMachineID,
 			migration.AdoptionActionResetSSHHostKeys,
+			migration.AdoptionActionInstallSSHKeys,
 		}
 		machineDigit := fmt.Sprintf("%x", call+10)
 		sshDigit := fmt.Sprintf("%x", call+12)
@@ -197,6 +201,7 @@ func migrationDestinationAdoptionFixture(
 		RequestNonce:   migration.OpaqueID(fmt.Sprintf("nonce_request_%04d", call)),
 		ReceiptNonce:   migration.OpaqueID(fmt.Sprintf("nonce_receipt_%04d", call)),
 		Policy:         fixed.Policy, SourceIdentity: fixed.SourceIdentity,
+		DestinationSSHUser: "developer",
 		DestinationSSHKeys: []string{
 			fmt.Sprintf("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixture%d", call),
 		},

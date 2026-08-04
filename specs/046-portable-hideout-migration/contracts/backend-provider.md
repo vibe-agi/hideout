@@ -192,9 +192,10 @@ Unexpected existing bytes are not accepted merely because sizes match.
 
 The Manager request fixes the operation/effect binding, stage, environment,
 import-time identity policy, authenticated source identity, and checksummed
-helper. The provider then generates the destination-local temporary SSH public
-material and request/receipt nonces, returns the exact guest request alongside
-the receipt, and must replay that same pair for the same binding. The Manager
+helper. The provider initializes or validates Lima's destination-local durable
+control key under Lima's own `_config` directory lock, generates request/receipt
+nonces, returns the exact guest request alongside the receipt, and must replay
+that same pair for the same binding. The Manager
 validates every fixed field and the receipt/request match; the provider cannot
 change the selected policy or permitted actions while filling its temporary
 control-channel fields.
@@ -205,7 +206,7 @@ The provider constructs an ephemeral boot configuration with:
 - no public endpoint or port-forward grants;
 - no imported proxy, DNS, network, command adapter, or provisioning authority;
 - no ordinary Hideout workload/session startup;
-- destination-generated SSH user public material only;
+- the destination Lima control public key and exact non-root guest user only;
 - read-only mounts containing the package-candidate Linux adoption helper and a
   strict adoption request;
 - a private writable receipt channel bound by operation/environment nonce;
@@ -213,9 +214,17 @@ The provider constructs an ephemeral boot configuration with:
   needed to prove completion and shutdown.
 
 The fixed helper entry point applies exactly the requested `SafeClone` or
-`ExactGuestRestore` actions. It never evaluates a string as shell, imports a user
-script, or accesses bundle ciphertext. On completion it writes a schema-valid
-receipt and shuts the guest down.
+`ExactGuestRestore` actions, then atomically and idempotently adds the bound
+destination control key to both the target user's and root's protected
+`authorized_keys`. Existing guest keys remain guest data. A distinct
+`install-destination-ssh-keys` result makes failure observable before activation.
+The same action installs an exact product-owned cloud-init override with
+`ssh_deletekeys: false` and `disable_root: false`: Lima changes its cloud-init
+instance ID on every boot, so this preserves the already-proved guest host keys
+and root control path instead of silently rotating or restricting them again.
+The helper never evaluates a string as shell, imports a user script, or accesses
+bundle ciphertext. On completion it writes a schema-valid receipt and shuts the
+guest down.
 
 The provider waits for exact stopped proof, removes ephemeral adoption channels,
 and returns the receipt plus provider observations. Timeout, helper/package digest

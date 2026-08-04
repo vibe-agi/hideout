@@ -106,9 +106,9 @@ type containerd struct {
 }
 
 type mount struct {
-	Location   string `yaml:"location"`
-	MountPoint string `yaml:"mountPoint"`
-	Writable   bool   `yaml:"writable"`
+	Location   string `json:"location" yaml:"location"`
+	MountPoint string `json:"mountPoint" yaml:"mountPoint"`
+	Writable   bool   `json:"writable" yaml:"writable"`
 }
 
 type provision struct {
@@ -764,6 +764,9 @@ func (b Backend) startAndObserveRuntime(ctx context.Context, session *backend.Se
 		}
 		if exists {
 			startExisting = true
+			if err := b.reconcileImportedRuntimeMounts(ctx, runner, hostEnv, session); err != nil {
+				return nil, nil, fmt.Errorf("prepare imported Lima runtime mounts: %w", err)
+			}
 			if session.RuntimeContract != nil {
 				if _, err := b.inspectRuntimeInstance(ctx, runner, hostEnv, session, false); err != nil {
 					return nil, nil, fmt.Errorf("refuse mismatched reusable Lima instance: %w", err)
@@ -990,21 +993,31 @@ func validateLimaStartSocketPath(hostEnv []string, instanceName string) error {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
+	root, err := resolveLimaHome(hostEnv)
+	if err != nil {
+		return fmt.Errorf("resolve Lima home for Unix-socket validation: %w", err)
+	}
+	return validateLimaUnixSocketPath(root, instanceName, darwinUnixPathMax)
+}
+
+func resolveLimaHome(hostEnv []string) (string, error) {
 	root := strings.TrimSpace(backend.EnvValue(hostEnv, "LIMA_HOME"))
 	if root == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("resolve Lima home for Unix-socket validation: %w", err)
+			return "", err
 		}
 		root = filepath.Join(home, ".lima")
 	}
-	if absolute, err := filepath.Abs(root); err == nil {
-		root = absolute
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
 	}
-	if physical, err := filepath.EvalSymlinks(root); err == nil {
+	root = absolute
+	if physical, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
 		root = physical
 	}
-	return validateLimaUnixSocketPath(root, instanceName, darwinUnixPathMax)
+	return root, nil
 }
 
 func validateLimaUnixSocketPath(limaHome, instanceName string, pathMax int) error {

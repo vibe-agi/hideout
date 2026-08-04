@@ -261,7 +261,8 @@ func validateMigrationDestinationAgainstManifest(
 			object.Runtime != environment.Runtime ||
 			object.GuestArchitecture != guestArchitecture ||
 			object.GuestUser != environment.GuestUser ||
-			object.ProfileComponent != environment.ProfileComponentID {
+			object.ProfileComponent != environment.ProfileComponentID ||
+			!migrationImageProvenanceEqual(object.ImageProvenance, environment.ImageProvenance) {
 			return ErrMigrationPlanInvalid
 		}
 		selectedEnvironments[object.EnvironmentRef] = struct{}{}
@@ -316,6 +317,13 @@ func validateMigrationDestinationAgainstManifest(
 		previousDiskSeen = true
 	}
 	return nil
+}
+
+func migrationImageProvenanceEqual(left, right *migration.ImageProvenance) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func migrationDestinationGuestArchitecture(source string) (string, bool) {

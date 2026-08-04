@@ -76,6 +76,24 @@ and cleanup effects are implemented, but TLC does not prove those provider calls
 `scripts/gates/migration.sh` checks the refinement inventory and the exact-package
 `scripts/gates/migration-lima.sh` supplies separate real-backend evidence.
 
+Imported-Lima first-start reconciliation does not add a transition before
+`active`: staging still has no host mounts and is never runnable or visible.
+After the atomic visibility commit, the backend may admit only
+destination-generated profile/runtime mounts and an explicitly approved
+workspace mapping before it starts the stopped instance. This remains within
+`StagedStateNeverRuns`, `RunnableIffActive`, and `AuthorityRequiresApproval`.
+Exact root-disk size, fail-closed image sentinel, and authenticated runtime-image
+provenance are concrete provider refinements covered by the closed migration
+test inventory; they are intentionally not abstracted as new TLA+ identities.
+Likewise, installing the destination Lima control key is an atomic sub-action of
+the already modeled isolated adoption step: the staged guest remains stopped and
+networkless, completion requires the matching action receipt, and no imported
+runtime authority becomes effective. The product-owned cloud-init override is a
+concrete refinement that prevents Lima's changing boot instance ID from undoing
+the receipted host identity or root control key. It therefore preserves
+`StagedStateNeverRuns`, `RunnableIffActive`, and `AuthorityRequiresApproval`
+without adding another abstract state transition.
+
 The state spaces intentionally exclude concrete filesystem paths, file
 contents, secrets, Lima commands, and unbounded production identifiers. Those
 belong in implementation tests and real backend evidence.

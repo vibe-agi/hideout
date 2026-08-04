@@ -84,6 +84,19 @@ func TestStageMigrationDestinationMaterializesBoundConfigAndResumesByComponent(t
 			stagedConfig.Images[0].Digest != "" {
 			t.Fatalf("normalized config has unsafe root-image fallback: %+v", stagedConfig.Images)
 		}
+		var normalized migrationNormalizedStageConfig
+		if err := readMigrationJSONStrict(
+			filepath.Join(stageDir, "instances", string(object.BackendIdentity), "normalized.json"),
+			&normalized,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if object.ImageProvenance == nil ||
+			normalized.RuntimeImageLocation != object.ImageProvenance.Reference ||
+			normalized.RuntimeImageDigest != object.ImageProvenance.Digest ||
+			normalized.RootDiskLogicalBytes != 8192 {
+			t.Fatalf("normalized config lost runtime image provenance: %+v", normalized)
+		}
 	}
 
 	for _, stream := range streams {
@@ -608,11 +621,19 @@ func migrationDestinationStageFixture(
 				EnvironmentRef: "environment_alpha1", BackendIdentity: "backend_alpha" + migration.OpaqueID(suffix),
 				Runtime: "linux", GuestArchitecture: "linux/arm64", GuestUser: "developer",
 				ProfileComponent: "profile_alpha1",
+				ImageProvenance: &migration.ImageProvenance{
+					Reference: "https://example.invalid/runtime-alpha.qcow2",
+					Digest:    migration.Digest("sha256:" + strings.Repeat("a", 64)),
+				},
 			},
 			{
 				EnvironmentRef: "environment_bravo1", BackendIdentity: "backend_bravo" + migration.OpaqueID(suffix),
 				Runtime: "linux", GuestArchitecture: "linux/arm64", GuestUser: "developer",
 				ProfileComponent: "profile_bravo1",
+				ImageProvenance: &migration.ImageProvenance{
+					Reference: "https://example.invalid/runtime-bravo.qcow2",
+					Digest:    migration.Digest("sha256:" + strings.Repeat("b", 64)),
+				},
 			},
 		},
 		Disks: disks,

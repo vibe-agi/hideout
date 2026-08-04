@@ -45,7 +45,10 @@ func runGuestMigrationHelper(selfPath string) error {
 			networkClassPath:    "/sys/class/net",
 			random:              rand.Reader,
 			generateSSHHostKeys: generateSSHHostKeys,
-			shutdown:            shutdownGuest,
+			fileOwnership: func(file *os.File, uid, gid int) error {
+				return file.Chown(uid, gid)
+			},
+			shutdown: shutdownGuest,
 		}).run()
 	case migration.IdentityObservationRequestSchema:
 		return (identityObservationRunner{

@@ -317,6 +317,7 @@ func buildMigrationImportStageRequest(
 			BackendIdentity: operation.DestinationIdentities[index].BackendIdentity,
 			Runtime:         action.Runtime, GuestArchitecture: architecture,
 			GuestUser: action.GuestUser, ProfileComponent: action.ProfileComponentID,
+			ImageProvenance: cloneMigrationImageProvenance(environment.ImageProvenance),
 		}
 	}
 	componentByDisk := make(map[migration.OpaqueID]migration.ComponentIndexEntry, len(disks))
@@ -360,6 +361,14 @@ func buildMigrationImportStageRequest(
 		return backend.DestinationStageRequest{}, err
 	}
 	return request, nil
+}
+
+func cloneMigrationImageProvenance(value *migration.ImageProvenance) *migration.ImageProvenance {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func migrationImportStageHandle(operationID string) migration.OpaqueID {
