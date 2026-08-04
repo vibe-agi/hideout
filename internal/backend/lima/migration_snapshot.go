@@ -525,6 +525,9 @@ func (b Backend) materializeMigrationSnapshotEntry(
 			if inspectErr != nil || format != entry.Format || logical != entry.LogicalBytes {
 				return errors.New("existing detached root snapshot does not match its plan")
 			}
+			if err := protectMigrationCloneFile(destination); err != nil {
+				return err
+			}
 			if _, cloneErr := os.Lstat(cloneDir); cloneErr == nil {
 				if err := b.verifyOneMigrationSnapshotCloneState(ctx, home, entry); err != nil {
 					return err
@@ -575,7 +578,7 @@ func (b Backend) materializeMigrationSnapshotEntry(
 		if err := os.Rename(filepath.Join(cloneDir, "disk"), destination); err != nil {
 			return err
 		}
-		if err := syncMigrationRegularFile(destination); err != nil {
+		if err := protectMigrationCloneFile(destination); err != nil {
 			return err
 		}
 		if err := syncMigrationDirectory(filepath.Dir(destination)); err != nil {
@@ -601,7 +604,7 @@ func (b Backend) materializeMigrationSnapshotEntry(
 		if err != nil || format != entry.Format || logical != entry.LogicalBytes {
 			return errors.New("cloned attached disk does not match snapshot plan")
 		}
-		if err := syncMigrationRegularFile(destination); err != nil {
+		if err := protectMigrationCloneFile(destination); err != nil {
 			return err
 		}
 		if err := syncMigrationDirectory(filepath.Dir(destination)); err != nil {
@@ -796,6 +799,54 @@ func syncMigrationRegularFile(path string) error {
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	return errors.Join(syncErr, closeErr)
+}
+
+// protectMigrationCloneFile closes the mode mismatch between Lima/APFS clones,
+// which preserve a source disk's commonly readable mode, and the closed
+// migration cleanup boundary, which admits private artifacts only. It operates
+// on the opened, singly linked regular file so a path replacement cannot redirect
+// the chmod to a different file after inspection.
+func protectMigrationCloneFile(path string) (returnErr error) {
+	before, err := os.Lstat(path)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 {
+		return errors.New("migration clone is absent or aliased")
+	}
+	beforeIdentity, err := platformMigrationStageFileIdentity(before)
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, file.Close()) }()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return errors.New("migration clone changed before protection")
+	}
+	openedIdentity, err := platformMigrationStageFileIdentity(opened)
+	if err != nil || openedIdentity != beforeIdentity {
+		return errors.New("migration clone identity changed before protection")
+	}
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(opened, after) || after.Mode().Perm() != 0o600 {
+		return errors.New("migration clone protection is unproved")
+	}
+	afterIdentity, err := platformMigrationStageFileIdentity(after)
+	if err != nil || afterIdentity.Device != beforeIdentity.Device ||
+		afterIdentity.Inode != beforeIdentity.Inode ||
+		afterIdentity.Links != beforeIdentity.Links ||
+		afterIdentity.Size != beforeIdentity.Size ||
+		afterIdentity.ModTimeUnixNano != beforeIdentity.ModTimeUnixNano {
+		return errors.New("migration clone changed during protection")
+	}
+	return nil
 }
 
 func readMigrationJSONStrict(path string, destination any) error {

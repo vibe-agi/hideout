@@ -645,7 +645,17 @@ func TestSnapshotMigrationSourceObservesIdentityThroughDisposableZeroNetworkCOWP
 func TestReleaseMigrationSnapshotRequiresExactOwnerAndIsIdempotent(t *testing.T) {
 	fixture := newMigrationSourceFixture(t, []migrationSourceInstanceFixture{{
 		name: "hideout-alpha", environmentRef: "environment_alpha1", status: "Stopped",
+		additionalDisks: []string{"data-alpha"},
 	}})
+	sourcePaths := []string{
+		filepath.Join(fixture.home, "hideout-alpha", "disk"),
+		filepath.Join(fixture.home, "_disks", "data-alpha", "datadisk"),
+	}
+	for _, sourcePath := range sourcePaths {
+		if err := os.Chmod(sourcePath, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	selections := []backend.MigrationSourceSelection{{
 		EnvironmentRef: "environment_alpha1", ProviderInstance: "hideout-alpha",
 	}}
@@ -654,10 +664,14 @@ func TestReleaseMigrationSnapshotRequiresExactOwnerAndIsIdempotent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	diskRefs := make([]migration.OpaqueID, len(inventory.Disks))
+	for index := range inventory.Disks {
+		diskRefs[index] = inventory.Disks[index].DiskRef
+	}
 	snapshot, err := fixture.provider.SnapshotMigrationSource(
 		context.Background(), backend.SourceSnapshotRequest{
 			Binding: inspectionRequest.Binding, InventoryDigest: inventory.InventoryDigest,
-			Selections: selections, DiskRefs: []migration.OpaqueID{inventory.Disks[0].DiskRef},
+			Selections: selections, DiskRefs: diskRefs,
 		},
 	)
 	if err != nil {
@@ -666,6 +680,45 @@ func TestReleaseMigrationSnapshotRequiresExactOwnerAndIsIdempotent(t *testing.T)
 	snapshotDir := filepath.Join(
 		fixture.home, "_hideout-migration", "snapshots", string(snapshot.SnapshotHandle),
 	)
+	var owner migrationSnapshotOwner
+	if err := readMigrationJSONStrict(filepath.Join(snapshotDir, "owner.json"), &owner); err != nil {
+		t.Fatal(err)
+	}
+	snapshotPaths := make([]string, 0, len(owner.Entries))
+	for _, entry := range owner.Entries {
+		snapshotPaths = append(
+			snapshotPaths,
+			migrationSnapshotEntryPath(fixture.home, snapshotDir, entry),
+		)
+	}
+	assertPrivateSnapshot := func() {
+		t.Helper()
+		for _, path := range snapshotPaths {
+			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o600 {
+				t.Fatalf("snapshot disk is not private: path=%s mode=%v", path, info.Mode())
+			}
+		}
+	}
+	assertPrivateSnapshot()
+	// Model a crash or pre-fix snapshot after clone/rename but before private
+	// mode durability. Re-materialization must tighten the existing files.
+	for _, path := range snapshotPaths {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range owner.Entries {
+		if err := fixture.provider.materializeMigrationSnapshotEntry(
+			context.Background(), fixture.home, snapshotDir, entry,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertPrivateSnapshot()
 	wrong := inspectionRequest.Binding
 	wrong.OperationID = "operation_different1234"
 	err = fixture.provider.ReleaseMigrationSnapshot(context.Background(), backend.SnapshotReleaseRequest{
@@ -708,8 +761,14 @@ func TestReleaseMigrationSnapshotRequiresExactOwnerAndIsIdempotent(t *testing.T)
 	if err := fixture.provider.ReleaseMigrationSnapshot(context.Background(), request); err != nil {
 		t.Fatalf("release replay failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(fixture.home, "hideout-alpha", "disk")); err != nil {
-		t.Fatalf("snapshot cleanup changed source disk: %v", err)
+	for _, sourcePath := range sourcePaths {
+		info, err := os.Lstat(sourcePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf("snapshot cleanup changed source disk: path=%s mode=%v", sourcePath, info.Mode())
+		}
 	}
 }
 
