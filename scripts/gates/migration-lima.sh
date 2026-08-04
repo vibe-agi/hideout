@@ -29,6 +29,27 @@ exact_store=""
 wrong_store=""
 compat_store=""
 daemon_socket_path_max=100
+# shellcheck disable=SC2016 # evaluated by the guest shell
+migration_guest_verify_script='
+  set -eu
+  printf "root="
+  cat /home/developer/migration-root-proof
+  printf "machine="
+  tr -d "[:space:]" </etc/machine-id
+  printf "\nssh="
+  set -- /etc/ssh/ssh_host_*_key.pub
+  [ -e "$1" ]
+  cat "$@" | sha256sum | sed "s/ .*//"
+  found=0
+  for path in /mnt/lima-*/migration-attached-proof; do
+    [ -f "$path" ] || continue
+    printf "attached="
+    cat "$path"
+    found=1
+  done
+  [ "$found" -eq 1 ]
+  [ ! -e /workspace/host-only.txt ]
+'
 
 retain_failure_diagnostics() {
   [ -n "${scratch:-}" ] && [ -d "$scratch" ] || return 0
@@ -243,6 +264,26 @@ migration_destination_profile() {
   printf '%s\n' "$profile_name"
 }
 
+migration_inspected_profile() {
+  local inspect_path="$1"
+  awk '
+    /^  backend: / {
+      for (field_number = 1; field_number <= NF; field_number++) {
+        if ($field_number == "profile:") {
+          profile_value = $(field_number + 1)
+          profile_fields++
+        }
+      }
+    }
+    END {
+      if (profile_fields != 1 || profile_value == "") {
+        exit 1
+      }
+      print profile_value
+    }
+  ' "$inspect_path"
+}
+
 validate_migration_lima_summary() {
   jq -e '
     .schema == "hideout.migration-lima-evidence/v1" and
@@ -417,6 +458,7 @@ if [ "$preflight_only" -eq 1 ]; then
   require_command stat
   bash -n scripts/gates/migration-lima.sh scripts/gates/migration.sh
   shellcheck scripts/gates/migration-lima.sh scripts/gates/migration.sh
+  sh -n -c "$migration_guest_verify_script"
   summary_fixture="$(migration_lima_summary_fixture)"
   printf '%s\n' "$summary_fixture" | validate_migration_lima_summary ||
     fail "summary validator rejected its valid preflight fixture"
@@ -545,11 +587,31 @@ if [ "$preflight_only" -eq 1 ]; then
     find "$diagnostic_fixture" -depth -delete
     fail "destination profile fixture accepted an obsolete environment record"
   fi
+  inspect_profile_fixture="$diagnostic_fixture/environment-inspect.txt"
+  printf '%s\n' \
+    'environment: migration-source' \
+    '  id: env_destination_fixture1' \
+    '  backend: lima profile: migration-source' \
+    '  instance: backend_destination_fixture1' \
+    >"$inspect_profile_fixture"
+  [ "$(migration_inspected_profile "$inspect_profile_fixture")" = \
+    "$destination_fixture_name" ] || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "destination inspection profile fixture was not parsed"
+  }
+  printf '%s\n' \
+    'environment: migration-source' \
+    '  backend: lima' \
+    >"$inspect_profile_fixture"
+  if migration_inspected_profile "$inspect_profile_fixture" >/dev/null; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "destination inspection profile fixture accepted a missing profile"
+  fi
   find "$diagnostic_fixture" -depth -delete
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=16\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=19\n'
   exit 0
 fi
 
@@ -1276,16 +1338,7 @@ verify_import() {
   local environment_id instance inspected_profile destination_profile
   environment_id="$(awk '/^  id: / {print $2}' "$inspect_path")"
   instance="$(awk '/^  instance: / {print $2}' "$inspect_path")"
-  inspected_profile="$(awk '
-    /^  backend: / {
-      for (index = 1; index <= NF; index++) {
-        if ($index == "profile:") {
-          print $(index + 1)
-          exit
-        }
-      }
-    }
-  ' "$inspect_path")"
+  inspected_profile="$(migration_inspected_profile "$inspect_path")" || return 1
   [ -n "$environment_id" ] && [ -n "$instance" ] &&
     [ -n "$inspected_profile" ] || return 1
   destination_profile="$(migration_destination_profile \
@@ -1294,26 +1347,9 @@ verify_import() {
   # shellcheck disable=SC2016 # evaluated by the guest shell
   hideout_for_store "$store" run \
     --profile "$destination_profile" --env "$source_name" \
-    --workspace "$workspace" --terminal never -- sh -c '
-      set -eu
-      printf "root="
-      cat /home/developer/migration-root-proof
-      printf "machine="
-      tr -d "[:space:]" </etc/machine-id
-      printf "\nssh="
-      set -- /etc/ssh/ssh_host_*_key.pub
-      [ -e "$1" ]
-      cat "$@" | sha256sum | sed "s/ .*//"
-      found=0
-      for path in /mnt/lima-*/migration-attached-proof; do
-        [ -f "$path" ] || continue
-        printf "attached="
-        cat "$path"
-        found=1
-      done
-      [ "$found" -eq 1 ]
-      [ ! -e /workspace/host-only.txt ]
-    ' hideout-migration-verify >"$run_path" 2>&1 || return 1
+    --workspace "$workspace" --terminal never -- \
+    sh -c "$migration_guest_verify_script" hideout-migration-verify \
+    >"$run_path" 2>&1 || return 1
   grep -Fq "root=$root_canary" "$run_path" || return 1
   grep -Fq "attached=$attached_canary" "$run_path" || return 1
   if grep -Fq "$host_canary" "$run_path"; then return 1; fi
