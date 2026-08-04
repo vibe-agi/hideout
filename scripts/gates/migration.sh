@@ -643,12 +643,14 @@ jq -n \
       "Local portable-core and bounded-model evidence only; no VM, real backend, physical-host transfer, or release candidate was exercised."
   }' >"$run_dir/summary.json"
 chmod 0600 "$run_dir/summary.json"
-if ! jq -e '
+if ! jq -e \
+  --argjson expectedMigrationPackageCount "$migration_package_count" \
+  --argjson expectedMigrationTestCount "$migration_test_count" '
   .schema == "hideout.migration-foundation-gate/v1" and
   .result == "passed" and
   .checks.schemas.count == 4 and
-  .checks.portablePackages.count == 13 and
-  .checks.migrationTests.count == 192 and
+  .checks.portablePackages.count == $expectedMigrationPackageCount and
+  .checks.migrationTests.count == $expectedMigrationTestCount and
   .checks.hostileMutations.count == 9 and
   .checks.durableCrashCuts.count == 13 and
   .checks.fuzzTargets.count == 6 and
