@@ -392,6 +392,7 @@ handoff.
 - [x] T180 Add a zero-lane Gate 0 toolchain preflight, install/pin Lima 2.2.0 in both release workflows, and retain bounded missing-pass diagnostics from the migration inventory
 - [x] T181 Split remote Gate 0 into required formal/non-formal shards, retain the aggregate required check, record per-model TLC timing/worker/run-review evidence, and provide a single-configuration diagnostic rerun that cannot claim full formal acceptance
 - [x] T182 Recover formal run reviews across job-level hard stops, fail closed when the review is absent, and pin the hosted runner to the measured single-worker policy after the two-worker `WorkloadObservation` regression
+- [x] T183 Remove the browser SSE credential-rotation subscriber-count race by proving stale unsubscription before fresh non-durable event publication
 
 ---
 

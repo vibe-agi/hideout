@@ -235,6 +235,13 @@ func TestBrowserSSECredentialRotationExpiresStreamAndRequiresFreshSeed(
 		state.CanMutate() {
 		t.Fatalf("credential rotation did not fail closed: %+v", state)
 	}
+	// Applying the new-generation event makes the client read-only immediately,
+	// but the server removes the stale subscriber on its bounded credential
+	// ticker. Prove that removal before waiting for the fresh subscriber;
+	// otherwise a transient count of one can still refer to the stale stream and
+	// the following non-durable event can be published before the fresh stream is
+	// registered.
+	waitForBrowserSubscriberCount(t, d, 0)
 
 	time.Sleep(5 * time.Millisecond)
 	base := strings.TrimSuffix(strings.Split(d.UIURL(), "#")[0], "/")
