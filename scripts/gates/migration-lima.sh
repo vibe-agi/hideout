@@ -370,6 +370,19 @@ migration_guest_profile_authorized() {
   ' "$profile_path" >/dev/null
 }
 
+migration_lima_stopped_inventory() {
+  local inventory_path="$1" instance="$2"
+  jq -s -e --arg instance "$instance" '
+    [.[] | select(.name == $instance)] as $matches |
+    ($matches | length) == 1 and
+    $matches[0].status == "Stopped" and
+    $matches[0].vmType == "vz" and
+    $matches[0].arch == "aarch64" and
+    $matches[0].limaVersion == "2.2.0" and
+    (($matches[0].errors // []) | length) == 0
+  ' "$inventory_path" >/dev/null
+}
+
 validate_migration_lima_summary() {
   jq -e '
     .schema == "hideout.migration-lima-evidence/v1" and
@@ -386,6 +399,7 @@ validate_migration_lima_summary() {
       wrongPassphraseNoDestinationEnvironment:true,
       incompatibleAdoptionExecutorRejectedBeforeEffects:true,
       terminalReceipts:true,
+      limaInventoryStopped:true,
       networkAuthorityReapproved:true,
       sameBundleThreeSafeClones:true,
       freshControlIdentity:true,
@@ -512,6 +526,7 @@ migration_lima_summary_fixture() {
         wrongPassphraseNoDestinationEnvironment:true,
         incompatibleAdoptionExecutorRejectedBeforeEffects:true,
         terminalReceipts:true,
+        limaInventoryStopped:true,
         networkAuthorityReapproved:true,
         sameBundleThreeSafeClones:true,
         freshControlIdentity:true,
@@ -764,11 +779,27 @@ if [ "$preflight_only" -eq 1 ]; then
     find "$diagnostic_fixture" -depth -delete
     fail "destination inspection profile fixture accepted a missing profile"
   fi
+  inventory_fixture="$diagnostic_fixture/lima-inventory.json"
+  printf '%s\n' \
+    '{"name":"backend_destination_fixture1","status":"Stopped","vmType":"vz","arch":"aarch64","errors":null,"limaVersion":"2.2.0"}' \
+    >"$inventory_fixture"
+  migration_lima_stopped_inventory \
+    "$inventory_fixture" backend_destination_fixture1 || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "stopped imported Lima inventory fixture was rejected"
+  }
+  jq '.status = "" | .vmType = "" | .arch = ""' \
+    "$inventory_fixture" >"$inventory_fixture.unknown"
+  if migration_lima_stopped_inventory \
+    "$inventory_fixture.unknown" backend_destination_fixture1; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "unknown imported Lima inventory fixture was accepted"
+  fi
   find "$diagnostic_fixture" -depth -delete
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=27\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=29\n'
   exit 0
 fi
 
@@ -1441,6 +1472,8 @@ verify_import() {
   local store="$1" workspace="$2" label="$3"
   local inspect_path="$scratch/environment-$label.txt"
   local run_path="$scratch/verify-$label.txt"
+  local inventory_path="$scratch/lima-inventory-$label.json"
+  local inventory_error_path="$scratch/lima-inventory-$label.err"
   local environment_id instance inspected_profile destination_profile profile_path
   local machine ssh_digest
   hideout_for_store "$store" env inspect "$source_name" >"$inspect_path" 2>&1 ||
@@ -1450,6 +1483,9 @@ verify_import() {
   inspected_profile="$(migration_inspected_profile "$inspect_path")" || return 1
   [ -n "$environment_id" ] && [ -n "$instance" ] &&
     [ -n "$inspected_profile" ] || return 1
+  lima list --format json --all-fields \
+    >"$inventory_path" 2>"$inventory_error_path" || return 1
+  migration_lima_stopped_inventory "$inventory_path" "$instance" || return 1
   destination_profile="$(migration_destination_profile \
     "$store" "$environment_id" "$source_name")" || return 1
   [ "$destination_profile" = "$inspected_profile" ] || return 1
@@ -1591,6 +1627,7 @@ evidence_log="$run_dir/gate.log"
     "$record_sha_before" "$record_sha_after"
   printf 'safe-clone-destinations=3 exact-restore-destinations=1\n'
   printf 'network-authority=reviewed-proposal-approved disabled-imported-authority=retained\n'
+  printf 'lima-inventory=all-four-imported-instances-stopped-and-error-free\n'
   printf 'crash-cuts=materializing,adopting daemon-restarts=2\n'
   printf 'compatibility-fixture=missing-zero-network-executor result=refused-before-operation\n'
 } >"$evidence_log"
@@ -1731,6 +1768,7 @@ jq -n \
       wrongPassphraseNoDestinationEnvironment:true,
       incompatibleAdoptionExecutorRejectedBeforeEffects:true,
       terminalReceipts:true,
+      limaInventoryStopped:true,
       networkAuthorityReapproved:true,
       sameBundleThreeSafeClones:true,
       freshControlIdentity:true,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/hideout/internal/backend"
 	"github.com/vibe-agi/hideout/internal/migration"
+	"gopkg.in/yaml.v3"
 )
 
 func TestStageMigrationDestinationMaterializesBoundConfigAndResumesByComponent(t *testing.T) {
@@ -60,18 +61,28 @@ func TestStageMigrationDestinationMaterializesBoundConfigAndResumesByComponent(t
 		}
 		rendered := string(config)
 		for _, forbidden := range []string{
-			"hideout-source", "images:", "base:", "provision:", "env:",
+			"hideout-source", "base:", "provision:", "env:",
 		} {
 			if strings.Contains(rendered, forbidden) {
 				t.Fatalf("normalized config retained forbidden source authority %q:\n%s", forbidden, rendered)
 			}
 		}
 		for _, required := range []string{
-			"vmType: vz", "arch: aarch64", "mounts: []", "additionalDisks:",
+			"vmType: vz", "arch: aarch64", "images:", "mounts: []", "additionalDisks:",
 		} {
 			if !strings.Contains(rendered, required) {
 				t.Fatalf("normalized config lacks %q:\n%s", required, rendered)
 			}
+		}
+		var stagedConfig migrationStagedLimaConfig
+		if err := yaml.Unmarshal(config, &stagedConfig); err != nil {
+			t.Fatal(err)
+		}
+		if len(stagedConfig.Images) != 1 ||
+			stagedConfig.Images[0].Location != migrationImportedRootImageSentinel ||
+			stagedConfig.Images[0].Arch != "aarch64" ||
+			stagedConfig.Images[0].Digest != "" {
+			t.Fatalf("normalized config has unsafe root-image fallback: %+v", stagedConfig.Images)
 		}
 	}
 

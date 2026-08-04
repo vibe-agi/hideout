@@ -23,6 +23,12 @@ const (
 	migrationStageCheckpointSchema = "hideout.lima-migration-stage-checkpoint/v1"
 	migrationStageCompleteSchema   = "hideout.lima-migration-stage-complete/v1"
 	migrationStageConfigSchema     = "hideout.lima-migration-stage-config/v1"
+	// Lima validates that every instance has at least one image declaration even
+	// when an already-populated root disk is present. The imported disk is the
+	// only root authority: this local sentinel is never read while that disk
+	// exists and makes a missing disk fail locally instead of fetching or
+	// rebuilding a different guest.
+	migrationImportedRootImageSentinel = "/dev/null"
 )
 
 type migrationStageOwner struct {
@@ -100,6 +106,7 @@ type migrationStageComplete struct {
 type migrationStagedLimaConfig struct {
 	VMType          string        `yaml:"vmType"`
 	Arch            string        `yaml:"arch"`
+	Images          []limaImage   `yaml:"images"`
 	MountType       string        `yaml:"mountType"`
 	MountInotify    bool          `yaml:"mountInotify"`
 	User            user          `yaml:"user"`
@@ -736,6 +743,10 @@ func migrationStageConfigurationBytes(
 	}
 	limaConfig := migrationStagedLimaConfig{
 		VMType: "vz", Arch: "aarch64", MountType: "virtiofs", MountInotify: false,
+		Images: []limaImage{{
+			Location: migrationImportedRootImageSentinel,
+			Arch:     "aarch64",
+		}},
 		User: user{
 			Name: configuration.GuestUser, Comment: "Hideout imported guest user",
 			UID: 1000, Home: "/home/" + configuration.GuestUser, Shell: "/bin/bash",
