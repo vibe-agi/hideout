@@ -229,6 +229,12 @@ grep -F '.schema == "hideout.public-alpha-validation-context/v1" and' \
   .github/workflows/hideout-alpha-promote.yml >/dev/null
 grep -F 'public_alpha_cleanup_root "$work" "$out/cleanup-report.json"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
+for workflow in .github/workflows/ci.yml \
+  .github/workflows/hideout-alpha-candidate.yml; do
+  grep -F 'brew install shellcheck' "$workflow" >/dev/null
+  grep -F 'shellcheck --version' "$workflow" >/dev/null
+  grep -F '= "0.11.0"' "$workflow" >/dev/null
+done
 grep -F 'umask 077' scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
@@ -266,6 +272,32 @@ fi
 grep -F 'HIDEOUT_GATE2_EXTERNAL_HOST_APP_PACK="$ROOT/test/host-app-packs/gate2-external"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install.sh' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+closure_validation_line="$(grep -n -m1 'cmd/validate-045' \
+  scripts/test-public-alpha-candidate.sh | cut -d: -f1)"
+clean_install_line="$(grep -n -m1 'HIDEOUT_REQUIRE_RUNTIME_CACHE=1' \
+  scripts/test-public-alpha-candidate.sh | cut -d: -f1)"
+[ -n "$closure_validation_line" ] && [ -n "$clean_install_line" ] &&
+  [ "$closure_validation_line" -lt "$clean_install_line" ] || {
+  echo "public-alpha-release: Feature 045 closure is not validated before the first VM" >&2
+  exit 1
+}
+grep -F 'additional product evidence has an invalid schema' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'do not pass Feature 046 evidence' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'duplicate additional proof' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'scripts/gates/migration-lima.sh --preflight' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F -- '--candidate-result "$migration_candidate_root/result.json"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F -- '--arg summary "run/summary.json"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F -- '--arg summarySHA256 "$migration_summary_sha"' \
+  scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'cmd/validate-046' scripts/test-public-alpha-candidate.sh >/dev/null
+grep -F 'product_evidence+=("$out/migration-lima/product-hardening-evidence.json")' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'hideout_seed_verified_runtime_cache' \
   scripts/test-public-alpha-clean-install.sh >/dev/null

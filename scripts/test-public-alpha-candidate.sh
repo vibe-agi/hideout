@@ -148,8 +148,134 @@ jq -e --arg version "$version" --arg commit "$source_commit" '
 cp "$signing" "$out/signing-observation.json"
 cp "$notarization" "$out/notarization-observation.json"
 
+# Feature 045 closure comes from the exact clean local candidate sequence. It
+# is intentionally source/version bound rather than archive-byte bound because
+# Developer ID signing changes Mach-O bytes. Validate this bridge before the
+# first VM starts; the signed archive still receives its own exact-package
+# signing, notarization, clean-install, migration, and runtime gates below.
+release_closure_manifest=""
+input_proof_ids="$work/input-proof-ids.txt"
+: >"$input_proof_ids"
+for manifest in "${product_evidence[@]}"; do
+  [ -f "$manifest" ] || {
+    echo "public-alpha-candidate: missing additional product evidence: $manifest" >&2
+    exit 2
+  }
+  go run ./cmd/hideout-schema-validate \
+    schemas/product-hardening-evidence.schema.json "$manifest" >/dev/null || {
+    echo "public-alpha-candidate: additional product evidence has an invalid schema: $manifest" >&2
+    exit 2
+  }
+  jq -r '.proofs[].proofId' "$manifest" >>"$input_proof_ids"
+  if jq -e '
+    any(.proofs[]?;
+      .featureId == "046-portable-hideout-migration" or
+      .proofId == "046.migration.real-lima")
+  ' "$manifest" >/dev/null; then
+    echo "public-alpha-candidate: do not pass Feature 046 evidence; the exact signed archive is tested by this gate" >&2
+    exit 2
+  fi
+  if jq -e '
+    any(.proofs[]?;
+      .featureId == "045-operator-observability-console" and
+      .proofId == "045.operator-console.release-closure")
+  ' "$manifest" >/dev/null 2>&1; then
+    [ -z "$release_closure_manifest" ] || {
+      echo "public-alpha-candidate: duplicate Feature 045 release closure evidence" >&2
+      exit 2
+    }
+    release_closure_manifest="$manifest"
+  fi
+done
+duplicate_input_proof="$(LC_ALL=C sort "$input_proof_ids" | uniq -d | head -n 1)"
+[ -z "$duplicate_input_proof" ] || {
+  echo "public-alpha-candidate: duplicate additional proof: $duplicate_input_proof" >&2
+  exit 2
+}
+[ -n "$release_closure_manifest" ] || {
+  echo "public-alpha-candidate: Feature 045 final release closure evidence is required" >&2
+  exit 2
+}
+go run ./internal/productevidence/cmd/validate-045 \
+  --commit "$source_commit" \
+  --package-identity "$out/package-identity.json" \
+  "$release_closure_manifest" >/dev/null || {
+  echo "public-alpha-candidate: Feature 045 release closure evidence is invalid" >&2
+  exit 2
+}
+
 HIDEOUT_REQUIRE_RUNTIME_CACHE=1 scripts/test-public-alpha-clean-install.sh --package "$package" --real-lima \
   --out "$out/clean-install.json"
+
+# Exercise the migration feature once more against the exact Developer ID
+# signed archive. The local closure proves the unsigned source candidate; this
+# proof is same-commit-and-package and therefore cannot be reused across the
+# signing boundary.
+migration_candidate_root="$work/migration-candidate"
+migration_candidate_run="$migration_candidate_root/run"
+mkdir -p "$migration_candidate_run"
+cp "$package" "$migration_candidate_run/$expected_package"
+chmod 0600 "$migration_candidate_run/$expected_package"
+migration_candidate_summary="$migration_candidate_run/summary.json"
+jq -n \
+  --arg generatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+  --arg commit "$source_commit" \
+  --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+  --arg version "$version" \
+  --arg tag "$tag" \
+  --arg archive "$expected_package" \
+  --arg archiveSHA256 "$package_sha" '
+    {
+      schema:"hideout.public-alpha-migration-candidate/v1",
+      generatedAt:$generatedAt,
+      source:{commit:$commit,tree:$tree,dirty:false},
+      candidate:{
+        version:$version,
+        tag:$tag,
+        archive:$archive,
+        archiveSHA256:$archiveSHA256,
+        signing:"validated",
+        notarization:"validated"
+      },
+      result:"passed",
+      candidateAcceptance:true,
+      publicationStatus:"private-draft"
+    }
+  ' >"$migration_candidate_summary"
+chmod 0600 "$migration_candidate_summary"
+migration_summary_sha="$(shasum -a 256 "$migration_candidate_summary" | awk '{print $1}')"
+jq -n \
+  --arg generatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+  --arg commit "$source_commit" \
+  --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+  --arg summary "run/summary.json" \
+  --arg summarySHA256 "$migration_summary_sha" \
+  --arg archive "run/$expected_package" \
+  --arg archiveSHA256 "$package_sha" '
+    {
+      schema:"hideout.release-package-candidate-pointer/v1",
+      generatedAt:$generatedAt,
+      source:{commit:$commit,tree:$tree,dirty:false},
+      result:"passed",
+      run:"run",
+      summary:$summary,
+      summarySHA256:$summarySHA256,
+      archive:$archive,
+      archiveSHA256:$archiveSHA256,
+      candidateAcceptance:true,
+      publicationStatus:"local-only"
+    }
+  ' >"$migration_candidate_root/result.json"
+chmod 0600 "$migration_candidate_root/result.json"
+scripts/gates/migration-lima.sh --preflight >/dev/null
+scripts/gates/migration-lima.sh \
+  --candidate-result "$migration_candidate_root/result.json" \
+  --out "$out/migration-lima"
+go run ./internal/productevidence/cmd/validate-046 \
+  --commit "$source_commit" \
+  --package-identity "$out/package-identity.json" \
+  "$out/migration-lima/product-hardening-evidence.json" >/dev/null
+product_evidence+=("$out/migration-lima/product-hardening-evidence.json")
 
 arch="$(jq -r '.hostArch' "$out/package-identity.json")"
 export HIDEOUT_RELEASE_BINARY="$hideout"

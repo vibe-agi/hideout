@@ -293,6 +293,18 @@ func validateRegisteredArtifact(validator string, refs []ArtifactRef, artifacts 
 		return validateProjectionReadinessArtifact(
 			refs, artifacts, expectedCommit, expectedPackage, expectedRuntime, true,
 		)
+	case ArtifactValidatorReleaseClosureV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateReleaseClosureArtifact(data, expectedCommit, expectedPackage)
+	case ArtifactValidatorMigrationLimaV1:
+		data, err := singleJSONArtifact(refs, artifacts)
+		if err != nil {
+			return err
+		}
+		return validateMigrationLimaArtifact(data, expectedCommit, expectedPackage)
 	default:
 		return fmt.Errorf("unsupported artifact validator %q", validator)
 	}

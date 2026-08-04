@@ -487,19 +487,124 @@ validate_migration_lima_summary() {
   ' "${1:--}" >/dev/null
 }
 
+write_migration_product_evidence() {
+  local manifest="$1" summary="$2" summary_relative="$3"
+  local package_identity="$4" proof_registry="$5"
+  local manifest_parent manifest_tmp summary_actual_relative summary_sha
+  case "$summary_relative" in
+    "" | /* | . | .. | ../* | */.. | */../*)
+      return 1
+      ;;
+  esac
+  [ -f "$summary" ] && [ ! -L "$summary" ] &&
+    [ -f "$package_identity" ] && [ ! -L "$package_identity" ] &&
+    [ -f "$proof_registry" ] && [ ! -L "$proof_registry" ] || return 1
+  manifest_parent="$(dirname "$manifest")"
+  mkdir -p "$manifest_parent"
+  manifest_parent="$(CDPATH='' cd -- "$manifest_parent" && pwd -P)"
+  summary="$(
+    CDPATH='' cd -- "$(dirname "$summary")" &&
+      printf '%s/%s\n' "$(pwd -P)" "$(basename "$summary")"
+  )"
+  case "$summary" in
+    "$manifest_parent"/*)
+      summary_actual_relative="${summary#"$manifest_parent"/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  [ "$summary_relative" = "$summary_actual_relative" ] || return 1
+  summary_sha="$(shasum -a 256 "$summary" | awk '{print $1}')" || return 1
+  manifest_tmp="$manifest_parent/.product-hardening-evidence.$$.json"
+  jq -e -n \
+    --arg generatedAt "$(jq -er '.generatedAt' "$summary")" \
+    --arg commit "$(jq -er '.source.commit' "$summary")" \
+    --arg summary "$summary_relative" \
+    --arg summarySHA256 "$summary_sha" \
+    --slurpfile package "$package_identity" \
+    --slurpfile registry "$proof_registry" '
+      [
+        $registry[0].requirements[] |
+        select(
+          .featureId == "046-portable-hideout-migration" and
+          .proofId == "046.migration.real-lima"
+        )
+      ] as $requirements |
+      if ($requirements | length) != 1 then
+        error("046 migration proof registry entry is missing or duplicated")
+      else
+        $requirements[0] as $requirement |
+        {
+          version:"hideout.product-hardening-evidence/v1",
+          generatedAt:$generatedAt,
+          commit:$commit,
+          dirty:false,
+          packageIdentity:$package[0],
+          proofs:[{
+            proofId:$requirement.proofId,
+            featureId:$requirement.featureId,
+            mode:"real-gate",
+            evidenceClass:"portable-migration-real-lima",
+            status:"passed",
+            commandSummary:"exact packaged migration across independent Lima stores with Safe Clone, Exact Guest Restore, crash recovery, and compatibility refusal",
+            coveredClaims:[
+              $requirement.claimIds[] | {
+                claimId:.,
+                source:"spec",
+                description:"exact-package real-Lima migration release proof"
+              }
+            ],
+            prerequisites:[{
+              name:"real-macos-arm64-lima",
+              status:"available"
+            }],
+            artifacts:[{
+              kind:"event-summary",
+              path:$summary,
+              sha256:$summarySHA256,
+              redactionStatus:"passed",
+              description:"strict migration fidelity and identity summary"
+            }],
+            redactionStatus:"passed",
+            host:{os:"darwin",arch:"arm64"},
+            notes:[
+              "Functional fidelity and identity-policy evidence; no performance claim.",
+              "One physical macOS host with independent source and destination stores."
+            ]
+          }]
+        }
+      end
+    ' >"$manifest_tmp" || {
+      rm -f "$manifest_tmp"
+      return 1
+    }
+  chmod 0600 "$manifest_tmp"
+  mv "$manifest_tmp" "$manifest"
+}
+
 migration_lima_summary_fixture() {
   jq -nc '
     def digest($character): $character * 64;
+    def commit($character): $character * 40;
+    def artifact($path;$character): {
+      path:$path,
+      bytes:1,
+      mode:"0600",
+      sha256:digest($character)
+    };
     {
       schema:"hideout.migration-lima-evidence/v1",
+      generatedAt:"2026-08-05T00:00:00Z",
       result:"passed",
       candidateAcceptance:true,
+      source:{commit:commit("a"),tree:commit("b"),dirty:false},
       candidate:{
         pointerSHA256:digest("a"),
         archiveSHA256:digest("b"),
         installedBinarySHA256:digest("c")
       },
-      bundle:{sha256:digest("d"),reusedDestinations:4},
+      bundle:{sha256:digest("d"),bytes:1,reusedDestinations:4},
       sourceImmutability:{
         rootDisk:{beforeSHA256:digest("1"),afterSHA256:digest("1")},
         attachedDisk:{beforeSHA256:digest("2"),afterSHA256:digest("2")},
@@ -556,12 +661,20 @@ migration_lima_summary_fixture() {
         adoptionCrashRecovered:true,
         daemonIdentityFreshAcrossCrashRecovery:true
       },
-      artifacts:[range(0;8) | {
-        path:("artifact-" + tostring + ".json"),
-        bytes:1,
-        mode:"0600",
-        sha256:digest((["5","6","7","8","9","a","b","c"][.] ))
-      }]
+      artifacts:[
+        artifact("export-terminal.json";"5"),
+        artifact("gate.log";"6"),
+        artifact("import-exact-terminal.json";"7"),
+        artifact("import-safe-one-terminal.json";"8"),
+        artifact("import-safe-three-terminal.json";"9"),
+        artifact("import-safe-two-terminal.json";"a"),
+        artifact("run-review.json";"b"),
+        artifact("stage-events.jsonl";"c")
+      ],
+      limitations:[
+        "This is a functional fidelity and identity-policy gate; it makes no performance claim.",
+        "The transfer is exercised between independent stores on one physical macOS host."
+      ]
     }
   '
 }
@@ -573,9 +686,11 @@ if [ "$preflight_only" -eq 1 ]; then
   require_command cmp
   require_command cp
   require_command find
+  require_command go
   require_command grep
   require_command jq
   require_command mktemp
+  require_command shasum
   require_command shellcheck
   require_command stat
   bash -n scripts/gates/migration-lima.sh scripts/gates/migration.sh
@@ -610,6 +725,67 @@ if [ "$preflight_only" -eq 1 ]; then
   run_dir="$diagnostic_fixture/evidence"
   source_store="$scratch/source-store"
   mkdir -p "$scratch" "$run_dir" "$source_store/daemon"
+
+  product_fixture="$diagnostic_fixture/product"
+  product_summary_dir="$product_fixture/run-fixture"
+  product_summary="$product_summary_dir/summary.json"
+  product_package="$product_fixture/package-identity.json"
+  product_registry="$product_fixture/proof-registry.json"
+  product_manifest="$product_fixture/product-hardening-evidence.json"
+  mkdir -p "$product_summary_dir"
+  printf '%s\n' "$summary_fixture" >"$product_summary"
+  jq -n '
+    {
+      name:"hideout",
+      productVersion:"0.1.0-alpha.4",
+      sourceCommit:("a" * 40),
+      artifactSHA256:("b" * 64),
+      hostOS:"darwin",
+      hostArch:"arm64"
+    }
+  ' >"$product_package"
+  go run ./cmd/hideout support proof-registry --json >"$product_registry"
+  write_migration_product_evidence \
+    "$product_manifest" "$product_summary" \
+    "run-fixture/summary.json" "$product_package" "$product_registry" ||
+    fail "valid migration product evidence fixture could not be assembled"
+  go run ./cmd/hideout-schema-validate \
+    schemas/product-hardening-evidence.schema.json \
+    "$product_manifest" >/dev/null ||
+    fail "valid migration product evidence fixture failed schema validation"
+  go run ./internal/productevidence/cmd/validate-046 \
+    --commit "$(jq -er '.source.commit' "$product_summary")" \
+    --package-identity "$product_package" \
+    "$product_manifest" >/dev/null ||
+    fail "valid migration product evidence fixture failed semantic validation"
+  jq '.candidate.archiveSHA256 = ("d" * 64)' \
+    "$product_summary" >"$product_summary.mutated"
+  mv "$product_summary.mutated" "$product_summary"
+  write_migration_product_evidence \
+    "$product_manifest" "$product_summary" \
+    "run-fixture/summary.json" "$product_package" "$product_registry" ||
+    fail "archive-mismatch migration fixture could not be assembled"
+  if go run ./internal/productevidence/cmd/validate-046 \
+    --commit "$(jq -er '.source.commit' "$product_summary")" \
+    --package-identity "$product_package" \
+    "$product_manifest" >/dev/null 2>&1; then
+    fail "migration product validator accepted a different package archive"
+  fi
+  printf '%s\n' "$summary_fixture" >"$product_summary"
+  jq '.identityEvidence.guest.safeCloneDigests[2] = .identityEvidence.guest.safeCloneDigests[1]' \
+    "$product_summary" >"$product_summary.mutated"
+  mv "$product_summary.mutated" "$product_summary"
+  write_migration_product_evidence \
+    "$product_manifest" "$product_summary" \
+    "run-fixture/summary.json" "$product_package" "$product_registry" ||
+    fail "duplicate-identity migration fixture could not be assembled"
+  if go run ./internal/productevidence/cmd/validate-046 \
+    --commit "$(jq -er '.source.commit' "$product_summary")" \
+    --package-identity "$product_package" \
+    "$product_manifest" >/dev/null 2>&1; then
+    fail "migration product validator accepted a duplicate Safe Clone identity"
+  fi
+
   printf 'candidate install diagnostic fixture\n' >"$scratch/install.log"
   printf 'must not be retained\n' >"$scratch/passphrase"
   printf 'migration worker diagnostic fixture\n' \
@@ -823,11 +999,11 @@ if [ "$preflight_only" -eq 1 ]; then
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=31\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=34\n'
   exit 0
 fi
 
-for command in awk cp date find grep jq limactl lsof mktemp mv openssl ps sed shasum sort ssh stat tail tar tr uname; do
+for command in awk cp date find go grep jq limactl lsof mktemp mv openssl ps sed shasum sort ssh stat tail tar tr uname; do
   require_command "$command"
 done
 
@@ -1939,6 +2115,28 @@ jq -n \
 ' >"$pointer_tmp"
 chmod 0600 "$pointer_tmp"
 mv "$pointer_tmp" "$out/result.json"
+
+package_identity="$scratch/package-identity.json"
+proof_registry="$scratch/proof-registry.json"
+"$hideout_binary" support release package-identity \
+  --archive "$archive" --out "$package_identity" >/dev/null ||
+  fail "candidate package identity could not be derived for migration proof"
+"$hideout_binary" support proof-registry --json >"$proof_registry" ||
+  fail "candidate proof registry could not be read"
+write_migration_product_evidence \
+  "$out/product-hardening-evidence.json" \
+  "$summary" "$run_id/summary.json" \
+  "$package_identity" "$proof_registry" ||
+  fail "migration product evidence could not be assembled"
+go run ./cmd/hideout-schema-validate \
+  schemas/product-hardening-evidence.schema.json \
+  "$out/product-hardening-evidence.json" >/dev/null ||
+  fail "migration product evidence failed schema validation"
+go run ./internal/productevidence/cmd/validate-046 \
+  --commit "$candidate_commit" \
+  --package-identity "$package_identity" \
+  "$out/product-hardening-evidence.json" >/dev/null ||
+  fail "migration product evidence failed semantic validation"
 
 # shellcheck disable=SC2034 # consumed by the sourced EXIT guard
 gate_completed=1

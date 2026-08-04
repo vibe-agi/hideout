@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -1113,7 +1114,7 @@ func writeRequirementArtifacts(t *testing.T, root string, req productevidence.Pr
 		rel := filepath.Join("artifacts", req.ProofID+".log")
 		data := []byte("runtime proof\n")
 		if req.ArtifactValidator != productevidence.ArtifactValidatorNone {
-			data = semanticProductArtifact(t, req.ArtifactValidator, commit, binding)
+			data = semanticProductArtifact(t, req.ArtifactValidator, commit, binding, packageIdentity)
 		}
 		artifacts[rel] = data
 	}
@@ -1521,7 +1522,7 @@ func readSharedWorkspaceDecisionFixture(t *testing.T) []byte {
 	return data
 }
 
-func semanticProductArtifact(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding) []byte {
+func semanticProductArtifact(t *testing.T, validator, commit string, binding productevidence.RuntimeBinding, packageIdentity productevidence.PackageIdentity) []byte {
 	t.Helper()
 	var value any
 	switch validator {
@@ -1723,6 +1724,10 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 				"historicalJournalOnly": "not-auto-recovered", "ordinaryOrphans": "report-only",
 			},
 		}
+	case productevidence.ArtifactValidatorReleaseClosureV1:
+		value = releaseClosureSemanticFixture(commit, packageIdentity)
+	case productevidence.ArtifactValidatorMigrationLimaV1:
+		value = migrationLimaSemanticFixture(commit, packageIdentity)
 	default:
 		t.Fatalf("unknown semantic validator %q", validator)
 	}
@@ -1731,6 +1736,192 @@ func semanticProductArtifact(t *testing.T, validator, commit string, binding pro
 		t.Fatal(err)
 	}
 	return data
+}
+
+func releaseClosureSemanticFixture(commit string, packageIdentity productevidence.PackageIdentity) map[string]any {
+	digest := strings.Repeat("d", 64)
+	ref := func(path string) map[string]any {
+		return map[string]any{"path": path, "sha256": digest, "bytes": 1, "mode": "0600"}
+	}
+	gateIDs := []string{
+		"formal", "local", "dependencies", "package-components", "recovery", "privacy",
+		"ui", "performance", "lima", "migration-lima", "package-build", "package-lifecycle",
+	}
+	gates := make([]map[string]any, 0, len(gateIDs))
+	for _, id := range gateIDs {
+		scope := "candidate"
+		candidateAcceptance := true
+		if slices.Contains([]string{"dependencies", "formal", "local", "package-components", "recovery"}, id) {
+			scope = "source"
+			candidateAcceptance = false
+		}
+		gates = append(gates, map[string]any{
+			"id": id, "scope": scope, "schema": "hideout.fixture/v1",
+			"generatedAt": "2026-08-05T00:00:00Z", "result": "passed",
+			"candidateAcceptance": candidateAcceptance, "evidence": ref("gates/" + id + ".json"),
+		})
+	}
+	return map[string]any{
+		"schema": "hideout.release-evidence/v1", "generatedAt": "2026-08-05T00:00:00Z",
+		"result": "passed", "stage": "final-ready", "releaseReadiness": true,
+		"source": map[string]any{
+			"commit": commit, "tree": strings.Repeat("b", 40), "dirty": false,
+			"committedAt": "2026-08-04T00:00:00Z", "manifest": ref("source/manifest.tsv"),
+		},
+		"candidate": map[string]any{
+			"version": packageIdentity.ProductVersion, "tag": "v" + packageIdentity.ProductVersion,
+			"channel": "developer-preview", "signingMode": "developer-preview-unsigned",
+			"publicationStatus": "local-only", "archive": ref("package/archive.tar.gz"),
+			"packageManifest":  ref("package/package-manifest.json"),
+			"packageSummary":   ref("package/summary.json"),
+			"lifecycleSummary": ref("package-lifecycle/summary.json"),
+		},
+		"package": releaseClosurePackageSemanticFixture(),
+		"formal": map[string]any{
+			"inventory": ref("formal/inventory.json"), "sourceInventory": ref("formal/source-inventory.json"),
+			"configurationCount": 16, "moduleCount": 12, "invariantCount": 122,
+			"propertyCount": 28, "goTestCount": 27,
+		},
+		"gates": gates,
+		"review": map[string]any{
+			"result": "passed", "requiredFindings": 1, "openRequiredFindings": 0,
+			"report": ref("docs/review.md"), "claimMatrix": ref("docs/claims.md"),
+		},
+		"limitations": []string{"one", "two", "three", "four", "five"},
+		"closure": map[string]any{
+			"localInstall":       map[string]any{"status": "passed", "evidence": ref("closure/local-install.json")},
+			"publicationAbsence": map[string]any{"status": "passed", "evidence": ref("closure/publication-absence.json")},
+		},
+		"digest": map[string]any{"algorithm": "sha256", "detachedPath": "evidence.json.sha256"},
+	}
+}
+
+func releaseClosurePackageSemanticFixture() map[string]any {
+	digest := strings.Repeat("d", 64)
+	file := func(path, kind string, executable bool) map[string]any {
+		mode := "0644"
+		if executable {
+			mode = "0755"
+		}
+		return map[string]any{
+			"path": path, "kind": kind, "sha256": digest,
+			"bytes": 1, "mode": mode, "executable": executable,
+		}
+	}
+	files := make([]map[string]any, 0, 100)
+	for index := range 100 {
+		files = append(files, file(fmt.Sprintf("files/file-%03d", index), "data", false))
+	}
+	helpers := make([]map[string]any, 0, 17)
+	for index := range 8 {
+		helpers = append(helpers,
+			file(fmt.Sprintf("helpers/manifest-%d.json", index), "helper-manifest", false),
+			file(fmt.Sprintf("helpers/linux-%d", index), "linux-helper", true),
+		)
+	}
+	helpers = append(helpers,
+		file("bin/hideout-migration-vz-adopt-darwin-arm64", "binary", true))
+	assets := make([]map[string]any, 0, 9)
+	for _, asset := range []struct {
+		path      string
+		mediaType string
+	}{
+		{"index.html", "text/html; charset=utf-8"},
+		{"style.css", "text/css; charset=utf-8"},
+		{"state.js", "text/javascript; charset=utf-8"},
+		{"client.js", "text/javascript; charset=utf-8"},
+		{"activity.js", "text/javascript; charset=utf-8"},
+		{"config.js", "text/javascript; charset=utf-8"},
+		{"migration.js", "text/javascript; charset=utf-8"},
+		{"presentation.js", "text/javascript; charset=utf-8"},
+		{"app.js", "text/javascript; charset=utf-8"},
+	} {
+		assets = append(assets, map[string]any{
+			"path": asset.path, "mediaType": asset.mediaType, "sha256": digest,
+		})
+	}
+	return map[string]any{
+		"files": files, "helpers": helpers,
+		"browserConsole": map[string]any{
+			"manifest":  file("share/hideout/browser/manifest.json", "browser-manifest", false),
+			"container": file("bin/hideout", "binary", true),
+			"inventory": map[string]any{
+				"schema": "hideout.embedded-asset-manifest/v1", "id": "browser-console",
+				"container": "bin/hideout", "containerSHA256": digest,
+				"license": "Apache-2.0", "assets": assets,
+			},
+		},
+		"runtime": map[string]any{
+			"family": "hideout-runtime", "revision": "fixture",
+			"catalogFileSHA256": digest, "artifactSHA256": digest,
+			"catalog":  file("share/hideout/runtime/catalog.json", "runtime-catalog", false),
+			"contract": file("share/hideout/runtime/contract.json", "runtime-contract", false),
+		},
+	}
+}
+
+func migrationLimaSemanticFixture(commit string, packageIdentity productevidence.PackageIdentity) map[string]any {
+	digest := func(character string) string { return strings.Repeat(character, 64) }
+	checks := map[string]bool{}
+	for _, name := range []string{
+		"packageCandidateInstalled", "encryptedBundleSealed", "rootDiskFidelity",
+		"attachedDiskFidelity", "hostWorkspaceExcluded", "sourceImmutable",
+		"wrongPassphraseNoDestinationEnvironment", "incompatibleAdoptionExecutorRejectedBeforeEffects",
+		"terminalReceipts", "limaInventoryStopped", "networkAuthorityReapproved",
+		"sameBundleThreeSafeClones", "freshControlIdentity", "freshBackendIdentity",
+		"safeCloneGuestIdentityFresh", "exactRestoreGuestIdentityPreserved",
+		"materializationCrashResumed", "adoptionCrashRecovered",
+		"daemonIdentityFreshAcrossCrashRecovery",
+	} {
+		checks[name] = true
+	}
+	paths := []string{
+		"export-terminal.json", "gate.log", "import-exact-terminal.json",
+		"import-safe-one-terminal.json", "import-safe-three-terminal.json",
+		"import-safe-two-terminal.json", "run-review.json", "stage-events.jsonl",
+	}
+	artifacts := make([]map[string]any, 0, len(paths))
+	for index, path := range paths {
+		artifacts = append(artifacts, map[string]any{
+			"path": path, "sha256": digest(string(rune('2' + index))), "bytes": 1, "mode": "0600",
+		})
+	}
+	return map[string]any{
+		"schema": "hideout.migration-lima-evidence/v1", "generatedAt": "2026-08-05T00:00:00Z",
+		"result": "passed", "candidateAcceptance": true,
+		"source": map[string]any{"commit": commit, "tree": strings.Repeat("b", 40), "dirty": false},
+		"candidate": map[string]any{
+			"pointerSHA256": digest("d"), "archiveSHA256": packageIdentity.ArtifactSHA256,
+			"installedBinarySHA256": digest("e"),
+		},
+		"bundle": map[string]any{"sha256": digest("f"), "bytes": 1, "reusedDestinations": 4},
+		"sourceImmutability": map[string]any{
+			"rootDisk":          map[string]any{"beforeSHA256": digest("1"), "afterSHA256": digest("1")},
+			"attachedDisk":      map[string]any{"beforeSHA256": digest("2"), "afterSHA256": digest("2")},
+			"environmentRecord": map[string]any{"beforeSHA256": digest("3"), "afterSHA256": digest("3")},
+		},
+		"identityEvidence": map[string]any{
+			"control": map[string]any{"sourceDigest": digest("1"), "destinationDigests": []string{digest("2"), digest("3"), digest("4"), digest("5")}},
+			"backend": map[string]any{"sourceDigest": digest("6"), "destinationDigests": []string{digest("7"), digest("8"), digest("9"), digest("a")}},
+			"guest":   map[string]any{"sourceDigest": digest("b"), "safeCloneDigests": []string{digest("c"), digest("d"), digest("e")}, "exactRestoreDigest": digest("b")},
+		},
+		"crashRecovery": map[string]any{
+			"cuts": []map[string]any{
+				{"phase": "materializing", "daemonInstanceDigest": digest("f")},
+				{"phase": "adopting", "daemonInstanceDigest": digest("0")},
+			},
+			"finalDaemonInstanceDigest":              digest("1"),
+			"materializationRequiredProtectedResume": true,
+			"adoptionRestartedWithoutBundleSecret":   true,
+		},
+		"compatibilityEvidence": map[string]any{
+			"fixture":          "missing-package-owned-zero-network-executor",
+			"errorCode":        "migration.capability.unavailable",
+			"operationCreated": false, "destinationEnvironmentCreated": false,
+		},
+		"checks": checks, "artifacts": artifacts,
+		"limitations": []string{"functional, not performance", "one physical host"},
+	}
 }
 
 func coveredClaimsForRequirement(req productevidence.ProofRequirement) []productevidence.CoveredClaim {

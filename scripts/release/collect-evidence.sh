@@ -93,6 +93,93 @@ validate_candidate_sequence_contract() {
   [ "$(grep -Fc 'scripts/gates/migration-lima.sh' "$matrix")" -eq 2 ]
 }
 
+write_release_closure_product_evidence() {
+  local manifest="$1" closure_evidence="$2"
+  local package_identity="$3" proof_registry="$4"
+  local manifest_parent manifest_tmp evidence_relative evidence_sha
+  [ -f "$closure_evidence" ] && [ ! -L "$closure_evidence" ] &&
+    [ -f "$package_identity" ] && [ ! -L "$package_identity" ] &&
+    [ -f "$proof_registry" ] && [ ! -L "$proof_registry" ] || return 1
+  manifest_parent="$(dirname "$manifest")"
+  mkdir -p "$manifest_parent"
+  manifest_parent="$(CDPATH='' cd -- "$manifest_parent" && pwd -P)"
+  closure_evidence="$(
+    CDPATH='' cd -- "$(dirname "$closure_evidence")" &&
+      printf '%s/%s\n' "$(pwd -P)" "$(basename "$closure_evidence")"
+  )"
+  case "$closure_evidence" in
+    "$manifest_parent"/*)
+      evidence_relative="${closure_evidence#"$manifest_parent"/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  safe_relative_path "$evidence_relative" || return 1
+  evidence_sha="$(sha256_file "$closure_evidence")" || return 1
+  manifest_tmp="$manifest_parent/.release-closure-product-evidence.$$.json"
+  jq -e -n \
+    --arg generatedAt "$(jq -er '.generatedAt' "$closure_evidence")" \
+    --arg commit "$(jq -er '.source.commit' "$closure_evidence")" \
+    --arg evidence "$evidence_relative" \
+    --arg evidenceSHA256 "$evidence_sha" \
+    --slurpfile package "$package_identity" \
+    --slurpfile registry "$proof_registry" '
+      [
+        $registry[0].requirements[] |
+        select(
+          .featureId == "045-operator-observability-console" and
+          .proofId == "045.operator-console.release-closure"
+        )
+      ] as $requirements |
+      if ($requirements | length) != 1 then
+        error("045 release-closure proof registry entry is missing or duplicated")
+      else
+        $requirements[0] as $requirement |
+        {
+          version:"hideout.product-hardening-evidence/v1",
+          generatedAt:$generatedAt,
+          commit:$commit,
+          dirty:false,
+          packageIdentity:$package[0],
+          proofs:[{
+            proofId:$requirement.proofId,
+            featureId:$requirement.featureId,
+            mode:"local-fast",
+            evidenceClass:"operator-console-final-closure",
+            status:"passed",
+            commandSummary:"exact clean source and local package completed all twelve release gates, local install, review closure, and publication-absence checks",
+            coveredClaims:[
+              $requirement.claimIds[] | {
+                claimId:.,
+                source:"spec",
+                description:"final operator-console release closure"
+              }
+            ],
+            prerequisites:[],
+            artifacts:[{
+              kind:"manifest",
+              path:$evidence,
+              sha256:$evidenceSHA256,
+              redactionStatus:"passed",
+              description:"final-ready local release evidence"
+            }],
+            redactionStatus:"passed",
+            notes:[
+              "Source-exact local unsigned closure; it is not a byte identity claim for the later Developer ID signed archive.",
+              "The public candidate separately validates signing, notarization, and the exact signed package."
+            ]
+          }]
+        }
+      end
+    ' >"$manifest_tmp" || {
+      rm -f "$manifest_tmp"
+      return 1
+    }
+  chmod 0600 "$manifest_tmp"
+  mv "$manifest_tmp" "$manifest"
+}
+
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -1469,6 +1556,13 @@ run_preflight() {
         "package-build",
         "package-lifecycle"
       ] as $gateIDs |
+      [
+        "formal",
+        "local",
+        "dependencies",
+        "package-components",
+        "recovery"
+      ] as $sourceGateIDs |
       {
         generatedAt:"2026-08-01T00:00:00Z",
         stage:"final-ready",
@@ -1547,13 +1641,14 @@ run_preflight() {
         },
         gates:[
           $gateIDs[] as $id |
+          ($sourceGateIDs | index($id) != null) as $sourceGate |
           {
             id:$id,
-            scope:"candidate",
+            scope:(if $sourceGate then "source" else "candidate" end),
             schema:"hideout.fixture/v1",
             generatedAt:"2026-08-01T00:00:00Z",
             result:"passed",
-            candidateAcceptance:true,
+            candidateAcceptance:($sourceGate | not),
             evidence:ref("gates/\($id).json"; $sha; "0600")
           }
         ],
@@ -1586,6 +1681,49 @@ run_preflight() {
   verify_sha256 \
     "$final_evidence" "$(awk '{print $1}' "$final_detached")" ||
     fail "synthetic final-ready detached digest did not verify"
+  closure_package_identity="$preflight_root/package-identity.json"
+  closure_proof_registry="$preflight_root/proof-registry.json"
+  closure_product_manifest="$preflight_root/product-hardening-evidence.json"
+  jq -n '
+    {
+      name:"hideout",
+      productVersion:"0.1.0-alpha.4",
+      sourceCommit:("a" * 40),
+      artifactSHA256:("d" * 64),
+      hostOS:"darwin",
+      hostArch:"arm64"
+    }
+  ' >"$closure_package_identity"
+  go run ./cmd/hideout support proof-registry --json \
+    >"$closure_proof_registry"
+  write_release_closure_product_evidence \
+    "$closure_product_manifest" "$final_evidence" \
+    "$closure_package_identity" "$closure_proof_registry" ||
+    fail "synthetic release-closure product evidence could not be assembled"
+  go run ./cmd/hideout-schema-validate \
+    schemas/product-hardening-evidence.schema.json \
+    "$closure_product_manifest" >/dev/null ||
+    fail "synthetic release-closure product evidence failed schema validation"
+  go run ./internal/productevidence/cmd/validate-045 \
+    --commit "$(printf 'a%.0s' {1..40})" \
+    --package-identity "$closure_package_identity" \
+    "$closure_product_manifest" >/dev/null ||
+    fail "synthetic release-closure product evidence failed semantic validation"
+  jq '.stage = "installed-local" | .releaseReadiness = false' \
+    "$final_evidence" >"$final_invalid"
+  mv "$final_invalid" "$final_evidence"
+  write_release_closure_product_evidence \
+    "$closure_product_manifest" "$final_evidence" \
+    "$closure_package_identity" "$closure_proof_registry" ||
+    fail "non-final release-closure product fixture could not be assembled"
+  if go run ./internal/productevidence/cmd/validate-045 \
+    --commit "$(printf 'a%.0s' {1..40})" \
+    --package-identity "$closure_package_identity" \
+    "$closure_product_manifest" >/dev/null 2>&1; then
+    fail "release-closure product validator accepted non-final evidence"
+  fi
+  build_release_evidence_from_inputs "$final_inputs" >"$final_evidence"
+  chmod 0600 "$final_evidence"
   jq '.formal.invariantCount = 75' \
     "$final_evidence" >"$final_invalid"
   if go run ./cmd/hideout-schema-validate \
@@ -2428,63 +2566,27 @@ resolve_source_pointer \
   "hideout.migration-lima-pointer/v1" \
   "hideout.migration-lima-evidence/v1"
 migration_lima_summary="$resolved_summary"
+migration_product_evidence="$artifact_root/migration-lima/product-hardening-evidence.json"
+require_private_evidence_file "$migration_product_evidence"
+migration_package_identity="$scratch/migration-package-identity.json"
+"$browser_container" support release package-identity \
+  --archive "$candidate_archive" \
+  --out "$migration_package_identity" >/dev/null ||
+  fail "candidate package identity could not be derived for migration validation"
+go run ./internal/productevidence/cmd/validate-046 \
+  --commit "$source_commit" \
+  --package-identity "$migration_package_identity" \
+  "$migration_product_evidence" >/dev/null ||
+  fail "real migration product evidence is not bound to the exact package candidate"
 jq -e \
-  --arg commit "$source_commit" \
   --arg tree "$source_tree" \
   --arg candidatePointerSHA256 "$(sha256_file "$package_pointer")" \
-  --arg archiveSHA256 "$candidate_archive_sha" \
   --arg installedBinarySHA256 "$(sha256_file "$browser_container")" '
-    .source == {commit:$commit,tree:$tree,dirty:false} and
-    .candidate == {
-      pointerSHA256:$candidatePointerSHA256,
-      archiveSHA256:$archiveSHA256,
-      installedBinarySHA256:$installedBinarySHA256
-    } and
-    .bundle.reusedDestinations == 4 and
-    all(.sourceImmutability[]; .beforeSHA256 == .afterSHA256) and
-    (.identityEvidence.control as $identity |
-      ($identity.destinationDigests | length) == 4 and
-      ($identity.destinationDigests | unique | length) == 4 and
-      ($identity.destinationDigests | index($identity.sourceDigest)) == null) and
-    (.identityEvidence.backend as $identity |
-      ($identity.destinationDigests | length) == 4 and
-      ($identity.destinationDigests | unique | length) == 4 and
-      ($identity.destinationDigests | index($identity.sourceDigest)) == null) and
-    (.identityEvidence.guest as $identity |
-      ($identity.safeCloneDigests | length) == 3 and
-      ($identity.safeCloneDigests | unique | length) == 3 and
-      ($identity.safeCloneDigests | index($identity.sourceDigest)) == null and
-      $identity.exactRestoreDigest == $identity.sourceDigest) and
-    [.crashRecovery.cuts[].phase] == ["materializing","adopting"] and
-    .crashRecovery.materializationRequiredProtectedResume == true and
-    .crashRecovery.adoptionRestartedWithoutBundleSecret == true and
-    ([
-      .crashRecovery.cuts[].daemonInstanceDigest,
-      .crashRecovery.finalDaemonInstanceDigest
-    ] as $daemonInstances |
-      ($daemonInstances | length) == 3 and
-      ($daemonInstances | unique | length) == 3) and
-    .compatibilityEvidence == {
-      fixture:"missing-package-owned-zero-network-executor",
-      errorCode:"migration.capability.unavailable",
-      operationCreated:false,
-      destinationEnvironmentCreated:false
-    } and
-    .checks.sameBundleThreeSafeClones == true and
-    .checks.limaInventoryStopped == true and
-    .checks.networkAuthorityReapproved == true and
-    .checks.materializationCrashResumed == true and
-    .checks.adoptionCrashRecovered == true and
-    .checks.daemonIdentityFreshAcrossCrashRecovery == true and
-    .checks.incompatibleAdoptionExecutorRejectedBeforeEffects == true and
-    all(.checks[]; . == true) and
-    (.artifacts | length) == 6 and
-    ([.artifacts[].path] | unique | length) == 6 and
-    all(.artifacts[];
-      .bytes > 0 and .mode == "0600" and
-      (.sha256 | test("^[a-f0-9]{64}$")))
+    .source.tree == $tree and
+    .candidate.pointerSHA256 == $candidatePointerSHA256 and
+    .candidate.installedBinarySHA256 == $installedBinarySHA256
   ' "$migration_lima_summary" >/dev/null ||
-  fail "real migration gate is not bound to the exact package candidate"
+  fail "real migration evidence does not bind the exact candidate pointer and installed binary"
 
 formal_inventory_relative="$(jq -er '.inventory.path' "$formal_summary")"
 formal_inventory_sha="$(jq -er '.inventory.sha256' "$formal_summary")"
@@ -2826,10 +2928,35 @@ chmod 0600 "$output" "$detached_output"
 verify_sha256 "$output" "$evidence_sha" ||
   fail "written evidence manifest does not match detached digest"
 
+release_package_identity="$scratch/release-package-identity.json"
+release_proof_registry="$scratch/release-proof-registry.json"
+release_product_evidence="$output_parent/product-hardening-evidence.json"
+"$browser_container" support release package-identity \
+  --archive "$candidate_archive" \
+  --out "$release_package_identity" >/dev/null ||
+  fail "candidate package identity could not be derived for release closure"
+"$browser_container" support proof-registry --json \
+  >"$release_proof_registry" ||
+  fail "candidate proof registry could not be read for release closure"
+write_release_closure_product_evidence \
+  "$release_product_evidence" "$output" \
+  "$release_package_identity" "$release_proof_registry" ||
+  fail "release-closure product evidence could not be assembled"
+go run ./cmd/hideout-schema-validate \
+  schemas/product-hardening-evidence.schema.json \
+  "$release_product_evidence" >/dev/null ||
+  fail "release-closure product evidence failed schema validation"
+go run ./internal/productevidence/cmd/validate-045 \
+  --commit "$source_commit" \
+  --package-identity "$release_package_identity" \
+  "$release_product_evidence" >/dev/null ||
+  fail "release-closure product evidence failed semantic validation"
+
 gate_completed=1
 printf \
-  'collect-evidence: passed stage=%s readiness=%s manifest=%s sha256=%s\n' \
+  'collect-evidence: passed stage=%s readiness=%s manifest=%s sha256=%s productEvidence=%s\n' \
   "$stage" \
   "$release_readiness" \
   "$output" \
-  "$evidence_sha"
+  "$evidence_sha" \
+  "$release_product_evidence"

@@ -45,6 +45,10 @@ var Required043ProofIDs = RequiredProofIDsForFeature(Feature043)
 
 var Required044ProofIDs = RequiredProofIDsForFeature(Feature044)
 
+var Required045ProofIDs = RequiredProofIDsForFeature(Feature045)
+
+var Required046ProofIDs = RequiredProofIDsForFeature(Feature046)
+
 type Aggregate struct {
 	Proofs       map[string]ProofEntry
 	Claims       map[string][]ProofEntry
@@ -182,6 +186,26 @@ func Require044ReleaseComplete(manifest Manifest, opts EvaluationOptions) error 
 func Require044PublicComplete(manifest Manifest, opts EvaluationOptions) error {
 	opts.Requirements = RequirementsForFeature(Feature044)
 	opts.Target = RequiredForPublicRelease
+	report, err := EvaluateManifest(manifest, opts)
+	if err != nil {
+		return err
+	}
+	return report.RequireSatisfied()
+}
+
+func Require045ReleaseComplete(manifest Manifest, opts EvaluationOptions) error {
+	opts.Requirements = RequirementsForFeature(Feature045)
+	opts.Target = RequiredForReleaseCandidate
+	report, err := EvaluateManifest(manifest, opts)
+	if err != nil {
+		return err
+	}
+	return report.RequireSatisfied()
+}
+
+func Require046ReleaseComplete(manifest Manifest, opts EvaluationOptions) error {
+	opts.Requirements = RequirementsForFeature(Feature046)
+	opts.Target = RequiredForReleaseCandidate
 	report, err := EvaluateManifest(manifest, opts)
 	if err != nil {
 		return err

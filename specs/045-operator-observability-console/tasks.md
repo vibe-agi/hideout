@@ -384,6 +384,11 @@ handoff.
 - [ ] T172 Confirm the local install is the exact candidate, preserve no legacy data as authorized, and hand off publication as a separate explicitly authorized action in `docs/release/045-readiness.md`
 - [x] T173 Fix the high-event observer shutdown deadline/reap defect, execute its Linux regression in the real-Lima observation lane, and retain an exact-clean passing receipt in `cmd/hideout-session-supervisor/`, `scripts/gates/workload-observation-lima.sh`, and `.artifacts/045/`
 - [x] T174 Add fail-closed progressive Lima aggregation that revalidates and reuses only exact-commit passed lanes from the immediately preceding digest-bound aggregate in `scripts/gates/release-candidate-lima.sh`
+- [x] T175 [US8] Register and independently validate the final Feature 045 release closure, including exact package/formal inventories, twelve-gate scope attribution, review closure, local install, and publication absence in `internal/productevidence/` and `scripts/release/collect-evidence.sh`
+- [x] T176 [US8] Install and version-check mandatory ShellCheck tooling before Gate 0 in both release workflows and lock the workflow contract in `scripts/test-public-alpha-release.sh`
+- [x] T177 [US8] Require the 045 closure before the first public-candidate VM and use a content-addressed signed-migration candidate summary rather than an incomplete package pointer in `scripts/test-public-alpha-candidate.sh`
+- [x] T178 Make the generated-output gate's start semantics explicit with side-effect-free help, fail-fast unknown-option rejection, pinned-LLVM ownership, and a no-VM declaration in `scripts/gates/generated.sh`
+- [x] T179 Reject malformed or duplicate additional product evidence and any caller-supplied unsigned Feature 046 proof before the public candidate's first VM in `scripts/test-public-alpha-candidate.sh`
 
 ---
 

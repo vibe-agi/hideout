@@ -159,7 +159,9 @@ jq -e '
   ([.requirements[] | select(.featureId == "041-workspace-executable-support")] | length == 4) and
   ([.requirements[] | select(.featureId == "042-disposable-orphan-recovery")] | length == 5) and
   ([.requirements[] | select(.featureId == "043-projection-readiness-proof")] | length == 5) and
-  ([.requirements[] | select(.featureId == "044-ordinary-user-release")] | length == 7)
+  ([.requirements[] | select(.featureId == "044-ordinary-user-release")] | length == 7) and
+  ([.requirements[] | select(.featureId == "045-operator-observability-console")] | length == 1) and
+  ([.requirements[] | select(.featureId == "046-portable-hideout-migration")] | length == 1)
 ' "$proof_registry_tmp" >/dev/null
 rm -f "$proof_registry_tmp"
 

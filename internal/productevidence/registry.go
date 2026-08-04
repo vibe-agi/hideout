@@ -62,6 +62,8 @@ const (
 	ArtifactValidatorDisposableRecoveryV1           = "disposable-recovery/v1"
 	ArtifactValidatorProjectionReadinessV1          = "projection-readiness/v1"
 	ArtifactValidatorProjectionPrivacyV1            = "projection-privacy/v1"
+	ArtifactValidatorReleaseClosureV1               = "release-closure/v1"
+	ArtifactValidatorMigrationLimaV1                = "migration-lima/v1"
 )
 
 var validRequirementLayers = []string{
@@ -110,6 +112,8 @@ var validArtifactValidators = []string{
 	ArtifactValidatorDisposableRecoveryV1,
 	ArtifactValidatorProjectionReadinessV1,
 	ArtifactValidatorProjectionPrivacyV1,
+	ArtifactValidatorReleaseClosureV1,
+	ArtifactValidatorMigrationLimaV1,
 }
 
 type ProofRequirement struct {
@@ -330,6 +334,14 @@ func ProductHardeningRequirements() []ProofRequirement {
 			"044.FR-001", "044.FR-024", "044.FR-025", "044.FR-027", "044.FR-032", "044.FR-033", "044.SC-013"),
 		req(Feature044, Proof044PublicReceipt, LayerReleaseCandidate, RequiredForPublicRelease, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
 			"044.FR-031", "044.FR-032", "044.SC-011", "044.SC-013"),
+
+		evidenceClassValidatorReq(Feature045, Proof045ReleaseClosure, LayerReleaseCandidate, RequiredForReleaseCandidate, FreshnessSameCommit, ArtifactPolicyExistsAndDigestIfSupplied,
+			"operator-console-final-closure", ArtifactValidatorReleaseClosureV1,
+			"045.SC-015"),
+
+		evidenceClassValidatorReq(Feature046, Proof046RealMigration, LayerRealGate, RequiredForReleaseCandidate, FreshnessSameCommitAndPackage, ArtifactPolicyExistsAndDigestIfSupplied,
+			"portable-migration-real-lima", ArtifactValidatorMigrationLimaV1,
+			"046.SC-001", "046.SC-002", "046.SC-004", "046.SC-007", "046.SC-008", "046.SC-014", "046.SC-015", "046.SC-016"),
 	}
 	sortRequirements(rows)
 	return rows
@@ -355,6 +367,12 @@ func req(featureID, proofID, layer, requiredFor, freshness, artifact string, cla
 func validatorReq(featureID, proofID, layer, requiredFor, freshness, artifact, validator string, claimIDs ...string) ProofRequirement {
 	r := req(featureID, proofID, layer, requiredFor, freshness, artifact, claimIDs...)
 	r.ArtifactValidator = validator
+	return r
+}
+
+func evidenceClassValidatorReq(featureID, proofID, layer, requiredFor, freshness, artifact, evidenceClass, validator string, claimIDs ...string) ProofRequirement {
+	r := validatorReq(featureID, proofID, layer, requiredFor, freshness, artifact, validator, claimIDs...)
+	r.RequiredEvidenceClass = evidenceClass
 	return r
 }
 
