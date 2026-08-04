@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This aggregate is verification-only. Do not inherit a workstation-wide
+# module-write policy before the later tidy lane gets a chance to inspect it.
+export GOFLAGS=-mod=readonly
+
 root="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 cd "$root"
 # shellcheck source=scripts/lib/gate-result.sh

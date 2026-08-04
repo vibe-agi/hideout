@@ -2158,10 +2158,11 @@ migration real-Lima gate is the first producer to retain this contract as
 `run-review.json`; it currently states `from-scratch` for every cross-run retry
 because no authenticated cross-run bundle checkpoint exists.
 
-Verification gates also isolate mutable tool configuration. Gate 0 and the
-migration gate pin Go's module mode to `-mod=readonly`, so an ambient developer
-`GOFLAGS` cannot silently repair or dirty the candidate. Any required module
-ledger change is an explicit pre-gate source change, never a test side effect.
+Verification gates also isolate mutable tool configuration. Gate 0, the local
+release aggregate, and the migration gate pin Go's module mode to
+`-mod=readonly`, so an ambient developer `GOFLAGS` cannot silently repair or
+dirty the candidate. Any required module ledger change is an explicit pre-gate
+source change, never a test side effect.
 
 ### Local, mutation, and formal acceptance
 
