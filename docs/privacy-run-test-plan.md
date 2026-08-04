@@ -2150,13 +2150,24 @@ because its producer exited zero; the evidence judge for that layer must also
 pass.
 
 Track process quality alongside product quality: time to first useful
-diagnostic, VM boots before failure, repeated logical/encoded bytes, rerun
-amplification (`repeated work / affected work`), authenticated-checkpoint hit
-rate, and harness/flaky failure rate. A post-run review that finds preventable
-work adds or moves a preflight before the next expensive attempt. The portable
-migration real-Lima gate is the first producer to retain this contract as
-`run-review.json`; it currently states `from-scratch` for every cross-run retry
-because no authenticated cross-run bundle checkpoint exists.
+diagnostic, work after that diagnostic, VM boots before failure, repeated
+logical/encoded bytes or already-passing lanes, rerun amplification (`repeated
+work / affected work`), authenticated-checkpoint hit rate, and harness/flaky
+failure rate. A post-run review that finds preventable work adds or moves a
+preflight before the next expensive attempt.
+
+The portable migration real-Lima gate and the local release aggregate retain
+this contract as `run-review.json`. The local aggregate also writes
+`run-plan.json` before its first lane. It recognizes a same-candidate retry only
+for a clean source with the same commit, tree, gate digest, inventory digest,
+and Go toolchain. A hashed kernel boot marker distinguishes the same boot
+session from a restart or power-cycle without exposing the host boot value.
+Neither gate currently authenticates a reusable cross-run checkpoint, so both
+state that release acceptance starts from the full gate. A failed local lane
+may first be reproduced in isolation; a candidate change invalidates the old
+acceptance run, while a reboot alone does not invalidate deterministic,
+digest-bound artifacts. Runtime and host-noise evidence is always re-evaluated
+after a different boot session.
 
 Verification gates also isolate mutable tool configuration. Gate 0, the local
 release aggregate, and the migration gate pin Go's module mode to

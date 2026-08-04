@@ -10,17 +10,24 @@ cd "$root"
 # shellcheck source=scripts/lib/gate-result.sh
 . "$root/scripts/lib/gate-result.sh"
 gate_completed=0
+gate_review_started=0
+gate_review_result=""
+gate_stage="initialization"
 
 out="$root/.artifacts/045/local"
 inventory="$root/scripts/gates/release-candidate-inventory.json"
+preflight_only=0
+run_scope="full-gate"
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/gates/release-candidate.sh [--out DIR]" \
+    "Usage: scripts/gates/release-candidate.sh [--out DIR] [--preflight]" \
     "" \
     "Runs the complete local unit, race, fuzz/property, schema, generated," \
     "static, dependency/advisory, migration, and mutation aggregate. Every lane runs and" \
     "writes private digest-bound evidence even when another lane fails." \
+    "The run records its start/reuse decision and a measured post-run review." \
+    "Use --preflight to validate that review protocol without running a lane." \
     "This command never publishes or accepts an exact release candidate."
 }
 
@@ -33,6 +40,11 @@ while [ "$#" -gt 0 ]; do
       fi
       out="$2"
       shift 2
+      ;;
+    --preflight)
+      preflight_only=1
+      run_scope="preflight-only"
+      shift
       ;;
     -h | --help)
       usage
@@ -69,16 +81,44 @@ sha256_file() {
   return 127
 }
 
+sha256_text() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+    return
+  fi
+  printf 'release-candidate-local: missing shasum or sha256sum\n' >&2
+  return 127
+}
+
 file_mode() {
   stat -f '%Lp' "$1" 2>/dev/null ||
     stat -c '%a' "$1" 2>/dev/null
 }
 
 source_commit="$(git rev-parse HEAD)"
+source_tree="$(git rev-parse 'HEAD^{tree}')"
 if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
   source_dirty=true
 else
   source_dirty=false
+fi
+
+gate_review_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+gate_review_started_epoch="$(date +%s)"
+host_boot_marker=""
+if [ -r /proc/sys/kernel/random/boot_id ]; then
+  host_boot_marker="$(tr -d '\n' </proc/sys/kernel/random/boot_id)"
+elif command -v sysctl >/dev/null 2>&1; then
+  host_boot_marker="$(sysctl -n kern.boottime 2>/dev/null || true)"
+fi
+if [ -n "$host_boot_marker" ]; then
+  host_boot_fingerprint="$(printf '%s' "$host_boot_marker" | sha256_text)"
+else
+  host_boot_fingerprint=""
 fi
 
 mkdir -p "$out"
@@ -102,8 +142,230 @@ chmod 0700 \
   "$run_dir/mutations/judge-negative-fixtures"
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hideout-release-local.XXXXXX")"
+gate_review_started=1
+
+start_mode="from-scratch"
+start_reason="no authenticated same-candidate lane checkpoint was selected"
+host_continuity="not-comparable"
+previous_review_json='null'
+previous_lanes='[]'
+first_failure_epoch=0
+first_failure_lane=""
+lanes='[]'
+
+write_gate_run_review() {
+  local result="$1" failure_layer="${2:-}" failure_reason="${3:-}"
+  [ "${gate_review_started:-0}" -eq 1 ] &&
+    [ -n "${run_dir:-}" ] && [ -d "$run_dir" ] || return 0
+  local finished_at finished_epoch elapsed_seconds diagnostic_seconds
+  local after_diagnostic_seconds repeated_lanes rerun_amplification
+  local completed_lanes failed_lane_count review_tmp
+  finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  finished_epoch="$(date +%s)"
+  elapsed_seconds=$((finished_epoch - gate_review_started_epoch))
+  if [ "${first_failure_epoch:-0}" -gt 0 ]; then
+    diagnostic_seconds=$((first_failure_epoch - gate_review_started_epoch))
+    after_diagnostic_seconds=$((finished_epoch - first_failure_epoch))
+  else
+    diagnostic_seconds="$elapsed_seconds"
+    after_diagnostic_seconds=0
+  fi
+  completed_lanes="$(jq 'length' <<<"${lanes:-[]}")"
+  failed_lane_count="$(
+    jq '[.[] | select(.result == "failed")] | length' <<<"${lanes:-[]}"
+  )"
+  repeated_lanes="$(
+    jq -n \
+      --argjson previous "${previous_lanes:-[]}" \
+      --argjson current "${lanes:-[]}" '
+        ($previous | map(select(.result == "passed") | .id)) as $passed |
+        [$current[].id | select(. as $id | $passed | index($id))] | unique
+      '
+  )"
+  rerun_amplification="$(
+    jq -n \
+      --argjson previous "${previous_lanes:-[]}" \
+      --argjson completed "$completed_lanes" '
+        ([$previous[] | select(.result == "failed")] | length) as $failed |
+        if $failed > 0 then ($completed / $failed) else null end
+      '
+  )"
+  review_tmp="$run_dir/.run-review.$$.json"
+  jq -n \
+    --arg result "$result" \
+    --arg scope "$run_scope" \
+    --arg commit "$source_commit" \
+    --arg tree "$source_tree" \
+    --argjson dirty "$source_dirty" \
+    --arg gateSHA256 "${gate_source_sha:-}" \
+    --arg inventorySHA256 "${inventory_sha:-}" \
+    --arg goVersion "${actual_go_version:-unknown}" \
+    --arg startedAt "$gate_review_started_at" \
+    --arg finishedAt "$finished_at" \
+    --arg startMode "$start_mode" \
+    --arg startReason "$start_reason" \
+    --arg hostBootFingerprint "$host_boot_fingerprint" \
+    --arg hostContinuity "$host_continuity" \
+    --arg stage "$gate_stage" \
+    --arg failureLayer "$failure_layer" \
+    --arg failureReason "$failure_reason" \
+    --arg firstFailureLane "${first_failure_lane:-}" \
+    --argjson previousReview "$previous_review_json" \
+    --argjson lanes "${lanes:-[]}" \
+    --argjson elapsedSeconds "$elapsed_seconds" \
+    --argjson diagnosticSeconds "$diagnostic_seconds" \
+    --argjson afterDiagnosticSeconds "$after_diagnostic_seconds" \
+    --argjson completedLanes "$completed_lanes" \
+    --argjson failedLanes "$failed_lane_count" \
+    --argjson repeatedLanes "$repeated_lanes" \
+    --argjson rerunAmplification "$rerun_amplification" '
+      {
+        schema:"hideout.gate-run-review/v1",
+        gate:"release-candidate-local",
+        scope:$scope,
+        result:$result,
+        candidate:{commit:$commit,tree:$tree,dirty:$dirty},
+        bindings:{gateSHA256:$gateSHA256,inventorySHA256:$inventorySHA256,go:$goVersion},
+        timing:{
+          startedAt:$startedAt,
+          finishedAt:$finishedAt,
+          elapsedSeconds:$elapsedSeconds,
+          timeToFirstUsefulDiagnosticSeconds:$diagnosticSeconds,
+          workAfterFirstDiagnosticSeconds:$afterDiagnosticSeconds
+        },
+        host:{
+          bootFingerprint:(if $hostBootFingerprint == "" then null else $hostBootFingerprint end),
+          continuity:$hostContinuity
+        },
+        start:{
+          mode:$startMode,
+          reason:$startReason,
+          checkpointReused:false,
+          resultReused:false,
+          previousReview:$previousReview
+        },
+        execution:{stage:$stage,completedLanes:$completedLanes,failedLanes:$failedLanes,lanes:$lanes},
+        failure:(if $result == "failed" then {
+          firstObservedLayer:$failureLayer,
+          firstFailureLane:(if $firstFailureLane == "" then null else $firstFailureLane end),
+          reason:$failureReason,
+          rootCauseClassification:"pending-post-run-review"
+        } else null end),
+        rerun:(if $result == "failed" then {
+          minimumDiagnosticScope:(if $failedLanes > 0 then "failed-lanes-only" else "failed-preflight-only" end),
+          releaseAcceptanceScope:"full-gate",
+          withoutCandidateChange:"same-candidate-retry",
+          afterCandidateChange:"from-scratch"
+        } else null end),
+        efficiency:{
+          repeatedPassedLanes:$repeatedLanes,
+          repeatedPassedLaneCount:($repeatedLanes | length),
+          rerunAmplification:$rerunAmplification,
+          authenticatedCheckpointHitRate:0,
+          preventableWorkAssessment:"pending-post-run-review",
+          metrics:[
+            "elapsedSeconds",
+            "timeToFirstUsefulDiagnosticSeconds",
+            "workAfterFirstDiagnosticSeconds",
+            "repeatedPassedLaneCount",
+            "rerunAmplification",
+            "authenticatedCheckpointHitRate"
+          ]
+        }
+      }
+    ' >"$review_tmp"
+  chmod 0600 "$review_tmp"
+  mv "$review_tmp" "$run_dir/run-review.json"
+  gate_review_result="$result"
+}
+
+gate_run_review_self_test() {
+  local self_test_dir="$scratch/run-review-self-test"
+  local self_test_status=0
+  local saved_run_dir="$run_dir"
+  local saved_gate_review_started="$gate_review_started"
+  local saved_gate_review_started_at="$gate_review_started_at"
+  local saved_gate_review_started_epoch="$gate_review_started_epoch"
+  local saved_gate_review_result="$gate_review_result"
+  local saved_gate_stage="$gate_stage"
+  local saved_start_mode="$start_mode"
+  local saved_start_reason="$start_reason"
+  local saved_host_continuity="$host_continuity"
+  local saved_previous_review_json="$previous_review_json"
+  local saved_previous_lanes="$previous_lanes"
+  local saved_lanes="$lanes"
+  local saved_first_failure_epoch="$first_failure_epoch"
+  local saved_first_failure_lane="$first_failure_lane"
+
+  set +e
+  mkdir -p "$self_test_dir"
+  chmod 0700 "$self_test_dir"
+  run_dir="$self_test_dir"
+  gate_review_started=1
+  gate_review_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  gate_review_started_epoch="$(date +%s)"
+  gate_stage="lane:race"
+  start_mode="same-candidate-retry"
+  start_reason="review writer self-test"
+  host_continuity="same-boot-session"
+  previous_review_json='{"path":"prior/run-review.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","result":"failed"}'
+  previous_lanes='[{"id":"unit","result":"passed"},{"id":"race","result":"failed"}]'
+  lanes='[{"id":"unit","result":"passed"},{"id":"race","result":"failed"}]'
+  first_failure_epoch="$gate_review_started_epoch"
+  first_failure_lane="race"
+
+  write_gate_run_review passed "" "" || self_test_status=1
+  jq -e '
+    .result == "passed" and
+    .failure == null and
+    .start.mode == "same-candidate-retry" and
+    .execution.completedLanes == 2
+  ' "$run_dir/run-review.json" >/dev/null || self_test_status=1
+
+  write_gate_run_review failed evidence-judge "self-test rejection" ||
+    self_test_status=1
+  [ "$(file_mode "$run_dir/run-review.json")" = "600" ] ||
+    self_test_status=1
+  jq -e '
+    .schema == "hideout.gate-run-review/v1" and
+    .gate == "release-candidate-local" and
+    .result == "failed" and
+    .failure.firstObservedLayer == "evidence-judge" and
+    .failure.firstFailureLane == "race" and
+    .rerun.minimumDiagnosticScope == "failed-lanes-only" and
+    .efficiency.repeatedPassedLanes == ["unit"] and
+    .efficiency.rerunAmplification == 2 and
+    .efficiency.authenticatedCheckpointHitRate == 0
+  ' "$run_dir/run-review.json" >/dev/null || self_test_status=1
+
+  run_dir="$saved_run_dir"
+  gate_review_started="$saved_gate_review_started"
+  gate_review_started_at="$saved_gate_review_started_at"
+  gate_review_started_epoch="$saved_gate_review_started_epoch"
+  gate_review_result="$saved_gate_review_result"
+  gate_stage="$saved_gate_stage"
+  start_mode="$saved_start_mode"
+  start_reason="$saved_start_reason"
+  host_continuity="$saved_host_continuity"
+  previous_review_json="$saved_previous_review_json"
+  previous_lanes="$saved_previous_lanes"
+  lanes="$saved_lanes"
+  first_failure_epoch="$saved_first_failure_epoch"
+  first_failure_lane="$saved_first_failure_lane"
+  set -e
+  return "$self_test_status"
+}
+
 cleanup() {
   local exit_status=$?
+  set +e
+  if { [ "$exit_status" -ne 0 ] || [ "${gate_completed:-0}" != "1" ]; } &&
+    [ "${gate_review_result:-}" != "failed" ]; then
+    write_gate_run_review \
+      failed \
+      "${gate_failure_layer:-preflight}" \
+      "${gate_failure_reason:-unclassified command failure}" || true
+  fi
   rm -rf -- "$scratch"
   if [ "$exit_status" -eq 0 ]; then
     gate_require_completion "release-candidate-local"
@@ -153,14 +415,124 @@ if [ "$actual_go_version" != "$required_go_version" ]; then
   exit 1
 fi
 
-lanes='[]'
+gate_source_sha="$(sha256_file "$root/scripts/gates/release-candidate.sh")"
+inventory_sha="$(sha256_file "$inventory")"
+previous_summary="$out/summary.json"
+if [ -f "$previous_summary" ] && [ ! -L "$previous_summary" ]; then
+  previous_run="$(
+    jq -er '
+      select(.schema == "hideout.local-release-candidate/v1") |
+      .run | select(test("^run-[0-9]{8}T[0-9]{6}Z-[0-9]+$"))
+    ' "$previous_summary" 2>/dev/null || true
+  )"
+  previous_review="$out/${previous_run:-invalid}/run-review.json"
+  if [ "$source_dirty" = false ] &&
+    [ -n "${previous_run:-}" ] &&
+    [ -f "$previous_review" ] && [ ! -L "$previous_review" ] &&
+    [ "$(file_mode "$previous_review")" = "600" ] &&
+    jq -e \
+      --arg commit "$source_commit" \
+      --arg tree "$source_tree" \
+      --argjson dirty "$source_dirty" \
+      --arg gateSHA256 "$gate_source_sha" \
+      --arg inventorySHA256 "$inventory_sha" \
+      --arg goVersion "$actual_go_version" '
+        .schema == "hideout.gate-run-review/v1" and
+        .gate == "release-candidate-local" and
+        (.result == "passed" or .result == "failed") and
+        .candidate == {commit:$commit,tree:$tree,dirty:$dirty} and
+        .bindings.gateSHA256 == $gateSHA256 and
+        .bindings.inventorySHA256 == $inventorySHA256 and
+        .bindings.go == $goVersion and
+        (.execution.lanes | type == "array")
+      ' "$previous_review" >/dev/null 2>&1; then
+    start_mode="same-candidate-retry"
+    start_reason="a prior exact-candidate review exists, but this aggregate authenticates no reusable lane checkpoint"
+    previous_lanes="$(jq -c '.execution.lanes' "$previous_review")"
+    previous_review_json="$(
+      jq -n \
+        --arg path "$previous_run/run-review.json" \
+        --arg sha256 "$(sha256_file "$previous_review")" \
+        --arg result "$(jq -er '.result' "$previous_review")" \
+        '{path:$path,sha256:$sha256,result:$result}'
+    )"
+    previous_boot_fingerprint="$(
+      jq -r '.host.bootFingerprint // empty' "$previous_review"
+    )"
+    if [ -n "$host_boot_fingerprint" ] &&
+      [ -n "$previous_boot_fingerprint" ]; then
+      if [ "$host_boot_fingerprint" = "$previous_boot_fingerprint" ]; then
+        host_continuity="same-boot-session"
+      else
+        host_continuity="different-boot-session"
+      fi
+    else
+      host_continuity="unknown"
+    fi
+  fi
+fi
+
+gate_stage="review-preflight"
+gate_run_review_self_test
+
+jq -n \
+  --arg generatedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  --arg commit "$source_commit" \
+  --arg tree "$source_tree" \
+  --argjson dirty "$source_dirty" \
+  --arg mode "$start_mode" \
+  --arg reason "$start_reason" \
+  --arg hostBootFingerprint "$host_boot_fingerprint" \
+  --arg hostContinuity "$host_continuity" \
+  --arg scope "$run_scope" \
+  --argjson previousReview "$previous_review_json" '
+    {
+      schema:"hideout.gate-run-plan/v1",
+      gate:"release-candidate-local",
+      generatedAt:$generatedAt,
+      candidate:{commit:$commit,tree:$tree,dirty:$dirty},
+      start:{
+        mode:$mode,
+        reason:$reason,
+        checkpointReused:false,
+        resultReused:false,
+        previousReview:$previousReview
+      },
+      host:{
+        bootFingerprint:(if $hostBootFingerprint == "" then null else $hostBootFingerprint end),
+        continuity:$hostContinuity
+      },
+      acceptance:{scope:$scope,requiredLanes:10}
+    }
+  ' >"$run_dir/run-plan.json"
+chmod 0600 "$run_dir/run-plan.json"
+printf \
+  'release-candidate-local: start=%s host=%s checkpointReused=false plan=%s\n' \
+  "$start_mode" "$host_continuity" "$run_dir/run-plan.json"
+
+if [ "$preflight_only" -eq 1 ]; then
+  gate_stage="preflight-complete"
+  write_gate_run_review passed "" ""
+  gate_completed=1
+  printf \
+    'release-candidate-local: preflight=passed plan=%s review=%s\n' \
+    "$run_dir/run-plan.json" "$run_dir/run-review.json"
+  exit 0
+fi
+
+gate_stage="lane-execution"
+gate_failure_layer="harness"
+gate_failure_reason="local lane execution ended outside a classified lane result"
 failed_lanes=0
 run_lane() {
   local id="$1"
   shift
   local log="$run_dir/lanes/$id.log"
-  local started_at finished_at status result
+  local started_at finished_at started_epoch finished_epoch elapsed_seconds
+  local status result
+  gate_stage="lane:$id"
   started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  started_epoch="$(date +%s)"
   printf 'release-candidate-local: running %s\n' "$id"
   set +e
   (
@@ -170,6 +542,8 @@ run_lane() {
   status=$?
   set -e
   finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  finished_epoch="$(date +%s)"
+  elapsed_seconds=$((finished_epoch - started_epoch))
   if [ ! -s "$log" ]; then
     printf 'lane produced no output (exit=%d)\n' "$status" >"$log"
   fi
@@ -180,6 +554,10 @@ run_lane() {
   else
     result="failed"
     failed_lanes=$((failed_lanes + 1))
+    if [ "$first_failure_epoch" -eq 0 ]; then
+      first_failure_epoch="$finished_epoch"
+      first_failure_lane="$id"
+    fi
     printf 'release-candidate-local: %s failed (exit=%d)\n' \
       "$id" "$status" >&2
     tail -30 "$log" >&2
@@ -193,12 +571,14 @@ run_lane() {
       --arg path "$run_id/lanes/$id.log" \
       --arg sha256 "$(sha256_file "$log")" \
       --argjson exit_code "$status" \
+      --argjson elapsed_seconds "$elapsed_seconds" \
       '. + [{
         id: $id,
         result: $result,
         exitCode: $exit_code,
         startedAt: $started_at,
         finishedAt: $finished_at,
+        elapsedSeconds: $elapsed_seconds,
         log: {path: $path, sha256: $sha256}
       }]' <<<"$lanes"
   )"
@@ -889,6 +1269,9 @@ run_lane migration scripts/gates/migration.sh --out "$run_dir/migration"
 run_lane mutations mutations_lane
 run_lane release-blockers release_blockers_lane
 
+gate_stage="evidence-assembly"
+gate_failure_layer="evidence-judge"
+gate_failure_reason="local aggregate evidence assembly or validation failed"
 jq -r '.requiredLanes[]' "$inventory" | LC_ALL=C sort \
   >"$scratch/expected-lanes"
 jq -r '.[].id' <<<"$lanes" | LC_ALL=C sort >"$scratch/observed-lanes"
@@ -957,13 +1340,16 @@ summary="$out/summary.json"
 jq -n \
   --arg generated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
   --arg commit "$source_commit" \
+  --arg tree "$source_tree" \
   --argjson dirty "$source_dirty" \
   --arg run "$run_id" \
   --arg result "$result" \
   --arg go_version "$actual_go_version" \
   --arg inventory_path "$run_id/inventory.json" \
-  --arg inventory_sha "$(sha256_file "$inventory")" \
-  --arg gate_sha "$(sha256_file "$root/scripts/gates/release-candidate.sh")" \
+  --arg inventory_sha "$inventory_sha" \
+  --arg gate_sha "$gate_source_sha" \
+  --arg run_plan_path "$run_id/run-plan.json" \
+  --arg run_plan_sha "$(sha256_file "$run_dir/run-plan.json")" \
   --argjson lanes "$lanes" \
   --argjson failed_lanes "$failed_lanes" \
   --argjson unit_passed "$unit_passed" \
@@ -973,7 +1359,7 @@ jq -n \
   '{
     schema: "hideout.local-release-candidate/v1",
     generatedAt: $generated_at,
-    source: {commit: $commit, dirty: $dirty},
+    source: {commit: $commit, tree: $tree, dirty: $dirty},
     result: $result,
     scope: "full-local-source-aggregate",
     candidateAcceptance: false,
@@ -984,6 +1370,7 @@ jq -n \
       path: "scripts/gates/release-candidate.sh",
       sha256: $gate_sha
     },
+    runPlan: {path: $run_plan_path, sha256: $run_plan_sha},
     lanes: $lanes,
     statistics: {
       requiredLanes: ($lanes | length),
@@ -1017,12 +1404,23 @@ if ! jq -e \
 fi
 
 if [ "$failed_lanes" -ne 0 ]; then
+  failed_lane_ids="$(
+    jq -r '[.[] | select(.result == "failed") | .id] | join(",")' \
+      <<<"$lanes"
+  )"
+  gate_stage="failed"
+  write_gate_run_review \
+    failed \
+    evidence-judge \
+    "lane evidence rejected: $failed_lane_ids"
   printf \
-    'release-candidate-local: result=%s failedLanes=%d evidence=%s\n' \
-    "$result" "$failed_lanes" "$summary"
+    'release-candidate-local: result=%s failedLanes=%d evidence=%s review=%s\n' \
+    "$result" "$failed_lanes" "$summary" "$run_dir/run-review.json"
   exit 1
 fi
+gate_stage="complete"
+write_gate_run_review passed "" ""
 gate_completed=1
 printf \
-  'release-candidate-local: result=%s failedLanes=%d evidence=%s\n' \
-  "$result" "$failed_lanes" "$summary"
+  'release-candidate-local: result=%s failedLanes=%d evidence=%s review=%s\n' \
+  "$result" "$failed_lanes" "$summary" "$run_dir/run-review.json"
