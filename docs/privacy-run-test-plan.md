@@ -2156,18 +2156,28 @@ work / affected work`), authenticated-checkpoint hit rate, and harness/flaky
 failure rate. A post-run review that finds preventable work adds or moves a
 preflight before the next expensive attempt.
 
-The portable migration real-Lima gate and the local release aggregate retain
-this contract as `run-review.json`. The local aggregate also writes
+The portable migration real-Lima gate, formal gate, and local release aggregate
+retain this contract as `run-review.json`. The local aggregate also writes
 `run-plan.json` before its first lane. It recognizes a same-candidate retry only
 for a clean source with the same commit, tree, gate digest, inventory digest,
 and Go toolchain. A hashed kernel boot marker distinguishes the same boot
 session from a restart or power-cycle without exposing the host boot value.
-Neither gate currently authenticates a reusable cross-run checkpoint, so both
-state that release acceptance starts from the full gate. A failed local lane
-may first be reproduced in isolation; a candidate change invalidates the old
-acceptance run, while a reboot alone does not invalidate deterministic,
+These gates do not claim a reusable cross-run checkpoint unless the gate has an
+explicit authenticated receipt, so release acceptance otherwise starts from
+the full gate. A failed local lane may first be reproduced in isolation; the
+formal gate exposes `--configuration ID` for that diagnostic purpose and still
+requires its complete inventory for acceptance. A candidate change invalidates
+the old acceptance run, while a reboot alone does not invalidate deterministic,
 digest-bound artifacts. Runtime and host-noise evidence is always re-evaluated
 after a different boot session.
+
+Remote Gate 0 preserves the complete no-VM contract while scheduling its
+formal and non-formal shards independently. Both must pass before the aggregate
+`Build, test, and Gate 0` check succeeds. The formal shard records each model's
+elapsed time, state counts, worker count, current model on failure, and exact
+diagnostic rerun command. Splitting changes scheduling and visibility only; it
+does not remove a model, invariant, property, refinement test, or evidence
+judge from the complete gate.
 
 Verification gates also isolate mutable tool configuration. Gate 0, the local
 release aggregate, and the migration gate pin Go's module mode to

@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gate0:
-    name: Build, test, and Gate 0
+  gate0_non_formal:
+    name: Gate 0 / non-formal
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -68,10 +68,59 @@ jobs:
           scripts/gates/generated.sh
           scripts/gates/dependency-licenses.sh
 
-      - name: Run the complete local contract gate
+      - name: Run the non-formal Gate 0 shard
         env:
           # A skipped tap parity check is not parity proof: CI checks out the
           # official tap and fails closed if the comparison cannot run.
           HIDEOUT_REQUIRE_TAP_PARITY: "1"
           HIDEOUT_TAP_FORMULA: ${{ github.workspace }}/.homebrew-tap-parity/Formula/hideout.rb
-        run: scripts/test-gate0.sh
+        run: scripts/test-gate0.sh --shard non-formal
+
+  gate0_formal:
+    name: Gate 0 / formal
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install the declared Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the complete formal Gate 0 shard
+        env:
+          # TLC remains exhaustive over the same bounded models. Two workers
+          # reduce wall time without changing the state/property inventory.
+          HIDEOUT_TLC_WORKERS: "2"
+        run: scripts/test-gate0.sh --shard formal
+
+      - name: Retain the formal execution review
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gate0-formal-review-${{ github.run_id }}
+          path: .artifacts/045/formal/reviews/**/run-review.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate0:
+    name: Build, test, and Gate 0
+    if: ${{ always() }}
+    needs:
+      - gate0_non_formal
+      - gate0_formal
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Gate 0 shard
+        env:
+          NON_FORMAL_RESULT: ${{ needs.gate0_non_formal.result }}
+          FORMAL_RESULT: ${{ needs.gate0_formal.result }}
+        run: |
+          test "$NON_FORMAL_RESULT" = success
+          test "$FORMAL_RESULT" = success

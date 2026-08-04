@@ -390,6 +390,7 @@ handoff.
 - [x] T178 Make the generated-output gate's start semantics explicit with side-effect-free help, fail-fast unknown-option rejection, pinned-LLVM ownership, and a no-VM declaration in `scripts/gates/generated.sh`
 - [x] T179 Reject malformed or duplicate additional product evidence and any caller-supplied unsigned Feature 046 proof before the public candidate's first VM in `scripts/test-public-alpha-candidate.sh`
 - [x] T180 Add a zero-lane Gate 0 toolchain preflight, install/pin Lima 2.2.0 in both release workflows, and retain bounded missing-pass diagnostics from the migration inventory
+- [x] T181 Split remote Gate 0 into required formal/non-formal shards, retain the aggregate required check, record per-model TLC timing/worker/run-review evidence, and provide a single-configuration diagnostic rerun that cannot claim full formal acceptance
 
 ---
 

@@ -236,9 +236,25 @@ for workflow in .github/workflows/ci.yml \
   grep -F '= "0.11.0"' "$workflow" >/dev/null
   grep -F 'limactl --version' "$workflow" >/dev/null
   grep -F '= "2.2.0"' "$workflow" >/dev/null
+  grep -F 'HIDEOUT_TLC_WORKERS: "2"' "$workflow" >/dev/null
 done
+grep -F 'run: scripts/test-gate0.sh --shard non-formal' \
+  .github/workflows/ci.yml >/dev/null
+grep -F 'run: scripts/test-gate0.sh --shard formal' \
+  .github/workflows/ci.yml >/dev/null
+grep -F 'NON_FORMAL_RESULT: ${{ needs.gate0_non_formal.result }}' \
+  .github/workflows/ci.yml >/dev/null
+grep -F 'FORMAL_RESULT: ${{ needs.gate0_formal.result }}' \
+  .github/workflows/ci.yml >/dev/null
+grep -F 'test "$NON_FORMAL_RESULT" = success' .github/workflows/ci.yml >/dev/null
+grep -F 'test "$FORMAL_RESULT" = success' .github/workflows/ci.yml >/dev/null
+grep -F '.artifacts/045/formal/reviews/**/run-review.json' \
+  .github/workflows/ci.yml >/dev/null
 grep -F 'gate0_release_preflight' scripts/test-gate0.sh >/dev/null
 grep -F 'vmBoots=0' scripts/test-gate0.sh >/dev/null
+grep -F 'minimumDiagnosticScope=' scripts/test-gate0.sh >/dev/null
+grep -F 'scripts/gates/formal.sh --configuration ' \
+  scripts/gates/formal.sh >/dev/null
 grep -F 'umask 077' scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
   scripts/test-public-alpha-candidate.sh >/dev/null

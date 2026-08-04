@@ -244,8 +244,14 @@ if ! jq -e --arg version "$(jq -r '.tla2tools.version' "$inventory")" \
   --arg sha "$(jq -r '.tla2tools.sha256' "$inventory")" '
     .tools.tla2tools.version == $version and
     .tools.tla2tools.sha256 == $sha and
+    (.tools.tlcWorkers | type == "number" and . >= 1 and . <= 64 and floor == .) and
     (.tools.java | type == "string" and length > 0) and
-    (.tools.go | type == "string" and length > 0)
+    (.tools.go | type == "string" and length > 0) and
+    .execution.startMode == "from-scratch" and
+    .execution.checkpointReused == false and
+    .execution.restartRequired == false and
+    .execution.powerCycleRequired == false and
+    (.execution.elapsedSeconds | type == "number" and . >= 0 and floor == .)
   ' "$summary" >/dev/null; then
   fail "tool-binding-mismatch"
 fi
@@ -278,11 +284,14 @@ while IFS= read -r entry; do
   if ! jq -e \
     --arg module "$module" \
     --arg config "$config" \
-    --arg kind "$kind" '
+    --arg kind "$kind" \
+    --argjson workers "$(jq -er '.tools.tlcWorkers' "$summary")" '
       .result == "passed" and
       .module == $module and
       .config == $config and
-      .kind == $kind
+      .kind == $kind and
+      .workers == $workers and
+      (.elapsedSeconds | type == "number" and . >= 0 and floor == .)
     ' <<<"$result" >/dev/null; then
     fail "configuration-result-invalid:$id"
   fi
@@ -329,6 +338,9 @@ while IFS= read -r entry; do
     fail "log-digest-mismatch:$id"
   grep -Fq 'Model checking completed. No error has been found.' "$log" ||
     fail "tlc-success-marker-missing:$id"
+  result_workers="$(jq -er '.workers' <<<"$result")"
+  grep -Eq " with ${result_workers} workers? on " "$log" ||
+    fail "tlc-worker-marker-mismatch:$id"
   if grep -Eiq \
     'Invariant .* is violated|Temporal properties were violated|counterexample|^Error:' \
     "$log"; then
@@ -451,7 +463,8 @@ jq -r '.negativeJudgeProofs[].id' "$summary" |
 printf '%s\n' \
   add-counterexample \
   omit-required-configuration \
-  stale-model-digest |
+  stale-model-digest \
+  worker-count-mismatch |
   LC_ALL=C sort >"$scratch/expected-negative-proofs"
 if [ -n "$(comm -3 "$scratch/expected-negative-proofs" "$scratch/observed-negative-proofs")" ]; then
   fail "negative-proof-set-mismatch"

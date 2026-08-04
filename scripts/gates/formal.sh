@@ -6,19 +6,34 @@ cd "$root"
 # shellcheck source=scripts/lib/gate-result.sh
 . "$root/scripts/lib/gate-result.sh"
 gate_completed=0
+gate_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+gate_started_epoch="$(date +%s)"
+gate_stage="preflight"
+gate_current_configuration=""
+gate_current_configuration_started_epoch=0
+gate_configuration_timings='[]'
+gate_review_written=0
 
 out="$root/.artifacts/045/formal"
 inventory="$root/formal/inventory.json"
 inventory_schema="$root/schemas/formal-inventory.schema.json"
 verifier="$root/scripts/gates/formal-verify.sh"
+selected_configuration=""
+tlc_workers="${HIDEOUT_TLC_WORKERS:-1}"
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/gates/formal.sh [--out DIR]" \
+    "Usage: scripts/gates/formal.sh [--out DIR] [--workers N]" \
+    "       scripts/gates/formal.sh --configuration ID [--workers N]" \
     "" \
     "Runs every repository TLC configuration, every inventoried Go formal/" \
     "refinement test, and false-green verifier fixtures. Writes digest-bound" \
-    "local evidence; it does not accept or publish a release candidate."
+    "local evidence; it does not accept or publish a release candidate." \
+    "" \
+    "  --configuration ID  Run one inventoried TLC model for diagnosis only." \
+    "                      This never emits full formal acceptance evidence." \
+    "  --workers N         Use 1..64 TLC workers (default: 1, or" \
+    "                      HIDEOUT_TLC_WORKERS when set)."
 }
 
 while [ "$#" -gt 0 ]; do
@@ -29,6 +44,22 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       out="$2"
+      shift 2
+      ;;
+    --configuration)
+      if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
+        printf 'formal-gate: --configuration requires an ID\n' >&2
+        exit 2
+      fi
+      selected_configuration="$2"
+      shift 2
+      ;;
+    --workers)
+      if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
+        printf 'formal-gate: --workers requires a number\n' >&2
+        exit 2
+      fi
+      tlc_workers="$2"
       shift 2
       ;;
     -h | --help)
@@ -42,6 +73,17 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+case "$tlc_workers" in
+  '' | *[!0-9]* | 0 | 0*)
+    printf 'formal-gate: workers must be an integer from 1 through 64\n' >&2
+    exit 2
+    ;;
+esac
+if [ "$tlc_workers" -lt 1 ] || [ "$tlc_workers" -gt 64 ]; then
+  printf 'formal-gate: workers must be an integer from 1 through 64\n' >&2
+  exit 2
+fi
 
 for command in awk comm curl git go java jq sed sort; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -94,18 +136,107 @@ mkdir -p "$out"
 out="$(CDPATH='' cd -- "$out" && pwd -P)"
 run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
 run_dir="$out/$run_id"
-mkdir -p "$run_dir/tlc" "$run_dir/go" "$run_dir/judge"
-chmod 0700 "$out" "$run_dir" "$run_dir/tlc" "$run_dir/go" "$run_dir/judge"
+review_dir="$out/reviews/$run_id"
+mkdir -p "$run_dir/tlc" "$run_dir/go" "$run_dir/judge" "$review_dir"
+chmod 0700 \
+  "$out" "$out/reviews" "$run_dir" "$run_dir/tlc" "$run_dir/go" \
+  "$run_dir/judge" "$review_dir"
+run_review="$review_dir/run-review.json"
+
+write_formal_run_review() {
+  local result="$1" failure_layer="${2:-}" failure_reason="${3:-}"
+  local finished_at finished_epoch elapsed_seconds current_elapsed review_tmp
+  finished_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  finished_epoch="$(date +%s)"
+  elapsed_seconds=$((finished_epoch - gate_started_epoch))
+  current_elapsed=0
+  if [ -n "$gate_current_configuration" ] &&
+    [ "$gate_current_configuration_started_epoch" -gt 0 ]; then
+    current_elapsed=$((finished_epoch - gate_current_configuration_started_epoch))
+  fi
+  review_tmp="$out/.run-review.$$.json"
+  jq -n \
+    --arg result "$result" \
+    --arg run "$run_id" \
+    --arg commit "$source_commit" \
+    --argjson dirty "$source_dirty" \
+    --arg startedAt "$gate_started_at" \
+    --arg finishedAt "$finished_at" \
+    --arg stage "$gate_stage" \
+    --arg configuration "$gate_current_configuration" \
+    --arg selectedConfiguration "$selected_configuration" \
+    --arg failureLayer "$failure_layer" \
+    --arg failureReason "$failure_reason" \
+    --argjson workers "$tlc_workers" \
+    --argjson elapsedSeconds "$elapsed_seconds" \
+    --argjson currentElapsedSeconds "$current_elapsed" \
+    --argjson configurations "$gate_configuration_timings" '
+      {
+        schema:"hideout.gate-run-review/v1",
+        gate:"formal",
+        run:$run,
+        result:$result,
+        candidate:{commit:$commit,dirty:$dirty},
+        start:{
+          mode:"from-scratch",
+          reason:"formal evidence has no authenticated cross-run checkpoint",
+          checkpointReused:false,
+          resultReused:false,
+          restartRequired:false,
+          powerCycleRequired:false
+        },
+        execution:{
+          scope:(if $selectedConfiguration == "" then "full-formal" else "single-configuration-diagnostic" end),
+          selectedConfiguration:(if $selectedConfiguration == "" then null else $selectedConfiguration end),
+          workers:$workers,
+          stage:$stage,
+          currentConfiguration:(if $configuration == "" then null else $configuration end),
+          currentConfigurationElapsedSeconds:$currentElapsedSeconds,
+          completedConfigurations:$configurations
+        },
+        timing:{startedAt:$startedAt,finishedAt:$finishedAt,elapsedSeconds:$elapsedSeconds},
+        failure:(if $result == "failed" then {
+          firstObservedLayer:$failureLayer,
+          reason:$failureReason
+        } else null end),
+        rerun:(if $result == "failed" then {
+          minimumDiagnosticScope:(if $configuration == "" then "failed-stage-only" else ("configuration:" + $configuration) end),
+          diagnosticCommand:(if $configuration == "" then null else ("scripts/gates/formal.sh --configuration " + $configuration + " --workers " + ($workers|tostring)) end),
+          releaseAcceptanceScope:"full-formal",
+          afterCandidateChange:"from-scratch"
+        } else null end),
+        efficiency:{
+          authenticatedCheckpointHitRate:0,
+          preventableWorkAssessment:"pending-post-run-review",
+          metrics:["elapsedSeconds","completedConfigurations","currentConfigurationElapsedSeconds"]
+        }
+      }
+    ' >"$review_tmp"
+  chmod 0600 "$review_tmp"
+  mv "$review_tmp" "$run_review"
+  gate_review_written=1
+}
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hideout-formal-gate.XXXXXX")"
 cleanup() {
   local exit_status=$?
+  if [ "$exit_status" -ne 0 ]; then
+    write_formal_run_review \
+      failed "$gate_stage" \
+      "formal gate exited before the current stage completed" || true
+  elif [ "$gate_review_written" -eq 0 ]; then
+    write_formal_run_review passed "" "" || true
+  fi
   rm -rf -- "$scratch"
   if [ "$exit_status" -eq 0 ]; then
     gate_require_completion "formal-gate"
   fi
 }
 trap cleanup EXIT
+
+printf \
+  'formal-gate: start=from-scratch checkpointReused=false workers=%s restartRequired=false powerCycleRequired=false review=%s\n' \
+  "$tlc_workers" "$run_review"
 
 go run ./cmd/hideout-schema-validate \
   "$inventory_schema" "$inventory" >"$run_dir/inventory-schema.log" 2>&1
@@ -170,6 +301,23 @@ if ! jq -e '
   exit 1
 fi
 
+if [ -n "$selected_configuration" ] && ! jq -e \
+  --arg id "$selected_configuration" \
+  'any(.configurations[]; .id == $id)' "$inventory" >/dev/null; then
+  printf 'formal-gate: unknown configuration: %s\n' \
+    "$selected_configuration" >&2
+  exit 2
+fi
+
+configuration_entries() {
+  if [ -n "$selected_configuration" ]; then
+    jq -c --arg id "$selected_configuration" \
+      '.configurations[] | select(.id == $id)' "$inventory"
+    return
+  fi
+  jq -c '.configurations[]' "$inventory"
+}
+
 tlc_results='[]'
 configuration_count=0
 total_invariants=0
@@ -180,6 +328,9 @@ while IFS= read -r entry; do
   config="$(jq -er '.config' <<<"$entry")"
   kind="$(jq -er '.kind' <<<"$entry")"
   log="$run_dir/tlc/$id.log"
+  gate_stage="formal-model"
+  gate_current_configuration="$id"
+  gate_current_configuration_started_epoch="$(date +%s)"
 
   if [ ! -f "$module" ] || [ -L "$module" ] ||
     [ ! -f "$config" ] || [ -L "$config" ]; then
@@ -190,7 +341,7 @@ while IFS= read -r entry; do
   printf 'formal-gate: checking %s (%s)\n' "$id" "$kind"
   java -XX:+UseParallelGC -cp "$tla_jar" tlc2.TLC \
     -deadlock \
-    -workers 1 \
+    -workers "$tlc_workers" \
     -metadir "$scratch/tlc-$id" \
     -config "$config" \
     "$module" >"$log" 2>&1
@@ -199,6 +350,10 @@ while IFS= read -r entry; do
     'Model checking completed. No error has been found.' "$log"; then
     printf 'formal-gate: TLC success marker missing for %s\n' "$id" >&2
     tail -40 "$log" >&2
+    exit 1
+  fi
+  if ! grep -Eq " with ${tlc_workers} workers? on " "$log"; then
+    printf 'formal-gate: TLC worker marker mismatch for %s\n' "$id" >&2
     exit 1
   fi
   if grep -Eiq \
@@ -242,6 +397,9 @@ while IFS= read -r entry; do
   generated="$(safe_numeric_stat "$generated" "generated-state count for $id")"
   distinct="$(safe_numeric_stat "$distinct" "distinct-state count for $id")"
   depth="$(safe_numeric_stat "$depth" "state-graph depth for $id")"
+  configuration_elapsed_seconds=$((
+    $(date +%s) - gate_current_configuration_started_epoch
+  ))
 
   relative_log="${log#"$out"/}"
   tlc_results="$(
@@ -259,6 +417,8 @@ while IFS= read -r entry; do
       --argjson generated "$generated" \
       --argjson distinct "$distinct" \
       --argjson depth "$depth" \
+      --argjson workers "$tlc_workers" \
+      --argjson elapsed_seconds "$configuration_elapsed_seconds" \
       '. + [{
         id: $id,
         module: $module,
@@ -270,6 +430,8 @@ while IFS= read -r entry; do
         invariants: $invariants,
         properties: $properties,
         counterexamples: 0,
+        workers: $workers,
+        elapsedSeconds: $elapsed_seconds,
         states: {
           generated: $generated,
           distinct: $distinct,
@@ -281,8 +443,34 @@ while IFS= read -r entry; do
   configuration_count=$((configuration_count + 1))
   total_invariants=$((total_invariants + invariant_count))
   total_properties=$((total_properties + property_count))
-done < <(jq -c '.configurations[]' "$inventory")
+  gate_configuration_timings="$(
+    jq -c \
+      --arg id "$id" \
+      --argjson elapsedSeconds "$configuration_elapsed_seconds" \
+      --argjson generated "$generated" \
+      --argjson distinct "$distinct" \
+      '. + [{id:$id,result:"passed",elapsedSeconds:$elapsedSeconds,
+        generatedStates:$generated,distinctStates:$distinct}]' \
+      <<<"$gate_configuration_timings"
+  )"
+  printf \
+    'formal-gate: configuration=%s result=passed elapsedSeconds=%s generated=%s distinct=%s\n' \
+    "$id" "$configuration_elapsed_seconds" "$generated" "$distinct"
+  gate_current_configuration=""
+  gate_current_configuration_started_epoch=0
+done < <(configuration_entries)
 
+if [ -n "$selected_configuration" ]; then
+  gate_stage="diagnostic-complete"
+  write_formal_run_review passed "" ""
+  gate_completed=1
+  printf \
+    'formal-gate: diagnostic=passed configuration=%s workers=%s evidenceAcceptance=false review=%s\n' \
+    "$selected_configuration" "$tlc_workers" "$run_review"
+  exit 0
+fi
+
+gate_stage="go-refinement"
 refinement_sources="$scratch/refinement-sources"
 jq -r '
   .goRefinement.tests[] |
@@ -408,6 +596,8 @@ write_summary() {
     --arg tla_sha "$tla_sha" \
     --arg java_version "$java_version" \
     --arg go_version "$go_version" \
+    --argjson tlc_workers "$tlc_workers" \
+    --argjson elapsed_seconds "$(( $(date +%s) - gate_started_epoch ))" \
     --argjson configuration_count "$configuration_count" \
     --argjson module_count "$(wc -l <"$scratch/inventory-modules" | tr -d ' ')" \
     --argjson invariant_count "$total_invariants" \
@@ -436,8 +626,16 @@ write_summary() {
       run: $run,
       tools: {
         tla2tools: {version: $tla_version, sha256: $tla_sha},
+        tlcWorkers: $tlc_workers,
         java: $java_version,
         go: $go_version
+      },
+      execution: {
+        startMode: "from-scratch",
+        checkpointReused: false,
+        restartRequired: false,
+        powerCycleRequired: false,
+        elapsedSeconds: $elapsed_seconds
       },
       gateSources: [
         {
@@ -479,6 +677,7 @@ write_summary() {
 }
 
 preliminary="$scratch/preliminary-summary.json"
+gate_stage="evidence-judge"
 write_summary "$preliminary" '[]' '[]'
 baseline_output="$(
   "$verifier" \
@@ -492,7 +691,8 @@ negative_proofs='[]'
 for mutation in \
   omit-required-configuration \
   add-counterexample \
-  stale-model-digest; do
+  stale-model-digest \
+  worker-count-mismatch; do
   fixture="$scratch/$mutation.json"
   case "$mutation" in
     omit-required-configuration)
@@ -508,6 +708,14 @@ for mutation in \
       jq '.configurations[0].moduleSHA256 = ("0" * 64)' \
         "$preliminary" >"$fixture"
       diagnostic='formal-verify: model-digest-mismatch:AttachReservation'
+      ;;
+    worker-count-mismatch)
+      jq '
+        (if .tools.tlcWorkers == 1 then 2 else 1 end) as $forged |
+        .tools.tlcWorkers = $forged |
+        .configurations |= map(.workers = $forged)
+      ' "$preliminary" >"$fixture"
+      diagnostic='formal-verify: tlc-worker-marker-mismatch:AttachReservation'
       ;;
   esac
 
@@ -567,12 +775,17 @@ write_summary "$summary" "$negative_proofs" "$artifacts"
 chmod 0600 "$summary"
 "$verifier" --summary "$summary" --evidence-root "$out"
 
+gate_stage="complete"
+write_formal_run_review passed "" ""
 gate_completed=1
 printf \
-  'formal-gate: passed configurations=%d modules=%s invariants=%d properties=%d goTests=%s evidence=%s\n' \
+  'formal-gate: passed configurations=%d modules=%s invariants=%d properties=%d goTests=%s workers=%s elapsedSeconds=%s evidence=%s review=%s\n' \
   "$configuration_count" \
   "$(wc -l <"$scratch/inventory-modules" | tr -d ' ')" \
   "$total_invariants" \
   "$total_properties" \
   "$(jq '.goRefinement.tests | length' "$inventory")" \
-  "$summary"
+  "$tlc_workers" \
+  "$(( $(date +%s) - gate_started_epoch ))" \
+  "$summary" \
+  "$run_review"

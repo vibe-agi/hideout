@@ -233,6 +233,8 @@ jobs:
             --observation "$HIDEOUT_ALPHA_ROOT/output/signing-observation.json" >/dev/null
 
       - name: Run local release contracts and retain bounded candidate metadata
+        env:
+          HIDEOUT_TLC_WORKERS: "2"
         run: |
           set -euo pipefail
           scripts/test-gate0.sh

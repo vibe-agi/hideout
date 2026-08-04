@@ -16,10 +16,12 @@ go_test_parallelism="${HIDEOUT_GATE0_GO_TEST_PARALLELISM:-4}"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/test-gate0.sh [--quick | --preflight]
+Usage: scripts/test-gate0.sh [--quick | --preflight | --shard NAME]
 
   --quick      Run the cached inner-loop static and unit tier.
   --preflight  Validate the exact release toolchain without running a test lane.
+  --shard NAME Run one CI orchestration shard: formal or non-formal.
+               A shard is diagnostic/CI work only; neither is complete Gate 0.
 
 With no option, run the complete deterministic Gate 0. No mode starts a VM.
 USAGE
@@ -98,12 +100,73 @@ if [ "${1:-}" = "--quick" ]; then
   exit 0
 fi
 
+gate0_shard="all"
+if [ "${1:-}" = "--shard" ]; then
+  [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+  case "$2" in
+    formal | non-formal)
+      gate0_shard="$2"
+      ;;
+    *)
+      printf 'gate0: unknown shard: %s\n' "$2" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift 2
+fi
+
 [ "$#" -eq 0 ] || {
   printf 'gate0: unknown option: %s\n' "$1" >&2
   usage >&2
   exit 2
 }
-gate0_release_preflight
+
+gate0_run_started_epoch="$(date +%s)"
+if [ "$gate0_shard" = "formal" ]; then
+  printf \
+    'gate0: shard=formal start=from-scratch checkpointReused=false vmBoots=0\n'
+  scripts/gates/formal.sh
+  printf \
+    'gate0: shard=formal result=passed elapsedSeconds=%s acceptance=partial formalRequired=false nonFormalRequired=true\n' \
+    "$(( $(date +%s) - gate0_run_started_epoch ))"
+  exit 0
+fi
+
+gate0_current_stage="preflight"
+gate0_stage_started_epoch="$gate0_run_started_epoch"
+gate0_run_completed=0
+if ! gate0_release_preflight; then
+  printf \
+    'gate0: result=failed shard=%s currentStage=preflight elapsedSeconds=%s minimumDiagnosticScope=preflight releaseAcceptanceScope=full-gate\n' \
+    "$gate0_shard" "$(( $(date +%s) - gate0_run_started_epoch ))" >&2
+  exit 1
+fi
+
+gate0_begin_stage() {
+  local next_stage="$1" now_epoch
+  now_epoch="$(date +%s)"
+  printf \
+    'gate0: stage=%s result=passed elapsedSeconds=%s\n' \
+    "$gate0_current_stage" "$((now_epoch - gate0_stage_started_epoch))"
+  gate0_current_stage="$next_stage"
+  gate0_stage_started_epoch="$now_epoch"
+  printf 'gate0: stage=%s startedAt=%s\n' \
+    "$gate0_current_stage" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+}
+
+gate0_finish() {
+  local now_epoch
+  now_epoch="$(date +%s)"
+  printf \
+    'gate0: stage=%s result=passed elapsedSeconds=%s\n' \
+    "$gate0_current_stage" "$((now_epoch - gate0_stage_started_epoch))"
+  gate0_run_completed=1
+}
+
+printf \
+  'gate0: shard=%s start=from-scratch checkpointReused=false vmBoots=0 restartRequired=false powerCycleRequired=false\n' \
+  "$gate0_shard"
 
 gate0_source_fingerprint() {
   {
@@ -124,19 +187,38 @@ gate0_source_fingerprint() {
 
 gate0_source_before="$(gate0_source_fingerprint)"
 gate0_verify_source_unchanged() {
-  local exit_status=$?
-  local source_after
+  local gate0_exit_code=$?
+  local source_after now_epoch result minimum_scope acceptance_scope
   trap - EXIT
   source_after="$(gate0_source_fingerprint)"
   if [ "$source_after" != "$gate0_source_before" ]; then
     printf 'gate0: source worktree changed while the gate was running:\n' >&2
     git status --short >&2
-    exit 1
+    gate0_exit_code=1
+    gate0_current_stage="source-integrity"
   fi
-  exit "$exit_status"
+  now_epoch="$(date +%s)"
+  result="failed"
+  minimum_scope="$gate0_current_stage"
+  if [ "$gate0_exit_code" -eq 0 ] && [ "$gate0_run_completed" -eq 1 ]; then
+    result="passed"
+    minimum_scope="none"
+  fi
+  if [ "$gate0_shard" = "all" ]; then
+    acceptance_scope="complete"
+  else
+    acceptance_scope="full-gate"
+  fi
+  printf \
+    'gate0: result=%s shard=%s currentStage=%s elapsedSeconds=%s minimumDiagnosticScope=%s releaseAcceptanceScope=%s checkpointReused=false vmBoots=0\n' \
+    "$result" "$gate0_shard" "$gate0_current_stage" \
+    "$((now_epoch - gate0_run_started_epoch))" "$minimum_scope" \
+    "$acceptance_scope"
+  exit "$gate0_exit_code"
 }
 trap gate0_verify_source_unchanged EXIT
 
+gate0_begin_stage foundation
 go build ./...
 go vet ./...
 # The Linux guest helpers and the Linux test binaries the real backend lanes
@@ -157,7 +239,11 @@ scripts/test-vulnerability-gate.sh --self-test --source
 # smoke, the four focused TLC configurations, and production refinement traces.
 # This starts no VM; full formal inventory evidence still follows separately.
 scripts/gates/migration.sh
-scripts/gates/formal.sh
+if [ "$gate0_shard" = "all" ]; then
+  gate0_begin_stage formal
+  scripts/gates/formal.sh
+fi
+gate0_begin_stage package-and-recovery
 scripts/gates/recovery.sh
 scripts/test-install-smoke.sh
 scripts/test-package-smoke.sh
@@ -213,6 +299,7 @@ test -f test/fixtures/workspaceattach/generate.sh
 test -f scripts/lib/workspace-research.sh
 scripts/test-runtime-smoke.sh
 
+gate0_begin_stage release-contracts
 # Test/evidence spine (026): one Go-owned proof registry feeds shell gates,
 # docs truth, and release supporting evidence.
 proof_registry_tmp="$(mktemp "${TMPDIR:-/tmp}/hideout-proof-registry.XXXXXX")"
@@ -354,6 +441,7 @@ if grep -R --fixed-strings "$release_secret" "$release_tmp" >/dev/null 2>&1; the
 fi
 rm -rf "$release_tmp"
 
+gate0_begin_stage product-smokes
 # Isolation-evidence machine-readable contract (no Lima): per-gate emission,
 # manifest aggregation shape, and release-dogfood schema for isolationGates /
 # environmentSnapshot.
@@ -467,6 +555,7 @@ go run ./internal/productevidence/cmd/validate-044 \
 rm -rf "$ordinary_user_tmp"
 scripts/test-release-readiness.sh --negative-fixtures
 
+gate0_begin_stage release-surface
 # Documentation truth gate (025): claim-boundary registry, known-overclaim scan,
 # curated command examples, localized README canonicality, and Gate 0/docs
 # consistency. This is local docs correctness evidence, not release readiness.
@@ -543,3 +632,5 @@ scripts/test-concurrent-sessions-smoke.sh
 # reducer, strict journal, typed backend observation, and redaction. Real Lima
 # stop behavior remains an explicit lifecycle Gate 2 lane.
 scripts/test-lifecycle-smoke.sh
+
+gate0_finish
