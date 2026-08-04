@@ -9,7 +9,7 @@ cd "$root"
 gate_completed=0
 
 out="$root/.artifacts/046/migration"
-fuzz_time="${HIDEOUT_MIGRATION_FUZZ_TIME:-1s}"
+fuzz_iterations="${HIDEOUT_MIGRATION_FUZZ_ITERATIONS:-20000}"
 fuzz_procs="${HIDEOUT_MIGRATION_FUZZ_PROCS:-2}"
 migration_test_inventory="$root/scripts/gates/migration-tests.txt"
 hostile_test_inventory="$root/scripts/gates/migration-hostile-tests.txt"
@@ -21,7 +21,7 @@ usage() {
     "Usage: scripts/gates/migration.sh [--out DIR]" \
     "       scripts/gates/migration.sh --preflight" \
     "" \
-    "Runs migration schemas, portable Go and offline Lima checks, bounded fuzz smoke, the four" \
+    "Runs migration schemas, portable Go and offline Lima checks, deterministic fuzz smoke, the four" \
     "migration TLC configurations, and their inventoried refinement tests." \
     "This local gate starts no VM and makes no real-backend migration claim."
 }
@@ -58,8 +58,9 @@ for command in awk bash comm curl find git go grep java jq mktemp sed shellcheck
     exit 1
   fi
 done
-if ! printf '%s\n' "$fuzz_time" | grep -Eq '^[1-9][0-9]*(ms|s)$'; then
-  printf 'migration-gate: invalid HIDEOUT_MIGRATION_FUZZ_TIME: %s\n' "$fuzz_time" >&2
+if ! printf '%s\n' "$fuzz_iterations" | grep -Eq '^[1-9][0-9]{4,6}$' ||
+  [ "$fuzz_iterations" -lt 10000 ] || [ "$fuzz_iterations" -gt 1000000 ]; then
+  printf 'migration-gate: HIDEOUT_MIGRATION_FUZZ_ITERATIONS must be 10000..1000000\n' >&2
   exit 2
 fi
 case "$fuzz_procs" in
@@ -442,11 +443,12 @@ fi
 
 : >"$fuzz_log"
 while IFS= read -r fuzz_name; do
-  printf 'migration-gate: fuzz smoke %s (%s)\n' "$fuzz_name" "$fuzz_time"
+  printf 'migration-gate: fuzz smoke %s (%sx)\n' "$fuzz_name" "$fuzz_iterations"
   GOMAXPROCS="$fuzz_procs" go test ./internal/migration \
     -run '^$' \
     -fuzz "^${fuzz_name}$" \
-    -fuzztime "$fuzz_time" \
+    -fuzztime "${fuzz_iterations}x" \
+    -timeout 2m \
     -parallel 1 2>&1 | tee -a "$fuzz_log"
 done <"$expected_fuzz"
 
@@ -583,7 +585,7 @@ jq -n \
   --arg generatedAt "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
   --arg commit "$source_commit" \
   --argjson dirty "$source_dirty" \
-  --arg fuzzTime "$fuzz_time" \
+  --argjson fuzzIterations "$fuzz_iterations" \
   --arg schemaSHA256 "$(sha256_file "$schema_log")" \
   --arg portableSHA256 "$(sha256_file "$portable_log")" \
   --arg fuzzSHA256 "$(sha256_file "$fuzz_log")" \
@@ -624,7 +626,11 @@ jq -n \
         inventorySHA256: $crashCutInventorySHA256,
         resultsSHA256: $crashCutResultsSHA256
       },
-      fuzzTargets: {count: 6, timeEach: $fuzzTime, logSHA256: $fuzzSHA256},
+      fuzzTargets: {
+        count: 6,
+        iterationsEach: $fuzzIterations,
+        logSHA256: $fuzzSHA256
+      },
       formalConfigurations: {
         count: 4,
         inventorySHA256: $formalInventorySHA256,
@@ -646,6 +652,8 @@ if ! jq -e '
   .checks.hostileMutations.count == 9 and
   .checks.durableCrashCuts.count == 13 and
   .checks.fuzzTargets.count == 6 and
+  (.checks.fuzzTargets.iterationsEach >= 10000 and
+    .checks.fuzzTargets.iterationsEach <= 1000000) and
   .checks.formalConfigurations.count == 4 and
   (.checks.formalConfigurations.results | length) == 4 and
   ([.checks.formalConfigurations.results[].id] | unique | length) == 4 and

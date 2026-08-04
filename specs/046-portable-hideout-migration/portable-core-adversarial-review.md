@@ -83,8 +83,12 @@ go test ./internal/migration -count=1
 go vet ./internal/migration
 go test -race ./internal/migration -count=1
 go test ./internal/migration -coverprofile=...  # 75.8% statements
-GOMAXPROCS=2 go test ./internal/migration -run='^$' -fuzz=<each target> -fuzztime=1s
+GOMAXPROCS=2 go test ./internal/migration -run='^$' \
+  -fuzz=<each target> -fuzztime=20000x -timeout=2m
 ```
 
-All commands passed after the mutations were restored. The six bounded fuzz
-runs executed 427,509 inputs without a crash or invariant failure.
+All commands passed after the mutations were restored. The original six
+time-bounded fuzz runs executed 427,509 inputs without a crash or invariant
+failure. Release smoke now uses a deterministic 20,000 mutation executions per
+target plus the committed corpus, with a separate two-minute hang bound, so
+host scheduling cannot turn normal fuzz-deadline shutdown into a false failure.
