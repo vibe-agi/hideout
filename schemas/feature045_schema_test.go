@@ -66,6 +66,45 @@ func TestFeature045SchemasCompileWithRepositoryDependencies(t *testing.T) {
 	}
 }
 
+func TestHelperManifestSchemaBindsMigrationHelpersToTheirPlatform(t *testing.T) {
+	schema := compileFeatureSchema(t, "helper-manifest.schema.json")
+	fixture := func(command, targetOS string) map[string]any {
+		return map[string]any{
+			"version":    "hideout.helper-manifest/v1",
+			"command":    command,
+			"targetOS":   targetOS,
+			"targetArch": "arm64",
+			"artifact":   command + "-arm64",
+			"sha256":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"builder":    "go build -trimpath",
+			"builtAt":    "2026-08-04T00:00:00Z",
+		}
+	}
+
+	for _, test := range []struct {
+		name     string
+		command  string
+		targetOS string
+		valid    bool
+	}{
+		{name: "Linux migration adoption", command: "hideout-migration-adopt", targetOS: "linux", valid: true},
+		{name: "Darwin VZ adoption", command: "hideout-migration-vz-adopt", targetOS: "darwin", valid: true},
+		{name: "unknown command", command: "hideout-unknown-helper", targetOS: "linux", valid: false},
+		{name: "Linux helper on Darwin", command: "hideout-migration-adopt", targetOS: "darwin", valid: false},
+		{name: "VZ helper on Linux", command: "hideout-migration-vz-adopt", targetOS: "linux", valid: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := schema.Validate(fixture(test.command, test.targetOS))
+			if test.valid && err != nil {
+				t.Fatalf("valid helper manifest: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("helper manifest accepted an invalid command/platform binding")
+			}
+		})
+	}
+}
+
 func TestObserverFrameSchemaMatchesCurrentEnvelopeAndClosedKinds(t *testing.T) {
 	schema := compileFeatureSchema(t, "observer-frame.schema.json")
 	value := map[string]any{

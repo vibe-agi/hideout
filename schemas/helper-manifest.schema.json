@@ -24,11 +24,16 @@
         "hideout-session-supervisor",
         "hideout-observer",
         "hideout-workspace-portal",
+        "hideout-migration-adopt",
+        "hideout-migration-vz-adopt",
         "tun2socks"
       ]
     },
     "targetOS": {
-      "const": "linux"
+      "enum": [
+        "linux",
+        "darwin"
+      ]
     },
     "targetArch": {
       "type": "string",
@@ -70,5 +75,31 @@
       "type": "boolean"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "hideout-migration-vz-adopt"
+          }
+        },
+        "required": ["command"]
+      },
+      "then": {
+        "properties": {
+          "targetOS": {
+            "const": "darwin"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "targetOS": {
+            "const": "linux"
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }
