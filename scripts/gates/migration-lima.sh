@@ -18,6 +18,7 @@ preflight_only=0
 timeout_seconds="${HIDEOUT_MIGRATION_LIMA_TIMEOUT_SECONDS:-1800}"
 scratch=""
 scratch_parent=""
+run_dir=""
 hideout_binary=""
 lima_home=""
 source_store=""
@@ -27,6 +28,39 @@ safe_three_store=""
 exact_store=""
 wrong_store=""
 compat_store=""
+daemon_socket_path_max=100
+
+retain_failure_diagnostics() {
+  [ -n "${scratch:-}" ] && [ -d "$scratch" ] || return 0
+  [ -n "${run_dir:-}" ] && [ -d "$run_dir" ] || return 0
+  local diagnostic_dir=""
+  local diagnostic_name source destination
+  for diagnostic_name in package-verify.log install.log; do
+    source="$scratch/$diagnostic_name"
+    [ -f "$source" ] && [ ! -L "$source" ] || continue
+    if [ -z "$diagnostic_dir" ]; then
+      diagnostic_dir="$run_dir/diagnostics"
+      mkdir -p "$diagnostic_dir"
+      chmod 0700 "$diagnostic_dir"
+    fi
+    destination="$diagnostic_dir/$diagnostic_name"
+    cp "$source" "$destination"
+    chmod 0600 "$destination"
+  done
+}
+
+scratch_supports_daemon_sockets() {
+  local root="$1"
+  local store_name control_socket session_socket
+  for store_name in \
+    source-store safe-one-store safe-two-store safe-three-store exact-store \
+    wrong-store compat-store; do
+    control_socket="$root/$store_name/daemon/hideoutd.sock"
+    session_socket="$root/$store_name/daemon/hideoutd-session.sock"
+    [ "${#control_socket}" -le "$daemon_socket_path_max" ] &&
+      [ "${#session_socket}" -le "$daemon_socket_path_max" ] || return 1
+  done
+}
 
 usage() {
   printf '%s\n' \
@@ -80,6 +114,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 fail() {
+  retain_failure_diagnostics
+  if [ -n "${run_dir:-}" ] && [ -d "$run_dir/diagnostics" ]; then
+    printf 'migration-lima: private diagnostics: %s\n' \
+      "$run_dir/diagnostics" >&2
+  fi
   printf 'migration-lima: %s\n' "$1" >&2
   exit 1
 }
@@ -253,8 +292,13 @@ if [ "$preflight_only" -eq 1 ]; then
   [ -z "$candidate_result" ] ||
     fail "--preflight and --candidate-result are mutually exclusive"
   require_command bash
+  require_command cmp
+  require_command cp
+  require_command find
   require_command jq
+  require_command mktemp
   require_command shellcheck
+  require_command stat
   bash -n scripts/gates/migration-lima.sh scripts/gates/migration.sh
   shellcheck scripts/gates/migration-lima.sh scripts/gates/migration.sh
   summary_fixture="$(migration_lima_summary_fixture)"
@@ -270,7 +314,31 @@ if [ "$preflight_only" -eq 1 ]; then
       fail "summary validator accepted invalid preflight mutation: $mutation"
     fi
   done
-  printf 'migration-lima: preflight=passed semantic-fixtures=5\n'
+  scratch_supports_daemon_sockets "/private/tmp/ho-mig.fixture" ||
+    fail "short scratch fixture cannot host daemon sockets"
+  long_scratch_fixture="/private/tmp/$(printf '%090d' 0)"
+  if scratch_supports_daemon_sockets "$long_scratch_fixture"; then
+    fail "long scratch fixture was accepted for daemon sockets"
+  fi
+  diagnostic_fixture="$(mktemp -d "${TMPDIR:-/tmp}/ho-mig-preflight.XXXXXX")"
+  scratch="$diagnostic_fixture/scratch"
+  run_dir="$diagnostic_fixture/evidence"
+  mkdir -p "$scratch" "$run_dir"
+  printf 'candidate install diagnostic fixture\n' >"$scratch/install.log"
+  retain_failure_diagnostics
+  cmp -s "$scratch/install.log" "$run_dir/diagnostics/install.log" || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "failure diagnostic fixture was not retained"
+  }
+  [ "$(stat -f '%Lp' "$run_dir/diagnostics/install.log" 2>/dev/null ||
+    stat -c '%a' "$run_dir/diagnostics/install.log")" = "600" ] || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "retained failure diagnostic is not private"
+  }
+  find "$diagnostic_fixture" -depth -delete
+  scratch=""
+  run_dir=""
+  printf 'migration-lima: preflight=passed semantic-fixtures=9\n'
   exit 0
 fi
 
@@ -336,6 +404,9 @@ lima() {
 cleanup() {
   local exit_status=$?
   set +e
+  if [ "$exit_status" -ne 0 ]; then
+    retain_failure_diagnostics
+  fi
   for store in \
     "${source_store:-}" "${safe_one_store:-}" "${safe_two_store:-}" \
     "${safe_three_store:-}" "${exact_store:-}" "${wrong_store:-}" \
@@ -355,7 +426,7 @@ cleanup() {
       done
   fi
   case "${scratch:-}" in
-    "$scratch_parent"/hideout-migration-lima.*)
+    "$scratch_parent"/ho-mig.*)
       [ ! -d "$scratch" ] || find "$scratch" -depth -delete
       ;;
     "") ;;
@@ -402,9 +473,23 @@ if tar -tzf "$archive" | awk '
   fail "candidate archive contains an unsafe entry"
 fi
 
-scratch_parent="$(CDPATH='' cd -- "${TMPDIR:-/tmp}" && pwd -P)"
-scratch="$(mktemp -d "$scratch_parent/hideout-migration-lima.XXXXXX")"
+if [ -L "$out" ]; then fail "evidence directory must not be a symlink"; fi
+mkdir -p "$out"
+out="$(cd "$out" && pwd -P)"
+chmod 0700 "$out"
+run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
+run_dir="$out/$run_id"
+mkdir -p "$run_dir"
+chmod 0700 "$run_dir"
+
+tmp_base="${HIDEOUT_MIGRATION_LIMA_TMPDIR:-/tmp}"
+mkdir -p "$tmp_base"
+scratch_parent="$(CDPATH='' cd -- "$tmp_base" && pwd -P)"
+scratch="$(mktemp -d "$scratch_parent/ho-mig.XXXXXX")"
+scratch="$(CDPATH='' cd -- "$scratch" && pwd -P)"
 chmod 0700 "$scratch"
+scratch_supports_daemon_sockets "$scratch" ||
+  fail "private scratch root is too long for daemon sockets: $scratch"
 lima_home="$scratch/lima"
 source_store="$scratch/source-store"
 safe_one_store="$scratch/safe-one-store"
@@ -961,14 +1046,6 @@ bundle_sha_after="$(sha256_file "$bundle")"
 [ "$bundle_sha_before" = "$bundle_sha_after" ] ||
   fail "bundle changed while reused across destinations"
 
-if [ -L "$out" ]; then fail "evidence directory must not be a symlink"; fi
-mkdir -p "$out"
-out="$(cd "$out" && pwd -P)"
-chmod 0700 "$out"
-run_id="run-$(date -u +'%Y%m%dT%H%M%SZ')-$$"
-run_dir="$out/$run_id"
-mkdir -p "$run_dir"
-chmod 0700 "$run_dir"
 evidence_log="$run_dir/gate.log"
 {
   printf 'candidate=%s\n' "$archive_sha"
