@@ -25,6 +25,106 @@ import (
 	"github.com/vibe-agi/hideout/internal/secrets"
 )
 
+func TestMigrationInspectAPIAuthenticatesSealedBundleAcrossOneShotHandle(t *testing.T) {
+	bundlePath := writeManagerSealedBundleFixture(t)
+	secretInputs := NewMigrationSecretInputStore(MigrationSecretInputStoreOptions{})
+	defer secretInputs.Close()
+	cache := NewMigrationInspectionCache(MigrationInspectionCacheOptions{})
+	defer cache.Close()
+	api := API{Migrations: &MigrationAPIService{
+		Service: MigrationService{SecretInputs: secretInputs},
+		Inspection: MigrationInspectionService{
+			SecretInputs: secretInputs,
+			Cache:        cache,
+		},
+	}}
+	credential := "Bearer migration-inspect-api-test"
+	secretBody, err := json.Marshal(MigrationSecretInputAPIRequest{
+		Purpose:    MigrationSecretPurposeInspect,
+		BundlePath: bundlePath,
+		Passphrase: "manager inspection passphrase",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretRequest := httptest.NewRequest(
+		http.MethodPost, "/api/v1/migration/secret-input", bytes.NewReader(secretBody),
+	)
+	secretRequest.Header.Set("Authorization", credential)
+	secretResponse := httptest.NewRecorder()
+	api.serveMigrationSecretInput(secretResponse, secretRequest)
+	if secretResponse.Code != http.StatusOK {
+		t.Fatalf("secret-input status=%d body=%s", secretResponse.Code, secretResponse.Body.String())
+	}
+	var secretEnvelope struct {
+		Version  string                     `json:"version"`
+		Resource string                     `json:"resource"`
+		Data     MigrationSecretInputHandle `json:"data"`
+		Errors   []string                   `json:"errors"`
+	}
+	if err := json.Unmarshal(secretResponse.Body.Bytes(), &secretEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if secretEnvelope.Version != APIVersion ||
+		secretEnvelope.Resource != "migration/secret-input" ||
+		len(secretEnvelope.Errors) != 0 || secretEnvelope.Data.Validate() != nil {
+		t.Fatalf("secret-input envelope=%+v", secretEnvelope)
+	}
+
+	inspectBody, err := json.Marshal(MigrationInspectAPIRequest{
+		BundlePath: bundlePath, SecretInputHandle: secretEnvelope.Data.Handle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectRequest := httptest.NewRequest(
+		http.MethodPost, "/api/v1/migration/import/inspect", bytes.NewReader(inspectBody),
+	)
+	inspectRequest.Header.Set("Authorization", credential)
+	inspectResponse := httptest.NewRecorder()
+	api.serveMigrationImportInspect(inspectResponse, inspectRequest)
+	if inspectResponse.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", inspectResponse.Code, inspectResponse.Body.String())
+	}
+	var inspectEnvelope struct {
+		Version  string                      `json:"version"`
+		Resource string                      `json:"resource"`
+		Data     MigrationReadOnlyInspection `json:"data"`
+		Errors   []string                    `json:"errors"`
+	}
+	if err := json.Unmarshal(inspectResponse.Body.Bytes(), &inspectEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if inspectEnvelope.Version != APIVersion ||
+		inspectEnvelope.Resource != "migration/import/inspect" ||
+		len(inspectEnvelope.Errors) != 0 ||
+		inspectEnvelope.Data.Inventory.BundleID != secretEnvelope.Data.BundleID ||
+		!inspectEnvelope.Data.Inventory.Sealed {
+		t.Fatalf("inspect envelope=%+v", inspectEnvelope)
+	}
+
+	wrongBody, err := json.Marshal(MigrationSecretInputAPIRequest{
+		Purpose:    MigrationSecretPurposeInspect,
+		BundlePath: bundlePath,
+		Passphrase: "wrong manager inspection passphrase",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongRequest := httptest.NewRequest(
+		http.MethodPost, "/api/v1/migration/secret-input", bytes.NewReader(wrongBody),
+	)
+	wrongRequest.Header.Set("Authorization", credential)
+	wrongResponse := httptest.NewRecorder()
+	api.serveMigrationSecretInput(wrongResponse, wrongRequest)
+	if wrongResponse.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(
+			wrongResponse.Body.String(), "migration.bundle.authentication_failed",
+		) || strings.Contains(wrongResponse.Body.String(), "wrong manager") {
+		t.Fatalf("wrong-passphrase status=%d body=%s", wrongResponse.Code, wrongResponse.Body.String())
+	}
+}
+
 func TestMigrationOperationActionRouteBindsCurrentRevisionAndExplicitCancellation(t *testing.T) {
 	operation := migrationExportOperationFixture()
 	now := operation.UpdatedAt.Add(time.Second)

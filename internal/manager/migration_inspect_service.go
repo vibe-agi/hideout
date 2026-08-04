@@ -97,6 +97,11 @@ func authenticateMigrationBundleHeaderFile(
 	if err != nil {
 		return migration.PublicBundleInspection{}, err
 	}
+	// Header authentication deliberately does not inspect the trailer. Merge the
+	// trailer-presence fact already proved by the sealed/public probe before
+	// comparing the two views; otherwise every valid sealed bundle differs only
+	// because AuthenticateBundleHeader reports TrailerPresent=false.
+	authenticated.TrailerPresent = public.TrailerPresent
 	after, afterPublic, err := bindOpenMigrationBundleHeaderFile(
 		path, file, requireSealed,
 	)
