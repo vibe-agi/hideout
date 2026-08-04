@@ -216,6 +216,33 @@ wait_operation_phase() {
   done
 }
 
+migration_destination_profile() {
+  local store="$1" environment_id="$2" environment_name="$3"
+  local record profile_path profile_name
+  case "$environment_id" in
+    env_[A-Za-z0-9_-]*) ;;
+    *) return 1 ;;
+  esac
+  record="$store/environments/$environment_id/environment.json"
+  [ -f "$record" ] && [ ! -L "$record" ] || return 1
+  profile_name="$(jq -er \
+    --arg id "$environment_id" --arg name "$environment_name" '
+      select(
+        .version == "hideout.environment/v2" and
+        .id == $id and .name == $name and
+        .mode == "dedicated-portal" and .status == "stopped"
+      ) |
+      .profile |
+      select(
+        type == "string" and length >= 1 and length <= 128 and
+        . != "." and . != ".." and test("^[A-Za-z0-9._-]+$")
+      )
+    ' "$record")" || return 1
+  profile_path="$store/profiles/$profile_name/profile.json"
+  [ -f "$profile_path" ] && [ ! -L "$profile_path" ] || return 1
+  printf '%s\n' "$profile_name"
+}
+
 validate_migration_lima_summary() {
   jq -e '
     .schema == "hideout.migration-lima-evidence/v1" and
@@ -493,11 +520,36 @@ if [ "$preflight_only" -eq 1 ]; then
     fail "phase waiter accepted a new recoverable failure after resume"
   fi
   timeout_seconds="$saved_timeout_seconds"
+
+  destination_fixture_store="$diagnostic_fixture/destination-store"
+  destination_fixture_id="env_destination_fixture1"
+  destination_fixture_name="migration-source"
+  mkdir -p \
+    "$destination_fixture_store/environments/$destination_fixture_id" \
+    "$destination_fixture_store/profiles/$destination_fixture_name"
+  printf '%s\n' '{"version":"hideout.environment/v2","id":"env_destination_fixture1","name":"migration-source","profile":"migration-source","mode":"dedicated-portal","status":"stopped"}' \
+    >"$destination_fixture_store/environments/$destination_fixture_id/environment.json"
+  printf '%s\n' '{"fixture":true}' \
+    >"$destination_fixture_store/profiles/$destination_fixture_name/profile.json"
+  [ "$(migration_destination_profile \
+    "$destination_fixture_store" "$destination_fixture_id" \
+    "$destination_fixture_name")" = "$destination_fixture_name" ] || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "destination profile fixture was not resolved from its exact environment"
+  }
+  printf '%s\n' '{"version":"hideout.environment/v1","id":"env_destination_fixture1","name":"migration-source","profile":"migration-source","mode":"dedicated-portal","status":"stopped"}' \
+    >"$destination_fixture_store/environments/$destination_fixture_id/environment.json"
+  if migration_destination_profile \
+    "$destination_fixture_store" "$destination_fixture_id" \
+    "$destination_fixture_name" >/dev/null; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "destination profile fixture accepted an obsolete environment record"
+  fi
   find "$diagnostic_fixture" -depth -delete
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=14\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=16\n'
   exit 0
 fi
 
@@ -1221,13 +1273,28 @@ verify_import() {
   local run_path="$scratch/verify-$label.txt"
   hideout_for_store "$store" env inspect "$source_name" >"$inspect_path" 2>&1 ||
     return 1
-  local environment_id instance
+  local environment_id instance inspected_profile destination_profile
   environment_id="$(awk '/^  id: / {print $2}' "$inspect_path")"
   instance="$(awk '/^  instance: / {print $2}' "$inspect_path")"
-  [ -n "$environment_id" ] && [ -n "$instance" ] || return 1
+  inspected_profile="$(awk '
+    /^  backend: / {
+      for (index = 1; index <= NF; index++) {
+        if ($index == "profile:") {
+          print $(index + 1)
+          exit
+        }
+      }
+    }
+  ' "$inspect_path")"
+  [ -n "$environment_id" ] && [ -n "$instance" ] &&
+    [ -n "$inspected_profile" ] || return 1
+  destination_profile="$(migration_destination_profile \
+    "$store" "$environment_id" "$source_name")" || return 1
+  [ "$destination_profile" = "$inspected_profile" ] || return 1
   # shellcheck disable=SC2016 # evaluated by the guest shell
-  hideout_for_store "$store" run --env "$source_name" --workspace "$workspace" \
-    --terminal never -- sh -c '
+  hideout_for_store "$store" run \
+    --profile "$destination_profile" --env "$source_name" \
+    --workspace "$workspace" --terminal never -- sh -c '
       set -eu
       printf "root="
       cat /home/developer/migration-root-proof
