@@ -255,6 +255,24 @@ prepare_crash_cut_inventory() {
   done <"$crash_cut_expected"
 }
 
+report_missing_inventory_tests() {
+  local package_log="$1" missing_names="$2" missing_name
+  while IFS= read -r missing_name; do
+    printf 'migration-gate: missing pass: %s\n' "$missing_name" >&2
+    jq -r --arg name "$missing_name" '
+      select(
+        .Test == $name and
+        (.Action == "output" or .Action == "skip" or .Action == "fail")
+      ) |
+      if .Action == "output" then
+        "migration-gate: test-output: " + (.Output | gsub("[\\r\\n]+$"; ""))
+      else
+        "migration-gate: test-action: " + .Action
+      end
+    ' "$package_log" | sed -n '1,40p' >&2
+  done <"$missing_names"
+}
+
 run_migration_test_inventory() {
   prepare_migration_test_inventory || return 1
   : >"$migration_test_log"
@@ -277,7 +295,9 @@ run_migration_test_inventory() {
     ' "$package_log" | LC_ALL=C sort -u >"$observed_names"
     if [ -n "$(comm -23 "$expected_names" "$observed_names")" ]; then
       printf 'migration-gate: inventoried tests did not all pass in %s\n' "$package" >&2
-      comm -23 "$expected_names" "$observed_names" >&2
+      missing_names="$scratch/missing-$(printf '%s' "$package" | tr '/.' '__')"
+      comm -23 "$expected_names" "$observed_names" >"$missing_names"
+      report_missing_inventory_tests "$package_log" "$missing_names"
       return 1
     fi
     jq -c --arg package "$package" '. + {inventoryPackage: $package}' \
@@ -366,6 +386,21 @@ if [ "$preflight_only" -eq 1 ]; then
   prepare_migration_test_inventory
   prepare_hostile_test_inventory
   prepare_crash_cut_inventory
+  diagnostic_log="$scratch/diagnostic.jsonl"
+  diagnostic_missing="$scratch/diagnostic-missing.txt"
+  diagnostic_output="$scratch/diagnostic.out"
+  printf '%s\n' \
+    '{"Action":"output","Test":"TestFixture","Output":"fixture skipped: limactl not installed\n"}' \
+    '{"Action":"skip","Test":"TestFixture"}' >"$diagnostic_log"
+  printf 'TestFixture\n' >"$diagnostic_missing"
+  report_missing_inventory_tests \
+    "$diagnostic_log" "$diagnostic_missing" 2>"$diagnostic_output"
+  grep -F 'migration-gate: missing pass: TestFixture' \
+    "$diagnostic_output" >/dev/null
+  grep -F 'migration-gate: test-output: fixture skipped: limactl not installed' \
+    "$diagnostic_output" >/dev/null
+  grep -F 'migration-gate: test-action: skip' \
+    "$diagnostic_output" >/dev/null
   bash -n scripts/gates/migration.sh scripts/gates/migration-lima.sh
   shellcheck scripts/gates/migration.sh scripts/gates/migration-lima.sh
   printf 'migration-gate: preflight=passed tests=%s packages=%s hostile=%s crash-cuts=%s\n' \

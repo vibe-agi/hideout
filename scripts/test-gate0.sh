@@ -14,11 +14,76 @@ cd "$ROOT"
 # concurrency for useful throughput while making Gate 0 deterministic.
 go_test_parallelism="${HIDEOUT_GATE0_GO_TEST_PARALLELISM:-4}"
 
+usage() {
+  cat <<'USAGE'
+Usage: scripts/test-gate0.sh [--quick | --preflight]
+
+  --quick      Run the cached inner-loop static and unit tier.
+  --preflight  Validate the exact release toolchain without running a test lane.
+
+With no option, run the complete deterministic Gate 0. No mode starts a VM.
+USAGE
+}
+
+gate0_require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    printf 'gate0: missing required command: %s\n' "$1" >&2
+    return 1
+  }
+}
+
+gate0_release_preflight() {
+  local command shellcheck_version markdownlint_version lima_version
+  local expected_go_version actual_go_version
+  for command in git go jq limactl markdownlint-cli2 shellcheck; do
+    gate0_require_command "$command" || return 1
+  done
+  expected_go_version="go$(awk '$1 == "go" { print $2; exit }' go.mod)"
+  actual_go_version="$(go env GOVERSION)"
+  [ "$actual_go_version" = "$expected_go_version" ] || {
+    printf 'gate0: Go version=%s, want=%s\n' \
+      "$actual_go_version" "$expected_go_version" >&2
+    return 1
+  }
+  shellcheck_version="$(shellcheck --version | awk '/^version:/ { print $2; exit }')"
+  [ "$shellcheck_version" = "0.11.0" ] || {
+    printf 'gate0: ShellCheck version=%s, want=0.11.0\n' \
+      "$shellcheck_version" >&2
+    return 1
+  }
+  markdownlint_version="$(markdownlint-cli2 --version | awk 'NR == 1 { print $2 }')"
+  [ "$markdownlint_version" = "v0.22.1" ] || {
+    printf 'gate0: markdownlint-cli2 version=%s, want=v0.22.1\n' \
+      "$markdownlint_version" >&2
+    return 1
+  }
+  lima_version="$(limactl --version | awk '{ print $NF; exit }')"
+  [ "$lima_version" = "2.2.0" ] || {
+    printf 'gate0: Lima version=%s, want=2.2.0\n' "$lima_version" >&2
+    return 1
+  }
+  printf 'gate0: preflight=passed go=%s shellcheck=%s markdownlint=%s lima=%s vmBoots=0\n' \
+    "$actual_go_version" "$shellcheck_version" "$markdownlint_version" "$lima_version"
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  usage
+  exit 0
+fi
+
+if [ "${1:-}" = "--preflight" ]; then
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  gate0_release_preflight
+  exit 0
+fi
+
 # --quick is the inner-loop tier: vet, format, cached tests, lint, schema
 # syntax. It allows Go test caching so only changed packages re-run, and it
 # proves nothing about smokes, evidence, or packaging. Full gate0 (no flag)
 # remains required before any commit or claim.
 if [ "${1:-}" = "--quick" ]; then
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   go vet ./...
   unformatted="$(gofmt -l cmd internal test)"
   if [ -n "$unformatted" ]; then
@@ -32,6 +97,13 @@ if [ "${1:-}" = "--quick" ]; then
   echo "gate0 --quick passed; run the full gate before commit"
   exit 0
 fi
+
+[ "$#" -eq 0 ] || {
+  printf 'gate0: unknown option: %s\n' "$1" >&2
+  usage >&2
+  exit 2
+}
+gate0_release_preflight
 
 gate0_source_fingerprint() {
   {

@@ -231,10 +231,14 @@ grep -F 'public_alpha_cleanup_root "$work" "$out/cleanup-report.json"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
 for workflow in .github/workflows/ci.yml \
   .github/workflows/hideout-alpha-candidate.yml; do
-  grep -F 'brew install shellcheck' "$workflow" >/dev/null
+  grep -F 'brew install shellcheck lima' "$workflow" >/dev/null
   grep -F 'shellcheck --version' "$workflow" >/dev/null
   grep -F '= "0.11.0"' "$workflow" >/dev/null
+  grep -F 'limactl --version' "$workflow" >/dev/null
+  grep -F '= "2.2.0"' "$workflow" >/dev/null
 done
+grep -F 'gate0_release_preflight' scripts/test-gate0.sh >/dev/null
+grep -F 'vmBoots=0' scripts/test-gate0.sh >/dev/null
 grep -F 'umask 077' scripts/test-public-alpha-candidate.sh >/dev/null
 grep -F 'candidate_short_tmp="${HIDEOUT_RELEASE_SHORT_TMPDIR:-/tmp}"' \
   scripts/test-public-alpha-candidate.sh >/dev/null
