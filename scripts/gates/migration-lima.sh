@@ -284,6 +284,92 @@ migration_inspected_profile() {
   ' "$inspect_path"
 }
 
+migration_network_authority_ref() {
+  local inspect_path="$1" source_ref="$2"
+  jq -er --arg source "$source_ref" '
+    .inventory as $inventory |
+    ($inventory.environments |
+      map(select(.sourceRef == $source))) as $environments |
+    select($environments | length == 1) |
+    $environments[0].authorityProposalIds as $environment_refs |
+    [
+      $inventory.authorityProposals[] as $proposal |
+      $proposal |
+      select(
+        .class == "network" and .state == "disabled" and
+        .sourceSummary == "{\"mode\":\"direct\"}" and
+        ($environment_refs | index($proposal.proposalId)) != null
+      )
+    ] as $matches |
+    select($matches | length == 1) |
+    $matches[0].proposalId |
+    select(
+      type == "string" and
+      test("^authority_[a-z0-9_-]{8,120}$")
+    )
+  ' "$inspect_path"
+}
+
+migration_network_authority_receipt() {
+  local status_path="$1" authority_ref="$2" source_ref="$3"
+  local proposal_count="$4"
+  jq -e \
+    --arg authority "$authority_ref" \
+    --arg source "$source_ref" \
+    --argjson proposalCount "$proposal_count" '
+      $proposalCount >= 1 and
+      .terminalReceipt.approvedAuthority == [{
+        proposalId:$authority,
+        environmentRef:$source,
+        class:"network"
+      }] and
+      (.terminalReceipt.disabledAuthorityProposalIds | type == "array") and
+      (.terminalReceipt.disabledAuthorityProposalIds | length) ==
+        ($proposalCount - 1) and
+      (.terminalReceipt.disabledAuthorityProposalIds |
+        index($authority)) == null
+    ' "$status_path" >/dev/null
+}
+
+migration_identity_policy_receipt() {
+  local status_path="$1" policy="$2"
+  case "$policy" in
+    safe)
+      jq -e '
+        .terminalReceipt.identityPolicies == {
+          safeClone:1,
+          exactGuestRestore:0,
+          freshControl:1,
+          freshBackend:1
+        }
+      ' "$status_path" >/dev/null
+      ;;
+    exact)
+      jq -e '
+        .terminalReceipt.identityPolicies == {
+          safeClone:0,
+          exactGuestRestore:1,
+          freshControl:1,
+          freshBackend:1
+        }
+      ' "$status_path" >/dev/null
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+migration_guest_profile_authorized() {
+  local profile_path="$1"
+  [ -f "$profile_path" ] && [ ! -L "$profile_path" ] || return 1
+  jq -e '
+    .network.mode == "direct" and
+    (.network.proxySecretRef // "") == "" and
+    (.policy.maxCapabilities | type == "array") and
+    (.policy.maxCapabilities | index("guest.exec")) != null and
+    (.policy.maxCapabilities | index("network.connect")) != null
+  ' "$profile_path" >/dev/null
+}
+
 validate_migration_lima_summary() {
   jq -e '
     .schema == "hideout.migration-lima-evidence/v1" and
@@ -300,6 +386,7 @@ validate_migration_lima_summary() {
       wrongPassphraseNoDestinationEnvironment:true,
       incompatibleAdoptionExecutorRejectedBeforeEffects:true,
       terminalReceipts:true,
+      networkAuthorityReapproved:true,
       sameBundleThreeSafeClones:true,
       freshControlIdentity:true,
       freshBackendIdentity:true,
@@ -425,6 +512,7 @@ migration_lima_summary_fixture() {
         wrongPassphraseNoDestinationEnvironment:true,
         incompatibleAdoptionExecutorRejectedBeforeEffects:true,
         terminalReceipts:true,
+        networkAuthorityReapproved:true,
         sameBundleThreeSafeClones:true,
         freshControlIdentity:true,
         freshBackendIdentity:true,
@@ -563,6 +651,61 @@ if [ "$preflight_only" -eq 1 ]; then
   fi
   timeout_seconds="$saved_timeout_seconds"
 
+  authority_fixture="$diagnostic_fixture/migration-inspect.json"
+  authority_fixture_source="env_source_fixture1"
+  authority_fixture_network="authority_network_fixture1"
+  printf '%s\n' \
+    '{"inventory":{"environments":[{"sourceRef":"env_source_fixture1","authorityProposalIds":["authority_host_fixture1","authority_network_fixture1"]}],"authorityProposals":[{"proposalId":"authority_host_fixture1","class":"host-app","sourceSummary":"{\"open\":{}}","state":"disabled"},{"proposalId":"authority_network_fixture1","class":"network","sourceSummary":"{\"mode\":\"direct\"}","state":"disabled"}]}}' \
+    >"$authority_fixture"
+  [ "$(migration_network_authority_ref \
+    "$authority_fixture" "$authority_fixture_source")" = \
+    "$authority_fixture_network" ] || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "authenticated network authority fixture was not resolved exactly"
+  }
+  jq '
+    .inventory.environments[0].authorityProposalIds +=
+      ["authority_network_fixture2"] |
+    .inventory.authorityProposals += [{
+      proposalId:"authority_network_fixture2",
+      class:"network",
+      sourceSummary:"{\"mode\":\"direct\"}",
+      state:"disabled"
+    }]
+  ' "$authority_fixture" >"$authority_fixture.ambiguous"
+  if migration_network_authority_ref \
+    "$authority_fixture.ambiguous" "$authority_fixture_source" >/dev/null; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "ambiguous authenticated network authority fixture was accepted"
+  fi
+
+  authority_receipt_fixture="$diagnostic_fixture/import-terminal.json"
+  printf '%s\n' \
+    '{"terminalReceipt":{"approvedAuthority":[{"proposalId":"authority_network_fixture1","environmentRef":"env_source_fixture1","class":"network"}],"disabledAuthorityProposalIds":["authority_host_fixture1"],"identityPolicies":{"safeClone":1,"exactGuestRestore":0,"freshControl":1,"freshBackend":1}}}' \
+    >"$authority_receipt_fixture"
+  migration_network_authority_receipt \
+    "$authority_receipt_fixture" "$authority_fixture_network" \
+    "$authority_fixture_source" 2 || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "approved network authority receipt fixture was rejected"
+  }
+  migration_identity_policy_receipt "$authority_receipt_fixture" safe || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "Safe Clone identity receipt fixture was rejected"
+  }
+  if migration_identity_policy_receipt "$authority_receipt_fixture" exact; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "Safe Clone identity receipt fixture was accepted as Exact Restore"
+  fi
+  jq '.terminalReceipt.approvedAuthority = []' \
+    "$authority_receipt_fixture" >"$authority_receipt_fixture.disabled"
+  if migration_network_authority_receipt \
+    "$authority_receipt_fixture.disabled" "$authority_fixture_network" \
+    "$authority_fixture_source" 2; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "disabled network authority receipt fixture was accepted"
+  fi
+
   destination_fixture_store="$diagnostic_fixture/destination-store"
   destination_fixture_id="env_destination_fixture1"
   destination_fixture_name="migration-source"
@@ -571,7 +714,8 @@ if [ "$preflight_only" -eq 1 ]; then
     "$destination_fixture_store/profiles/$destination_fixture_name"
   printf '%s\n' '{"version":"hideout.environment/v2","id":"env_destination_fixture1","name":"migration-source","profile":"migration-source","mode":"dedicated-portal","status":"stopped"}' \
     >"$destination_fixture_store/environments/$destination_fixture_id/environment.json"
-  printf '%s\n' '{"fixture":true}' \
+  printf '%s\n' \
+    '{"network":{"mode":"direct"},"policy":{"maxCapabilities":["guest.exec","network.connect"]}}' \
     >"$destination_fixture_store/profiles/$destination_fixture_name/profile.json"
   [ "$(migration_destination_profile \
     "$destination_fixture_store" "$destination_fixture_id" \
@@ -579,6 +723,19 @@ if [ "$preflight_only" -eq 1 ]; then
     find "$diagnostic_fixture" -depth -delete
     fail "destination profile fixture was not resolved from its exact environment"
   }
+  migration_guest_profile_authorized \
+    "$destination_fixture_store/profiles/$destination_fixture_name/profile.json" || {
+    find "$diagnostic_fixture" -depth -delete
+    fail "explicitly authorized migration profile fixture was rejected"
+  }
+  jq '.policy.maxCapabilities = ["guest.exec"]' \
+    "$destination_fixture_store/profiles/$destination_fixture_name/profile.json" \
+    >"$diagnostic_fixture/profile-without-network.json"
+  if migration_guest_profile_authorized \
+    "$diagnostic_fixture/profile-without-network.json"; then
+    find "$diagnostic_fixture" -depth -delete
+    fail "migration profile without network authority was accepted for guest verification"
+  fi
   printf '%s\n' '{"version":"hideout.environment/v1","id":"env_destination_fixture1","name":"migration-source","profile":"migration-source","mode":"dedicated-portal","status":"stopped"}' \
     >"$destination_fixture_store/environments/$destination_fixture_id/environment.json"
   if migration_destination_profile \
@@ -611,7 +768,7 @@ if [ "$preflight_only" -eq 1 ]; then
   scratch=""
   run_dir=""
   source_store=""
-  printf 'migration-lima: preflight=passed semantic-fixtures=19\n'
+  printf 'migration-lima: preflight=passed semantic-fixtures=27\n'
   exit 0
 fi
 
@@ -995,6 +1152,12 @@ jq -e '
 ' "$inspect_log" >/dev/null ||
   fail "authenticated bundle inventory is incomplete"
 source_ref="$(jq -er '.inventory.environments[0].sourceRef' "$inspect_log")"
+network_authority_ref="$(
+  migration_network_authority_ref "$inspect_log" "$source_ref"
+)" || fail "authenticated bundle has no single direct-network authority proposal"
+authority_proposal_count="$(
+  jq -er '.inventory.authorityProposals | length | select(. >= 1)' "$inspect_log"
+)" || fail "authenticated bundle authority inventory is invalid"
 
 wrong_store="$scratch/wrong-pass-store"
 hideout_for_store "$wrong_store" init --no-input --profile default --template dev \
@@ -1059,11 +1222,13 @@ start_import() {
     hideout_for_store "$store" migrate import "$bundle" --all \
       --policy "$source_ref=exact-guest-restore" \
       --ack migration.identity.exact_guest_restore_collision \
+      --approve "$network_authority_ref" \
       --passphrase-stdin --yes --idempotency-key "migration-import-$label-0001" \
       <"$passphrase_file" >"$import_log" 2>&1 ||
       return 1
   else
     hideout_for_store "$store" migrate import "$bundle" --all \
+      --approve "$network_authority_ref" \
       --passphrase-stdin --yes --idempotency-key "migration-import-$label-0001" \
       <"$passphrase_file" >"$import_log" 2>&1 ||
       return 1
@@ -1080,7 +1245,13 @@ import_bundle() {
   local store="$1" label="$2" policy="$3"
   local operation
   operation="$(start_import "$store" "$label" "$policy")" || return 1
-  wait_migration "$store" "$operation" import "$scratch/import-$label-status.json"
+  wait_migration \
+    "$store" "$operation" import "$scratch/import-$label-status.json" || return 1
+  migration_network_authority_receipt \
+    "$scratch/import-$label-status.json" "$network_authority_ref" \
+    "$source_ref" "$authority_proposal_count" || return 1
+  migration_identity_policy_receipt \
+    "$scratch/import-$label-status.json" "$policy"
 }
 
 all_distinct() {
@@ -1266,8 +1437,49 @@ wait_for_resume_action() {
   done
 }
 
+verify_import() {
+  local store="$1" workspace="$2" label="$3"
+  local inspect_path="$scratch/environment-$label.txt"
+  local run_path="$scratch/verify-$label.txt"
+  local environment_id instance inspected_profile destination_profile profile_path
+  local machine ssh_digest
+  hideout_for_store "$store" env inspect "$source_name" >"$inspect_path" 2>&1 ||
+    return 1
+  environment_id="$(awk '/^  id: / {print $2}' "$inspect_path")"
+  instance="$(awk '/^  instance: / {print $2}' "$inspect_path")"
+  inspected_profile="$(migration_inspected_profile "$inspect_path")" || return 1
+  [ -n "$environment_id" ] && [ -n "$instance" ] &&
+    [ -n "$inspected_profile" ] || return 1
+  destination_profile="$(migration_destination_profile \
+    "$store" "$environment_id" "$source_name")" || return 1
+  [ "$destination_profile" = "$inspected_profile" ] || return 1
+  profile_path="$store/profiles/$destination_profile/profile.json"
+  migration_guest_profile_authorized "$profile_path" || return 1
+  # shellcheck disable=SC2016 # evaluated by the guest shell
+  hideout_for_store "$store" run \
+    --profile "$destination_profile" --env "$source_name" \
+    --workspace "$workspace" --terminal never -- \
+    sh -c "$migration_guest_verify_script" hideout-migration-verify \
+    >"$run_path" 2>&1 || return 1
+  grep -Fq "root=$root_canary" "$run_path" || return 1
+  grep -Fq "attached=$attached_canary" "$run_path" || return 1
+  if grep -Fq "$host_canary" "$run_path"; then return 1; fi
+  machine="$(sed -n 's/^machine=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
+  ssh_digest="$(sed -n 's/^ssh=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
+  printf '%s\n' "$machine" | grep -Eq '^[a-f0-9]{32}$' || return 1
+  printf '%s\n' "$ssh_digest" | grep -Eq '^[a-f0-9]{64}$' || return 1
+  printf '%s\n%s\n%s\n%s\n' "$environment_id" "$instance" "$machine" "$ssh_digest" \
+    >"$scratch/identity-$label"
+  hideout_for_store "$store" stop "$source_name" \
+    >"$scratch/stop-$label.log" 2>&1 || return 1
+}
+
 import_bundle "$safe_one_store" safe-one safe || fail "first Safe Clone import"
+verify_import "$safe_one_store" "$safe_one_workspace" safe-one ||
+  fail "verify first Safe Clone destination"
 import_bundle "$safe_two_store" safe-two safe || fail "second Safe Clone import"
+verify_import "$safe_two_store" "$safe_two_workspace" safe-two ||
+  fail "verify second Safe Clone destination"
 safe_three_operation="$(start_import "$safe_three_store" safe-three safe)" ||
   fail "start third Safe Clone import"
 wait_operation_phase "$safe_three_store" "$safe_three_operation" materializing ||
@@ -1300,73 +1512,20 @@ wait_migration \
   "$safe_three_store" "$safe_three_operation" import \
   "$scratch/import-safe-three-status.json" ||
   fail "third Safe Clone did not recover after the adoption crash"
+migration_network_authority_receipt \
+  "$scratch/import-safe-three-status.json" "$network_authority_ref" \
+  "$source_ref" "$authority_proposal_count" ||
+  fail "third Safe Clone did not commit the reviewed network authority"
+migration_identity_policy_receipt \
+  "$scratch/import-safe-three-status.json" safe ||
+  fail "third Safe Clone committed the wrong identity policy"
 final_crash_instance="$(daemon_instance_for_store "$safe_three_store" safe-three-final)" ||
   fail "observe final daemon after crash recovery"
 all_distinct "$first_crash_instance" "$second_crash_instance" "$final_crash_instance" ||
   fail "crash recovery reused a daemon instance identity"
-import_bundle "$exact_store" exact exact || fail "Exact Guest Restore import"
-for status_path in \
-  "$scratch/import-safe-one-status.json" \
-  "$scratch/import-safe-two-status.json" \
-  "$scratch/import-safe-three-status.json"; do
-  jq -e '
-    .terminalReceipt.identityPolicies == {
-      safeClone:1,
-      exactGuestRestore:0,
-      freshControl:1,
-      freshBackend:1
-    }
-  ' "$status_path" >/dev/null ||
-    fail "Safe Clone terminal receipt has the wrong identity policy"
-done
-jq -e '
-  .terminalReceipt.identityPolicies == {
-    safeClone:0,
-    exactGuestRestore:1,
-    freshControl:1,
-    freshBackend:1
-  }
-' "$scratch/import-exact-status.json" >/dev/null ||
-  fail "Exact Guest Restore terminal receipt has the wrong identity policy"
-
-verify_import() {
-  local store="$1" workspace="$2" label="$3"
-  local inspect_path="$scratch/environment-$label.txt"
-  local run_path="$scratch/verify-$label.txt"
-  hideout_for_store "$store" env inspect "$source_name" >"$inspect_path" 2>&1 ||
-    return 1
-  local environment_id instance inspected_profile destination_profile
-  environment_id="$(awk '/^  id: / {print $2}' "$inspect_path")"
-  instance="$(awk '/^  instance: / {print $2}' "$inspect_path")"
-  inspected_profile="$(migration_inspected_profile "$inspect_path")" || return 1
-  [ -n "$environment_id" ] && [ -n "$instance" ] &&
-    [ -n "$inspected_profile" ] || return 1
-  destination_profile="$(migration_destination_profile \
-    "$store" "$environment_id" "$source_name")" || return 1
-  [ "$destination_profile" = "$inspected_profile" ] || return 1
-  # shellcheck disable=SC2016 # evaluated by the guest shell
-  hideout_for_store "$store" run \
-    --profile "$destination_profile" --env "$source_name" \
-    --workspace "$workspace" --terminal never -- \
-    sh -c "$migration_guest_verify_script" hideout-migration-verify \
-    >"$run_path" 2>&1 || return 1
-  grep -Fq "root=$root_canary" "$run_path" || return 1
-  grep -Fq "attached=$attached_canary" "$run_path" || return 1
-  if grep -Fq "$host_canary" "$run_path"; then return 1; fi
-  machine="$(sed -n 's/^machine=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
-  ssh_digest="$(sed -n 's/^ssh=//p' "$run_path" | tail -1 | tr -d '[:space:]')"
-  printf '%s\n' "$machine" | grep -Eq '^[a-f0-9]{32}$' || return 1
-  printf '%s\n' "$ssh_digest" | grep -Eq '^[a-f0-9]{64}$' || return 1
-  printf '%s\n%s\n%s\n%s\n' "$environment_id" "$instance" "$machine" "$ssh_digest" \
-    >"$scratch/identity-$label"
-}
-
-verify_import "$safe_one_store" "$safe_one_workspace" safe-one ||
-  fail "verify first Safe Clone destination"
-verify_import "$safe_two_store" "$safe_two_workspace" safe-two ||
-  fail "verify second Safe Clone destination"
 verify_import "$safe_three_store" "$safe_three_workspace" safe-three ||
   fail "verify crash-recovered third Safe Clone destination"
+import_bundle "$exact_store" exact exact || fail "Exact Guest Restore import"
 verify_import "$exact_store" "$exact_workspace" exact ||
   fail "verify Exact Guest Restore destination"
 
@@ -1408,11 +1567,6 @@ all_distinct \
   [ "$source_ssh_digest" = "$exact_ssh_digest" ] ||
   fail "Exact Guest Restore did not preserve guest identity"
 
-for store in \
-  "$safe_one_store" "$safe_two_store" "$safe_three_store" "$exact_store"; do
-  hideout_for_store "$store" stop "$source_name" >/dev/null 2>&1 ||
-    fail "stop imported environment in $(basename "$store")"
-done
 root_sha_after="$(sha256_file "$source_root_path")"
 attached_sha_after="$(sha256_file "$source_attached_path")"
 record_sha_after="$(sha256_file "$source_record_path")"
@@ -1436,6 +1590,7 @@ evidence_log="$run_dir/gate.log"
   printf 'source-record-before=%s after=%s\n' \
     "$record_sha_before" "$record_sha_after"
   printf 'safe-clone-destinations=3 exact-restore-destinations=1\n'
+  printf 'network-authority=reviewed-proposal-approved disabled-imported-authority=retained\n'
   printf 'crash-cuts=materializing,adopting daemon-restarts=2\n'
   printf 'compatibility-fixture=missing-zero-network-executor result=refused-before-operation\n'
 } >"$evidence_log"
@@ -1576,6 +1731,7 @@ jq -n \
       wrongPassphraseNoDestinationEnvironment:true,
       incompatibleAdoptionExecutorRejectedBeforeEffects:true,
       terminalReceipts:true,
+      networkAuthorityReapproved:true,
       sameBundleThreeSafeClones:true,
       freshControlIdentity:true,
       freshBackendIdentity:true,

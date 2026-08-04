@@ -2471,6 +2471,7 @@ jq -e \
       destinationEnvironmentCreated:false
     } and
     .checks.sameBundleThreeSafeClones == true and
+    .checks.networkAuthorityReapproved == true and
     .checks.materializationCrashResumed == true and
     .checks.adoptionCrashRecovered == true and
     .checks.daemonIdentityFreshAcrossCrashRecovery == true and
